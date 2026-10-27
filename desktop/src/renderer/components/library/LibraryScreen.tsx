@@ -289,7 +289,10 @@ export default function LibraryScreen({
         ))}
 
         {/* Themes tab — starred theme favorites first, then the rest. */}
-        {tab === 'themes' && (loadGate(installedThemeCount > 0, 'themes') ?? (
+        {/* WHY built-ins don't count as rows here: they are always in the list, even when
+            the theme list failed to load — counting them would hide that failure behind six
+            cards and leave downloaded themes silently missing. */}
+        {tab === 'themes' && (loadGate(mp.themeEntries.some(t => t.installed && !t.isBuiltin), 'themes') ?? (
           <>
             <Section title="Favorite themes" empty="Star an installed theme and it appears here.">
               {mp.themeEntries.filter(t => t.installed && themeFavSet.has(t.slug)).length > 0 && (

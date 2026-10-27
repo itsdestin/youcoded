@@ -90,9 +90,11 @@ describe('an old phone page against the new host', () => {
     expect(close).toHaveBeenCalledWith(4005, expect.stringContaining('older than your computer'));
   });
 
-  it('index.html is served no-cache, so reloading the tab fetches the new page', async () => {
+  it('index.html is never pinned forever, so reloading the tab fetches the new page', async () => {
+    // Kept a week, never immutable: a reload asks the computer again, and a page opened from the kept copy checks its own
+    // version and reloads (index-html-version-check.test.ts).
     const { cacheControlFor } = await import('../src/main/remote-static-policy');
-    expect(cacheControlFor('/index.html')).toBe('no-cache');
-    expect(cacheControlFor('/')).toBe('no-cache');
+    expect(cacheControlFor('/index.html')).not.toContain('immutable');
+    expect(cacheControlFor('/')).not.toContain('immutable');
   });
 });

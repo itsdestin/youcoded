@@ -27,6 +27,7 @@ import { ccProjectSlug, nativeStoreSlug } from '../slug-encoding';
 import { onSyncSpacesEvent, syncSpacesSyncNow, syncSpacesSyncNowAwaited, getManagedRoots } from '../sync-spaces/service';
 import { readFolders } from '../saved-folders';
 import { resolveLocalProject } from './resolve-local-project';
+import { mapLimit } from '../map-limit';
 import { perfMark } from '../perf-marks';
 import type { TranscriptEvent, SessionProvider } from '../../shared/types';
 import type { SpaceSyncEvent } from '../sync-spaces/types';
@@ -643,13 +644,15 @@ export function noteModelUsed(sessionId: string, ref: PortableModelRef): void {
  * reads are cheap but not per-record. Cross-OS safe: a foreign-OS originalPath
  * that doesn't exist here is skipped in favor of the name/basename fallbacks.
  */
-export function buildLocalProjectResolver(): (rec: { projectName: string; originalPath: string }) => string | null {
+export function buildLocalProjectResolver(): (rec: { projectName: string; originalPath: string }) => Promise<string | null> {
   const managed = new Map<string, string>(
     (getManagedRoots()?.listProjects() ?? []).map((p) => [p.name, p.path]),
   );
   let saved: Array<{ path: string }> = [];
   try { saved = readFolders(); } catch { /* saved folders unreadable */ }
-  return (rec) => resolveLocalProject(rec, managed, saved);
+  // One existence cache per resolver (= per browse): records share project folders.
+  const existsCache = new Map<string, Promise<boolean>>();
+  return (rec) => resolveLocalProject(rec, managed, saved, existsCache);
 }
 
 // Task 8: list BOTH provider buckets so the sweep covers native/ records too.
@@ -692,7 +695,13 @@ async function materializeSweepBody(): Promise<void> {
   // (slug-repair.ts §6.0 Case C) must be frozen out of this direction until a
   // human resolves it; see heldForkIds' WHY in slug-repair-state.ts.
   const heldForks = heldForkIds();
-  for (const rec of records) {
+  // WHY resolved up front, bounded (2026-10-22 freeze hunt): this used to be one blocking existsSync
+  // per record (~2,600 per sweep). Now the distinct paths are probed off the main thread, a few at a
+  // time, before the loop; the loop below then just looks the answer up. Same result per record.
+  const existsCache = new Map<string, Promise<boolean>>();
+  const resolvedLocals = await mapLimit(records, 16, (rec) =>
+    rec.transcriptRef ? resolveLocalProject(rec, managed, saved, existsCache) : Promise.resolve(null));
+  for (const [recIndex, rec] of records.entries()) {
     if (!rec.transcriptRef) continue; // no durable copy to materialize from
     if (heldForks.has(rec.id)) continue; // fork hold — frozen until resolved
     // The record IS the truth for provider (not a param) — see
@@ -732,7 +741,7 @@ async function materializeSweepBody(): Promise<void> {
     // because mirrorIn keeps the space current from the fresher local side; a
     // noteSessionEnded refinement lands with leases in 2b.
     if (sessions.has(rec.id) || handoffPins.has(rec.id)) continue;
-    const local = resolveLocalProject(rec, managed, saved);
+    const local = resolvedLocals[recIndex];
     if (!local) continue;
     try {
       // WHY shouldCommit (review round 1): the check above and the rename
@@ -834,7 +843,7 @@ export async function materializeOne(id: string, cwd?: string): Promise<void> {
     const managed = new Map<string, string>((getManagedRoots()?.listProjects() ?? []).map((p) => [p.name, p.path]));
     let saved: Array<{ path: string }> = [];
     try { saved = readFolders(); } catch { /* saved folders unreadable */ }
-    local = resolveLocalProject(rec, managed, saved) ?? undefined;
+    local = (await resolveLocalProject(rec, managed, saved)) ?? undefined;
   }
   if (!local) return;
   const localPath = localJsonlPath(local, id, sessionProvider);
@@ -908,7 +917,7 @@ export async function resolveHandoffProject(context: TransferContext): Promise<s
   const managed = new Map<string, string>((getManagedRoots()?.listProjects() ?? []).map((p) => [p.name, p.path]));
   let saved: Array<{ path: string }> = [];
   try { saved = readFolders(); } catch { /* no saved folders */ }
-  const project = resolveLocalProject(record, managed, saved);
+  const project = await resolveLocalProject(record, managed, saved);
   return project && fs.existsSync(project) ? project : null;
 }
 
@@ -932,7 +941,7 @@ export async function importConfirmedHandoff(context: TransferContext, pinActive
   const managed = new Map<string, string>((getManagedRoots()?.listProjects() ?? []).map((p) => [p.name, p.path]));
   let saved: Array<{ path: string }> = [];
   try { saved = readFolders(); } catch { /* no saved folders */ }
-  const projectPath = resolveLocalProject(record, managed, saved);
+  const projectPath = await resolveLocalProject(record, managed, saved);
   if (!projectPath || !fs.existsSync(projectPath)) return { status: 'incomplete', reason: 'project missing' };
   const allowed = () => handoffPins.has(context.sessionId) && !sessions.has(context.sessionId) &&
     !heldForkIds().has(context.sessionId) && pinActive() && mayCommit();

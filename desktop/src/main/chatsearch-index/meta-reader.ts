@@ -40,14 +40,14 @@ export function readMetaFile(dir: string, provider: string): ChatsearchMetaFile 
 export interface ResolveDeps {
   dir: string;
   /** buildLocalProjectResolver() from the conversations service, bound per call. */
-  resolveLocal: (rec: { projectName: string; originalPath: string }) => string | null;
+  resolveLocal: (rec: { projectName: string; originalPath: string }) => string | null | Promise<string | null>;
   /** Is the transcript materialized on THIS device under the local root? */
-  transcriptExistsLocally: (provider: ChatsearchProvider, localPath: string, id: string) => boolean;
+  transcriptExistsLocally: (provider: ChatsearchProvider, localPath: string, id: string) => boolean | Promise<boolean>;
   /** ccProjectSlug for claude, nativeStoreSlug for native. */
   slugFor: (provider: ChatsearchProvider, localPath: string) => string;
 }
 
-export function resolveShortIds(queries: string[], deps: ResolveDeps): ResolvedConversation[] {
+export async function resolveShortIds(queries: string[], deps: ResolveDeps): Promise<ResolvedConversation[]> {
   const all: Array<{ provider: ChatsearchProvider; entry: ChatsearchMetaEntry }> = [];
   for (const provider of PROVIDERS) {
     const file = readMetaFile(deps.dir, provider);
@@ -59,7 +59,9 @@ export function resolveShortIds(queries: string[], deps: ResolveDeps): ResolvedC
       all.push({ provider, entry: { ...entry, id: String(entry.id || id) } });
     }
   }
-  return queries.map((q): ResolvedConversation => {
+  // WHY Promise.all over map: resolving a card's folder and checking its transcript are async now
+  // (2026-10-22 freeze hunt); results stay in query order.
+  return Promise.all(queries.map(async (q): Promise<ResolvedConversation> => {
     if (!QUERY_RE.test(q)) return { status: 'unknown', query: q };
     // Same rule as the CLI: an exact id wins outright, otherwise a prefix has
     // to be unique. Without the exact-first pass, a full id that happens to
@@ -69,8 +71,8 @@ export function resolveShortIds(queries: string[], deps: ResolveDeps): ResolvedC
     if (hits.length === 0) return { status: 'unknown', query: q };
     if (hits.length > 1) return { status: 'ambiguous', query: q, candidates: hits.map((h) => h.entry.id).sort() };
     const { provider, entry } = hits[0];
-    const localPath = deps.resolveLocal({ projectName: entry.projectName, originalPath: entry.originalPath });
-    const here = localPath ? deps.transcriptExistsLocally(provider, localPath, entry.id) : false;
+    const localPath = await deps.resolveLocal({ projectName: entry.projectName, originalPath: entry.originalPath });
+    const here = localPath ? await deps.transcriptExistsLocally(provider, localPath, entry.id) : false;
     return {
       status: 'ok',
       id: entry.id,
@@ -91,5 +93,5 @@ export function resolveShortIds(queries: string[], deps: ResolveDeps): ResolvedC
       missingProject: !localPath,
       notSyncedYet: !!localPath && !here,
     };
-  });
+  }));
 }

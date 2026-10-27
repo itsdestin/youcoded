@@ -28,4 +28,12 @@ export const APP: readonly ScreenEntry[] = [
   // The same popup over a native session's TodoWrite list (Open tasks rework, 2026-10-13: the
   // path that showed nothing before).
   { name: 'dev/open-tasks#native', tags: ['dev'], mark: 'chat/open-tasks', params: { tasks: 'native' } },
+  // The phone's start-up screens (dev/workbench/GatePractice.tsx) and its two new notices (ToastPractice.tsx): the real gate / toast over
+  // pretend connections, at phone size. Phone-reliability review deck, 2026-10-22.
+  ...(['connecting', 'unreachable', 'tab', 'login'] as const).map((g) => ({
+    name: `dev/gate#${g}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, params: { gate: g }, newIn: 'after' as const,
+  })),
+  ...(['lost', 'password'] as const).map((t) => ({
+    name: `dev/toast#${t}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: t }, newIn: 'after' as const,
+  })),
 ];

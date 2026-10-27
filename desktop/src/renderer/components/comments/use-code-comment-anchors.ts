@@ -18,7 +18,7 @@ import type { EditorView } from '@codemirror/view';
 import { resolveSelector } from '../../../shared/doc-comments-anchor';
 import type { TextQuoteSelector } from '../../../shared/doc-comments-types';
 import { setCommentStatus, anchorSignature, type DocComment } from '../../state/doc-comments-store';
-import { visibleEditorFor } from '../artifact-views/cm/ref-line-highlight';
+import { visibleEditorFor } from '../artifact-views/cm/editor-registry';
 // F1/F2/F3 (T14 review): the same document-length bound use-quote-marks.ts
 // enforces for its own O(document-length) tree walk — CodeMirror's live
 // document can be just as large as a rendered file's DOM text, and exporting

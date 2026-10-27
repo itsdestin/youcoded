@@ -14,6 +14,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { PERMISSION_OVERRIDES_DEFAULT } from '../shared/types';
+import { atomicWrite } from './atomic-write';
 
 // ─── Session defaults (~/.claude/youcoded-defaults.json) ─────────────────────
 
@@ -42,41 +43,90 @@ function syncPermissionOverrides(defaults: Record<string, any>): void {
   if (overrides && typeof overrides === 'object') permissionOverridesSink?.(overrides);
 }
 
+// WHY a cache (2026-10-22 freeze hunt): `defaults:get` used to readFileSync on every call, and on a
+// nearly-full btrfs disk that read stalled the whole main thread for seconds. The read is now async
+// and its parsed result is cached per file. The cache is validated by an (async) stat signature
+// instead of trusted blindly, because other code still writes this file directly
+// (migrate-permission-overrides, the dev tools, a hand edit): a changed signature means re-read.
+// An atomic write replaces the inode, so the signature also changes on every save of ours.
+interface DefaultsCacheEntry { sig: string; value: Record<string, any> }
+const defaultsCache = new Map<string, DefaultsCacheEntry>();
+// WHY a generation (review 2026-10-22): a read that began before a save can finish after it. It must
+// not push its older overrides into the enforcement cache or the read cache over the save's newer ones.
+// Every save bumps this; a read acts on the cache/sink only if it is unchanged since the read began.
+const writeGen = new Map<string, number>();
+const genOf = (file: string) => writeGen.get(file) ?? 0;
+
+function withOverrideDefaults(parsed: Record<string, any>): Record<string, any> {
+  return {
+    ...defaultsInitial(), ...parsed,
+    permissionOverrides: { ...PERMISSION_OVERRIDES_DEFAULT, ...parsed.permissionOverrides },
+  };
+}
+
+/** Hand out a copy so a caller mutating its result can never corrupt the cache. */
+function cloneDefaults(v: Record<string, any>): Record<string, any> {
+  return { ...v, permissionOverrides: { ...v.permissionOverrides } };
+}
+
 /** The saved defaults over the built-in ones, overrides merged key by key. Refreshes the
  *  enforcement cache as a side effect, as the desktop handler always did. */
-export function readDefaults(file = defaultsFilePath()): Record<string, any> {
+export async function readDefaults(file = defaultsFilePath()): Promise<Record<string, any>> {
+  const gen = genOf(file);
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    const result = {
-      ...defaultsInitial(), ...parsed,
-      permissionOverrides: { ...PERMISSION_OVERRIDES_DEFAULT, ...parsed.permissionOverrides },
-    };
-    syncPermissionOverrides(result);
-    return result;
+    const st = await fs.promises.stat(file);
+    const sig = `${st.ino}:${st.size}:${st.mtimeMs}`;
+    const hit = defaultsCache.get(file);
+    if (hit && hit.sig === sig) {
+      if (gen === genOf(file)) syncPermissionOverrides(hit.value);
+      return cloneDefaults(hit.value);
+    }
+    const parsed = JSON.parse(await fs.promises.readFile(file, 'utf-8'));
+    const result = withOverrideDefaults(parsed);
+    if (gen === genOf(file)) {
+      defaultsCache.set(file, { sig, value: result });
+      syncPermissionOverrides(result);
+    }
+    return cloneDefaults(result);
   } catch {
+    defaultsCache.delete(file);
     return defaultsInitial();
   }
 }
 
+// WHY a queue: writeDefaults is read-merge-write. It was safe while it was synchronous; now that it
+// awaits, two overlapping saves would both read the old file and the second would drop the first's
+// keys. Saves for one file run one at a time, in the order asked.
+const writeQueues = new Map<string, Promise<unknown>>();
+
 /** Merge `updates` into the saved defaults (the override block merged INTO, never replaced),
- *  write, refresh the enforcement cache, and answer the result — or null when it could not
- *  be written. */
-export function writeDefaults(updates: Record<string, any>, file = defaultsFilePath()): Record<string, any> | null {
+ *  write atomically, refresh the enforcement cache, and answer the result — or null when it
+ *  could not be written. */
+export function writeDefaults(updates: Record<string, any>, file = defaultsFilePath()): Promise<Record<string, any> | null> {
+  const run = (writeQueues.get(file) ?? Promise.resolve()).then(() => writeDefaultsNow(updates, file));
+  const tail = run.catch(() => {});
+  writeQueues.set(file, tail);
+  void tail.then(() => { if (writeQueues.get(file) === tail) writeQueues.delete(file); });
+  return run;
+}
+
+async function writeDefaultsNow(updates: Record<string, any>, file: string): Promise<Record<string, any> | null> {
   try {
     let current: Record<string, any> = defaultsInitial();
     try {
-      const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
-      current = {
-        ...current, ...parsed,
-        permissionOverrides: { ...PERMISSION_OVERRIDES_DEFAULT, ...parsed.permissionOverrides },
-      };
+      current = withOverrideDefaults(JSON.parse(await fs.promises.readFile(file, 'utf-8')));
     } catch { /* no file yet, or unreadable: start from the built-in defaults */ }
     const merged = { ...current, ...updates };
     if (updates && updates.permissionOverrides) {
       merged.permissionOverrides = { ...current.permissionOverrides, ...updates.permissionOverrides };
     }
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(merged, null, 2));
+    // atomicWrite makes the folder, writes a temp file and renames it over the target, so a reader
+    // (or a crash mid-save) sees the old whole file or the new one — never half.
+    await atomicWrite(file, JSON.stringify(merged, null, 2));
+    // WHY drop the cached copy: the next read must see what was just saved (its stat signature
+    // changes anyway; this makes the invalidation explicit rather than dependent on timestamps).
+    defaultsCache.delete(file);
+    writeGen.set(file, genOf(file) + 1);
     syncPermissionOverrides(merged);
     return merged;
   } catch {

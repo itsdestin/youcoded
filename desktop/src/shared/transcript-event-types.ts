@@ -125,6 +125,8 @@ interface UserMessageData extends SubagentStamp {
   /** A slash command read from its command tags. The chat starts no turn for
    *  it, because many commands get no reply (2026-09-11). */
   slashCommand?: boolean;
+  /** Claude Code queue: files the person attached, read back off the message's "Attached:" lines (shared/claude-queue-wire.ts). */
+  attachedFiles?: string[];
   /** Native: absolute composer attachment paths, persisted so resume can
    *  re-read the pixels (events carry no binary). #290 follow-up fix 2. */
   attachments?: string[];
@@ -336,6 +338,11 @@ interface ContextClearData {
   contextUsedAfter?: number;
 }
 
+interface ModelSwitchData extends SubagentStamp {
+  /** The model the conversation is on from here: a Claude Code alias (`opus[1m]`) or a native provider model id. */
+  model: string;
+}
+
 interface SkillInvokedData {
   /** The resolved, qualified id (wecoded-themes-plugin:theme-builder). */
   skillId: string;
@@ -374,6 +381,7 @@ interface TranscriptDataMap {
   'replay-complete': ReplayCompleteData;
   'session-error': SessionErrorData;
   'context-clear': ContextClearData;
+  'model-switch': ModelSwitchData;
   'skill-invoked': SkillInvokedData;
   'subagent-usage': SubagentUsageData;
   'background-task': BackgroundTaskData;

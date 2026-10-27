@@ -47,7 +47,8 @@ describe('parseTranscriptLine', () => {
 
   it('recognizes an app mod command envelope even without promptId', () => {
     const events = parseTranscriptLine(JSON.stringify({ type: 'user', uuid: 'mod-model', origin: { kind: 'plugin', name: 'youcoded-control-bridge' }, message: { role: 'user', content: '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>' } }), sessionId);
-    expect(events).toMatchObject([{ type: 'user-message', uuid: 'mod-model', data: { text: '/model sonnet', slashCommand: true } }]);
+    // A /model command line draws nothing itself; the "Set model to" reply after it draws the divider.
+    expect(events).toEqual([]);
   });
 
   it('drops only the bridge command\'s extra compact row, not actual user text or other plugins', () => {
@@ -666,17 +667,18 @@ describe('TranscriptWatcher', () => {
       path.join(subagentsDir, 'agent-abc.meta.json'),
       JSON.stringify({ description: 'Find bug', agentType: 'Explore' }),
     );
-    fs.writeFileSync(
-      path.join(subagentsDir, 'agent-abc.jsonl'),
-      JSON.stringify({
+    // WHY empty at start (2026-10-22): existing helper files are no longer replayed when watching starts
+    // (their history comes from the page reader); the helper's line arrives after, as it does live.
+    const subagentJsonl = path.join(subagentsDir, 'agent-abc.jsonl');
+    fs.writeFileSync(subagentJsonl, '');
+    const subagentLine = JSON.stringify({
         type: 'assistant', uuid: 'uuid-s1', isSidechain: true,
         message: {
           role: 'assistant',
           content: [{ type: 'tool_use', id: 'toolu_S1', name: 'Read', input: { file_path: '/a' } }],
           stop_reason: null,
         },
-      }) + '\n',
-    );
+      }) + '\n';
 
     const tw = new TranscriptWatcher(tmpRoot);
     const events: TranscriptEvent[] = [];
@@ -684,6 +686,9 @@ describe('TranscriptWatcher', () => {
     tw.startWatching('desktop-sess-1', sessionId, 'C:/tmp/project');
     try {
       fs.appendFileSync(parentJsonl, agentToolUseLine('uuid-1', 'toolu_P1') + '\n');
+      // Wait until the helper file is tracked (its start point fixed) before it gets its line.
+      await vi.waitFor(() => expect((tw as any).sessions.get('desktop-sess-1').subagentWatcher.perFile.has('abc')).toBe(true), { timeout: WATCH_MS });
+      fs.appendFileSync(subagentJsonl, subagentLine);
       tw.readNewLinesForSession('desktop-sess-1');
       await vi.waitFor(() => {
         expect(events.map(e => e.type + ':' + (looseData(e).toolName ?? ''))).toContain('tool-use:Read');
@@ -997,17 +1002,17 @@ describe('startWatching path source', () => {
       path.join(subagentsDir, 'agent-hook.meta.json'),
       JSON.stringify({ description: 'Find bug', agentType: 'Explore' }),
     );
-    fs.writeFileSync(
-      path.join(subagentsDir, 'agent-hook.jsonl'),
-      JSON.stringify({
+    // Empty at start: existing helper files are not replayed (2026-10-22); the line arrives after watching starts.
+    const hookSubagentJsonl = path.join(subagentsDir, 'agent-hook.jsonl');
+    fs.writeFileSync(hookSubagentJsonl, '');
+    const hookSubagentLine = JSON.stringify({
         type: 'assistant', uuid: 'uuid-hook-s1', isSidechain: true,
         message: {
           role: 'assistant',
           content: [{ type: 'tool_use', id: 'toolu_HS1', name: 'Read', input: { file_path: '/a' } }],
           stop_reason: null,
         },
-      }) + '\n',
-    );
+      }) + '\n';
 
     // 4-arg: transcriptPath (parentJsonl, inside divergentDir) wins over any
     // cwd-derived slug. If subagentsDir regressed to slug-derivation, it would
@@ -1020,6 +1025,8 @@ describe('startWatching path source', () => {
     // Live path (getHistory was removed in B1): the parent's Agent tool_use is
     // appended after watching starts, which binds the helper file.
     fs.appendFileSync(parentJsonl, agentToolUseLine('uuid-hook-1', 'toolu_HP1') + '\n');
+    await vi.waitFor(() => expect((watcher as any).sessions.get('desktop-hook-1').subagentWatcher.perFile.has('hook')).toBe(true), { timeout: WATCH_MS });
+    fs.appendFileSync(hookSubagentJsonl, hookSubagentLine);
     watcher.readNewLinesForSession('desktop-hook-1');
     await vi.waitFor(() => {
       expect(history.some(e => e.type === 'tool-use' && e.data.toolName === 'Read')).toBe(true);
@@ -1171,6 +1178,16 @@ describe('messages recorded outside an ordinary user line', () => {
     ]);
   });
 
+  it('a queue send shows the words the person typed, with its attached files and without the read instruction', () => {
+    const wire = 'Read this entire file: "/p/notes.md"\nUse Read before answering; read large text in chunks if needed. If a file is unavailable or cannot be read, say so. Do not assume the file contents were supplied automatically.\n\nCompare "/p/notes.md"\n\nAttached: "/q/shot.png"';
+    expect(parseTranscriptLine(queued(wire, 'prompt', { kind: 'human' }), 's1')).toEqual([
+      expect.objectContaining({ type: 'user-message', uuid: 'q1', data: { text: 'Compare "/p/notes.md"', attachedFiles: ['/q/shot.png'] } }),
+    ]);
+    expect(parseTranscriptLine(commandLine('what is this\n\nAttached: "/q/shot.png"'), 's1')).toEqual([
+      expect.objectContaining({ type: 'user-message', data: { text: 'what is this', attachedFiles: ['/q/shot.png'] } }),
+    ]);
+  });
+
   it('a background task notice stays hidden', () => {
     expect(parseTranscriptLine(queued('<task-notification><task-id>b1</task-id></task-notification>', 'task-notification'), 's1')).toEqual([]);
   });
@@ -1191,6 +1208,36 @@ describe('messages recorded outside an ordinary user line', () => {
     expect(parseTranscriptLine(line, 's1')).toEqual([
       expect.objectContaining({ data: { text: '/compact we are going to prepare the plan.', slashCommand: true } }),
     ]);
+  });
+
+  it('a /model command line naming a model, or none, is not a user bubble', () => {
+    for (const args of ['opus[1m]', 'sonnet', 'claude-haiku-5-5', '']) {
+      const line = commandLine(`<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>${args}</command-args>`);
+      expect(parseTranscriptLine(line, 's1')).toEqual([]);
+    }
+  });
+
+  it('a /model command line naming no known model stays the plain command', () => {
+    const line = commandLine('<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>gpt-weird</command-args>');
+    expect(parseTranscriptLine(line, 's1')).toEqual([expect.objectContaining({ type: 'user-message', data: { text: '/model gpt-weird', slashCommand: true } })]);
+  });
+
+  it("Claude Code's \"Set model to\" reply is the model switch, in every spelling it has used", () => {
+    const esc = String.fromCharCode(27);
+    for (const [reply, model] of [
+      [`Set model to ${esc}[1mOpus 5 (1M context)${esc}[22m and saved as your default for new sessions`, 'opus[1m]'],
+      ['Set model to `Sonnet 5.5` and saved as your default for new sessions', 'sonnet'],
+      [`Set model to ${esc}[1mHaiku 4.5${esc}[22m`, 'haiku'],
+      ['Set model to Fable 5 and saved as your default for new sessions · Draws from usage', 'fable'],
+      ['Set model to Mystery 9', 'Mystery 9'],
+    ] as const) {
+      expect(parseTranscriptLine(commandLine(`<local-command-stdout>${reply}</local-command-stdout>`), 's1'))
+        .toEqual([expect.objectContaining({ type: 'model-switch', uuid: 'c1', data: { model } })]);
+    }
+  });
+
+  it('a declined switch ("Kept model as") draws nothing', () => {
+    expect(parseTranscriptLine(commandLine('<local-command-stdout>Kept model as `Opus 5.5 (1M context)`</local-command-stdout>'), 's1')).toEqual([]);
   });
 
   it("the dimmed echo of a command's output stays hidden", () => {
@@ -1454,5 +1501,32 @@ describe('parseTranscriptLine — control messages written as user lines', () =>
       expect(events[0].type).toBe('compact-summary');
       expect(events[0].data).toEqual({ sourceTimestamp: 0 });
     });
+  });
+});
+
+// Destin, 2026-10-22: one "wyd" sent from the phone showed as two bubbles. Claude Code had written the prompt twice — the second
+// line after a stalled request, with the same parent entry and the same text — and its terminal showed one.
+describe('a prompt Claude Code wrote twice', () => {
+  const line = (uuid: string, parentUuid: string, text: string, ts: string) => JSON.stringify({
+    parentUuid, type: 'user', message: { role: 'user', content: text }, uuid, promptId: `p-${uuid}`, timestamp: ts,
+    origin: { kind: 'human' }, promptSource: 'typed',
+  });
+  const userTexts = (lines: string[]) => {
+    const tally = emptyTurnUsageTally();
+    return lines.flatMap((l) => parseTranscriptLine(l, 'desk-1', tally)).filter((e) => e.type === 'user-message').map((e) => (e.data as { text: string }).text);
+  };
+
+  it('shows once when the second copy follows the same entry', () => {
+    expect(userTexts([
+      line('a', 'root', 'wyd', '2026-10-22T18:34:08.567Z'),
+      line('b', 'root', 'wyd', '2026-10-22T18:35:06.923Z'),
+    ])).toEqual(['wyd']);
+  });
+
+  it('still shows the same words typed again after the first', () => {
+    expect(userTexts([
+      line('a', 'root', 'wyd', '2026-10-22T18:34:08.567Z'),
+      line('b', 'a', 'wyd', '2026-10-22T18:35:06.923Z'),
+    ])).toEqual(['wyd', 'wyd']);
   });
 });

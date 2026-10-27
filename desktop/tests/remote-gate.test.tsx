@@ -6,6 +6,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemoteGate, type RemoteGateShim } from '../src/renderer/remote-gate';
+import { queueBrowserStorage } from './helpers/queue-browser-storage';
 
 type Listener = Parameters<RemoteGateShim['startSavedKeySignIn']>[0];
 
@@ -22,6 +23,8 @@ function fakeShim(opts: { savedKey: boolean }) {
     retrySavedKeyNow: vi.fn(),
     stopSavedKeySignIn: vi.fn(),
     onCredentialRefused: vi.fn((cb: (reason: string) => void) => { refusedCb = cb; }),
+    connectToHost: vi.fn(async () => {}),
+    disconnectFromHost: vi.fn(async () => {}),
   };
   return {
     shim,
@@ -36,7 +39,7 @@ async function mount(f: ReturnType<typeof fakeShim>) {
   await act(async () => {});
 }
 
-const passwordBox = () => screen.queryByPlaceholderText('Password');
+const passwordBox = () => screen.queryByLabelText('Password');
 
 describe('RemoteGate', () => {
   beforeEach(() => {
@@ -84,9 +87,9 @@ describe('RemoteGate', () => {
     const f = fakeShim({ savedKey: true });
     await mount(f);
     f.report({ type: 'failed', kind: 'unreachable' });
-    expect(screen.getByText("Can't reach your computer.")).toBeTruthy();
-    expect(screen.getByText('Trying again…')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Try now' }));
+    expect(screen.getByText("Can't reach your computer")).toBeTruthy();
+    expect(screen.getByText('It keeps trying by itself every few seconds.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(f.shim.retrySavedKeyNow).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Enter password instead' }));
     expect(f.shim.stopSavedKeySignIn).toHaveBeenCalled();
@@ -135,7 +138,7 @@ describe('RemoteGate', () => {
     expect(screen.getByText('This computer no longer accepts this device. Enter the password to connect again.')).toBeTruthy();
   });
 
-  it('a page older than its computer says so and offers Refresh, which reloads', async () => {
+  it('a page older than its computer says so and offers a reload, which reloads', async () => {
     const f = fakeShim({ savedKey: true });
     await mount(f);
     f.setState('connected');
@@ -144,25 +147,27 @@ describe('RemoteGate', () => {
     Object.defineProperty(window, 'location', { configurable: true, value: { ...orig, reload } });
     try {
       f.refuseCredential('unsupported-version');
-      expect(screen.getByText("This page is older than your computer's YouCoded. Refresh to update.")).toBeTruthy();
-      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+      expect(screen.getByText('This page needs a refresh')).toBeTruthy();
+      // No password box: a password cannot fix an old page (review P-5).
+      expect(passwordBox()).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Reload this tab' }));
       expect(reload).toHaveBeenCalledTimes(1);
     } finally {
       Object.defineProperty(window, 'location', { configurable: true, value: orig });
     }
   });
 
-  it('"Try now" shows it is trying, and the password stays one tap away', async () => {
+  it('"Try again" shows it is trying, and the password stays one tap away', async () => {
     const f = fakeShim({ savedKey: true });
     await mount(f);
     f.report({ type: 'failed', kind: 'unreachable' });
-    fireEvent.click(screen.getByRole('button', { name: 'Try now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(screen.getByText('Trying to connect…')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Try now' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Try again' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole('button', { name: 'Enter password instead' })).toBeTruthy();
     f.report({ type: 'failed', kind: 'unreachable' });
-    expect(screen.getByText("Can't reach your computer.")).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Try now' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText("Can't reach your computer")).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Try again' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('a refusal the page cannot explain, or an unexpected error, does not blame the password', async () => {
@@ -179,11 +184,71 @@ describe('RemoteGate', () => {
     expect(screen.queryByText('Invalid password')).toBeNull();
   });
 
+  describe('the Android app going back to the computer it was last using', () => {
+    const HOME_PC = { name: 'Home PC', host: '100.64.1.2', port: 9900, password: 'pw' };
+    beforeEach(() => {
+      // Node 26's own localStorage can mask jsdom's; give the page a plain one.
+      vi.stubGlobal('localStorage', queueBrowserStorage());
+      (window as any).claude = { android: { getPairedDevices: vi.fn(async () => ({ devices: [HOME_PC] })) } };
+    });
+
+    async function mountAndroid(f: ReturnType<typeof fakeShim>) {
+      render(<RemoteGate isAndroid loadShim={async () => f.shim} renderApp={() => <div>THE APP</div>} />);
+      await act(async () => {});
+      f.setState('connected'); // the phone's own runtime answered
+      await act(async () => {});
+    }
+
+    it('reconnects to it at launch without first showing the phone\'s own conversations', async () => {
+      const { rememberLastComputer } = await import('../src/renderer/last-computer');
+      rememberLastComputer('100.64.1.2', 9900);
+      const f = fakeShim({ savedKey: false });
+      let finish: () => void = () => {};
+      (f.shim.connectToHost as any).mockImplementationOnce(() => new Promise<void>((r) => { finish = r; }));
+      await mountAndroid(f);
+      expect(screen.getByText('Connecting to Home PC…')).toBeTruthy();
+      expect(screen.queryByText('THE APP')).toBeNull();
+      expect(f.shim.connectToHost).toHaveBeenCalledWith('100.64.1.2', 9900, 'pw');
+      await act(async () => { finish(); });
+      expect(screen.getByText('THE APP')).toBeTruthy();
+    });
+
+    it('an asleep computer: says so, keeps trying, and the phone alone is one tap away', async () => {
+      const { rememberLastComputer, lastComputer } = await import('../src/renderer/last-computer');
+      rememberLastComputer('100.64.1.2', 9900);
+      const f = fakeShim({ savedKey: false });
+      (f.shim.connectToHost as any).mockRejectedValue(Object.assign(new Error('timed out'), { signInFailure: { kind: 'unreachable' } }));
+      await mountAndroid(f);
+      await waitFor(() => expect(screen.getByText("Can't reach Home PC")).toBeTruthy());
+      expect(screen.getByText('It keeps trying by itself every few seconds.')).toBeTruthy();
+      expect(screen.queryByText('THE APP')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Use this phone only' }));
+      await waitFor(() => expect(screen.getByText('THE APP')).toBeTruthy());
+      expect(lastComputer()).toBeNull();
+    });
+
+    it('with no computer remembered, opens the phone\'s own runtime as before', async () => {
+      const f = fakeShim({ savedKey: false });
+      await mountAndroid(f);
+      await waitFor(() => expect(screen.getByText('THE APP')).toBeTruthy());
+      expect(f.shim.connectToHost).not.toHaveBeenCalled();
+    });
+  });
+
   it('once connected, a later drop keeps the app on screen', async () => {
     const f = fakeShim({ savedKey: true });
     await mount(f);
     f.setState('connected');
     f.setState('disconnected');
     expect(screen.getByText('THE APP')).toBeTruthy();
+  });
+});
+
+describe('the notice when a saved computer refuses the Android app', () => {
+  it('blames the password only when the computer refused the password', async () => {
+    const { savedPasswordRefusedNotice } = await import('../src/renderer/remote-gate');
+    expect(savedPasswordRefusedNotice('Home PC', 'invalid-credentials')).toMatch(/didn't accept the saved password/);
+    expect(savedPasswordRefusedNotice('Home PC', 'no-password-configured')).toBe('Home PC has no remote access password set yet. Set one on that computer, in Settings → Remote access.');
+    expect(savedPasswordRefusedNotice('Home PC', 'rate-limited')).toBe('Home PC refused this sign-in.');
   });
 });

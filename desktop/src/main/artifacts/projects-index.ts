@@ -14,6 +14,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { readSidecarShared } from './artifact-store';
+import { createExistsProbe } from './exists-probe';
+import { mapLimit } from '../map-limit';
 import { listProjects } from './central-index';
 import { buildSavedFolderProjects } from './saved-folder-projects';
 import { trackedArtifacts } from './visible-artifacts';
@@ -40,7 +42,10 @@ export async function countArtifacts(projectRoot: string): Promise<number> {
     .filter((a: any) => a.status !== 'deleted');
   // Drop orphans — files marked 'active' but bash-rm'd off disk (CC has no
   // Delete tool, so this is the common case). fs.access in parallel is cheap.
-  const alive = await Promise.all(visible.map(async (a: any) => {
+  // WHY a probe + bounded concurrency (2026-10-22 freeze hunt): thousands of tracked files, most in
+  // deleted folders — see exists-probe.ts. Same answer per file as the fs.access it replaces.
+  const probe = createExistsProbe();
+  const alive = await mapLimit(visible, 32, async (a: any) => {
     const full = a.kind === 'internal' ? path.join(projectRoot, a.path) : a.absolutePath;
     // Fix: a null `absolutePath` (a malformed/legacy external record) must be
     // treated as not-alive BEFORE isAbsoluteRecorded runs — that guard calls
@@ -53,8 +58,8 @@ export async function countArtifacts(projectRoot: string): Promise<number> {
     // relative record against the process cwd and count a coincidentally-named
     // file as this artifact.
     if (a.kind !== 'internal' && (full == null || !isAbsoluteRecorded(full))) return false;
-    try { await fs.promises.access(full); return true; } catch { return false; }
-  }));
+    return probe.exists(full);
+  });
   return alive.filter(Boolean).length;
 }
 
@@ -74,10 +79,7 @@ export async function projectAllFiles(projectRoot: string): Promise<{ files: any
       if (a.kind !== 'internal' || a.status === 'deleted') return false;
       return !seen.has(canonicalize(a.path, projectRoot));
     });
-    const alive = await Promise.all(candidates.map(async (a) => {
-      try { await fs.promises.access(path.join(projectRoot, a.path)); return true; }
-      catch { return false; }
-    }));
+    const alive = await createExistsProbe().existsAll(candidates.map((a) => path.join(projectRoot, a.path)));
     candidates.forEach((a, i) => {
       if (!alive[i]) return;
       const rel = canonicalize(a.path, projectRoot);
@@ -99,7 +101,7 @@ export function isGatedRoot(projectRoot: string): boolean {
   return /^[a-z]:?$/.test(canon) || canon === '/' || /^[a-z]:\/$/.test(canon);
 }
 
-export async function countAllFiles(projectRoot: string): Promise<{ count: number; truncated: boolean } | null> {
+async function countAllFiles(projectRoot: string): Promise<{ count: number; truncated: boolean } | null> {
   if (isGatedRoot(projectRoot)) return null; // gated — no scan, no fake number
   try {
     const r = await projectAllFiles(projectRoot);

@@ -29,7 +29,7 @@ vi.mock('../src/main/conversations/service', async () => {
   const { resolveLocalProject } = await import('../src/main/conversations/resolve-local-project');
   return {
     getConversationStore: () => storeHolder.current,
-    buildLocalProjectResolver: () => (rec: any) => resolveLocalProject(rec, new Map(), savedHolder.current),
+    buildLocalProjectResolver: () => async (rec: any) => resolveLocalProject(rec, new Map(), savedHolder.current),
   };
 });
 

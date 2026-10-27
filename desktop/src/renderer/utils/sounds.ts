@@ -40,14 +40,61 @@ export type SoundCategory = 'attention' | 'ready';
 
 // ── Synthesizer helpers ──────────────────────────────────────────────────────
 
+/**
+ * WHY one shared, pre-built AudioContext (freeze hunt 2026-10-22, long-reply freeze): building a
+ * context makes the page wait on the app's main process (a synchronous round trip to find the
+ * audio device). The end-of-reply chime built a fresh one at the exact moment a long reply
+ * finished - when the main process is busiest - so the page froze for as long as the main process
+ * was behind: measured 1.5 s after a 2,000-line reply and 20 s after a 700 KB one (CPU profile:
+ * the whole stall is `new AudioContext()`, nothing in markdown; muted, the freeze is gone).
+ * Now the context is built once, at idle after start-up (prepareSounds), kept asleep between
+ * chimes and woken for each one. The notes, volume and timing are unchanged.
+ */
+let sharedCtx: AudioContext | null = null;
+let sleepTimer: ReturnType<typeof setTimeout> | undefined;
+function sharedContext(): AudioContext {
+  if (!sharedCtx || sharedCtx.state === 'closed') sharedCtx = new AudioContext();
+  return sharedCtx;
+}
+/** Put the context back to sleep once the last chime in flight has finished (so no audio stream stays open). */
+// WHY the deadline only moves later (independent review, 2026-10-24): a stock chime asks for sleep after 1.5 s while a longer custom
+// file may still be playing; the old "restart the timer" let the shorter request replace the longer one and cut the file off.
+let sleepAt = 0;
+function sleepSoon(afterMs: number) {
+  sleepAt = Math.max(sleepAt, Date.now() + afterMs);
+  if (sleepTimer) clearTimeout(sleepTimer);
+  sleepTimer = setTimeout(() => { sleepTimer = undefined; void sharedCtx?.suspend().catch(() => {}); }, Math.max(0, sleepAt - Date.now()));
+}
+/** Wake the context. A suspended context's clock is stopped, so notes scheduled before this starts at the same moment they would have. */
+function wake(ctx: AudioContext) {
+  if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = undefined; }
+  if (ctx.state !== 'running') void ctx.resume().catch(() => {});
+}
+/**
+ * Build the shared context now, off the critical moment, and put it to sleep. Scheduled once
+ * below, a few seconds after this file loads. A failure is ignored: the first chime then builds it as before.
+ */
+export function prepareSounds() {
+  try {
+    if (typeof AudioContext === 'undefined') return;
+    const ctx = sharedContext();
+    void ctx.suspend().catch(() => {});
+  } catch { /* no audio available: playSound will report it when a chime is due */ }
+}
+// WHY here and not in App.tsx: this module is loaded once by the app shell, so the context is built a few
+// seconds after start-up, when nothing is busy. Nothing is played. Guarded so tests and non-browser
+// loads of this file do nothing.
+if (typeof window !== 'undefined' && typeof setTimeout === 'function') setTimeout(prepareSounds, 4000);
+
 function synth(recipe: (ctx: AudioContext, gain: GainNode) => void, volume: number) {
   try {
-    const ctx = new AudioContext();
+    const ctx = sharedContext();
     const gain = ctx.createGain();
     gain.connect(ctx.destination);
     gain.gain.setValueAtTime(volume, ctx.currentTime);
     recipe(ctx, gain);
-    setTimeout(() => ctx.close(), 1500);
+    wake(ctx);
+    sleepSoon(1500);
   } catch (e) {
     // Log instead of silently swallowing — previously any AudioContext construction
     // failure (autoplay policy, per-page AudioContext cap, sandbox restriction) was
@@ -300,7 +347,7 @@ function parseAiffToAudioBuffer(ctx: AudioContext, arrayBuffer: ArrayBuffer): Au
 async function playCustomFile(filePath: string, volume: number) {
   const fileUrl = fileUrlFromPath(filePath);
   try {
-    const ctx = new AudioContext();
+    const ctx = sharedContext();
 
     let buffer = audioBufferCache.get(filePath);
     if (!buffer) {
@@ -320,7 +367,9 @@ async function playCustomFile(filePath: string, volume: number) {
     source.connect(gain);
     gain.connect(ctx.destination);
     source.start();
-    source.onended = () => ctx.close();
+    wake(ctx);
+    // WHY sleep after the file ends, not close: the context is shared with the stock chimes (see sharedContext).
+    source.onended = () => sleepSoon(300);
   } catch (e) {
     console.warn('[sound] custom file playback failed, trying HTMLAudioElement fallback', filePath, e);
     try {

@@ -2,7 +2,7 @@
 
 # PTY I/O mechanism — depth
 
-Writing programmatically into Claude Code's Ink TUI input bar exposes undocumented behaviors. Submit logic: `desktop/src/main/pty-worker.js` (case `'input'`) + `app/.../PtyBridge.kt` (`writeInput`). Renderer safety net: `useSubmitConfirmation.ts`. Gate: `state/pty-input-gate.ts`.
+Writing programmatically into Claude Code's Ink TUI input bar exposes undocumented behaviors. Submit logic: `desktop/src/main/pty-worker.js` (case `'input'`; Android runs this same worker), reached first through the host's durable queue (`renderer/state/submit-outgoing.ts` -> `main/claude-queue-transport.ts`, direct PTY send only as the fallback). Renderer safety net (skips its retry for queue and direct sends): `useSubmitConfirmation.ts`. Gate: `state/pty-input-gate.ts`.
 
 ## The mechanism (April 2026 audit, CC v2.1.119)
 
@@ -16,9 +16,9 @@ Three deterministic shapes; no 600ms timing guesses on the Windows path:
 
 1. **Passthrough** — no trailing `\r`. Single write.
 2. **Atomic submit** — `\r` AND total ≤ `SAFE_ATOMIC_LEN` (56 bytes; 8-byte margin under the threshold). One write.
-3. **Echo-driven submit** (desktop) / **600ms split** (Android) — `\r` AND >56. Chunk body ≤56 bytes, then `\r` separately.
+3. **Echo-driven submit** (desktop and Android, same worker) — `\r` AND >56. Chunk body ≤56 bytes, then `\r` separately.
    - **Desktop:** wait for the body tail to echo from CC stdout (proving CC drained the body from its input pipe), then write `\r` as one byte — no timing assumption. On echo timeout (`ECHO_TIMEOUT_MS`, 12s) SUPPRESS the CR (no echo ⇒ a live Ink select menu has focus; a blind `\r` answers it). Recovery is the renderer retry. Do NOT reintroduce the blind fallback CR (2026-07-09 stray-Enter fix, youcoded#110).
-   - **Android:** still 600ms gap (Linux PTY has no ConPTY gap-collapse). Mirroring desktop's echo-driven approach is a TODO in `PtyBridge.writeInput`.
+   - **Android:** runs the same worker, so the same echo-driven path (the old 600ms split is gone).
 
 ## Answering a live Ink select menu (2026-07-26, CC 2.1.220)
 
@@ -58,7 +58,7 @@ typed digit does nothing on them (fixture `untrusted-digit-ignored`). Their butt
 
 Only ONE device may drive such a menu at a time: `main/menu-answer-lock.ts` (IPC
 `session:menu-lock`, a 20 s lease, one instance shared by desktop IPC and the remote
-WebSocket host; Kotlin `MenuAnswerLock.kt`). Without it a desktop's arrows and a phone's
+WebSocket host). Without it a desktop's arrows and a phone's
 Enter could combine into an answer neither person chose. The second device is refused and its card says
 "Another device is answering this right now, so nothing was sent."
 
@@ -91,7 +91,7 @@ Protocol facts live in `docs/cc-dependencies.md` → "Ink menu option selection"
 - Don't atomic-write any `body + \r` longer than 56 bytes — the constants are version-coupled and can shift downward.
 - Don't reintroduce bracketed-paste markers (`\x1b[200~...\x1b[201~`) on Windows (ConPTY mangles them).
 - **`useSubmitConfirmation` is the second-line defense** — sends a bare `\r` only when `pending` stays set 8s after submit AND `canRetrySubmit()` passes: `attentionState==='ok'`, no awaiting-approval/running current-turn tools, no in-flight assistant turn, no uncompleted interactive prompt. `attentionState==='ok'` ALONE is not idle (normal mid-turn + while a permission/AskUserQuestion menu is up); gating on it alone auto-answered prompts. Don't gate on `!isThinking` (never clears if CC never got the message).
-- **Never write to the PTY during a pending interaction** — CC's Ink select menu is LIVE while a hook permission card is up. Every automated writer consults `hasPendingInteraction`/`canRetrySubmit` or main-side `HookRelay.hasPendingPermission(sessionId)` (Android: `EventBridge.hasPendingPermission`). Deliberate menu-drivers (`state/prompt-input.ts` for PromptCard/TrustGate, `plan-menu-driver.ts` for the plan card, kept-card buttons, terminal-view xterm keystrokes) intentionally bypass; ToolCard itself no longer writes to the PTY. Fixed youcoded#110.
+- **Never write to the PTY during a pending interaction** — CC's Ink select menu is LIVE while a hook permission card is up. Every automated writer consults `hasPendingInteraction`/`canRetrySubmit` or main-side `HookRelay.hasPendingPermission(sessionId)`. Deliberate menu-drivers (`state/prompt-input.ts` for PromptCard/TrustGate, `plan-menu-driver.ts` for the plan card, kept-card buttons, terminal-view xterm keystrokes) intentionally bypass; ToolCard itself no longer writes to the PTY. Fixed youcoded#110.
 - **One sanitized string** — the optimistic bubble + PTY send both derive from `components/outgoing-message.ts`; the transcript confirms by content match (PTY send replaces newlines AND tabs with spaces — CC takes a typed tab as the Tab key and drops it, 2026-09-23). A newline-bearing bubble stayed `pending` forever + armed a stray retry `\r`.
 
 ## Output flow control (2026-10-04)
@@ -101,7 +101,7 @@ Protocol facts live in `docs/cc-dependencies.md` → "Ink menu option selection"
 - **A re-mounted terminal must be given a picture (2026-10-05).** A page reload, renderer crash, tear-off to a new window or a buddy window opening creates an EMPTY xterm, and Claude Code redraws only with relative cursor moves, so nothing appears until it next repaints by itself. `terminal-output-router.ts` remembers which sessions have already drawn into a terminal (`drew`, kept across reloads, cleared at session exit) and, when ANY window reports ready for one of those, asks for one repaint through the same worker `bounce`, queued after the replay of the held output; the 1 s per-session limit is shared with the renderer's request (a request inside the window is deferred to its end by one timer per session, never dropped), and a pre-mount cut plus a re-mount still nudge once. A session's very first mount never does. Chosen over replaying the remote ring buffer (`ptyBuffers`): that buffer lives in the remote server, its head can start mid-escape, and replay would still need a mode-restore pass; the nudge needs no new machinery. A shell session redraws its prompt line (harmless, the terminal was empty). Windows: the worker skips the nudge, but a fresh terminal's first fit always sends a resize (`lastCols` starts at 0) and ConPTY re-emits its buffer on a resize.
 - **The send gate is master's, unchanged.** Windows and phones read the computer's own copy of the terminal (`main/session-screens.ts`), which a window reload never empties. An earlier perf-branch variant ("an unpainted screen is no verdict, so send") was removed on integration: it could type a message plus Enter into a hook-less prompt while the screen was blank. Android's own runtime keeps master's own-terminal read.
 - Don't forward PTY output without the brake, don't let a remote client or buddy window ack, and don't hold a paused PTY through the child's exit (Unix node-pty drops unread bytes 200 ms after exit).
-- Android's own PTY runtime is NOT braked (`PtyBridge.kt`, `SessionService.kt` `tryEmit` can drop output and the tail may go unflushed); the phone app, remote browsers and `session:terminal-ack` are no-ops there by design.
+- Android runs the same worker (`app/build.gradle.kts` packs the desktop backend), but only desktop windows ack: remote browsers and the phone page never ack, `session:terminal-ack` is refused at the phone door and `ackOutput` is a no-op in `remote-shim.ts`, by design.
 
 ## Diagnostics
 

@@ -8,7 +8,7 @@
 // The bar is drawn with the app's own Button, so it matches every theme; each
 // press is forwarded to the editor, which does exactly what its own toolbar
 // button would. Anything beyond the basics is one press away in Office — the
-// briefcase in the panel header (office-review#B-inline), not a button in this bar.
+// Office icon in the panel header (office-review#B-inline), not a button in this bar.
 import React, { useEffect, useRef, useState } from 'react';
 import { Button, Tooltip } from '../ui';
 import type { ArtifactViewProps } from '../artifact-views/types';

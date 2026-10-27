@@ -7,8 +7,7 @@ import { sanitizeDocHtml } from './sanitize-doc-html';
 // comment pane as a markdown file — CommentableDocument is that shared layout.
 import { CommentableDocument } from '../comments/CommentableDocument';
 
-// @ts-ignore mammoth.browser lacks type declarations
-import mammoth from 'mammoth/mammoth.browser';
+import { convertDocx } from './docx-convert-jobs';
 
 export function DocxView({ absolutePath, path, commentsMode, onOpenComments, focusThreadId, projectRoot }: ArtifactViewProps) {
   // BinaryContent owns loading/error for the byte read and remounts the inner
@@ -37,13 +36,14 @@ function DocxContent({ bytes, path, commentsMode, onOpenComments, focusThreadId,
 
   useEffect(() => {
     let cancelled = false;
-    // mammoth wants an ArrayBuffer; pass the bytes' underlying buffer.
-    mammoth
-      .convertToHtml({ arrayBuffer: bytes.buffer })
+    // Converted off the page (docx-convert-jobs.ts: a worker, with the old in-page conversion as fallback) so a big
+    // document never freezes the window; "Loading document" shows meanwhile.
+    const job = convertDocx(bytes);
+    job.promise
       // Cleaned before it is ever stored for render — see sanitize-doc-html.ts.
-      .then((result: any) => { if (!cancelled) setHtml(sanitizeDocHtml(result.value)); })
+      .then((value) => { if (!cancelled) setHtml(sanitizeDocHtml(value)); })
       .catch((e: any) => { if (!cancelled) setParseError(String(e?.message ?? e)); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; job.cancel(); };
   }, [bytes]);
 
   if (parseError) return <CenterNote>Couldn’t open this document.</CenterNote>;

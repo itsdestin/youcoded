@@ -117,8 +117,20 @@ export function fitSummaryToolOutputs(messages: ModelMessage[], maxTokens: numbe
   });
   candidates.sort((a, b) => b.value.length - a.value.length);
   const copy = [...messages];
+  // WHY a running total (freeze hunt, 2026-10-24): this used to call messagesTokens(copy) — a walk of
+  // the WHOLE history — inside a ~17-step binary search for every shortened output. A 4,000-message
+  // history needing a few hundred outputs trimmed froze the app for 1.4-7 s (measured) while the
+  // summary request was being prepared. Token size is a plain sum of per-message sizes, so only the one
+  // message being rewritten needs re-sizing; the decisions (and so the output) are identical.
+  let total = messagesTokens(copy);
+  const sizeOf = new Map<number, number>();   // message index -> its current token size
+  const currentSize = (i: number) => {
+    let n = sizeOf.get(i);
+    if (n === undefined) { n = messageTokens(copy[i]); sizeOf.set(i, n); }
+    return n;
+  };
   for (const { message, part, textPart, value } of candidates) {
-    if (messagesTokens(copy) <= maxTokens) break;
+    if (total <= maxTokens) break;
     const original = copy[message] as Extract<ModelMessage, { role: 'tool' }>;
     const replacement = (length: number): ModelMessage => {
       const content = [...original.content];
@@ -131,16 +143,19 @@ export function fitSummaryToolOutputs(messages: ModelMessage[], maxTokens: numbe
     };
     // Keep as much as possible while satisfying this output's share of the
     // request. If one output cannot suffice, shrink it fully before the next.
+    const before = currentSize(message);
     let low = 0; let high = value.length;
     while (low < high) {
       const mid = Math.ceil((low + high) / 2);
-      copy[message] = replacement(mid);
-      if (messagesTokens(copy) <= maxTokens) low = mid;
+      if (total - before + messageTokens(replacement(mid)) <= maxTokens) low = mid;
       else high = mid - 1;
     }
     copy[message] = replacement(low);
+    const after = messageTokens(copy[message]);
+    total += after - before;
+    sizeOf.set(message, after);
   }
-  return messagesTokens(copy) <= maxTokens ? copy : null;
+  return total <= maxTokens ? copy : null;
 }
 
 /** Provenance for the summarizer WITHOUT touching the messages: a note naming

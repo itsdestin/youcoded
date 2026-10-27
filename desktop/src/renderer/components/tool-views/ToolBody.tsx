@@ -5,7 +5,7 @@ import { UnifiedDiff, FILE_BOX_CHUNK } from '../diff/UnifiedDiff';
 import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
 import MarkdownContent from '../MarkdownContent';
 import { useSessionToolCalls } from '../../state/chat-context';
-import { buildTasksById, TASK_LIFECYCLE, TaskState, TaskStatus } from '../../state/task-state';
+import { buildTasksByIdShared, TASK_LIFECYCLE, TaskState, TaskStatus } from '../../state/task-state';
 import { SubagentTimeline } from './SubagentTimeline';
 import { ChevronIcon } from '../Icons';
 import { useExpandAllToggle, getInitialExpanded, isExpandModeActive } from '../../hooks/useExpandAllToggle';
@@ -70,9 +70,14 @@ function stripCarriageReturns(s: string): string {
 function CollapsibleBlock({ children, maxLines = 20, className = '' }: { children: string; maxLines?: number; className?: string }) {
   const [open, setOpen] = useState(() => getInitialExpanded());
   useExpandAllToggle(() => setOpen(true), () => setOpen(false));
-  const lines = children.split('\n');
+  // WHY memoised (perf, 2026-10-22): the split (and the slice+join of the collapsed preview) was redone
+  // on every render of every card — each streamed word re-renders the open ones — and on a
+  // multi-thousand-line output that is a whole-string pass per render. Same strings, computed once
+  // per output.
+  const lines = useMemo(() => children.split('\n'), [children]);
   const overflow = lines.length > maxLines;
-  const shown = open || !overflow ? children : lines.slice(0, maxLines).join('\n');
+  const preview = useMemo(() => (lines.length > maxLines ? lines.slice(0, maxLines).join('\n') : children), [lines, maxLines, children]);
+  const shown = open || !overflow ? children : preview;
   // WHY the 45vh cap when expanded: expanded is ONE <pre> (cheap to draw, so no
   // chunked reveal), but uncapped a 5,000-line command output pushed the chat
   // down by 5,000 lines — what D1 (Destin, 2026-09-18) says he doesn't want.
@@ -386,7 +391,8 @@ function ShellView({ tool, commandField, sessionId }: {
   // result of a background start is only the launch acknowledgment.
   const run = tool.shellRun;
   const bg = run != null || (tool.input.run_in_background as boolean | undefined);
-  const response = tool.response ? stripCarriageReturns(tool.response) : '';
+  // WHY memoised (perf, 2026-10-22): a split/map/join over the whole output on every render of the card.
+  const response = useMemo(() => (tool.response ? stripCarriageReturns(tool.response) : ''), [tool.response]);
   const kind = run ? shellEndKind(run) : undefined;
   // A signal kill or an unknown exit is not a failure (native-run-facts.ts).
   const failed = tool.status === 'failed' || kind === 'failed';
@@ -1024,21 +1030,28 @@ function GrepView({ tool }: { tool: ToolCallState }) {
   const glob = asString(tool.input.glob);
   const path = asString(tool.input.path);
   const resp = tool.response || '';
-  const lines = resp ? resp.split('\n').filter(l => l.trim()) : [];
+  // WHY memoised (perf, 2026-10-22): splitting, filtering and regex-grouping the WHOLE response ran on
+  // every render of the card, though only 30 rows are drawn. Derived from the response alone, so
+  // computed once per response.
+  const lines = useMemo(() => (resp ? resp.split('\n').filter(l => l.trim()) : []), [resp]);
+  const byFile = useMemo(() => {
+    const out = new Map<string, { line: string; text: string }[]>();
+    if (mode !== 'content') return out;
+    for (const l of lines) {
+      const m = l.match(/^(.+?):(\d+):(.*)$/);
+      if (m) {
+        const [, file, ln, text] = m;
+        if (!out.has(file)) out.set(file, []);
+        out.get(file)!.push({ line: ln, text });
+      }
+    }
+    return out;
+  }, [lines, mode]);
 
   // Parse `file:line:match` for content mode; treat everything else as a flat
   // list. For content mode we group by file so the eye can scan.
   let body: React.ReactNode;
   if (mode === 'content' && lines.length > 0) {
-    const byFile = new Map<string, { line: string; text: string }[]>();
-    for (const l of lines) {
-      const m = l.match(/^(.+?):(\d+):(.*)$/);
-      if (m) {
-        const [, file, ln, text] = m;
-        if (!byFile.has(file)) byFile.set(file, []);
-        byFile.get(file)!.push({ line: ln, text });
-      }
-    }
     body = (
       <div className="space-y-2">
         {Array.from(byFile.entries()).map(([file, matches]) => (
@@ -1096,7 +1109,8 @@ function GlobView({ tool }: { tool: ToolCallState }) {
   const pattern = asString(tool.input.pattern);
   const path = asString(tool.input.path);
   const resp = tool.response || '';
-  const paths = resp ? resp.split('\n').filter(l => l.trim()) : [];
+  // WHY memoised: same reason as GrepView — whole-response split per render, 30 rows drawn.
+  const paths = useMemo(() => (resp ? resp.split('\n').filter(l => l.trim()) : []), [resp]);
 
   return (
     <div className="space-y-2">
@@ -1220,7 +1234,7 @@ export default function ToolBody({ tool, sessionId }: { tool: ToolCallState; ses
   // text deltas, so this re-renders on tool events only.
   const toolCalls = useSessionToolCalls(sessionId || '');
   const tasksById = useMemo(
-    () => buildTasksById(toolCalls),
+    () => buildTasksByIdShared(toolCalls),
     [toolCalls],
   );
   // Fix: this must sit above the `inner` IIFE's switch, not inside the Bash

@@ -1,6 +1,6 @@
 # YouCoded Privacy Policy
 
-**Effective date:** September 15, 2026
+**Effective date:** October 23, 2026
 
 YouCoded is made and published by **Destin's Adventures, LLC**, an Arizona limited liability company. It is not affiliated with Anthropic or any other commercial entity. This policy explains in plain language what data the YouCoded software touches, what gets sent to servers operated by the project, and what doesn't.
 
@@ -106,7 +106,11 @@ Once an hour while the app is running, YouCoded fetches a small text file (`anno
 
 Theme metadata and the bundled-plugin manifest are also fetched from public GitHub URLs (`raw.githubusercontent.com`). These fetches are anonymous from YouCoded's perspective and are subject to GitHub's own logging.
 
-### 3.6 Remote access (optional, off by default)
+### 3.6 App updates (desktop)
+
+The desktop app checks GitHub's public releases API (`api.github.com`) for a newer version shortly after it starts and from time to time while it runs. With **Install updates automatically** on (the default; switch it off in the update popup or in Settings → Help & feedback → Updates), it downloads the new installer from GitHub in the background and installs it when you quit or choose Restart to update. Each download is checked against a signed release file before it is installed. These requests go to GitHub, not to YouCoded-operated servers, and carry nothing about you beyond what any download does; GitHub may log them under its own policies. The Android app does not update itself.
+
+### 3.7 Remote access (optional, off by default)
 
 The app can serve its UI to a web browser over your local network or via Tailscale. This is **off by default**. When enabled, traffic flows directly between your device and the browser you connect from — **none of it touches YouCoded-operated servers.** The connection is **not TLS-encrypted** at the YouCoded layer; we strongly recommend Tailscale (which encrypts end-to-end with WireGuard) for sensitive sessions.
 

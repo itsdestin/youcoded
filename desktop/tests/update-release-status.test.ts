@@ -83,9 +83,24 @@ describe('readReleaseStatus — is there an update, and which file', () => {
     const early = readReleaseStatus(releaseWith([NAMES.apk]), BETA, 'win32', 'x64');
     expect(early).toMatchObject({ update_available: false, download_url: HTML_URL, manifest_url: null });
     // Mac files attached, Windows not yet: a Mac is offered it, Windows waits.
-    const partial = releaseWith([NAMES.apk, NAMES.macArm, NAMES.macIntel]);
+    // (Changed with the F4 fix: this release used to be offered WITHOUT its signed files; it now carries them.)
+    const partial = releaseWith([NAMES.apk, NAMES.macArm, NAMES.macIntel, ...MANIFEST_FILES]);
     expect(readReleaseStatus(partial, BETA, 'darwin', 'arm64')?.update_available).toBe(true);
     expect(readReleaseStatus(partial, BETA, 'win32', 'x64')?.update_available).toBe(false);
+  });
+
+  it('does not offer a release whose signed files were removed (the brake), however new it is', () => {
+    const pulled = releaseWith(Object.values(NAMES)); // installers still attached, youcoded-release.json and .sig deleted
+    expect(readReleaseStatus(pulled, '1.2.4', 'win32', 'x64')?.update_available).toBe(false);
+    const onlySignature = releaseWith([...Object.values(NAMES), 'youcoded-release.json.sig']);
+    expect(readReleaseStatus(onlySignature, '1.2.4', 'win32', 'x64')?.update_available).toBe(false);
+  });
+
+  it('on the beta listing a pulled release is skipped and the next good one is offered', () => {
+    const good = { ...releaseWith([...Object.values(NAMES), ...MANIFEST_FILES]), tag_name: 'v1.3.0-beta.80', prerelease: true };
+    const pulled = { ...releaseWith(Object.values(NAMES)), tag_name: 'v1.3.0-beta.81', prerelease: true };
+    const picked = selectRelease([pulled, good], { includePrereleases: true, platform: 'win32', arch: 'x64' });
+    expect(picked?.tag_name).toBe('v1.3.0-beta.80');
   });
 
   it('returns null for a reply that is not a release (the rate-limit body)', () => {
@@ -155,6 +170,8 @@ describe('the beta channel — which release is offered', () => {
       `YouCoded-Installer-${version}-arm64.dmg`,
       `YouCoded-Installer-${version}-x64.dmg`,
       `YouCoded-${version}.AppImage`,
+      // A real release carries its signed files; one without them is a PULLED release and is not offered (F4).
+      ...MANIFEST_FILES,
     ];
     return {
       tag_name: tag,

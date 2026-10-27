@@ -10,6 +10,7 @@ import { BrowserRelayServer, deployBrowserRelay, setBrowserRelayAttachment } fro
 interface Sessions {
   getSession(id: string): { provider?: string } | undefined;
   on(event: 'session-exit', cb: (id: string) => void): unknown;
+  on(event: 'session-created', cb: () => void): unknown;
 }
 
 let relay: BrowserRelayServer | null = null;
@@ -31,6 +32,9 @@ async function startRelay(sessions: Sessions): Promise<void> {
   });
   const socketPath = await server.start();
   relay = server;
+  // WHY: a deleted socket file would silently cut every Claude Code session off
+  // the Browser until restart — re-create it as each session starts.
+  sessions.on('session-created', () => { void server.ensureListening(); });
   // The same interpreter the PTY worker and the other app MCP servers use
   // (system Node), resolved without blocking.
   let nodePath = 'node';

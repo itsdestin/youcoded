@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTaskCreateResult, parseTaskListResult, buildTasksById, toolIdsBeforeLastClear } from './task-state';
+import { parseTaskCreateResult, parseTaskListResult, buildTasksById, buildTasksByIdShared, toolIdsBeforeLastClear } from './task-state';
 import type { ToolCallState } from '../../shared/types';
 
 function makeCall(overrides: Partial<ToolCallState> & { toolUseId: string; toolName: string }): ToolCallState {
@@ -300,5 +300,36 @@ describe('toolIdsBeforeLastClear', () => {
     const calls = new Map([['t1', { toolUseId: 't1', toolName: 'TodoWrite', status: 'complete', input: { todos: [{ content: 'Old', status: 'pending' }] } } as any]]);
     expect(buildTasksById(calls).size).toBe(1);
     expect(buildTasksById(calls, new Set(['t1'])).size).toBe(0);
+  });
+});
+
+// Perf: N expanded task cards + the app hook used to re-scan the whole tool history each, per tool event.
+describe('buildTasksByIdShared', () => {
+  const calls = () => new Map([['t1', makeCall({ toolUseId: 't1', toolName: 'TodoWrite', input: { todos: [{ content: 'A', status: 'pending' }] } })]]);
+
+  it('scans a given toolCalls Map once however many readers ask, and returns the same result', () => {
+    const m = calls();
+    let scans = 0;
+    const realValues = m.values.bind(m);
+    m.values = () => { scans++; return realValues(); };
+    const first = buildTasksByIdShared(m);
+    for (let i = 0; i < 10; i++) expect(buildTasksByIdShared(m)).toBe(first);
+    expect(scans).toBe(1);
+    expect(first.size).toBe(1);
+  });
+
+  it('keeps separate answers per pre-clear set, and a new Map (any tool event) gets a fresh answer', () => {
+    const m = calls();
+    const cleared = new Set(['t1']);
+    expect(buildTasksByIdShared(m, cleared).size).toBe(0);
+    expect(buildTasksByIdShared(m, cleared)).toBe(buildTasksByIdShared(m, cleared));
+    expect(buildTasksByIdShared(m).size).toBe(1);
+    const next = new Map(m).set('t2', makeCall({ toolUseId: 't2', toolName: 'TodoWrite', input: { todos: [{ content: 'B', status: 'pending' }] } }));
+    expect(buildTasksByIdShared(next)).not.toBe(buildTasksByIdShared(m));
+  });
+
+  it('matches the uncached builder', () => {
+    const m = calls();
+    expect(buildTasksByIdShared(m)).toEqual(buildTasksById(m));
   });
 });

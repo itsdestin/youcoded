@@ -14,8 +14,8 @@
 // shown in TWO places — Settings → Help & feedback (was Development until 2026-09-28), and the version pill's update
 // popup beside the changelog — and a second copy is how the Development list
 // ended up with two versions of itself, only one of which users ever saw.
-import React, { useEffect, useState } from 'react';
-import { Toggle } from './SettingsPanel';
+import React, { useEffect, useState, useSyncExternalStore } from 'react';
+import { Toggle } from './settings-toggle';
 import { CARD_LEVEL_1, SectionLabel, SettingRow } from './ui';
 
 /** Shared state hook, so the two surfaces cannot drift in what they report. */
@@ -103,7 +103,117 @@ export function BetaChannelRow(
   return (
     <section>
       <SectionLabel className="mb-2">Updates</SectionLabel>
-      <div className={`${CARD_LEVEL_1} px-3 py-1`}>{row}</div>
+      {/* WHY the auto-install row shares this card (#183, Q-switch "both-places"): the two
+          update settings are one group, so they are one card, the beta row first as before. */}
+      <div className={`${CARD_LEVEL_1} px-3 py-1`}>{row}<AutoInstallRow header /></div>
     </section>
+  );
+}
+
+/** "Install updates automatically" (#183) as one small store, not per-row state.
+ *  WHY a store: the update popup's line under its title ("Installs by itself the next time
+ *  you quit") must change the moment the switch below it is flipped (UX review 1, U2) — two
+ *  useState copies would disagree until reopened. */
+let autoInstall: boolean | null = null;
+let autoInstallLoading = false;
+// WHY a resolved flag: after {supported:false} the value stays null, so "null" alone would re-ask
+// the host on every mount of every row. Once a definite answer arrives we ask no more this page load.
+let autoInstallResolved = false;
+// WHY a request counter: two quick flips send two saves; an older reply landing after a newer
+// flip must not move the switch back.
+let autoInstallRequest = 0;
+type AutoInstallReply = { supported?: unknown; enabled?: unknown } | null | undefined;
+/** The value a reply means: a boolean, null for supported:false, or undefined for a malformed reply. */
+function readAutoInstallReply(s: AutoInstallReply): boolean | null | undefined {
+  if (!s || typeof s.supported !== 'boolean') return undefined;
+  if (!s.supported) return null;
+  return typeof s.enabled === 'boolean' ? s.enabled : undefined;
+}
+const autoInstallListeners = new Set<() => void>();
+function setAutoInstallValue(v: boolean | null) {
+  autoInstall = v;
+  for (const l of autoInstallListeners) l();
+}
+function subscribeAutoInstall(l: () => void) {
+  autoInstallListeners.add(l);
+  // WHY the capability check: Android and remote browsers have no installer to run, so the
+  // method is absent there and the row renders nothing (same reasoning as useBetaChannel).
+  const api = window.claude?.update as
+    | { getAutoInstall?: () => Promise<AutoInstallReply> }
+    | undefined;
+  if (!autoInstallResolved && !autoInstallLoading && typeof api?.getAutoInstall === 'function') {
+    autoInstallLoading = true;
+    const startedAt = autoInstallRequest;
+    api.getAutoInstall()
+      .then((s) => {
+        const v = readAutoInstallReply(s);
+        // A malformed reply is "unknown": hide the row, but allow a later retry.
+        if (v === undefined) return;
+        autoInstallResolved = true;
+        // A flip made while this read was in flight is newer than the read.
+        if (startedAt === autoInstallRequest) setAutoInstallValue(v);
+      })
+      .catch(() => {})
+      .finally(() => { autoInstallLoading = false; });
+  }
+  return () => { autoInstallListeners.delete(l); };
+}
+
+/** Test seam: forget what this page load has learned. */
+export function resetAutoInstallStoreForTests() {
+  autoInstall = null; autoInstallLoading = false; autoInstallResolved = false; autoInstallRequest = 0;
+  autoInstallListeners.clear();
+}
+
+/** null until known, or where the host has no automatic updates (Android, remote). */
+export function useAutoInstall(): [boolean | null, () => void] {
+  const enabled = useSyncExternalStore(subscribeAutoInstall, () => autoInstall);
+  const flip = () => {
+    if (enabled === null) return;
+    const previous = enabled;
+    const next = !enabled;
+    const mine = ++autoInstallRequest;
+    setAutoInstallValue(next);  // optimistic
+    const api = window.claude.update as unknown as { setAutoInstall: (on: boolean) => Promise<AutoInstallReply> };
+    // WHY revert to `previous` on a failed or malformed reply (review of T1): a reply with no boolean
+    // `supported` is an error, and treating it as "unsupported" hid the row instead of undoing the flip.
+    const revert = () => { if (mine === autoInstallRequest) setAutoInstallValue(previous); };
+    api.setAutoInstall(next)
+      .then((s) => {
+        if (mine !== autoInstallRequest) return; // a newer flip owns the switch
+        const v = readAutoInstallReply(s);
+        if (v === undefined) revert(); else setAutoInstallValue(v);
+      })
+      .catch(revert);
+  };
+  return [enabled, flip];
+}
+
+// Two lengths for the same reason as the beta row: 'nav' truncates to one line.
+// WHY no "when you quit" (UX review 1, U4/U10): on a computer where installing needs a
+// password, quitting does not install, so the switch says only what is true everywhere; the
+// update popup's line under its title says when this computer installs it.
+const AUTO_DESCRIPTION =
+  'Downloads new versions by itself. Off: you choose when to update.';
+const AUTO_DESCRIPTION_SHORT = 'Downloads new versions by itself';
+
+/** "Install updates automatically" (#183). Beside Get beta builds in both places it appears:
+ *  inside the update popup's Updates card, and in Settings → Help & feedback. */
+export function AutoInstallRow(
+  { icon, variant = 'item', header }: { icon?: React.ReactNode; variant?: 'nav' | 'item'; header?: boolean } = {},
+) {
+  const [enabled, flip] = useAutoInstall();
+  if (enabled === null) return null;
+  return (
+    <SettingRow
+      variant={variant}
+      // WHY header inside the popup's card: two rows of one card, both unboxed like the beta
+      // row — a box inside the card read as a third level (first shoot, 2026-10-22).
+      header={header}
+      icon={icon}
+      title="Install updates automatically"
+      description={variant === 'nav' ? AUTO_DESCRIPTION_SHORT : AUTO_DESCRIPTION}
+      control={<Toggle enabled={enabled} onToggle={flip} label="Install updates automatically" />}
+    />
   );
 }

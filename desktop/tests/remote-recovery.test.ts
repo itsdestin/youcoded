@@ -52,13 +52,6 @@ describe('recovery never repeats an action and never loses a pairing', () => {
     expect(server).toMatch(/silent for \$\{silent\} s/);
   });
 
-  it('a browser keeps its pairing through a long outage', () => {
-    // This path deleted the saved address and credential and connected to 'android-local',
-    // which does not exist in a browser: a phone that lost signal came back unpaired.
-    expect(shim).toContain("const hasLocalBridge = location.protocol === 'file:';");
-    expect(shim).toContain('reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && hasLocalBridge');
-  });
-
   it('a device the host refused permanently stops retrying', () => {
     // Retrying an unpaired or retired credential can never succeed, and on upgrade day
     // every device doing it at once is what would trip the host's own limiter.

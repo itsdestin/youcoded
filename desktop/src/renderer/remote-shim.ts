@@ -13,10 +13,18 @@ import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage, saidInPlace } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT, OUTCOME_UNKNOWN_EVENT } from './remote-events';
 import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
+import { CLOSE_REPLACED } from '../shared/remote-close-codes';
+import { firstFrameProtocols, TOOK_FRAMES_PROTOCOL } from '../shared/first-frames';
+import { markPage, startConnection, markConnection, markWake, takeReport } from './remote-timings';
+import { readRemotePlace, remotePlaceStorages, remotePlaceHost } from './state/remote-place';
+import { markScreensReady } from './state/screens-ready';
+import { setConnectionMode } from './platform';
+markPage('connection-code'); // this module's code has arrived and run (remote-timings.ts)
 import { announce } from './utils/announce';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
 // The phone's own backend (localBridgeUrl) and the Android app itself (invokeAndroidHost) — WHY there.
 import { localBridgeUrl, invokeAndroidHost, hasAndroidHost, setAndroidHostEventSink } from './android-local-bridge';
+import { rememberLastComputer, forgetLastComputer } from './last-computer';
 import type { FirstRunState } from '../shared/first-run-types';
 import { createRemotePagesBridge } from './remote-pages-bridge';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
@@ -139,6 +147,63 @@ function noteRefusedAfterConnecting(reason: string): void {
 let framesReceived = 0;
 /** When the last one arrived. The heartbeat below reads it: silence is what earns a question. */
 let lastFrameAt = 0;
+/** A large answer arriving as `remote:piece` frames (remote-server sendAnswer): its parts so far, by piece id. Each piece is a
+ *  complete frame, so a multi-MB load keeps proving the connection alive while it arrives instead of looking like silence. */
+const pieceParts = new Map<number, string[]>();
+
+// ── Requests sent right behind the sign-in (2026-10-22 phone speed) ──────────────────────────────────────────────────────────────
+// WHY: a reopen waited for four answers in a row — connected, signed in, the session list, the conversation — at ~470 ms each on
+// Destin's phone. A computer that says `pipelined` at sign-in (remote-server authOkMessage) holds requests sent before its answer
+// and handles them after it, so the next connection to it sends the list and the conversation it will open with the sign-in.
+// The answers wait here until the app asks for exactly them; the conversation's live pushes are parked until its page is applied.
+const PIPELINED_KEY = 'youcoded-remote-pipelined';
+function hostPipelines(url: string): boolean {
+  try { return (JSON.parse(localStorage.getItem(PIPELINED_KEY) ?? '[]') as string[]).includes(url); } catch { return false; }
+}
+function rememberPipelines(url: string): void {
+  try {
+    const known = JSON.parse(localStorage.getItem(PIPELINED_KEY) ?? '[]') as string[];
+    if (!known.includes(url)) localStorage.setItem(PIPELINED_KEY, JSON.stringify([...known, url].slice(-8)));
+  } catch { /* no storage: this connection just waits */ }
+}
+/** The current socket may send before its sign-in is answered (its computer said `pipelined` last time). */
+let sendBeforeSignIn = false;
+let early: { generation: number; list: Promise<any> | null; opens: Map<string, Promise<any>> } | null = null;
+/** Live pushes for a conversation opened early, held until the app has applied its page (or 15 s, if it never asks). */
+const parked = new Map<string, Array<() => void>>();
+
+function releaseParked(sid: string): void {
+  const held = parked.get(sid);
+  parked.delete(sid);
+  for (const run of held ?? []) run();
+}
+
+/** Ask for the session list and the conversation the app will open, once per connection, as early as this socket may. */
+function startEarlyRequests(generation: number): void {
+  if (early?.generation === generation) return;
+  early = { generation, list: invoke('session:list'), opens: new Map() };
+  early.list!.catch(() => { /* the app asks again (takeEarlyList) */ });
+  // The app's next open of this conversation: a first load (fresh) on a new page, a catch-up (`have`) on a reconnect to the same computer.
+  const fresh = !(hasConnectedBefore && lastReadyHost === getWsUrl());
+  const place = readRemotePlace(remotePlaceStorages(), remotePlaceHost());
+  if (!place) return;
+  parked.set(place, []);
+  const opening = openSessionRemoteNow({ sessionId: place, fresh });
+  opening.catch(() => { /* the app's own open asks again */ });
+  early.opens.set(`${place}|${fresh}`, opening);
+  setTimeout(() => { if (early?.opens.delete(`${place}|${fresh}`)) releaseParked(place); }, 15_000);
+}
+
+function takeEarlyList(): Promise<any> | null {
+  if (!early || early.generation !== connectionGeneration || !early.list) return null;
+  const list = early.list;
+  early.list = null;
+  return list.catch(() => invoke('session:list'));
+}
+/** Another tab of this browser took the connection (CLOSE_REPLACED). WHY a flag (branch review F4): the network coming back and
+ *  the page being shown both reconnect a disconnected page, so a hidden tab could take the connection from the one in front, and
+ *  the tab showing "Reload this tab" took it back on focus. Only the reload the card offers reconnects it. */
+let takenOver = false;
 
 function signInError(message: string, failure: SignInFailure): Error {
   return Object.assign(new Error(message), { signInFailure: failure });
@@ -184,7 +249,21 @@ function setConversationPhase(phase: ConversationPhase): void {
   // round, so the 10 s no-report timer turned every connect into "may be out of date".
   if (isAndroidLocal()) return;
   conversationPhase = phase;
-  dispatchEvent('remote:conversation-status', { phase });
+  dispatchEvent('remote:conversation-status', { phase, slow: computerSlow });
+}
+
+/**
+ * The connection is up but the computer has not answered a check for a while (2026-10-22 phone reliability, cause 2).
+ * NOT a connection state: leaving 'connected' rejects every request in flight and stops the heartbeat, which is the very
+ * churn this exists to avoid. The laptop's app freezes for 10–50 s at a time while awake; the page now waits it out
+ * (HEARTBEAT_REPLY_MS) and says so, and a message sent meanwhile is delivered when the computer thaws.
+ */
+let computerSlow = false;
+function setComputerSlow(slow: boolean): void {
+  if (computerSlow === slow) return;
+  computerSlow = slow;
+  if (isAndroidLocal()) return;
+  dispatchEvent('remote:conversation-status', { phase: conversationPhase ?? 'complete', slow });
 }
 
 /** This page no longer describes a computer's copy (it left the host): forget the phase so a
@@ -217,6 +296,11 @@ function reportFill(report: { round?: number; failed?: number } | undefined): vo
   if (report?.round !== undefined && report.round !== fillRound) return;   // an older round
   if (noFillTimer) { clearTimeout(noFillTimer); noFillTimer = null; }
   setConversationPhase((report?.failed ?? 0) > 0 ? 'incomplete' : 'complete');
+  // One frame on, the conversations are on screen: the computer logs how long this connection took (remote-timings.ts).
+  const frame = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb: () => void) => setTimeout(cb, 0);
+  if (!isAndroidLocal()) frame(() => { const r = takeReport(); if (r) send({ type: 'remote:timings', payload: r }); });
+  // The conversation is on screen: the screens the app loads on demand may now come down behind it (state/screens-ready.ts).
+  frame(markScreensReady);
 }
 
 // Where each session stands on this page, as the host's own numbers: the epoch (which record) and the last event number applied.
@@ -397,6 +481,8 @@ let pendingSendQueue: { data: string; at: number }[] = [];
 function setConnectionState(state: RemoteConnectionState) {
   const was = connectionState;
   connectionState = state;
+  // A connection that is gone is not "slow": the reconnecting strip says what is happening now.
+  if (state !== 'connected') setComputerSlow(false);
   // Batch 2 (§6): leaving `connected` after a first successful connect is a drop —
   // the strip says "reconnecting" and the phone keeps what it shows.
   if (was === 'connected' && state !== 'connected' && hasConnectedBefore && !suppressReconnectingPhase) setConversationPhase('reconnecting');
@@ -503,12 +589,16 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   'appearance:broadcast': 'user-action',
 };
 
+/** While set, messages are collected for the next socket's opening request instead of sent (shared/first-frames.ts). */
+let capturing: string[] | null = null;
+
 function send(msg: any): boolean {
   const data = JSON.stringify(msg);
+  if (capturing) { capturing.push(data); return true; }
   // Only send directly when both the socket is OPEN AND auth has completed.
   // If OPEN but still 'authenticating', the auth message has been sent but
   // 'auth:ok' hasn't arrived — the bridge rejects application messages here.
-  if (ws?.readyState === WebSocket.OPEN && connectionState === 'connected') {
+  if (ws?.readyState === WebSocket.OPEN && (connectionState === 'connected' || (sendBeforeSignIn && connectionState === 'authenticating'))) {
     ws.send(data);
     return true;
   }
@@ -632,6 +722,7 @@ function applyPtyCut(sid: string, pty: any): void {
 async function openPtyEarly(sid: string): Promise<void> {
   try {
     const reply = await invoke('session:open', { sessionId: sid, ptyOnly: true, pty: ptyOffsets.has(sid) ? { ...ptyOffsets.get(sid)! } : {} });
+    markConnection('terminal');
     // Only this small answer qualifies (an older host answers a full open); and not once the ordinary answer has drawn the terminal.
     if (!reply?.ok || reply.ptyOnly !== true || openedHere.has(sid) || ptyEarly.has(sid)) return;
     ptyEarly.add(sid);
@@ -639,7 +730,18 @@ async function openPtyEarly(sid: string): Promise<void> {
   } catch { /* the ordinary open carries the terminal too */ }
 }
 
-async function openSessionRemote(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<any> {
+/** The app's open of a conversation: the answer to the one asked with the sign-in when it is exactly this, else a new request. */
+function openSessionRemote(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<any> {
+  const key = `${req.sessionId}|${!!req.fresh}`;
+  const ready = early?.generation === connectionGeneration ? early.opens.get(key) : undefined;
+  if (!ready) return openSessionRemoteNow(req);
+  early!.opens.delete(key);
+  // Its parked pushes follow once the app has applied the page: the app's own continuation runs before this timer.
+  void ready.then(() => setTimeout(() => releaseParked(req.sessionId), 0), () => releaseParked(req.sessionId));
+  return ready;
+}
+
+async function openSessionRemoteNow(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<any> {
   const sid = req.sessionId;
   const have = req.fresh ? undefined : fillCursors.get(sid);
   void openPtyEarly(sid);
@@ -652,6 +754,7 @@ async function openSessionRemote(req: { sessionId: string; claudeSessionId?: str
     // The terminal rides the same answer: how far this page has drawn (empty = send all of it).
     pty: ptyOffsets.has(sid) ? { ...ptyOffsets.get(sid)! } : {},
   });
+  markConnection('conversation');
   if (reply?.ok) {
     // Set BEFORE anything else runs: the host sends this session's held pushes right after this answer, and each one moves the cursor on.
     fillCursors.set(sid, { epoch: reply.epoch, seq: reply.headSeq });
@@ -973,8 +1076,20 @@ function handleMessage(data: string, generation: number): void {
   if (generation !== connectionGeneration) return;
   framesReceived++;
   lastFrameAt = Date.now();
+  if (computerSlow) setComputerSlow(false); // it answered
   let msg: any;
   try { msg = JSON.parse(data); } catch { return; }
+
+  if (msg?.type === 'remote:piece') {
+    const { id: pieceId, i, n, data: part } = msg.payload ?? {};
+    if (typeof pieceId !== 'number' || typeof i !== 'number' || typeof n !== 'number' || typeof part !== 'string') return;
+    const parts = pieceParts.get(pieceId) ?? [];
+    parts[i] = part;
+    pieceParts.set(pieceId, parts);
+    // The computer sends a large answer's pieces back to back, so the last one completes it.
+    if (i === n - 1) { pieceParts.delete(pieceId); handleMessage(parts.join(''), generation); }
+    return;
+  }
 
   const { type, id, payload } = msg;
 
@@ -986,6 +1101,7 @@ function handleMessage(data: string, generation: number): void {
     const entry = pending.get(id)!;
     clearTimeout(entry.timeout);
     pending.delete(id);
+    if (entry.type === 'session:list') markConnection('list');
     // The host answered "I don't implement this channel" (remote-server's
     // default case). Surface it — otherwise the caller, which mostly doesn't
     // check, renders an empty panel with no explanation.
@@ -1013,6 +1129,8 @@ function handleMessage(data: string, generation: number): void {
   // Push events: note where this session stands (the host numbers every session-scoped push), then hand it to the listeners.
   // A live terminal frame for a session this connection has not opened yet is dropped (see openedHere).
   if (type === 'pty:output' && !openedHere.has(payload?.sessionId) && !ptyEarly.has(payload?.sessionId)) return;
+  const held = typeof payload?.sessionId === 'string' ? parked.get(payload.sessionId) : undefined;
+  if (held) { held.push(() => { noteCursor(msg); routePush(type, payload); }); return; }
   noteCursor(msg);
   routePush(type, payload);
 }
@@ -1275,12 +1393,45 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
     // it; its late close set "disconnected". Every handler below is bound to its own socket.
     if (ws) retireSocket(ws);
     setConnectionState('connecting');
-    const socket = new WebSocket(getWsUrl());
-    ws = socket;
-    const isCurrent = () => generation === connectionGeneration && ws === socket;
+    startConnection();
+    sendBeforeSignIn = false;
+    for (const sid of [...parked.keys()]) releaseParked(sid);   // an old connection's held pushes: the new one refills anyway
     // Decided now, not when the close arrives: by then the Android app may already have gone back
     // to its own runtime, which changes the answer (finding 1).
     const localBridge = location.protocol === 'file:' && !targetUrl;
+    // Security: when connecting to the local Android bridge (file:// protocol),
+    // use the auth token passed via URL query param by WebViewHost.
+    // The token is in the URL so it's available before any JS runs (no race).
+    const bridgeToken = new URLSearchParams(location.search).get('bridgeToken');
+    // refillPush: this page refills one conversation on `session:refill`, so the computer need not hang up on it
+    // when one fill never completes (remote-server dropAudience, 2026-10-22). pieces: it puts a large answer back together
+    // from `remote:piece` frames, so a slow load never reads as silence (remote-server PIECE_CHARS).
+    const authMsg = localBridge && bridgeToken
+      ? { type: 'auth', token: bridgeToken, refillPush: true, pieces: true }
+      : isToken
+        ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true, refillPush: true, pieces: true }
+        : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true, refillPush: true, pieces: true, previousDeviceId: deviceRowFor(getWsUrl()) };
+    // A computer that holds early requests gets the list and the conversation with the sign-in, not a round trip later. A browser page
+    // was served by the computer it talks to (no target), so it is that computer's own version and always may; the Android app's page
+    // is its own build, so it waits until a computer has said so once.
+    const mayPipeline = !localBridge && (!targetUrl || hostPipelines(getWsUrl()));
+    // WHY in the opening request (2026-10-22 phone speed): a saved sign-in and those requests ride the socket's subprotocol names
+    // (shared/first-frames.ts), so the computer answers them with its "connected" — one round trip (~470 ms on a phone) sooner. Not
+    // the password (the gate's sign-in): that stays a message. A computer that does not take them picks the plain name, and onopen
+    // sends the same messages itself.
+    let firstFrames: string[] | null = null;
+    if (isToken && !localBridge) {
+      firstFrames = [JSON.stringify(authMsg)];
+      if (mayPipeline) {
+        sendBeforeSignIn = true;
+        capturing = firstFrames;
+        try { startEarlyRequests(generation); } finally { capturing = null; }
+      }
+    }
+    const protocols = firstFrames && firstFrameProtocols(firstFrames);
+    const socket = protocols ? new WebSocket(getWsUrl(), protocols) : new WebSocket(getWsUrl());
+    ws = socket;
+    const isCurrent = () => generation === connectionGeneration && ws === socket;
 
     // Track whether the socket ever got to OPEN. Lets onclose tell the difference
     // between "couldn't reach host" (TCP refused, Android cleartext block,
@@ -1304,19 +1455,13 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
     socket.onopen = () => {
       if (!isCurrent()) return;
       didOpen = true;
+      markConnection('open');
       clearTimeout(connectTimeout);
       setConnectionState('authenticating');
-      // Security: when connecting to the local Android bridge (file:// protocol),
-      // use the auth token passed via URL query param by WebViewHost.
-      // The token is in the URL so it's available before any JS runs (no race).
-      const bridgeToken = new URLSearchParams(location.search).get('bridgeToken');
-      const isLocalBridge = location.protocol === 'file:' && !targetUrl;
-      const authMsg = isLocalBridge && bridgeToken
-        ? { type: 'auth', token: bridgeToken }
-        : isToken
-          ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true }
-          : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true, previousDeviceId: deviceRowFor(getWsUrl()) };
+      if (socket.protocol === TOOK_FRAMES_PROTOCOL) return;   // the computer took them from the opening request
+      if (firstFrames) { for (const frame of firstFrames) socket.send(frame); return; }
       socket.send(JSON.stringify(authMsg));
+      if (mayPipeline) { sendBeforeSignIn = true; startEarlyRequests(generation); }
     };
 
     let authResolved = false;
@@ -1337,6 +1482,8 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           myDeviceId = msg.deviceId ?? myDeviceId;
           if (typeof msg.deviceId === 'string' && msg.deviceId) rememberDeviceRow(getWsUrl(), msg.deviceId);
           authResolved = true;
+          markConnection('signed-in');
+          if (msg.pipelined === true) rememberPipelines(getWsUrl());
           // WHY here (one-core R4-1, S7): the host says what this screen can do, before anything announces the connection. An
           // older computer sends nothing and gets the conservative defaults. Replaced on EVERY auth:ok: a reconnect or a
           // switch between the Android app's own runtime and a paired computer takes the new host's answer.
@@ -1370,9 +1517,10 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // server tells every client `platform: 'desktop'`, so getPlatform() cannot answer
           // this. connectToHost still declares it explicitly for the Android-paired case,
           // which IS file:// and IS remote.
-          if (!isAndroidLocal()) {
-            void import('./platform').then(({ setConnectionMode }) => setConnectionMode('remote'));
-          }
+          // WHY at once, not through a dynamic import (2026-10-22 phone speed): the import landed AFTER the app had mounted, so its
+          // local→remote listener flushed everything — the session list, the open conversation, the fill already running — and
+          // listed and filled again. Every phone-browser load paid that twice, and an early-answered conversation was thrown away.
+          if (!isAndroidLocal()) setConnectionMode('remote');
 
           // Fix: drain any messages queued during the cold-start window
           // (mount-time fetches that fired before auth completed). Must be
@@ -1381,6 +1529,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // Whether this connection continues the same host's session (a reconnect) or starts one: a different host's positions mean
           // nothing, so a first connect to it forgets the terminal's and every conversation's, BEFORE anything asks for a fill.
           readyReconnect = hasConnectedBefore && lastReadyHost === getWsUrl();
+          pieceParts.clear(); // a half-arrived answer from the last connection never completes
           openedHere.clear(); // every conversation is opened again on this connection
           ptyEarly.clear();
           if (!readyReconnect) { ptyOffsets.clear(); ptyBacklog.clear(); fillCursors.clear(); lastSessionSummaries = null; }
@@ -1481,13 +1630,20 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         return;
       }
 
-      if (isTerminalClose(event.code)) suppressReconnectingPhase = true;
+      // Another tab of this browser signed in with the same saved key and took over (CLOSE_REPLACED). Coming back would
+      // take it back again, forever; the key stays good for whichever tab the person uses. The Android app is one page,
+      // so for it this can only be its own dead connection being cleared: it reconnects as usual.
+      const replaced = event.code === CLOSE_REPLACED && !isAndroidPaired() && !localBridge;
+      if (isTerminalClose(event.code) || replaced) suppressReconnectingPhase = true;
       setConnectionState('disconnected');
       suppressReconnectingPhase = false;
       // Attempt reconnection — local bridge uses its own retry (token comes
       // from the URL each time), remote connections use stored session tokens.
       if (localBridge) {
         retryLocalBridge();
+      } else if (replaced) {
+        takenOver = true;
+        noteRefusedAfterConnecting('replaced');
       } else if (isTerminalClose(event.code)) {
         // Unpaired or retired: the credential can never work again. Forget it so the next
         // attempt asks for the password once, rather than retrying forever.
@@ -1518,36 +1674,15 @@ function isTerminalClose(code: number): boolean {
 }
 
 function scheduleReconnect(token: string): void {
-  // WHY only a real local bridge falls back: this path deleted the saved address and
-  // credential and connected to 'android-local', which does not exist in a browser. A phone
-  // that lost signal in a lift came back unpaired.
-  const hasLocalBridge = location.protocol === 'file:';
-  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && !hasLocalBridge) {
-    // Keep retrying, slowly, and keep the pairing. Disconnected is a state to show, not a
-    // reason to forget who you are.
+  // Keep retrying, slowly, and keep the pairing. Disconnected is a state to show, not a
+  // reason to forget who you are.
+  // WHY the Android app too (2026-10-22 phone reliability, cause 1): after ten failures it used
+  // to delete the paired computer and drop to the phone's own runtime — 3.5 to 6 minutes of a
+  // sleeping laptop, about six times a day — and nothing ever reconnected. Only a computer that
+  // refuses this phone's key (onSavedKeyAttemptFailed) or the person (disconnectFromHost) leaves now.
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     reconnectDelay = Math.min(reconnectDelay * 2, 60_000);
     reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
-  }
-  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && hasLocalBridge) {
-    // Reconnect-fallback: switching to local bridge means any messages
-    // queued for the prior remote host are wrong-destination. Drop them
-    // here — disconnect() isn't on this path (ws.onclose only schedules
-    // the retry, doesn't disconnect).
-    if (pendingSendQueue.length > 0) {
-      console.warn('[remote-shim] discarding', pendingSendQueue.length,
-        'queued messages on reconnect fallback to local bridge');
-      pendingSendQueue = [];
-    }
-    reconnectAttempts = 0;
-    reconnectDelay = 1000;
-    targetUrl = null;
-    localStorage.removeItem('youcoded-remote-target');
-    localStorage.removeItem('youcoded-remote-token');
-    // Reconnect to local bridge
-    forgetConversationPhase();
-    // WHY the mode flips in the .then (R4-1): capabilities change on the local runtime's auth:ok, so the mode changes WITH them, as in disconnectFromHost.
-    connect('android-local', false).then(() => import('./platform')).then(({ setConnectionMode }) => setConnectionMode('local')).catch(() => {});
-    return;
   }
 
   if (reconnectTimer) return;
@@ -1563,6 +1698,26 @@ function scheduleReconnect(token: string): void {
   }, reconnectDelay);
 }
 
+/** The Android app leaves a computer that refused its key for good, and goes back to its own runtime. */
+function fallBackToLocalRuntime(): void {
+  // Queued messages were for the computer: on the phone's own runtime they are wrong-destination.
+  // disconnect() is not on this path (onclose only schedules a retry), so drop them here.
+  if (pendingSendQueue.length > 0) {
+    console.warn('[remote-shim] discarding', pendingSendQueue.length, 'queued messages on fallback to the local runtime');
+    pendingSendQueue = [];
+  }
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  reconnectAttempts = 0;
+  reconnectDelay = 1000;
+  targetUrl = null;
+  localStorage.removeItem('youcoded-remote-target');
+  localStorage.removeItem('youcoded-remote-token');
+  forgetLastComputer();
+  forgetConversationPhase();
+  // WHY the mode flips in the .then (R4-1): capabilities change on the local runtime's auth:ok, so the mode changes WITH them, as in disconnectFromHost.
+  connect('android-local', false).then(() => import('./platform')).then(({ setConnectionMode }) => setConnectionMode('local')).catch(() => {});
+}
+
 /** One attempt with the saved key failed: tell the sign-in screen, then try again, unless the
  *  computer refused the key or the person chose to type the password instead. */
 function onSavedKeyAttemptFailed(err: unknown, token: string): void {
@@ -1572,11 +1727,10 @@ function onSavedKeyAttemptFailed(err: unknown, token: string): void {
     if (hasConnectedBefore) noteRefusedAfterConnecting(failure.reason);
     if (location.protocol === 'file:' && targetUrl) {
       // The Android app paired to a computer that will never take its key goes back to its own
-      // runtime now, which is where MAX_RECONNECT_ATTEMPTS used to land it after minutes. Any
-      // other refusal (remote access switched off on the computer) keeps the pairing and keeps
-      // trying slowly, as it always did: deleting it would unpair the phone (finding 1).
-      if (KEY_IS_DEAD.has(failure.reason)) reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
-      scheduleReconnect(token);
+      // runtime now. Any other refusal (remote access switched off on the computer) keeps the
+      // pairing and keeps trying slowly: deleting it would unpair the phone (finding 1).
+      if (KEY_IS_DEAD.has(failure.reason)) fallBackToLocalRuntime();
+      else scheduleReconnect(token);
     }
     return;
   }
@@ -1622,19 +1776,26 @@ export function stopSavedKeySignIn(): void {
  *  dead. 10 s, not 5: right after waking a phone's radio and tunnel can take several seconds to
  *  come back, and a reply can queue behind a catch-up already on its way (review finding 3). */
 const WAKE_CHECK_TIMEOUT_MS = 10_000;
+/** Away at least this long, the computer has usually already given up on this connection: it closes one whose
+ *  pings go unanswered for ~60 s (remote-server MAX_MISSED_PINGS), and a phone's browser freezes a hidden page. */
+const LONG_AWAY_MS = 45_000;
 /** How often the page looks at whether the computer is still talking, while it is in front. */
 const HEARTBEAT_INTERVAL_MS = 10_000;
 /** Silence that earns a question. Longer than the interval so a busy connection is never asked. */
 const HEARTBEAT_IDLE_MS = 12_000;
-/** How long that question may go unanswered before the connection is replaced. Shorter than the
- *  wake check's: the page is in front, the radio is up, and a person may be waiting on a tap. */
-const HEARTBEAT_REPLY_MS = 5_000;
-/** Hidden for longer than the computer's own patience (its check runs every 20 s and it gives up
- *  after three): its side is already gone, so the page reconnects on sight instead of asking. */
-const HIDDEN_TOO_LONG_MS = 60_000;
+/** How long that question may go unanswered before the connection is replaced.
+ *  WHY 20 s, not 5 (2026-10-22 phone reliability, cause 2): measured on Destin's laptop, its app freezes 10–50 s about
+ *  twenty times a day while awake. 5 s turned every freeze over ~17 s into a reconnect, a refill and a blocked Send —
+ *  and a message sent in it reported failed though it arrived. With 20 s a freeze up to ~32 s is waited out
+ *  ("Waiting for your computer…" after SLOW_AFTER_MS). A connection the network really lost is still replaced: sooner
+ *  when the phone reports going offline. */
+const HEARTBEAT_REPLY_MS = 20_000;
+/** How long the question goes unanswered before the page says it is waiting for the computer. */
+const SLOW_AFTER_MS = 5_000;
+/** A queued send waits longer than an ordinary request: the measured freezes reach ~50 s, and a send that
+ *  timed out at 30 s was reported failed and put back in the box while the computer then accepted it. */
+const QUEUE_ACTION_TIMEOUT_MS = 60_000;
 let wakeCheckInFlight = false;
-/** When the page was last hidden, or 0 if it is showing. Read once, by the wake check. */
-let hiddenSince = 0;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -1647,31 +1808,39 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
  * 30 s, and the screens that asked stayed empty. Down: reconnect now. Up: one quick question,
  * and a connection that cannot answer it is replaced at once rather than waited on.
  */
-export function checkConnectionAfterWake(): void {
+export function checkConnectionAfterWake(awayMs = 0): void {
   // The Android app's own bridge is on the same device; the first sign-in has its own screen.
-  if (isAndroidLocal()) return;
-  const hiddenFor = hiddenSince ? Date.now() - hiddenSince : 0;
-  hiddenSince = 0;
+  if (isAndroidLocal() || takenOver) return;
+  markWake();
   if (!hasConnectedBefore) {
     // Still on the sign-in screen, trying the saved key: the network coming back is the moment to
     // try again, not the end of a backoff of up to a minute (finding 6).
     if (savedKeyListener && !savedKeyStopped && connectionState === 'disconnected') retrySavedKeyNow();
     return;
   }
-  if (connectionState === 'connecting' || connectionState === 'authenticating') return;
   const token = localStorage.getItem('youcoded-remote-token');
+  if (connectionState === 'connecting' || connectionState === 'authenticating') {
+    // An attempt started before a long absence was frozen with the page and may hang until its 15 s timeout: start over.
+    if (awayMs >= LONG_AWAY_MS && token && !savedKeyStopped) reconnectNow(token);
+    return;
+  }
   if (connectionState === 'disconnected') {
     if (token && !savedKeyStopped) reconnectNow(token);
     return;
   }
-  // Away longer than the computer waits: it has already closed its side, so a question here
-  // would only wait out its own deadline for an answer that can never come — ten seconds of a
-  // phone that looks connected and answers nothing. Replace the connection now.
-  if (hiddenFor >= HIDDEN_TOO_LONG_MS) {
-    if (ws) abandonSocket(ws);
+  // Away a long time: replace the connection now, without asking. WHY (Destin, 2026-10-22, choosing between this and
+  // asking first: "lets just reconnect right away"): after minutes away the old connection was usually dead, and asking
+  // first spent seconds waiting for an answer that never came (10 s, then 2.5 s) before reconnecting — most of the wait he
+  // saw on resume. A new connection takes ~1 s and fetches only what was missed. The cost, accepted: a connection that
+  // was still fine is replaced too, with a brief "reconnecting".
+  if (awayMs >= LONG_AWAY_MS && ws) {
+    abandonSocket(ws);
     if (token && !savedKeyStopped) reconnectNow(token);
     return;
   }
+  // A short absence: ask first. A backgrounded phone's browser keeps answering the computer's pings, so after a few
+  // seconds away the connection is usually still good (2026-10-22 phone reliability, cause 3); a dead one fails this
+  // question within WAKE_CHECK_TIMEOUT_MS.
   probeConnection(WAKE_CHECK_TIMEOUT_MS, 'after waking');
 }
 
@@ -1687,7 +1856,11 @@ function probeConnection(timeoutMs: number, why: string): void {
   const generation = connectionGeneration;
   const framesAtSend = framesReceived;
   const id = `${myDeviceId || 'anon'}:${generation}:${++messageId}`;
-  const settle = () => { clearTimeout(timeout); pending.delete(id); wakeCheckInFlight = false; };
+  const settle = () => { clearTimeout(timeout); clearTimeout(slowTimer); pending.delete(id); wakeCheckInFlight = false; };
+  // Still no answer after a few seconds: say so, without touching the connection.
+  const slowTimer = setTimeout(() => {
+    if (generation === connectionGeneration && ws === socket && framesReceived === framesAtSend) setComputerSlow(true);
+  }, SLOW_AFTER_MS);
   const timeout = setTimeout(() => {
     settle();
     if (generation !== connectionGeneration || ws !== socket || connectionState !== 'connected') return;
@@ -1825,35 +1998,15 @@ function disconnect(): void {
 }
 
 /**
- * Check if a host IP is in the Tailscale CGNAT range (100.64.0.0/10)
- * and verify Tailscale VPN is connected before attempting connection.
- */
-async function checkTailscaleIfNeeded(host: string): Promise<void> {
-  const match = host.match(/^100\.(\d+)\./);
-  if (!match) return;
-  const secondOctet = parseInt(match[1]);
-  if (secondOctet < 64 || secondOctet > 127) return;
-
-  try {
-    const status = await invoke('remote:detect-tailscale');
-    if (!status?.connected) {
-      throw new Error('Tailscale VPN is not connected. Turn on Tailscale and try again.');
-    }
-  } catch (err: any) {
-    // Re-throw Tailscale-specific errors; swallow others (e.g. bridge timeout)
-    if (err.message?.includes('Tailscale')) throw err;
-  }
-}
-
-/**
  * Connect to a remote desktop server. Disconnects from the current server first.
  * __PLATFORM__ is preserved as 'android' so touch adaptations stay active.
+ *
+ * WHY no Tailscale pre-check any more (2026-10-22 phone reliability): it asked the phone's OWN
+ * backend `remote:detect-tailscale`, which runs a `tailscale` program that does not exist inside
+ * the Android app — so it could only ever answer "not connected". A computer that cannot be
+ * reached already fails the connect with "Can't reach your computer".
  */
 export async function connectToHost(host: string, port: number, password: string): Promise<void> {
-  // Pre-flight: check Tailscale before disconnecting from local bridge
-  // (invoke needs the current WebSocket connection)
-  await checkTailscaleIfNeeded(host);
-
   const { setConnectionMode } = await import('./platform');
 
   // Disconnect from current server (local bridge or previous remote)
@@ -1875,6 +2028,7 @@ export async function connectToHost(host: string, port: number, password: string
     await connect(password, false);
     // Connection succeeded — persist remote target for session restore
     localStorage.setItem('youcoded-remote-target', targetUrl);
+    rememberLastComputer(host, port);
     preservePlatform = false;
     setConnectionMode('remote');
   } catch (err) {
@@ -1918,6 +2072,8 @@ export async function disconnectFromHost(): Promise<void> {
   // Clear remote target — getWsUrl() falls back to localhost:9901
   targetUrl = null;
   localStorage.removeItem('youcoded-remote-target');
+  // The person chose to leave this computer: do not go back to it at the next launch.
+  forgetLastComputer();
   preservePlatform = false;
 
   // Reconnect to local bridge
@@ -1992,14 +2148,25 @@ export function installShim(): void {
   setAndroidHostEventSink((type, payload) => dispatchEvent(type, payload));
   // Wake checks (2026-09-11): see checkConnectionAfterWake. Guarded for pages without a DOM.
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    // How long the page was hidden decides how long the wake check waits (LONG_AWAY_MS).
+    let hiddenAt: number | null = null;
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') checkConnectionAfterWake();
-      // Remembered so the wake check knows whether the computer can still be there at all.
-      else hiddenSince = Date.now();
+      if (document.visibilityState !== 'visible') { hiddenAt ??= Date.now(); return; }
+      const away = hiddenAt === null ? 0 : Date.now() - hiddenAt;
+      hiddenAt = null;
+      checkConnectionAfterWake(away);
     });
   }
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
     window.addEventListener('online', () => checkConnectionAfterWake());
+    // The phone says its network is gone: the connection is too. Say "Reconnecting" now instead of after the
+    // heartbeat's longer wait (2026-10-22), and keep trying; 'online' tries again at once.
+    window.addEventListener('offline', () => {
+      if (connectionState !== 'connected' || !ws || isAndroidLocal()) return;
+      abandonSocket(ws);
+      const token = localStorage.getItem('youcoded-remote-token');
+      if (token && !savedKeyStopped) scheduleReconnect(token);
+    });
     // A page restored from the browser's back/forward cache kept its old socket object.
     window.addEventListener('pageshow', (e) => { if ((e as PageTransitionEvent).persisted) checkConnectionAfterWake(); });
   }
@@ -2071,9 +2238,13 @@ export function installShim(): void {
       // Hand a list of pushes (an open's `before` / `after`) to the same listeners a live push reaches.
       play: (pushes: Array<{ type: string; payload: unknown }>) => playPushes(pushes),
       // The host asks a PHONE to fill again by closing its connection (the reconnect fills everything), so this never fires here.
-      onRefill: (_cb: (sessionId: string) => void) => () => {},
+      // The computer's fill of one conversation never completed (its hold expired): App fills that one again.
+      onRefill: (cb: (sessionId: string) => void) => {
+        const handler = addListener('session:refill', (p: { sessionId?: unknown }) => { if (typeof p?.sessionId === 'string') cb(p.sessionId); });
+        return () => removeListener('session:refill', handler);
+      },
       destroy: (sessionId: string) => invoke('session:destroy', { sessionId }),
-      list: () => invoke('session:list'),
+      list: () => takeEarlyList() ?? invoke('session:list'),
       // includeOpen: also list the chats open right now, marked `open` (a page's chat list; the Resume list leaves them out).
       browse: (opts?: { includeOpen?: boolean }) => invoke('session:browse', opts?.includeOpen ? { includeOpen: true } : undefined),
       // Fix: parameter order MUST match preload.ts — (sessionId, projectSlug, count, all).
@@ -2113,7 +2284,7 @@ export function installShim(): void {
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
       sendInput: (sessionId: string, text: string, notice?: 'model-switch', sendId?: string) => (noteSendEpoch(sessionId, sendId), fire('session:input', { sessionId, text, notice, sendId })),
       queue: { action: (sessionId: string, action: import('../shared/conversation-queue-channel-types').ConversationQueueAction) => {
-        return (action.kind === 'enqueue' && noteSendEpoch(sessionId,action.payload.sendId), invoke('session:queue-action', { sessionId, action }));
+        return (action.kind === 'enqueue' && noteSendEpoch(sessionId,action.payload.sendId), invoke('session:queue-action', { sessionId, action }, { timeoutMs: QUEUE_ACTION_TIMEOUT_MS }));
       } },
       control: (sessionId: string, request: import('../shared/claude-control-types').ClaudeControlRequest) => {
         if (request.kind === 'send-text') noteSendEpoch(sessionId, request.sendId);
@@ -2476,6 +2647,15 @@ export function installShim(): void {
         invoke('update:get-beta-channel'),
       setBetaChannel: (enabled: boolean): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
         invoke('update:set-beta-channel', { enabled }),
+      // Same reasoning as the beta channel: a HOST setting, so a paired phone reads and writes the
+      // computer's. Android's own backend answers {supported:false} (no in-app updater).
+      getAutoInstall: (): Promise<import('../shared/update-install-types').UpdateAutoInstallState> =>
+        invoke('update:get-auto-install'),
+      setAutoInstall: (enabled: boolean): Promise<import('../shared/update-install-types').UpdateAutoInstallState> =>
+        invoke('update:set-auto-install', { enabled }),
+      // 'update:restart-to-update' installs and reopens THIS computer: never from a phone or a browser
+      // (desktopOnly in the channel table), so this is a stub like launch.
+      restartToUpdate: async () => ({ restarting: false }),
       // WHY no socket listener: update:install-progress is desktop-only, just like launch.
       onInstallProgress: (_handler: (ev: import('../shared/update-install-types').UpdateInstallProgressEvent) => void) => () => {},
       onProgress: (_handler: (ev: any) => void) => {

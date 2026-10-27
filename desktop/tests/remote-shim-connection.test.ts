@@ -350,7 +350,8 @@ describe('remote-shim — client:ready', () => {
     onmessage: ((e: { data: string }) => void) | null = null;
     onclose: ((e: { code: number; reason: string }) => void) | null = null;
     onerror: (() => void) | null = null;
-    constructor(public url: string) { FakeWebSocket.instances.push(this); }
+    protocol = '';
+    constructor(public url: string, public protocols?: string[]) { FakeWebSocket.instances.push(this); }
     send(data: string) {
       if (this.readyState !== FakeWebSocket.OPEN) throw new Error('WebSocket is not OPEN');
       this.sent.push(data);
@@ -463,6 +464,88 @@ describe('remote-shim — client:ready', () => {
       expect(readies[0].payload.reconnect).toBe(true);
     });
 
+    // A reopen waited for four answers in a row (~470 ms each on Destin's phone). A computer that said `pipelined` is sent the list
+    // and the conversation the page will open together with the sign-in, and the app's own calls get those answers.
+    it('a browser page asks for the list and its last conversation with the sign-in, and the app reuses the answers', async () => {
+      // The page came from the computer it talks to, so that computer holds early requests (remote-server: pipelined).
+      const place = new Map<string, string>([['youcoded-remote-place:localhost', 's1']]);
+      (globalThis as any).sessionStorage = { getItem: (k: string) => place.get(k) ?? null, setItem: (k: string, v: string) => { place.set(k, v); } };
+      try {
+        const p = shim.connect('dev-1:secret', true);
+        const ws = FakeWebSocket.instances[0];
+        ws.open();
+        // Before the sign-in is answered: the sign-in, the list, and the conversation (terminal first, then the chat).
+        expect(ws.sent.map((d) => JSON.parse(d).type)).toEqual(['auth', 'session:list', 'session:open', 'session:open']);
+        const list = ws.sentOf('session:list')[0];
+        const [ptyOpen, chatOpen] = ws.sentOf('session:open');
+        expect(chatOpen.payload.fresh).toBe(true);                   // a new page: a whole first page, not a catch-up
+        ws.receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', pipelined: true });
+        await p;
+
+        ws.receive({ type: 'session:list:response', id: list.id, payload: [{ id: 's1' }] });
+        ws.receive({ type: 'session:open:response', id: ptyOpen.id, payload: { ok: true, ptyOnly: true } });
+        ws.receive({ type: 'session:open:response', id: chatOpen.id, payload: { ok: true, epoch: 'e', headSeq: 1 } });
+        // A live message for that conversation, arriving before the app has applied its page, waits for it.
+        const live: string[] = [];
+        (window as any).claude.on.transcriptEvent((e: any) => live.push(e.uuid));
+        await new Promise((r) => setTimeout(r, 0));
+        ws.receive({ type: 'transcript:event', payload: { sessionId: 's1', uuid: 'u2', type: 'assistant-text' }, epoch: 'e', seq: 2 });
+        expect(live).toEqual([]);
+
+        // The app's own calls are answered from those, with nothing asked again.
+        await expect((window as any).claude.session.list()).resolves.toEqual([{ id: 's1' }]);
+        const reply = await (window as any).claude.session.open({ sessionId: 's1', fresh: true });
+        expect(reply).toMatchObject({ ok: true, epoch: 'e' });
+        expect(live).toEqual([]);                                     // the app applies the page in this continuation
+        await vi.waitFor(() => expect(live).toEqual(['u2']));         // then the held message follows
+        expect(ws.sentOf('session:list')).toHaveLength(1);
+        expect(ws.sentOf('session:open')).toHaveLength(2);
+      } finally { delete (globalThis as any).sessionStorage; }
+    });
+
+    it('a saved sign-in and the early requests ride the opening request; a computer that takes them is sent nothing more', async () => {
+      // One round trip less: the computer answers them with its "connected" (shared/first-frames.ts).
+      const { readFirstFrames, TOOK_FRAMES_PROTOCOL } = await import('../src/shared/first-frames');
+      const place = new Map<string, string>([['youcoded-remote-place:localhost', 's1']]);
+      (globalThis as any).sessionStorage = { getItem: (k: string) => place.get(k) ?? null, setItem: (k: string, v: string) => { place.set(k, v); } };
+      try {
+        const p = shim.connect('dev-1:secret', true);
+        const ws = FakeWebSocket.instances[0];
+        const frames = readFirstFrames(ws.protocols ?? [])!.map((f) => JSON.parse(f));
+        expect(frames.map((m) => m.type)).toEqual(['auth', 'session:list', 'session:open', 'session:open']);
+        expect(frames[0]).toMatchObject({ deviceId: 'dev-1', secret: 'secret' });
+        ws.protocol = TOOK_FRAMES_PROTOCOL;
+        ws.open();
+        expect(ws.sent).toEqual([]);
+        ws.receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', pipelined: true });
+        await p;
+        ws.receive({ type: 'session:list:response', id: frames[1].id, payload: [{ id: 's1' }] });
+        await expect((window as any).claude.session.list()).resolves.toEqual([{ id: 's1' }]);
+        expect(ws.sentOf('session:list')).toHaveLength(0);
+      } finally { delete (globalThis as any).sessionStorage; }
+    });
+
+    it('a password sign-in is never put in the opening request', async () => {
+      const p = shim.connect('pw', false);
+      const ws = FakeWebSocket.instances[0];
+      expect(ws.protocols).toBeUndefined();
+      ws.open();
+      expect(ws.sentOf('auth')[0].password).toBe('pw');
+      ws.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      await p;
+    });
+
+    it('is in remote mode the moment it is signed in, before the app mounts', async () => {
+      // The switch used to land after the app had mounted, and its local→remote listener flushed and refilled everything.
+      const platform = await import('../src/renderer/platform');
+      const p = shim.connect('pw', false);
+      const ws = FakeWebSocket.instances[0];
+      ws.open();
+      ws.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      expect(platform.isRemoteMode()).toBe(true);
+      await p;
+    });
+
     it('drops a frame from a socket that is no longer the current one', async () => {
       const p1 = shim.connect('pw', false);
       const ws1 = FakeWebSocket.instances[0];
@@ -477,6 +560,24 @@ describe('remote-shim — client:ready', () => {
       ws1.receive({ type: 'session:created', payload: { id: 'ghost' } });
       ws2.receive({ type: 'session:created', payload: { id: 'real' } });
       expect(seen.map((s) => s.id)).toEqual(['real']);
+    });
+
+    // A long conversation's load used to arrive as one multi-MB frame; over a slow relay the page heard nothing until all of it
+    // was in, took that for a dead computer and reconnected. The computer now sends it in pieces, and the page puts them back.
+    it('says it can take a large answer in pieces, and puts the pieces back together into the one message', async () => {
+      const p = shim.connect('pw', false);
+      const ws = FakeWebSocket.instances[0];
+      ws.open();
+      expect(ws.sentOf('auth')[0].pieces).toBe(true);
+      ws.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      await p;
+      const seen: any[] = [];
+      (window as any).claude.on.sessionCreated((s: any) => seen.push(s));
+      const whole = JSON.stringify({ type: 'session:created', payload: { id: 'big', name: 'x'.repeat(50) + '😀' } });
+      const cut = whole.indexOf('😀') + 1;                       // between the emoji's two halves
+      const parts = [whole.slice(0, 20), whole.slice(20, cut), whole.slice(cut)];
+      parts.forEach((data, i) => ws.receive({ type: 'remote:piece', payload: { id: 7, i, n: parts.length, data } }));
+      expect(seen.map((s) => s.name)).toEqual(['x'.repeat(50) + '😀']);
     });
   });
 });
@@ -523,6 +624,11 @@ describe('remote-shim — heartbeat', () => {
       (globalThis as any).location = { protocol, host: 'desk:9900', search: '' };
       doc = Object.assign(new EventTarget(), { visibilityState: 'visible' });
       (globalThis as any).document = doc;
+      // The window's own events ('offline'), as a browser has them.
+      const win = new EventTarget();
+      (globalThis as any).addEventListener = win.addEventListener.bind(win);
+      (globalThis as any).removeEventListener = win.removeEventListener.bind(win);
+      (globalThis as any).dispatchEvent = win.dispatchEvent.bind(win);
       store = { 'youcoded-remote-token': 'dev-1:secret' };
       (globalThis as any).localStorage = {
         getItem: (k: string) => store[k] ?? null,
@@ -569,10 +675,36 @@ describe('remote-shim — heartbeat', () => {
       const ws = await signedIn();
       await vi.advanceTimersByTimeAsync(20_000);
       expect(ws.sentOf('remote:ping')).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(20_000);
       expect(FakeWebSocket.instances).toHaveLength(2);
       latest().open();
       expect(latest().sentOf('auth')[0]).toMatchObject({ deviceId: 'dev-1', secret: 'secret' });
+    });
+
+    it('waits out a computer that freezes for half a minute, saying so, and keeps the connection', async () => {
+      // The laptop's app freezes 10–50 s at a time; a 5 s wait turned each freeze over ~17 s into a reconnect.
+      const statuses: any[] = [];
+      (globalThis as any).claude.on.remoteConversationStatus((s: any) => statuses.push(s));
+      const ws = await signedIn();
+      await vi.advanceTimersByTimeAsync(20_000);                   // quiet: the question goes out
+      const ping = ws.sentOf('remote:ping')[0];
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(statuses.at(-1)).toMatchObject({ slow: true });       // "Waiting for your computer…"
+      await vi.advanceTimersByTimeAsync(10_000);                   // the computer thaws ~36 s after it went quiet
+      ws.receive({ type: 'remote:ping:response', id: ping.id, payload: { ok: true } });
+      expect(statuses.at(-1)).toMatchObject({ slow: false });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it('a phone that reports going offline says "reconnecting" at once instead of waiting', async () => {
+      const statuses: any[] = [];
+      (globalThis as any).claude.on.remoteConversationStatus((s: any) => statuses.push(s));
+      await signedIn();
+      (globalThis as any).dispatchEvent(new Event('offline'));
+      expect(statuses.at(-1)).toMatchObject({ phase: 'reconnecting' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(FakeWebSocket.instances).toHaveLength(2);             // and keeps trying
     });
 
     it('leaves a hidden page alone — the browser freezes it anyway', async () => {
@@ -583,22 +715,45 @@ describe('remote-shim — heartbeat', () => {
       expect(FakeWebSocket.instances).toHaveLength(1);
     });
 
-    it('coming back after longer than the computer waits reconnects at once, asking nothing', async () => {
+    it('coming back to a connection that died during a short absence replaces it once the question goes unanswered', async () => {
       const ws = await signedIn();
       hide();
-      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(20_000);
       show();
-      expect(ws.sentOf('remote:ping')).toHaveLength(0);
+      expect(ws.sentOf('remote:ping')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(10_000);
       expect(FakeWebSocket.instances).toHaveLength(2);
     });
 
-    it('a short absence still asks rather than dropping a good connection', async () => {
+    it('a short absence still asks rather than dropping a good connection, and waits the full check', async () => {
       const ws = await signedIn();
       hide();
       await vi.advanceTimersByTimeAsync(5_000);
       show();
       expect(ws.sentOf('remote:ping')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it('after minutes away the connection is replaced at once, without waiting for an answer', async () => {
+      // Destin: "very slow reconnects after leaving phone for a while and resuming"; he chose reconnecting right away.
+      const ws = await signedIn();
+      hide();
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      show();
+      expect(ws.sentOf('remote:ping')).toHaveLength(0);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    });
+
+    it('after minutes away an attempt that was still connecting is started over instead of waiting for its timeout', async () => {
+      const ws = await signedIn();
+      ws.close(1006);                                    // dropped; the retry starts and then the page is hidden
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(FakeWebSocket.instances).toHaveLength(2);   // still connecting
+      hide();
+      vi.setSystemTime(Date.now() + 5 * 60_000);         // the browser froze the page: the clock moved, its timers did not
+      show();
+      expect(FakeWebSocket.instances).toHaveLength(3);
     });
 
     it('does not run on the Android app’s own bridge', async () => {
@@ -867,6 +1022,31 @@ describe('remote-shim — overlapping connections', () => {
       expect(claude().capabilities).toMatchObject({ terminalTransport: 'raw-bytes', terminalScreenRead: true });
     });
 
+    it('keeps its computer through a long outage instead of falling back to its own runtime', async () => {
+      // A laptop asleep for 20 minutes used to cost the pairing after ten tries (3.5–6 min).
+      await setup({ protocol: 'file:', search: '?bridgeToken=bt&bridgePort=9901' });
+      const pairing = shim.connectToHost('desk', 9900, 'pw');
+      for (let i = 0; i < 200 && FakeWebSocket.instances.length === 0; i++) await new Promise((r) => setImmediate(r));
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      await pairing;
+      expect(JSON.parse(store['youcoded-last-computer'])).toEqual({ host: 'desk', port: 9900 });
+      latest().fireClose(1006);
+      for (let i = 0; i < 25; i++) {                   // far past the old limit of ten
+        await vi.advanceTimersByTimeAsync(60_000);
+        latest().fireClose(1006);
+      }
+      expect(FakeWebSocket.instances.filter((s) => s.url.startsWith('ws://localhost:'))).toHaveLength(0);
+      expect(latest().url).toBe('ws://desk:9900/ws');
+      expect(store['youcoded-remote-target']).toBe('ws://desk:9900/ws');
+      expect(store['youcoded-remote-token']).toBe('dev-1:s');
+    });
+
+    it('forgets the computer to come back to once it refuses the key', async () => {
+      await pairThenReconnectRefused('revoked');
+      expect(store['youcoded-last-computer']).toBeUndefined();
+    });
+
     it('keeps the pairing when the computer only switched remote access off', async () => {
       await pairThenReconnectRefused('no-password-configured');
       expect(store['youcoded-remote-target']).toBe('ws://desk:9900/ws');
@@ -1070,6 +1250,37 @@ describe('remote-shim — overlapping connections', () => {
       const ws = await signedIn();
       ws.fireClose(4003);
       expect(refusals).toEqual(['revoked']);
+    });
+
+    it('a tab another tab took over stops, keeps the key, and does not take it back', async () => {
+      await setup();
+      const refusals: string[] = [];
+      shim.onCredentialRefused((r) => refusals.push(r));
+      const ws = await signedIn();
+      ws.fireClose(4011);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(refusals).toEqual(['replaced']);
+      expect(FakeWebSocket.instances).toHaveLength(1);      // no reconnect that would kick the other tab
+      expect(store['youcoded-remote-token']).toBe('dev-1:secret');
+      // Neither the network coming back nor the tab being shown again takes it back; only Reload does.
+      shim.checkConnectionAfterWake();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it('the Android app whose old connection was replaced just reconnects', async () => {
+      await setup({ protocol: 'file:', search: '?bridgeToken=bt&bridgePort=9901' });
+      const pairing = shim.connectToHost('desk', 9900, 'pw');
+      for (let i = 0; i < 200 && FakeWebSocket.instances.length === 0; i++) await new Promise((r) => setImmediate(r));
+      latest().open();
+      // The app's own page is not the computer's: nothing is sent ahead of the sign-in until that computer has said it may.
+      expect(latest().sent.map((d) => JSON.parse(d).type)).toEqual(['auth']);
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      await pairing;
+      latest().fireClose(4011);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(latest().url).toBe('ws://desk:9900/ws');
+      expect(FakeWebSocket.instances).toHaveLength(2);
     });
   });
 });

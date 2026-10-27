@@ -91,6 +91,26 @@ describe('the listener is private by construction', () => {
     expect(address.port).toBeGreaterThan(0);
   });
 
+  it('compresses large messages to a phone (conversation loads cross a slow relay)', async () => {
+    const { mockSessionManager, mockHookRelay, config } = makeServer();
+    const { RemoteServer } = await import('../src/main/remote-server');
+    server = new RemoteServer(mockSessionManager, mockHookRelay, config);
+    await server.start();
+    expect((server as any).wss.options.perMessageDeflate).toMatchObject({ threshold: 1024, zlibDeflateOptions: { level: 1 } });
+  });
+
+  it('two starts at once bind one listener, and the terminal is relayed once', async () => {
+    // The Tailscale retry, the wake handler and the settings switch can all start it; a second bind rolled the first one back.
+    const { mockSessionManager, mockHookRelay, config } = makeServer();
+    const { RemoteServer } = await import('../src/main/remote-server');
+    server = new RemoteServer(mockSessionManager, mockHookRelay, config);
+    const before = mockSessionManager.listenerCount('pty-output');
+    await Promise.all([server.start(), server.start()]);
+    expect(server.isRunning()).toBe(true);
+    expect((server as any).httpServer.listening).toBe(true);
+    expect(mockSessionManager.listenerCount('pty-output')).toBe(before + 1);
+  });
+
   it('refuses to start without a private address instead of falling back', async () => {
     // The fallback IS the open listener this batch exists to remove: binding every
     // interface is what makes conversations readable by anything on the same wifi.
@@ -104,6 +124,45 @@ describe('the listener is private by construction', () => {
       'Tailscale is installed but not connected, so there is no private address to listen on.',
     );
     expect(server.isRunning()).toBe(false);
+  });
+
+  it('starts by itself once Tailscale connects after the app opened', async () => {
+    // The app opens at login before Tailscale has connected; remote access must not stay off all day.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      detection.connected = false;
+      detection.ip = null;
+      const { mockSessionManager, mockHookRelay, config } = makeServer();
+      const { RemoteServer } = await import('../src/main/remote-server');
+      server = new RemoteServer(mockSessionManager, mockHookRelay, config);
+      await expect(server.start()).rejects.toThrow(/not connected/);
+      detection.connected = true;
+      detection.ip = '127.0.0.1';
+      await vi.advanceTimersByTimeAsync(20_000);
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(server!.isRunning()).toBe(true));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not keep looking for Tailscale that is not installed', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      detection.installed = false;
+      detection.connected = false;
+      detection.ip = null;
+      const { mockSessionManager, mockHookRelay, config } = makeServer();
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const { RemoteConfig } = await import('../src/main/remote-config');
+      server = new RemoteServer(mockSessionManager, mockHookRelay, config);
+      await expect(server.start()).rejects.toThrow(/not installed/);
+      const calls = (RemoteConfig.detectTailscale as any).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect((RemoteConfig.detectTailscale as any).mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('says which of the two Tailscale problems it is', async () => {

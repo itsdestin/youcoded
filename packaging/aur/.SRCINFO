@@ -1,0 +1,23 @@
+pkgbase = youcoded-bin
+	pkgdesc = Your personal AI assistant and open source everything app — Claude, ChatGPT, OpenRouter or free local models
+	pkgver = 1.3.2
+	pkgrel = 1
+	url = https://youcoded.ai
+	arch = x86_64
+	license = MIT
+	depends = gtk3
+	depends = nss
+	depends = libxss
+	depends = libnotify
+	depends = alsa-lib
+	provides = youcoded
+	conflicts = youcoded
+	noextract = youcoded-1.3.2.pacman
+	options = !strip
+	options = !debug
+	source = youcoded-1.3.2.pacman::https://github.com/itsdestin/youcoded/releases/download/v1.3.2/youcoded-1.3.2.pacman
+	source = LICENSE-1.3.2::https://raw.githubusercontent.com/itsdestin/youcoded/v1.3.2/LICENSE
+	sha256sums = 435203b3d19a674cc800786cf6b0207f1478a4aeea2e4b58961c6ecdd8c86096
+	sha256sums = 92c1eb7d8da61b2785f75165c4edf104788f3f41f12ee75279f141eb0c51263a
+
+pkgname = youcoded-bin

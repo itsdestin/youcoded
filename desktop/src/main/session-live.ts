@@ -20,7 +20,7 @@
 import type { Publish } from './publish';
 import type { SessionRecords } from './session-record';
 import { detectPermissionMode } from '../shared/permission-mode-detect';
-import { claudeAliasForModelId, CLAUDE_ALIAS_LABELS, isPlaceholderModelId } from '../shared/model-ids';
+import { claudeAliasForModelId, isPlaceholderModelId } from '../shared/model-ids';
 import { IPC } from '../shared/backend-contract';
 import { clearDividerId } from '../shared/divider-ids';
 import type { PromptCardButton, SessionLiveBody } from '../shared/session-live-types';
@@ -72,7 +72,7 @@ export class SessionLiveFacts {
   /** The wait after a "Switch model?" pop-up closed (see inputBlock). */
   private readonly popupTimers = new Map<string, unknown>();
   /** A /model the host announced and has not yet seen confirmed: what to put back if Claude Code refused it. */
-  private readonly pendingModel = new Map<string, { alias: string; prev: string | null; dividerId: string | null; at: number; turnStarted: boolean; popup: boolean; confirmed: boolean }>();
+  private readonly pendingModel = new Map<string, { alias: string; prev: string | null; at: number; turnStarted: boolean; popup: boolean; confirmed: boolean }>();
   private ids = 0;
   private readonly directReceipts = new Map<string, Set<string>>();
   private readonly stopTargets = new Map<string, { sessionId: string; epoch: string; userUuid: string; accepted?: boolean }>();
@@ -106,27 +106,24 @@ export class SessionLiveFacts {
   }
 
   /**
-   * A screen wrote `text` into a Claude Code session's terminal. `notice` is the screen saying "this was typed as a command in the
-   * chat" (as opposed to the model picker or the Shift+Space cycle, which write the same bytes): only a typed command draws the
-   * "Model switched to ..." divider, exactly as before.
+   * A screen wrote `text` into a Claude Code session's terminal. WHY no divider here any more (2026-10-22): the "Model switched to ..."
+   * line is now read from Claude Code's own "Set model to" reply in the transcript (the `model-switch` event), for every way of switching and on reopen.
    */
-  noteInput(sessionId: string, text: string, notice?: unknown): void {
+  noteInput(sessionId: string, text: string): void {
     if (!this.deps.isClaude(sessionId) || typeof text !== 'string') return;
     const model = MODEL_COMMAND_RE.exec(text);
-    if (model) { this.modelRequested(sessionId, model[1], notice, true); return; }
+    if (model) { this.modelRequested(sessionId, model[1], true); return; }
     if (COMPACT_COMMAND_RE.test(text)) { this.compactStarted(sessionId); return; }
     if (CLEAR_COMMAND_RE.test(text)) this.clearTyped(sessionId);
   }
 
-  private modelRequested(sessionId: string, requested: string, notice: unknown, announce: boolean): void {
+  private modelRequested(sessionId: string, requested: string, announce: boolean): void {
     const alias = claudeAliasForModelId(requested);
     if (!alias) return;
-    const dividerId = announce && notice === 'model-switch' ? this.nextId('model-switch') : null;
     // WHY: a second request must retain the last confirmed model, not an earlier optimistic label.
     const earlier = this.pendingModel.get(sessionId);
-    this.pendingModel.set(sessionId, { alias, prev: earlier && !earlier.confirmed ? earlier.prev : (this.deps.records.facts(sessionId)?.model ?? null), dividerId, at: this.now(), turnStarted: false, popup: false, confirmed: false });
+    this.pendingModel.set(sessionId, { alias, prev: earlier && !earlier.confirmed ? earlier.prev : (this.deps.records.facts(sessionId)?.model ?? null), at: this.now(), turnStarted: false, popup: false, confirmed: false });
     if (announce) this.live(sessionId, { kind: 'model', model: alias });
-    if (dividerId) this.live(sessionId, { kind: 'model-switch', id: dividerId, label: `Model switched to ${CLAUDE_ALIAS_LABELS[alias]}` });
   }
 
   /** A structured request starts no fake terminal input or optimistic model change. */
@@ -139,7 +136,7 @@ export class SessionLiveFacts {
       this.compactStarted(sessionId, id);
     }
     // Cached model switches can still ask in the native menu. Preserve its declined-switch reconciliation.
-    if (request.command === 'model' && request.args) this.modelRequested(sessionId, request.args, request.notice, false);
+    if (request.command === 'model' && request.args) this.modelRequested(sessionId, request.args, false);
   }
 
   /** Capture BEFORE handoff, not when a possibly delayed receipt arrives. */
@@ -192,12 +189,8 @@ export class SessionLiveFacts {
     if (request.command === 'model' && result.model && !isPlaceholderModelId(result.model)) {
       // WHY: a command can return successfully while retaining another model; publish the getter's answer, never its requested alias.
       const actual = claudeAliasForModelId(result.model) ?? result.model;
-      const previous = this.deps.records.facts(sessionId)?.model;
       this.pendingModel.delete(sessionId); this.clearPopupTimer(sessionId);
       this.live(sessionId, { kind: 'model', model: actual });
-      if (request.notice === 'model-switch' && actual !== previous) {
-        this.live(sessionId, { kind: 'model-switch', id: `model-direct-${result.requestId}`, label: `Model switched to ${CLAUDE_ALIAS_LABELS[actual as keyof typeof CLAUDE_ALIAS_LABELS] ?? actual}` });
-      }
     } else if (request.command === 'clear' && result.claudeSessionId) {
       this.noteSessionStart(sessionId, 'clear', result.claudeSessionId);
     }
@@ -206,14 +199,14 @@ export class SessionLiveFacts {
 
   /**
    * Claude Code did not take the model switch (a "Switch model?" pop-up was answered No, or the next reply came from a different model): take back what the
-   * host announced, so no screen keeps claiming it. The divider is retracted and the label goes back to the model the session was on.
+   * host announced, so no screen keeps claiming it: the label goes back to the model the session was on. (No divider to take back: it is drawn only from
+   * Claude Code's "Set model to" reply, which a declined switch never writes.)
    */
   private rejectModel(sessionId: string): void {
     const pm = this.pendingModel.get(sessionId);
     if (!pm) return;
     this.pendingModel.delete(sessionId);
     this.clearPopupTimer(sessionId);
-    if (pm.dividerId) this.live(sessionId, { kind: 'model-switch-retract', id: pm.dividerId });
     if (pm.prev) this.live(sessionId, { kind: 'model', model: pm.prev });
   }
 
@@ -251,8 +244,8 @@ export class SessionLiveFacts {
     }
     const pm = this.pendingModel.get(sessionId);
     if (pm) {
-      // Claude Code records a /model command when it RUNS it: that is the confirmation (also for one that waited behind a "Switch model?" pop-up).
-      if (e.type === 'user-message' && e.data?.slashCommand && typeof (e.data as { text?: unknown }).text === 'string' && /^\/model\b/.test((e.data as { text: string }).text)) { pm.confirmed = true; this.clearPopupTimer(sessionId); }
+      // Claude Code's "Set model to" reply (the model-switch event) is the confirmation, also for one that waited behind a "Switch model?" pop-up.
+      if (e.type === 'model-switch') { pm.confirmed = true; this.clearPopupTimer(sessionId); }
       if (e.type === 'user-message' && !e.data?.slashCommand) pm.turnStarted = true;
       else if (e.type === 'assistant-text' && pm.turnStarted && typeof e.data?.model === 'string' && !isPlaceholderModelId(e.data.model)) {
         const actual = claudeAliasForModelId(e.data.model);
@@ -407,7 +400,7 @@ export class SessionLiveFacts {
   inputBlock(sessionId: string, block: InputBlock | null): void {
     this.live(sessionId, { kind: 'input-block', block });
     // WHY (2026-10-02, one-core sync-fix1): this is how a declined switch is noticed. The old reader scanned the WHOLE terminal screen for refusal words, and the
-    // screen holds the conversation too: a chat that merely said "the model was not found" made every /model lose its divider (Destin's missing divider, twice).
+    // screen holds the conversation too: a chat that merely said "the model was not found" made every /model lose its label (Destin's missing divider, twice).
     // Now only two anchored facts count: a "Switch model?" pop-up that came and went with no /model line in the transcript, and a reply from another model.
     const pm = this.pendingModel.get(sessionId);
     if (!pm || pm.confirmed) return;

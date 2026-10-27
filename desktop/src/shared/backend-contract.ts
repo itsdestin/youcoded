@@ -36,7 +36,7 @@ import type {
   ApiResult, AuthStartResponse, AuthPollResponse, MarketplaceUser, AccountExportResult,
 } from './account-types';
 import type {
-  UpdateDownloadResult, UpdateLaunchResult, UpdateCachedDownload, UpdateBetaChannelState, UpdateChangelogResult,
+  UpdateDownloadResult, UpdateLaunchResult, UpdateCachedDownloadResult, UpdateBetaChannelState, UpdateAutoInstallState, UpdateRestartResult, UpdateChangelogResult,
 } from './update-install-types';
 import type { SessionInfo, TranscriptEvent } from './types';
 import type { MarketplaceChannelTypes, SkillsBridge, MarketplaceBridge, FirstRunBridge } from './marketplace-channel-types';
@@ -52,7 +52,7 @@ import type { OfficeChannelTypes } from './office-channel-types';
 export type { MarketplaceThumbs } from './marketplace-channel-types';
 import type {
   NativeSendResult, SessionContext, SessionContextText,
-  SessionMetaResult, HandoffAttemptResult, HandoffCreateParams,
+  SessionMetaResult, ReopenEntry, HandoffAttemptResult, HandoffCreateParams,
   SpecialistsEvent, ShellEvent,
 } from './types';
 import type { Capabilities } from './capabilities';
@@ -153,6 +153,9 @@ export const IPC = {
   UPDATE_GET_CACHED_DOWNLOAD: 'update:get-cached-download',
   UPDATE_GET_BETA_CHANNEL: 'update:get-beta-channel',   // () -> { betaChannel, effective }
   UPDATE_SET_BETA_CHANNEL: 'update:set-beta-channel',   // (enabled: boolean)
+  UPDATE_GET_AUTO_INSTALL: 'update:get-auto-install',   // () -> { supported, enabled? }
+  UPDATE_SET_AUTO_INSTALL: 'update:set-auto-install',   // (enabled: boolean) -> { supported, enabled? }
+  UPDATE_RESTART_TO_UPDATE: 'update:restart-to-update', // () -> { restarting } (desktop only)
   OPEN_EXTERNAL: 'shell:open-external',
   SHOW_ITEM_IN_FOLDER: 'shell:show-item-in-folder',
   // Open a local file with the OS default app (HTML→browser, .docx→Word, etc.).
@@ -985,9 +988,12 @@ export interface ChannelTypes extends ConversationQueueChannelTypes, BrowserChan
   'update:download': { request: void; response: UpdateDownloadResult };
   'update:cancel': { request: { jobId: string }; response: { success: boolean } };
   'update:launch': { request: { jobId: string; filePath: string }; response: UpdateLaunchResult };
-  'update:get-cached-download': { request: { version: string }; response: UpdateCachedDownload | null };
+  'update:get-cached-download': { request: { version: string }; response: UpdateCachedDownloadResult | null };
   'update:get-beta-channel': { request: void; response: UpdateBetaChannelState };
   'update:set-beta-channel': { request: { enabled: boolean }; response: UpdateBetaChannelState };
+  'update:get-auto-install': { request: void; response: UpdateAutoInstallState };
+  'update:set-auto-install': { request: { enabled: boolean }; response: UpdateAutoInstallState };
+  'update:restart-to-update': { request: void; response: UpdateRestartResult };
   // account:* — the YouCoded account (one-core R3-2).
   'account:start': { request: void; response: ApiResult<AuthStartResponse> };
   'account:poll': { request: { deviceCode: string }; response: ApiResult<AuthPollResponse> };
@@ -1049,7 +1055,7 @@ interface SessionBridge {
   list(): Promise<any[]>;
   /** False on a remote client whose connection is down; always true on desktop. */
   canSend(): boolean;
-  /** Typed model-switch notice + stable send ID permit host dividers and lost-reply sendOutcomes reconciliation. */
+  /** Stable send ID permits lost-reply sendOutcomes reconciliation. `notice` is accepted but unread since 2026-10-22 (the model-switch divider comes from the transcript). */
   sendInput(sessionId: string, text: string, notice?: 'model-switch', sendId?: string): void;
   control(sessionId: string, request: ClaudeControlRequest): Promise<ClaudeControlResult>; // explicit intent; only unavailable permits legacy fallback
   /** Android's own runtime only (it has no host screen reader): reports whether a Claude Code pop-up holds the keyboard. Elsewhere the computer reads the terminal (session-screens.ts). */
@@ -1082,7 +1088,7 @@ interface SessionBridge {
   // exposing this at all), but the SHARED bridge still carries it — a remote
   // browser's preload-equivalent (remote-shim) implements it too; the
   // renderer is what skips calling it off-desktop (App.tsx, T4).
-  reopenList(): Promise<string[]>;
+  reopenList(): Promise<ReopenEntry[]>;
   forgetReopen(ids: string[]): Promise<{ ok: boolean }>;
 }
 
@@ -1189,12 +1195,17 @@ interface ClaudeApi {
     download: () => Promise<UpdateDownloadResult>;
     cancel: (jobId: string) => Promise<{ success: boolean }>;
     launch: (jobId: string, filePath: string) => Promise<UpdateLaunchResult>;
-    getCachedDownload: (version: string) => Promise<UpdateCachedDownload | null>;
+    getCachedDownload: (version: string) => Promise<UpdateCachedDownloadResult | null>;
     // Beta update channel. `betaChannel` is the saved answer (null = never
     // chosen); `effective` is what the next check will use, which for an
     // unchosen install is whether this build is itself a pre-release.
     getBetaChannel: () => Promise<UpdateBetaChannelState>;
     setBetaChannel: (enabled: boolean) => Promise<UpdateBetaChannelState>;
+    // "Install updates automatically" (#183). `supported:false` where there is no in-app updater.
+    getAutoInstall: () => Promise<UpdateAutoInstallState>;
+    setAutoInstall: (enabled: boolean) => Promise<UpdateAutoInstallState>;
+    // Restart to update (#183 T3): asks about open chats, installs at exit, reopens. Desktop only.
+    restartToUpdate: () => Promise<UpdateRestartResult>;
     onProgress: (handler: (ev: import('./update-install-types').UpdateProgressEvent) => void) => () => void;
     onInstallProgress: (handler: (ev: import('./update-install-types').UpdateInstallProgressEvent) => void) => () => void;
   };

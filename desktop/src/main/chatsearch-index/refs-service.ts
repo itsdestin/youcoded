@@ -95,17 +95,18 @@ async function findLocalTranscript(provider: ChatsearchProvider, id: string): Pr
   return hits.find((p): p is string => !!p) ?? null;
 }
 
-export function resolveConversations(shortIds: unknown): { ok: true; results: ResolvedConversation[] } | { ok: false; error: string } {
+export async function resolveConversations(shortIds: unknown): Promise<{ ok: true; results: ResolvedConversation[] } | { ok: false; error: string }> {
   // A card resolves the ids from one search. A hundred is far past anything the
   // CLI prints, so a larger list is a caller bug, not a big search.
   if (!Array.isArray(shortIds) || shortIds.length > 100) return { ok: false, error: 'Expected up to 100 ids' };
   const resolveLocal = buildLocalProjectResolver();
   return {
     ok: true,
-    results: resolveShortIds(shortIds.map(String), {
+    results: await resolveShortIds(shortIds.map(String), {
       dir: chatsearchDir(os.homedir()),
       resolveLocal,
-      transcriptExistsLocally: (p, local, id) => fs.existsSync(localTranscriptPath(p, local, id)),
+      // WHY async access (2026-10-22 freeze hunt): one blocking stat per resolved card on the main thread.
+      transcriptExistsLocally: (p, local, id) => fs.promises.access(localTranscriptPath(p, local, id)).then(() => true, () => false),
       slugFor: (p, local) => (p === 'native' ? nativeStoreSlug(local) : ccProjectSlug(local)),
     }),
   };
@@ -159,7 +160,7 @@ export async function readConversation(req: ChatsearchReadRequest): Promise<Chat
         const e = await entryOf(p, id);
         if (!e) return null;
         resolveLocal ??= buildLocalProjectResolver();
-        const local = resolveLocal({ projectName: e.projectName, originalPath: e.originalPath });
+        const local = await resolveLocal({ projectName: e.projectName, originalPath: e.originalPath });
         return local ? localTranscriptPath(p, local, id) : null;
       },
       roots,

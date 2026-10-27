@@ -76,6 +76,7 @@ describe('SubagentWatcher', () => {
       subagentsDir,
       index,
       emit: e => emitted.push(e),
+      replayExisting: true, // these tests write a file first, then start; the default (no replay) is pinned in its own describe below
     });
   });
 
@@ -339,6 +340,7 @@ describe('SubagentWatcher read integrity', () => {
       subagentsDir,
       index,
       emit: e => emitted.push(e),
+      replayExisting: true, // test writes the file first (see the default-behaviour describe)
     });
   });
 
@@ -410,6 +412,7 @@ describe('SubagentWatcher timer lifecycle', () => {
       subagentsDir,
       index,
       emit: e => emitted.push(e),
+      replayExisting: true, // test writes the file first (see the default-behaviour describe)
     });
   });
 
@@ -528,7 +531,7 @@ describe('SubagentWatcher arms timers only when there is something to poll', () 
     subagentsDir = path.join(tmpRoot, 'subagents');
     index = new SubagentIndex();
     emitted = [];
-    watcher = new SubagentWatcher({ sessionId: 'sess-lazy', subagentsDir, index, emit: e => emitted.push(e) });
+    watcher = new SubagentWatcher({ sessionId: 'sess-lazy', subagentsDir, index, emit: e => emitted.push(e), replayExisting: true });
   });
 
   afterEach(() => {
@@ -641,5 +644,77 @@ describe('SubagentWatcher arms timers only when there is something to poll', () 
     await vi.advanceTimersByTimeAsync(5000); // one safety-net tick
     await vi.waitFor(() => expect(emitted.map(e => looseData(e).toolUseId)).toContain('toolu_LW2'), { timeout: SETTLE_MS });
     expect(emitted).toHaveLength(2);
+  });
+});
+
+// 2026-10-22 freeze hunt: helpers that already exist when watching starts are NOT replayed (their
+// history reaches the chat through getHistory, as the parent transcript's does), reads are capped, and
+// helpers that appear or grow afterwards are still delivered in full.
+describe('SubagentWatcher default: existing helper files are not replayed', () => {
+  let tmpRoot: string; let subagentsDir: string; let index: SubagentIndex; let emitted: TranscriptEvent[]; let watcher: SubagentWatcher;
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-noreplay-'));
+    subagentsDir = path.join(tmpRoot, 'subagents');
+    fs.mkdirSync(subagentsDir, { recursive: true });
+    index = new SubagentIndex(); emitted = [];
+    watcher = new SubagentWatcher({ sessionId: 's', subagentsDir, index, emit: (e) => emitted.push(e) });
+  });
+  afterEach(() => { watcher.stop(); fs.rmSync(tmpRoot, { recursive: true, force: true }); });
+
+  it('emits nothing for lines already in an existing file, but streams what is appended after start', async () => {
+    writeMeta(subagentsDir, 'old', 'Find bug', 'Explore');
+    appendLine(subagentsDir, 'old', toolUseLine('u-old', 'toolu_OLD', 'Read', { file_path: '/old' }));
+    index.recordParentAgentToolUse('toolu_parent', 'Find bug', 'Explore');
+    watcher.start();
+    await vi.waitFor(() => expect((watcher as any).perFile.has('old')).toBe(true), { timeout: SETTLE_MS }); // tracked, so its start point is fixed
+    await wait(200);
+    expect(emitted).toHaveLength(0);
+    appendLine(subagentsDir, 'old', toolUseLine('u-new', 'toolu_NEW', 'Read', { file_path: '/new' }));
+    await vi.waitFor(() => expect(emitted).toHaveLength(1), { timeout: WATCH_MS });
+    expect(looseData(emitted[0]).toolUseId).toBe('toolu_NEW');
+  });
+
+  it('still reads a helper that first appears after start from its first byte', async () => {
+    watcher.start();
+    await wait(20); // a helper made in the very same instant as start() counts as already there
+    index.recordParentAgentToolUse('toolu_parent', 'Find bug', 'Explore');
+    writeMeta(subagentsDir, 'fresh', 'Find bug', 'Explore');
+    appendLine(subagentsDir, 'fresh', toolUseLine('u1', 'toolu_F1', 'Read', { file_path: '/a' }));
+    await vi.waitFor(() => expect(emitted).toHaveLength(1), { timeout: WATCH_MS });
+  });
+
+  it('reads a large backlog in capped pieces and loses no line', async () => {
+    const file = path.join(subagentsDir, 'agent-big.jsonl');
+    writeMeta(subagentsDir, 'big', 'Find bug', 'Explore');
+    fs.writeFileSync(file, '');
+    index.recordParentAgentToolUse('toolu_parent', 'Find bug', 'Explore');
+    watcher.start();
+    await vi.waitFor(() => expect((watcher as any).perFile.has('big')).toBe(true), { timeout: SETTLE_MS });
+    // ~3 MiB appended at once: several 1 MiB reads, with lines split across the cap boundaries.
+    const lines = Array.from({ length: 3000 }, (_, i) => JSON.stringify(toolUseLine(`u${i}`, `toolu_${i}`, 'Read', { file_path: '/x'.repeat(500) })));
+    fs.appendFileSync(file, lines.join('\n') + '\n');
+    await vi.waitFor(() => expect(emitted).toHaveLength(3000), { timeout: WATCH_MS });
+    expect(new Set(emitted.map((e) => looseData(e).toolUseId)).size).toBe(3000);
+  });
+});
+
+describe('SubagentWatcher: nothing is delivered after stop()', () => {
+  it('a backlog read cut short by stop() emits no further events', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-stop-'));
+    const dir = path.join(tmp, 'subagents'); fs.mkdirSync(dir);
+    const idx = new SubagentIndex(); const got: TranscriptEvent[] = [];
+    const w = new SubagentWatcher({ sessionId: 's', subagentsDir: dir, index: idx, emit: (e) => got.push(e), replayExisting: true });
+    writeMeta(dir, 'big', 'Find bug', 'Explore');
+    idx.recordParentAgentToolUse('toolu_parent', 'Find bug', 'Explore');
+    const lines = Array.from({ length: 3000 }, (_, i) => JSON.stringify(toolUseLine(`u${i}`, `toolu_${i}`, 'Read', { file_path: '/x'.repeat(500) })));
+    fs.writeFileSync(path.join(dir, 'agent-big.jsonl'), lines.join('\n') + '\n');   // ~3 MiB: several capped reads
+    w.start();
+    await vi.waitFor(() => expect(got.length).toBeGreaterThan(0), { timeout: SETTLE_MS });
+    w.stop();
+    const atStop = got.length;
+    // settle: a NEGATIVE check (nothing more arrives after stop), so a fixed wait is the right shape here.
+    await wait(300);
+    expect(got.length).toBe(atStop);
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

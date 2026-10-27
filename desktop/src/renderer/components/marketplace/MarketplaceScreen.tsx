@@ -106,9 +106,10 @@ export default function MarketplaceScreen({
   }, Object.keys(SHOOT_DETAIL_IDS).filter(Boolean));
   useScreenOpen('marketplace/theme-detail', (sub) => {
     setDetailScreen(sub ? `marketplace/theme-detail/${sub}` : undefined);
-    setDetail({ kind: 'theme', slug: sub === 'not-installed' || sub === 'install' ? 'cotton-candy-sky' : 'meadow-mist' });
+    // `builtin`: a theme that ships in the app — Apply only, no Uninstall / like / share.
+    setDetail({ kind: 'theme', slug: sub === 'builtin' ? 'youcoded-night' : sub === 'not-installed' || sub === 'install' ? 'cotton-candy-sky' : 'meadow-mist' });
     if (sub === 'install') mp.installTheme('cotton-candy-sky').catch(() => undefined);
-  }, ['not-installed', 'install']);
+  }, ['not-installed', 'install', 'builtin']);
   const [integrations, setIntegrations] = useState<IntegrationCardItem[]>([]);
   // Integration click-to-expand — mirrors the plugin detail-overlay pattern
   // but renders IntegrationDetailOverlay (below) because integrations aren't
@@ -418,7 +419,8 @@ export default function MarketplaceScreen({
   // for a spinner each time would be a visible flash. The error text is
   // mp.error verbatim — the real message, never a guessed cause
   // (docs/error-message-standards.md). Retry re-runs the same fetch.
-  const registryEmpty = mp.skillEntries.length === 0 && mp.themeEntries.length === 0;
+  // Built-in themes are always listed, loaded or not, so they don't count toward "loaded".
+  const registryEmpty = mp.skillEntries.length === 0 && !mp.themeEntries.some(t => !t.isBuiltin);
   const registryState = registryEmpty && mp.loading
     ? <LoadingState what="the marketplace" />
     : registryEmpty && mp.error

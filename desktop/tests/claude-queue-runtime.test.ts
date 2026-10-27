@@ -12,7 +12,7 @@ afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { rec
 async function fixture() {
  const root = await mkdtemp(join(tmpdir(), 'queue-runtime-')); roots.push(root);
  const bridge = Object.assign(new EventEmitter(), { attachQueueTransport: vi.fn(), setQueueInitializer: vi.fn(), isReady: ():boolean => true, executeQueueClear: vi.fn(async () => ({ status: 'accepted', requestId: 'clear', claudeSessionId: 'new-conversation' })) });
- const manager = { getSession: () => ({ id: 's', cwd: root, provider: 'claude' }), sendInput: vi.fn(() => true), queueWorkerCommand: vi.fn(async (_id: string, command: {type:string}) => ({ status: command.type==='queue-acquire'?'owned':command.type==='queue-release'?'released':'revoked' })) };
+ const manager = { getSession: () => ({ id: 's', cwd: root, provider: 'claude' }), sendInput: vi.fn(() => true), queueWorkerCommand: vi.fn(async (_id: string, command: {type:string}) => ({ status: command.type==='queue-acquire'?'owned':['queue-release','queue-abandon'].includes(command.type)?'released':'revoked' })) };
  const publish = vi.fn(); const noteSend = vi.fn(); let safe = false;
  const runtime = new ClaudeQueueRuntime({ userDataRoot: () => root, bridge: bridge as any, manager: manager as any, inputSafe: () => safe, working: () => false, publish, noteSend });
  bridge.emit('native-ready', 's', 'inc'); bridge.emit('state', 's', { claudeSessionId: 'conversation', turnId: null });
@@ -20,6 +20,30 @@ async function fixture() {
  return { root, bridge, manager, runtime, publish, noteSend, safe: () => { safe = true; } };
 }
 describe('instance-owned Claude queue runtime', () => {
+ it('shows a stalled idle send in the strip after a short while, and says when the terminal box is busy', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  try {
+   const f=await fixture(); f.safe(); const identity=await f.runtime.action('s',{kind:'identity'}); if(identity.status!=='identity')throw Error('identity');
+   await f.runtime.action('s',{kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId:'slow',originalText:'hi',displayContent:'hi',attachments:[]}});
+   expect(f.publish.mock.lastCall?.[1]).toMatchObject({queue:[]});
+   await vi.advanceTimersByTimeAsync(9000);
+   expect(f.publish.mock.lastCall?.[1]).toMatchObject({queue:[expect.objectContaining({sendId:'slow'})]});
+   const transport=f.bridge.attachQueueTransport.mock.lastCall![0] as ClaudeQueueTransport;
+   await transport.offer('s','inc',{boundaryId:'idle',boundarySeq:1,conversationId:'conversation',turnId:null,kind:'idle',expiresAt:Date.now()+10000,composerBusy:true});
+   expect(f.publish.mock.lastCall?.[1]).toMatchObject({queue:[expect.objectContaining({sendId:'slow',notice:expect.stringMatching(/message box in the terminal/)})]});
+   await f.runtime.close();
+  } finally { vi.useRealTimers(); }
+ });
+ it('says whether it ever accepted a send, without sending anything', async () => {
+  const f=await fixture(); const identity=await f.runtime.action('s',{kind:'identity'}); if(identity.status!=='identity')throw Error('identity');
+  await f.runtime.action('s',{kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId:'arrived',originalText:'hi',displayContent:'hi',attachments:[]}});
+  const enqueues=f.noteSend.mock.calls.length;
+  expect(await f.runtime.action('s',{kind:'lookup',queueId:identity.identity.queueId,sendId:'arrived'})).toMatchObject({status:'lookup',found:true,identity:identity.identity});
+  expect(await f.runtime.action('s',{kind:'lookup',queueId:identity.identity.queueId,sendId:'never-sent'})).toMatchObject({status:'lookup',found:false});
+  expect(await f.runtime.action('s',{kind:'lookup',queueId:'00000000-0000-4000-8000-000000000000',sendId:'arrived'})).toMatchObject({status:'unknown'});
+  expect(f.noteSend.mock.calls.length).toBe(enqueues);
+  await f.runtime.close();
+ });
  it('keeps an idle-ready send quiet until it genuinely waits or becomes unconfirmed', async () => {
   const f=await fixture(); f.safe(); const identity=await f.runtime.action('s',{kind:'identity'}); if(identity.status!=='identity')throw Error('identity');
   await f.runtime.action('s',{kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId:'quiet',originalText:'hi',displayContent:'hi',attachments:[]}});
@@ -29,7 +53,15 @@ describe('instance-owned Claude queue runtime', () => {
   const staged=await transport.poll('s','inc'); expect(staged.kind).toBe('stage');
   expect(f.publish.mock.lastCall?.[1]).toMatchObject({queue:[]});
   await transport.event('s','inc',{kind:'unknown',attemptId:staged.lease!.attemptId,wireHash:staged.lease!.wireHash}); await pending;
-  expect(f.publish.mock.lastCall?.[1]).toMatchObject({queue:[expect.objectContaining({status:'uncertain'})]});
+  const row=(f.publish.mock.lastCall?.[1] as {queue:{queueId:string;status:string;content:string;notice?:string}[]}).queue[0];
+  expect(row).toMatchObject({status:'uncertain',content:'hi'});
+  // The problem is on THIS row as its own sentence, never pasted into the message text.
+  expect(row.notice).toMatch(/unconfirmed/i);
+  // Dismissing it hands the person's own words back for the message box.
+  const dismissing=f.runtime.action('s',{kind:'dismiss',itemId:row.queueId});
+  const abandon=await transport.poll('s','inc'); expect(abandon.kind).toBe('abandon');
+  await transport.event('s','inc',{kind:'abandoned',attemptId:staged.lease!.attemptId,wireHash:staged.lease!.wireHash});
+  expect(await dismissing).toEqual({status:'done',restore:{text:'hi',attachments:[]}});
   await f.runtime.close();
  });
  it('rotates drained full history only on deliberate identity lookup and retires resolved closed namespaces',async()=>{

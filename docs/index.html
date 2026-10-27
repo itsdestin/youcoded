@@ -4,8 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <!-- Lowercase "youcoded", as in the logo (Destin, brand-website-v1 TAB note); the wording, the logo's own tagline, was picked in brand-website-v2 (TITLE b). -->
-<title>youcoded — open source everything</title>
-<meta name="description" content="One app for Claude, hundreds of cloud models, or one that runs free on your own computer — working in your files, on every device you own. Windows, macOS, Linux, Android.">
+<!-- WHY "AI assistant" joined the tagline (2026-10-22, search discovery): the tab
+     title is also the headline of a Google result and what an AI search tool
+     quotes first. "open source everything" alone never said what kind of thing
+     YouCoded is, so it matched no search a newcomer would type. The lowercase
+     brand and Destin's tagline stay; the description below follows the hero's
+     own subtitle so search results, share cards and the page say one thing. -->
+<title>youcoded — your personal AI assistant and open source everything app</title>
+<meta name="description" content="A fully customizable AI assistant and open-source everything app. Ask for new features, pages or a whole new look, on any AI model — even free, offline ones.">
+<link rel="canonical" href="https://youcoded.ai/">
 <!-- Social preview. og-image.png is a PHOTOGRAPH OF THIS PAGE, rebuilt by
      docs/tools/gen-og-image.mjs — regenerate it whenever the hero changes.
      It used to be a dark screenshot of the app from before the redesign, so
@@ -13,26 +20,59 @@
      it opened (reported 2026-09-04). The favicon is the app icon (docs/brand/,
      brand identity 2026-10-04) so a tab, the header and the installed app
      read as one product; applyTheme() swaps it to the theme the visitor picks. -->
-<meta property="og:title" content="YouCoded — Agentic AI for Everyone">
-<meta property="og:description" content="One app for Claude, hundreds of cloud models, or one that runs free on your own computer — working in your files, on every device you own. Windows, macOS, Linux, Android.">
+<meta property="og:title" content="YouCoded — Make your technology useful, fun, yours.">
+<meta property="og:description" content="A fully customizable AI assistant and open-source everything app. Ask it for new features, pages, games or a whole new look, on any AI model — including free ones on your own computer. Windows, macOS, Linux and Android.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://youcoded.ai/">
 <!-- ?v=2 is a CACHE BUST, not decoration. Slack, iMessage, Discord, Facebook
      and Twitter all cache a preview image BY URL, for days, and a link Destin
      had already shared kept showing the old picture after the file was
      replaced. Bump the number whenever og-image.png is regenerated. -->
-<meta property="og:image" content="https://youcoded.ai/og-image.png?v=6">
+<meta property="og:image" content="https://youcoded.ai/og-image.png?v=7">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="The YouCoded website: the headline &quot;An Assistant That's Yours.&quot; between four theme mascots, above the app running a real conversation.">
+<meta property="og:image:alt" content="The YouCoded website: the headline &quot;Make Your Technology Yours.&quot; between four theme mascots, above the app helping plan a week.">
 <meta property="og:site_name" content="YouCoded">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="YouCoded — Agentic AI for Everyone">
-<meta name="twitter:description" content="One app for Claude, hundreds of cloud models, or one that runs free on your own computer — working in your files, on every device you own. Windows, macOS, Linux, Android.">
-<meta name="twitter:image" content="https://youcoded.ai/og-image.png?v=6">
-<meta name="twitter:image:alt" content="The YouCoded website: the headline &quot;An Assistant That's Yours.&quot; between four theme mascots, above the app running a real conversation.">
+<meta name="twitter:title" content="YouCoded — Make your technology useful, fun, yours.">
+<meta name="twitter:description" content="A fully customizable AI assistant and open-source everything app. Ask it for new features, pages, games or a whole new look, on any AI model — including free ones on your own computer. Windows, macOS, Linux and Android.">
+<meta name="twitter:image" content="https://youcoded.ai/og-image.png?v=7">
+<meta name="twitter:image:alt" content="The YouCoded website: the headline &quot;Make Your Technology Yours.&quot; between four theme mascots, above the app helping plan a week.">
 <link rel="icon" type="image/png" sizes="32x32" href="brand/default-32.png" id="favicon">
 <link rel="apple-touch-icon" href="brand/apple-touch-icon.png">
+<!-- WHY (2026-10-22, search discovery): a machine-readable label Google, Bing and
+     AI search tools read to know this page is a free app, which systems it runs
+     on and what the site is called ("YouCoded", not "youcoded.ai", in results).
+     Deliberately no version number and no FAQ copy here: both change often and a
+     stale copy hidden in the page would contradict the visible one. -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "name": "YouCoded",
+      "alternateName": "youcoded",
+      "url": "https://youcoded.ai/"
+    },
+    {
+      "@type": "SoftwareApplication",
+      "name": "YouCoded",
+      "url": "https://youcoded.ai/",
+      "description": "A fully customizable AI assistant and open-source everything app. Ask it for new features, pages, games or a whole new look, on whichever AI model you choose: Claude, ChatGPT, hundreds of models through OpenRouter, or a free model running on your own computer.",
+      "applicationCategory": "UtilitiesApplication",
+      "operatingSystem": "Windows, macOS, Linux, Android",
+      "downloadUrl": "https://github.com/itsdestin/youcoded/releases/latest",
+      "image": "https://youcoded.ai/og-image.png",
+      "license": "https://opensource.org/licenses/MIT",
+      "isAccessibleForFree": true,
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "author": { "@type": "Person", "name": "Destin", "url": "https://github.com/itsdestin" },
+      "sameAs": ["https://github.com/itsdestin/youcoded"]
+    }
+  ]
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;0,9..40,800;0,9..40,900;1,9..40,400;1,9..40,900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -2507,7 +2547,7 @@ Contract: mascots/README.md (from the repo root)
 <footer><div class="wrap"><div class="panel foot">
   <a href="#top" class="logo" aria-label="YouCoded, back to top"><img class="logo-icon" src="brand/default-128.png" alt="" width="44" height="44"><span class="wm"><span class="wm-you">you</span>coded</span></a>
   <span class="badge">Open Source</span>
-  <div class="flinks"><a href="https://github.com/itsdestin/youcoded" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/itsdestin" target="_blank" rel="noopener">Built by Destin</a><a href="https://github.com/itsdestin/youcoded/blob/master/PRIVACY.md" target="_blank" rel="noopener">Privacy</a><a href="https://github.com/itsdestin/youcoded/blob/master/TERMS.md" target="_blank" rel="noopener">Terms</a></div>
+  <div class="flinks"><a href="https://github.com/itsdestin/youcoded" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/itsdestin" target="_blank" rel="noopener">Built by Destin</a><a href="changelog.html">Changelog</a><a href="security.html">Security</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a></div>
   <p class="legal">MIT License &middot; YouCoded is an independent, community-built project. Not affiliated with, endorsed by, or officially supported by Anthropic, OpenAI, or OpenRouter.</p>
 </div></div></footer>
 

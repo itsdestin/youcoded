@@ -117,6 +117,89 @@ describe('RemoteServer — pairing', () => {
       expect(second.last()!.secret).toBeUndefined();
     });
 
+    it('a device that signs in again replaces its older connection, and no other device\'s', async () => {
+      // A phone that reconnected after a silent drop left its dead connection on the computer for 60–80 s,
+      // still being sent to and counted as online.
+      const { CLOSE_REPLACED } = await import('../src/shared/remote-close-codes');
+      const { server } = await makeServer();
+      const first = await connect(server, { password: 'correct-horse', deviceName: 'My phone' });
+      const other = await connect(server, { password: 'correct-horse', deviceName: 'Tablet' });
+      const again = await connect(server, { deviceId: first.last()!.deviceId as string, secret: first.last()!.secret as string });
+      expect(again.last()!.type).toBe('auth:ok');
+      expect(first.closed).toEqual({ code: CLOSE_REPLACED, reason: 'Replaced' });
+      expect(other.closed).toBeNull();
+      expect((server as unknown as { clients: Set<unknown> }).clients.size).toBe(2);
+    });
+
+    it('a fill that never completed asks a page that can to refill that one conversation, and hangs up on one that cannot', async () => {
+      const { server } = await makeServer();
+      const modern = await connect(server, { password: 'correct-horse', deviceName: 'New page', refillPush: true });
+      const older = await connect(server, { password: 'correct-horse', deviceName: 'Old page' });
+      const clients = [...(server as unknown as { clients: Set<{ ws: unknown; audienceId?: number }> }).clients];
+      clients.find((c) => c.ws === modern)!.audienceId = -11;
+      clients.find((c) => c.ws === older)!.audienceId = -12;
+      server.dropAudience(-11, 's1');
+      server.dropAudience(-12, 's1');
+      expect(modern.closed).toBeNull();
+      expect(modern.last()).toEqual({ type: 'session:refill', payload: { sessionId: 's1' } });
+      expect(older.closed).toMatchObject({ code: 4010 });
+    });
+
+    it('answers requests sent right behind the sign-in after it, and drops them when the sign-in is refused', async () => {
+      // A reopening phone sends its list and conversation requests with the sign-in instead of a round trip later.
+      const { server } = await makeServer();
+      const handle = (ws: FakeSocket) => (server as unknown as { handleConnection(w: unknown, r: unknown): void })['handleConnection'](ws, { socket: { remoteAddress: '127.0.0.1' } });
+      const ok = new FakeSocket();
+      handle(ok);
+      ok.emit('message', JSON.stringify({ type: 'auth', password: 'correct-horse', deviceName: 'Phone' }));
+      ok.emit('message', JSON.stringify({ type: 'remote:ping', id: 'anon:1:1' }));
+      await vi.waitFor(() => expect(ok.sent.map((m) => m.type)).toEqual(['auth:ok', 'remote:ping:response']));
+      expect(ok.sent[0].pipelined).toBe(true);
+
+      const refused = new FakeSocket();
+      handle(refused);
+      refused.emit('message', JSON.stringify({ type: 'auth', password: 'wrong', deviceName: 'Phone' }));
+      refused.emit('message', JSON.stringify({ type: 'remote:ping', id: 'anon:1:1' }));
+      await vi.waitFor(() => expect(refused.closed).not.toBeNull());
+      await new Promise((r) => setImmediate(r));   // settle: nothing more is sent
+      expect(refused.sent.map((m) => m.type)).toEqual(['auth:failed']);
+    });
+
+    it('a sign-in and requests carried in the opening request are answered as soon as the socket exists', async () => {
+      // A reopening phone puts its saved sign-in and first requests in the socket's subprotocol names, saving a round trip.
+      const { firstFrameProtocols, TOOK_FRAMES_PROTOCOL, PLAIN_PROTOCOL } = await import('../src/shared/first-frames');
+      const { server } = await makeServer();
+      const paired = await connect(server, { password: 'correct-horse', deviceName: 'Phone' });
+      const auth = { type: 'auth', deviceId: paired.last()!.deviceId, secret: paired.last()!.secret };
+      const s = server as unknown as { pickProtocol(o: Set<string>, r: unknown): string | false; handleConnection(w: unknown, r: unknown): void };
+
+      const req = { socket: { remoteAddress: '127.0.0.1' } };
+      const offered = firstFrameProtocols([JSON.stringify(auth), JSON.stringify({ type: 'remote:ping', id: 'd:1:1' })])!;
+      expect(s.pickProtocol(new Set(offered), req)).toBe(TOOK_FRAMES_PROTOCOL);
+      const ws = new FakeSocket();
+      s.handleConnection(ws, req);   // nothing sent by the page itself
+      await vi.waitFor(() => expect(ws.sent.map((m) => m.type)).toEqual(['auth:ok', 'remote:ping:response']));
+
+      // Anything else is answered as before: the first name offered, and the page sends its own messages.
+      expect(s.pickProtocol(new Set([PLAIN_PROTOCOL, TOOK_FRAMES_PROTOCOL, 'yc-frames.not-base64!']), {})).toBe(PLAIN_PROTOCOL);
+      expect(s.pickProtocol(new Set(), {})).toBe(false);
+    });
+
+    it('a request that arrives during the sign-in slowdown waits for the sign-in instead of being read as a second one', async () => {
+      const { server } = await makeServer();
+      (server as unknown as { shouldSlowConnection(): boolean }).shouldSlowConnection = () => true;
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const ws = new FakeSocket();
+        (server as unknown as { handleConnection(w: unknown, r: unknown): void })['handleConnection'](ws, { socket: { remoteAddress: '127.0.0.1' } });
+        ws.emit('message', JSON.stringify({ type: 'auth', password: 'correct-horse', deviceName: 'Phone' }));
+        ws.emit('message', JSON.stringify({ type: 'remote:ping', id: 'anon:1:1' }));
+        await vi.advanceTimersByTimeAsync(2_500);
+        expect(ws.closed).toBeNull();
+        await vi.waitFor(() => expect(ws.sent.map((m) => m.type)).toEqual(['auth:ok', 'remote:ping:response']));
+      } finally { vi.useRealTimers(); }
+    });
+
     it('both sign-in paths tell the screen the protocol version and what it can do', async () => {
       const { server } = await makeServer();
       const first = await connect(server, { password: 'correct-horse', deviceName: 'My phone' });
@@ -295,6 +378,26 @@ describe('RemoteServer — readiness', () => {
   const ready = JSON.stringify({ type: 'client:ready', payload: { reconnect: false } });
   const tick = () => new Promise((r) => setImmediate(r));
   afterEach(() => { vi.resetModules(); });
+
+  // A phone counts only a whole frame as a sign of life, so a multi-MB conversation load over a slow relay read as a dead
+  // computer and was asked for again, forever. A page that says it can is sent a large answer in pieces it puts back together.
+  it('sends a large answer in pieces to a page that can put them back together, and whole to one that cannot', async () => {
+    const server = await makeServer();
+    const modern = new FakeSocket();
+    server.addClient(modern, 'dev-1', '100.64.0.2', { pieces: true });
+    const older = new FakeSocket();
+    server.addClient(older, 'dev-2', '100.64.0.3');
+    // The cut falls between the emoji's two halves; the page still gets the emoji back whole.
+    const head = JSON.stringify({ type: 'session:open:response', id: 'dev:1:1', payload: { text: '' } }).indexOf('""') + 1;
+    const text = 'y'.repeat(256 * 1024 - 1 - head) + '😀' + 'z'.repeat(300 * 1024);
+    for (const ws of [modern, older]) server.respond([...server.clients].find((c: any) => c.ws === ws), 'session:open', 'dev:1:1', { text });
+
+    const pieces = modern.frames.filter((f) => f.type === 'remote:piece');
+    expect(pieces.length).toBeGreaterThan(1);
+    expect(pieces.map((f) => f.payload.i)).toEqual(pieces.map((_, i) => i));
+    expect(JSON.parse(pieces.map((f) => f.payload.data).join(''))).toEqual({ type: 'session:open:response', id: 'dev:1:1', payload: { text } });
+    expect(older.frames).toEqual([{ type: 'session:open:response', id: 'dev:1:1', payload: { text } }]);
+  });
 
   it('sends nothing at connect: a push before the page is listening would be dropped', async () => {
     const server = await makeServer();

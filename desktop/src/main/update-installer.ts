@@ -15,7 +15,7 @@ import https from 'https';
 import { randomUUID } from 'crypto';
 import { spawn as nodeSpawn, type SpawnOptions } from 'child_process';
 import { StringDecoder } from 'string_decoder';
-import type { UpdateInstallProgressEvent, UpdateInstallErrorCode, UpdateDownloadResult, UpdateProgressEvent, UpdateLaunchResult } from '../shared/update-install-types';
+import type { UpdateInstallProgressEvent, UpdateInstallErrorCode, UpdateDownloadResult, UpdateProgressEvent, UpdateLaunchResult, UpdateCachedDownload } from '../shared/update-install-types';
 
 // Domains we'll accept release-asset downloads from. GitHub Releases redirects
 // the download URL from github.com to a CDN host; both need to be allowed. A
@@ -54,7 +54,9 @@ const ALLOWED_EXTENSIONS_BY_PLATFORM: Record<string, readonly string[]> = {
 };
 
 export class UpdateInstallError extends Error {
-  constructor(public readonly code: UpdateInstallErrorCode, detail?: string) {
+  // WHY httpStatus (#183 T2): the install-time brake must tell "the signed file is gone" (404 on the
+  // final hop) from a rate limit or an outage; the message text alone is not something to parse.
+  constructor(public readonly code: UpdateInstallErrorCode, detail?: string, public readonly httpStatus?: number) {
     super(detail ? `${code}: ${detail}` : code);
     this.name = 'UpdateInstallError';
   }
@@ -336,36 +338,50 @@ export function createUpdateInstaller(options: UpdateInstallerOptions) {
     return active?.jobId ?? null;
   }
 
-  return { startDownload, cancelDownload, getActiveJobId };
+  /** WHY (#183 T2): closing the popup no longer cancels, so a reopened popup asks what the running job
+   *  has reached. -1 = size unknown, the same sentinel the progress events use. */
+  function getActiveProgress(): { jobId: string; percent: number } | null {
+    if (!active) return null;
+    const percent = active.bytesTotal > 0 ? Math.floor((active.bytesReceived / active.bytesTotal) * 100) : -1;
+    return { jobId: active.jobId, percent };
+  }
+
+  return { startDownload, cancelDownload, getActiveJobId, getActiveProgress };
 }
 
 // ─── Task 4: Stale-download cleanup + cache lookup ──────────────────────────
 
 const STALE_DOWNLOAD_AGE_MS = 24 * 3600 * 1000;
 
+/** Files in the cache that are not installers: the auto-update bookkeeping. WHY never swept by age:
+ *  `pending.json` can be days old while its download is still the one waiting for a restart. */
+export const RESERVED_CACHE_FILES: ReadonlySet<string> = new Set(['pending.json', 'attempt.json']);
+
 /**
- * Swept at app startup. Removes abandoned .partial files unconditionally and
- * any non-partial download older than 24h (likely already installed).
- * Safe to call when the directory doesn't exist — creates it.
+ * Swept after the first successful release check (moved off startup, #183 T2). Removes abandoned
+ * .partial files unconditionally and any non-partial download older than 24h (likely already
+ * installed) — EXCEPT names in `keep` (the pending download and the current latest's file) and the
+ * reserved bookkeeping files. WHY keep: with background downloads, a finished download can sit for
+ * days waiting for the next quit; the age rule used to delete it out from under the install.
+ * Async (performance rule 1). A missing folder is simply nothing to sweep.
  */
-export function cleanupStaleDownloads(cacheDir: string): void {
-  if (!fs.existsSync(cacheDir)) {
-    fs.mkdirSync(cacheDir, { recursive: true });
-    return;
-  }
+export async function cleanupStaleDownloads(cacheDir: string, keep: ReadonlySet<string> = new Set()): Promise<void> {
+  let entries: string[];
+  try { entries = await fs.promises.readdir(cacheDir); } catch { return; }
   const now = Date.now();
-  for (const entry of fs.readdirSync(cacheDir)) {
+  for (const entry of entries) {
     const entryPath = path.join(cacheDir, entry);
     try {
       if (entry.endsWith('.partial')) {
-        fs.unlinkSync(entryPath);
+        await fs.promises.unlink(entryPath);
         continue;
       }
-      const stat = fs.statSync(entryPath);
+      if (keep.has(entry) || RESERVED_CACHE_FILES.has(entry)) continue;
+      const stat = await fs.promises.stat(entryPath);
       if (!stat.isFile()) continue;
-      if (now - stat.mtimeMs > STALE_DOWNLOAD_AGE_MS) fs.unlinkSync(entryPath);
+      if (now - stat.mtimeMs > STALE_DOWNLOAD_AGE_MS) await fs.promises.unlink(entryPath);
     } catch {
-      // Best-effort cleanup; don't block app startup on a stuck file.
+      // Best-effort cleanup; a stuck file must not stop the rest of the sweep.
     }
   }
 }
@@ -401,21 +417,23 @@ function buildVersionRegex(expectedVersion: string): RegExp {
   return new RegExp(`(?:^|[_-])${escaped}(?=[_.\\-]|$)`);
 }
 
-export function findCachedDownload(
+// WHY async (#183 T2): it now runs on the background download path and on every popup open.
+export async function findCachedDownload(
   cacheDir: string,
   expectedVersion: string,
   platform: NodeJS.Platform,
-): import('../shared/update-install-types').UpdateCachedDownload | null {
-  if (!fs.existsSync(cacheDir)) return null;
+): Promise<UpdateCachedDownload | null> {
+  let entries: string[];
+  try { entries = await fs.promises.readdir(cacheDir); } catch { return null; }
   const allowed = ALLOWED_EXTENSIONS_BY_PLATFORM[platform] ?? [];
   const versionRe = buildVersionRegex(expectedVersion);
-  for (const entry of fs.readdirSync(cacheDir)) {
+  for (const entry of entries) {
     if (entry.endsWith('.partial')) continue;
     if (!allowed.some(ext => entry.endsWith(ext))) continue;
     if (!versionRe.test(entry)) continue;
     const filePath = path.join(cacheDir, entry);
     try {
-      if (fs.statSync(filePath).isFile()) return { filePath, version: expectedVersion };
+      if ((await fs.promises.stat(filePath)).isFile()) return { filePath, version: expectedVersion };
     } catch { /* ignore */ }
   }
   return null;

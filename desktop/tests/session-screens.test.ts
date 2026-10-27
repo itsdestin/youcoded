@@ -4,7 +4,7 @@
 // bytes go through the renderer's own terminal registry (FixtureTerminal, getScreenText / getVisibleScreenText) and through the computer's headless copy,
 // and at every step the screen text, the stuck decision and the card must be the same. The renderer's decision logic is kept below as a verbatim reference
 // (the body of the old useAttentionClassifier tick), so a mistake in moving it cannot hide behind "both sides use the same new function".
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { classifyBuffer, type BufferClass, type ClassifierContext } from '../src/shared/attention-classifier';
 import { parseInkSelect, menuToButtons } from '../src/shared/ink-select-parser';
 import { cardTitleFor } from '../src/shared/prompt-card-rules';
@@ -119,6 +119,17 @@ describe('the computer reads a screen exactly as the window does (real captures,
 });
 
 describe('positive queue input safety', () => {
+  it('wakes the queue when an ask closes with no new terminal output', async () => {
+    const rig = makeRig({ started: true });
+    const rule = '─'.repeat(40); rig.output(`\x1b[2J\x1b[H${rule}\r\n❯ \r\n${rule}`); await rig.settle();
+    const need = rig.records.screenNeed(S)!; const spy = vi.spyOn(rig.records, 'screenNeed');
+    spy.mockReturnValue({ ...need, asking: true }); rig.screens.refresh(S);
+    const before = rig.wakes(); expect(rig.screens.queueInputSafe(S)).toBe(false);
+    spy.mockReturnValue({ ...need, asking: false }); rig.screens.refresh(S);
+    expect(rig.wakes()).toBe(before + 1);
+    rig.screens.refresh(S); expect(rig.wakes()).toBe(before + 1); // only the closing edge, not every refresh
+    spy.mockRestore();
+  });
   it('requires a fully parsed known message box and refuses blank, pending, popup and forgotten screens', async () => {
     const rig = makeRig({ started: true });
     expect(rig.screens.queueInputSafe(S)).toBe(false);

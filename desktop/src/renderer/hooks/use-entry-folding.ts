@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 
 /**
  * Perf cycle 3 — stop DRAWING conversation entries that are far off screen,
@@ -46,13 +47,14 @@ export const FOLD_ROOT_MARGIN = `${FOLD_MARGIN_PX}px 0px`;
  * Folding waits for scrolling to STOP; unfolding does not.
  *
  * Asymmetric on purpose. Unfolding late shows the user a blank gap, so it runs
- * on a short debounce — and FOLD_ROOT_MARGIN means it fires ~1.5 screens before
+ * at once (it used to wait 100 ms; a fast flick outran that) — and FOLD_ROOT_MARGIN means it fires ~1.5 screens before
  * the entry could be seen. Folding late costs nothing but memory, so it waits
  * for an idle moment: folding mid-scroll re-renders the list under a moving
  * viewport, and scroll judder is the one regression in this area the user has
  * already reported by feel (2026-08-28, cycle 2).
  */
-export const UNFOLD_DEBOUNCE_MS = 100;
+// Unfold is no longer debounced (see the observer callback and the scroll listener): kept at 0 for the tests.
+export const UNFOLD_DEBOUNCE_MS = 0;
 export const FOLD_IDLE_MS = 800;
 
 /**
@@ -111,14 +113,25 @@ export function useEntryFolding(
   enabled: boolean,
   rootRef: React.RefObject<HTMLElement | null>,
   active = true,
+  /**
+   * Entries that start FOLDED on the very first render, with the height to hold for them
+   * (state/first-draw-plan.ts). Read once, on mount: later changes are ignored. WHY: a long
+   * conversation draws only its newest entries on open; the observer below draws the rest
+   * as they come near the viewport, exactly as it does for entries folded later.
+   */
+  seed?: ReadonlyArray<readonly [string, number]>,
 ): EntryFolding {
-  const [state, setState] = useState<FoldState>(EMPTY);
+  const [state, setState] = useState<FoldState>(() => (seed?.length
+    ? { folded: new Set(seed.map(([k]) => k)), heights: new Map(seed) }
+    : EMPTY));
 
   // Everything the observer writes lives in refs. A setState per intersection
   // would be one render per entry per scroll — the observer fires for hundreds
   // of elements at a time, and this hook exists to make rendering cheaper.
-  const heights = useRef(new Map<string, number>());
-  const folded = useRef(new Set<string>());
+  // WHY seeded from the same list as `state`: flushFold/flushUnfold read these refs, not the state.
+  const heights = useRef<Map<string, number>>(null as unknown as Map<string, number>);
+  const folded = useRef<Set<string>>(null as unknown as Set<string>);
+  if (heights.current === null) { heights.current = new Map(state.heights); folded.current = new Set(state.folded); }
   // MEMBERSHIP, not a queue — and that distinction is the whole correctness
   // argument. The first version drained a `pendingFold` queue and cleared it,
   // skipping any entry with no measured height yet. An entry prepended above the
@@ -153,6 +166,39 @@ export function useEntryFolding(
   const publish = useCallback(() => {
     setState({ folded: new Set(folded.current), heights: new Map(heights.current) });
   }, []);
+  // An entry unfolds from a spacer of a GUESSED height (state/first-draw-plan.ts) to its real body. When
+  // that happens above what the reader is looking at, the view must not move. The browser's own scroll
+  // anchoring usually absorbs it, but not in every browser (the remote web view may lack
+  // `overflow-anchor`), so this holds the topmost visible entry and puts it back, like ChatView's
+  // `prependAnchorRef` does for a prepended page. Idempotent: when the browser already compensated, the
+  // measured drift is 0 and nothing is written.
+  const anchor = useRef<{ el: HTMLElement; top: number } | null>(null);
+  /** Keys unfolded since the last commit, whose real height is read once they are drawn. */
+  const justUnfolded = useRef(new Set<string>());
+  const captureAnchor = useCallback(() => {
+    const root = rootRef.current;
+    anchor.current = null;
+    if (!root) return;
+    const rootTop = root.getBoundingClientRect().top;
+    const entries = root.querySelectorAll<HTMLElement>('[data-entry-key]');
+    // Entries are in layout order, so binary search for the first one still on screen.
+    let lo = 0, hi = entries.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (entries[mid].getBoundingClientRect().bottom > rootTop) hi = mid;
+      else lo = mid + 1;
+    }
+    // WHY skip entries that are spacers right now: a spacer on screen is about to be drawn at its real height,
+    // and anchoring to IT keeps its top edge fixed while everything drawn below it shifts by the guess error
+    // (first-draw-stability journey, 13 px at 40-80x CPU throttle). Anchoring to the first DRAWN entry in view
+    // keeps what the reader can actually see in place; with nothing drawn in view, fall back to the topmost.
+    const rootBottom = root.getBoundingClientRect().bottom;
+    let pick = lo;
+    while (pick < entries.length && folded.current.has(entries[pick].dataset.entryKey ?? '')
+      && entries[pick].getBoundingClientRect().top < rootBottom) pick++;
+    const el = entries[pick] && entries[pick].getBoundingClientRect().top < rootBottom ? entries[pick] : entries[lo];
+    if (el) anchor.current = { el, top: el.getBoundingClientRect().top - rootTop };
+  }, [rootRef]);
   const removalPublishPending = useRef(false);
   const publishRemovals = useCallback(() => {
     if (removalPublishPending.current) return;
@@ -169,10 +215,13 @@ export function useEntryFolding(
     unfoldTimer.current = null;
     let changed = false;
     for (const key of folded.current) {
-      if (!outOfView.current.has(key)) { folded.current.delete(key); changed = true; }
+      if (!outOfView.current.has(key)) {
+        if (!changed) captureAnchor();
+        folded.current.delete(key); justUnfolded.current.add(key); changed = true;
+      }
     }
     if (changed) publish();
-  }, [publish]);
+  }, [publish, captureAnchor]);
 
   const flushFold = useCallback(() => {
     foldTimer.current = null;
@@ -213,6 +262,7 @@ export function useEntryFolding(
     // (`{ root, rootMargin: '400px 0px' }`), which is what identified it.
     const root = rootRef.current ?? null;
     const io = new IntersectionObserver((entries) => {
+      let enteredBand = false;
       for (const entry of entries) {
         const key = (entry.target as HTMLElement).dataset.entryKey;
         if (!key) continue;
@@ -226,7 +276,7 @@ export function useEntryFolding(
             if (h > 0) heights.current.set(key, h);
           }
           outOfView.current.delete(key);
-          if (unfoldTimer.current == null) unfoldTimer.current = setTimeout(flushUnfold, UNFOLD_DEBOUNCE_MS);
+          enteredBand = true;
         } else {
           outOfView.current.add(key);
           // Restarted on every out-of-view report, so this only fires once the
@@ -234,6 +284,14 @@ export function useEntryFolding(
           if (foldTimer.current != null) clearTimeout(foldTimer.current);
           foldTimer.current = setTimeout(flushFold, activeRef.current ? FOLD_IDLE_MS : INACTIVE_FOLD_MS);
         }
+      }
+      // WHY immediately, not after UNFOLD_DEBOUNCE_MS: a fast flick on a loaded renderer covers the whole
+      // 1,500 px lead inside a 100 ms wait (Chrome 10x CPU throttle: the first-draw-stability journey
+      // showed a blank spacer in view). One observer callback already batches every entry that crossed
+      // the line together, so there is nothing left to coalesce; the timer only added latency.
+      if (enteredBand) {
+        if (unfoldTimer.current != null) { clearTimeout(unfoldTimer.current); unfoldTimer.current = null; }
+        flushUnfold();
       }
     }, { root, rootMargin: FOLD_ROOT_MARGIN });
     observer.current = io;
@@ -307,7 +365,9 @@ export function useEntryFolding(
       if (b.bottom < top) break;
       const key = el.dataset.entryKey;
       if (!key || !folded.current.has(key)) continue;
+      if (!changed) captureAnchor();
       folded.current.delete(key);
+      justUnfolded.current.add(key);
       // Also out of `outOfView`, or the next fold flush would fold it straight
       // back. The observer still believes it is out of view, so its own
       // "now visible" report follows within a frame and agrees.
@@ -315,7 +375,24 @@ export function useEntryFolding(
       changed = true;
     }
     if (changed) publish();
-  }, [publish, rootRef]);
+  }, [publish, rootRef, captureAnchor]);
+
+  // WHY a scroll listener on top of the observer: the observer reports a frame AFTER the scroll that
+  // moved an entry into the band, and its callback queues behind whatever the page is busy with. On a
+  // loaded renderer a fast flick outran that and the reader saw a blank spacer (first-draw-stability
+  // journey under Chrome CPU throttling). A scroll event fires before the frame it belongs to, and
+  // unfoldNearViewport reads positions directly, and flushSync commits it before this frame paints
+  // (a plain setState can be scheduled after the paint, which is a blank frame).
+  // Costs one binary search per scroll event, and only while something is folded.
+  const unfoldRef = useRef<() => void>(NOOP);
+  unfoldRef.current = unfoldNearViewport;
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const onScroll = () => { if (enabledRef.current && activeRef.current && folded.current.size > 0) flushSync(() => unfoldRef.current()); };
+    root.addEventListener('scroll', onScroll, { passive: true });
+    return () => root.removeEventListener('scroll', onScroll);
+  }, [rootRef]);
 
   // Suspending folding must unfold what is already folded, synchronously enough
   // that the find bar never walks a DOM with holes in it.
@@ -373,6 +450,25 @@ export function useEntryFolding(
     io.observe(el);
     return () => { io.unobserve(el); cleanup(); };
   }, [publishRemovals]);
+
+  // After an unfold is drawn: (1) put the anchor entry back where it was, (2) record the real height of
+  // what was just drawn. WHY (2): the observer never re-reports an entry that stays in view, so without this
+  // the height held for it would stay the guessed one, and a later fold would use a wrong spacer. A hidden
+  // pane reads 0 (it is not laid out) and keeps what it had.
+  useLayoutEffect(() => {
+    const a = anchor.current;
+    anchor.current = null;
+    const root = rootRef.current;
+    if (a && root && a.el.isConnected) {
+      const drift = a.el.getBoundingClientRect().top - root.getBoundingClientRect().top - a.top;
+      if (Math.abs(drift) > 0.5) root.scrollTop += drift;
+    }
+    for (const key of justUnfolded.current) {
+      const h = elements.current.get(key)?.offsetHeight ?? 0;
+      if (h > 0) heights.current.set(key, h);
+    }
+    justUnfolded.current.clear();
+  }, [state, rootRef]);
 
   const isFolded = useCallback((key: string) => state.folded.has(key), [state]);
   const heightOf = useCallback((key: string) => state.heights.get(key), [state]);

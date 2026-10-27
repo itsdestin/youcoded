@@ -44,16 +44,29 @@ type Scanner = (text: string, array?: boolean) => Scan;
 
 // WHY: re-stringifying parsed objects erases whitespace/number spelling. Compare
 // exact serialized values, not a canonical approximation of the outgoing bytes.
-function serializedValues(text: string, array = false): Scan {
+export function serializedValues(text: string, array = false): Scan {
   const entries: Array<[string, string]> = [];
   let i = 1;
-  const space = () => { while (/\s/.test(text[i] ?? '') && i < text.length) i++; };
+  // WHY: a ChatGPT body can be tens of MB of base64 image strings; this walker ran a regex test
+  // per character and stepped through every string byte, freezing the main process for seconds.
+  // ASCII whitespace is tested by char code (same set /\s/ matches there); anything non-ASCII
+  // still goes through /\s/, so the reported entries are identical.
+  const isSpace = (code: number, ch: string) => code < 128 ? (code === 32 || (code >= 9 && code <= 13)) : /\s/.test(ch);
+  const space = () => { while (i < text.length && isSpace(text.charCodeAt(i), text[i])) i++; };
+  // WHY: inside a string only a quote or backslash matters, so jump straight to the next one natively.
+  const stringStops = /["\\]/g;
   const endValue = () => {
     let depth = 0;
     let quoted = false;
     for (; i < text.length; i++) {
       const c = text[i];
-      if (quoted) { if (c === '\\') i++; else if (c === '"') quoted = false; continue; }
+      if (quoted) {
+        stringStops.lastIndex = i;
+        const m = stringStops.exec(text);
+        if (!m) { i = text.length - 1; continue; }
+        if (m[0] === '\\') i = m.index + 1; else { quoted = false; i = m.index; }
+        continue;
+      }
       if (c === '"') quoted = true;
       else if (c === '[' || c === '{') depth++;
       else if (c === ']' || c === '}') { if (depth === 0) break; depth--; }

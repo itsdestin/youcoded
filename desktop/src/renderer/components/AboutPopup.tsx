@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Toggle } from './SettingsPanel';
+import { Toggle } from './settings-toggle';
 import { Button, CARD_LEVEL_1, Dialog, FoldRow, SectionLabel, SettingRow } from './ui';
 import { formatVersionLine } from '../../shared/version-line';
 

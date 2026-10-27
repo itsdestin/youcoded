@@ -48,15 +48,20 @@ export function mimeTypeFor(ext: string): string {
  * filename (index-CuRzLGx0.js), so the contents can never change under a given
  * URL — those are safe to pin forever.
  *
- * index.html deliberately is NOT: it is the one unhashed entry point, and
+ * index.html deliberately is NOT immutable: it is the one unhashed entry point, and
  * marking it immutable would strand a client on a stale build permanently with
- * no way to recover short of clearing site data. It must revalidate.
+ * no way to recover short of clearing site data.
+ *
+ * WHY it is kept a week (2026-10-22 phone speed): asking for it again on every open
+ * cost a phone a round trip (~0.5 s) before any code ran. The page itself checks,
+ * after loading from that copy, that the computer still serves the same version and
+ * reloads once if not (the inline script in index.html), so an update still arrives
+ * on the first open after it. A reload asks the computer again regardless.
  */
 export function cacheControlFor(urlPath: string): string {
   const normalized = urlPath.replace(/\\/g, '/');
-  return /(^|\/)assets\//.test(normalized)
-    ? 'public, max-age=31536000, immutable'
-    : 'no-cache';
+  if (/(^|\/)assets\//.test(normalized)) return 'public, max-age=31536000, immutable';
+  return normalized === '/' || normalized === '/index.html' ? 'private, max-age=604800' : 'no-cache';
 }
 
 /**

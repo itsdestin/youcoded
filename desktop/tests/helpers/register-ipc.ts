@@ -21,6 +21,8 @@ export function registerWithRuntime(register: (...args: any[]) => any, ...args: 
     window.webContents.isDestroyed = () => window.isDestroyed?.() ?? false;
   }
   const registry = padded[8];
+  // The status push now also fires when a background update download lands (#183 T2), so a hand-made registry needs the id list the push gate reads.
+  if (registry && typeof registry.getWindowIds !== 'function') registry.getWindowIds = () => [];
   if (registry && typeof registry.getMainWindowIds !== 'function') {
     registry.getMainWindowIds = () => registry.getWindowIds?.() ?? [];
   }

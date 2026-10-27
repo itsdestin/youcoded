@@ -1,6 +1,6 @@
 # Contributing to YouCoded
 
-Thanks for helping. YouCoded is built and maintained mostly through conversation with Claude Code by someone who does not write code by hand, so clear descriptions matter more than clever diffs.
+Thanks for helping. YouCoded is built and maintained through conversation with AI by someone who does not write code by hand, so clear descriptions matter more than clever diffs.
 
 ## Proposing a change
 
@@ -59,4 +59,4 @@ There is no bot and no CI check for this today; a PR with unsigned commits will 
 
 ## License of contributions
 
-Contributions are accepted under the license that already covers the files you touch — the [MIT License](./LICENSE) for the desktop app, the Android app, the shared React UI, scripts and docs; and [Apache License 2.0](./terminal-emulator-vendored/LICENSE) for anything under `terminal-emulator-vendored/` (upstream Termux code). By signing off, you confirm you have the right to submit the contribution under that license, and you agree that it may be relicensed together with the rest of the project if the project's license ever changes.
+Contributions are accepted under the license that already covers the files you touch — the [MIT License](./LICENSE) for the desktop app, the Android app, the shared React UI, scripts and docs, unless a file says otherwise. By signing off, you confirm you have the right to submit the contribution under that license, and you agree that it may be relicensed together with the rest of the project if the project's license ever changes.

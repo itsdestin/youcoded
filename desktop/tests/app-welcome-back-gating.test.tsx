@@ -581,4 +581,35 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     // "window is not defined" unhandled errors that failed verify.sh at random.
     await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
   });
+
+  it('Resume all reopens a session that ran with Skip permissions on with it still on, and only that one', async () => {
+    await mountApp({
+      beforeRender: () => {
+        // WHY wrap rather than assign: the fake's namespaces ignore assignment,
+        // and the bridge itself takes a replaced namespace.
+        const store = (window as any).__workbenchStore;
+        const claude = (window as any).claude;
+        const real = claude.session;
+        claude.session = new Proxy({}, {
+          get: (_t, key) => key === 'reopenList'
+            ? async () => store.getState().reopen.map((id: string) => ({ id, skipPermissions: id === 'wb-past-0' }))
+            : real[key],
+        });
+      },
+    });
+    const store = (window as any).__workbenchStore;
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    const before = store.getState().sessions.length;
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+
+    await waitFor(() => expect(store.getState().sessions.some((s: any) => s.resumeSessionId === 'wb-past-0')).toBe(true), { timeout: 8000 });
+    const opened = store.getState().sessions.slice(before);
+    expect(opened.find((s: any) => s.resumeSessionId === 'wb-past-0')?.skipPermissions).toBe(true);
+    // settle: wait for the whole batch, then check no other row picked the setting up.
+    await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+    const others = store.getState().sessions.slice(before).filter((s: any) => s.resumeSessionId !== 'wb-past-0');
+    expect(others.length).toBeGreaterThan(0);
+    expect(others.every((s: any) => s.skipPermissions === false)).toBe(true);
+  });
 });

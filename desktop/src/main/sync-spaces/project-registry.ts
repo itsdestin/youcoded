@@ -26,6 +26,7 @@
 // identically; a future cleanup can prune them).
 import fs from 'fs';
 import path from 'path';
+import { mapLimit } from '../map-limit';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
 import { laterOf, isConflictCopyName, extractConflictBase } from '../conversations/store-core';
 import { validateSyncName } from './guards';
@@ -155,17 +156,22 @@ function canonicalBaseFor(fileName: string, entry: ProjectRegistryEntry): string
  *  files are skipped, never thrown (dev instance + built app share the tree).
  *  Conflict copies are folded into their canonical in memory (fold-on-read is
  *  load-bearing — see file header). Copy files are left on disk (inert). */
-export function readProjectRegistry(personalRoot: string): ProjectRegistryEntry[] {
+export async function readProjectRegistry(personalRoot: string): Promise<ProjectRegistryEntry[]> {
   const dir = registryDir(personalRoot);
   let names: string[];
-  try { names = fs.readdirSync(dir); } catch { return []; }
-  const groups = new Map<string, ProjectRegistryEntry[]>();
-  for (const n of names) {
-    if (!n.endsWith('.json')) continue;
+  try { names = await fs.promises.readdir(dir); } catch { return []; }
+  // WHY async + bounded (2026-10-22 freeze hunt): this runs on every syncspaces:status poll and a
+  // stalled disk froze the main thread on its lstat/readFile per record. Records are tiny, so a
+  // small pool is plenty; results stay in directory order so the fold below is unchanged.
+  const parsed = await mapLimit(names.filter((n) => n.endsWith('.json')), 8, async (n) => {
     const full = path.join(dir, n);
     let e: ProjectRegistryEntry | null = null;
-    try { if (fs.lstatSync(full).isFile()) e = parseEntry(fs.readFileSync(full, 'utf8')); }
+    try { if ((await fs.promises.lstat(full)).isFile()) e = parseEntry(await fs.promises.readFile(full, 'utf8')); }
     catch { /* corrupt/vanished — skip */ }
+    return { n, e };
+  });
+  const groups = new Map<string, ProjectRegistryEntry[]>();
+  for (const { n, e } of parsed) {
     if (!e) continue;
     const base = canonicalBaseFor(n, e); // review #1: content-name wins over the copy regex
     if (!base) continue;                 // filename matches neither its own content nor a valid copy

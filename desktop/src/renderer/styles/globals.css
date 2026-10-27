@@ -770,6 +770,21 @@ body[data-mode="buddy-chat"] #theme-bg {
 /* WHY: one height cap for every box that scrolls once opened (file boxes, command output, git review) — was max-h-[45vh] in five places. */
 .scroll-box-cap { max-height: 45vh; }
 
+/* One gap for everything stacked above the input bar: input bar → queued card,
+   card → card, top card → last message, input bar → last message, and the
+   model-status / jump-to-bottom / freshness floats. Destin (2026-10-22): these
+   were 12, 6, -2 (overlapping) and 3-11px depending on the chrome style.
+   --input-edge-inset is how far below the measured bottom-chrome box's top the
+   VISIBLE input edge sits: 0 when the frame or pill starts at that top, 8px for
+   the floating input bar's own top margin (floating CHROME resets it to 0 —
+   see the input-style presets). Both vars live on <body>, where the layout
+   attributes are set, so every chat pane inherits them. */
+/* (--chat-float-gap / --input-edge-inset defaults live in the app-wide :root
+   block below, beside --bottom-chrome-total.) */
+body[data-input-style="floating"]:not([data-chrome-style="floating"]) {
+  --input-edge-inset: 8px;
+}
+
 /* Chat scroll area extends behind header and bottom chrome —
    extra padding so content starts below the header / above the
    input bar, but scrolls behind frosted glass in both directions.
@@ -794,7 +809,11 @@ body[data-mode="buddy-chat"] #theme-bg {
      there. */
   /* Freshness is another measured float, not a taller input bar. Reserve its
      footprint so the last message rests above it even while it is syncing. */
-  padding-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + var(--vvp-offset, 0px));
+  /* + --input-edge-inset + --chat-float-gap: the last message rests one shared
+     gap above the input bar's VISIBLE edge, the same gap the queued cards and
+     the other floats keep (see :root below). - 2px: an assistant row's own
+     py-0.5, so the gap is measured to the bubble, not to its row. */
+  padding-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--input-edge-inset, 0px) + var(--chat-float-gap, 0.375rem) - 2px + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + var(--vvp-offset, 0px));
 }
 
 /* Inset the scrollbar track so it stops below the header and above the
@@ -803,7 +822,7 @@ body[data-mode="buddy-chat"] #theme-bg {
    travel range matches the content's actual scrollable area. */
 .chat-scroll::-webkit-scrollbar-track {
   margin-top: var(--top-chrome-height, 2.5rem);
-  margin-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + var(--vvp-offset, 0px));
+  margin-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--input-edge-inset, 0px) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + var(--vvp-offset, 0px));
 }
 
 /* Bottom chrome (input + status bars) — mirrors header pattern.
@@ -842,7 +861,37 @@ body[data-mode="buddy-chat"] #theme-bg {
 .jump-to-bottom {
   /* Includes --vvp-offset so the button stays above the soft keyboard
      when it's open (same treatment as .bottom-float). */
-  bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + 0.75rem + var(--vvp-offset, 0px));
+  bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + var(--input-edge-inset, 0px) + var(--chat-float-gap, 0.375rem) + var(--vvp-offset, 0px));
+  /* Fade + rise in, fade + drop out. The horizontal centering lives here (not in a
+     Tailwind -translate-x-1/2) because that utility and this animation both write
+     `transform` and would overwrite each other. Colors keep Tailwind's hover fade. */
+  transition: opacity 180ms ease-out, transform 180ms ease-out, background-color 150ms;
+}
+.jump-to-bottom[data-state='in'] {
+  opacity: 1;
+  transform: translateX(-50%);
+  animation: jump-to-bottom-in 180ms ease-out;
+}
+.jump-to-bottom[data-state='out'] {
+  opacity: 0;
+  transform: translateX(-50%) translateY(0.5rem);
+  pointer-events: none;
+}
+@keyframes jump-to-bottom-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(0.5rem); }
+  to { opacity: 1; transform: translateX(-50%); }
+}
+[data-reduced-effects] .jump-to-bottom,
+[data-reduced-effects] .jump-to-bottom[data-state='in'] {
+  transition-duration: 0ms;
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .jump-to-bottom,
+  .jump-to-bottom[data-state='in'] {
+    transition-duration: 0ms;
+    animation: none;
+  }
 }
 
 /* Native local-model loading / unloaded strip — floats centered just above the
@@ -852,13 +901,13 @@ body[data-mode="buddy-chat"] #theme-bg {
    it up above itself) — only .jump-to-bottom, the other float sharing this
    band, consumes that var. */
 .model-status-strip {
-  bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + 0.75rem + var(--vvp-offset, 0px));
+  bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--input-edge-inset, 0px) + var(--chat-float-gap, 0.375rem) + var(--vvp-offset, 0px));
 }
 
 /* WHY this status floats in the CHAT pane rather than the input frame: it
    follows the model-loading/queued-message stack, including the soft keyboard. */
 .handoff-freshness-toast {
-  bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + 0.75rem + var(--vvp-offset, 0px));
+  bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + var(--input-edge-inset, 0px) + var(--chat-float-gap, 0.375rem) + var(--vvp-offset, 0px));
   z-index: 10;
 }
 
@@ -871,7 +920,7 @@ body[data-mode="buddy-chat"] #theme-bg {
    Does NOT add --queued-strip-height to its own offset (that would push it
    up above itself) — only the OTHER two floats that share this band do. */
 .queued-messages-strip {
-  bottom: calc(var(--bottom-chrome-height, 5rem) + 0.75rem + var(--vvp-offset, 0px));
+  bottom: calc(var(--bottom-chrome-height, 5rem) + var(--input-edge-inset, 0px) + var(--chat-float-gap, 0.375rem) + var(--vvp-offset, 0px));
 }
 
 /* Chat/terminal toggle motion has two meanings. A user selection slides between
@@ -1546,7 +1595,19 @@ pre.yc-code code {
    .yc-code-block there or this stops matching. */
 .yc-code-block {
   content-visibility: auto;
-  contain-intrinsic-size: auto 8rem;
+  /* WHY the height is computed, not a flat 8rem (first-draw-stability journey under CPU load,
+     2026-10-23): a block off the edge of the screen holds this guessed height, and the moment a
+     flick brings it near the view it is drawn at its REAL height. A 43-line block guessed at
+     128 px grew by 756 px inside the entry the reader was looking at, and everything below it
+     jumped by that much (native scroll anchoring does not compensate growth INSIDE its anchor).
+     MarkdownContent (CodeBlockFrame) sets contain-intrinsic-height INLINE from the block's line count;
+     a line is 1.25rem (text-sm) and the <pre> pads 0.75rem top and bottom, so that is the real height
+     to the pixel (the border sits outside the content box). It is inline, not a custom property here,
+     because a custom property is inherited and restyled every coloured span inside a block that is
+     still streaming in. The 8rem below is only the fallback for a block that carries no inline height.
+     Width keeps the old guess: the block is a stretching block, so its width never comes from this. */
+  contain-intrinsic-width: auto 8rem;
+  contain-intrinsic-height: auto 8rem;
 }
 
 /* Frozen chunk of a still-open code fence (FrozenFenceChunk): layout containment stops each
@@ -1995,6 +2056,8 @@ pre.yc-code code {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
+  --chat-float-gap: 0.375rem; /* the shared stack gap above the input bar — see .chat-scroll */
+  --input-edge-inset: 0px;
   --frame-edge: 10px;
   --frame-corner: 12px;
   /* WHY --edge-card: fills barely differ between layers on every theme (measured), so the outline carries it; theme --edge-dim vanished on glass themes. Less fg than --edge-strong so cards never read as buttons. */

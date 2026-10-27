@@ -34,7 +34,6 @@ import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
 import { buildSessionCreateArgs } from '../shared/session-create-args';
 import BrowserPanel from './components/browser/BrowserPanel';
 import { useBrowserRightPane } from './hooks/use-browser-right-pane';
-import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
 import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptShrink } from './state/transcript-batch';
@@ -94,9 +93,7 @@ import TrustGate, { useTrustGateActive, usePendingPromptActive } from './compone
 import { InitializingCover } from './components/InitializingCover';
 import { promptShowMeansStarted, composerDisabled, startedIds, announcedAsStarted, startedFromSummaries } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
-import SettingsPanel from './components/SettingsPanel';
 import { readBuddyStyle } from './components/BuddyStyleRow';
-import ResumeBrowser from './components/ResumeBrowser';
 import QuitSessionsPrompt from './components/QuitSessionsPrompt';
 import { fetchReopenList, forgetReopenList, resolveNativeBinding } from './state/welcome-back';
 import CloseSessionPrompt, { CLOSE_PROMPT_SUPPRESS_KEY } from './components/CloseSessionPrompt';
@@ -108,14 +105,9 @@ import type { ModelBinding } from '../shared/provider-types';
 import OpenTasksPopup from './components/OpenTasksPopup';
 import { SPECIALIST_SETTINGS_EVENT } from './components/SpecialistModelUnavailable';
 import { useSessionTasks } from './hooks/useSessionTasks';
-import MarketplaceScreen from './components/marketplace/MarketplaceScreen';
-import LibraryScreen from './components/library/LibraryScreen';
 import { MarketplaceProvider } from './state/marketplace-context';
 import ThemeShareSheet from './components/ThemeShareSheet';
 import ShareSheet from './components/ShareSheet';
-import { ProjectView } from './components/project-view/ProjectView';
-import { PagesView } from './components/pages/PagesView';
-import { PageHost } from './components/pages/PageHost';
 import { PageCreateDialog, usePageCreate } from './components/pages/PageCreateDialog';
 import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
@@ -123,9 +115,12 @@ import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionP
 import type { NativePermissionMode } from '../shared/permission-types';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
 import { createFirstPageLoader, type FirstPageLoader, type PageHint } from './state/first-page-loader';
+import { createRefillRetry } from './state/refill-retry';
 
 import FirstRunView from './components/FirstRunView';
 import { getCapabilities, getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
+import { deferredScreen } from './components/deferred-screen';
+import { markScreensReady, useScreensReady } from './state/screens-ready';
 import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
 import { reconcilePending, confirmPending } from './state/pending-action';
 import { usePhoneSessionActions } from './hooks/usePhoneSessionActions';
@@ -270,6 +265,20 @@ function seedNativeMode(sessionId: string, set: SetNativeModes): void {
   });
 }
 
+// WHY deferred (2026-10-22 phone speed, Destin chose it): these screens were in the code a phone downloads and runs before
+// it shows anything. Each now loads when opened, or ahead of that once `screensReady` (state/screens-ready.ts): on a phone
+// after its conversation is drawn, on the computer at once. components/deferred-screen.tsx says why not React.lazy.
+const SettingsPanel = deferredScreen(() => import('./components/SettingsPanel').then((m) => m.default));
+const ResumeBrowser = deferredScreen(() => import('./components/ResumeBrowser').then((m) => m.default));
+const ProjectView = deferredScreen(() => import('./components/project-view/ProjectView').then((m) => m.ProjectView));
+const PagesView = deferredScreen(() => import('./components/pages/PagesView').then((m) => m.PagesView));
+const PageHost = deferredScreen(() => import('./components/pages/PageHost').then((m) => m.PageHost));
+const GamePanel = deferredScreen(() => import('./components/game/GamePanel').then((m) => m.default));
+const MarketplaceScreen = deferredScreen(() => import('./components/marketplace/MarketplaceScreen').then((m) => m.default));
+const LibraryScreen = deferredScreen(() => import('./components/library/LibraryScreen').then((m) => m.default));
+/** Screens rendered only while open: fetched ahead once screens may load, so the first open is not a download. */
+const OPENED_ON_DEMAND = [GamePanel, MarketplaceScreen, LibraryScreen];
+
 function AppInner() {
   // Dev-only: count AppInner's OWN re-renders (the tranche-1 metric — see
   // AppInnerProfiler). No-dep effect → runs once per AppInner commit; when
@@ -382,10 +391,21 @@ function AppInner() {
   const headerRef = useRef<HTMLDivElement>(null);
   const bottomBarRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const screensReady = useScreensReady();
+  useEffect(() => {
+    // The computer and the Android app read these screens from disk: at once. A phone browser waits for its conversation
+    // to be drawn (remote-shim reportFill), or 10 s if that never reports.
+    if (!isRemoteMode()) { markScreensReady(); return; }
+    const t = setTimeout(markScreensReady, 10_000);
+    return () => clearTimeout(t);
+  }, []);
+  useEffect(() => { if (screensReady) for (const screen of OPENED_ON_DEMAND) screen.preload(); }, [screensReady]);
   const [settingsBadge, setSettingsBadge] = useState(false);
   // Remote access batch 2: the phone's copy of the conversation (see the
   // remoteConversationStatus subscription below). Undefined on the desktop.
   const [conversationStatus, setConversationStatus] = useState<ConversationStatus | undefined>(undefined);
+  // The computer is slow to answer but the connection is up (phone only; remote-shim setComputerSlow).
+  const [computerSlow, setComputerSlow] = useState(false);
   // Remote access batch 2 (§3): on a remote client nothing picks a conversation until the computer's session list has arrived — the list
   // reply (or a destroyed conversation's focus) decides the place (decideRemotePlace). Every automatic selection asks mayAutoSelect()
   // first; the desktop is unaffected. Reset when this page starts talking to a different computer.
@@ -404,6 +424,11 @@ function AppInner() {
   const remoteCatchingUp = isRemoteMode() && (conversationStatus === 'restoring' || conversationStatus === 'reconnecting');
   const handleRefreshConversation = useCallback(() => {
     void (window.claude as any).remote?.rehydrate?.();
+  }, []);
+  // The Android app's way out while its computer is unreachable (2026-10-22 phone reliability): it no
+  // longer drops to the phone's own runtime on a timer, so the person chooses it. Same call as Settings' Disconnect.
+  const handleUsePhoneOnly = useCallback(() => {
+    void import('./remote-shim').then((m) => m.disconnectFromHost()).catch(() => {});
   }, []);
   const [syncAutoOpen, setSyncAutoOpen] = useState(false);
   // Deep-link flag for the Model Providers popup — set by a provider-error
@@ -1592,8 +1617,9 @@ function AppInner() {
     const seedChatOff = (window.claude.on as any).seedChat?.((payload: any) => { dispatch({ type: 'CHAT_STATE_SEEDED', sessions: payload }); });
     // Where the phone's copy of the conversation stands — reconnecting, restoring, incomplete, complete. Only a remote client ever
     // receives it; ChatView renders the strip (preload declares it and never fires).
-    const conversationStatusOff = (window.claude as any).on.remoteConversationStatus?.((s: { phase: ConversationStatus }) => {
+    const conversationStatusOff = (window.claude as any).on.remoteConversationStatus?.((s: { phase: ConversationStatus; slow?: boolean }) => {
       setConversationStatus(s?.phase);
+      setComputerSlow(s?.slow === true);
     });
 
     // Artifact tracker: when Claude writes/edits a file inside the active project
@@ -1727,26 +1753,58 @@ function AppInner() {
 
   // Which conversations a phone watches (one-core R5-3): the one on screen plus a few it looked at lately. Inert on the computer's own
   // windows, which own what they show. Placed here (not with the other phone state) because it needs the first-page loader.
-  const remoteWatch = useRemoteWatch({ enabled: isRemoteMode(), activeId: sessionId, sessionIds: useMemo(() => sessions.map((x: any) => x.id), [sessions]), loader: firstPages });
+  const remoteWatch = useRemoteWatch({ enabled: isRemoteMode(), activeId: sessionId, sessionIds: useMemo(() => sessions.map((x: any) => x.id), [sessions]), listLoaded: sessionListLoaded, loader: firstPages });
   // Read through a ref by the handlers below that must not re-register every time the watch set changes.
   const remoteWatchRef = useRef(remoteWatch);
   remoteWatchRef.current = remoteWatch;
+  // The phone's connection band above the message box (ConnectionStrip.tsx), for the conversation on screen. Undefined on the
+  // computer's own window, which has no copy to describe. Memoised so the input bar sees a new value only when one changes.
+  const activeFilling = sessionId ? remoteWatch.isFilling(sessionId) : false;
+  const phoneConnection = useMemo(() => (isRemoteMode() ? {
+    conversationStatus, waitingForComputer: computerSlow, filling: activeFilling, onRefresh: handleRefreshConversation, onUsePhoneOnly: handleUsePhoneOnly,
+  } : undefined), [conversationStatus, computerSlow, activeFilling, handleRefreshConversation, handleUsePhoneOnly]);
 
   // Fill every conversation this screen holds AGAIN (one-core R5-2). After a reconnect it sends where it got to, and the computer answers with
   // exactly the events it missed — or a fresh page when the record changed or the gap is older than it keeps; Refresh always takes a fresh
   // page. Either way the shim is told how it went, so the strip says "up to date" or "may be behind".
+  const refillRetry = useMemo(() => createRefillRetry({
+    refill: (id) => firstPages.refill(id, { fresh: true }),
+    healed: () => reportFillRound([]),
+    hidden: () => document.visibilityState === 'hidden',
+    whenVisible: (cb) => {
+      const on = () => { if (document.visibilityState !== 'hidden') { document.removeEventListener('visibilitychange', on); cb(); } };
+      document.addEventListener('visibilitychange', on);
+      return () => document.removeEventListener('visibilitychange', on);
+    },
+  }), [firstPages, reportFillRound]);
+  useEffect(() => () => refillRetry.cancel(), [refillRetry]);
   const fillAgain = useCallback((fresh: boolean) => {
     // WHY only what is watched on a phone (one-core R5-3): refilling opens (watches) the conversation, and a phone must not start
     // receiving all of them again just because the connection came back. The rest keep their position and catch up when next opened.
     const watched = remoteWatch.watchedIds();
     const ids = (watched ?? sessionsRef.current.map((x: any) => x.id)).filter((id: string) => !String(id).startsWith('pending-handoff:'));
     // R6-2: changes whose answer was lost are settled against what the fills just put on the screen.
-    void Promise.all(ids.map((id: string) => firstPages.refill(id, { fresh }))).then((outcomes) => { reportFillRound(outcomes); void reconcilePending(); });
-  }, [firstPages, reportFillRound, remoteWatch]);
+    refillRetry.cancel();
+    void Promise.all(ids.map((id: string) => firstPages.refill(id, { fresh }))).then((outcomes) => {
+      reportFillRound(outcomes); void reconcilePending();
+      if (isRemoteMode()) refillRetry.start(ids, outcomes); // the failed ones are tried again on their own (refill-retry.ts)
+    });
+  }, [firstPages, reportFillRound, remoteWatch, refillRetry]);
   useOnRemoteReconnect(() => fillAgain(false)); useDropEndedSessionsOnReconnect(sessionsRef, movedSessionsRef, (id) => goneRef.current(id)); // sync-fix3
   useSendReconcile(); // what became of a message sent as the connection dropped (one-core R5-4b)
   // The computer says this window's fill of a conversation never completed (its hold expired): fill it again from a fresh page.
-  useEffect(() => (window.claude.session as any).onRefill?.((sid: string) => { void firstPages.refill(sid, { fresh: true }); }), [firstPages]);
+  // WHY the watch check and the retry (branch review F3): refilling opens (watches) a conversation, so one the phone has left since is
+  // not refilled. And the push stands in for the hang-up that used to force a full round, so a refill that fails here gets the round's
+  // treatment: the strip says the conversation may be behind, and it is tried again on its own.
+  useEffect(() => (window.claude.session as any).onRefill?.((sid: string) => {
+    const watched = remoteWatchRef.current.watchedIds();
+    if (watched && !watched.includes(sid)) return;
+    void firstPages.refill(sid, { fresh: true }).then((outcome) => {
+      if (outcome === 'ok') return;
+      reportFillRound([outcome]);
+      refillRetry.start([sid], [outcome]);
+    });
+  }), [firstPages, reportFillRound, refillRetry]);
   useEffect(() => {
     const onRefresh = () => fillAgain(true);
     window.addEventListener(REMOTE_REFRESH_EVENT, onRefresh);
@@ -1764,12 +1822,14 @@ function AppInner() {
     // Forget closed sessions first. A native session is keyed by the id it
     // resumes, so the same id can legitimately come back — and a stale entry
     // here would silently deny it any history at all.
-    firstPages.retainOnly(new Set(sessions.map((s) => s.id)));
+    // Only against the computer's list once it has arrived: before it, a phone's fill of the conversation it reopened on is already
+    // running, and an empty list would drop it (it was then filled twice — 2026-10-22 phone speed).
+    if (sessionListLoaded) firstPages.retainOnly(new Set(sessions.map((s) => s.id)));
     // WHY: session:created may precede the attempt's admitted reply. Its
     // unlocated first page must not consume the receiver's one locator read.
     // A phone fills only what it watches (useRemoteWatch fills the one on screen when it is chosen); every other conversation is not sent to it.
     if (!pendingRef.current?.active && !isRemoteMode()) for (const s of sessions) if (!String(s.id).startsWith('pending-handoff:')) void loadFirstPage(s.id);
-  }, [sessions, loadFirstPage, firstPages]);
+  }, [sessions, sessionListLoaded, loadFirstPage, firstPages]);
 
   useEffect(() => {
     window.claude.session.list().then((list: any[]) => {
@@ -3153,6 +3213,7 @@ function AppInner() {
   // Asked ONCE per launch, strip empty, not while a phone catches up, and only
   // in the LEADER window (remote/Android never — S-phone; a non-leader WAITS).
   const [welcomeBackIds, setWelcomeBackIds] = useState<string[] | null>(null);
+  const welcomeBackSkipIds = useRef<ReadonlySet<string>>(new Set()); // ran with Skip permissions on at close
   const welcomeBackAsked = useRef(false);
   useEffect(() => {
     if (welcomeBackAsked.current || isFirstRun !== false || !sessionListLoaded || remoteCatchingUp) return;
@@ -3161,7 +3222,8 @@ function AppInner() {
     welcomeBackAsked.current = true;
     if (sessions.length > 0) return;
     let alive = true;
-    void fetchReopenList().then((ids) => { if (alive && ids.length > 0) setWelcomeBackIds(ids); });
+    void fetchReopenList().then((rows) => { if (!alive || rows.length === 0) return;
+      welcomeBackSkipIds.current = new Set(rows.filter((r) => r.skipPermissions).map((r) => r.id)); setWelcomeBackIds(rows.map((r) => r.id)); });
     return () => { alive = false; };
   }, [isFirstRun, sessionListLoaded, remoteCatchingUp, sessions.length, myWindowId, leaderWindowId, isLeader]);
   const welcomeBackDone = useCallback(() => {
@@ -3187,10 +3249,10 @@ function AppInner() {
       const ok = await handleResumeSession(
         r.sessionId, r.projectSlug, r.projectPath,
         undefined, // no picker here: main reopens it on its transcript's model, never a record a helper overwrote (resume-model.ts)
-        // WHY always false: this screen shows no Skip permissions switch, so a
-        // default of "skip" would have reopened every session with approvals off,
-        // unseen. Resuming one row through its own card still shows the switch.
-        false, false, r.provider, binding, r.name, true,
+        // WHY per session, never the app-wide default: this screen has no Skip permissions
+        // switch, so each session returns as it was at close (Destin, 2026-10-23: always-off
+        // dropped it), and the default can't turn approvals off unseen on the others.
+        welcomeBackSkipIds.current.has(r.sessionId), false, r.provider, binding, r.name, true,
       );
       return ok ? 'launched' : 'failed';
     })).finally(() => { recoveryBatchRef.current = false; });
@@ -3209,10 +3271,11 @@ function AppInner() {
   // to close and whether those sessions come back next launch. `requestId`
   // round-trips on the answer so main can match it to the right pending
   // request (a second window closing at the same time gets its own).
-  const [quitPrompt, setQuitPrompt] = useState<{ requestId: string; sessions: number } | null>(null);
+  // `reason: 'update'` (#183): Restart to update raises the same prompt with restart wording.
+  const [quitPrompt, setQuitPrompt] = useState<{ requestId: string; sessions: number; reason?: 'update' } | null>(null);
   useEffect(() => {
     const api = (window.claude as any).window;
-    return api?.onCloseRequest?.((req: { requestId: string; sessions: number }) => setQuitPrompt(req)) ?? undefined;
+    return api?.onCloseRequest?.((req: { requestId: string; sessions: number; reason?: 'update' }) => setQuitPrompt(req)) ?? undefined;
   }, []);
   useEffect(() => {
     // Whole-app quit wins over a pending prompt (design §4 step 5): main
@@ -3415,7 +3478,7 @@ function AppInner() {
   // is a cheap view remount, not a reconnect.
   const activeGamePane = gameState.panelOpen ? (
     <ErrorBoundary name="Game">
-      <GamePanel connection={gameConnection} chessConnection={chessConnection} incognito={lobby.incognito} onToggleIncognito={lobby.toggleIncognito} />
+      <GamePanel load connection={gameConnection} chessConnection={chessConnection} incognito={lobby.incognito} onToggleIncognito={lobby.toggleIncognito} />
     </ErrorBoundary>
   ) : null;
   // Browser panel when open, else the games pane — one element, placed by ChatView or TerminalRightSlot.
@@ -3574,8 +3637,6 @@ function AppInner() {
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}
                       onSendQueuedNow={handleSendQueuedNow}
-                      conversationStatus={conversationStatus}
-                      onRefreshConversation={handleRefreshConversation}
                       filling={remoteWatch.isFilling(s.id)}
                       modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}
                     />
@@ -3683,7 +3744,7 @@ function AppInner() {
                   // choice (it presses Esc into Claude Code first — which on a
                   // live permission or plan menu DECLINES it).
                   if (sessionId) showBlockedSend(sessionId, block, retry);
-                }} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} initialAttachments={currentSession?.initialAttachments} provider={currentSession?.provider} />
+                }} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} connection={phoneConnection} initialInput={currentSession?.initialInput} initialAttachments={currentSession?.initialAttachments} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={statusBarData}
                   onOpenSync={handleOpenSync}
@@ -4007,6 +4068,7 @@ function AppInner() {
           from inside it (rename, a first-time warning) shows on top. This said
           z-[8000] long after ProjectView.tsx moved it down (see its header). */}
       <ProjectView
+        load={screensReady || artifactState.projectViewOpen}
         // Project view homes to the focused conversation's folder on every open.
         activeSessionCwd={currentSession?.cwd}
         onNewConversation={(cwd) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); createSession(cwd, false); }}
@@ -4026,6 +4088,7 @@ function AppInner() {
           creator skill that turns that conversation into a page is Phase 1's
           next task, not part of this shell. */}
       <PagesView
+        load={screensReady || artifactState.pagesViewOpen}
         // Make a page / Edit open the new-session dialog (folder, model, the
         // rest) with the creator skill waiting in the composer — not sent, so
         // the person adds what the page should do and presses Enter. Edit
@@ -4039,6 +4102,7 @@ function AppInner() {
         })}
       />
       <PageHost
+        load={screensReady || artifactState.pageViewOpen}
         settingsOpen={settingsOpen}
         onToggleSettings={() => setSettingsOpen(prev => !prev)}
         settingsBadge={settingsBadge}
@@ -4061,6 +4125,7 @@ function AppInner() {
           right slot (passed as ChatView's gamePane prop above), so it shares the
           artifact drawer's framed chrome instead of being a separate slide-out. */}
       <SettingsPanel
+        load={screensReady || settingsOpen}
         open={settingsOpen}
         onClose={() => { setSettingsOpen(false); setSyncAutoOpen(false); setProvidersAutoOpen(false); setSpecialistsAutoOpen(false); }}
         onSendInput={(text) => {
@@ -4128,6 +4193,7 @@ function AppInner() {
       {quitPrompt && (
         <QuitSessionsPrompt
           count={quitPrompt.sessions}
+          reason={quitPrompt.reason}
           onCancel={() => answerClose({ close: false })}
           onConfirm={(reopen) => answerClose({ close: true, reopen })}
         />
@@ -4136,6 +4202,7 @@ function AppInner() {
           its search/filter state and open/close behaviour untouched. */}
       {welcomeBackMode && (
         <ResumeBrowser
+          load
           open
           onClose={welcomeBackDone}
           onResume={handleResumeSession}
@@ -4145,6 +4212,7 @@ function AppInner() {
         />
       )}
       <ResumeBrowser
+        load={screensReady || resumeRequested}
         open={resumeRequested}
         onClose={() => setResumeRequested(false)}
         onResume={handleResumeSession}
@@ -4266,6 +4334,7 @@ function AppInner() {
       {(activeView === 'marketplace' || activeView === 'library') && (
         activeView === 'marketplace' ? (
           <MarketplaceScreen
+            load
             onExit={() => { setActiveView('chat'); setMarketplaceInitialType(undefined); setMarketplaceInitialDetailId(undefined); }}
             settingsOpen={settingsOpen}
             onToggleSettings={() => setSettingsOpen((v) => !v)}
@@ -4280,6 +4349,7 @@ function AppInner() {
           />
         ) : (
           <LibraryScreen
+            load
             onExit={() => setActiveView('chat')}
             settingsOpen={settingsOpen}
             onToggleSettings={() => setSettingsOpen((v) => !v)}
@@ -4447,9 +4517,9 @@ function AppInner() {
 // getUsageSnapshot lets /cost and /usage snapshot live stats from App state.
 import type { UsageSnapshot } from './state/chat-types';
 import type { SessionChatState } from './state/chat-types';
-const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; sendBlocked?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: React.ComponentProps<typeof InputBar>['onSendBlocked']; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; initialAttachments?: string[]; provider?: 'claude' | 'native' }>(
-  function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, sendBlocked, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
-    return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} sendBlocked={sendBlocked} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} onModelSwitchCommand={onModelSwitchCommand} initialInput={initialInput} initialAttachments={initialAttachments} provider={provider} />;
+const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; sendBlocked?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: React.ComponentProps<typeof InputBar>['onSendBlocked']; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; initialAttachments?: string[]; provider?: 'claude' | 'native'; connection?: React.ComponentProps<typeof InputBar>['connection'] }>(
+  function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, sendBlocked, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider, connection }, ref) {
+    return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} sendBlocked={sendBlocked} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} onModelSwitchCommand={onModelSwitchCommand} initialInput={initialInput} initialAttachments={initialAttachments} provider={provider} connection={connection} />;
   },
 );
 

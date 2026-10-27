@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       base:
-        description: 'Next-patch beta prefix; leave blank to select it automatically. Beta numbers reset after each official release.'
+        description: 'Next-feature-release beta prefix; leave blank to select it automatically. Beta numbers reset after each feature release (X.Y.0), not after a bug-fix release.'
         required: false
         default: ''
         type: string
@@ -73,7 +73,7 @@ jobs:
           docker pull alpine:3.24
           echo 'YOUCODED_APK_VERSION=docker run --rm alpine:3.24 apk version -t' >> "$GITHUB_ENV"
       - name: Cache runtime downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: app/build/runtime-cache
           key: android-runtime-${{ hashFiles('app/runtime/pins.env') }}

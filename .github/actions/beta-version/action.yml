@@ -2,7 +2,7 @@ name: Resolve beta version
 description: Number betas from the latest official release, not the lifetime Actions counter
 inputs:
   base:
-    description: Next-patch beta prefix; blank selects it automatically after the official release
+    description: Next-feature-release beta prefix (1.3.x → 1.4.0-beta); blank selects it automatically
     required: false
     default: ''
 outputs:

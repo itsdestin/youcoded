@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { createRef } from 'react';
 import {
-  useStickToBottom, isAtBottom, distanceFromBottom, RESTICK_THRESHOLD_PX, REARM_IDLE_MS,
+  useStickToBottom, isAtBottom, distanceFromBottom, RESTICK_THRESHOLD_PX, REARM_IDLE_MS, JUMP_GLIDE_MS,
 } from '../src/renderer/hooks/use-stick-to-bottom';
 
 // jsdom doesn't lay out, so scrollHeight/clientHeight are always 0 and scrollTop
@@ -230,15 +230,51 @@ describe('useStickToBottom', () => {
     expect(result.current.stickRef.current).toBe(false);
   });
 
-  it('jumpToBottom re-arms sticking', () => {
+  it('jumpToBottom re-arms sticking and glides to the real bottom', () => {
     const { result } = renderHook(() => useStickToBottom(ref));
     act(() => { result.current.scrollToBottom(); });
     act(() => { wheel(el, -400); });
     expect(result.current.stickRef.current).toBe(false);
 
     act(() => { result.current.jumpToBottom(); });
-
     expect(result.current.stickRef.current).toBe(true);
+
+    act(() => { vi.advanceTimersByTime(JUMP_GLIDE_MS + 50); });
     expect(el.scrollTop).toBe(MAX_SCROLL);
+  });
+
+  it('the glide re-reads the bottom each frame, so content that grows mid-glide is still reached', () => {
+    const { result } = renderHook(() => useStickToBottom(ref));
+    act(() => { result.current.scrollToBottom(); });
+    act(() => { wheel(el, -400); });
+    act(() => { result.current.jumpToBottom(); });
+    act(() => { vi.advanceTimersByTime(JUMP_GLIDE_MS / 2); });
+    expect(el.scrollTop).toBeLessThan(MAX_SCROLL);
+    expect(el.scrollTop).toBeGreaterThan(MAX_SCROLL - 400);
+  });
+
+  it('scrolling up mid-glide cancels it instead of fighting the user', () => {
+    const { result } = renderHook(() => useStickToBottom(ref));
+    act(() => { result.current.scrollToBottom(); });
+    act(() => { wheel(el, -800); });
+    act(() => { result.current.jumpToBottom(); });
+    act(() => { vi.advanceTimersByTime(JUMP_GLIDE_MS / 3); });
+    act(() => { wheel(el, -100); });
+    const stoppedAt = el.scrollTop;
+    act(() => { vi.advanceTimersByTime(JUMP_GLIDE_MS * 2); });
+    expect(el.scrollTop).toBe(stoppedAt);
+    expect(result.current.stickRef.current).toBe(false);
+  });
+
+  it('an upward wheel that moves nothing (already at the bottom) re-arms instead of leaving the button stuck', () => {
+    const { result } = renderHook(() => useStickToBottom(ref));
+    act(() => { result.current.scrollToBottom(); });
+    // Wheel over a nested scroller: the event bubbles here, but THIS container
+    // does not move, so no scroll event follows.
+    act(() => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true })); });
+    expect(result.current.atBottom).toBe(false);
+    settle();
+    expect(result.current.atBottom).toBe(true);
+    expect(result.current.stickRef.current).toBe(true);
   });
 });

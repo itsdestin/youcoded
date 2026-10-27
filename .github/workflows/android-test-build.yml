@@ -5,9 +5,9 @@ on:
     inputs:
       base:
         description: >-
-          Next-patch beta prefix. Blank selects it automatically after the official
-          release, with beta numbers restarting at 1. Build types add -dev or
-          -releasetest, e.g. 1.3.2-beta.1-releasetest after release 1.3.1.
+          Next-feature-release beta prefix. Blank selects it automatically, with beta
+          numbers restarting at 1 after each feature release. Build types add -dev or
+          -releasetest, e.g. 1.4.0-beta.1-releasetest after release 1.3.1.
         required: false
         default: ''
 
@@ -76,7 +76,7 @@ jobs:
           docker pull alpine:3.24
           echo 'YOUCODED_APK_VERSION=docker run --rm alpine:3.24 apk version -t' >> "$GITHUB_ENV"
       - name: Cache runtime downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: app/build/runtime-cache
           key: android-runtime-${{ hashFiles('app/runtime/pins.env') }}

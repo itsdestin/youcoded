@@ -56,7 +56,22 @@ describe('Claude queue file instructions', () => {
     expect(text.length).toBe(262_144);
     const mentions = '@notes.md '.repeat(20);
     await expect(prepareClaudeQueueInput({ text: mentions + 'x'.repeat(262_144 - mentions.length), attachments: [], cwd })).rejects.toThrow(/prepared.*too large/i);
-    await expect(prepareClaudeQueueInput({ text: String.fromCharCode(1).repeat(262_144), attachments: [], cwd })).rejects.toThrow(/prepared.*too large/i);
+    await expect(prepareClaudeQueueInput({ text: '"'.repeat(262_144), attachments: [], cwd })).rejects.toThrow(/prepared.*too large/i);
+  });
+  it('puts attached files at the end as plain lines and keeps the read instruction for @ mentions only', async () => {
+    const shot = await put('shot.png'); const notes = await put('notes.md');
+    const attached = await prepareClaudeQueueInput({ text: 'What is this?', attachments: [shot], cwd });
+    expect(attached).toEqual({ wireText: 'What is this?\n\nAttached: ' + JSON.stringify(shot), files: [shot] });
+    const both = await prepareClaudeQueueInput({ text: 'Compare @notes.md', attachments: [shot, notes], cwd });
+    expect(both.wireText.startsWith('Read this entire file: ' + JSON.stringify(notes) + '\n')).toBe(true);
+    // A file that is both attached and mentioned is listed once, as a mention.
+    expect(both.wireText.endsWith('Compare ' + JSON.stringify(notes) + '\n\nAttached: ' + JSON.stringify(shot))).toBe(true);
+    expect(await prepareClaudeQueueInput({ text: '', attachments: [shot], cwd })).toEqual({ wireText: 'Attached: ' + JSON.stringify(shot), files: [shot] });
+  });
+  it('removes characters Claude Code\'s box always drops, keeping joiners that real text needs', async () => {
+    const r = await prepareClaudeQueueInput({ text: 'a\u200Bb\u2060c\uFEFF\r\nd 👨\u200D👩 می\u200Cخواهم', attachments: [], cwd });
+    expect(r.wireText).toBe('abc\nd 👨\u200D👩 می\u200Cخواهم');
+    await expect(prepareClaudeQueueInput({ text: '\u200B\u2060', attachments: [], cwd })).rejects.toThrow(/nothing to send/i);
   });
   it('refuses an unavailable explicit attachment instead of claiming its contents are present', async () => {
     await expect(prepareClaudeQueueInput({ text: 'Read it', attachments: [path.join(cwd, 'gone.pdf')], cwd })).rejects.toThrow(/attachment.*unavailable/i);

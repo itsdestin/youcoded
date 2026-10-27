@@ -10,9 +10,15 @@
 //     `desktopOnly` (download/cancel/launch/cached) or `remoteAllowed:false` (changelog).
 // A failed beta-channel save keeps the phone's old soft answer `{ok:false,error}` (remoteOnError).
 import { IPC } from '../../shared/backend-contract';
+import type { UpdateRestartResult } from '../../shared/update-install-types';
 import { getChangelog } from '../changelog-service';
 import { getUpdateService } from '../update-service';
 import { defineChannel, type MainChannelDef } from './channel-def';
+
+// Restart to update needs main.ts's windows and close-request queue, so main hands the function over at
+// startup (the same pattern as window.ts's bindWindow).
+let restartToUpdate: (() => Promise<UpdateRestartResult>) | null = null;
+export function bindUpdateRestart(fn: () => Promise<UpdateRestartResult>): void { restartToUpdate = fn; }
 
 export const updateChannels: MainChannelDef[] = [
   defineChannel({
@@ -30,5 +36,18 @@ export const updateChannels: MainChannelDef[] = [
     handler: (payload) => getUpdateService().setBetaChannel(payload?.enabled),
     // The phone always got `{ok:false,error}` here when the save failed.
     remoteOnError: (error) => ({ ok: false, error: String((error as Error)?.message ?? error) }),
+  }),
+  // Restart to update (#183 T3): installs and reopens THIS computer, so never from a phone.
+  defineChannel({ name: IPC.UPDATE_RESTART_TO_UPDATE, kind: 'handle', desktopOnly: true, handler: () => (restartToUpdate ? restartToUpdate() : Promise.resolve({ restarting: false })) }),
+  // "Install updates automatically" (#183): allowed from a paired phone like the beta channel
+  // (one setting kept in sync everywhere). {supported:false} where there is no in-app updater.
+  defineChannel({ name: IPC.UPDATE_GET_AUTO_INSTALL, kind: 'handle', handler: () => getUpdateService().getAutoInstall() }),
+  defineChannel({
+    name: IPC.UPDATE_SET_AUTO_INSTALL, kind: 'handle',
+    handler: (payload) => getUpdateService().setAutoInstall(payload?.enabled),
+    // WHY no remoteOnError (review of T1): the beta channel's soft {ok:false,error} answer is an old
+    // shape its own caller understands. This switch's caller treats any reply without `supported`
+    // as a failure to revert from, so a failed save must reach the phone as a rejection (the table's
+    // thrown-handler flag does that), never as a quiet answer.
   }),
 ];

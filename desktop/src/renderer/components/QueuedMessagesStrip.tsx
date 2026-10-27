@@ -75,6 +75,9 @@ function SendNowButton({ onClick, paused = false, uncertain = false }: { onClick
   );
 }
 
+/** What an Unconfirmed row says (the host's own diagnostic wording is for logs, not people). */
+const UNCONFIRMED_NOTE = 'This may not have reached Claude Code. Check the conversation above; Dismiss puts the words back in your message box.';
+
 interface QueuedMessage {
   queueId: string;
   content: string;
@@ -82,6 +85,8 @@ interface QueuedMessage {
   paused?: boolean;
   status?: 'waiting' | 'delivering' | 'uncertain';
   editing?: boolean;
+  /** The host's one sentence about this message (why it waits, or why it was not sent). */
+  notice?: string;
 }
 
 interface Props {
@@ -115,7 +120,13 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
   const preview = workbenchQueuePreview();
   const [dismissed, setDismissed] = React.useState(false);
   const proposed = preview?.endsWith('-after');
-  if (preview) {
+  if (preview === 'stack') {
+    // Two waiting cards, for reviewing the spacing between stacked cards.
+    queuedMessages = [
+      { queueId: 'review-only-1', content: 'Please check the release notes.', timestamp: 0, status: 'waiting' },
+      { queueId: 'review-only-2', content: 'Then update the changelog.', timestamp: 0, status: 'waiting' },
+    ];
+  } else if (preview) {
     queuedMessages = preview === 'idle-after' || preview === 'blocked-after' || dismissed ? [] : [{
       queueId: 'review-only', content: 'Please check the release notes.', timestamp: 0,
       status: preview.startsWith('idle') ? 'delivering' : preview.startsWith('waiting') ? 'waiting' : 'uncertain',
@@ -141,7 +152,15 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
           <div className="text-3xs text-fg-muted select-none shrink-0">
             {q.editing ? 'Editing' : q.status === 'uncertain' ? 'Unconfirmed' : q.status === 'delivering' ? 'Sending' : q.paused ? 'Paused' : 'Queued'}
           </div>
-          <div className="flex-1 min-w-0 truncate text-sm text-fg-2">{q.content}</div>
+          <div className="flex-1 min-w-0">
+            <div className="truncate text-sm text-fg-2">{q.content}</div>
+            {/* WHY (2026-10-22, "no real way to recover"): say what is known and what Dismiss does, on this row only. */}
+            {(q.notice || q.status === 'uncertain') && (
+              <div className="text-3xs text-fg-muted">
+                {q.status === 'uncertain' ? UNCONFIRMED_NOTE : q.notice}
+              </div>
+            )}
+          </div>
           {q.status !== 'delivering' && (onEdit || onCancel || onSendNow) && (
             <div className="flex items-center gap-0.5 shrink-0">
               {/* The quick chips' own edit button (Destin, 2026-09-28). */}

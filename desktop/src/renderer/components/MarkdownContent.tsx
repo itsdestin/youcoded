@@ -1,11 +1,11 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 import type { Plugin, PluggableList } from 'unified';
-import type { Root, Element, Text, RootContent } from 'hast';
+import type { Root, Element, RootContent } from 'hast';
 import { visitParents } from 'unist-util-visit-parents';
-import { detectLinkTokens } from './markdown-linkify';
+import { rehypeLinkTokens } from './rehype-link-tokens';
 import { Button } from './ui';
 import { FilepathToken } from './FilepathToken';
 import { CONVERSATIONS_FENCE, parseConversationRefs } from '../../shared/chatsearch-refs';
@@ -13,8 +13,9 @@ import ChatsearchRefBlock from './tool-views/ChatsearchRefBlock';
 import { SessionRefsEnabled } from './session-refs-context';
 import { ANCHOR_SKIP_ATTR } from './comments/anchor-skip';
 import {
-  startStream, advanceStream, withDefinitions, splitOpenFence, fenceChunks, type StreamView,
+  startStream, advanceStream, withDefinitions, splitOpenFence, fenceChunks, scanOpenList, listSplitOf, type ListScan, type StreamView,
   DETAILS_OPEN_WITH_SUMMARY, DETAILS_OPEN, DETAILS_SUMMARY, DETAILS_CLOSE, DETAILS_OPEN_ANY,
+  fenceOverHighlightLimit, canDrawInSlices, sliceCuts, nextSliceEnd, PROGRESSIVE_FIRST_CHARS, PROGRESSIVE_BATCH_CHARS,
 } from './markdown-blocks';
 
 /**
@@ -144,6 +145,19 @@ const rehypeSafeDisclosures: Plugin<[{ disclosures?: boolean }?], Root> =
  * highlighter failed to tokenise. Reading the hast node instead is immune to
  * whatever the highlighter did to the element tree.
  */
+/** Height in rem a skipped code block holds: 1.25rem per line plus the 1.5rem the <pre> pads. */
+export function placeholderRem(lines: number): number {
+  return lines * 1.25 + 1.5;
+}
+
+/** How many lines a <pre> shows for this text: a final newline does not start another line. Always at least 1. */
+export function codeLineCount(text: string): number {
+  const body = text.endsWith('\n') ? text.slice(0, -1) : text;
+  let n = 1;
+  for (let i = body.indexOf('\n'); i !== -1; i = body.indexOf('\n', i + 1)) n++;
+  return n;
+}
+
 function hastText(node: unknown): string {
   if (!node || typeof node !== 'object') return '';
   const n = node as { type?: string; value?: string; children?: unknown[] };
@@ -151,97 +165,6 @@ function hastText(node: unknown): string {
   if (Array.isArray(n.children)) return n.children.map(hastText).join('');
   return '';
 }
-
-/**
- * Rehype plugin: splits plain text nodes into clickable tokens — web URLs
- * (rendered as real <a> links) and file paths (rendered as filepath-token,
- * which becomes a FilepathToken chip below).
- *
- * WHY it runs in the hast (HTML AST) pass rather than on the markdown source:
- * the ancestor chain is available here, so "is this inside a code block?" is a
- * fact rather than a guess, and nothing has to be re-parsed.
- *
- * WHY it runs AFTER rehype-highlight in the plugin array: the highlighter
- * rewrites a code block's single text node into a tree of <span> tokens. Going
- * last means we split the leaves it produced, so a URL inside ```bash is found
- * and the colouring around it survives.
- *
- * Text already inside an <a> is skipped — remark-gfm has already autolinked
- * bare URLs in prose, and linkifying a link would nest anchors.
- *
- * Fenced code blocks are NO LONGER skipped (they were, for paths). A URL or a
- * path printed in a code block is the single most common way Claude hands one
- * over, and reading it out by hand was the complaint this fixes.
- */
-const rehypeLinkTokens: Plugin<[{ filepaths: boolean }], Root> =
-  (options) => (tree: Root) => {
-  const filepaths = options?.filepaths ?? false;
-  // visitParents provides the full ancestor chain, which is what tells us
-  // whether we are inside an existing link or inside a fenced code block.
-  visitParents(tree, 'text', (node, ancestors) => {
-    const parent = ancestors[ancestors.length - 1];
-    if (!parent) return;
-    const index = (parent as Element | Root).children.indexOf(node as Text);
-    if (index === -1) return;
-
-    // Never linkify inside an existing anchor — that would nest <a> in <a>,
-    // which is invalid HTML and makes the click target ambiguous.
-    if (ancestors.some((a) => a.type === 'element' && (a as Element).tagName === 'a')) return;
-
-    // Inside a fenced block the chip styling would break the monospace grid, so
-    // FilepathToken uses its quieter 'inline' variant there (see the component
-    // map below). Inline `backticks` keep the chip.
-    const inPreBlock = ancestors.some(
-      (a) => a.type === 'element' && (a as Element).tagName === 'pre',
-    );
-
-    const textNode = node as Text;
-    const matches = detectLinkTokens(textNode.value, { filepaths });
-    if (matches.length === 0) return;
-
-    // Split the text node into a sequence of text + token elements.
-    const replacements: RootContent[] = [];
-    let cursor = 0;
-    for (const m of matches) {
-      if (m.start > cursor) {
-        replacements.push({ type: 'text', value: textNode.value.slice(cursor, m.start) });
-      }
-      // The matched source text is kept as the element's child even when the
-      // component ignores it: CopyButton reads the raw text off this hast tree
-      // (hastText), so dropping it would silently delete every path from what a
-      // code block copies.
-      const child: Text = { type: 'text', value: m.text };
-      replacements.push(
-        m.kind === 'url'
-          ? ({
-              type: 'element',
-              tagName: 'a',
-              properties: { href: m.value },
-              children: [child],
-            } as Element)
-          : ({
-              type: 'element',
-              tagName: 'filepath-token',
-              properties: {
-                'data-path': m.value,
-                'data-raw': m.text,
-                ...(inPreBlock ? { 'data-in-code': 'true' } : {}),
-              },
-              children: [child],
-            } as Element),
-      );
-      cursor = m.end;
-    }
-    if (cursor < textNode.value.length) {
-      replacements.push({ type: 'text', value: textNode.value.slice(cursor) });
-    }
-
-    // Replace the original text node with our sequence in the parent's children array.
-    (parent as Element | Root).children.splice(index as number, 1, ...replacements);
-    // Skip past the newly-inserted nodes — they're already processed.
-    return index + replacements.length;
-  });
-};
 
 /**
  * rehype-highlight, but with ONE highlighter shared by every render.
@@ -254,7 +177,43 @@ const rehypeLinkTokens: Plugin<[{ filepaths: boolean }], Root> =
  * output (same library, same languages, same options) without the rebuild.
  */
 const sharedHighlight = (rehypeHighlight as unknown as () => (tree: Root, file: unknown) => void)();
-const rehypeHighlightShared: Plugin<[], Root> = () => sharedHighlight as any;
+/**
+ * WHY a wrapper (freeze hunt 2026-10-22, item 2): a fence over the size limit
+ * (markdown-blocks.ts HIGHLIGHT_MAX_LINES / _CHARS) skips colouring so one huge
+ * block cannot freeze the page for seconds. rehype-highlight only touches a code
+ * element that names a language, so the big block's language class is dropped
+ * BEFORE it runs - the block then comes out exactly like a fence written with no
+ * language (no .hljs class, same box, same Copy button). Only direct text is
+ * counted, which is all an uncoloured fence holds.
+ */
+function dropLanguageFromHugeFences(tree: Root) {
+  visitParents(tree, 'element', (node, ancestors) => {
+    const el = node as Element;
+    if (el.tagName !== 'code' || !Array.isArray(el.properties?.className)) return;
+    const parent = ancestors[ancestors.length - 1] as Element | undefined;
+    if (parent?.type !== 'element' || parent.tagName !== 'pre') return;
+    const texts = el.children.flatMap((child) => (child.type === 'text' ? [child.value] : []));
+    if (!fenceOverHighlightLimit(...texts)) return;
+    const rest = (el.properties.className as string[]).filter((c) => !/^(?:lang|language)-/.test(String(c)));
+    // An empty class list would print class="" - delete it so the markup equals a no-language fence's.
+    if (rest.length) el.properties.className = rest;
+    else delete el.properties.className;
+  });
+}
+const rehypeHighlightShared: Plugin<[], Root> = () => (tree: Root, file: unknown) => {
+  dropLanguageFromHugeFences(tree);
+  sharedHighlight(tree, file);
+};
+/** The plugin list without colouring: for the pieces of a streaming fence already over the limit. */
+const uncolouredCache = new WeakMap<PluggableList, PluggableList>();
+function withoutColour(plugins: PluggableList): PluggableList {
+  let u = uncolouredCache.get(plugins);
+  if (!u) {
+    u = plugins.filter((p) => p !== rehypeHighlightShared);
+    uncolouredCache.set(plugins, u);
+  }
+  return u;
+}
 
 // Stable plugin arrays — avoids re-creating on every render. URL linkification
 // runs in EVERY context (it needs no session), so it lives in the stable array;
@@ -444,7 +403,7 @@ const mdComponents = {
       // itself would fade its border and fill along with the code. The wrapper frames;
       // the <pre> scrolls sideways and only the code fades, on a side with more. It is
       // CSS-only (no listener per block), so a long chat of code blocks costs nothing.
-      <div className="yc-code-block relative group my-3 rounded-md bg-canvas border border-edge overflow-hidden">
+      <CodeBlockFrame codeText={codeText} line={node?.position?.start.line}>
         {/* yc-code is the hook the globals.css rule needs to out-specify
             highlight.js's own `pre code.hljs` box (see the .yc-code block
             there). Don't drop it. */}
@@ -454,7 +413,7 @@ const mdComponents = {
         {/* A fence still being typed draws its finished head separately (FrozenFence),
             so Copy takes the head plus the tail drawn here. */}
         <FenceCopyButton tailText={codeText} line={node?.position?.start.line} />
-      </div>
+      </CodeBlockFrame>
     );
   },
   code({ className, children, node, ...props }: any) {
@@ -547,6 +506,29 @@ function FenceCopyButton({ tailText, line }: { tailText: string; line: number | 
   return text ? <CopyButton text={text} /> : null;
 }
 
+/**
+ * The framed box around a code block. Carries the block's line count so globals.css can hold its real
+ * height while the browser skips drawing it (see `.yc-code-block`). WHY the finished head is counted: a
+ * fence still being typed draws only its newest lines here; the rest sit in the frozen head.
+ */
+function CodeBlockFrame({ codeText, line, children }: { codeText: string; line: number | undefined; children: React.ReactNode }) {
+  const frozen = useContext(FrozenFenceContext);
+  const text = (frozen && frozen.line === line ? frozen.text : '') + codeText;
+  return (
+    <div
+      className="yc-code-block relative group my-3 rounded-md bg-canvas border border-edge overflow-hidden"
+      // WHY an inline height, not a custom property (desktop quiet-machine run 2026-10-23): this used to set `--yc-lines` here and
+      // let globals.css do the arithmetic. A custom property is INHERITED, so every change to the line count of a block still
+      // streaming in made the browser re-check the style of every coloured span inside it: 3.3 s of style recalculation per 6 s
+      // on a 2,000-line fence, typing 61 ms vs 12 ms without it. The longhand below is read by this one element only, and is the
+      // same number the stylesheet computed (1.25rem per line + 0.75rem top and bottom padding of the <pre>).
+      style={{ containIntrinsicHeight: `auto ${placeholderRem(codeLineCount(text))}rem` }}
+    >
+      {children}
+    </div>
+  );
+}
+
 /** Does this <pre> hold a fenced block whose language is `conversations`? */
 function isConversationsFence(node: any): boolean {
   const code = node?.children?.find((c: any) => c?.tagName === 'code');
@@ -603,6 +585,91 @@ const mdPreviewComponents = {
   },
 };
 
+/**
+ * The finished items of a long tight list that is still being typed (see
+ * splitOpenList). Same idea as FrozenFence: the <ul>/<ol> they belong INSIDE is
+ * built by react-markdown for the newest items only, so the `ul`/`ol` overrides
+ * below reach the head through this context and draw it as their first children.
+ * WHY inside the live list and not as lists of their own: one <ul> with all the
+ * <li>s as direct children is what the whole-message render makes, so numbering
+ * continues, `space-y-*` spacing and every sibling selector see the same tree.
+ */
+interface FrozenList {
+  /** Line (1-based) of the document react-markdown is drawing where the live list starts: the head belongs to THAT list only. */
+  line: number;
+  ordered: boolean;
+  /** Set by the live list when it drew the head; if it never does, the chunk falls back to the whole list. */
+  claimed: { current: boolean };
+  /** The whole list's first number (the live tail would otherwise claim the number of ITS first item). */
+  start: number;
+  node: React.ReactNode;
+}
+const FrozenListContext = createContext<FrozenList | null>(null);
+
+/** Is this the top-level list that starts on `line` of the document react-markdown is drawing (not one nested inside an item)? */
+const isListAt = (node: any, line: number) => node?.position?.start?.line === line && node?.position?.start?.column === 1;
+
+const liveListCache = new WeakMap<object, React.ComponentProps<typeof ReactMarkdown>['components']>();
+const chunkListCache = new WeakMap<object, React.ComponentProps<typeof ReactMarkdown>['components']>();
+/** components for the live tail: its first list also draws the frozen head, then its own (newest) items. */
+function liveListComponents(components: NonNullable<React.ComponentProps<typeof ReactMarkdown>['components']>) {
+  let c = liveListCache.get(components);
+  if (!c) {
+    const make = (tag: 'ul' | 'ol') => {
+      const Base: any = (components as any)[tag] ?? tag;
+      return function LiveList(props: any) {
+        const head = useContext(FrozenListContext);
+        const takes = !!head && head.ordered === (tag === 'ol') && isListAt(props.node, head.line);
+        // WHY: the head must be drawn by exactly one list; MarkdownChunk checks this after drawing.
+        useLayoutEffect(() => { if (takes) head!.claimed.current = true; });
+        if (!head || head.ordered !== (tag === 'ol') || !isListAt(props.node, head.line)) return <Base {...props} />;
+        // start: only the real first number, and none when it is 1 (as react-markdown leaves it).
+        const start = tag === 'ol' ? { start: head.start === 1 ? undefined : head.start } : {};
+        return <Base {...props} {...start}>{head.node}{props.children}</Base>;
+      };
+    };
+    c = { ...components, ul: make('ul'), ol: make('ol') };
+    liveListCache.set(components, c);
+  }
+  return c;
+}
+/** components for a finished chunk: its list wrapper is removed, leaving the <li>s (and the newlines between them). */
+function chunkListComponents(components: NonNullable<React.ComponentProps<typeof ReactMarkdown>['components']>) {
+  let c = chunkListCache.get(components);
+  if (!c) {
+    const make = (tag: 'ul' | 'ol') => {
+      const Base: any = (components as any)[tag] ?? tag;
+      return function ChunkList(props: any) {
+        if (!isListAt(props.node, 1)) return <Base {...props} />;
+        // WHY the trailing newline is dropped: the live list's own children start with one, so
+        // head + tail give exactly the "\n<li>\n<li>\n" a single list has.
+        const kids = React.Children.toArray(props.children);
+        if (kids[kids.length - 1] === '\n') kids.pop();
+        return <>{kids}</>;
+      };
+    };
+    c = { ...components, ul: make('ul'), ol: make('ol') };
+    chunkListCache.set(components, c);
+  }
+  return c;
+}
+
+/**
+ * Twenty finished items of a still-open list, drawn once. WHY memo: `source` is final, so it is
+ * never parsed again however long the list grows.
+ */
+const FrozenListChunk = React.memo(function FrozenListChunk({ source, rehypePlugins, components }: {
+  source: string;
+  rehypePlugins: PluggableList;
+  components: NonNullable<React.ComponentProps<typeof ReactMarkdown>['components']>;
+}) {
+  return (
+    <ReactMarkdown remarkPlugins={remarkPluginsStable} rehypePlugins={rehypePlugins} components={chunkListComponents(components)}>
+      {source}
+    </ReactMarkdown>
+  );
+});
+
 interface Props {
   content: string;
   /** When provided, file paths detected in text are rendered as FilepathToken chips. */
@@ -621,6 +688,13 @@ interface Props {
    * stopped and history messages, which draw as one piece.
    */
   live?: boolean;
+  /**
+   * A big FINISHED document (the file viewer): draw the first screenful at once and the rest in
+   * small slices, one per animation frame, instead of one long freeze. Ends as the same page.
+   */
+  progressive?: boolean;
+  /** Called once with true when a progressive draw has drawn everything (false while it is still going). */
+  onProgressive?: (done: boolean) => void;
 }
 
 /**
@@ -629,8 +703,10 @@ interface Props {
  * highlighted and reconciled exactly once instead of once per streamed word.
  * Every prop is a string or module-level/memoised, so the comparison holds.
  */
-const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fenceAt, rehypePlugins, components }: {
+const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fenceAt, listScan, rehypePlugins: basePlugins, components }: {
   source: string;
+  /** How far a scan of this piece as a growing list has got (see scanOpenList); null = draw it whole. */
+  listScan: ListScan | null;
   /** The reply is still streaming — the only time a long open fence may be drawn in chunks. */
   live: boolean;
   /** Where an open top-level fence starts in `source` when text comes before it (see DrawnGroup.fenceAt). */
@@ -647,6 +723,39 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fe
   // until the reply ends. A reply that stops with its fence still open (Stop, an
   // error, a truncated or old message) must draw as one block, like any other.
   const split = defs || !live ? null : splitOpenFence(source, fenceAt);
+  // WHY decided here from the WHOLE fence (frozen head + live tail), not per 20-line chunk
+  // (freeze hunt item 2): a chunk is tiny, so the plugin alone would colour every one of
+  // them, and the fence would turn grey at the end when it is drawn as one block. Once the
+  // fence passes the limit it stays uncoloured for the rest of the stream, as it will be
+  // when finished.
+  const over = !!split && fenceOverHighlightLimit(split.frozen, split.tail);
+  // WHY the chunks drawn BEFORE the crossing are redrawn plain a few per frame, not all at once
+  // (freeze hunt item 3): redrawing all ~75 at the crossing was one 66-72 ms burst in the middle
+  // of the stream, which is what made typing lag 140-220 ms there while master (which never
+  // redraws) stayed at ~12-24 ms. Chunks frozen after the crossing are plain from the start.
+  // Chunks only ever change colour once, old ones are off the end of what the reader is looking at
+  // (the newest lines), and the end state is identical to the all-at-once version.
+  const crossRef = useRef<{ at: number } | null>(null);
+  // Chunks that were on the page, coloured, at the last render under the limit (0 = none yet).
+  const drawnUnderRef = useRef(0);
+  const [converted, setConverted] = useState(0);
+  if (!split) { crossRef.current = null; drawnUnderRef.current = 0; }
+  else if (!over) drawnUnderRef.current = fenceChunks(split.frozen).length;
+  else if (!crossRef.current) {
+    // Only chunks that were really drawn coloured need the gradual redraw; a fence first seen already over
+    // the limit (bubble mounted mid-reply, or a big jump) never drew colour there, so it is plain at once.
+    crossRef.current = { at: drawnUnderRef.current };
+  }
+  const crossAt = crossRef.current?.at ?? 0;
+  useEffect(() => {
+    if (!split) { setConverted(0); return; }
+    if (converted >= crossAt) return;
+    // WHY rAF: a few chunks per frame keeps typing and scrolling alive between them (and a hidden window stops).
+    const id = requestAnimationFrame(() => setConverted((c) => Math.min(crossAt, c + CONVERT_CHUNKS_PER_FRAME)));
+    return () => cancelAnimationFrame(id);
+  }, [!!split, converted, crossAt]);
+  const plainPlugins = over ? withoutColour(basePlugins) : basePlugins;
+  const rehypePlugins = plainPlugins;
   const frozenText = split?.frozen ?? '';
   const opening = split?.opening ?? '';
   const prefix = split?.prefix ?? '';
@@ -660,24 +769,64 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fe
       line,
       text: frozenText,
       node: fenceChunks(frozenText).map((chunk, i) => (
-        <FrozenFenceChunk key={i} source={opening + chunk} rehypePlugins={rehypePlugins} components={components} />
+        <FrozenFenceChunk key={i} source={opening + chunk}
+          // Plain once over the limit, except old chunks not yet converted (they keep their colour, props unchanged, so React skips them).
+          rehypePlugins={over && (i >= crossAt || i < converted) ? plainPlugins : basePlugins}
+          components={components} />
       )),
     };
-  }, [frozenText, opening, line, rehypePlugins, components]);
+  }, [frozenText, opening, line, over, crossAt, converted, plainPlugins, basePlugins, components]);
+
+  // A long tight list still being typed (not a fence, no definitions in front): finished items are
+  // drawn once, in chunks of 20, and react-markdown re-reads only the newest ones (splitOpenList).
+  // The scan comes from the parent (see MarkdownContent) and is null unless the reply is live and
+  // this group is the last one, so a finished reply and every other group draw as before.
+  // WHY failedAt: a list whose finished head no live list claimed (see below) is drawn whole from then on.
+  const [failedAt, setFailedAt] = useState(-1);
+  const listSplit = !split && !defs && listScan?.source === source && listScan.at !== failedAt ? listSplitOf(source, listScan) : null;
+  const listChunks = listSplit?.chunks;
+  const listOrdered = listSplit?.ordered ?? false;
+  const listStart = listSplit?.start ?? 1;
+  // The list's line in the document drawn below (text before it, if any, comes first).
+  const listLine = listSplit ? listSplit.prefix.split('\n').length : 1;
+  // WHY memoised on the chunk list: it is the same array until a whole new chunk freezes.
+  const frozenList = useMemo<FrozenList | null>(() => {
+    if (!listChunks || !components) return null;
+    return {
+      claimed: { current: false },
+      line: listLine,
+      ordered: listOrdered,
+      start: listStart,
+      node: listChunks.map((chunk, i) => (
+        <FrozenListChunk key={i} source={chunk} rehypePlugins={rehypePlugins} components={components} />
+      )),
+    };
+  }, [listChunks, listOrdered, listStart, listLine, rehypePlugins, components]);
+
+  // WHY a safety net: whatever sits in front of the list (an open HTML block, a fence the scan misread)
+  // can stop react-markdown from making the live list at the line we expect. The head would then be
+  // silently missing from the page, so redraw the whole text before it is ever painted.
+  useLayoutEffect(() => {
+    if (frozenList && listScan && !frozenList.claimed.current) setFailedAt(listScan.at);
+  }, [frozenList, listScan]);
 
   const markdown = (
     <ReactMarkdown
       remarkPlugins={remarkPluginsStable}
       rehypePlugins={rehypePlugins}
-      components={components}
+      components={listSplit && components ? liveListComponents(components) : components}
     >
-      {split ? prefix + opening + split.tail : withDefinitions(source, defs)}
+      {split ? prefix + opening + split.tail : listSplit ? listSplit.prefix + listSplit.tail : withDefinitions(source, defs)}
     </ReactMarkdown>
   );
   // WHY the Provider is ALWAYS the root (null when there is no head): swapping the
   // root element's type when the fence reaches 40 lines, or closes, would make React
   // rebuild the whole block (flash, scroll jump, lost selection, Copy reset).
-  return <FrozenFenceContext.Provider value={frozen}>{markdown}</FrozenFenceContext.Provider>;
+  return (
+    <FrozenFenceContext.Provider value={frozen}>
+      <FrozenListContext.Provider value={frozenList}>{markdown}</FrozenListContext.Provider>
+    </FrozenFenceContext.Provider>
+  );
 });
 
 /** react-markdown's components with the block wrapper removed: a chunk draws only its coloured lines. */
@@ -719,7 +868,46 @@ const FrozenFenceChunk = React.memo(function FrozenFenceChunk({ source, rehypePl
   );
 });
 
-export default React.memo(function MarkdownContent({ content, sessionId, preview, incremental, live = false }: Props) {
+/** Old coloured chunks redrawn plain per animation frame after a streaming fence passes the highlight limit. */
+const CONVERT_CHUNKS_PER_FRAME = 6;
+
+/** Groups per memoised page of a progressively drawn file (see the render of MarkdownContent). */
+const GROUP_PAGE = 100;
+type DrawnGroupView = StreamView['groups'][number];
+
+/**
+ * One page of a progressive draw: the same keyed Fragment per group as the streaming path
+ * (so the finished DOM is the same), skipped whole while its groups are the same objects.
+ * WHY a group is the same object when unchanged: advanceStream's `finish` hands back the previous
+ * group for any group whose text and definitions did not change.
+ */
+const GroupPage = React.memo(function GroupPage({ groups, startsPainted, rehypePlugins, components }: {
+  groups: DrawnGroupView[];
+  startsPainted: boolean;
+  rehypePlugins: PluggableList;
+  components: React.ComponentProps<typeof ReactMarkdown>['components'];
+}) {
+  let painted = startsPainted;
+  return (
+    <>
+      {groups.map((g) => {
+        const newline = g.paints && painted;
+        painted ||= g.paints;
+        return (
+          <React.Fragment key={g.key}>
+            {newline ? '\n' : null}
+            {g.paints && (
+              <MarkdownChunk source={g.draw} defs={g.defs} live={false} listScan={null} fenceAt={g.fenceAt} rehypePlugins={rehypePlugins} components={components} />
+            )}
+          </React.Fragment>
+        );
+      })}
+    </>
+  );
+}, (a, b) => a.startsPainted === b.startsPainted && a.rehypePlugins === b.rehypePlugins && a.components === b.components
+  && a.groups.length === b.groups.length && a.groups.every((g, i) => g === b.groups[i]));
+
+export default React.memo(function MarkdownContent({ content, sessionId, preview, incremental, live = false, progressive = false, onProgressive }: Props) {
   // Memoize the rehype plugin array and the component map by sessionId so that:
   // (a) When sessionId is absent, we use the stable module-scope arrays (no allocation).
   // (b) When sessionId is present, the filepath-token component is added once and
@@ -769,14 +957,50 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
   // made during render is discarded along with that render. React re-runs this
   // function at once with the new view, before drawing any child, so the cost
   // is one extra call of this function, not a second draw.
-  const [streamState, setStreamState] = useState<StreamView>(() => startStream(content));
+  const [streamState, setStreamState] = useState<StreamView>(() => startStream(
+    // A progressive draw starts from its first slice, not the whole text (see the slices block below).
+    progressive && canDrawInSlices(content) ? content.slice(0, nextSliceEnd(sliceCuts(content), 0, PROGRESSIVE_FIRST_CHARS, content.length)) : content,
+  ));
+  // Where the last group's scan as a growing list has got to, so an update reads only the new lines.
+  // WHY a ref: it only remembers progress; scanOpenList checks the text itself, so the answer is the
+  // same with or without it and a render React discards cannot leave anything stale.
+  const listScanRef = useRef<ListScan | null>(null);
+  // Progressive draw of a finished document (file viewer; freeze hunt 2026-10-22, item 4): the text is
+  // handed to the streaming path below as a PREFIX that grows by a slice per animation frame (see
+  // PROGRESSIVE_* in markdown-blocks.ts for why a prefix and not a pre-cut document). A text a prefix
+  // cannot draw faithfully (canDrawInSlices) is drawn whole, as before.
+  const cuts = useMemo(() => (progressive && canDrawInSlices(content) ? sliceCuts(content) : null), [progressive, content]);
+  const [shown, setShown] = useState<{ content: string; end: number }>({ content: '', end: 0 });
+  let shownEnd = content.length;
+  if (cuts) {
+    shownEnd = shown.content === content ? shown.end : nextSliceEnd(cuts, 0, PROGRESSIVE_FIRST_CHARS, content.length);
+    // WHY state set during render (the same pattern as streamState above): a new text restarts the slices.
+    if (shown.content !== content) setShown({ content, end: shownEnd });
+  }
+  const progressiveDone = shownEnd >= content.length;
+  const onProgressiveRef = useRef(onProgressive);
+  onProgressiveRef.current = onProgressive;
+  useEffect(() => {
+    if (!progressive) return;
+    onProgressiveRef.current?.(progressiveDone);
+    if (!cuts || progressiveDone) return;
+    // WHY rAF: one slice per frame keeps scrolling and typing alive between slices, and a hidden
+    // window stops drawing altogether (performance.md rule 2).
+    const id = requestAnimationFrame(() => {
+      setShown((cur) => (cur.content === content ? { content, end: nextSliceEnd(cuts, cur.end, PROGRESSIVE_BATCH_CHARS, content.length) } : cur));
+    });
+    return () => cancelAnimationFrame(id);
+  }, [progressive, cuts, content, progressiveDone, shownEnd]);
+  const drawnText = cuts ? content.slice(0, shownEnd) : content;
+  const sliced = !!cuts;
+
   let stream = streamState;
-  if (incremental && stream.drawn !== content) {
-    stream = advanceStream(stream, content);
+  if ((incremental || sliced) && stream.drawn !== drawnText) {
+    stream = advanceStream(stream, drawnText);
     setStreamState(stream);
   }
 
-  if (incremental) {
+  if (incremental || sliced) {
     // WHY a keyed Fragment per group, not a wrapper element: the groups' elements
     // land as direct siblings exactly as one whole-message render would put them,
     // so `.assistant-bubble > *`, `last:mb-0` and every other selector see the
@@ -788,6 +1012,27 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
     // same element the single-document render used, so nothing drawn before the
     // message started growing is rebuilt.
     let painted = false;
+    // A progressively drawn big file can hold thousands of groups. Walking every one of them as its own
+    // element on every slice made the work per slice grow with the file (a 1 MB file took 3x longer sliced
+    // than drawn whole), so they are handed to memoised PAGES of GROUP_PAGE groups: a finished page is
+    // skipped with one comparison. Pages are by position and only ever appended to, so no group changes
+    // page and nothing already drawn is rebuilt. (Not for a streaming reply: it is short, and a page
+    // boundary would add a wrapper to a path that is already tuned.)
+    if (sliced && !incremental) {
+      const pages: React.ReactNode[] = [];
+      for (let at = 0; at < stream.groups.length; at += GROUP_PAGE) {
+        const slice = stream.groups.slice(at, at + GROUP_PAGE);
+        pages.push(<GroupPage key={slice[0].key} groups={slice} startsPainted={painted} rehypePlugins={rehypePlugins} components={components} />);
+        painted ||= slice.some((g) => g.paints);
+      }
+      return <>{pages}</>;
+    }
+    // WHY the scan is made here and not by the chunk: only the LAST group of a live reply can be a list
+    // that is still growing. When the reply ends the scan turns null and just that group is redrawn whole;
+    // a plain `live` flag would have redrawn the last group of every reply (it stays null for those).
+    const lastGroup = stream.groups[stream.groups.length - 1];
+    const listScan = live && lastGroup && lastGroup.fenceAt === undefined ? scanOpenList(lastGroup.draw, listScanRef.current) : null;
+    listScanRef.current = listScan;
     return (
       <>
         {stream.groups.map((g) => {
@@ -807,6 +1052,7 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
                   // whole bubble, and every other group would miss its memo and be re-parsed and
                   // re-coloured in one commit — a hitch at the end of every reply.
                   live={live && g.fenceAt !== undefined}
+                  listScan={g === lastGroup ? listScan : null}
                   fenceAt={g.fenceAt}
                   rehypePlugins={rehypePlugins}
                   components={components}

@@ -2,7 +2,7 @@ import { KeepGoingRow } from './KeepGoingRow';
 import { useModelProviderType } from '../hooks/use-provider-type';
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
-import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, type AssistantTurn } from '../state/chat-types';
+import { shouldRenderAssistantTurn, type AssistantTurn } from '../state/chat-types';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
 import { workbenchQueuePreview } from '../workbench-mode';
 import ToolCard from './ToolCard';
@@ -18,6 +18,7 @@ import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
 import { useEntryFolding } from '../hooks/use-entry-folding';
+import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
 import { SessionContextBanner } from './SessionContextBanner';
 import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
@@ -34,17 +35,22 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
 import { OnScreenContext } from '../state/on-screen-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
+
+// Matches the .jump-to-bottom exit transition in globals.css.
+const JUMP_FADE_MS = 180;
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
-import { StatusStrip, Button } from './ui';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import { useBrowserExpanded } from '../state/browser-store';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
- *  short enough that it can never feel like the view is fighting you. Any user
- *  input releases it immediately. */
+ *  short enough that it can never feel like the view is fighting you. It only ever
+ *  corrects the entry's movement within the document, never the reader's own scrolling. */
 const ANCHOR_SETTLE_MS = 700;
+
+/** The entry held in place while an older page is prepended: where it sits in the scrolled document. */
+interface PrependAnchor { el: Element; key: string | null; docTop: number }
 
 /** Retry budget for a page main could not LOCATE (`unresolved`) — as opposed to
  *  a page that genuinely does not exist. The usual cause is a just-resumed
@@ -99,14 +105,6 @@ interface Props {
   onCancelQueued?: (sessionId: string, queueId: string) => void;
   onEditQueued?: (sessionId: string, queueId: string, text: string) => void;
   onSendQueuedNow?: (sessionId: string, queueId: string) => void;
-  /** Remote access batch 2 (questions deck 2026-09-10, Q-3 "keep it, say so"):
-   *  where a PHONE's copy of this conversation stands. `reconnecting` and
-   *  `restoring` show a quiet busy strip; `incomplete` says the copy may be
-   *  behind the computer and offers Refresh. Undefined / `complete` shows
-   *  nothing. Only ever set on a remote client — App owns the subscription. */
-  conversationStatus?: 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
-  /** Asks the host for a fresh copy — the strip's Refresh. */
-  onRefreshConversation?: () => void;
   /** A phone is filling this conversation right now, or is about to (it was just switched to and is not watched yet). While the
    *  conversation has no content yet, the screen says it is catching up instead of drawing an empty conversation (one-core R5-3).
    *  Never set on the computer. */
@@ -120,7 +118,7 @@ interface Props {
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, filling, modelLoadingDemo, model, providerType }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, filling, modelLoadingDemo, model, providerType }: Props) {
   // Paused while hidden: an unstamped session's lookup registers a listener and reads
   // the provider lists, and a hidden tab does no work (performance.md rule 2).
   // Guard: use-provider-type.test.tsx "a paused caller…".
@@ -129,31 +127,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
   const dispatch = useChatDispatch();
 
-  // What the conversation strip shows: the live status, plus a 2.5 s "Up to
-  // date" after a refresh so the person can see it worked (tester U9). An
-  // initial `complete` — the desktop, or a phone that connected cleanly —
-  // shows nothing; only a transition OUT of restoring/incomplete earns the beat.
-  const [stripStatus, setStripStatus] = useState<'reconnecting' | 'restoring' | 'incomplete' | 'up-to-date' | null>(null);
-  const prevStatusRef = useRef<typeof conversationStatus>(undefined);
-  useEffect(() => {
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = conversationStatus;
-    if (conversationStatus === 'complete') {
-      if (prev === 'restoring' || prev === 'incomplete') {
-        setStripStatus('up-to-date');
-        const t = window.setTimeout(() => setStripStatus(null), 2500);
-        return () => window.clearTimeout(t);
-      }
-      setStripStatus(null);
-      return;
-    }
-    setStripStatus(conversationStatus ?? null);
-  }, [conversationStatus]);
   // WHY (one-core R5-3): a phone watches only a few conversations, so switching to one it has not opened means its content is still
-  // on its way. Until some arrives, show the SAME "Catching up with your computer…" strip a reconnect shows (no new copy) and not the
-  // "Start a conversation" hint, which would claim a conversation with history is empty for the moment the fill takes.
+  // on its way. Until some arrives, the input bar's connection strip says "Catching up with your computer…" (ConnectionStrip.tsx),
+  // and this view does not draw the "Start a conversation" hint, which would claim a conversation with history is empty.
   const waitingForFill = !!filling && state.timeline.length === 0;
-  const shownStrip = stripStatus ?? (waitingForFill ? 'restoring' : null);
   const { showTimestamps, reducedEffects } = useTheme();
 
   // Motion on a SESSION SWITCH only.
@@ -220,12 +197,24 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   }, [cwd, sessionId, artifactDispatch]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Keeps the Jump-to-bottom button mounted for its fade-out after atBottom flips
+  // true (it unmounts instantly otherwise, which reads as a pop). WHY "mounted"
+  // rather than an "exiting" flag set on the flip: that flag only lands in the
+  // render AFTER atBottom changes, so for one render the button was unmounted and
+  // came back already faded — the exit looked instant.
+  const [jumpMounted, setJumpMounted] = useState(false);
+
   // Auto-scroll ("stick to bottom"). See use-stick-to-bottom.ts for why this is
   // intent-driven instead of observer-driven — the old IntersectionObserver
   // could not see a scroll that a streaming delta undid in the same frame.
   const {
     atBottom, stickRef, scrollToBottom, stickToBottom, jumpToBottom, releaseStick,
   } = useStickToBottom(scrollContainerRef);
+  useEffect(() => {
+    if (!atBottom) { setJumpMounted(true); return; }
+    const t = setTimeout(() => setJumpMounted(false), JUMP_FADE_MS);
+    return () => clearTimeout(t);
+  }, [atBottom]);
   // Task 12 review fix: refs for the --queued-strip-height measurement effect
   // below (chatRootRef = this component's OUTER root; queuedStripRef = the
   // strip's own rendered element).
@@ -341,11 +330,19 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // session. The bottom bar is the one whose height varies with drafts/multi-line.
     const chrome = document.querySelector('.chrome-wrapper--bottom');
     if (!chrome) return;
+    // WHY the rAF: useChromeMeasurements publishes --bottom-chrome-height from
+    // its OWN ResizeObserver on this same element, and observers run in
+    // registration order. When ours ran first we pinned against the OLD padding,
+    // then the padding grew and nothing re-pinned — a theme with a taller input
+    // bar opened 16-24px short of the bottom, the last message under the bar.
+    // One frame later every observer has run and the padding is current.
+    let raf = 0;
     const observer = new ResizeObserver(() => {
-      if (stickRef.current) scrollToBottom();
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => { if (stickRef.current) scrollToBottom(); });
     });
     observer.observe(chrome);
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); cancelAnimationFrame(raf); };
   }, [visible, scrollToBottom, stickRef]);
 
   // Auto-scroll when new content arrives and the view is still stuck to the
@@ -417,18 +414,21 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // measures the drift that ACTUALLY happened and can be re-applied as late
   // content settles, because "put this element back where it was" stays true no
   // matter what else moved.
-  const prependAnchorRef = useRef<{ el: Element; topOffset: number } | null>(null);
+  const prependAnchorRef = useRef<PrependAnchor | null>(null);
+  /** Ends the correction window of the last prepend (see the layout effect below). */
+  const endAnchorWindowRef = useRef<(() => void) | null>(null);
 
-  /** The topmost entry still on screen, and how far below the viewport's top edge
-   *  it sits. Null when nothing is rendered yet. */
-  const captureScrollAnchor = useCallback(() => {
+  /** The topmost entry still on screen, and where it sits in the SCROLLED DOCUMENT (its distance from the
+   *  top of the scrollable content, which scrolling by the reader does not change). Null when nothing is
+   *  rendered yet. */
+  const captureScrollAnchor = useCallback((): PrependAnchor | null => {
     const scroller = scrollContainerRef.current;
     const content = contentRef.current;
     if (!scroller || !content) return null;
     const scrollerTop = scroller.getBoundingClientRect().top;
     for (const el of Array.from(content.querySelectorAll('.timeline-entry'))) {
       const r = el.getBoundingClientRect();
-      if (r.bottom > scrollerTop) return { el, topOffset: r.top - scrollerTop };
+      if (r.bottom > scrollerTop) return { el, key: el.getAttribute('data-entry-key'), docTop: r.top - scrollerTop + scroller.scrollTop };
     }
     return null;
   }, []);
@@ -524,42 +524,67 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     return () => io.disconnect();
   }, [history.hasMore, history.loading, history.cursor, loadOlderPage]);
 
-  // Put the anchored entry back where it was. Runs BEFORE paint
-  // (useLayoutEffect), so the prepended turns are never SEEN to push the view
-  // down, and keeps correcting for a short window afterwards because a code block
-  // or an image inside the new page finishes laying out a frame or two later.
+  // Hold the reader's place across a prepended page. Runs BEFORE paint (useLayoutEffect), so the prepended
+  // turns are never SEEN to push the view down, and keeps correcting for a short window afterwards because
+  // a code block or an image inside the new page finishes laying out a frame or two later.
+  //
+  // WHY it follows the entry's place in the DOCUMENT and never its place on screen (2026-10-23): the first
+  // version put the entry back at the screen position it had when the page arrived. Every layout callback
+  // for the next 700 ms then dragged the view back to that spot, undoing whatever the reader had scrolled
+  // meanwhile (scrollbar drag, touch fling, keys, a scripted scroll; only a wheel/touch/key EVENT let go),
+  // and a page arriving right after a release moved the view ~1,600 px. Now the only thing corrected is
+  // the entry moving within the document (content ABOVE it changing height): its document position is
+  // unchanged by any scrolling, so nothing the reader does is ever undone, whatever the input.
+  //
+  // WHY the browser's own scroll anchoring is off for the window: it would also move scrollTop for the very
+  // same insertion, and with two correctors the shift is applied twice. Off here, this effect is the only
+  // one; the previous inline value is restored when the window ends.
   useLayoutEffect(() => {
     const anchor = prependAnchorRef.current;
     if (!anchor) return;
     prependAnchorRef.current = null;
     const scroller = scrollContainerRef.current;
     const content = contentRef.current;
-    if (!scroller || !content || !anchor.el.isConnected) return;
+    if (!scroller || !content) return;
+    // A newer page replaces the previous page's window.
+    endAnchorWindowRef.current?.();
+    let el: Element | null = anchor.el;
+    let lastDocTop = anchor.docTop;
+    const priorAnchoring = scroller.style.overflowAnchor;
+    scroller.style.overflowAnchor = 'none';
 
     let live = true;
     const restore = () => {
-      if (!live || !anchor.el.isConnected) return;
-      const drift = (anchor.el.getBoundingClientRect().top - scroller.getBoundingClientRect().top) - anchor.topOffset;
-      // Sub-pixel drift is not worth a write — and writing would restart the
-      // ResizeObserver for nothing.
-      if (Math.abs(drift) > 0.5) scroller.scrollTop += drift;
+      if (!live) return;
+      // The entry's wrapper can be re-created by a re-render; find it again by key.
+      if (!el || !el.isConnected) {
+        el = anchor.key ? content.querySelector(`[data-entry-key="${CSS.escape(anchor.key)}"]`) : null;
+        if (!el) return;
+      }
+      const docTop = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      const shift = docTop - lastDocTop;
+      lastDocTop = docTop;
+      // Sub-pixel shift is not worth a write - and writing would restart the ResizeObserver for nothing.
+      if (Math.abs(shift) > 0.5) scroller.scrollTop += shift;
     };
     restore();
 
-    // Stop the moment the user takes over. Deliberately NOT the 'scroll' event:
-    // restore() scrolls, so that would cancel the correction with its own effect.
-    const release = () => { live = false; cleanup(); };
     const ro = new ResizeObserver(restore);
     ro.observe(content);
-    for (const ev of ['wheel', 'touchstart', 'keydown'] as const) scroller.addEventListener(ev, release, { passive: true });
-    const stop = setTimeout(() => { live = false; cleanup(); }, ANCHOR_SETTLE_MS);
-    function cleanup() {
+    const stop = setTimeout(end, ANCHOR_SETTLE_MS);
+    function end() {
+      if (!live) return;
+      live = false;
       clearTimeout(stop);
       ro.disconnect();
-      for (const ev of ['wheel', 'touchstart', 'keydown'] as const) scroller!.removeEventListener(ev, release);
+      scroller!.style.overflowAnchor = priorAnchoring;
+      if (endAnchorWindowRef.current === end) endAnchorWindowRef.current = null;
     }
-    return cleanup;
+    endAnchorWindowRef.current = end;
   }, [state.timeline]);
+  // WHY separate: the window must outlive later timeline changes (a streamed delta must not cut the
+  // correction short), so the layout effect above has no cleanup of its own; only leaving the chat ends it.
+  useEffect(() => () => { endAnchorWindowRef.current?.(); }, []);
 
   useEffect(() => {
     const node = contentRef.current;
@@ -622,7 +647,13 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // which reads to the folding observer as "everything scrolled away". Telling
   // it the pane is merely in the background is what stops a tab you left a
   // moment ago from being blank when you come back — see INACTIVE_FOLD_MS.
-  const folding = useEntryFolding(true, scrollContainerRef, sessionActive);
+  // WHY a first-draw plan (freeze hunt 2026-10-22, item 3): opening a long conversation drew all of its
+  // ~30-turn page at once, for every open session, shown or not. Now only the newest screens are drawn;
+  // older entries start as spacers and are drawn as the reader scrolls near them. Decided ONCE, on mount
+  // (useState initialiser): later entries and pages follow the ordinary folding rules. Why it cannot
+  // jump: state/first-draw-plan.ts header.
+  const [firstDraw] = useState(() => planFirstDraw(presentation.timeline, presentation.assistantTurns, streamingTurnId));
+  const folding = useEntryFolding(true, scrollContainerRef, sessionActive, firstDraw);
 
   // Scroll, unfold and re-frost BEFORE the first painted frame of a switch —
   // the three reasons messages popped in. WHY per step: the hook's header.
@@ -730,6 +761,20 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     return () => window.removeEventListener('keydown', onKey, true);
   }, [visible]);
 
+  // A click on a "quoted words" chip (jump-to-ref, chat-ref-highlight.ts) scrolls to a message that may still be a
+  // first-draw spacer. WHY release the stick here (2026-10-22 review): that scroll alone does not un-pin the chat
+  // (only wheel/touch/keys do), so when the spacer was replaced by its real body the content height changed and the
+  // ResizeObserver above re-pinned to the bottom, undoing the jump (measured: the words ended ~42,000 px away).
+  // Chat Find already does the same through its beforeReveal. Only the visible chat answers, as with Ctrl+F.
+  useEffect(() => {
+    if (!visible) return;
+    const onJump = (e: Event) => {
+      if ((e as CustomEvent<{ ref?: { kind?: string } }>).detail?.ref?.kind === 'chat') releaseStick();
+    };
+    window.addEventListener('youcoded:jump-to-ref', onJump);
+    return () => window.removeEventListener('youcoded:jump-to-ref', onJump);
+  }, [visible, releaseStick]);
+
   // The find row changes the scroll container's height (it takes its own row
   // above the messages). Shrinking a container does not fire a scroll event
   // and none of the ResizeObservers above watch the container itself, so a
@@ -829,7 +874,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // hardcodes an offset — so once .chat-scroll's padding-bottom grows by
   // this var, both naturally settle content above the strip. No JS change
   // needed there.
-  const QUEUED_STRIP_GAP = '0.5rem'; // visual breathing room above the strip's top edge (Destin's ask)
+  const QUEUED_STRIP_GAP = 'var(--chat-float-gap, 0.375rem)'; // the shared stack gap — see :root in globals.css
   // WHY: measure the real strip with review-only rows too, preserving the composer clearance.
   const queuePreview = workbenchQueuePreview();
   const hasQueuedMessages = state.queuedMessages.length > 0 || (!!queuePreview && queuePreview !== 'idle-after');
@@ -853,6 +898,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // read a single number instead of remembering to add the gap itself.
       const h = Math.ceil(el.getBoundingClientRect().height);
       root.style.setProperty('--queued-strip-height', `calc(${h}px + ${QUEUED_STRIP_GAP})`);
+      // The var grows .chat-scroll's padding, which no content observer sees —
+      // re-pin so the last message moves up above the cards instead of under them.
+      if (stickRef.current) scrollToBottom();
     };
     const observer = new ResizeObserver(update);
     observer.observe(el);
@@ -880,7 +928,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // modelStatusRef.current directly after each render: null means the component
   // rendered nothing this pass, so the effect zeroes the var instead of
   // guessing from a re-derived boolean.
-  const MODEL_STATUS_GAP = '0.75rem'; // matches .jump-to-bottom's own gap so the two bands stack evenly
+  const MODEL_STATUS_GAP = 'var(--chat-float-gap, 0.375rem)'; // the shared stack gap, so every band stacks evenly
   useEffect(() => {
     const root = chatRootRef.current;
     if (!root) return;
@@ -892,6 +940,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     const update = () => {
       const h = Math.ceil(el.getBoundingClientRect().height);
       root.style.setProperty('--model-status-height', `calc(${h}px + ${MODEL_STATUS_GAP})`);
+      if (stickRef.current) scrollToBottom(); // same reason as the queued strip's
     };
     const observer = new ResizeObserver(update);
     observer.observe(el);
@@ -968,7 +1017,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         <div className="frame-edge" />
         <div className="chat-pane">
           {visible && <ScreenMark name="chat" />}
-          {visible && <ChatEdgeFade belowFindRow={findOpen || !!shownStrip} />}
+          {visible && <ChatEdgeFade belowFindRow={findOpen} />}
           {/* Center the hint between measured chrome edges, clearing even a
               floating header's extra margin. Use the actual provider name. */}
           {state.timeline.length === 0 && !state.isThinking && !waitingForFill && (
@@ -1003,41 +1052,6 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               onClose={() => setFindOpen(false)}
             />
           )}
-          {/* Remote access batch 2 (questions deck 2026-09-10, Q-3 "keep it, say
-              so"): where the phone's copy of this conversation stands. Its own
-              ROW above the messages, like the find bar — not inside the scroller,
-              because the chat sticks to its newest message and a strip at the
-              top of the scroll content was never on screen (measured 2026-09-10).
-              `.find-row` clears the overlaid header the same way. Desktop never
-              sets the prop, so nothing changes there. */}
-          {shownStrip && (
-            <div className={`find-row px-3 pb-2 shrink-0${findOpen ? ' !mt-0' : ''}`} data-conversation-status={shownStrip}>
-              {shownStrip === 'incomplete' ? (
-                // Wording per the first phone tester (U11, 2026-09-10): "behind
-                // your computer" read as a place, not a time.
-                <StatusStrip
-                  tone="warn"
-                  detail="The last refresh didn’t finish, so newer messages may be missing."
-                  action={<Button size="sm" onClick={onRefreshConversation}>Refresh</Button>}
-                >
-                  This conversation may be out of date.
-                </StatusStrip>
-              ) : shownStrip === 'reconnecting' ? (
-                <StatusStrip tone="busy" detail="Your draft is safe. It sends once you’re reconnected.">
-                  Reconnecting to your computer…
-                </StatusStrip>
-              ) : shownStrip === 'restoring' ? (
-                // No draft line here: the connection IS back (tester U8).
-                <StatusStrip tone="busy" detail="Loading the newest messages…">
-                  Catching up with your computer…
-                </StatusStrip>
-              ) : (
-                // A beat of "Up to date" after a refresh, so it visibly worked
-                // (tester U9) — then the row goes away on its own.
-                <StatusStrip tone="ok">Up to date.</StatusStrip>
-              )}
-            </div>
-          )}
           {/* flex-1 min-h-0 (was h-full): with the find row in flow above it,
               h-full would overflow the pane by the row's height and clip the
               last message under the input bar. chat-scroll--below-find-row
@@ -1051,7 +1065,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               wallpaper laid OVER this scroller (pinned by float-chrome-pops.test.ts); the framed
               layouts cut messages at the frame's edge and have no fade yet — an open question for
               Destin, not decided here. */}
-          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen || shownStrip ? ' chat-scroll--below-find-row' : ''}`}>
+          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen ? ' chat-scroll--below-find-row' : ''}`}>
            {/* The arrival class is on the CONTENT wrapper, not the scroller:
                animating transform on the scroll container would make it a
                containing block and disturb useStickToBottom's measurements. */}
@@ -1089,44 +1103,28 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                 // Only the key and the "render nothing" gates live here; the
                 // row itself is ChatTimelineRow, memoised so a streamed word
                 // re-renders only the entry that changed (see its header).
-                let key: string;
                 let turn: AssistantTurn | undefined;
-                switch (entry.kind) {
-                  case 'user': key = entry.message.id; break;
-                  case 'assistant-turn':
-                    turn = presentation.assistantTurns.get(entry.turnId);
-                    // Shared gate (chat-types.ts): a segment-less turn renders
-                    // only when its abnormal stopReason gives the footer row
-                    // something to say — the empty_response fix.
-                    if (!shouldRenderAssistantTurn(turn)) return null;
-                    key = entry.turnId;
-                    break;
-                  case 'prompt':
-                    // Perf cycle 2: the "See previous messages" marker is retired —
-                    // older turns now stream in as the top of the list scrolls into
-                    // view. A timeline persisted by an OLDER build can still carry
-                    // one, so it is skipped rather than rendered as a dead prompt.
-                    if (entry.prompt.promptId === HISTORY_EXPAND_PROMPT_ID) return null;
-                    key = entry.prompt.promptId;
-                    break;
-                  // /cost and /usage snapshot — entryId is the stable key since the
-                  // same snapshot object is kept in state across re-renders.
-                  case 'usage-card': key = entry.snapshot.entryId; break;
-                  case 'system-marker': key = entry.marker.id; break;
-                  case 'skill-invocation':
-                  case 'compacting':
-                  case 'copy-picker':
-                    key = entry.id; break;
+                // The key switch lives in first-draw-plan.ts so the plan and this list cannot disagree.
+                // null = a retired "See previous messages" marker (an older build can still persist one).
+                const entryKey = timelineEntryKey(entry);
+                if (entryKey === null) return null;
+                if (entry.kind === 'assistant-turn') {
+                  turn = presentation.assistantTurns.get(entry.turnId);
+                  // Shared gate (chat-types.ts): a segment-less turn renders
+                  // only when its abnormal stopReason gives the footer row
+                  // something to say — the empty_response fix.
+                  if (!shouldRenderAssistantTurn(turn)) return null;
                 }
+                const key = entryKey;
                 // Folded rows pass their held height; an unfolded row passes
                 // undefined — a primitive either way, so the memo holds.
-                const foldHeight = folding.isFolded(key!) ? folding.heightOf(key!) : undefined;
+                const foldHeight = folding.isFolded(key) ? folding.heightOf(key) : undefined;
                 const isAssistant = entry.kind === 'assistant-turn';
                 return (
                   <ChatTimelineRow
-                    key={key!}
+                    key={key}
                     entry={entry}
-                    entryKey={key!}
+                    entryKey={key}
                     turn={turn}
                     // Assistant rows only: a new toolCalls Map (any tool event)
                     // must not re-render marker and card rows.
@@ -1343,10 +1341,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
          offset so the button appears above the frosted input bar.
          Positioned in the outer absolute div so it floats above the full
          framed-shell (chat + drawer) without being clipped by chat-pane. */}
-      {!atBottom && (
+      {(!atBottom || jumpMounted) && (
         <button
           onClick={jumpToBottom}
-          className="jump-to-bottom absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 text-xs bg-inset hover:bg-edge text-fg-2 rounded-full shadow-lg transition-colors z-10"
+          // data-state drives the fade/slide in globals.css. panel-glass gives the
+          // frosted look on wallpaper themes (solid themes keep a plain surface).
+          data-state={atBottom ? 'out' : 'in'}
+          tabIndex={atBottom ? -1 : undefined}
+          className="jump-to-bottom panel-glass absolute bottom-4 left-1/2 px-3 py-1.5 text-xs bg-inset hover:bg-edge text-fg-2 border border-edge-dim rounded-full shadow-lg transition-colors z-10"
         >
           Jump to bottom
         </button>

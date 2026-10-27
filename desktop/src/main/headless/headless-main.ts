@@ -4,6 +4,10 @@
 // YOUCODED_HEADLESS_PORT and YOUCODED_HEADLESS_TOKEN (and YOUCODED_USER_DATA, YOUCODED_SECRET_KEY,
 // YOUCODED_HOST_SOCKET); on a laptop it can be run by hand to test the phone's backend in a browser
 // pointed at the built page with ?bridgePort=<port>&bridgeToken=<token>.
+// WHY (2026-10-22 freeze hunt): same as bootstrap.ts — 16 libuv threads so a stalled disk cannot occupy
+// all 4 default ones and queue every other async fs call. Must precede any import that touches the
+// disk. (Statements before imports are safe: TypeScript emits CommonJS in source order.)
+if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = '16';
 import './install-electron-shim'; // must be first: every backend module below imports `electron`
 import fs from 'fs';
 

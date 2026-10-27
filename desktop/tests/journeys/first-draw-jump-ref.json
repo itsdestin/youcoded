@@ -1,0 +1,17 @@
+{
+  "start": {
+    "scenario": "default",
+    "screen": null,
+    "width": 1440,
+    "height": 900,
+    "theme": "meadow-mist",
+    "latency": 0,
+    "params": "seed=long-40"
+  },
+  "steps": [
+    {
+      "do": "check",
+      "file": "first-draw-jump-ref.check.js"
+    }
+  ]
+}

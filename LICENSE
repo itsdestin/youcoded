@@ -1,22 +1,3 @@
-YouCoded License
-================
-
-YouCoded-authored application code, shared user interface, build scripts and
-documentation are licensed under the MIT License below, unless a file states
-otherwise. Copies of the MIT text also live at desktop/LICENSE and app/LICENSE.
-
-Third-party code, programs, libraries, data, fonts and other bundled components
-retain their respective licenses and copyright notices; this MIT grant does
-not relicense them. Android bundles Alpine runtime components (including
-GPL/LGPL-licensed programs and libraries), modified musl, npm dependencies and
-Claude Code, whose separate terms apply. Consult the release-specific component
-inventory, preserved notices and corresponding-source materials accompanying
-the Android build. An inventory or an upstream URL alone is not a complete
-corresponding-source distribution. Development builds may have incomplete
-redistribution materials and are not evidence of redistribution clearance.
-
-----------------------------------------------------------------------------
-
 MIT License
 
 Copyright (c) 2026 Destin

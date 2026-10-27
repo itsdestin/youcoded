@@ -321,6 +321,11 @@ fs.writeSync(1, 'DONE-MARKER\\n');
 // RELEASING keeps the program alive so it measures only that.
 const PRODUCER_STAYS_OPEN = PRODUCER + `
 process.stdin.setRawMode(true);
+// WHY a sentinel (found 2026-10-22, load average ~90): raw mode is entered AFTER the marker goes out. A test that
+// sent its release key the moment it saw the marker could beat that, and the terminal then ECHOED the key into
+// the output (one extra "q" after the last line). The sentinel is written once echo is off, so a test waits on
+// the program being ready for the key (a signal), never on time; received() removes it from the comparison.
+fs.writeSync(1, 'RAW-READY');
 process.stdin.once('data', () => process.exit(0));
 `;
 // The same lines in small pieces a few milliseconds apart, as a real program prints: the worker
@@ -444,7 +449,7 @@ function attachReal(child: ChildProcess, lines: number, producer = PRODUCER) {
 // terminal driver now and then emits a line ending's return twice ("\r\r\n" — 113 extra characters
 // in 12 MB, at a few block edges, on macOS CI daily since 2026-10-08). That is the kernel's doing,
 // passed through untouched; a lost or duplicated LINE still fails every comparison below.
-const received = (r: { state: { out: string } }) => (process.platform === 'darwin' ? r.state.out.replace(/\r+\n/g, '\r\n') : r.state.out);
+const received = (r: { state: { out: string } }) => (process.platform === 'darwin' ? r.state.out.replace(/\r+\n/g, '\r\n') : r.state.out).replace('RAW-READY', '');
 /** Where two long outputs first part, with the characters around it — a failure message, not a check. */
 const firstDifference = (got: string, want: string) => {
   let i = 0;
@@ -519,7 +524,7 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
     const lines = 250_000;                                         // ~11 MB
     const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '200000', YOUCODED_PTY_FLOW_LOW: '50000' }, PRODUCER_STAYS_OPEN);
     kids.push(r);
-    expect(await r.until(() => r.state.out.includes('DONE-MARKER'), 60000)).toBe(true);
+    expect(await r.until(() => r.state.out.includes('RAW-READY'), 60000)).toBe(true); // after the marker, with echo off
     r.child.send({ type: 'input', data: 'q' });
     expect(await r.until(() => r.state.exited, 30000)).toBe(true);
     // WHY the first-difference message (2026-10-21): this failed once on Linux at load ~90 with ONE
@@ -551,7 +556,7 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
     r.state.auto = true;
     r.ack(frozenAt);
     // Every line arrives while the program is still open; only then is it told to exit.
-    expect(await r.until(() => r.state.out.includes('DONE-MARKER'), 60000)).toBe(true);
+    expect(await r.until(() => r.state.out.includes('RAW-READY'), 60000)).toBe(true); // after the marker, with echo off
     r.child.send({ type: 'input', data: 'q' });
     expect(await r.until(() => r.state.exited, 30000)).toBe(true);
     expect(received(r)).toBe(expected(lines));
