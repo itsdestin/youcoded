@@ -25,7 +25,7 @@
 import fs from 'fs';
 import path from 'path';
 import { CLAUDE_CODE_LINK_TOOL, CLAUDE_CODE_MCP_SERVER_ID } from '../shared/send-user-link';
-import { CLAUDE_CODE_NOTIFY_TOOL } from '../shared/notify-user';
+import { CLAUDE_CODE_NOTIFY_TOOL, NOTIFY_INSTRUCTION } from '../shared/notify-user';
 
 /** The MCP server, verbatim. Held in String.raw so the embedded copy stays
  *  byte-identical to the Android asset — the server source therefore may not
@@ -97,6 +97,9 @@ var NOTIFY_LABEL_MAX = 24;
 
 var NOTIFY_TOOL = {
   name: NOTIFY_TOOL_NAME,
+  // Claude Code defers every MCP tool behind ToolSearch by default (name only, no description), so the model never
+  // learns what this one is for. This marks it to load up front; the server's other tools stay deferred.
+  _meta: { 'anthropic/alwaysLoad': true },
   description: [
     'Tell the user something is ready for them. Their conversation list shows your short label on this conversation, and your reply shows the label and message at its top.',
     'The app does not tell them a reply is ready: you do. Call this whenever you stop and hand the conversation back because you finished what they asked or need their decision (ask in your reply, then call this), and at a checkpoint they would want to see while you keep working.',
@@ -265,6 +268,9 @@ export interface ClaudeCodeMcpDeployment {
   configPath: string;
   /** The exact CLI flags to append when spawning `claude`. */
   args: string[];
+  /** The text for `--append-system-prompt` (NOTIFY_INSTRUCTION). Inline, not a file: it has no quotes or braces, so node-pty's
+   *  Windows command-line join carries it intact, and a third file write would be a new blocking call on session start. */
+  appendPrompt: string;
 }
 
 /** Directory name under userData — its own folder so the two files are
@@ -302,5 +308,6 @@ export function deployClaudeCodeLinkMcp(baseDir: string, nodePath: string): Clau
   // A path carries no quotes or braces that have to survive that; JSON does.
   // Both tools are pre-approved: neither reads or writes anything (a link the
   // user clicks; a label and card in the app), so neither may raise a prompt.
-  return { serverPath, configPath, args: ['--mcp-config', configPath, '--allowedTools', CLAUDE_CODE_LINK_TOOL, CLAUDE_CODE_NOTIFY_TOOL] };
+  const appendPrompt = `You are running inside YouCoded, and the person may be in another conversation while you work. ${NOTIFY_INSTRUCTION}`;
+  return { serverPath, configPath, appendPrompt, args: ['--mcp-config', configPath, '--allowedTools', CLAUDE_CODE_LINK_TOOL, CLAUDE_CODE_NOTIFY_TOOL] };
 }

@@ -438,6 +438,12 @@ describe('SessionManager', () => {
     // Pre-approved, so handing the user a link never raises a permission prompt.
     expect(args).toContain('--allowedTools');
     expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__youcoded__SendUserLink');
+    // Notify user is pre-approved too, and the main prompt says the assistant owns "ready". No quotes or braces, so the
+    // Windows command-line join carries it intact.
+    expect(args).toContain('mcp__youcoded__NotifyUser');
+    const appended = args[args.indexOf('--append-system-prompt') + 1];
+    expect(appended).toContain('NotifyUser tool');
+    expect(appended).not.toMatch(/["'{}]/);
   });
 
   // T9a: the doc-comments MCP server rides the SAME two flags, combined into

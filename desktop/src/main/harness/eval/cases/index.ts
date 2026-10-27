@@ -3,6 +3,7 @@ import { CODE_EXPLANATION } from './code-explanation';
 import { CONFIG_INVESTIGATION } from './config-investigation';
 import { OPTIONS_PROPOSAL } from './options-proposal';
 import { PORT_BUMP } from './port-bump';
+import { NOTIFY_CHECKPOINT, NOTIFY_FINISHED_TASK, NOTIFY_NEEDS_DECISION, NOTIFY_QUICK_ANSWER, NOTIFY_WAITING_ON_BACKGROUND } from './notify-user';
 import type { EvalCase } from '../case-types';
 
 // WHY the registry is built from the list rather than hand-written as an object
@@ -18,6 +19,8 @@ const ALL: EvalCase[] = [
   OPTIONS_PROPOSAL,
   PORT_BUMP,
   CODE_EXPLANATION,
+  // "Notify user" reliability (test-engine/eval-plans/notify-user.json).
+  NOTIFY_FINISHED_TASK, NOTIFY_NEEDS_DECISION, NOTIFY_CHECKPOINT, NOTIFY_QUICK_ANSWER, NOTIFY_WAITING_ON_BACKGROUND,
 ];
 
 const CASES: Record<string, EvalCase> = {};

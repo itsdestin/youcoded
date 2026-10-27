@@ -12,7 +12,8 @@ import { SessionRecords } from '../src/main/session-record';
 import { ev } from './helpers/transcript-events';
 import { NotifyBubble, NotifyCard } from '../src/renderer/components/NotifyCard';
 import { resetNotifyStoresForTest, setLatestNotify } from '../src/renderer/state/notify-seen';
-import { CLAUDE_CODE_NOTIFY_TOOL, NOTIFY_USER_TOOL, shortNotifyLabel } from '../src/shared/notify-user';
+import { CLAUDE_CODE_NOTIFY_TOOL, NOTIFY_INSTRUCTION, NOTIFY_USER_TOOL, shortNotifyLabel } from '../src/shared/notify-user';
+import { assembleSystemPrompt } from '../src/main/harness/prompt-assembly';
 import { NotifyUserTool } from '../src/main/harness/tools/notify-user';
 import { makeSession } from './helpers/harness-fakes';
 import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
@@ -113,6 +114,17 @@ describe('who decides a conversation is ready', () => {
     const helper = makeSession({ profile: CLOUD_DEFAULT }) as any;
     helper.opts.isSpecialistChild = true;
     expect(Object.keys(helper.buildAiTools())).not.toContain('NotifyUser');
+  });
+});
+
+describe("the instruction in the assistant's main prompt", () => {
+  // Measured 2026-10-26: the tool's description alone did not make a model notify; this sentence in the system prompt did.
+  const prompt = (o: Record<string, unknown>) => assembleSystemPrompt({ presetBody: 'p', cwd: '/tmp', appVersion: '0', gitSnapshot: 'Git: not a repository', ...o });
+  it('is there for a session that decides ready itself, and only for its root assistant', () => {
+    expect(prompt({ notifiesByModel: true })).toContain(NOTIFY_INSTRUCTION);
+    expect(prompt({ notifiesByModel: false })).not.toContain(NOTIFY_INSTRUCTION);
+    expect(prompt({ notifiesByModel: true, audience: 'parent' })).not.toContain(NOTIFY_INSTRUCTION);
+    expect(prompt({ notifiesByModel: true, hasTools: false })).not.toContain(NOTIFY_INSTRUCTION);
   });
 });
 

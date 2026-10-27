@@ -115,7 +115,7 @@ const MODEL_STEP_EVENTS = new Set<TranscriptEvent['type']>([
  *  Note this gate only ever guards the NEGATIVE verdict: each check tests its
  *  positive evidence first, so a tool the model really did reach before the
  *  provider died still reports `passed`. */
-function noGradableModelTurn(run: CaseRun): boolean {
+export function noGradableModelTurn(run: CaseRun): boolean {
   if (run?.error) return true;
   return (
     !testingTurnEvents(run).events.some((e) => MODEL_STEP_EVENTS.has(e.type))
@@ -125,7 +125,7 @@ function noGradableModelTurn(run: CaseRun): boolean {
 
 /** Why there was nothing of the model's to grade — quoting the real error when
  *  the run carries one, never a guessed cause. */
-function noGradableTurnDetail(run: CaseRun): string {
+export function noGradableTurnDetail(run: CaseRun): string {
   if (run?.error) {
     return (
       `The run failed before the model finished, so nothing here can be read as the model's ` +

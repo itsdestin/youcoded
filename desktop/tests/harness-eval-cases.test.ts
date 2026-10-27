@@ -8,6 +8,8 @@ import { WRAP_UP_PROMPT } from '../src/main/harness/eval/run-case';
  *  file naming a case that no longer exists fails at validation, but a plan
  *  file that silently lost a case would just run a smaller matrix. */
 const GUIDANCE_CASES = ['config-investigation', 'options-proposal', 'port-bump', 'code-explanation'];
+// "Notify user" reliability (test-engine/eval-plans/notify-user.json).
+const NOTIFY_CASES = ['notify-finished-task', 'notify-needs-decision', 'notify-checkpoint', 'notify-quick-answer', 'notify-waiting-on-background'];
 
 describe('case registry', () => {
   it('carries the battery as a case', () => {
@@ -30,7 +32,7 @@ describe('case registry', () => {
 
   it('registers all four guidance cases under their own ids', () => {
     for (const id of GUIDANCE_CASES) expect(getCase(id).id).toBe(id);
-    expect(allCaseIds()).toEqual([...GUIDANCE_CASES, 'harness-battery'].sort());
+    expect(allCaseIds()).toEqual([...GUIDANCE_CASES, 'harness-battery', ...NOTIFY_CASES].sort());
   });
 
   it('gives every case a non-empty prompt', () => {

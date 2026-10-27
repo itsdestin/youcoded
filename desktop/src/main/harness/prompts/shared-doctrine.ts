@@ -16,9 +16,12 @@
 // Byte-stable per session by construction: every flag comes from the session's
 // capability profile or its role, both fixed at session start.
 
+import { NOTIFY_INSTRUCTION } from '../../../shared/notify-user';
 import { ADMIN_WORK_GUIDANCE } from './admin-work-guidance';
 
 export interface DoctrineOpts {
+  /** The session decides "ready" itself (harness notifiesByModel): it gets NOTIFY_INSTRUCTION after the finish rules. */
+  notify?: boolean;
   /** 'user' — the root session, whose reader is the person. 'parent' — a
    *  specialist, whose reader is the parent model; the writing-for-the-user
    *  block and the "your last message does one of three things" rule are
@@ -131,6 +134,7 @@ export function sharedDoctrine(o: DoctrineOpts): string {
     : [
         o.tools ? section('Working rules, every conversation:', WORK_FULL(o)) : null,
         section('Before you finish:', FINISH_FULL),
+        o.notify ? NOTIFY_INSTRUCTION : null,
         o.audience === 'user' ? section('How you write:', WRITE_FULL) : null,
         section('Messages you may see:', ENVELOPES(o)),
         o.tools ? GIT_LINE : null,

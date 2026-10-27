@@ -69,3 +69,12 @@ export function shortNotifyLabel(label: string): string {
 export function readyIsTheModels(ctx: { assembledBy?: string; notifiesByModel?: boolean } | null | undefined): boolean {
   return ctx?.assembledBy === 'claude-code' || ctx?.notifiesByModel === true;
 }
+
+/** The one sentence a session's MAIN instructions carry about Notify user (native: the shared doctrine; Claude Code:
+ *  --append-system-prompt-file). WHY (2026-10-26, measured): the tool's own description was not enough — Sonnet in
+ *  Claude Code finished a task without calling it even with the description in view, and called it once this line was
+ *  in its system prompt. */
+export const NOTIFY_INSTRUCTION = 'YouCoded does not tell the person when your reply is ready: you do, with the NotifyUser tool. '
+  + 'Before you end a turn in which you finished what they asked, or in which you ask them to decide something, call NotifyUser once. '
+  + 'When they asked to hear about a step as soon as it is done, call it right after that step, before you go on. '
+  + 'Never call it for a short conversational reply, or about background work you are still waiting on.';

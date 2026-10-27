@@ -1,0 +1,13 @@
+{
+  "_notes": [
+    "Does the assistant call Notify user when it hands the conversation back, and only then? (notify-user plan Part 3, docs/active/plans/2026-10-26-notify-user-red-and-model-driven.md in the workspace.) Capable sessions no longer get the app's automatic blue, so a missed call means the person never learns a reply is ready.",
+    "Five cases, one per situation in the plan's table: finished task (E1), needs a decision (E6), checkpoint mid-task (E2), quick answer (E4, should NOT notify), waiting on background work (E3, should NOT notify). All checks are mechanical; no rubric, so the judge is not called.",
+    "Models: the cloud spread plus Qwen 3.6 27B, the open-weight family a big local model runs. Three repeats each, because one run per arm measures noise (harness-evaluator rule)."
+  ],
+  "name": "notify-user",
+  "cases": ["notify-finished-task", "notify-needs-decision", "notify-checkpoint", "notify-quick-answer", "notify-waiting-on-background"],
+  "instructions": [{ "id": "none", "file": null }],
+  "models": ["Claude Opus 5", "GPT 5.6 Luna", "Grok 4.5", "Qwen 3.8 Max", "Deepseek v4 flash 0731", "Qwen 3.6 27B"],
+  "repeats": 3,
+  "judge": "x-ai/grok-4.5"
+}

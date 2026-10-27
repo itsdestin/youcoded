@@ -352,6 +352,8 @@ export class SessionManager extends EventEmitter {
         const link = deployClaudeCodeLinkMcp(app.getPath('userData'), nodePath);
         mcpConfigPaths.push(link.configPath);
         allowedToolNames.push(...link.args.slice(link.args.indexOf('--allowedTools') + 1));
+        // The "you tell the person a reply is ready" sentence (shared/notify-user.ts NOTIFY_INSTRUCTION): only with the tool it names.
+        args.push('--append-system-prompt', link.appendPrompt);
       } catch (err) {
         log('WARN', 'SessionManager', 'SendUserLink MCP deploy failed — this session starts without the link tool', { error: String(err) });
       }

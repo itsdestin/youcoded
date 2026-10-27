@@ -40,7 +40,7 @@ const DEFAULT_INSTRUCTION_BUDGET_TOKENS = 20_000;
 // gitSnapshot: the <env> git line, computed AHEAD by the caller with
 // gitSnapshotAsync (2026-09-16 C3). When absent the sync shell-out below runs,
 // which only the evaluator and tests should reach — see the WHY on gitSnapshotAsync.
-export interface PromptInputs { presetBody: string; cwd: string; appVersion: string; promptVariant?: PromptVariant; hasTools?: boolean; instructionBudgetTokens?: number; supportsParallelToolCalls?: boolean; audience?: 'user' | 'parent'; presetName?: string; gitSnapshot?: string; projectInstructionFiles?: readonly ProjectInstructionFile[] }
+export interface PromptInputs { presetBody: string; cwd: string; appVersion: string; promptVariant?: PromptVariant; hasTools?: boolean; instructionBudgetTokens?: number; supportsParallelToolCalls?: boolean; audience?: 'user' | 'parent'; presetName?: string; gitSnapshot?: string; projectInstructionFiles?: readonly ProjectInstructionFile[]; notifiesByModel?: boolean }
 
 const GIT_TIMEOUT_MS = 3000;
 
@@ -179,6 +179,7 @@ export function assembleSystemPromptParts(i: PromptInputs): PromptPart[] {
         tools: hasTools,
         batching: hasTools && i.supportsParallelToolCalls === true && i.promptVariant !== 'local-small',
         compact: i.promptVariant === 'local-small',
+        notify: hasTools && i.notifiesByModel === true && (i.audience ?? 'user') === 'user',
       }),
     },
     // Capability-steering overlay, appended after the doctrine: personality (preset body) and

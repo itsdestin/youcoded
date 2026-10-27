@@ -2973,7 +2973,7 @@ export class NativeSessionHost extends EventEmitter {
       // timeouts) and could land on a different date or branch than the prompt the
       // model actually got. presetName is label-only and reaches no model.
       ...(() => {
-        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name, gitSnapshot, projectInstructionFiles });
+        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name, gitSnapshot, projectInstructionFiles, notifiesByModel: profile.supportsTools && profile.maxToolPresentation !== 'simplified' });
         return { promptParts, systemPrompt: promptParts.map((p) => p.text).join('\n\n') };
       })(),
     };
