@@ -164,6 +164,11 @@ a{color:inherit}
 .kicker{font-family:var(--font-mono);font-size:.8rem;font-weight:500;letter-spacing:.15em;
   text-transform:uppercase;opacity:.9;margin-bottom:9px;
   text-shadow:0 1px 14px rgba(var(--canvas-rgb),.6)}
+/* WHY: "MIT" links to the license (Destin, 2026-10-27). A thin, faint underline marks it
+   as a link without making the kicker read like a button. */
+.kicker a{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px;
+  text-decoration-color:color-mix(in srgb,currentColor 40%,transparent)}
+.kicker a:hover{text-decoration-color:currentColor}
 h1{font-family:var(--font-ui);font-size:clamp(3rem,7.4vw,5.6rem);font-weight:900;letter-spacing:-.05em;
   line-height:.97;text-shadow:0 2px 30px rgba(var(--canvas-rgb),.55)}
 h1 em{font-style:normal;color:var(--accent)}
@@ -2000,7 +2005,7 @@ html{-webkit-tap-highlight-color:transparent}
 
 <header class="hero hero-centred hero-flank" id="top">
   <div class="wrap">
-    <p class="kicker">Free &middot; Easy &middot; Open source</p>
+    <p class="kicker">Free &middot; Easy &middot; <a href="https://github.com/itsdestin/youcoded/blob/master/LICENSE" target="_blank" rel="noopener">MIT</a></p>
     <div class="flankrow">
       <div class="mrow mrow-l">
 <button class="mascot" data-theme="youcoded" data-idle="float" data-acts="wave cheer" data-face="welcome"
