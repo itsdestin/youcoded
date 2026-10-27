@@ -1,3 +1,4 @@
+import { readyIsTheModels } from '../../shared/notify-user';
 import { useCallback, useRef } from 'react';
 import { useSyncExternalStore } from 'react';
 import { useChatStore } from '../state/chat-context';
@@ -43,7 +44,7 @@ export function statusFromSummary(summary: SessionSummary, unseen: boolean): Ses
   // Same rule as the local derivation: an unseen notification beats green.
   if (summary.notifyLabel && unseen) return 'blue';
   if (summary.working) return 'green';
-  if (summary.hasHistory && unseen) return 'blue';
+  if (summary.hasHistory && unseen && !summary.byModel) return 'blue';
   return 'gray';
 }
 
@@ -167,6 +168,7 @@ interface SessionMemo {
   browserAsk: SessionChatState['browserAsk'];
   openPromptIds: SessionChatState['openPromptIds'];
   startupFailed: SessionChatState['startupFailed'];
+  sessionContext: SessionChatState['sessionContext'];
   /** Not viewed and not active — the only way the arguments reach the colour. */
   unseen: boolean;
   /** Derived by the peer-session branch, whose rules differ (no green/blue). */
@@ -195,6 +197,7 @@ function memoHolds(m: SessionMemo | undefined, c: SessionChatState, unseen: bool
     && m.browserAsk === c.browserAsk
     && m.openPromptIds === c.openPromptIds
     && m.startupFailed === c.startupFailed
+    && m.sessionContext === c.sessionContext
     && m.hasTimeline === (c.timeline.length > 0)
     && m.unseen === unseen;
 }
@@ -202,7 +205,7 @@ function memoHolds(m: SessionMemo | undefined, c: SessionChatState, unseen: bool
 function memoOf(c: SessionChatState, unseen: boolean, peer: boolean, info: SessionAttentionInfo): SessionMemo {
   return {
     toolCalls: c.toolCalls, activeTurnToolIds: c.activeTurnToolIds, attentionState: c.attentionState,
-    isThinking: c.isThinking, hasTimeline: c.timeline.length > 0, latestNotify: c.latestNotify, browserAsk: c.browserAsk, openPromptIds: c.openPromptIds, startupFailed: c.startupFailed, unseen, peer, info,
+    isThinking: c.isThinking, hasTimeline: c.timeline.length > 0, latestNotify: c.latestNotify, browserAsk: c.browserAsk, openPromptIds: c.openPromptIds, startupFailed: c.startupFailed, sessionContext: c.sessionContext, unseen, peer, info,
   };
 }
 
@@ -283,7 +286,9 @@ export function useSessionAttention(
         : attentionColor ?? (
           notify ? 'blue'
           : (chatState.isThinking || hasRunning) ? 'green'
-          : (chatState.timeline.length > 0 && unseen) ? 'blue'
+          // The app's automatic blue, only where the assistant does not decide "ready" itself (small local models).
+          // Elsewhere an unseen finished reply with no Notify user call stays gray (Destin, 2026-10-26, Q-3: "gray").
+          : (chatState.timeline.length > 0 && unseen && !readyIsTheModels(chatState.sessionContext)) ? 'blue'
           : 'gray'
         );
       const info: SessionAttentionInfo = { status, attentionState: chatState.attentionState, awaitingApproval: hasAwaiting };

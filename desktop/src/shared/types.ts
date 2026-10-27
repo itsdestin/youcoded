@@ -811,6 +811,8 @@ export interface SessionContext {
   skillsOffered?: boolean;
   /** Tools available to the assistant this session. */
   tools?: string[] | null;
+  /** The assistant decides "ready" (has Notify user), so screens add no automatic blue (shared/notify-user.ts readyIsTheModels). */
+  notifiesByModel?: boolean;
   /** MCP servers dropped at session start to fit the tools budget. */
   droppedMcpServers?: string[] | null;
 }

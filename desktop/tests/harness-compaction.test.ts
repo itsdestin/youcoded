@@ -39,6 +39,9 @@ describe('driver compaction', () => {
     const model = new MockLanguageModelV4({ doStream: async (o: any) => { calls.push(o); return inner.doStream(o); } });
     const events: any[] = [];
     const session = makeSession({ contextLength: 8192, model, tools: [], onEvent: e => events.push(e) });
+    // Sized to the token: this case's thresholds assume NO tool schema at all (`tools: []`), so the Notify user tool a
+    // capable session is now given (shared/notify-user.ts) is withheld here rather than re-tuning every number.
+    (session as any).notifiesByModel = () => false;
     await session.send('first task ' + 'a'.repeat(15000));
     await session.send('new large request ' + 'x'.repeat(9000));
     expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(1);

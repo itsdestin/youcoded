@@ -13,7 +13,6 @@ import { WebSearchTool } from './web-search';
 import { AskUserQuestionTool } from './ask-user-question';
 import { SendUserFileTool } from './send-user-file';
 import { SendUserLinkTool } from './send-user-link';
-import { NotifyUserTool } from './notify-user';
 import {
   ReadFileCommentsTool,
   ReplyToCommentTool,
@@ -28,4 +27,4 @@ import {
  *  build-design.md §5). WebFetch/WebSearch are the web pair (free in every
  *  preset/mode — see permission-types.rulesForMode); AskUserQuestion
  *  (interactive, driver-routed) comes last. */
-export const CORE_TOOLS: NativeTool[] = [ReadTool, WriteTool, EditTool, BashTool, BashOutputTool, KillShellTool, GlobTool, GrepTool, TodoWriteTool, WebFetchTool, WebSearchTool, SendUserFileTool, SendUserLinkTool, NotifyUserTool, ReadFileCommentsTool, ReplyToCommentTool, ResolveCommentTool, ReopenCommentTool, AddCommentTool, MoveCommentTool, AskUserQuestionTool];
+export const CORE_TOOLS: NativeTool[] = [ReadTool, WriteTool, EditTool, BashTool, BashOutputTool, KillShellTool, GlobTool, GrepTool, TodoWriteTool, WebFetchTool, WebSearchTool, SendUserFileTool, SendUserLinkTool, ReadFileCommentsTool, ReplyToCommentTool, ResolveCommentTool, ReopenCommentTool, AddCommentTool, MoveCommentTool, AskUserQuestionTool];

@@ -46,6 +46,7 @@ describe('simplified tool presentation', () => {
     expect((simplified.Bash.description as string).length).toBeLessThan((full.Bash.description as string).length);
   });
   it('full profile keeps rich descriptions and all ten tools (plus the conditional Task tool)', () => {
-    expect(Object.keys((makeSession({ tools: CORE_TOOLS, profile: CLOUD_DEFAULT }) as any).buildAiTools())).toHaveLength(CORE_PLUS_CONDITIONAL_TASK);
+    // + NotifyUser: a full-presentation root session decides "ready" itself (shared/notify-user.ts); a simplified one does not get it.
+    expect(Object.keys((makeSession({ tools: CORE_TOOLS, profile: CLOUD_DEFAULT }) as any).buildAiTools())).toHaveLength(CORE_PLUS_CONDITIONAL_TASK + 1);
   });
 });

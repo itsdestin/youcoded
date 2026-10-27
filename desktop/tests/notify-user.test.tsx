@@ -14,6 +14,9 @@ import { NotifyBubble, NotifyCard } from '../src/renderer/components/NotifyCard'
 import { resetNotifyStoresForTest, setLatestNotify } from '../src/renderer/state/notify-seen';
 import { CLAUDE_CODE_NOTIFY_TOOL, NOTIFY_USER_TOOL, shortNotifyLabel } from '../src/shared/notify-user';
 import { NotifyUserTool } from '../src/main/harness/tools/notify-user';
+import { makeSession } from './helpers/harness-fakes';
+import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
+import type { ChatAction } from '../src/renderer/state/chat-types';
 import type { TranscriptEvent } from '../src/shared/types';
 import type { ToolCallState } from '../src/shared/types';
 
@@ -23,11 +26,14 @@ const at = (ts: number) => ({ timestamp: ts, uuid: `n${++n}`, sessionId: S });
 const notify = (id: string, label: string, name = NOTIFY_USER_TOOL) =>
   ev('tool-use', { toolUseId: id, toolName: name, toolInput: { label, message: 'The draft is done.' } }, at(n + 1));
 
-function setup(viewed: string[] = []) {
+function setup(viewed: string[] = [], context: Record<string, unknown> | null = { assembledBy: 'claude-code' }) {
   const { wrapper, store } = makeStoreWrapper([S]);
   const { result } = renderHook(() => useSessionAttention([{ id: S }, { id: 'other' }], new Set(viewed), 'other'), { wrapper });
+  // Who decides "ready" comes from the session's "Started with" record, as in the app.
+  if (context) act(() => store.dispatch({ type: 'SESSION_CONTEXT', sessionId: S, context } as ChatAction));
   const records = new SessionRecords();
   records.begin(S);
+  if (context) records.note(S, 'native:session-context', { sessionId: S, context });
   const send = (t: TranscriptEvent) => {
     records.note(S, 'transcript:event', t);
     act(() => { for (const a of eventToAction(t, { live: true })) store.dispatch(a); });
@@ -78,6 +84,35 @@ describe('the conversation\'s status while a notification is unseen', () => {
     send(ev('user-message', { text: 'ok' }, at(60)));
     send(first);
     expect(read()).toMatchObject({ label: undefined, phoneLabel: undefined });
+  });
+});
+
+describe('who decides a conversation is ready', () => {
+  const finishUnseen = (send: (t: TranscriptEvent) => void) => {
+    send(ev('user-message', { text: 'go' }, at(1)));
+    send(ev('assistant-text', { text: 'done', partId: 'p', model: 'm' }, at(2)));
+    send(ev('turn-complete', { stopReason: 'end_turn' }, at(3)));
+  };
+  it('a Claude Code or capable-model session that finishes unseen WITHOUT notifying stays gray, on both screens', () => {
+    for (const context of [{ assembledBy: 'claude-code' }, { assembledBy: 'youcoded', notifiesByModel: true }]) {
+      const { send, read } = setup([], context);
+      finishUnseen(send);
+      expect(read(), JSON.stringify(context)).toMatchObject({ status: 'gray', phone: 'gray' });
+    }
+  });
+  it('a small local model keeps the automatic blue, on both screens', () => {
+    const { send, read } = setup([], { assembledBy: 'youcoded', notifiesByModel: false });
+    finishUnseen(send);
+    expect(read()).toMatchObject({ status: 'blue', phone: 'blue' });
+  });
+  it('only a capable root session is given the Notify user tool', () => {
+    const tools = (over: Parameters<typeof makeSession>[0]) => Object.keys((makeSession(over) as any).buildAiTools());
+    expect(tools({ profile: CLOUD_DEFAULT })).toContain('NotifyUser');
+    expect(tools({ profile: { ...CLOUD_DEFAULT, maxToolPresentation: 'simplified' } })).not.toContain('NotifyUser');
+    // A helper never notifies the person: its parent does.
+    const helper = makeSession({ profile: CLOUD_DEFAULT }) as any;
+    helper.opts.isSpecialistChild = true;
+    expect(Object.keys(helper.buildAiTools())).not.toContain('NotifyUser');
   });
 });
 

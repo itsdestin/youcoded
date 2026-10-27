@@ -3499,6 +3499,7 @@ export class NativeSessionHost extends EventEmitter {
       skillsOffered: inv.skillsOffered,
       tools: inv.toolNames,
       droppedMcpServers: inv.droppedMcpServers,
+      notifiesByModel: session.notifiesByModel(),
     };
   }
 
@@ -3519,8 +3520,9 @@ export class NativeSessionHost extends EventEmitter {
   private republishWindow(sessionId: string, entry: LiveEntry): void {
     const prev = entry.sessionContext;
     if (!prev) return;
-    const next: SessionContext = { ...prev, modelLabel: entry.session.binding.modelId, contextWindowTokens: entry.session.contextWindowTokens };
-    if (next.modelLabel === prev.modelLabel && next.contextWindowTokens === prev.contextWindowTokens) return;
+    // notifiesByModel too: swapping to or from a small local model changes who decides "ready" (shared/notify-user.ts).
+    const next: SessionContext = { ...prev, modelLabel: entry.session.binding.modelId, contextWindowTokens: entry.session.contextWindowTokens, notifiesByModel: entry.session.notifiesByModel() };
+    if (next.modelLabel === prev.modelLabel && next.contextWindowTokens === prev.contextWindowTokens && next.notifiesByModel === prev.notifiesByModel) return;
     entry.sessionContext = next;
     this.emit('session-context', { sessionId, context: next });
   }

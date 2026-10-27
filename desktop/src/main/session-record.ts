@@ -31,7 +31,7 @@ import type { SessionLive } from '../shared/session-live-types';
 import type { InputBlock } from '../shared/cc-input-focus';
 import { isNativeStartupState, type NativeStartupState } from '../shared/native-startup';
 import { isSendId, type SendOutcome } from '../shared/send-outcome-types';
-import { isNotifyUserToolName, notifyFieldsOf } from '../shared/notify-user';
+import { isNotifyUserToolName, notifyFieldsOf, readyIsTheModels } from '../shared/notify-user';
 import type { BrowserPrompt } from '../shared/browser-types';
 
 export const RING_MAX_EVENTS = 2000;
@@ -257,7 +257,7 @@ export class SessionRecords {
     // The queue length is read through the live source (it is not an event), so a change to it is only seen when something asks; it is in the key
     // so that when a push IS built it counts. (The permission mode and model left the summary in sync-fix3: no screen read them.)
     const live = this.safeLive(sessionId);
-    return `${f.working ? 1 : 0}|${this.waitingCount(rec)}|${reported ?? this.attentionOf(rec)}|${f.hasHistory ? 1 : 0}|${rec.started ? 1 : 0}|${live?.queued?.length ?? 0}|${f.notifyLabel ?? ''}`;
+    return `${f.working ? 1 : 0}|${this.waitingCount(rec)}|${reported ?? this.attentionOf(rec)}|${f.hasHistory ? 1 : 0}|${rec.started ? 1 : 0}|${live?.queued?.length ?? 0}|${f.notifyLabel ?? ''}|${readyIsTheModels(rec.sessionContext as never) ? 1 : 0}`;
   }
 
   /** What the summary shows for attention: another writer's state wins; the computer's "stuck" shows when nothing else is wrong. */
@@ -731,6 +731,7 @@ export class SessionRecords {
       working: f.working, awaitingCount: f.awaitingCount, attention: reported ?? this.attentionOf(rec),
       hasHistory: f.hasHistory, queuedCount: f.queued.length, started: rec.started,
       ...(f.notifyLabel ? { notifyLabel: f.notifyLabel } : {}),
+      ...(readyIsTheModels(rec.sessionContext as never) ? { byModel: true } : {}),
     };
   }
 

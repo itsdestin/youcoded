@@ -30,6 +30,8 @@ export interface SessionSummary {
    *  session's status pill and turns the dot blue while it is unseen, the same as the computer derives from its own events. Optional so an
    *  older computer's summaries still read. */
   notifyLabel?: string;
+  /** The assistant decides "ready" (shared/notify-user.ts readyIsTheModels): a phone then shows no automatic blue for this session. */
+  byModel?: boolean;
   // WHY no permissionMode / model here (sync-fix3): they were sent and read by no screen. A late-joining screen gets the mode and the model chip from the fill
   // (`session:open`: liveFill / the native host's facts), which is where the chips are drawn from. Carrying them also made every mode or model change push a summary nobody uses.
 }

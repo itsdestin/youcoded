@@ -29,12 +29,14 @@ export function isNotifyUserToolName(name: string): boolean {
 export const NOTIFY_LABEL_MAX = 24;
 
 /** What both tools tell the model. Identical in both session types so the model
- *  behaves the same way in each. */
+ *  behaves the same way in each. Since 2026-10-26 (notify-user questions Q-3: "gray"
+ *  — trust the assistant) the app no longer turns a capable session blue on its own,
+ *  so the model is told plainly that "ready" is its job. */
 export const NOTIFY_USER_DESCRIPTION = [
-  'Tell the user something is ready for them: a response worth reading, or a checkpoint reached in a longer task.',
-  'Their conversation list shows your short label on this conversation, and the chat shows a highlighted card with your message that they can jump to.',
-  'Use it sparingly — when you finish something they asked for, or reach a point they would want to look at while you keep working. Do not use it for every reply, for routine progress, or to ask a question (ask in your reply instead).',
-  'The label and message are shown at the top of your reply, right beside it, so do not repeat what the reply says: say only what is ready, or what to look at.',
+  'Tell the user something is ready for them. Their conversation list shows your short label on this conversation, and your reply shows the label and message at its top.',
+  'The app does not tell them a reply is ready: you do. Call this whenever you stop and hand the conversation back because you finished what they asked or need their decision (ask in your reply, then call this), and at a checkpoint they would want to see while you keep working.',
+  'Do not call it when you stop only to wait for your own helpers or background work, for a short conversational reply (a quick answer, a greeting), or more than once per reply.',
+  'The label and message sit beside your reply, so do not repeat what the reply says: say only what is ready, or what to look at.',
 ].join(' ');
 
 export const NOTIFY_LABEL_DESCRIPTION = `Two or three words shown in the conversation list, e.g. "Draft ready" or "Tests passing". At most ${NOTIFY_LABEL_MAX} characters.`;
@@ -58,4 +60,12 @@ export function pillNotifyLabel(notes: ReadonlyMap<string, string> | undefined, 
 /** The label as the status pill shows it: cut to NOTIFY_LABEL_MAX with an ellipsis. */
 export function shortNotifyLabel(label: string): string {
   return label.length <= NOTIFY_LABEL_MAX ? label : `${label.slice(0, NOTIFY_LABEL_MAX - 1).trimEnd()}…`;
+}
+
+/** Does the ASSISTANT decide when this conversation is "ready" (Notify user), rather than the app turning it blue
+ *  whenever a reply ends unseen? Claude Code sessions and native sessions on a capable model do (Destin, 2026-10-26:
+ *  "replace the existing automatic version ... at least for all frontier sessions"); small local models keep the
+ *  automatic blue. Read from the session's "Started with" record, which every screen already holds. */
+export function readyIsTheModels(ctx: { assembledBy?: string; notifiesByModel?: boolean } | null | undefined): boolean {
+  return ctx?.assembledBy === 'claude-code' || ctx?.notifiesByModel === true;
 }

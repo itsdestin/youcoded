@@ -35,8 +35,6 @@ export interface HarnessManifest {
 export const NATIVE_TOOL_NAMES = [
   'Read', 'Write', 'Edit', 'Bash', 'BashOutput', 'KillShell', 'Glob', 'Grep',
   'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'SendUserFile', 'SendUserLink',
-  // 2026-10-26: "Notify user" (shared/notify-user.ts), attached everywhere like SendUserLink.
-  'NotifyUser',
   // T8 (docs/active/specs/2026-09-26-doc-comments-build-design.md §5) — the
   // assistant's six document-comment tools, unconditionally attached like the
   // rest of this list (no capability gate the way Skill/Task have one).
@@ -68,6 +66,10 @@ export const CONDITIONAL_TOOL_NAMES = [
   // browser service, for root sessions, on profiles that aren't a small
   // model's simplified presentation (harness-session.ts syncBrowserTools).
   'BrowserNavigate', 'BrowserHistory', 'BrowserZoom', 'BrowserSnapshot', 'BrowserAct', 'BrowserScreenshot', 'BrowserTabs', 'BrowserWait', 'BrowserAskUser',
+  // "Notify user" (2026-10-26): attached for root sessions on profiles that aren't a small model's simplified
+  // presentation — those sessions own "ready"; small models keep the app's automatic blue
+  // (harness-session.ts notifiesByModel / syncNotifyTool).
+  'NotifyUser',
 ] as const;
 
 // Fix: with `limits.maxTokens` left undefined, streamText omits `max_tokens`

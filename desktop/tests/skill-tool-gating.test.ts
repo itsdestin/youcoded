@@ -94,7 +94,8 @@ describe('gating Skill leaves the other tools alone', () => {
       // (CLOUD_DEFAULT.canDelegate is true and makeOpts sets no
       // isSpecialistChild), and Task 14's ModelSearch rides that same gate —
       // both filtered here too, not a regression.
-      expect(toolNames(s).filter((n) => n !== 'Skill' && n !== 'Task' && n !== 'ModelSearch')).toEqual([]);
+      // NotifyUser: attached to every capable root session (shared/notify-user.ts), the same add-or-withhold shape.
+      expect(toolNames(s).filter((n) => n !== 'Skill' && n !== 'Task' && n !== 'ModelSearch' && n !== 'NotifyUser')).toEqual([]);
     }
   });
 });

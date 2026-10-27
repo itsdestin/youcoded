@@ -11,6 +11,7 @@
 // surface is FROZEN — this driver emits ONLY the pre-existing TranscriptEventType
 // values; max_steps and doom_loop surface as PERMISSION ASKS (askUser), never as
 // new event types.
+import { NotifyUserTool } from './tools/notify-user';
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow } from '../providers/context-overflow';
@@ -1554,6 +1555,9 @@ export class HarnessSession extends EventEmitter {
    *  model and back ON when it swaps back up. The has()/delete() pair keeps
    *  both directions idempotent.
    */
+  /** The assistant, not the app, decides "ready" (Notify user): root sessions on a full-presentation profile; small models and helpers don't (shared/notify-user.ts). */
+  notifiesByModel(): boolean { return this.profile.supportsTools && this.profile.maxToolPresentation !== 'simplified' && !this.opts.isSpecialistChild; }
+
   private syncTaskTool(): void {
     const wanted = this.profile.canDelegate && !this.opts.isSpecialistChild;
     if (!wanted) { this.toolByName.delete('Task'); this.toolByName.delete('ModelSearch'); return; }
@@ -1648,6 +1652,7 @@ export class HarnessSession extends EventEmitter {
     this.syncSkillTool();
     this.syncTaskTool();
     syncBrowserTools(this.toolByName, !!this.opts.toolServices?.browser && !this.opts.isSpecialistChild && this.profile.maxToolPresentation !== 'simplified');
+    if (this.notifiesByModel()) this.toolByName.set(NotifyUserTool.name, NotifyUserTool); else this.toolByName.delete(NotifyUserTool.name); // only where the assistant owns "ready"
     this.syncMcpTools();
     // Simplified presentation (spec §4.2): small local models get each tool's
     // compact shortDescription (falling back to the full description when a tool
