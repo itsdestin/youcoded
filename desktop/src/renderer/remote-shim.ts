@@ -3343,8 +3343,9 @@ export function installShim(): void {
         return response?.text ?? '';
       },
     },
-    // The Browser — mirrors preload.ts. Every channel is desktopOnly on the host, which answers { unsupported:true },
-    // so a call from here rejects (screens gate on capabilities.assistantBrowser, false here).
+    // The Browser — mirrors preload.ts. Every channel but `answer` is desktopOnly on the host, which answers { unsupported:true },
+    // so a call from here rejects (screens gate on capabilities.assistantBrowser, false here). `answer` works: a phone answers
+    // the Browser's card the computer publishes (PhoneBrowserAskCard, card #205).
     // No pushes reach a phone, so the listeners never fire.
     browser: {
       state: (sessionId: string) => invoke('browser:state', { sessionId }),

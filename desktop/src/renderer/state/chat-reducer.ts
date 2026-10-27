@@ -28,6 +28,7 @@ import { updatePendingSendEntry } from './pending-send-entry';
 import { interruptedAssistantTurns } from './interrupted-turn';
 import { touchTurnTime } from './turn-time';
 import { applyNotifyFact } from './notify-fact';
+import { applyOpenPrompts, applyWaitingAction } from './waiting-facts';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
 // this counter at 0 while its snapshot already holds msg-1..msg-N, so new live
@@ -943,6 +944,8 @@ function spinnerWithNoTurn(session: SessionChatState): Partial<SessionChatState>
 }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
+  const waiting = applyWaitingAction(state, action); // waiting-facts.ts: a fact with no case of its own
+  if (waiting) return waiting;
   let next = chatReducerCases(state, action);
   const id = (action as { sessionId?: string }).sessionId;
   if (next === state || !id) return next;
@@ -952,6 +955,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   // WHY here: the "Notify user" label is one small fact derived from tool cards
   // and user turns; keeping it in the wrapper covers every path that adds either.
   next = applyNotifyFact(state, next, id, action);
+  next = applyOpenPrompts(next, id, action);
   const s = next.get(id);
   if (!s || !s.stallWarning || s.attentionState === 'stuck') return next;
   const fixed = new Map(next);

@@ -516,6 +516,14 @@ export interface SessionChatState {
    * and `toolCalls` never shrinks (performance.md rule 4). Absent = none.
    */
   latestNotify?: { toolUseId: string; label: string } | null;
+  /**
+   * What the assistant is blocked on the person for beyond permission-style asks (2026-10-26, notify-user plan Part 1) — each turns the
+   * dot red: the Browser's open card (the host's `session:live browser-ask`; a phone also draws the card from it), the ids of Claude Code's
+   * unanswered terminal cards (SHOW_PROMPT until COMPLETE/DISMISS), and a native session that failed to start. Absent = none.
+   */
+  browserAsk?: import('../../shared/browser-types').BrowserPrompt | null;
+  openPromptIds?: readonly string[];
+  startupFailed?: boolean;
 }
 
 export function createSessionChatState(): SessionChatState {
@@ -644,6 +652,10 @@ export type ChatAction =
       sessionId: string;
       queueId: string;
     }
+  /** The host's `session:live browser-ask`: the Browser's card for this conversation, or null once it closes. */
+  | { type: 'BROWSER_ASK_CHANGED'; sessionId: string; prompt: import('../../shared/browser-types').BrowserPrompt | null }
+  /** A native session's startup failed (Retry / Continue showing) or stopped failing. */
+  | { type: 'NATIVE_STARTUP_FAILED'; sessionId: string; failed: boolean }
   | {
       type: 'SHOW_PROMPT';
       sessionId: string;

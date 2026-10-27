@@ -37,7 +37,8 @@ describe('the complete list of what a phone may call', () => {
 
   it('includes every channel opened on request, and none of the neighbours that were not approved', () => {
     // WHY: Destin explicitly approved both recovery choices on paired phones and remote browsers.
-    for (const name of [...OPENED_IN_R6_1, ...OPENED_IN_R6_3, 'native:startup-action']) expect(live, name).toContain(name);
+    // browser:answer: Destin, 2026-10-26 (notify-user questions Q-1): answer the Browser's card from a phone like any approval card (card #205).
+    for (const name of [...OPENED_IN_R6_1, ...OPENED_IN_R6_3, 'native:startup-action', 'browser:answer']) expect(live, name).toContain(name);
     const stillRefused = [
       'theme-marketplace:refresh-registry', 'theme-marketplace:generate-preview',
       'marketplace:get-config', 'marketplace:set-config', 'marketplace:invalidate-cache', 'marketplace:read-component',

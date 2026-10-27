@@ -12,7 +12,7 @@ import { answerPrompt } from '../state/prompt-input';
 import { findArchiveBoundary } from '../state/archive-boundary';
 import { projectTimeline } from '../state/timeline-presentation';
 import ThinkingIndicator from './ThinkingIndicator';
-import BrowserAskCard from './browser/BrowserAskCard';
+import BrowserAskCard, { PhoneBrowserAskCard } from './browser/BrowserAskCard';
 import { browserSupported } from '../state/browser-store';
 import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
@@ -1319,7 +1319,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             {/* The Browser's ask card (2026-10-13): the assistant is waiting on
                 the person — a site permission, a final step, "needs you", or a
                 browser download. Reads only this conversation's slice. */}
-            {browserSupported() && <BrowserAskCard sessionId={sessionId} />}
+            {browserSupported() ? <BrowserAskCard sessionId={sessionId} />
+              // A phone: the card the computer published (card #205).
+              : state.browserAsk && <PhoneBrowserAskCard sessionId={sessionId} prompt={state.browserAsk} />}
           </>
         )}
            </div>

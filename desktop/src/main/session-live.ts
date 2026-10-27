@@ -18,6 +18,7 @@
 //
 // Electron-free and injected, like publish.ts: tests drive it with a record and a fake publish.
 import type { Publish } from './publish';
+import type { BrowserPrompt } from '../shared/browser-types';
 import type { SessionRecords } from './session-record';
 import { detectPermissionMode } from '../shared/permission-mode-detect';
 import { claudeAliasForModelId, isPlaceholderModelId } from '../shared/model-ids';
@@ -52,7 +53,7 @@ const COMPACT_CHECK_MS = 30_000;
 
 export interface SessionLiveDeps {
   publish: Publish;
-  records: Pick<SessionRecords, 'facts' | 'hasPrompt' | 'isCompacting' | 'openPrompts' | 'epochOf'>;
+  records: Pick<SessionRecords, 'facts' | 'hasPrompt' | 'isCompacting' | 'openPrompts' | 'epochOf' | 'browserAskOf'>;
   /** Is this a Claude Code session? (A native session's host says these things itself; a shell has none.) */
   isClaude(sessionId: string): boolean;
   now?: () => number;
@@ -385,6 +386,14 @@ export class SessionLiveFacts {
     // One card per question: the same promptId, or another card with the same title, is already up.
     if (this.deps.records.hasPrompt(sessionId, card.promptId) || this.deps.records.openPrompts(sessionId).some((p) => p.title === card.title)) return;
     this.live(sessionId, { kind: 'prompt-show', ...card });
+  }
+
+  /** The Browser's card for this conversation changed (main/ipc/browser.ts reports every Browser state push). Published only when the card
+   *  itself changes, so the Browser's frequent state pushes (tabs, loading) are not each a numbered event. */
+  browserAsk(sessionId: string, prompt: BrowserPrompt | null): void {
+    const shown = this.deps.records.browserAskOf(sessionId);
+    if ((shown?.id ?? null) === (prompt?.id ?? null)) return;
+    this.live(sessionId, { kind: 'browser-ask', prompt });
   }
 
   /** The menu a card was drawn for has left the terminal. A card that is not open says nothing new. */

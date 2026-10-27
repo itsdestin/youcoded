@@ -8,6 +8,7 @@
 //
 import type { InputBlock } from './cc-input-focus';
 import type { NativeStartupState } from './native-startup';
+import type { BrowserPrompt } from './browser-types';
 
 // Types only: nothing here runs. In shared/ because the renderer reads them and renderer code does not import from main/.
 
@@ -49,7 +50,13 @@ export type SessionLiveBody =
    * WHY here (sync with master's popups work, 2026-10-01): master's chat-send gate read the window's own terminal, so a phone (which has no terminal) could never
    * refuse a send typed into an open "Switch model?" confirmation. The computer is the ONLY reader (main/session-screens.ts); every screen's gate asks this.
    */
-  | { kind: 'input-block'; block: InputBlock | null };
+  | { kind: 'input-block'; block: InputBlock | null }
+  /**
+   * The assistant's Browser is waiting on the person (a site permission, a "final step", a home-network address, a hand-off), or `null` once the
+   * card is answered or withdrawn. WHY a session fact (2026-10-26, notify-user plan Part 1): the Browser's own state push reaches only the
+   * computer's windows, so the conversation's light never went red and a phone never saw the card (card #205). Every screen now gets it.
+   */
+  | { kind: 'browser-ask'; prompt: BrowserPrompt | null };
 
 export type SessionLive = { sessionId: string } & SessionLiveBody;
 

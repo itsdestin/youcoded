@@ -1,7 +1,8 @@
 {
  "_note": "Every channel a PHONE may call, as of one-core R6-3 (2026-10-01). Any change to this list is a decision for Destin: edit it only with his approval. tests/phone-open-set.test.ts compares the live channel table to it.",
  "_added_continue_turn": "2026-10-21: native:continue-turn (the chat error card's Try again and the step limit's Keep going) — Destin signed off this widening on 2026-10-21 (\"yes should work on phone\").",
- "total": 281,
+ "_added_browser_answer": "2026-10-26: browser:answer (answer the assistant Browser's card from a phone) — Destin, notify-user questions Q-1: \"can we just build in remote browser approvals like every other approval card?\" (card #205).",
+ "total": 282,
  "open": [
   "account:signed-in",
   "account:user",
@@ -26,6 +27,7 @@
   "artifacts:search-content",
   "artifacts:unwatch-project",
   "artifacts:watch-project",
+  "browser:answer",
   "chatgpt:cancel-sign-in",
   "chatgpt:sign-out",
   "chatgpt:status",

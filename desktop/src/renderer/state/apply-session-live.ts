@@ -2,7 +2,7 @@ import type { SessionLive } from '../../shared/session-live-types';
 import { routeSessionLive, type TranscriptBatcher } from './transcript-batch';
 import { CLAUDE_ALIASES } from '../../shared/model-ids';
 import { setScreenInputBlock } from './screen-input-store';
-import { setNativeStartup } from './native-startup-store';
+import { getNativeStartup, setNativeStartup } from './native-startup-store';
 
 export interface SessionLiveDeps {
   batcher: Pick<TranscriptBatcher, 'push'>;
@@ -24,7 +24,12 @@ export function applySessionLive(live: SessionLive, deps: SessionLiveDeps): void
   if (!live?.sessionId) return;
   // What holds the keyboard goes straight to the send gates' store (never through the frame batcher: a gate reads it at the instant of a send).
   if (live.kind === 'input-block') { setScreenInputBlock(live.sessionId, live.block); return; }
-  if (live.kind === 'native-startup') { setNativeStartup(live.sessionId, live.state); return; }
+  if (live.kind === 'native-startup') {
+    setNativeStartup(live.sessionId, live.state);
+    // A failed start (Retry / Continue) is the assistant waiting on the person: it turns the dot red (useSessionAttention).
+    deps.batcher.push({ type: 'NATIVE_STARTUP_FAILED', sessionId: live.sessionId, failed: getNativeStartup(live.sessionId)?.phase === 'failed' });
+    return;
+  }
   routeSessionLive(live, { batcher: deps.batcher, contextTokens: deps.contextTokens });
   if (live.kind !== 'model') return;
   const native = deps.isNative(live.sessionId);

@@ -38,6 +38,78 @@ export function browserCardCopy(p: BrowserPrompt): Copy {
   }
 }
 
+/** The buttons of a card whose answer is a plain choice (site, final step, home address, no browser) — the same
+ *  on the computer and a phone. A hand-off's buttons differ by screen, so each card draws its own. */
+function askActions(p: BrowserPrompt, answer: (a: PromptAnswer) => void, sending: boolean): React.ReactNode {
+  const host = p.host ?? '';
+  switch (p.kind) {
+    case 'site':
+      return (
+        <>
+          <Button variant="secondary" size="sm" disabled={sending} onClick={() => answer('no')}>Not now</Button>
+          {p.allowAlways !== false && host && (
+            <Button variant="secondary" size="sm" disabled={sending} onClick={() => answer('allow_always')}>Always allow {host}</Button>
+          )}
+          <Button variant="primary" size="sm" disabled={sending} onClick={() => answer('allow_chat')}>Allow for this chat</Button>
+        </>
+      );
+    case 'final':
+      return (
+        <>
+          <Button variant="secondary" size="sm" disabled={sending} onClick={() => answer('no')}>Don't allow</Button>
+          <Button variant="primary" size="sm" disabled={sending} onClick={() => answer('once')}>Allow this once</Button>
+        </>
+      );
+    case 'local':
+      return (
+        <>
+          <Button variant="secondary" size="sm" disabled={sending} onClick={() => answer('no')}>Don't allow</Button>
+          <Button variant="primary" size="sm" disabled={sending} onClick={() => answer('allow_chat')}>Allow for this chat</Button>
+        </>
+      );
+    case 'no-browser':
+      return (
+        <>
+          <Button variant="secondary" size="sm" disabled={sending} onClick={() => answer('no')}>Not now</Button>
+          <Button variant="primary" size="sm" disabled={sending} onClick={() => answer('download')}>Download</Button>
+        </>
+      );
+    default:
+      return null;
+  }
+}
+
+/**
+ * The same card on a PHONE (2026-10-26, card #205: "build in remote browser approvals like every other approval card"). A phone
+ * has no Browser of its own (capabilities.assistantBrowser is false), so the card comes from the conversation's `browserAsk`
+ * fact the computer publishes, and the answer goes back over `browser:answer` (the one Browser channel a phone may use).
+ * A hand-off needs the browser itself, so the phone says where to do it and offers only "I can't do this".
+ */
+export const PhoneBrowserAskCard = memo(function PhoneBrowserAskCard({ sessionId, prompt }: { sessionId: string; prompt: BrowserPrompt }) {
+  const [sending, setSending] = useState(false);
+  const answer = useCallback(async (a: PromptAnswer) => {
+    setSending(true);
+    try { await bridge().answer(sessionId, prompt.id, a); } finally { setSending(false); }
+  }, [prompt.id, sessionId]);
+  const copy = browserCardCopy(prompt);
+  const body = prompt.kind === 'handoff' ? `${copy.body} Do this in the browser on your computer.` : copy.body;
+  const actions = prompt.kind === 'handoff'
+    ? <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('cant')}>I can't do this</Button>
+    : askActions(prompt, (a) => void answer(a), sending);
+  return (
+    <div className="mx-4 my-2 rounded-lg border border-edge bg-inset p-3 in-view" role="group" aria-label="The browser is asking you">
+      <div className="flex items-start gap-2">
+        <GlobeIcon className="w-4 h-4 mt-0.5 text-fg-muted shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium text-fg">{copy.title}</div>
+          <p className="text-xs text-fg-2 mt-1">{body}</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap justify-end gap-2 mt-3">{actions}</div>
+    </div>
+  );
+});
+
 const BrowserAskCard = memo(function BrowserAskCard({ sessionId }: { sessionId: string }) {
   const state = useBrowserState(sessionId);
   const paneOpen = useBrowserPaneOpen(sessionId);
@@ -75,36 +147,8 @@ const BrowserAskCard = memo(function BrowserAskCard({ sessionId }: { sessionId: 
 
   const p = prompt!;
   const copy = browserCardCopy(p);
-  const host = p.host ?? '';
   let actions: React.ReactNode;
   switch (p.kind) {
-    case 'site':
-      actions = (
-        <>
-          <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('no')}>Not now</Button>
-          {p.allowAlways !== false && host && (
-            <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('allow_always')}>Always allow {host}</Button>
-          )}
-          <Button variant="primary" size="sm" disabled={sending} onClick={() => void answer('allow_chat')}>Allow for this chat</Button>
-        </>
-      );
-      break;
-    case 'final':
-      actions = (
-        <>
-          <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('no')}>Don't allow</Button>
-          <Button variant="primary" size="sm" disabled={sending} onClick={() => void answer('once')}>Allow this once</Button>
-        </>
-      );
-      break;
-    case 'local':
-      actions = (
-        <>
-          <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('no')}>Don't allow</Button>
-          <Button variant="primary" size="sm" disabled={sending} onClick={() => void answer('allow_chat')}>Allow for this chat</Button>
-        </>
-      );
-      break;
     case 'handoff':
       actions = (
         <>
@@ -121,15 +165,12 @@ const BrowserAskCard = memo(function BrowserAskCard({ sessionId }: { sessionId: 
       );
       break;
     case 'no-browser':
-      actions = downloading ? (
-        <Button variant="secondary" size="sm" onClick={() => void bridge().cancelDownload()}>Cancel</Button>
-      ) : (
-        <>
-          <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('no')}>Not now</Button>
-          <Button variant="primary" size="sm" disabled={sending} onClick={() => void answer('download')}>Download</Button>
-        </>
-      );
+      actions = downloading
+        ? <Button variant="secondary" size="sm" onClick={() => void bridge().cancelDownload()}>Cancel</Button>
+        : askActions(p, answer, sending);
       break;
+    default:
+      actions = askActions(p, answer, sending);
   }
 
   return (

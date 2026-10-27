@@ -16,6 +16,11 @@ import type { SessionSummary } from '../../shared/session-summary-types';
 // Both mean "the turn is over, act now", which is what red means.
 const RED_ATTENTION = new Set<AttentionState>(['stalled', 'session-died', 'error']);
 
+/** Waiting on the person for something other than a permission-style ask (see the call site). */
+function isWaitingOutsideAsks(c: Pick<SessionChatState, 'browserAsk' | 'openPromptIds' | 'startupFailed'>): boolean {
+  return !!c.browserAsk || (c.openPromptIds?.length ?? 0) > 0 || !!c.startupFailed;
+}
+
 export function attentionDotColor(state: AttentionState): 'red' | 'amber' | null {
   if (state === 'ok') return null;
   return RED_ATTENTION.has(state) ? 'red' : 'amber';
@@ -159,6 +164,9 @@ interface SessionMemo {
   isThinking: boolean;
   hasTimeline: boolean;
   latestNotify: SessionChatState['latestNotify'];
+  browserAsk: SessionChatState['browserAsk'];
+  openPromptIds: SessionChatState['openPromptIds'];
+  startupFailed: SessionChatState['startupFailed'];
   /** Not viewed and not active — the only way the arguments reach the colour. */
   unseen: boolean;
   /** Derived by the peer-session branch, whose rules differ (no green/blue). */
@@ -184,6 +192,9 @@ function memoHolds(m: SessionMemo | undefined, c: SessionChatState, unseen: bool
     && m.attentionState === c.attentionState
     && m.isThinking === c.isThinking
     && m.latestNotify === c.latestNotify
+    && m.browserAsk === c.browserAsk
+    && m.openPromptIds === c.openPromptIds
+    && m.startupFailed === c.startupFailed
     && m.hasTimeline === (c.timeline.length > 0)
     && m.unseen === unseen;
 }
@@ -191,7 +202,7 @@ function memoHolds(m: SessionMemo | undefined, c: SessionChatState, unseen: bool
 function memoOf(c: SessionChatState, unseen: boolean, peer: boolean, info: SessionAttentionInfo): SessionMemo {
   return {
     toolCalls: c.toolCalls, activeTurnToolIds: c.activeTurnToolIds, attentionState: c.attentionState,
-    isThinking: c.isThinking, hasTimeline: c.timeline.length > 0, latestNotify: c.latestNotify, unseen, peer, info,
+    isThinking: c.isThinking, hasTimeline: c.timeline.length > 0, latestNotify: c.latestNotify, browserAsk: c.browserAsk, openPromptIds: c.openPromptIds, startupFailed: c.startupFailed, unseen, peer, info,
   };
 }
 
@@ -256,6 +267,9 @@ export function useSessionAttention(
       // keeps asking after the turn that hired it ended, and those requests
       // used to leave the dot un-red (see helperAsksOf).
       if (!hasAwaiting) hasAwaiting = hasHelperAsk(chatState.toolCalls);
+      // Blocked on the person in ways that are not permission-style asks (2026-10-26, notify-user plan Part 1): the Browser's
+      // card, Claude Code's terminal cards, a native session that failed to start. The phone counts the same (session-record waitingCount).
+      if (!hasAwaiting) hasAwaiting = isWaitingOutsideAsks(chatState);
       // Priority: red (permission prompt OR a state that needs a decision) →
       // amber ("something may be wrong, I don't know") → green (working) →
       // blue (unseen activity) → gray (idle).
@@ -306,7 +320,7 @@ export function useSessionAttention(
         const t = chatState.toolCalls.get(id);
         if (t?.status === 'awaiting-approval') { awaitingApproval = true; break; }
       }
-      if (!awaitingApproval) awaitingApproval = hasHelperAsk(chatState.toolCalls);
+      if (!awaitingApproval) awaitingApproval = hasHelperAsk(chatState.toolCalls) || isWaitingOutsideAsks(chatState);
       const status: SessionStatusColor = awaitingApproval ? 'red' : attentionDotColor(chatState.attentionState) ?? 'gray';
       const info = { status, attentionState: chatState.attentionState, awaitingApproval };
       next.set(sid, info);

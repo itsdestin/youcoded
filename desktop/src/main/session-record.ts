@@ -32,6 +32,7 @@ import type { InputBlock } from '../shared/cc-input-focus';
 import { isNativeStartupState, type NativeStartupState } from '../shared/native-startup';
 import { isSendId, type SendOutcome } from '../shared/send-outcome-types';
 import { isNotifyUserToolName, notifyFieldsOf } from '../shared/notify-user';
+import type { BrowserPrompt } from '../shared/browser-types';
 
 export const RING_MAX_EVENTS = 2000;
 export const RING_MAX_BYTES = 2 * 1024 * 1024;
@@ -197,6 +198,8 @@ interface Rec {
    *  on a screen that missed the "free" event is cleared. */
   inputBlock: InputBlock | null;
   inputBlockSeen: boolean;
+  /** The Browser's open card for this conversation (a session-live `browser-ask`), or null. Counts as waiting on the person. */
+  browserAsk: BrowserPrompt | null;
   queueSnapshot?: import('../shared/session-live-types').SessionLiveBody & {kind:'queue'};
   /** The "Started with …" record as last published (native:session-context). WHY: a Claude Code session has no host to ask, so a fill
    *  (whose SESSION_FILL_RESET clears the screen's copy) could only get it back from here — without this the banner vanished on open. */
@@ -254,7 +257,7 @@ export class SessionRecords {
     // The queue length is read through the live source (it is not an event), so a change to it is only seen when something asks; it is in the key
     // so that when a push IS built it counts. (The permission mode and model left the summary in sync-fix3: no screen read them.)
     const live = this.safeLive(sessionId);
-    return `${f.working ? 1 : 0}|${rec.asks.size + rec.passwordAsks.size}|${reported ?? this.attentionOf(rec)}|${f.hasHistory ? 1 : 0}|${rec.started ? 1 : 0}|${live?.queued?.length ?? 0}|${f.notifyLabel ?? ''}`;
+    return `${f.working ? 1 : 0}|${this.waitingCount(rec)}|${reported ?? this.attentionOf(rec)}|${f.hasHistory ? 1 : 0}|${rec.started ? 1 : 0}|${live?.queued?.length ?? 0}|${f.notifyLabel ?? ''}`;
   }
 
   /** What the summary shows for attention: another writer's state wins; the computer's "stuck" shows when nothing else is wrong. */
@@ -321,7 +324,7 @@ export class SessionRecords {
       epoch: randomBytes(8).toString('hex'),
       headSeq: 0, ring: [], ringBytes: 0, tail: [], tailBytes: 0, pty: { chunks: [], length: 0, base: 0 }, oversize: 0,
       asks: new Map(), passwordAsks: new Set(), prompts: new Map(), promptAt: new Map(), terminalMode: null, compacting: null,
-      runningTools: new Set(), started: false, stuck: false, inputBlock: null, inputBlockSeen: false, modelEverLoaded: false,
+      runningTools: new Set(), started: false, stuck: false, inputBlock: null, inputBlockSeen: false, browserAsk: null, modelEverLoaded: false,
       facts: {
         working: false, attention: 'ok', reportedAttention: null, hasHistory: false,
         lastActivityAt: this.now(), permissionMode: null, model: null, modelState: null,
@@ -650,6 +653,18 @@ export class SessionRecords {
   }
 
   /** The cards open now, with when each was raised: what the host checks against the terminal and against later activity. */
+  /** The Browser card open for this conversation, or null (session-live.ts publishes only a change). */
+  browserAskOf(sessionId: string): BrowserPrompt | null { return this.records.get(sessionId)?.browserAsk ?? null; }
+
+  /**
+   * Everything the assistant is blocked on the person for: permission/question/plan asks, password asks, Claude Code's terminal cards, an open
+   * Browser card, and a native session that failed to start. Any of them turns the dot red (summary `awaitingCount`).
+   * WHY (2026-10-26, notify-user plan Part 1): red used to count only the first two, so a Browser card or "Usage limit reached" read green.
+   */
+  private waitingCount(rec: Rec): number {
+    return rec.asks.size + rec.passwordAsks.size + rec.prompts.size + (rec.browserAsk ? 1 : 0) + (rec.nativeStartup?.phase === 'failed' ? 1 : 0);
+  }
+
   openPrompts(sessionId: string): Array<{ promptId: string; title: string; at: number }> {
     const rec = this.records.get(sessionId);
     return rec ? [...rec.prompts.values()].map((p) => ({ promptId: p.promptId, title: p.title, at: rec.promptAt.get(p.promptId) ?? 0 })) : [];
@@ -689,6 +704,8 @@ export class SessionRecords {
     // What holds the keyboard now (a phone opened while a "Switch model?" confirmation is up must refuse a send; one opened after it closed must not).
     if (rec.queueSnapshot) out.push({type:'session:live',payload:{sessionId,...rec.queueSnapshot}});
     if (rec.inputBlockSeen) out.push({ type: 'session:live', payload: { sessionId, kind: 'input-block', block: rec.inputBlock } });
+    // A Browser card still waiting: a phone that opens the conversation now must see it (card #205).
+    if (rec.browserAsk) out.push({ type: 'session:live', payload: { sessionId, kind: 'browser-ask', prompt: rec.browserAsk } });
     return out;
   }
 
@@ -700,7 +717,7 @@ export class SessionRecords {
     return {
       ...rec.facts,
       permissionMode: host?.permissionMode ?? rec.facts.permissionMode,
-      awaitingCount: rec.asks.size + rec.passwordAsks.size,
+      awaitingCount: this.waitingCount(rec),
       queued: host?.queued ?? [],
     };
   }
@@ -923,6 +940,9 @@ export class SessionRecords {
       case 'input-block':
         rec.inputBlock = live.block && typeof live.block === 'object' ? (live.block as InputBlock) : null;
         rec.inputBlockSeen = true;
+        return;
+      case 'browser-ask':
+        rec.browserAsk = live.prompt && typeof live.prompt === 'object' && typeof live.prompt.id === 'string' ? (live.prompt as BrowserPrompt) : null;
         return;
       default:
         return;

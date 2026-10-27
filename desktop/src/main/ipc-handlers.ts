@@ -1,3 +1,4 @@
+import { setBrowserAskListener } from './ipc/browser';
 import { app, IpcMain, BrowserWindow, powerSaveBlocker, webContents } from 'electron';
 import fs from 'fs';
 import path from 'path';
@@ -433,6 +434,8 @@ export function registerIpcHandlers(
     isClaude: (id) => { const p = sessionManager.getSession(id)?.provider; return p !== 'native' && p !== 'shell' && !!sessionManager.getSession(id); },
   });
 
+  // A Browser card waiting on the person becomes a session fact every screen gets: the red light, and the card on a phone (card #205).
+  setBrowserAskListener((id, prompt) => liveFacts.browserAsk(id, prompt));
   const stopClaudeControlReceipts = subscribeClaudeControlReceipts(sessionManager, runtime.records, liveFacts);
   // One host terminal reader drives cards, attention and positive queue input ownership; windows/phones consume its published verdicts.
   let onMainAttention: ((sessionId: string, state: 'ok' | 'stuck') => void) | null = null; // set once the status relay below exists

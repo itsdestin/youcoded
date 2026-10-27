@@ -268,12 +268,16 @@ describe('browser:* channel parity', () => {
   it('names twenty request channels (non-vacuity)', () => {
     expect(REQUESTS.length).toBe(20);
   });
-  it('each is a desktopOnly table entry, in preload and remote-shim', () => {
+  // The one exception: a phone answers the Browser's card (card #205, Destin 2026-10-26: "build in remote browser
+  // approvals like every other approval card"). Everything else stays on the computer.
+  const PHONE_ALLOWED = ['BROWSER_ANSWER'];
+  it('each is a desktopOnly table entry (but the card answer), in preload and remote-shim', () => {
     const table = readSource('src', 'main', 'ipc', 'browser.ts');
     const preload = readSource('src', 'main', 'preload.ts');
     const shim = readSource('src', 'renderer', 'remote-shim.ts');
     for (const [, konst, channel] of REQUESTS) {
-      expect(table, `${channel}: no desktopOnly entry`).toMatch(new RegExp(`name: IPC\\.${konst}, kind: '(handle|on)', desktopOnly: true`));
+      if (PHONE_ALLOWED.includes(konst)) expect(table, `${channel}: must be answerable from a phone`).toMatch(new RegExp(`name: IPC\\.${konst}, kind: 'handle',\\n`));
+      else expect(table, `${channel}: no desktopOnly entry`).toMatch(new RegExp(`name: IPC\\.${konst}, kind: '(handle|on)', desktopOnly: true`));
       expect(preload, `${channel}: not in preload`).toContain(`IPC.${konst}`);
       // Fire-and-forget sends (picture acks, the person's clicks, the panel's
       // size) are no-ops on a phone: nothing of the browser's page reaches it.
