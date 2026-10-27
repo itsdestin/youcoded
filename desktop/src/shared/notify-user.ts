@@ -75,6 +75,6 @@ export function readyIsTheModels(ctx: { assembledBy?: string; notifiesByModel?: 
  *  Claude Code finished a task without calling it even with the description in view, and called it once this line was
  *  in its system prompt. */
 export const NOTIFY_INSTRUCTION = 'YouCoded does not tell the person when your reply is ready: you do, with the NotifyUser tool. '
-  + 'Before you end a turn in which you finished what they asked, or in which you ask them to decide something, call NotifyUser once. '
+  + 'Before you end a turn in which you did work they asked for (changed files, ran commands, looked things up) or in which you ask them to decide something, call NotifyUser once. '
   + 'When they asked to hear about a step as soon as it is done, call it right after that step, before you go on. '
-  + 'Never call it for a short conversational reply, or about background work you are still waiting on.';
+  + 'Do not call it when your whole reply is a short answer with no work behind it, like a quick question or a greeting, or about background work you are still waiting on.';
