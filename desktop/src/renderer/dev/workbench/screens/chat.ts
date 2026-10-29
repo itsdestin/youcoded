@@ -128,6 +128,11 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#admin-approval', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' } },
   { ...chat('chat#admin-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'] },
   { ...chat('chat#admin-choices-phone', 'view', 'approval', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'], viewport: { width: 390, height: 844 } },
+  // WHY (card #207): the comment tool's outside-the-project ask, on both chat kinds and a phone.
+  { ...chat('chat#outside-comments', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-outside-comments', latency: '150' } },
+  { ...chat('chat#outside-comments-cc', 'view', 'approval'), session: 'wb-1', params: { seed: 'bubbles-outside-comments-cc', latency: '150' } },
+  { ...chat('chat#outside-comments-today-cc', 'view', 'approval'), session: 'wb-1', params: { seed: 'bubbles-outside-comments-today-cc', latency: '150' } },
+  { ...chat('chat#outside-comments-phone', 'view', 'approval', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-outside-comments', latency: '150' }, viewport: { width: 390, height: 844 } },
   // WHY: the same recovered history remains readable at every readiness phase.
   ...['opening', 'connecting', 'failed', 'ready'].flatMap(phase => [
     { ...chat(`chat#native-startup-${phase}`, 'view', 'native-startup', ...(phase === 'failed' ? ['error-state'] : [])),

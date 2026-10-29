@@ -35,6 +35,7 @@ import { AdminRunStrip } from './permissions/AdminRunStrip';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../shared/send-user-link';
+import { bareDocCommentsToolName } from '../../shared/doc-comments-mcp';
 import { toolActionLabel } from '../utils/tool-group-summary';
 import { PlanApprovalCard } from './PlanApprovalCard';
 import { ExpiredApprovalActions } from './ExpiredApprovalActions';
@@ -644,6 +645,14 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   const budgetStop = isNative && permissionMode === 'full-auto'
     && (toolName === 'doom_loop' || toolName === 'max_steps');
   const [confirmingExternal, setConfirmingExternal] = useState(false);
+  // WHY (card #207): a comment tool reaching a file outside the chat's project
+  // gets its own three-choice row — once / this chat / no — like the Browser's
+  // site ask. "This chat" covers comments on any outside file until the chat
+  // ends (Destin chose any-file over per-folder, 2026-10-29); it never covers
+  // editing those files. Both surfaces flag the ask `external`: the native
+  // path guard, and main.ts for Claude Code's comment server. A helper's ask
+  // keeps the plain row — a helper can never hold a chat-wide grant.
+  const outsideComments = external === true && !specialistName && bareDocCommentsToolName(toolName ?? '') !== null;
   // Consequence-gated confirm strip (deny-listed asks) — mirrors the delete-model
   // confirm in LocalModelsSection: replace the button row with a plain-language
   // warning + Cancel / confirm.
@@ -732,7 +741,13 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 
   // Keyboard order matches the visible row: Run it / Deny / Always allow.
   const actions = useRef<(() => void)[]>([]);
-  actions.current = externalStop || budgetStop
+  actions.current = outsideComments
+    ? [
+        () => handleRespond({ decision: { behavior: 'allow' } }),
+        () => handleRespond({ decision: { behavior: 'allow' }, allowOutsideCommentsForSession: true }),
+        () => handleRespond({ decision: { behavior: 'deny' } }),
+      ]
+    : externalStop || budgetStop
     ? [
         () => handleRespond({ decision: { behavior: 'allow' } }),
         () => handleRespond({ decision: { behavior: 'deny' } }),
@@ -893,6 +908,34 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       </div>
     );
   }
+
+  if (outsideComments) return (
+    // Same band, colors and arrow-key ring as the generic row below; only the
+    // three choices and the one-line scope note differ.
+    <div className={bare ? 'space-y-1.5' : 'px-3 py-2 border-t border-edge bg-inset/30 space-y-1.5'}>
+      <p className="text-3xs text-fg-muted leading-relaxed">
+        This file is outside this chat&apos;s project. The assistant can read and reply to its comments, but can&apos;t change the file itself.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        {([
+          ['Allow this once', 'bg-green-400/60 hover:bg-green-400/80 text-green-100'],
+          ['Allow for this chat', BROAD_ALLOW_COLORS],
+          ["Don't allow", 'bg-red-400/60 hover:bg-red-400/80 text-red-100'],
+        ] as const).map(([label, colors], i) => (
+          <button
+            key={label}
+            ref={el => { buttonsRef.current[i] = el; }}
+            disabled={responding}
+            onClick={() => actions.current[i]()}
+            className={`px-3 ${pad} text-xs font-medium rounded-lg ${colors} transition-colors disabled:opacity-50 ${focusIdx === i ? ring : ''}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {unconfirmedNote}
+    </div>
+  );
 
   if (confirmingExternal || externalStop || budgetStop || fullAutoStop) return (
     <FullAutoStops
