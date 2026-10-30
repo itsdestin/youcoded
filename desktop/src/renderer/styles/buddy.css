@@ -589,3 +589,16 @@ html[data-mode="buddy-chat"] .chat-scroll .in-view.px-4 {
   padding-left: 6px !important;
   padding-right: 6px !important;
 }
+/* The All sessions menu in the small window (buddy-rebuild-tryit#T-8):
+   - each row's name and folder line start where "All sessions" does — the
+     main window's rows begin with a drag grip, which the buddy hides, so they
+     sat 8px further left;
+   - its height follows the window, so it grows and shrinks with the size
+     button instead of keeping the height it opened at. */
+html[data-mode="buddy-chat"] .session-menu [data-session-id] {
+  padding-left: 8px;
+}
+html[data-mode="buddy-chat"] .session-menu {
+  max-height: calc(100vh - 48px) !important;
+  --session-menu-available-height: calc(100vh - 48px) !important;
+}

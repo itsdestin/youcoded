@@ -2754,7 +2754,8 @@ export default function SessionStrip({
                   onChange={setNewCwd}
                   // "Manage projects…" bridges to Project View (same action as
                   // the header button) and closes the session menu behind it.
-                  onManageProjects={() => { setMenuOpen(false); artifactDispatch({ type: 'PROJECT_VIEW_OPENED' }); }}
+                  // The buddy (`viewer`) has no Projects screen to open, so its picker shows no Manage projects row.
+                  onManageProjects={viewer ? undefined : () => { setMenuOpen(false); artifactDispatch({ type: 'PROJECT_VIEW_OPENED' }); }}
                 />
               </div>
               {/* ONE model list. Replaces the Runtime toggle + the provider and
@@ -2814,8 +2815,9 @@ export default function SessionStrip({
                   )}
                 </>
               )}
-              {/* Launch in new window — hidden on platforms without multi-window support */}
-              {detachAvailable && (
+              {/* Launch in new window — hidden on platforms without multi-window support, and in the buddy (`viewer`), which
+                  owns no window to launch from and ignored the switch */}
+              {detachAvailable && !viewer && (
                 <div className="flex items-center justify-between">
                   {/* WHY "Launch in new window": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
                   <label className="text-xs font-medium text-fg-muted">Launch in new window</label>

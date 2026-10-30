@@ -70,7 +70,7 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
   const listRef = useScrollFade<HTMLDivElement>();
   // Fixed-position coordinates for the portaled dropdown, computed from the
   // trigger button's screen rect whenever the dropdown opens (and on resize).
-  const [panelPos, setPanelPos] = useState<{ top: number; left: number; maxHeight: number; width: number } | null>(null);
+  const [panelPos, setPanelPos] = useState<{ top?: number; bottom?: number; left: number; maxHeight: number; width: number } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -144,7 +144,10 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
     const margin = 8;
     // R4-2: match-the-trigger mode measures the control instead of using the
     // fixed width, and hangs the panel off its left edge rather than centring.
-    const width = panelMatchesTrigger ? rect.width : PANEL_WIDTH;
+    // WHY the cap (buddy rebuild, buddy-rebuild-tryit#T-8 "folder picker overlaps the left side but not the right"): in a
+    // window narrower than the panel — the buddy's 320px chat — the clamp below put a 320px panel at -8px. Never wider
+    // than the window less its margins; every window wider than 336px is unchanged.
+    const width = Math.min(panelMatchesTrigger ? rect.width : PANEL_WIDTH, window.innerWidth - margin * 2);
     const left = panelMatchesTrigger
       ? Math.min(Math.max(rect.left, margin), Math.max(window.innerWidth - width - margin, margin))
       : Math.min(
@@ -153,7 +156,15 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
         );
     const top = rect.bottom + 4;
     // Never extend past the viewport bottom — the panel scrolls instead.
-    const maxHeight = Math.max(window.innerHeight - top - margin, 120);
+    const below = window.innerHeight - top - margin;
+    // Too little room below (a trigger low in a short window, as in the buddy) and more above: open upward instead of
+    // running off the bottom (buddy-rebuild-tryit#T-8). Unchanged wherever 200px or more fits below.
+    const above = rect.top - 4 - margin;
+    if (below < 200 && above > below) {
+      setPanelPos({ bottom: window.innerHeight - rect.top + 4, left, maxHeight: above, width });
+      return;
+    }
+    const maxHeight = Math.max(below, 120);
     setPanelPos({ top, left, maxHeight, width });
   }, [panelMatchesTrigger]);
 
@@ -248,7 +259,7 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
           // on the mousedown, and our click never fires.
           data-folder-switcher-portal=""
           className="layer-surface fixed overflow-hidden flex flex-col"
-          style={{ top: panelPos.top, left: panelPos.left, width: panelPos.width, maxHeight: panelPos.maxHeight, zIndex: POPOVER_Z, animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both' }}
+          style={{ top: panelPos.top, bottom: panelPos.bottom, left: panelPos.left, width: panelPos.width, maxHeight: panelPos.maxHeight, zIndex: POPOVER_Z, animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both' }}
         >
           {/* "No folder" — a session with no project at all (Destin, first-run
               guide round 2, N-6). Always the first row, above the saved list,
