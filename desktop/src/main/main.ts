@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, webContents, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, session, webContents, dialog } from 'electron';
 import { safeOpenExternal } from './safe-open';
+import { installPermissionPolicy } from './permission-policy';
 import { browserToolService, startBrowserSupport, stopBrowserSupport, wireBrowserSessionCleanup } from './assistant-browser/browser-main';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
@@ -1551,6 +1552,14 @@ void app.whenReady().then(async () => {
   // inside the theme-protocol chore's measured window (each chore is measured as
   // mark[n] − mark[n−1]). This mark separates them from registerThemeProtocol().
   perfMark('main:chore:ipc-prefs:done');
+
+  // WHY (audit F4): Electron grants every permission a page asks for unless told otherwise. Only the microphone (voice),
+  // copy/paste and full-screen are used; everything else is refused. Installed before any window exists.
+  installPermissionPolicy(session.defaultSession, {
+    indexHtmlPath: path.join(__dirname, '../renderer/index.html'),
+    devServerUrl: DEV_SERVER_URL,
+    log: (m) => log('WARN', 'Permissions', m),
+  });
 
   registerThemeProtocol();
   perfMark('main:chore:theme-protocol:done');
