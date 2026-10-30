@@ -76,6 +76,26 @@ describe('Claude Code comment asks for files outside the project', () => {
     expect(event.payload.external).toBeUndefined();
   });
 
+  it('"No" on an outside-file card tells Claude Code the user declined, instead of a bare refusal', () => {
+    judgeCommentAsk(ask('AddComment', { path: OUTSIDE_FILE }));
+    const sent = takeCommentAnswer('r1', { decision: { behavior: 'deny' } }) as { decision: { behavior: string; message?: string } };
+    expect(sent.decision.behavior).toBe('deny');
+    expect(sent.decision.message).toMatch(/user declined/i);
+    expect(sent.decision.message).toMatch(/outside this chat's project/i);
+  });
+
+  it('a helper\'s "No" carries the same reason', () => {
+    judgeCommentAsk(ask('AddComment', { path: OUTSIDE_FILE }, { agent_id: 'helper-1' }));
+    const sent = takeCommentAnswer('r1', { decision: { behavior: 'deny' } }) as { decision: { message?: string } };
+    expect(sent.decision.message).toMatch(/user declined/i);
+  });
+
+  it('leaves other asks\' answers as they were', () => {
+    expect(takeCommentAnswer('unrelated', { decision: { behavior: 'deny' } })).toEqual({ decision: { behavior: 'deny' } });
+    judgeCommentAsk(ask('AddComment', { path: OUTSIDE_FILE }));
+    expect(takeCommentAnswer('r1', { decision: { behavior: 'deny', message: 'own words' } })).toEqual({ decision: { behavior: 'deny', message: 'own words' } });
+  });
+
   it('asks with the same card for a Word or Excel file in another folder', () => {
     for (const name of ['report.docx', 'sales.xlsx']) {
       const event = ask('AddComment', { path: path.join(os.tmpdir(), 'elsewhere', name) });

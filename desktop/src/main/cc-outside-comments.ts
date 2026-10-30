@@ -21,8 +21,18 @@ import { bareDocCommentsToolName } from '../shared/doc-comments-mcp';
 
 interface CommentsSession { serverId: string; cwd: string; granted: boolean }
 const sessions = new Map<string, CommentsSession>();
-/** Outside-file asks awaiting an answer: requestId → sessionId. */
-const openAsks = new Map<string, string>();
+/** Outside-file asks awaiting an answer. `chatWide`: the card offered "Allow
+ *  for this chat" (a helper's plain card never does). */
+const openAsks = new Map<string, { sessionId: string; chatWide: boolean }>();
+
+/** WHY a reason on "No": a bare hook deny reaches Claude as "Permission denied
+ *  by hook", and in testing it then guessed at a mystery safety check and told
+ *  the person to change its settings. Claude Code puts a deny's `message` into
+ *  the refused tool's result word for word (docs/cc-dependencies.md), so this
+ *  says plainly that the person chose No — the app's own assistant is told the
+ *  same thing in harness-session.ts. */
+const OUTSIDE_COMMENTS_DECLINED =
+  "The user declined comments on this file, which is outside this chat's project. Ask what they would like instead; don't try to reach the file another way.";
 
 /** Listen for each Claude Code session's comment helper (the session manager's
  *  private `doc-comments-mcp-attached` event) and forget the session on exit. */
@@ -32,7 +42,7 @@ export function trackOutsideComments(sessionManager: EventEmitter): void {
   });
   sessionManager.on('session-exit', (sessionId: string) => {
     sessions.delete(sessionId);
-    for (const [requestId, sid] of openAsks) if (sid === sessionId) openAsks.delete(requestId);
+    for (const [requestId, open] of openAsks) if (open.sessionId === sessionId) openAsks.delete(requestId);
   });
 }
 
@@ -57,25 +67,31 @@ export function judgeCommentAsk(event: { sessionId: string; payload?: Record<str
   if (!isOutside(info.cwd, target)) return bare === 'ReadFileComments' ? 'approve' : 'pass';
   // A helper (Claude Code subagent) never holds or mints the chat-wide grant,
   // matching the app's own assistant: it gets the plain card every time.
-  if (typeof payload.agent_id === 'string' && payload.agent_id) return 'ask';
-  if (info.granted) return 'approve';
   const requestId = payload._requestId;
-  if (typeof requestId === 'string') openAsks.set(requestId, event.sessionId);
+  if (typeof payload.agent_id === 'string' && payload.agent_id) {
+    if (typeof requestId === 'string') openAsks.set(requestId, { sessionId: event.sessionId, chatWide: false });
+    return 'ask';
+  }
+  if (info.granted) return 'approve';
+  if (typeof requestId === 'string') openAsks.set(requestId, { sessionId: event.sessionId, chatWide: true });
   payload.external = true;
   return 'ask';
 }
 
 /** The answer to a Claude Code ask, on its way to Claude Code: records "Allow
- *  for this chat" for an open outside-file ask, and always strips the field
- *  (Claude Code's hook answer has no such key). */
+ *  for this chat" for an open outside-file ask, gives a "No" its reason, and
+ *  always strips the field (Claude Code's hook answer has no such key). */
 export function takeCommentAnswer(requestId: string, decision: object): object {
   const { allowOutsideCommentsForSession, ...rest } = decision as Record<string, unknown>;
-  const sessionId = openAsks.get(requestId);
-  if (sessionId === undefined) return rest;
+  const open = openAsks.get(requestId);
+  if (open === undefined) return rest;
   openAsks.delete(requestId);
   const inner = (rest.decision as Record<string, unknown> | undefined) ?? rest;
-  const info = sessions.get(sessionId);
-  if (info && inner.behavior === 'allow' && allowOutsideCommentsForSession === true) info.granted = true;
+  if (inner.behavior === 'deny' && inner.message === undefined) {
+    return rest.decision ? { ...rest, decision: { ...inner, message: OUTSIDE_COMMENTS_DECLINED } } : { ...rest, message: OUTSIDE_COMMENTS_DECLINED };
+  }
+  const info = sessions.get(open.sessionId);
+  if (info && open.chatWide && inner.behavior === 'allow' && allowOutsideCommentsForSession === true) info.granted = true;
   return rest;
 }
 
