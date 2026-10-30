@@ -463,8 +463,8 @@ export async function openPlaidLink(url: string, browser: PlaidBrowser = 'defaul
   if (!/^https:\/\/([a-z0-9-]+\.)*plaid\.com\//i.test(url)) throw new PlaidError('BAD_LINK', 'Plaid returned a sign-in address the app will not open.');
   if (browser !== 'default' && (await openInBrowser(url, browser))) return;
   // The default browser, or the chosen one when it could not be started.
-  const { shell } = await import('electron');
-  await shell.openExternal(url);
+  const { safeOpenExternal } = await import('../safe-open');
+  await safeOpenExternal(url);
 }
 
 /** Start one named browser on the URL. False when it is not installed (the caller falls back to the default). The

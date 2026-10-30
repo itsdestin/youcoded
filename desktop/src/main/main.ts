@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, shell, webContents, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, webContents, dialog } from 'electron';
+import { safeOpenExternal } from './safe-open';
 import { browserToolService, startBrowserSupport, stopBrowserSupport, wireBrowserSessionCleanup } from './assistant-browser/browser-main';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
@@ -748,7 +749,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // Security: deny window.open() but route safe http(s)/mailto to the OS browser
   win.webContents.setWindowOpenHandler(({ url }) => {
     // Rejects when the OS has no handler for the scheme — must not escape as an unhandled rejection.
-    if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url).catch(() => {});
+    if (/^(https?:|mailto:)/i.test(url)) void safeOpenExternal(url).catch(() => {});
     return { action: 'deny' as const };
   });
   // Disable Chromium's pinch-to-zoom so our IPC zoom handler is the sole zoom path
@@ -1030,7 +1031,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
     // WHY: this isolated experiment's request ceiling must refuse a model
     // dispatch before the provider fetch; never enable it in the built app.
     beforeModelRequest: LUNA_REQUEST_GUARD,
-    openExternal: (url) => LUNA_REQUEST_GUARD ? openLunaAuthBrowser(url, process.env.LUNA_HOST_BROWSER_HOME ?? '') : shell.openExternal(url),
+    openExternal: (url) => LUNA_REQUEST_GUARD ? openLunaAuthBrowser(url, process.env.LUNA_HOST_BROWSER_HOME ?? '') : safeOpenExternal(url).then(() => undefined),
     // The object still exists under the kill switch (the launch check reads the
     // account file through it), but it must not talk to OpenAI: the poll
     // refreshes the token, and a rejected refresh deletes the saved sign-in.

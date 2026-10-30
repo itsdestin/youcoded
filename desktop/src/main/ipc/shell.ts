@@ -8,6 +8,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { clipboard, dialog, shell, type BrowserWindow } from 'electron';
+import { safeOpenExternal, openPathSafely } from '../safe-open';
 import { IPC } from '../../shared/backend-contract';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
@@ -105,7 +106,7 @@ export const shellChannels: MainChannelDef[] = [
   // Open the YouCoded CHANGELOG on GitHub in the default browser.
   defineChannel({
     name: IPC.OPEN_CHANGELOG, kind: 'handle', desktopOnly: true,
-    handler: async () => { await shell.openExternal('https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md'); },
+    handler: async () => { await safeOpenExternal('https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md'); },
   }),
 
   // Open any URL in the default browser (allowlisted to http/https — the scheme is the boundary; any HOST is fine, because
@@ -113,7 +114,7 @@ export const shellChannels: MainChannelDef[] = [
   // explicitly. Never file:, javascript:, etc.
   defineChannel({
     name: IPC.OPEN_EXTERNAL, kind: 'handle', desktopOnly: true,
-    handler: async ({ url }) => { if (typeof url === 'string' && /^https?:\/\//i.test(url)) await shell.openExternal(url); },
+    handler: async ({ url }) => { if (typeof url === 'string' && /^https?:\/\//i.test(url)) await safeOpenExternal(url, { mailto: false }); },
   }),
 
   // Reveal a local file in the OS file manager (the artifact panel's "Reveal in folder"). No-op for empty / non-string paths.
@@ -122,10 +123,11 @@ export const shellChannels: MainChannelDef[] = [
     handler: async ({ filePath }) => { if (typeof filePath === 'string' && filePath.length > 0) shell.showItemInFolder(filePath); },
   }),
 
-  // Open a local file with the OS default app (HTML to browser, .docx to Word, ...). shell.openPath resolves with ''
-  // on success or an error string on failure.
+  // Open a local file with the OS default app (HTML to browser, .docx to Word, ...). Resolves with '' on success or an
+  // error string on failure. WHY openPathSafely (audit F2): a program or script type is shown in its folder instead of being
+  // run — one click on a file chip must never start a program. Same '' result, so no error appears.
   defineChannel({
     name: IPC.OPEN_PATH, kind: 'handle', desktopOnly: true,
-    handler: async ({ filePath }) => (typeof filePath !== 'string' || filePath.length === 0 ? 'no path' : shell.openPath(filePath)),
+    handler: async ({ filePath }) => (typeof filePath !== 'string' || filePath.length === 0 ? 'no path' : openPathSafely(filePath)),
   }),
 ];
