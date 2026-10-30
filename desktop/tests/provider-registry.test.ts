@@ -228,6 +228,53 @@ describe('ProviderRegistry', () => {
     expect(row.baseUrl).toBe('http://localhost:1234/v1');
   });
 
+  // Security hardening 2026-10-30 (secrets audit F7): a saved key must never silently follow an
+  // address change to a different host, and a caller must not be able to aim a row at another key.
+  describe('saved key vs address changes', () => {
+    const mk = async () => {
+      const id = await reg.upsert({ type: 'openai-compatible', label: 'Mine', baseUrl: 'https://api.good.example/v1', enabled: true });
+      await reg.setKey(id, 'sk-secret-1');
+      return id;
+    };
+    it('changing the address to a different host drops the saved key', async () => {
+      const id = await mk();
+      await reg.upsert({ id, type: 'openai-compatible', label: 'Mine', baseUrl: 'https://evil.example/v1', enabled: true });
+      expect(await reg.endpointKey(id)).toBeUndefined();
+      const row = (await reg.list()).find((p) => p.id === id)!;
+      expect(row.hasKey).toBe(false);
+      expect(row.baseUrl).toBe('https://evil.example/v1');
+      // ...and the person can paste a key for the new host as usual.
+      await reg.setKey(id, 'sk-new');
+      expect(await reg.endpointKey(id)).toBe('sk-new');
+    });
+    it('a different port or scheme counts as a different host', async () => {
+      const id = await mk();
+      await reg.upsert({ id, type: 'openai-compatible', label: 'Mine', baseUrl: 'http://api.good.example/v1', enabled: true });
+      expect(await reg.endpointKey(id)).toBeUndefined();
+    });
+    it('a label edit, an enable toggle, or a path change on the SAME host keeps the key', async () => {
+      const id = await mk();
+      await reg.upsert({ id, type: 'openai-compatible', label: 'Renamed', baseUrl: 'https://api.good.example/v1', enabled: false });
+      await reg.upsert({ id, type: 'openai-compatible', label: 'Renamed', baseUrl: 'https://API.good.example/v2', enabled: true });
+      expect(await reg.endpointKey(id)).toBe('sk-secret-1');
+    });
+    it('a caller cannot point a row at another row\'s key through secretRef', async () => {
+      const victim = await mk();
+      const victimRef = (await reg.list()).find((p) => p.id === victim)!.secretRef!;
+      const evil = await reg.upsert({ type: 'openai-compatible', label: 'Evil', baseUrl: 'https://evil.example/v1', secretRef: victimRef, enabled: true } as any);
+      expect(await reg.endpointKey(evil)).toBeUndefined();
+      await reg.upsert({ id: evil, type: 'openai-compatible', label: 'Evil', secretRef: victimRef } as any);
+      expect(await reg.endpointKey(evil)).toBeUndefined();
+      // The victim's own key is untouched.
+      expect(await reg.endpointKey(victim)).toBe('sk-secret-1');
+    });
+    it('the built-in OpenRouter row ignores a new address', async () => {
+      await reg.upsert({ id: 'openrouter', type: 'openrouter', label: 'OpenRouter', baseUrl: 'https://evil.example/v1', enabled: true });
+      const row = (await reg.list()).find((p) => p.id === 'openrouter')!;
+      expect(row.baseUrl).toBeUndefined();
+    });
+  });
+
   describe('local-engine hook (Plan B)', () => {
     function makeHook(overrides: Partial<LocalEngineHook> = {}): LocalEngineHook {
       return {
