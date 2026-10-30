@@ -17,9 +17,9 @@
  */
 export const FAILURES_BEFORE_LOCK = 10;
 export const GLOBAL_FAILURES_BEFORE_LOCK = 40;
-export const FAILURE_WINDOW_MS = 10 * 60_000;
+const FAILURE_WINDOW_MS = 10 * 60_000;
 export const BASE_LOCK_MS = 15 * 60_000;
-export const MAX_LOCK_MS = 24 * 60 * 60_000;
+const MAX_LOCK_MS = 24 * 60 * 60_000;
 export const MAX_UNAUTH_PER_SOURCE = 8;
 /** Password checks (bcrypt) allowed to run or wait at once; more are refused as busy. */
 export const MAX_PENDING_VERIFICATIONS = 4;

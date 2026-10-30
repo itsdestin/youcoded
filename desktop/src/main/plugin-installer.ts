@@ -241,7 +241,7 @@ export function removeEscapingSymlinks(dir: string): number {
  * upstream repo's HEAD is right now. Refuse instead. YouCoded's own marketplace
  * entries (sourceMarketplace "youcoded") are exempt; they are our own repos.
  */
-export const UNVERIFIABLE_PLUGIN_ERROR = "Can't verify this plugin right now, try again later.";
+const UNVERIFIABLE_PLUGIN_ERROR = "Can't verify this plugin right now, try again later.";
 function needsPinButHasNone(entry: MarketplaceEntry): boolean {
   if (entry.sourceType !== 'url' && entry.sourceType !== 'git-subdir') return false;
   if (entry.sourceMarketplace === 'youcoded') return false;
