@@ -222,6 +222,12 @@ var PENDING_DIR = ['.youcoded', 'comments', '.pending'];
 // so the app's comments pane and this script read and write one file.
 var FALLBACK_DIR = ['.youcoded', 'loose-file-comments'];
 
+/** True when p, as written, is root or below it (no disk reads). */
+function lexicallyInside(root, p) {
+  var rel = path.relative(root, p);
+  return rel === '' || (rel !== '..' && rel.indexOf('..' + path.sep) !== 0 && !path.isAbsolute(rel));
+}
+
 /** Card #207: an ABSOLUTE path outside this session's project. Only reached
  *  after Claude Code let the call through, which for a file outside the
  *  project means the person answered the app's outside-file card (main.ts
@@ -260,7 +266,18 @@ function locate(filePath) {
     if (!realProjectRoot) return { error: 'path-outside-project' };
     var abs = path.resolve(realProjectRoot, filePath);
     return checkContainment(realProjectRoot, abs).then(function (realAbs) {
-      if (realAbs === null) return locateOutside(filePath, realProjectRoot);
+      if (realAbs === null) {
+        // WHY (independent review, 2026-10-30): the app decides "outside the
+        // project, show the card" from the path as written. A shortcut
+        // (symlink, or a Windows junction) INSIDE the project that leads out
+        // of it looks inside there, so it got no card and would have been
+        // followed here to the real file. Refuse it, as before card #207;
+        // naming the real file's own path still works, after the card.
+        if (lexicallyInside(realProjectRoot, abs) || lexicallyInside(path.resolve(PROJECT_ROOT), path.resolve(filePath))) {
+          return { error: 'path-outside-project' };
+        }
+        return locateOutside(filePath, realProjectRoot);
+      }
       var rel = path.relative(realProjectRoot, realAbs);
       var sidecarPath = path.join.apply(path, [realProjectRoot].concat(SIDECAR_DIR, [rel + '.json']));
       var pendingDir = path.join.apply(path, [realProjectRoot].concat(PENDING_DIR));

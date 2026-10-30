@@ -467,6 +467,30 @@ describe('path containment — model-controlled path at the MCP tool-argument su
     }
   });
 
+  // The app shows the outside-file card by the path as written, so a link
+  // inside the project named by its FULL path got no card; it must not then be
+  // followed out to the real file (to the loose-file store or the Word queue).
+  it.each(['secret.md', 'secret.docx'])('a link inside the project to an outside %s is refused when named by its full path too', async (name) => {
+    const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'yc-doc-comments-mcp-outside-'));
+    try {
+      const secret = path.join(outside, name);
+      await fs.promises.writeFile(secret, 'do not comment on me');
+      const link = path.join(root, `linked-${name}`);
+      try {
+        await fs.promises.symlink(secret, link);
+      } catch {
+        return; // no symlink rights on this platform — skip
+      }
+      const client = start(root);
+      const res = await client.callTool('ReadFileComments', { path: link });
+      expect(res.result.isError).toBe(true);
+      expect(res.result.content[0].text).toContain('path-outside-project');
+      expect(fs.existsSync(path.join(root, '.youcoded', 'comments', '.pending'))).toBe(false);
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it.each(['ReplyToComment', 'ResolveComment', 'ReopenComment', 'MoveComment'])(
     '%s refuses a path-escaping argument too, not just AddComment (review 3, F1)',
     async (toolName) => {

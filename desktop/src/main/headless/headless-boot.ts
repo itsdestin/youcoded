@@ -23,7 +23,7 @@ import { RemoteConfig } from '../remote-config';
 import { LocalSkillProvider } from '../skill-provider';
 import { CommandProvider } from '../command-provider';
 import { shouldAutoApprove, shouldAutoApproveDocComment } from '../permission-auto-approve';
-import { trackOutsideComments, judgeCommentAsk } from '../cc-outside-comments';
+import { trackOutsideComments, judgeCommentAsk, forgetCommentAsk } from '../cc-outside-comments';
 import { getPermissionOverrides } from '../app-signals';
 import { IPC } from '../../shared/types';
 import { log, rotateLog } from '../logger';
@@ -249,6 +249,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
     ipcWiring.publish(event.sessionId, IPC.HOOK_EVENT, event, { windows: () => {} });
   });
   hookRelay.on('permission-expired', (sessionId: string, requestId: string, reason?: string) => {
+    forgetCommentAsk(requestId); // card #207, same as main.ts
     const evt = { type: 'PermissionExpired', sessionId, payload: { _requestId: requestId, _reason: reason }, timestamp: Date.now() };
     ipcWiring.publish(sessionId, IPC.HOOK_EVENT, evt, { windows: () => {} });
   });

@@ -16,14 +16,19 @@
 // which both answer Claude Code asks and both serve permission:respond.
 // The grant lives in memory only: it ends when the chat ends or the app quits.
 import * as path from 'path';
+import { promises as fsp } from 'fs';
 import type { EventEmitter } from 'events';
 import { bareDocCommentsToolName } from '../shared/doc-comments-mcp';
 
-interface CommentsSession { serverId: string; cwd: string; granted: boolean }
+/** `approved`: outside files the person said Yes to, one entry per Yes, each
+ *  used up by the one Word/Excel request it allowed (claimOutsideApproval). */
+interface CommentsSession { serverId: string; cwd: string; granted: boolean; approved: string[] }
 const sessions = new Map<string, CommentsSession>();
 /** Outside-file asks awaiting an answer. `chatWide`: the card offered "Allow
- *  for this chat" (a helper's plain card never does). */
-const openAsks = new Map<string, { sessionId: string; chatWide: boolean }>();
+ *  for this chat" (a helper's plain card never does). `target`: the file asked about. */
+const openAsks = new Map<string, { sessionId: string; chatWide: boolean; target: string }>();
+/** The chat's current permission mode as the app last read it ('auto', 'bypass', ...). */
+let modeOf: (sessionId: string) => string | null | undefined = () => undefined;
 
 /** WHY a reason on "No": a bare hook deny reaches Claude as "Permission denied
  *  by hook", and in testing it then guessed at a mystery safety check and told
@@ -38,12 +43,57 @@ const OUTSIDE_COMMENTS_DECLINED =
  *  private `doc-comments-mcp-attached` event) and forget the session on exit. */
 export function trackOutsideComments(sessionManager: EventEmitter): void {
   sessionManager.on('doc-comments-mcp-attached', (sessionId: string, cwd: string, _token: string, serverId: string) => {
-    sessions.set(sessionId, { serverId, cwd, granted: false });
+    sessions.set(sessionId, { serverId, cwd, granted: false, approved: [] });
   });
   sessionManager.on('session-exit', (sessionId: string) => {
     sessions.delete(sessionId);
     for (const [requestId, open] of openAsks) if (open.sessionId === sessionId) openAsks.delete(requestId);
   });
+}
+
+/** Where the chat's permission mode is read from (create-runtime.ts wires the
+ *  session record's footer-read mode). */
+export function setOutsideCommentsModeLookup(lookup: (sessionId: string) => string | null | undefined): void {
+  modeOf = lookup;
+}
+
+/** An outside-file ask ended without an answer (timed out, or Claude Code went
+ *  away): forget it, so the open-asks list cannot grow for a long chat. */
+export function forgetCommentAsk(requestId: string): void {
+  openAsks.delete(requestId);
+}
+
+/** WHY (independent review, 2026-10-30): the Word/Excel request queue
+ *  (pending-mutation-queue.ts) checks only this chat's secret, and that secret
+ *  sits in a file the assistant could read. Before card #207 a forged request
+ *  could only touch files inside the project, which the assistant can change
+ *  anyway; now it could name any Word/Excel file. So an outside request also
+ *  needs the person's own answer, recorded here by the app: "Allow for this
+ *  chat", or a Yes for this very file (used up by the one request it allowed).
+ *  In "auto" and "skip permissions" modes Claude Code decides without asking
+ *  the app at all, so there is no answer to record; the person chose not to be
+ *  asked there, and the request goes through as before. */
+export async function claimOutsideApproval(sessionId: string, realTarget: string): Promise<boolean> {
+  const info = sessions.get(sessionId);
+  if (!info) return false;
+  if (info.granted) return true;
+  const mode = modeOf(sessionId);
+  if (mode === 'auto' || mode === 'bypass') return true;
+  const want = sameFileKey(realTarget);
+  for (let i = 0; i < info.approved.length; i++) {
+    const real = await fsp.realpath(info.approved[i]).catch(() => path.resolve(info.approved[i]));
+    if (sameFileKey(real) === want) {
+      info.approved.splice(i, 1);
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Windows and macOS file names ignore letter case by default; Linux's do not. */
+function sameFileKey(p: string): string {
+  const resolved = path.resolve(p);
+  return process.platform === 'win32' || process.platform === 'darwin' ? resolved.toLowerCase() : resolved;
 }
 
 /** 'approve': answer allow now. 'ask': show a card and let no other
@@ -69,11 +119,11 @@ export function judgeCommentAsk(event: { sessionId: string; payload?: Record<str
   // matching the app's own assistant: it gets the plain card every time.
   const requestId = payload._requestId;
   if (typeof payload.agent_id === 'string' && payload.agent_id) {
-    if (typeof requestId === 'string') openAsks.set(requestId, { sessionId: event.sessionId, chatWide: false });
+    if (typeof requestId === 'string') openAsks.set(requestId, { sessionId: event.sessionId, chatWide: false, target });
     return 'ask';
   }
   if (info.granted) return 'approve';
-  if (typeof requestId === 'string') openAsks.set(requestId, { sessionId: event.sessionId, chatWide: true });
+  if (typeof requestId === 'string') openAsks.set(requestId, { sessionId: event.sessionId, chatWide: true, target });
   payload.external = true;
   return 'ask';
 }
@@ -91,7 +141,10 @@ export function takeCommentAnswer(requestId: string, decision: object): object {
     return rest.decision ? { ...rest, decision: { ...inner, message: OUTSIDE_COMMENTS_DECLINED } } : { ...rest, message: OUTSIDE_COMMENTS_DECLINED };
   }
   const info = sessions.get(open.sessionId);
-  if (info && open.chatWide && inner.behavior === 'allow' && allowOutsideCommentsForSession === true) info.granted = true;
+  if (info && inner.behavior === 'allow') {
+    if (open.chatWide && allowOutsideCommentsForSession === true) info.granted = true;
+    else info.approved.push(open.target);
+  }
   return rest;
 }
 
@@ -109,4 +162,5 @@ function isOutside(cwd: string, target: string): boolean {
 export function resetOutsideCommentsForTests(): void {
   sessions.clear();
   openAsks.clear();
+  modeOf = () => undefined;
 }

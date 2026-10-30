@@ -12,6 +12,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import { EventEmitter } from 'events';
+import { trackOutsideComments, judgeCommentAsk, takeCommentAnswer, setOutsideCommentsModeLookup, resetOutsideCommentsForTests } from '../src/main/cc-outside-comments';
 import {
   startPendingMutationQueue,
   stopPendingMutationQueue,
@@ -160,24 +162,45 @@ describe('queue round-trip — request written, result appears, and the original
   });
 });
 
+/** Plays the person answering the outside-file card in a Claude Code chat:
+ *  "Yes" for one file, or "Allow for this chat" (cc-outside-comments.ts). */
+const SERVER = 'youcoded-doc-comments-q1w2e3r4';
+function answerOutsideCard(sessionId: string, file: string, how: 'yes' | 'chat' | 'no'): void {
+  const manager = new EventEmitter();
+  trackOutsideComments(manager);
+  manager.emit('doc-comments-mcp-attached', sessionId, root, VALID_TOKEN, SERVER);
+  const requestId = `ask-${randomUUID()}`;
+  judgeCommentAsk({ sessionId, payload: { tool_name: `mcp__${SERVER}__AddComment`, tool_input: { path: file }, _requestId: requestId } });
+  takeCommentAnswer(requestId, how === 'no'
+    ? { decision: { behavior: 'deny' } }
+    : { decision: { behavior: 'allow' }, ...(how === 'chat' ? { allowOutsideCommentsForSession: true } : {}) });
+}
+
+const OUTSIDE_SELECTOR = { kind: 'text' as const, selector: { type: 'TextQuoteSelector' as const, exact: 'Beta opens to 500 customers on March 10', prefix: '', suffix: '', occurrence: 0 } };
+
 describe('a Word file outside the project, named by a request carrying this chat\'s token', () => {
-  it('is read and written in place; nothing is copied under the project', async () => {
+  afterEach(() => resetOutsideCommentsForTests());
+
+  async function outsideFixture(): Promise<{ realRoot: string; outside: string; file: string }> {
     await newRoot();
     const realRoot = await fs.promises.realpath(root);
     const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'yc-pending-queue-outside-'));
+    const file = path.join(outside, 'brief.docx');
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), file);
+    return { realRoot, outside, file };
+  }
+
+  it('after "Allow for this chat", is read and written in place; nothing is copied under the project', async () => {
+    const { realRoot, outside, file } = await outsideFixture();
     try {
-      const file = path.join(outside, 'brief.docx');
-      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), file);
       await start('sess-outside', root);
+      answerOutsideCard('sess-outside', file, 'chat');
 
       const listId = await writeRequest(realRoot, { kind: 'list', format: 'docx', path: file });
       const listed = await waitForResult(realRoot, listId);
       expect(listed.ok && listed.comments!.map((c) => c.id)).toContain('w-0');
 
-      const addId = await writeRequest(realRoot, {
-        kind: 'add', format: 'docx', path: file, author: 'assistant', text: 'outside via queue',
-        selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'Beta opens to 500 customers on March 10', prefix: '', suffix: '', occurrence: 0 } },
-      });
+      const addId = await writeRequest(realRoot, { kind: 'add', format: 'docx', path: file, author: 'assistant', text: 'outside via queue', selector: OUTSIDE_SELECTOR });
       expect((await waitForResult(realRoot, addId)).ok).toBe(true);
       const read = await readDocxComments(await fs.promises.readFile(file), file);
       expect(read.ok && read.comments.some((c) => c.text === 'outside via queue')).toBe(true);
@@ -187,14 +210,68 @@ describe('a Word file outside the project, named by a request carrying this chat
     }
   });
 
-  it('is still refused without this chat\'s token', async () => {
-    await newRoot();
-    const realRoot = await fs.promises.realpath(root);
-    const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'yc-pending-queue-outside-'));
+  it('carrying the right token but no answer from the person, is refused and the file is untouched', async () => {
+    const { realRoot, outside, file } = await outsideFixture();
     try {
-      const file = path.join(outside, 'brief.docx');
-      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), file);
+      await start('sess-outside-unasked', root);
+      const before = await fs.promises.readFile(file);
+      const id = await writeRequest(realRoot, { kind: 'add', format: 'docx', path: file, author: 'assistant', text: 'forged', selector: OUTSIDE_SELECTOR });
+      expect(await waitForResult(realRoot, id)).toEqual({ ok: false, error: 'outside-file-not-approved' });
+      expect((await fs.promises.readFile(file)).equals(before)).toBe(true);
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('after "No", is refused', async () => {
+    const { realRoot, outside, file } = await outsideFixture();
+    try {
+      await start('sess-outside-no', root);
+      answerOutsideCard('sess-outside-no', file, 'no');
+      const id = await writeRequest(realRoot, { kind: 'list', format: 'docx', path: file });
+      expect(await waitForResult(realRoot, id)).toEqual({ ok: false, error: 'outside-file-not-approved' });
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('a "Yes" covers that one file, once', async () => {
+    const { realRoot, outside, file } = await outsideFixture();
+    try {
+      await start('sess-outside-yes', root);
+      const other = path.join(outside, 'other.docx');
+      await fs.promises.copyFile(file, other);
+      answerOutsideCard('sess-outside-yes', file, 'yes');
+
+      const otherId = await writeRequest(realRoot, { kind: 'list', format: 'docx', path: other });
+      expect(await waitForResult(realRoot, otherId)).toEqual({ ok: false, error: 'outside-file-not-approved' });
+      const firstId = await writeRequest(realRoot, { kind: 'list', format: 'docx', path: file });
+      expect((await waitForResult(realRoot, firstId)).ok).toBe(true);
+      const againId = await writeRequest(realRoot, { kind: 'list', format: 'docx', path: file });
+      expect(await waitForResult(realRoot, againId)).toEqual({ ok: false, error: 'outside-file-not-approved' });
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('in a chat Claude Code runs without asking (auto mode), goes through with no card answer', async () => {
+    const { realRoot, outside, file } = await outsideFixture();
+    try {
+      await start('sess-outside-auto', root);
+      answerOutsideCard('sess-outside-auto', path.join(outside, 'unrelated.docx'), 'no');
+      setOutsideCommentsModeLookup((sessionId) => (sessionId === 'sess-outside-auto' ? 'auto' : 'normal'));
+      const id = await writeRequest(realRoot, { kind: 'list', format: 'docx', path: file });
+      expect((await waitForResult(realRoot, id)).ok).toBe(true);
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('is still refused without this chat\'s token', async () => {
+    const { realRoot, outside, file } = await outsideFixture();
+    try {
       await start('sess-outside-forged', root);
+      answerOutsideCard('sess-outside-forged', file, 'chat');
       const id = await writeRequest(realRoot, { kind: 'list', format: 'docx', path: file, token: 'a-completely-different-forged-token-00000000' });
       expect(await waitForResult(realRoot, id)).toEqual({ ok: false, error: 'invalid-request-token' });
     } finally {

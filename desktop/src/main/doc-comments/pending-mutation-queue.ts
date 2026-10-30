@@ -79,6 +79,7 @@ import {
   type OutsideApproval,
 } from './doc-comments-dispatch';
 import { resolveSourceFilePath } from './doc-comments-store';
+import { claimOutsideApproval } from '../cc-outside-comments';
 import type {
   CommentReply,
   PendingMutationRequest,
@@ -146,14 +147,14 @@ function tokensMatch(a: unknown, b: string): boolean {
   return timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
 }
 
-/** True when `req.token` matches ANY session currently sharing this entry's
- *  queue — several Claude Code sessions can share one project root, each
- *  with its own independently-generated token. */
-function hasValidToken(entry: Entry, req: PendingMutationRequest): boolean {
-  for (const token of entry.refs.values()) {
-    if (tokensMatch(req.token, token)) return true;
+/** The session whose token `req.token` matches, among ALL sessions currently
+ *  sharing this entry's queue — several Claude Code sessions can share one
+ *  project root, each with its own independently-generated token. Null: none. */
+function tokenOwner(entry: Entry, req: PendingMutationRequest): string | null {
+  for (const [sessionId, token] of entry.refs) {
+    if (tokensMatch(req.token, token)) return sessionId;
   }
-  return false;
+  return null;
 }
 
 /** Applies one request through the SAME dispatch functions the desktop IPC
@@ -168,22 +169,28 @@ function hasValidToken(entry: Entry, req: PendingMutationRequest): boolean {
 const isQueued = (r: object): boolean => 'queued' in r && (r as { queued?: unknown }).queued === true;
 
 /** Card #207: an absolute path whose real location is outside the project
- *  is a Word/Excel file in another folder. The request already carries this
- *  chat's secret (checked before this runs), and Claude Code ran the tool only
- *  after the outside-file card was answered (cc-outside-comments.ts), so it is
- *  applied with the card's approval instead of the project root. Decided by
- *  the SAME realpath containment the helper script used to route it here. */
-async function targetScope(reqPath: string, trustedProjectRoot: string): Promise<{ path: string; projectRoot?: string; outsideApproval?: OutsideApproval }> {
+ *  is a Word/Excel file in another folder (decided by the SAME realpath
+ *  containment the helper script used to route it here). The chat's secret
+ *  alone is not enough for one — the assistant could read it — so the app's
+ *  own record of the person's answer must cover this file too
+ *  (cc-outside-comments.ts claimOutsideApproval); then it is applied with the
+ *  card's approval instead of the project root. */
+async function targetScope(reqPath: string, trustedProjectRoot: string, sessionId: string): Promise<{ path: string; projectRoot?: string; outsideApproval?: OutsideApproval } | { refused: string }> {
   if (path.isAbsolute(reqPath)) {
     const inside = await resolveSourceFilePath({ path: reqPath, projectRoot: trustedProjectRoot });
-    if (!inside.ok && inside.error === 'path-outside-project') return { path: reqPath, outsideApproval: OUTSIDE_FILE_APPROVED };
+    if (!inside.ok && inside.error === 'path-outside-project') {
+      const real = await fs.realpath(reqPath).catch(() => reqPath);
+      if (!(await claimOutsideApproval(sessionId, real))) return { refused: 'outside-file-not-approved' };
+      return { path: reqPath, outsideApproval: OUTSIDE_FILE_APPROVED };
+    }
   }
   return { path: reqPath, projectRoot: trustedProjectRoot };
 }
 
-async function applyRequest(req: PendingMutationRequest, trustedProjectRoot: string): Promise<PendingMutationResult> {
+async function applyRequest(req: PendingMutationRequest, trustedProjectRoot: string, sessionId: string): Promise<PendingMutationResult> {
   const format: NativeFormat = req.format;
-  const base = await targetScope(req.path, trustedProjectRoot);
+  const base = await targetScope(req.path, trustedProjectRoot, sessionId);
+  if ('refused' in base) return { ok: false, error: base.refused };
   if (req.kind === 'list') {
     const result = await listNativeComments(format, base);
     return result.ok ? { ok: true, comments: result.comments } : { ok: false, error: result.error };
@@ -348,7 +355,8 @@ async function handleNewRequest(entry: Entry, absPath: string): Promise<void> {
     }
     const resultPath = path.join(entry.pendingDir, `${req.id}.result.json`);
     let result: PendingMutationResult;
-    if (!hasValidToken(entry, req)) {
+    const owner = tokenOwner(entry, req);
+    if (owner === null) {
       // Finding #1: the REAL authorization boundary. A mismatched or
       // missing token means this file did not come from a session this
       // queue is currently serving — refuse honestly (a live, legitimate
@@ -359,7 +367,7 @@ async function handleNewRequest(entry: Entry, absPath: string): Promise<void> {
       result = { ok: false, error: 'invalid-request-token' };
     } else {
       try {
-        result = await applyRequest(req, entry.realRoot);
+        result = await applyRequest(req, entry.realRoot, owner);
       } catch (err) {
         result = { ok: false, error: err instanceof Error ? err.message : 'apply-failed' };
       }
