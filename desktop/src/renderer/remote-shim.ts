@@ -3301,6 +3301,7 @@ export function installShim(): void {
       onChatState: () => () => { /* no-op unsubscribe */ },
       onChatSize: () => () => { /* no-op unsubscribe */ },
       onFocusSession: () => () => { /* no-op unsubscribe */ },
+      onSeenInBuddy: () => () => { /* no-op unsubscribe: the buddy is a desktop window */ },
       // ── The Linux/KDE buddy helper (design §4) ──
       // Answered locally, not thrown and not sent over the wire. Two reasons.
       // First, the honest answer really is this one: a phone or a remote browser

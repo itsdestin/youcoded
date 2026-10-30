@@ -115,6 +115,9 @@ export interface BuddyWindowManagerDeps {
   setPersistedChatSize?(size: 'small' | 'large'): void;
   registry: WindowRegistry;
   mainWindow: () => BrowserWindow | null;
+  /** The open chat started showing a session (opened, or switched to another): main tells that session's owner
+   *  window it has been seen, so its blue dot clears (see watchedSession). Optional: tests leave it out. */
+  onWatchedSessionChanged?(): void;
   /** Broadcast { dismissed, visible } to all windows (buddy:status-changed). */
   onStatusChanged(status: { dismissed: boolean; visible: boolean; style: BuddyStyle }): void;
   /**
@@ -861,6 +864,7 @@ export class BuddyWindowManager {
       this.chat.show();
       this.chat.webContents.send(IPC_CHAT_STATE, { visible: true, mascot: mascotSide(layout) });
       this.barVisibility.setChatOpen(true);
+      this.deps.onWatchedSessionChanged?.();
       // Opening the chat is what actually brings a peeking buddy out — and keeps
       // him out, unlike the hover hop.
       this.syncEngagement();
@@ -915,10 +919,18 @@ export class BuddyWindowManager {
       this.deps.registry.subscribe(sessionId, wcId);
     }
     this.viewedSessionId = sessionId;
+    this.deps.onWatchedSessionChanged?.();
   }
 
   getViewedSession(): string | null {
     return this.viewedSessionId;
+  }
+
+  /** The session the person is looking at in the buddy right now: the viewed one while the chat is open, else null.
+   *  WHY separate from getViewedSession: the viewed session is remembered while the chat is shut, and a reply that
+   *  finishes then has not been seen, so it must still turn blue. */
+  watchedSession(): string | null {
+    return this.chatOpenIntent && this.chat && !this.chat.isDestroyed() ? this.viewedSessionId : null;
   }
 
   /** True iff `win` is one of the buddy windows this manager owns
@@ -1183,6 +1195,7 @@ export class BuddyWindowManager {
     this.chat.show();
     this.chat.focus();
     this.barVisibility.setChatOpen(true);
+    this.deps.onWatchedSessionChanged?.();
     this.syncEngagement();
     // setChatOpen(true) created the bar above the chat, but chat.focus() may
     // have re-raised the chat — assert the order rather than rely on timing.

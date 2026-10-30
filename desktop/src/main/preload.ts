@@ -273,6 +273,7 @@ const IPC = {
   BUDDY_INSTALL_HELPER: 'buddy:install-helper',
   BUDDY_REMOVE_HELPER: 'buddy:remove-helper',
   SESSION_FOCUS_REQUEST: 'session:focus-request',
+  SESSION_SEEN_IN_BUDDY: 'session:seen-in-buddy',
   SESSION_ATTENTION_SUMMARY: 'session:attention-summary',
   ATTENTION_REPORT: 'attention:report',
   ATTENTION_GET_SUMMARY: 'attention:get-summary',
@@ -2008,6 +2009,11 @@ contextBridge.exposeInMainWorld('claude', {
       const listener = (_: unknown, sessionId: string) => cb(sessionId);
       ipcRenderer.on(IPC.SESSION_FOCUS_REQUEST, listener);
       return () => ipcRenderer.removeListener(IPC.SESSION_FOCUS_REQUEST, listener);
+    },
+    onSeenInBuddy: (cb: (sessionId: string) => void) => {
+      const listener = (_: unknown, sessionId: string) => cb(sessionId);
+      ipcRenderer.on(IPC.SESSION_SEEN_IN_BUDDY, listener);
+      return () => ipcRenderer.removeListener(IPC.SESSION_SEEN_IN_BUDDY, listener);
     },
     // ── The Linux/KDE buddy helper (design §4) ──
     //

@@ -1130,6 +1130,22 @@ function AppInner() {
     }
   }, [sessionAttention, sessions]);
 
+  // The buddy chat is showing one of this window's sessions: count it as seen, exactly as switching to it here does.
+  // WHY: this window draws the dot every screen shows (main merges each owner's colours), and only its own
+  // viewedSessions could clear blue — so opening a finished reply in the buddy left it blue everywhere
+  // (Destin, 2026-10-30: "clicking into a session never clears blue status dots in the buddy").
+  useEffect(() => {
+    const off = window.claude?.buddy?.onSeenInBuddy?.((sid: string) => {
+      setViewedSessions((prev) => {
+        if (prev.has(sid)) return prev;
+        const next = new Set(prev);
+        next.add(sid);
+        return next;
+      });
+    });
+    return off;
+  }, []);
+
   // Buddy "open main app" → its viewed session; sessionsRef keeps this subscription stable.
   useEffect(() => {
     const off = window.claude?.buddy?.onFocusSession?.((sid: string) => {

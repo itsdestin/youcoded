@@ -562,6 +562,25 @@ function recomputeAndBroadcastAttention(): void {
   }
   // Dock/peek activity signal: attention pops a peeking buddy out (spec §6.2).
   buddyManagerRef?.setAttentionNeeded(anyNeedsAttention);
+  // A reply that finishes while the buddy chat is showing it was seen as it arrived.
+  tellOwnerSeenInBuddy(summary);
+}
+
+/**
+ * The buddy chat is open on a session whose dot is blue: tell the window that owns it the reply has been seen, so it
+ * clears the blue the way switching to the session there does. WHY here: the owner window derives the colour every
+ * screen shows (it alone knows what it has looked at), and nothing told it about the buddy (Destin, 2026-10-30:
+ * "clicking into a session never clears blue status dots in the buddy"). Only on blue, so this costs a lookup per
+ * summary and sends nothing once the dot is clear.
+ */
+function tellOwnerSeenInBuddy(summary: AttentionSummary): void {
+  const sid = buddyManagerRef?.watchedSession();
+  if (!sid || summary.perSession[sid]?.status !== 'blue') return;
+  for (const [wcId, byWin] of attentionReports) {
+    if (!byWin.has(sid)) continue;
+    const wc = webContents.fromId(wcId);
+    if (wc && !wc.isDestroyed()) wc.send(IPC.SESSION_SEEN_IN_BUDDY, sid);
+  }
 }
 
 // 100ms debounce — coalesces bursts of classifier transitions so buddy
@@ -1708,6 +1727,7 @@ void app.whenReady().then(async () => {
         },
         registry: windowRegistry,
         mainWindow: () => mainWindow,
+        onWatchedSessionChanged: () => tellOwnerSeenInBuddy(buildAttentionSummary()),
         // Status pushes go to every window (main app Settings panels + buddy
         // surfaces) so the "Hidden until restart" row state renders live.
         onStatusChanged: (status) => {

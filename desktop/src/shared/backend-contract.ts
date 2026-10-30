@@ -447,6 +447,8 @@ export const IPC = {
   BUDDY_REMOVE_HELPER: 'buddy:remove-helper',
   // Main → main window: switch active session (sent by buddy:open-main).
   SESSION_FOCUS_REQUEST: 'session:focus-request',
+  // Main → the window that owns a session: the buddy chat is showing it, so its reply has been seen (no blue dot).
+  SESSION_SEEN_IN_BUDDY: 'session:seen-in-buddy',
   SESSION_ATTENTION_SUMMARY: 'session:attention-summary',
   ATTENTION_REPORT: 'attention:report',
   ATTENTION_GET_SUMMARY: 'attention:get-summary',

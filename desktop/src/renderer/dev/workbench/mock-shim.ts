@@ -3950,6 +3950,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     onChatSize: () => () => {},
     onAttachFile: () => () => {},
     onAttentionSummary: () => () => {},
+    onSeenInBuddy: () => () => {},
     onFocusSession: (cb: (sessionId: string) => void) => {
       focusSessionSubs.add(cb);
       return () => { focusSessionSubs.delete(cb); };

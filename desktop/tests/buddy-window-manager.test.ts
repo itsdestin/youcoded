@@ -145,6 +145,7 @@ function harness(opts: {
   tray?: TrayFake;
   nativeSizeDrift?: boolean;
   chatSize?: 'small' | 'large' | null;
+  onWatchedSessionChanged?: () => void;
 } = {}): Harness {
   const created: Harness['created'] = [];
   const wins: Partial<Record<BuddyRole, FakeWin>> = {};
@@ -170,6 +171,7 @@ function harness(opts: {
     workArea: opts.workArea,
     captionChannelLive: opts.caption ? () => true : undefined,
     createTray: opts.tray ? opts.tray.create : undefined,
+    onWatchedSessionChanged: opts.onWatchedSessionChanged,
   };
 
   const all = () => Object.values(wins) as FakeWin[];
@@ -954,6 +956,35 @@ describe("the chat's two sizes (the bar's size button)", () => {
       expect(['above', 'below']).toContain(cue.mascot);
     } finally {
       h.manager.hide();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('the session the buddy chat is showing', () => {
+  it('is the viewed session only while the chat is open, and each open or switch is announced', () => {
+    vi.useFakeTimers();
+    try {
+      const announced = vi.fn();
+      const h = harness({ onWatchedSessionChanged: announced });
+      h.manager.show();
+      h.manager.setViewedSession('s1');
+      // Chosen but not on screen: a reply finishing now has not been seen.
+      expect(h.manager.watchedSession()).toBeNull();
+      h.manager.toggleChat();
+      expect(h.manager.watchedSession()).toBe('s1');
+      announced.mockClear();
+      h.manager.setViewedSession('s2');
+      expect(h.manager.watchedSession()).toBe('s2');
+      expect(announced).toHaveBeenCalledTimes(1);
+      h.manager.toggleChat(); // close
+      expect(h.manager.watchedSession()).toBeNull();
+      announced.mockClear();
+      h.manager.toggleChat(); // re-open: the owner window hears again
+      vi.advanceTimersByTime(300);
+      expect(h.manager.watchedSession()).toBe('s2');
+      expect(announced).toHaveBeenCalled();
+    } finally {
       vi.useRealTimers();
     }
   });

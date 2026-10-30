@@ -1403,6 +1403,8 @@ export interface BuddyApi {
   onChatState(cb: (s: { visible: boolean; mascot?: 'above' | 'below'; resize?: 'out' | 'in' }) => void): () => void;
   onChatSize(cb: (size: 'small' | 'large') => void): () => void;
   onFocusSession(cb: (sessionId: string) => void): () => void;
+  /** The buddy chat is showing this session, so the window that owns it counts it as seen (clears its blue dot). */
+  onSeenInBuddy(cb: (sessionId: string) => void): () => void;
 }
 
 // Marketplace redesign Phase 1 — per-entry component inventory for the
