@@ -20,8 +20,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       # WHY (2026-09-13): this workflow never stamped a version, so its APKs
       # inherited the hand-set versionName in app/build.gradle.kts — `1.2.4`,
       # the May release — and every dogfood build reported itself to analytics
@@ -51,20 +50,20 @@ jobs:
           grep -nE 'versionCode|versionName' app/build.gradle.kts | head -2
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v6
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c  # v6
       # The app's bundled programs (app/runtime/build-runtime.sh) are cross-built with clang + lld and
       # assembled from pinned downloads, cached by their pins (Android clean rebuild, 2026-10-14).
       - name: Install runtime build tools
@@ -76,7 +75,7 @@ jobs:
           docker pull alpine:3.24
           echo 'YOUCODED_APK_VERSION=docker run --rm alpine:3.24 apk version -t' >> "$GITHUB_ENV"
       - name: Cache runtime downloads
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
         with:
           path: app/build/runtime-cache
           key: android-runtime-${{ hashFiles('app/runtime/pins.env') }}
@@ -110,14 +109,14 @@ jobs:
         run: ./gradlew assembleReleaseTest
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: youcoded-test-apk
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 7
 
       - name: Upload releaseTest APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: youcoded-test-apk-releasetest
           path: app/build/outputs/apk/releaseTest/*.apk
