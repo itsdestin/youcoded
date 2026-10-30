@@ -152,7 +152,8 @@ export function BuddyChat({ tools = 'summary', shown = true, opened = 0 }: { too
   if (!viewedSession) {
     return (
       <div className="buddy-chat-shell" style={{ height: '100vh', padding: '12px 10px' }}>
-        <BuddyWelcome onSessionCreated={(sid) => select(sid)} />
+        {/* key: each open starts it afresh, like the session strip — no half-filled form greets the next open. */}
+        <BuddyWelcome key={opened} onSessionCreated={(sid) => select(sid)} />
       </div>
     );
   }
