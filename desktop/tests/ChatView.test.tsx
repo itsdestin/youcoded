@@ -84,7 +84,11 @@ describe('model status placement', () => {
 
   it('keeps the local-model floater within the chat column even with a drawer', () => {
     mocks.artifact.drawerOpenBySession.s1 = true;
+    // The demo strip shows only inside the workbench (?modelLoading=1).
+    const before = location.href;
+    window.history.replaceState(null, '', '/?mode=workbench&modelLoading=1');
     const { container } = render(<ChatView sessionId="s1" visible sessionActive modelLoadingDemo />);
+    window.history.replaceState(null, '', before);
     expect(container.querySelector('.drawer-pane')).toBeTruthy();
     const model = container.querySelector('.model-status-strip') as HTMLElement;
     expect(model).toBeTruthy();

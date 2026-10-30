@@ -3639,7 +3639,7 @@ function AppInner() {
                       onEditQueued={handleEditQueued}
                       onSendQueuedNow={handleSendQueuedNow}
                       filling={remoteWatch.isFilling(s.id)}
-                      modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}
+                      modelLoadingDemo={s.id === sessionId /* the workbench's ?modelLoading= demo applies to the visible chat only */}
                     />
                   </ErrorBoundary>}
                   {!String(s.id).startsWith('pending-handoff:') && <ErrorBoundary name="Terminal">
