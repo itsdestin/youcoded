@@ -38,6 +38,9 @@ interface Parts {
   // simply don't swap (graceful degradation per spec §3.2).
   faces: Partial<Record<FaceName | 'blink', SVGGElement>>;
   pupils: SVGGElement[];
+  /** Slots the rig contract says "move with the body" (wecoded-themes/mascots/README.md → Component slots) that a rig
+   *  draws OUTSIDE #rig-body — the template puts #slot-hat beside it. applyBody moves them with the body. */
+  bodyFollowers: SVGGElement[];
 }
 
 // Parts the springs act on: the four limbs plus the tail, which trails
@@ -146,12 +149,29 @@ export function MascotRig({
     const root = svg.querySelector<SVGGElement>('#rig-root');
     // The idle body loops rotate/scale in viewBox coordinates.
     if (root) (root.style as unknown as Record<string, string>).transformBox = 'view-box';
+    // WHY (buddy rebuild, 2026-10-29 — Destin: "when it sleeps with something like the morning rounds dog theme, the ears
+    // stay floating above its head"): the contract says a hat and eyewear move WITH THE BODY, but the template draws
+    // #slot-hat beside #rig-body, and only #rig-body was ever moved — so a pose that settles the body (sleep) left a hat,
+    // or a dog's ears drawn in the hat slot, hanging where the head used to be. A slot outside the body now takes the
+    // body's own transform, about the body's own origin.
+    const bodyEl = byId.get('rig-body');
+    const bodyFollowers: SVGGElement[] = [];
+    if (bodyEl) {
+      for (const id of ['slot-hat', 'slot-eyewear']) {
+        const el = svg.querySelector<SVGGElement>(`#${id}`);
+        if (!el || bodyEl.contains(el)) continue;
+        (el.style as unknown as Record<string, string>).transformBox = 'view-box';
+        el.style.transformOrigin = bodyEl.style.transformOrigin;
+        bodyFollowers.push(el);
+      }
+    }
     partsRef.current = {
       svg,
       root,
       byId,
       faces,
       pupils: Array.from(svg.querySelectorAll<SVGGElement>('.pupil')),
+      bodyFollowers,
     };
     // SPRINGS SURVIVE A RE-INDEX (2026-09-05). They used to be thrown away here,
     // and because React can rebuild the host div with identical innerHTML —
@@ -482,13 +502,17 @@ function applyBody(parts: Parts, pose: PoseName, instant: boolean): void {
     // The same curve both ways is what made the change of state read as a jump
     // rather than as him doing something.
     const asleep = pose === 'sleep';
-    el.style.transition = instant
+    const transition = instant
       ? 'none'
       : asleep
         ? 'transform 620ms cubic-bezier(.32,.02,.28,1)'
         : 'transform 300ms cubic-bezier(.2,1.5,.4,1)';
-    el.style.transform =
-      `translate(${p.tx ?? 0}px, ${p.ty ?? 0}px) rotate(${p.rotate ?? 0}deg) scale(${p.scale ?? 1})`;
+    const transform = `translate(${p.tx ?? 0}px, ${p.ty ?? 0}px) rotate(${p.rotate ?? 0}deg) scale(${p.scale ?? 1})`;
+    // The body, and the slots that ride on it (Parts.bodyFollowers), in one step so they can never part company.
+    for (const target of [el, ...parts.bodyFollowers]) {
+      target.style.transition = transition;
+      target.style.transform = transform;
+    }
   }
 }
 
