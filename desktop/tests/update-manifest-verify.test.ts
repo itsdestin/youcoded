@@ -135,6 +135,21 @@ describe('verifyDownloadedUpdate — the full gate', () => {
     })).rejects.toMatchObject({ code: 'verify-failed' });
   });
 
+  it('refuses a release older than the highest version ever installed, even if newer than running', async () => {
+    // WHY (audit SC-9): machine once ran 1.5.0, was reinstalled at 1.2.4; a signed 1.3.0 must not be offered.
+    const bytes = bytesOf(manifestFor('1.3.0'));
+    await expect(verifyDownloadedUpdate({
+      ...base, filePath: installerPath, manifestBytes: bytes, signatureBytes: sign(bytes), highestInstalledVersion: '1.5.0',
+    })).rejects.toMatchObject({ code: 'verify-failed' });
+  });
+
+  it('still accepts a release equal to or newer than the highest installed version', async () => {
+    const bytes = bytesOf(manifestFor('1.3.0'));
+    await expect(verifyDownloadedUpdate({
+      ...base, filePath: installerPath, manifestBytes: bytes, signatureBytes: sign(bytes), highestInstalledVersion: '1.3.0',
+    })).resolves.toMatchObject({ version: '1.3.0' });
+  });
+
   it('installs the full release over a beta of the same version', async () => {
     const bytes = bytesOf(manifestFor('1.3.0'));
     await expect(verifyDownloadedUpdate({
