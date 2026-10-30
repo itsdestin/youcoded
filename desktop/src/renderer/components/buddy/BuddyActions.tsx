@@ -1,3 +1,4 @@
+import React from 'react';
 /**
  * The icons of the buddy's four actions — screenshot the desktop into the chat, a bigger or smaller chat window, open
  * YouCoded, hide the buddy — drawn by the panel beside the mascot (BuddyBarApp; buddy-rebuild-review5#C-5). The same
@@ -8,7 +9,36 @@ const ICON = {
   stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
 } as const;
 
+// TEMPORARY — icon review (Destin, 2026-10-30: "screenshot, open youcoded, and hide … redrawn so their purpose is more
+// intuitive"). ?icons=<shot>,<open>,<hide> swaps in a candidate so the review deck can photograph each one in the real
+// row. Deleted, with every losing candidate, once he picks.
+const PICK = (() => {
+  try { return new URLSearchParams(window.location.search).get('icons')?.split(',') ?? []; } catch { return []; }
+})();
+const CANDIDATES: Record<'shot' | 'open' | 'hide', Record<string, React.ReactNode>> = {
+  shot: {
+    frame: <><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2" /><circle cx="12" cy="12" r="3" /></>,
+    monitor: <><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4M6 9V7h3M15 7h3v2M18 11v2h-3M9 13H6v-2" /></>,
+    camera: <><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z" /><circle cx="12" cy="13" r="3" /></>,
+  },
+  open: {
+    external: <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />,
+    window: <><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 9h20M6 6.5h.01M9 6.5h.01" /></>,
+    home: <><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9v10a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9" /></>,
+  },
+  hide: {
+    eyeoff: <><path d="M10.7 5.1A10.7 10.7 0 0 1 21.9 12a10.8 10.8 0 0 1-1.4 2.5M14.1 14.2a3 3 0 0 1-4.3-4.3M17.5 17.5A10.8 10.8 0 0 1 2.1 12a10.8 10.8 0 0 1 4.4-5.1" /><path d="m2 2 20 20" /></>,
+    tuck: <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />,
+    close: <path d="M6 6l12 12M18 6 6 18" />,
+  },
+};
+const candidate = (kind: 'shot' | 'open' | 'hide', i: number) => {
+  const c = CANDIDATES[kind][PICK[i] ?? ''];
+  return c ? <svg {...ICON}>{c}</svg> : null;
+};
+
 export function CameraIcon() {
+  const c = candidate('shot', 0); if (c) return c;
   return (
     <svg {...ICON}>
       <path d="M4 8h3l2-2h6l2 2h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
@@ -18,6 +48,7 @@ export function CameraIcon() {
 }
 /** A window with an arrow leaving it: "open the app". Not the diagonal arrows, which mean the size below. */
 export function OpenIcon() {
+  const c = candidate('open', 1); if (c) return c;
   return (
     <svg {...ICON}>
       <rect x="3" y="4" width="14" height="14" rx="2" /><path d="M3 8h14M14 3h7v7M21 3l-8 8" />
@@ -28,6 +59,7 @@ export function SizeIcon() {
   return <svg {...ICON}><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>;
 }
 export function HideIcon() {
+  const c = candidate('hide', 2); if (c) return c;
   return (
     <svg {...ICON}>
       <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
