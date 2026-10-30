@@ -62,7 +62,7 @@ export class LoadTimes {
     // Serialized writes, each to a temp file then renamed in, so a crash
     // mid-write leaves the previous file whole.
     this.writing = this.writing.then(async () => {
-      const tmp = `${this.filePath}.tmp`;
+      const tmp = `${this.filePath}.${process.pid}.tmp`; // per process: dev and built app share the folder
       await fs.promises.writeFile(tmp, JSON.stringify(body));
       await fs.promises.rename(tmp, this.filePath);
     }).catch(() => { /* best-effort */ });

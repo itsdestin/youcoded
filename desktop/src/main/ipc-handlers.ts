@@ -1805,7 +1805,7 @@ export function registerIpcHandlers(
     const sig = `${m.id}:${m.state}:${m.loadedBytes ?? ''}:${m.loadExpectedMs ?? ''}`;
     if (lastSessionModelState.get(sessionId) === sig) return;
     lastSessionModelState.set(sessionId, sig);
-    const full = { sessionId, modelId: m.id, state: m.state, sizeBytes: m.sizeBytes, loadedBytes: m.loadedBytes ?? null, loadExpectedMs: m.loadExpectedMs ?? null };
+    const full = { sessionId, modelId: m.id, state: m.state, sizeBytes: m.sizeBytes, loadedBytes: m.loadedBytes ?? null, ...(m.loadExpectedMs ? { loadExpectedMs: m.loadExpectedMs } : {}) };
     publish(sessionId, IPC.NATIVE_MODEL_STATE, full);
   };
   engineManager.on('models-changed', (models: EngineModelType[]) => {

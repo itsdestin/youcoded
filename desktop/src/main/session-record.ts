@@ -776,7 +776,7 @@ export class SessionRecords {
       f.modelState = {
         state: String(p.state ?? ''), modelId: typeof p.modelId === 'string' ? p.modelId : null,
         sizeBytes: typeof p.sizeBytes === 'number' ? p.sizeBytes : null, loadedBytes: typeof p.loadedBytes === 'number' ? p.loadedBytes : null,
-        loadExpectedMs: typeof p.loadExpectedMs === 'number' ? p.loadExpectedMs : null,
+        ...(typeof p.loadExpectedMs === 'number' ? { loadExpectedMs: p.loadExpectedMs } : {}),
       };
       if (f.modelState.state === 'loaded') rec.modelEverLoaded = true;
       return;
