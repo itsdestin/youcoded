@@ -23,6 +23,7 @@ import { RemoteConfig } from '../remote-config';
 import { LocalSkillProvider } from '../skill-provider';
 import { CommandProvider } from '../command-provider';
 import { shouldAutoApprove, shouldAutoApproveDocComment } from '../permission-auto-approve';
+import { trackOutsideComments, judgeCommentAsk } from '../cc-outside-comments';
 import { getPermissionOverrides } from '../app-signals';
 import { IPC } from '../../shared/types';
 import { log, rotateLog } from '../logger';
@@ -233,13 +234,15 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   const docCommentsServerIds = new Map<string, string>();
   sessionManager.on('doc-comments-mcp-attached', (sessionId: string, _cwd: string, _token: string, serverId: string) => { docCommentsServerIds.set(sessionId, serverId); });
   sessionManager.on('session-exit', (sessionId: string) => { docCommentsServerIds.delete(sessionId); });
+  trackOutsideComments(sessionManager); // card #207, same as main.ts
   hookRelay.on('hook-event', (event) => {
     if (event.type === 'PermissionRequest') {
       const toolName = event.payload?.tool_name as string;
       const toolInput = event.payload?.tool_input as Record<string, unknown> | undefined;
       const requestId = event.payload?._requestId as string;
       const mode = event.payload?.permission_mode as string | undefined;
-      if (requestId && (shouldAutoApproveDocComment(toolName, toolInput, mode, docCommentsServerIds.get(event.sessionId)) || shouldAutoApprove(toolName, toolInput, getPermissionOverrides()))) {
+      const commentAsk = judgeCommentAsk(event); // card #207 — see main.ts
+      if (requestId && commentAsk !== 'ask' && (commentAsk === 'approve' || shouldAutoApproveDocComment(toolName, toolInput, mode, docCommentsServerIds.get(event.sessionId)) || shouldAutoApprove(toolName, toolInput, getPermissionOverrides()))) {
         hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
       }
     }

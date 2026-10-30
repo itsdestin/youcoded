@@ -39,6 +39,7 @@ import { applyAdminApproval } from './admin-approval';
 import { bashGrantOptions, type GrantScope } from '../../shared/bash-grant-shapes';
 import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServices } from './tools/types';
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
+import { outsideCommentsVerdict } from './tools/doc-comments-tools';
 import { syncBrowserTools } from './tools/browser';
 import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
@@ -864,6 +865,11 @@ export class HarnessSession extends EventEmitter {
   private shellEnv: Record<string, string> | null = null;
   /** Ephemeral, root-only approval across all outside folders; never serialized. */
   private externalEditsAllowed = false;
+  /** Card #207: "Allow for this chat" on a comment tool's outside-file ask.
+   *  Covers comments on ANY outside plain file (Destin chose any-file over
+   *  per-folder, 2026-10-29), never the files themselves; same memory-only,
+   *  root-only, reset-on-resume contract as externalEditsAllowed. */
+  private outsideCommentsAllowed = false;
   private adminCommandsAllowed = false; // memory-only consent, never serialized
   private retryDelays: number[];
   // Resolved capability profile (Task 5). Drives the doom-loop window + tool
@@ -1060,6 +1066,7 @@ export class HarnessSession extends EventEmitter {
     this.shellCwd = null; // a resumed session starts back at the workspace root
     this.shellEnv = null; // same contract — a resumed session starts with a fresh env too
     this.externalEditsAllowed = false; // consent never survives a resume
+    this.outsideCommentsAllowed = false;
     this.adminCommandsAllowed = false;
   }
 
@@ -4097,6 +4104,20 @@ export class HarnessSession extends EventEmitter {
       }
     }
 
+    // 3a. Card #207: a comment tool pointed at a file in another folder. Before
+    //     this, ReadFileComments had no path subject at all and the store
+    //     refused the call outright ("path-outside-project"), so the person
+    //     was never asked. Now it asks — once, or for the rest of this chat —
+    //     and the tool keeps that file's comments by its real location.
+    const commentsReach = outsideCommentsVerdict(call.toolName, args, this.opts.cwd);
+    if (commentsReach.kind === 'deny') return { text: commentsReach.reason, isError: true };
+    if (commentsReach.kind === 'office-outside') {
+      return { text: `${call.toolName} can't reach comments in a Word or Excel file outside this chat's project yet. Tell the user, and suggest opening a chat in that file's folder.`, isError: true };
+    }
+    if (commentsReach.kind === 'outside') {
+      externalAsk = !(this.outsideCommentsAllowed && !this.opts.isSpecialistChild);
+    }
+
     // 3b. Admin commands ask unless explicitly approved; refused elevation tools
     // stay refused. WHY: an admin grant waives only the sudo toll, so removing
     // protected folders or naming secret files still triggers its own floor.
@@ -4162,6 +4183,9 @@ export class HarnessSession extends EventEmitter {
       // exception. Child sessions never inherit it, even when sharing a parent.
       if (externalAsk && !this.opts.isSpecialistChild && d.allowExternalEditsForSession === true
         && (call.toolName === 'Write' || call.toolName === 'Edit')) this.externalEditsAllowed = true;
+      // Card #207: the comment-tool counterpart — main assistant only.
+      if (externalAsk && commentsReach.kind === 'outside' && !this.opts.isSpecialistChild
+        && d.allowOutsideCommentsForSession === true) this.outsideCommentsAllowed = true;
       // WHY: a later destructive-command ask can carry a valid admin choice
       // without the admin floor marker. Honor it, but never a protected-path floor.
       if (isAdmin && (!floorStop || floorStop === 'admin') && d.adminApprovalScope) {

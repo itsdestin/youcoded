@@ -40,6 +40,7 @@ import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
 import { shouldAutoApprove, shouldAutoApproveDocComment } from './permission-auto-approve';
+import { trackOutsideComments, judgeCommentAsk } from './cc-outside-comments';
 import { getPermissionOverrides, setForgetSessionAttention } from './app-signals';
 import { IPC, type AttentionState, type AttentionSummary, type SessionOwnershipAcquired } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
@@ -1148,6 +1149,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
   sessionManager.on('session-exit', (sessionId: string) => {
     docCommentsServerIdsBySession.delete(sessionId);
   });
+  trackOutsideComments(sessionManager);
 
   // The windows' leg of a Claude Code hook event: the window that owns the session, else the main window; an event that ENDS an ask also reaches the
   // watching buddy chat (hook-window-route.ts). WHY here and not in publish (one-core R5-2): publish delivers the phones' leg and the record.
@@ -1211,7 +1213,13 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
       // bypassPermissions); `plan`, `default`, an unrecognized mode, or a
       // missing `permissionMode` all fall through to the ordinary ask below
       // (see permission-auto-approve.ts's own header for the full reasoning).
-      if (requestId && (shouldAutoApproveDocComment(toolName, toolInput, permissionMode, docCommentsServerId) || shouldAutoApprove(toolName, toolInput, getPermissionOverrides()))) {
+      // Card #207: a comment tool aimed at a file outside the project asks
+      // with the outside-file card (or is approved by this chat's earlier
+      // "Allow for this chat"); an in-project comment read is approved here
+      // now that it is no longer pre-allowed. 'ask' must beat the rules
+      // below, which would otherwise wave a plain-file comment change through.
+      const commentAsk = judgeCommentAsk(event);
+      if (requestId && commentAsk !== 'ask' && (commentAsk === 'approve' || shouldAutoApproveDocComment(toolName, toolInput, permissionMode, docCommentsServerId) || shouldAutoApprove(toolName, toolInput, getPermissionOverrides()))) {
         hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
         autoApproved = true;
       }

@@ -28,10 +28,12 @@
 // makes even a plain-text/markdown reply ask every time, contradicting §5.2a's
 // "sparingly... frictionless" intent for the common case.
 //
-// The mechanism this build uses: `ReadFileComments` alone is allow-listed
-// (DOC_COMMENTS_MCP_READ_TOOL, session-manager.ts) — a read never mutates
-// anything, so it is safe unconditionally, the same posture the native tool's
-// `permissionSubject: () => undefined` already gives it. The five mutation
+// The mechanism this build uses: no tool is allow-listed. `ReadFileComments`
+// was until card #207 — a read never mutates anything — but a pre-allowed
+// read never reached the app, so one aimed at a file OUTSIDE the project
+// could not ask first. main's cc-outside-comments.ts now answers an
+// in-project read "allow" at once and raises the outside-file card for an
+// outside one. The five mutation
 // tools are deliberately NOT allow-listed; instead, main.ts's own
 // `hookRelay.on('hook-event', ...)` — the SAME `PermissionRequest` hook path
 // that already auto-approves a handful of other categories
@@ -110,7 +112,6 @@ import {
   YOUCODED_PROJECT_ROOT_ENV,
   DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV,
   YOUCODED_MCP_TOKEN_ENV,
-  docCommentsMcpReadTool,
 } from '../shared/doc-comments-mcp';
 import {
   READ_FILE_COMMENTS_DESCRIPTION,
@@ -145,6 +146,7 @@ var fs = require('fs');
 var fsp = fs.promises;
 var path = require('path');
 var crypto = require('crypto');
+var os = require('os');
 
 var PROTOCOL_FALLBACK = '2025-06-18';
 // Cosmetic only (shown in /mcp) — the actual mcp__{server}__{tool} prefix
@@ -215,6 +217,28 @@ function nativeFormatFor(filePath) {
 
 var SIDECAR_DIR = ['.youcoded', 'comments'];
 var PENDING_DIR = ['.youcoded', 'comments', '.pending'];
+// Card #207: the per-machine store for files outside any project — the SAME
+// folder and sha256(realpath) key doc-comments-store.ts's locateFallback uses,
+// so the app's comments pane and this script read and write one file.
+var FALLBACK_DIR = ['.youcoded', 'loose-file-comments'];
+
+/** Card #207: an ABSOLUTE path outside this session's project. Only reached
+ *  after Claude Code let the call through, which for a file outside the
+ *  project means the person answered the app's outside-file card (main.ts
+ *  never auto-approves one without their chat-wide grant), or the session runs
+ *  with permissions skipped. Word/Excel comments live inside the file and go
+ *  through the app's queue under the project folder, so those stay refused. */
+function locateOutside(filePath) {
+  if (!path.isAbsolute(filePath)) return Promise.resolve({ error: 'path-outside-project' });
+  var abs = path.resolve(filePath);
+  return realpathWithNonexistentTail(abs).then(function (real) {
+    var resolved = real || abs;
+    if (nativeFormatFor(resolved)) return { error: 'word-or-excel-outside-project-not-supported-yet' };
+    var hash = crypto.createHash('sha256').update(resolved).digest('hex');
+    var sidecarPath = path.join.apply(path, [os.homedir()].concat(FALLBACK_DIR, [hash + '.json']));
+    return { sidecarPath: sidecarPath, sourceAbsolutePath: resolved };
+  });
+}
 
 /** Resolves filePath against the ONE trusted project root this process was
  *  spawned with (env, never model input — see this file's TS header) and
@@ -231,7 +255,7 @@ function locate(filePath) {
     if (!realProjectRoot) return { error: 'path-outside-project' };
     var abs = path.resolve(realProjectRoot, filePath);
     return checkContainment(realProjectRoot, abs).then(function (realAbs) {
-      if (realAbs === null) return { error: 'path-outside-project' };
+      if (realAbs === null) return locateOutside(filePath);
       var rel = path.relative(realProjectRoot, realAbs);
       var sidecarPath = path.join.apply(path, [realProjectRoot].concat(SIDECAR_DIR, [rel + '.json']));
       var pendingDir = path.join.apply(path, [realProjectRoot].concat(PENDING_DIR));
@@ -1092,5 +1116,8 @@ export function deployClaudeCodeDocCommentsMcp(
   // another OS user, this is belt-and-suspenders on the file itself.
   fs.chmodSync(configPath, 0o600);
 
-  return { serverPath, configPath, allowedTools: [docCommentsMcpReadTool(serverId)], serverId, token, deployDir: dir };
+  // Card #207: nothing is pre-allowed any more. A pre-allowed read never reached the app, so a
+  // read of a file outside the project could not ask first; cc-outside-comments.ts now answers an
+  // in-project read "allow" at once instead, so in-project reads still never show a card.
+  return { serverPath, configPath, allowedTools: [], serverId, token, deployDir: dir };
 }

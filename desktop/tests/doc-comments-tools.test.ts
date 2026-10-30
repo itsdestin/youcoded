@@ -26,7 +26,7 @@ import {
 } from '../src/main/harness/tools/doc-comments-tools';
 import type { ToolContext } from '../src/main/harness/tools/types';
 import { decidePermission } from '../src/main/harness/permission-engine';
-import { addComment } from '../src/main/doc-comments/doc-comments-store';
+import { addComment, listComments } from '../src/main/doc-comments/doc-comments-store';
 import type { CellSelector, CommentSelector, TextQuoteSelector } from '../src/shared/doc-comments-types';
 
 const CELL_SELECTOR: CommentSelector = { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1' } as CellSelector };
@@ -198,12 +198,21 @@ describe('path containment refusal at the tool-argument surface', () => {
     expect(r).toEqual({ text: 'ReadFileComments failed: path-outside-project', isError: true });
   });
 
-  it('an absolute path outside the project root is refused the same way', async () => {
+  // The session asks the person before an outside call reaches execute()
+  // (harness-session.ts, outsideCommentsVerdict); once it does, the comments
+  // live in the per-machine store keyed by the file's real location — never
+  // misfiled under this project.
+  it('an absolute path outside the project keeps its comments in the loose-file store, not the project', async () => {
     const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-doc-comments-tools-outside-'));
     try {
       const ctx = makeCtx(root);
-      const r = await AddCommentTool.execute({ path: path.join(outside, 'x.md'), selector: CELL_SELECTOR, text: 'x' }, ctx);
-      expect(r).toEqual({ text: 'AddComment failed: path-outside-project', isError: true });
+      const file = path.join(outside, 'x.md');
+      const r = await AddCommentTool.execute({ path: file, selector: TEXT_SELECTOR, text: 'outside note' }, ctx);
+      expect(r.isError).toBeFalsy();
+      expect(fs.existsSync(path.join(root, '.youcoded'))).toBe(false);
+      const fromStore = await listComments({ path: file });
+      expect(fromStore.ok && fromStore.comments.map((c) => c.text)).toEqual(['outside note']);
+      expect((await ReadFileCommentsTool.execute({ path: file }, ctx)).text).toContain('outside note');
     } finally {
       await fs.promises.rm(outside, { recursive: true, force: true });
     }

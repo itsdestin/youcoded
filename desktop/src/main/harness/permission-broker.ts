@@ -13,6 +13,7 @@ import { randomUUID } from 'crypto';
 import type { GrantScope } from '../../shared/bash-grant-shapes';
 import { isAdminApprovalScope, type AdminApprovalScope } from '../../shared/admin-approval';
 import { adminCommandVerdict } from './tools/admin-command';
+import { bareDocCommentsToolName } from '../../shared/doc-comments-mcp';
 import type { HookEvent, FloorStop } from '../../shared/types';
 
 export interface AskRequest {
@@ -90,6 +91,8 @@ export interface AskDecision {
   grantScope?: GrantScope;
   /** Memory-only consent to outside-folder file edits; never a stored permission rule. */
   allowExternalEditsForSession?: boolean;
+  /** Card #207: memory-only consent to comments on outside files for this chat. */
+  allowOutsideCommentsForSession?: boolean;
   /** Validated choice on an admin approval; never accepted on other asks or a deny. */
   adminApprovalScope?: AdminApprovalScope;
   /** A HUMAN answered "no" on a card — set ONLY by respond() below, which is
@@ -145,6 +148,8 @@ interface PendingAsk {
   /** Only a permission ask of this shape may mint an ephemeral outside-edit
    *  grant (master, merged in); a password ask never can, so it stays absent. */
   canGrantExternalEdits?: boolean;
+  /** Card #207: only a main assistant's outside-file comment ask may mint it. */
+  canGrantOutsideComments?: boolean;
   canGrantAdmin?: boolean;
   /** The exact PermissionRequest/PasswordRequest this ask emitted, minus its
    *  timestamp, kept so the heartbeat re-announces something byte-identical.
@@ -238,6 +243,10 @@ export class PermissionBroker extends EventEmitter {
         // Only a main assistant's Full Auto Write/Edit outside-folder ask can do so.
         canGrantExternalEdits: req.external === true && req.permissionMode === 'full-auto'
           && !req.raisedBy && (req.toolName === 'Write' || req.toolName === 'Edit'),
+        // WHY (card #207): same posture — only an outside-file ask from a
+        // comment tool, raised by the main assistant, can grant chat-wide
+        // comment access; any other approval carrying the field gets nothing.
+        canGrantOutsideComments: req.external === true && !req.raisedBy && bareDocCommentsToolName(req.toolName) !== null,
         // WHY: a renderer selector cannot turn an unrelated approval into admin authority.
         canGrantAdmin: req.toolName === 'Bash' && (!req.floorStop || req.floorStop === 'admin')
           && typeof req.toolInput.command === 'string' && adminCommandVerdict(req.toolInput.command)?.kind === 'admin',
@@ -399,6 +408,8 @@ export class PermissionBroker extends EventEmitter {
         ? { adminApprovalScope: decision.adminApprovalScope } : {}),
       ...(behavior === 'allow' && entry.canGrantExternalEdits && decision.allowExternalEditsForSession === true
         ? { allowExternalEditsForSession: true } : {}),
+      ...(behavior === 'allow' && entry.canGrantOutsideComments && decision.allowOutsideCommentsForSession === true
+        ? { allowOutsideCommentsForSession: true } : {}),
       ...(behavior === 'deny' ? { dismissed: true } : {}), ...(updatedInput ? { updatedInput } : {}),
     };
 

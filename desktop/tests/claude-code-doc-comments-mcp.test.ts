@@ -25,7 +25,6 @@ import {
   YOUCODED_PROJECT_ROOT_ENV,
   YOUCODED_MCP_TOKEN_ENV,
   DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV,
-  docCommentsMcpReadTool,
   docCommentsMcpMutatorTools,
 } from '../src/shared/doc-comments-mcp';
 import {
@@ -145,9 +144,9 @@ describe('deployment', () => {
       // process's own env — the two must be the SAME value.
       expect(deployment.token.length).toBeGreaterThan(16);
       expect(config.mcpServers[deployment.serverId].env[YOUCODED_MCP_TOKEN_ENV]).toBe(deployment.token);
-      // Only ReadFileComments is safe to pre-approve (§5.2a) — the five
-      // mutation tools are deliberately absent from this list.
-      expect(deployment.allowedTools).toEqual([docCommentsMcpReadTool(deployment.serverId)]);
+      // Nothing is pre-approved: a pre-approved read could never ask before
+      // reaching a file outside the project (main answers in-project reads).
+      expect(deployment.allowedTools).toEqual([]);
     } finally {
       fs.rmSync(baseDir, { recursive: true, force: true });
     }
@@ -403,17 +402,32 @@ describe('path containment — model-controlled path at the MCP tool-argument su
     expect(res.result.content[0].text).toContain('path-outside-project');
   });
 
-  it('refuses an absolute path outside the project', async () => {
+  // The person approved this call in the app before it got here (main's
+  // cc-outside-comments.ts asks first), so the script keeps the comments in
+  // the same per-machine store the app's comments pane reads for that file.
+  it('keeps comments on an absolute path outside the project in the app\'s loose-file store', async () => {
     const client = start(root);
-    const outsideFile = path.join(os.tmpdir(), `yc-doc-comments-mcp-outside-${process.pid}.md`);
+    const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'yc-doc-comments-mcp-outside-'));
+    const outsideFile = path.join(outside, 'notes.md');
     await fs.promises.writeFile(outsideFile, 'x');
     try {
-      const res = await client.callTool('AddComment', { path: outsideFile, selector: SELECTOR, text: 'x' });
-      expect(res.result.isError).toBe(true);
-      expect(res.result.content[0].text).toContain('path-outside-project');
+      const res = await client.callTool('AddComment', { path: outsideFile, selector: SELECTOR, text: 'outside comment' });
+      expect(res.result.isError).toBe(false);
+      const listed = await listComments({ path: outsideFile });
+      expect(listed.ok && listed.comments.map((c) => c.text)).toEqual(['outside comment']);
+      expect(fs.existsSync(path.join(root, '.youcoded'))).toBe(false); // nothing misfiled under the project
+      const read = await client.callTool('ReadFileComments', { path: outsideFile });
+      expect(read.result.content[0].text).toContain('outside comment');
     } finally {
-      await fs.promises.rm(outsideFile, { force: true });
+      await fs.promises.rm(outside, { recursive: true, force: true });
     }
+  });
+
+  it('refuses a Word file outside the project with a plain reason', async () => {
+    const client = start(root);
+    const res = await client.callTool('ReadFileComments', { path: path.join(os.tmpdir(), 'elsewhere', 'report.docx') });
+    expect(res.result.isError).toBe(true);
+    expect(res.result.content[0].text).toContain('word-or-excel-outside-project-not-supported-yet');
   });
 
   it('a symlink inside the project root that points outside it is refused (realpath, not the string, decides)', async () => {
@@ -676,7 +690,7 @@ describe('parity: mutator tools never include the read-only tool', () => {
       `mcp__${id}__AddComment`,
       `mcp__${id}__MoveComment`,
     ]);
-    expect(docCommentsMcpMutatorTools(id)).not.toContain(docCommentsMcpReadTool(id));
+    expect(docCommentsMcpMutatorTools(id)).not.toContain(`mcp__${id}__ReadFileComments`);
   });
 });
 

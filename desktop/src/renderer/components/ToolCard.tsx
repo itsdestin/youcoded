@@ -28,6 +28,7 @@ import { normalizeQuestions, isValidQuestions } from './ask-question-normalize';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
 // status-bar chip colors, so the footer band can never drift from the chip.
 import { FullAutoStops, BROAD_ALLOW_COLORS } from './permissions/FullAutoStops';
+import { OutsideCommentsAsk } from './permissions/OutsideCommentsAsk';
 import { floorAskNote } from './permissions/deny-list-copy';
 import { AdminPasswordPrompt } from './permissions/AdminPasswordPrompt';
 import { AdminApprovalChoices, type AdminApprovalScope } from './permissions/AdminApprovalChoices';
@@ -910,38 +911,8 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   }
 
   if (outsideComments) return (
-    // WHY (Destin's deck note, 2026-10-29: "these buttons dont seem to actually
-    // match how we'd style other/similar cards"): this is the generic row below
-    // with only its middle button renamed — Yes / Allow for this chat / No, the
-    // scope note UNDER the buttons like alwaysAllowNote. The first draft borrowed
-    // the browser card's wording and put the note on top, which no other
-    // permission card does.
-    <div className={bare ? 'space-y-1.5' : 'px-3 py-2 border-t border-edge bg-inset/30 space-y-1.5'}>
-      {/* WHY nowrap + flex-wrap: at phone width "Allow for this chat" broke
-          mid-label into a two-line pill; a whole button dropping to the next
-          row reads cleaner than a split one. */}
-      <div className="flex flex-wrap items-center gap-2">
-        {([
-          ['Yes', 'bg-green-400/60 hover:bg-green-400/80 text-green-100'],
-          ['Allow for this chat', BROAD_ALLOW_COLORS],
-          ['No', 'bg-red-400/60 hover:bg-red-400/80 text-red-100'],
-        ] as const).map(([label, colors], i) => (
-          <button
-            key={label}
-            ref={el => { buttonsRef.current[i] = el; }}
-            disabled={responding}
-            onClick={() => actions.current[i]()}
-            className={`px-3 ${pad} text-xs font-medium rounded-lg whitespace-nowrap ${colors} transition-colors disabled:opacity-50 ${focusIdx === i ? ring : ''}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <p className="text-3xs text-fg-muted leading-relaxed">
-        This file is outside this chat&apos;s project. Allow for this chat covers comments on any outside file until the chat ends, and never lets the assistant change the files.
-      </p>
-      {unconfirmedNote}
-    </div>
+    <OutsideCommentsAsk inset={bare} responding={responding} focusIdx={focusIdx} buttonsRef={buttonsRef}
+      pad={pad} ring={ring} unconfirmedNote={unconfirmedNote} onChoose={(i) => actions.current[i]()} />
   );
 
   if (confirmingExternal || externalStop || budgetStop || fullAutoStop) return (

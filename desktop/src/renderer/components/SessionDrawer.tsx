@@ -18,6 +18,7 @@ import { gitFooterState } from '../utils/git-footer';
 import { ActiveArtifactView, type ActiveArtifactHandle, type CommentsHeaderState } from './artifact-views/ActiveArtifactView';
 import { MenuIcon } from './context-menu/menu-icons';
 import { CommentsFloatingActions } from './comments/CommentsFloatingActions';
+import { commentTargetFor } from './comments/comment-target';
 import SessionPreviewPane from './SessionPreviewPane';
 // 6b: COPY was originally added ONLY for the "Referenced
 // conversations" list block below (a cut candidate — see Task 6 brief 6b).
@@ -1288,7 +1289,8 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                       message just sent — is in view; in the (auto-)expanded
                       pane the send happened out of sight and the button
                       "doesn't seem clickable" (review deck R-5). */}
-                  <CommentsFloatingActions path={active.path} beforeSend={() => editRef.current?.toggleComments()} projectRoot={projectRoot} />
+                  {/* Card #207: same comment location as the open file's own panel (comment-target.ts). */}
+                  <CommentsFloatingActions {...commentTargetFor(active, projectRoot)} beforeSend={() => editRef.current?.toggleComments()} />
                 </div>
               )}
               {active && (

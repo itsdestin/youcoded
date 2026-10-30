@@ -62,14 +62,6 @@ export function bareDocCommentsToolName(toolName: string): DocCommentsBareToolNa
   return (DOC_COMMENTS_BARE_TOOL_NAMES as readonly string[]).includes(bare) ? bare as DocCommentsBareToolName : null;
 }
 
-/** The one tool that is always pre-approved via `--allowedTools`, on every
- *  target type — a read never mutates the source file or its comment store
- *  (same posture as the native tool's `permissionSubject: () => undefined`,
- *  doc-comments-tools.ts's own `ReadFileCommentsTool`). */
-export function docCommentsMcpReadTool(serverId: string): string {
-  return docCommentsMcpToolName(serverId, 'ReadFileComments');
-}
-
 /** The five tools whose target CAN be a Word/Excel file's own bytes (§5.2a,
  *  decided option 1) — never allow-listed, since the same tool name also
  *  serves a plain-text/markdown/code target that must stay frictionless.
