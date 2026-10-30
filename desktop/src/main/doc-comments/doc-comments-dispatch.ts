@@ -72,6 +72,18 @@ const native = (format: NativeFormat, absolutePath: string, path: string) => ({ 
 /** A change kept for an Office editor that could not take it yet (live-comments.ts). */
 type Queued = { ok: true; queued: true };
 
+/** Card #207: "the person approved this outside file on the outside-file
+ *  card." With no `projectRoot`, a Word/Excel target is otherwise accepted only
+ *  when the app already tracks it (`authorizeBytesRead`: a file the person
+ *  opened). A symbol, so nothing from a window or the remote socket can carry
+ *  it (neither IPC nor JSON can send one); only two main-process callers set
+ *  it, each only after the card was answered (or the chat skips permissions):
+ *  the app assistant's comment tools (harness-session.ts asks first) and the
+ *  Claude Code request queue (pending-mutation-queue.ts: the request carries
+ *  the chat's own secret, and Claude Code ran the tool only after the ask). */
+export const OUTSIDE_FILE_APPROVED: unique symbol = Symbol('outside-file-approved');
+export type OutsideApproval = typeof OUTSIDE_FILE_APPROVED;
+
 /** F1 fix (post-T3 build review, blocker): the no-`projectRoot` fallback in
  *  `resolveSourceFilePath` resolves and returns ANY absolute path the caller
  *  names, with no containment of its own — that fallback is deliberately open
@@ -100,11 +112,11 @@ export function refuseNativeMutation(_filePath: string): ({ ok: false; error: 'n
  *  module. A write is at least as sensitive as a read, so it gets the exact
  *  same gate, never a looser one. */
 async function resolveDocxTarget(
-  args: { path: string; projectRoot?: string }
+  args: { path: string; projectRoot?: string; outsideApproval?: OutsideApproval }
 ): Promise<{ ok: true; absolutePath: string } | Refusal | UntrackedSourceRefusal> {
   const resolved = await resolveSourceFilePath(args);
   if (!resolved.ok) return resolved;
-  if (!args.projectRoot) {
+  if (!args.projectRoot && args.outsideApproval !== OUTSIDE_FILE_APPROVED) {
     const auth = await authorizeBytesRead(resolved.absolutePath);
     if (!auth.ok) return { ok: false, error: 'path-not-tracked' };
   }
@@ -114,6 +126,7 @@ async function resolveDocxTarget(
 export async function addNativeDocxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   selector: CommentSelector;
   text: string;
   author: CommentAuthor;
@@ -127,6 +140,7 @@ export async function addNativeDocxComment(args: {
 export async function replyToNativeDocxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   text: string;
   author: CommentAuthor;
@@ -144,6 +158,7 @@ export async function replyToNativeDocxComment(args: {
 export async function resolveNativeDocxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   by: CommentAuthor;
 }): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
@@ -156,6 +171,7 @@ export async function resolveNativeDocxComment(args: {
 export async function reopenNativeDocxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   by: CommentAuthor;
 }): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
@@ -168,6 +184,7 @@ export async function reopenNativeDocxComment(args: {
 export async function moveNativeDocxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   newSelector: CommentSelector;
 }): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
@@ -182,6 +199,7 @@ export async function moveNativeDocxComment(args: {
 export async function editNativeDocxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   text: string;
 }): Promise<{ ok: true; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
@@ -194,6 +212,7 @@ export async function editNativeDocxComment(args: {
 export async function editNativeDocxReply(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   replyId: string;
   text: string;
@@ -207,6 +226,7 @@ export async function editNativeDocxReply(args: {
 export async function deleteNativeDocxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
 }): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
   const resolved = await resolveDocxTarget(args);
@@ -218,6 +238,7 @@ export async function deleteNativeDocxComment(args: {
 export async function deleteNativeDocxReply(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   replyId: string;
 }): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
@@ -231,11 +252,11 @@ export async function deleteNativeDocxReply(args: {
  *  untracked-source gate, never a looser one, since a write is at least as
  *  sensitive as a read. */
 async function resolveXlsxTarget(
-  args: { path: string; projectRoot?: string }
+  args: { path: string; projectRoot?: string; outsideApproval?: OutsideApproval }
 ): Promise<{ ok: true; absolutePath: string } | Refusal | UntrackedSourceRefusal> {
   const resolved = await resolveSourceFilePath(args);
   if (!resolved.ok) return resolved;
-  if (!args.projectRoot) {
+  if (!args.projectRoot && args.outsideApproval !== OUTSIDE_FILE_APPROVED) {
     const auth = await authorizeBytesRead(resolved.absolutePath);
     if (!auth.ok) return { ok: false, error: 'path-not-tracked' };
   }
@@ -245,6 +266,7 @@ async function resolveXlsxTarget(
 export async function addNativeXlsxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   selector: CommentSelector;
   text: string;
   author: CommentAuthor;
@@ -266,6 +288,7 @@ export async function addNativeXlsxComment(args: {
 export async function replyToNativeXlsxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   text: string;
   author: CommentAuthor;
@@ -283,6 +306,7 @@ export async function replyToNativeXlsxComment(args: {
 export async function resolveNativeXlsxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   by: CommentAuthor;
 }): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
@@ -295,6 +319,7 @@ export async function resolveNativeXlsxComment(args: {
 export async function reopenNativeXlsxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   by: CommentAuthor;
 }): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
@@ -312,6 +337,7 @@ export async function reopenNativeXlsxComment(args: {
 export async function moveNativeXlsxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   newSelector: CommentSelector;
 }): Promise<{ ok: true; id: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
@@ -326,6 +352,7 @@ export async function moveNativeXlsxComment(args: {
 export async function editNativeXlsxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   text: string;
 }): Promise<{ ok: true; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
@@ -338,6 +365,7 @@ export async function editNativeXlsxComment(args: {
 export async function editNativeXlsxReply(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   replyId: string;
   text: string;
@@ -351,6 +379,7 @@ export async function editNativeXlsxReply(args: {
 export async function deleteNativeXlsxComment(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
 }): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
   const resolved = await resolveXlsxTarget(args);
@@ -362,6 +391,7 @@ export async function deleteNativeXlsxComment(args: {
 export async function deleteNativeXlsxReply(args: {
   path: string;
   projectRoot?: string;
+  outsideApproval?: OutsideApproval;
   id: string;
   replyId: string;
 }): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
@@ -379,7 +409,7 @@ export async function deleteNativeXlsxReply(args: {
  *  elsewhere in this feature carries (§1.1), not the resolved absolute one. */
 export async function listNativeComments(
   format: NativeFormat,
-  args: { path: string; projectRoot?: string }
+  args: { path: string; projectRoot?: string; outsideApproval?: OutsideApproval }
 ): Promise<DocxReadResult | XlsxReadResult | Refusal | UntrackedSourceRefusal | { ok: false; error: 'read-failed' }> {
   const resolved = await resolveSourceFilePath(args);
   if (!resolved.ok) return resolved;
@@ -396,7 +426,7 @@ export async function listNativeComments(
   // tracked external artifact / explicit user-opened file
   // (`authorizeBytesRead`, `read-binary-access.ts`'s own authority) — never
   // an arbitrary caller-named absolute path.
-  if (!args.projectRoot) {
+  if (!args.projectRoot && args.outsideApproval !== OUTSIDE_FILE_APPROVED) {
     const auth = await authorizeBytesRead(resolved.absolutePath);
     if (!auth.ok) return { ok: false, error: 'path-not-tracked' };
   }

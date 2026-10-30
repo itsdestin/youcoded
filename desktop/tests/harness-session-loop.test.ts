@@ -756,6 +756,76 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(askUser).toHaveBeenCalledTimes(2);
   });
 
+  it('asks before a comment tool reaches a file outside the project, and "Allow for this chat" covers every later outside file until resume', async () => {
+    const read = fakeTool('ReadFileComments', { schema: z.object({ path: z.string() }) });
+    const outsideA = path.join(os.tmpdir(), 'yc-outside-a', 'notes.md');
+    const outsideB = path.join(os.tmpdir(), 'yc-outside-b', 'other.md');
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'ReadFileComments', { path: outsideA }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'ReadFileComments', { path: outsideB }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', allowOutsideCommentsForSession: true }));
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW, askUser }), async () => model as any);
+    await session.send('go');
+    expect(askUser).toHaveBeenCalledTimes(1);
+    expect(askUser.mock.calls[0][0]).toMatchObject({ toolName: 'ReadFileComments', external: true });
+    expect((read as any).calls).toHaveLength(2);
+    session.seedHistory([]);
+    (session as any).modelFactory = async () => scriptedModel([
+      stream(toolCallChunk('c3', 'ReadFileComments', { path: outsideB }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]) as any;
+    await session.send('again');
+    expect(askUser).toHaveBeenCalledTimes(2);
+  });
+
+  it('a comment tool inside the project never asks, and a plain "Yes" covers only that call', async () => {
+    const read = fakeTool('ReadFileComments', { schema: z.object({ path: z.string() }) });
+    const outside = path.join(os.tmpdir(), 'yc-outside', 'notes.md');
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'ReadFileComments', { path: 'inside.md' }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'ReadFileComments', { path: outside }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c3', 'ReadFileComments', { path: outside }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW, askUser }), async () => model as any);
+    await session.send('go');
+    expect(askUser).toHaveBeenCalledTimes(2);
+    expect((read as any).calls).toHaveLength(3);
+  });
+
+  it('asks for a Word file outside the project like any other outside file', async () => {
+    const read = fakeTool('ReadFileComments', { schema: z.object({ path: z.string() }) });
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'ReadFileComments', { path: path.join(os.tmpdir(), 'yc-outside', 'report.docx') }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW, askUser }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(askUser).toHaveBeenCalledTimes(1);
+    expect(askUser.mock.calls[0][0].external).toBe(true);
+    expect((read as any).calls).toHaveLength(1);
+    expect(events.find((e) => e.type === 'tool-result')!.data.toolResult).not.toMatch(/Word or Excel/);
+  });
+
+  it('never applies the outside-comments grant to a specialist child', async () => {
+    const read = fakeTool('ReadFileComments', { schema: z.object({ path: z.string() }) });
+    const outside = path.join(os.tmpdir(), 'yc-outside', 'notes.md');
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'ReadFileComments', { path: outside }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'ReadFileComments', { path: outside }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', allowOutsideCommentsForSession: true }));
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW, askUser, isSpecialistChild: true }), async () => model as any);
+    await session.send('go');
+    expect(askUser).toHaveBeenCalledTimes(2);
+  });
+
   it('askUser canceled → user-interrupt, turn ends, NO turn-complete', async () => {
     const write = fakeTool('Write');
     const model = scriptedModel([

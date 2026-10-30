@@ -60,6 +60,7 @@ import type { SessionInfo } from '../shared/types';
 import type { Platform } from './platform';
 import { createSessionState, type SessionState } from './ipc/session-state';
 import { SessionRecords } from './session-record';
+import { setOutsideCommentsModeLookup } from './cc-outside-comments';
 import { AudienceFills } from './audience-fill';
 
 export interface CreateRuntimeDeps {
@@ -658,6 +659,9 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   records.setLiveSource((sessionId) => (nativeHost.isNativeSessionId(sessionId)
     ? { queued: nativeHost.queuedMessageIds(sessionId), permissionMode: nativeHost.getPermissionMode(sessionId) }
     : null));
+  // Card #207: an outside Word/Excel request in a chat Claude Code runs without asking (auto, skip permissions) has no card
+  // answer to check, so the queue reads the mode here (cc-outside-comments.ts claimOutsideApproval).
+  setOutsideCommentsModeLookup((sessionId) => records.facts(sessionId)?.permissionMode);
 
   return {
     nativeHome, permissionStore, stepGuardSettings, contextSettings, secretsStore, engineManager,

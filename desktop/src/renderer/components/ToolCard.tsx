@@ -28,6 +28,7 @@ import { normalizeQuestions, isValidQuestions } from './ask-question-normalize';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
 // status-bar chip colors, so the footer band can never drift from the chip.
 import { FullAutoStops, BROAD_ALLOW_COLORS } from './permissions/FullAutoStops';
+import { OutsideCommentsAsk } from './permissions/OutsideCommentsAsk';
 import { floorAskNote } from './permissions/deny-list-copy';
 import { AdminPasswordPrompt } from './permissions/AdminPasswordPrompt';
 import { AdminApprovalChoices, type AdminApprovalScope } from './permissions/AdminApprovalChoices';
@@ -35,6 +36,7 @@ import { AdminRunStrip } from './permissions/AdminRunStrip';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../shared/send-user-link';
+import { bareDocCommentsToolName } from '../../shared/doc-comments-mcp';
 import { toolActionLabel } from '../utils/tool-group-summary';
 import { PlanApprovalCard } from './PlanApprovalCard';
 import { ExpiredApprovalActions } from './ExpiredApprovalActions';
@@ -644,6 +646,14 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   const budgetStop = isNative && permissionMode === 'full-auto'
     && (toolName === 'doom_loop' || toolName === 'max_steps');
   const [confirmingExternal, setConfirmingExternal] = useState(false);
+  // WHY (card #207): a comment tool reaching a file outside the chat's project
+  // gets its own three-choice row — once / this chat / no — like the Browser's
+  // site ask. "This chat" covers comments on any outside file until the chat
+  // ends (Destin chose any-file over per-folder, 2026-10-29); it never covers
+  // editing those files. Both surfaces flag the ask `external`: the native
+  // path guard, and main.ts for Claude Code's comment server. A helper's ask
+  // keeps the plain row — a helper can never hold a chat-wide grant.
+  const outsideComments = external === true && !specialistName && bareDocCommentsToolName(toolName ?? '') !== null;
   // Consequence-gated confirm strip (deny-listed asks) — mirrors the delete-model
   // confirm in LocalModelsSection: replace the button row with a plain-language
   // warning + Cancel / confirm.
@@ -732,7 +742,13 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 
   // Keyboard order matches the visible row: Run it / Deny / Always allow.
   const actions = useRef<(() => void)[]>([]);
-  actions.current = externalStop || budgetStop
+  actions.current = outsideComments
+    ? [
+        () => handleRespond({ decision: { behavior: 'allow' } }),
+        () => handleRespond({ decision: { behavior: 'allow' }, allowOutsideCommentsForSession: true }),
+        () => handleRespond({ decision: { behavior: 'deny' } }),
+      ]
+    : externalStop || budgetStop
     ? [
         () => handleRespond({ decision: { behavior: 'allow' } }),
         () => handleRespond({ decision: { behavior: 'deny' } }),
@@ -893,6 +909,11 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       </div>
     );
   }
+
+  if (outsideComments) return (
+    <OutsideCommentsAsk inset={bare} responding={responding} focusIdx={focusIdx} buttonsRef={buttonsRef}
+      pad={pad} ring={ring} unconfirmedNote={unconfirmedNote} onChoose={(i) => actions.current[i]()} />
+  );
 
   if (confirmingExternal || externalStop || budgetStop || fullAutoStop) return (
     <FullAutoStops
