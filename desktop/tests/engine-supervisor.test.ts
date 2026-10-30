@@ -1741,3 +1741,44 @@ describe('EngineSupervisor — loading progress without blocking', () => {
     expect(emitted).toEqual([]);
   });
 });
+
+describe('EngineSupervisor — the engine\'s password (2026-10-30 audit F1)', () => {
+  const spawnEnv = (n = 0): Record<string, string> => mockSpawn.mock.calls[n][2].env;
+
+  it('starts the engine with a random password in its environment, never on the command line', async () => {
+    mockSpawn.mockReturnValue(makeFakeChild());
+    sup = makeSupervisor(healthAfter(0));
+    await sup.ensureRunning();
+    const key = spawnEnv().LLAMA_API_KEY;
+    expect(key).toMatch(/^[0-9a-f]{64}$/);
+    expect(spawnArgs().join(' ')).not.toContain(key);          // argv is readable by other users of the computer
+    expect(spawnArgs().join(' ')).not.toMatch(/api-key/);
+  });
+
+  it('uses a different password for every start', async () => {
+    mockSpawn.mockImplementation(() => makeFakeChild());
+    sup = makeSupervisor(healthAfter(0));
+    await sup.ensureRunning();
+    await sup.stop();
+    await sup.ensureRunning();
+    expect(spawnEnv(0).LLAMA_API_KEY).not.toBe(spawnEnv(1).LLAMA_API_KEY);
+  });
+
+  it('sends that password on every request the app makes to the engine', async () => {
+    mockSpawn.mockReturnValue(makeFakeChild());
+    const fetchMock = healthAfter(0);
+    sup = makeSupervisor(fetchMock);
+    await sup.ensureRunning();
+    const key = spawnEnv().LLAMA_API_KEY;
+    const auth = (call: any[]) => new Headers(call[1]?.headers).get('authorization');
+    fetchMock.mockClear();
+    await sup.trackedFetch('http://127.0.0.1:9920/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    await sup.authedFetch('http://127.0.0.1:9920/props');
+    await sup.listModels();
+    await sup.unloadModel('m');
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(4);
+    for (const c of fetchMock.mock.calls) expect(auth(c), String(c[0])).toBe(`Bearer ${key}`);
+    // caller headers survive
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get('content-type')).toBe('application/json');
+  });
+});

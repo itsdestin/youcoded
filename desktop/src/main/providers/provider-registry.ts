@@ -598,7 +598,9 @@ export class ProviderRegistry {
           // whole path, and idle shutdown reaps it afterwards. A thrown
           // ensureRunning is caught by the outer try/catch → {ok:false,message}.
           const base = await this.localEngine.ensureRunning();
-          res = await fetch(`${stripSlash(base)}/models`, { signal });
+          // WHY the engine's own fetch (2026-10-30 audit F1): the engine now demands a password only its supervisor holds,
+          // so a plain fetch here would be answered 401 and report a healthy engine as broken.
+          res = await this.localEngine.fetchImpl()(`${stripSlash(base)}/models`, { signal });
           break;
         }
         case 'openrouter': {

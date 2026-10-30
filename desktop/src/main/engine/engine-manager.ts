@@ -696,6 +696,13 @@ export class EngineManager extends EventEmitter {
     writePresetFile(filePath, contents);
   }
 
+  /** The fetch for talking to the LOCAL ENGINE's own management endpoints (/models, /props, ...). The engine demands a password
+   *  that only its supervisor knows (2026-10-30 audit F1), so these go through the supervisor's authedFetch; with no supervisor
+   *  yet there is no engine running to ask, and the test seam / plain fetch is used. */
+  private engineFetch(): typeof fetch {
+    return this.supervisor ? this.supervisor.authedFetch : (this.opts.fetchImpl ?? fetch);
+  }
+
   /** Ask the running router to re-read its preset file. No restart — the
    *  process keeps serving throughout.
    *
@@ -709,7 +716,7 @@ export class EngineManager extends EventEmitter {
   private async applyReload(): Promise<void> {
     if (!this.supervisor || this.supervisor.status() !== 'running') return; // its next boot reads the file
     const url = `http://127.0.0.1:${this.port}/models?reload=1`;
-    const res = await (this.opts.fetchImpl ?? fetch)(url, { method: 'GET' });
+    const res = await this.engineFetch()(url, { method: 'GET' });
     if (!res.ok) {
       const detail = res.statusText ? `${res.status} ${res.statusText}` : String(res.status);
       throw new Error(`The engine would not re-read its settings (HTTP ${detail}). It is still running with the previous ones.`);
@@ -1516,7 +1523,7 @@ export class EngineManager extends EventEmitter {
       const propsUrl = resident
         ? `http://127.0.0.1:${this.port}/props?model=${encodeURIComponent(modelId)}`
         : `http://127.0.0.1:${this.port}/props`;
-      const res = await (this.opts.fetchImpl ?? fetch)(propsUrl, { method: 'GET' });
+      const res = await this.engineFetch()(propsUrl, { method: 'GET' });
       const props: any = await res.json();
       // The field carrying the loaded context has drifted across llama.cpp builds
       // (default_generation_settings.n_ctx vs a top-level n_ctx) — read both.
@@ -1980,7 +1987,7 @@ export class EngineManager extends EventEmitter {
     const cfg = readEngineConfig(this.home);
     if (this.supervisor?.status() === 'running') {
       try {
-        await (this.opts.fetchImpl ?? fetch)(`http://127.0.0.1:${this.port}/models/unload`, {
+        await this.engineFetch()(`http://127.0.0.1:${this.port}/models/unload`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ model: id }),
         });
