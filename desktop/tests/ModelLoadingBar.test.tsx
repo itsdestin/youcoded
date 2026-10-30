@@ -56,6 +56,21 @@ describe('ModelLoadingBar', () => {
     expect(screen.getByText(/finishing up/)).toBeTruthy();
   });
 
+  it('with no byte reading but a past load time, fills by time and says about how long', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    render(
+      <ModelLoadingBar modelState="loading" modelInfo={info} loadedBytes={null} loadExpectedMs={20_000}
+        everResident={false} isThinking={false} onReload={() => {}} />,
+    );
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getByText(/about 15s left/)).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('25');
+    // Past the usual time it stops claiming progress: back to a plain counter.
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.getByText(/25s/)).toBeTruthy();
+  });
+
   it('shows time left once it has a steady reading speed', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     const { rerender } = render(bar(0.1 * GB));

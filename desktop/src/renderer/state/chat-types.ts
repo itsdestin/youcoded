@@ -430,6 +430,8 @@ export interface SessionChatState {
   /** While modelState==='loading': bytes resident in RAM so far, for the
    *  "N GB / M GB" progress bar. null when not loading / progress unavailable. */
   modelLoadedBytes: number | null;
+  /** While loading with no byte measurement: past loads' duration here (ms). */
+  modelLoadExpectedMs: number | null;
   /** True once this session's model has been seen fully 'loaded' at least once.
    *  Distinguishes "unloaded because it slept after use" (→ show the Reload
    *  prompt) from "unloaded because it hasn't finished its FIRST load yet" (a
@@ -538,6 +540,7 @@ export function createSessionChatState(): SessionChatState {
     modelState: null,
     modelInfo: null,
     modelLoadedBytes: null,
+    modelLoadExpectedMs: null,
     modelEverResident: false,
     seenUuids: new Set(),
     queuedMessages: [],
@@ -674,6 +677,7 @@ export type ChatAction =
       modelId: string;
       sizeBytes: number | null;
       loadedBytes?: number | null;
+      loadExpectedMs?: number | null;
     }
   | {
       // Native runtime only: a provider/stream failure ended the turn.
@@ -1251,6 +1255,7 @@ export interface SerializedSessionChatState {
   modelState?: import('../../shared/engine-types').EngineModelState | null;
   modelInfo?: { modelId: string; sizeBytes: number | null } | null;
   modelLoadedBytes?: number | null;
+  modelLoadExpectedMs?: number | null;
   modelEverResident?: boolean;
   // Optional so a pre-field snapshot from an older host still deserializes.
   seenUuids?: string[];
@@ -1306,6 +1311,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         modelState: s.modelState,
         modelInfo: s.modelInfo,
         modelLoadedBytes: s.modelLoadedBytes,
+        modelLoadExpectedMs: s.modelLoadExpectedMs,
         modelEverResident: s.modelEverResident,
         seenUuids: Array.from(s.seenUuids),
         queuedMessages: s.queuedMessages,
@@ -1365,6 +1371,7 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       modelState: ser.modelState ?? null,
       modelInfo: ser.modelInfo ?? null,
       modelLoadedBytes: ser.modelLoadedBytes ?? null,
+      modelLoadExpectedMs: ser.modelLoadExpectedMs ?? null,
       modelEverResident: ser.modelEverResident ?? false,
       // Older hosts predate seenUuids — default to an empty Set (not undefined,
       // which would crash the reducer's .has() dedup check).

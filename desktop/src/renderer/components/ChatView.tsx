@@ -946,7 +946,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     observer.observe(el);
     update();
     return () => observer.disconnect();
-  }, [state.modelState, state.modelInfo, state.modelLoadedBytes, state.modelEverResident, state.isThinking]);
+  }, [state.modelState, state.modelInfo, state.modelLoadedBytes, state.modelLoadExpectedMs, state.modelEverResident, state.isThinking]);
 
   return (
     // WHY: every open session's ChatView stays mounted, and waiting cards listen
@@ -1297,6 +1297,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             modelState={modelLoadingDemo ? 'loading' : state.modelState}
             modelInfo={modelLoadingDemo ? { modelId: 'Qwen3-8B-Q4_K_M.gguf', sizeBytes: 8 * 1024 ** 3 } : state.modelInfo}
             loadedBytes={state.modelLoadedBytes}
+            loadExpectedMs={state.modelLoadExpectedMs}
             everResident={state.modelEverResident}
             isThinking={state.isThinking}
             onReload={(modelId) => { void window.claude.models.load(modelId); }}

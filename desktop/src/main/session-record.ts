@@ -134,7 +134,7 @@ export interface SessionFacts {
   model: string | null;
   /** Native sessions: the bound model's residency, from the last model-state push. WHY the whole payload (sync-fix3): a screen that opens later
    *  is handed it by liveFill, and the Reload / loading bar needs the size and load progress as well as the state. */
-  modelState: { state: string; modelId: string | null; sizeBytes: number | null; loadedBytes: number | null } | null;
+  modelState: { state: string; modelId: string | null; sizeBytes: number | null; loadedBytes: number | null; loadExpectedMs?: number | null } | null;
   /** Native sessions: ids of messages waiting behind the running turn (text is never copied here). */
   queued: string[];
 }
@@ -776,6 +776,7 @@ export class SessionRecords {
       f.modelState = {
         state: String(p.state ?? ''), modelId: typeof p.modelId === 'string' ? p.modelId : null,
         sizeBytes: typeof p.sizeBytes === 'number' ? p.sizeBytes : null, loadedBytes: typeof p.loadedBytes === 'number' ? p.loadedBytes : null,
+        loadExpectedMs: typeof p.loadExpectedMs === 'number' ? p.loadExpectedMs : null,
       };
       if (f.modelState.state === 'loaded') rec.modelEverLoaded = true;
       return;

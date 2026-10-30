@@ -29,6 +29,9 @@ interface Props {
   modelInfo: { modelId: string; sizeBytes: number | null } | null;
   /** Bytes resident so far while loading (null when unavailable / not loading). */
   loadedBytes: number | null;
+  /** No byte measurement here (Windows, macOS): how long this model's past loads
+   *  took on this machine. The bar then fills by time and says "about". */
+  loadExpectedMs?: number | null;
   /** True once the model has reached 'loaded' at least once this session. Gates
    *  the Reload prompt so a fresh session that's still doing its FIRST load never
    *  flashes "unloaded · Reload" during the cold-start race window. */
@@ -76,7 +79,7 @@ const ETA_MIN_PCT = 5;
 // is `position: absolute`, so a plain static wrapper around it would not size
 // itself to the absolutely-positioned child and would always measure 0.
 const ModelLoadingBar = React.forwardRef<HTMLDivElement, Props>(function ModelLoadingBar(
-  { modelState, modelInfo, loadedBytes, everResident, isThinking, onReload },
+  { modelState, modelInfo, loadedBytes, loadExpectedMs, everResident, isThinking, onReload },
   ref,
 ) {
   const notResident = modelState === 'sleeping' || modelState === 'unloaded';
@@ -140,6 +143,12 @@ const ModelLoadingBar = React.forwardRef<HTMLDivElement, Props>(function ModelLo
   const readEta = hasProgress && !finalizing && elapsed >= ETA_MIN_ELAPSED_S && pct >= ETA_MIN_PCT
     ? formatEta(((size! - loadedBytes!) / loadedBytes!) * elapsedMs)
     : null;
+  // Time-based fill from past loads, only while within the usual time: past it,
+  // a bar parked near the end would claim more than we know, so it goes back to
+  // the sweep and the seconds counter. Capped short of full for the same reason.
+  const timedLeftMs = !hasProgress && loadExpectedMs ? loadExpectedMs - elapsedMs : null;
+  const timed = loading && timedLeftMs != null && timedLeftMs > 0;
+  const timedPct = timed ? Math.min(95, Math.round((elapsedMs / loadExpectedMs!) * 100)) : 0;
 
   // NOT an L4 overlay, despite what change 29 reads like. This strip is
   // positioned INSIDE the chat column (absolute, z-10) — converting it to a
@@ -183,6 +192,10 @@ const ModelLoadingBar = React.forwardRef<HTMLDivElement, Props>(function ModelLo
                     <span className="text-fg-dim text-xs tabular-nums">
                       · {gbNum(loadedBytes)} / {gbNum(size)} GB · {readEta ?? `${elapsed}s`}
                     </span>
+                  ) : timed ? (
+                    <span className="text-fg-dim text-xs tabular-nums">
+                      {size != null ? `· ${gbNum(size)} GB ` : ''}· {formatEta(timedLeftMs) ?? `${elapsed}s`}
+                    </span>
                   ) : size != null ? (
                     <span className="text-fg-dim text-xs">· {gbNum(size)} GB · {elapsed}s</span>
                   ) : (
@@ -195,6 +208,8 @@ const ModelLoadingBar = React.forwardRef<HTMLDivElement, Props>(function ModelLo
               // Full bar + moving highlight: RAM read is done, backend is still
               // initializing. Never sits frozen at 100%.
               <div className="model-load-finalize h-1.5 rounded-full" />
+            ) : timed ? (
+              <ProgressBar percent={timedPct} aria-label={`Loading ${name}`} />
             ) : hasProgress ? (
               // Determinate: fill tracks resident bytes / total size. Change 46 —
               // this is the only one of the three states that is a real progress

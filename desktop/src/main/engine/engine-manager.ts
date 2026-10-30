@@ -25,6 +25,7 @@ import {
   presetGlobalValue, parseExtraFlags, checkFlagsAgainstBinary,
 } from './model-presets';
 import type { BinaryCheckOptions, BinaryCheckResult } from './model-presets';
+import { LoadTimes } from './load-times';
 import { contextLengthFor } from '../models/fit-estimator';
 import { readManifest, removeManifest, markManifestComplete, isManifestComplete } from '../models/download-manifest';
 import { ManifestBackfill, defaultBackfillLookups, isStaleBackfillMiss } from '../models/manifest-backfill';
@@ -377,6 +378,9 @@ export class EngineManager extends EventEmitter {
    *  told from "the engine is still up" (see notePresetInForce). */
   private lastSupervisorState: string | null = null;
 
+  /** Past load durations on this machine — the bar's estimate where bytes can't be measured. */
+  private readonly loadTimes: LoadTimes;
+
   constructor(
     private home: NativeHome,
     // Kept on the instance since §E3: the manifest backfill's curated-list
@@ -409,6 +413,7 @@ export class EngineManager extends EventEmitter {
     } = {}
   ) {
     super();
+    this.loadTimes = new LoadTimes(path.join(path.dirname(presetFilePath(home.root)), 'load-times.json'));
     // The third argument matters: acquisition fills in the device list of an
     // engine installed before that list existed, in the background, because
     // status() is synchronous and cannot wait on a spawned process. status() is
@@ -1265,6 +1270,7 @@ export class EngineManager extends EventEmitter {
       presetPath: presetFilePath(this.home.root),
       // Beside models.ini: per machine, never synced (engine-log.ts).
       logPath: path.join(path.dirname(presetFilePath(this.home.root)), 'engine.log'),
+      expectedLoadMs: (id: string, size: number | null) => this.loadTimes.expected(id, size),
       fetchImpl: this.opts.fetchImpl,
       ...(this.opts.supervisorOpts ?? {}),
     });
@@ -1293,6 +1299,9 @@ export class EngineManager extends EventEmitter {
       void this.noteLoadError(e.modelId, message);
     });
     this.supervisor.on('crashed', (info) => this.emit('crashed', info));
+    this.supervisor.on('load-timed', (e: { modelId: string; sizeBytes: number | null; ms: number }) => {
+      this.loadTimes.record(e.modelId, e.sizeBytes, e.ms);
+    });
     // Fan out per-model residency (load/sleep/unload) → the model-state
     // coordinator turns this into per-session banners (unloaded/loading UI).
     this.supervisor.on('models-changed', (models) => this.emit('models-changed', models));

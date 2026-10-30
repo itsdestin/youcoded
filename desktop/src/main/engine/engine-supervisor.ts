@@ -62,6 +62,9 @@ export interface EngineSupervisorOpts {
   idleCheckMs?: number;      // default 60s
   modelPollMs?: number;      // /models state poll cadence when idle; default MODEL_POLL_IDLE_MS
   modelPollLoadingMs?: number; // faster cadence while a model is loading; default MODEL_POLL_LOADING_MS
+  /** How long this model's load is expected to take on this machine, from past
+   *  loads (load-times.ts), or null when there is no history. Unset = never. */
+  expectedLoadMs?: (modelId: string, sizeBytes: number | null) => number | null;
   /** Where to keep the engine's own output (engine-log.ts). Unset = not kept. */
   logPath?: string;
   /** Test seam: resolve the PID listening on `port` (Linux). Default: ss + /proc scan. */
@@ -440,6 +443,8 @@ export class EngineSupervisor extends EventEmitter {
   // than as zero (see loadedModelsBytes below); the idle check reads it as [].
   private lastPolledModels: EngineModel[] | null = null;
   private loadProgress = new Map<string, number>();      // modelId → max resident bytes seen while loading (monotonic)
+  /** modelId → when this load was first seen, for the 'load-timed' report. */
+  private loadSeenAt = new Map<string, number>();
   /** modelId → the pid last found loading it, so the next 400 ms tick reads two
    *  small files instead of searching again (see findModelChildRss). */
   private loadingPid = new Map<string, number>();
@@ -1318,6 +1323,7 @@ export class EngineSupervisor extends EventEmitter {
     this.lastModelSig = '';
 
     this.loadProgress.clear();
+    this.loadSeenAt.clear();
     this.loadingPid.clear();
     this.lastReadSeen.clear();
     this.readBaselineByPid.clear();
@@ -1384,7 +1390,21 @@ export class EngineSupervisor extends EventEmitter {
         const maxRss = Math.max(this.loadProgress.get(m.id) ?? 0, rss);
         this.loadProgress.set(m.id, maxRss);
         if (maxRss > 0) m.loadedBytes = m.sizeBytes ? Math.min(maxRss, m.sizeBytes) : maxRss;
+        if (!this.loadSeenAt.has(m.id)) this.loadSeenAt.set(m.id, Date.now());
+        // WHY (2026-10-29): with no measured bytes (Windows, macOS, or a Linux
+        // kernel that hides /proc), the bar had nothing to show but a sweep.
+        // Past loads of this model on this machine say roughly how long it takes.
+        if (maxRss <= 0) {
+          const expected = this.opts.expectedLoadMs?.(m.id, m.sizeBytes) ?? null;
+          if (expected) m.loadExpectedMs = expected;
+        }
       } else {
+        // A load just finished: report how long it took, for the next estimate.
+        const seenAt = this.loadSeenAt.get(m.id);
+        if (seenAt !== undefined) {
+          this.loadSeenAt.delete(m.id);
+          if (m.state === 'loaded') this.emit('load-timed', { modelId: m.id, sizeBytes: m.sizeBytes, ms: Date.now() - seenAt });
+        }
         this.loadProgress.delete(m.id); // load finished / not loading → drop tracker
         this.loadingPid.delete(m.id);
         // Remember where this process's read counter stood, so its NEXT load
@@ -1398,7 +1418,7 @@ export class EngineSupervisor extends EventEmitter {
     // readers above having a current answer — and the idle timer must not be
     // answered with a stale set just because this poll matched the last one.
     this.lastPolledModels = models;
-    const sig = models.map((m) => `${m.id}:${m.state}:${m.loadedBytes ?? ''}`).sort().join('|');
+    const sig = models.map((m) => `${m.id}:${m.state}:${m.loadedBytes ?? ''}:${m.loadExpectedMs ?? ''}`).sort().join('|');
     if (sig !== this.lastModelSig) { this.lastModelSig = sig; this.emit('models-changed', models); }
   }
 

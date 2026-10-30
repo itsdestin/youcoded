@@ -1770,6 +1770,29 @@ describe('EngineSupervisor — loading progress without blocking', () => {
     expect(latest()).toMatchObject({ state: 'loading', loadedBytes: 1_500_000 });
   });
 
+  it('with no byte reading, a load carries its expected time, and a finished load reports how long it took', async () => {
+    const { fetchImpl, setLoading } = loadingFetch();
+    mockSpawn.mockReturnValue(makeFakeChild());
+    const expectedLoadMs = vi.fn(() => 12_000);
+    sup = makeSupervisor(fetchImpl, { scanCacheImpl: async () => [], expectedLoadMs });
+    await sup.ensureRunning();
+    await flush();
+    const timed: any[] = [];
+    sup.on('load-timed', (e) => timed.push(e));
+    setLoading();
+    await sup.pollModelsNow();
+    expect(sup.latestModels()?.[0]).toMatchObject({ state: 'loading', loadExpectedMs: 12_000 });
+    expect(expectedLoadMs).toHaveBeenCalledWith('m-Q4_K_M', 10_000_000);
+    (sup as any).loadSeenAt.set('m-Q4_K_M', Date.now() - 9_000); // the load began 9 s ago
+    (fetchImpl as any).mockImplementation(async (url: string) => (String(url).includes('/models')
+      ? { ok: true, status: 200, json: async () => ({ data: [{ id: 'm-Q4_K_M', size: 10_000_000, status: { value: 'loaded' } }] }) }
+      : { ok: true, status: 200, json: async () => ({ status: 'ok' }) }) as any);
+    await sup.pollModelsNow();
+    expect(timed).toHaveLength(1);
+    expect(timed[0]).toMatchObject({ modelId: 'm-Q4_K_M', sizeBytes: 10_000_000 });
+    expect(timed[0].ms).toBeGreaterThanOrEqual(9_000);
+  });
+
   it('stopping the engine tells listeners every model is unloaded, so no chat stays on "loading"', async () => {
     const { fetchImpl, setLoading } = loadingFetch();
     mockSpawn.mockReturnValue(makeFakeChild());

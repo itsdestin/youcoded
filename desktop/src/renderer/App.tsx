@@ -1196,6 +1196,7 @@ function AppInner() {
         modelId: s.modelId,
         sizeBytes: typeof s.sizeBytes === 'number' ? s.sizeBytes : null,
         loadedBytes: typeof s.loadedBytes === 'number' ? s.loadedBytes : null,
+        loadExpectedMs: typeof s.loadExpectedMs === 'number' ? s.loadExpectedMs : null,
       });
     });
     return () => { off?.(); };

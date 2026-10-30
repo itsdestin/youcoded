@@ -1801,11 +1801,11 @@ export function registerIpcHandlers(
   // model's state, only on change. The signature has loadedBytes (load progress) and the model id (after a
   // switch the chat kept the old model's name and size).
   const lastSessionModelState = new Map<string, string>();
-  const pushModelState = (sessionId: string, m: Pick<EngineModelType, 'id' | 'state' | 'sizeBytes' | 'loadedBytes'>) => {
-    const sig = `${m.id}:${m.state}:${m.loadedBytes ?? ''}`;
+  const pushModelState = (sessionId: string, m: Pick<EngineModelType, 'id' | 'state' | 'sizeBytes' | 'loadedBytes' | 'loadExpectedMs'>) => {
+    const sig = `${m.id}:${m.state}:${m.loadedBytes ?? ''}:${m.loadExpectedMs ?? ''}`;
     if (lastSessionModelState.get(sessionId) === sig) return;
     lastSessionModelState.set(sessionId, sig);
-    const full = { sessionId, modelId: m.id, state: m.state, sizeBytes: m.sizeBytes, loadedBytes: m.loadedBytes ?? null };
+    const full = { sessionId, modelId: m.id, state: m.state, sizeBytes: m.sizeBytes, loadedBytes: m.loadedBytes ?? null, loadExpectedMs: m.loadExpectedMs ?? null };
     publish(sessionId, IPC.NATIVE_MODEL_STATE, full);
   };
   engineManager.on('models-changed', (models: EngineModelType[]) => {
