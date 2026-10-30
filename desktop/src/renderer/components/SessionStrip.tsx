@@ -353,6 +353,8 @@ function blankDragImage(): HTMLCanvasElement {
 
 /* ── Main component ──────────────────────────────────────── */
 
+// WHY: the close "x" takes no room until its row is hovered, then widens in and the row slides over (Destin, 2026-10-30: a reserved empty gap read as a ragged edge); touch screens can't hover, so there it always shows, like ProjectSwitcher's remove button.
+const CLOSE_X_CLASS = 'shrink-0 h-5 w-0 opacity-0 overflow-hidden flex items-center justify-center rounded-sm text-fg-faint hover:text-red-400 hover:bg-inset transition-[width,opacity] duration-150 motion-reduce:transition-none group-hover/row:w-5 group-hover/row:opacity-100 group-focus-within/row:w-5 group-focus-within/row:opacity-100 pointer-coarse:w-5 pointer-coarse:opacity-100';
 export default function SessionStrip({
   sessions: sourceSessions, activeSessionId, onSelectSession: selectSession,
   onCreateSession, onCloseSession, sessionStatuses,
@@ -2586,7 +2588,7 @@ export default function SessionStrip({
                       // isn't competing with the still-open session menu above it.
                       onClick={(e) => { e.stopPropagation(); if (!suppressClick.current) { setMenuOpen(false); onCloseSession(s.id, s.name); } }}
                       onPointerDown={(e) => e.stopPropagation()}
-                      className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-fg-faint hover:text-red-400 hover:bg-inset opacity-0 group-hover/row:opacity-100 transition-opacity"
+                      className={CLOSE_X_CLASS}
                     >
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -2719,7 +2721,7 @@ export default function SessionStrip({
                               setMenuOpen(false);
                               onCloseSession(s.id, s.name);
                             }}
-                            className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-fg-faint hover:text-red-400 hover:bg-inset opacity-0 group-hover/row:opacity-100 transition-opacity"
+                            className={CLOSE_X_CLASS}
                           >
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
