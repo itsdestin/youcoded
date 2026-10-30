@@ -24,7 +24,7 @@ describe('strongestStatus', () => {
 
 describe('useMascotMood', () => {
   it('is alert on red or amber and working on green', () => {
-    const { result, rerender } = renderHook(({ s }) => useMascotMood(s, false), { initialProps: { s: summary('red') } });
+    const { result, rerender } = renderHook(({ s }) => useMascotMood(s, false).mood, { initialProps: { s: summary('red') } });
     expect(result.current).toBe('alert');
     rerender({ s: summary('amber') });
     expect(result.current).toBe('alert');
@@ -34,7 +34,7 @@ describe('useMascotMood', () => {
 
   it('waves once when a reply becomes ready, then rests', () => {
     vi.useFakeTimers();
-    const { result, rerender } = renderHook(({ s }) => useMascotMood(s, false), { initialProps: { s: summary('green') } });
+    const { result, rerender } = renderHook(({ s }) => useMascotMood(s, false).mood, { initialProps: { s: summary('green') } });
     rerender({ s: summary('blue') });
     expect(result.current).toBe('done');
     act(() => { vi.advanceTimersByTime(DONE_MS); });
@@ -44,7 +44,7 @@ describe('useMascotMood', () => {
   it('has an idle moment while quiet, then falls asleep, and wakes when anything changes', () => {
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0);
-    const { result, rerender } = renderHook(({ s }) => useMascotMood(s, false), { initialProps: { s: summary('gray') } });
+    const { result, rerender } = renderHook(({ s }) => useMascotMood(s, false).mood, { initialProps: { s: summary('gray') } });
     expect(result.current).toBe('idle');
     act(() => { vi.advanceTimersByTime(MOMENT_MIN_MS); });
     expect(result.current).toBe('glance');
@@ -60,17 +60,29 @@ describe('useMascotMood', () => {
 
   it('never has idle moments or sleeps while a session is red, amber or green', () => {
     vi.useFakeTimers();
-    const { result } = renderHook(() => useMascotMood(summary('green'), false));
+    const { result } = renderHook(() => useMascotMood(summary('green'), false).mood);
     act(() => { vi.advanceTimersByTime(SLEEP_AFTER_MS + MOMENT_MIN_MS + MOMENT_SPREAD_MS); });
     expect(result.current).toBe('working');
   });
 
   it('with reduced effects there is no wave, no idle moment and no sleep', () => {
     vi.useFakeTimers();
-    const { result, rerender } = renderHook(({ s }) => useMascotMood(s, true), { initialProps: { s: summary('green') } });
+    const { result, rerender } = renderHook(({ s }) => useMascotMood(s, true).mood, { initialProps: { s: summary('green') } });
     rerender({ s: summary('blue') });
     expect(result.current).toBe('idle');
     act(() => { vi.advanceTimersByTime(SLEEP_AFTER_MS + MOMENT_MIN_MS + MOMENT_SPREAD_MS); });
     expect(result.current).toBe('idle');
+  });
+
+  it('wakes when you point at or press him, even with nothing else changing', () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useMascotMood(summary('gray'), false));
+    act(() => { vi.advanceTimersByTime(SLEEP_AFTER_MS); });
+    expect(result.current.mood).toBe('sleep');
+    act(() => { result.current.wake(); });
+    expect(result.current.mood).toBe('idle');
+    // ...and the quiet clock starts over, so he does not drop straight back to sleep.
+    act(() => { vi.advanceTimersByTime(SLEEP_AFTER_MS - 1000); });
+    expect(result.current.mood).not.toBe('sleep');
   });
 });

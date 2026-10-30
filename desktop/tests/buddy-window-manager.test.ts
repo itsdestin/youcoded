@@ -78,6 +78,8 @@ function fakeWin(role: BuddyRole, x: number, y: number, nativeSizeDrift = false)
     }),
     setTitle: vi.fn(),
     setSize: vi.fn((w: number, h: number) => { size.width = w; size.height = h; }),
+    setMinimumSize: vi.fn(),
+    setMaximumSize: vi.fn(),
     getBounds: vi.fn(() => ({ ...at, ...size })),
     getPosition: vi.fn(() => [at.x, at.y]),
     isDestroyed: () => false,
@@ -896,6 +898,9 @@ describe("the chat's two sizes (the bar's size button)", () => {
       h.manager.toggleChatSize();
       expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
       expect(h.saved.chatSize).toBe('small');
+      // The way back to small also lowers the window's size limits — without it Linux refused to shrink it.
+      expect(h.wins.chat!.setMinimumSize).toHaveBeenLastCalledWith(CHAT_SIZE.width, CHAT_SIZE.height);
+      expect(h.wins.chat!.setMaximumSize).toHaveBeenLastCalledWith(CHAT_SIZE.width, CHAT_SIZE.height);
     } finally {
       h.manager.hide();
       vi.useRealTimers();

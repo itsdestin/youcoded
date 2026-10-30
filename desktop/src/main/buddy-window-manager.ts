@@ -802,12 +802,18 @@ export class BuddyWindowManager {
   }
 
   /** Give the chat window its current size at `at`. place() sends the size with the position on ordinary desktops; on
-   *  the rename channel (native Wayland) a window may still resize ITSELF, so the size goes through setSize there. */
+   *  the rename channel (native Wayland) a window may still resize ITSELF, so the size goes through setSize there.
+   *
+   *  WHY the minimum and maximum first (Destin's try-it, buddy-rebuild-tryit#T-3: "gets bigger, then clicking again just
+   *  makes it jump left/right instead of shrinking"): the chat is a non-resizable window, and on Linux that pins its
+   *  minimum and maximum size hints to its size. Growing raised the minimum to the large size, so the way back to small
+   *  was refused by the window system while the group's layout moved for the small size — the sideways jump. Setting
+   *  both limits to the new size first lets it shrink as well as grow. */
   private applyChatSize(win: BrowserWindow, at: Point): void {
-    if (this.captionLive()) {
-      const { width, height } = this.sizeOf('chat');
-      win.setSize(width, height);
-    }
+    const { width, height } = this.sizeOf('chat');
+    win.setMinimumSize(width, height);
+    win.setMaximumSize(width, height);
+    if (this.captionLive()) win.setSize(width, height);
     this.place('chat', win, at);
   }
 

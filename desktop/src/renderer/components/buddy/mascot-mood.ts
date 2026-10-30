@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AttentionSummary } from '../../../shared/types';
 import type { SessionStatusColor } from '../StatusDot';
 import type { PoseName } from '../mascot/mascot-poses';
@@ -51,11 +51,19 @@ export const STRETCH_MS = 900;
 
 /**
  * The mood for `summary`. Owns its timers: the 'done' beat, the idle moments and the sleep countdown. Every change of
- * the strongest colour restarts the quiet clock — that is "waking when anything happens".
+ * the strongest colour restarts the quiet clock — that is "waking when anything happens". `wake` does the same for the
+ * user's own hand: pointing at him or pressing him (buddy-rebuild-tryit#T-7: "the doze off seems to break sometimes?
+ * like i cant get him back awake" — only a change of colour woke him, so a sleeping buddy ignored being touched).
  */
-export function useMascotMood(summary: AttentionSummary | null, reducedEffects: boolean): MascotMood {
+export function useMascotMood(summary: AttentionSummary | null, reducedEffects: boolean): { mood: MascotMood; wake: () => void } {
   const status = strongestStatus(summary);
   const [beat, setBeat] = useState<'done' | 'glance' | 'stretch' | 'sleep' | null>(null);
+  // Bumped by wake(): restarts the quiet clock even when he was not asleep, so touching him counts as activity.
+  const [wakeTick, setWakeTick] = useState(0);
+  const wake = useCallback(() => {
+    setBeat((b) => (b === 'sleep' || b === 'glance' || b === 'stretch' ? null : b));
+    setWakeTick((n) => n + 1);
+  }, []);
   const prevStatus = useRef(status);
 
   // A change of colour: a fresh blue plays the 'done' wave; anything else simply wakes him.
@@ -92,9 +100,8 @@ export function useMascotMood(summary: AttentionSummary | null, reducedEffects: 
     schedule();
     return () => timers.forEach(clearTimeout);
     // `beat` changes on every moment; only entering quiet or sleep restarts this.
-  }, [quiet, reducedEffects, beat === 'sleep']);
+  }, [quiet, reducedEffects, beat === 'sleep', wakeTick]);
 
-  if (status === 'red' || status === 'amber') return 'alert';
-  if (status === 'green') return 'working';
-  return beat ?? 'idle';
+  const mood: MascotMood = status === 'red' || status === 'amber' ? 'alert' : status === 'green' ? 'working' : beat ?? 'idle';
+  return { mood, wake };
 }

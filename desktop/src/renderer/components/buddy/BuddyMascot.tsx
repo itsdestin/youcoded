@@ -96,7 +96,7 @@ export function BuddyMascot() {
   // idle glances and stretches, sleep after a quiet while. The shared summary hook PULLS on mount, so he is right from
   // the moment he appears (the old listener-only hook left him idle until something changed).
   const summary = useAttentionSummary();
-  const mood = useMascotMood(summary, reducedEffects);
+  const { mood, wake } = useMascotMood(summary, reducedEffects);
   const attention = mood === 'alert';
 
   // Mascot resolution order (spec §3.5): theme rig → theme flat art →
@@ -428,7 +428,9 @@ export function BuddyMascot() {
         // fallback art, without changing authored rigs' --rig-* token mapping.
         ...defaultMascotPaint(theme),
       }}
-      onPointerDown={onPointerDown}
+      // Touching him wakes him (mascot-mood.ts `wake`); before the drag/press handling, which it never changes.
+      onPointerEnter={wake}
+      onPointerDown={(e) => { wake(); onPointerDown(e); }}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onLostPointerCapture={onLostPointerCapture}
