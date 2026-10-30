@@ -720,7 +720,15 @@ async function askUser(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserA
  *  address at all. Requests a page's scripts and images make are not covered
  *  (stated in the spec): only documents, which carry readable page text. */
 export async function navigationVerdict(env: RunnerEnv, sessionId: string | null, url: string): Promise<'allow' | 'block'> {
-  if (!/^https?:/i.test(url)) return 'allow'; // data:, about:, blob: — no network address
+  if (!/^https?:/i.test(url)) {
+    // WHY an allow-list (2026-10-30 audit B4): this used to wave EVERY non-web address through "because it has no network
+    // address" — which also let file: (the person's own files), data:, view-source: and browser-internal pages load in a tab.
+    // Only what a normal page needs stays: an empty page, a page's own embedded document, a blob it made itself, and
+    // Chromium's error page. (The model and the address box already refuse these; this is the second wall.)
+    if (/^(about:blank|about:srcdoc|blob:|chrome-error:)/i.test(url.trim())) return 'allow';
+    if (sessionId) env.service.addNote(sessionId, 'The browser stopped the page (or a part of it) from loading a local or special address (file:, data: or a browser-internal page). Only web addresses are opened.');
+    return 'block';
+  }
   const cls = await classifyUrl(url, env.policy.lookup);
   if (cls === 'public') return 'allow';
   const key = hostPortKey(url);
