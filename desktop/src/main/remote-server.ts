@@ -54,6 +54,7 @@ import { UpdateSettings } from './update-settings';
 import { resolveStaticFile } from './remote-static-path';
 import { log } from './logger';
 import { CLOSE_REPLACED } from '../shared/remote-close-codes';
+import { AuthThrottle, VerificationQueue } from './remote-auth-throttle';
 
 const AUTH_TIMEOUT_MS = 5000;
 // The most an unauthenticated socket may buffer before it signs in. The auth
@@ -233,6 +234,10 @@ export class RemoteServer {
   // statusInterval removed — status data now fed by ipc-handlers.ts via broadcastStatusData()
   // Host-wide failure count, for the slowdown. Per-socket attempts live on the socket.
   private hostFailures = { count: 0, resetAt: 0 };
+  // WHY (security audit RA-1): lockouts per source address and host-wide, plus one-at-a-time password
+  // checks. See remote-auth-throttle.ts. Paired devices' saved keys are checked before any of this.
+  private authThrottle = new AuthThrottle();
+  private verifyQueue = new VerificationQueue();
   private statusListeners = new Set<(status: RemoteStatus) => void>();
   /**
    * Ids of requests this host finished, per device, so a client that lost the reply can ask
@@ -819,9 +824,15 @@ export class RemoteServer {
       ws.close(4009, 'Too many pending connections');
       return;
     }
+    // WHY also per source (audit RA-1): one address must not be able to hold the whole shared pool and
+    // starve the owner's phone. The loopback app page (local mode) is exempt; it is the app itself.
+    if (!this.local && !this.authThrottle.acquireUnauth(ip)) {
+      ws.close(4009, 'Too many pending connections');
+      return;
+    }
     this.unauthSockets++;
     let releasedUnauth = false;
-    const releaseUnauth = () => { if (!releasedUnauth) { releasedUnauth = true; this.unauthSockets--; } };
+    const releaseUnauth = () => { if (!releasedUnauth) { releasedUnauth = true; this.unauthSockets--; if (!this.local) this.authThrottle.releaseUnauth(ip); } };
     ws.once('close', releaseUnauth);
     // ONE auth attempt per connection. The handler below detaches itself on the first
     // message and every failure path closes the socket, so a guesser pays a full
@@ -938,7 +949,24 @@ export class RemoteServer {
           }
         }
 
-        if (msg.password && await this.config.verifyPassword(msg.password)) {
+        // WHY here, after the saved-key check above (audit RA-1): a locked-out source can still use a
+        // device key it already holds; only password guessing is stopped.
+        const waitMs = this.authThrottle.retryAfterMs(ip);
+        if (msg.password && waitMs > 0) {
+          ws.send(JSON.stringify({ type: 'auth:failed', reason: 'too-many-attempts', retryAfterMs: waitMs }));
+          ws.close(4001, 'Too many attempts');
+          return;
+        }
+        const verdict = msg.password && typeof msg.password === 'string'
+          ? await this.verifyQueue.run(() => this.config.verifyPassword(msg.password))
+          : false;
+        if (verdict === 'busy') {
+          ws.send(JSON.stringify({ type: 'auth:failed', reason: 'too-many-attempts', retryAfterMs: 30_000 }));
+          ws.close(4001, 'Busy');
+          return;
+        }
+        if (verdict) {
+          this.authThrottle.recordSuccess(ip);
           this.clearFailedAttempts();
           // The secret is returned once per pairing. A device that still HOLDS its credential
           // re-authenticates with it above. Arriving here with only the password means that
@@ -957,6 +985,8 @@ export class RemoteServer {
           // The restore waits for client:ready (addClient armed the old-client fallback).
         } else {
           this.recordFailedAttempt();
+          // Only real password guesses count; a stale saved key alone must not lock out password sign-in.
+          if (msg.password) this.authThrottle.recordFailure(ip);
           ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-credentials' }));
           ws.close(4001, 'Auth failed');
         }

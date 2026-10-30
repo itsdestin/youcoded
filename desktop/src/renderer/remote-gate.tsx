@@ -143,7 +143,10 @@ function LoginScreen({ onLogin, notice }: { onLogin: (password: string) => Promi
             ? 'This computer has no remote access password yet. Set one on the computer itself, in Settings → Remote access.'
             : failure.reason === 'invalid-credentials'
               ? 'Invalid password'
-              : 'Your computer refused this sign-in.'
+              // WHY (security audit RA-1): the computer now pauses password tries after repeated wrong ones.
+              : failure.reason === 'too-many-attempts'
+                ? 'Too many wrong passwords. Wait a few minutes and try again.'
+                : 'Your computer refused this sign-in.'
           : failure
             ? troubleText(failure.kind)
             : "Couldn't sign in."
