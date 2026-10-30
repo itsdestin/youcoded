@@ -49,8 +49,8 @@ const execFileAsync = promisify(execFile);
 // Now it reads git's own request (protocol=/host= lines on stdin) and answers only for
 // https://github.com. It is also registered under credential.https://github.com.helper
 // (see credentialedGitInvocation), so git does not even call it for other hosts.
-// eslint-disable-next-line no-template-curly-in-string -- these are SHELL expansions inside the helper script, not JS templates
 export const GIT_CREDENTIAL_HELPER =
+  // eslint-disable-next-line no-template-curly-in-string -- these are SHELL expansions inside the helper script, not JS templates
   '!f() { [ "$1" = "get" ] || return 0; h=; p=; while IFS= read -r l; do case "$l" in host=*) h=${l#host=};; protocol=*) p=${l#protocol=};; esac; done; ' +
   '[ "$h" = "github.com" ] && [ "$p" = "https" ] && printf "username=x-access-token\\npassword=%s\\n" "$YOUCODED_GIT_TOKEN"; return 0; }; f';
 
