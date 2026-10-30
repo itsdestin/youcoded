@@ -2847,9 +2847,9 @@ export function installShim(): void {
       // root gate as the other reads). Its { ok:false, error } answers are DATA
       // the caller words for the person (not-found, not-allowed…), so this
       // channel is deliberately NOT in REJECT_ON_NOT_OK. On the Android app the
-      // bridge answers not-implemented-on-mobile and the caller falls back.
-      resolvePath: (projectRoot: string, filePath: string) =>
-        invoke('artifacts:resolve-path', { projectRoot, path: filePath }),
+      // bridge answers not-implemented-on-mobile and the caller falls back. The host drops `sessionId` for this door (card #40).
+      resolvePath: (projectRoot: string, filePath: string, sessionId?: string) =>
+        invoke('artifacts:resolve-path', { projectRoot, path: filePath, sessionId }),
       listProjectsIndex: (opts?: { withCounts?: boolean }) =>
         invoke('artifacts:list-projects-index', opts ?? {}),
       // This transport sends an OBJECT payload, not positional args — `full`
