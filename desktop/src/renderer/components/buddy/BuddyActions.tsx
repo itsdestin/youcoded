@@ -25,11 +25,21 @@ const CANDIDATES: Record<'shot' | 'open' | 'hide', Record<string, React.ReactNod
     external: <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />,
     window: <><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 9h20M6 6.5h.01M9 6.5h.01" /></>,
     home: <><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9v10a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9" /></>,
+    // Round 2 (Destin: "either b/c. want to see a few more variants").
+    winout: <><path d="M13 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7M3 9h9" /><path d="M16 3h5v5M21 3l-7 7" /></>,
+    wininside: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M10 16l5-5M11 11h4v4" /></>,
+    winup: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M12 17v-5M9.5 14.5 12 12l2.5 2.5" /></>,
+    extsoft: <><rect x="3" y="7" width="14" height="14" rx="3" /><path d="M14 3h7v7M21 3l-9 9" /></>,
   },
   hide: {
     eyeoff: <><path d="M10.7 5.1A10.7 10.7 0 0 1 21.9 12a10.8 10.8 0 0 1-1.4 2.5M14.1 14.2a3 3 0 0 1-4.3-4.3M17.5 17.5A10.8 10.8 0 0 1 2.1 12a10.8 10.8 0 0 1 4.4-5.1" /><path d="m2 2 20 20" /></>,
     tuck: <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />,
     close: <path d="M6 6l12 12M18 6 6 18" />,
+    // Round 2 (Destin: "none of these").
+    sleep: <><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" /><path d="M15 3h4l-4 5h4" /></>,
+    leave: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></>,
+    minimize: <><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M8 12h8" /></>,
+    putaway: <><path d="M3 13h5l1.5 2.5h5L16 13h5v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M12 3v8M8.5 7.5 12 11l3.5-3.5" /></>,
   },
 };
 const candidate = (kind: 'shot' | 'open' | 'hide', i: number) => {
