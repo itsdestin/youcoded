@@ -83,11 +83,11 @@ function atStartup(id: string, graph: ModuleGraph): boolean {
 
 // WHY (2026-10-30 security audit F4): the main page had no Content-Security-Policy. Stamped into index.html as a <meta> so
 // it covers the desktop window (file://), a phone's browser and the Android WebView alike. Left out of the public landing-page
-// demo build (`build:site`: VITE_WORKBENCH=1), which is a different product surface that fetches fixtures from other places.
+// demo build (`build:site`: VITE_WORKBENCH=1 without VITE_SHOOT; the screenshot build keeps it so shoot can see violations), which is a different product surface that fetches fixtures from other places.
 // The policy and the reasons for each part: src/shared/app-csp.ts. Pinned by tests/app-csp.test.ts.
 const appContentSecurityPolicy = {
   name: 'youcoded-content-security-policy',
-  apply: (_config: unknown, env: { command: string }) => !(env.command === 'build' && process.env.VITE_WORKBENCH === '1'),
+  apply: (_config: unknown, env: { command: string }) => !(env.command === 'build' && process.env.VITE_WORKBENCH === '1' && process.env.VITE_SHOOT !== '1'),
   // Written straight after <meta charset> (the charset tag must stay within the first 1024 bytes of the file, and the policy
   // must come before the first script and style it governs). The policy only uses single quotes, so a double-quoted attribute is safe.
   transformIndexHtml: {
