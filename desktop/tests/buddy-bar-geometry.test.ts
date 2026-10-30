@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { describe, it, expect } from 'vitest';
 import {
   BAR_CONTENT, BAR_PADDING, BAR_PADDING_X, BAR_TOOLTIP_ROOM, BAR_GAP_PX, BAR_SIZE, CHAT_SIZE, CHAT_GAP_PX, MASCOT_SIZE,
@@ -227,6 +229,15 @@ describe('computeTrayLayout', () => {
     expect(chat.x + CHAT_SIZE.width / 2).toBe(1712);
     expect(bar.y).toBe(chat.y + CHAT_SIZE.height);
     expect(bar.y + BAR_SIZE.height).toBe(1040 - 8);
+  });
+  it('the button row sits just under the chat, not a hint-room away (the bar draws it at its window top here)', () => {
+    // WHY: the bar window has BAR_TOOLTIP_ROOM for hover hints. Drawn at the window's bottom (the floating style),
+    // that room became a 34px gap under the chat; in this style buddy.css [data-under="1"] draws the row at the top.
+    const { chat, bar } = computeTrayLayout({ x: 1700, y: 1048, width: 24, height: 24 }, WA);
+    const rowTop = bar.y + BAR_PADDING;
+    expect(rowTop - (chat.y + CHAT_SIZE.height)).toBe(BAR_PADDING);
+    const css = readFileSync(join(__dirname, '../src/renderer/styles/buddy.css'), 'utf8');
+    expect(css).toMatch(new RegExp(`\\.buddy-bar-root\\[data-under="1"\\] \\{[^}]*align-items: flex-start;[^}]*padding-top: ${BAR_PADDING}px`));
   });
   it('top bar (macOS menu bar): the chat hangs from the top', () => {
     const { chat } = computeTrayLayout({ x: 1500, y: 2, width: 22, height: 22 }, { x: 0, y: 25, width: 1920, height: 1055 });

@@ -166,8 +166,8 @@ already meant exactly "something may be wrong and I don't know", which is what a
 is, so the warning was routed there rather than given a state of its own. Consequence
 worth knowing: `RED_ATTENTION` is `{stalled, session-died, error}`, which leaves `'stuck'`
 as the only amber state. `attentionDotColor()` is the single source for those colours —
-the old buddy `AttentionStrip` (since deleted; the buddy now draws the main window's warning) had drifted to a private table painting `'stuck'` red and now
-defers to it, which moved four pill colours (`stalled` blue→red, `session-died` grey→red,
+the old buddy `AttentionStrip` (since deleted; the buddy now draws the main window's warning) had drifted to a private table painting `'stuck'` red; moving it onto
+this function changed four pill colours (`stalled` blue→red, `session-died` grey→red,
 `error` blue→red, `stuck` red→amber).
 
 ### `stalledSince` — stamped once, held, and cleared at the one write site
@@ -316,7 +316,7 @@ unreachable in that window. `TranscriptPageResult.unresolved` separates them, on
 `ipc-handlers.ts` and `transcript-page.ts` (both doors share the one `transcript:page` channel; `remote-server.ts` does not set it) (the same React renderer runs over the remote
 bridge). Callers retry rather than record: `ChatView` on a bounded backoff — at the top of
 the list there is no scroll gesture left to re-trigger the sentinel, so it must heal on a
-timer — and `App`/the buddy floater through `renderer/state/first-page-retry.ts`.
+timer — and `App`/the buddy chat through `renderer/state/first-page-loader.ts` (which applies `first-page-retry.ts`).
 <!-- verify: {"path": "youcoded/desktop/src/shared/types.ts", "contains": "unresolved[?]: true"} -->
 
 **No overlap, by construction.** `startWatching` starts the live tailer at end-of-file

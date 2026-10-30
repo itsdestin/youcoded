@@ -1985,8 +1985,8 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.BUDDY_STATUS_CHANGED, listener);
       return () => ipcRenderer.removeListener(IPC.BUDDY_STATUS_CHANGED, listener);
     },
-    onBarState: (cb: (s: { visible: boolean }) => void) => {
-      const listener = (_: unknown, s: { visible: boolean }) => cb(s);
+    onBarState: (cb: (s: { visible: boolean; under?: boolean }) => void) => {
+      const listener = (_: unknown, s: { visible: boolean; under?: boolean }) => cb(s);
       ipcRenderer.on(IPC.BUDDY_BAR_STATE, listener);
       return () => ipcRenderer.removeListener(IPC.BUDDY_BAR_STATE, listener);
     },

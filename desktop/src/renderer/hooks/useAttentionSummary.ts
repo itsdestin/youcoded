@@ -13,9 +13,8 @@ const EMPTY: AttentionSummary = { anyNeedsAttention: false, perSession: {} };
  * carries "needs attention" STATES only (stalled / error / awaiting-input), so
  * it can colour a peer session red or amber but can never say green — a peer
  * window's session that is happily working looks identical to an idle one. The
- * merged summary carries the colour itself, green included. The buddy's
- * SessionPill has drawn peer dots from this feed since it shipped; nothing but
- * the main switcher was missing.
+ * merged summary carries the colour itself, green included. The main
+ * switcher and the buddy's SessionStrip both draw their dots from this feed.
  *
  * Pull first, then subscribe: the push fires on CHANGE only, so a window opened
  * while a peer session is mid-turn would otherwise show it grey until that turn

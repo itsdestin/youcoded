@@ -185,9 +185,8 @@ interface Props {
 const DOT_BG: Record<SessionStatusColor, string> = {
   green: 'bg-green-400',
   red: 'bg-red-400',
-  // Amber harmonizes with the buddy AttentionStrip's #f5a623 ("needs
-  // attention" convention). bg-amber-400 (#fbbf24) reads as the same status
-  // across surfaces.
+  // Amber is the "needs attention" convention; bg-amber-400 (#fbbf24) reads as
+  // the same status on every surface that draws this strip (the buddy's too).
   amber: 'bg-amber-400',
   blue: 'bg-blue-400',
   gray: 'bg-gray-500',

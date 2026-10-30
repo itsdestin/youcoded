@@ -26,7 +26,7 @@ export function useBuddyFeed(sessionId: string | null): void {
     // handler that touches session state bails with `if (!session) return
     // state` when state.get(sessionId) is undefined — so without SESSION_INIT,
     // USER_PROMPT and every TRANSCRIPT_* event is silently dropped and the
-    // bubble feed never populates. Main's App.tsx dispatches SESSION_INIT via
+    // buddy's chat never fills. Main's App.tsx dispatches SESSION_INIT via
     // the sessionCreated listener and the session-list load; buddy has
     // neither, so we initialize on-demand here for the session being viewed.
     // SESSION_INIT is idempotent (no-op if already initialized).
