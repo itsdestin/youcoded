@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, session, webContents, dialog } from 'electron';
 import { safeOpenExternal } from './safe-open';
 import { installPermissionPolicy } from './permission-policy';
+import { sealPreviewFrames } from './preview-frame-guard';
 import { browserToolService, startBrowserSupport, stopBrowserSupport, wireBrowserSessionCleanup } from './assistant-browser/browser-main';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
@@ -747,6 +748,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     if (!isAppPageUrl(url, path.join(__dirname, '../renderer/index.html'), DEV_SERVER_URL)) event.preventDefault();
   });
   sealOfficeFrames(win.webContents); // WHY: subframes skip will-navigate; Office frames never leave office: (office-frame-guard.ts)
+  sealPreviewFrames(win.webContents, DEV_SERVER_URL); // WHY (audit F8): the HTML preview / Pages frames cannot navigate themselves to a website (preview-frame-guard.ts)
   // Security: deny window.open() but route safe http(s)/mailto to the OS browser
   win.webContents.setWindowOpenHandler(({ url }) => {
     // Rejects when the OS has no handler for the scheme — must not escape as an unhandled rejection.

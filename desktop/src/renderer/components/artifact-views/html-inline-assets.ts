@@ -1,7 +1,7 @@
 // Inline an HTML artifact's RELATIVE local assets so the preview renders the
 // way the page actually looks (Destin's review: an index.html referencing
 // styles.css / game.js rendered unstyled and inert). srcDoc previews have no
-// base URL and the app CSP blocks file:// subresources, so relative refs can
+// base URL and file:// subresources are refused, so relative refs can
 // never load on their own — instead the sibling files are fetched through the
 // guarded artifacts:read-binary IPC and inlined: stylesheets become <style>,
 // scripts become inline <script>, images/fonts become data: URIs.
@@ -18,6 +18,18 @@
 //   not a hung preview).
 
 const MAX_ASSETS = 40;
+
+// WHY a file-type check per kind of reference (2026-10-30 audit F1): the HTML file chooses the path, so `<link rel=stylesheet
+// href="../../notes/secret.txt">` used to paste ANY readable text file into a <style> element where the page's own script could
+// read it back. A stylesheet reference now inlines only a .css file, a script reference only script files; pictures and fonts
+// were already limited by their extension tables.
+const STYLESHEET_EXT = new Set(['css']);
+const SCRIPT_EXT = new Set(['js', 'mjs', 'cjs']);
+function hasExt(ref: string, allowed: Set<string>): boolean {
+  const name = ref.split(/[?#]/)[0].split('/').pop() ?? '';
+  const dot = name.lastIndexOf('.');
+  return dot > 0 && allowed.has(name.slice(dot + 1).toLowerCase());
+}
 
 const IMAGE_MIME: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
@@ -81,7 +93,7 @@ export async function inlineLocalAssets(html: string, htmlAbsPath: string): Prom
     // <link rel="stylesheet" href> → <style>
     for (const link of Array.from(doc.querySelectorAll('link[rel~="stylesheet" i][href]'))) {
       const ref = link.getAttribute('href');
-      if (!isRelativeRef(ref) || !take()) continue;
+      if (!isRelativeRef(ref) || !hasExt(ref, STYLESHEET_EXT) || !take()) continue;
       jobs.push(fetchBytes(resolveRelativeRef(htmlAbsPath, ref)).then((bytes) => {
         if (!bytes) return;
         const style = doc.createElement('style');
@@ -93,7 +105,7 @@ export async function inlineLocalAssets(html: string, htmlAbsPath: string): Prom
     // frame exactly as a remote script would — same trust boundary as today).
     for (const script of Array.from(doc.querySelectorAll('script[src]'))) {
       const ref = script.getAttribute('src');
-      if (!isRelativeRef(ref) || !take()) continue;
+      if (!isRelativeRef(ref) || !hasExt(ref, SCRIPT_EXT) || !take()) continue;
       jobs.push(fetchBytes(resolveRelativeRef(htmlAbsPath, ref)).then((bytes) => {
         if (!bytes) return;
         script.removeAttribute('src');

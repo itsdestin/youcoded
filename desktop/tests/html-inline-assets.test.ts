@@ -61,3 +61,14 @@ describe('inlineLocalAssets', () => {
     expect(await inlineLocalAssets(selfContained, '/p/i.html')).toBe(selfContained);
   });
 });
+
+describe('inlineLocalAssets only pulls in the matching file type (2026-10-30 audit F1)', () => {
+  it('does not paste an arbitrary project file into a <style> or <script>', async () => {
+    readBinary.mockImplementation(async () => ({ ok: true, base64: b64('SECRET TEXT') }));
+    const html = '<html><head><link rel="stylesheet" href="../../notes/secret.txt"><link rel="stylesheet" href="ok.css"><script src="../keys.json"></script><script src="app.js"></script></head></html>';
+    const out = await inlineLocalAssets(html, '/proj/site/index.html');
+    expect(readBinary.mock.calls.map((c) => c[0]).sort()).toEqual(['/proj/site/app.js', '/proj/site/ok.css']);
+    expect(out).toContain('href="../../notes/secret.txt"');   // left as written: it does not load, and leaks nothing
+    expect(out).toContain('src="../keys.json"');
+  });
+});
