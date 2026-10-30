@@ -76,8 +76,12 @@ describe('Claude Code comment asks for files outside the project', () => {
     expect(event.payload.external).toBeUndefined();
   });
 
-  it('lets a Word file outside the project straight through to the helper\'s plain refusal', () => {
-    expect(judgeCommentAsk(ask('ReadFileComments', { path: path.join(os.tmpdir(), 'elsewhere', 'report.docx') }))).toBe('approve');
+  it('asks with the same card for a Word or Excel file in another folder', () => {
+    for (const name of ['report.docx', 'sales.xlsx']) {
+      const event = ask('AddComment', { path: path.join(os.tmpdir(), 'elsewhere', name) });
+      expect(judgeCommentAsk(event)).toBe('ask');
+      expect(event.payload.external).toBe(true);
+    }
   });
 
   it('ignores another server\'s look-alike tools and sessions it never saw', () => {

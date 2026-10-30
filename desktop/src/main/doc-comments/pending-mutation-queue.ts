@@ -74,8 +74,11 @@ import {
   resolveNativeXlsxComment,
   reopenNativeXlsxComment,
   moveNativeXlsxComment,
+  OUTSIDE_FILE_APPROVED,
   type NativeFormat,
+  type OutsideApproval,
 } from './doc-comments-dispatch';
+import { resolveSourceFilePath } from './doc-comments-store';
 import type {
   CommentReply,
   PendingMutationRequest,
@@ -164,9 +167,23 @@ function hasValidToken(entry: Entry, req: PendingMutationRequest): boolean {
  *  The assistant is told so (claude-code-doc-comments-mcp.ts) rather than told it failed. */
 const isQueued = (r: object): boolean => 'queued' in r && (r as { queued?: unknown }).queued === true;
 
+/** Card #207: an absolute path whose real location is outside the project
+ *  is a Word/Excel file in another folder. The request already carries this
+ *  chat's secret (checked before this runs), and Claude Code ran the tool only
+ *  after the outside-file card was answered (cc-outside-comments.ts), so it is
+ *  applied with the card's approval instead of the project root. Decided by
+ *  the SAME realpath containment the helper script used to route it here. */
+async function targetScope(reqPath: string, trustedProjectRoot: string): Promise<{ path: string; projectRoot?: string; outsideApproval?: OutsideApproval }> {
+  if (path.isAbsolute(reqPath)) {
+    const inside = await resolveSourceFilePath({ path: reqPath, projectRoot: trustedProjectRoot });
+    if (!inside.ok && inside.error === 'path-outside-project') return { path: reqPath, outsideApproval: OUTSIDE_FILE_APPROVED };
+  }
+  return { path: reqPath, projectRoot: trustedProjectRoot };
+}
+
 async function applyRequest(req: PendingMutationRequest, trustedProjectRoot: string): Promise<PendingMutationResult> {
   const format: NativeFormat = req.format;
-  const base = { path: req.path, projectRoot: trustedProjectRoot };
+  const base = await targetScope(req.path, trustedProjectRoot);
   if (req.kind === 'list') {
     const result = await listNativeComments(format, base);
     return result.ok ? { ok: true, comments: result.comments } : { ok: false, error: result.error };

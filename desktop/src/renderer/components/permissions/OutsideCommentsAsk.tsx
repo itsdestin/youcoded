@@ -41,8 +41,10 @@ export function OutsideCommentsAsk({ inset, responding, focusIdx, buttonsRef, pa
           </button>
         ))}
       </div>
+      {/* WHY the Word/Excel clause: those files keep comments inside themselves,
+          so approving one does change it; every other file's comments are kept apart. */}
       <p className="text-3xs text-fg-muted leading-relaxed">
-        This file is outside this chat&apos;s project. Allow for this chat covers comments on any outside file until the chat ends, and never lets the assistant change the files.
+        This file is outside this chat&apos;s project. Allow for this chat covers comments on any outside file until the chat ends. Word and Excel comments are saved inside the file; other files are never changed.
       </p>
       {unconfirmedNote}
     </div>

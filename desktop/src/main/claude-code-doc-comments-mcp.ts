@@ -226,14 +226,19 @@ var FALLBACK_DIR = ['.youcoded', 'loose-file-comments'];
  *  after Claude Code let the call through, which for a file outside the
  *  project means the person answered the app's outside-file card (main.ts
  *  never auto-approves one without their chat-wide grant), or the session runs
- *  with permissions skipped. Word/Excel comments live inside the file and go
- *  through the app's queue under the project folder, so those stay refused. */
-function locateOutside(filePath) {
+ *  with permissions skipped. A Word/Excel file's comments live inside the file,
+ *  so it goes through this chat's own queue (under the project folder, like
+ *  any Word/Excel request) naming the outside file; the app applies it with
+ *  the card's approval (pending-mutation-queue.ts targetScope). */
+function locateOutside(filePath, realProjectRoot) {
   if (!path.isAbsolute(filePath)) return Promise.resolve({ error: 'path-outside-project' });
   var abs = path.resolve(filePath);
   return realpathWithNonexistentTail(abs).then(function (real) {
     var resolved = real || abs;
-    if (nativeFormatFor(resolved)) return { error: 'word-or-excel-outside-project-not-supported-yet' };
+    if (nativeFormatFor(resolved)) {
+      var pendingDir = path.join.apply(path, [realProjectRoot].concat(PENDING_DIR));
+      return { realProjectRoot: realProjectRoot, sourceAbsolutePath: resolved, pendingDir: pendingDir };
+    }
     var hash = crypto.createHash('sha256').update(resolved).digest('hex');
     var sidecarPath = path.join.apply(path, [os.homedir()].concat(FALLBACK_DIR, [hash + '.json']));
     return { sidecarPath: sidecarPath, sourceAbsolutePath: resolved };
@@ -255,7 +260,7 @@ function locate(filePath) {
     if (!realProjectRoot) return { error: 'path-outside-project' };
     var abs = path.resolve(realProjectRoot, filePath);
     return checkContainment(realProjectRoot, abs).then(function (realAbs) {
-      if (realAbs === null) return locateOutside(filePath);
+      if (realAbs === null) return locateOutside(filePath, realProjectRoot);
       var rel = path.relative(realProjectRoot, realAbs);
       var sidecarPath = path.join.apply(path, [realProjectRoot].concat(SIDECAR_DIR, [rel + '.json']));
       var pendingDir = path.join.apply(path, [realProjectRoot].concat(PENDING_DIR));

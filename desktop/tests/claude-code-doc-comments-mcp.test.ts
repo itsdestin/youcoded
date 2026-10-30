@@ -423,12 +423,29 @@ describe('path containment — model-controlled path at the MCP tool-argument su
     }
   });
 
-  it('refuses a Word file outside the project with a plain reason', async () => {
-    const client = start(root);
-    const res = await client.callTool('ReadFileComments', { path: path.join(os.tmpdir(), 'elsewhere', 'report.docx') });
-    expect(res.result.isError).toBe(true);
-    expect(res.result.content[0].text).toContain('word-or-excel-outside-project-not-supported-yet');
-  });
+  it('sends a Word file outside the project through this chat\'s own queue, naming the outside file', async () => {
+    const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '5000' });
+    const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'yc-doc-comments-mcp-outside-'));
+    try {
+      const outsideFile = path.join(outside, 'report.docx');
+      await fs.promises.writeFile(outsideFile, 'stands in for a Word file');
+      const callPromise = client.callTool('ReadFileComments', { path: outsideFile }, 8000);
+      const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
+      const requestFile = await vi.waitFor(() => {
+        const files = fs.existsSync(pendingDir) ? fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json')) : [];
+        if (!files.length) throw new Error('no request yet');
+        return path.join(pendingDir, files[0]);
+      });
+      const request = JSON.parse(fs.readFileSync(requestFile, 'utf8'));
+      expect(request).toMatchObject({ kind: 'list', format: 'docx', path: outsideFile });
+      // Stand in for the app answering it.
+      fs.writeFileSync(path.join(pendingDir, `${request.id}.result.json`), JSON.stringify({ ok: true, comments: [] }));
+      const res = await callPromise;
+      expect(res.result.isError).toBe(false);
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  }, 15000);
 
   it('a symlink inside the project root that points outside it is refused (realpath, not the string, decides)', async () => {
     const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'yc-doc-comments-mcp-outside-'));

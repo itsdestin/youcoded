@@ -6,7 +6,7 @@
 //   - every comment-tool permission ask reaches the app (the read is no longer
 //     pre-allowed — claude-code-doc-comments-mcp.ts deploy), and an in-project
 //     read is answered "allow" here at once, so nothing changes for it;
-//   - an outside plain file raises the outside-file card (`external: true` on
+//   - an outside file (plain, Word or Excel) raises the outside-file card (`external: true` on
 //     the ask, which ToolCard draws as Yes / Allow for this chat / No), unless
 //     this chat already chose "Allow for this chat";
 //   - the answer is read on its way back (permission:respond) to record that
@@ -18,7 +18,6 @@
 import * as path from 'path';
 import type { EventEmitter } from 'events';
 import { bareDocCommentsToolName } from '../shared/doc-comments-mcp';
-import { nativeFormatFor } from './doc-comments/doc-comments-dispatch';
 
 interface CommentsSession { serverId: string; cwd: string; granted: boolean }
 const sessions = new Map<string, CommentsSession>();
@@ -56,9 +55,6 @@ export function judgeCommentAsk(event: { sessionId: string; payload?: Record<str
   const target = (payload.tool_input as Record<string, unknown> | undefined)?.path;
   if (typeof target !== 'string') return 'pass';
   if (!isOutside(info.cwd, target)) return bare === 'ReadFileComments' ? 'approve' : 'pass';
-  // Word/Excel outside the project is not supported yet; the helper refuses
-  // it with a plain reason, so asking first would only lead to that refusal.
-  if (nativeFormatFor(target) !== null) return 'approve';
   // A helper (Claude Code subagent) never holds or mints the chat-wide grant,
   // matching the app's own assistant: it gets the plain card every time.
   if (typeof payload.agent_id === 'string' && payload.agent_id) return 'ask';

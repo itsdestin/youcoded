@@ -218,6 +218,22 @@ describe('path containment refusal at the tool-argument surface', () => {
     }
   });
 
+  it('a Word file outside the project gets its comment inside that file, nothing under the project', async () => {
+    const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-doc-comments-tools-outside-'));
+    try {
+      const ctx = makeCtx(root);
+      const file = path.join(outside, 'brief.docx');
+      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), file);
+      const selector: CommentSelector = { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'Marketing emails go out', prefix: '', suffix: '', occurrence: 0 } };
+      const r = await AddCommentTool.execute({ path: file, selector, text: 'outside word note' }, ctx);
+      expect(r.isError).toBeFalsy();
+      expect(fs.existsSync(path.join(root, '.youcoded'))).toBe(false);
+      expect((await ReadFileCommentsTool.execute({ path: file }, ctx)).text).toContain('outside word note');
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it('a symlink inside the project pointing OUTSIDE it is refused on every mutation tool (realpath, not string containment)', async () => {
     const secret = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-doc-comments-tools-secret-'));
     const secretFile = path.join(secret, 'x.md');

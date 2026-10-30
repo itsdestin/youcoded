@@ -796,7 +796,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect((read as any).calls).toHaveLength(3);
   });
 
-  it('refuses a Word file outside the project up front instead of asking', async () => {
+  it('asks for a Word file outside the project like any other outside file', async () => {
     const read = fakeTool('ReadFileComments', { schema: z.object({ path: z.string() }) });
     const model = scriptedModel([
       stream(toolCallChunk('c1', 'ReadFileComments', { path: path.join(os.tmpdir(), 'yc-outside', 'report.docx') }), finishChunk('tool-calls')),
@@ -806,8 +806,10 @@ describe('HarnessSession — multi-step turn driver', () => {
     const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW, askUser }), async () => model as any);
     const events = collect(session);
     await session.send('go');
-    expect(askUser).not.toHaveBeenCalled();
-    expect(events.find((e) => e.type === 'tool-result')!.data.toolResult).toMatch(/Word or Excel file outside/);
+    expect(askUser).toHaveBeenCalledTimes(1);
+    expect(askUser.mock.calls[0][0].external).toBe(true);
+    expect((read as any).calls).toHaveLength(1);
+    expect(events.find((e) => e.type === 'tool-result')!.data.toolResult).not.toMatch(/Word or Excel/);
   });
 
   it('never applies the outside-comments grant to a specialist child', async () => {

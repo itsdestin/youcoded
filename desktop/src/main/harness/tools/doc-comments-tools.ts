@@ -38,6 +38,8 @@ import {
   resolveNativeXlsxComment,
   reopenNativeXlsxComment,
   moveNativeXlsxComment,
+  OUTSIDE_FILE_APPROVED,
+  type OutsideApproval,
 } from '../../doc-comments/doc-comments-dispatch';
 import { refuseUnknownProjectRoot } from '../../doc-comments/doc-comments-gate';
 import { checkPathGuard } from './guards';
@@ -171,17 +173,16 @@ function nativeSubjectFor(path: string): string | undefined {
  *  harness-session.ts asks the person first (once, or for the rest of the
  *  chat), and on yes the tool reads and writes that file's comments in the
  *  per-machine fallback store (doc-comments-store.ts `locateFallback`), keyed
- *  by the file's real location instead of misfiled under this project.
- *  `office-outside` is a Word/Excel file in another folder: its comments live
- *  inside the file and that path needs a project root, so it is refused
- *  honestly up front rather than asked about and then failing.
+ *  by the file's real location instead of misfiled under this project. A
+ *  Word/Excel file in another folder is `outside` too: its comments live inside
+ *  the file, reached with the card's approval (doc-comments-dispatch.ts
+ *  OUTSIDE_FILE_APPROVED) through the same code as a file inside the project.
  *  Only an ABSOLUTE path can be outside: a relative one is resolved against the
  *  project and the store's own containment check refuses any `..` escape. */
 export type OutsideCommentsVerdict =
   | { kind: 'inside' }
   | { kind: 'deny'; reason: string }
-  | { kind: 'outside' }
-  | { kind: 'office-outside' };
+  | { kind: 'outside' };
 
 export function outsideCommentsVerdict(toolName: string, args: unknown, cwd: string): OutsideCommentsVerdict {
   if (bareDocCommentsToolName(toolName) === null) return { kind: 'inside' };
@@ -190,16 +191,20 @@ export function outsideCommentsVerdict(toolName: string, args: unknown, cwd: str
   const verdict = checkPathGuard(p, cwd);
   if (verdict.kind === 'deny') return { kind: 'deny', reason: verdict.reason };
   if (verdict.kind !== 'external') return { kind: 'inside' };
-  return targetFormat(p) ? { kind: 'office-outside' } : { kind: 'outside' };
+  return { kind: 'outside' };
 }
 
-/** The store's projectRoot for this call: none for an approved outside file
- *  (the fallback store), the chat's folder otherwise. WHY re-derived here
- *  rather than passed in: execute() only runs after harness-session.ts's
- *  guard let the call through, and deriving from the SAME verdict means a
- *  path the guard judged inside can never quietly fall back. */
-function storeRootFor(path: string, ctx: ToolContext): string | undefined {
-  return outsideCommentsVerdict('ReadFileComments', { path }, ctx.cwd).kind === 'outside' ? undefined : ctx.cwd;
+/** Where this call's comments are reached: the chat's folder, or for an
+ *  approved outside file no project root plus the card's approval (a plain
+ *  file uses the per-machine fallback store and ignores the approval; a
+ *  Word/Excel file needs it). WHY re-derived here rather than passed in:
+ *  execute() only runs after harness-session.ts's guard let the call through,
+ *  and deriving from the SAME verdict means a path the guard judged inside can
+ *  never quietly reach outside. */
+function scopeFor(path: string, ctx: ToolContext): { projectRoot?: string; outsideApproval?: OutsideApproval } {
+  return outsideCommentsVerdict('ReadFileComments', { path }, ctx.cwd).kind === 'outside'
+    ? { outsideApproval: OUTSIDE_FILE_APPROVED }
+    : { projectRoot: ctx.cwd };
 }
 
 function formatComment(c: PersistedComment): string {
@@ -247,8 +252,8 @@ export const ReadFileCommentsTool = defineTool({
     if (gateErr) return { text: `ReadFileComments failed: ${gateErr}`, isError: true };
     const format = targetFormat(args.path);
     const result = format
-      ? await listNativeComments(format, { path: args.path, projectRoot: ctx.cwd })
-      : await listComments({ path: args.path, projectRoot: storeRootFor(args.path, ctx) });
+      ? await listNativeComments(format, { path: args.path, ...scopeFor(args.path, ctx) })
+      : await listComments({ path: args.path, ...scopeFor(args.path, ctx) });
     if (!result.ok) return { text: `ReadFileComments failed: ${describeError(result)}`, isError: true };
     if (result.comments.length === 0) return { text: `No comments on ${args.path}.` };
     return { text: `${result.comments.length} comment(s) on ${args.path}:\n\n${result.comments.map(formatComment).join('\n\n')}` };
@@ -280,10 +285,10 @@ export const ReplyToCommentTool = defineTool({
     if (gateErr) return { text: `ReplyToComment failed: ${gateErr}`, isError: true };
     const format = targetFormat(args.path);
     const result = format === 'docx'
-      ? await replyToNativeDocxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, text: args.text, author: 'assistant' })
+      ? await replyToNativeDocxComment({ path: args.path, ...scopeFor(args.path, ctx), id: args.commentId, text: args.text, author: 'assistant' })
       : format === 'xlsx'
-        ? await replyToNativeXlsxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, text: args.text, author: 'assistant' })
-        : await replyToComment({ path: args.path, projectRoot: storeRootFor(args.path, ctx), id: args.commentId, text: args.text, author: 'assistant' });
+        ? await replyToNativeXlsxComment({ path: args.path, ...scopeFor(args.path, ctx), id: args.commentId, text: args.text, author: 'assistant' })
+        : await replyToComment({ path: args.path, ...scopeFor(args.path, ctx), id: args.commentId, text: args.text, author: 'assistant' });
     if (!result.ok) return { text: `ReplyToComment failed: ${describeError(result)}`, isError: true };
     if ('queued' in result) return { text: queuedText(args.path) };
     return { text: `Reply added to comment ${args.commentId} on ${args.path}.` };
@@ -305,10 +310,10 @@ export const ResolveCommentTool = defineTool({
     if (gateErr) return { text: `ResolveComment failed: ${gateErr}`, isError: true };
     const format = targetFormat(args.path);
     const result = format === 'docx'
-      ? await resolveNativeDocxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, by: 'assistant' })
+      ? await resolveNativeDocxComment({ path: args.path, ...scopeFor(args.path, ctx), id: args.commentId, by: 'assistant' })
       : format === 'xlsx'
-        ? await resolveNativeXlsxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, by: 'assistant' })
-        : await resolveComment({ path: args.path, projectRoot: storeRootFor(args.path, ctx), id: args.commentId, by: 'assistant' });
+        ? await resolveNativeXlsxComment({ path: args.path, ...scopeFor(args.path, ctx), id: args.commentId, by: 'assistant' })
+        : await resolveComment({ path: args.path, ...scopeFor(args.path, ctx), id: args.commentId, by: 'assistant' });
     if (!result.ok) return { text: `ResolveComment failed: ${describeError(result)}`, isError: true };
     if ('queued' in result) return { text: queuedText(args.path) };
     return { text: `Comment ${args.commentId} on ${args.path} marked resolved.` };
@@ -330,10 +335,10 @@ export const ReopenCommentTool = defineTool({
     if (gateErr) return { text: `ReopenComment failed: ${gateErr}`, isError: true };
     const format = targetFormat(args.path);
     const result = format === 'docx'
-      ? await reopenNativeDocxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, by: 'assistant' })
+      ? await reopenNativeDocxComment({ path: args.path, ...scopeFor(args.path, ctx), id: args.commentId, by: 'assistant' })
       : format === 'xlsx'
-        ? await reopenNativeXlsxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, by: 'assistant' })
-        : await reopenComment({ path: args.path, projectRoot: storeRootFor(args.path, ctx), id: args.commentId, by: 'assistant' });
+        ? await reopenNativeXlsxComment({ path: args.path, ...scopeFor(args.path, ctx), id: args.commentId, by: 'assistant' })
+        : await reopenComment({ path: args.path, ...scopeFor(args.path, ctx), id: args.commentId, by: 'assistant' });
     if (!result.ok) return { text: `ReopenComment failed: ${describeError(result)}`, isError: true };
     if ('queued' in result) return { text: queuedText(args.path) };
     return { text: `Comment ${args.commentId} on ${args.path} reopened.` };
@@ -359,10 +364,10 @@ export const AddCommentTool = defineTool({
     const format = targetFormat(args.path);
     const selector = args.selector as CommentSelector;
     const result = format === 'docx'
-      ? await addNativeDocxComment({ path: args.path, projectRoot: ctx.cwd, selector, text: args.text, author: 'assistant' })
+      ? await addNativeDocxComment({ path: args.path, ...scopeFor(args.path, ctx), selector, text: args.text, author: 'assistant' })
       : format === 'xlsx'
-        ? await addNativeXlsxComment({ path: args.path, projectRoot: ctx.cwd, selector, text: args.text, author: 'assistant' })
-        : await addComment({ path: args.path, projectRoot: storeRootFor(args.path, ctx), selector, text: args.text, author: 'assistant' });
+        ? await addNativeXlsxComment({ path: args.path, ...scopeFor(args.path, ctx), selector, text: args.text, author: 'assistant' })
+        : await addComment({ path: args.path, ...scopeFor(args.path, ctx), selector, text: args.text, author: 'assistant' });
     if (!result.ok) return { text: `AddComment failed: ${describeError(result)}`, isError: true };
     if ('queued' in result) return { text: queuedText(args.path) };
     return { text: `Comment added to ${args.path} (id: ${result.id}).` };
@@ -386,10 +391,10 @@ export const MoveCommentTool = defineTool({
     const format = targetFormat(args.path);
     const newSelector = args.newSelector as CommentSelector;
     const result = format === 'docx'
-      ? await moveNativeDocxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, newSelector })
+      ? await moveNativeDocxComment({ path: args.path, ...scopeFor(args.path, ctx), id: args.commentId, newSelector })
       : format === 'xlsx'
-        ? await moveNativeXlsxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, newSelector })
-        : await moveComment({ path: args.path, projectRoot: storeRootFor(args.path, ctx), id: args.commentId, newSelector });
+        ? await moveNativeXlsxComment({ path: args.path, ...scopeFor(args.path, ctx), id: args.commentId, newSelector })
+        : await moveComment({ path: args.path, ...scopeFor(args.path, ctx), id: args.commentId, newSelector });
     if (!result.ok) return { text: `MoveComment failed: ${describeError(result)}`, isError: true };
     if ('queued' in result) return { text: queuedText(args.path) };
     // Code review 2026-09-27, desktop F1: an xlsx move mints a FRESH id (its

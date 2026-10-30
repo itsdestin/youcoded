@@ -4111,9 +4111,6 @@ export class HarnessSession extends EventEmitter {
     //     and the tool keeps that file's comments by its real location.
     const commentsReach = outsideCommentsVerdict(call.toolName, args, this.opts.cwd);
     if (commentsReach.kind === 'deny') return { text: commentsReach.reason, isError: true };
-    if (commentsReach.kind === 'office-outside') {
-      return { text: `${call.toolName} can't reach comments in a Word or Excel file outside this chat's project yet. Tell the user, and suggest opening a chat in that file's folder.`, isError: true };
-    }
     if (commentsReach.kind === 'outside') {
       externalAsk = !(this.outsideCommentsAllowed && !this.opts.isSpecialistChild);
     }

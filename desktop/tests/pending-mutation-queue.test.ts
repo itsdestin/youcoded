@@ -160,6 +160,49 @@ describe('queue round-trip — request written, result appears, and the original
   });
 });
 
+describe('a Word file outside the project, named by a request carrying this chat\'s token', () => {
+  it('is read and written in place; nothing is copied under the project', async () => {
+    await newRoot();
+    const realRoot = await fs.promises.realpath(root);
+    const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'yc-pending-queue-outside-'));
+    try {
+      const file = path.join(outside, 'brief.docx');
+      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), file);
+      await start('sess-outside', root);
+
+      const listId = await writeRequest(realRoot, { kind: 'list', format: 'docx', path: file });
+      const listed = await waitForResult(realRoot, listId);
+      expect(listed.ok && listed.comments!.map((c) => c.id)).toContain('w-0');
+
+      const addId = await writeRequest(realRoot, {
+        kind: 'add', format: 'docx', path: file, author: 'assistant', text: 'outside via queue',
+        selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'Beta opens to 500 customers on March 10', prefix: '', suffix: '', occurrence: 0 } },
+      });
+      expect((await waitForResult(realRoot, addId)).ok).toBe(true);
+      const read = await readDocxComments(await fs.promises.readFile(file), file);
+      expect(read.ok && read.comments.some((c) => c.text === 'outside via queue')).toBe(true);
+      expect(fs.readdirSync(realRoot).filter((n) => n !== '.youcoded')).toEqual([]);
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('is still refused without this chat\'s token', async () => {
+    await newRoot();
+    const realRoot = await fs.promises.realpath(root);
+    const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'yc-pending-queue-outside-'));
+    try {
+      const file = path.join(outside, 'brief.docx');
+      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), file);
+      await start('sess-outside-forged', root);
+      const id = await writeRequest(realRoot, { kind: 'list', format: 'docx', path: file, token: 'a-completely-different-forged-token-00000000' });
+      expect(await waitForResult(realRoot, id)).toEqual({ ok: false, error: 'invalid-request-token' });
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('a move request round-trips through the queue', () => {
   // Code review 2026-09-27, desktop F1: the queue's own 'move' branch used to
   // discard `moveNativeXlsxComment`'s returned fresh id (`result.ok ? {ok:
