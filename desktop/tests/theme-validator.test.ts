@@ -1,5 +1,7 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { validateTheme, computeOnAccent, luminance, sanitizeCSS, validateCommunityTheme, lintCustomCssSelectors } from '../src/renderer/themes/theme-validator';
+import { validateTheme, computeOnAccent, luminance, sanitizeCSS, validateCommunityTheme, lintCustomCssSelectors, isAllowedGoogleFontUrl } from '../src/renderer/themes/theme-validator';
 
 const MINIMAL_VALID = {
   name: 'Test Theme',
@@ -195,6 +197,92 @@ describe('sanitizeCSS', () => {
   it('preserves valid CSS untouched', () => {
     const css = '.panel { backdrop-filter: blur(12px); border-radius: 8px; color: var(--fg); }';
     expect(sanitizeCSS(css)).toBe(css);
+  });
+});
+
+describe('sanitizeCSS: filter bypasses found by the 2026-10-30 audit', () => {
+  const NET = /https?:\/\/|\/\/evil/i;
+  it('blocks an @import rebuilt from a split keyword', () => {
+    const out = sanitizeCSS('@imp@import a;ort "https://evil.example/x.css"; body{color:red}');
+    expect(out).not.toMatch(/@import/i);
+    expect(out).not.toMatch(NET);
+    expect(out).toContain('body{color:red}');
+  });
+  it('blocks an escaped @import keyword', () => {
+    expect(sanitizeCSS('@\\69mport "https://evil.example/x.css"; a{}')).not.toMatch(NET);
+  });
+  it('blocks a web address inside image-set() (no url())', () => {
+    for (const fn of ['image-set', '-webkit-image-set']) {
+      const out = sanitizeCSS(`a{background:${fn}("https://evil.example/p.png" 1x)}`);
+      expect(out).not.toMatch(NET);
+    }
+  });
+  it('blocks a web address inside image-set(url(...)) and src()', () => {
+    expect(sanitizeCSS('a{background:image-set(url(https://evil.example/p.png) 1x)}')).not.toMatch(NET);
+    expect(sanitizeCSS('a{background:src("https://evil.example/p.png")}')).not.toMatch(NET);
+  });
+  it('blocks CSS escapes that spell url( or the scheme', () => {
+    expect(sanitizeCSS('a{background:u\\72l(https://evil.example/p.png)}')).not.toMatch(NET);
+    expect(sanitizeCSS('a{background:url(\\68ttps://evil.example/p.png)}')).not.toMatch(NET);
+    expect(sanitizeCSS('a{background:url("\\68 ttps://evil.example/p.png")}')).not.toMatch(NET);
+    expect(sanitizeCSS('a{background:\\75rl(HTTP://evil.example/p.png)}')).not.toMatch(NET);
+  });
+  it('blocks addresses a browser reads as another computer or another scheme', () => {
+    for (const u of ['\\\\evil.example/p.png', '/\\evil.example/p.png', ' //evil.example/p.png', 'ht\ttps://evil.example/p.png', 'file:///etc/passwd', 'ftp://evil.example/p']) {
+      const out = sanitizeCSS(`a{background:url("${u.replace(/\\/g, '\\\\')}")}`);   // CSS-escape the backslashes so the browser decodes back to `u`
+      expect(out).toContain('url(');
+      expect(out).not.toMatch(/evil|passwd/);
+    }
+  });
+  it('blocks remote fonts in @font-face', () => {
+    expect(sanitizeCSS('@font-face{font-family:x;src:url(https://evil.example/f.woff2)}')).not.toMatch(NET);
+  });
+  it('keeps theme-asset:, data:, fragment and relative addresses, byte for byte', () => {
+    const css = 'a{background:url(theme-asset://s/a.png)} b{background:image-set("theme-asset://s/b.png" 1x)} c{filter:url(#f)} d{background:url(img/x.png)} e{background:url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\'/>")}';
+    expect(sanitizeCSS(css)).toBe(css);
+  });
+  it('leaves comments and strings that merely mention an address alone', () => {
+    const css = '/* see https://example.com */ a::after{content:"https://example.com"}';
+    expect(sanitizeCSS(css)).toBe(css);
+  });
+});
+
+describe('sanitizeCSS leaves every shipped theme untouched', () => {
+  // WHY: theme-engine now sanitizes at the point of use. If a shipped theme's CSS changed, a user would SEE the difference.
+  const roots = ['../src/renderer/themes/builtin', '../src/renderer/dev/workbench/fixtures/themes'];
+  const files: string[] = [];
+  for (const r of roots) {
+    const dir = path.resolve(__dirname, r);
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.isFile() && e.name.endsWith('.json')) files.push(path.join(dir, e.name));
+      if (e.isDirectory() && fs.existsSync(path.join(dir, e.name, 'manifest.json'))) files.push(path.join(dir, e.name, 'manifest.json'));
+    }
+  }
+  it('found themes to check', () => { expect(files.length).toBeGreaterThan(5); });
+  for (const f of files) {
+    it(path.basename(path.dirname(f)) + '/' + path.basename(f), () => {
+      const css = JSON.parse(fs.readFileSync(f, 'utf8')).custom_css;
+      if (typeof css === 'string') expect(sanitizeCSS(css)).toBe(css);
+    });
+  }
+});
+
+describe('isAllowedGoogleFontUrl', () => {
+  it('accepts Google Fonts stylesheet addresses', () => {
+    expect(isAllowedGoogleFontUrl('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap')).toBe(true);
+    expect(isAllowedGoogleFontUrl('https://fonts.googleapis.com/css?family=Roboto')).toBe(true);
+  });
+  it('rejects every other host, scheme and shape', () => {
+    for (const u of [
+      'https://evil.example/x.css', 'http://fonts.googleapis.com/css2?family=A', 'https://fonts.googleapis.com.evil.example/css2?family=A',
+      'https://fonts.googleapis.com@evil.example/css2?family=A', 'https://fonts.googleapis.com/other', 'javascript:alert(1)', '//fonts.googleapis.com/css2?family=A',
+      'https://fonts.googleapis.com/css2?family=A\\evil', '', undefined, 42,
+    ]) expect(isAllowedGoogleFontUrl(u as unknown)).toBe(false);
+  });
+  it('validateTheme drops a bad font address but keeps the theme', () => {
+    const t = validateTheme({ ...MINIMAL_VALID, font: { family: 'X', 'google-font-url': 'https://evil.example/x.css' } });
+    expect(t.font?.['google-font-url']).toBeUndefined();
+    expect(t.font?.family).toBe('X');
   });
 });
 
