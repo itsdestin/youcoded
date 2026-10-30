@@ -20,8 +20,8 @@
 const API_HOSTS = ['https://api.youcoded.ai'];
 
 export function buildAppCsp(opts: { workbench?: boolean } = {}): string {
-  // The UI workbench (a browser page with a fake backend, never shipped) fetches its Office sample documents from a local
-  // practice editor server on a changing port. Nothing in the real app does this.
+  // The UI workbench (a browser page with a fake backend, never shipped) frames the Office editor from, and fetches its sample
+  // documents from, a local practice server on a changing port. Nothing in the real app does this (it uses the office: scheme).
   const workbenchHosts = opts.workbench ? ' http://127.0.0.1:* http://localhost:*' : '';
   return [
     "default-src 'self'",
@@ -35,7 +35,7 @@ export function buildAppCsp(opts: { workbench?: boolean } = {}): string {
     // the page fetches is its own files, data:/blob: pictures and the Worker.
     `connect-src 'self' file: data: blob: theme-asset: ws: wss: ${API_HOSTS.join(' ')}${workbenchHosts}`,
     // about:srcdoc frames (previews, pages) are always allowed; office: is the document editor; https: for embeds in previews.
-    "frame-src 'self' office: blob: https:",
+    `frame-src 'self' office: blob: https:${workbenchHosts}`,
     "worker-src 'self' blob:",
     "object-src 'none'",
     // No <form> may post anywhere (inherited by previews, which also set their own).
