@@ -505,7 +505,9 @@ export class BuddyWindowManager {
    * forces every window to be moved even when its target looks unchanged.
    * Hidden ones too: the chat and strip are re-placed when they open, but
    * only by a title change, which an unchanged target would not make.
-   * Called once the new usable area has been looked up (main.ts).
+   * Called once the new usable area has been looked up (main.ts), on every
+   * platform: a Windows tablet or a Mac changing monitors comes apart the same
+   * way, and where nothing really changed the key below returns at once.
    */
   screenChanged(): void {
     const win = this.mascot;
@@ -528,12 +530,17 @@ export class BuddyWindowManager {
     const chatOpen = !!(this.chatOpenIntent && this.chat && !this.chat.isDestroyed());
     const layout = this.layoutFor({ ...target, ...MASCOT_SIZE });
     const mascotAt = chatOpen ? layout.mascot : target;
+    const chatWas = this.chat && !this.chat.isDestroyed() ? this.rectOf(this.chat) : null;
     this.place('mascot', win, mascotAt, true);
     this.place('chat', this.chat, layout.chat, true);
     this.place('bar', this.bar, this.currentBarPosition({ ...mascotAt, ...MASCOT_SIZE }), true);
     // The turn may have moved him from below the chat to above it. Sent as the
     // size button's grow-in rather than an open, so menus and drafts survive.
-    if (chatOpen) this.chat?.webContents.send(IPC_CHAT_STATE, { visible: true, resize: 'in', mascot: mascotSide(layout) });
+    // WHY only when the chat really moved: this runs on every platform, and a
+    // usable-area change that leaves the chat where it was (a taskbar or dock
+    // appearing far from the buddy) must not replay its grow-in for nothing.
+    const chatMoved = !chatWas || Math.round(chatWas.x) !== Math.round(layout.chat.x) || Math.round(chatWas.y) !== Math.round(layout.chat.y);
+    if (chatOpen && chatMoved) this.chat?.webContents.send(IPC_CHAT_STATE, { visible: true, resize: 'in', mascot: mascotSide(layout) });
   }
 
   /**

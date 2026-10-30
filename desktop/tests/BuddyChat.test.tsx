@@ -6,6 +6,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
 import React from 'react';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import ToolCard from '../src/renderer/components/ToolCard';
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import { CompactSurfaceContext } from '../src/renderer/state/compact-surface-context';
@@ -112,5 +114,37 @@ describe('opening the buddy chat', () => {
     act(() => { chatState!({ visible: false }); });
     act(() => { chatState!({ visible: true, mascot: 'below' }); });
     expect(mounts.opened.at(-1)).toBe(afterOpen + 1);
+  });
+});
+
+describe('the chat panel between animations', () => {
+  // WHY (Destin, 2026-10-30: "a bit odd/jittery"): the frame between one animation and the next had no class at all, so
+  // it drew the whole panel at full size before the entrance hid it again — a flash at the start of every open and every
+  // size change. Every phase now carries a class, and the one between animations ('pre') is invisible.
+  it('never shows the panel without an animation class when it reopens or resizes', () => {
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 0);
+    const { container } = render(<BuddyChatApp />);
+    const panel = () => container.querySelector('.buddy-chat-panel')!;
+    act(() => { chatState!({ visible: false }); });
+    act(() => { chatState!({ visible: true, mascot: 'below' }); });
+    expect(panel().className).toContain('buddy-chat-pre');
+    act(() => { (chatState as any)({ visible: true, resize: 'out' }); });
+    act(() => { (chatState as any)({ visible: true, resize: 'in' }); });
+    expect(panel().className).toContain('buddy-chat-pre');
+    raf.mockRestore();
+  });
+});
+
+describe('message times in the buddy (contract R25)', () => {
+  // WHY a source pin: a 2026-10-26 refactor of buddy.css dropped this rule by accident and every message showed its time
+  // again; jsdom applies no stylesheet, so only the rule's text can be checked here.
+  const css = readFileSync(join(__dirname, '../src/renderer/styles/buddy.css'), 'utf8');
+  it('folds every time away, shows it on a half-second rest, and keeps the newest one', () => {
+    expect(css).toMatch(/html\[data-mode="buddy-chat"\] \.timeline-entry \.bubble-timestamp \{[^}]*max-height: 0/);
+    expect(css).toMatch(/\.timeline-entry:hover \.bubble-timestamp \{[^}]*opacity 120ms ease 600ms/);
+    expect(css).toMatch(/\.timeline-entry:nth-last-child\(1 of \.timeline-entry\) \.bubble-timestamp \{[^}]*opacity: 1/);
+  });
+  it('the pre phase is invisible', () => {
+    expect(css).toMatch(/\.buddy-chat-pre \{ opacity: 0; \}/);
   });
 });

@@ -256,12 +256,10 @@ body[data-mode="buddy-chat"] .input-bar-container form {
     0 0 0 1px color-mix(in srgb, var(--edge) 50%, transparent);
 }
 
-/* Buddy-chat floating chips (SessionPill, AttentionStrip, and anything
-   else using .layer-surface inside the buddy) get the same drop shadow +
-   rim-ring styling as the form pill, so all three floating elements
-   inside the bubble read as a coherent set. Inline style on SessionPill
-   uses `border:none` which strips .layer-surface's 1px solid edge —
-   box-shadow ring restores the ring without fighting the inline override.
+/* Buddy-chat floating surfaces (anything using .layer-surface inside the
+   buddy: menus, popovers) get the same drop shadow + rim-ring styling, so the
+   floating elements inside the small window read as a coherent set. The
+   box-shadow ring restores the edge where an inline `border:none` strips it.
    !important because layer-surface already sets box-shadow. */
 body[data-mode="buddy-chat"] .layer-surface {
   box-shadow:
@@ -638,6 +636,31 @@ body[data-mode="buddy-chat"] .assistant-bubble {
 html[data-mode="buddy-chat"] .session-menu {
   width: calc(100vw - 12px) !important;
   left: 6px !important;
+}
+/* Message times (buddy-rebuild-gaps#G-1, contract R25): only the newest
+   message keeps its time; every other one folds its time away and shows it
+   after the pointer has rested on the message for 0.6 s. Folded with height
+   and opacity, not display, so the delay can run. WHY restored (2026-10-30):
+   the 2026-10-26 refactor of this file dropped the block by accident, and every
+   message showed its time again — the final review caught it. */
+html[data-mode="buddy-chat"] .timeline-entry .bubble-timestamp {
+  max-height: 0;
+  margin-top: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: opacity 120ms ease, max-height 0ms linear 120ms, margin-top 0ms linear 120ms;
+}
+html[data-mode="buddy-chat"] .timeline-entry:hover .bubble-timestamp {
+  max-height: 1em;
+  margin-top: 4px;
+  opacity: 1;
+  transition: opacity 120ms ease 600ms, max-height 0ms linear 600ms, margin-top 0ms linear 600ms;
+}
+html[data-mode="buddy-chat"] .timeline-entry:nth-last-child(1 of .timeline-entry) .bubble-timestamp {
+  max-height: 1em;
+  margin-top: 4px;
+  opacity: 1;
+  transition: none;
 }
 /* A warning with buttons (AttentionBanner): at 320px the buttons beside the
    sentence squeezed it to two or three words a line. The sentence takes the

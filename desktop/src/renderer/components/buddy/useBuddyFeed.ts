@@ -83,9 +83,7 @@ export function useBuddyFeed(sessionId: string | null): void {
     // Fill AFTER every listener is wired, so no live event can race past us (the answer is played through them). Perf cycle 2: this used
     // to be requestTranscriptReplay, which streamed the WHOLE transcript into the buddy's own reducer. The loader retries a page the
     // computer could not resolve yet (a just-resumed session) on the same terms as the main window (first-page-loader.ts).
-    //
-    // The buddy has no scroll-up sentinel this cycle: it is a glanceable recent
-    // view, not a place to read back through a conversation.
+    // Older pages load when the reader scrolls up: the buddy draws the main window's ChatView, which pages itself.
     void loader.load(sessionId);
     // The computer says this window's fill never completed (its 30 s hold expired and the held pushes were dropped): fill again from a fresh page.
     const unsubRefill = (window as any).claude?.session?.onRefill?.((sid: string) => { if (sid === sessionId) void loader.refill(sessionId, { fresh: true }); });
