@@ -1742,7 +1742,7 @@ describe('EngineSupervisor — loading progress without blocking', () => {
   });
 });
 
-describe('EngineSupervisor — the engine\'s password (2026-10-30 audit F1)', () => {
+describe('EngineSupervisor — the engine\'s password', () => {
   const spawnEnv = (n = 0): Record<string, string> => mockSpawn.mock.calls[n][2].env;
 
   it('starts the engine with a random password in its environment, never on the command line', async () => {

@@ -83,7 +83,7 @@ export const syncChannels: MainChannelDef[] = [
       // Only the computer's own door gets here (a phone returned above), so `shell` is this machine's.
       // WHY the safe versions (audit F2/F7): the address and path come from saved sync settings, not from this click.
       if (target.url) void safeOpenExternal(target.url);
-      else if (target.path) void openPathSafely(target.path);
+      else if (target.path) await openPathSafely(target.path);   // awaited: it checks the file type first, then opens
       return undefined;
     },
   }),

@@ -72,8 +72,10 @@ describe('the Office frame guard', () => {
   });
 
   it('is wired into every app window beside the top-frame guard', () => {
+    // createAppWindow makes one call, and that call (window-hardening.ts) applies the Office guard along with the other window rules.
     const main = readFileSync(join(__dirname, '../../src/main/main.ts'), 'utf8');
     const body = main.slice(main.indexOf('function createAppWindow('));
-    expect(body.slice(0, body.indexOf('\n}\n'))).toMatch(/sealOfficeFrames\(win\.webContents\)/);
+    expect(body.slice(0, body.indexOf('\n}\n'))).toMatch(/secureAppWindow\(win,/);
+    expect(readFileSync(join(__dirname, '../../src/main/window-hardening.ts'), 'utf8')).toMatch(/sealOfficeFrames\(contents\)/);
   });
 });

@@ -200,7 +200,7 @@ describe('sanitizeCSS', () => {
   });
 });
 
-describe('sanitizeCSS: filter bypasses found by the 2026-10-30 audit', () => {
+describe('sanitizeCSS: split keywords, image-set, escapes and other ways round the filter', () => {
   const NET = /https?:\/\/|\/\/evil/i;
   it('blocks an @import rebuilt from a split keyword', () => {
     const out = sanitizeCSS('@imp@import a;ort "https://evil.example/x.css"; body{color:red}');

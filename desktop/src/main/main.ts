@@ -1,7 +1,4 @@
-import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, session, webContents, dialog } from 'electron';
-import { safeOpenExternal } from './safe-open';
-import { installPermissionPolicy } from './permission-policy';
-import { sealPreviewFrames } from './preview-frame-guard';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, webContents, dialog } from 'electron';
 import { browserToolService, startBrowserSupport, stopBrowserSupport, wireBrowserSessionCleanup } from './assistant-browser/browser-main';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
@@ -54,7 +51,7 @@ import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { canDeliverToRenderer, sendToRenderer, wireRendererRecovery } from './renderer-recovery';
 import { registerThemeProtocol } from './theme-protocol';
-import { sealOfficeFrames } from './office/office-frame-guard';
+import { safeOpenExternal, secureAppWindow } from './window-hardening';
 import { officeIpc } from './ipc/office'; // the table's Office channels reach the modules below through this (ipc/office.ts)
 import { startOffice } from './office/office-boot';
 import { getOfficeSessions, quitOfficeSessions } from './office/office-session-registry';
@@ -747,8 +744,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   win.webContents.on('will-navigate', (event, url) => {
     if (!isAppPageUrl(url, path.join(__dirname, '../renderer/index.html'), DEV_SERVER_URL)) event.preventDefault();
   });
-  sealOfficeFrames(win.webContents); // WHY: subframes skip will-navigate; Office frames never leave office: (office-frame-guard.ts)
-  sealPreviewFrames(win.webContents, DEV_SERVER_URL); // WHY (audit F8): the HTML preview / Pages frames cannot navigate themselves to a website (preview-frame-guard.ts)
+  secureAppWindow(win, { devServerUrl: DEV_SERVER_URL, mainDir: __dirname, log }); // WHY: subframes skip will-navigate, and Electron grants every page permission by default (window-hardening.ts)
   // Security: deny window.open() but route safe http(s)/mailto to the OS browser
   win.webContents.setWindowOpenHandler(({ url }) => {
     // Rejects when the OS has no handler for the scheme — must not escape as an unhandled rejection.
@@ -1554,14 +1550,6 @@ void app.whenReady().then(async () => {
   // inside the theme-protocol chore's measured window (each chore is measured as
   // mark[n] − mark[n−1]). This mark separates them from registerThemeProtocol().
   perfMark('main:chore:ipc-prefs:done');
-
-  // WHY (audit F4): Electron grants every permission a page asks for unless told otherwise. Only the microphone (voice),
-  // copy/paste and full-screen are used; everything else is refused. Installed before any window exists.
-  installPermissionPolicy(session.defaultSession, {
-    indexHtmlPath: path.join(__dirname, '../renderer/index.html'),
-    devServerUrl: DEV_SERVER_URL,
-    log: (m) => log('WARN', 'Permissions', m),
-  });
 
   registerThemeProtocol();
   perfMark('main:chore:theme-protocol:done');
