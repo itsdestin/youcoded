@@ -7,6 +7,7 @@
 // at <root>/.youcoded/sync.git and GIT_WORK_TREE at <root>. The user's tree
 // never contains any git artifact of ours; their own repo is untouched.
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
@@ -16,6 +17,7 @@ import { GITHUB_AUTH_ERROR_CODE } from '../github-client';
 import { matchGitCorruption, isNetworkFailureStderr, stderrTail, REPO_CORRUPT_ERROR_CODE } from '../sync-error-classifier';
 import { deleteZeroByteObjects, brokenBackupName, pruneBrokenBackups } from './repair';
 import { mapLimit } from '../map-limit';
+import { inspectSyncRepo, untrustedRepoError } from './repo-trust';
 
 // Serialises info/exclude updates per file (see unstageOversize).
 const excludeQueues = new Map<string, Promise<void>>();
@@ -42,8 +44,31 @@ const execFileAsync = promisify(execFile);
  * TOKEN HYGIENE: the token rides ONLY in the env var — this helper string (and
  * therefore argv) never contains it, and nothing is written to any git config.
  */
+// WHY host-checked (security hardening 2026-10-30): the old helper printed the token for
+// ANY host git asked about, so a repo whose remote pointed elsewhere got the GitHub token.
+// Now it reads git's own request (protocol=/host= lines on stdin) and answers only for
+// https://github.com. It is also registered under credential.https://github.com.helper
+// (see credentialedGitInvocation), so git does not even call it for other hosts.
 export const GIT_CREDENTIAL_HELPER =
-  '!f() { if [ "$1" = "get" ]; then printf "username=x-access-token\\npassword=%s\\n" "$YOUCODED_GIT_TOKEN"; fi; }; f';
+  '!f() { [ "$1" = "get" ] || return 0; h=; p=; while IFS= read -r l; do case "$l" in host=*) h=${l#host=};; protocol=*) p=${l#protocol=};; esac; done; ' +
+  '[ "$h" = "github.com" ] && [ "$p" = "https" ] && printf "username=x-access-token\\npassword=%s\\n" "$YOUCODED_GIT_TOKEN"; return 0; }; f';
+
+/** Only this URL prefix ever receives the app token. */
+export const GIT_CREDENTIAL_SCOPE = 'credential.https://github.com.helper';
+
+// WHY (security hardening 2026-10-30): passed on EVERY sync git call so that even a
+// repo folder that slipped past the trust check cannot run programs through git:
+// - core.hooksPath -> a folder that never exists, so no hook script can run;
+// - core.fsmonitor=false -> git never launches a "file watcher" program from config;
+// - core.sshCommand=ssh -> a repo-supplied replacement for ssh is ignored;
+// - protocol.ext.allow=never -> `ext::` remotes (which run commands) are refused.
+export const NO_HOOKS_DIR = path.join(os.homedir(), '.youcoded', 'no-git-hooks');
+export const SAFE_GIT_OVERRIDES = [
+  '-c', `core.hooksPath=${NO_HOOKS_DIR}`,
+  '-c', 'core.fsmonitor=false',
+  '-c', 'core.sshCommand=ssh',
+  '-c', 'protocol.ext.allow=never',
+];
 
 /** Pure: build the argv+env for one git call. No token → untouched passthrough
  *  (system credential helpers keep working). With a token → our helper wins,
@@ -56,7 +81,7 @@ export function credentialedGitInvocation(
 ): { args: string[]; env: NodeJS.ProcessEnv } {
   if (!token) return { args, env };
   return {
-    args: ['-c', 'credential.helper=', '-c', `credential.helper=${GIT_CREDENTIAL_HELPER}`, ...args],
+    args: ['-c', 'credential.helper=', '-c', `${GIT_CREDENTIAL_SCOPE}=${GIT_CREDENTIAL_HELPER}`, ...args],
     env: { ...env, YOUCODED_GIT_TOKEN: token, GIT_TERMINAL_PROMPT: '0' },
   };
 }
@@ -206,8 +231,13 @@ export class GitTransport implements SyncTransport {
   private tmpPackStaleMs: number;
   private getAuthToken?: () => Promise<string | null>;
   private log: (m: string) => void;
+  private unsafeRepoForTests = false;
+  private get safeOverrides(): string[] { return this.unsafeRepoForTests ? [] : SAFE_GIT_OVERRIDES; }
 
-  constructor(opts: { deviceName: string; maxFileBytes?: number; gcInterval?: number; lockStaleMs?: number; fetchIdleMs?: number; tmpPackStaleMs?: number; getAuthToken?: () => Promise<string | null>; log?: (m: string) => void }) {
+  constructor(opts: { deviceName: string; maxFileBytes?: number; gcInterval?: number; lockStaleMs?: number; fetchIdleMs?: number; tmpPackStaleMs?: number; getAuthToken?: () => Promise<string | null>; log?: (m: string) => void; unsafeRepoForTests?: boolean }) {
+    // TEST-ONLY escape hatch: lets a test plant hooks / fault-injection config in the sync repo.
+    // Production never sets it; it switches off BOTH the trust check and the safe overrides.
+    this.unsafeRepoForTests = opts.unsafeRepoForTests === true;
     // Injectable so tests can prove the quiet-fetch stop and the partial-pack
     // sweep without waiting minutes.
     this.fetchIdleMs = opts.fetchIdleMs ?? FETCH_IDLE_MS;
@@ -231,6 +261,31 @@ export class GitTransport implements SyncTransport {
     // last moments, held for milliseconds — a 5-minute-old lock is still dead.
     // Injectable so tests don't have to wait 5 real minutes.
     this.lockStaleMs = opts.lockStaleMs ?? GIT_TIMEOUT;
+  }
+
+  // Verdicts for sync folders already inspected, keyed by folder and invalidated when
+  // the repo's config file changes — so the check costs one stat per git call.
+  private trustCache = new Map<string, string>();
+
+  /** Throws (plain-language, coded) when an existing <root>/.youcoded/sync.git is not
+   *  one this app could have created. See repo-trust.ts for what "ours" means. */
+  private async ensureTrusted(space: SyncSpace): Promise<void> {
+    if (this.unsafeRepoForTests) return;
+    const gd = this.gitDir(space);
+    let sig = 'none';
+    try {
+      const l = fs.lstatSync(gd);
+      let c = 'noconfig';
+      try { const cs = fs.statSync(path.join(gd, 'config')); c = `${cs.mtimeMs}:${cs.size}`; } catch { /* no config yet */ }
+      sig = `${l.isDirectory() ? 'd' : 'x'}${l.isSymbolicLink() ? 'l' : ''}:${c}`;
+    } catch { /* not created yet: inspectSyncRepo treats it as fine */ }
+    if (this.trustCache.get(gd) === sig) return;
+    const reason = await inspectSyncRepo(gd, space.root);
+    if (reason) {
+      this.log(`[sync] refusing untrusted sync repo at ${gd}: ${reason}`);
+      throw untrustedRepoError(reason);
+    }
+    this.trustCache.set(gd, sig);
   }
 
   private gitDir(space: SyncSpace): string {
@@ -298,8 +353,10 @@ export class GitTransport implements SyncTransport {
     // App token first, system helper otherwise (credentialedGitInvocation is a
     // no-op passthrough on null). getToken is cached upstream, so this does
     // not re-read disk / re-exec gh per git call.
+    // Refuse a sync folder this app did not create BEFORE git reads anything from it.
+    await this.ensureTrusted(space);
     const token = this.getAuthToken ? await this.getAuthToken().catch(() => null) : null;
-    const inv = credentialedGitInvocation([...DURABLE_WRITES, ...args], baseEnv, token);
+    const inv = credentialedGitInvocation([...this.safeOverrides, ...DURABLE_WRITES, ...args], baseEnv, token);
     try {
       // Why maxBuffer 64MB: Node's default is only 1MB and it KILLS the child
       // when output exceeds it — on a big space that silently breaks history()
@@ -317,8 +374,9 @@ export class GitTransport implements SyncTransport {
    *  failed fetch: offline, silent, retried next cycle. */
   private async fetchOrigin(space: SyncSpace): Promise<ExecResult> {
     const baseEnv = { ...process.env, GIT_DIR: this.gitDir(space), GIT_WORK_TREE: space.root, GIT_LITERAL_PATHSPECS: '1' };
+    await this.ensureTrusted(space);
     const token = this.getAuthToken ? await this.getAuthToken().catch(() => null) : null;
-    const inv = credentialedGitInvocation([...DURABLE_WRITES, 'fetch', '--progress', 'origin', 'main'], baseEnv, token);
+    const inv = credentialedGitInvocation([...this.safeOverrides, ...DURABLE_WRITES, 'fetch', '--progress', 'origin', 'main'], baseEnv, token);
     const tokenUsed = token != null;
     return new Promise((resolve) => {
       let stdout = '';
@@ -409,7 +467,8 @@ export class GitTransport implements SyncTransport {
    *  is an error, never "no version" (that dropped the conflict copy). */
   private async showStage(space: SyncSpace, stage: 2 | 3, rel: string): Promise<Buffer> {
     const env = { ...process.env, GIT_DIR: this.gitDir(space), GIT_WORK_TREE: space.root };
-    const { stdout } = await execFileAsync('git', ['show', `:${stage}:${rel}`], {
+    await this.ensureTrusted(space);
+    const { stdout } = await execFileAsync('git', [...this.safeOverrides, 'show', `:${stage}:${rel}`], {
       cwd: space.root, env, timeout: GIT_TIMEOUT,
       encoding: 'buffer', maxBuffer: this.maxFileBytes + 1024 * 1024,
     });
@@ -418,6 +477,8 @@ export class GitTransport implements SyncTransport {
 
   async init(space: SyncSpace): Promise<void> {
     const gd = this.gitDir(space);
+    // An existing sync.git is adopted only if it looks like one this app made.
+    await this.ensureTrusted(space);
     if (!fs.existsSync(path.join(gd, 'HEAD'))) {
       fs.mkdirSync(gd, { recursive: true });
       await this.git(space, ['init', '--initial-branch=main']);
