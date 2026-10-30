@@ -1263,6 +1263,8 @@ export class EngineManager extends EventEmitter {
       // used to freeze the old values into the object for its whole life.
       readConfig: () => this.spawnConfig(),
       presetPath: presetFilePath(this.home.root),
+      // Beside models.ini: per machine, never synced (engine-log.ts).
+      logPath: path.join(path.dirname(presetFilePath(this.home.root)), 'engine.log'),
       fetchImpl: this.opts.fetchImpl,
       ...(this.opts.supervisorOpts ?? {}),
     });

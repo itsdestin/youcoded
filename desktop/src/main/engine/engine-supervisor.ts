@@ -31,6 +31,7 @@ import type { ModelSettings } from '../../shared/model-manager-types';
 import { scanGgufCache, scanGgufCacheAsync } from './cache-scan';
 import { isFollowerPart } from '../../shared/gguf-split';
 import { renderPresetFile, writePresetFile } from './model-presets';
+import { openEngineLog, type EngineLog } from './engine-log';
 
 /** Everything the spawn reads out of `~/.youcoded/config.json` — re-read at
  *  EVERY spawn (and at every idle check), never frozen into the constructor. */
@@ -61,6 +62,8 @@ export interface EngineSupervisorOpts {
   idleCheckMs?: number;      // default 60s
   modelPollMs?: number;      // /models state poll cadence when idle; default MODEL_POLL_IDLE_MS
   modelPollLoadingMs?: number; // faster cadence while a model is loading; default MODEL_POLL_LOADING_MS
+  /** Where to keep the engine's own output (engine-log.ts). Unset = not kept. */
+  logPath?: string;
   /** Test seam: resolve the PID listening on `port` (Linux). Default: ss + /proc scan. */
   pidOnPort?: (port: number) => number | null | Promise<number | null>;
   /** Test seam: resolve a PID's executable path (for the stale-engine reaper).
@@ -478,7 +481,13 @@ export class EngineSupervisor extends EventEmitter {
    *  told only that something had gone wrong. */
   private presetProblemText: string | null = null;
 
-  constructor(private readonly opts: EngineSupervisorOpts) { super(); }
+  /** One per supervisor, kept across respawns so a crash and its restart share a file. */
+  private readonly engineLog: EngineLog | null;
+
+  constructor(private readonly opts: EngineSupervisorOpts) {
+    super();
+    this.engineLog = opts.logPath ? openEngineLog(opts.logPath) : null;
+  }
 
   /** Config as it is on disk RIGHT NOW. Never cached: the whole point of
    *  readConfig is that a settings change is picked up without rebuilding this
@@ -715,8 +724,10 @@ export class EngineSupervisor extends EventEmitter {
     // child once its OS pipe buffer fills. See docs/error-message-standards.md.
     const MAX_OUTPUT_TAIL = 4000;
     let outputTail = '';
+    this.engineLog?.begin(child.spawnargs ?? []);
     const collect = (buf: Buffer) => {
       outputTail = (outputTail + buf.toString('utf8')).slice(-MAX_OUTPUT_TAIL);
+      this.engineLog?.write(buf);
     };
     child.stdout?.on('data', collect);
     child.stderr?.on('data', collect);
