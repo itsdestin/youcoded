@@ -40,7 +40,7 @@ import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
 import { shouldAutoApprove, shouldAutoApproveDocComment } from './permission-auto-approve';
-import { trackOutsideComments, judgeCommentAsk, forgetCommentAsk } from './cc-outside-comments';
+import { trackOutsideComments, judgeCommentAsk } from './cc-outside-comments';
 import { getPermissionOverrides, setForgetSessionAttention } from './app-signals';
 import { IPC, type AttentionState, type AttentionSummary, type SessionOwnershipAcquired } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
@@ -1149,7 +1149,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
   sessionManager.on('session-exit', (sessionId: string) => {
     docCommentsServerIdsBySession.delete(sessionId);
   });
-  trackOutsideComments(sessionManager);
+  trackOutsideComments(sessionManager, hookRelay);
 
   // The windows' leg of a Claude Code hook event: the window that owns the session, else the main window; an event that ENDS an ask also reaches the
   // watching buddy chat (hook-window-route.ts). WHY here and not in publish (one-core R5-2): publish delivers the phones' leg and the record.
@@ -1237,7 +1237,6 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
   // 'hook-closed' (the far end went away; Claude Code's own menu may still be
   // on screen, so the card keeps waiting). See hook-relay.ts.
   hookRelay.on('permission-expired', (sessionId: string, requestId: string, reason?: string) => {
-    forgetCommentAsk(requestId); // card #207: an unanswered outside-file ask is dropped, not kept until the chat ends
     const evt = {
       type: 'PermissionExpired',
       sessionId,

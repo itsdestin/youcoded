@@ -23,7 +23,7 @@ import { RemoteConfig } from '../remote-config';
 import { LocalSkillProvider } from '../skill-provider';
 import { CommandProvider } from '../command-provider';
 import { shouldAutoApprove, shouldAutoApproveDocComment } from '../permission-auto-approve';
-import { trackOutsideComments, judgeCommentAsk, forgetCommentAsk } from '../cc-outside-comments';
+import { trackOutsideComments, judgeCommentAsk } from '../cc-outside-comments';
 import { getPermissionOverrides } from '../app-signals';
 import { IPC } from '../../shared/types';
 import { log, rotateLog } from '../logger';
@@ -234,7 +234,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   const docCommentsServerIds = new Map<string, string>();
   sessionManager.on('doc-comments-mcp-attached', (sessionId: string, _cwd: string, _token: string, serverId: string) => { docCommentsServerIds.set(sessionId, serverId); });
   sessionManager.on('session-exit', (sessionId: string) => { docCommentsServerIds.delete(sessionId); });
-  trackOutsideComments(sessionManager); // card #207, same as main.ts
+  trackOutsideComments(sessionManager, hookRelay); // card #207, same as main.ts
   hookRelay.on('hook-event', (event) => {
     if (event.type === 'PermissionRequest') {
       const toolName = event.payload?.tool_name as string;
@@ -249,7 +249,6 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
     ipcWiring.publish(event.sessionId, IPC.HOOK_EVENT, event, { windows: () => {} });
   });
   hookRelay.on('permission-expired', (sessionId: string, requestId: string, reason?: string) => {
-    forgetCommentAsk(requestId); // card #207, same as main.ts
     const evt = { type: 'PermissionExpired', sessionId, payload: { _requestId: requestId, _reason: reason }, timestamp: Date.now() };
     ipcWiring.publish(sessionId, IPC.HOOK_EVENT, evt, { windows: () => {} });
   });

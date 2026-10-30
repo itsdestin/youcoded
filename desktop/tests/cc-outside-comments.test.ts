@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import * as path from 'path';
 import * as os from 'os';
-import { trackOutsideComments, judgeCommentAsk, takeCommentAnswer, forgetCommentAsk, resetOutsideCommentsForTests } from '../src/main/cc-outside-comments';
+import { trackOutsideComments, judgeCommentAsk, takeCommentAnswer, resetOutsideCommentsForTests } from '../src/main/cc-outside-comments';
 
 const SERVER = 'youcoded-doc-comments-a1b2c3d4';
 const PROJECT = path.join(os.tmpdir(), 'yc-project');
@@ -61,8 +61,10 @@ describe('Claude Code comment asks for files outside the project', () => {
   });
 
   it('an ask that timed out unanswered is forgotten: a late answer to it grants nothing', () => {
+    const relay = new EventEmitter();
+    trackOutsideComments(new EventEmitter(), relay);
     judgeCommentAsk(ask('ReadFileComments', { path: OUTSIDE_FILE }));
-    forgetCommentAsk('r1');
+    relay.emit('permission-expired', 's1', 'r1', 'app-timeout');
     expect(takeCommentAnswer('r1', { decision: { behavior: 'deny' } })).toEqual({ decision: { behavior: 'deny' } });
     takeCommentAnswer('r1', { decision: { behavior: 'allow' }, allowOutsideCommentsForSession: true });
     expect(judgeCommentAsk(ask('ReadFileComments', { path: OUTSIDE_FILE }, {}, 'r2'))).toBe('ask');

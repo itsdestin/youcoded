@@ -40,8 +40,12 @@ const OUTSIDE_COMMENTS_DECLINED =
   "The user declined comments on this file, which is outside this chat's project. Ask what they would like instead; don't try to reach the file another way.";
 
 /** Listen for each Claude Code session's comment helper (the session manager's
- *  private `doc-comments-mcp-attached` event) and forget the session on exit. */
-export function trackOutsideComments(sessionManager: EventEmitter): void {
+ *  private `doc-comments-mcp-attached` event), forget the session on exit, and
+ *  forget an outside-file ask that ended unanswered (the hook relay's
+ *  `permission-expired`: timed out, or Claude Code went away), so the open-asks
+ *  list cannot grow for a long chat. */
+export function trackOutsideComments(sessionManager: EventEmitter, hookRelay?: EventEmitter): void {
+  hookRelay?.on('permission-expired', (_sessionId: string, requestId: string) => forgetCommentAsk(requestId));
   sessionManager.on('doc-comments-mcp-attached', (sessionId: string, cwd: string, _token: string, serverId: string) => {
     sessions.set(sessionId, { serverId, cwd, granted: false, approved: [] });
   });
@@ -57,9 +61,7 @@ export function setOutsideCommentsModeLookup(lookup: (sessionId: string) => stri
   modeOf = lookup;
 }
 
-/** An outside-file ask ended without an answer (timed out, or Claude Code went
- *  away): forget it, so the open-asks list cannot grow for a long chat. */
-export function forgetCommentAsk(requestId: string): void {
+function forgetCommentAsk(requestId: string): void {
   openAsks.delete(requestId);
 }
 
