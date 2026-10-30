@@ -93,7 +93,7 @@ describe('upgradePluginFromGit', () => {
     const { upgradePluginFromGit } = await import('../src/main/plugin-installer');
     const dir = seedInstalled('u2');
     failWhen = { match: 'clone', output: 'fatal: could not read from remote repository' };
-    const r = await upgradePluginFromGit({ id: 'u2', sourceType: 'url', sourceRef: 'https://github.com/o/r.git' } as any);
+    const r = await upgradePluginFromGit({ id: 'u2', sourceType: 'url', sourceRef: 'https://github.com/o/r.git', sourceCommit: 'abc1234' } as any);
     expect(r.status).toBe('failed');
     expect((r as { error: string }).error).toContain('could not read from remote repository');  // git's words, not a guess
     expect(fs.readFileSync(path.join(dir, 'OLD.txt'), 'utf8')).toBe('old');
@@ -112,7 +112,7 @@ describe('upgradePluginFromGit', () => {
   it('leaves no staging or retired directories behind on success', async () => {
     const { upgradePluginFromGit } = await import('../src/main/plugin-installer');
     seedInstalled('u4');
-    await upgradePluginFromGit({ id: 'u4', sourceType: 'url', sourceRef: 'https://github.com/o/r.git' } as any);
+    await upgradePluginFromGit({ id: 'u4', sourceType: 'url', sourceRef: 'https://github.com/o/r.git', sourceCommit: 'abc1234' } as any);
     expect(fs.readdirSync(pluginsDir()).filter((n) => n.startsWith('.'))).toEqual([]);
   });
 
@@ -136,11 +136,11 @@ describe('update() reaches the git upgrade path', () => {
     const { installPlugin } = await import('../src/main/plugin-installer');
     const dir = seedInstalled('wired');
     // installPlugin alone refuses — this is the guard update() used to stop at.
-    const blocked = await installPlugin({ id: 'wired', sourceType: 'url', sourceRef: 'https://github.com/o/r.git' } as any);
+    const blocked = await installPlugin({ id: 'wired', sourceType: 'url', sourceRef: 'https://github.com/o/r.git', sourceCommit: 'abc1234' } as any);
     expect(blocked.status).toBe('already_installed');
     expect(fs.existsSync(path.join(dir, 'NEW.txt'))).toBe(false);
     // The upgrade path is the one that actually replaces the tree.
-    const upgraded = await upgradePluginFromGit({ id: 'wired', sourceType: 'url', sourceRef: 'https://github.com/o/r.git' } as any);
+    const upgraded = await upgradePluginFromGit({ id: 'wired', sourceType: 'url', sourceRef: 'https://github.com/o/r.git', sourceCommit: 'abc1234' } as any);
     expect(upgraded.status).toBe('installed');
     expect(fs.existsSync(path.join(dir, 'NEW.txt'))).toBe(true);
   });

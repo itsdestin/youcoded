@@ -124,13 +124,21 @@ interface MarketplaceEntry {
 // `sourceMarketplace` alone; it comes from fetchable JSON and can be spoofed
 // if the registry is compromised. This is an allowlist on the canonical
 // repo URL the code was actually fetched from.
-const TRUSTED_POSTINSTALL_ORGS = ['itsdestin/', 'destinationunknown/'];
+// WHY exact owner match (2026-10 security audit SC-6): the old check was
+// `sourceRef.includes('github.com/itsdestin/')`, which also passes
+// `https://evil.example/github.com/itsdestin/x.git` or a query string that merely
+// contains the text. We now parse the URL and require https, host github.com
+// and the first path segment to equal a trusted owner exactly.
+const TRUSTED_POSTINSTALL_ORGS = ['itsdestin', 'destinationunknown'];
 
-function isPostInstallTrusted(entry: MarketplaceEntry): boolean {
+export function isPostInstallTrusted(entry: MarketplaceEntry): boolean {
   if (!entry.postInstall || !entry.sourceRef) return false;
-  return TRUSTED_POSTINSTALL_ORGS.some(org =>
-    entry.sourceRef.includes(`github.com/${org}`),
-  );
+  let u: URL;
+  try { u = new URL(entry.sourceRef); } catch { return false; }
+  if (u.protocol !== 'https:' || u.hostname.toLowerCase() !== 'github.com') return false;
+  if (u.username || u.password || u.port) return false;
+  const owner = u.pathname.split('/').filter(Boolean)[0]?.toLowerCase();
+  return !!owner && TRUSTED_POSTINSTALL_ORGS.includes(owner);
 }
 
 function runShell(command: string, cwd: string): Promise<{ ok: boolean; output: string }> {
@@ -168,17 +176,76 @@ function runGit(...args: string[]): Promise<{ ok: boolean; output: string }> {
   });
 }
 
-function copyDirSync(src: string, dest: string): void {
+/**
+ * WHY (2026-10 security audit SC-10): a cloned plugin repo can contain symlinks
+ * such as `notes.txt -> ~/.ssh/id_rsa`. fs.copyFileSync FOLLOWS symlinks, so the
+ * private file's contents would be copied into the plugin folder where the
+ * model can read them. We never follow a link out of the plugin: links whose
+ * real target is outside the source root are skipped; links to a file inside
+ * the root are copied as plain files; links to folders are skipped (cycles).
+ */
+export function copyDirSync(src: string, dest: string, rootReal?: string): void {
+  const root = rootReal ?? fs.realpathSync(src);
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
+    if (entry.isSymbolicLink()) {
+      let real: string;
+      try { real = fs.realpathSync(srcPath); } catch { continue; } // dangling
+      if (!isContainedIn(real, root)) {
+        console.warn(`[plugin-installer] skipped symlink pointing outside the plugin: ${entry.name}`);
+        continue;
+      }
+      if (fs.statSync(real).isFile()) fs.copyFileSync(real, destPath);
+      continue;
+    }
     if (entry.isDirectory()) {
-      copyDirSync(srcPath, destPath);
-    } else {
+      copyDirSync(srcPath, destPath, root);
+    } else if (entry.isFile()) {
       fs.copyFileSync(srcPath, destPath);
     }
   }
+}
+
+/**
+ * Same protection for `url` plugins, which are cloned straight into place (so
+ * copyDirSync never runs): delete any symlink whose real target is outside the
+ * plugin folder. The .git folder is left alone.
+ */
+export function removeEscapingSymlinks(dir: string): number {
+  let removed = 0;
+  let root: string;
+  try { root = fs.realpathSync(dir); } catch { return 0; }
+  const walk = (d: string) => {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      if (entry.name === '.git') continue;
+      const p = path.join(d, entry.name);
+      if (entry.isSymbolicLink()) {
+        let inside = false;
+        try { inside = isContainedIn(fs.realpathSync(p), root); } catch { /* dangling */ }
+        if (!inside) { try { fs.rmSync(p, { force: true }); removed++; } catch { /* best effort */ } }
+      } else if (entry.isDirectory()) {
+        walk(p);
+      }
+    }
+  };
+  walk(dir);
+  return removed;
+}
+
+/**
+ * WHY (2026-10 security audit SC-4): a third-party git plugin must be installed
+ * at the exact commit the catalog scanned. The fallback index.json has no
+ * commit, so with the catalog server unreachable we would install whatever the
+ * upstream repo's HEAD is right now. Refuse instead. YouCoded's own marketplace
+ * entries (sourceMarketplace "youcoded") are exempt; they are our own repos.
+ */
+export const UNVERIFIABLE_PLUGIN_ERROR = "Can't verify this plugin right now, try again later.";
+function needsPinButHasNone(entry: MarketplaceEntry): boolean {
+  if (entry.sourceType !== 'url' && entry.sourceType !== 'git-subdir') return false;
+  if (entry.sourceMarketplace === 'youcoded') return false;
+  return !entry.sourceCommit;
 }
 
 /** Check if a plugin is already installed via Claude Code's /plugin install.
@@ -379,6 +446,7 @@ export async function upgradePluginFromGit(entry: MarketplaceEntry): Promise<Ins
   if (sourceType !== 'url' && sourceType !== 'git-subdir') {
     return { status: 'failed', error: `upgradePluginFromGit does not handle source type "${sourceType}"` };
   }
+  if (needsPinButHasNone(entry)) return { status: 'failed', error: UNVERIFIABLE_PLUGIN_ERROR };
   fs.mkdirSync(PLUGINS_DIR, { recursive: true });
   const targetDir = path.join(PLUGINS_DIR, id);
   const staging = path.join(PLUGINS_DIR, `.upgrade-${id}-${process.pid}`);
@@ -527,8 +595,10 @@ async function installFromUrl(id: string, url: string, commit?: string, targetOv
   if (commit) {
     const pinned = await pinToCommit(targetDir, commit);
     if (!pinned.ok) return { status: 'failed', error: `could not check out the listed version ${commit}: ${pinned.output.slice(0, 200)}` };
+    removeEscapingSymlinks(targetDir);
     return { status: 'installed', commit: pinned.commit };
   }
+  removeEscapingSymlinks(targetDir);
   return { status: 'installed' };
 }
 
@@ -558,6 +628,8 @@ async function installFromGitSubdir(id: string, repoUrl: string, subdir: string,
     }
 
     const sourceDir = path.join(tmpDir, subdir);
+    // WHY: audit SC-10 — never copy from outside the checkout even if `subdir` holds `..`.
+    if (!isContainedIn(sourceDir, tmpDir)) return { status: 'failed', error: 'Invalid plugin subdirectory' };
     if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
       return { status: 'failed', error: `Subdirectory not found after checkout: ${subdir}` };
     }
@@ -577,6 +649,9 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
   if (!id) return { status: 'failed', error: 'Missing plugin id' };
   // Security: validate plugin ID to prevent path traversal (e.g. "../../.ssh")
   if (!SAFE_ID_RE.test(id)) return { status: 'failed', error: 'Invalid plugin id' };
+
+  // Refuse before touching anything (see needsPinButHasNone).
+  if (needsPinButHasNone(entry)) return { status: 'failed', error: UNVERIFIABLE_PLUGIN_ERROR };
 
   // Guard: already in progress
   if (installsInProgress.has(id)) return { status: 'installing' };
