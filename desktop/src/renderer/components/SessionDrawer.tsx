@@ -264,6 +264,8 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // the drawer used to open onto "Nothing here yet" for the whole lookup — up
   // to seconds on a phone — contradicting the file just tapped (2026-09-11).
   const pillPending = useArtifactSelector((s) => s.pillPending?.[sessionId] ?? null);
+  // A tapped short path that opened from beside this chat's other files (card #40).
+  const pillFoundIn = useArtifactSelector((s) => s.pillFoundIn?.[sessionId] ?? null);
 
   // Re-list this session's files whenever the drawer opens against a resolved
   // project root.
@@ -782,7 +784,8 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         {/* break-words on both notes: a long unbroken file name otherwise forces
             the drawer to scroll sideways on a phone (review 2026-09-11). */}
         {pillError && (
-          <div className="mx-2 mt-2 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well break-words">
+          // whitespace-pre-line: the more-than-one-folder note lists each location on its own line.
+          <div className="mx-2 mt-2 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well break-words whitespace-pre-line">
             {pillError}
           </div>
         )}
@@ -1231,6 +1234,14 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   resetKey={active.id}
                   onClose={() => setFindOpen(false)}
                 />
+              )}
+              {/* WHY (card #40): this file was not in the chat's folder — the tap found it beside
+                  the chat's other files. Naming the folder makes a wrong guess visible at once.
+                  Same quiet box as the drawer's other tap notes; only while this file shows. */}
+              {pillFoundIn && pillFoundIn.artifactId === active.id && (
+                <div className="mx-2 mt-1 mb-1 shrink-0 px-2.5 py-1.5 text-2xs text-fg-muted rounded-md border border-edge bg-well break-words">
+                  {`Opened from ${pillFoundIn.folder}, next to this chat’s other files.`}
+                </div>
               )}
               <div ref={contentRef} className="flex-1 min-h-0 overflow-hidden artifact-content-pane">
                 <ActiveArtifactView

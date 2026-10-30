@@ -3153,14 +3153,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // real lookup (read-service.ts resolveArtifactPath): the fixture row whose
     // FULL path is exactly the tapped one, else outside-project / not-found
     // decided from the strings (the workbench has no disk to look at).
-    resolvePath: async (projectRoot: string, filePath: string) => {
+    resolvePath: async (projectRoot: string, filePath: string, sessionId?: string) => {
       if (filesRefused()) return refuseAsToday('artifacts:resolve-path');
       const root = projectRoot.replace(/\/+$/, '');
       const abs = filePath.startsWith('/') ? filePath : `${root}/${filePath.replace(/^\.\//, '')}`;
       const rows = filesIn(projectRoot);
       const hit = rows.find((r) => (r.kind === 'internal' ? `${root}/${r.path}` : r.absolutePath) === abs);
       if (hit) return { ok: true, artifact: hit };
-      return { ok: false, error: abs.startsWith(`${root}/`) ? 'not-found' : 'outside-project' };
+      if (!abs.startsWith(`${root}/`)) return { ok: false, error: 'outside-project' };
+      // Card #40's nearby search, from strings: a short path is "found" beside
+      // an external fixture row that already sits at <somewhere>/<that path>.
+      if (!sessionId || filePath.startsWith('/')) return { ok: false, error: 'not-found' };
+      const short = filePath.replace(/^\.\//, '');
+      const elsewhere = rows.map((r) => r.absolutePath).filter((p): p is string => !!p && p.endsWith(`/${short}`));
+      return { ok: false, error: 'not-found', searchedNearby: true, ...(elsewhere.length ? { elsewhere } : {}) };
     },
     // Batch 3, Q-7 (yes): save a copy to the phone. The real channel
     // (remote-download.ts) mints a short-lived link on the host and the shim

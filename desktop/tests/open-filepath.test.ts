@@ -67,7 +67,7 @@ function installClaudeArtifacts(stubs: {
   listAllFiles?: (cwd: string) => Promise<any>;
   listSession?: (sessionId: string, cwd: string) => Promise<any>;
   appendVersion?: (cwd: string, sessionId: string, args: any) => Promise<any>;
-  resolvePath?: (cwd: string, path: string) => Promise<any>;
+  resolvePath?: (cwd: string, path: string, sessionId?: string) => Promise<any>;
 }) {
   const listProject = vi.fn(stubs.listProject ?? (async () => ({ ok: true, artifacts: [] })));
   const listAllFiles = vi.fn(stubs.listAllFiles ?? (async () => ({ ok: true, files: [] })));
@@ -332,7 +332,8 @@ describe('openFilepath — one host lookup replaces listing the project', () => 
 
     await openFilepath(ctx, 's1', TAPPED);
 
-    expect(stubs.resolvePath).toHaveBeenCalledWith(WS, TAPPED);
+    // A tap names its chat, so the host can look beside that chat's files for a short path.
+    expect(stubs.resolvePath).toHaveBeenCalledWith(WS, TAPPED, 's1');
     expect(dispatched.map((a) => a.type)).toEqual([
       'DRAWER_OPENED', 'PILL_ERROR_CLEARED', 'PILL_RESOLVE_STARTED', 'SESSION_ARTIFACT_UPSERTED', 'ACTIVE_ARTIFACT_SET',
     ]);
@@ -584,5 +585,103 @@ describe('openFilepath — a failed lookup is not a missing file', () => {
     expect(last.type).toBe('PILL_RESOLVE_FAILED');
     expect(last.message).toMatch(/outside this chat’s project folder/);
     expect(stubs.appendVersion).not.toHaveBeenCalled();
+  });
+});
+
+// A chat starts in one folder, the assistant works in another, and names a file by a
+// path relative to where it was working. The host finds it beside the chat's own files.
+describe('openFilepath — a short path found beside this chat\'s other files', () => {
+  const FOUND = '/home/u/banner/icon6/s-bands.png';
+  const externalRecord = (id: string, abs: string): ArtifactRecord => ({
+    id, path: abs.split('/').pop()!, kind: 'external', absolutePath: abs, lastModified: '',
+    status: 'active', versions: [], comments: [], tags: [],
+  });
+
+  it('one match outside the folder is recorded by its FULL location, opened, and its folder named', async () => {
+    const stubs = installClaudeArtifacts({
+      resolvePath: async (_cwd, p) => (p === FOUND
+        ? { ok: false, error: 'outside-project' }
+        : { ok: false, error: 'not-found', searchedNearby: true, elsewhere: [FOUND] }),
+      listSession: async () => ({ ok: true, artifacts: [externalRecord('rec-found', FOUND)] }),
+    });
+    const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/home/u/youcoded-dev' } }));
+    await openFilepath(ctx, 's1', 'icon6/s-bands.png');
+
+    expect(stubs.resolvePath).toHaveBeenNthCalledWith(1, '/home/u/youcoded-dev', 'icon6/s-bands.png', 's1');
+    expect(stubs.appendVersion).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(stubs.appendVersion.mock.calls[0][2])).toContain(FOUND);
+    expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['rec-found']);
+    expect(dispatched[dispatched.length - 1]).toEqual({
+      type: 'PILL_FOUND_ELSEWHERE', sessionId: 's1', artifactId: 'rec-found', folder: '/home/u/banner/icon6',
+    });
+    expect(dispatched.some((a) => a.type === 'PILL_RESOLVE_FAILED')).toBe(false);
+  });
+
+  it('one match inside the folder opens the host\'s record without any write', async () => {
+    const inside = '/proj/sub/icon6/s.png';
+    const stubs = installClaudeArtifacts({
+      resolvePath: async (_cwd, p) => (p === inside
+        ? { ok: true, artifact: discoveredRecord('sub/icon6/s.png') }
+        : { ok: false, error: 'not-found', searchedNearby: true, elsewhere: [inside] }),
+    });
+    const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
+    await openFilepath(ctx, 's1', 'icon6/s.png');
+    expect(stubs.appendVersion).not.toHaveBeenCalled();
+    expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['sub/icon6/s.png']);
+    expect(dispatched.find((a) => a.type === 'PILL_FOUND_ELSEWHERE')).toMatchObject({ folder: '/proj/sub/icon6' });
+  });
+
+  it('two matches open nothing and list both locations', async () => {
+    const stubs = installClaudeArtifacts({
+      resolvePath: async () => ({ ok: false, error: 'not-found', searchedNearby: true, elsewhere: ['/a/x/out.png', '/b/x/out.png'] }),
+    });
+    const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
+    await openFilepath(ctx, 's1', 'x/out.png');
+    expect(stubs.resolvePath).toHaveBeenCalledTimes(1);
+    expect(stubs.appendVersion).not.toHaveBeenCalled();
+    expect(dispatched.some((a) => a.type === 'ACTIVE_ARTIFACT_SET')).toBe(false);
+    const last = dispatched[dispatched.length - 1] as any;
+    expect(last.type).toBe('PILL_RESOLVE_FAILED');
+    expect(last.message).toContain('/a/x/out.png');
+    expect(last.message).toContain('/b/x/out.png');
+  });
+
+  it('no match says where it looked', async () => {
+    installClaudeArtifacts({ resolvePath: async () => ({ ok: false, error: 'not-found', searchedNearby: true }) });
+    const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
+    await openFilepath(ctx, 's1', 'x/out.png');
+    const last = dispatched[dispatched.length - 1] as any;
+    expect(last.type).toBe('PILL_RESOLVE_FAILED');
+    expect(last.message).toMatch(/isn’t in this chat’s folder \(\/proj\) or next to the other files/);
+  });
+
+  it('an auto-open never asks for the nearby search and never opens by it', async () => {
+    const stubs = installClaudeArtifacts({
+      resolvePath: async () => ({ ok: false, error: 'not-found', searchedNearby: true, elsewhere: ['/a/x/out.png'] }),
+    });
+    const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
+    await openFilepath(ctx, 's1', 'x/out.png', { drawerOpensImmediately: false });
+    expect(stubs.resolvePath).toHaveBeenCalledWith('/proj', 'x/out.png');
+    expect(stubs.resolvePath).toHaveBeenCalledTimes(1);
+    expect(dispatched).toEqual([]);
+  });
+
+  it('a newer tap during the second look wins; the found file is not opened', async () => {
+    let releaseSecond!: (v: any) => void;
+    installClaudeArtifacts({
+      resolvePath: (_cwd, p) => (p === FOUND
+        ? new Promise((r) => { releaseSecond = r; })
+        : p === '/proj/other.md'
+          ? Promise.resolve({ ok: true, artifact: discoveredRecord('other.md') })
+          : Promise.resolve({ ok: false, error: 'not-found', searchedNearby: true, elsewhere: [FOUND] })),
+    });
+    const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
+    const first = openFilepath(ctx, 's1', 'icon6/s-bands.png');
+    await vi.waitFor(() => expect(releaseSecond).toBeTypeOf('function'));
+    await openFilepath(ctx, 's1', '/proj/other.md');
+    releaseSecond({ ok: false, error: 'outside-project' });
+    await first;
+    expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['other.md']);
+    expect(dispatched.some((a) => a.type === 'PILL_FOUND_ELSEWHERE')).toBe(false);
   });
 });
