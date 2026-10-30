@@ -244,6 +244,11 @@ export function backendDeviceRefusal(
  *  disabled with the download bar already gone and nothing else on screen.
  *  Overridable for tests only (`loadProbeTimeoutMs`); production never sets it. */
 const LOAD_PROBE_TIMEOUT_MS = 10 * 60_000;
+// deleteModel: how long to wait for the engine to release a model (its process
+// exited in ~150 ms when measured), and how hard a remove retries a busy file.
+const RELEASE_WAIT_MS = 10_000;
+const DELETE_RETRIES = 8;
+const DELETE_RETRY_MS = 250;
 
 /** A duration in the units a reader would use for it. The verification load's
  *  cap is ten minutes in production and milliseconds under test, and neither
@@ -1975,9 +1980,12 @@ export class EngineManager extends EventEmitter {
   // Do NOT reintroduce until the model picker actually consumes a per-tier
   // default — a write-only stat would just be dead state.
 
-  /** Plan C: delete a model (all parts). Best-effort /models/unload first so
-   *  the router isn't serving a file we're removing; file deletion proceeds
-   *  regardless (the router tolerates a vanished file on next request). */
+  /** Plan C: delete a model (all parts). /models/unload first, then WAIT for the
+   *  engine to let go before removing anything. WHY (2026-10-29): Linux removes
+   *  a file that is still open, Windows refuses (EBUSY/EPERM), and the unload
+   *  call returns before the model's process has exited — so deleting a loaded
+   *  model on Windows failed. The removes are async and retry on those errors
+   *  (Node's own rm retry), which also covers antivirus briefly holding a file. */
   async deleteModel(id: string): Promise<void> {
     const cfg = readEngineConfig(this.home);
     if (this.supervisor?.status() === 'running') {
@@ -1987,16 +1995,18 @@ export class EngineManager extends EventEmitter {
           body: JSON.stringify({ model: id }),
         });
       } catch { /* best-effort */ }
+      await this.waitUntilReleased(id);
     }
+    const rm = (p: string, recursive = false) =>
+      fs.promises.rm(p, { force: true, recursive, maxRetries: DELETE_RETRIES, retryDelay: DELETE_RETRY_MS });
     // A vision model IS its folder — weights, projector, manifest and any
     // .partial all live inside it, and the engine names the model by that
     // folder (design §E2). So one recursive remove is the whole delete, and it
     // needs no guesses about what is in there.
     const folder = path.join(cfg.cacheDir, id);
-    let isFolderModel = false;
-    try { isFolderModel = fs.statSync(folder).isDirectory(); } catch { /* flat model */ }
+    const isFolderModel = await fs.promises.stat(folder).then((st) => st.isDirectory(), () => false);
     if (isFolderModel) {
-      fs.rmSync(folder, { recursive: true, force: true });
+      await rm(folder, true);
     } else {
       // A multi-part id points at part 00001 — delete every sibling part.
       const partMatch = /-(\d{5})-of-(\d{5})$/.exec(id);
@@ -2005,8 +2015,8 @@ export class EngineManager extends EventEmitter {
             `${id.replace(/-\d{5}-of-\d{5}$/, '')}-${String(i + 1).padStart(5, '0')}-of-${partMatch[2]}.gguf`)
         : [`${id}.gguf`];
       for (const name of names) {
-        fs.rmSync(path.join(cfg.cacheDir, name), { force: true });
-        fs.rmSync(path.join(cfg.cacheDir, `${name}.partial`), { force: true });
+        await rm(path.join(cfg.cacheDir, name));
+        await rm(path.join(cfg.cacheDir, `${name}.partial`));
       }
       // The manifest describes files that no longer exist — remove it with them.
       removeManifest(cfg.cacheDir, `${id}.gguf`);
@@ -2021,6 +2031,19 @@ export class EngineManager extends EventEmitter {
     // 400s on use — the delete-side twin of the post-download refresh.
     await this.refreshModels();
     this.emit('status-changed');
+  }
+
+  /** Resolves once the engine no longer lists `id` as loaded, loading or asleep
+   *  (its process has exited and closed the file), or after RELEASE_WAIT_MS —
+   *  the delete then still tries, and its retries cover a slow exit. */
+  private async waitUntilReleased(id: string): Promise<void> {
+    const deadline = Date.now() + RELEASE_WAIT_MS;
+    while (Date.now() < deadline && this.supervisor?.status() === 'running') {
+      let row: EngineModel | undefined;
+      try { row = (await this.supervisor.listModels()).find((m) => m.id === id); } catch { return; }
+      if (!row || row.state === 'unloaded') return;
+      await new Promise((r) => setTimeout(r, 150));
+    }
   }
 
   /** App-quit teardown — registered next to nativeHost.destroyAll(). Resolves

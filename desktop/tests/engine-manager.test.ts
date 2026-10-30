@@ -460,6 +460,33 @@ describe('EngineManager — on a temp home', () => {
       await mgr.deleteModel('M-UD-Q4_K_XL-00001-of-00002');
       expect(fs.readdirSync(cacheDir)).toEqual([]);
     });
+
+    it('deleteModel() waits for the engine to release a loaded model before removing its file', async () => {
+      // Windows cannot delete a file a process still holds open, and the unload
+      // call returns before the model's process has exited.
+      plantInstall();
+      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
+      const file = path.join(cacheDir, 'M-Q4_K_M.gguf');
+      fs.writeFileSync(file, Buffer.alloc(1));
+      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir } }));
+      const mgr = new EngineManager(home, userData, 9999, { fetchImpl: (async () => ({ ok: true, status: 200 })) as any });
+      let polls = 0;
+      const fileStillThereWhileLoaded: boolean[] = [];
+      (mgr as any).supervisor = {
+        status: () => 'running',
+        listModels: async () => {
+          polls += 1;
+          fileStillThereWhileLoaded.push(fs.existsSync(file));
+          return [{ id: 'M-Q4_K_M', state: polls < 3 ? 'loaded' : 'unloaded' }];
+        },
+        refreshModels: async () => {},
+      };
+      (mgr as any).refreshModels = async () => {};
+      await mgr.deleteModel('M-Q4_K_M');
+      expect(polls).toBe(3);
+      expect(fileStillThereWhileLoaded).toEqual([true, true, true]);
+      expect(fs.existsSync(file)).toBe(false);
+    });
   });
 
   describe('EngineManager — local downloads', () => {

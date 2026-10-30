@@ -187,8 +187,6 @@
     {"file": "engine/engine-acquisition.ts", "fn": "EngineAcquisition.runBackfill", "call": "fs.readFileSync", "count": 1},
     {"file": "engine/engine-acquisition.ts", "fn": "EngineAcquisition.runBackfill", "call": "fs.renameSync", "count": 1},
     {"file": "engine/engine-acquisition.ts", "fn": "EngineAcquisition.runBackfill", "call": "fs.writeFileSync", "count": 1},
-    {"file": "engine/engine-manager.ts", "fn": "EngineManager.deleteModel", "call": "fs.rmSync", "count": 3},
-    {"file": "engine/engine-manager.ts", "fn": "EngineManager.deleteModel", "call": "fs.statSync", "count": 1},
     {"file": "engine/engine-manager.ts", "fn": "EngineManager.installAndVerify", "call": "fs.existsSync", "count": 1},
     {"file": "engine/engine-manager.ts", "fn": "EngineManager.installedDevices", "call": "fs.readFileSync", "count": 1},
     {"file": "engine/engine-manager.ts", "fn": "EngineManager.usableInstallExists", "call": "fs.existsSync", "count": 1},
