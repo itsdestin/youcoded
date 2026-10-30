@@ -212,6 +212,8 @@ export class BuddyWindowManager {
   // True between the first frame of a drag and its release. Used only to re-ask
   // for the usable screen area once per gesture instead of once per frame.
   private dragging = false;
+  /** The screen the group was last laid out on — see screenChanged. */
+  private lastScreenKey: string | null = null;
   /**
    * Save the mascot's position, 300ms after he stops moving.
    *
@@ -326,7 +328,7 @@ export class BuddyWindowManager {
    *    running inside the compositor moves it. Asking the OS there does nothing
    *    at all, and the OS does not even report the failure.
    */
-  private place(role: BuddyRole, win: BrowserWindow | null, at: Point): void {
+  private place(role: BuddyRole, win: BrowserWindow | null, at: Point, force = false): void {
     if (!win || win.isDestroyed()) return;
     // REFUSE a non-finite coordinate; do not substitute one. 0 is the CORNER of
     // the screen, not a neutral value, and this writes `this.pos` — so a single
@@ -344,7 +346,15 @@ export class BuddyWindowManager {
     const x = Math.round(at.x);
     const y = Math.round(at.y);
     this.pos[role] = { x, y };
-    if (this.captionLive()) win.setTitle(buildCaption(role, x, y));
+    if (this.captionLive()) {
+      // WHY `force`: the KDE helper moves a window only when its title CHANGES.
+      // After the screen turns, the desktop has already pushed each window back
+      // on screen by itself, so a window whose target equals its old title
+      // would never be moved back into the group. A one-pixel-off title first
+      // makes the real one a change (Destin, portrait, 2026-10-30).
+      if (force) win.setTitle(buildCaption(role, x, y + 1));
+      win.setTitle(buildCaption(role, x, y));
+    }
     // WHY: setPosition preserves Electron's rounded native size. On XWayland
     // at 150% scale that round-trip grows the chat on each move/open. These
     // windows have fixed role sizes, so always send those with the position.
@@ -482,6 +492,48 @@ export class BuddyWindowManager {
       ? dockPosition(edge, { x: mb.x, y: mb.y }, MASCOT_SIZE, this.workAreaFor(display))
       : { x: mb.x, y: mb.y };
     this.glideGroup(target);
+  }
+
+  /**
+   * The screen changed shape: turned to portrait, a new resolution, a monitor
+   * added or removed. Put the whole group back together on the new screen.
+   *
+   * WHY: on a turn the desktop shoves each window back on screen by itself,
+   * one at a time, and the app is never told where they went — so the mascot,
+   * the strip and the chat came apart (Destin, portrait, 2026-10-30). This
+   * re-lays all three from the mascot, exactly as a drag release would, and
+   * forces every window to be moved even when its target looks unchanged.
+   * Hidden ones too: the chat and strip are re-placed when they open, but
+   * only by a title change, which an unchanged target would not make.
+   * Called once the new usable area has been looked up (main.ts).
+   */
+  screenChanged(): void {
+    const win = this.mascot;
+    if (!win || win.isDestroyed()) return;
+    if (this.dragging) return; // the drag's own release settles the group
+    const mb = this.rectOf(win);
+    const display = screen.getDisplayMatching(mb) ?? screen.getPrimaryDisplay();
+    const wa = this.workAreaFor(display);
+    // WHY the key: KDE fires the same "screen changed" event three times every
+    // time any window appears, so most calls are about a screen that did not
+    // change — and regrouping then would cut short the open/close glide.
+    const key = JSON.stringify([display.bounds, wa]);
+    if (key === this.lastScreenKey) return;
+    this.lastScreenKey = key;
+    if (this.glideTimer) { clearInterval(this.glideTimer); this.glideTimer = null; }
+    const inside = clampToWorkArea({ x: mb.x, y: mb.y }, MASCOT_SIZE, wa);
+    const { mode, edge } = this.dockState;
+    // A docked or peeking buddy stays flush on his edge of the NEW screen.
+    const target = mode !== 'free' && edge ? dockPosition(edge, inside, MASCOT_SIZE, wa) : inside;
+    const chatOpen = !!(this.chatOpenIntent && this.chat && !this.chat.isDestroyed());
+    const layout = this.layoutFor({ ...target, ...MASCOT_SIZE });
+    const mascotAt = chatOpen ? layout.mascot : target;
+    this.place('mascot', win, mascotAt, true);
+    this.place('chat', this.chat, layout.chat, true);
+    this.place('bar', this.bar, this.currentBarPosition({ ...mascotAt, ...MASCOT_SIZE }), true);
+    // The turn may have moved him from below the chat to above it. Sent as the
+    // size button's grow-in rather than an open, so menus and drafts survive.
+    if (chatOpen) this.chat?.webContents.send(IPC_CHAT_STATE, { visible: true, resize: 'in', mascot: mascotSide(layout) });
   }
 
   /**
@@ -688,6 +740,8 @@ export class BuddyWindowManager {
     // if the saved position is off-screen entirely, fall back to primary.
     const display = screen.getDisplayMatching({ ...raw, ...MASCOT_SIZE }) ?? screen.getPrimaryDisplay();
     const clamped = clampToWorkArea(raw, MASCOT_SIZE, this.workAreaFor(display));
+    // The screen he is laid out on now, so screenChanged acts only on a real change.
+    this.lastScreenKey = JSON.stringify([display.bounds, this.workAreaFor(display)]);
     this.mascot = this.create('mascot', clamped);
     this.wireMascotLifecycle(this.mascot);
     // Born click-through: only his drawn body catches clicks (setMascotHit).

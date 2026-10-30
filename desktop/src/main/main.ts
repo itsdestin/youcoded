@@ -1669,36 +1669,28 @@ void app.whenReady().then(async () => {
   // never told where the compositor really put him. This asks KDE directly.
   // Everywhere else Electron's own answer is right and stays in use, untouched.
   const buddyWorkArea = helperAtLaunch.needed ? new WorkAreaResolver() : null;
-  if (buddyWorkArea) {
-    // Start the lookup now instead of at the first show(): the buddy's first
-    // appearance waits for this answer either way (BuddyWindowManager.show
-    // defers until it settles), and starting it here means the wait is normally
-    // already over by the time the user switches him on.
-    void buddyWorkArea.refresh();
-
-    // Screens being plugged in, unplugged or rearranged all invalidate which
-    // KDE screen each of Electron's displays is, so all three events re-ask.
-    //
-    // Debounced because KDE fires display-metrics-changed THREE TIMES within
-    // 200 ms of a window appearing (measured 2026-07-23 on the buddy overlay),
-    // so an undebounced handler would run the whole lookup three times over
-    // every time the buddy is shown.
-    //
-    // Moving a taskbar, or setting it to auto-hide, fires NO event at all —
-    // nothing in KDE publishes one (verified: its strut service has zero
-    // signals) — so that case is caught when the buddy is shown and again at
-    // the start of each drag, which BuddyWindowManager already does.
-    const reresolveWorkArea = (() => {
-      let t: NodeJS.Timeout | null = null;
-      return () => {
-        if (t) clearTimeout(t);
-        t = setTimeout(() => { void buddyWorkArea.refresh(); }, 250);
-      };
-    })();
-    screen.on('display-metrics-changed', reresolveWorkArea);
-    screen.on('display-added', reresolveWorkArea);
-    screen.on('display-removed', reresolveWorkArea);
-  }
+  // Start the lookup now instead of at the first show(): the buddy's first
+  // appearance waits for this answer either way (BuddyWindowManager.show
+  // defers until it settles), and starting it here means the wait is normally
+  // already over by the time the user switches him on.
+  void buddyWorkArea?.refresh();
+  // Screens plugged in, unplugged, rearranged or TURNED: re-ask KDE which screen is which (where it must be asked), then
+  // put the buddy back together. WHY the regroup: on a turn to portrait the desktop rescues his three windows one by one
+  // and never says where, so they came apart (Destin, 2026-10-30). Debounced: KDE fires display-metrics-changed THREE
+  // TIMES within 200 ms of any window appearing (measured 2026-07-23). A moved or auto-hidden taskbar fires nothing at
+  // all; BuddyWindowManager re-asks at show and at each drag start.
+  const reresolveWorkArea = (() => {
+    let t: NodeJS.Timeout | null = null;
+    return () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => {
+        void (buddyWorkArea?.refresh() ?? Promise.resolve()).then(() => buddyManagerRef?.screenChanged());
+      }, 250);
+    };
+  })();
+  screen.on('display-metrics-changed', reresolveWorkArea);
+  screen.on('display-added', reresolveWorkArea);
+  screen.on('display-removed', reresolveWorkArea);
 
   // The buddy is three windows (mascot, chat, bar) on every platform. A second
   // one-window "overlay" strategy for Linux Wayland was built behind a chooser

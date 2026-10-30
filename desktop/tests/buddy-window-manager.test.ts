@@ -230,17 +230,18 @@ describe('the caption channel', () => {
     const SRC = readSource(join(__dirname, '../src/main/buddy-window-manager.ts'));
     const lines = SRC.split('\n');
 
-    it('every one of the ten write sites and three creation sites is still there', () => {
+    it('every one of the thirteen write sites and three creation sites is still there', () => {
       // The ast-grep rule buddy-window-move-only-in-place proves nothing moves
       // the buddy EXCEPT through place(). It cannot notice a write path being DELETED — and a deleted one is
       // invisible to the behaviour tests too, because other paths keep the same
       // totals non-zero (the bar, for instance, is also renamed by glideGroup
       // and by showBar's else-branch). Counting the call sites makes a deletion
       // loud. Design §3 fixes these numbers: nine setPosition writes, three
-      // constructor placements. The tenth write is applyChatSize's (the chat's two sizes, buddy rebuild).
+      // constructor placements. The tenth write is applyChatSize's (the chat's two sizes, buddy rebuild);
+      // the last three are screenChanged's regroup after the screen turns.
       const calls = (re: RegExp): number =>
         lines.filter((l) => re.test(l) && !l.trimStart().startsWith('//')).length;
-      expect(calls(/this\.place\(/)).toBe(10);
+      expect(calls(/this\.place\(/)).toBe(13);
       expect(calls(/this\.create\(/)).toBe(3);
     });
 
@@ -987,5 +988,77 @@ describe('the session the buddy chat is showing', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('the screen turning', () => {
+  // Turning a laptop-tablet to portrait: the desktop pushes each window back on
+  // screen by itself, and the app is never told where. The buddy must lay all
+  // three pieces out again from the mascot, as one group.
+  const rect = { x: 0, y: 0, width: 1920, height: 1080 };
+  const area: BuddyWorkAreaSource = {
+    ready: true,
+    refresh: () => Promise.resolve(),
+    areaFor: () => ({ rect: { ...rect }, resolved: true }),
+  };
+  // Where a window was last sent: its latest title, or the one it was born with.
+  const last = (h: Harness, role: BuddyRole) => {
+    const t = h.captionsFor(role).at(-1) ?? h.created.filter((c) => c.variant === role).at(-1)!.title!;
+    return parseCaption(t)!;
+  };
+  const turn = () => Object.assign(rect, { width: 1080, height: 1920 });
+
+  beforeEach(() => { Object.assign(rect, { width: 1920, height: 1080 }); });
+
+  it('lays the mascot, chat and strip out together on the new screen', () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ caption: true, workArea: area, savedPos: { x: 1700, y: 900 } });
+      h.manager.show();
+      h.manager.toggleChat();
+      vi.advanceTimersByTime(300);
+      turn();
+      h.manager.screenChanged();
+      const m = last(h, 'mascot'), c = last(h, 'chat'), b = last(h, 'bar');
+      // All on the narrower screen…
+      expect(m.x + MASCOT_SIZE.width).toBeLessThanOrEqual(1080);
+      expect(c.x + CHAT_SIZE.width).toBeLessThanOrEqual(1080);
+      expect(b.x + BAR_SIZE.width).toBeLessThanOrEqual(1080);
+      // …and exactly where closing and reopening the chat there would put them.
+      h.manager.toggleChat();
+      vi.advanceTimersByTime(300);
+      h.manager.toggleChat();
+      vi.advanceTimersByTime(300);
+      expect([last(h, 'mascot'), last(h, 'chat'), last(h, 'bar')]).toEqual([m, c, b]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('moves every window even when its spot is unchanged, because the desktop already moved it', () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ caption: true, workArea: area, savedPos: { x: 200, y: 200 } });
+      h.manager.show();
+      vi.advanceTimersByTime(300);
+      const at = last(h, 'mascot');
+      turn();
+      h.manager.screenChanged();
+      // A title the helper has not seen, then the real one: two changes, so it moves.
+      const caps = h.captionsFor('mascot');
+      expect(caps.at(-2)).toBe(buildCaption('mascot', at.x, at.y + 1));
+      expect(caps.at(-1)).toBe(buildCaption('mascot', at.x, at.y));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does nothing when the screen did not really change', () => {
+    // KDE fires the change event three times whenever any window appears.
+    const h = harness({ caption: true, workArea: area, savedPos: { x: 200, y: 200 } });
+    h.manager.show();
+    const n = h.titleCalls();
+    h.manager.screenChanged();
+    expect(h.titleCalls()).toBe(n);
   });
 });
