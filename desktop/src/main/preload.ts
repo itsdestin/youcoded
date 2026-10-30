@@ -2408,9 +2408,9 @@ contextBridge.exposeInMainWorld('claude', {
     // Resolve ONE file path tapped in chat to the record the drawer opens — a
     // tracked record, or the on-disk file inside the folder. Replaces
     // downloading the whole project list to find one file (read-service.ts
-    // resolveArtifactPath). Answers { ok:true, artifact } or { ok:false, error }.
-    resolvePath: (projectRoot: string, filePath: string) =>
-      ipcRenderer.invoke('artifacts:resolve-path', { projectRoot, path: filePath }),
+    // resolveArtifactPath). Answers { ok:true, artifact } or { ok:false, error }; `sessionId` also searches beside that chat's files (card #40).
+    resolvePath: (projectRoot: string, filePath: string, sessionId?: string) =>
+      ipcRenderer.invoke('artifacts:resolve-path', { projectRoot, path: filePath, sessionId }),
     listProjectsIndex: (opts?: { withCounts?: boolean }) =>
       ipcRenderer.invoke('artifacts:list-projects-index', opts),
     // opts: { full? } — full opts into reading up to FULL_READ_MAX_BYTES for a

@@ -782,7 +782,8 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         {/* break-words on both notes: a long unbroken file name otherwise forces
             the drawer to scroll sideways on a phone (review 2026-09-11). */}
         {pillError && (
-          <div className="mx-2 mt-2 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well break-words">
+          // whitespace-pre-line: the more-than-one-folder note lists each location on its own line.
+          <div className="mx-2 mt-2 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well break-words whitespace-pre-line">
             {pillError}
           </div>
         )}
@@ -1231,6 +1232,15 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   resetKey={active.id}
                   onClose={() => setFindOpen(false)}
                 />
+              )}
+              
+              {/* WHY (card #40, seen 2026-10-29): with a file open and the list hidden, a tapped
+                  file that could not open put its note only in the hidden list — the chip looked
+                  dead. The note shows here too whenever the list is not on screen. */}
+              {pillError && !showList && (
+                <div role="status" className="mx-2 mt-1 mb-1 shrink-0 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well break-words whitespace-pre-line">
+                  {pillError}
+                </div>
               )}
               <div ref={contentRef} className="flex-1 min-h-0 overflow-hidden artifact-content-pane">
                 <ActiveArtifactView

@@ -430,6 +430,18 @@ describe('artifacts:resolve-path over remote', () => {
     }
   });
 
+  it('a phone sending a sessionId never switches on the search beside that chat\'s files', async () => {
+    resolveSpy().mockClear();
+    await overRemote('artifacts:resolve-path', { projectRoot: root, path: 'nope/x.md', sessionId: 'sess-1' });
+    const opts = resolveSpy().mock.calls[0][2] as Record<string, unknown> | undefined;
+    expect(opts?.nearSession).toBeUndefined();
+    expect(opts?.refusePrivate).toBe(true);
+    // The computer's own window does pass it.
+    resolveSpy().mockClear();
+    await overIpc('artifacts:resolve-path', { projectRoot: root, path: 'nope/x.md', sessionId: 'sess-1' });
+    expect((resolveSpy().mock.calls[0][2] as any)?.nearSession).toMatchObject({ sessionId: 'sess-1' });
+  });
+
   it('a malformed payload answers bad-request, and the lookup never runs', async () => {
     resolveSpy().mockClear();
     expect(await overRemote('artifacts:resolve-path', { projectRoot: root })).toEqual({ ok: false, error: 'bad-request' });
