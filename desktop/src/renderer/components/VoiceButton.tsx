@@ -161,7 +161,12 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
     // The mic lives at the composer's right edge, so a card centred on it would
     // run off the window. Hang the card's RIGHT edge from the mic's right edge
     // instead (translate(-100%, -100%) below): it grows leftward, over the box.
-    setPos({ x: r.right, y: r.top - 8 });
+    // WHY the clamp: in a window barely wider than the card (the buddy chat, a phone), growing
+    // leftward from the mic ran its left edge off the window and cut off the start of every line
+    // (Destin's screenshot, 2026-10-30). Keep 12px clear of the left edge, the same margin its
+    // max-width leaves; the card is already mounted when this runs, so its width is real.
+    const w = panelRef.current?.offsetWidth ?? 0;
+    setPos({ x: Math.max(r.right, w + 12), y: r.top - 8 });
   }, []);
 
   useEffect(() => {

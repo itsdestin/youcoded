@@ -46,10 +46,13 @@ export const CHAT_SIZE_LARGE: Size = { width: 440, height: 660 };
 /**
  * The mascot ARTWORK's insets inside his window, as fractions of window height.
  *
- * The canonical rig uses viewBox="-3 -5 30 30" but its ink only spans y=0..23:
+ * The canonical rig uses viewBox="-3 -5 30 30" but its ink only spans y=0..21:
  * 5 units of headroom above the head (authored so raised-arm poses like welcome
- * and shocked have somewhere to go) and 2 below the feet. At 112px that's 18.7px
- * of nothing above him and 7.5px below.
+ * and shocked have somewhere to go) and 4 below the feet (the legs are y=17..21).
+ * At 112px that's 18.7px of nothing above him and 15px below. WHY 4, not the 2 this
+ * once said: measured 2026-10-30 in the built-in rigs and a theme rig (feet end at
+ * 96 of 112px) after Destin saw the button strip "definitely sits lower than the
+ * buddy feet" — the old figure put his feet 8px lower than they are drawn.
  *
  * So the window's edges are a poor proxy for where he visually ends — a 6px
  * window gap reads as ~13px below him but ~25px above, nearly double. Gaps are
@@ -58,7 +61,7 @@ export const CHAT_SIZE_LARGE: Size = { width: 440, height: 660 };
  * window when below it").
  */
 const MASCOT_INK_TOP_INSET = 5 / 30;
-const MASCOT_INK_BOTTOM_INSET = 2 / 30;
+const MASCOT_INK_BOTTOM_INSET = 4 / 30;
 
 /**
  * Gap between the chat panel and the mascot's ARTWORK — NOT his window edge.
@@ -66,7 +69,8 @@ const MASCOT_INK_BOTTOM_INSET = 2 / 30;
  * of foot padding), which Destin was happy with; the above side now matches it
  * instead of gaping.
  */
-export const CHAT_GAP_PX = 13;
+// 4 (was 13), to the drawn feet: Destin, 2026-10-30, "move them both much closer to the top of the chat window".
+export const CHAT_GAP_PX = 4;
 
 /**
  * The mascot's visible artwork rect. Vertical only — the horizontal insets
@@ -84,24 +88,12 @@ export function mascotInkRect(mascotBounds: Rect): Rect {
   };
 }
 
-/**
- * Where the rig's hands sit, as a fraction of the mascot window's height.
- *
- * The canonical capsule rig (wecoded-themes/mascots/README.md) uses
- * viewBox="-3 -5 30 30" and draws arms hanging from y=9 to y=13; POSES.idle
- * drops them a further 0.5, so the mitten spans y≈11.5..13.5 and centres at
- * ≈12.5 — which is (12.5 + 5) / 30 ≈ 0.583 of the window height, a little
- * below the mascot's midline. Destin wants the action bar's row lined up with
- * the hands rather than the midline (2026-07-17).
- */
-const HANDS_CENTER_FRACTION = 0.583;
-
 /** Chat's horizontal nudge off the group's true centre — Destin's eye, 2026-07-16. */
 const CHAT_NUDGE_X = 10;
 
 /**
- * The VISIBLE button row's rect — ALWAYS to the mascot's right, vertically
- * centred on his hands. The bar window sits BAR_PADDING outside this on every
+ * The VISIBLE button row's rect — ALWAYS to the mascot's right, its bottom
+ * level with his feet. The bar window sits BAR_PADDING outside this on every
  * side; positioning math works in content space so the padding can change
  * without moving the buttons.
  *
@@ -115,10 +107,12 @@ const CHAT_NUDGE_X = 10;
  * Pure — unit-tested.
  */
 export function computeBarContentRect(mascotBounds: Rect): Rect {
-  const handsY = mascotBounds.y + Math.round(mascotBounds.height * HANDS_CENTER_FRACTION);
+  // WHY the feet, not the hands (Destin, 2026-10-30): "make the bottom of the button strip match the
+  // bottom of the mascot's feet" — the strip and his feet now share one baseline just above the chat.
+  const ink = mascotInkRect(mascotBounds);
   return {
     x: mascotBounds.x + mascotBounds.width + BAR_GAP_PX,
-    y: handsY - Math.round(BAR_CONTENT.height / 2),
+    y: ink.y + ink.height - BAR_CONTENT.height,
     width: BAR_CONTENT.width,
     height: BAR_CONTENT.height,
   };

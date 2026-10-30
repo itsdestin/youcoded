@@ -95,13 +95,11 @@ html[data-mode="buddy-chat"] .buddy-chat-panel {
       rgba(255, 255, 255, 0) 60%,
       rgba(0, 0, 0, 0.04) 100%
     ),
-    color-mix(
-      in srgb,
-      var(--panel) calc(clamp(0.88, var(--panels-opacity, 1), 0.94) * 100%),
-      transparent
-    ) !important;
-  backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
-  -webkit-backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+    /* WHY solid: Destin, 2026-10-30, "i want to try making the main chat window … opaque" — the
+       desktop no longer shows through the chat (it was 88–94% of the theme's panel colour). */
+    var(--panel) !important;
+  /* No backdrop-filter: a solid panel has nothing behind it worth blurring, and the header and
+     message box now carry their own frost over the conversation. */
   /* WHY the theme's popup corner, not a fixed 18px (guide principle 2: corners come from the
      theme's shape setting): the same var(--radius-xl) .layer-surface gives every popup. */
   border-radius: var(--radius-xl);
@@ -363,6 +361,14 @@ body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn:nth
 }
 .buddy-bar-btn:active { scale: 0.94; }
 .buddy-bar-btn[data-busy="1"] { scale: 0.92; }
+/* The button strip's panel is solid, like the chat (Destin, 2026-10-30: "the button strip above the
+   chat window is still transparent"). Over a wallpaper theme .layer-surface turns see-through and
+   frosted; here the desktop would show through, and there is nothing of the app's to frost. */
+body[data-mode="buddy-bar"] .layer-surface {
+  background-color: var(--panel) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
 
 /* ── Alive & responsive (spec §5) ──
    All mascot motion is transforms INSIDE the fixed 80×80 window.
@@ -528,10 +534,34 @@ html[data-mode="buddy-chat"] .buddy-chat-header {
   left: 0;
   right: 0;
   z-index: 20;
-  /* The window's own glass, fading out downward, so messages slide under the
-     session strip instead of showing through between its pills. */
-  background: linear-gradient(to bottom, var(--panel) 70%, transparent);
-  padding-bottom: 6px;
+  /* Clear: only the floating header bar inside it is drawn, so messages slide all the way up
+     behind the bar and stay plainly visible around and above it. Destin, 2026-10-30: "the header
+     bar itself should be blurred, and the area around it/above it should not be". The panel-
+     coloured fade this replaced hid them. */
+  background: transparent;
+  padding-bottom: 2px;
+}
+/* The floating header bar: frosted glass over the conversation. With Reduced effects (no blur)
+   it is nearly solid instead, so text never sits unblurred behind the buttons. */
+html[data-mode="buddy-chat"] .buddy-chat-header .header-bar {
+  background-color: color-mix(in srgb, var(--panel) 94%, transparent) !important;
+}
+/* WHY gated here and a literal blur: the theme engine's glass sheet only runs over a wallpaper,
+   but what sits behind these two is the conversation itself, in every theme. Gating on
+   [data-reduced-effects] keeps the app's "turn the glass off" switch working (react-renderer
+   rule: no blur Reduced effects cannot remove); the literal px is because Chromium does not
+   repaint a blur written through a variable. */
+html[data-mode="buddy-chat"]:not([data-reduced-effects]) .buddy-chat-header .header-bar {
+  background-color: color-mix(in srgb, var(--panel) 62%, transparent) !important;
+  backdrop-filter: blur(14px) saturate(1.2) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.2) !important;
+}
+/* The message box: the same frost, so replies scrolling under it show through blurred. Its own
+   rounded shape carries the blur (the wrapper around it has none — see .input-bar-container). */
+html[data-mode="buddy-chat"]:not([data-reduced-effects]) .input-bar-container form {
+  background-color: color-mix(in srgb, var(--inset) 62%, transparent) !important;
+  backdrop-filter: blur(14px) saturate(1.2) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.2) !important;
 }
 html[data-mode="buddy-chat"] .buddy-chat-header .header-bar {
   /* The main window's .header-bar is absolutely placed over its chrome; here it
@@ -556,6 +586,14 @@ html[data-mode="buddy-chat"] .buddy-chat-bottom {
 /* WHY the scroll's own padding: the main window's chat clears its header and
    message box with --top/--bottom-chrome-height plus roomy extra space (24px
    top, a float gap below). The buddy keeps the clearance and drops the extra. */
+/* Messages fade out over the last few pixels before the window's top and bottom edges instead
+   of being cut off by them (Destin, 2026-10-30: "messages should begin fading away just a tiny
+   bit before they reach the top/bottom of the window"). A mask on the scroller, not a painted
+   band, so the frosted header bar and message box still see the real messages behind them. */
+html[data-mode="buddy-chat"] .chat-scroll {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 18px, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 18px, #000 calc(100% - 18px), transparent);
+}
 html[data-mode="buddy-chat"] .chat-scroll {
   padding-top: calc(var(--top-chrome-height, 34px) + 2px) !important;
   padding-bottom: calc(var(--bottom-chrome-height, 56px) + var(--queued-strip-height, 0px) + 6px) !important;

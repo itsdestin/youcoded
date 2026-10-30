@@ -19,13 +19,11 @@ const rectsOverlap = (
   && a.y < b.y + bSize.height && a.y + aSize.height > b.y;
 
 describe('computeBarContentRect', () => {
-  it('sits to the right of the mascot, centered on his hands (not his midline)', () => {
+  it('sits to the right of the mascot, its bottom level with his feet', () => {
     const r = computeBarContentRect(mascot(500, 300));
     expect(r.x).toBe(500 + 112 + BAR_GAP_PX);
-    // Hands sit at 58.3% of the mascot's height, below the 50% midline.
-    const handsY = 300 + Math.round(112 * 0.583);
-    expect(r.y).toBe(handsY - BAR_CONTENT.height / 2);
-    expect(handsY).toBeGreaterThan(300 + 56); // strictly below center
+    const ink = mascotInkRect(mascot(500, 300));
+    expect(r.y + r.height).toBe(ink.y + ink.height);
   });
 
   it('never flips sides — it is always to the mascot\'s right', () => {
@@ -101,9 +99,8 @@ describe('computeGroupLayout', () => {
     const l = computeGroupLayout(mascot(600, 100), wa);
     expect(l.mascot).toEqual({ x: 600, y: 100 });
     expect(inkGap(l)).toBe(CHAT_GAP_PX);
-    // Unchanged from the window-gap era Destin was happy with: 13 - 7px of
-    // foot padding = the old 6px window gap.
-    expect(l.chat.y).toBe(100 + 112 + 6);
+    // 4px under his feet, which are drawn 15px above his window's bottom edge.
+    expect(l.chat.y).toBe(100 + 112 - 11);
   });
 
   it('flips the chat above when it would not fit below, leaving him put', () => {
