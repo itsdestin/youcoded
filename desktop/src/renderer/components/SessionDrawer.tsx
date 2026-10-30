@@ -1238,6 +1238,14 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
               {/* WHY (card #40): this file was not in the chat's folder — the tap found it beside
                   the chat's other files. Naming the folder makes a wrong guess visible at once.
                   Same quiet box as the drawer's other tap notes; only while this file shows. */}
+              {/* WHY (card #40, seen 2026-10-29): with a file open and the list hidden, a tapped
+                  file that could not open put its note only in the hidden list — the chip looked
+                  dead. The note shows here too whenever the list is not on screen. */}
+              {pillError && !showList && (
+                <div role="status" className="mx-2 mt-1 mb-1 shrink-0 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well break-words whitespace-pre-line">
+                  {pillError}
+                </div>
+              )}
               {pillFoundIn && pillFoundIn.artifactId === active.id && (
                 <div className="mx-2 mt-1 mb-1 shrink-0 px-2.5 py-1.5 text-2xs text-fg-muted rounded-md border border-edge bg-well break-words">
                   {`Opened from ${pillFoundIn.folder}, next to this chat’s other files.`}

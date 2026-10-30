@@ -3095,6 +3095,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // listFolder) — the only way to reach that error without a real disk.
   const lockedSwitch = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('filesLocked') === '1';
+  // Pretend files on disk beside fixture rows, for card #40's nearby search:
+  // one only there (a short path opens it), and `summary.md` in two folders
+  // (the "more than one folder" note). Nothing lists them; only a tap finds them.
+  const NEARBY_DISK_FILES = [
+    '/tmp/youcoded-scratch/latency-chart-before.png',
+    '/tmp/youcoded-scratch/summary.md',
+    '/home/you/Projects/community-garden/summary.md',
+  ];
   // A file only a phone would balk at: 24 MB is over the 10 MB image/PDF ceiling
   // but well under the desktop's 50 MB, so the same row previews fine at the
   // desk and shows the too-large card on the phone. Appended to the lists only in
@@ -3160,12 +3168,24 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       const rows = filesIn(projectRoot);
       const hit = rows.find((r) => (r.kind === 'internal' ? `${root}/${r.path}` : r.absolutePath) === abs);
       if (hit) return { ok: true, artifact: hit };
+      // A pretend on-disk file beside a fixture row (card #40). The real host
+      // answers outside-project here and the renderer records it; the workbench
+      // has no recorder, so it answers the record directly — same open, same note.
+      if (NEARBY_DISK_FILES.includes(abs)) {
+        return { ok: true, artifact: { id: `nearby:${abs}`, path: abs.split('/').pop()!, kind: 'external', absolutePath: abs,
+          lastModified: new Date().toISOString(), status: 'active', versions: [], comments: [], tags: [] } };
+      }
       if (!abs.startsWith(`${root}/`)) return { ok: false, error: 'outside-project' };
-      // Card #40's nearby search, from strings: a short path is "found" beside
-      // an external fixture row that already sits at <somewhere>/<that path>.
+      // Card #40's nearby search: the short path placed beside each fixture
+      // row's folder, kept where the pretend disk has a file.
       if (!sessionId || filePath.startsWith('/')) return { ok: false, error: 'not-found' };
-      const short = filePath.replace(/^\.\//, '');
-      const elsewhere = rows.map((r) => r.absolutePath).filter((p): p is string => !!p && p.endsWith(`/${short}`));
+      const segs = filePath.replace(/^\.\//, '').split('/');
+      const dirs = new Set(rows.map((r) => r.absolutePath?.split('/').slice(0, -1).join('/')).filter((d): d is string => !!d));
+      const want = segs.slice(0, -1).join('/');
+      const elsewhere = [...dirs]
+        .filter((d) => !want || d.endsWith(`/${want}`))
+        .map((d) => `${want ? d.slice(0, -want.length - 1) : d}/${segs.join('/')}`)
+        .filter((c) => NEARBY_DISK_FILES.includes(c));
       return { ok: false, error: 'not-found', searchedNearby: true, ...(elsewhere.length ? { elsewhere } : {}) };
     },
     // Batch 3, Q-7 (yes): save a copy to the phone. The real channel
