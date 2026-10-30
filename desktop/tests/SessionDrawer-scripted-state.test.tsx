@@ -256,7 +256,7 @@ describe('SessionDrawer while a tapped file is being looked up', () => {
 
   // With a file showing, the list is hidden — a tap that could not open used to
   // put its note only there, so the chip looked like it did nothing.
-  it('a tap that could not open shows its note over the open file, and names the folder a found file came from', async () => {
+  it('a tap that could not open shows its note over the open file', async () => {
     setViewport(false);
     const tracked = {
       id: 'a1', path: 'notes.md', kind: 'internal', absolutePath: null, lastModified: '', status: 'active',
@@ -274,11 +274,6 @@ describe('SessionDrawer while a tapped file is being looked up', () => {
     const notes = await screen.findAllByText('Couldn’t open old.png — it isn’t here.');
     expect(notes.some((n) => n.closest('.drawer-content'))).toBe(true);
 
-    setArtifactState({ ...open, pillFoundIn: { [SESSION]: { artifactId: 'a1', folder: '/work/icon6' } } } as any);
-    expect(screen.getByText('Opened from /work/icon6, next to this chat’s other files.')).toBeTruthy();
-    // Another file's note is never shown over this one.
-    setArtifactState({ ...open, pillFoundIn: { [SESSION]: { artifactId: 'other', folder: '/work/icon6' } } } as any);
-    expect(screen.queryByText(/^Opened from/)).toBeNull();
   });
 
   it('shows the note on a phone-width screen as well', async () => {

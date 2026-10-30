@@ -16,12 +16,6 @@ export interface ArtifactState {
   // lookup ends clears it — the file opened, it could not open, the drawer
   // closed, or a new tap started.
   pillPending: Record<string, string | null>;
-  // A tapped short path that opened from beside this chat's other files rather
-  // than from the chat's own folder (card #40): which record, and the folder it
-  // came from. The drawer names that folder above the file while that file is
-  // the one showing, so a wrong guess is visible. Cleared with the pill notes.
-  // Optional so hand-built test states need not carry it.
-  pillFoundIn?: Record<string, { artifactId: string; folder: string } | null>;
   // Drawer open/closed is scoped per session and remembered across switches.
   // A new/unseen session has no entry → closed by default. Consumers read the
   // ACTIVE session's flag; the open/close actions carry the sessionId.
@@ -148,10 +142,7 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
         ...s,
         pillError: { ...s.pillError, [a.sessionId]: null },
         pillPending: { ...s.pillPending, [a.sessionId]: null },
-        pillFoundIn: { ...s.pillFoundIn, [a.sessionId]: null },
       };
-    case 'PILL_FOUND_ELSEWHERE':
-      return { ...s, pillFoundIn: { ...s.pillFoundIn, [a.sessionId]: { artifactId: a.artifactId, folder: a.folder } } };
     case 'DRAWER_OPENED':
       return { ...s, drawerOpenBySession: { ...s.drawerOpenBySession, [a.sessionId]: true } };
     case 'DRAWER_CLOSED':
@@ -167,7 +158,6 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
         pillError: { ...s.pillError, [a.sessionId]: null },
         // A re-opened drawer must not say "Opening …" for a tap the person closed on.
         pillPending: { ...s.pillPending, [a.sessionId]: null },
-        pillFoundIn: { ...s.pillFoundIn, [a.sessionId]: null },
         gitReviewBySession: { ...s.gitReviewBySession, [a.sessionId]: false },
         // Closing the drawer must also drop a live preview — the exclusivity
         // rule (only one of active-artifact/preview at a time) still applies
@@ -274,7 +264,6 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
         sessionCwd: without(s.sessionCwd),
         pillError: without(s.pillError),
         pillPending: without(s.pillPending),
-        ...(s.pillFoundIn ? { pillFoundIn: without(s.pillFoundIn) } : {}),
         drawerOpenBySession: without(s.drawerOpenBySession),
         activeArtifactBySession: without(s.activeArtifactBySession),
         gitReviewBySession: without(s.gitReviewBySession),

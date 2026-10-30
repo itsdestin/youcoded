@@ -265,27 +265,20 @@ export async function openFilepath(
     };
 
     // Card #40: open the ONE file the host found beside this chat's other files, the way a tap
-    // on its full location would open it, then name the folder it came from above it.
+    // on its full location would open it.
     const openFoundElsewhere = async (abs: string): Promise<void> => {
       const resolvePath = (window.claude as any)?.artifacts?.resolvePath;
       const again: HostLookup = await askHost(resolvePath, folder, abs);
       if (!isCurrent()) return;
-      let openedId: string | null = null;
       const second = again.kind === 'answer' ? again.answer : null;
       if (second?.ok) {
         show(second.artifact);
-        openedId = second.artifact.id;
       } else if (second && second.error === 'outside-project' && getCapabilities().projectWrites) {
-        openedId = await artifactify(undefined, abs);
+        await artifactify(undefined, abs);
       } else {
         // It was there a moment ago; whatever the second look said is the truth now.
         failWith(second ? describeRefusal(second.error, name)
           : again.kind === 'failed' && again.detail ? `Couldn’t open ${name}: ${again.detail}` : `Couldn’t open ${name}.`);
-        return;
-      }
-      if (openedId && isCurrent()) {
-        const slash = abs.replace(/\\/g, '/').lastIndexOf('/');
-        dispatch({ type: 'PILL_FOUND_ELSEWHERE', sessionId, artifactId: openedId, folder: slash > 0 ? abs.slice(0, slash) : abs });
       }
     };
 

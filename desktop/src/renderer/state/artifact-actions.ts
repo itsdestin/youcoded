@@ -26,9 +26,6 @@ export type ArtifactAction =
   // "Opening <name>…" instead. Cleared by ACTIVE_ARTIFACT_SET (it opened),
   // PILL_RESOLVE_FAILED (it could not), DRAWER_CLOSED and PILL_ERROR_CLEARED.
   | { type: 'PILL_RESOLVE_STARTED'; sessionId: string; name: string }
-  // A tapped short path opened from beside this chat's other files, not from
-  // the chat's folder (card #40) — the drawer names `folder` above that file.
-  | { type: 'PILL_FOUND_ELSEWHERE'; sessionId: string; artifactId: string; folder: string }
   // Open/close is per-session (remembered across session switches), so both
   // carry the sessionId whose drawer is being toggled.
   | { type: 'DRAWER_OPENED'; sessionId: string }

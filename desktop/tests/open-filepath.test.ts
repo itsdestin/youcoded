@@ -597,7 +597,7 @@ describe('openFilepath — a short path found beside this chat\'s other files', 
     status: 'active', versions: [], comments: [], tags: [],
   });
 
-  it('one match outside the folder is recorded by its FULL location, opened, and its folder named', async () => {
+  it('one match outside the folder is recorded by its FULL location and opened', async () => {
     const stubs = installClaudeArtifacts({
       resolvePath: async (_cwd, p) => (p === FOUND
         ? { ok: false, error: 'outside-project' }
@@ -611,9 +611,6 @@ describe('openFilepath — a short path found beside this chat\'s other files', 
     expect(stubs.appendVersion).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(stubs.appendVersion.mock.calls[0][2])).toContain(FOUND);
     expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['rec-found']);
-    expect(dispatched[dispatched.length - 1]).toEqual({
-      type: 'PILL_FOUND_ELSEWHERE', sessionId: 's1', artifactId: 'rec-found', folder: '/home/u/banner/icon6',
-    });
     expect(dispatched.some((a) => a.type === 'PILL_RESOLVE_FAILED')).toBe(false);
   });
 
@@ -628,7 +625,6 @@ describe('openFilepath — a short path found beside this chat\'s other files', 
     await openFilepath(ctx, 's1', 'icon6/s.png');
     expect(stubs.appendVersion).not.toHaveBeenCalled();
     expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['sub/icon6/s.png']);
-    expect(dispatched.find((a) => a.type === 'PILL_FOUND_ELSEWHERE')).toMatchObject({ folder: '/proj/sub/icon6' });
   });
 
   it('two matches open nothing and list both locations', async () => {
@@ -682,6 +678,5 @@ describe('openFilepath — a short path found beside this chat\'s other files', 
     releaseSecond({ ok: false, error: 'outside-project' });
     await first;
     expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['other.md']);
-    expect(dispatched.some((a) => a.type === 'PILL_FOUND_ELSEWHERE')).toBe(false);
   });
 });
