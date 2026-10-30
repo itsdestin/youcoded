@@ -12,10 +12,11 @@ import { CompactSurfaceContext } from '../src/renderer/state/compact-surface-con
 import type { ToolCallState } from '../src/shared/types';
 
 // BuddyChat itself is the main window's whole chat; this file only needs to know whether it is mounted again.
-const mounts = vi.hoisted(() => ({ count: 0 }));
+const mounts = vi.hoisted(() => ({ count: 0, opened: [] as number[] }));
 vi.mock('../src/renderer/components/buddy/BuddyChat', () => ({
-  BuddyChat: () => {
+  BuddyChat: ({ opened }: { opened?: number }) => {
     React.useEffect(() => { mounts.count++; }, []);
+    mounts.opened.push(opened ?? 0);
     return <div data-testid="chat" />;
   },
 }));
@@ -25,6 +26,7 @@ let respond: ReturnType<typeof vi.fn>;
 let chatState: ((s: { visible: boolean; mascot?: 'above' | 'below' }) => void) | null;
 beforeEach(() => {
   mounts.count = 0;
+  mounts.opened = [];
   chatState = null;
   respond = vi.fn().mockResolvedValue(true);
   (window as any).claude = {
@@ -97,5 +99,18 @@ describe('opening the buddy chat', () => {
     act(() => { chatState!({ visible: true, mascot: 'above' }); });
     expect(mounts.count).toBe(1);
     expect(document.querySelector('.buddy-chat-panel')!.getAttribute('data-mascot')).toBe('above');
+  });
+
+  it('counts each open — so its menus start closed — but not the size button\'s fade and grow', () => {
+    render(<BuddyChatApp />);
+    act(() => { chatState!({ visible: true, mascot: 'below' }); });
+    const afterOpen = mounts.opened.at(-1)!;
+    act(() => { chatState!({ visible: true, resize: 'out' } as any); });
+    act(() => { chatState!({ visible: true, resize: 'in', mascot: 'below' } as any); });
+    expect(mounts.opened.at(-1)).toBe(afterOpen);
+    expect(document.querySelector('.buddy-chat-panel')!.className).not.toContain('buddy-chat-enter');
+    act(() => { chatState!({ visible: false }); });
+    act(() => { chatState!({ visible: true, mascot: 'below' }); });
+    expect(mounts.opened.at(-1)).toBe(afterOpen + 1);
   });
 });

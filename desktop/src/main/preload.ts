@@ -1994,8 +1994,8 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.BUDDY_MASCOT_STATE, listener);
       return () => ipcRenderer.removeListener(IPC.BUDDY_MASCOT_STATE, listener);
     },
-    onChatState: (cb: (s: { visible: boolean; mascot?: 'above' | 'below' }) => void) => {
-      const listener = (_: unknown, s: { visible: boolean; mascot?: 'above' | 'below' }) => cb(s);
+    onChatState: (cb: (s: { visible: boolean; mascot?: 'above' | 'below'; resize?: 'out' | 'in' }) => void) => {
+      const listener = (_: unknown, s: { visible: boolean; mascot?: 'above' | 'below'; resize?: 'out' | 'in' }) => cb(s);
       ipcRenderer.on(IPC.BUDDY_CHAT_STATE, listener);
       return () => ipcRenderer.removeListener(IPC.BUDDY_CHAT_STATE, listener);
     },

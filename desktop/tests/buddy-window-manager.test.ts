@@ -891,11 +891,18 @@ describe("the chat's two sizes (the bar's size button)", () => {
       h.manager.toggleChat();
       expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
       h.manager.toggleChatSize();
+      // First the panel fades out, and the window has not changed yet...
+      expect(sentTo(h.wins.chat, 'buddy:chat-state').at(-1)).toEqual({ visible: true, resize: 'out' });
+      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
+      // ...then, while it is invisible, the window changes and the panel is told to grow back in.
+      vi.advanceTimersByTime(100);
       expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE_LARGE);
+      expect(sentTo(h.wins.chat, 'buddy:chat-state').at(-1)).toMatchObject({ visible: true, resize: 'in' });
       expect(h.saved.chatSize).toBe('large');
       expect(sentTo(h.wins.chat, 'buddy:chat-size').at(-1)).toBe('large');
       expect(sentTo(h.wins.bar, 'buddy:chat-size').at(-1)).toBe('large');
       h.manager.toggleChatSize();
+      vi.advanceTimersByTime(100);
       expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
       expect(h.saved.chatSize).toBe('small');
       // The way back to small also lowers the window's size limits — without it Linux refused to shrink it.
@@ -919,14 +926,17 @@ describe("the chat's two sizes (the bar's size button)", () => {
   });
 
   it('on the rename channel the chat resizes itself, since it cannot be moved by the app', () => {
+    vi.useFakeTimers();
     const h = harness({ caption: true });
     try {
       h.manager.show();
       h.manager.toggleChat();
       h.manager.toggleChatSize();
+      vi.advanceTimersByTime(100);
       expect(h.wins.chat!.setSize).toHaveBeenLastCalledWith(CHAT_SIZE_LARGE.width, CHAT_SIZE_LARGE.height);
     } finally {
       h.manager.hide();
+      vi.useRealTimers();
     }
   });
 

@@ -496,6 +496,23 @@ body[data-mode="buddy-chat"] .buddy-chat-panel[data-mascot="below"].buddy-chat-e
   from { opacity: 1; transform: scale(1); }
   to { opacity: 0; transform: scale(0.95); }
 }
+/* The size button (buddy-rebuild-tryit2#U-1): the panel fades out (90ms, the same CHAT_RESIZE_FADE_MS main waits),
+   the window changes size and place while it is invisible, and the panel grows back in from its centre. */
+body[data-mode="buddy-chat"] .buddy-chat-resize-out {
+  animation: buddy-chat-resize-out 90ms ease-in forwards;
+  transform-origin: 50% 50%;
+}
+body[data-mode="buddy-chat"] .buddy-chat-resize-in {
+  animation: buddy-chat-resize-in 200ms cubic-bezier(0.2, 0.9, 0.3, 1.05);
+  transform-origin: 50% 50%;
+}
+@keyframes buddy-chat-resize-out {
+  to { opacity: 0; transform: scale(0.97); }
+}
+@keyframes buddy-chat-resize-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
 
 /* ── The small main chat (buddy rebuild, 2026-10-25) ──
    The buddy hosts the main window's ChatView, SessionStrip and InputBar

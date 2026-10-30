@@ -1400,7 +1400,7 @@ export interface BuddyApi {
   onBarState(cb: (s: { visible: boolean }) => void): () => void;
   onMascotState(cb: (s: { mode: 'free' | 'docked' | 'peeking'; edge: string | null }) => void): () => void;
   /** `mascot`: which side of the chat he is on, so the chat grows out of him. */
-  onChatState(cb: (s: { visible: boolean; mascot?: 'above' | 'below' }) => void): () => void;
+  onChatState(cb: (s: { visible: boolean; mascot?: 'above' | 'below'; resize?: 'out' | 'in' }) => void): () => void;
   onChatSize(cb: (size: 'small' | 'large') => void): () => void;
   onFocusSession(cb: (sessionId: string) => void): () => void;
 }

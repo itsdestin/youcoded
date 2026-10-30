@@ -29,6 +29,8 @@ const IPC_BAR_STATE = 'buddy:bar-state';
 const IPC_CHAT_STATE = 'buddy:chat-state';
 const IPC_MASCOT_STATE = 'buddy:mascot-state';
 const IPC_CHAT_SIZE = 'buddy:chat-size';
+// How long the chat panel takes to fade out before its window changes size (buddy.css .buddy-chat-resize-out).
+const CHAT_RESIZE_FADE_MS = 90;
 
 // How close (px) the raw drag target must get to a screen edge, WITH the chat
 // open, to read as "put him away" — close the chat and peek. Deliberately much
@@ -792,11 +794,24 @@ export class BuddyWindowManager {
   toggleChatSize(): void {
     this.chatLarge = !this.chatLarge;
     this.deps.setPersistedChatSize?.(this.chatLarge ? 'large' : 'small');
-    if (this.chat && !this.chat.isDestroyed() && this.chatOpenIntent) {
-      const layout = this.layoutFor();
-      this.applyChatSize(this.chat, layout.chat);
-      this.raiseSatellites();
-      this.glideGroup(layout.mascot);
+    const chat = this.chat;
+    if (chat && !chat.isDestroyed() && this.chatOpenIntent) {
+      // WHY in three beats (buddy-rebuild-tryit2#U-1: "it feels like it moves left before expanding then right before
+      // shrinking, instead of smoothly growing/shrinking in/out from the center"): a window's new size and new place are
+      // two separate steps for the window system, so the user saw the chat lurch sideways and then change size. The
+      // panel fades out first, the window changes while it is invisible, and the panel then grows into place from its
+      // centre — one movement on screen.
+      chat.webContents.send(IPC_CHAT_STATE, { visible: true, resize: 'out' });
+      if (this.chatResizeTimer) clearTimeout(this.chatResizeTimer);
+      this.chatResizeTimer = setTimeout(() => {
+        this.chatResizeTimer = null;
+        if (chat.isDestroyed() || chat !== this.chat || !this.chatOpenIntent) return;
+        const layout = this.layoutFor();
+        this.applyChatSize(chat, layout.chat);
+        this.raiseSatellites();
+        this.glideGroup(layout.mascot);
+        chat.webContents.send(IPC_CHAT_STATE, { visible: true, resize: 'in', mascot: mascotSide(layout) });
+      }, CHAT_RESIZE_FADE_MS);
     }
     this.pushChatSize();
   }
@@ -1136,6 +1151,8 @@ export class BuddyWindowManager {
   // against rapid re-toggles.
   private chatOpenIntent = false;
   private chatHideTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The size button's pause while the panel is faded out (toggleChatSize). */
+  private chatResizeTimer: ReturnType<typeof setTimeout> | null = null;
 
   private createChat(): void {
     this.chatOpenIntent = true;

@@ -3,7 +3,7 @@ import { ThemeProvider } from '../../state/theme-context';
 import { ChatProvider } from '../../state/chat-context';
 import { BuddyChat } from './BuddyChat';
 
-type Phase = 'enter' | 'exit' | 'rest';
+type Phase = 'enter' | 'exit' | 'rest' | 'resize-out' | 'resize-in';
 
 export function BuddyChatApp({ seed }: { seed?: React.ReactNode } = {}) {
   // Entrance/exit: the first mount plays the entrance; buddy:chat-state pushes replay it on every re-show and play
@@ -18,15 +18,22 @@ export function BuddyChatApp({ seed }: { seed?: React.ReactNode } = {}) {
   // Hidden means idle (performance.md rule 2): while main has the window hidden, the chat stops drawing streamed
   // words and catches up when shown. The window's own visibility is the one fact that is always right here.
   const [shown, setShown] = useState(() => document.visibilityState === 'visible');
+  // Each open's number — BuddyChat starts its session strip afresh on a new one (menus closed, forms reset).
+  const [opened, setOpened] = useState(0);
 
   useEffect(() => {
     document.body.setAttribute('data-mode', 'buddy-chat');
     const onVis = () => setShown(document.visibilityState === 'visible');
     document.addEventListener('visibilitychange', onVis);
-    const off = window.claude?.buddy?.onChatState?.((s: { visible: boolean; mascot?: 'above' | 'below' }) => {
+    const off = window.claude?.buddy?.onChatState?.((s: { visible: boolean; mascot?: 'above' | 'below'; resize?: 'out' | 'in' }) => {
       if (s.mascot) setMascot(s.mascot);
+      // The size button (main's toggleChatSize): fade out while the window changes, then grow in from the centre. Not
+      // an open — nothing resets.
+      if (s.resize === 'out') { setPhase('resize-out'); return; }
+      if (s.resize === 'in') { setPhase('rest'); requestAnimationFrame(() => setPhase('resize-in')); return; }
       if (s.visible) {
         setShown(true);
+        setOpened((n) => n + 1);
         setPhase('rest');
         requestAnimationFrame(() => setPhase('enter'));
       } else {
@@ -44,11 +51,11 @@ export function BuddyChatApp({ seed }: { seed?: React.ReactNode } = {}) {
         {/* buddy-chat-panel carries the frosted-glass chrome (buddy.css) — it has to be the same element the
             enter/exit animation scales, or the glass rectangle appears instantly and only the contents animate. */}
         <div
-          className={`buddy-chat-panel${phase === 'enter' ? ' buddy-chat-enter' : phase === 'exit' ? ' buddy-chat-exit' : ''}`}
+          className={`buddy-chat-panel${phase === 'rest' ? '' : ` buddy-chat-${phase}`}`}
           data-mascot={mascot}
           style={{ width: '100%', height: '100%' }}
         >
-          <BuddyChat shown={shown} />
+          <BuddyChat shown={shown} opened={opened} />
         </div>
       </ChatProvider>
     </ThemeProvider>

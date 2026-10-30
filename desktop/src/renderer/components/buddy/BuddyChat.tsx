@@ -6,6 +6,7 @@ import ChatView from '../ChatView';
 import SessionStrip from '../SessionStrip';
 import { ArtifactProvider, createArtifactStore } from '../../state/ArtifactContext';
 import { useAttentionSummary } from '../../hooks/useAttentionSummary';
+import { useSessionDefaults } from '../../hooks/useSessionDefaults';
 import { useChromeMeasurements } from '../../hooks/useChromeMeasurements';
 import { buildSessionCreateArgs } from '../../../shared/session-create-args';
 import { BuddyWelcome } from './BuddyWelcome';
@@ -28,7 +29,7 @@ import type { SessionChatState } from '../../state/chat-types';
  * (screenshot, size, open YouCoded, hide) are NOT in here: they are the panel beside the mascot (BuddyBarApp,
  * buddy-rebuild-review5#C-5).
  */
-export function BuddyChat({ tools = 'summary', shown = true }: { tools?: CompactSurface['tools']; /** false while main has the window hidden */ shown?: boolean } = {}) {
+export function BuddyChat({ tools = 'summary', shown = true, opened = 0 }: { tools?: CompactSurface['tools']; /** false while main has the window hidden */ shown?: boolean; /** how many times the chat has been opened */ opened?: number } = {}) {
   // The main window's cards draw themselves for the small window under this (state/compact-surface-context.ts).
   // 'summary' — one row for a reply's steps and files — was chosen (buddy-rebuild-review2#D-1, review4#A-2).
   const compactSurface = useMemo<CompactSurface>(() => ({ tools }), [tools]);
@@ -37,6 +38,13 @@ export function BuddyChat({ tools = 'summary', shown = true }: { tools?: Compact
   // WHY the shared hook (#S-1): it PULLS the summary on mount, then listens. The buddy used to only
   // listen, so every dot was grey until something changed somewhere.
   const summary = useAttentionSummary();
+  // The saved new-session defaults (model, project folder, skip permissions), the same hook the main window reads — the
+  // buddy's New session form started from the app's built-in values instead (buddy-rebuild-tryit2#U-3). Re-read on
+  // every open: the window regains focus then, and the hook asks again on focus.
+  const sessionDefaults = useSessionDefaults(false);
+  // Every close of the window starts the session strip afresh, so a menu, a half-filled New session form or an open
+  // folder list never greets the next open (buddy-rebuild-tryit2#U-3). The chat itself is NOT rebuilt (BuddyChatApp).
+  // `opened` counts the opens (BuddyChatApp, from main's buddy:chat-state cue — the one signal every platform sends).
   // This window's own files-and-previews store, created once (ChatView and SessionStrip read it, as in the main window).
   const [artifactStore] = useState(() => createArtifactStore());
 
@@ -156,7 +164,12 @@ export function BuddyChat({ tools = 'summary', shown = true }: { tools?: Compact
         <div ref={headerRef} className="buddy-chat-header">
           <div className="header-bar">
             <SessionStrip
+              key={opened}
               sessions={sessions as any}
+              defaultModel={sessionDefaults.model}
+              defaultStartModel={sessionDefaults.startModel}
+              defaultSkipPermissions={sessionDefaults.skipPermissions}
+              defaultProjectFolder={sessionDefaults.projectFolder}
               activeSessionId={viewedSession}
               onSelectSession={select}
               onCreateSession={createSession}
