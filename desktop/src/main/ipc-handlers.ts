@@ -1797,27 +1797,22 @@ export function registerIpcHandlers(
   // releaseModel, not unloadModel: a model the user asked to KEEP LOADED must
   // survive the last chat on it closing, or the setting is a lie (design §C2).
   nativeHost.setModelReleasedHandler((modelId) => { void engineManager.releaseModel(modelId); });
-  // Join per-model residency (engine) with session→model (host): push each live
-  // native session its bound model's state so ChatView can show the unloaded /
-  // loading banner (#4/#5). Only push on change per session.
-  // Signature includes loadedBytes so LOAD PROGRESS updates (state stays
-  // 'loading' while bytes climb) are pushed, not just state transitions.
-  // The model id is in the signature: after a switch the new model's state often
-  // matches the old one's ('loaded'), and the chat then kept the old name and size.
+  // Join per-model residency (engine) with session→model (host): push each live native session its bound
+  // model's state, only on change. The signature has loadedBytes (load progress) and the model id (after a
+  // switch the chat kept the old model's name and size).
   const lastSessionModelState = new Map<string, string>();
   const pushModelState = (sessionId: string, m: Pick<EngineModelType, 'id' | 'state' | 'sizeBytes' | 'loadedBytes'>) => {
     const sig = `${m.id}:${m.state}:${m.loadedBytes ?? ''}`;
     if (lastSessionModelState.get(sessionId) === sig) return;
     lastSessionModelState.set(sessionId, sig);
-    publish(sessionId, IPC.NATIVE_MODEL_STATE, { sessionId, modelId: m.id, state: m.state, sizeBytes: m.sizeBytes, loadedBytes: m.loadedBytes ?? null });
+    const full = { sessionId, modelId: m.id, state: m.state, sizeBytes: m.sizeBytes, loadedBytes: m.loadedBytes ?? null };
+    publish(sessionId, IPC.NATIVE_MODEL_STATE, full);
   };
   engineManager.on('models-changed', (models: EngineModelType[]) => {
     for (const m of models) for (const sessionId of nativeHost.sessionsForModel(m.id)) pushModelState(sessionId, m);
   });
-  // WHY: a chat that opens on, or switches to, a model whose state is NOT changing
-  // got no push, so it never learned the model was loaded — and when that model
-  // later slept, its strip said "Loading…" forever. A model the engine does not
-  // list (a cloud model) is pushed as available, clearing any old local strip.
+  // WHY: a chat opening on (or switching to) a model whose state is not changing got no push, so when
+  // it later slept the strip said "Loading…" forever. A model the engine doesn't list (cloud) clears it.
   function pushCurrentModelState(sessionId: string, modelId: string): void {
     const m = engineManager.latestModels()?.find((x) => x.id === modelId);
     pushModelState(sessionId, m ?? { id: modelId, state: 'loaded', sizeBytes: null, loadedBytes: undefined });
