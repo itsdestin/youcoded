@@ -9,7 +9,7 @@ import http from 'http';
 import type { AddressInfo } from 'net';
 import { randomInt } from 'crypto';
 
-export const SIGNIN_LISTENER_TTL_MS = 15 * 60 * 1000;
+const SIGNIN_LISTENER_TTL_MS = 15 * 60 * 1000;
 const SECRET_RE = /^[0-9a-f]{64}$/;
 const DONE_PAGE = '<!doctype html><meta charset="utf-8"><title>YouCoded</title><body style="font-family:sans-serif;padding:2em"><p>You can return to YouCoded.</p></body>';
 
