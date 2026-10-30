@@ -3,7 +3,7 @@ import { ThemeProvider } from '../../state/theme-context';
 import { ChatProvider } from '../../state/chat-context';
 import { BuddyChat } from './BuddyChat';
 
-type Phase = 'enter' | 'exit' | 'rest' | 'resize-out' | 'resize-in';
+type Phase = 'enter' | 'exit' | 'pre' | 'resize-out' | 'resize-in';
 
 export function BuddyChatApp({ seed }: { seed?: React.ReactNode } = {}) {
   // Entrance/exit: the first mount plays the entrance; buddy:chat-state pushes replay it on every re-show and play
@@ -11,7 +11,7 @@ export function BuddyChatApp({ seed }: { seed?: React.ReactNode } = {}) {
   //
   // WHY no remount (buddy rebuild, 2026-10-25): this used to key the WHOLE tree on every show, so each open threw the
   // conversation away and filled it again from the computer — the buddy felt slow to open, and a long chat was
-  // rebuilt every time. Now only the panel's animation class restarts: 'rest' for one frame, then 'enter'.
+  // rebuilt every time. Now only the panel's animation class restarts: 'pre' (invisible) for one frame, then 'enter'.
   const [phase, setPhase] = useState<Phase>('enter');
   // Which side of the chat the mascot is on, so the chat grows out of him (buddy-rebuild-questions#Q-7).
   const [mascot, setMascot] = useState<'above' | 'below'>('below');
@@ -30,11 +30,14 @@ export function BuddyChatApp({ seed }: { seed?: React.ReactNode } = {}) {
       // The size button (main's toggleChatSize): fade out while the window changes, then grow in from the centre. Not
       // an open — nothing resets.
       if (s.resize === 'out') { setPhase('resize-out'); return; }
-      if (s.resize === 'in') { setPhase('rest'); requestAnimationFrame(() => setPhase('resize-in')); return; }
+      // WHY 'pre' for the one frame between animations (Destin, 2026-10-30: "a bit odd/jittery"): the old 'rest'
+      // has no class, so that frame drew the WHOLE panel at full size before the animation snapped it back to
+      // invisible and grew it in — a flash at the start of every open and every resize. 'pre' holds it invisible.
+      if (s.resize === 'in') { setPhase('pre'); requestAnimationFrame(() => setPhase('resize-in')); return; }
       if (s.visible) {
         setShown(true);
         setOpened((n) => n + 1);
-        setPhase('rest');
+        setPhase('pre');
         requestAnimationFrame(() => setPhase('enter'));
       } else {
         setPhase('exit');
@@ -51,7 +54,7 @@ export function BuddyChatApp({ seed }: { seed?: React.ReactNode } = {}) {
         {/* buddy-chat-panel carries the frosted-glass chrome (buddy.css) — it has to be the same element the
             enter/exit animation scales, or the glass rectangle appears instantly and only the contents animate. */}
         <div
-          className={`buddy-chat-panel${phase === 'rest' ? '' : ` buddy-chat-${phase}`}`}
+          className={`buddy-chat-panel buddy-chat-${phase}`}
           data-mascot={mascot}
           style={{ width: '100%', height: '100%' }}
         >

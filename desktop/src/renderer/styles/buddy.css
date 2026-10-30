@@ -456,68 +456,78 @@ body[data-mode="buddy-mascot"] .mascot-sink[data-swing="left"] .mascot-lean { ro
    top edge — the chat normally hangs BELOW the mascot, so growing downward
    from there reads as the panel dropping out of the buddy.
 
-   Open is deliberately springy (Destin 2026-07-16 — the old 120ms ease-out
-   read as a flat fade), but the panel fills the window edge-to-edge and
-   Electron clips anything past the window bounds. The earlier
-   cubic-bezier(…1.56…) overshoot carried the panel PAST scale(1) — ~7% over,
-   ~11px each side / ~17px top+bottom on the 320×480 window — so the peak
-   frame's edges got clipped off (Destin 2026-07-17: "too large for its
-   container, edges briefly disappear").
-
-   Fix: the spring now PEAKS at scale(1) — the window edge — and the bounce
-   lives INWARD (a slight dip below full size, then settle back up). The eye
-   still reads a spring arriving and settling, but the panel never exceeds the
-   window, so nothing clips. The bounce is carried by the keyframe stops, so
-   the timing function must NOT overshoot (a back-out curve would blow past a
-   1.0 stop mid-segment and re-introduce the clip) — plain ease-out.
-
-   Close stays quick and non-bouncy: main hides the window 140ms after cueing
-   the exit, and anything longer would just get truncated mid-animation. */
+   History: a plain 120ms fade read as flat (2026-07-16); a spring that passed full size had its edges clipped by the
+   window (2026-07-17); the inward dip that replaced it read as jitter (2026-10-30). Below is the current answer. */
 /* The chat grows out of the buddy (buddy-rebuild-questions#Q-7, "the chat grows out of the buddy and tucks back
    in, quickly"): main says which side of the chat he is on (buddy:chat-state `mascot`), and the panel scales from
-   that edge. 260ms in (was 360), the same spring settle; 120ms out. Transform and opacity only. */
+   that edge. Transform and opacity only.
+
+   WHY one long glide instead of the spring (Destin, 2026-10-30: "a bit odd/jittery … still having it feel
+   premium/polished"): the old open reached full size at about 135ms, then dipped to 97% and came back within the
+   next ~120ms. At that speed the eye reads the dip as a shudder, not a bounce. Now the panel covers most of its
+   distance at once and slows smoothly into place over 300ms (an "expo-out" curve), with no reversal. That keeps the
+   lively start that replaced the old flat fade (2026-07-16) and never passes full size, so nothing is clipped at the
+   window edge (2026-07-17). The fade finishes before the movement does, so the text is solid while it settles.
+   Close: 130ms accelerating away. Main hides the window at 140ms, so it must end before then. */
+body[data-mode="buddy-chat"] .buddy-chat-pre { opacity: 0; }
 body[data-mode="buddy-chat"] .buddy-chat-enter {
-  animation: buddy-chat-in 260ms ease-out;
+  animation: buddy-chat-fade-in 180ms cubic-bezier(0.3, 0, 0.2, 1) both,
+             buddy-chat-rise-in 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
   transform-origin: 50% 0%;
+  will-change: transform, opacity;
 }
 body[data-mode="buddy-chat"] .buddy-chat-exit {
-  animation: buddy-chat-out 120ms ease-in forwards;
+  animation: buddy-chat-out 130ms cubic-bezier(0.4, 0, 1, 1) forwards;
   transform-origin: 50% 0%;
+  will-change: transform, opacity;
 }
 body[data-mode="buddy-chat"] .buddy-chat-panel[data-mascot="below"].buddy-chat-enter,
 body[data-mode="buddy-chat"] .buddy-chat-panel[data-mascot="below"].buddy-chat-exit {
   transform-origin: 50% 100%;
-  --buddy-chat-from: 10px;
+  --buddy-chat-from: 8px;
 }
-@keyframes buddy-chat-in {
-  /* scale is capped at 1.0 (the window edge); the 68%/84% dip-and-recover is
-     the spring settle, staying safely inside the window the whole time. */
-  0% { opacity: 0; transform: scale(0.84) translateY(var(--buddy-chat-from, -10px)); }
-  52% { opacity: 1; transform: scale(1) translateY(0); }
-  68% { transform: scale(0.972) translateY(0); }
-  84% { transform: scale(0.994) translateY(0); }
-  100% { transform: scale(1) translateY(0); }
+@keyframes buddy-chat-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes buddy-chat-rise-in {
+  from { transform: translateY(var(--buddy-chat-from, -8px)) scale(0.94); }
+  to { transform: none; }
 }
 @keyframes buddy-chat-out {
-  from { opacity: 1; transform: scale(1); }
-  to { opacity: 0; transform: scale(0.95); }
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(calc(var(--buddy-chat-from, -8px) / 2)) scale(0.97); }
 }
 /* The size button (buddy-rebuild-tryit2#U-1): the panel fades out (90ms, the same CHAT_RESIZE_FADE_MS main waits),
-   the window changes size and place while it is invisible, and the panel grows back in from its centre. */
+   the window changes size and place while it is invisible, and the panel grows back in from its centre. WHY no
+   overshoot on the way back in any more: the old curve passed full size and came back, the same small shudder. */
 body[data-mode="buddy-chat"] .buddy-chat-resize-out {
-  animation: buddy-chat-resize-out 90ms ease-in forwards;
+  animation: buddy-chat-resize-out 90ms cubic-bezier(0.4, 0, 1, 1) forwards;
   transform-origin: 50% 50%;
+  will-change: transform, opacity;
 }
 body[data-mode="buddy-chat"] .buddy-chat-resize-in {
-  animation: buddy-chat-resize-in 200ms cubic-bezier(0.2, 0.9, 0.3, 1.05);
+  animation: buddy-chat-fade-in 160ms cubic-bezier(0.3, 0, 0.2, 1) both,
+             buddy-chat-resize-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
   transform-origin: 50% 50%;
+  will-change: transform, opacity;
 }
 @keyframes buddy-chat-resize-out {
   to { opacity: 0; transform: scale(0.97); }
 }
 @keyframes buddy-chat-resize-in {
-  from { opacity: 0; transform: scale(0.97); }
-  to { opacity: 1; transform: scale(1); }
+  from { transform: scale(0.97); }
+  to { transform: none; }
+}
+/* Reduced motion: the same timing with no movement, only the fade. */
+@media (prefers-reduced-motion: reduce) {
+  body[data-mode="buddy-chat"] .buddy-chat-enter,
+  body[data-mode="buddy-chat"] .buddy-chat-resize-in { animation: buddy-chat-fade-in 180ms ease-out both; }
+  body[data-mode="buddy-chat"] .buddy-chat-exit,
+  body[data-mode="buddy-chat"] .buddy-chat-resize-out { animation: buddy-chat-fade-out 120ms ease-in forwards; }
+}
+@keyframes buddy-chat-fade-out {
+  to { opacity: 0; }
 }
 
 /* ── The small main chat (buddy rebuild, 2026-10-25) ──
