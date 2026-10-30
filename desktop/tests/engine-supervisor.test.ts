@@ -112,6 +112,9 @@ function makeSupervisor(fetchImpl: any, extra: Record<string, any> = {}) {
     // An empty /proc by default: the load progress bar reads it asynchronously
     // now, and a test must never depend on the real machine's processes.
     procFs: emptyProcFs,
+    // Likewise "who is on our port": the default runs `ss`/`netstat` on the real
+    // machine. Unknown (null) = the identity guard passes, as before.
+    pidOnPort: () => null,
     // The placeholder cache dir does not exist, so its scan is [] — answered
     // instantly here, because the real scan is async disk I/O now and a
     // fake-timer test cannot wait for it (under full-suite load the model poll

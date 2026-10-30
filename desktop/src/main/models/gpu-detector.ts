@@ -23,7 +23,7 @@
 // wrong answer in either direction is bad. Saying no to a supported chip hides a
 // large speed-up; saying yes to an unsupported one downloads a build that dies
 // at the first model load, which is worse than never offering it.
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import type { GpuInfo, GpuVendor } from '../../shared/model-manager-types';
@@ -231,36 +231,45 @@ export function amdLinuxPool(
 
 // ---------- impure probes (best-effort, never throw) ----------
 
-function runCmd(file: string, args: string[]): string | null {
-  try {
+// ASYNC (2026-10-29): this ran synchronously, and a cold PowerShell start on
+// Windows is 0.3-1.5 s (more with antivirus) — the whole app froze for it the
+// first time anything asked about the graphics card.
+function runCmd(file: string, args: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
     // Short timeout so a hung/absent tool can't stall the panel; windowsHide
     // keeps a console flash from appearing.
-    return execFileSync(file, args, {
-      timeout: 4000, windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    execFile(file, args, { timeout: 4000, windowsHide: true, encoding: 'utf8' }, (err, stdout) => {
+      resolve(err ? null : stdout); // tool missing, non-zero exit, or timeout — all non-fatal.
     });
-  } catch {
-    return null; // tool missing, non-zero exit, or timeout — all non-fatal.
-  }
+  });
 }
 
-function readNvidiaSmiVram(): number | null {
-  const out = runCmd('nvidia-smi', ['--query-gpu=memory.total', '--format=csv,noheader,nounits']);
+// Older NVIDIA drivers install nvidia-smi here and do not put it on PATH; a
+// card with no answer is never offered the faster CUDA build.
+const WINDOWS_NVSMI = 'C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvidia-smi.exe';
+async function runNvidiaSmi(args: string[]): Promise<string | null> {
+  const out = await runCmd('nvidia-smi', args);
+  return out ?? (process.platform === 'win32' ? runCmd(WINDOWS_NVSMI, args) : null);
+}
+
+async function readNvidiaSmiVram(): Promise<number | null> {
+  const out = await runNvidiaSmi(['--query-gpu=memory.total', '--format=csv,noheader,nounits']);
   return out ? parseNvidiaSmiMemory(out) : null;
 }
 
-function readNvidiaSmiName(): string | null {
-  const out = runCmd('nvidia-smi', ['--query-gpu=name', '--format=csv,noheader']);
+async function readNvidiaSmiName(): Promise<string | null> {
+  const out = await runNvidiaSmi(['--query-gpu=name', '--format=csv,noheader']);
   if (!out) return null;
   const first = out.split('\n').map((l) => l.trim()).find((l) => l.length > 0);
   return first ?? null;
 }
 
-function readRegistryVram(): number | null {
+async function readRegistryVram(): Promise<number | null> {
   const cmd =
     "Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\*' " +
     "-Name 'HardwareInformation.qwMemorySize' -EA SilentlyContinue | " +
     "Select-Object -ExpandProperty 'HardwareInformation.qwMemorySize'";
-  const out = runCmd('powershell', ['-NoProfile', '-NonInteractive', '-Command', cmd]);
+  const out = await runCmd('powershell', ['-NoProfile', '-NonInteractive', '-Command', cmd]);
   return out ? parseRegistryQwMemorySize(out) : null;
 }
 
@@ -275,7 +284,7 @@ function readRegistryVram(): number | null {
 // Windows machine — silently switching the Windows-AMD → ROCm offer off
 // altogether. ForEach-Object also gives the one-value-per-line shape
 // `parseWindowsAdapterVendor` reads.
-function readWindowsAdapterStrings(): string | null {
+function readWindowsAdapterStrings(): Promise<string | null> {
   const cmd =
     "Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\*' " +
     "-EA SilentlyContinue | ForEach-Object { $_.DriverDesc; $_.ProviderName }";
@@ -322,18 +331,17 @@ function readLinuxGfxTarget(): string | null {
   return null;
 }
 
-function detectWindows(): GpuInfo {
+async function detectWindows(): Promise<GpuInfo> {
   // nvidia-smi is authoritative (only ever present for a real NVIDIA discrete
   // card). The registry QWORD can include an iGPU carve-out, so gate it on the
   // dedicated floor; then take the larger of the two confident readings.
-  const smi = readNvidiaSmiVram();
-  const reg = readRegistryVram();
+  const [smi, reg] = await Promise.all([readNvidiaSmiVram(), readRegistryVram()]);
   // Vendor is answered SEPARATELY from VRAM and without the dedicated floor: an
   // AMD laptop chip reports no dedicated VRAM at all, and would still be offered
   // ROCm. nvidia-smi only ever exists for a real NVIDIA card, so its presence is
   // proof on its own; otherwise fall back to the adapter's driver strings.
   // The second PowerShell call is skipped entirely when nvidia-smi already answered.
-  const adapters = smi != null ? null : readWindowsAdapterStrings();
+  const adapters = smi != null ? null : await readWindowsAdapterStrings();
   const vendor: GpuVendor | null = smi != null ? 'nvidia'
     : (adapters ? parseWindowsAdapterVendor(adapters) : null);
   const regDedicated = reg != null && reg >= MIN_DEDICATED_VRAM_BYTES ? reg : null;
@@ -343,11 +351,11 @@ function detectWindows(): GpuInfo {
   if (!candidates.length) return { ...NULL_GPU, vendor };
   const totalVramBytes = Math.max(...candidates);
   // Name is diagnostics-only; only trust it when nvidia-smi produced the figure.
-  const name = smi != null ? readNvidiaSmiName() : null;
+  const name = smi != null ? await readNvidiaSmiName() : null;
   return { name, totalVramBytes, vendor, gfxTarget: null };
 }
 
-function detectMac(): GpuInfo {
+async function detectMac(): Promise<GpuInfo> {
   // Apple Silicon = unified memory: the GPU shares system RAM, so its usable
   // working set is a fraction of total RAM (Metal caps the GPU allocation).
   // 0.7 mirrors the estimator's RAM headroom — the model still runs on the
@@ -365,7 +373,7 @@ function detectMac(): GpuInfo {
   // Intel Mac: a discrete/embedded GPU reports VRAM via system_profiler. The
   // vendor is left null rather than guessed — an Intel Mac's card may be AMD,
   // Intel or NVIDIA, and no faster build exists for any of them on macOS.
-  const out = runCmd('system_profiler', ['SPDisplaysDataType']);
+  const out = await runCmd('system_profiler', ['SPDisplaysDataType']);
   const vram = out ? parseSystemProfilerVram(out) : null;
   if (vram == null || vram < MIN_DEDICATED_VRAM_BYTES) return NULL_GPU;
   return { name: null, totalVramBytes: vram, vendor: null, gfxTarget: null };
@@ -402,7 +410,7 @@ function readAmdSysfsPool(): { bytes: number; shared: boolean } | null {
   }
 }
 
-function detectLinux(): GpuInfo {
+async function detectLinux(): Promise<GpuInfo> {
   // Vendor and gfx target are read FIRST and unconditionally: they are what the
   // faster-engine gate needs, and the VRAM branches below all return early. An
   // AMD laptop chip falls through every VRAM branch to NULL_GPU, and losing its
@@ -411,11 +419,11 @@ function detectLinux(): GpuInfo {
   const vendor = readLinuxVendor();
   const gfxTarget = vendor === 'amd' ? readLinuxGfxTarget() : null;
   // NVIDIA first (authoritative + carries a name), then AMD sysfs.
-  const smi = readNvidiaSmiVram();
+  const smi = await readNvidiaSmiVram();
   if (smi != null && smi >= MIN_DEDICATED_VRAM_BYTES) {
     // nvidia-smi answering is proof of an NVIDIA card even when /sys/class/drm
     // named something else (a hybrid laptop whose panel hangs off the iGPU).
-    return { name: readNvidiaSmiName(), totalVramBytes: smi, vendor: 'nvidia', gfxTarget: null };
+    return { name: await readNvidiaSmiName(), totalVramBytes: smi, vendor: 'nvidia', gfxTarget: null };
   }
   const amd = readAmdSysfsPool();
   if (amd != null && amd.bytes >= MIN_DEDICATED_VRAM_BYTES) {
@@ -427,24 +435,22 @@ function detectLinux(): GpuInfo {
   return { ...NULL_GPU, vendor, gfxTarget };
 }
 
-let cached: GpuInfo | undefined;
+let cached: Promise<GpuInfo> | undefined;
 
 /** Best-effort dedicated-VRAM probe. Cached; never throws. Non-null VRAM only
- *  on a confidently-detected dedicated GPU (incl. Apple Silicon unified mem). */
-export async function detectGpu(): Promise<GpuInfo> {
-  if (cached !== undefined) return cached;
-  try {
+ *  on a confidently-detected dedicated GPU (incl. Apple Silicon unified mem).
+ *  The PROMISE is cached, so callers that ask at the same moment share one probe. */
+export function detectGpu(): Promise<GpuInfo> {
+  cached ??= (async () => {
     switch (process.platform) {
-      case 'win32': cached = detectWindows(); break;
-      case 'darwin': cached = detectMac(); break;
-      case 'linux': cached = detectLinux(); break;
-      default: cached = NULL_GPU;
+      case 'win32': return detectWindows();
+      case 'darwin': return detectMac();
+      case 'linux': return detectLinux();
+      default: return NULL_GPU;
     }
-  } catch {
-    // Belt-and-suspenders: the platform helpers already swallow their own
-    // errors, but a top-level throw must still degrade to RAM-only.
-    cached = NULL_GPU;
-  }
+  })().catch(() => NULL_GPU);
+  // Belt-and-suspenders above: the helpers swallow their own errors, but a
+  // top-level throw must still degrade to RAM-only.
   return cached;
 }
 

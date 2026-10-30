@@ -23,7 +23,7 @@
 // command line, because llama-server merges the router's own command line OVER
 // every preset: a `-c` left on the command line silently outranks — and so
 // defeats — every per-model context length.
-import { spawn, ChildProcess, execFileSync } from 'child_process';
+import { spawn, ChildProcess, execFile } from 'child_process';
 import * as fs from 'fs';
 import { EventEmitter } from 'events';
 import type { EngineModel, EngineModelState, EngineRunState } from '../../shared/engine-types';
@@ -62,10 +62,10 @@ export interface EngineSupervisorOpts {
   modelPollMs?: number;      // /models state poll cadence when idle; default MODEL_POLL_IDLE_MS
   modelPollLoadingMs?: number; // faster cadence while a model is loading; default MODEL_POLL_LOADING_MS
   /** Test seam: resolve the PID listening on `port` (Linux). Default: ss + /proc scan. */
-  pidOnPort?: (port: number) => number | null;
+  pidOnPort?: (port: number) => number | null | Promise<number | null>;
   /** Test seam: resolve a PID's executable path (for the stale-engine reaper).
    *  Default: readlink /proc/<pid>/exe. */
-  exeForPid?: (pid: number) => string | null;
+  exeForPid?: (pid: number) => string | null | Promise<string | null>;
   /** Test seams for the preset file. Default: the temp-file + rename writer in
    *  model-presets.ts, and a plain read back. */
   writePresetImpl?: (filePath: string, contents: string) => void;
@@ -198,24 +198,24 @@ const MODEL_POLL_LOADING_MS = 400;
 /** Resolve the PID of the process listening on a localhost port, cross-platform:
  *  Linux `ss` (+ /proc fallback), macOS `lsof`, Windows `netstat`. Returns null
  *  when the tool is missing/unparseable or no listener is found — callers treat
- *  null as "unknown", never "safe", so a non-answer never blocks startup. */
-function defaultPidOnPort(port: number): number | null {
+ *  null as "unknown", never "safe", so a non-answer never blocks startup.
+ *  ASYNC (2026-10-29): it runs on every engine start, and `netstat -ano` on a
+ *  busy Windows machine can take seconds — synchronously that froze every window. */
+async function defaultPidOnPort(port: number): Promise<number | null> {
   switch (process.platform) {
     case 'linux': {
-      try {
-        const out = execFileSync('ss', ['-ltnp'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
-        const pid = parseSsListenerPid(out, port);
-        if (pid != null) return pid;
-      } catch { /* ss missing/failed — fall through to the /proc scan */ }
-      return pidOnPortViaProc(port);
+      const out = await runTool('ss', ['-ltnp'], 3000);
+      const pid = out ? parseSsListenerPid(out, port) : null;
+      // ss missing/failed/no match — fall through to the /proc scan.
+      return pid ?? pidOnPortViaProc(port);
     }
     case 'darwin': {
       // -nP: no DNS/port-name lookups (fast); -sTCP:LISTEN: listeners only; -F p: PID-only output.
-      const out = runTool('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-F', 'p']);
+      const out = await runTool('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-F', 'p']);
       return out ? parseLsofPid(out) : null;
     }
     case 'win32': {
-      const out = runTool('netstat', ['-ano', '-p', 'tcp']);
+      const out = await runTool('netstat', ['-ano', '-p', 'tcp']);
       return out ? parseNetstatListenerPid(out, port) : null;
     }
     default:
@@ -223,12 +223,12 @@ function defaultPidOnPort(port: number): number | null {
   }
 }
 
-function runTool(file: string, args: string[]): string | null {
-  try {
-    return execFileSync(file, args, { encoding: 'utf8', timeout: 4000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-  } catch {
-    return null; // tool missing, non-zero exit, or timeout — all non-fatal (unknown).
-  }
+function runTool(file: string, args: string[], timeout = 4000): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(file, args, { encoding: 'utf8', timeout, windowsHide: true }, (err, stdout) => {
+      resolve(err ? null : stdout); // tool missing, non-zero exit, or timeout — all non-fatal (unknown).
+    });
+  });
 }
 
 // ---- pure parsers (unit-tested; no shell in tests) ----
@@ -361,29 +361,29 @@ export function parseNetstatListenerPid(stdout: string, port: number): number | 
 
 /** Linux /proc-only port→PID: find the socket inode for the LISTEN port in
  *  /proc/net/tcp(6), then the process whose fd links to that inode. */
-function pidOnPortViaProc(port: number): number | null {
+async function pidOnPortViaProc(port: number): Promise<number | null> {
   const hex = ':' + port.toString(16).toUpperCase().padStart(4, '0');
-  const inode = listenInodeForPort(hex);
+  const inode = await listenInodeForPort(hex);
   if (!inode) return null;
   let pids: string[];
-  try { pids = fs.readdirSync('/proc'); } catch { return null; }
+  try { pids = await fs.promises.readdir('/proc'); } catch { return null; }
   for (const pid of pids) {
     if (!/^\d+$/.test(pid)) continue;
     let fds: string[];
-    try { fds = fs.readdirSync(`/proc/${pid}/fd`); } catch { continue; } // perms / raced exit
+    try { fds = await fs.promises.readdir(`/proc/${pid}/fd`); } catch { continue; } // perms / raced exit
     for (const fd of fds) {
       try {
-        if (fs.readlinkSync(`/proc/${pid}/fd/${fd}`) === `socket:[${inode}]`) return parseInt(pid, 10);
+        if (await fs.promises.readlink(`/proc/${pid}/fd/${fd}`) === `socket:[${inode}]`) return parseInt(pid, 10);
       } catch { /* raced fd close */ }
     }
   }
   return null;
 }
 
-function listenInodeForPort(hexPort: string): string | null {
+async function listenInodeForPort(hexPort: string): Promise<string | null> {
   for (const f of ['/proc/net/tcp', '/proc/net/tcp6']) {
     let lines: string[];
-    try { lines = fs.readFileSync(f, 'utf8').split('\n'); } catch { continue; }
+    try { lines = (await fs.promises.readFile(f, 'utf8')).split('\n'); } catch { continue; }
     for (const line of lines.slice(1)) {
       const cols = line.trim().split(/\s+/);
       // cols[1]=local_address (hexIP:hexPort), cols[3]=state ('0A' = LISTEN), cols[9]=inode
@@ -397,18 +397,18 @@ function listenInodeForPort(hexPort: string): string | null {
  *  stale-engine reaper to confirm the squatter is actually llama-server before
  *  killing it. Returns null when undeterminable — callers treat null as
  *  "unknown", never "safe", so an unconfirmable process is never killed. */
-function defaultExeForPid(pid: number): string | null {
+async function defaultExeForPid(pid: number): Promise<string | null> {
   switch (process.platform) {
     case 'linux':
-      try { return fs.readlinkSync(`/proc/${pid}/exe`); } catch { return null; }
+      try { return await fs.promises.readlink(`/proc/${pid}/exe`); } catch { return null; }
     case 'darwin': {
-      const out = runTool('ps', ['-p', String(pid), '-o', 'comm=']);
+      const out = await runTool('ps', ['-p', String(pid), '-o', 'comm=']);
       const name = out?.split('\n')[0]?.trim();
       return name || null;
     }
     case 'win32': {
       // Image name only (llama-server.exe) — enough to confirm it's our engine.
-      const out = runTool('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH']);
+      const out = await runTool('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH']);
       const m = out && /^"([^"]+)"/.exec(out.trim());
       return m ? m[1] : null;
     }
@@ -644,7 +644,7 @@ export class EngineSupervisor extends EventEmitter {
     // If the listener is a llama-server that is NOT our live child, kill it so this
     // spawn gets the port. Where the port→PID tool is unavailable the reaper is a
     // no-op and the conflict simply surfaces as the child's startup exit (unchanged).
-    this.reapStaleEngineOnPort();
+    await this.reapStaleEngineOnPort();
 
     // The per-model settings file. Written fresh before EVERY spawn (the router
     // reads it once, at startup) and passed as --models-preset. `null` = it could
@@ -736,7 +736,7 @@ export class EngineSupervisor extends EventEmitter {
         // the orphan — and later count ITS death as OUR crash (the false "engine
         // crashed repeatedly" strike-out). Only accept when the listener is our child
         // (or identity can't be determined on this platform — fall through as before).
-        if (res.ok && this.isOurChildOnPort(child)) {
+        if (res.ok && await this.isOurChildOnPort(child)) {
           this.state = 'running';
           this.touch();
           child.off('exit', startupExitListener);
@@ -841,9 +841,9 @@ export class EngineSupervisor extends EventEmitter {
    *  missing/unparseable) so we never regress a platform we can't inspect — the
    *  guard only ever REJECTS a confidently-foreign listener; it never blocks an
    *  unknown one. This is what stops us adopting an orphaned engine on our port. */
-  private isOurChildOnPort(child: ChildProcess): boolean {
+  private async isOurChildOnPort(child: ChildProcess): Promise<boolean> {
     if (child.pid == null) return true;            // not assigned yet — can't disprove
-    const pid = (this.opts.pidOnPort ?? defaultPidOnPort)(this.opts.port);
+    const pid = await this.pidOnOurPort();
     if (pid == null) return true;                  // unknown — don't block on a non-answer
     return pid === child.pid;
   }
@@ -852,13 +852,19 @@ export class EngineSupervisor extends EventEmitter {
    *  orphan from a previous run). Best-effort; never throws, and never touches our
    *  own child or a process we can't confirm is llama-server. Runs before spawn so
    *  this instance can actually bind the fixed port instead of adopting the orphan. */
-  private reapStaleEngineOnPort(): void {
-    const pid = (this.opts.pidOnPort ?? defaultPidOnPort)(this.opts.port);
+  private async reapStaleEngineOnPort(): Promise<void> {
+    const pid = await this.pidOnOurPort();
     if (pid == null) return;                       // nothing (identifiably) on the port
     if (this.child && this.child.pid === pid) return; // our own live child — leave it
-    const exe = (this.opts.exeForPid ?? defaultExeForPid)(pid);
+    let exe: string | null = null;
+    try { exe = await (this.opts.exeForPid ?? defaultExeForPid)(pid); } catch { return; }
     if (exe == null || !exe.includes('llama-server')) return; // not confirmably our engine — never kill it
     try { process.kill(pid, 'SIGKILL'); } catch { /* already gone / not ours to kill */ }
+  }
+
+  /** Who listens on our port; null = unknown (a lookup that throws counts as unknown). */
+  private async pidOnOurPort(): Promise<number | null> {
+    try { return await (this.opts.pidOnPort ?? defaultPidOnPort)(this.opts.port); } catch { return null; }
   }
 
   private onExit(code: number | null): void {
