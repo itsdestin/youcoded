@@ -114,6 +114,16 @@ const NODE_TARBALL_SHA256: Record<string, string> = {
 // Bump deliberately; the only constraint is that the release still publishes
 // the macOS .zip / Linux .tar.gz assets this installer expects.
 const GH_VERSION = '2.96.0';
+// WHY (2026-10 security audit SC-7): the gh archive used to be unpacked on TLS alone. These are
+// the SHA-256 values from the release's own gh_<ver>_checksums.txt
+// (https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_checksums.txt). The linux-amd64
+// and macOS-arm64 values were also re-checked by hashing the downloaded archives. Bump with GH_VERSION.
+export const GH_ARCHIVE_SHA256: Record<string, string> = {
+  'gh_2.96.0_linux_amd64.tar.gz': '83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60',
+  'gh_2.96.0_linux_arm64.tar.gz': '06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909',
+  'gh_2.96.0_macOS_amd64.zip': '4bd449df9ad639391bc62b8032546f0fe9edcd8526e06682a4f88abd8c5d163c',
+  'gh_2.96.0_macOS_arm64.zip': 'f23a0c37d963aacc3bed703ccbd59b41c5ca22101fab7f00eb2b7cad23aba463',
+};
 const PATH_MARKER = '# Added by YouCoded first-run installer';
 
 /** Root dir for YouCoded-managed user-local tools (macOS: ~/Library/..., Linux: ~/.youcoded). */
@@ -1035,6 +1045,16 @@ export async function installGhUserLocal(): Promise<{ success: boolean; error?: 
         `https://github.com/cli/cli/releases/download/v${GH_VERSION}/${stem}.${ext}`,
         archivePath,
       );
+
+      // Check the fingerprint BEFORE anything is unpacked or run.
+      const expected = GH_ARCHIVE_SHA256[`${stem}.${ext}`];
+      if (!expected || (await sha256File(archivePath)) !== expected) {
+        fs.unlink(archivePath, () => {});
+        return {
+          success: false,
+          error: 'The GitHub CLI download did not match its expected fingerprint. Check your connection and try again.',
+        };
+      }
 
       // Extract to a scratch dir first, then copy out only the binary. Keeps
       // the tools bin dir flat and avoids leaving the archive's LICENSE/man

@@ -92,3 +92,19 @@ describe('buildRefreshedPath (Windows PATH rebuilt from the registry)', () => {
     ]);
   });
 });
+
+// Security audit SC-7: the gh archive is checked against pinned SHA-256 values
+// before it is unpacked. The table must cover every asset the installer can ask for.
+describe('GitHub CLI archive pins', () => {
+  it('has a 64-hex SHA-256 for every platform/arch asset at the pinned version', async () => {
+    const { GH_ARCHIVE_SHA256 } = await import('../src/main/prerequisite-installer');
+    const src = (await import('node:fs')).readFileSync(
+      new URL('../src/main/prerequisite-installer.ts', import.meta.url), 'utf8');
+    const ver = /const GH_VERSION = '([^']+)'/.exec(src)![1];
+    const wanted = [
+      `gh_${ver}_linux_amd64.tar.gz`, `gh_${ver}_linux_arm64.tar.gz`,
+      `gh_${ver}_macOS_amd64.zip`, `gh_${ver}_macOS_arm64.zip`,
+    ];
+    for (const name of wanted) expect(GH_ARCHIVE_SHA256[name]).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
