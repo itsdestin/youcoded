@@ -80,17 +80,17 @@ const HOME_BASENAMES = new Set(APP_SECRET_BASENAMES);
 
 /** The remote-access files: `youcoded-remote.json` (password hash) and `.remote-devices.json` (paired devices),
  *  each with an optional `.<profile>` suffix a dev instance uses (remote-paths.ts). */
-export const APP_SECRET_PATTERNS: readonly RegExp[] = [/^youcoded-remote(\.[^./]+)?\.json$/, /^\.remote-devices(\.[^./]+)?\.json$/];
+const APP_SECRET_PATTERNS: readonly RegExp[] = [/^youcoded-remote(\.[^./]+)?\.json$/, /^\.remote-devices(\.[^./]+)?\.json$/];
 
 /** Credential files refused WHEREVER they sit (security hardening 2026-10-30; before this only the
  *  home-anchored list above applied to the assistant). Mixed files like .npmrc/.pypirc are included
  *  on purpose now: they routinely hold registry tokens, and a prompt-injected assistant that can
  *  read one can send it out. */
-export const SECRET_ANYWHERE_BASENAMES: readonly string[] = [
+const SECRET_ANYWHERE_BASENAMES: readonly string[] = [
   '.git-credentials', '.git-credentials-store', '.netrc', '_netrc', '.npmrc', '.pypirc', '.pgpass', '.vault-token',
 ];
 /** Private-key names by prefix (id_rsa, id_rsa_work, id_rsa.bak…), but never the matching PUBLIC key (`.pub`). */
-export const KEY_NAME_PREFIXES: readonly string[] = ['id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa'];
+const KEY_NAME_PREFIXES: readonly string[] = ['id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa'];
 /** Key and certificate bundles. (`.key` is left to the phone list: Apple Keynote files share it.) */
 const ASSISTANT_KEY_EXTENSIONS = ['.pem', '.p12', '.pfx', '.kdbx'];
 

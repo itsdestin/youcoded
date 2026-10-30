@@ -124,7 +124,7 @@ const DENIED_IN_PROJECT: Array<[string, string]> = [
 ];
 
 describe('the deny list itself', () => {
-  it('the phone list extends the assistant\'s list; they now SHARE the app-secret and key-file names (2026-10-30)', () => {
+  it('the phone list extends the assistant\'s list; they now SHARE the app-secret and key-file names', () => {
     // Still phone-only: a project\'s git config (the assistant needs it to help with git).
     expect(isCredentialPath('/home/u/proj/.git/config', '/home/u')).toBe(false);
     // Now refused to the assistant too (security hardening): private keys and the app\'s password files.

@@ -5,9 +5,7 @@
 // already-existing same-named repo used to be adopted without looking at its visibility,
 // and (b) a repo flipped public later was never noticed. This module holds the plain
 // error and a cached re-check that runs before a sync cycle.
-import { GITHUB_AUTH_ERROR_CODE, REPO_PUBLIC_ERROR_CODE, repoPublicError } from '../github-client';
-
-export { REPO_PUBLIC_ERROR_CODE, repoPublicError };
+import { GITHUB_AUTH_ERROR_CODE, repoPublicError } from '../github-client';
 
 /** `https://github.com/owner/name(.git)` -> { owner, name }, else null. */
 export function parseGithubRepoUrl(url: string): { owner: string; name: string } | null {

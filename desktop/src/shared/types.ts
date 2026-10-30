@@ -82,9 +82,7 @@ export interface PortableModelRef {
  *    command's output or reached by a cd the text cannot follow;
  *  - 'secret-path': the command reads a secret or credential file — the same
  *    list the file tools refuse (harness/tools/bash-secret-paths.ts);
- *    'secret-maybe': it could (a glob, a find with no usable filter);
- *  - 'protected-config': it changes a file that controls what the assistant may do
- *    (saved permissions, YouCoded settings, Claude hooks, git hooks) — harness/tools/protected-config.ts.
+ *    'secret-maybe': it could (a glob, a find with no usable filter); 'protected-config': it changes a file that controls what the assistant may do (harness/tools/protected-config.ts).
  *  The card's wording comes from this, so it never claims more than the check
  *  knows (review N11). */
 export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe' | 'admin' | 'protected-config';

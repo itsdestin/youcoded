@@ -66,7 +66,7 @@ function notConnectedError(): Error {
   return e;
 }
 /** Coded refusal for a PUBLIC repo (shared with sync-spaces/repo-visibility.ts). */
-export const REPO_PUBLIC_ERROR_CODE = 'repo-public';
+const REPO_PUBLIC_ERROR_CODE = 'repo-public';
 export function repoPublicError(repoName: string): Error {
   const e: any = new Error(
     `Sync is paused because the GitHub repository "${repoName}" is public, so anyone could read what YouCoded syncs there. ` +

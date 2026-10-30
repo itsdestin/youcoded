@@ -19,7 +19,7 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
-export const SYNC_REPO_UNTRUSTED_ERROR_CODE = 'sync-repo-untrusted';
+const SYNC_REPO_UNTRUSTED_ERROR_CODE = 'sync-repo-untrusted';
 
 /** Every config key a repo made by this app (or by `git init` for it) can hold.
  *  Keys are compared lower-cased; the subsection of remote/branch keys is
@@ -75,14 +75,16 @@ export function findUntrustedConfigEntry(entries: Array<[string, string]>, root:
 /** Inspect an existing sync repo folder. Returns null when it is trusted (or
  *  does not exist yet), otherwise a short internal reason for the log. */
 export async function inspectSyncRepo(gd: string, root: string): Promise<string | null> {
+  // Async on purpose: this runs on the app's main thread (tests/main-blocking-calls).
+  const exists = (p: string) => fs.promises.lstat(p).then(() => true, () => false);
   let st: fs.Stats;
-  try { st = fs.lstatSync(gd); } catch { return null; } // nothing there yet: init will create it
+  try { st = await fs.promises.lstat(gd); } catch { return null; } // nothing there yet: init will create it
   if (st.isSymbolicLink() || !st.isDirectory()) return 'sync.git is not a plain folder';
   for (const f of FORBIDDEN_FILES) {
-    if (fs.existsSync(path.join(gd, f))) return `unexpected ${f}`;
+    if (await exists(path.join(gd, f))) return `unexpected ${f}`;
   }
   const cfg = path.join(gd, 'config');
-  if (!fs.existsSync(cfg)) return null;
+  if (!(await exists(cfg))) return null;
   let out: string;
   try {
     // `--file` reads ONLY this file and runs nothing; -z keeps values with newlines intact.

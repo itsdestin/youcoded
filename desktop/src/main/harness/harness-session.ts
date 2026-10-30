@@ -42,7 +42,7 @@ import { checkPathGuard, workspaceMatchFor } from './tools/guards';
 import { syncBrowserTools } from './tools/browser';
 import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
-import { isProtectedConfigPath, bashTouchesProtectedConfig } from './tools/protected-config';
+import { protectedConfigStop } from './tools/protected-config';
 import { adminCommandVerdict, refuseMessage, visibleSudoLines } from './tools/admin-command';
 import * as os from 'os';
 import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote, withEdgeCap } from './image-support';
@@ -4123,14 +4123,7 @@ export class HarnessSession extends EventEmitter {
     const checkOtherFloors = isBash && (!isAdmin || skipUpfrontAdminPassword);
     const rmFloor = checkOtherFloors ? destructiveRmVerdict(subject!, bashCtx) : null;
     const secretFloor = checkOtherFloors && !rmFloor ? secretPathVerdict(subject!, bashCtx) : null;
-    // WHY (security hardening 2026-10-30): the files that decide what the assistant may do next
-    // (saved permissions, mode, YouCoded settings, Claude hooks, git hooks) always ask, in EVERY
-    // mode, so injected text cannot quietly grant itself more power. See tools/protected-config.ts.
-    const protectedConfigFloor = !rmFloor && !secretFloor && subject !== undefined && (
-      ((call.toolName === 'Write' || call.toolName === 'Edit') && isProtectedConfigPath(subject, this.opts.cwd))
-      || (isBash && bashTouchesProtectedConfig(subject!))
-    ) ? 'protected-config' as const : undefined;
-    const floorStop: FloorStop | undefined = isAdmin && !skipUpfrontAdminPassword ? 'admin' : (rmFloor?.kind ?? secretFloor?.kind ?? protectedConfigFloor);
+    const floorStop: FloorStop | undefined = isAdmin && !skipUpfrontAdminPassword ? 'admin' : (rmFloor?.kind ?? secretFloor?.kind ?? protectedConfigStop(call.toolName, subject, this.opts.cwd, isBash)); // saved permissions/hooks always ask (tools/protected-config.ts)
     if (floorStop) log('INFO', 'HarnessSession', 'a floor below the permission rules forced an ask', { sessionId: this.opts.sessionId, floor: floorStop });
     // denyListed: true so Full auto shows its stop band (worded per floorStop —
     // deny-list-copy.ts) like any deny-list stop, instead of silently running.

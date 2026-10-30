@@ -49,6 +49,7 @@ const execFileAsync = promisify(execFile);
 // Now it reads git's own request (protocol=/host= lines on stdin) and answers only for
 // https://github.com. It is also registered under credential.https://github.com.helper
 // (see credentialedGitInvocation), so git does not even call it for other hosts.
+// eslint-disable-next-line no-template-curly-in-string -- these are SHELL expansions inside the helper script, not JS templates
 export const GIT_CREDENTIAL_HELPER =
   '!f() { [ "$1" = "get" ] || return 0; h=; p=; while IFS= read -r l; do case "$l" in host=*) h=${l#host=};; protocol=*) p=${l#protocol=};; esac; done; ' +
   '[ "$h" = "github.com" ] && [ "$p" = "https" ] && printf "username=x-access-token\\npassword=%s\\n" "$YOUCODED_GIT_TOKEN"; return 0; }; f';
@@ -62,7 +63,7 @@ export const GIT_CREDENTIAL_SCOPE = 'credential.https://github.com.helper';
 // - core.fsmonitor=false -> git never launches a "file watcher" program from config;
 // - core.sshCommand=ssh -> a repo-supplied replacement for ssh is ignored;
 // - protocol.ext.allow=never -> `ext::` remotes (which run commands) are refused.
-export const NO_HOOKS_DIR = path.join(os.homedir(), '.youcoded', 'no-git-hooks');
+const NO_HOOKS_DIR = path.join(os.homedir(), '.youcoded', 'no-git-hooks');
 export const SAFE_GIT_OVERRIDES = [
   '-c', `core.hooksPath=${NO_HOOKS_DIR}`,
   '-c', 'core.fsmonitor=false',
@@ -274,9 +275,9 @@ export class GitTransport implements SyncTransport {
     const gd = this.gitDir(space);
     let sig = 'none';
     try {
-      const l = fs.lstatSync(gd);
+      const l = await fs.promises.lstat(gd);
       let c = 'noconfig';
-      try { const cs = fs.statSync(path.join(gd, 'config')); c = `${cs.mtimeMs}:${cs.size}`; } catch { /* no config yet */ }
+      try { const cs = await fs.promises.stat(path.join(gd, 'config')); c = `${cs.mtimeMs}:${cs.size}`; } catch { /* no config yet */ }
       sig = `${l.isDirectory() ? 'd' : 'x'}${l.isSymbolicLink() ? 'l' : ''}:${c}`;
     } catch { /* not created yet: inspectSyncRepo treats it as fine */ }
     if (this.trustCache.get(gd) === sig) return;

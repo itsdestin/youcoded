@@ -25,7 +25,7 @@ const HOME_PROTECTED_DIRS = [
 const HOME_PROTECTED_FILES = ['.claude/settings.json', '.claude/settings.local.json'];
 
 /** True when the canonical (forward-slash, `..`-resolved) path is one of the protected files. */
-export function isProtectedConfigCanonical(canonical: string, homes: string[]): boolean {
+function isProtectedConfigCanonical(canonical: string, homes: string[]): boolean {
   const c = canonical.toLowerCase();
   // Anywhere: a project's git hooks and git config, and its Claude settings (which hold hooks).
   if (/\/\.git\/hooks(\/|$)/.test(c) || /\/\.git\/config$/.test(c)) return true;
@@ -70,4 +70,13 @@ export function bashTouchesProtectedConfig(command: string): boolean {
   if (!PROTECTED_TEXT.test(command)) return false;
   if (READ_ONLY_START.test(command) && !CHAINING_OR_WRITING.test(command)) return false;
   return true;
+}
+
+/** The floor stop for one tool call, or undefined. WHY here and not in harness-session.ts: that file is
+ *  budgeted; the reasoning lives next to the paths it protects. Write/Edit are judged by their file path
+ *  (links followed), Bash by the plain text of the command. */
+export function protectedConfigStop(toolName: string, subject: string | undefined, cwd: string, isBash: boolean): 'protected-config' | undefined {
+  if (subject === undefined) return undefined;
+  const hit = (toolName === 'Write' || toolName === 'Edit') ? isProtectedConfigPath(subject, cwd) : isBash && bashTouchesProtectedConfig(subject);
+  return hit ? 'protected-config' : undefined;
 }
