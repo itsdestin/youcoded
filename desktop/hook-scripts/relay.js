@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 const net = require('net');
-const os = require('os');
-const path = require('path');
-const PIPE_NAME = process.env.CLAUDE_DESKTOP_PIPE || (process.platform === 'win32' ? '\\\\.\\pipe\\claude-desktop-hooks' : path.join(os.tmpdir(), 'claude-desktop-hooks.sock'));
+// WHY no shared-name fallback (security hardening 2026-10-30): these hooks are installed for EVERY
+// `claude` on the machine. When the variable is missing (a plain terminal, or YouCoded could not set up
+// a private socket) the old code connected to the fixed shared name /tmp/claude-desktop-hooks.sock, which
+// another account on the computer could have created first to read the hook messages and answer permission
+// asks. Now: no private socket name from YouCoded means do nothing, quietly, exactly like "app not running".
+const PIPE_NAME = process.env.CLAUDE_DESKTOP_PIPE;
+if (!PIPE_NAME) process.exit(0);
 
 let input = '';
 process.stdin.setEncoding('utf8');

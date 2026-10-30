@@ -1419,6 +1419,10 @@ void app.whenReady().then(async () => {
     await hookRelay.start();
   } catch (e) {
     log('ERROR', 'Main', 'Failed to start hook relay', { error: String(e) });
+    // WHY (security hardening 2026-10-30): never hand sessions the name of a socket we are not
+    // listening on (or could not make private) — someone else could be, and would receive the hooks.
+    // With no name, a session's hook scripts do nothing at all.
+    sessionManager.setPipeName('');
   }
   perfMark('main:chore:hook-relay:done');
 
