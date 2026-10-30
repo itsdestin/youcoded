@@ -58,7 +58,7 @@ export function BuddyGroupScreen() {
         style={{ position: 'absolute', left: layout.chat.x, top: layout.chat.y, width: CHAT_SIZE.width, height: CHAT_SIZE.height, border: 0, background: 'transparent', colorScheme: 'normal' }}
       />
       {(
-        // Left-aligned where the bar's row starts (beside his hands), sized to its content.
+        // Left-aligned where the bar's row starts (beside him, its bottom level with his feet), sized to its content.
         <div className="buddy-bar-root" data-visible="1" style={{
           position: 'absolute', left: bar.x, top: bar.y - 10, width: 'auto', height: bar.height + 20,
         }}>

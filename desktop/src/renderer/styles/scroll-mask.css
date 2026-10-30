@@ -42,8 +42,8 @@
    starts just past it, where the content actually disappears.
 
    GLASS: a mask makes the element a "backdrop root" — a frosted (backdrop-filter) element
-   INSIDE it can no longer see the wallpaper. So the chat transcript and the bubble feeds,
-   whose bubbles are frosted, are exempt (their WHY is at each site and in the guard's list). */
+   INSIDE it can no longer see the wallpaper. So the chat transcript (the buddy's too),
+   whose bubbles are frosted, is exempt (their WHY is at each site and in the guard's list). */
 .scroll-mask, .scroll-mask-x, .scroll-mask-y, .scroll-mask-frame {
   --scroll-mask-size: 40px;
   --scroll-mask-under: 0px;

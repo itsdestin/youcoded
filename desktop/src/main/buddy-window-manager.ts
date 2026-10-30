@@ -645,12 +645,14 @@ export class BuddyWindowManager {
       const bar = this.bar;
       if (bar && !bar.isDestroyed()) {
         bar.setIgnoreMouseEvents(false);
-        bar.webContents.send(IPC_BAR_STATE, { visible: true });
+        // `under`: in the taskbar style the bar hangs directly under the chat (computeTrayLayout), so the bar draws
+        // its row at the TOP of its window with the hints below — at the bottom, the hint room became a 34px gap.
+        bar.webContents.send(IPC_BAR_STATE, { visible: true, under: this.style === 'tray' });
       }
     } else {
       const bar = this.bar;
       if (bar && !bar.isDestroyed()) {
-        bar.webContents.send(IPC_BAR_STATE, { visible: false });
+        bar.webContents.send(IPC_BAR_STATE, { visible: false, under: this.style === 'tray' });
         // Let the CSS fade finish, then make the window click-through so the
         // invisible bar doesn't eat clicks meant for whatever is underneath.
         // (forward:true kept mousemove flowing to the page back when hover could
@@ -1180,7 +1182,7 @@ export class BuddyWindowManager {
       // state once the renderer is actually listening.
       this.bar.webContents.once('did-finish-load', () => {
         if (this.bar && !this.bar.isDestroyed()) {
-          this.bar.webContents.send(IPC_BAR_STATE, { visible: this.barCssVisible });
+          this.bar.webContents.send(IPC_BAR_STATE, { visible: this.barCssVisible, under: this.style === 'tray' });
           // So the size button's hint says which way it goes from the start.
           this.pushChatSize();
         }

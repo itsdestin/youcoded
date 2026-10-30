@@ -74,8 +74,8 @@ html[data-mode="buddy-bar"] #root {
    Apple HIG design systems for glass surfaces.
    backdrop-filter stays for content INSIDE the bubble (e.g. bubbles
    scrolling past the input area get subtly blurred under it when theme
-   has --panels-blur > 0). overflow:hidden clips the bubble feed + input
-   pill to the rounded corner curve during scroll.
+   has --panels-blur > 0). overflow:hidden clips the chat + message box
+   to the rounded corner curve during scroll.
    isolation:isolate establishes a stacking context so the ::before
    noise layer with z-index:-1 stays confined between the panel
    background and the chat UI, without bleeding into the parent.
@@ -309,6 +309,14 @@ body[data-mode="buddy-bar"] .buddy-bar-root {
   align-items: flex-end;
   padding-bottom: 8px;
   box-sizing: border-box;
+}
+/* Taskbar style: the bar hangs directly under the chat (computeTrayLayout), so
+   the panel sits at the TOP of its window, 8px under the chat, and the hints
+   open below it. At the bottom, the hint room became a 34px gap. */
+body[data-mode="buddy-bar"] .buddy-bar-root[data-under="1"] {
+  align-items: flex-start;
+  padding-top: 8px;
+  padding-bottom: 0;
 }
 body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="0"] {
   opacity: 0;
