@@ -3,7 +3,7 @@ import { join } from 'path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BuddyWindowManager, clampToWorkArea, type BuddyWindowManagerDeps, type BuddyWorkAreaSource } from '../src/main/buddy-window-manager';
 import { buildCaption, parseCaption, type BuddyRole } from '../src/shared/buddy-caption';
-import { MASCOT_SIZE, CHAT_SIZE, BAR_SIZE } from '../src/main/buddy-bar-geometry';
+import { MASCOT_SIZE, CHAT_SIZE, CHAT_SIZE_LARGE, BAR_SIZE } from '../src/main/buddy-bar-geometry';
 import { WorkAreaResolver } from '../src/main/buddy-work-area';
 import { readSource } from './helpers/guard-scope';
 
@@ -77,6 +77,9 @@ function fakeWin(role: BuddyRole, x: number, y: number, nativeSizeDrift = false)
       size.width = bounds.width; size.height = bounds.height;
     }),
     setTitle: vi.fn(),
+    setSize: vi.fn((w: number, h: number) => { size.width = w; size.height = h; }),
+    setMinimumSize: vi.fn(),
+    setMaximumSize: vi.fn(),
     getBounds: vi.fn(() => ({ ...at, ...size })),
     getPosition: vi.fn(() => [at.x, at.y]),
     isDestroyed: () => false,
@@ -126,7 +129,7 @@ interface Harness {
   manager: BuddyWindowManager;
   created: Array<{ variant: BuddyRole; x: number; y: number; title?: string }>;
   wins: Partial<Record<BuddyRole, FakeWin>>;
-  saved: { mascot: { x: number; y: number } | null };
+  saved: { mascot: { x: number; y: number } | null; chatSize: 'small' | 'large' | null };
   /** Every native placement call made by any buddy window. */
   positionCalls: () => number;
   /** Every setTitle call made by any buddy window. */
@@ -141,10 +144,12 @@ function harness(opts: {
   savedPos?: { x: number; y: number } | null;
   tray?: TrayFake;
   nativeSizeDrift?: boolean;
+  chatSize?: 'small' | 'large' | null;
+  onWatchedSessionChanged?: () => void;
 } = {}): Harness {
   const created: Harness['created'] = [];
   const wins: Partial<Record<BuddyRole, FakeWin>> = {};
-  const saved: Harness['saved'] = { mascot: null };
+  const saved: Harness['saved'] = { mascot: null, chatSize: opts.chatSize ?? null };
   let dock = opts.dock ?? null;
 
   const deps: BuddyWindowManagerDeps = {
@@ -158,12 +163,15 @@ function harness(opts: {
     setPersistedPosition: (_k, pos) => { saved.mascot = pos; },
     getPersistedDock: () => dock,
     setPersistedDock: (edge) => { dock = edge; },
+    getPersistedChatSize: () => saved.chatSize,
+    setPersistedChatSize: (size) => { saved.chatSize = size; },
     registry: { subscribe: vi.fn(), unsubscribe: vi.fn() } as never,
     mainWindow: () => null,
     onStatusChanged: vi.fn(),
     workArea: opts.workArea,
     captionChannelLive: opts.caption ? () => true : undefined,
     createTray: opts.tray ? opts.tray.create : undefined,
+    onWatchedSessionChanged: opts.onWatchedSessionChanged,
   };
 
   const all = () => Object.values(wins) as FakeWin[];
@@ -222,17 +230,18 @@ describe('the caption channel', () => {
     const SRC = readSource(join(__dirname, '../src/main/buddy-window-manager.ts'));
     const lines = SRC.split('\n');
 
-    it('every one of the nine write sites and three creation sites is still there', () => {
+    it('every one of the thirteen write sites and three creation sites is still there', () => {
       // The ast-grep rule buddy-window-move-only-in-place proves nothing moves
       // the buddy EXCEPT through place(). It cannot notice a write path being DELETED — and a deleted one is
       // invisible to the behaviour tests too, because other paths keep the same
       // totals non-zero (the bar, for instance, is also renamed by glideGroup
       // and by showBar's else-branch). Counting the call sites makes a deletion
       // loud. Design §3 fixes these numbers: nine setPosition writes, three
-      // constructor placements.
+      // constructor placements. The tenth write is applyChatSize's (the chat's two sizes, buddy rebuild);
+      // the last three are screenChanged's regroup after the screen turns.
       const calls = (re: RegExp): number =>
         lines.filter((l) => re.test(l) && !l.trimStart().startsWith('//')).length;
-      expect(calls(/this\.place\(/)).toBe(9);
+      expect(calls(/this\.place\(/)).toBe(13);
       expect(calls(/this\.create\(/)).toBe(3);
     });
 
@@ -280,7 +289,7 @@ describe('the caption channel', () => {
         h.manager.toggleChat();
         vi.advanceTimersByTime(70);
         h.manager.toggleChat();
-        expect(h.wins.chat!.webContents.send).toHaveBeenLastCalledWith('buddy:chat-state', { visible: true });
+        expect(h.wins.chat!.webContents.send).toHaveBeenLastCalledWith('buddy:chat-state', expect.objectContaining({ visible: true }));
         vi.advanceTimersByTime(200);
         expect(h.wins.chat!.isVisible()).toBe(true);
       } finally {
@@ -867,5 +876,189 @@ describe('taskbar-icon style', () => {
     h.manager.show('tray');
     expect(h.wins.mascot).toBeDefined();
     expect(h.manager.getStatus().style).toBe('floating');
+  });
+});
+
+describe("the chat's two sizes (the bar's size button)", () => {
+  const sentTo = (w: FakeWin | undefined, channel: string) =>
+    (w?.webContents.send.mock.calls ?? []).filter((c) => c[0] === channel).map((c) => c[1]);
+
+  it('switches an open chat to the large size and back, remembers it, and tells the chat and the bar', () => {
+    vi.useFakeTimers();
+    const h = harness();
+    try {
+      h.manager.show();
+      h.manager.toggleChat();
+      h.manager.toggleChat(); // close, so the bar exists and is re-created on the next open
+      vi.advanceTimersByTime(200);
+      h.manager.toggleChat();
+      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
+      h.manager.toggleChatSize();
+      // First the panel fades out, and the window has not changed yet...
+      expect(sentTo(h.wins.chat, 'buddy:chat-state').at(-1)).toEqual({ visible: true, resize: 'out' });
+      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
+      // ...then, while it is invisible, the window changes and the panel is told to grow back in.
+      vi.advanceTimersByTime(100);
+      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE_LARGE);
+      expect(sentTo(h.wins.chat, 'buddy:chat-state').at(-1)).toMatchObject({ visible: true, resize: 'in' });
+      expect(h.saved.chatSize).toBe('large');
+      expect(sentTo(h.wins.chat, 'buddy:chat-size').at(-1)).toBe('large');
+      expect(sentTo(h.wins.bar, 'buddy:chat-size').at(-1)).toBe('large');
+      h.manager.toggleChatSize();
+      vi.advanceTimersByTime(100);
+      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
+      expect(h.saved.chatSize).toBe('small');
+      // The way back to small also lowers the window's size limits — without it Linux refused to shrink it.
+      expect(h.wins.chat!.setMinimumSize).toHaveBeenLastCalledWith(CHAT_SIZE.width, CHAT_SIZE.height);
+      expect(h.wins.chat!.setMaximumSize).toHaveBeenLastCalledWith(CHAT_SIZE.width, CHAT_SIZE.height);
+    } finally {
+      h.manager.hide();
+      vi.useRealTimers();
+    }
+  });
+
+  it('opens at the remembered large size', () => {
+    const h = harness({ chatSize: 'large' });
+    try {
+      h.manager.show();
+      h.manager.toggleChat();
+      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE_LARGE);
+    } finally {
+      h.manager.hide();
+    }
+  });
+
+  it('on the rename channel the chat resizes itself, since it cannot be moved by the app', () => {
+    vi.useFakeTimers();
+    const h = harness({ caption: true });
+    try {
+      h.manager.show();
+      h.manager.toggleChat();
+      h.manager.toggleChatSize();
+      vi.advanceTimersByTime(100);
+      expect(h.wins.chat!.setSize).toHaveBeenLastCalledWith(CHAT_SIZE_LARGE.width, CHAT_SIZE_LARGE.height);
+    } finally {
+      h.manager.hide();
+      vi.useRealTimers();
+    }
+  });
+
+  it("tells the chat which side of it the buddy is on, so it grows out of him", () => {
+    vi.useFakeTimers();
+    const h = harness();
+    try {
+      h.manager.show();
+      h.manager.toggleChat();
+      h.manager.toggleChat();
+      vi.advanceTimersByTime(200);
+      h.manager.toggleChat();
+      const cue = sentTo(h.wins.chat, 'buddy:chat-state').at(-1) as { visible: boolean; mascot: string };
+      expect(cue.visible).toBe(true);
+      expect(['above', 'below']).toContain(cue.mascot);
+    } finally {
+      h.manager.hide();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('the session the buddy chat is showing', () => {
+  it('is the viewed session only while the chat is open, and each open or switch is announced', () => {
+    vi.useFakeTimers();
+    try {
+      const announced = vi.fn();
+      const h = harness({ onWatchedSessionChanged: announced });
+      h.manager.show();
+      h.manager.setViewedSession('s1');
+      // Chosen but not on screen: a reply finishing now has not been seen.
+      expect(h.manager.watchedSession()).toBeNull();
+      h.manager.toggleChat();
+      expect(h.manager.watchedSession()).toBe('s1');
+      announced.mockClear();
+      h.manager.setViewedSession('s2');
+      expect(h.manager.watchedSession()).toBe('s2');
+      expect(announced).toHaveBeenCalledTimes(1);
+      h.manager.toggleChat(); // close
+      expect(h.manager.watchedSession()).toBeNull();
+      announced.mockClear();
+      h.manager.toggleChat(); // re-open: the owner window hears again
+      vi.advanceTimersByTime(300);
+      expect(h.manager.watchedSession()).toBe('s2');
+      expect(announced).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('the screen turning', () => {
+  // Turning a laptop-tablet to portrait: the desktop pushes each window back on
+  // screen by itself, and the app is never told where. The buddy must lay all
+  // three pieces out again from the mascot, as one group.
+  const rect = { x: 0, y: 0, width: 1920, height: 1080 };
+  const area: BuddyWorkAreaSource = {
+    ready: true,
+    refresh: () => Promise.resolve(),
+    areaFor: () => ({ rect: { ...rect }, resolved: true }),
+  };
+  // Where a window was last sent: its latest title, or the one it was born with.
+  const last = (h: Harness, role: BuddyRole) => {
+    const t = h.captionsFor(role).at(-1) ?? h.created.filter((c) => c.variant === role).at(-1)!.title!;
+    return parseCaption(t)!;
+  };
+  const turn = () => Object.assign(rect, { width: 1080, height: 1920 });
+
+  beforeEach(() => { Object.assign(rect, { width: 1920, height: 1080 }); });
+
+  it('lays the mascot, chat and strip out together on the new screen', () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ caption: true, workArea: area, savedPos: { x: 1700, y: 900 } });
+      h.manager.show();
+      h.manager.toggleChat();
+      vi.advanceTimersByTime(300);
+      turn();
+      h.manager.screenChanged();
+      const m = last(h, 'mascot'), c = last(h, 'chat'), b = last(h, 'bar');
+      // All on the narrower screen…
+      expect(m.x + MASCOT_SIZE.width).toBeLessThanOrEqual(1080);
+      expect(c.x + CHAT_SIZE.width).toBeLessThanOrEqual(1080);
+      expect(b.x + BAR_SIZE.width).toBeLessThanOrEqual(1080);
+      // …and exactly where closing and reopening the chat there would put them.
+      h.manager.toggleChat();
+      vi.advanceTimersByTime(300);
+      h.manager.toggleChat();
+      vi.advanceTimersByTime(300);
+      expect([last(h, 'mascot'), last(h, 'chat'), last(h, 'bar')]).toEqual([m, c, b]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('moves every window even when its spot is unchanged, because the desktop already moved it', () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ caption: true, workArea: area, savedPos: { x: 200, y: 200 } });
+      h.manager.show();
+      vi.advanceTimersByTime(300);
+      const at = last(h, 'mascot');
+      turn();
+      h.manager.screenChanged();
+      // A title the helper has not seen, then the real one: two changes, so it moves.
+      const caps = h.captionsFor('mascot');
+      expect(caps.at(-2)).toBe(buildCaption('mascot', at.x, at.y + 1));
+      expect(caps.at(-1)).toBe(buildCaption('mascot', at.x, at.y));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does nothing when the screen did not really change', () => {
+    // KDE fires the change event three times whenever any window appears.
+    const h = harness({ caption: true, workArea: area, savedPos: { x: 200, y: 200 } });
+    h.manager.show();
+    const n = h.titleCalls();
+    h.manager.screenChanged();
+    expect(h.titleCalls()).toBe(n);
   });
 });

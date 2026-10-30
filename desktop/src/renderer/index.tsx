@@ -253,6 +253,22 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
       // both panes can be operated in every theme without launching a dev
       // Electron instance. ThemeProvider so the themes are the real ones; no
       // ChatProvider because nothing on that screen touches chat state.
+      // The buddy's chat window with a conversation in it (dev/workbench/mockups/BuddyChatScreen.tsx) — the buddy
+      // rebuild's review screen. It brings its own providers, as the real buddy window does.
+      // The whole buddy group on a desktop (dev/workbench/mockups/BuddyGroupScreen.tsx) — where its actions live.
+      if (__view === 'buddy-group') {
+        const [{ BuddyGroupScreen }, { ThemeProvider }] = await Promise.all([
+          import('./dev/workbench/mockups/BuddyGroupScreen'),
+          import('./state/theme-context'),
+        ]);
+        __mount.render(<ThemeProvider><BuddyGroupScreen /></ThemeProvider>);
+        return;
+      }
+      if (__view === 'buddy-chat') {
+        const { BuddyChatScreen } = await import('./dev/workbench/mockups/BuddyChatScreen');
+        __mount.render(<BuddyChatScreen />);
+        return;
+      }
       if (__view === 'buddy-session') {
         const [{ BuddySessionScreensMockup }, { ThemeProvider }] = await Promise.all([
           import('./dev/workbench/mockups/BuddySessionScreens'),

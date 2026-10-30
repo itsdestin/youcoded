@@ -3495,7 +3495,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // App.tsx calls this on mount specifically to avoid racing the
     // onDirectoryUpdated push — pulling `leaderWindowId: WORKBENCH_WINDOW_ID`
     // here is what makes `isLeader` resolve true.
-    getDirectory: async () => ({ leaderWindowId: WORKBENCH_WINDOW_ID, windows: [] }),
+    // WHY the buddy chat view gets the sessions (buddy rebuild, 2026-10-25): its session switcher lists the
+    // directory, so an empty one drew a buddy with nothing to switch to. App's own window never reads its own row.
+    getDirectory: async () => (typeof location !== 'undefined' && new URLSearchParams(location.search).get('view') === 'buddy-chat'
+      ? { leaderWindowId: WORKBENCH_WINDOW_ID, windows: [{ window: { id: WORKBENCH_WINDOW_ID, label: 'Window 1', createdAt: 0 }, sessions: store.getState().sessions as any }] }
+      : { leaderWindowId: WORKBENCH_WINDOW_ID, windows: [] }),
     // The first page of a RESUMED session's history (App.tsx loadFirstPage).
     // The catch-all's `[]` has no `.events`, so a resume in the workbench used
     // to show an empty conversation. Student mode answers a resume of the
@@ -3932,6 +3936,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   let buddyHelperInstalled = buddyHelperMode === 'installed' || buddyHelperMode === 'not-needed-installed';
   const buddyHelperSupported = buddyHelperNeeded && buddyHelperMode !== 'none';
   let buddyDismissed = false;
+  let buddyViewed: string | null = null;
   const buddyStatusSubs = new Set<(s: unknown) => void>();
   const pushBuddyStatus = () => {
     const snap = { dismissed: buddyDismissed };
@@ -3960,6 +3965,18 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       buddyStatusSubs.add(cb);
       return () => buddyStatusSubs.delete(cb);
     },
+    // WHY (buddy rebuild, 2026-10-25): the buddy CHAT window's own calls, so `?view=buddy-chat` can draw the
+    // shipping chat against the workbench's conversations. The buddy views the first session unless told otherwise;
+    // subscribing is a no-op because the workbench's chat is seeded in place, never streamed per window.
+    getViewedSession: async () => buddyViewed ?? (typeof location !== 'undefined' ? new URLSearchParams(location.search).get('buddySession') : null) ?? store.getState().sessions[0]?.id ?? null,
+    setSession: async (sessionId: string) => { buddyViewed = sessionId; },
+    toggleChatSize: async () => {},
+    toggleChat: async () => {},
+    onChatState: () => () => {},
+    onChatSize: () => () => {},
+    onAttachFile: () => () => {},
+    onAttentionSummary: () => () => {},
+    onSeenInBuddy: () => () => {},
     onFocusSession: (cb: (sessionId: string) => void) => {
       focusSessionSubs.add(cb);
       return () => { focusSessionSubs.delete(cb); };
@@ -4135,6 +4152,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
+    // WHY only on the buddy chat view (buddy rebuild, 2026-10-25): the buddy draws every dot from main's merged summary, and its
+    // review needs each colour on screen. The main window computes its own dots and is left exactly as it was.
+    ...(typeof location !== 'undefined' && new URLSearchParams(location.search).get('view') === 'buddy-chat' ? { attention: { getSummary: async () => {
+      const colours = ['green', 'red', 'blue', 'amber'];
+      const perSession: Record<string, { status: string }> = {};
+      store.getState().sessions.forEach((x: any, i: number) => { perSession[x.id] = { status: colours[i] ?? 'gray' }; });
+      return { anyNeedsAttention: true, perSession };
+    } } } : {}),
     skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, integrations, dev: devMock, voiceVocabulary, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario),

@@ -1,183 +1,203 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AttentionSummary } from '../../../shared/types';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { SessionInfo } from '../../../shared/types';
+import type { SessionStatusColor } from '../StatusDot';
 import InputBar from '../InputBar';
-import { SessionPill } from './SessionPill';
-import { BubbleFeed } from './BubbleFeed';
-import { AttentionStrip } from './AttentionStrip';
+import ChatView from '../ChatView';
+import SessionStrip from '../SessionStrip';
+import { ArtifactProvider, createArtifactStore } from '../../state/ArtifactContext';
+import { useAttentionSummary } from '../../hooks/useAttentionSummary';
+import { useSessionDefaults } from '../../hooks/useSessionDefaults';
+import { useChromeMeasurements } from '../../hooks/useChromeMeasurements';
+import { buildSessionCreateArgs } from '../../../shared/session-create-args';
 import { BuddyWelcome } from './BuddyWelcome';
+import { useBuddyFeed } from './useBuddyFeed';
+import { CompactSurfaceContext, type CompactSurface } from '../../state/compact-surface-context';
+import { Toast } from '../ui';
+import { useBlockedSend } from '../../hooks/useBlockedSend';
+import type { BlockedSendToast } from '../../utils/blocked-send-toast';
+import { useChatStore } from '../../state/chat-context';
+import type { SessionChatState } from '../../state/chat-types';
 
 /**
- * Compact chat surface rendered inside the buddy chat BrowserWindow.
- * Shell composition only — bubble feed, input, and attention strip are
- * placeholders replaced by E3–E5.
- *
- * Session management:
- * - Mount effect picks up the session main already selected (or falls back to
- *   the leader window's first session), subscribes, and requests replay.
- * - Churn effect unsubscribes the previous session when the user switches.
- * - Unmount cleanup in the mount effect handles the active session on close.
- * - attentionSummary is hoisted here so both SessionPill and (future)
- *   AttentionStrip consume the same subscription.
+ * The buddy's chat window: the MAIN window's chat, hosted small (buddy rebuild, 2026-10-25 —
+ * buddy-rebuild-questions#Q-2 "a small main chat"). Every piece a user sees is the main window's own:
+ * SessionStrip at the top (its dots, its All sessions menu — #Q-4, #S-1), ChatView in the middle
+ * (question and permission cards, warnings with buttons, scroll-back, skill cards — #Q-3) and the
+ * InputBar at the bottom. Only the window's own concerns live here: which session it shows, the feed
+ * that fills this window's chat store (useBuddyFeed — in the main window App does that), and the
+ * compact density, which is CSS scoped to html[data-mode="buddy-chat"] (buddy.css). The buddy's actions
+ * (screenshot, size, open YouCoded, hide) are NOT in here: they are the panel beside the mascot (BuddyBarApp,
+ * buddy-rebuild-review5#C-5).
  */
-export function BuddyChat() {
+export function BuddyChat({ tools = 'summary', shown = true, opened = 0 }: { tools?: CompactSurface['tools']; /** false while main has the window hidden */ shown?: boolean; /** how many times the chat has been opened */ opened?: number } = {}) {
+  // The main window's cards draw themselves for the small window under this (state/compact-surface-context.ts).
+  // 'summary' — one row for a reply's steps and files — was chosen (buddy-rebuild-review2#D-1, review4#A-2).
+  const compactSurface = useMemo<CompactSurface>(() => ({ tools }), [tools]);
   const [viewedSession, setViewedSession] = useState<string | null>(null);
-  const [attentionSummary, setAttentionSummary] = useState<AttentionSummary | null>(null);
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  // WHY the shared hook (#S-1): it PULLS the summary on mount, then listens. The buddy used to only
+  // listen, so every dot was grey until something changed somewhere.
+  const summary = useAttentionSummary();
+  // The saved new-session defaults (model, project folder, skip permissions), the same hook the main window reads — the
+  // buddy's New session form started from the app's built-in values instead (buddy-rebuild-tryit2#U-3). Re-read on
+  // every open: the window regains focus then, and the hook asks again on focus.
+  const sessionDefaults = useSessionDefaults(false);
+  // Every close of the window starts the session strip afresh, so a menu, a half-filled New session form or an open
+  // folder list never greets the next open (buddy-rebuild-tryit2#U-3). The chat itself is NOT rebuilt (BuddyChatApp).
+  // `opened` counts the opens (BuddyChatApp, from main's buddy:chat-state cue — the one signal every platform sends).
+  // This window's own files-and-previews store, created once (ChatView and SessionStrip read it, as in the main window).
+  const [artifactStore] = useState(() => createArtifactStore());
 
-  // Subscribe to the global attention summary pushed by main. The unsub
-  // function returned by onAttentionSummary is used directly as the cleanup.
-  useEffect(() => {
-    const unsub = window.claude.buddy?.onAttentionSummary?.(setAttentionSummary);
-    return unsub;
+  useBuddyFeed(viewedSession);
+
+  const select = useCallback((sid: string | null) => {
+    setViewedSession(sid);
+    if (sid) void window.claude.buddy?.setSession?.(sid);
   }, []);
 
-  // Desktop-capture action: main pushes the saved PNG path here after the
-  // user clicks the capture icon. Re-emit as a window CustomEvent so the
-  // InputBar (which lives several nested components deep and doesn't
-  // receive props from BuddyChat) can pick it up without prop threading.
-  // The InputBar's listener calls addFiles([path]), which is the same
-  // code path as clipboard-image paste — no special-casing for buddy.
-  useEffect(() => {
-    const unsub = (window as any).claude?.buddy?.onAttachFile?.((filePath: string) => {
-      window.dispatchEvent(new CustomEvent('buddy:attach-file', { detail: { filePath } }));
-    });
-    return unsub;
-  }, []);
-
-  // Mount effect: pick the session to view. Prefer whatever main already
-  // recorded for this buddy window; fall back to the leader window's first
-  // session, then any first session in the directory.
+  // Every session in every window — the buddy owns none, it can show any.
   useEffect(() => {
     let cancelled = false;
-    let subscribedId: string | null = null;
-    (async () => {
-      let sid = await window.claude.buddy?.getViewedSession?.() ?? null;
-      if (!sid) {
-        const dir = await window.claude.detach.getDirectory();
-        // Use leaderWindowId to find the leader's first session.
-        // Fall back to whatever first session the directory has.
-        const leaderEntry = dir?.windows?.find?.((entry: any) => entry.window?.id === dir.leaderWindowId);
-        sid = leaderEntry?.sessions?.[0]?.id
-          ?? dir?.windows?.[0]?.sessions?.[0]?.id
-          ?? null;
-        // Persist the choice so reopening the chat picks the same session.
-        if (sid) await window.claude.buddy.setSession(sid);
+    const load = async () => {
+      const dir = await window.claude.detach.getDirectory();
+      if (cancelled || !dir?.windows) return;
+      const all: SessionInfo[] = [];
+      const seen = new Set<string>();
+      for (const entry of dir.windows) {
+        for (const s of (entry.sessions ?? [])) {
+          if (seen.has(s.id)) continue;
+          seen.add(s.id);
+          all.push(s);
+        }
       }
-      if (cancelled) return;
-      setViewedSession(sid);
-      if (sid) {
-        window.claude.buddy.subscribe(sid);
-        // requestTranscriptReplay is now owned by BubbleFeed's effect, which
-        // runs AFTER the transcript:event listener is wired. Calling it here
-        // would race past the listener-registration and drop replay events.
-        subscribedId = sid;
-      }
-    })();
-    return () => {
-      cancelled = true;
-      // Release main's subscription record when this component unmounts
-      // (buddy window close, or React strict-mode double-mount). Without
-      // this, session events would keep flowing to a destroyed webContents.
-      if (subscribedId) window.claude.buddy?.unsubscribe?.(subscribedId);
+      setSessions(all);
     };
+    void load();
+    const unsub = window.claude.detach.onDirectoryUpdated(load);
+    return () => { cancelled = true; unsub?.(); };
   }, []);
 
-  // Churn effect: when the user switches sessions via SessionPill, unsubscribe
-  // the previous one. Does NOT return a cleanup — the mount effect above owns
-  // unmount cleanup for the active subscription, preventing double-unsubscribe.
-  const prevSessionRef = useRef<string | null>(null);
+  // Which session to show: the one main remembers for the buddy, else the first there is.
   useEffect(() => {
-    const prev = prevSessionRef.current;
-    if (prev && prev !== viewedSession) {
-      window.claude.buddy?.unsubscribe?.(prev);
-    }
-    prevSessionRef.current = viewedSession;
-  }, [viewedSession]);
-
-  // When the session the buddy is viewing is destroyed (closed in the main
-  // window, or exited on its own), auto-switch to another active session.
-  // Without this, the pill shows "no session" and the feed stays frozen on
-  // the dead session's last state, because viewedSession still holds the
-  // destroyed id. Mirrors App.tsx's auto-switch behavior on main.
-  //
-  // If no other sessions exist, clear viewedSession so the Welcome/first-run
-  // screen renders — same behavior as opening the buddy with no sessions.
-  //
-  // We depend on viewedSession so the handler closes over the current value
-  // without needing a ref. setSession is idempotent per sid, so re-subscribing
-  // happens cleanly in the chosen branch.
+    let cancelled = false;
+    void (async () => {
+      const sid = await window.claude.buddy?.getViewedSession?.() ?? null;
+      if (!cancelled && sid) setViewedSession(sid);
+    })();
+    return () => { cancelled = true; };
+  }, []);
   useEffect(() => {
-    const handler = async (destroyedId: string) => {
-      if (destroyedId !== viewedSession) return;
-      const dir = await window.claude.detach.getDirectory();
-      let next: string | null = null;
-      for (const entry of dir?.windows ?? []) {
-        for (const s of (entry.sessions ?? [])) {
-          if (s.id !== destroyedId) { next = s.id; break; }
-        }
-        if (next) break;
-      }
-      if (next) {
-        await window.claude.buddy.setSession(next);
-        await window.claude.buddy.subscribe(next);
-        setViewedSession(next);
-      } else {
-        // No remaining sessions — drop to the welcome screen.
-        setViewedSession(null);
-      }
-    };
-    const raw = window.claude.on.sessionDestroyed(handler);
-    return () => window.claude.off('session:destroyed', raw);
-  }, [viewedSession]);
+    // The remembered session is gone (closed, or never set): move to another, or to the welcome screen.
+    if (viewedSession && sessions.some((s) => s.id === viewedSession)) return;
+    if (viewedSession && sessions.length === 0) return; // directory not loaded yet
+    const next = sessions[0]?.id ?? null;
+    if (next !== viewedSession) select(next);
+  }, [sessions, viewedSession, select]);
 
-  // Close the chat window on Escape.
+  // The main window's colours, keyed for SessionStrip.
+  const statuses = useMemo(() => {
+    const m = new Map<string, SessionStatusColor>();
+    for (const [id, s] of Object.entries(summary.perSession)) m.set(id, (s?.status ?? 'gray') as SessionStatusColor);
+    return m;
+  }, [summary]);
+
+  const createSession = useCallback(async (cwd: string, dangerous: boolean, model: string, provider?: 'claude' | 'native', _newWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string) => {
+    const info = await (window.claude.session.create as any)(buildSessionCreateArgs({
+      name: 'New Session', cwd, runtime: provider === 'native' ? 'native' : 'claude', model, skipPermissions: dangerous, binding, preset,
+    }));
+    if (info?.id) select(info.id);
+  }, [select]);
+  const closeSession = useCallback((id: string) => { void window.claude.session.destroy(id); }, []);
+  // Resuming happens in the main window's Resume browser — the buddy has no room for it.
+  const openResume = useCallback(() => { void window.claude.buddy?.openMain?.(); }, []);
+
+  // Close the chat window on Escape — unless something inside (a menu, a card) used it first.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') window.claude.buddy?.toggleChat?.();
+      if (e.key === 'Escape' && !e.defaultPrevented) window.claude.buddy?.toggleChat?.();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Handle session creation from the welcome screen. Mirrors the subscribe +
-  // view-set flow that SessionPill.selectSession does — BuddyWelcome only
-  // knows about the created session id, not the subscription handoff.
-  const handleSessionCreated = useCallback(async (sid: string) => {
-    await window.claude.buddy.setSession(sid);
-    await window.claude.buddy.subscribe(sid);
-    setViewedSession(sid);
-  }, []);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  // The same --top/--bottom-chrome-height the main window publishes, so ChatView's messages scroll
+  // behind the header and the message box exactly as they do there.
+  useChromeMeasurements(headerRef, bottomRef, viewedSession, 'chat');
+
+  const current = sessions.find((s) => s.id === viewedSession);
+
+  // A send the session cannot take right now — Claude Code showing a permission, question or plan menu — is refused
+  // with the main window's own toast and "Send anyway", instead of typing into the menu and confirming whatever it
+  // highlights (card 85a; buddy-rebuild-questions#Q-8). The same gate and the same words as App.tsx; the buddy has no
+  // terminal view of its own, so the toast's terminal action opens the main window instead.
+  const chatStore = useChatStore();
+  const chatStateRef = useRef<Map<string, SessionChatState>>(chatStore.getState());
+  useEffect(() => {
+    chatStateRef.current = chatStore.getState();
+    return chatStore.subscribeAll(() => { chatStateRef.current = chatStore.getState(); });
+  }, [chatStore]);
+  const [toast, setToast] = useState<BlockedSendToast | null>(null);
+  const { showBlockedSend } = useBlockedSend({
+    chatState: chatStateRef,
+    showToast: setToast,
+    openTerminal: () => { void window.claude.buddy?.openMain?.(); },
+  });
+  const onSendBlocked = useCallback((retry: () => void, block: Parameters<typeof showBlockedSend>[1]) => {
+    if (viewedSession) showBlockedSend(viewedSession, block, retry);
+  }, [viewedSession, showBlockedSend]);
+  const getSessionState = useCallback((sid: string) => chatStateRef.current.get(sid), []);
+
+  if (!viewedSession) {
+    return (
+      <div className="buddy-chat-shell" style={{ height: '100vh', padding: '12px 10px' }}>
+        {/* key: each open starts it afresh, like the session strip — no half-filled form greets the next open. */}
+        <BuddyWelcome key={opened} onSessionCreated={(sid) => select(sid)} />
+      </div>
+    );
+  }
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100vh',
-        padding: '12px 10px',
-        gap: 10,
-      }}
-    >
-      {/* Hide the session pill in the empty state — the welcome screen owns
-          the full viewport to match main app's "No active session" screen.
-          Pill reappears as soon as a session is chosen or created. */}
-      {viewedSession ? (
-        <SessionPill
-          viewedSessionId={viewedSession}
-          onChange={setViewedSession}
-          attentionSummary={attentionSummary}
+    <ArtifactProvider store={artifactStore}>
+      <CompactSurfaceContext.Provider value={compactSurface}>
+      <div className="buddy-chat-shell relative h-screen overflow-hidden">
+        <div ref={headerRef} className="buddy-chat-header">
+          <div className="header-bar">
+            <SessionStrip
+              key={opened}
+              sessions={sessions as any}
+              defaultModel={sessionDefaults.model}
+              defaultStartModel={sessionDefaults.startModel}
+              defaultSkipPermissions={sessionDefaults.skipPermissions}
+              defaultProjectFolder={sessionDefaults.projectFolder}
+              activeSessionId={viewedSession}
+              onSelectSession={select}
+              onCreateSession={createSession}
+              onCloseSession={closeSession}
+              sessionStatuses={statuses}
+              onOpenResumeBrowser={openResume}
+              viewer
+            />
+          </div>
+        </div>
+        <ChatView
+          sessionId={viewedSession}
+          // While the window is hidden ChatView pauses its read of the chat (it catches up on show) — hidden means idle.
+          visible={shown}
+          sessionActive
+          compact
+          cwd={current?.cwd}
+          provider={(current as any)?.provider}
+          model={(current as any)?.model}
+          providerType={(current as any)?.providerType}
         />
-      ) : null}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        {viewedSession ? (
-          <BubbleFeed sessionId={viewedSession} />
-        ) : (
-          <BuddyWelcome onSessionCreated={handleSessionCreated} />
-        )}
+        <div ref={bottomRef} className="chrome-wrapper chrome-wrapper--bottom bottom-float buddy-chat-bottom">
+          <InputBar sessionId={viewedSession} compact onSendBlocked={onSendBlocked} getSessionState={getSessionState} />
+        </div>
+        {toast && <Toast message={toast.message} durationMs={toast.durationMs} actions={toast.actions} onDismiss={() => setToast(null)} />}
       </div>
-      {viewedSession ? (
-        <InputBar sessionId={viewedSession} compact />
-      ) : null}
-      <AttentionStrip sessionId={viewedSession} summary={attentionSummary} />
-    </div>
+      </CompactSurfaceContext.Provider>
+    </ArtifactProvider>
   );
 }

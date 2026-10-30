@@ -1975,7 +1975,7 @@ export class HarnessSession extends EventEmitter {
     this.historyOrigins = [null, ...this.historyOrigins.slice(cut)];
     this.reprojectContextUsed(estimateBefore);
     // Existing frozen event (no new type). `summary` is the canonical field the
-    // renderer reads (types.ts / App.tsx / BubbleFeed.tsx). `autoCompaction` tags
+    // renderer reads (types.ts / App.tsx / useBuddyFeed.ts). `autoCompaction` tags
     // this as a SPONTANEOUS native compaction so the renderer surfaces the marker
     // even though the manual-/compact `compactionPending` flag was never set —
     // CC's own compact-summary events never carry it, so the manual path is

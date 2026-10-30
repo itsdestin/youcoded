@@ -9,7 +9,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import ToolCard from '../src/renderer/components/ToolCard';
 import PromptCard from '../src/renderer/components/PromptCard';
-import { CompactToolStrip } from '../src/renderer/components/buddy/CompactToolStrip';
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import { CardKeysLiveContext } from '../src/renderer/state/card-keys-context';
 import { EscCloseProvider } from '../src/renderer/hooks/use-esc-close';
@@ -108,17 +107,6 @@ describe('an answer with no reply', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
       await waitFor(() => expect(screen.queryByText(/couldn.t confirm/i)).toBeNull());
-    });
-  });
-
-  describe("buddy's compact strip — same rule", () => {
-    it('an Allow that got no reply is not marked expired, and says it could not be confirmed', async () => {
-      respond.mockRejectedValue(TIMEOUT);
-      render(<ChatProvider><CompactToolStrip tools={[bashAsk()]} sessionId="s1" /></ChatProvider>);
-      fireEvent.click(screen.getByRole('button', { name: '✓ Allow' }));
-
-      expect(await screen.findByText(/couldn.t confirm/i)).toBeInTheDocument();
-      expect(expiredWasBroadcast()).toBe(false);
     });
   });
 });

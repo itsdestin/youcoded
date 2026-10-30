@@ -121,8 +121,7 @@ export interface AppChannelTypes {
   'buddy:hide': { request: void; response: Nothing };
   'buddy:toggle-chat': { request: void; response: Nothing };
   'buddy:set-session': { request: { sessionId: string }; response: Nothing };
-  'buddy:subscribe': { request: { sessionId: string }; response: Nothing };
-  'buddy:unsubscribe': { request: { sessionId: string }; response: Nothing };
+  'buddy:toggle-chat-size': { request: void; response: Nothing };
   'buddy:get-viewed-session': { request: void; response: string | null };
   'buddy:move-mascot': { request: { localDx: number; localDy: number }; response: Nothing };
   'buddy:drag-ended': { request: void; response: Nothing };

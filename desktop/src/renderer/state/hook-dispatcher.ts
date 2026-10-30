@@ -163,7 +163,7 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
 
 /**
  * Computes the action for a hook event and applies it — shared by App.tsx (main
- * window) and BubbleFeed.tsx (buddy window), both of which batch transcript
+ * window) and useBuddyFeed.ts (buddy window), both of which batch transcript
  * deltas into animation frames but dispatch hook events immediately. WHY the
  * flush (2026-09-28, journeys/permission-approve.json step 8 flake under
  * load): a stalled frame can leave a chronologically earlier transcript delta

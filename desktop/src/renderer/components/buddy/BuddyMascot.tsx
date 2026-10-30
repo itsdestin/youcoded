@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTheme } from '../../state/theme-context';
 import { useThemeMascot } from '../../hooks/useThemeMascot';
-import { useAnyAttentionNeeded } from '../../hooks/useAnyAttentionNeeded';
+import { useAttentionSummary } from '../../hooks/useAttentionSummary';
+import { useMascotMood, MOOD_POSE } from './mascot-mood';
 import { MascotRig, type RigMotion } from '../mascot/MascotRig';
 import { purifySvgMarkup } from '../mascot/sanitize-rig-svg';
 import type { PoseName } from '../mascot/mascot-poses';
@@ -89,8 +90,14 @@ export interface MascotDockState { mode: 'free' | 'docked' | 'peeking'; edge: st
 // (`window.claude.buddy`) is the mascot's only input, and tests drive dock
 // state through the same `onMascotState` subscription main uses.
 export function BuddyMascot() {
-  const attention = useAnyAttentionNeeded();
   const { theme, activeTheme, reducedEffects } = useTheme();
+  // What he is doing follows the dots' own colours (mascot-mood.ts; buddy rebuild, buddy-rebuild-questions#Q-7/#Q-8):
+  // alert on red/amber (today's shocked pose and bounce), a focused look while working, a wave when a reply is ready,
+  // idle glances and stretches, sleep after a quiet while. The shared summary hook PULLS on mount, so he is right from
+  // the moment he appears (the old listener-only hook left him idle until something changed).
+  const summary = useAttentionSummary();
+  const { mood, wake } = useMascotMood(summary, reducedEffects);
+  const attention = mood === 'alert';
 
   // Mascot resolution order (spec §3.5): theme rig → theme flat art →
   // first-party default rig. Flat art is the legacy tier: it gets the
@@ -225,7 +232,7 @@ export function BuddyMascot() {
       ? 'shocked'
       : dragging // a press alone must not change his face — that read as "drag handle" too
         ? 'pressed'
-        : 'idle';
+        : MOOD_POSE[mood];
   const dragRef = useRef<DragState | null>(null);
   // Smoothed drag velocity for the rig's limb springs. A ref — pointermove-rate
   // React state would re-render 60×/s for nothing.
@@ -421,7 +428,9 @@ export function BuddyMascot() {
         // fallback art, without changing authored rigs' --rig-* token mapping.
         ...defaultMascotPaint(theme),
       }}
-      onPointerDown={onPointerDown}
+      // Touching him wakes him (mascot-mood.ts `wake`); before the drag/press handling, which it never changes.
+      onPointerEnter={wake}
+      onPointerDown={(e) => { wake(); onPointerDown(e); }}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onLostPointerCapture={onLostPointerCapture}
@@ -454,7 +463,7 @@ export function BuddyMascot() {
           <div className={showAttention && !reducedEffects ? 'mascot-bounce' : ''} style={{ width: '100%', height: '100%' }}>
             {useRig ? (
               <div ref={rigHostRef} style={{ width: '100%', height: '100%' }}>
-                <MascotRig svgUrl={rigUrl} pose={pose} motionRef={motionRef} reducedEffects={reducedEffects} hitTestable />
+                <MascotRig svgUrl={rigUrl} pose={pose} motionRef={motionRef} reducedEffects={reducedEffects} motionStyle={mood === 'sleep' && !peeking ? 'sleepy' : 'chill'} hitTestable />
               </div>
             ) : (
               <img

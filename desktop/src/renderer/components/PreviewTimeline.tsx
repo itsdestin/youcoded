@@ -10,7 +10,7 @@
 // like they will after they resume". So this is ChatView's timeline switch
 // with everything live taken out: the entries, the components and the props
 // are the same, and anything that only makes sense in a running session is
-// skipped. MUST mirror ChatView.tsx's `state.timeline.map` (and BubbleFeed.tsx)
+// skipped. MUST mirror ChatView.tsx's `state.timeline.map` (and useBuddyFeed.ts)
 // for the entry kinds it draws.
 import React from 'react';
 import UserMessage from './UserMessage';

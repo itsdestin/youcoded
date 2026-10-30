@@ -3278,8 +3278,7 @@ export function installShim(): void {
       hide: () => { throw new Error('Buddy is desktop-only in this version'); },
       toggleChat: () => { throw new Error('Buddy is desktop-only in this version'); },
       setSession: () => { throw new Error('Buddy is desktop-only in this version'); },
-      subscribe: () => { throw new Error('Buddy is desktop-only in this version'); },
-      unsubscribe: () => { throw new Error('Buddy is desktop-only in this version'); },
+      toggleChatSize: () => { throw new Error('Buddy is desktop-only in this version'); },
       getViewedSession: () => { throw new Error('Buddy is desktop-only in this version'); },
       // No-op (not throw): drag handlers fire constantly while the user moves
       // the pointer; throwing would spam the console on any platform where
@@ -3300,7 +3299,9 @@ export function installShim(): void {
       onBarState: () => () => { /* no-op unsubscribe */ },
       onMascotState: () => () => { /* no-op unsubscribe */ },
       onChatState: () => () => { /* no-op unsubscribe */ },
+      onChatSize: () => () => { /* no-op unsubscribe */ },
       onFocusSession: () => () => { /* no-op unsubscribe */ },
+      onSeenInBuddy: () => () => { /* no-op unsubscribe: the buddy is a desktop window */ },
       // ── The Linux/KDE buddy helper (design §4) ──
       // Answered locally, not thrown and not sent over the wire. Two reasons.
       // First, the honest answer really is this one: a phone or a remote browser

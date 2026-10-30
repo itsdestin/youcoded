@@ -10,7 +10,12 @@ vi.mock('../src/renderer/state/theme-context', () => ({
   useTheme: () => ({ theme: 'light', activeTheme: null, reducedEffects: state.reducedEffects }),
 }));
 vi.mock('../src/renderer/hooks/useThemeMascot', () => ({ useThemeMascot: () => null }));
-vi.mock('../src/renderer/hooks/useAnyAttentionNeeded', () => ({ useAnyAttentionNeeded: () => state.attention }));
+// The mascot reads the shared summary (mascot-mood.ts); "attention" here is one red session, the alert mood.
+vi.mock('../src/renderer/hooks/useAttentionSummary', () => ({
+  useAttentionSummary: () => (state.attention
+    ? { anyNeedsAttention: true, perSession: { s1: { status: 'red' } } }
+    : { anyNeedsAttention: false, perSession: {} }),
+}));
 // The real rig still renders (the grip mittens need it); this only records the
 // pose it was asked to draw, which nothing in the DOM exposes.
 vi.mock('../src/renderer/components/mascot/MascotRig', async (importActual) => {

@@ -1,7 +1,7 @@
 import { BrowserWindow, screen, type Display } from 'electron';
 import type { WindowRegistry } from './window-registry';
 import {
-  BAR_SIZE, MASCOT_SIZE, CHAT_SIZE, computeBarPosition, computeGroupLayout,
+  BAR_SIZE, MASCOT_SIZE, CHAT_SIZE, CHAT_SIZE_LARGE, computeBarPosition, computeGroupLayout,
   mascotXRangeForChat, type GroupLayout,
 } from './buddy-bar-geometry';
 import { BarVisibilityTracker } from './buddy-bar-visibility';
@@ -28,6 +28,9 @@ type BuddyStyle = 'floating' | 'tray';
 const IPC_BAR_STATE = 'buddy:bar-state';
 const IPC_CHAT_STATE = 'buddy:chat-state';
 const IPC_MASCOT_STATE = 'buddy:mascot-state';
+const IPC_CHAT_SIZE = 'buddy:chat-size';
+// How long the chat panel takes to fade out before its window changes size (buddy.css .buddy-chat-resize-out).
+const CHAT_RESIZE_FADE_MS = 90;
 
 // How close (px) the raw drag target must get to a screen edge, WITH the chat
 // open, to read as "put him away" — close the chat and peek. Deliberately much
@@ -41,7 +44,9 @@ const POSITION_SAVE_DEBOUNCE_MS = 300;
 
 // The size of each buddy window, by role. These are the very constants the
 // BrowserWindows are built with, which is what makes it safe for rectOf() to
-// report a window's rectangle without asking the OS for it.
+// report a window's rectangle without asking the OS for it. The chat's is the
+// SMALL size; its current one is BuddyWindowManager.sizeOf('chat') (two sizes,
+// buddy rebuild 2026-10-25).
 const ROLE_SIZE: Record<BuddyRole, Size> = {
   mascot: MASCOT_SIZE,
   chat: CHAT_SIZE,
@@ -104,8 +109,15 @@ export interface BuddyWindowManagerDeps {
    *  buddy is still docked after a restart (spec §6.1). */
   getPersistedDock(): DockEdge | null;
   setPersistedDock(edge: DockEdge | null): void;
+  /** Persisted chat size (buddy-positions.json `chatSize`), so the size button's choice survives a restart
+   *  (buddy-rebuild-review2#B-2, "remembers your choice"). Optional: absent = always small. */
+  getPersistedChatSize?(): 'small' | 'large' | null;
+  setPersistedChatSize?(size: 'small' | 'large'): void;
   registry: WindowRegistry;
   mainWindow: () => BrowserWindow | null;
+  /** The open chat started showing a session (opened, or switched to another): main tells that session's owner
+   *  window it has been seen, so its blue dot clears (see watchedSession). Optional: tests leave it out. */
+  onWatchedSessionChanged?(): void;
   /** Broadcast { dismissed, visible } to all windows (buddy:status-changed). */
   onStatusChanged(status: { dismissed: boolean; visible: boolean; style: BuddyStyle }): void;
   /**
@@ -200,6 +212,8 @@ export class BuddyWindowManager {
   // True between the first frame of a drag and its release. Used only to re-ask
   // for the usable screen area once per gesture instead of once per frame.
   private dragging = false;
+  /** The screen the group was last laid out on — see screenChanged. */
+  private lastScreenKey: string | null = null;
   /**
    * Save the mascot's position, 300ms after he stops moving.
    *
@@ -209,11 +223,19 @@ export class BuddyWindowManager {
    * he came back in the corner every launch. Saving from place(), the one place
    * a buddy window is ever moved, works on every platform.
    */
+  /** The chat's size: the size button switches it (toggleChatSize), the persisted choice seeds it. */
+  private chatLarge = false;
+  private sizeOf(role: BuddyRole): Size {
+    return role === 'chat' && this.chatLarge ? CHAT_SIZE_LARGE : ROLE_SIZE[role];
+  }
+
   private readonly persistMascot = debounce(() => {
     this.deps.setPersistedPosition('mascot', { ...this.pos.mascot });
   }, POSITION_SAVE_DEBOUNCE_MS);
 
-  constructor(private readonly deps: BuddyWindowManagerDeps) {}
+  constructor(private readonly deps: BuddyWindowManagerDeps) {
+    this.chatLarge = deps.getPersistedChatSize?.() === 'large';
+  }
 
   // ——— one write path, one read path, one work-area path ————————————————
   // Everything in this block exists so that "where is the buddy" and "move the
@@ -264,7 +286,7 @@ export class BuddyWindowManager {
       const b = win.getBounds();
       return { x: b.x, y: b.y, width: b.width, height: b.height };
     }
-    return { ...this.pos[role], ...ROLE_SIZE[role] };
+    return { ...this.pos[role], ...this.sizeOf(role) };
   }
 
   /** The usable rectangle of one screen — see BuddyWorkAreaSource. */
@@ -306,7 +328,7 @@ export class BuddyWindowManager {
    *    running inside the compositor moves it. Asking the OS there does nothing
    *    at all, and the OS does not even report the failure.
    */
-  private place(role: BuddyRole, win: BrowserWindow | null, at: Point): void {
+  private place(role: BuddyRole, win: BrowserWindow | null, at: Point, force = false): void {
     if (!win || win.isDestroyed()) return;
     // REFUSE a non-finite coordinate; do not substitute one. 0 is the CORNER of
     // the screen, not a neutral value, and this writes `this.pos` — so a single
@@ -324,11 +346,19 @@ export class BuddyWindowManager {
     const x = Math.round(at.x);
     const y = Math.round(at.y);
     this.pos[role] = { x, y };
-    if (this.captionLive()) win.setTitle(buildCaption(role, x, y));
+    if (this.captionLive()) {
+      // WHY `force`: the KDE helper moves a window only when its title CHANGES.
+      // After the screen turns, the desktop has already pushed each window back
+      // on screen by itself, so a window whose target equals its old title
+      // would never be moved back into the group. A one-pixel-off title first
+      // makes the real one a change (Destin, portrait, 2026-10-30).
+      if (force) win.setTitle(buildCaption(role, x, y + 1));
+      win.setTitle(buildCaption(role, x, y));
+    }
     // WHY: setPosition preserves Electron's rounded native size. On XWayland
     // at 150% scale that round-trip grows the chat on each move/open. These
     // windows have fixed role sizes, so always send those with the position.
-    else win.setBounds({ x, y, ...ROLE_SIZE[role] });
+    else win.setBounds({ x, y, ...this.sizeOf(role) });
     // Only the mascot's position is remembered between runs; the chat and the
     // bar are always re-anchored to him when they open.
     if (role === 'mascot') this.persistMascot();
@@ -462,6 +492,55 @@ export class BuddyWindowManager {
       ? dockPosition(edge, { x: mb.x, y: mb.y }, MASCOT_SIZE, this.workAreaFor(display))
       : { x: mb.x, y: mb.y };
     this.glideGroup(target);
+  }
+
+  /**
+   * The screen changed shape: turned to portrait, a new resolution, a monitor
+   * added or removed. Put the whole group back together on the new screen.
+   *
+   * WHY: on a turn the desktop shoves each window back on screen by itself,
+   * one at a time, and the app is never told where they went — so the mascot,
+   * the strip and the chat came apart (Destin, portrait, 2026-10-30). This
+   * re-lays all three from the mascot, exactly as a drag release would, and
+   * forces every window to be moved even when its target looks unchanged.
+   * Hidden ones too: the chat and strip are re-placed when they open, but
+   * only by a title change, which an unchanged target would not make.
+   * Called once the new usable area has been looked up (main.ts), on every
+   * platform: a Windows tablet or a Mac changing monitors comes apart the same
+   * way, and where nothing really changed the key below returns at once.
+   */
+  screenChanged(): void {
+    const win = this.mascot;
+    if (!win || win.isDestroyed()) return;
+    if (this.dragging) return; // the drag's own release settles the group
+    const mb = this.rectOf(win);
+    const display = screen.getDisplayMatching(mb) ?? screen.getPrimaryDisplay();
+    const wa = this.workAreaFor(display);
+    // WHY the key: KDE fires the same "screen changed" event three times every
+    // time any window appears, so most calls are about a screen that did not
+    // change — and regrouping then would cut short the open/close glide.
+    const key = JSON.stringify([display.bounds, wa]);
+    if (key === this.lastScreenKey) return;
+    this.lastScreenKey = key;
+    if (this.glideTimer) { clearInterval(this.glideTimer); this.glideTimer = null; }
+    const inside = clampToWorkArea({ x: mb.x, y: mb.y }, MASCOT_SIZE, wa);
+    const { mode, edge } = this.dockState;
+    // A docked or peeking buddy stays flush on his edge of the NEW screen.
+    const target = mode !== 'free' && edge ? dockPosition(edge, inside, MASCOT_SIZE, wa) : inside;
+    const chatOpen = !!(this.chatOpenIntent && this.chat && !this.chat.isDestroyed());
+    const layout = this.layoutFor({ ...target, ...MASCOT_SIZE });
+    const mascotAt = chatOpen ? layout.mascot : target;
+    const chatWas = this.chat && !this.chat.isDestroyed() ? this.rectOf(this.chat) : null;
+    this.place('mascot', win, mascotAt, true);
+    this.place('chat', this.chat, layout.chat, true);
+    this.place('bar', this.bar, this.currentBarPosition({ ...mascotAt, ...MASCOT_SIZE }), true);
+    // The turn may have moved him from below the chat to above it. Sent as the
+    // size button's grow-in rather than an open, so menus and drafts survive.
+    // WHY only when the chat really moved: this runs on every platform, and a
+    // usable-area change that leaves the chat where it was (a taskbar or dock
+    // appearing far from the buddy) must not replay its grow-in for nothing.
+    const chatMoved = !chatWas || Math.round(chatWas.x) !== Math.round(layout.chat.x) || Math.round(chatWas.y) !== Math.round(layout.chat.y);
+    if (chatOpen && chatMoved) this.chat?.webContents.send(IPC_CHAT_STATE, { visible: true, resize: 'in', mascot: mascotSide(layout) });
   }
 
   /**
@@ -668,6 +747,8 @@ export class BuddyWindowManager {
     // if the saved position is off-screen entirely, fall back to primary.
     const display = screen.getDisplayMatching({ ...raw, ...MASCOT_SIZE }) ?? screen.getPrimaryDisplay();
     const clamped = clampToWorkArea(raw, MASCOT_SIZE, this.workAreaFor(display));
+    // The screen he is laid out on now, so screenChanged acts only on a real change.
+    this.lastScreenKey = JSON.stringify([display.bounds, this.workAreaFor(display)]);
     this.mascot = this.create('mascot', clamped);
     this.wireMascotLifecycle(this.mascot);
     // Born click-through: only his drawn body catches clicks (setMascotHit).
@@ -769,6 +850,58 @@ export class BuddyWindowManager {
     this.barVisibility.setChatOpen(false);
   }
 
+  /**
+   * The bar's size button: switch the chat between its two sizes (buddy-rebuild-questions#Q-6, review2#B-2) and
+   * remember the choice. The chat is re-laid out WITH the mascot — the group rule: never clamp a buddy window alone —
+   * so a larger chat that no longer fits beside him moves him, exactly as opening it there would.
+   */
+  toggleChatSize(): void {
+    this.chatLarge = !this.chatLarge;
+    this.deps.setPersistedChatSize?.(this.chatLarge ? 'large' : 'small');
+    const chat = this.chat;
+    if (chat && !chat.isDestroyed() && this.chatOpenIntent) {
+      // WHY in three beats (buddy-rebuild-tryit2#U-1: "it feels like it moves left before expanding then right before
+      // shrinking, instead of smoothly growing/shrinking in/out from the center"): a window's new size and new place are
+      // two separate steps for the window system, so the user saw the chat lurch sideways and then change size. The
+      // panel fades out first, the window changes while it is invisible, and the panel then grows into place from its
+      // centre — one movement on screen.
+      chat.webContents.send(IPC_CHAT_STATE, { visible: true, resize: 'out' });
+      if (this.chatResizeTimer) clearTimeout(this.chatResizeTimer);
+      this.chatResizeTimer = setTimeout(() => {
+        this.chatResizeTimer = null;
+        if (chat.isDestroyed() || chat !== this.chat || !this.chatOpenIntent) return;
+        const layout = this.layoutFor();
+        this.applyChatSize(chat, layout.chat);
+        this.raiseSatellites();
+        this.glideGroup(layout.mascot);
+        chat.webContents.send(IPC_CHAT_STATE, { visible: true, resize: 'in', mascot: mascotSide(layout) });
+      }, CHAT_RESIZE_FADE_MS);
+    }
+    this.pushChatSize();
+  }
+
+  /** Give the chat window its current size at `at`. place() sends the size with the position on ordinary desktops; on
+   *  the rename channel (native Wayland) a window may still resize ITSELF, so the size goes through setSize there.
+   *
+   *  WHY the minimum and maximum first (Destin's try-it, buddy-rebuild-tryit#T-3: "gets bigger, then clicking again just
+   *  makes it jump left/right instead of shrinking"): the chat is a non-resizable window, and on Linux that pins its
+   *  minimum and maximum size hints to its size. Growing raised the minimum to the large size, so the way back to small
+   *  was refused by the window system while the group's layout moved for the small size — the sideways jump. Setting
+   *  both limits to the new size first lets it shrink as well as grow. */
+  private applyChatSize(win: BrowserWindow, at: Point): void {
+    const { width, height } = this.sizeOf('chat');
+    win.setMinimumSize(width, height);
+    win.setMaximumSize(width, height);
+    if (this.captionLive()) win.setSize(width, height);
+    this.place('chat', win, at);
+  }
+
+  /** Tell the chat and the bar which size the chat is (the bar words its size button by it). */
+  private pushChatSize(): void {
+    const size = this.chatLarge ? 'large' : 'small';
+    for (const w of [this.chat, this.bar]) if (w && !w.isDestroyed()) w.webContents.send(IPC_CHAT_SIZE, size);
+  }
+
   toggleChat(): void {
     if (!this.chat || this.chat.isDestroyed()) {
       this.createChat();
@@ -790,8 +923,9 @@ export class BuddyWindowManager {
       const layout = this.layoutFor();
       this.place('chat', this.chat, layout.chat);
       this.chat.show();
-      this.chat.webContents.send(IPC_CHAT_STATE, { visible: true });
+      this.chat.webContents.send(IPC_CHAT_STATE, { visible: true, mascot: mascotSide(layout) });
       this.barVisibility.setChatOpen(true);
+      this.deps.onWatchedSessionChanged?.();
       // Opening the chat is what actually brings a peeking buddy out — and keeps
       // him out, unlike the hover hop.
       this.syncEngagement();
@@ -820,11 +954,12 @@ export class BuddyWindowManager {
     }
     if (!mb) {
       const primary = this.primaryWorkArea();
-      const fallback = { x: primary.x + primary.width - CHAT_SIZE.width - 24, y: primary.y + primary.height - CHAT_SIZE.height - 24 };
+      const chat = this.sizeOf('chat');
+      const fallback = { x: primary.x + primary.width - chat.width - 24, y: primary.y + primary.height - chat.height - 24 };
       return { mascot: fallback, chat: fallback };
     }
     const display = screen.getDisplayMatching(mb) ?? screen.getPrimaryDisplay();
-    return computeGroupLayout(mb, this.workAreaFor(display));
+    return computeGroupLayout(mb, this.workAreaFor(display), this.sizeOf('chat'));
   }
 
   /** Chat + bar placement for the taskbar style, against the screen the icon
@@ -832,7 +967,7 @@ export class BuddyWindowManager {
   private trayLayout(): { chat: Point; bar: Point } {
     const icon = this.tray?.bounds() ?? null;
     const display = icon ? (screen.getDisplayMatching(icon) ?? screen.getPrimaryDisplay()) : screen.getPrimaryDisplay();
-    return computeTrayLayout(icon, this.workAreaFor(display));
+    return computeTrayLayout(icon, this.workAreaFor(display), this.sizeOf('chat'));
   }
 
   /** Move the chat's subscription from the previous session to the new one. */
@@ -845,10 +980,18 @@ export class BuddyWindowManager {
       this.deps.registry.subscribe(sessionId, wcId);
     }
     this.viewedSessionId = sessionId;
+    this.deps.onWatchedSessionChanged?.();
   }
 
   getViewedSession(): string | null {
     return this.viewedSessionId;
+  }
+
+  /** The session the person is looking at in the buddy right now: the viewed one while the chat is open, else null.
+   *  WHY separate from getViewedSession: the viewed session is remembered while the chat is shut, and a reply that
+   *  finishes then has not been seen, so it must still turn blue. */
+  watchedSession(): string | null {
+    return this.chatOpenIntent && this.chat && !this.chat.isDestroyed() ? this.viewedSessionId : null;
   }
 
   /** True iff `win` is one of the buddy windows this manager owns
@@ -1008,8 +1151,9 @@ export class BuddyWindowManager {
     if ((actualDx !== 0 || actualDy !== 0) && this.chat && !this.chat.isDestroyed() && chatOpen) {
       const cb = this.rectOf(this.chat);
       const chatRaw = { x: cb.x + actualDx, y: cb.y + actualDy };
-      const chatDisplay = screen.getDisplayMatching({ ...chatRaw, ...CHAT_SIZE }) ?? screen.getPrimaryDisplay();
-      const chatClamped = clampToWorkArea(chatRaw, CHAT_SIZE, this.workAreaFor(chatDisplay));
+      const chatSize = this.sizeOf('chat');
+      const chatDisplay = screen.getDisplayMatching({ ...chatRaw, ...chatSize }) ?? screen.getPrimaryDisplay();
+      const chatClamped = clampToWorkArea(chatRaw, chatSize, this.workAreaFor(chatDisplay));
       this.place('chat', this.chat, chatClamped);
     }
     // Bar follows its own CSS visibility (not Electron isVisible() — the
@@ -1037,6 +1181,8 @@ export class BuddyWindowManager {
       this.bar.webContents.once('did-finish-load', () => {
         if (this.bar && !this.bar.isDestroyed()) {
           this.bar.webContents.send(IPC_BAR_STATE, { visible: this.barCssVisible });
+          // So the size button's hint says which way it goes from the start.
+          this.pushChatSize();
         }
       });
     } else {
@@ -1078,6 +1224,8 @@ export class BuddyWindowManager {
   // against rapid re-toggles.
   private chatOpenIntent = false;
   private chatHideTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The size button's pause while the panel is faded out (toggleChatSize). */
+  private chatResizeTimer: ReturnType<typeof setTimeout> | null = null;
 
   private createChat(): void {
     this.chatOpenIntent = true;
@@ -1088,6 +1236,16 @@ export class BuddyWindowManager {
     const layout = this.layoutFor();
     this.chat = this.create('chat', layout.chat);
     this.wireChatLifecycle(this.chat);
+    // The window is built at the small size; a remembered large size is applied at once.
+    if (this.chatLarge) this.applyChatSize(this.chat, layout.chat);
+    // The first open's cue races page load (a send before the page listens is dropped) — re-send it, with the size,
+    // once the renderer is listening, so the very first open also grows from the buddy's side.
+    const chatWin = this.chat;
+    chatWin.webContents.once('did-finish-load', () => {
+      if (chatWin.isDestroyed() || chatWin !== this.chat) return;
+      chatWin.webContents.send(IPC_CHAT_STATE, { visible: true, mascot: mascotSide(this.layoutFor()) });
+      this.pushChatSize();
+    });
     // If a session was already chosen (via setViewedSession) before the
     // chat window was ever opened, subscribe now. Without this, the first
     // render of chat renders empty because no transcript events are
@@ -1098,6 +1256,7 @@ export class BuddyWindowManager {
     this.chat.show();
     this.chat.focus();
     this.barVisibility.setChatOpen(true);
+    this.deps.onWatchedSessionChanged?.();
     this.syncEngagement();
     // setChatOpen(true) created the bar above the chat, but chat.focus() may
     // have re-raised the chat — assert the order rather than rely on timing.
@@ -1174,4 +1333,9 @@ function debounce<T extends (...a: any[]) => void>(fn: T, ms: number): T {
     if (t) clearTimeout(t);
     t = setTimeout(() => fn(...args), ms);
   }) as T;
+}
+
+/** Which side of the chat the mascot is on, so the chat window grows out of him (buddy-rebuild-questions#Q-7). */
+function mascotSide(layout: GroupLayout): 'above' | 'below' {
+  return layout.chat.y >= layout.mascot.y ? 'above' : 'below';
 }

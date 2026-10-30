@@ -517,7 +517,7 @@ describe('useEntryFolding', () => {
     // registerEntry manually via `act()` after renderHook has already flushed
     // effects, which hides exactly this ordering. Mount through `render` with
     // a real ref prop so React itself drives the timing, the way ChatView /
-    // PreviewTimeline / BubbleFeed actually mount their first screen of
+    // PreviewTimeline actually mount their first screen of
     // entries.
     let api!: EntryFolding;
     function List() {

@@ -136,7 +136,8 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
     rawError={errorMessage ?? ''} handlers={{ onRetry, onOpenProviderSettings, onSwitchProviders, onSummarise }} />;
 
   const destructive = DESTRUCTIVE.includes(state);
-  const bubbleBase = 'flex items-center gap-2 bg-inset rounded-2xl rounded-bl-sm px-4 py-2.5';
+  // attention-bubble: a hook for the buddy's small window, which wraps the buttons under the sentence (buddy.css).
+  const bubbleBase = 'attention-bubble flex items-center gap-2 bg-inset rounded-2xl rounded-bl-sm px-4 py-2.5';
   const bubbleClasses = destructive
     ? `${bubbleBase} ring-1 ring-[var(--destructive)]`
     : bubbleBase;

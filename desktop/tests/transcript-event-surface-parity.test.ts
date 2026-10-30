@@ -33,7 +33,7 @@ const ALL_TYPES: Record<TranscriptEventType, true> = {
   'subagent-usage': true, 'background-task': true,
 };
 
-// The options each window passes (App.tsx, BubbleFeed.tsx). Same compaction flag so
+// The options each window passes (App.tsx, useBuddyFeed.ts). Same compaction flag so
 // the comparison isolates what the OPTIONS change; the buddy has no statusline.
 const mainWindow = (pending: boolean | undefined) => ({ live: true, compactionPending: pending, fallbackContextTokens: 777 });
 const buddyWindow = (pending: boolean | undefined) => ({ live: true, compactionPending: pending, fallbackContextTokens: null });
@@ -84,7 +84,7 @@ describe('transcript event surface parity', () => {
   describe('the two screens share ONE listener, with no ledger of skipped types', () => {
     const src = (p: string) => readFileSync(fileURLToPath(new URL(`../src/renderer/${p}`, import.meta.url)), 'utf8');
     it('App and the buddy both attach through state/screen-feed, and neither translates events itself', () => {
-      for (const file of ['App.tsx', 'components/buddy/BubbleFeed.tsx']) {
+      for (const file of ['App.tsx', 'components/buddy/useBuddyFeed.ts']) {
         const code = src(file);
         expect(code, file).toContain('attachTranscriptFeed(');
         expect(code, file).toContain('attachSessionLiveFeed(');

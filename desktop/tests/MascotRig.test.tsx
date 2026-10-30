@@ -93,6 +93,16 @@ describe('body pose', () => {
       });
     });
 
+    it('moves a hat drawn beside the body WITH the body, so a sleeping dog keeps its ears on its head', async () => {
+      // The default rig, like the contract's template, draws #slot-hat beside #rig-body (Destin, 2026-10-29: the
+      // morning-rounds dog's ears stayed floating above its head while it slept).
+      const c = mount('sleep');
+      await waitFor(() => expect(bodyOf(c)!.style.transform).not.toBe(''));
+      const hat = c.querySelector<SVGGElement>('#slot-hat')!;
+      expect(bodyOf(c)!.contains(hat)).toBe(false);
+      expect(hat.style.transform).toBe(bodyOf(c)!.style.transform);
+    });
+
     it('leaves the body alone for a pose that does not ask', async () => {
       // Every pose that shipped before this existed must be byte-for-byte
       // unchanged: no rotation, no shift, no shrink, full brightness.
