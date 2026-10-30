@@ -1232,6 +1232,14 @@ describe('native runtime reducer paths', () => {
     expect(state.get(SESSION)!).toBe(same);
   });
 
+  it('modelEverResident does not carry over to a different model after a switch', () => {
+    state = dispatch(state, { type: 'NATIVE_MODEL_STATE_CHANGED', sessionId: SESSION, state: 'loaded', modelId: 'Qwen-2B', sizeBytes: 2_000_000_000 });
+    expect(state.get(SESSION)!.modelEverResident).toBe(true);
+    state = dispatch(state, { type: 'NATIVE_MODEL_STATE_CHANGED', sessionId: SESSION, state: 'unloaded', modelId: 'Gemma-12B', sizeBytes: 9_000_000_000 });
+    expect(state.get(SESSION)!.modelEverResident).toBe(false);
+    expect(state.get(SESSION)!.modelInfo?.modelId).toBe('Gemma-12B');
+  });
+
   it('modelEverResident latches on first loaded and stays true through sleep/unload', () => {
     // Fresh session's cold state: not yet resident → the Reload prompt must NOT
     // key on this (ModelLoadingBar shows the loading bar instead).

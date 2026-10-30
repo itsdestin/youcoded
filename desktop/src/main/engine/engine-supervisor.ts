@@ -865,7 +865,9 @@ export class EngineSupervisor extends EventEmitter {
     const wasRunning = this.state === 'running';
     this.child = null;
     this.disarmIdleTimer();
+    const lastModels = this.lastPolledModels;
     this.stopModelPoll();
+    this.emitAllUnloaded(lastModels);
     if (this.intentionalShutdown) { this.state = 'stopped'; this.emit('status-changed'); return; }
     if (!wasRunning) return;
     const now = Date.now();
@@ -891,7 +893,11 @@ export class EngineSupervisor extends EventEmitter {
 
   private async _stop(): Promise<void> {
     this.disarmIdleTimer();
+    // Taken before the poll is torn down (it clears the reading); onExit then
+    // sees null and does not announce twice.
+    const lastModels = this.lastPolledModels;
     this.stopModelPoll();
+    this.emitAllUnloaded(lastModels);
     if (!this.child) {
       if (this.state !== 'error') this.state = 'stopped';
       return;
@@ -993,6 +999,13 @@ export class EngineSupervisor extends EventEmitter {
     // would wait for a moment that may never come (design §C2).
     const modelId = requestModelId(init);
     if (modelId) this.inFlightByModel.set(modelId, (this.inFlightByModel.get(modelId) ?? 0) + 1);
+    // A request to a model last seen NOT loaded is about to wake it: check at
+    // once so the loading strip shows now, not at the next 10 s idle poll (a
+    // short load could otherwise finish unseen). A beat later, so the router has
+    // received the request and already says 'loading'.
+    if (modelId && this.lastPolledModels?.find((m) => m.id === modelId)?.state !== 'loaded') {
+      setTimeout(() => { if (this.state === 'running') this.nudgeModelPoll(); }, 250).unref?.();
+    }
     const releaseModel = () => {
       if (!modelId) return;
       const next = (this.inFlightByModel.get(modelId) ?? 1) - 1;
@@ -1312,6 +1325,21 @@ export class EngineSupervisor extends EventEmitter {
   loadedModelsBytes(): number | undefined {
     if (this.lastPolledModels === null) return undefined;
     return sumLoadedModelBytes(this.lastPolledModels);
+  }
+
+  /** The latest /models reading (null = not asked yet / engine not running).
+   *  WHY public: a chat that opens on, or switches to, a model whose state is
+   *  NOT changing gets no 'models-changed' — the coordinator reads this to tell
+   *  it the current state at once (else it never learns the model is loaded). */
+  latestModels(): EngineModel[] | null { return this.lastPolledModels; }
+
+  /** Tell listeners every model is now unloaded. WHY: the poll only emits on a
+   *  change it SEES, and a stopped or crashed engine is never polled again — so
+   *  a chat whose last news was 'loading' kept a "Loading…" strip until the next
+   *  boot. Called with the reading taken just before the poll was torn down. */
+  private emitAllUnloaded(last: EngineModel[] | null): void {
+    if (!last?.length) return;
+    this.emit('models-changed', last.map((m) => ({ ...m, state: 'unloaded' as const, loaded: false, loadedBytes: undefined })));
   }
 
   /** Compute the live model set (with load progress) and emit if it changed. */

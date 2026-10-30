@@ -1342,6 +1342,11 @@ export class EngineManager extends EventEmitter {
     return this.supervisor?.inFlightFor(modelId) ?? 0;
   }
 
+  /** The engine's latest model reading, or null when it is not running. */
+  latestModels(): EngineModel[] | null {
+    return this.supervisor?.latestModels() ?? null;
+  }
+
   /** The router's own word on one model's residency; `null` = could not be
    *  determined, NEVER "unloaded" (EngineSupervisor.routerModelState). */
   async routerModelState(modelId: string): Promise<EngineModelState | null> {

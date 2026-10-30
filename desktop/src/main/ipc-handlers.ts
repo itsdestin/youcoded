@@ -840,7 +840,8 @@ export function registerIpcHandlers(
       // so the loading bar + GB progress appear immediately rather than only after
       // the first message. Fire-and-forget; the model poll drives the UI.
       // WHY local only: a cloud model id sent here booted the local engine and logged a bogus load error.
-      void nativeHost.localModelForSession(info.id).then((id) => (id ? engineManager.loadModel(id) : undefined))
+      void nativeHost.localModelForSession(info.id)
+        .then((id) => (id ? engineManager.loadModel(id).then(() => pushCurrentModelState(info.id, id)) : undefined))
         .catch(() => { /* engine not installed / boot failed — the first send surfaces it */ });
     } else if (info.provider === 'claude') {
       // Contract R23: EVERY chat carries the line saying what the assistant
@@ -1769,6 +1770,7 @@ export function registerIpcHandlers(
   // A native session's model changed (the picker, from any screen): the label on every screen.
   nativeHost.on('model-changed', (e: { sessionId: string; model: string }) => {
     publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'model', model: e.model });
+    pushCurrentModelState(e.sessionId, e.model);
   });
   nativeHost.on('permission-mode', (e: { sessionId: string; mode: NativePermissionMode }) => {
     publish(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e);
@@ -1800,19 +1802,26 @@ export function registerIpcHandlers(
   // loading banner (#4/#5). Only push on change per session.
   // Signature includes loadedBytes so LOAD PROGRESS updates (state stays
   // 'loading' while bytes climb) are pushed, not just state transitions.
+  // The model id is in the signature: after a switch the new model's state often
+  // matches the old one's ('loaded'), and the chat then kept the old name and size.
   const lastSessionModelState = new Map<string, string>();
+  const pushModelState = (sessionId: string, m: Pick<EngineModelType, 'id' | 'state' | 'sizeBytes' | 'loadedBytes'>) => {
+    const sig = `${m.id}:${m.state}:${m.loadedBytes ?? ''}`;
+    if (lastSessionModelState.get(sessionId) === sig) return;
+    lastSessionModelState.set(sessionId, sig);
+    publish(sessionId, IPC.NATIVE_MODEL_STATE, { sessionId, modelId: m.id, state: m.state, sizeBytes: m.sizeBytes, loadedBytes: m.loadedBytes ?? null });
+  };
   engineManager.on('models-changed', (models: EngineModelType[]) => {
-    for (const m of models) {
-      const payload = { modelId: m.id, state: m.state, sizeBytes: m.sizeBytes, loadedBytes: m.loadedBytes ?? null };
-      const sig = `${m.state}:${m.loadedBytes ?? ''}`;
-      for (const sessionId of nativeHost.sessionsForModel(m.id)) {
-        if (lastSessionModelState.get(sessionId) === sig) continue;
-        lastSessionModelState.set(sessionId, sig);
-        const full = { sessionId, ...payload };
-        publish(sessionId, IPC.NATIVE_MODEL_STATE, full);
-      }
-    }
+    for (const m of models) for (const sessionId of nativeHost.sessionsForModel(m.id)) pushModelState(sessionId, m);
   });
+  // WHY: a chat that opens on, or switches to, a model whose state is NOT changing
+  // got no push, so it never learned the model was loaded — and when that model
+  // later slept, its strip said "Loading…" forever. A model the engine does not
+  // list (a cloud model) is pushed as available, clearing any old local strip.
+  function pushCurrentModelState(sessionId: string, modelId: string): void {
+    const m = engineManager.latestModels()?.find((x) => x.id === modelId);
+    pushModelState(sessionId, m ?? { id: modelId, state: 'loaded', sizeBytes: null, loadedBytes: undefined });
+  }
   // Download progress fans out to every window + remotes on one push channel,
   // mirroring the engine install-progress emitter above.
   modelManager.on('download-progress', (p) => {

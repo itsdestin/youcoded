@@ -81,12 +81,15 @@ const ModelLoadingBar = React.forwardRef<HTMLDivElement, Props>(function ModelLo
 ) {
   const notResident = modelState === 'sleeping' || modelState === 'unloaded';
   // The model is coming up if it's explicitly loading, OR a turn is in flight
-  // while it's still asleep/unloaded (the send is waking it), OR it's a fresh
-  // session whose model hasn't finished its first load yet (eager load in flight).
+  // while it's still asleep/unloaded (the send is waking it).
+  // WHY no longer "OR not resident and never resident" (2026-10-29): that also
+  // matched an eager load that FAILED, a stopped engine, and a chat that was
+  // never told its model was loaded — each showed "Loading…" with a clock
+  // ticking forever. The eager load reports 'loading' within one poll, so the
+  // cold-start gap it covered is a fraction of a second with nothing shown.
   const loading =
     modelState === 'loading' ||
-    (isThinking && notResident) ||
-    (notResident && !everResident);
+    (isThinking && notResident);
   // Reload prompt ONLY after the model was resident and then dropped while idle.
   const showReload = !isThinking && notResident && everResident;
 

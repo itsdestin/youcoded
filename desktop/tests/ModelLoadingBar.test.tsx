@@ -22,6 +22,23 @@ function bar(loadedBytes: number) {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('ModelLoadingBar', () => {
+  it('shows nothing for a model that is not loading and was never loaded, with no reply running', () => {
+    // A failed open-time load, or a stopped engine: there is nothing to wait for.
+    const { container } = render(
+      <ModelLoadingBar modelState="unloaded" modelInfo={info} loadedBytes={null}
+        everResident={false} isThinking={false} onReload={() => {}} />,
+    );
+    expect(container.textContent).toBe('');
+  });
+
+  it('a reply waking a sleeping model shows the loading strip', () => {
+    render(
+      <ModelLoadingBar modelState="sleeping" modelInfo={info} loadedBytes={null}
+        everResident isThinking onReload={() => {}} />,
+    );
+    expect(screen.getByText('Loading')).toBeTruthy();
+  });
+
   it('a pause early in a load still reads "Loading", not "finishing up"', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     const { rerender } = render(bar(0.2 * GB));

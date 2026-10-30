@@ -1767,6 +1767,23 @@ describe('EngineSupervisor — loading progress without blocking', () => {
     expect(latest()).toMatchObject({ state: 'loading', loadedBytes: 1_500_000 });
   });
 
+  it('stopping the engine tells listeners every model is unloaded, so no chat stays on "loading"', async () => {
+    const { fetchImpl, setLoading } = loadingFetch();
+    mockSpawn.mockReturnValue(makeFakeChild());
+    sup = makeSupervisor(fetchImpl, { scanCacheImpl: async () => [] });
+    await sup.ensureRunning();
+    await flush();
+    setLoading();
+    await sup.pollModelsNow();
+    expect(sup.latestModels()?.[0]).toMatchObject({ id: 'm-Q4_K_M', state: 'loading' });
+    const emitted: any[] = [];
+    sup.on('models-changed', (ms) => emitted.push(ms));
+    await sup.stop();
+    expect(emitted.at(-1)).toEqual([expect.objectContaining({ id: 'm-Q4_K_M', state: 'unloaded', loaded: false })]);
+    expect(emitted).toHaveLength(1);
+    expect(sup.latestModels()).toBeNull();
+  });
+
   it('a lookup that finishes after the engine stopped leaves nothing behind', async () => {
     const proc = gatedProc();
     const { fetchImpl, setLoading } = loadingFetch();
@@ -1789,6 +1806,8 @@ describe('EngineSupervisor — loading progress without blocking', () => {
     expect((sup as any).loadProgress.size).toBe(0);
     expect((sup as any).loadingPid.size).toBe(0);
     expect(sup.loadedModelsBytes()).toBeUndefined();
-    expect(emitted).toEqual([]);
+    // Only the stop's own "everything is unloaded" notice — never the stale
+    // reading's "loading".
+    expect(emitted).toEqual([[expect.objectContaining({ id: 'm-Q4_K_M', state: 'unloaded' })]]);
   });
 });
