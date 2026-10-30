@@ -19,7 +19,10 @@
 /** Hosts the page itself calls with fetch(): the marketplace/account Worker. Game lobbies use a wss: socket (allowed below). */
 const API_HOSTS = ['https://api.youcoded.ai'];
 
-export function buildAppCsp(): string {
+export function buildAppCsp(opts: { workbench?: boolean } = {}): string {
+  // The UI workbench (a browser page with a fake backend, never shipped) fetches its Office sample documents from a local
+  // practice editor server on a changing port. Nothing in the real app does this.
+  const workbenchHosts = opts.workbench ? ' http://127.0.0.1:* http://localhost:*' : '';
   return [
     "default-src 'self'",
     // See the long note above: inline + eval + https because srcdoc frames inherit this list.
@@ -30,7 +33,7 @@ export function buildAppCsp(): string {
     "media-src 'self' data: blob: file: theme-asset: https:",
     // ws:/wss: because the phone app and a second computer connect to the host by address (any address); everything else
     // the page fetches is its own files, data:/blob: pictures and the Worker.
-    `connect-src 'self' file: data: blob: theme-asset: ws: wss: ${API_HOSTS.join(' ')}`,
+    `connect-src 'self' file: data: blob: theme-asset: ws: wss: ${API_HOSTS.join(' ')}${workbenchHosts}`,
     // about:srcdoc frames (previews, pages) are always allowed; office: is the document editor; https: for embeds in previews.
     "frame-src 'self' office: blob: https:",
     "worker-src 'self' blob:",

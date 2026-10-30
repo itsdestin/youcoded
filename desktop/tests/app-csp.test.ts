@@ -23,6 +23,10 @@ describe('app Content-Security-Policy', () => {
     expect(c.split(/\s+/)).not.toContain('http:');
     expect(c).not.toContain('*');
   });
+  it('only the workbench (never shipped) may reach local practice servers', () => {
+    expect(buildAppCsp()).not.toMatch(/127\.0\.0\.1|localhost/);
+    expect(buildAppCsp({ workbench: true })).toMatch(/connect-src [^;]*http:\/\/127\.0\.0\.1:\*/);
+  });
   it('keeps what theme backgrounds, chat pictures, sounds and previews need', () => {
     expect(dir('img-src')).toMatch(/theme-asset:/);
     expect(dir('img-src')).toMatch(/\bhttps:/);

@@ -92,7 +92,7 @@ const appContentSecurityPolicy = {
   // must come before the first script and style it governs). The policy only uses single quotes, so a double-quoted attribute is safe.
   transformIndexHtml: {
     order: 'pre' as const,
-    handler: (html: string) => html.replace(/(<meta charset="[^"]*"\s*\/?>)/i, `$1\n  <meta http-equiv="Content-Security-Policy" content="${buildAppCsp()}" />`),
+    handler: (html: string) => html.replace(/(<meta charset="[^"]*"\s*\/?>)/i, `$1\n  <meta http-equiv="Content-Security-Policy" content="${buildAppCsp({ workbench: process.env.VITE_WORKBENCH === '1' })}" />`),
   },
 };
 
