@@ -2575,6 +2575,14 @@ export class NativeSessionHost extends EventEmitter {
     return this.live.get(sessionId)?.session.binding.modelId ?? null;
   }
 
+  /** modelForSession, but null unless the chat runs on the LOCAL engine. WHY: opening a cloud chat eager-loaded
+   *  its id into the local engine — booting it, rescanning the models folder, logging a bogus load error. */
+  async localModelForSession(sessionId: string): Promise<string | null> {
+    const binding = this.live.get(sessionId)?.session.binding;
+    const type = binding ? await this.providerTypeFor(binding).catch(() => null) : null;
+    return type === 'local-engine' ? binding!.modelId : null;
+  }
+
   /** Set a session's permission mode (renderer chip → NATIVE_SET_PERMISSION_MODE).
    *  Validates LOUDLY: an unknown mode string is a renderer/wiring bug, so throw
    *  (rejecting the invoke() promise at the ipcMain.handle boundary) rather than

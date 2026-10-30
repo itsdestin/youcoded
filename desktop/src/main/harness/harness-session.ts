@@ -2092,6 +2092,7 @@ export class HarnessSession extends EventEmitter {
    *  step parks and cleared the moment it un-parks or the step ends. Null means
    *  nothing is parked, which is the entire race guard for the Retry button. */
   private resolveRetry: (() => void) | null = null;
+  private lastPrefillReading: PrefillProgress | null = null; // previous reading → toReport's per-batch ETA rate
   private emitPrefillProgress(p: PrefillProgress): void {
     // Prefill progress after the first token would be describing work the user
     // can already see the result of; the notice is a pre-output affordance only.
@@ -2105,7 +2106,8 @@ export class HarnessSession extends EventEmitter {
     // BELOW the re-arm above: a report is proof of life whether or not we render
     // it, and gating the re-arm too would let a healthy stream trip the watchdog.
     if (!this.profile.announcePrefill) return;
-    const report = toReport(p);
+    const report = toReport(p, this.lastPrefillReading); // kept even when throttled below; other streams ignored
+    this.lastPrefillReading = p;
     const isFinal = report.newProcessed >= report.newTotal;
     const now = Date.now();
     if (!isFinal && now - this.lastPrefillEmitAt < 400) return;

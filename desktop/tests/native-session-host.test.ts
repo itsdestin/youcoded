@@ -619,6 +619,17 @@ describe('NativeSessionHost', () => {
     await host2.destroyAll();
   });
 
+  it('names a model for the open-time local load only when the chat runs on the local engine', async () => {
+    const typed = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT,
+      async (b) => (b.providerId === 'local' ? 'local-engine' : 'openrouter'), async () => null);
+    await typed.create({ sessionId: 'loc', cwd: root, binding: { providerId: 'local', modelId: 'Qwen-9B' } });
+    await typed.create({ sessionId: 'cloud', cwd: root, binding: { providerId: 'or', modelId: 'gpt-5.6-luna' } });
+    expect(await typed.localModelForSession('loc')).toBe('Qwen-9B');
+    expect(await typed.localModelForSession('cloud')).toBeNull();
+    expect(await typed.localModelForSession('not-live')).toBeNull();
+    await typed.destroyAll();
+  });
+
   it('list() surfaces sessions for the Resume Browser with provider tag', async () => {
     await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
     const rows = host.list();

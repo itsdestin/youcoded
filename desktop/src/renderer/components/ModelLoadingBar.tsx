@@ -5,6 +5,7 @@ import BrailleSpinner from './BrailleSpinner';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import { useSecondsTick } from '../hooks/useSecondsTick';
+import { formatEta } from './ThinkingIndicator';
 
 // Centered status strip that floats just ABOVE the input area for a NATIVE
 // (local-model) session. States (2026-07-14 memory-lifecycle UX):
@@ -56,6 +57,16 @@ const FINALIZE_PCT = 99;
 // If resident bytes stop climbing for this long while still 'loading', treat it
 // as finalizing too — covers models whose peak RSS plateaus below FINALIZE_PCT.
 const PLATEAU_MS = 2500;
+// …but only once most of the file is in. WHY (2026-10-29): on the Z13 the
+// reading sat at 0.16 GB of 31 GB for the whole load (the main process now also
+// counts bytes read, which fixes that), and the plateau rule turned a load that
+// had barely started into "Preparing · finishing up" for 10-30 s. A pause in the
+// first 90% is a pause, not the end.
+const PLATEAU_MIN_PCT = 90;
+// A time-left needs a steady speed first: the first second or two is the engine
+// starting up and allocating, not reading.
+const ETA_MIN_ELAPSED_S = 3;
+const ETA_MIN_PCT = 5;
 
 // forwardRef (fix: jump-to-bottom/model-status-strip overlap): ChatView needs
 // this component's OWN rendered height to publish `--model-status-height`
@@ -117,8 +128,15 @@ const ModelLoadingBar = React.forwardRef<HTMLDivElement, Props>(function ModelLo
   // Finalizing: weights are in RAM (near-full % OR bytes plateaued) but the
   // backend is still initializing — show a full, animated "Preparing…" bar.
   const plateaued =
-    hasProgress && lastGrowthAtRef.current > 0 && Date.now() - lastGrowthAtRef.current > PLATEAU_MS;
+    hasProgress && pct >= PLATEAU_MIN_PCT && lastGrowthAtRef.current > 0 && Date.now() - lastGrowthAtRef.current > PLATEAU_MS;
   const finalizing = hasProgress && (pct >= FINALIZE_PCT || plateaued);
+  // Time left to finish READING the file, from the average speed so far. It
+  // leaves out the short "finishing up" step after it, so it errs early;
+  // formatEta rounds hard and says "about", and hides itself under 2 s.
+  const elapsedMs = loadStartedAt == null ? 0 : now - loadStartedAt;
+  const readEta = hasProgress && !finalizing && elapsed >= ETA_MIN_ELAPSED_S && pct >= ETA_MIN_PCT
+    ? formatEta(((size! - loadedBytes!) / loadedBytes!) * elapsedMs)
+    : null;
 
   // NOT an L4 overlay, despite what change 29 reads like. This strip is
   // positioned INSIDE the chat column (absolute, z-10) — converting it to a
@@ -158,8 +176,9 @@ const ModelLoadingBar = React.forwardRef<HTMLDivElement, Props>(function ModelLo
                   {brand?.icon && <span className="inline-flex shrink-0" style={{ color: brand.color }}><ProviderIcon icon={brand.icon} size={12} /></span>}
                   <span className="font-medium">{name}</span>
                   {hasProgress ? (
+                    // Elapsed seconds too, so a pause never looks like a freeze.
                     <span className="text-fg-dim text-xs tabular-nums">
-                      · {gbNum(loadedBytes)} / {gbNum(size)} GB
+                      · {gbNum(loadedBytes)} / {gbNum(size)} GB · {readEta ?? `${elapsed}s`}
                     </span>
                   ) : size != null ? (
                     <span className="text-fg-dim text-xs">· {gbNum(size)} GB · {elapsed}s</span>

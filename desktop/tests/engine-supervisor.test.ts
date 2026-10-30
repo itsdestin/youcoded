@@ -1624,15 +1624,25 @@ describe('findModelChildRss', () => {
     expect(reads).not.toContain('/proc/999/cmdline');
   });
 
-  it('a pid found on an earlier tick costs two reads and no directory listing', async () => {
+  it('a pid found on an earlier tick costs three small reads and no directory listing', async () => {
     const { procFs, dirs, reads } = fakeProcFs({
       '/proc/100/task/100/children': '300',
       '/proc/300/cmdline': MODEL_CMD,
       '/proc/300/status': statusWith(4096),
     });
     expect(await findModelChildRss('m-Q4_K_M', 100, 300, procFs)).toEqual({ pid: 300, bytes: 4096 * 1024 });
-    expect(reads).toEqual(['/proc/300/cmdline', '/proc/300/status']);
+    expect(reads).toEqual(['/proc/300/cmdline', '/proc/300/status', '/proc/300/io']);
     expect(dirs).toEqual([]);
+  });
+
+  it('also reports the bytes the model child has read, which is what climbs on a GPU load', async () => {
+    const { procFs } = fakeProcFs({
+      '/proc/300/cmdline': MODEL_CMD,
+      '/proc/300/status': statusWith(160_000),
+      '/proc/300/io': 'rchar: 30900000000\nwchar: 12\nsyscr: 9\n',
+    });
+    expect(await findModelChildRss('m-Q4_K_M', 100, 300, procFs))
+      .toEqual({ pid: 300, bytes: 160_000 * 1024, readBytes: 30_900_000_000 });
   });
 
   it('a remembered pid now running something else is NOT reported — the search runs again', async () => {
@@ -1714,6 +1724,47 @@ describe('EngineSupervisor — loading progress without blocking', () => {
     proc.release();
     await Promise.all([a, b]);
     expect(emitted.at(-1)?.[0]).toMatchObject({ id: 'm-Q4_K_M', state: 'loading', loadedBytes: 500 * 1024 });
+  });
+
+  it('the bar follows bytes read when memory stays flat, and a wake from sleep counts only new reads', async () => {
+    let rchar = 0;
+    const procFs: ProcFs = {
+      readdir: async (d) => { if (d === '/proc/4242/task') return ['4242']; return enoent(); },
+      readFile: async (p) => {
+        if (p === '/proc/4242/task/4242/children') return '5000';
+        if (p === '/proc/5000/cmdline') return MODEL_CMD;
+        if (p === '/proc/5000/status') return statusWith(100); // VmRSS flat, as on Vulkan
+        if (p === '/proc/5000/io') return `rchar: ${rchar}\n`;
+        return enoent();
+      },
+    };
+    let state: 'loaded' | 'loading' | 'sleeping' = 'loading';
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/health')) return { ok: true, status: 200, json: async () => ({ status: 'ok' }) } as any;
+      if (u.includes('/models')) return { ok: true, status: 200, json: async () => ({ data: [{ id: 'm-Q4_K_M', size: 10_000_000, status: { value: state } }] }) } as any;
+      return { ok: true, status: 200, text: async () => '' } as any;
+    });
+    mockSpawn.mockReturnValue(makeFakeChild());
+    sup = makeSupervisor(fetchImpl, { procFs, scanCacheImpl: async () => [] });
+    await sup.ensureRunning();
+    await flush();
+    const latest = () => (sup as any).lastPolledModels?.[0];
+
+    rchar = 4_000_000;
+    await sup.pollModelsNow();
+    expect(latest()).toMatchObject({ state: 'loading', loadedBytes: 4_000_000 });
+
+    rchar = 9_800_000;
+    await sup.pollModelsNow();
+    state = 'loaded';
+    await sup.pollModelsNow();
+
+    // Same process wakes from sleep: its counter starts at 9.8 MB already.
+    state = 'loading';
+    rchar = 9_800_000 + 1_500_000;
+    await sup.pollModelsNow();
+    expect(latest()).toMatchObject({ state: 'loading', loadedBytes: 1_500_000 });
   });
 
   it('a lookup that finishes after the engine stopped leaves nothing behind', async () => {

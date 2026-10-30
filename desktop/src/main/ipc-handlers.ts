@@ -839,8 +839,9 @@ export function registerIpcHandlers(
       // Eager-load the bound model the moment the session opens (like LM Studio),
       // so the loading bar + GB progress appear immediately rather than only after
       // the first message. Fire-and-forget; the model poll drives the UI.
-      const eagerModelId = nativeHost.modelForSession(info.id);
-      if (eagerModelId) { void engineManager.loadModel(eagerModelId).catch(() => { /* engine not installed / boot failed — the first send surfaces it */ }); }
+      // WHY local only: a cloud model id sent here booted the local engine and logged a bogus load error.
+      void nativeHost.localModelForSession(info.id).then((id) => (id ? engineManager.loadModel(id) : undefined))
+        .catch(() => { /* engine not installed / boot failed — the first send surfaces it */ });
     } else if (info.provider === 'claude') {
       // Contract R23: EVERY chat carries the line saying what the assistant
       // started with — a Claude Code chat is still a chat. The native runtime

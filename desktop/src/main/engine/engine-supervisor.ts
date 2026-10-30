@@ -116,15 +116,28 @@ export async function findModelChildRss(
   routerPid: number | undefined,
   knownPid: number | undefined,
   procFs: ProcFs,
-): Promise<{ pid: number; bytes: number } | undefined> {
+): Promise<{ pid: number; bytes: number; readBytes?: number } | undefined> {
   const needle = `/${modelId}.gguf`;
-  const tryPid = async (pid: number): Promise<{ pid: number; bytes: number } | undefined> => {
+  const tryPid = async (pid: number): Promise<{ pid: number; bytes: number; readBytes?: number } | undefined> => {
     try {
       const cmd = await procFs.readFile(`/proc/${pid}/cmdline`); // NUL-separated
       if (!cmd.includes('--model') || !cmd.includes(needle)) return undefined;
       const status = await procFs.readFile(`/proc/${pid}/status`);
       const m = /VmRSS:\s+(\d+)\s+kB/.exec(status);
-      return m ? { pid, bytes: parseInt(m[1], 10) * 1024 } : undefined;
+      if (!m) return undefined;
+      // WHY also `rchar` (bytes the process has read, cache hits included):
+      // on a GPU build the weights are read() straight into graphics memory, so
+      // VmRSS never climbs — measured on the Z13 (Vulkan, b10665): VmRSS sat at
+      // 0.16 GB for a whole 31 GB load while rchar rose smoothly to 30.9 GB,
+      // cold and warm alike. The bar read ~0% and then said "finishing up" for
+      // the entire load. Optional: a kernel that hides /proc/<pid>/io just
+      // leaves the old VmRSS reading.
+      let readBytes: number | undefined;
+      try {
+        const io = /rchar:\s+(\d+)/.exec(await procFs.readFile(`/proc/${pid}/io`));
+        if (io) readBytes = Number(io[1]);
+      } catch { /* unreadable — VmRSS only */ }
+      return { pid, bytes: parseInt(m[1], 10) * 1024, readBytes };
     } catch { return undefined; } // raced exit / not ours to read
   };
   if (knownPid !== undefined) {
@@ -427,6 +440,13 @@ export class EngineSupervisor extends EventEmitter {
   /** modelId → the pid last found loading it, so the next 400 ms tick reads two
    *  small files instead of searching again (see findModelChildRss). */
   private loadingPid = new Map<string, number>();
+  /** modelId → the last (pid, bytes-read) seen while it was loading, and pid →
+   *  the bytes-read count that pid had when its last load ENDED. WHY: a model
+   *  that auto-sleeps keeps its process, so on wake its read counter already
+   *  holds the whole first load; without the baseline the bar would leap to
+   *  full the instant it woke. */
+  private lastReadSeen = new Map<string, { pid: number; read: number }>();
+  private readBaselineByPid = new Map<number, number>();
   /** modelId → the resident-memory lookup already running. WHY single-flight:
    *  the timer poll and a user's load/unload nudge can overlap; they share one
    *  lookup instead of stacking /proc reads. */
@@ -1269,6 +1289,8 @@ export class EngineSupervisor extends EventEmitter {
 
     this.loadProgress.clear();
     this.loadingPid.clear();
+    this.lastReadSeen.clear();
+    this.readBaselineByPid.clear();
     this.pollGeneration += 1;
     // Back to "not asked yet". A stopped engine holds no model in memory, but
     // the reading it left behind describes a process that no longer exists.
@@ -1320,6 +1342,10 @@ export class EngineSupervisor extends EventEmitter {
       } else {
         this.loadProgress.delete(m.id); // load finished / not loading → drop tracker
         this.loadingPid.delete(m.id);
+        // Remember where this process's read counter stood, so its NEXT load
+        // (a wake from sleep, same pid) counts only new reads.
+        const seen = this.lastReadSeen.get(m.id);
+        if (seen) { this.readBaselineByPid.set(seen.pid, seen.read); this.lastReadSeen.delete(m.id); }
       }
     }
     // Recorded on EVERY poll, not only when the signature changed. The emit
@@ -1331,8 +1357,9 @@ export class EngineSupervisor extends EventEmitter {
     if (sig !== this.lastModelSig) { this.lastModelSig = sig; this.emit('models-changed', models); }
   }
 
-  /** Resident bytes of the router's child process serving `modelId` (its VmRSS,
-   *  which climbs toward the file size as the GGUF is read into RAM). Linux only
+  /** How much of `modelId` the router's child has brought in so far: the larger
+   *  of its VmRSS (climbs on a load into RAM) and the bytes it has read since
+   *  this load began (climbs on a load into graphics memory). Linux only
    *  (reads /proc); undefined elsewhere → the UI falls back to an elapsed-only,
    *  indeterminate bar. The child's cmdline carries `--model …/<id>.gguf`, which
    *  the router process (with `--models-dir`) does not, so the needle is unique.
@@ -1345,9 +1372,16 @@ export class EngineSupervisor extends EventEmitter {
     const lookup = findModelChildRss(
       modelId, this.child?.pid ?? undefined, this.loadingPid.get(modelId), this.opts.procFs ?? realProcFs,
     ).then((hit) => {
+      if (!hit) return undefined;
       // Remember the pid only for the run that found it (a stop clears the map).
-      if (hit && generation === this.pollGeneration) this.loadingPid.set(modelId, hit.pid);
-      return hit?.bytes;
+      if (generation === this.pollGeneration) {
+        this.loadingPid.set(modelId, hit.pid);
+        if (hit.readBytes !== undefined) this.lastReadSeen.set(modelId, { pid: hit.pid, read: hit.readBytes });
+      }
+      // Whichever measure has moved further: VmRSS for a load into ordinary
+      // memory (CPU, mmap), bytes read for one into graphics memory.
+      const read = hit.readBytes === undefined ? 0 : Math.max(0, hit.readBytes - (this.readBaselineByPid.get(hit.pid) ?? 0));
+      return Math.max(hit.bytes, read);
     }, () => undefined).finally(() => { this.rssInFlight.delete(modelId); });
     this.rssInFlight.set(modelId, lookup);
     return lookup;
