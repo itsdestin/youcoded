@@ -8,10 +8,10 @@
 // harness-only: the AI's Read/Grep/Glob may not touch them, but you can still
 // open your own .git-credentials in the viewer.
 //
-// The list holds ONLY files that are pure secrets, so denying a read never costs
-// a real "help me fix this config" task. Mixed config files that legitimately
-// carry help-me requests (.npmrc, .pypirc, shell history) are deliberately NOT
-// here.
+// The list holds files that are secrets, so denying a read rarely costs a real
+// "help me fix this config" task. Shell history stays OFF this list. (.npmrc and
+// .pypirc were left off until 2026-10-30; they are on it now because they routinely
+// carry registry tokens — see SECRET_ANYWHERE_BASENAMES.)
 //
 // Matching is case-insensitive (Chrome's "Login Data" has a space and capitals;
 // on POSIX the canonical path keeps its case) and anchored to the user's home so
@@ -61,12 +61,38 @@ const BROWSER_CRED_BASENAMES = new Set([
   'cookies.sqlite', 'signons.sqlite',
 ]);
 
-/** YouCoded's own encrypted stores, matched by basename but only UNDER HOME — the
+/** YouCoded's own secret and credential files, matched by basename but only UNDER HOME — the
  *  userData dir is under home on every platform (~/.config/youcoded,
  *  ~/Library/Application Support/youcoded, ~/AppData/Roaming/youcoded), so
  *  anchoring to home keeps them covered while a project fixture that happened to
- *  share the name stays readable (2026-09-10 review, F3). */
-const HOME_BASENAMES = new Set(['native-secrets.json', 'chatgpt-account.json']);
+ *  share the name stays readable (2026-09-10 review, F3).
+ *
+ *  WHY ONE SHARED LIST (security hardening 2026-10-30): the phone door already refused
+ *  github-token.json, marketplace-auth.json, page-connections.json and the remote-access
+ *  password files, but the assistant's own list stopped at two of them, so a prompt-injected
+ *  assistant could read them. The phone list below now spreads THIS list, so the two doors
+ *  cannot drift apart again. */
+export const APP_SECRET_BASENAMES: readonly string[] = [
+  'native-secrets.json', 'chatgpt-account.json', '.claude.json', '.remote-tokens.json',
+  'github-token.json', 'marketplace-auth.json', 'search-providers.json', 'page-connections.json',
+];
+const HOME_BASENAMES = new Set(APP_SECRET_BASENAMES);
+
+/** The remote-access files: `youcoded-remote.json` (password hash) and `.remote-devices.json` (paired devices),
+ *  each with an optional `.<profile>` suffix a dev instance uses (remote-paths.ts). */
+export const APP_SECRET_PATTERNS: readonly RegExp[] = [/^youcoded-remote(\.[^./]+)?\.json$/, /^\.remote-devices(\.[^./]+)?\.json$/];
+
+/** Credential files refused WHEREVER they sit (security hardening 2026-10-30; before this only the
+ *  home-anchored list above applied to the assistant). Mixed files like .npmrc/.pypirc are included
+ *  on purpose now: they routinely hold registry tokens, and a prompt-injected assistant that can
+ *  read one can send it out. */
+export const SECRET_ANYWHERE_BASENAMES: readonly string[] = [
+  '.git-credentials', '.git-credentials-store', '.netrc', '_netrc', '.npmrc', '.pypirc', '.pgpass', '.vault-token',
+];
+/** Private-key names by prefix (id_rsa, id_rsa_work, id_rsa.bak…), but never the matching PUBLIC key (`.pub`). */
+export const KEY_NAME_PREFIXES: readonly string[] = ['id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa'];
+/** Key and certificate bundles. (`.key` is left to the phone list: Apple Keynote files share it.) */
+const ASSISTANT_KEY_EXTENSIONS = ['.pem', '.p12', '.pfx', '.kdbx'];
 
 /**
  * True when `canonical` (a canonicalize()'d absolute path — forward slashes,
@@ -78,10 +104,16 @@ export function isCredentialPath(canonical: string, home: string): boolean {
   const h = home.toLowerCase().replace(/\/$/, '');
   const base = c.slice(c.lastIndexOf('/') + 1);
 
+  // Secrets that are secret wherever they sit (before the home anchor on purpose).
+  if (SECRET_ANYWHERE_BASENAMES.includes(base)) return true;
+  if (!base.endsWith('.pub') && KEY_NAME_PREFIXES.some((k) => base.startsWith(k))) return true;
+  if (ASSISTANT_KEY_EXTENSIONS.some((ext) => base.endsWith(ext))) return true;
+
   if (!c.startsWith(h + '/')) return false;
   const rel = c.slice(h.length + 1);
 
   if (HOME_BASENAMES.has(base)) return true;
+  if (APP_SECRET_PATTERNS.some((re) => re.test(base))) return true;
   if (HOME_FILES.includes(rel)) return true;
   if (HOME_DIR_PREFIXES.some((p) => rel.startsWith(p))) return true;
   if (BROWSER_CRED_BASENAMES.has(base) && BROWSER_ROOTS.some((r) => rel.startsWith(r))) return true;
@@ -93,10 +125,10 @@ export function isCredentialPath(canonical: string, home: string): boolean {
 // carry a token), `.git-credentials`, `id_rsa`, `*.pem`, and through fs:read-head ANY file on the computer, e.g.
 // the remote password hash. This is the ONE list every phone file read consults (main/phone-read-deny.ts).
 //
-// It EXTENDS this file rather than forking it: it calls isCredentialPath unchanged and adds names that match
-// ANYWHERE in the path (a project's own `.git-credentials` / `id_rsa`), which the home-anchored list above
-// deliberately did not cover. isCredentialPath itself is NOT changed, so the native assistant's file tools
-// (harness/tools/guards.ts) refuse exactly what they refused before; only the phone door calls the function below.
+// It EXTENDS this file rather than forking it: it calls isCredentialPath and adds names that match
+// ANYWHERE in the path. Since 2026-10-30 the app's own secret files and the any-folder secret names/keys are ONE
+// shared list (APP_SECRET_*, SECRET_ANYWHERE_*, KEY_NAME_PREFIXES) used by both doors; the phone alone additionally
+// refuses `.git/` folders, shell histories, `.gitconfig`, `*.key` and the like.
 // `.env` is deliberately NOT here: artifacts:get serves it on purpose (the pane is the human escape hatch for
 // editing a .env, editable-path-policy.ts D5), and read-binary / fs:read-head / search already refuse it.
 // Everything is compared lowercase on the RESOLVED path, so symlinks, `..` and Windows/macOS case do not dodge it.
@@ -106,19 +138,17 @@ const PHONE_DENY_SEGMENTS = new Set(['.git', '.ssh', '.gnupg', '.aws', '.azure',
 
 /** File names a phone never reads, at any depth. */
 const PHONE_DENY_BASENAMES = new Set([
-  '.git-credentials', '.git-credentials-store', '.netrc', '_netrc', '.npmrc', '.pypirc', '.pgpass', '.credentials.json',
-  '.gitconfig', 'rclone.conf', '.vault-token',
+  ...SECRET_ANYWHERE_BASENAMES, '.credentials.json',
+  '.gitconfig', 'rclone.conf',
   // Shell and REPL histories (they hold typed passwords and tokens).
   '.bash_history', '.zsh_history', '.sh_history', 'fish_history', '.python_history', '.node_repl_history',
   '.psql_history', '.mysql_history', '.sqlite_history', '.irb_history',
-  // The app's own secret and config files (remote-paths.ts, providers/secrets-store.ts, chatgpt-auth.ts,
-  // github-client.ts, marketplace-auth-store.ts, harness/search/search-key-store.ts, pages/connections-store.ts).
-  'native-secrets.json', 'chatgpt-account.json', '.claude.json', '.remote-tokens.json',
-  'github-token.json', 'marketplace-auth.json', 'search-providers.json', 'page-connections.json',
+  // The app's own secret and config files (shared with the assistant's list: APP_SECRET_BASENAMES).
+  ...APP_SECRET_BASENAMES,
 ]);
 
 /** Private-key names by prefix (id_rsa, id_rsa_work, id_rsa.bak…), but never the matching PUBLIC key (`.pub`). */
-const PHONE_DENY_KEY_PREFIXES = ['id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa'];
+const PHONE_DENY_KEY_PREFIXES = KEY_NAME_PREFIXES;
 
 /** Paths under these (any depth) are refused: tool configs that carry a login. */
 const PHONE_DENY_SUBPATHS = ['/.config/gh/', '/.docker/config.json', '/.kube/config'];
@@ -126,9 +156,7 @@ const PHONE_DENY_SUBPATHS = ['/.config/gh/', '/.docker/config.json', '/.kube/con
 /** Extensions of key and certificate bundles. */
 const PHONE_DENY_EXTENSIONS = ['.pem', '.key', '.p12', '.pfx', '.kdbx'];
 
-/** The remote-access files: `youcoded-remote.json` (password hash) and `.remote-devices.json` (paired devices),
- *  each with an optional `.<profile>` suffix a dev instance uses (remote-paths.ts). */
-const PHONE_DENY_PATTERNS = [/^youcoded-remote(\.[^./]+)?\.json$/, /^\.remote-devices(\.[^./]+)?\.json$/];
+const PHONE_DENY_PATTERNS = APP_SECRET_PATTERNS;
 
 /** True when a phone must be refused this file. `canonical` is a canonicalize()'d absolute path (forward slashes,
  *  `..` resolved), `home` the same-canonicalized home directory. */
@@ -176,4 +204,11 @@ export const CREDENTIAL_EXCLUDE_GLOBS: readonly string[] = [
   '!**/.config/gcloud/**', '!**/.local/share/keyrings/**', '!**/.password-store/**',
   '!**/Keychains/**', '!**/native-secrets.json', '!**/chatgpt-account.json',
   '!**/logins.json', '!**/key4.db', '!**/key3.db', '!**/signons.sqlite',
+  // Shared with the phone door (security hardening 2026-10-30): the app's own secret files and
+  // secrets that are secret wherever they sit, so Grep from a parent folder cannot print them.
+  ...APP_SECRET_BASENAMES.map((b) => `!**/${b}`),
+  '!**/youcoded-remote*.json', '!**/.remote-devices*.json',
+  ...SECRET_ANYWHERE_BASENAMES.map((b) => `!**/${b}`),
+  ...KEY_NAME_PREFIXES.map((k) => `!**/${k}*`),
+  ...ASSISTANT_KEY_EXTENSIONS.map((ext) => `!**/*${ext}`),
 ];

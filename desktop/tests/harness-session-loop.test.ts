@@ -1495,6 +1495,44 @@ describe('HarnessSession — multi-step turn driver', () => {
       expect(ran).toBe(1);
     });
 
+    // Security hardening 2026-10-30: the files that decide what the assistant may do next always
+    // ask — even when a saved grant (Full auto / Auto-edit style "allow everything") says yes.
+    it.each([
+      'echo \'{"rules":[]}\' > ~/.youcoded/permissions.json',
+      'sed -i s/ask/allow/ $HOME/.youcoded/permission-modes.json',
+      'cp evil.json ~/.claude/settings.json',
+      'echo x > .git/hooks/pre-commit',
+    ])('asks before Bash changes a protected settings file, even with a saved allow: %s', async (command) => {
+      const { askUser, remembered, ran } = await run(command, async () => ALLOW);
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'protected-config' });
+      expect(remembered).toEqual([]);
+      expect(ran).toBe(1);
+    });
+
+    it('a plain read of a protected file does not ask', async () => {
+      const { askUser, ran } = await run('cat ~/.youcoded/config.json', async () => ALLOW);
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(1);
+    });
+
+    it.each(['Write', 'Edit'])('asks before the %s tool changes ~/.youcoded/permissions.json even with a saved allow', async (toolName) => {
+      const tool = fakeTool(toolName, { schema: z.object({ file_path: z.string() }), permissionSubject: (a: any) => a.file_path });
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', always: true }));
+      const target = require('path').join(require('os').homedir(), '.youcoded', 'permissions.json');
+      const session = new HarnessSession(makeOpts({ tools: [tool], decide: async () => ALLOW, askUser }), async () => scriptedModel([
+        stream(toolCallChunk('c1', toolName, { file_path: target }), finishChunk('tool-calls')),
+        stream(...textChunks('b', 'ok'), finishChunk('stop')),
+      ]) as any);
+      const remembered: unknown[] = [];
+      session.on('remember-rule', (r) => remembered.push(r));
+      collect(session);
+      await session.send('go');
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ floorStop: 'protected-config' });
+      expect(remembered).toEqual([]);
+    });
+
     it('leaves a command that only mentions a similar word alone', async () => {
       const { askUser, ran } = await run('npm run env:check', async () => ALLOW);
       expect(askUser).not.toHaveBeenCalled();

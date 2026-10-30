@@ -124,11 +124,12 @@ const DENIED_IN_PROJECT: Array<[string, string]> = [
 ];
 
 describe('the deny list itself', () => {
-  it('extends the assistant\'s list without changing it: isCredentialPath still answers as before', () => {
-    // These were NOT refused to the assistant before and still are not (the new list is the phone\'s alone).
+  it('the phone list extends the assistant\'s list; they now SHARE the app-secret and key-file names (2026-10-30)', () => {
+    // Still phone-only: a project\'s git config (the assistant needs it to help with git).
     expect(isCredentialPath('/home/u/proj/.git/config', '/home/u')).toBe(false);
-    expect(isCredentialPath('/home/u/proj/id_rsa', '/home/u')).toBe(false);
-    expect(isCredentialPath('/home/u/.claude/youcoded-remote.json', '/home/u')).toBe(false);
+    // Now refused to the assistant too (security hardening): private keys and the app\'s password files.
+    expect(isCredentialPath('/home/u/proj/id_rsa', '/home/u')).toBe(true);
+    expect(isCredentialPath('/home/u/.claude/youcoded-remote.json', '/home/u')).toBe(true);
   });
   it.each([
     '/home/u/p/.git/config', '/home/u/p/.GIT/hooks/pre-commit', '/home/u/p/.git-credentials', '/home/u/.netrc', '/home/u/p/.npmrc',
