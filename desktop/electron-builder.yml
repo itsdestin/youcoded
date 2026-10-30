@@ -99,7 +99,9 @@ linux:
   category: Development
   # maintainer is required by the deb/rpm packagers.
   maintainer: itsdestin <itsdestin@users.noreply.github.com>
-  synopsis: Desktop GUI for Claude Code with the YouCoded toolkit
+  # WHY: Linux package tools and app stores show this one line as the app's summary.
+  # Keep it matching the website's title (2026-10-22).
+  synopsis: Your personal AI assistant and open source everything app
   # WHY: the AppImage catalog (and other Linux app stores) read this file from
   # usr/share/metainfo/ inside the AppImage for our description and OUR chosen
   # screenshots; without it they show a robot's picture of the sign-in screen.
