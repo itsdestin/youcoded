@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ThemeProvider } from '../../state/theme-context';
-import { CameraIcon, SizeIcon, OpenIcon, HideIcon } from './BuddyActions';
+import { ScreenshotIcon, SizeIcon, OpenIcon, HideIcon } from './BuddyActions';
 import { Button } from '../ui/Button';
 import { Tooltip } from '../ui/Tooltip';
 
@@ -62,7 +62,7 @@ export function BuddyBarButtons() {
   // Short hint words on purpose: the hint has to fit inside this small window (BAR_SIZE), which it cannot leave.
   return (
     <div className="layer-surface flex items-center gap-0.5 p-1">
-      <BarButton label="Screenshot desktop" onClick={onCapture} busy={capturing}><CameraIcon /></BarButton>
+      <BarButton label="Screenshot desktop" onClick={onCapture} busy={capturing}><ScreenshotIcon /></BarButton>
       <BarButton label={large ? 'Smaller chat' : 'Bigger chat'} onClick={() => { void window.claude?.buddy?.toggleChatSize?.(); }}><SizeIcon /></BarButton>
       <BarButton label="Open YouCoded" onClick={() => { void window.claude?.buddy?.openMain?.(); }}><OpenIcon /></BarButton>
       <BarButton label="Hide buddy" onClick={() => { void window.claude?.buddy?.dismiss?.(); }}><HideIcon /></BarButton>
