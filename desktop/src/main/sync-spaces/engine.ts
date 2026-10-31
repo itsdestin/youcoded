@@ -20,6 +20,10 @@ interface EngineOpts {
   // SpaceManager/gh dependency. MUST throw a plain-language error on failure —
   // syncSpace surfaces it verbatim as the space's error event every cycle.
   ensureProvisioned?: (space: SyncSpace) => Promise<void>;
+  // Runs before every pull/push cycle; throwing stops that cycle with the thrown
+  // plain-language error. service.ts uses it to refuse a PUBLIC GitHub repo
+  // (security hardening 2026-10-30); it caches, so it is cheap to call every cycle.
+  verifyBeforeSync?: (space: SyncSpace) => Promise<void>;
 }
 
 // Warn once per launch when a space's hidden sync history exceeds this. Remote
@@ -115,6 +119,7 @@ export class SpaceSyncEngine {
   private pollMs: number;
   private sizeWarnBytes: number;
   private ensureProvisioned?: (space: SyncSpace) => Promise<void>;
+  private verifyBeforeSync?: (space: SyncSpace) => Promise<void>;
   // One-per-LAUNCH dedup for the large-history warning: this Set lives as long
   // as the engine instance, so a space that's already over the threshold emits
   // the warning exactly once instead of on every sync.
@@ -139,6 +144,7 @@ export class SpaceSyncEngine {
     this.sizeWarnBytes = opts.sizeWarnBytes ?? SIZE_WARN_BYTES;
     this.watchBudget = opts.watchBudget ?? WATCH_BUDGET;
     this.ensureProvisioned = opts.ensureProvisioned;
+    this.verifyBeforeSync = opts.verifyBeforeSync;
     this.onEvent = opts.onEvent;
     if (this.pollMs > 0) {
       this.pollTimer = setInterval(() => {
@@ -336,6 +342,8 @@ export class SpaceSyncEngine {
           }
           await this.ensureProvisioned(space);
         }
+        // WHY before the pull: a public repo must receive nothing, and fetching from it is pointless.
+        if (this.verifyBeforeSync) await this.verifyBeforeSync(space);
         const pull = await this.transport.pull(space);
         if (pull.conflictCopies.length) this.onEvent({ type: 'conflict', spaceId: space.id, copies: pull.conflictCopies });
         const push = await this.transport.push(space, `sync from ${space.id}`);

@@ -1446,6 +1446,7 @@ void app.whenReady().then(async () => {
     await hookRelay.start();
   } catch (e) {
     log('ERROR', 'Main', 'Failed to start hook relay', { error: String(e) });
+    sessionManager.setPipeName(''); // WHY: never hand sessions a socket name we could not make private (hook-relay.ts); with none, hook scripts do nothing
   }
   perfMark('main:chore:hook-relay:done');
 

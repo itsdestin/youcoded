@@ -24,6 +24,7 @@ import { notifySignedOut } from '../social-handlers';
 import { clearArcadeCache } from '../arcade-handlers';
 import { reconcileInstalls, type InstalledSkillSource } from '../install-reconcile';
 import { defineChannel, type MainChannelDef } from './channel-def';
+import { startSigninListener, type SigninListener } from '../signin-loopback';
 
 type Client = ReturnType<typeof createMarketplaceApiClient>;
 interface AccountDeps {
@@ -54,13 +55,26 @@ function toStoredUser(me: { id: string; login: string; avatar_url: string | null
   return { id: me.id, login: me.login, avatar_url: me.avatar_url ?? '', display_name: me.display_name, handle: me.handle ?? null };
 }
 
+// Sign-in listeners by device code. Only one sign-in at a time: starting another closes the old one.
+const signinListeners = new Map<string, SigninListener>();
+function closeAllSigninListeners(): void {
+  for (const l of signinListeners.values()) l.close();
+  signinListeners.clear();
+}
+
 export const accountChannels: MainChannelDef[] = [
   // Device-code sign-in: main opens the browser (the renderer cannot call shell.openExternal).
   defineChannel({
     name: IPC.ACCOUNT_START, kind: 'handle', remoteAllowed: false,
     handler: () => wrap(async () => {
       const { client } = need();
-      const out = await client.authStart();
+      closeAllSigninListeners();
+      const listener = await startSigninListener();
+      let out;
+      try {
+        out = await client.authStart(listener.port);
+      } catch (e) { listener.close(); throw e; }
+      signinListeners.set(out.device_code, listener);
       // openExternal can fail on some Linux sandboxes (Flatpak). Non-fatal: the renderer shows the URL.
       await shell.openExternal(out.auth_url).catch((err) =>
         console.warn('[marketplace] openExternal failed; user must open URL manually:', err));
@@ -71,8 +85,13 @@ export const accountChannels: MainChannelDef[] = [
     name: IPC.ACCOUNT_POLL, kind: 'handle', remoteAllowed: false,
     handler: ({ deviceCode }) => wrap(async () => {
       const { client, store, installedSkillSource } = need();
-      const res = await client.authPoll(deviceCode);
+      const listener = signinListeners.get(deviceCode);
+      // Bound to this computer: until the browser delivered the secret to our listener there is
+      // nothing to collect, so do not ask the Worker (it would only say pending).
+      if (listener && listener.secret() === null) return { status: 'pending' as const };
+      const res = await client.authPoll(deviceCode, listener?.secret() ?? undefined);
       if (res.status === 'complete') {
+        listener?.close(); signinListeners.delete(deviceCode);
         // The Worker returns the profile alongside the token: store both so user() works at once
         // (the games lobby needs user.login as the player tag).
         if (res.user) store.setSession(res.token, toStoredUser(res.user));

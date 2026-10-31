@@ -13,9 +13,13 @@
  * The SERVER decides whether a hook is blocking — relay doesn't need to know.
  */
 const net = require('net');
-const os = require('os');
-const path = require('path');
-const PIPE_NAME = process.env.CLAUDE_DESKTOP_PIPE || (process.platform === 'win32' ? '\\\\.\\pipe\\claude-desktop-hooks' : path.join(os.tmpdir(), 'claude-desktop-hooks.sock'));
+// WHY no shared-name fallback (security hardening 2026-10-30): these hooks are installed for EVERY
+// `claude` on the machine. When the variable is missing (a plain terminal, or YouCoded could not set up
+// a private socket) the old code connected to the fixed shared name /tmp/claude-desktop-hooks.sock, which
+// another account on the computer could have created first to read the hook messages and answer permission
+// asks. Now: no private socket name from YouCoded means do nothing, quietly, exactly like "app not running".
+const PIPE_NAME = process.env.CLAUDE_DESKTOP_PIPE;
+if (!PIPE_NAME) process.exit(0);
 // Tier-2 backstop: 2h30m — deliberately 30m LONGER than the app's own 2h hold
 // (hook-relay.ts APP_HOLD_MS: the app should answer first, it is the only party
 // that can label the card accurately) and 30m SHORTER than the Claude Code hook
