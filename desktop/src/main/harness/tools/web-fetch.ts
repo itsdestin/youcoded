@@ -25,6 +25,7 @@ import TurndownService from 'turndown';
 import { defineTool } from './registry';
 import { guardedFetch, readBodyCapped, NetGuardError, type GuardedFetchOpts } from './net-guard';
 import type { ToolResultPayload } from './types';
+import { siteKeyFor } from '../../../shared/site-key';
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
@@ -785,7 +786,12 @@ export const WebFetchTool = defineTool<z.infer<typeof inputSchema>>({
   // parameter to page through) and also composeNotice's no-bounds fallback
   // (Task 19) for the rare defineTool pipeline-cap-only case.
   moreHint: 'fetch a more specific URL, or a narrower section of the page',
-  permissionSubject: (args) => args.url,
+  // WHY the site, not the URL (Ask-first website question, 2026-10-31): the person is
+  // asked about a WEBSITE, so the thing a remembered "Always allow" stores and the
+  // engine compares is the site key (host, lower case, "www." folded — see
+  // shared/site-key.ts), never one page's address. An unreadable address keeps its
+  // raw text so it can only ever be matched by itself.
+  permissionSubject: (args) => siteKeyFor(args.url) ?? args.url,
   async execute(args, ctx) {
     // WHY: the Luna reservation guard counts model sends, not tool-network
     // traffic. Keep the advertised tool stable but fail before DNS or HTTP.

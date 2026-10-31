@@ -30,7 +30,7 @@ const VERBS: Record<string, string> = {
   Read: 'Read',
   Glob: 'Search for files in',
   Grep: 'Search the contents of',
-  WebFetch: 'Fetch',
+  WebFetch: 'Visit',
   WebSearch: 'Search the web for',
   Skill: 'Load the skill',
   NotebookEdit: 'Edit the notebook',

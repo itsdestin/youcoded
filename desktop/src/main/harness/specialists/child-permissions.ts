@@ -116,6 +116,13 @@ export function buildChildDecide(i: ChildPermissionInputs): ChildPermissionInput
     if (parent.action === 'ask' && parent.denyListed) {
       return parent;
     }
+    // 5b. A website question is NOT covered by a helper's launch approval. Approving
+    //     "let this helper do its job" never named any website, and the person chose
+    //     (Ask first) to be asked about each new site — so the ask passes through to
+    //     the parent's card, naming the helper, exactly like a deny-listed ask above.
+    //     Only WebFetch's ask is ever a website question: the site-key subject is
+    //     what the card and any remembered "Always allow" are about.
+    if (parent.action === 'ask' && tool === 'WebFetch') return parent;
     // 6/7. Parent ask. The launch approval already covered this work, so inside
     //      a granted envelope it becomes an allow. denyListed is hardcoded
     //      false here (not `parent.denyListed`): step 5 above already
