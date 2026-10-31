@@ -210,7 +210,10 @@ const MODES: readonly { id: NativePermissionMode; label: string; line: string }[
     // (native-session-host.ts:291-301), so it does outrank them. Naming the
     // list as the exception to the mode is true either way; claiming it can
     // never be overridden would not be.
-    line: 'Works without checking with you, so you can leave it running. It still asks before:',
+    // WHY "can't catch everything" (Destin, 2026-10-31, security audit): the list is a set of known
+    // dangerous commands, so it is not complete. Same claim as the first-time Full auto warning
+    // (first-time-warnings.ts), which repeats this list.
+    line: 'Works without checking with you, so you can leave it running. It still asks before these, but they can’t catch everything:',
   },
 ];
 
