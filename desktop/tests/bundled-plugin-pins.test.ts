@@ -78,7 +78,7 @@ describe('materializePinnedSource (real git)', () => {
   });
   it('script pins each folder to its LAST touching commit', () => {
     const { origin, pinned } = setup();
-    const pins: Record<string, { commit: string; version: string }> = computePins(origin, 'master', ['plug']);
+    const pins = computePins(origin, 'master', ['plug']) as Record<string, { commit: string; version: string }>;
     expect(pins['plug'].commit).not.toBe(pinned);
     expect(pins['plug'].version).toBe('2.0.0');
   });

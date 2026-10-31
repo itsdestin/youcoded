@@ -11,6 +11,8 @@ const inst = vi.hoisted(() => ({
   // sweeps stale .old-/.upgrade- litter at the top of every run — the mock
   // module needs the export or the real call throws "not a function".
   sweepStaleUpgradeDirs: vi.fn(),
+  // Audit item 24: reconcile now decides against the app's pinned commit. These two stand in for the git work.
+  readPinMarker: vi.fn(), materializePinnedSource: vi.fn(),
   // Review fix (Finding 2): skill-provider.ts now imports marketplaceCacheDir
   // from plugin-installer instead of hand-building the cache path. Mirror the
   // real helper's shape (contains 'youcoded-marketplace-cache' + the source
@@ -25,6 +27,7 @@ vi.mock('../src/main/plugin-installer', () => inst);
 const loggerMock = vi.hoisted(() => ({ log: vi.fn() }));
 vi.mock('../src/main/logger', () => loggerMock);
 import { LocalSkillProvider } from '../src/main/skill-provider';
+import { getBundledPin } from '../src/main/bundled-plugin-sync';
 
 const entry = (id: string, version: string) => ({ id, type: 'plugin', version, sourceType: 'local', sourceRef: id, sourceMarketplace: 'youcoded' });
 
@@ -36,16 +39,21 @@ describe('LocalSkillProvider.reconcileBundledPlugins', () => {
     for (const k of Object.keys(versions)) delete versions[k];
     vi.spyOn(p as any, 'fetchIndex').mockResolvedValue(BUNDLED_PLUGIN_IDS.map((id) => entry(id, '1.0.0')));
     vi.spyOn(p.configStore, 'updatePackageVersion').mockImplementation((id: string, v: string) => { versions[id] = v; });
-    inst.refreshLocalMarketplaceCache.mockResolvedValue({ ok: true, refreshed: true });
+    inst.materializePinnedSource.mockResolvedValue({ ok: true });
+    inst.readPinMarker.mockResolvedValue(null);
     inst.isPluginInstalled.mockReturnValue(true);
     inst.readPluginVersion.mockImplementation((dir: string) => dir.includes('youcoded-marketplace-cache') ? '0.2.0' : '0.1.0');
-    inst.upgradePluginFromLocal.mockResolvedValue({ status: 'installed' });
+    // After the swap the installed tree carries the pinned copy's version.
+    const upgraded = new Set<string>();
+    inst.readPluginVersion.mockImplementation((dir: string) =>
+      dir.includes('youcoded-marketplace-cache') || [...upgraded].some((id) => dir.endsWith(id)) ? '0.2.0' : '0.1.0');
+    inst.upgradePluginFromLocal.mockImplementation(async (id: string) => { upgraded.add(id); return { status: 'installed' }; });
     inst.installPlugin.mockResolvedValue({ status: 'installed' });
   });
   it('is a no-op on a dev instance unless overridden', async () => {
     process.env.YOUCODED_PROFILE = 'dev';
     expect((await p.reconcileBundledPlugins()).every((r) => r.action === 'skipped-dev')).toBe(true);
-    expect(inst.refreshLocalMarketplaceCache).not.toHaveBeenCalled();
+    expect(inst.materializePinnedSource).not.toHaveBeenCalled();
     process.env.YOUCODED_BUNDLED_UPGRADE = '1';
     expect((await p.reconcileBundledPlugins()).some((r) => r.action === 'upgraded')).toBe(true);
   });
@@ -57,12 +65,18 @@ describe('LocalSkillProvider.reconcileBundledPlugins', () => {
   });
   it('leaves an equal version alone', async () => {
     inst.readPluginVersion.mockReturnValue('0.2.0');
+    // Same version AND already stamped with the pinned commit = nothing to do (a version-only match re-syncs once).
+    inst.readPinMarker.mockImplementation(async () => getBundledPin('youcoded-chatsearch')!.commit);
+    inst.readPinMarker.mockResolvedValue(null);
+    for (const id of BUNDLED_PLUGIN_IDS) inst.readPinMarker.mockResolvedValueOnce(getBundledPin(id)!.commit);
     expect((await p.reconcileBundledPlugins()).every((r) => r.action === 'unchanged')).toBe(true);
     expect(inst.upgradePluginFromLocal).not.toHaveBeenCalled();
   });
-  it('still compares against the last cache copy when the refresh fails', async () => {
-    inst.refreshLocalMarketplaceCache.mockResolvedValue({ ok: false, refreshed: false, error: 'fetch failed: offline' });
-    expect((await p.reconcileBundledPlugins()).find((x) => x.id === 'youcoded-chatsearch')?.action).toBe('upgraded');
+  it('keeps the installed copy when the pinned version cannot be fetched (offline first launch after an update)', async () => {
+    inst.materializePinnedSource.mockResolvedValue({ ok: false, error: 'fetch failed: offline' });
+    const r = await p.reconcileBundledPlugins();
+    expect(r.every((x) => x.action === 'unchanged')).toBe(true);
+    expect(inst.upgradePluginFromLocal).not.toHaveBeenCalled();
   });
   it('installs a bundled id that is not installed, refetching the index once when it is absent', async () => {
     inst.isPluginInstalled.mockImplementation((id: string) => id !== 'youcoded-chatsearch');
@@ -342,6 +356,7 @@ describe('LocalSkillProvider.repairPackageVersions', () => {
 // Review fix (Finding 4): update() had zero test coverage — Finding 1 (a
 // missing via check that could create a duplicate install) is exactly the
 // kind of bug that gap let through.
+// Built-in ids are refused by update() (they only move with the app, audit item 24), so these use an ordinary local plugin.
 describe('LocalSkillProvider.update', () => {
   let p: LocalSkillProvider;
   const versions: Record<string, string> = {};
@@ -354,13 +369,13 @@ describe('LocalSkillProvider.update', () => {
   });
 
   it('replaces the tree and records the disk version when already_installed via YouCoded on a local source', async () => {
-    vi.spyOn(p as any, 'fetchIndex').mockResolvedValue([entry('youcoded-chatsearch', '1.0.0')]);
+    vi.spyOn(p as any, 'fetchIndex').mockResolvedValue([entry('local-plugin', '1.0.0')]);
     inst.installPlugin.mockResolvedValue({ status: 'already_installed', via: 'YouCoded' });
     inst.upgradePluginFromLocal.mockResolvedValue({ status: 'installed' });
-    const r = await p.update('youcoded-chatsearch');
-    expect(inst.upgradePluginFromLocal).toHaveBeenCalledWith('youcoded-chatsearch', 'youcoded-chatsearch', 'youcoded');
+    const r = await p.update('local-plugin');
+    expect(inst.upgradePluginFromLocal).toHaveBeenCalledWith('local-plugin', 'local-plugin', 'youcoded');
     expect(r).toMatchObject({ ok: true, newVersion: '2.0.0' });
-    expect(versions['youcoded-chatsearch']).toBe('2.0.0');
+    expect(versions['local-plugin']).toBe('2.0.0');
   });
 
   it('does not call upgradePluginFromLocal for a url-sourced plugin', async () => {
@@ -402,9 +417,9 @@ describe('LocalSkillProvider.update', () => {
     // Finding 1: this is the regression itself — installPlugin's local-source
     // branch would otherwise fall through and write a SECOND copy under
     // YOUCODED_PLUGINS_DIR for an id Claude Code already owns.
-    vi.spyOn(p as any, 'fetchIndex').mockResolvedValue([entry('youcoded-chatsearch', '1.0.0')]);
+    vi.spyOn(p as any, 'fetchIndex').mockResolvedValue([entry('local-plugin', '1.0.0')]);
     inst.installPlugin.mockResolvedValue({ status: 'already_installed', via: 'Claude Code' });
-    const r = await p.update('youcoded-chatsearch');
+    const r = await p.update('local-plugin');
     expect(inst.upgradePluginFromLocal).not.toHaveBeenCalled();
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/Claude Code/);
@@ -412,22 +427,22 @@ describe('LocalSkillProvider.update', () => {
   });
 
   it('returns a failure without bumping the recorded version when the upgrade fails', async () => {
-    vi.spyOn(p as any, 'fetchIndex').mockResolvedValue([entry('youcoded-chatsearch', '1.0.0')]);
+    vi.spyOn(p as any, 'fetchIndex').mockResolvedValue([entry('local-plugin', '1.0.0')]);
     inst.installPlugin.mockResolvedValue({ status: 'already_installed', via: 'YouCoded' });
     inst.upgradePluginFromLocal.mockResolvedValue({ status: 'failed', error: 'disk full' });
-    const r = await p.update('youcoded-chatsearch');
+    const r = await p.update('local-plugin');
     expect(r).toMatchObject({ ok: false, error: 'disk full' });
     expect(p.configStore.updatePackageVersion).not.toHaveBeenCalled();
   });
 
   it('records the version read off disk, not the marketplace index version', async () => {
-    vi.spyOn(p as any, 'fetchIndex').mockResolvedValue([entry('youcoded-chatsearch', '1.0.0')]);
+    vi.spyOn(p as any, 'fetchIndex').mockResolvedValue([entry('local-plugin', '1.0.0')]);
     inst.installPlugin.mockResolvedValue({ status: 'already_installed', via: 'YouCoded' });
     inst.upgradePluginFromLocal.mockResolvedValue({ status: 'installed' });
     inst.readPluginVersion.mockReturnValue('1.5.2');
-    const r = await p.update('youcoded-chatsearch');
+    const r = await p.update('local-plugin');
     expect(r.newVersion).toBe('1.5.2');
-    expect(versions['youcoded-chatsearch']).toBe('1.5.2');
+    expect(versions['local-plugin']).toBe('1.5.2');
   });
 });
 
@@ -439,9 +454,9 @@ describe('LocalSkillProvider.resolveUninstallTarget', () => {
     return p;
   };
   it('a plugin id names itself; a skill id names the installed plugin that ships it; anything else names nothing', async () => {
-    const p = provider({ 'youcoded-chatsearch': {}, other: {} }, [{ id: 'youcoded-chatsearch:chatsearch', pluginName: 'youcoded-chatsearch' }, { id: 'mine' }]);
+    const p = provider({ 'local-plugin': {}, other: {} }, [{ id: 'local-plugin:chatsearch', pluginName: 'local-plugin' }, { id: 'mine' }]);
     expect(await p.resolveUninstallTarget('other')).toBe('other');
-    expect(await p.resolveUninstallTarget('youcoded-chatsearch:chatsearch')).toBe('youcoded-chatsearch');
+    expect(await p.resolveUninstallTarget('local-plugin:chatsearch')).toBe('local-plugin');
     expect(await p.resolveUninstallTarget('mine')).toBeNull();
     expect(await p.resolveUninstallTarget('nothing')).toBeNull();
   });
