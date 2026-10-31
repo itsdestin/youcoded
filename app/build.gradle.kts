@@ -375,6 +375,9 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
 
+    // Serves the bundled page over https://appassets.androidplatform.net instead of file:// (2026-10-30 security audit A2).
+    implementation("androidx.webkit:webkit:1.12.1")
+
 
 
     // Unpacking the backend and data files the app ships (RuntimeInstaller.kt).

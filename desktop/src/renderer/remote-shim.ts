@@ -5,6 +5,8 @@
 
 // Type-only, plus table-error-flag (one tiny value; imported from backend-contract it would pull the whole contract into the Android bundle — WHY 2026-09-30 one-core R3-3).
 import type { VoiceReadiness } from '../shared/voice-types';
+import { isAndroidAppPage } from './android-page';
+import { isConnectionAllowed, TAILSCALE_ONLY_MESSAGE } from '../shared/cleartext-hosts';
 import type { RemoteBridge } from '../shared/backend-contract';
 import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 
@@ -453,7 +455,7 @@ const VOICE_REMOTE_REASON =
  *  halves are needed: `!targetUrl` ALONE is also true of a plain remote browser
  *  tab, which is precisely where the microphone must not appear. */
 function isAndroidLocal(): boolean {
-  return location.protocol === 'file:' && !targetUrl;
+  return isAndroidAppPage() && !targetUrl;
 }
 
 // Fix: queue application messages sent before the WS auth handshake completes,
@@ -534,14 +536,14 @@ function isTouchFirstDevice(): boolean {
 
 /** The Android app, paired to a computer: its own runtime is only reachable on a side connection. */
 function isAndroidPaired(): boolean {
-  return location.protocol === 'file:' && !!targetUrl;
+  return isAndroidAppPage() && !!targetUrl;
 }
 
 function getWsUrl(): string {
   // If a remote host override is set, use it (connectToHost sets this)
   if (targetUrl) return targetUrl;
   // Android WebView loads from file:// — connect to local bridge server.
-  if (location.protocol === 'file:') return localBridgeUrl();
+  if (isAndroidAppPage()) return localBridgeUrl();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 }
@@ -1398,7 +1400,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
     for (const sid of [...parked.keys()]) releaseParked(sid);   // an old connection's held pushes: the new one refills anyway
     // Decided now, not when the close arrives: by then the Android app may already have gone back
     // to its own runtime, which changes the answer (finding 1).
-    const localBridge = location.protocol === 'file:' && !targetUrl;
+    const localBridge = isAndroidAppPage() && !targetUrl;
     // Security: when connecting to the local Android bridge (file:// protocol),
     // use the auth token passed via URL query param by WebViewHost.
     // The token is in the URL so it's available before any JS runs (no race).
@@ -1725,7 +1727,7 @@ function onSavedKeyAttemptFailed(err: unknown, token: string): void {
   if (failure?.kind === 'refused') {
     savedKeyListener?.({ type: 'refused', reason: failure.reason });
     if (hasConnectedBefore) noteRefusedAfterConnecting(failure.reason);
-    if (location.protocol === 'file:' && targetUrl) {
+    if (isAndroidAppPage() && targetUrl) {
       // The Android app paired to a computer that will never take its key goes back to its own
       // runtime now. Any other refusal (remote access switched off on the computer) keeps the
       // pairing and keeps trying slowly: deleting it would unpair the phone (finding 1).
@@ -2007,6 +2009,9 @@ function disconnect(): void {
  * reached already fails the connect with "Can't reach your computer".
  */
 export async function connectToHost(host: string, port: number, password: string): Promise<void> {
+  // WHY first, before disconnecting anything (2026-10-30 audit A1): plain ws:// is allowed only to a Tailscale address; a refused
+  // address leaves the current connection alone. `cleartextRefused` lets the sign-in gate stop retrying (it can never succeed).
+  if (!isConnectionAllowed(`ws://${host}:${port}/ws`)) throw Object.assign(new Error(TAILSCALE_ONLY_MESSAGE), { cleartextRefused: true });
   const { setConnectionMode } = await import('./platform');
 
   // Disconnect from current server (local bridge or previous remote)
@@ -2172,7 +2177,7 @@ export function installShim(): void {
   }
   // Android WebView (file://) always starts in local mode — clear any stale remote target
   // that could redirect connect('android-local') to a dead remote server
-  if (location.protocol === 'file:') {
+  if (isAndroidAppPage()) {
     localStorage.removeItem('youcoded-remote-target');
     localStorage.removeItem('youcoded-remote-token');
   } else {

@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.JavascriptInterface
 import com.youcoded.app.runtime.PairedDeviceStore
+import com.youcoded.app.ui.CleartextPolicy
 import com.youcoded.app.runtime.VoiceRecognizer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +74,9 @@ class HostJsBridge(
             "android:get-paired-devices" -> reply(id, JSONObject().put("devices", readDevices()))
             "android:save-paired-device" -> {
                 val host = p.optString("host"); val port = p.optInt("port", 9900)
+                // WHY (2026-10-30 audit A1): a computer is saved only at an address the app may reach without encryption; the page
+                // shows this message as "Couldn’t save <name>: ...".
+                if (!CleartextPolicy.isAllowedHost(host)) throw IllegalArgumentException(CleartextPolicy.MESSAGE)
                 val kept = without(readDevices(), host, port)
                 kept.put(JSONObject().put("name", p.optString("name", "Computer")).put("host", host).put("port", port).put("password", p.optString("password")))
                 PairedDeviceStore.prefs(context).edit().putString(DEVICES, kept.toString()).apply()

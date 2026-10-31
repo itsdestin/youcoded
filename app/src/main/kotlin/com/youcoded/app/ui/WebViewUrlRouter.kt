@@ -7,7 +7,7 @@ import java.net.URLDecoder
  * What the app's WebView does with a URL it is asked to open (remote access
  * batch 3, technical design 2026-09-10 §10, Android column).
  *
- * WHY this exists: the page is the bundled file:// UI, and when it is paired to
+ * WHY this exists: the page is the bundled UI (https://appassets.androidplatform.net), and when it is paired to
  * a desktop the Download button opens
  * http://<paired computer>/download/<43-char token>/<name>. WebViewHost used to
  * send every non-local URL to ACTION_VIEW, so that link opened in Chrome as a
@@ -32,7 +32,9 @@ enum class UrlDecision {
 object WebViewUrlPolicy {
     private const val DOWNLOAD_ROUTE = "/download/"
     private const val FALLBACK_NAME = "download"
-    private const val ASSET_PREFIX = "file:///android_asset/"
+    /** The only page address that loads in place: the bundled UI served by WebViewAssetLoader (AppWebView.PAGE_ORIGIN + /assets/web/). */
+    const val PAGE_ORIGIN = "https://appassets.androidplatform.net"
+    private const val ASSET_PREFIX = "$PAGE_ORIGIN/assets/web/"
 
     /**
      * Android caps a file name at 255 BYTES. A little under, so the download
@@ -88,7 +90,12 @@ object WebViewUrlPolicy {
     fun decide(url: String, isPairedHost: (host: String, port: Int) -> Boolean, devServersInApp: Boolean = false): UrlDecision {
         val uri = parse(url)
         if (uri != null && isMintedDownload(uri, isPairedHost)) return UrlDecision.DOWNLOAD
-        if (url.startsWith("file:")) return if (isBundledAsset(url)) UrlDecision.LOAD else UrlDecision.BLOCK
+        // WHY every file: address is refused now (2026-10-30 audit A2): the page is no longer a file:// page, so nothing legitimate
+        // is one, and the WebView has file access switched off. The page's own address on the app's private https name loads in
+        // place; any other address on that private name is refused too (it is not a real website to hand to a browser).
+        if (url.startsWith("file:")) return UrlDecision.BLOCK
+        if (isBundledAsset(url)) return UrlDecision.LOAD
+        if (uri?.host.equals("appassets.androidplatform.net", ignoreCase = true)) return UrlDecision.BLOCK
         // WHY only when asked (independent review, 2026-10-15): Claude Code now runs ON the phone, so a link to a dev
         // server it started (http://localhost:5173) would replace the app's own page — and reach the app's JavaScript
         // bridge. Only a debug build, whose own page may come from a laptop's dev server, keeps them in place.
@@ -141,6 +148,9 @@ object WebViewUrlPolicy {
         val path = uri.rawPath ?: return false
         if (!MINTED_PATH.matches(path)) return false
         val (host, port) = hostAndPort(uri, scheme) ?: return false
+        // WHY (2026-10-30 audit A1): the download token travels in the address, so a plain http link is trusted only on a
+        // Tailscale address; it is refused as a download (and so never handed to the download manager) anywhere else.
+        if (!CleartextPolicy.isAllowed(scheme, host)) return false
         return isPairedHost(host, port)
     }
 

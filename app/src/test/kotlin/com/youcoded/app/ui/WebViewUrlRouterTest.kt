@@ -30,7 +30,8 @@ class WebViewUrlRouterTest {
     private val paired: (String, Int) -> Boolean = { host, port ->
         (host == "100.64.0.9" && port == 9900) ||
             (host == "desk.tailnet.ts.net" && port == 443) ||
-            (host == "fd7a:115c::1" && port == 9900) ||
+            (host == "fd7a:115c:a1e0::1" && port == 9900) ||
+            (host == "192.168.1.20" && port == 9900) ||
             (host == "my_desk.local" && port == 9900)
     }
 
@@ -58,12 +59,22 @@ class WebViewUrlRouterTest {
             "https://desk.tailnet.ts.net/download/$token/a.zip",
             "http://100.64.0.9:9900/download/$token",
             "http://100.64.0.9:9900/download/$token/report.pdf?x=1#part",
-            "http://[fd7a:115c::1]:9900/download/$token/notes.md",
+            "http://[fd7a:115c:a1e0::1]:9900/download/$token/notes.md",
             // java.net.URI will not parse a host with an underscore; the link
             // from a computer named that way must still download.
-            "http://my_desk.local:9900/download/$token/notes.md",
+            "https://my_desk.local:9900/download/$token/notes.md",
         )) {
             assertEquals(url, UrlDecision.DOWNLOAD, decide(url))
+        }
+    }
+
+    // 2026-10-30 audit A1: a plain-http download token may only cross Tailscale, even from a computer the phone is paired with.
+    @Test fun `a plain download from a paired computer outside Tailscale is not saved`() {
+        for (url in listOf(
+            "http://192.168.1.20:9900/download/$token/report.pdf",
+            "http://my_desk.local:9900/download/$token/notes.md",
+        )) {
+            assertEquals(url, UrlDecision.OPEN_EXTERNALLY, decide(url))
         }
     }
 
@@ -85,8 +96,8 @@ class WebViewUrlRouterTest {
 
     @Test fun `the bundled page and the dev servers load in place`() {
         for (url in listOf(
-            "file:///android_asset/web/index.html?bridgePort=9901",
-            "file:///android_asset/web/assets/index-abc123.js",
+            "https://appassets.androidplatform.net/assets/web/index.html?bridgePort=9901",
+            "https://appassets.androidplatform.net/assets/web/assets/index-abc123.js",
             "http://localhost:5173/",
             "http://10.0.2.2:5173/src/main.tsx",
             "http://localhost:9950/download/$token/x.bin",
@@ -100,7 +111,7 @@ class WebViewUrlRouterTest {
         for (url in listOf("http://localhost:5173/", "http://10.0.2.2:5173/src/main.tsx")) {
             assertEquals(url, UrlDecision.OPEN_EXTERNALLY, decide(url, devServersInApp = false))
         }
-        assertEquals(UrlDecision.LOAD, decide("file:///android_asset/web/index.html", devServersInApp = false))
+        assertEquals(UrlDecision.LOAD, decide("https://appassets.androidplatform.net/assets/web/index.html", devServersInApp = false))
     }
 
     // A downloaded .html in the phone's storage, tapped, used to load AS the
@@ -115,8 +126,16 @@ class WebViewUrlRouterTest {
             "file:///android_asset/%2e%2e/%2e%2e/data/x",
             "file:///android_asset/web%2F..%2F..%2Fx",
             "file:///android_assets/look-alike.html",
+            // The old bundled-page address no longer loads either: nothing is a file:// page now, and file access is off.
+            "file:///android_asset/web/index.html",
+            // The app's private https name only serves its bundled page; look-alikes and other paths are refused, not opened in a browser.
+            "https://appassets.androidplatform.net/assets/runtime/node.tar.gz",
+            "https://appassets.androidplatform.net/assets/web/../runtime/x",
+            "https://appassets.androidplatform.net/assets/web/%2e%2e/runtime/x",
+            "https://appassets.androidplatform.net.evil.com/assets/web/index.html",
         )) {
-            assertEquals(url, UrlDecision.BLOCK, decide(url))
+            val expected = if (url.contains("evil.com")) UrlDecision.OPEN_EXTERNALLY else UrlDecision.BLOCK
+            assertEquals(url, expected, decide(url))
         }
         val actions = FakeActions()
         val router = WebViewUrlRouter(actions, paired)
@@ -173,7 +192,7 @@ class WebViewUrlRouterTest {
         val actions = FakeActions()
         val router = WebViewUrlRouter(actions, paired)
         assertTrue(router.onNavigation("http://100.64.0.9:9900/download/$token/report%20final.pdf"))
-        assertFalse(router.onNavigation("file:///android_asset/web/index.html"))
+        assertFalse(router.onNavigation("https://appassets.androidplatform.net/assets/web/index.html"))
         assertTrue(router.onNavigation("https://example.com/download/$token/setup.apk"))
         assertEquals(listOf("http://100.64.0.9:9900/download/$token/report%20final.pdf" to "report final.pdf"), actions.downloads)
         assertEquals(listOf("https://example.com/download/$token/setup.apk"), actions.external)
@@ -184,7 +203,7 @@ class WebViewUrlRouterTest {
         val router = WebViewUrlRouter(actions, paired)
         router.onDownloadRequested("https://desk.tailnet.ts.net/download/$token/a.zip")
         router.onDownloadRequested("https://example.com/elsewhere.zip")
-        router.onDownloadRequested("file:///android_asset/web/index.html")
+        router.onDownloadRequested("https://appassets.androidplatform.net/assets/web/index.html")
         router.onDownloadRequested("blob:file:///6c1a2b3c-0000-4000-8000-000000000000")
         router.onDownloadRequested("data:text/plain;base64,aGk=")
         assertEquals(listOf("https://desk.tailnet.ts.net/download/$token/a.zip" to "a.zip"), actions.downloads)
