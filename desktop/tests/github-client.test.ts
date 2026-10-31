@@ -165,9 +165,20 @@ describe('github-client createPrivateRepo', () => {
     const { c } = await clientWith([
       ['POST', '/user/repos', { status: 422, json: { message: 'name already exists on this account' } }],
       ['GET', '/user', { status: 200, json: { login: 'octocat' } }],
-      ['GET', '/repos/octocat/r', { status: 200, json: { clone_url: 'https://github.com/octocat/r.git' } }],
+      ['GET', '/repos/octocat/r', { status: 200, json: { clone_url: 'https://github.com/octocat/r.git', private: true } }],
     ]);
     await expect(c.createPrivateRepo('r')).resolves.toBe('https://github.com/octocat/r.git');
+  });
+
+  it.each([false, undefined])('SECURITY: an existing repo that is not proven private (private=%s) is REFUSED, never adopted', async (priv) => {
+    const { c } = await clientWith([
+      ['POST', '/user/repos', { status: 422, json: { message: 'name already exists on this account' } }],
+      ['GET', '/user', { status: 200, json: { login: 'octocat' } }],
+      ['GET', '/repos/octocat/r', { status: 200, json: { clone_url: 'https://github.com/octocat/r.git', private: priv } }],
+    ]);
+    const err = await c.createPrivateRepo('r').catch((e) => e);
+    expect(err.syncErrorCode).toBe('repo-public');
+    expect(String(err.message)).toContain('is public');
   });
 
   it('401 → plain-language "sign-in expired" with the github-auth code, token absent', async () => {

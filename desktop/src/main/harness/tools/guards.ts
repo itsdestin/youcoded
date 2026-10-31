@@ -19,11 +19,12 @@
 // KNOWN LIMITATIONS (spec §2.3, accepted — honest friction on the file tools,
 // not a sandbox):
 //   1. Bash can still `cat .env` — these guards only gate the native file tools.
-//   2. Symlinks are NOT resolved: a link INSIDE cwd that points at ~/.ssh (or
-//      anywhere outside) passes the jail, because we canonicalize the link path
-//      lexically, not its realpath target. Deliberate — realpath would hit the
-//      fs on every call and still race (TOCTOU). PITFALLS entry ships with this
-//      file (Task 13).
+//   2. Symlinks ARE resolved since 2026-10-30 (security hardening): the secret
+//      deny and the cwd jail are judged on the path as typed AND on its real
+//      location (nearest existing ancestor's realpath), so a link INSIDE cwd that
+//      points at ~/.ssh or outside is caught. It is still a check-then-use
+//      window (a link swapped between this check and the read), which is why this
+//      stays "honest friction", not a sandbox.
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -230,34 +231,81 @@ export function workspaceMatchFor(
   return null;
 }
 
+/** The real location of `abs`, with symlinks followed. A path that does not exist yet (a Write
+ *  target) resolves through its nearest EXISTING ancestor, so a link in the middle of the path is
+ *  still followed. Returns null when nothing can be resolved. (Same technique as
+ *  main/phone-read-deny.ts, which does it async for the phone door.) */
+export function realpathNearestSync(abs: string): string | null {
+  let probe = path.resolve(abs);
+  const suffix: string[] = [];
+  for (let i = 0; i < 64; i++) {
+    try {
+      return path.join(fs.realpathSync.native(probe), ...suffix);
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT' && err?.code !== 'ENOTDIR') return null;
+      // A DANGLING link (its target does not exist yet) is still a doorway: Write would create the
+      // target through it. Follow it by hand instead of treating it as a missing file.
+      try {
+        if (fs.lstatSync(probe).isSymbolicLink()) {
+          probe = path.resolve(path.dirname(probe), fs.readlinkSync(probe));
+          continue;
+        }
+      } catch { /* not a link: walk up to the nearest existing folder */ }
+      const parent = path.dirname(probe);
+      if (parent === probe) return null;
+      suffix.unshift(path.basename(probe));
+      probe = parent;
+    }
+  }
+  return null;
+}
+
 export type GuardVerdict =
   | { kind: 'ok' }
   | { kind: 'deny'; reason: string }
   | { kind: 'external'; canonicalPath: string };
 
-export function checkPathGuard(rawPath: string, cwd: string, internalReadRoots?: string[]): GuardVerdict {
-  const canonical = canonicalize(rawPath, cwd);
+/** The secret deny, applied to ONE spelling of a path (the typed one, or its real location). */
+function secretDenyReason(rawPath: string, canonical: string, cwd: string): string | null {
   // isSensitivePath already covers .ssh/.gnupg/.aws segments, credential
   // basenames, .config/gh, and (as of Phase 2) dotenv files.
   if (isSensitivePath(canonical)) {
-    return { kind: 'deny', reason: `Access to ${rawPath} is blocked: it looks like a credential or secret file. This cannot be overridden.` };
+    return `Access to ${rawPath} is blocked: it looks like a credential or secret file. This cannot be overridden.`;
   }
   // Belt-and-suspenders for the home credential dirs even when addressed
   // relatively — redundant with isSensitivePath's segment check, but keeps the
   // guard's intent legible and survives any future narrowing of that set.
-  const home = canonicalize(os.homedir(), cwd);
-  for (const secretDir of [`${home}/.ssh`, `${home}/.gnupg`, `${home}/.aws`]) {
-    if (isUnderRoot(canonical, secretDir)) {
-      return { kind: 'deny', reason: `Access to ${rawPath} is blocked: it is under a credential directory. This cannot be overridden.` };
+  // Both spellings of home (as set, and with symlinks resolved) are checked.
+  const homes = new Set([canonicalize(os.homedir(), cwd)]);
+  const realHome = realpathNearestSync(os.homedir());
+  if (realHome) homes.add(canonicalize(realHome, cwd));
+  for (const home of homes) {
+    for (const secretDir of [`${home}/.ssh`, `${home}/.gnupg`, `${home}/.aws`]) {
+      if (isUnderRoot(canonical, secretDir)) {
+        return `Access to ${rawPath} is blocked: it is under a credential directory. This cannot be overridden.`;
+      }
+    }
+    // Harness-only credential files (2026-09-10 security review): git/docker/cloud
+    // credentials, keyrings, browser login stores, YouCoded's own encrypted stores.
+    // Separate from isSensitivePath so the file VIEWER is unaffected — see
+    // credential-paths.ts.
+    if (isCredentialPath(canonical, home)) {
+      return `Access to ${rawPath} is blocked: it looks like a stored credential. This cannot be overridden.`;
     }
   }
-  // Harness-only credential files (2026-09-10 security review): git/docker/cloud
-  // credentials, keyrings, browser login stores, YouCoded's own encrypted stores.
-  // Separate from isSensitivePath so the file VIEWER is unaffected — see
-  // credential-paths.ts.
-  if (isCredentialPath(canonical, home)) {
-    return { kind: 'deny', reason: `Access to ${rawPath} is blocked: it looks like a stored credential. This cannot be overridden.` };
-  }
+  return null;
+}
+
+export function checkPathGuard(rawPath: string, cwd: string, internalReadRoots?: string[]): GuardVerdict {
+  const canonical = canonicalize(rawPath, cwd);
+  // WHY (security hardening 2026-10-30): the checks below used to judge only the TYPED path, so a
+  // symlink inside the project pointing at ~/.ssh/id_rsa (a cloned repo can ship one) read as an
+  // ordinary project file, and a link to ~/.bashrc counted as "inside the workspace" for Write/Edit.
+  // Now the real location is judged too: the secret deny on both, the jail on the real one.
+  const realAbs = realpathNearestSync(resolveP(rawPath, cwd));
+  const real = realAbs ? canonicalize(realAbs, cwd) : null;
+  const denied = secretDenyReason(rawPath, canonical, cwd) ?? (real && real !== canonical ? secretDenyReason(rawPath, real, cwd) : null);
+  if (denied) return { kind: 'deny', reason: denied };
   // Bash's own spill files are readable without an external_directory ask.
   //
   // WHY (2026-08-11 review round 8): when Bash truncates, it saves the full
@@ -290,6 +338,15 @@ export function checkPathGuard(rawPath: string, cwd: string, internalReadRoots?:
   if (internalReadRoots?.some((root) => isUnderRoot(canonical, canonicalize(root, cwd)))) return { kind: 'ok' };
   if (!isUnderRoot(canonical, canonicalize(cwd, cwd))) {
     return { kind: 'external', canonicalPath: canonical }; // → external_directory ask
+  }
+  // Typed path is inside, but a symlink may lead out: compare the real location with the real
+  // workspace folder (the folder itself can be reached through a link, e.g. /home -> /var/home).
+  if (real) {
+    const realCwdAbs = realpathNearestSync(resolveP(cwd, cwd));
+    const realCwd = realCwdAbs ? canonicalize(realCwdAbs, cwd) : canonicalize(cwd, cwd);
+    if (!isUnderRoot(real, realCwd) && !isUnderRoot(real, canonicalize(cwd, cwd))) {
+      return { kind: 'external', canonicalPath: real };
+    }
   }
   return { kind: 'ok' };
 }

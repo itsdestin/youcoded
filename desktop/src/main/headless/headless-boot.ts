@@ -138,7 +138,11 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   } catch (e) {
     log('ERROR', 'Headless', 'Failed to install hooks', { error: String(e) });
   }
-  try { await hookRelay.start(); } catch (e) { log('ERROR', 'Headless', 'Failed to start hook relay', { error: String(e) }); }
+  try { await hookRelay.start(); } catch (e) {
+    log('ERROR', 'Headless', 'Failed to start hook relay', { error: String(e) });
+    // Same fail-closed rule as main.ts: no socket we own means no socket name handed to sessions.
+    sessionManager.setPipeName('');
+  }
   try {
     const { runSettingsChores } = require('../launch-settings-chores');
     await runSettingsChores();

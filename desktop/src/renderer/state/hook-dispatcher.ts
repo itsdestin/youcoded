@@ -1,6 +1,6 @@
 import { HookEvent, type FloorStop } from '../../shared/types';
 
-const FLOOR_STOPS: FloorStop[] = ['removal', 'removal-if-empty', 'removal-unknown', 'secret-path', 'secret-maybe', 'admin'];
+const FLOOR_STOPS: FloorStop[] = ['removal', 'removal-if-empty', 'removal-unknown', 'secret-path', 'secret-maybe', 'admin', 'protected-config'];
 import { ChatAction } from './chat-types';
 import { flushTranscriptActions } from './transcript-batch';
 

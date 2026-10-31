@@ -16,6 +16,22 @@ import { getShell } from './harness/tools/bash';
 
 const GH_TOKEN_RE = /gh[opsu]_[A-Za-z0-9]{20,}/g;
 const ANTHROPIC_KEY_RE = /sk-ant-[A-Za-z0-9_-]{20,}/g;
+// WHY more shapes (security hardening 2026-10-30, secrets audit F8): a bug report is posted as a
+// public GitHub issue, and the old list covered only GitHub and Anthropic keys. Each of these is a
+// prefix + a long unguessable body, so a false positive on ordinary text is very unlikely. Order
+// matters: the specific shapes run before the generic `sk-` one.
+const SECRET_SHAPES: Array<[RegExp, string]> = [
+  [/github_pat_[A-Za-z0-9_]{20,}/g, '[REDACTED-GH-TOKEN]'],
+  [/sk-or-[A-Za-z0-9_-]{16,}/g, '[REDACTED-OPENROUTER-KEY]'],
+  [/sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}/g, '[REDACTED-API-KEY]'],
+  [/AIza[0-9A-Za-z_-]{30,}/g, '[REDACTED-GOOGLE-KEY]'],
+  [/xox[abprsoe]-[A-Za-z0-9-]{10,}/g, '[REDACTED-SLACK-TOKEN]'],
+  [/xapp-[A-Za-z0-9-]{10,}/g, '[REDACTED-SLACK-TOKEN]'],
+  [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '[REDACTED-AWS-KEY]'],
+  [/access-(?:sandbox|development|production)-[0-9a-fA-F-]{20,}/g, '[REDACTED-PLAID-TOKEN]'],
+  [/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[REDACTED-JWT]'],
+  [/(Bearer\s+)[A-Za-z0-9._~+\/=-]{16,}/gi, '$1[REDACTED-TOKEN]'],
+];
 
 // WHY (Fix, v1.2.4 — cross-platform robustness): every subprocess in this file
 // was spawned by bare command name (`git`, `gh`, `claude`, `bash`). Two Windows
@@ -44,9 +60,9 @@ function resolveCmd(cmd: string): { command: string; shell: boolean } {
 
 /**
  * Apply minimal, high-confidence redaction to a log excerpt before it
- * leaves the main process. We deliberately avoid aggressive token-shape
- * scrubbing — false positives erode user trust. The editable preview in
- * the renderer is the real safety net.
+ * leaves the main process. Only long, prefixed key shapes are scrubbed (a
+ * false positive on ordinary text erodes user trust); the editable preview in
+ * the renderer is still the final safety net.
  */
 export function redactLog(text: string, homeDir: string): string {
   let out = text;
@@ -55,8 +71,14 @@ export function redactLog(text: string, homeDir: string): string {
     const escaped = homeDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     out = out.replace(new RegExp(escaped, 'g'), '~');
   }
+  // Same home folder spelled with forward slashes (Windows paths often appear both ways in logs).
+  if (homeDir && homeDir.includes('\\')) {
+    const fwd = homeDir.replace(/\\/g, '/').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(new RegExp(fwd, 'gi'), '~');
+  }
   out = out.replace(GH_TOKEN_RE, '[REDACTED-GH-TOKEN]');
   out = out.replace(ANTHROPIC_KEY_RE, '[REDACTED-ANTHROPIC-KEY]');
+  for (const [re, label] of SECRET_SHAPES) out = out.replace(re, label);
   return out;
 }
 

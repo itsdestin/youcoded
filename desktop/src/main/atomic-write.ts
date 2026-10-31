@@ -29,12 +29,19 @@ async function renameOverTarget(from: string, to: string): Promise<void> {
 }
 
 /** Atomic write via temp file + rename (same directory, so the same filesystem). Creates the folder.
- *  A failed write removes its temp file and rethrows. */
-export async function atomicWrite(target: string, content: string): Promise<void> {
+ *  A failed write removes its temp file and rethrows.
+ *
+ *  `opts.mode`: the file's permission bits (POSIX; e.g. 0o600 = owner only). WHY (security hardening
+ *  2026-10-30): the temp file is brand new, so without this it got the default 0644 and the rename
+ *  then REPLACED a private file (~/.claude.json, which holds decrypted MCP keys) with a
+ *  world-readable one. The mode is also applied explicitly after the write, because the process
+ *  umask can only remove bits at creation, and some filesystems ignore the creation mode. */
+export async function atomicWrite(target: string, content: string, opts?: { mode?: number }): Promise<void> {
   const tmpPath = `${target}.tmp.${process.pid}.${atomicWriteSeq++}`;
   await fs.promises.mkdir(path.dirname(target), { recursive: true });
   try {
-    await fs.promises.writeFile(tmpPath, content, 'utf8');
+    await fs.promises.writeFile(tmpPath, content, opts?.mode !== undefined ? { encoding: 'utf8', mode: opts.mode } : 'utf8');
+    if (opts?.mode !== undefined && process.platform !== 'win32') await fs.promises.chmod(tmpPath, opts.mode);
     await renameOverTarget(tmpPath, target);
   } catch (err) {
     await fs.promises.rm(tmpPath, { force: true }).catch(() => {});

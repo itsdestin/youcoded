@@ -54,7 +54,6 @@ describe('secret-path floor: commands that only look similar are left alone', ()
     'grep -r API_KEY src',
     'curl https://example.com/.env.example',
     'ssh-keygen --help',
-    'cat .git-credentials',        // outside the home folder it is an ordinary project file
     // Only WRITING a secret file exposes nothing (decided 2026-09-23).
     'cp .env.example .env',
     'echo KEY=1 > .env',
@@ -198,8 +197,17 @@ describe('secret-path floor: indirect reads (scripts, curl @file, git rev:path, 
   });
 
   // N5 — a glob that could expand to a secret file asks, as a "could read".
-  it.each(['cat .env*', 'cat .e?v', 'cat ~/.ss*/id_rsa', 'cat .en[v]'])('%s asks (could match a secret)', (cmd) => {
+  it.each(['cat .env*', 'cat .e?v', 'cat .en[v]'])('%s asks (could match a secret)', (cmd) => {
     expect(secretPathVerdict(cmd, ctx)?.kind).toBe('secret-maybe');
+  });
+  // Since 2026-10-30 a private-key NAME (id_rsa...) is a secret wherever it sits, so a glob that still
+  // spells the key's name is a sure hit, not just a "could".
+  it('cat ~/.ss*/id_rsa asks (names a private key)', () => {
+    expect(secretPathVerdict('cat ~/.ss*/id_rsa', ctx)?.kind).toBe('secret-path');
+  });
+  // Changed 2026-10-30 (security hardening): .git-credentials, .npmrc, .pypirc are secrets in ANY folder.
+  it.each(['cat .git-credentials', 'cat .npmrc', 'cat deploy/id_ed25519'])('%s asks (secret wherever it sits)', (cmd) => {
+    expect(secretPathVerdict(cmd, ctx)?.kind).toBe('secret-path');
   });
 
   it.each([
