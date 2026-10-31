@@ -14,7 +14,8 @@
 // startup, so the handlers reach them through bindAccountDeps; before that runs they answer
 // "signed out" (the same fallback remote-server had when no store was injected).
 import fs from 'fs';
-import { dialog, shell } from 'electron';
+import { dialog } from 'electron';
+import { safeOpenExternal } from '../safe-open';
 import { IPC } from '../../shared/backend-contract';
 import type { ApiResult } from '../../shared/account-types';
 import type { MarketplaceAuthStore } from '../marketplace-auth-store';
@@ -62,7 +63,7 @@ export const accountChannels: MainChannelDef[] = [
       const { client } = need();
       const out = await client.authStart();
       // openExternal can fail on some Linux sandboxes (Flatpak). Non-fatal: the renderer shows the URL.
-      await shell.openExternal(out.auth_url).catch((err) =>
+      await safeOpenExternal(out.auth_url).catch((err) =>
         console.warn('[marketplace] openExternal failed; user must open URL manually:', err));
       return out;
     }),

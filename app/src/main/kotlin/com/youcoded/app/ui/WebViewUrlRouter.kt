@@ -25,7 +25,7 @@ enum class UrlDecision {
     DOWNLOAD,
     /** Handed to another app (a browser, a mail app). */
     OPEN_EXTERNALLY,
-    /** Neither loaded nor handed out: a file:// address other than the bundled page. */
+    /** Neither loaded nor handed out: a file:// address other than the bundled page, or any link that is not a web or mail address. */
     BLOCK,
 }
 
@@ -93,8 +93,14 @@ object WebViewUrlPolicy {
         // server it started (http://localhost:5173) would replace the app's own page — and reach the app's JavaScript
         // bridge. Only a debug build, whose own page may come from a laptop's dev server, keeps them in place.
         if (isDevServer(uri)) return if (devServersInApp) UrlDecision.LOAD else UrlDecision.OPEN_EXTERNALLY
-        return UrlDecision.OPEN_EXTERNALLY
+        // WHY only web and mail links leave the app (2026-10-30 security audit A3): this used to hand EVERY other address to
+        // Android's "open with" (intent:, market:, content:, sms:, tel:, custom app schemes), so a link in rendered chat text
+        // could start another app. The desktop app already limits its links to http, https and mailto; the phone now matches.
+        // Matched on the raw text (no trimming, case-insensitive), so a leading space or odd casing cannot slip a scheme past.
+        return if (EXTERNAL_LINK.containsMatchIn(url)) UrlDecision.OPEN_EXTERNALLY else UrlDecision.BLOCK
     }
+
+    private val EXTERNAL_LINK = Regex("^(https?|mailto):", RegexOption.IGNORE_CASE)
 
     /**
      * The one plain, visible, openable file name to save as. It lands in the

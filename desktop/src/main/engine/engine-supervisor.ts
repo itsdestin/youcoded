@@ -24,6 +24,7 @@
 // every preset: a `-c` left on the command line silently outranks — and so
 // defeats — every per-model context length.
 import { spawn, ChildProcess, execFileSync } from 'child_process';
+import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import { EventEmitter } from 'events';
 import type { EngineModel, EngineModelState, EngineRunState } from '../../shared/engine-types';
@@ -405,6 +406,12 @@ function defaultExeForPid(pid: number): string | null {
 }
 
 export class EngineSupervisor extends EventEmitter {
+  /** WHY a password (2026-10-30 security audit F1): the engine listens on a fixed, well-known local port, and without a
+   *  password any web page open in a browser, or any other program, could talk to the user's model (use their GPU, read what
+   *  the model is doing). A new random one is made for every start and handed to the engine through its environment (not the
+   *  command line, which other users of the computer can read). Every request the app makes goes through authedFetch. The port
+   *  stays fixed on purpose: the stale-engine reaper below finds a leftover engine from a crashed run BY that port. */
+  private apiKey: string | null = null;
   private child: ChildProcess | null = null;
   private state: EngineRunState = 'stopped';
   private startPromise: Promise<string> | null = null; // single-flight ensureRunning
@@ -592,10 +599,11 @@ export class EngineSupervisor extends EventEmitter {
   private async attemptStart(attempt: { omitModelId?: string; withoutPreset?: boolean }): Promise<string> {
     this.intentionalShutdown = false;
     this.state = 'starting';
+    this.apiKey = randomBytes(32).toString('hex');
     this.lastStartupOutput = '';
     this.emit('status-changed');
     const cfg = this.config();
-    const fetchImpl = this.opts.fetchImpl ?? fetch;
+    const fetchImpl = this.authedFetch;
     const readyDeadlineMs = this.opts.readyDeadlineMs ?? 30_000;
     const readyPollMs = this.opts.readyPollMs ?? 250;
 
@@ -682,7 +690,8 @@ export class EngineSupervisor extends EventEmitter {
         // Plan C's flat HTTP downloads). LLAMA_CACHE only matters for
         // llama-server's own -hf auto-download path, which nothing uses yet —
         // it's effectively vestigial (kept harmlessly). See engine-dependencies.md.
-        env: { ...process.env, ...(this.opts.env ?? {}), LLAMA_CACHE: cfg.cacheDir },
+        // LLAMA_API_KEY is llama-server's own spelling of --api-key; the router passes the password on to its model children (measured on b10665).
+        env: { ...process.env, ...(this.opts.env ?? {}), LLAMA_CACHE: cfg.cacheDir, LLAMA_API_KEY: this.apiKey },
         stdio: ['ignore', 'pipe', 'pipe'],
       }
     );
@@ -960,6 +969,16 @@ export class EngineSupervisor extends EventEmitter {
     return false;
   }
 
+  /** fetch with the engine's password attached. EVERY request to the local engine goes through this (or trackedFetch, which
+   *  calls it) — a plain fetch to the engine's port is refused with 401. Safe to call while stopped: it simply sends no password. */
+  authedFetch: typeof fetch = (input: any, init?: any) => {
+    const base = this.opts.fetchImpl ?? fetch;
+    if (!this.apiKey) return base(input, init);
+    const headers = new Headers(init?.headers ?? (typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined));
+    if (!headers.has('authorization')) headers.set('authorization', `Bearer ${this.apiKey}`);
+    return base(input, { ...(init ?? {}), headers });
+  };
+
   /** The fetch handed to createOpenAICompatible for the local provider. Holds
    *  inFlight until the response body is FULLY read (or errored/cancelled) and
    *  touches lastActivity per chunk, so idle shutdown can never cut a stream. */
@@ -981,7 +1000,7 @@ export class EngineSupervisor extends EventEmitter {
     };
     let res: Response;
     try {
-      res = await (this.opts.fetchImpl ?? fetch)(input, init);
+      res = await this.authedFetch(input, init);
     } catch (e) {
       this.inFlight--; releaseModel(); this.touch();
       throw e;
@@ -1031,7 +1050,7 @@ export class EngineSupervisor extends EventEmitter {
     const scan = this.opts.scanCacheImpl ?? scanGgufCacheAsync;
     if (this.state !== 'running') return await scan(this.cacheDir());
     try {
-      const res = await (this.opts.fetchImpl ?? fetch)(`${this.rootUrl()}/models`, { method: 'GET' });
+      const res = await this.authedFetch(`${this.rootUrl()}/models`, { method: 'GET' });
       if (!res.ok) return await scan(this.cacheDir());
       const payload: any = await res.json();
       const rows: any[] = Array.isArray(payload?.data) ? payload.data
@@ -1126,7 +1145,7 @@ export class EngineSupervisor extends EventEmitter {
     if (this.state !== 'running') return null;
     try {
       const url = `${this.rootUrl()}/models${reload ? '?reload=1' : ''}`;
-      const res = await (this.opts.fetchImpl ?? fetch)(url, { method: 'GET' });
+      const res = await this.authedFetch(url, { method: 'GET' });
       if (!res.ok) return null;
       const payload: any = await res.json();
       const rows: any[] = Array.isArray(payload?.data) ? payload.data
@@ -1161,7 +1180,7 @@ export class EngineSupervisor extends EventEmitter {
   async routerModelState(modelId: string): Promise<EngineModelState | null> {
     if (this.state !== 'running') return null;
     try {
-      const res = await (this.opts.fetchImpl ?? fetch)(`${this.rootUrl()}/models`, { method: 'GET' });
+      const res = await this.authedFetch(`${this.rootUrl()}/models`, { method: 'GET' });
       if (!res.ok) return null;
       const payload: any = await res.json();
       const rows: any[] = Array.isArray(payload?.data) ? payload.data
@@ -1359,7 +1378,7 @@ export class EngineSupervisor extends EventEmitter {
   async unloadModel(modelId: string): Promise<void> {
     if (this.state !== 'running') return;
     try {
-      await (this.opts.fetchImpl ?? fetch)(`${this.rootUrl()}/models/unload`, {
+      await this.authedFetch(`${this.rootUrl()}/models/unload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: modelId }),

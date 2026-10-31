@@ -835,3 +835,7 @@ is unreliable or absent. Three design consequences:
 
 Re-run all three (`probe-parallel.mjs <base> <model> 1,2,4,8`, `probe-prefix-fanout.mjs`,
 `probe-plan-grammar.mjs`) on every engine bump; results replace this section.
+
+## The engine's password (2026-10-30 security audit)
+
+The supervisor starts every engine with a fresh random password in the `LLAMA_API_KEY` environment variable (llama-server's own spelling of `--api-key`; environment, not the command line, because other users of the computer can read argv). Measured on b10665 in router mode: with the key set, `/models`, `/props`, `/models/load`, `/models/unload` and `/v1/chat/completions` all answer 401 without `Authorization: Bearer <key>`, only `/health` is open, and the router passes the key on to the model children it spawns (a routed chat completed). So **every request to the engine must go through `EngineSupervisor.authedFetch`** (or `trackedFetch`, which uses it); `EngineManager.engineFetch()` does that for the manager. The port stays fixed (9920 / 9970 dev) on purpose: the stale-engine reaper finds an orphan from a crashed run by that port, and an orphan can no longer be adopted because its password is unknown. `api-key` / `api-key-file` stay reserved in `model-presets.ts`.
