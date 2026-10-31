@@ -11,6 +11,7 @@ import path from 'path';
 import https from 'https';
 import { spawn } from 'child_process';
 import { app, BrowserWindow, shell } from 'electron';
+import { safeOpenExternal } from './safe-open';
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost, deriveDownloadFilename, cleanupStaleDownloads, RESERVED_CACHE_FILES } from './update-installer';
 import type { UpdateProgressEvent, UpdateInstallErrorCode, UpdateBetaChannelState, UpdateAutoInstallState, UpdateDownloadResult, UpdateCachedDownloadResult, UpdateLaunchResult } from '../shared/update-install-types';
 import { verifyDownloadedUpdate, compareVersions, hashFileSha256 } from './update-manifest-verify';
@@ -198,7 +199,8 @@ function createUpdateService() {
       if (result.success && result.quitPending) scheduleQuit();
       else launchActive = false;
     },
-    shellOpenExternal: (url: string) => shell.openExternal(url),
+    // WHY safeOpenExternal (audit F7): the fallback address comes from update metadata, so only a web address may be opened.
+    shellOpenExternal: async (url: string) => { await safeOpenExternal(url); },
     appRelaunch: () => app.relaunch(),
     fallbackDownloadUrl: () => cachedUpdateStatus?.download_url ?? '',
     // production reads process.env.APPIMAGE (Linux only); tests pass an override.

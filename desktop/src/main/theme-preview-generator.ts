@@ -1,6 +1,8 @@
 import { BrowserWindow } from 'electron';
 import path from 'path';
 import fs from 'fs';
+// WHY (audit F10): the preview page is built from a theme's own stylesheet; run it through the same filter the app uses.
+import { sanitizeCSS } from '../renderer/themes/theme-validator';
 
 const PREVIEW_WIDTH = 800;
 const PREVIEW_HEIGHT = 500;
@@ -50,6 +52,8 @@ export async function generateThemePreview(
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      // WHY explicit (audit F10): this window has no preload and renders theme-supplied content; say so rather than rely on the default.
+      sandbox: true,
       // Hidden windows skip paints by default in Electron 20+ — without this,
       // capturePage returns empty buffers because no frame was ever composited.
       // Option is real but missing from this Electron version's type defs.
@@ -219,7 +223,7 @@ async function buildPreviewHTML(manifest: Record<string, any>, themeDir: string)
   }
 
   // Inject custom_css for body::after overlays (patterns, etc.)
-  const customCss = manifest.custom_css || '';
+  const customCss = sanitizeCSS(String(manifest.custom_css || ''));
 
   return `<!DOCTYPE html>
 <html>

@@ -95,7 +95,9 @@ function renderDrawer(activeId: string) {
 
 function iframeSrcDoc(container: HTMLElement): string | null {
   const frame = container.querySelector('iframe');
-  return frame ? frame.getAttribute('srcdoc') : null;
+  // The preview adds its Content-Security-Policy <meta> tags in front of the page (html-preview-csp.ts); this test is about WHICH
+  // page is shown, so compare the page itself.
+  return frame ? (frame.getAttribute('srcdoc') ?? '').replace(/^(<meta http-equiv="(?:Content-Security-Policy|x-dns-prefetch-control)"[^>]*>)+/, '') : null;
 }
 
 describe('HTML artifact viewer — stale content across file switches', () => {

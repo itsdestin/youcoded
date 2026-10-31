@@ -141,36 +141,220 @@ export function validateTheme(raw: unknown): ThemeDefinition {
   lintCustomCss(t.custom_css as string | undefined, t.slug as string);
   lintCustomCssSelectors(t.custom_css as string | undefined, t.slug as string);
 
+  // WHY (audit SC-1): the font link becomes a remote stylesheet that styles the whole app and can change after a theme
+  // was reviewed. Only Google Fonts' own stylesheet address is kept; anything else is dropped (the theme still loads,
+  // with its `family` fallback fonts) — applied here so hand-installed themes get the same rule as registry ones.
+  const font = t.font as Record<string, unknown> | undefined;
+  if (font && font['google-font-url'] !== undefined && !isAllowedGoogleFontUrl(font['google-font-url'])) {
+    console.warn(`[theme-validator] theme "${String(t.slug)}": font.google-font-url must be https://fonts.googleapis.com/css2?… — ignored`);
+    delete font['google-font-url'];
+  }
+
   return raw as ThemeDefinition;
+}
+
+// WHY a scanner instead of regexes (2026-10-30 security audit F3/SC-2): the old regex filter was beaten three ways
+// — `@imp@import a;ort "https://x"` (removing the inner rule glued the outer keyword back together), `image-set("https://x" 1x)`
+// (a web address in a plain string, no url()), and CSS escapes (`u\72l(`, `url(\68ttps://x)`). A browser reads escapes
+// as the real characters, so this reads the stylesheet the way a browser does: it decodes escapes in names and addresses
+// first, then checks what the decoded text is. Anything that could fetch from the network is blocked; theme-asset:, data:,
+// blob:, #fragment and plain relative addresses stay.
+
+/** Schemes a theme stylesheet may point at — none of these leave the computer. */
+const SAFE_URL_SCHEMES = new Set(['theme-asset:', 'data:', 'blob:']);
+/** CSS functions whose string arguments are addresses (besides url() itself). */
+const URL_STRING_FUNCTIONS = new Set(['url', 'src', 'image', 'image-set', '-webkit-image-set', 'cross-fade', '-webkit-cross-fade']);
+
+const isHex = (c: string) => /[0-9a-fA-F]/.test(c);
+const isNameChar = (c: string) => /[A-Za-z0-9_\-]/.test(c) || c.charCodeAt(0) > 0x7f;
+
+/** Reads one CSS escape starting at the backslash at css[i]; returns the character it stands for and the next index. */
+function readEscape(css: string, i: number): { ch: string; next: number } {
+  let j = i + 1;
+  if (j >= css.length) return { ch: '\uFFFD', next: j };
+  if (isHex(css[j])) {
+    let hex = '';
+    while (j < css.length && hex.length < 6 && isHex(css[j])) hex += css[j++];
+    if (/[ \t\n\r\f]/.test(css[j] ?? '')) j++;   // one whitespace after a hex escape belongs to it
+    const cp = parseInt(hex, 16);
+    return { ch: cp === 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ? '\uFFFD' : String.fromCodePoint(cp), next: j };
+  }
+  return { ch: css[j], next: j + 1 };
+}
+
+/** Reads an identifier (escapes decoded) starting at i. */
+function readIdent(css: string, i: number): { name: string; next: number } {
+  let name = '';
+  let j = i;
+  while (j < css.length) {
+    if (css[j] === '\\') { const e = readEscape(css, j); name += e.ch; j = e.next; }
+    else if (isNameChar(css[j])) name += css[j++];
+    else break;
+  }
+  return { name, next: j };
+}
+
+/** Reads a quoted string at css[i] (the opening quote); returns its decoded text and the index after the closing quote. */
+function readString(css: string, i: number): { value: string; next: number } {
+  const quote = css[i];
+  let value = '';
+  let j = i + 1;
+  while (j < css.length && css[j] !== quote) {
+    if (css[j] === '\\') {
+      if (css[j + 1] === '\n') { j += 2; continue; }   // escaped newline continues the string
+      const e = readEscape(css, j); value += e.ch; j = e.next;
+    } else if (css[j] === '\n') break;                 // unescaped newline ends a bad string
+    else value += css[j++];
+  }
+  return { value, next: j < css.length && css[j] === quote ? j + 1 : j };
+}
+
+/** True when a decoded address cannot reach the network. */
+function isSafeCssUrl(decoded: string): boolean {
+  // Browsers drop tabs/newlines/control characters and leading spaces inside an address before reading it.
+  const u = decoded.replace(/[\u0000-\u0020\u007f]/g, '');
+  if (u === '') return true;
+  if (u.startsWith('#')) return true;
+  // `//host`, `\\host` and `/\host` all mean "another computer" to a browser.
+  if (/^[\\/]{2}/.test(u)) return false;
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*:)/.exec(u);
+  if (scheme) return SAFE_URL_SCHEMES.has(scheme[1].toLowerCase());
+  return true;   // plain relative address: resolves inside the app's own folder
+}
+
+/** Index just past the ")" that closes the "(" at css[open], skipping strings and escapes. */
+function closeParen(css: string, open: number): number {
+  let depth = 0;
+  for (let j = open; j < css.length; j++) {
+    const c = css[j];
+    if (c === '"' || c === "'") { j = readString(css, j).next - 1; }
+    else if (c === '\\') { j = readEscape(css, j).next - 1; }
+    else if (c === '(') depth++;
+    else if (c === ')') { depth--; if (depth === 0) return j + 1; }
+  }
+  return css.length;
+}
+
+/** Index just past the end of an at-rule that starts at i: through its ";" or its {...} block. */
+function endOfAtRule(css: string, i: number): number {
+  for (let j = i; j < css.length; j++) {
+    const c = css[j];
+    if (c === '"' || c === "'") j = readString(css, j).next - 1;
+    else if (c === '\\') j = readEscape(css, j).next - 1;
+    else if (c === '(') j = closeParen(css, j) - 1;
+    else if (c === ';') return j + 1;
+    else if (c === '{') {
+      let depth = 0;
+      for (let k = j; k < css.length; k++) {
+        if (css[k] === '{') depth++;
+        else if (css[k] === '}' && --depth === 0) return k + 1;
+      }
+      return css.length;
+    }
+  }
+  return css.length;
+}
+
+/** One scan: returns the stylesheet with every network-capable construct removed. */
+function sanitizeOnce(css: string): string {
+  let out = '';
+  let i = 0;
+  // Depth of "(" inside a function whose strings are addresses; 0 = not inside one.
+  let urlFnDepth = 0;
+  const parenStack: boolean[] = [];   // true for each open "(" that belongs to an address function
+  while (i < css.length) {
+    const c = css[i];
+    if (c === '/' && css[i + 1] === '*') {          // comment: copy untouched
+      const close = css.indexOf('*/', i + 2);
+      const end = close === -1 ? css.length : close + 2;
+      out += css.slice(i, end); i = end; continue;
+    }
+    if (c === '"' || c === "'") {
+      const s = readString(css, i);
+      if (urlFnDepth > 0 && !isSafeCssUrl(s.value)) out += '""';   // address inside image-set()/src()/…
+      else out += css.slice(i, s.next);
+      i = s.next; continue;
+    }
+    if (c === '@' ) {
+      const id = readIdent(css, i + 1);
+      const name = id.name.toLowerCase();
+      if (name === 'import') { i = endOfAtRule(css, i); continue; }   // could pull in a stylesheet that changes later
+      out += css.slice(i, id.next || i + 1); i = id.next || i + 1; continue;
+    }
+    if (c === '\\' || isNameChar(c)) {
+      const start = i;
+      const id = readIdent(css, i);
+      const name = id.name.toLowerCase();
+      if (css[id.next] === '(') {
+        if (name === 'expression') { out += '/* blocked */'; i = closeParen(css, id.next); continue; }
+        if (name === 'url') {
+          // Unquoted url(...) is one token; quoted is a function holding a string (handled by the string branch).
+          let j = id.next + 1;
+          while (j < css.length && /[ \t\n\r\f]/.test(css[j])) j++;
+          if (css[j] === '"' || css[j] === "'") {
+            // Quoted url("..."): judge the string; a blocked one takes the whole call with it.
+            const str = readString(css, j);
+            if (!isSafeCssUrl(str.value)) {
+              let k = str.next;
+              while (k < css.length && css[k] !== ')') k++;
+              out += 'url(/* blocked */)'; i = k < css.length ? k + 1 : k; continue;
+            }
+          } else {
+            let value = '';
+            while (j < css.length && css[j] !== ')') {
+              if (css[j] === '\\') { const e = readEscape(css, j); value += e.ch; j = e.next; } else value += css[j++];
+            }
+            const end = j < css.length ? j + 1 : j;
+            out += isSafeCssUrl(value) ? css.slice(start, end) : 'url(/* blocked */)';
+            i = end; continue;
+          }
+        }
+        out += css.slice(start, id.next + 1);
+        const isAddressFn = URL_STRING_FUNCTIONS.has(name);
+        parenStack.push(isAddressFn); if (isAddressFn) urlFnDepth++;
+        i = id.next + 1; continue;
+      }
+      if (name === '-moz-binding') {                  // old Firefox script-binding property
+        let j = id.next;
+        while (j < css.length && /[ \t\n\r\f]/.test(css[j])) j++;
+        if (css[j] === ':') {
+          let k = j;
+          while (k < css.length && css[k] !== ';' && css[k] !== '}') k++;
+          out += '/* blocked */'; i = css[k] === ';' ? k + 1 : k; continue;
+        }
+      }
+      out += css.slice(start, Math.max(id.next, start + 1)); i = Math.max(id.next, start + 1); continue;
+    }
+    if (c === '(') { parenStack.push(false); }
+    if (c === ')') { if (parenStack.pop()) urlFnDepth--; }
+    out += c; i++;
+  }
+  return out;
 }
 
 /**
  * Sanitizes a CSS string by stripping dangerous patterns that could
  * load external resources or execute code. Safe patterns like
- * theme-asset:// and data: URIs are preserved.
+ * theme-asset:// and data: URIs are preserved, and a stylesheet with nothing
+ * dangerous in it comes back byte-for-byte unchanged.
  */
 export function sanitizeCSS(css: string): string {
   let result = css;
+  // Removing a rule can glue the text on either side into a new one (`@imp` + `ort "x"`), so go again until nothing changes.
+  for (let pass = 0; pass < 8; pass++) {
+    const next = sanitizeOnce(result)
+      // javascript: has no business anywhere in a stylesheet.
+      .replace(/javascript\s*:/gi, '/* blocked */');
+    if (next === result) return result;
+    result = next;
+  }
+  return '/* blocked: stylesheet kept changing under sanitising */';
+}
 
-  // Strip @import rules (could load external stylesheets that change over time)
-  result = result.replace(/@import\s+[^;]+;?/gi, '');
-
-  // Strip url() with external protocols — keep theme-asset:// and data: URIs
-  result = result.replace(
-    /url\(\s*['"]?\s*(https?:\/\/|\/\/|ftp:\/\/)[^)]*\)/gi,
-    'url(/* blocked */)',
-  );
-
-  // Strip expression() — IE-era CSS expression injection
-  result = result.replace(/expression\s*\([^)]*\)/gi, '/* blocked */');
-
-  // Strip javascript: URIs anywhere in the CSS
-  result = result.replace(/javascript\s*:/gi, '/* blocked */');
-
-  // Strip -moz-binding — XBL binding injection (Firefox legacy)
-  result = result.replace(/-moz-binding\s*:[^;]+;?/gi, '/* blocked */');
-
-  return result;
+/** Only Google's stylesheet host may supply a theme font (audit SC-1): a theme's font link is a remote stylesheet that styles the whole app. */
+const GOOGLE_FONT_URL = /^https:\/\/fonts\.googleapis\.com\/css2?\?[A-Za-z0-9:;,@=&+%._~!*'()\-\/]*$/;
+export function isAllowedGoogleFontUrl(url: unknown): url is string {
+  return typeof url === 'string' && url.length <= 2048 && GOOGLE_FONT_URL.test(url);
 }
 
 /**

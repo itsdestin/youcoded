@@ -124,6 +124,23 @@ pacman:
     - libnotify
     - alsa-lib
 npmRebuild: false
+# WHY (2026-10-30 security audit F2/F4): Electron ships switches ("fuses") that decide what the packaged program will
+# do when something else asks it to. Left at their defaults, ANY program could start YouCoded's own signed executable as a
+# plain Node.js interpreter with debug flags, and a loose "app" folder dropped beside app.asar would be loaded in place
+# of the real code. electron-builder flips them natively (no @electron/fuses dependency of ours, no afterPack script).
+# runAsNode stays ON on purpose: the app starts itself as Node for the Browser installer (assistant-browser/browser-installer.ts),
+# Pages programs (pages/page-program.ts) and the admin-password helper (scripts/askpass/youcoded-askpass) - turning it
+# off would break all three until they move to utility processes. grantFileProtocolExtraPrivileges stays ON: the window is a file:// page that fetch()es local
+# sound files. Cookie encryption is left alone: it is a one-way change that wants an OS keyring on Linux.
+# Pinned by tests/electron-fuses-config.test.ts.
+electronFuses:
+  runAsNode: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
+  # Checked by Electron on macOS and Windows only (ignored on Linux). electron-builder writes the app.asar fingerprint
+  # into the Info.plist / exe for it. Needs one installed-build launch test per OS before a release.
+  enableEmbeddedAsarIntegrityValidation: true
 asarUnpack:
   - dist/main/pty-worker.js
   # Read's PDF text extraction (main process, src/main/harness/pdf-text.ts)
