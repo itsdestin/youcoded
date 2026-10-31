@@ -98,6 +98,10 @@ export function createBuddyTray(assetsDir: string, handlers: BuddyTrayHandlers):
       const b = tray.getBounds();
       return b.width > 0 && b.height > 0 ? b : null;
     },
+    // KNOWN GAP (Linux/KDE, measured 2026-10-31, Electron 41.10.7): destroy() unexports the icon, but KDE's
+    // tray keeps showing it until the app quits — Electron registers it on the app's one shared D-Bus
+    // connection, and KDE only forgets an icon when its connection goes away. So turning "Minimize to tray"
+    // off leaves a dead icon. Cause, measurements and the planned fix: card #210.
     destroy() {
       liveTrays.delete(refresh);
       if (!tray.isDestroyed()) tray.destroy();
