@@ -8,6 +8,7 @@
 import { DESTRUCTIVE_DENY_LIST } from './permission-types';
 import type { PermissionRule } from './permission-types';
 import { grantAdmitsHostile, ruleMatches } from './subject-glob';
+import { EXACT_ONLY_REASON, riskyVariant, safeFamilyOf, type SafeFamily } from './bash-risky-variants';
 
 export type GrantScope = 'exact' | 'wide';
 
@@ -76,6 +77,14 @@ export function describeBashPattern(pattern: string): string | null {
     const i = scriptIndex(tokens);
     if (i >= 0 && i === tokens.length - 1) return `Running ${tokens[i]}`;
   }
+  // A split program's wide grant reads as what it covers, not "Any curl command".
+  // Also what an older "Any curl command" row reads as now: that is all it covers.
+  const fetch = /^(curl|wget)\*$/.exec(pattern);
+  if (fetch) return `Downloading with ${fetch[1]}`;
+  const install = /^(npm|pnpm|yarn|bun|cnpm) (\S+)\*$/.exec(pattern);
+  if (install && safeFamilyOf(`${install[1]} ${install[2]}`)) return `Installing with ${install[1]}, without package setup scripts`;
+  const pip = /^(pip3?) (\S+)\*$/.exec(pattern);
+  if (pip && safeFamilyOf(`${pip[1]} ${pip[2]}`)) return `Installing ready-made packages with ${pip[1]}`;
   const generic = /^([^*?]+?)\*$/.exec(pattern);
   if (generic) return `Any ${generic[1].trim()} command`;
   return null;
@@ -213,7 +222,32 @@ function wideRule(pattern: string): PermissionRule {
   return { tool: 'Bash', pattern, action: 'allow', match: 'glob' };
 }
 
+// What a wide choice for a split program says it grants. WHY words like these and
+// not "Any curl command": the grant is only ever honoured for the safe form (see
+// SAFETY RULE 5 in subject-glob.ts), so the label must name that form — a button
+// that said "any" would again promise more than the engine gives, or the reverse.
+const SAFE_FAMILY_COPY: Record<SafeFamily, (program: string) => { label: string; limits: string }> = {
+  download: (program) => ({
+    label: `Always allow downloading with ${program}`,
+    limits: "Doesn't cover sending data or files out, or this command chained onto another one.",
+  }),
+  'node-install': (program) => ({
+    label: `Always allow installing with ${program}, without running package setup scripts`,
+    limits: "Doesn't cover installs that let packages run their own setup scripts, or this command chained onto another one.",
+  }),
+  'pip-install': (program) => ({
+    label: `Always allow installing ready-made packages with ${program}`,
+    limits: "Doesn't cover packages that need building first, or this command chained onto another one.",
+  }),
+};
+
 function deriveWide(command: string, tokens: string[]): GrantOption | null {
+  // WHY first (audit finding 10): a command in its RISKY form — an upload, an
+  // install that runs setup scripts, a variable set first, text filled in later —
+  // is remembered exactly or not at all. Any wide rung built from it would be
+  // refused by the engine anyway (SAFETY RULE 5), so offering it would be a
+  // button that saves a grant which then never fires.
+  if (riskyVariant(command) !== null) return null;
   const key = shapeKey(tokens);
   const shape = COMMAND_SHAPES.find((s) => s.key === key);
   if (shape) {
@@ -240,6 +274,11 @@ function deriveWide(command: string, tokens: string[]): GrantOption | null {
   const run = scriptRunScope(tokens);
   if (run) return { scope: 'wide', rule: wideRule(run.pattern), label: run.label, limits: run.limits };
 
+  const family = safeFamilyOf(command);
+  if (family) {
+    const copy = SAFE_FAMILY_COPY[family.family](family.program);
+    return { scope: 'wide', rule: wideRule(`${key}*`), label: copy.label, limits: copy.limits };
+  }
   return { scope: 'wide', rule: wideRule(`${key}*`), label: `Any ${key} command`, limits: GENERIC_LIMITS };
 }
 
@@ -361,7 +400,9 @@ export function bashGrantOptions(command: string): GrantOption[] {
       scope: 'exact',
       rule: { tool: 'Bash', pattern: command, action: 'allow', match: 'exact' },
       label: command,
-      limits: GENERIC_LIMITS,
+      // A risky command says WHY nothing wider is on offer (EXACT_ONLY_REASON); an
+      // ordinary one keeps the generic sentence.
+      limits: ((r) => (r ? EXACT_ONLY_REASON[r] : GENERIC_LIMITS))(riskyVariant(command)),
     },
   ];
   const wide = deriveWide(command, tokens);

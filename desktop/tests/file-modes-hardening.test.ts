@@ -54,9 +54,9 @@ describe.skipIf(!posix)('desktop.log is owner-only', () => {
       vi.resetModules();
       const { log, rotateLog } = await import('../src/main/logger');
       log('INFO', 'T', 'hello');
-      await new Promise((r) => setTimeout(r, 100));
       const logPath = path.join(home, '.claude', 'desktop.log');
-      expect(mode(logPath)).toBe(0o600);
+      // WHY waitFor, not a fixed sleep: the logger writes asynchronously, and a busy machine outruns 100 ms.
+      await vi.waitFor(() => expect(mode(logPath)).toBe(0o600));
       fs.chmodSync(logPath, 0o644);
       await rotateLog();
       expect(mode(logPath)).toBe(0o600);

@@ -125,6 +125,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#native', 'view'), session: 'wb-2' },
   // WHY: photograph the real admin confirmation and the unchanged push confirmation it reuses.
   { ...chat('chat#push-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-push-approval', latency: '150' }, open: ['Always allow'] },
+  // WHY (audit finding 10): the Always-allow choices for a download, an upload and a plain package install.
+  ...['curl-download', 'curl-upload', 'npm-install'].map((g) => ({ ...chat(`chat#grant-${g}`, 'view', 'approval'), session: 'wb-2', params: { seed: `bubbles-grant-${g}`, latency: '150' }, open: ['Always allow'] })),
   { ...chat('chat#admin-approval', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' } },
   { ...chat('chat#admin-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'] },
   { ...chat('chat#admin-choices-phone', 'view', 'approval', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'], viewport: { width: 390, height: 844 } },

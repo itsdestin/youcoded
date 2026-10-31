@@ -45,15 +45,17 @@ describe('sign-in loopback listener', () => {
     expect(r.body).toContain('return to YouCoded');
     expect(r.body).not.toMatch(/https?:\/\/|<script|<img|<link/i);
     expect(open.secret()).toBe(SECRET);
-    await new Promise((res) => setTimeout(res, 100));
-    expect(await refused(port)).toBe(true);
+    // WHY waitFor: closing the listener is asynchronous; a fixed 100 ms guess fails on a busy machine.
+    await vi.waitFor(async () => expect(await refused(port)).toBe(true));
   });
 
   it('closes by itself after its time limit with no secret', async () => {
     open = await startSigninListener(150);
     const port = open.port;
-    await new Promise((res) => setTimeout(res, 400));
-    expect(await refused(port)).toBe(true);
+    // Probe with a path the listener ignores: refused() sends a VALID secret, which would itself
+    // fill the listener if it were still open and make this assertion about the probe.
+    const stillOpen = () => get(port, '/').then(() => true, () => false);
+    await vi.waitFor(async () => expect(await stillOpen()).toBe(false), { timeout: 5000 });
     expect(open.secret()).toBeNull();
   });
 });
