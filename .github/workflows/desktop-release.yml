@@ -115,6 +115,14 @@ jobs:
       - name: Fetch the Office add-on
         run: node scripts/fetch-office.mjs --required
 
+      # WHY (audit item 24): every release must carry the exact commit of each built-in plugin.
+      # Fails when a built-in plugin changed in wecoded-marketplace after the pins were last
+      # refreshed. Fix: run `node scripts/refresh-bundled-plugin-pins.mjs` and commit the file
+      # (docs/build-and-release.md). One leg is enough; the checkout is identical on all three.
+      - name: Check built-in plugin pins are current
+        if: matrix.name == 'linux'
+        run: node scripts/refresh-bundled-plugin-pins.mjs --check
+
       - name: Run tests
         run: npm test
 

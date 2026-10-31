@@ -4,13 +4,14 @@ import os from 'os';
 import { scanSkills } from './skill-scanner';
 import { SkillConfigStore } from './skill-config-store';
 import { encodeSkillLink, decodeSkillLink } from './skill-share';
-import { installPlugin, uninstallPlugin, upgradePluginFromLocal, refreshLocalMarketplaceCache, readPluginVersion, isPluginInstalled, marketplaceCacheDir, sweepStaleUpgradeDirs, type InstallResult, upgradePluginFromGit } from './plugin-installer';
+import { installPlugin, uninstallPlugin, upgradePluginFromLocal, readPinMarker, materializePinnedSource, readPluginVersion, isPluginInstalled, marketplaceCacheDir, sweepStaleUpgradeDirs, type InstallResult, upgradePluginFromGit } from './plugin-installer';
 import { pluginInstallDir, YOUCODED_PLUGINS_DIR, listInstalledPluginDirs } from './claude-code-registry';
 import { getConfig as getMarketplaceConfig } from './marketplace-config-store';
 import { reconcileHooks } from './hook-reconciler';
 import { reconcileMcp } from './mcp-reconciler';
 import { log } from './logger';
-import { BUNDLED_PLUGIN_IDS } from '../shared/bundled-plugins';
+import { BUNDLED_PLUGIN_IDS, isBundledPlugin } from '../shared/bundled-plugins';
+import { getBundledPin, planBundledSync } from './bundled-plugin-sync';
 import { isNewerVersion } from '../shared/version-compare';
 // Marketplace overhaul Task 16: the Worker host the catalog is served from.
 // Main already imports this module (install-reconcile.ts, marketplace-api-handlers.ts).
@@ -381,6 +382,9 @@ export class LocalSkillProvider {
    * in ~/.claude/youcoded-config/<id>.json is NOT touched.
    */
   async update(id: string): Promise<{ ok: boolean; newVersion?: string; error?: string; missingRequiredFields?: string[] }> {
+    // WHY (audit item 24): built-in plugins move only when the app updates (to the commit baked
+    // into the app). An Update click must not pull a newer or different copy from GitHub.
+    if (isBundledPlugin(id)) return { ok: false, error: 'Built-in plugins are updated together with the app.' };
     const index = await this.fetchIndex();
     const entry = index.find(e => e.id === id);
     if (!entry) return { ok: false, error: `Skill not found in marketplace: ${id}` };
@@ -1075,23 +1079,10 @@ export class LocalSkillProvider {
       index = await this.fetchIndex();
     }
 
-    // Review fix (Finding 2): refresh once per DISTINCT marketplace among the
-    // bundled entries actually found in the index, reading sourceMarketplace
-    // off each entry instead of hardcoding 'youcoded'. Today every bundled id
-    // happens to share one marketplace, so this is one call — but the compare
-    // below (marketplaceCacheDir) now also reads the entry's own marketplace,
-    // so a future entry from a different marketplace needs ITS cache
-    // refreshed too, not just 'youcoded'. Per-distinct-marketplace (not
-    // per-id) avoids refreshing the same repo N times in one pass; the 1h
-    // gate inside refreshLocalMarketplaceCache would make a per-id call cheap
-    // too, but grouping is one fewer thing to reason about.
-    const marketplaces = new Set(ids.map((id) => index.find((e) => e.id === id)?.sourceMarketplace ?? 'youcoded'));
-    for (const mp of marketplaces) {
-      const refreshed = await refreshLocalMarketplaceCache(mp);
-      if (!refreshed.ok) {
-        log('WARN', 'bundled-plugins', 'marketplace cache refresh failed; comparing against the last copy', { marketplace: mp, error: refreshed.error });
-      }
-    }
+    // WHY (audit item 24): the old step here refreshed the marketplace cache to the newest
+    // GitHub master on every launch. Built-in plugins are now taken from the commit pinned in
+    // this app build (installPlugin / upgradePluginFromLocal fetch exactly that commit), so
+    // nothing newer is downloaded here and a launch with no internet changes nothing.
 
     const out: Array<{ id: string; action: ReconcileAction; from?: string; to?: string; error?: string; via?: string }> = [];
     for (const id of ids) {
@@ -1198,31 +1189,45 @@ export class LocalSkillProvider {
         continue;
       }
 
-      // Review fix (Finding 2): read the cache copy through the same helper
-      // plugin-installer.ts itself uses (marketplaceCacheDir), instead of
-      // hand-building the path. The hand-built path hardcoded
-      // 'wecoded-marketplace' — for any entry whose sourceMarketplace ever
-      // differed, this would have silently pointed at a directory that
-      // doesn't exist, `available` would come back null, and this id would
-      // report 'unchanged' forever with no error at all.
+      // WHY (audit item 24): decide against the PINNED commit's copy, not master. First make
+      // sure that commit's files are in the cache (no download if an earlier launch already
+      // has them). If that fails (offline, first launch after an app update), the installed
+      // copy simply stays as it is until the next launch.
+      const pin = getBundledPin(id);
+      if (!pin) {
+        out.push({ id, action: 'failed', error: 'this app build has no pinned version for this built-in plugin' });
+        continue;
+      }
+      const cacheRepo = marketplaceCacheDir('youcoded', '');
+      const prepared = await materializePinnedSource(cacheRepo, pin.commit, pin.sourceRef);
       const installed = readPluginVersion(installDir);
-      const available = readPluginVersion(marketplaceCacheDir(mp, sourceRef));
-      if (!isNewerVersion(installed ?? undefined, available ?? undefined)) {
+      if (!prepared.ok) {
+        log('WARN', 'bundled-plugins', 'could not get the pinned version; keeping the installed copy', { id, error: prepared.error });
+        out.push({ id, action: 'unchanged', from: installed ?? undefined });
+        continue;
+      }
+      const available = readPluginVersion(marketplaceCacheDir('youcoded', pin.sourceRef));
+      const plan = planBundledSync({
+        installedVersion: installed,
+        installedMarker: await readPinMarker(installDir),
+        pin,
+        pinnedVersion: available,
+      });
+      if (plan !== 'upgrade') {
+        if (plan === 'keep-newer') log('INFO', 'bundled-plugins', 'installed copy is newer than this app\'s pinned one; keeping it', { id, installed, pinned: available });
         out.push({ id, action: 'unchanged', from: installed ?? undefined });
         continue;
       }
 
-      const r = await upgradePluginFromLocal(id, sourceRef, mp);
+      const r = await upgradePluginFromLocal(id, pin.sourceRef, 'youcoded');
       if (r.status !== 'installed') {
         out.push({ id, action: 'failed', from: installed ?? undefined, to: available ?? undefined, error: (r as any).error ?? `upgrade did not complete (status: ${r.status})` });
         continue;
       }
 
-      // `available` is guaranteed a real version string by this point:
-      // isNewerVersion() above only returns true when both `installed` and
-      // `available` are non-empty strings — so recording it here can't fall
-      // through to a synthetic '1.0.0' (Finding 9's same anti-pattern).
-      this.configStore.updatePackageVersion(id, available as string);
+      // The pin's plugin.json may (rarely) carry no version; only record one we actually read.
+      const landed = readPluginVersion(installDir) ?? available;
+      if (landed) this.configStore.updatePackageVersion(id, landed);
       this.installedCache = null;
       this.onCacheInvalidated?.();
       out.push({ id, action: 'upgraded', from: installed ?? undefined, to: available ?? undefined });

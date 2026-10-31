@@ -33,6 +33,7 @@ const claude = () => (window as any).claude;
 // One copy, one answer — a second implementation would drift and show a badge the
 // upgrade path disagrees with.
 import { isNewerVersion } from '../../shared/version-compare';
+import { isBundledPlugin } from '../../shared/bundled-plugins';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -587,6 +588,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     for (const entry of skillEntries) {
       const pkg = packages[entry.id];
       if (!pkg) continue; // not installed via marketplace
+      // WHY (audit item 24): built-in plugins only move with an app update, so the registry's
+      // newer copy must not light an "Update" badge the button could not honour.
+      if (isBundledPlugin(entry.id)) continue;
       const listedCommit = entry.catalog?.sourceCommit;
       const commitMoved = !!pkg.commit && !!listedCommit && pkg.commit !== listedCommit;
       if (isNewerVersion(pkg.version, entry.version) || commitMoved) {
