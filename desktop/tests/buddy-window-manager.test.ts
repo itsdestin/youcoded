@@ -852,6 +852,17 @@ describe('taskbar-icon style', () => {
     expect(chat.y + CHAT_SIZE.height + BAR_SIZE.height).toBeGreaterThan(1080 - 20);
   });
 
+  it('tells the bar it hangs under the chat, so it draws its row at the top with the hints below', () => {
+    // WHY: drawn at the bottom of its window (the floating style) the row sat a whole hint-room (34px) under the chat.
+    const tray = trayFake({ x: 1800, y: 1050, width: 24, height: 24 });
+    const h = harness({ tray });
+    h.manager.show('tray');
+    tray.handlers!.onToggleChat();
+    const states = (h.wins.bar?.webContents.send.mock.calls ?? []).filter((c) => c[0] === 'buddy:bar-state').map((c) => c[1]);
+    expect(states.length).toBeGreaterThan(0);
+    expect(states.every((s) => s.under === true)).toBe(true);
+  });
+
   it('puts a red dot on the icon while something needs you', () => {
     const tray = trayFake();
     const h = harness({ tray });

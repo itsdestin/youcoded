@@ -31,9 +31,10 @@ interface Props {
 }
 
 /**
- * Shared new-session form used by the buddy chat window in two places:
- *   1. BuddyWelcome expanded state (no active session)
- *   2. SessionPill dropdown's "+ New session…" expansion
+ * Shared new-session form, used in two places:
+ *   1. BuddyWelcome expanded state (the buddy chat with no active session)
+ *   2. PageCreateDialog (Pages → Create a page)
+ * The buddy's own "New session" with a session open comes from SessionStrip, as in the main window.
  *
  * WHY THE 2026-09-10 REWRITE. This form used to be a hand-copy of the welcome
  * form's fields, and its own comment pointed at App.tsx line numbers that had

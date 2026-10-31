@@ -252,10 +252,13 @@ const TRAY_EDGE_GAP_PX = 8;
  * instead of a floating mascot (the "taskbar icon" buddy style).
  *
  * WHY its own layout and not computeGroupLayout with a pretend mascot: that
- * layout reserves a 112px hole for the mascot and hangs the button row off his
- * hands, so with no mascot drawn the buttons would float beside empty space.
+ * layout reserves a 112px hole for the mascot and sets the button row beside
+ * him, level with his feet, so with no mascot drawn the buttons would float beside empty space.
  * Here the chat sits against the bar the icon lives in, horizontally centred
- * on the icon, with the button row tucked directly under the chat.
+ * on the icon, with the button row tucked directly under the chat. The bar
+ * WINDOW starts at the chat's bottom edge and draws its row at its own top
+ * (BAR_PADDING down, hints below — buddy:bar-state `under`), so the row sits
+ * BAR_PADDING under the chat; drawn at the bottom it left a BAR_TOOLTIP_ROOM gap.
  *
  * `icon` is where the OS says the icon is — null where it won't say (Linux),
  * which falls back to the bottom-right corner, where most Linux panels keep
