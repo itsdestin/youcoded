@@ -23,7 +23,8 @@ const fetchAsk = (over: Partial<ToolCallState> = {}): ToolCallState => ({
   status: 'awaiting-approval', requestId: 'native-web1', permissionMode: 'ask', ...over,
 } as ToolCallState);
 const renderCard = (tool: ToolCallState) =>
-  render(<ChatProvider><ToolCard tool={tool} sessionId="s1" sessionCwd="/home/me/notes" /></ChatProvider>);
+  // WHY: ToolCard reads the folder from the store by sessionId; it has no sessionCwd prop.
+  render(<ChatProvider><ToolCard tool={tool} sessionId="s1" /></ChatProvider>);
 
 describe('website ask card', () => {
   it('names the site plainly and says what each answer covers', () => {

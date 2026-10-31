@@ -117,8 +117,9 @@ describe('WebFetch', () => {
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/private|internal/i);
   });
-  it('permissionSubject is the url', () => {
-    expect(WebFetchTool.permissionSubject({ url: 'https://a.b/c' } as any)).toBe('https://a.b/c');
+  // WHY: ask-first-per-website means the permission subject is the site, not the full address.
+  it('permissionSubject is the site, not the full url', () => {
+    expect(WebFetchTool.permissionSubject({ url: 'https://a.b/c' } as any)).toBe('a.b');
   });
 
   // --- extra edge tests (plan: "further edge tests you judge necessary") ---

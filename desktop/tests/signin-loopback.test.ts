@@ -13,6 +13,9 @@ const get = (port: number, path: string, method = 'GET') => new Promise<{ status
 });
 const refused = (port: number) => get(port, '/youcoded-signin?secret=' + SECRET).then(() => false, () => true);
 
+// WHY: polling with the real secret would hand the secret to a still-open listener; probe a harmless path.
+const gone = (port: number) => get(port, '/').then(() => false, () => true);
+
 let open: SigninListener | null = null;
 afterEach(() => { open?.close(); open = null; vi.useRealTimers(); });
 
@@ -45,15 +48,14 @@ describe('sign-in loopback listener', () => {
     expect(r.body).toContain('return to YouCoded');
     expect(r.body).not.toMatch(/https?:\/\/|<script|<img|<link/i);
     expect(open.secret()).toBe(SECRET);
-    await new Promise((res) => setTimeout(res, 100));
-    expect(await refused(port)).toBe(true);
+    // The listener closes itself right after answering; wait for the port to go dead.
+    await vi.waitFor(async () => expect(await refused(port)).toBe(true));
   });
 
   it('closes by itself after its time limit with no secret', async () => {
     open = await startSigninListener(150);
     const port = open.port;
-    await new Promise((res) => setTimeout(res, 400));
-    expect(await refused(port)).toBe(true);
+    await vi.waitFor(async () => expect(await gone(port)).toBe(true), { timeout: 3000 });
     expect(open.secret()).toBeNull();
   });
 });
