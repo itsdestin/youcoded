@@ -158,6 +158,21 @@ export const accountChannels: MainChannelDef[] = [
       clearArcadeCache(); // and forget the cached friends leaderboard
     },
   }),
+  // WHY (Destin, 2026-10-31, security audit): "Sign out" only ends THIS computer's sign-in. This ends
+  // every device's. Unlike sign-out it is NOT best-effort: if the server cannot be reached we stay
+  // signed in and say so, because clearing locally would look like success while other devices still work.
+  defineChannel({
+    name: IPC.ACCOUNT_SIGN_OUT_ALL, kind: 'handle', remoteAllowed: false,
+    handler: () => {
+      const { store, client } = need();
+      return wrap(async () => {
+        await client.logoutAll();
+        store.signOut();
+        notifySignedOut();
+        clearArcadeCache();
+      });
+    },
+  }),
   defineChannel({
     name: IPC.ACCOUNT_UPDATE_PROFILE, kind: 'handle', remoteAllowed: false,
     handler: ({ displayName }) => {

@@ -1302,7 +1302,7 @@ describe('RemoteServer account bridge', () => {
   it('a phone is still refused the account actions that change who this computer is', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-    for (const type of ['account:start', 'account:poll', 'account:refresh', 'account:sign-out', 'account:update-profile', 'account:set-handle', 'account:delete', 'account:export']) {
+    for (const type of ['account:start', 'account:poll', 'account:refresh', 'account:sign-out', 'account:sign-out-all', 'account:update-profile', 'account:set-handle', 'account:delete', 'account:export']) {
       const sent = await sendAndCollect(server, { type, id: `r-${type}`, payload: {} });
       expect(sent[0].payload, type).toMatchObject({ ok: false, unsupported: true });
     }
