@@ -54,8 +54,8 @@ describe.skipIf(!posix)('desktop.log is owner-only', () => {
       vi.resetModules();
       const { log, rotateLog } = await import('../src/main/logger');
       log('INFO', 'T', 'hello');
-      await new Promise((r) => setTimeout(r, 100));
       const logPath = path.join(home, '.claude', 'desktop.log');
+      await vi.waitFor(() => expect(fs.existsSync(logPath)).toBe(true)); // WHY: wait for the write, not a guess
       expect(mode(logPath)).toBe(0o600);
       fs.chmodSync(logPath, 0o644);
       await rotateLog();
