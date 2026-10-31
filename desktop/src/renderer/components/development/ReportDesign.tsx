@@ -245,7 +245,9 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
       })}
       {isBug && tick({
         title: 'Recent logs', label: 'Include recent logs', checked: logs, onChange: chooseLogs,
-        hint: 'The app’s last 200 lines of activity. You can read them, and remove anything private, before sending.',
+        // WHY (Destin, 2026-10-31, security audit): the app hides known key and password shapes, but that
+        // cannot catch everything, and the ticket is public. Say so instead of implying the logs are clean.
+        hint: 'The app’s last 200 lines of activity. Passwords and keys it recognizes are hidden, but it can miss some. Read them and remove anything private before sending; the ticket is public.',
       })}
       {tick({
         title: 'Screenshots or files', label: 'Finish with attachments in GitHub', checked: attachments, onChange: setAttachments,
