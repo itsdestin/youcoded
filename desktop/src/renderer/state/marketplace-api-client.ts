@@ -151,8 +151,9 @@ export interface BlockRow extends SocialUserCard {
 
 export interface MarketplaceApiClient {
   getStats(): Promise<StatsResponse>;
-  authStart(): Promise<AuthStartResponse>;
-  authPoll(deviceCode: string): Promise<AuthPollResponse>;
+  /** `loopbackPort`: where this computer listens for the sign-in secret (main/signin-loopback.ts). */
+  authStart(loopbackPort?: number): Promise<AuthStartResponse>;
+  authPoll(deviceCode: string, loopbackSecret?: string): Promise<AuthPollResponse>;
   /** Resolve the current session token to the signed-in user's profile. */
   authMe(): Promise<AuthMeResponse>;
   /** Update the account display name. Returns the stored value. */
@@ -284,11 +285,15 @@ export function createMarketplaceApiClient(opts: {
 
   return {
     getStats: () => request<StatsResponse>("/stats", { method: "GET" }),
-    authStart: () => request<AuthStartResponse>("/auth/github/start", { method: "POST" }),
-    authPoll: (device_code) =>
+    authStart: (loopbackPort) =>
+      request<AuthStartResponse>("/auth/github/start", {
+        method: "POST",
+        ...(loopbackPort !== undefined ? { body: JSON.stringify({ loopback_port: loopbackPort }) } : {}),
+      }),
+    authPoll: (device_code, loopbackSecret) =>
       request<AuthPollResponse>("/auth/github/poll", {
         method: "POST",
-        body: JSON.stringify({ device_code }),
+        body: JSON.stringify(loopbackSecret ? { device_code, loopback_secret: loopbackSecret } : { device_code }),
       }),
     authMe: () => request<AuthMeResponse>("/auth/me", { method: "GET", auth: true }),
     updateProfile: (display_name) =>

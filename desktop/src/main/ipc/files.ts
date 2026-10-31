@@ -16,6 +16,7 @@ import path from 'path';
 import { IPC } from '../../shared/backend-contract';
 import { readFileHead } from '../fs-read-head';
 import { uploadDir, MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE_SENTENCE, sanitizeUploadName, sweepOldUploads, uploadFolderBytes, MAX_UPLOAD_FOLDER_BYTES, UPLOAD_FOLDER_FULL_SENTENCE } from '../upload-store';
+import { ensurePrivateTempDir } from '../private-temp-dir';
 import { defineChannel, type MainChannelDef } from './channel-def';
 import { refuseHeadOutsideKnownFolders } from './file-gates';
 
@@ -38,7 +39,8 @@ export const filesChannels: MainChannelDef[] = [
       if (Math.floor((payload.data.length * 3) / 4) > MAX_UPLOAD_BYTES) return { error: UPLOAD_TOO_LARGE_SENTENCE };
       const dir = uploadDir();
       try {
-        await fs.promises.mkdir(dir, { recursive: true });
+        // Owner-only folder; refused (upload fails, nothing written) if someone else owns it.
+        await ensurePrivateTempDir(dir);
         // WHY (2026-10-01 one-core R3-SEC review): a ceiling on the whole folder, after an inline sweep of old files.
         const incoming = Math.floor((payload.data.length * 3) / 4);
         if ((await uploadFolderBytes(dir)) + incoming > MAX_UPLOAD_FOLDER_BYTES) {
@@ -49,7 +51,8 @@ export const filesChannels: MainChannelDef[] = [
         const filePath = path.join(dir, `${Date.now()}-${sanitizeUploadName(payload.name)}`);
         const buffer = Buffer.from(payload.data, 'base64');
         if (buffer.length > MAX_UPLOAD_BYTES) return { error: UPLOAD_TOO_LARGE_SENTENCE };
-        await fs.promises.writeFile(filePath, buffer);
+        // 0600: the attachment is for this user and the assistant only.
+        await fs.promises.writeFile(filePath, buffer, { mode: 0o600 });
         return { path: filePath };
       } catch {
         return { error: 'Upload failed' };

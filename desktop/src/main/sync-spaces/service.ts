@@ -14,6 +14,7 @@ import { importProjectFolder } from './import-project';
 import { MAX_SYNC_FILE_BYTES, validateSyncName } from './guards';
 import { createSyncHubSocket } from '../sync-hub-socket';
 import { getGithubClient } from '../github-client';
+import { makeRepoVisibilityChecker } from './repo-visibility';
 import type { LeaseResult, SyncHubEvent } from '../sync-hub-socket';
 import { mapLimit } from '../map-limit';
 import { readProjectRegistry, ensureProjectEntry, setProjectDisplayName, setProjectStopped, setProjectDescription, markProjectRemoved, readRemovedProjects } from './project-registry';
@@ -372,7 +373,17 @@ async function startEngine(log: (m: string) => void): Promise<void> {
   // supersedes us mid-loop, the module-level `engine` no longer points at `e`
   // and we must stop OUR instance ourselves — otherwise its chokidar watchers
   // leak with nothing left holding a reference to close them.
-  const e = new SpaceSyncEngine(transport, { onEvent: broadcast, ensureProvisioned });
+  // Refuse to sync into a repo that is (or became) public. Cached ~30 min per repo.
+  const checkVisibility = makeRepoVisibilityChecker((method, apiPath) => {
+    const c = getGithubClient();
+    if (!c) throw new Error('no github client');
+    return c.api(method, apiPath);
+  });
+  const verifyBeforeSync = async (space: SyncSpace) => {
+    const url = manager!.remoteFor(space.id);
+    if (url) await checkVisibility(url);
+  };
+  const e = new SpaceSyncEngine(transport, { onEvent: broadcast, ensureProvisioned, verifyBeforeSync });
   engine = e;
   // WHY read the list first, then re-check: the registry read is async now, so a disable could land
   // during it; the old synchronous code could not be superseded at this point.

@@ -35,6 +35,13 @@ const BUILT_INS: ProviderConfig[] = [
   { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true },
 ];
 const BUILT_IN_IDS = new Set(BUILT_INS.map((b) => b.id));
+
+/** The scheme+host+port a provider address points at, lower-cased; the whole text when it is not a
+ *  URL (so two different unparseable strings count as different hosts and a key is dropped). */
+function hostOf(address: string | undefined): string {
+  if (!address) return '';
+  try { return new URL(address).origin.toLowerCase(); } catch { return address.trim().toLowerCase(); }
+}
 // Sign in with ChatGPT (backend design §2). This row is VIRTUAL: it is
 // appended to what readAll() returns and is NEVER in BUILT_INS, because init()
 // writes every BUILT_INS entry to ~/.youcoded/providers.json — a file shared
@@ -171,6 +178,7 @@ export class ProviderRegistry {
     // The virtual row is never written to disk (see CHATGPT_ROW) — neither by
     // its id nor by its type, which would be the same stray-card bug.
     if (VIRTUAL_IDS.has(id) || input.type === 'chatgpt') throw new Error(CHATGPT_NOT_A_KEY_MESSAGE);
+    let droppedKeyRef: string | undefined;
     await this.home.mutateJson(FILE, (cur) => {
       const file = (cur as ProvidersFile | null) ?? { v: 1 as const, providers: [] };
       const existing = file.providers.find((p) => p.id === id);
@@ -182,12 +190,28 @@ export class ProviderRegistry {
       // Field-by-field merge: an omitted field keeps the on-disk value, so a
       // partial update (e.g. a label-only edit from the Providers panel) can't
       // wipe the baseUrl or secretRef.
+      // WHY (security hardening 2026-10-30, secrets audit F7): this call is reachable from the
+      // renderer and from a paired phone, and a saved key is sent to whatever baseUrl the row holds
+      // (the connection test sends `Authorization: Bearer <key>` there). So:
+      //  - secretRef is NEVER taken from the caller. A new row starts with none (setKey makes it);
+      //    an existing row keeps its own. Otherwise a caller could point a row at another row's key.
+      //  - the built-in OpenRouter / local rows keep their fixed address.
+      //  - if an existing row's address moves to a DIFFERENT host, the saved key is dropped: it was
+      //    given to the old host, so the person must paste it again for the new one (the form's
+      //    normal "key typed" step then saves it). A same-host edit (path change, label) keeps it.
+      const builtIn = BUILT_IN_IDS.has(id);
+      const nextBaseUrl = builtIn ? existing?.baseUrl : (input.baseUrl ?? existing?.baseUrl);
+      let nextSecretRef = existing?.secretRef;
+      if (existing?.secretRef && nextBaseUrl !== existing.baseUrl && hostOf(nextBaseUrl) !== hostOf(existing.baseUrl)) {
+        droppedKeyRef = existing.secretRef;
+        nextSecretRef = undefined;
+      }
       const next: ProviderConfig = {
         id,
         type: input.type ?? existing?.type,
         label: input.label ?? existing?.label,
-        baseUrl: input.baseUrl ?? existing?.baseUrl,
-        secretRef: input.secretRef ?? existing?.secretRef,
+        baseUrl: nextBaseUrl,
+        secretRef: nextSecretRef,
         enabled: input.enabled ?? existing?.enabled ?? true,
       };
       if (existing) {
@@ -197,6 +221,12 @@ export class ProviderRegistry {
       }
       return file;
     });
+    // Outside the file lock (two stores, two locks — same order remove() uses): erase the key that
+    // belonged to the old host so it cannot be used against the new one.
+    if (droppedKeyRef) {
+      await this.secrets.delete(droppedKeyRef);
+      this.health?.clear(droppedKeyRef);
+    }
     return id;
   }
 

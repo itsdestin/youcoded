@@ -65,6 +65,16 @@ function notConnectedError(): Error {
   e.syncErrorCode = GITHUB_AUTH_ERROR_CODE;
   return e;
 }
+/** Coded refusal for a PUBLIC repo (shared with sync-spaces/repo-visibility.ts). */
+const REPO_PUBLIC_ERROR_CODE = 'repo-public';
+export function repoPublicError(repoName: string): Error {
+  const e: any = new Error(
+    `Sync is paused because the GitHub repository "${repoName}" is public, so anyone could read what YouCoded syncs there. ` +
+    'Make it private on GitHub (Settings, then Danger Zone), or delete it so YouCoded can create a private one, then try again.',
+  );
+  e.syncErrorCode = REPO_PUBLIC_ERROR_CODE;
+  return e;
+}
 function authExpiredError(): Error {
   const e: any = new Error('GitHub sign-in expired — reconnect your GitHub account in the Sync settings');
   e.syncErrorCode = GITHUB_AUTH_ERROR_CODE;
@@ -312,7 +322,13 @@ export function createGithubClient(opts: GithubClientOpts): GithubClient {
       const login = user.json?.login ? String(user.json.login) : null;
       if (login) {
         const existing = await rest(token, 'GET', `/repos/${login}/${encodeURIComponent(name)}`);
-        if (existing.status === 200 && existing.json?.clone_url) return String(existing.json.clone_url);
+        if (existing.status === 200 && existing.json?.clone_url) {
+          // WHY (security hardening 2026-10-30): adopting a same-named repo is only safe if it is
+          // PRIVATE — otherwise the user's conversations/files would be pushed somewhere public.
+          // Strictly `=== true`: a missing field is treated as "not proven private".
+          if (existing.json.private !== true) throw repoPublicError(name);
+          return String(existing.json.clone_url);
+        }
       }
     }
 

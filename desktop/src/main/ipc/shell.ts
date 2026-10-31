@@ -9,6 +9,7 @@ import os from 'os';
 import path from 'path';
 import { clipboard, dialog, shell, type BrowserWindow } from 'electron';
 import { IPC } from '../../shared/backend-contract';
+import { privateTempDirOrFresh } from '../private-temp-dir';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
 /** The picker dialogs sit on the main window, which main builds. */
@@ -91,13 +92,14 @@ export const shellChannels: MainChannelDef[] = [
     handler: async () => {
       const img = clipboard.readImage();
       if (img.isEmpty()) return null;
-      await fs.promises.mkdir(clipboardTmpDir, { recursive: true });
+      // Owner-only folder; if someone else already owns the usual name, a fresh unpredictable one is used.
+      const pasteDir = await privateTempDirOrFresh(clipboardTmpDir);
       if (!clipboardCleanupScheduled) {
         clipboardCleanupScheduled = true;
         setInterval(cleanupClipboardTemp, 3600_000);
       }
-      const filePath = path.join(clipboardTmpDir, `paste-${Date.now()}.png`);
-      await fs.promises.writeFile(filePath, img.toPNG());
+      const filePath = path.join(pasteDir, `paste-${Date.now()}.png`);
+      await fs.promises.writeFile(filePath, img.toPNG(), { mode: 0o600 });
       return filePath;
     },
   }),
