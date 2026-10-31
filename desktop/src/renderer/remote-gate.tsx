@@ -82,6 +82,8 @@ const OLD_PAGE_NOTICE: Notice = { kind: 'reload', heading: 'This page needs a re
 // WHY (2026-10-22): the computer now closes an older connection when the same browser signs in again, so a second tab
 // takes over from the first. Only a reload of THIS tab brings it back; the password is not needed.
 const OTHER_TAB_NOTICE: Notice = { kind: 'reload', heading: 'Open in another tab', line: 'YouCoded is open in another tab of this browser. Reload this tab to use it here instead.' };
+// WHY its own sentence (Destin 2026-10-31): a device signed out for sitting unused 90 days should hear that, not the generic refusal.
+const DEVICE_EXPIRED_NOTICE: Notice = { kind: 'password', line: 'This device was signed out after 90 days without use. Enter the password to connect again.' };
 const KEY_REFUSED_NOTICE: Notice = { kind: 'password', line: 'This computer no longer accepts this device. Enter the password to connect again.' };
 // WHY exported: the photo-only screen list shows this toast with these very words (dev/workbench/ToastPractice).
 /** WHY by reason (branch review F9): only a refused credential means the saved password is wrong; a computer with remote access
@@ -91,8 +93,10 @@ export const savedPasswordRefusedNotice = (name: string, reason = 'invalid-crede
     ? `${name} has no remote access password set yet. Set one on that computer, in Settings → Remote access.`
     : ['invalid-credentials', 'revoked', 'unknown'].includes(reason)
       ? `${name} didn't accept the saved password. Update it in Settings → Connect to Desktop.`
-      : `${name} refused this sign-in.`;
-const KEY_REFUSALS = new Set(['revoked', 'unknown', 'invalid-credentials', 'retired']);
+      : reason === 'expired'
+        ? `${name} signed this phone out after 90 days without use. Enter the password again in Settings → Connect to Desktop.`
+        : `${name} refused this sign-in.`;
+const KEY_REFUSALS = new Set(['revoked', 'expired', 'unknown', 'invalid-credentials', 'retired']);
 
 type Trouble = Exclude<SignInFailure['kind'], 'refused'>;
 
@@ -394,7 +398,7 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
         setConnected(false);
         setHasConnectedOnce(false);
         setSavedKey('none');
-        setNotice(reason === 'replaced' ? OTHER_TAB_NOTICE : reason === 'unsupported-version' ? OLD_PAGE_NOTICE : KEY_REFUSALS.has(reason) ? KEY_REFUSED_NOTICE : null);
+        setNotice(reason === 'replaced' ? OTHER_TAB_NOTICE : reason === 'unsupported-version' ? OLD_PAGE_NOTICE : reason === 'expired' ? DEVICE_EXPIRED_NOTICE : KEY_REFUSALS.has(reason) ? KEY_REFUSED_NOTICE : null);
       });
       setShim(s);
       // Android WebView: auto-connect to LocalBridgeServer. If the bridge server isn't
@@ -410,6 +414,8 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
       const started = s.startSavedKeySignIn((e) => {
         setAttempting(false);
         setSavedKey(e.type === 'refused' ? 'none' : e.kind);
+        // The saved key was timed out at page load: say why before asking for the password.
+        if (e.type === 'refused' && e.reason === 'expired') setNotice(DEVICE_EXPIRED_NOTICE);
       });
       setSavedKey(started ? 'connecting' : 'none');
     });

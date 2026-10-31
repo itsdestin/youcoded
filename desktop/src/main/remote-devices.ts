@@ -18,7 +18,18 @@ export interface RemoteDevice {
   createdAt: number;
   lastSeenAt: number;
   revokedAt: number | null;
+  /**
+   * When the device last got in (a sign-in, or a connection ending). Drives the 90-day sign-out.
+   * Kept apart from lastSeenAt on purpose: records from before this existed have no value, and
+   * their clock starts at the upgrade rather than at an old lastSeenAt (see load()).
+   */
+  lastUsedAt: number;
+  /** 'expired' = signed out for 90 days of non-use (the phone is told so); null = unpaired by hand. */
+  revokedReason: 'expired' | null;
 }
+
+/** Destin 2026-10-31: a paired device unused for 90 days must enter the password again. */
+const DEVICE_EXPIRY_MS = 90 * 24 * 60 * 60 * 1000;
 
 /** What the panel is allowed to see. Never the hash. */
 export type RemoteDeviceView = Pick<RemoteDevice, 'id' | 'name' | 'createdAt' | 'lastSeenAt'> & { online: boolean };
@@ -49,7 +60,8 @@ export class RemoteDeviceStore {
     this.load();
   }
 
-  private load(): void {
+  private load(now = Date.now()): void {
+    let migrated = false;
     try {
       const raw = JSON.parse(fs.readFileSync(this.storePath, 'utf8'));
       if (!Array.isArray(raw)) return;
@@ -62,9 +74,15 @@ export class RemoteDeviceStore {
           createdAt: Number(d.createdAt) || 0,
           lastSeenAt: Number(d.lastSeenAt) || 0,
           revokedAt: d.revokedAt == null ? null : Number(d.revokedAt),
+          // WHY now when missing: a pairing made before this rule has no last-used date. Starting its
+          // 90 days at the upgrade means nobody is signed out the day they update.
+          lastUsedAt: d.lastUsedAt == null ? (migrated = true, now) : Number(d.lastUsedAt) || now,
+          revokedReason: d.revokedReason === 'expired' ? 'expired' : null,
         });
       }
     } catch { /* no store yet */ }
+    // Written back so the upgrade-day start is remembered, not re-set to "now" on every launch.
+    if (migrated) this.save();
   }
 
   private save(): void {
@@ -84,6 +102,8 @@ export class RemoteDeviceStore {
       createdAt: now,
       lastSeenAt: now,
       revokedAt: null,
+      lastUsedAt: now,
+      revokedReason: null,
     };
     this.devices.set(device.id, device);
     this.save();
@@ -107,6 +127,7 @@ export class RemoteDeviceStore {
     const secret = crypto.randomBytes(32).toString('base64url');
     device.secretHash = hash(secret);
     device.lastSeenAt = now;
+    device.lastUsedAt = now;
     this.save();
     return { deviceId: device.id, secret };
   }
@@ -116,15 +137,23 @@ export class RemoteDeviceStore {
    * unpaired so its client can stop retrying, and an unknown id must be told its credential was
    * retired — the migration case. Both are terminal; a wrong secret is not.
    */
-  authenticate(deviceId: unknown, secret: unknown, now = Date.now()): { ok: true; device: RemoteDevice } | { ok: false; reason: 'unknown' | 'revoked' | 'bad-secret' } {
+  authenticate(deviceId: unknown, secret: unknown, now = Date.now()): { ok: true; device: RemoteDevice } | { ok: false; reason: 'unknown' | 'revoked' | 'expired' | 'bad-secret' } {
     if (typeof deviceId !== 'string' || typeof secret !== 'string') return { ok: false, reason: 'unknown' };
     const device = this.devices.get(deviceId);
     if (!device) return { ok: false, reason: 'unknown' };
-    if (device.revokedAt !== null) return { ok: false, reason: 'revoked' };
+    if (device.revokedAt !== null) return { ok: false, reason: device.revokedReason === 'expired' ? 'expired' : 'revoked' };
     const given = Buffer.from(hash(secret), 'hex');
     const known = Buffer.from(device.secretHash, 'hex');
     if (given.length !== known.length || !crypto.timingSafeEqual(given, known)) return { ok: false, reason: 'bad-secret' };
+    // WHY after the secret check: only the holder of the right key learns it was timed out. Checked on
+    // every connect so a device that comes back on day 91 is stopped even if nothing swept it first.
+    if (now - device.lastUsedAt > DEVICE_EXPIRY_MS) {
+      this.expire(device, now);
+      this.save();
+      return { ok: false, reason: 'expired' };
+    }
     device.lastSeenAt = now;
+    device.lastUsedAt = now;
     this.save();
     return { ok: true, device };
   }
@@ -140,6 +169,33 @@ export class RemoteDeviceStore {
     device.revokedAt = now;
     this.save();
     return true;
+  }
+
+  private expire(device: RemoteDevice, now: number): void {
+    device.revokedAt = now;
+    device.revokedReason = 'expired';
+  }
+
+  /** Sign out every device unused for 90 days. Run at startup and whenever the list is read. Returns their ids. */
+  expireStale(now = Date.now()): string[] {
+    const out: string[] = [];
+    for (const d of this.devices.values()) {
+      if (d.revokedAt === null && now - d.lastUsedAt > DEVICE_EXPIRY_MS) { this.expire(d, now); out.push(d.id); }
+    }
+    if (out.length) this.save();
+    return out;
+  }
+
+  /**
+   * A connection ended: count the time it was connected as use. WHY: a phone left connected for months
+   * is in use, and connecting is the only other moment the date moves.
+   */
+  touch(deviceId: string, now = Date.now()): void {
+    const device = this.devices.get(deviceId);
+    if (!device || device.revokedAt !== null) return;
+    device.lastUsedAt = now;
+    device.lastSeenAt = now;
+    this.save();
   }
 
   rename(deviceId: string, name: unknown): boolean {
@@ -167,7 +223,7 @@ export class RemoteDeviceStore {
 
   /** Every device loses access — what a password change means. */
   revokeAll(now = Date.now()): void {
-    for (const d of this.devices.values()) if (d.revokedAt === null) d.revokedAt = now;
+    for (const d of this.devices.values()) if (d.revokedAt === null) { d.revokedAt = now; d.revokedReason = null; }
     this.save();
   }
 }

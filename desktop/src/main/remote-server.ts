@@ -53,7 +53,7 @@ import { NativeHome } from './native-home';
 import { UpdateSettings } from './update-settings';
 import { resolveStaticFile } from './remote-static-path';
 import { log } from './logger';
-import { CLOSE_REPLACED } from '../shared/remote-close-codes';
+import { CLOSE_REPLACED, CLOSE_DEVICE_EXPIRED } from '../shared/remote-close-codes';
 import { AuthThrottle, VerificationQueue } from './remote-auth-throttle';
 
 const AUTH_TIMEOUT_MS = 5000;
@@ -300,6 +300,7 @@ export class RemoteServer {
     this.local = opts?.local ?? null;
     this.audience = opts?.audience ?? null;
     this.devices = new RemoteDeviceStore();
+    this.devices.expireStale(); // 90 days unused = signed out; checked here at startup and again on every connect
     this.getFocusSessionId = opts?.getFocusSessionId ?? (() => null);
     this.serveBuiltPage = opts?.serveBuiltPage ?? true;
     if (opts?.getNativeRuntime) this.getNativeRuntime = opts.getNativeRuntime;
@@ -665,6 +666,7 @@ export class RemoteServer {
   getDeviceList(): RemoteDeviceView[] {
     const online = new Set<string>();
     for (const c of this.clients) online.add(c.deviceId);
+    this.devices.expireStale(); // a stale device never shows in Settings, even before anyone connects
     return this.devices.list(online);
   }
 
@@ -695,6 +697,7 @@ export class RemoteServer {
    *  can stand down when the last one leaves (simplification audit W14). */
   private removeClient(client: AuthenticatedClient): void {
     if (!this.clients.delete(client)) return;
+    this.devices.touch(client.deviceId); // time spent connected counts as use for the 90-day sign-out
     this.leaveAudience(client);
     // WHY: close/error/liveness drops must invalidate in-flight starts for this connection only.
     this.handoffRoute?.cancelOwner(`remote:${client.id}`);
@@ -943,8 +946,8 @@ export class RemoteServer {
             // Not a failed guess, so it does not count toward the lockout: on upgrade day
             // every retired credential arrives at once and must not lock the household out.
             ws.send(JSON.stringify({ type: 'auth:failed', reason: result.reason }));
-            ws.close(result.reason === 'revoked' ? 4003 : 4004,
-              result.reason === 'revoked' ? 'Device unpaired' : 'Credential retired');
+            ws.close(result.reason === 'revoked' ? 4003 : result.reason === 'expired' ? CLOSE_DEVICE_EXPIRED : 4004,
+              result.reason === 'revoked' ? 'Device unpaired' : result.reason === 'expired' ? 'Signed out after 90 days unused' : 'Credential retired');
             return;
           }
         }

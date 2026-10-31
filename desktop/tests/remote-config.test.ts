@@ -137,6 +137,25 @@ describe('RemoteConfig', () => {
     expect(config.weakPassword).toBe(true);
   });
 
+  it('remembers a short password across a restart, and clears the note when it is changed', async () => {
+    // The hash can't reveal length, so the flag is saved when it is learned (set, or a correct sign-in).
+    let saved = '';
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.writeFileSync).mockImplementation(((_p: unknown, data: unknown) => { saved = String(data); }) as never);
+    vi.mocked(fs.mkdirSync).mockImplementation(() => undefined as any);
+    const { RemoteConfig } = await import('../src/main/remote-config');
+    const config = new RemoteConfig();
+    await config.setPassword('abc');
+    expect(JSON.parse(saved).weakPassword).toBe(true);
+
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(saved as never);
+    expect(new RemoteConfig().weakPassword).toBe(true);
+
+    await config.setPassword('a-long-enough-one');
+    expect(JSON.parse(saved).weakPassword).toBe(false);
+  });
+
   it('no longer offers a way to trust an address instead of a password', async () => {
     // The removed check treated 100.64.0.0/10 as proof of Tailscale membership. That is the
     // carrier-grade NAT range, not one Tailscale owns, and membership was never authorization.

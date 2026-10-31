@@ -295,6 +295,24 @@ describe('RemoteServer — pairing', () => {
       expect(back.closed).toEqual({ code: 4003, reason: 'Device unpaired' });
     });
 
+    it('a device unused for 90 days is signed out with its own close code and message reason', async () => {
+      // Destin 2026-10-31. The phone must be able to say WHY (not the generic "no longer accepts this device").
+      const { server } = await makeServer();
+      const paired = await connect(server, { password: 'correct-horse', deviceName: 'My phone' });
+      const deviceId = paired.last()!.deviceId as string;
+      const secret = paired.last()!.secret as string;
+      const store = (server as unknown as { devices: { devices: Map<string, { lastUsedAt: number }> } }).devices;
+      store.devices.get(deviceId)!.lastUsedAt = Date.now() - 91 * 24 * 60 * 60 * 1000;
+
+      const back = await connect(server, { deviceId, secret });
+      expect(back.last()).toEqual({ type: 'auth:failed', reason: 'expired' });
+      expect(back.closed?.code).toBe(4006);
+      // It can come back with the password, as a new row.
+      const again = await connect(server, { password: 'correct-horse', deviceName: 'My phone', previousDeviceId: deviceId });
+      expect(again.last()!.type).toBe('auth:ok');
+      expect(again.last()!.deviceId).not.toBe(deviceId);
+    });
+
     it('a credential from the retired token file is told it is retired, not that it guessed wrong', async () => {
       // Upgrade day: every old opaque token arrives at once. Answering "invalid credentials"
       // would count them all as failed guesses and lock the household out of its own host.

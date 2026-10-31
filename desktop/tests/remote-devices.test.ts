@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RemoteDeviceStore } from '../src/main/remote-devices';
@@ -149,5 +149,79 @@ describe('paired device store', () => {
     expect(restarted.authenticate(phone.deviceId, phone.secret).ok).toBe(false);
     expect(restarted.authenticate(tablet.deviceId, tablet.secret).ok).toBe(false);
     expect(restarted.list()).toEqual([]);
+  });
+
+  describe('90-day sign-out for devices that are not used', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+
+    it('keeps a device that is used, and signs out one that is not', () => {
+      const store = new RemoteDeviceStore(storePath);
+      const t0 = Date.now();
+      const used = store.pair('Used phone', t0);
+      const idle = store.pair('Idle tablet', t0);
+      // The phone connects on day 60 and again on day 100; the tablet is never touched.
+      expect(store.authenticate(used.deviceId, used.secret, t0 + 60 * DAY).ok).toBe(true);
+      expect(store.authenticate(used.deviceId, used.secret, t0 + 100 * DAY).ok).toBe(true);
+      expect(store.authenticate(idle.deviceId, idle.secret, t0 + 100 * DAY)).toEqual({ ok: false, reason: 'expired' });
+    });
+
+    it('is told "expired" (not "unpaired"), and still after a restart, until it signs in again', () => {
+      const store = new RemoteDeviceStore(storePath);
+      const t0 = Date.now();
+      const phone = store.pair('My phone', t0);
+      expect(store.authenticate(phone.deviceId, phone.secret, t0 + 91 * DAY)).toEqual({ ok: false, reason: 'expired' });
+      expect(reopen().authenticate(phone.deviceId, phone.secret, t0 + 92 * DAY)).toEqual({ ok: false, reason: 'expired' });
+      // A hand unpair stays a different answer.
+      const other = store.pair('Other', t0);
+      store.revoke(other.deviceId);
+      expect(store.authenticate(other.deviceId, other.secret)).toEqual({ ok: false, reason: 'revoked' });
+    });
+
+    it('does not tell a wrong key that a device expired', () => {
+      const store = new RemoteDeviceStore(storePath);
+      const t0 = Date.now();
+      const phone = store.pair('My phone', t0);
+      expect(store.authenticate(phone.deviceId, 'wrong', t0 + 91 * DAY)).toEqual({ ok: false, reason: 'bad-secret' });
+    });
+
+    it('the startup sweep signs out stale devices and the list stops showing them', () => {
+      const store = new RemoteDeviceStore(storePath);
+      const t0 = Date.now();
+      const idle = store.pair('Idle', t0 - 100 * DAY);
+      const fresh = store.pair('Fresh', t0 - 10 * DAY);
+      expect(store.expireStale(t0)).toEqual([idle.deviceId]);
+      expect(reopen().list().map(d => d.name)).toEqual(['Fresh']);
+      expect(store.isRevoked(idle.deviceId)).toBe(true);
+      expect(store.isRevoked(fresh.deviceId)).toBe(false);
+    });
+
+    it('a connection that stays open counts as use when it ends', () => {
+      const store = new RemoteDeviceStore(storePath);
+      const t0 = Date.now();
+      const phone = store.pair('My phone', t0);
+      store.touch(phone.deviceId, t0 + 80 * DAY); // connected for 80 days, then dropped
+      expect(store.authenticate(phone.deviceId, phone.secret, t0 + 150 * DAY).ok).toBe(true);
+    });
+
+    it('pairings from before this rule start their 90 days at the upgrade, not at their old date', () => {
+      const store = new RemoteDeviceStore(storePath);
+      const phone = store.pair('Old phone');
+      // Rewrite the file as an older version would have: an ancient lastSeenAt and no lastUsedAt.
+      const rows = JSON.parse(readFileSync(storePath, 'utf8'));
+      for (const r of rows) { delete r.lastUsedAt; delete r.revokedReason; r.lastSeenAt = Date.now() - 400 * DAY; }
+      writeFileSync(storePath, JSON.stringify(rows));
+      const upgraded = reopen();
+      expect(upgraded.authenticate(phone.deviceId, phone.secret).ok).toBe(true);
+      expect(upgraded.expireStale()).toEqual([]);
+    });
+
+    it('signing in with the password gives a fresh start to a stale row', () => {
+      const store = new RemoteDeviceStore(storePath);
+      const t0 = Date.now();
+      const phone = store.pair('My phone', t0);
+      expect(store.authenticate(phone.deviceId, phone.secret, t0 + 91 * DAY).ok).toBe(false);
+      // The expired row is gone for good: the password pairs a new one.
+      expect(store.pairAgain(phone.deviceId, t0 + 91 * DAY)).toBeNull();
+    });
   });
 });
