@@ -98,7 +98,7 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/browser#starting', 'pane', 'browser'), params: { browser: 'starting' } },
   { ...chat('chat/browser#error', 'pane', 'browser', 'error-state'), params: { browser: 'error' } },
   { ...chat('chat/browser#narrow', 'pane', 'browser', 'narrow'), params: { browser: 'working' }, viewport: { width: 390, height: 844 } },
-  ...['site', 'final', 'local', 'handoff', 'no-browser', 'downloading'].map((b) => ({ ...chat(`chat#browser-${b}`, 'view', 'browser'), params: { browser: b } })),
+  ...['site', 'form', 'final', 'local', 'handoff', 'no-browser', 'downloading'].map((b) => ({ ...chat(`chat#browser-${b}`, 'view', 'browser'), params: { browser: b } })),
   // Right-click menus, opened on the first visible element of each kind.
   chat('chat/menu/assistant', 'menu'),
   chat('chat/menu/user', 'menu'),

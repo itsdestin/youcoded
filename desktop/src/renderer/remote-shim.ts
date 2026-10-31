@@ -3357,7 +3357,7 @@ export function installShim(): void {
       openWindowForHandoff: (sessionId: string) => invoke('browser:open-window-for-handoff', { sessionId }),
       setShowWindow: (show: boolean) => invoke('browser:set-show-window', { show }),
       updateSettings: (patch: Record<string, unknown>) => invoke('browser:update-settings', patch),
-      removeSite: (host: string) => invoke('browser:remove-site', { host }),
+      removeSite: (host: string, form?: boolean) => invoke('browser:remove-site', { host, form }),
       clearSignins: () => invoke('browser:clear-signins'),
       stop: () => invoke('browser:stop'),
       closeSession: (sessionId: string) => invoke('browser:close-session', { sessionId }),

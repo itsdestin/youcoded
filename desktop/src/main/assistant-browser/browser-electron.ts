@@ -3,7 +3,7 @@
 // Settings → Browser open — an install that never browses never runs the worker.
 import * as path from 'path';
 import { app, screen, utilityProcess } from 'electron';
-import { BrowserClient, type WorkerHandle } from './browser-client';
+import { BrowserClient, browserModeOf, type WorkerHandle } from './browser-client';
 import { log } from '../logger';
 
 let client: BrowserClient | null = null;
@@ -25,6 +25,7 @@ function pictureRatio(): number {
 export function getBrowserClient(): BrowserClient {
   if (client) return client;
   client = new BrowserClient({
+    modeOf: browserModeOf,
     log: (level, msg, data) => log(level, 'Browser', msg, data),
     fork: (): WorkerHandle => {
       const child = utilityProcess.fork(path.join(__dirname, 'browser-host.js'), [browserRootDir(), String(pictureRatio())], {

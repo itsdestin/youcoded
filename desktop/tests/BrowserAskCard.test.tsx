@@ -44,6 +44,19 @@ describe('Browser ask card', () => {
     expect(screen.getByText(/This is your own Chrome/)).toBeInTheDocument();
   });
 
+  it('form submit: Allow once, Always allow on this site, Don\'t allow; My Chrome never offers Always', async () => {
+    const b = show({ kind: 'form', id: 'p7', host: 'shop.example', allowAlways: true, message: 'Let the assistant submit a form on shop.example?' });
+    expect(screen.getByText('Let the assistant submit a form on shop.example?')).toBeInTheDocument();
+    for (const [name, answer] of [['Always allow on shop.example', 'allow_always'], ['Allow once', 'once'], ['Don\'t allow', 'no']] as const) {
+      await waitFor(() => expect(screen.getByRole('button', { name })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name }));
+      expect(b.bridge.answer).toHaveBeenLastCalledWith('s1', 'p7', answer);
+    }
+    cleanup();
+    show({ kind: 'form', id: 'p8', host: 'mail.example', allowAlways: false, message: 'Let the assistant submit a form on mail.example in your Chrome, where you\'re signed in?' });
+    expect(screen.queryByRole('button', { name: /Always allow/ })).toBeNull();
+  });
+
   it('final step: only "Allow this once" or "Don\'t"', () => {
     const b = show({ kind: 'final', id: 'p2', host: 'shop.example', message: 'The assistant wants to click "Place order" on shop.example.' });
     expect(screen.queryByRole('button', { name: /Always/ })).toBeNull();

@@ -3,7 +3,7 @@
 
 export type BrowserRunState = 'stopped' | 'starting' | 'running' | 'error';
 
-type PromptKind = 'site' | 'final' | 'local' | 'handoff' | 'no-browser';
+type PromptKind = 'site' | 'final' | 'form' | 'local' | 'handoff' | 'no-browser';
 export type PromptAnswer = 'allow_chat' | 'allow_always' | 'once' | 'no' | 'done' | 'cant' | 'download';
 
 /** A card the Browser shows the person, asking them to decide or act. */
@@ -81,6 +81,10 @@ export interface BrowserPreferences {
   preferredBrowser: BrowserKind | null;
   /** Hosts the person chose "Always allow" for (lower-case host names). */
   alwaysAllowedSites: string[];
+  /** Hosts where the person chose "Always allow" for SUBMITTING FORMS (lower-case, www. folded).
+   *  WHY separate from alwaysAllowedSites (click/type) and from any "may open this site" list:
+   *  each is a different permission and must be granted and revoked on its own. */
+  alwaysAllowedFormSites: string[];
   /** The one-time explainer was dismissed. */
   explainerSeen: boolean;
 }
@@ -142,7 +146,7 @@ export interface BrowserChannelTypes {
   'browser:open-window-for-handoff': { request: { sessionId: string }; response: boolean };
   'browser:set-show-window': { request: { show: boolean }; response: BrowserInfo };
   'browser:update-settings': { request: BrowserSettingsPatch; response: BrowserInfo };
-  'browser:remove-site': { request: { host: string }; response: BrowserInfo };
+  'browser:remove-site': { request: { host: string; form?: boolean }; response: BrowserInfo };
   'browser:clear-signins': { request: void; response: BrowserInfo };
   'browser:stop': { request: void; response: boolean };
   'browser:close-session': { request: { sessionId: string }; response: boolean };
@@ -166,7 +170,7 @@ export interface BrowserBridge {
   openWindowForHandoff: (sessionId: string) => Promise<boolean>;
   setShowWindow: (show: boolean) => Promise<BrowserInfo>;
   updateSettings: (patch: BrowserSettingsPatch) => Promise<BrowserInfo>;
-  removeSite: (host: string) => Promise<BrowserInfo>;
+  removeSite: (host: string, form?: boolean) => Promise<BrowserInfo>;
   clearSignins: () => Promise<BrowserInfo>;
   stop: () => Promise<boolean>;
   closeSession: (sessionId: string) => Promise<boolean>;

@@ -11,6 +11,9 @@
 //   offers Always and asks on every new site it navigates to;
 // - final steps (buy, send, delete, submit, … — by wording AND by form
 //   structure) ask every time;
+// - submitting ANY form asks, whatever the button says, until the person
+//   chooses "Always allow" for that site (its own list, apart from click/type
+//   permission) — except in Full Auto, which keeps only the word check above;
 // - home-network addresses ask per host:port per chat; metadata never opens;
 // - a declined or unanswered ask blocks the identical action for 2 minutes.
 // This is friction for a well-meaning assistant reading hostile pages, not a
@@ -20,7 +23,7 @@ import type { Locator, Page } from 'playwright-core';
 import { type BrowserToolArgs } from './browser-tool-specs';
 import { validateBrowserRequest } from './browser-tool-validation';
 import { BrowserService, BrowserUnavailableError, BrowserCallLifecycleError, firstLine, hostOf, refreshTitles, type PromptAnswer } from './browser-service';
-import type { BrowserSettings } from './browser-settings';
+import { foldHost, type BrowserSettings } from './browser-settings';
 import type { BrowserInstaller } from './browser-installer';
 import { classifyUrl, hostPortKey, personAddress, type LookupFn } from './browser-net';
 import { wrapUntrusted } from '../harness/tools/untrusted';
@@ -52,6 +55,8 @@ export interface RunCtx {
   deadline?: number;
   /** Shared receipt survives prompt delivery ending before underlying work settles. */
   receipt?: { stage: string; page?: Page };
+  /** The conversation's permission mode as the app last read it; null/unknown = ask (fail closed). */
+  mode?: string | null;
 }
 
 export interface RunResult { text: string; isError?: boolean; imagePath?: string }
@@ -105,6 +110,10 @@ export interface ElementInfo {
   tag: string; type: string; role: string; name: string; href: string;
   isSubmit: boolean; inForm: boolean; formSearch: boolean; formAction: string; submitLabel: string;
   frameUrl: string; isPassword: boolean;
+  /** Clicking this would (or could, via the page's script) send the form it belongs to. */
+  clickSubmits: boolean;
+  /** Pressing Enter here sends the form it belongs to. */
+  enterSubmits: boolean;
 }
 
 /** Is this action a "final step" that must ask every time? Exported for tests. */
@@ -119,6 +128,21 @@ export function isFinalStep(action: string, info: ElementInfo | null, submitAfte
   }
   if (action === 'type') return submitAfterType && formSubmits;
   if (action === 'press_key') return formSubmits; // caller only asks for Enter
+  return false;
+}
+
+/** Full Auto = the person chose not to be asked: YouCoded's 'full-auto', Claude Code's skip-permissions 'bypass'.
+ *  Anything else, including an unknown or missing mode, asks (fail closed). Exported for tests. */
+export function isFullAutoMode(mode: string | null | undefined): boolean { return mode === 'full-auto' || mode === 'bypass'; }
+
+/** Would this action send a form — by what actually happens (a control in a form, Enter in a form field),
+ *  not by the button's words? WHY structure: the English-word check misses "Continue", icons and other languages.
+ *  Exported for tests. */
+export function isFormSubmit(action: string, info: ElementInfo | null, submitAfterType: boolean): boolean {
+  if (!info) return false;
+  if (action === 'click' || action === 'double_click') return info.clickSubmits;
+  if (action === 'type') return submitAfterType && info.enterSubmits;
+  if (action === 'press_key') return info.enterSubmits; // caller only asks for Enter
   return false;
 }
 
@@ -140,6 +164,10 @@ async function elementInfo(target: { kind: 'page'; page: Page } | { kind: 'locat
     const visible = ((e.innerText || '').trim() || (typeof e.value === 'string' ? e.value : '') || e.getAttribute('title') || e.getAttribute('placeholder') || '').trim();
     const label = (aria && visible && aria !== visible ? `${aria} — ${visible}` : aria || visible).replace(/\s+/g, ' ').slice(0, 120);
     const a = e.closest('a');
+    // The form the control belongs to, including a <button form="id"> sitting outside it.
+    const owner = (e as HTMLButtonElement).form || form;
+    const clickSubmits = !!owner && ((tag === 'button' && type !== 'reset') || (tag === 'input' && ['submit', 'image', 'button'].includes(type)) || e.getAttribute('role') === 'button');
+    const enterSubmits = !!owner && ((tag === 'input' && !['button', 'reset', 'file'].includes(type)) || (tag === 'button' && (type === '' || type === 'submit')));
     const isSubmit = (tag === 'button' && (type === '' || type === 'submit') && !!form) || (tag === 'input' && (type === 'submit' || type === 'image'));
     const formSearch = !!form && (form.getAttribute('role') === 'search' || !!form.querySelector('input[type="search"]') || /search/i.test(form.getAttribute('action') || ''));
     const submitLabel = form
@@ -149,7 +177,7 @@ async function elementInfo(target: { kind: 'page'; page: Page } | { kind: 'locat
     return {
       tag, type, role: e.getAttribute('role') || tag, name: label, href: a ? a.href : '',
       isSubmit, inForm: !!form, formSearch, formAction: form ? (form.getAttribute('action') || '') : '', submitLabel,
-      frameUrl: location.href, isPassword: type === 'password',
+      frameUrl: location.href, isPassword: type === 'password', clickSubmits, enterSubmits,
     };
   };
   if (target.kind === 'page') {
@@ -496,7 +524,23 @@ async function act(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAct'>
     if (env.policy.isRefused(refKey)) return err(`The user already declined or didn't answer this exact step a moment ago. Don't retry — ask them in chat.`);
     const prefs = await env.settings.read();
     checkpoint(ctx);
-    if (final) {
+    // A form being sent that the word check did not already stop (a "final" card, below, covers the others).
+    // WHY skipped when `final`: that card is already an every-time ask for the same click; two cards would be noise.
+    const formSite = foldHost(host);
+    const formAsk = !final && !isFullAutoMode(ctx.mode) && isFormSubmit(a.action, info, !!a.submit)
+      && !(prefs.alwaysAllowedFormSites.includes(formSite) && !prefs.useMyChrome);
+    if (formAsk) {
+      const answer = await env.service.ask(sid, {
+        kind: 'form', host, allowAlways: !prefs.useMyChrome,
+        message: prefs.useMyChrome ? `Let the assistant submit a form on ${where} in your Chrome, where you're signed in?` : `Let the assistant submit a form on ${where}?`,
+      }, { timeoutMs: Math.min(ASK_WAIT_MS, remaining(ctx) - 3000), signal: ctx.signal });
+      checkpoint(ctx);
+      const out = askOutcome(answer, `submit a form on ${host}`);
+      if (out) { if (answer !== 'cancelled') env.policy.refuse(refKey); return out; }
+      env.policy.grantSite(sid, host); // sending a form implies the site, for this chat only (as a final step does)
+      // WHY its own store: this never adds the site to the click/type list or any list of sites the assistant may visit.
+      if (answer === 'allow_always' && !prefs.useMyChrome) await env.settings.allowFormSite(host);
+    } else if (final) {
       const answer = await env.service.ask(sid, {
         kind: 'final', host,
         message: `The assistant wants to ${verb} on ${where}.`,

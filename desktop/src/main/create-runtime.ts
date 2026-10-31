@@ -61,6 +61,7 @@ import type { Platform } from './platform';
 import { createSessionState, type SessionState } from './ipc/session-state';
 import { SessionRecords } from './session-record';
 import { setOutsideCommentsModeLookup } from './cc-outside-comments';
+import { setBrowserModeLookup } from './assistant-browser/browser-client';
 import { AudienceFills } from './audience-fill';
 
 export interface CreateRuntimeDeps {
@@ -662,6 +663,8 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   // Card #207: an outside Word/Excel request in a chat Claude Code runs without asking (auto, skip permissions) has no card
   // answer to check, so the queue reads the mode here (cc-outside-comments.ts claimOutsideApproval).
   setOutsideCommentsModeLookup((sessionId) => records.facts(sessionId)?.permissionMode);
+  // The Browser's form-submit ask is skipped only in Full Auto, so it reads the same live mode.
+  setBrowserModeLookup((sessionId) => records.facts(sessionId)?.permissionMode);
 
   return {
     nativeHome, permissionStore, stepGuardSettings, contextSettings, secretsStore, engineManager,

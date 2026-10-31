@@ -2079,7 +2079,7 @@ contextBridge.exposeInMainWorld('claude', {
     openWindowForHandoff: (sessionId: string) => browserInvoke(IPC.BROWSER_OPEN_WINDOW_FOR_HANDOFF, { sessionId }),
     setShowWindow: (show: boolean) => browserInvoke(IPC.BROWSER_SET_SHOW_WINDOW, { show }),
     updateSettings: (patch: Record<string, unknown>) => browserInvoke(IPC.BROWSER_UPDATE_SETTINGS, patch),
-    removeSite: (host: string) => browserInvoke(IPC.BROWSER_REMOVE_SITE, { host }),
+    removeSite: (host: string, form?: boolean) => browserInvoke(IPC.BROWSER_REMOVE_SITE, { host, form }),
     clearSignins: () => browserInvoke(IPC.BROWSER_CLEAR_SIGNINS),
     stop: () => browserInvoke(IPC.BROWSER_STOP),
     closeSession: (sessionId: string) => browserInvoke(IPC.BROWSER_CLOSE_SESSION, { sessionId }),

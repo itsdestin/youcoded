@@ -14,7 +14,7 @@ export type BrowserCommand =
   | { cmd: 'set-show-window'; show: boolean }
   | { cmd: 'info' }
   | { cmd: 'update-settings'; patch: unknown }
-  | { cmd: 'remove-site'; host: string }
+  | { cmd: 'remove-site'; host: string; form?: boolean }
   | { cmd: 'clear-signins' }
   | { cmd: 'stop' }
   | { cmd: 'close-session'; sessionId: string; forget: boolean }
@@ -27,7 +27,7 @@ export type BrowserCommand =
   | { cmd: 'selection'; sessionId: string };
 
 export type MainToWorker =
-  | { t: 'call'; id: number; sessionId: string; tool: string; args: unknown; vision: boolean }
+  | { t: 'call'; id: number; sessionId: string; tool: string; args: unknown; vision: boolean; mode?: string | null }
   | { t: 'cancel'; id: number }
   | { t: 'cmd'; id: number; command: BrowserCommand }
   | { t: 'shutdown' };

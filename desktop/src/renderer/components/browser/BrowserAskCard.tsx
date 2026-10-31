@@ -3,7 +3,7 @@
 // you"). ONE card for both session kinds: the asks are the Browser's own rules,
 // not the session's permission system (design review 1 #1).
 //
-// Kinds: site permission (once per site per chat), final step (every time),
+// Kinds: site permission (once per site per chat), form submit (until "Always allow"), final step (every time),
 // home-network address, "needs you" hand-off, and "no browser — download one".
 // Copy follows the spec glossary; buttons sit on the right with one primary
 // (design guide G-4, G-28).
@@ -26,6 +26,13 @@ export function browserCardCopy(p: BrowserPrompt): Copy {
         body: p.allowAlways === false
           ? 'This is your own Chrome, where you\'re signed in. It still asks before sending, buying or deleting.'
           : 'It still asks before sending, buying or deleting.',
+      };
+    case 'form':
+      return {
+        title: p.message,
+        body: p.allowAlways === false
+          ? 'This is your own Chrome, where you\'re signed in. A form can send what you typed in it to the site.'
+          : 'A form can send what you typed in it to the site. Buying, sending and deleting still ask every time.',
       };
     case 'final':
       return { title: p.message, body: 'This looks like a step that buys, sends, posts, deletes or submits something. It only happens if you allow it.' };
@@ -86,6 +93,17 @@ const BrowserAskCard = memo(function BrowserAskCard({ sessionId }: { sessionId: 
             <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('allow_always')}>Always allow {host}</Button>
           )}
           <Button variant="primary" size="sm" disabled={sending} onClick={() => void answer('allow_chat')}>Allow for this chat</Button>
+        </>
+      );
+      break;
+    case 'form':
+      actions = (
+        <>
+          <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('no')}>Don't allow</Button>
+          {p.allowAlways !== false && host && (
+            <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('allow_always')}>Always allow on {host}</Button>
+          )}
+          <Button variant="primary" size="sm" disabled={sending} onClick={() => void answer('once')}>Allow once</Button>
         </>
       );
       break;
