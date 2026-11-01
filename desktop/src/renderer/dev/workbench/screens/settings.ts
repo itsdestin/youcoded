@@ -92,7 +92,7 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // error-notices-1 (2026-10-12): a setting that couldn't load (one line + Retry), and a
   // general error with Report bug / Diagnose (Permissions).
   { ...settings('settings/assistant/specialists#load-failed', 'dialog', 'error-state'), params: { fail: 'specialists.getDelegatedModels' } },
-  { ...settings('settings/assistant/permissions#load-failed', 'dialog', 'error-state'), params: { fail: 'permissions.list' } },
+  { ...settings('settings/assistant/permissions#load-failed', 'dialog', 'error-state'), params: { fail: 'permissions.list' }, open: [{ do: 'scroll', dir: 'down', times: 3 }] },
   { ...settings('settings/assistant/general#step-guard-failed', 'dialog', 'error-state'), params: { fail: 'native.getStepGuard' } },
   settings('settings/appearance', 'dialog'),
   // The two Appearance folds, now the shared FoldRow (submit-ticket-5 proposal 1).

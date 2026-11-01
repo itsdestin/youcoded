@@ -14,18 +14,74 @@
 //     or cannot be read, git asks as it always did. Reuses the approach of
 //     sync-spaces/repo-trust.ts (`git config --file … --list -z` runs nothing).
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { checkPathGuard } from './guards';
+import { checkPathGuard, canonicalize, realpathNearestSync } from './guards';
+import { isPhoneDeniedPath } from './credential-paths';
+import { readOnlyVerdict } from '../../../shared/safe-readonly-commands';
 
 const execFileAsync = promisify(execFile);
 
 /** Words checked per command line; a longer line simply asks (it is not an everyday command). */
 const MAX_WORDS_CHECKED = 80;
 
-export function pathsAreNotSecret(words: string[], cwd: string): boolean {
+/** A folder that CONTAINS the home credential folders (home itself, its parents, `/`). A command that reads whole
+ *  folders (grep -r, rg…) pointed at one would read them without ever naming a secret file. */
+function containsCredentialFolders(dirWord: string, cwd: string): boolean {
+  const home = os.homedir();
+  const expanded = dirWord === '~' ? home : dirWord.startsWith('~/') ? path.join(home, dirWord.slice(2)) : dirWord;
+  const abs = path.resolve(cwd, expanded);
+  let real = abs;
+  try { real = fs.realpathSync.native(abs); } catch { /* not there: judge the typed spelling */ }
+  const homes = [home];
+  try { homes.push(fs.realpathSync.native(home)); } catch { /* ignore */ }
+  for (const h of homes) {
+    for (const sub of ['.ssh', '.aws', '.gnupg', '.claude', '.youcoded']) {
+      const target = path.join(h, sub);
+      for (const c of new Set([abs, real])) {
+        if (target === c || target.startsWith(c.endsWith(path.sep) ? c : c + path.sep)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Places no look-only command should read silently, beyond what the file tools' guard already refuses:
+ *  the phone's wider list (shell histories, .git folders, key bundles, saved logins), the app's own settings and
+ *  saved approvals, and the computer's live process/device files (a process's environment holds keys; /dev can
+ *  stream forever). Judged on the typed AND the real location. */
+function isExtraDenied(word: string, cwd: string): boolean {
+  const home = os.homedir();
+  const expanded = word === '~' ? home : word.startsWith('~/') ? path.join(home, word.slice(2)) : word;
+  const typed = canonicalize(expanded, cwd);
+  const realAbs = realpathNearestSync(path.resolve(cwd, expanded));
+  for (const c of new Set([typed, realAbs ? canonicalize(realAbs, cwd) : typed])) {
+    const lower = c.toLowerCase();
+    if (lower.startsWith('/proc/') || lower === '/proc') return true;
+    if ((lower.startsWith('/dev/') || lower === '/dev') && lower !== '/dev/null') return true;
+    if (/\/\.(youcoded|claude)(\/|$)/.test(lower) || /\/\.claude\.json$/.test(lower) || /\/\.config\/(youcoded|claude)(\/|$)/.test(lower)) return true;
+    if (isPhoneDeniedPath(c, canonicalize(home, cwd))) return true;
+  }
+  return false;
+}
+
+/** A PATH with an empty or `.` entry would let a file in the project stand in for `ls`. */
+export function pathIsClean(pathVar: string | undefined = process.env.PATH): boolean {
+  if (!pathVar) return false;
+  return pathVar.split(path.delimiter).every((e) => e !== '' && e !== '.' && path.isAbsolute(e));
+}
+
+export function pathsAreNotSecret(words: string[], cwd: string, readsFolders = false): boolean {
   if (words.length > MAX_WORDS_CHECKED) return false;
+  // WHY: `grep -r x ~` never names a secret file, yet reads every one below home. Judged for folder-reading
+  // commands only, so `ls ~` and `du -sh /` stay quiet. Every word is tried, so `rg x -- /` is caught too.
+  if (readsFolders) {
+    for (const w of words) if (containsCredentialFolders(w, cwd)) return false;
+    // No folder named at all means the shell's own folder, which holds them only if it is home or above.
+    if (containsCredentialFolders('.', cwd)) return false;
+  }
   for (const raw of words) {
     // `--flag=value`: judge the value too (`--file=.env`), and the bare word itself.
     const candidates = new Set<string>([raw]);
@@ -34,6 +90,7 @@ export function pathsAreNotSecret(words: string[], cwd: string): boolean {
     for (const c of candidates) {
       if (c === '' || c.startsWith('-') && !c.includes('/') && !c.includes('.')) continue;
       if (checkPathGuard(c, cwd).kind === 'deny') return false;
+      if (isExtraDenied(c, cwd)) return false;
     }
   }
   return true;
@@ -56,6 +113,11 @@ const RUNS_PROGRAMS = [
   /^pager\./,
   /^alias\./,
   /^extensions\./,
+  // A partial clone fetches missing files from its remote the moment a read command needs one: network, plus the
+  // remote's helper programs.
+  /^remote\..*\.(promisor|partialclonefilter|uploadpack|receivepack|vcs|proxy)$/,
+  /^(protocol|http)\./,
+  /^url\..*\.(insteadof|pushinsteadof)$/,
   /^submodule\..*\.(update|fetchrecurse)$/,
 ];
 const FALSE_VALUE = /^(false|0|no|off)$/i;
@@ -105,6 +167,11 @@ async function findGitDirs(startDir: string): Promise<string[] | null> {
   return [];
 }
 
+/** Hooks that git runs on its own from plain read commands (the index rewrite after `git status`/`git diff`, ref
+ *  updates, automatic cleanup). A repo that ships any of them is not safe to read quietly. Other hooks (pre-commit…)
+ *  only fire on commands that are not on the list. Red team 2026-10-31 confirmed post-index-change fires. */
+const READ_TRIGGERED_HOOKS = ['post-index-change', 'reference-transaction', 'fsmonitor-watchman', 'pre-auto-gc', 'post-rewrite'];
+
 /** True only when the repo found from `startDir` has settings that run nothing. No repo found → true
  *  (git itself will just say "not a git repository"). Anything unreadable → false (ask). */
 export async function gitSettingsRunNothing(startDir: string): Promise<boolean> {
@@ -112,6 +179,9 @@ export async function gitSettingsRunNothing(startDir: string): Promise<boolean> 
   if (dirs === null) return true;
   if (dirs.length === 0) return false;
   for (const gd of dirs) {
+    for (const hook of READ_TRIGGERED_HOOKS) {
+      if (await fs.promises.lstat(path.join(gd, 'hooks', hook)).then(() => true, () => false)) return false;
+    }
     for (const name of ['config', 'config.worktree']) {
       const file = path.join(gd, name);
       if (!(await fs.promises.lstat(file).then(() => true, () => false))) continue;
@@ -129,4 +199,15 @@ export async function gitSettingsRunNothing(startDir: string): Promise<boolean> 
     }
   }
   return true;
+}
+
+/** The checks the engine's built-in read-only rule needs for one command, or undefined when the line is not on the
+ *  list at all (then nothing is worth reading from disk). Full auto never calls this: it already allows everything. */
+export async function readOnlyChecksFor(subject: string, here: string, powershell: boolean): Promise<{ pathsOk: boolean; gitOk: boolean } | undefined> {
+  const v = readOnlyVerdict(subject, { powershell });
+  if (!v.safe) return undefined;
+  return {
+    pathsOk: pathIsClean() && pathsAreNotSecret(v.words, here, v.readsFolders),
+    gitOk: v.usesGit ? await gitSettingsRunNothing(here) : true,
+  };
 }

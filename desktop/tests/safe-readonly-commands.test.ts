@@ -5,6 +5,7 @@
 // WHY the hostile corpus is the point of this file: every published bypass of a safe-command
 // list was a flag or spelling nobody had listed. For EVERY command on the list there is at
 // least one dangerous form below that must ASK, plus fuzz-style spellings.
+/* eslint-disable no-template-curly-in-string -- the hostile shell lines below contain ${…}; they are test data, not templates */
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -44,7 +45,7 @@ const ALLOWED: string[] = [
   'git log -n 5 --format=%H', 'git log --stat -p -- src/a.ts', 'git log --since=2.days --author=bob', 'git log -S foo',
   'git diff', 'git diff --stat', 'git diff --cached', 'git diff HEAD~1 HEAD', 'git diff --name-only main...HEAD', 'git diff -- a.txt',
   'git show', 'git show HEAD', 'git show HEAD:a.txt', 'git show --stat abc123',
-  'git branch', 'git branch -a', 'git branch -vv', 'git branch --list "feat/*"', 'git branch --show-current', 'git branch -r --contains abc',
+  'git branch', 'git branch -a', 'git branch -vv', 'git branch --list "feat/*"', 'git branch --show-current', 'git branch -r --contains=abc',
   'git tag', 'git tag -l "v1.*"', 'git tag --list', 'git rev-parse HEAD', 'git rev-parse --show-toplevel', 'git rev-parse --abbrev-ref HEAD',
   'git ls-files', 'git ls-files -m', 'git ls-tree HEAD', 'git ls-tree -r --name-only HEAD', 'git cat-file -p HEAD', 'git cat-file -t HEAD',
   'git describe --tags', 'git rev-list --count HEAD', 'git rev-list --max-count=5 HEAD', 'git merge-base main HEAD', 'git blame a.txt', 'git blame -L 1,5 a.txt',
@@ -53,7 +54,7 @@ const ALLOWED: string[] = [
   'git --no-pager log', 'git --no-pager diff', 'git --version', 'git version',
   // harmless spellings: padding, end-of-options, bare dash, a lone ~ inside a revision
   ' ls', 'ls ', 'ls --', 'ls -- -la', 'ls -- --all', 'ls -', 'ls --color=', 'git log HEAD~3..HEAD', 'ls a~', 'git show HEAD^', 'git diff main..feature~2',
-  'node --version', 'npm --version', 'python3 --version', 'go version', 'cargo --version',
+  'python3 --version', 'pip --version', 'gh --version', 'docker --version',
   // chains where every part passes
   'ls && pwd', 'ls; pwd', 'git status && git diff', 'cat a.txt | head -5', 'grep foo a.txt | sort | uniq -c | head', 'git log --oneline | head -5',
   'find . -name x | wc -l', 'ls 2>&1', 'ls > /dev/null'.replace(' > ', ' >'), 'grep foo a 2>/dev/null', 'ls || echo none', 'ls -la 2>&1 | head',
@@ -75,6 +76,12 @@ const HOSTILE: Record<string, string[]> = {
   sed: ["sed -i s/a/b/ f", "sed -n -i 5p f", "sed 's/a/b/e' f", "sed -e 'e id' f", "sed -n 'w out' f", "sed -n 5w p", 'sed -f script f', 'sed --in-place s/a/b/ f',
     "sed -n 5p -i f", 'sed 5p f', "sed -n '5,10!d' f", 'sed -n p f', "sed -n 1p -s f", 'sed --expression=e f', 'sed -s -n 5p f', 'sed -n 5pp f', "sed -n '1p;w x' f", 'sed -n -e 5p f'],
   git: [
+    // red team 2026-10-31: flags git does not give a value to, so the next word really creates a ref
+    'git branch --abbrev newb', 'git branch --sort --list newb2', 'git branch --format --list newb4', 'git tag --format -l newt2', 'git branch --contains --list x',
+    'git branch --points-at --list x', 'git tag --contains -l x', 'git branch -- --list', 'git branch --list -- x', 'git tag -l -- x', 'git log --format --output=x', 'git log --max-count --output=x',
+    'git log -S --output=x', 'git log -n --output=x', 'git log --pretty --output=y', 'git log --since --output=z',
+    // %G placeholders make git run gpg
+    'git log --format=%GG', 'git show --format=%GS', 'git log --pretty=format:%GK', 'git log --format=%G?', 'git log --pretty=format:x%GFy',
     'git -c core.pager=sh log', 'git -ccore.pager=sh log', 'git --config-env=core.pager=X log', 'git -C /tmp status', 'git --git-dir=/tmp/x status', 'git --work-tree=/ status',
     'git --exec-path=/tmp status', 'git --paginate log', 'git -p log', 'git log --output=out', 'git log --output out', 'git log --outpu=out', 'git log --out=out', 'git diff --output=out',
     'git diff --ext-diff', 'git diff --ext', 'git diff --textconv', 'git show --textconv x', 'git log --ext-diff -p', 'git log --show-signature', 'git cat-file --textconv HEAD:a',
@@ -98,7 +105,7 @@ const HOSTILE: Record<string, string[]> = {
   hostname: ['hostname newname', 'hostname -F file', 'hostname -b x', 'hostname -s'],
   base64: ['base64 -o out a', 'base64 --output=out a', 'base64 -oout a', 'base64 -i in', 'base64 --out=x a', 'base64 -o'],
   file: ['file -C', 'file -m magic x', 'file --magic-file=m x', 'file -f list', 'file --files-from=l', 'file -z x', 'file -Z x', 'file -C -m x', 'file --compile'],
-  diff: ['diff -X ex a b', 'diff --exclude-from=ex a b', 'diff --to-file=x', 'diff --output=x a b', 'diff -o x a b', 'diff -D x a b'],
+  diff: ['diff -l a b', 'diff -ul a b', 'diff --paginate a b', 'diff -X ex a b', 'diff --exclude-from=ex a b', 'diff --to-file=x', 'diff --output=x a b', 'diff -o x a b', 'diff -D x a b'],
   du: ['du --files0-from=list', 'du -X ex', 'du --exclude-from=ex', 'du --files0=x', 'du -o x'],
   df: ['df --sync', 'df --output=x', 'df -y'],
   free: ['free -s 1', 'free --seconds=1', 'free -c 3', 'free --count=3'],
@@ -107,8 +114,8 @@ const HOSTILE: Record<string, string[]> = {
   wc: ['wc --files0-from=x', 'wc --files0-from x'],
   md5sum: ['md5sum -c sums', 'md5sum --check sums', 'sha256sum -c x', 'sha256sum --check=x', 'cksum --check x'],
   echo: ['echo hi > out', 'echo hi >> out', 'echo $(id)', 'echo `id`', 'echo $HOME', 'echo ${HOME}', 'echo $((1+1))', 'echo hi &', 'echo hi > /etc/passwd', 'echo hi 2>out', 'echo hi >&2', 'echo >/dev/nullx', 'echo <(ls)', 'echo >(ls)'],
-  printf: ['printf -v x hi', 'printf', 'printf -- hi'],
-  seq: ['seq --foo 3', 'seq -o x 3'],
+  printf: ['printf %2000000000s x', 'printf %99999d 1', 'printf -v x hi', 'printf', 'printf -- hi'],
+  seq: ['seq --foo 3', 'seq -o x 3', 'seq 1 99999999999', 'seq 99999999 1'],
   test: ['test -f a ; rm a', '[ -f a', '[ -f a ] ; rm a'],
   tr: ['tr a b c', 'tr -o x', 'tr a'.replace('a', 'a b c')],
   strings: ['strings -o2 x'.replace('-o2', '--output=x'), 'strings --unknown x'],
@@ -137,7 +144,7 @@ const HOSTILE: Record<string, string[]> = {
   nproc: ['nproc --foo'],
   arch: ['arch -x86_64 sh', 'arch x'],
   expr: ['expr 1 + 1 > out', 'expr $(id)'],
-  'version probes': ['node --version x', 'node -e 1', 'node --eval 1', 'python -c "1"', 'python3 script.py', 'python --version --foo', 'npm --version install', 'npm install', 'npm run x', 'cargo build', 'go build', 'go run x', 'go env -w X=1', 'git --version x', 'java -jar x', 'make', 'make clean', 'gcc x.c', 'docker ps', 'docker --version x', 'rustc x.rs', 'pip install x', 'node', 'python', 'npm', 'npx x', 'npx --version x', 'deno run x', 'ruby -e 1'],
+  'version probes': ['go version', 'cargo --version', 'rustc --version', 'yarn --version', 'pnpm --version', 'npx --version', 'node --version', 'npm --version', 'bun --version', 'node --version x', 'node -e 1', 'node --eval 1', 'python -c "1"', 'python3 script.py', 'python --version --foo', 'npm --version install', 'npm install', 'npm run x', 'cargo build', 'go build', 'go run x', 'go env -w X=1', 'git --version x', 'java -jar x', 'make', 'make clean', 'gcc x.c', 'docker ps', 'docker --version x', 'rustc x.rs', 'pip install x', 'node', 'python', 'npm', 'npx x', 'npx --version x', 'deno run x', 'ruby -e 1'],
 };
 
 // Programs deliberately NOT on the list, even though another assistant allows them.
@@ -159,7 +166,7 @@ const FUZZ: string[] = [
   // globs (could expand to a flag-looking file name)
   'ls *', 'ls *.ts', 'ls ?', 'ls [a-z]*', 'cat *', 'sort *', 'find *', 'ls a*b', 'git diff *', 'ls ~root', 'ls ~/*', 'ls ~+', 'ls ~-',
   // other operators
-  'ls &', 'ls & pwd', 'ls &&', '&& ls', 'ls ||', '|| ls', 'ls |', '| ls', 'ls ;', '; ls', 'ls ;;', 'ls |& cat', 'ls &> out', 'ls &>> out', 'ls >| out', 'ls 3>x', 'ls 2>x', 'ls 1>x', 'ls >x', 'ls >>x', 'ls <x', 'ls <<x', 'ls <<<x', 'ls >/dev/null2', 'ls 2>/dev/null2', 'ls 2>&2', 'ls 2>&1x', 'ls >&2',
+  'ls &', 'ls & pwd', 'ls &&', '&& ls', 'ls ||', '|| ls', 'ls |', '| ls', 'ls ;', '; ls', 'ls ;;', 'ls |& cat', 'ls &> out', 'ls &>/dev/null', 'ls &>> out', 'ls >| out', 'ls 3>x', 'ls 2>x', 'ls 1>x', 'ls >x', 'ls >>x', 'ls <x', 'ls <<x', 'ls <<<x', 'ls >/dev/null2', 'ls 2>/dev/null2', 'ls 2>&2', 'ls 2>&1x', 'ls >&2',
   '(ls)', '{ ls; }', 'ls ; (rm a)', 'if true; then ls; fi', 'for i in 1; do ls; done', 'while true; do ls; done', 'time ls', '! ls', 'ls !', 'ls #x', '#ls', 'ls # x',
   // whitespace and control characters
   'ls\nrm a', 'ls\n', '\nls', 'ls\r', 'ls\rrm a', 'ls\trm', 'ls\tfoo', 'ls\0', 'ls\0rm', 'ls \x1b[0m', 'ls\x07', 'ls\x7f', 'ls\vrm', 'ls\frm', 'ls -la', 'ls rm a', 'ls rm a', 'ls\u0085rm',
@@ -314,6 +321,25 @@ describe('pathsAreNotSecret', () => {
   it('a very long list of words asks', () => { expect(pathsAreNotSecret(Array(200).fill('a'), tmp)).toBe(false); });
 });
 
+describe('folder-reading commands pointed at a folder that holds the credential folders', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-folders-'));
+  it('are flagged by the parser', () => {
+    for (const c of ['grep -r x ~', 'grep -rn x /', 'grep -R x .', 'rg x ~', 'rg x', 'diff -r a b', 'git grep --no-index x', 'egrep --recursive x d', 'grep --dereference-recursive x d'])
+      expect(readOnlyVerdict(c).readsFolders, c).toBe(true);
+    for (const c of ['ls -R ~', 'du -sh ~', 'cat a', 'grep x a', 'find ~ -name x', 'git grep x'])
+      expect(readOnlyVerdict(c).readsFolders, c).toBe(false);
+  });
+  it('ask when a named folder contains home or its credential folders', () => {
+    expect(pathsAreNotSecret(['grep', '-r', 'x', '~'], tmp, true)).toBe(false);
+    expect(pathsAreNotSecret(['grep', '-r', 'x', '/'], tmp, true)).toBe(false);
+    expect(pathsAreNotSecret(['rg', 'x', path.dirname(os.homedir())], tmp, true)).toBe(false);
+  });
+  it('a project folder is fine, and so is listing home by name only', () => {
+    expect(pathsAreNotSecret(['grep', '-r', 'x', '.'], tmp, true)).toBe(true);
+    expect(pathsAreNotSecret(['ls', '~'], tmp, false)).toBe(true);
+  });
+});
+
 describe('configRunsPrograms', () => {
   it.each([
     [['core.fsmonitor', '/tmp/x']], [['core.pager', 'sh']], [['core.hooksPath', '/x']], [['core.sshCommand', 'x']], [['diff.external', 'x']],
@@ -365,5 +391,33 @@ describe('gitSettingsRunNothing (real repositories)', () => {
     // tmp may itself sit inside a repo on a dev machine; only assert the pointer case strictly
     fs.writeFileSync(path.join(d, '.git'), 'garbage');
     expect(await gitSettingsRunNothing(d)).toBe(false);
+  });
+});
+
+describe('red-team follow-ups (2026-10-31) for the file-level checks', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-rt-'));
+  it('live process and device files ask, whatever command names them', () => {
+    for (const w of ['/proc/self/environ', '/proc/1/cmdline', '/dev/zero', '/dev/urandom', '/dev/tty']) expect(pathsAreNotSecret(['cat', w], tmp), w).toBe(false);
+    expect(pathsAreNotSecret(['ls', '>/dev/null'.slice(1)], tmp)).toBe(true); // /dev/null itself is fine
+  });
+  it("the app's own settings, histories and key bundles ask", () => {
+    for (const w of ['~/.claude/settings.json', '~/.claude.json', '~/.youcoded/permissions.json', '~/.bash_history', '~/.zsh_history', 'x.pem', '~/.gitconfig', '.git/config'])
+      expect(pathsAreNotSecret(['cat', w], tmp), w).toBe(false);
+  });
+});
+
+describe('git repositories that read commands could be turned against', () => {
+  const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, stdio: 'pipe' });
+  it('a repo that ships a hook git runs by itself asks', async () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-hook-')); git(d, 'init', '-q');
+    expect(await gitSettingsRunNothing(d)).toBe(true);
+    fs.writeFileSync(path.join(d, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\n'); // only fires on commit: not a read trigger
+    expect(await gitSettingsRunNothing(d)).toBe(true);
+    fs.writeFileSync(path.join(d, '.git', 'hooks', 'post-index-change'), '#!/bin/sh\n');
+    expect(await gitSettingsRunNothing(d)).toBe(false);
+  });
+  it('a partial clone (fetches missing files from its remote) asks', () => {
+    for (const k of ['remote.origin.promisor', 'remote.origin.partialclonefilter', 'remote.origin.uploadpack', 'extensions.partialclone', 'url.x.insteadOf', 'http.proxy'])
+      expect(configRunsPrograms([[k, 'x']]), k).toBe(true);
   });
 });

@@ -36,9 +36,12 @@ export interface ReadOnlyVerdict {
   usesGit: boolean;
   /** Every plain word in the line (for the caller's path checks). */
   words: string[];
+  /** Some part reads the CONTENTS of whole folders (grep -r, rg, diff -r, git grep --no-index): a folder that
+   *  contains the credential folders (home, /) must ask, even though no credential file is named. */
+  readsFolders: boolean;
 }
 
-const NOT_SAFE: ReadOnlyVerdict = { safe: false, usesGit: false, words: [] };
+const NOT_SAFE: ReadOnlyVerdict = { safe: false, usesGit: false, words: [], readsFolders: false };
 export const MAX_READONLY_LENGTH = 2000;
 
 // ── lexer ───────────────────────────────────────────────────────────────────
@@ -49,7 +52,7 @@ type Segment = string[];
 // (checked below); `[`/`]` only as the whole word (the `test` brackets).
 const PLAIN_CHAR = /[A-Za-z0-9_.\/:=,@%+^-]/;
 // The only redirects accepted: throw output away, or merge errors into the output.
-const SAFE_REDIRECT = /^(?:2>&1|>\/dev\/null|2>\/dev\/null|&>\/dev\/null|1>\/dev\/null)(?=[\s;|&]|$)/;
+const SAFE_REDIRECT = /^(?:2>&1|>\/dev\/null|2>\/dev\/null|1>\/dev\/null)(?=[\s;|&]|$)/;
 
 /** Split into pipeline/list segments of decoded words, or null if anything is not plain. */
 function lex(command: string): Segment[] | null {
@@ -159,8 +162,10 @@ function quotedBodyIsPlain(body: string, double: boolean): boolean {
 
 // ── flag tables ─────────────────────────────────────────────────────────────
 
-/** How a long option takes its value: none, required (`--x=v` or `--x v`), optional (`--x` or `--x=v`). */
-type Arity = 'n' | 'r' | 'o';
+/** How a long option takes its value: none, required (`--x=v` or `--x v`), optional (`--x` or `--x=v`), or
+ *  equals-only (`--x=v` and nothing else). Git's tables use 'e' only: red team 2026-10-31 showed that guessing whether git
+ *  swallows the NEXT word lets a hidden flag or a branch name slip past. */
+type Arity = 'n' | 'r' | 'o' | 'e';
 
 interface Spec {
   /** Short letters that take no value; may be clustered (`-la`). */
@@ -196,7 +201,13 @@ function argsMatch(spec: Spec, args: string[]): boolean {
       const arity = spec.long && Object.prototype.hasOwnProperty.call(spec.long, name) ? spec.long[name] : undefined;
       if (arity === undefined) return false;
       if (arity === 'n' && eq !== -1) return false;
-      if (arity === 'r' && eq === -1) { if (i >= args.length) return false; i++; }
+      if (arity === 'e' && eq === -1) return false;
+      if (arity === 'r' && eq === -1) {
+        // WHY a value that looks like a flag is refused: if our idea of "takes a value" were wrong, a real flag
+        // (--output=x) would be hiding in the value slot where it is never checked.
+        if (i >= args.length || args[i].startsWith('-')) return false;
+        i++;
+      }
       continue;
     }
     // short option cluster
@@ -206,7 +217,7 @@ function argsMatch(spec: Spec, args: string[]): boolean {
       const ch = letters[k];
       if (spec.short?.includes(ch)) continue;
       if (spec.shortArg?.includes(ch)) {
-        if (k === letters.length - 1) { if (i >= args.length) return false; i++; }
+        if (k === letters.length - 1) { if (i >= args.length || args[i].startsWith('-')) return false; i++; }
         break; // the rest of this word is the value
       }
       return false;
@@ -290,7 +301,8 @@ const SPECS: Record<string, Spec | 'free'> = {
   strings: { short: 'afo', shortArg: 'nte' },
   // WHY diff is on the list but not -X/--exclude-from: that reads a file of patterns.
   diff: {
-    short: 'uciqrswbBiyEaNlTZ', shortArg: 'UCxIF',
+    // WHY no -l: it pipes the output through `pr`, a second program found on PATH.
+    short: 'uciqrswbBiyEaNTZ', shortArg: 'UCxIF',
     long: {
       ...L('brief recursive report-identical-files ignore-all-space ignore-space-change ignore-blank-lines ignore-case side-by-side expand-tabs text new-file minimal strip-trailing-cr show-c-function speed-large-files initial-tab'),
       ...L('exclude ignore-matching-lines label width', 'r'),
@@ -317,6 +329,7 @@ const SPECS: Record<string, Spec | 'free'> = {
   true: 'free',
   false: 'free',
   expr: 'free',
+  // WHY seq's numbers are kept small in segmentCheck: `seq 1 99999999999` never finishes.
   seq: { short: 'w', shortArg: 'sf', long: { ...L('equal-width'), ...L('separator format', 'r') } },
   test: 'free',
   '[': 'free',
@@ -392,12 +405,15 @@ function sedMatches(args: string[]): boolean {
 // ── printf: format words only ───────────────────────────────────────────────
 // WHY: `printf -v name` stores into a shell variable; the first word must be the format, not a flag.
 function printfMatches(args: string[]): boolean {
-  return args.length > 0 && !args[0].startsWith('-');
+  // WHY a width of thousands is refused: `%2000000000s` would make gigabytes of output.
+  return args.length > 0 && !args[0].startsWith('-') && !/%[-+ #0]*\d{4,}/.test(args[0]);
 }
 
 // ── `X --version` and friends ───────────────────────────────────────────────
-const VERSION_TOOLS = new Set(['node', 'npm', 'pnpm', 'yarn', 'bun', 'npx', 'python', 'python3', 'pip', 'pip3', 'cargo', 'rustc',
-  'git', 'gh', 'docker', 'deno', 'ruby', 'gcc', 'make', 'cmake', 'java']);
+// WHY this short list: go, cargo, rustc, yarn, pnpm, npx, node and npm are left out. Version managers (Go's own
+// toolchain switching, rustup, corepack, Volta, mise) can DOWNLOAD and run a different toolchain when asked for a
+// version inside a project that names one (red team 2026-10-31 confirmed it for `go version`).
+const VERSION_TOOLS = new Set(['python', 'python3', 'pip', 'pip3', 'git', 'gh', 'docker', 'gcc', 'make', 'cmake', 'ruby', 'java']);
 
 // ── git ─────────────────────────────────────────────────────────────────────
 // WHY per-subcommand tables: git has hundreds of flags and a lot of them run programs (--ext-diff, --textconv,
@@ -413,7 +429,7 @@ const GIT_DIFF_LONG = {
     'no-renames find-renames find-copies function-context compact-summary full-index binary text no-prefix indent-heuristic ' +
     'no-indent-heuristic merge-base irreversible-delete'),
   ...L('color unified word-diff color-words dirstat abbrev stat-width', 'o'),
-  ...L('diff-filter diff-algorithm src-prefix dst-prefix inter-hunk-context', 'r'),
+  ...L('diff-filter diff-algorithm src-prefix dst-prefix inter-hunk-context', 'e'),
 };
 const GIT_LOG_LONG = {
   ...GIT_DIFF_LONG,
@@ -422,7 +438,7 @@ const GIT_LOG_LONG = {
     'regexp-ignore-case extended-regexp fixed-strings all-match invert-grep mailmap use-mailmap no-mailmap full-diff parents children ' +
     'show-pulls remotes tags branches'),
   ...L('decorate branches tags remotes pretty no-walk', 'o'),
-  ...L('date format author committer grep since until after before max-count skip min-parents max-parents', 'r'),
+  ...L('date format author committer grep since until after before max-count skip min-parents max-parents', 'e'),
 };
 // WHY these are absent everywhere below: output (writes a file), ext-diff and textconv (run programs), show-signature
 // (runs gpg), exec, paginate, open-files-in-pager, no-index is left out of diff on purpose to keep it to repo content.
@@ -439,13 +455,13 @@ const GIT_SUB: Record<string, Spec> = {
   'ls-tree': { short: 'drtlz', long: { ...L('name-only name-status long full-name full-tree object-only'), ...L('abbrev', 'o') } },
   // WHY cat-file only -t/-s/-e/-p: --textconv and --filters run programs from the repo's settings.
   'cat-file': { short: 'tsep', maxPos: 2, long: L('allow-unknown-type') },
-  describe: { long: { ...L('tags always long exact-match contains all first-parent'), ...L('abbrev dirty', 'o'), ...L('match candidates', 'r') } },
-  'rev-list': { shortArg: 'n', numeric: true, long: { ...L('count all first-parent no-merges merges reverse parents left-right ancestry-path topo-order date-order boundary'), ...L('branches tags remotes', 'o'), ...L('max-count since until after before author grep skip', 'r') } },
+  describe: { long: { ...L('tags always long exact-match contains all first-parent'), ...L('abbrev dirty', 'o'), ...L('match candidates', 'e') } },
+  'rev-list': { shortArg: 'n', numeric: true, long: { ...L('count all first-parent no-merges merges reverse parents left-right ancestry-path topo-order date-order boundary'), ...L('branches tags remotes', 'o'), ...L('max-count since until after before author grep skip', 'e') } },
   'merge-base': { long: L('is-ancestor fork-point octopus all independent') },
   blame: { short: 'wepslfn', shortArg: 'L', long: L('porcelain line-porcelain incremental show-name show-number show-email minimal root') },
-  'name-rev': { long: { ...L('name-only tags always'), ...L('refs', 'r') } },
+  'name-rev': { long: { ...L('name-only tags always'), ...L('refs', 'e') } },
   'show-ref': { short: 'dsq', long: { ...L('head heads tags verify quiet dereference'), ...L('hash abbrev', 'o') } },
-  'for-each-ref': { long: L('format sort count points-at merged no-merged contains', 'r') },
+  'for-each-ref': { long: L('format sort count points-at merged no-merged contains', 'e') },
   'count-objects': { short: 'vH' },
   grep: {
     short: 'IEFGPiwvnlLcohHqaWpz', shortArg: 'efABCm', numeric: true,
@@ -453,7 +469,7 @@ const GIT_SUB: Record<string, Spec> = {
       ...L('extended-regexp fixed-strings basic-regexp perl-regexp ignore-case invert-match word-regexp line-number files-with-matches files-without-match count ' +
         'only-matching no-filename quiet text cached untracked no-index exclude-standard and or not all-match name-only heading break show-function function-context ' +
         'full-name null column byte-offset'),
-      ...L('max-depth threads regexp file after-context before-context context max-count', 'r'),
+      ...L('max-depth threads regexp file after-context before-context context max-count', 'e'),
     },
   },
 };
@@ -461,9 +477,9 @@ const GIT_SUB: Record<string, Spec> = {
 function gitBranchOk(args: string[]): boolean {
   const spec: Spec = {
     short: 'arv',
-    long: { ...L('list show-current all remotes verbose no-color column no-column'), ...L('contains no-contains sort format points-at abbrev', 'r'), ...L('merged no-merged color', 'o') },
+    long: { ...L('list show-current all remotes verbose no-color column no-column'), ...L('contains no-contains sort format points-at abbrev', 'e'), ...L('merged no-merged color', 'o') },
   };
-  if (!argsMatch(spec, args)) return false;
+  if (args.includes('--') || !argsMatch(spec, args)) return false;
   const positional = positionalWords(spec, args);
   // WHY a bare name asks: `git branch NAME` creates a branch. A pattern is only a pattern after --list.
   return positional.length === 0 || args.includes('--list');
@@ -471,9 +487,9 @@ function gitBranchOk(args: string[]): boolean {
 function gitTagOk(args: string[]): boolean {
   const spec: Spec = {
     short: 'l',
-    long: { ...L('list column no-column'), ...L('sort format points-at contains no-contains', 'r'), ...L('merged no-merged', 'o') },
+    long: { ...L('list column no-column'), ...L('sort format points-at contains no-contains', 'e'), ...L('merged no-merged', 'o') },
   };
-  if (!argsMatch(spec, args)) return false;
+  if (args.includes('--') || !argsMatch(spec, args)) return false;
   // WHY: `git tag NAME` creates a tag; with no -l/--list a bare word is a name.
   return positionalWords(spec, args).length === 0 || args.includes('--list') || args.includes('-l');
 }
@@ -488,7 +504,6 @@ function positionalWords(spec: Spec, args: string[]): string[] {
     if (a === '--') { ended = true; continue; }
     if (a.startsWith('--')) {
       const name = a.slice(2).split('=')[0];
-      if (spec.long?.[name] === 'r' && !a.includes('=')) i++;
       continue;
     }
     if (spec.numeric && /^-\d+$/.test(a)) continue;
@@ -506,6 +521,9 @@ function gitMatches(args: string[]): boolean {
   while (i < args.length && (args[i] === '--no-pager' || args[i] === '--no-optional-locks')) i++;
   const sub = args[i];
   if (sub === undefined) return false;
+  // WHY: the %G… placeholders in a log format make git run gpg on every signed commit (touching ~/.gnupg and, for
+  // some setups, the network). Refused anywhere in a git line.
+  if (args.some((a) => /%G/.test(a))) return false;
   const rest = args.slice(i + 1);
   if (sub === 'branch') return gitBranchOk(rest);
   if (sub === 'tag') return gitTagOk(rest);
@@ -527,15 +545,30 @@ function programName(word: string): string | null {
   return /^[A-Za-z0-9_\[.-]+$/.test(word) && !word.includes('/') ? word : null;
 }
 
-function segmentIsReadOnly(words: string[]): { ok: boolean; git: boolean } {
+function segmentIsReadOnly(words: string[]): { ok: boolean; git: boolean; folders: boolean } {
+  const r = segmentCheck(words);
+  return { ...r, folders: r.ok && readsFolderContents(words) };
+}
+
+function readsFolderContents(words: string[]): boolean {
+  const name = words[0];
+  const args = words.slice(1);
+  if (name === 'rg') return true;
+  if (name === 'grep' || name === 'egrep' || name === 'fgrep') return args.some((a) => /^-[A-Za-z0-9]*[rR]/.test(a) && !a.startsWith('--') || a === '--recursive' || a === '--dereference-recursive');
+  if (name === 'diff') return args.some((a) => /^-[A-Za-z]*r/.test(a) && !a.startsWith('--') || a === '--recursive');
+  if (name === 'git') return args.includes('grep') && args.includes('--no-index');
+  return false;
+}
+
+function segmentCheck(words: string[]): { ok: boolean; git: boolean } {
   const name = programName(words[0]);
   if (name === null) return { ok: false, git: false };
   const args = words.slice(1);
   if (name === 'git') return { ok: gitMatches(args) || (args.length === 1 && args[0] === '--version'), git: true };
   if (VERSION_TOOLS.has(name) && args.length === 1 && args[0] === '--version') return { ok: true, git: false };
-  if (name === 'go') return { ok: args.length === 1 && args[0] === 'version', git: false };
   if (name === 'find') return { ok: findMatches(args), git: false };
   if (name === 'sed') return { ok: sedMatches(args), git: false };
+  if (name === 'seq' && args.some((a) => /\d{7,}/.test(a))) return { ok: false, git: false };
   if (name === 'printf') return { ok: printfMatches(args), git: false };
   if (name === '[') {
     // `[ … ]` must end with its closing bracket
@@ -554,14 +587,16 @@ export function readOnlyVerdict(command: string, opts?: { powershell?: boolean }
   const segments = lex(command);
   if (!segments) return NOT_SAFE;
   let usesGit = false;
+  let readsFolders = false;
   const words: string[] = [];
   for (const seg of segments) {
     const r = segmentIsReadOnly(seg);
     if (!r.ok) return NOT_SAFE;
     if (r.git) usesGit = true;
+    if (r.folders) readsFolders = true;
     words.push(...seg);
   }
-  return { safe: true, usesGit, words };
+  return { safe: true, usesGit, words, readsFolders };
 }
 
 // ── what Settings tells the person ──────────────────────────────────────────
@@ -577,10 +612,10 @@ export const READONLY_COMMAND_GROUPS: ReadonlyArray<{ title: string; commands: s
   { title: 'Facts about this computer', commands: ['whoami', 'id', 'uname', 'hostname', 'date', 'nproc', 'arch', 'uptime', 'free', 'which', 'type'], note: 'date only shows the time. It never sets it.' },
   { title: 'Reading git history', commands: ['git status', 'git log', 'git show', 'git diff', 'git branch', 'git tag', 'git rev-parse', 'git ls-files', 'git ls-tree', 'git cat-file', 'git describe', 'git rev-list', 'git merge-base', 'git blame', 'git name-rev', 'git show-ref', 'git for-each-ref', 'git count-objects', 'git grep', 'git remote', 'git worktree list', 'git stash list', 'git reflog'],
     note: 'Only the looking forms. Anything that changes the project, or sends it somewhere, still asks. In a project whose git settings run programs, git asks every time.' },
-  { title: 'Version checks', commands: ['node --version', 'python --version', 'npm --version', 'git --version', '…and similar'] },
+  { title: 'Version checks', commands: ['python --version', 'pip --version', 'git --version', '…and similar'] },
 ];
 
 /** Names of every program that can run with no flags beyond its table — for the parity test. */
 export function readOnlyProgramNames(): string[] {
-  return [...Object.keys(SPECS), 'find', 'sed', 'printf', 'git', 'go', ...VERSION_TOOLS];
+  return [...Object.keys(SPECS), 'find', 'sed', 'printf', 'git', ...VERSION_TOOLS];
 }
