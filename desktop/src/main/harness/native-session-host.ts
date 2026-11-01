@@ -35,6 +35,8 @@ import { RunningCalls } from './askpass/running-calls';
 import type { AskpassServer } from './askpass/askpass-server';
 import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
+import { readOnlyVerdict } from '../../shared/safe-readonly-commands';
+import { pathsAreNotSecret, gitSettingsRunNothing } from './tools/readonly-guard';
 import { getShell } from './tools/bash';
 import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
 import { assembleSystemPrompt, assembleSystemPromptParts, gitSnapshotAsync } from './prompt-assembly';
@@ -2709,14 +2711,29 @@ export class NativeSessionHost extends EventEmitter {
     const inScope = (r: PermissionRule) => (
       scope === undefined ? r.specialist === undefined : (r.specialist === undefined || r.specialist === scope)
     );
-    return async (tool: string, subject: string | undefined) => {
+    return async (tool: string, subject: string | undefined, where?: { shellCwd?: string }) => {
       const mode = this.modeFor.get(sessionId) ?? 'ask';
       // WHY: disk plus synchronous session memory keep new grants effective before
       // persistence finishes; one scope filter also keeps specialist grants isolated.
       const rememberedRules = [...await this.permissionStore.rulesFor(cwd), ...(this.rememberedFor.get(sessionId) ?? [])].filter(inScope);
+      const powershell = getShell().label === 'PowerShell';
+      // "Commands that never ask": only worth the file checks when the line is on the built-in list and a mode
+      // that uses it. Full auto already allows everything, so it skips them.
+      let readOnlyChecks: { pathsOk: boolean; gitOk: boolean } | undefined;
+      if (tool === 'Bash' && subject !== undefined && mode !== 'full-auto') {
+        const v = readOnlyVerdict(subject, { powershell });
+        if (v.safe) {
+          // Judged from where the shell really is now (a persisted `cd` may have moved it), not the session root.
+          const here = where?.shellCwd ?? cwd;
+          readOnlyChecks = {
+            pathsOk: pathsAreNotSecret(v.words, here),
+            gitOk: v.usesGit ? await gitSettingsRunNothing(here) : true,
+          };
+        }
+      }
       const decision = decidePermission(tool, subject, {
         presetRules, modeRules: rulesForMode(mode), denyList: DESTRUCTIVE_DENY_LIST, rememberedRules,
-      }, { powershell: getShell().label === 'PowerShell' });
+      }, { powershell, readOnlyChecks });
       // Only explicit admin rules supply this flag, never the Full Auto baseline.
       return tool === 'Bash' && subject !== undefined && hasAdminApproval(rememberedRules, subject, mode)
         ? { ...decision, passwordlessAdminAllowed: true,

@@ -8,6 +8,7 @@
 import type { PermissionRule } from './permission-types';
 import { CODE_RUNNING_CORPUS, HOSTILE_CORPUS } from './bash-hostile-corpus';
 import { riskyVariant } from './bash-risky-variants';
+import { readOnlyVerdict } from './safe-readonly-commands';
 
 /** Escape a literal run of a pattern for a RegExp, keeping `?` as one character. */
 function globLiteral(text: string): string {
@@ -63,6 +64,14 @@ export const BOUNDED_RUNG_VETO: readonly string[] = [
 export interface MatchContext {
   /** The Bash tool is running PowerShell, not bash. */
   powershell?: boolean;
+  /** The two checks the built-in read-only list cannot do from text alone (computed in main by
+   *  tools/readonly-guard.ts before deciding). Absent = NOT done = the list does not apply: fail closed. */
+  readOnlyChecks?: {
+    /** No word in the command leads (by name or by symlink) to a credential file. */
+    pathsOk: boolean;
+    /** The project's git settings run no programs. Only consulted when the command uses git. */
+    gitOk: boolean;
+  };
 }
 
 /** The ONE function that knows what a whole rule means. `subjectMatches` above is
@@ -77,6 +86,15 @@ export function ruleMatches(rule: PermissionRule, subject: string, context: Matc
   // promise cannot afford ('RM -rf /' is not 'rm -rf /' on the platforms Bash
   // runs on). No trimming either: the stored pattern IS the approved command.
   if (rule.match === 'exact') return rule.pattern !== undefined && subject === rule.pattern;
+  // The built-in read-only list (shared/safe-readonly-commands.ts). Every condition must hold; any doubt = no match,
+  // so the mode's blanket rule asks as before.
+  if (rule.match === 'safe-readonly') {
+    if (rule.tool !== 'Bash' || rule.action !== 'allow') return false;
+    const checks = context.readOnlyChecks;
+    if (!checks || !checks.pathsOk) return false;
+    const v = readOnlyVerdict(subject, { powershell: context.powershell });
+    return v.safe && (!v.usesGit || checks.gitOk);
+  }
   if (!subjectMatches(subject, rule.pattern)) return false;
 
   const pattern = rule.pattern;
