@@ -76,7 +76,7 @@ const HOSTILE: Record<string, string[]> = {
   sed: ["sed -i s/a/b/ f", "sed -n -i 5p f", "sed 's/a/b/e' f", "sed -e 'e id' f", "sed -n 'w out' f", "sed -n 5w p", 'sed -f script f', 'sed --in-place s/a/b/ f',
     "sed -n 5p -i f", 'sed 5p f', "sed -n '5,10!d' f", 'sed -n p f', "sed -n 1p -s f", 'sed --expression=e f', 'sed -s -n 5p f', 'sed -n 5pp f', "sed -n '1p;w x' f", 'sed -n -e 5p f'],
   git: [
-    // red team 2026-10-31: flags git does not give a value to, so the next word really creates a ref
+    // flags git does not give a value to, so the next word really creates a ref
     'git branch --abbrev newb', 'git branch --sort --list newb2', 'git branch --format --list newb4', 'git tag --format -l newt2', 'git branch --contains --list x',
     'git branch --points-at --list x', 'git tag --contains -l x', 'git branch -- --list', 'git branch --list -- x', 'git tag -l -- x', 'git log --format --output=x', 'git log --max-count --output=x',
     'git log -S --output=x', 'git log -n --output=x', 'git log --pretty --output=y', 'git log --since --output=z',
@@ -394,7 +394,7 @@ describe('gitSettingsRunNothing (real repositories)', () => {
   });
 });
 
-describe('red-team follow-ups (2026-10-31) for the file-level checks', () => {
+describe('file-level checks against live process files, app settings and histories', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-rt-'));
   it('live process and device files ask, whatever command names them', () => {
     for (const w of ['/proc/self/environ', '/proc/1/cmdline', '/dev/zero', '/dev/urandom', '/dev/tty']) expect(pathsAreNotSecret(['cat', w], tmp), w).toBe(false);

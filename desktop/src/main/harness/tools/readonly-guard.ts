@@ -33,10 +33,10 @@ function containsCredentialFolders(dirWord: string, cwd: string): boolean {
   const home = os.homedir();
   const expanded = dirWord === '~' ? home : dirWord.startsWith('~/') ? path.join(home, dirWord.slice(2)) : dirWord;
   const abs = path.resolve(cwd, expanded);
-  let real = abs;
-  try { real = fs.realpathSync.native(abs); } catch { /* not there: judge the typed spelling */ }
-  const homes = [home];
-  try { homes.push(fs.realpathSync.native(home)); } catch { /* ignore */ }
+  // realpathNearestSync is the guards' own (already allowlisted) link-following helper.
+  const real = realpathNearestSync(abs) ?? abs;
+  const homeReal = realpathNearestSync(home);
+  const homes = homeReal && homeReal !== home ? [home, homeReal] : [home];
   for (const h of homes) {
     for (const sub of ['.ssh', '.aws', '.gnupg', '.claude', '.youcoded']) {
       const target = path.join(h, sub);
@@ -68,7 +68,7 @@ function isExtraDenied(word: string, cwd: string): boolean {
 }
 
 /** A PATH with an empty or `.` entry would let a file in the project stand in for `ls`. */
-export function pathIsClean(pathVar: string | undefined = process.env.PATH): boolean {
+function pathIsClean(pathVar: string | undefined = process.env.PATH): boolean {
   if (!pathVar) return false;
   return pathVar.split(path.delimiter).every((e) => e !== '' && e !== '.' && path.isAbsolute(e));
 }
