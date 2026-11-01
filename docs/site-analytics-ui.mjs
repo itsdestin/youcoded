@@ -1,11 +1,15 @@
-import { createAnalytics, eligible, installerTarget } from './site-analytics.mjs';
+import { createAnalytics, eligible, installerTarget, noteMe } from './site-analytics.mjs';
 
 // WHY: owner authorized collection after deploying analytics-path rate protection.
 // The Worker has a separate kill switch and refuses unsigned admissions.
 const COLLECTION_ENABLED = true;
 export function mountAnalyticsUI(win = window, doc = document) {
   let client;
-  if (COLLECTION_ENABLED && eligible(win)) client = createAnalytics({ fetch: win.fetch.bind(win), crypto: win.crypto, href: win.location.href, referrer: doc.referrer });
+  // Read /?me before the eligibility check, so the very visit that sets it is not counted.
+  noteMe(win);
+  let tab = null;
+  try { tab = win.sessionStorage; } catch { /* blocked: reloads count as new visits */ }
+  if (COLLECTION_ENABLED && eligible(win)) client = createAnalytics({ fetch: win.fetch.bind(win), crypto: win.crypto, href: win.location.href, referrer: doc.referrer, tab });
   // No readback API: event details carry only an outcome, never the page nonce or capability.
   win.addEventListener('youcoded:site-analytics', event => {
     try {

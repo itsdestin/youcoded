@@ -1,6 +1,6 @@
 # YouCoded Privacy Policy
 
-**Effective date:** October 23, 2026
+**Effective date:** October 31, 2026
 
 YouCoded is made and published by **Destin's Adventures, LLC**, an Arizona limited liability company. It is not affiliated with Anthropic or any other commercial entity. This policy explains in plain language what data the YouCoded software touches, what gets sent to servers operated by the project, and what doesn't.
 
@@ -26,11 +26,11 @@ The top-level landing page at `https://youcoded.ai/` sends a visit and cumulativ
 
 Attribution uses an owner-registered source/campaign pair from the link and a referring hostname, never the full referring URL or other query parameters. Invalid or unregistered pairs are untagged. Website analytics do not send message content, app device hashes, account identifiers, inferred visitor platform, or geography. Hosting and security providers still process network requests and may keep operational logs under their own policies; this is not a promise of no server logs.
 
-Each page creates a random identifier in JavaScript memory. It is transmitted for initial admission, but the server stores only a secret-keyed HMAC-derived page key, not the raw random identifier. An opaque server capability lets the same open page update its cumulative counts without double-counting retries. This correlates updates from that page, including across midnight, but does not identify returning visitors across reloads or tabs. Reloading creates a new identifier; restoring the same document from the browser's back/forward cache retains the same visit. No website journey identifier is saved in cookies, localStorage, sessionStorage, or a URL.
+Each page creates a random identifier in JavaScript memory. It is transmitted for initial admission, but the server stores only a secret-keyed HMAC-derived page key, not the raw random identifier. An opaque server capability lets the same open page update its cumulative counts without double-counting retries. This correlates updates from that page, including across midnight, but does not identify returning visitors across reloads or tabs. Reloading the page in the same tab continues the same visit: the opaque capability (never the random identifier) is kept in that tab's sessionStorage, which the browser deletes when the tab closes, so refreshing does not count as a new visit. A new tab or a later visit starts a new, unconnected visit. Restoring the same document from the browser's back/forward cache also retains the same visit. No website journey identifier is saved in cookies, localStorage, or a URL. One visit counts at most five installer-link clicks.
 
 All website visitor analytics records in the active database — daily aggregates, per-page deduplication snapshots, and supporting daily records — share a rolling **90 UTC-date history including today**. Scheduled cleanup removes expired records; outages can delay physical deletion. Reports and updates independently enforce the retained window. Cloudflare backups/Time Travel and operational logs have separate retention. Cloudflare documents a Time Travel recovery window of 7 days on Workers Free and 30 days on Workers Paid; see [Cloudflare D1 limits](https://developers.cloudflare.com/d1/platform/limits/). The 90-day active-database window does not promise instantaneous deletion from backups or operational logs. Owner-created campaign configuration is retained separately so shared links continue to work; it is not visitor history.
 
-The website has no visitor preference or opt-out control. Blocking scripts or requests, connection failures, bots, and collection limits affect coverage. Counts describe accepted page snapshots, not every person who visits. The app's analytics opt-out remains separate and is described in Section 3.1.
+Anyone can stop their own browser from being counted by opening `https://youcoded.ai/?me` once; this saves a single "do not count this browser" flag in that browser's localStorage and nothing else (`https://youcoded.ai/?me=off` removes it). The site owner uses it to keep their own visits out of the numbers. Blocking scripts or requests, connection failures, bots, and collection limits affect coverage. Counts describe accepted page snapshots, not every person who visits. The app's analytics opt-out remains separate and is described in Section 3.1.
 
 ---
 
@@ -53,7 +53,7 @@ If you discover a code path that contradicts any of the above, treat it as a pri
 
 ### 3.1 Privacy-preserving device analytics (opt-out)
 
-**What it is:** A daily heartbeat ping from each device that has the app open at least once that day, telling YouCoded *which version* of the app is in active use *on roughly how many devices* in *which countries and regions*. That's the entire purpose. It is a daily-attendance counter — there are no session counts, no message counts, no plugin usage events, no in-app behavior tracking. The device hash is a stable pseudonymous identifier, not an anonymous one: it lets us recognize the same device without receiving its raw hardware ID.
+**What it is:** A daily heartbeat ping from each device that has the app open at least once that day, telling YouCoded *which version* of the app is in active use *on roughly how many devices* in *which countries and regions*. That's the entire purpose. It is a daily-attendance counter — there are no session counts, no message counts, no plugin usage events, no in-app behavior tracking. Two further messages are sent at most once each (see below). The device hash is a stable pseudonymous identifier, not an anonymous one: it lets us recognize the same device without receiving its raw hardware ID.
 
 **What we send:**
 
@@ -61,6 +61,12 @@ If you discover a code path that contradicts any of the above, treat it as a pri
 - The installed app version (e.g. `1.3.0`).
 - The platform (`desktop` or `android`).
 - On desktop, the OS family (`win`, `mac`, or `linux`). Android omits this.
+- On computers that YouCoded's own developers mark as a *team device*, a `team` flag, so their use is left out of the counts.
+
+**Two one-time messages:**
+
+- **Setup progress, on a new install only.** Once each, with the same hash, version and platform: that the app was opened for the first time, that setup finished, that a first message was sent, and — if a setup step failed — that step's name (for example `node`). Never the error text, file paths or anything you typed. Installs from before this was added never send them.
+- **Turning analytics off.** When you switch the toggle off, the app sends one last notice saying so, with the version and platform but **without** the device hash, and then nothing more.
 
 **What our server adds (server-side, from your IP at request time):**
 

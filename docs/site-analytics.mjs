@@ -1,7 +1,25 @@
-// Website-only protocol. No identifier escapes this document's memory except in requests.
+// Website-only protocol. The random page identifier never leaves this document's memory except in
+// requests; only the server's opaque capability is kept, per tab, so a reload continues the visit.
 const TARGETS = ['Windows', 'macOS', 'Linux', 'Android'];
 const empty = () => ({ Windows: 0, macOS: 0, Linux: 0, Android: 0 });
+// WHY a "don't count me" flag (analytics deck D-4, 2026-10-31): the owner's own
+// visits and download tests were counted as real interest. Opening /?me once sets
+// it for that browser (/?me=off clears it); it holds no identifier, only "skip".
+export const ME_KEY = 'youcoded-analytics-me';
+export function noteMe(win) {
+  try {
+    const params = new URL(win.location.href).searchParams;
+    if (!params.has('me')) return;
+    if (params.get('me') === 'off') win.localStorage.removeItem(ME_KEY); else win.localStorage.setItem(ME_KEY, '1');
+    params.delete('me');
+    const query = params.toString();
+    win.history?.replaceState?.(null, '', win.location.pathname + (query ? '?' + query : '') + win.location.hash);
+  } catch { /* storage blocked: the visit simply counts */ }
+}
 export function eligible(win) {
+  try {
+    if (win.localStorage?.getItem(ME_KEY) === '1') return false;
+  } catch { /* storage blocked: treat as an ordinary visitor */ }
   try { return win.self === win.top && win.location.origin === 'https://youcoded.ai' && win.location.pathname === '/'; } catch { return false; }
 }
 function label(value) {
@@ -40,10 +58,18 @@ export function installerTarget(key, href) {
     return keys[key];
   } catch { return null; }
 }
-export function createAnalytics({ fetch, crypto, href, referrer, clock = { now: Date.now, setTimeout: globalThis.setTimeout.bind(globalThis), clearTimeout: globalThis.clearTimeout.bind(globalThis) } }) {
+// WHY `tab` (deck D-4): a reload in the same tab used to start a new visit, so one person
+// refreshing five times read as five visits. The server's opaque capability (never the
+// random page identifier) is kept in that tab's sessionStorage, which the browser deletes
+// when the tab closes, and a reload continues the same visit instead of starting one.
+const TAB_KEY = 'youcoded-site-visit';
+export const MAX_CLICKS_PER_VISIT = 5;
+export function createAnalytics({ fetch, crypto, href, referrer, tab = null, clock = { now: Date.now, setTimeout: globalThis.setTimeout.bind(globalThis), clearTimeout: globalThis.clearTimeout.bind(globalThis) } }) {
   let stopped = false, nonce, capability, current = { instructions: false, downloads: empty() };
   let revision = 0, sentRevision = -1, attempts = 0, job = null, timer = null, active = null, token = 0;
   const createdAt = Math.floor(clock.now() / 1000), attribution = metadata(href, referrer);
+  let resumed = null;
+  try { const saved = tab?.getItem(TAB_KEY); if (typeof saved === 'string' && saved.length > 0 && saved.length <= 256) resumed = saved; } catch { /* no tab storage */ }
   function cancelTimer() { if (timer !== null) clock.clearTimeout(timer); timer = null; }
   function stop() {
     stopped = true; cancelTimer(); token++;
@@ -79,12 +105,14 @@ export function createAnalytics({ fetch, crypto, href, referrer, clock = { now: 
     const result = await Promise.race([response, deadline]);
     if (myToken !== token || stopped) return;
     clock.clearTimeout(deadlineId); active = null;
+    // A kept capability the server no longer accepts (expired): forget it so the next page load starts fresh.
+    if ([403, 410].includes(result.status) && !request.start) { try { tab?.removeItem(TAB_KEY); } catch { /* ignore */ } }
     if ([403, 404, 410, 429].includes(result.status)) { stop(); return; }
     const valid = result.status === 200 && (request.start
       ? result.data?.version === 1 && typeof result.data.capability === 'string' && result.data.capability.length > 0 && result.data.capability.length <= 256 && result.data.attribution && typeof result.data.attribution === 'object'
       : result.data?.ok === true);
     if (valid) {
-      if (request.start) { capability = result.data.capability; nonce = null; }
+      if (request.start) { capability = result.data.capability; nonce = null; try { tab?.setItem(TAB_KEY, capability); } catch { /* no tab storage: reloads count again */ } }
       sentRevision = request.revision; job = null;
       if (revision > sentRevision) schedule();
     } else if (request.retries < 2) { request.retries++; schedule(500 * request.retries); }
@@ -92,11 +120,12 @@ export function createAnalytics({ fetch, crypto, href, referrer, clock = { now: 
     else { job = null; sentRevision = request.revision; if (revision > sentRevision) schedule(); }
   }
   try {
-    if (!stopped) { nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join(''); void send().catch(stop); }
+    if (!stopped && resumed) { capability = resumed; sentRevision = revision; }
+    else if (!stopped) { nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join(''); void send().catch(stop); }
   } catch { stop(); }
   return Object.freeze({
     instructions() { if (!stopped && !current.instructions) { current.instructions = true; revision++; schedule(); } },
-    download(target) { if (!stopped && TARGETS.includes(target) && Object.values(current.downloads).reduce((a, b) => a + b, 0) < 100) { current.downloads[target]++; revision++; schedule(); } },
+    download(target) { if (!stopped && TARGETS.includes(target) && Object.values(current.downloads).reduce((a, b) => a + b, 0) < MAX_CLICKS_PER_VISIT) { current.downloads[target]++; revision++; schedule(); } },
     flush() { if (!stopped && !active && !job) { cancelTimer(); void send().catch(stop); } },
     stop,
   });
