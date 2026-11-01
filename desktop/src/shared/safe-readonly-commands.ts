@@ -36,12 +36,14 @@ export interface ReadOnlyVerdict {
   usesGit: boolean;
   /** Every plain word in the line (for the caller's path checks). */
   words: string[];
+  /** Some part walks the folder it is given with no folder named: judged from the shell's own folder too. */
+  readsFromCwd: boolean;
   /** Some part reads the CONTENTS of whole folders (grep -r, rg, diff -r, git grep --no-index): a folder that
    *  contains the credential folders (home, /) must ask, even though no credential file is named. */
   readsFolders: boolean;
 }
 
-const NOT_SAFE: ReadOnlyVerdict = { safe: false, usesGit: false, words: [], readsFolders: false };
+const NOT_SAFE: ReadOnlyVerdict = { safe: false, usesGit: false, words: [], readsFolders: false, readsFromCwd: false };
 export const MAX_READONLY_LENGTH = 2000;
 
 // ── lexer ───────────────────────────────────────────────────────────────────
@@ -302,9 +304,9 @@ const SPECS: Record<string, Spec | 'free'> = {
   // WHY diff is on the list but not -X/--exclude-from: that reads a file of patterns.
   diff: {
     // WHY no -l: it pipes the output through `pr`, a second program found on PATH.
-    short: 'uciqrswbBiyEaNTZ', shortArg: 'UCxIF',
+    short: 'uciqswbBiyEaNTZ', shortArg: 'UCxIF', // no -r: recursion follows links inside the folders (see grep)
     long: {
-      ...L('brief recursive report-identical-files ignore-all-space ignore-space-change ignore-blank-lines ignore-case side-by-side expand-tabs text new-file minimal strip-trailing-cr show-c-function speed-large-files initial-tab'),
+      ...L('brief report-identical-files ignore-all-space ignore-space-change ignore-blank-lines ignore-case side-by-side expand-tabs text new-file minimal strip-trailing-cr show-c-function speed-large-files initial-tab'),
       ...L('exclude ignore-matching-lines label width', 'r'),
       ...L('unified context color', 'o'),
     },
@@ -331,19 +333,19 @@ const SPECS: Record<string, Spec | 'free'> = {
   expr: 'free',
   // WHY seq's numbers are kept small in segmentCheck: `seq 1 99999999999` never finishes.
   seq: { short: 'w', shortArg: 'sf', long: { ...L('equal-width'), ...L('separator format', 'r') } },
-  test: 'free',
-  '[': 'free',
 };
 
 const GREP_LONG: Record<string, Arity> = {
   ...L('extended-regexp fixed-strings basic-regexp perl-regexp ignore-case no-ignore-case invert-match word-regexp line-regexp count ' +
     'files-without-match files-with-matches only-matching quiet silent no-messages byte-offset with-filename no-filename line-number ' +
-    'initial-tab null null-data text recursive dereference-recursive line-buffered binary unix-byte-offsets'),
+    'initial-tab null null-data text recursive line-buffered binary unix-byte-offsets'),
   ...L('color colour', 'o'),
-  ...L('label binary-files directories exclude exclude-dir include regexp file max-count after-context before-context context', 'r'),
+  ...L('label binary-files exclude exclude-dir include regexp file max-count after-context before-context context', 'r'),
 };
 const GREP: Spec = {
-  short: 'EFGPiyvwxcLlosqbHhnTZzaIUrRuV', shortArg: 'efmABC', numeric: true, long: GREP_LONG,
+  // WHY no -R/--dereference-recursive: they follow symlinks found INSIDE the folder, so a link in a downloaded project
+  // can lead a recursive search into ~/.aws without the typed folder ever naming it. -r does not follow them.
+  short: 'EFGPiyvwxcLlosqbHhnTZzaIUrV', shortArg: 'efmABC', numeric: true, long: GREP_LONG,
 };
 SPECS.grep = GREP; SPECS.egrep = GREP; SPECS.fgrep = GREP;
 
@@ -352,14 +354,15 @@ SPECS.grep = GREP; SPECS.egrep = GREP; SPECS.fgrep = GREP;
 // WHY each omission: --pre/--pre-glob RUN a program on every file; --hostname-bin runs one; -z/--search-zip call
 // decompressors; --no-config would be harmless but unlisted. -f/--file reads a pattern file (fine) — kept.
 SPECS.rg = {
-  short: 'iSswxvFnNHIcloLqauUhbPV0',
+  // WHY no -L/--follow on rg: it follows links found inside the folders it searches (see grep above).
+  short: 'iSswxvFnNHIcloqauUhbPV0',
   shortArg: 'eftTgABCmjdrME',
   numeric: true,
   long: {
     ...L('ignore-case smart-case case-sensitive word-regexp line-regexp invert-match fixed-strings line-number no-line-number ' +
       'with-filename no-filename count count-matches files-with-matches files-without-match only-matching quiet hidden no-ignore ' +
       'no-ignore-vcs no-ignore-parent no-ignore-dot no-ignore-global text multiline multiline-dotall null heading no-heading pretty json ' +
-      'stats files type-list sort-files follow column vimgrep trim no-messages binary pcre2 passthru crlf line-buffered block-buffered unrestricted ' +
+      'stats files type-list sort-files column vimgrep trim no-messages binary pcre2 passthru crlf line-buffered block-buffered unrestricted ' +
       'no-binary one-file-system'),
     ...L('color regexp file glob iglob type type-not after-context before-context context max-count max-depth replace threads max-filesize ' +
       'max-columns encoding sort sortr ignore-file', 'r'),
@@ -395,6 +398,16 @@ function findMatches(args: string[]): boolean {
 // WHY not general sed: the `w` command writes files, `e` runs programs, -i edits in place (Claude Code CVE-2025-66032
 // used the `e` flag). Codex allows exactly this idiom; so do we.
 const SED_PRINT = /^(?:\d+(?:,\d+)?|\$)p$/;
+// ── test / [ ───────────────────────────────────────────────────────────────
+// WHY not free text (red team 2026-10-31): `test -v 'a[$(cmd)]'` and numeric comparisons evaluate their operand as
+// arithmetic, which RUNS a command substitution hidden in a quoted word. So only file tests and plain words are
+// accepted: operands may hold nothing but plain characters, and -v, -R, -o, -a and the number comparisons are out.
+const TEST_OK_OPERAND = /^[A-Za-z0-9_.\/:=,@%+^~-]*$/;
+const TEST_REFUSED = new Set(['-v', '-R', '-o', '-a', '-eq', '-ne', '-lt', '-le', '-gt', '-ge', '-nt', '-ot', '-ef', '(', ')', '!', '[', ']', '\\(', '\\)']);
+function testMatches(args: string[]): boolean {
+  return args.length <= 6 && args.every((a) => TEST_OK_OPERAND.test(a) && !TEST_REFUSED.has(a));
+}
+
 function sedMatches(args: string[]): boolean {
   if (args.length < 2) return false;
   if (args[0] !== '-n' && args[0] !== '--quiet' && args[0] !== '--silent') return false;
@@ -406,7 +419,7 @@ function sedMatches(args: string[]): boolean {
 // WHY: `printf -v name` stores into a shell variable; the first word must be the format, not a flag.
 function printfMatches(args: string[]): boolean {
   // WHY a width of thousands is refused: `%2000000000s` would make gigabytes of output.
-  return args.length > 0 && !args[0].startsWith('-') && !/%[-+ #0]*\d{4,}/.test(args[0]);
+  return args.length > 0 && !args[0].startsWith('-') && !/%[-+ #0]*\d{4,}/.test(args[0]) && !/%[-+ #0-9.]*\*/.test(args[0]);
 }
 
 // ── `X --version` and friends ───────────────────────────────────────────────
@@ -545,18 +558,18 @@ function programName(word: string): string | null {
   return /^[A-Za-z0-9_\[.-]+$/.test(word) && !word.includes('/') ? word : null;
 }
 
-function segmentIsReadOnly(words: string[]): { ok: boolean; git: boolean; folders: boolean } {
+function segmentIsReadOnly(words: string[]): { ok: boolean; git: boolean; folders: boolean; cwd: boolean } {
   const r = segmentCheck(words);
-  return { ...r, folders: r.ok && readsFolderContents(words) };
+  const walks = r.ok && readsFolderContents(words);
+  // WHY every git command counts: `git diff ~ ../x` outside a repo silently becomes a folder-to-folder compare.
+  return { ...r, folders: r.ok && (walks || r.git), cwd: walks };
 }
 
 function readsFolderContents(words: string[]): boolean {
   const name = words[0];
   const args = words.slice(1);
   if (name === 'rg') return true;
-  if (name === 'grep' || name === 'egrep' || name === 'fgrep') return args.some((a) => /^-[A-Za-z0-9]*[rR]/.test(a) && !a.startsWith('--') || a === '--recursive' || a === '--dereference-recursive');
-  if (name === 'diff') return args.some((a) => /^-[A-Za-z]*r/.test(a) && !a.startsWith('--') || a === '--recursive');
-  if (name === 'git') return args.includes('grep') && args.includes('--no-index');
+  if (name === 'grep' || name === 'egrep' || name === 'fgrep') return args.some((a) => /^-[A-Za-z0-9]*r/.test(a) && !a.startsWith('--') || a === '--recursive');
   return false;
 }
 
@@ -568,11 +581,13 @@ function segmentCheck(words: string[]): { ok: boolean; git: boolean } {
   if (VERSION_TOOLS.has(name) && args.length === 1 && args[0] === '--version') return { ok: true, git: false };
   if (name === 'find') return { ok: findMatches(args), git: false };
   if (name === 'sed') return { ok: sedMatches(args), git: false };
-  if (name === 'seq' && args.some((a) => /\d{7,}/.test(a))) return { ok: false, git: false };
+  if (name === 'test') return { ok: testMatches(args), git: false };
+  // WHY plain small numbers only: exponents (1e9), hex and long digits all make output that never ends.
+  if (name === 'seq' && args.some((a) => !a.startsWith('-') && !/^\d{1,6}(\.\d{1,3})?$/.test(a))) return { ok: false, git: false };
   if (name === 'printf') return { ok: printfMatches(args), git: false };
   if (name === '[') {
     // `[ … ]` must end with its closing bracket
-    return { ok: args.length >= 1 && args[args.length - 1] === ']', git: false };
+    return { ok: args.length >= 1 && args[args.length - 1] === ']' && testMatches(args.slice(0, -1)), git: false };
   }
   if (!Object.prototype.hasOwnProperty.call(SPECS, name)) return { ok: false, git: false };
   const spec = SPECS[name];
@@ -588,15 +603,17 @@ export function readOnlyVerdict(command: string, opts?: { powershell?: boolean }
   if (!segments) return NOT_SAFE;
   let usesGit = false;
   let readsFolders = false;
+  let readsFromCwd = false;
   const words: string[] = [];
   for (const seg of segments) {
     const r = segmentIsReadOnly(seg);
     if (!r.ok) return NOT_SAFE;
     if (r.git) usesGit = true;
     if (r.folders) readsFolders = true;
+    if (r.cwd) readsFromCwd = true;
     words.push(...seg);
   }
-  return { safe: true, usesGit, words, readsFolders };
+  return { safe: true, usesGit, words, readsFolders, readsFromCwd };
 }
 
 // ── what Settings tells the person ──────────────────────────────────────────
@@ -617,5 +634,5 @@ export const READONLY_COMMAND_GROUPS: ReadonlyArray<{ title: string; commands: s
 
 /** Names of every program that can run with no flags beyond its table — for the parity test. */
 export function readOnlyProgramNames(): string[] {
-  return [...Object.keys(SPECS), 'find', 'sed', 'printf', 'git', ...VERSION_TOOLS];
+  return [...Object.keys(SPECS), 'find', 'sed', 'printf', 'test', '[', 'git', ...VERSION_TOOLS];
 }

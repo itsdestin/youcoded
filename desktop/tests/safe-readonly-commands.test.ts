@@ -28,7 +28,7 @@ const ALLOWED: string[] = [
   'readlink -f x', 'realpath src', 'basename /a/b.txt', 'dirname /a/b.txt', 'pwd', 'pwd -P',
   'sort a.txt', 'sort -u -k 2 a.txt', 'sort -t , -k2 -n a.txt', 'sort -r -n a.txt', 'uniq -c a.txt', 'uniq -c',
   'cut -d , -f 1 a.csv', 'cut -f1,3 a.tsv', 'paste -s a.txt', 'tr a-z A-Z', 'tr -d x', 'fold -w 80 a.txt',
-  'column -t a.txt', 'comm -12 a b', 'cmp a b', 'diff a b', 'diff -u a b', 'diff -r -q d1 d2',
+  'column -t a.txt', 'comm -12 a b', 'cmp a b', 'diff a b', 'diff -u a b', 'diff -q d1 d2',
   'md5sum a.txt', 'sha256sum a.txt b.txt', 'base64 a.txt', 'base64 -d a.b64', 'od -c a.bin', 'hexdump -C a.bin',
   'strings a.bin', 'strings -n 8 a.bin',
   'whoami', 'id', 'id -u', 'uname -a', 'hostname', 'date', 'date -u', "date '+%Y-%m-%d'", 'date +%s', 'nproc', 'arch', 'uptime',
@@ -96,8 +96,8 @@ const HOSTILE: Record<string, string[]> = {
     'git blame --contents /etc/shadow a', 'git rev-list --exec x', 'git diff -O/etc/passwd', 'git log --output=/dev/null', 'git stash show --output=x',
     "git 'push'", 'git -- log', 'git log --unified=x --output=y', 'git show-ref --tags --output=x', 'git for-each-ref --shell', 'git describe --dirty=x --exec',
   ],
-  rg: ['rg --pre sh x', 'rg --pre=sh x', 'rg --pre-glob=* x', 'rg --pr sh x', 'rg -z x', 'rg --search-zip x', 'rg --hostname-bin=sh x', 'rg --hostname-bin sh', 'rg --no-config x', 'rg --generate man', 'rg --debug x', 'rg --pre', 'rg --PRE=sh x', 'rg -zn x'],
-  grep: ['grep --exclude-from=x y', 'grep -D skip', 'grep --unknown x', 'grep -X x', 'grep --binary-file=x y'],
+  rg: ['rg --follow x .', 'rg -L x .', 'rg -uuL x', 'rg --pre sh x', 'rg --pre=sh x', 'rg --pre-glob=* x', 'rg --pr sh x', 'rg -z x', 'rg --search-zip x', 'rg --hostname-bin=sh x', 'rg --hostname-bin sh', 'rg --no-config x', 'rg --generate man', 'rg --debug x', 'rg --pre', 'rg --PRE=sh x', 'rg -zn x'],
+  grep: ['grep --directories=recurse x ~', 'grep --directories recurse x ~', 'grep -d recurse x ~', 'grep -R x .', 'grep -rR x .', 'grep --dereference-recursive x .', 'grep --exclude-from=x y', 'grep -D skip', 'grep --unknown x', 'grep -X x', 'grep --binary-file=x y'],
   cat: ['cat -o x', 'cat --output=x', 'cat > out', 'cat >> out', 'cat < in', 'cat <<EOF'],
   tail: ['tail -f x', 'tail -F x', 'tail --follow x', 'tail --follow=name x', 'tail -f', 'tail -fn1 x', 'tail --pid=1 x', 'tail --retry x', 'tail -s 1 x', 'tail --sleep-interval=1 x'],
   head: ['head --follow x', 'head -f x', 'head -o x'],
@@ -105,7 +105,7 @@ const HOSTILE: Record<string, string[]> = {
   hostname: ['hostname newname', 'hostname -F file', 'hostname -b x', 'hostname -s'],
   base64: ['base64 -o out a', 'base64 --output=out a', 'base64 -oout a', 'base64 -i in', 'base64 --out=x a', 'base64 -o'],
   file: ['file -C', 'file -m magic x', 'file --magic-file=m x', 'file -f list', 'file --files-from=l', 'file -z x', 'file -Z x', 'file -C -m x', 'file --compile'],
-  diff: ['diff -l a b', 'diff -ul a b', 'diff --paginate a b', 'diff -X ex a b', 'diff --exclude-from=ex a b', 'diff --to-file=x', 'diff --output=x a b', 'diff -o x a b', 'diff -D x a b'],
+  diff: ['diff -r d1 d2', 'diff -rq d1 d2', 'diff --recursive d1 d2', 'diff -l a b', 'diff -ul a b', 'diff --paginate a b', 'diff -X ex a b', 'diff --exclude-from=ex a b', 'diff --to-file=x', 'diff --output=x a b', 'diff -o x a b', 'diff -D x a b'],
   du: ['du --files0-from=list', 'du -X ex', 'du --exclude-from=ex', 'du --files0=x', 'du -o x'],
   df: ['df --sync', 'df --output=x', 'df -y'],
   free: ['free -s 1', 'free --seconds=1', 'free -c 3', 'free --count=3'],
@@ -114,9 +114,12 @@ const HOSTILE: Record<string, string[]> = {
   wc: ['wc --files0-from=x', 'wc --files0-from x'],
   md5sum: ['md5sum -c sums', 'md5sum --check sums', 'sha256sum -c x', 'sha256sum --check=x', 'cksum --check x'],
   echo: ['echo hi > out', 'echo hi >> out', 'echo $(id)', 'echo `id`', 'echo $HOME', 'echo ${HOME}', 'echo $((1+1))', 'echo hi &', 'echo hi > /etc/passwd', 'echo hi 2>out', 'echo hi >&2', 'echo >/dev/nullx', 'echo <(ls)', 'echo >(ls)'],
-  printf: ['printf %2000000000s x', 'printf %99999d 1', 'printf -v x hi', 'printf', 'printf -- hi'],
-  seq: ['seq --foo 3', 'seq -o x 3', 'seq 1 99999999999', 'seq 99999999 1'],
-  test: ['test -f a ; rm a', '[ -f a', '[ -f a ] ; rm a'],
+  printf: ["printf '%*d' 2000000000 1", "printf '%.*f' 999999999 1", "printf '%0*d' 2000000000 1", 'printf %2000000000s x', 'printf %99999d 1', 'printf -v x hi', 'printf', 'printf -- hi'],
+  seq: ['seq 1 1e9', 'seq 1e100', 'seq 0x10', 'seq 1 99999999', 'seq 1 2 3 x', 'seq --foo 3', 'seq -o x 3', 'seq 1 99999999999', 'seq 99999999 1'],
+  test: [
+    "test -v 'a[$(touch x)]'", "[ -v 'a[$(touch x)]' ]", "test -R 'a[$(id)]'", "[ 'a[$(id)]' -eq 1 ]", "test 'a[$(id)]' -eq 1", "test x -gt '$(id)'", 'test -n "$(id)"', "test -o x", "test x -a y", "test ! -f x",
+    "[ -f '$HOME' ]", "[ -f x`id` ]", "test -f 'a b$IFS'", "[ -f x", "[ ] ]", 'test -f a b c d e f g h',
+    'test -f a ; rm a', '[ -f a', '[ -f a ] ; rm a'],
   tr: ['tr a b c', 'tr -o x', 'tr a'.replace('a', 'a b c')],
   strings: ['strings -o2 x'.replace('-o2', '--output=x'), 'strings --unknown x'],
   od: ['od -N', 'od --output=x a', 'od -z', 'od -j'],
@@ -324,9 +327,9 @@ describe('pathsAreNotSecret', () => {
 describe('folder-reading commands pointed at a folder that holds the credential folders', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-folders-'));
   it('are flagged by the parser', () => {
-    for (const c of ['grep -r x ~', 'grep -rn x /', 'grep -R x .', 'rg x ~', 'rg x', 'diff -r a b', 'git grep --no-index x', 'egrep --recursive x d', 'grep --dereference-recursive x d'])
+    for (const c of ['grep -r x ~', 'grep -rn x /', 'rg x ~', 'rg x', 'git grep --no-index x', 'git diff ~ ../x', 'git status', 'egrep --recursive x d'])
       expect(readOnlyVerdict(c).readsFolders, c).toBe(true);
-    for (const c of ['ls -R ~', 'du -sh ~', 'cat a', 'grep x a', 'find ~ -name x', 'git grep x'])
+    for (const c of ['ls -R ~', 'du -sh ~', 'cat a', 'grep x a', 'find ~ -name x'])
       expect(readOnlyVerdict(c).readsFolders, c).toBe(false);
   });
   it('ask when a named folder contains home or its credential folders', () => {
@@ -337,6 +340,17 @@ describe('folder-reading commands pointed at a folder that holds the credential 
   it('a project folder is fine, and so is listing home by name only', () => {
     expect(pathsAreNotSecret(['grep', '-r', 'x', '.'], tmp, true)).toBe(true);
     expect(pathsAreNotSecret(['ls', '~'], tmp, false)).toBe(true);
+  });
+});
+
+describe('git diff pointed at folders outside the project (red team)', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-gd-'));
+  it('asks when a named folder holds the credential folders', () => {
+    expect(pathsAreNotSecret(['git', 'diff', '~', '../../empty'], tmp, true, false)).toBe(false);
+    expect(pathsAreNotSecret(['git', 'diff', '../..', '../../empty'], tmp, true, false)).toBe(false);
+  });
+  it('a project git command with no folder named stays quiet even when the shell sits in home', () => {
+    expect(pathsAreNotSecret(['git', 'status'], os.homedir(), true, false)).toBe(true);
   });
 });
 
@@ -417,7 +431,20 @@ describe('git repositories that read commands could be turned against', () => {
     expect(await gitSettingsRunNothing(d)).toBe(false);
   });
   it('a partial clone (fetches missing files from its remote) asks', () => {
-    for (const k of ['remote.origin.promisor', 'remote.origin.partialclonefilter', 'remote.origin.uploadpack', 'extensions.partialclone', 'url.x.insteadOf', 'http.proxy'])
+    for (const k of ['remote.origin.promisor', 'remote.origin.partialclonefilter', 'remote.origin.uploadpack', 'extensions.partialclone', 'url.x.insteadOf', 'http.proxy', 'pretty.x', 'format.pretty'])
       expect(configRunsPrograms([[k, 'x']]), k).toBe(true);
+  });
+});
+
+describe('nested repositories carry their own settings', () => {
+  const git = (cwd: string, ...a: string[]) => execFileSync('git', ['-c', 'protocol.file.allow=always', '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, stdio: 'pipe' });
+  it('a checked-out submodule whose config names a helper program makes git ask', async () => {
+    const inner = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-inner-')); git(inner, 'init', '-q'); fs.writeFileSync(path.join(inner, 'f'), 'x'); git(inner, 'add', 'f'); git(inner, 'commit', '-q', '-m', 'm');
+    const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-outer-')); git(outer, 'init', '-q');
+    git(outer, 'submodule', 'add', '-q', inner, 'sub'); git(outer, 'commit', '-q', '-m', 's');
+    expect(await gitSettingsRunNothing(outer)).toBe(true);
+    const cfgDir = fs.readFileSync(path.join(outer, 'sub', '.git'), 'utf8').replace('gitdir:', '').trim();
+    fs.appendFileSync(path.join(path.resolve(path.join(outer, 'sub'), cfgDir), 'config'), '[core]\n\tfsmonitor = /tmp/evil\n');
+    expect(await gitSettingsRunNothing(outer)).toBe(false);
   });
 });

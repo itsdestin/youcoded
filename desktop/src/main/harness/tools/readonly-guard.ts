@@ -73,14 +73,14 @@ function pathIsClean(pathVar: string | undefined = process.env.PATH): boolean {
   return pathVar.split(path.delimiter).every((e) => e !== '' && e !== '.' && path.isAbsolute(e));
 }
 
-export function pathsAreNotSecret(words: string[], cwd: string, readsFolders = false): boolean {
+export function pathsAreNotSecret(words: string[], cwd: string, readsFolders = false, readsFromCwd = false): boolean {
   if (words.length > MAX_WORDS_CHECKED) return false;
   // WHY: `grep -r x ~` never names a secret file, yet reads every one below home. Judged for folder-reading
   // commands only, so `ls ~` and `du -sh /` stay quiet. Every word is tried, so `rg x -- /` is caught too.
   if (readsFolders) {
     for (const w of words) if (containsCredentialFolders(w, cwd)) return false;
     // No folder named at all means the shell's own folder, which holds them only if it is home or above.
-    if (containsCredentialFolders('.', cwd)) return false;
+    if (readsFromCwd && containsCredentialFolders('.', cwd)) return false;
   }
   for (const raw of words) {
     // `--flag=value`: judge the value too (`--file=.env`), and the bare word itself.
@@ -99,7 +99,7 @@ export function pathsAreNotSecret(words: string[], cwd: string, readsFolders = f
 // Settings that make a read-only git command launch something, or reach elsewhere.
 // Keys are lower-cased section.name (git lower-cases both; a subsection keeps its case).
 const RUNS_PROGRAMS = [
-  /^core\.(fsmonitor|pager|sshcommand|gitproxy|hookspath|askpass|alternaterefscommand|attributesfile|editor|worktree)$/,
+  /^core\.(fsmonitor|pager|sshcommand|gitproxy|hookspath|askpass|alternaterefscommand|attributesfile|editor)$/,
   /^diff\.external$/,
   /^diff\..*\.(textconv|command|binary)$/,
   /^(include|includeif)\./,
@@ -113,6 +113,9 @@ const RUNS_PROGRAMS = [
   /^pager\./,
   /^alias\./,
   /^extensions\./,
+  // A saved log format that includes the signature placeholders makes git run gpg on every signed commit.
+  /^pretty\./,
+  /^format\.pretty$/,
   // A partial clone fetches missing files from its remote the moment a read command needs one: network, plus the
   // remote's helper programs.
   /^remote\..*\.(promisor|partialclonefilter|uploadpack|receivepack|vcs|proxy)$/,
@@ -137,13 +140,14 @@ export function configRunsPrograms(entries: Array<[string, string]>): boolean {
 }
 
 /** The git folder(s) a command run in `startDir` would read settings from, or null if none is found. */
-async function findGitDirs(startDir: string): Promise<string[] | null> {
+async function findGitDirs(startDir: string, rootOut?: { root?: string }): Promise<string[] | null> {
   const exists = (p: string) => fs.promises.lstat(p).then((s) => s, () => null);
   let dir = path.resolve(startDir);
   for (let hops = 0; hops < 64; hops++) {
     const dotGit = path.join(dir, '.git');
     const st = await exists(dotGit);
     if (st) {
+      if (rootOut) rootOut.root = dir;
       if (st.isDirectory()) return [dotGit];
       // A `.git` FILE points at the real folder (worktrees, submodules). Follow it, plus its shared parent.
       let text: string;
@@ -175,9 +179,33 @@ const READ_TRIGGERED_HOOKS = ['post-index-change', 'reference-transaction', 'fsm
 /** True only when the repo found from `startDir` has settings that run nothing. No repo found → true
  *  (git itself will just say "not a git repository"). Anything unreadable → false (ask). */
 export async function gitSettingsRunNothing(startDir: string): Promise<boolean> {
-  const dirs = await findGitDirs(startDir);
+  const rootOut: { root?: string } = {};
+  const dirs = await findGitDirs(startDir, rootOut);
   if (dirs === null) return true;
   if (dirs.length === 0) return false;
+  if (!(await gitDirsRunNothing(dirs))) return false;
+  // Nested repositories (git "submodule" links) have their OWN settings, and `git status` runs inside them. A zip or
+  // tar download can carry one with a helper program in it (red team 2026-10-31). Find them from the index.
+  if (rootOut.root) {
+    let out: string;
+    try {
+      // The overrides keep git itself from running anything while we merely ask it to list files.
+      const r = await execFileAsync('git', ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/nonexistent', '--no-optional-locks', 'ls-files', '-s', '-z'],
+        { cwd: rootOut.root, timeout: 10_000, maxBuffer: 8 * 1024 * 1024 });
+      out = r.stdout;
+    } catch { return false; }
+    const links = out.split('\0').filter((r) => r.startsWith('160000 ')).map((r) => r.slice(r.indexOf('\t') + 1));
+    if (links.length > 50) return false;
+    for (const rel of links) {
+      const nested = await findGitDirs(path.join(rootOut.root, rel));
+      if (nested === null) continue; // not checked out: nothing to run
+      if (nested.length === 0 || !(await gitDirsRunNothing(nested))) return false;
+    }
+  }
+  return true;
+}
+
+async function gitDirsRunNothing(dirs: string[]): Promise<boolean> {
   for (const gd of dirs) {
     for (const hook of READ_TRIGGERED_HOOKS) {
       if (await fs.promises.lstat(path.join(gd, 'hooks', hook)).then(() => true, () => false)) return false;
@@ -207,7 +235,7 @@ export async function readOnlyChecksFor(subject: string, here: string, powershel
   const v = readOnlyVerdict(subject, { powershell });
   if (!v.safe) return undefined;
   return {
-    pathsOk: pathIsClean() && pathsAreNotSecret(v.words, here, v.readsFolders),
+    pathsOk: pathIsClean() && pathsAreNotSecret(v.words, here, v.readsFolders, v.readsFromCwd),
     gitOk: v.usesGit ? await gitSettingsRunNothing(here) : true,
   };
 }
