@@ -1108,7 +1108,8 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
       return !def || def.desktopOnly || def.remoteAllowed === false;
     });
     expect(notServed).toEqual([]);
-  });
+    // WHY 120 s: the first import of the whole channel table is slow on a loaded machine (timed out at 30 s under load).
+  }, 120_000);
 });
 
 // (The native:usage-report channel + its four-surface parity net were removed in

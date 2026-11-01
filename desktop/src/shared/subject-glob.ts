@@ -7,6 +7,7 @@
 // `*` also matches the empty string, so a bare "git push" matches "git push*".
 import type { PermissionRule } from './permission-types';
 import { CODE_RUNNING_CORPUS, HOSTILE_CORPUS } from './bash-hostile-corpus';
+import { riskyVariant } from './bash-risky-variants';
 
 /** Escape a literal run of a pattern for a RegExp, keeping `?` as one character. */
 function globLiteral(text: string): string {
@@ -95,7 +96,16 @@ export function ruleMatches(rule: PermissionRule, subject: string, context: Matc
   // before an entry joined CODE_RUNNING_CORPUS (an old "Any node command") stops
   // working instead of keeping its reach; the user is simply asked again. Grants
   // covering the destructive families are NOT voided — see bash-hostile-corpus.ts.
-  return !grantRunsAnyCode(pattern);
+  if (grantRunsAnyCode(pattern)) return false;
+  // SAFETY RULE 5 (2026-10-31, audit finding 10) — a wildcard grant never covers
+  // the RISKY form of a command. "Any curl command" was meant as downloading, but
+  // the same words also matched a curl that uploads; "Any npm install command"
+  // also matched packages running their own setup scripts. Checked here, at
+  // decision time, so grants saved earlier are narrowed too (they keep covering
+  // the safe forms and simply ask for the risky ones). Also refuses commands that
+  // start with a variable assignment or contain text the shell fills in later.
+  // An EXACT grant returned above and is unaffected: it names one string.
+  return riskyVariant(subject, pattern) === null;
 }
 
 /** Safety rules 1–3 for a wildcard Bash allow grant: everything ruleMatches

@@ -211,6 +211,7 @@ describe('settings.json has one reader and one writer', () => {
     'claude-settings.ts': 'the module itself',
     'sync-service.ts': 'copies the file into the sync space by path — never parses or edits it',
     'sync-state.ts': 'checks whether the file exists by path',
+    'harness/tools/protected-config.ts': 'lists the path so the assistant must ask before changing it — never reads or parses it',
   };
   // WHY the look-behind: only Claude's own file, named exactly "settings.json". Other stores whose
   // names merely end in it (Office's office-editor-settings.json, its yc-settings.json route) are

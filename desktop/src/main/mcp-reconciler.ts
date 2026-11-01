@@ -197,7 +197,8 @@ async function writeClaudeJsonAtomic(data: ClaudeJson): Promise<void> {
   // `<file>.<pid>.tmp` was safe only because the write was synchronous. Now two reconciles in one
   // process (launch + a plugin install) can overlap, and a shared temp name would make the second
   // rename fail. The result on disk is the same: the old whole file or the new whole file.
-  await atomicWrite(CLAUDE_JSON, JSON.stringify(data, null, 2));
+  // 0600: this file holds decrypted MCP env vars and headers (security hardening 2026-10-30).
+  await atomicWrite(CLAUDE_JSON, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
 /** Convert a manifest entry to the shape Claude Code expects in .claude.json. */

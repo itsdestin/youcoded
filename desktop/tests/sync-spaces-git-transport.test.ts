@@ -290,7 +290,7 @@ describe('GitTransport specifics', () => {
     const h = await makeHarness();
     const a = await h.makeDeviceSpace();
     // Force a gc every 2nd call so we don't need 50 iterations.
-    const t = new GitTransport({ deviceName: 'T', gcInterval: 2 });
+    const t = new GitTransport({ deviceName: 'T', gcInterval: 2, unsafeRepoForTests: true });
     const gitDir = path.join(a.root, '.youcoded', 'sync.git');
     const counterFile = path.join(a.root, '.youcoded', 'gc-counter');
     const packDir = path.join(gitDir, 'objects', 'pack');
@@ -482,7 +482,8 @@ describe('GitTransport specifics', () => {
     fs.writeFileSync(hookPath, '#!/bin/sh\necho "simulated-disk-hiccup: pre-commit refused" >&2\nexit 1\n');
     fs.chmodSync(hookPath, 0o755);
     fs.writeFileSync(path.join(a.root, 'two.md'), 'second');
-    const err = await h.transport.push(a, 'x').catch((e) => e);
+    // unsafeRepoForTests: this test PLANTS a hook, which the hardened transport deliberately ignores.
+    const err = await new GitTransport({ deviceName: 'T', unsafeRepoForTests: true }).push(a, 'x').catch((e) => e);
     expect(err).toBeInstanceOf(Error);
     // NOT the coded corruption path — proves this is the generic branch.
     expect(err.syncErrorCode).toBeUndefined();
@@ -609,7 +610,8 @@ describe('credentialedGitInvocation', () => {
     // any stale system helper.
     expect(inv.args.slice(0, 4)).toEqual([
       '-c', 'credential.helper=',
-      '-c', `credential.helper=${GIT_CREDENTIAL_HELPER}`,
+      // Scoped to github.com only (security hardening): no other host is ever offered the token.
+      '-c', `credential.https://github.com.helper=${GIT_CREDENTIAL_HELPER}`,
     ]);
     expect(inv.args.join(' ')).not.toContain(TOKEN);
     expect(inv.env.YOUCODED_GIT_TOKEN).toBe(TOKEN);
@@ -1104,7 +1106,7 @@ describe('GitTransport downloads', () => {
     const h = await makeHarness();
     const a = await h.makeDeviceSpace();
     gitIn(a, STALL);
-    const t = new GitTransport({ deviceName: 'T', fetchIdleMs: 300 });
+    const t = new GitTransport({ deviceName: 'T', fetchIdleMs: 300, unsafeRepoForTests: true });
     const r = await (t as any).fetchOrigin(a);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toMatch(/fetch stopped: no data/);
@@ -1140,7 +1142,7 @@ describe('GitTransport downloads', () => {
     await h.transport.push(b, 'b moves on');                 // remote is now ahead of a
     fs.writeFileSync(path.join(a.root, 'a2.md'), 'more from a');
     gitIn(a, STALL);
-    const t = new GitTransport({ deviceName: 'T', fetchIdleMs: 300 });
+    const t = new GitTransport({ deviceName: 'T', fetchIdleMs: 300, unsafeRepoForTests: true });
     await expect(t.push(a, 'while stalled')).resolves.toMatchObject({ pushed: false, contacted: false });
     gitIn(a, ['config', '--unset', 'remote.origin.uploadpack']);
     // WHY use the normal transport after removing the fault: a healthy Windows fetch

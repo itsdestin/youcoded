@@ -1,0 +1,3 @@
+{"type":"user_message","text":"install the date library"}
+{"type":"tool_use","id":"grant-npm-install","name":"Bash","input":{"command":"npm install date-fns","description":"Install date-fns"}}
+{"type":"permission_request","tool_use_id":"grant-npm-install","requestId":"native-grant-npm-install","denyListed":false,"permissionMode":"ask"}

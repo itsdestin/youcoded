@@ -511,6 +511,24 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
     await engine.stop();
   });
 
+  it('SECURITY: a failed pre-sync check (public repo) stops the cycle before any pull or push, and surfaces its code', async () => {
+    const t = fakeTransport();
+    const err: any = new Error('Sync is paused because the GitHub repository "x" is public');
+    err.syncErrorCode = 'repo-public';
+    const verifyBeforeSync = vi.fn(async () => { throw err; });
+    const events: SpaceSyncEvent[] = [];
+    const engine = new SpaceSyncEngine(t, { debounceMs: 50, pollMs: 0, onEvent: e => events.push(e), verifyBeforeSync });
+    const space: SyncSpace = { id: 'personal', kind: 'personal', root: tmp };
+    await engine.addSpace(space);
+    await engine.syncSpace(space);
+    expect(t.pulls.length).toBe(0);
+    expect(t.pushes.length).toBe(0);
+    const e = events.find(x => x.type === 'error') as any;
+    expect(e.errorCode).toBe('repo-public');
+    expect(events.some(x => x.type === 'synced')).toBe(false);
+    await engine.stop();
+  });
+
   it('self-heals: provisioning failure surfaces VERBATIM each cycle until it succeeds', async () => {
     const t = fakeTransport();
     let provisioned = false;

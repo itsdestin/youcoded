@@ -66,6 +66,7 @@ const FLOOR_NOTES: Record<FloorStop, string> = {
   // Admin-password design (2026-09-25): an admin command always asks, and the
   // password card follows the Yes, so the note says so rather than surprising.
   admin: "Always asks: this runs with full control of your computer. You'll type your password next",
+  'protected-config': "Always asks: this changes a file that controls what the assistant is allowed to do",
 };
 
 /** Full auto's band for a floor the deny-list has no family for. */
@@ -76,6 +77,7 @@ const FLOOR_COPY: Record<FloorStop, { header: string; subline: string }> = {
   'secret-path': { header: 'Stopped before using a secret file', subline: `${SUBLINE_BASE} — this uses a file that holds passwords or keys.` },
   'secret-maybe': { header: 'Stopped at a possible secret file', subline: `${SUBLINE_BASE} — this could read a file that holds passwords or keys.` },
   admin: { header: HEADERS.admin, subline: `${SUBLINE_BASE} — ${CLAUSES.admin}` },
+  'protected-config': { header: 'Stopped before changing safety settings', subline: `${SUBLINE_BASE} — this changes a file that controls what the assistant is allowed to do.` },
 };
 
 export function floorAskNote(floorStop: FloorStop): string {
