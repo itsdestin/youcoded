@@ -240,6 +240,32 @@ describe("analytics-service setup milestones and the opt-out notice", () => {
     await vi.waitFor(() => expect(to("/app/milestone").map((c) => c.body.milestone).sort()).toEqual(["first_open", "setup_failed_node"]));
   });
 
+  it("switching analytics off while setup steps are sending stays off", async () => {
+    let release: () => void = () => {};
+    const svc = await importFresh();
+    await svc.runAnalyticsOnLaunch(); // fresh install: first_open goes out
+    await vi.waitFor(() => expect(to("/app/milestone")).toHaveLength(1));
+    globalThis.fetch = vi.fn((url: string) => new Promise((resolve) => {
+      release = () => resolve(new Response("{}", { status: 200 }));
+      if (!String(url).endsWith("/app/milestone")) release();
+    })) as any;
+    svc.noteMilestone("first_message");
+    await vi.waitFor(() => expect((globalThis.fetch as any).mock.calls.length).toBeGreaterThan(0));
+    svc.setOptIn(false);
+    release();
+    await vi.waitFor(() => expect(JSON.parse(fs.readFileSync(STATE_FILE, "utf8")).milestones.first_message).toBe(true));
+    expect(JSON.parse(fs.readFileSync(STATE_FILE, "utf8")).optIn).toBe(false);
+  });
+
+  it("a damaged analytics file is treated as an existing install, never a new one", async () => {
+    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+    fs.writeFileSync(STATE_FILE, "{not json");
+    const svc = await importFresh();
+    await svc.runAnalyticsOnLaunch();
+    expect(to("/app/heartbeat")).toHaveLength(1);
+    expect(to("/app/milestone")).toHaveLength(0);
+  });
+
   it("turning analytics off sends one notice without the device hash, once", async () => {
     writeExisting({ optIn: true, lastPingedDate: "1970-01-01" });
     const svc = await importFresh();

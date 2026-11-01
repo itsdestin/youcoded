@@ -104,9 +104,12 @@ function readState(): AnalyticsState | null {
       milestones: parsed.milestones && typeof parsed.milestones === "object" ? { ...parsed.milestones } : undefined,
       optOutReported: parsed.optOutReported === true ? true : undefined,
     };
-  } catch {
-    // null = no readable file: a fresh install (see milestones below).
-    return null;
+  } catch (e) {
+    // null ONLY when the file does not exist — a fresh install (see milestones
+    // below). A file that exists but cannot be read or parsed is an existing
+    // install with a damaged file: it must never be mistaken for a new one.
+    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    return { ...defaultState(), milestones: { baseline: true } };
   }
 }
 
@@ -231,9 +234,9 @@ async function flushMilestones(): Promise<void> {
       if (!known || known.baseline || analyticsSuppression() !== null) return;
       const owed = Object.keys(known).filter((k) => known![k] === false);
       if (owed.length === 0) return;
-      let state: AnalyticsState;
-      try { state = JSON.parse(await fs.promises.readFile(ANALYTICS_FILE, "utf8")); } catch { return; }
-      if (!state.optIn) return;
+      const read = async (): Promise<AnalyticsState | null> => { try { return JSON.parse(await fs.promises.readFile(ANALYTICS_FILE, "utf8")); } catch { return null; } };
+      const before = await read();
+      if (!before?.optIn) return;
       // WHY wait for the daily run's hash: computing it here would call
       // node-machine-id (a synchronous child process) from a chat send.
       const hash = cachedHash;
@@ -250,8 +253,13 @@ async function flushMilestones(): Promise<void> {
         });
         if (ok) known[milestone] = true;
       }
-      state.milestones = { ...known };
-      await fs.promises.writeFile(ANALYTICS_FILE, JSON.stringify(state, null, 2));
+      // WHY re-read after the network: the owner may have switched analytics off,
+      // or the daily check-in may have saved its date, while these were sending.
+      // Only the milestone record is ours to change; everything else is kept as is.
+      const latest = await read();
+      if (!latest) return;
+      latest.milestones = { ...known };
+      await fs.promises.writeFile(ANALYTICS_FILE, JSON.stringify(latest, null, 2));
     } catch {
       // Analytics never surfaces an error; owed milestones retry on the next daily run.
     } finally {
@@ -303,6 +311,7 @@ export async function runAnalyticsOnLaunch(): Promise<void> {
     });
     if (ok) {
       // Re-read: a milestone flush may have written the file meanwhile.
+      // (Read from disk, so a switch-off made while this was sending is kept.)
       const fresh = readState() ?? state;
       fresh.lastPingedDate = today;
       fresh.milestones = known ?? fresh.milestones;

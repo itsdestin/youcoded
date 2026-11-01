@@ -96,19 +96,25 @@ test('a reload in the same tab continues the visit instead of starting a new one
   const tab = memoryStorage();
   const first = rig(undefined, tab); await first.tick(0);
   assert.equal(first.calls[0].url.endsWith('/start'), true);
-  assert.equal(tab.data.get('youcoded-site-visit'), 'opaque');
+  assert.equal(JSON.parse(tab.data.get('youcoded-site-visit')).c, 'opaque');
   assert.equal(JSON.stringify([...tab.data.values()]).includes(first.calls[0].body.nonce), false);
+  first.client.download('macOS'); await first.tick(250);
   const reload = rig(undefined, tab); await reload.tick(1000);
   assert.equal(reload.calls.length, 0);
+  // A second click on the same installer after the reload still adds to the visit.
   reload.client.download('macOS'); await reload.tick(250);
   assert.equal(reload.calls[0].url.endsWith('/update'), true);
   assert.equal(reload.calls[0].body.capability, 'opaque');
+  assert.equal(reload.calls[0].body.downloads.macOS, 2);
 });
-test('an expired kept visit is forgotten so the next page load starts fresh', async () => {
-  const tab = memoryStorage({ 'youcoded-site-visit': 'old' });
-  const r = rig(() => Promise.resolve({ status: 410 }), tab); await r.tick(0);
-  r.client.download('Linux'); await r.tick(250);
-  assert.equal(tab.data.has('youcoded-site-visit'), false);
+test('an expired kept visit starts a new visit carrying only this page load', async () => {
+  const tab = memoryStorage({ 'youcoded-site-visit': JSON.stringify({ c: 'old', i: true, d: { Windows: 2, macOS: 0, Linux: 0, Android: 0 } }) });
+  const r = rig(n => n === 1 ? Promise.resolve({ status: 410 }) : undefined, tab); await r.tick(0);
+  r.client.download('Linux'); await r.tick(2000);
+  assert.equal(r.calls[0].url.endsWith('/update'), true);
+  assert.equal(r.calls[1].url.endsWith('/start'), true);
+  assert.deepEqual(r.calls[1].body.downloads, { Windows: 0, macOS: 0, Linux: 1, Android: 0 });
+  assert.equal(JSON.parse(tab.data.get('youcoded-site-visit')).c, 'opaque');
 });
 test('opening /?me stops this browser counting, /?me=off restores it, and the address is cleaned', () => {
   const local = memoryStorage(); let replaced = null;

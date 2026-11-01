@@ -285,7 +285,8 @@ const sessionEntries: MainChannelDef[] = [
         o.liveFacts?.noteInput(sessionId, text);
         // A submitted line (Enter) is a sent message: the setup staircase's last step (deck U-2).
         // One in-memory check after the first time — this runs at typing speed.
-        if (typeof text === 'string' && text.includes('\r') && text.trim().length > 0) noteMilestone('first_message');
+        // A bare answer to a terminal prompt (Enter, a menu number, y/n) is not a message.
+        if (typeof text === 'string' && text.includes('\r') && !/^\s*(\d{1,2}|y|n|yes|no)?\s*$/i.test(text)) noteMilestone('first_message');
         o.screens?.noteInput(sessionId, text);
         // The write was accepted, so the computer "received" this send: a phone that lost its connection right after can learn that (R5-4b).
         if (sendId !== undefined) ctx.runtime?.records.noteSend(sessionId, sendId);
