@@ -85,6 +85,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // Scrolls first: the backup warning at the top of the modes card (backup-warning-1) pushed the
   // folder rows below the fold at 1440×900.
   { ...settings('settings/assistant/permissions#folder-open-hover', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 3 }, 'youcoded /home/destin/youcoded-dev/youcoded 7 ▸', { do: 'hover', target: { role: 'button', label: 'youcoded /home/destin/youcoded-dev/youcoded 7 ▾' } }] },
+  // "Commands that never ask": the closed fold opened, to show the plain-words list (2026-10-31).
+  { ...settings('settings/assistant/permissions#never-ask-open', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 2 }, 'Look-only commands Used in Ask first and Auto edit. Checking things ne'] },
   settings('settings/assistant/permissions/skip-confirm', 'dialog'),
   settings('settings/assistant/specialists', 'dialog'),
   // error-notices-1 (2026-10-12): a setting that couldn't load (one line + Retry), and a
