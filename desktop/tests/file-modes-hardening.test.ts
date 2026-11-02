@@ -55,8 +55,8 @@ describe.skipIf(!posix)('desktop.log is owner-only', () => {
       const { log, rotateLog } = await import('../src/main/logger');
       log('INFO', 'T', 'hello');
       const logPath = path.join(home, '.claude', 'desktop.log');
-      // WHY: wait for the log file to appear instead of guessing a delay (flaky on a busy machine).
-      await vi.waitFor(() => expect(mode(logPath)).toBe(0o600));
+      await vi.waitFor(() => expect(fs.existsSync(logPath)).toBe(true)); // WHY: wait for the write, not a guess
+      expect(mode(logPath)).toBe(0o600);
       fs.chmodSync(logPath, 0o644);
       await rotateLog();
       expect(mode(logPath)).toBe(0o600);

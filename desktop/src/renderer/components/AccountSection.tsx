@@ -341,6 +341,8 @@ function SignedInBody({
   // MarketplaceApiClient.logout). Show that something is happening and prevent a
   // double-click while the request is in flight.
   const [signingOut, setSigningOut] = useState(false);
+  const [signingOutAll, setSigningOutAll] = useState(false);
+  const [signOutAllError, setSignOutAllError] = useState<string | null>(null);
 
   // Blocked users — fetched once when the popup opens (SignedInBody mounts on
   // open). null while loading / on error; we render nothing in either case so
@@ -464,6 +466,39 @@ function SignedInBody({
               {signingOut ? 'Signing out…' : 'Sign out'}
             </Button>
           </div>
+          {/* WHY (Destin, 2026-10-31, security audit): "Sign out" only ends the sign-in on THIS device. If a
+              phone is lost, this ends it everywhere. Secondary, with the plain consequence beside it; it does
+              not sign this device out unless the server confirmed, so a failure is shown instead of hidden. */}
+          <div className="flex items-center gap-3">
+            <span className="flex-1 min-w-0 text-xs text-fg-2">
+              Lost a device? Sign out everywhere, including this one.
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={async () => {
+                setSigningOutAll(true);
+                setSignOutAllError(null);
+                try {
+                  const res = await window.claude.account.signOutAll();
+                  if (res.ok) {
+                    await signOut(); // flips this window to signed-out; the server work is already done
+                  } else {
+                    setSignOutAllError(res.status === 404
+                      ? 'The server cannot do this yet. You are still signed in everywhere.'
+                      : 'Could not reach the server, so nothing changed. You are still signed in everywhere. Try again.');
+                  }
+                } finally {
+                  setSigningOutAll(false);
+                }
+              }}
+              disabled={signingOutAll || signingOut}
+              className="shrink-0"
+            >
+              {signingOutAll ? 'Signing out…' : 'Sign out of all devices'}
+            </Button>
+          </div>
+          {signOutAllError && <FieldError as="p">{signOutAllError}</FieldError>}
         </div>
       </section>
 

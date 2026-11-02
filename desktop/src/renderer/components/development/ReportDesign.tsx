@@ -245,7 +245,9 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
       })}
       {isBug && tick({
         title: 'Recent logs', label: 'Include recent logs', checked: logs, onChange: chooseLogs,
-        hint: 'The app’s last 200 lines of activity. You can read them, and remove anything private, before sending.',
+        // WHY (Destin, 2026-10-31, security audit): the app hides known key and password shapes, but that
+        // cannot catch everything, and the ticket is public. Say so instead of implying the logs are clean.
+        hint: 'The app’s last 200 lines of activity, posted publicly. Passwords and keys it recognizes are hidden, but it can miss some, so read them and remove anything private before sending.',
       })}
       {tick({
         title: 'Screenshots or files', label: 'Finish with attachments in GitHub', checked: attachments, onChange: setAttachments,
@@ -268,7 +270,16 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
         {status && <Pill tone={status.tone}>{status.text}</Pill>}
       </div>
       <p className="text-xs text-fg-2 whitespace-pre-wrap break-words">{description.trim() || 'No description yet.'}</p>
-      <div className="text-2xs text-fg-muted pt-1 space-y-1">{foot ?? <p>This ticket will be public on GitHub.</p>}</div>
+      <div className="text-2xs text-fg-muted pt-1 space-y-1">{foot ?? <>
+        {/* WHY (Destin, 2026-10-31, security audit: "explain what they're uploading, where it's visible"). Each claim
+            is what submitIssue (main/dev-tools.ts) does: it POSTs the title and body, with the ticked error
+            details, logs and an Environment line (app version, platform, OS name and release), to
+            itsdestin/youcoded using the GitHub connection the person made; with no connection (or on the
+            attachments route) the same text is prefilled into GitHub in their browser instead. */}
+        <p>Sent: the title and description above, plus everything under “Sent with it”.</p>
+        <p>It becomes a public ticket in the itsdestin/youcoded project on GitHub, posted from your GitHub account (if the app isn’t connected to one, you finish in your browser).</p>
+        <p>Anyone on the internet can read it. Closing it doesn’t hide it, and GitHub keeps a visible history of any edits.</p>
+      </>}</div>
     </div>
   </section>;
 

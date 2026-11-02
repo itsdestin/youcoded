@@ -222,7 +222,7 @@ describe('shell:open-external channel parity', () => {
 describe('account:* channel parity', () => {
   const NEW_TYPES = [
     'account:start', 'account:poll', 'account:signed-in', 'account:user',
-    'account:refresh', 'account:sign-out', 'account:update-profile', 'account:set-handle', 'account:delete',
+    'account:refresh', 'account:sign-out', 'account:sign-out-all', 'account:update-profile', 'account:set-handle', 'account:delete',
     // Accounts Phase 2 — data export lives in the account group across all four surfaces.
     'account:export',
   ];

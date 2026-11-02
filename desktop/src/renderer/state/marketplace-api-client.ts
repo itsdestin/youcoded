@@ -164,6 +164,8 @@ export interface MarketplaceApiClient {
   deleteAccount(): Promise<void>;
   /** Invalidate the current session token server-side. */
   logout(): Promise<void>;
+  /** Invalidate EVERY session of this account server-side (POST /auth/logout-all, 204). Throws MarketplaceApiError (404 = server too old to have it). */
+  logoutAll(): Promise<void>;
   postInstall(pluginId: string): Promise<void>;
   postRating(input: PostRatingInput): Promise<{ hidden: boolean }>;
   deleteRating(pluginId: string): Promise<void>;
@@ -320,6 +322,11 @@ export function createMarketplaceApiClient(opts: {
       // AbortSignal.timeout() rejects with a TimeoutError DOMException, not an
       // AbortError — so offline sign-out is fine.
       await request("/auth/logout", { method: "POST", auth: true, signal: AbortSignal.timeout(5000) });
+    },
+    // WHY a longer bound than logout(): this is a deliberate button press whose result the person waits on and is
+    // told about, so a slow answer should still be allowed to finish; but it must not hang forever either.
+    logoutAll: async () => {
+      await request("/auth/logout-all", { method: "POST", auth: true, signal: AbortSignal.timeout(15000) });
     },
     postInstall: async (plugin_id) => {
       await request("/installs", { method: "POST", body: JSON.stringify({ plugin_id }), auth: true });

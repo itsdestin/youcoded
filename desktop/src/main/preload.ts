@@ -471,6 +471,7 @@ const IPC = {
   ACCOUNT_USER: 'account:user',
   ACCOUNT_REFRESH: 'account:refresh',
   ACCOUNT_SIGN_OUT: 'account:sign-out',
+  ACCOUNT_SIGN_OUT_ALL: 'account:sign-out-all',
   ACCOUNT_UPDATE_PROFILE: 'account:update-profile',
   ACCOUNT_SET_HANDLE: 'account:set-handle',
   ACCOUNT_DELETE: 'account:delete',
@@ -1416,6 +1417,8 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.ACCOUNT_REFRESH),
     signOut: (): Promise<void> =>
       ipcRenderer.invoke(IPC.ACCOUNT_SIGN_OUT),
+    signOutAll: (): Promise<ApiResult<void>> =>
+      ipcRenderer.invoke(IPC.ACCOUNT_SIGN_OUT_ALL),
     updateProfile: (displayName: string): Promise<ApiResult<{ display_name: string }>> =>
       ipcRenderer.invoke(IPC.ACCOUNT_UPDATE_PROFILE, { displayName }),
     setHandle: (handle: string): Promise<ApiResult<{ handle: string }>> =>

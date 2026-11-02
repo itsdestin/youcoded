@@ -48,7 +48,7 @@ describe('sign-in loopback listener', () => {
     expect(r.body).toContain('return to YouCoded');
     expect(r.body).not.toMatch(/https?:\/\/|<script|<img|<link/i);
     expect(open.secret()).toBe(SECRET);
-    // The listener closes itself right after answering; wait for the port to go dead.
+    // WHY waitFor: a fixed pause outruns a busy machine; wait until the listener has actually closed.
     await vi.waitFor(async () => expect(await refused(port)).toBe(true));
   });
 

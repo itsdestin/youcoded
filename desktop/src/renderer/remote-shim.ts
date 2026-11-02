@@ -2480,6 +2480,7 @@ export function installShim(): void {
       // Force a /auth/me round-trip; returns the fresh profile or null (401-cleared).
       refresh: (): Promise<MarketplaceUser | null> => invoke('account:refresh'),
       signOut: (): Promise<void> => invoke('account:sign-out'),
+      signOutAll: (): Promise<ApiResult<unknown>> => invoke('account:sign-out-all'),
       updateProfile: (displayName: string): Promise<ApiResult<unknown>> =>
         invoke('account:update-profile', { displayName }),
       setHandle: (handle: string): Promise<ApiResult<unknown>> =>
