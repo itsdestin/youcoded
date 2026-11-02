@@ -36,7 +36,9 @@ const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: pa
 delete env.WALKTHROUGH_KEY; delete env.ANTHROPIC_API_KEY;   // the app must get the key only by the user typing it
 // WHY the Chromium switch: release builds never open a debugging port themselves (main.ts gates
 // YOUCODED_DEVTOOLS_PORT to unpackaged builds); this lets the walk-through see the page without changing the app.
-const args = [`--remote-debugging-port=${PORT}`, ...(process.platform === 'linux' ? ['--no-sandbox'] : [])];
+// No --no-sandbox: the workflow sets the sandbox up the way the .deb installer does. (With the switch, the app's
+// keychain helper — a second copy of the app that doesn't inherit it — crashed and no key could be saved.)
+const args = [`--remote-debugging-port=${PORT}`];
 const app = spawn(exe, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
 const log = fs.createWriteStream(path.join(out, 'app.log'));
 app.stdout.pipe(log); app.stderr.pipe(log);

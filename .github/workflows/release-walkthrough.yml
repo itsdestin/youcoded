@@ -42,6 +42,8 @@ jobs:
         # (correctly) refuses to save the key — seen on the first run, 2026-11-01.
         run: |
           sudo apt-get install -y -qq gnome-keyring dbus-x11 > /dev/null
+          # The Chrome sandbox helper must be owned by root with the setuid bit — exactly what the .deb installer does.
+          sudo chown root:root app/chrome-sandbox && sudo chmod 4755 app/chrome-sandbox
           exe=$(find app -maxdepth 1 -type f -iname 'youcoded' | head -1); echo "app: $exe"
           dbus-run-session -- bash -c '
             echo -n walkthrough | gnome-keyring-daemon --unlock --components=secrets > /dev/null
