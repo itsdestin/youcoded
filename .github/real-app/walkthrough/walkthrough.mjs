@@ -26,6 +26,7 @@ const WORDS = {
   startSession: 'Start session',        // welcome screen, form open
   messageBox: 'Message your assistant', // chat input placeholder (InputBar.tsx)
   send: 'Send message',                 // its send button (InputBar.tsx aria-label)
+  attach: /^Attach/,                    // the paperclip (InputBar.tsx)
   modelMenu: 'Model',                   // the session form's model menu (model/ModelPicker.tsx aria-label)
   modelSearch: 'Search all models',     // its search box
   keySource: 'Anthropic',               // the source shown beside models of the app's own assistant (first-run.ts NATIVE_KEY_LABEL)
@@ -70,7 +71,10 @@ if (process.platform === 'linux') env.XDG_CURRENT_DESKTOP = env.XDG_CURRENT_DESK
 // YOUCODED_DEVTOOLS_PORT to unpackaged builds); this lets the walk-through see the page without changing the app.
 // No --no-sandbox: the workflow sets the sandbox up the way the .deb installer does. (With the switch, the app's
 // keychain helper — a second copy of the app that doesn't inherit it — crashed and no key could be saved.)
-const args = [`--remote-debugging-port=${PORT}`];
+// --inspect opens the app's main process to the walk-through too, used ONLY to answer the computer's own
+// "choose a file" window (a native dialog no page tool can click) with the file a user would pick.
+const INSPECT = 9339;
+const args = [`--remote-debugging-port=${PORT}`, `--inspect=${INSPECT}`];
 const log = fs.createWriteStream(path.join(out, 'app.log'));
 let app, exited = null;
 // Start the app as this user (same home folder every time, so a restart keeps what they did).
@@ -155,6 +159,18 @@ async function restart() {
   launch();
   await connect();
   await page.waitForSelector('h1, h2, button', { timeout: 60_000 });
+}
+
+// Answer the next "choose a file" window(s) with these files, as a person picking them would.
+async function answerFilePicker(paths) {
+  const list = await (await fetch(`http://127.0.0.1:${INSPECT}/json/list`)).json();
+  const ws = new WebSocket(list[0].webSocketDebuggerUrl);
+  await new Promise((ok, bad) => { ws.onopen = ok; ws.onerror = bad; });
+  const expression = `(() => { const { dialog } = process.mainModule.require('electron');
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: ${JSON.stringify(paths)} }); return 'ok'; })()`;
+  const reply = await new Promise((ok) => { ws.onmessage = (e) => ok(JSON.parse(e.data)); ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression } })); });
+  ws.close();
+  if (reply?.result?.result?.value !== 'ok') throw new Error(`could not answer the file chooser: ${JSON.stringify(reply).slice(0, 200)}`);
 }
 
 // ---- the steps -----------------------------------------------------------------------------------------------
@@ -338,6 +354,16 @@ try {
     if (await save.isVisible().catch(() => false)) await save.click(); else await page.keyboard.press('ControlOrMeta+S');
     for (let i = 0; i < 30; i++) { if (fs.readFileSync(file, 'utf8').includes('papaya')) return 'saved to disk'; await sleep(500); }
     throw new Error('the edit never reached the file on disk');
+  }, { critical: false });
+
+  await step('attach-file', 'The user attaches a file to a message and the assistant reads it', async () => {
+    const file = path.join(home, 'walkthrough-attach.txt');
+    fs.writeFileSync(file, 'The secret fruit is kumquat.\n');
+    await answerFilePicker([file]);
+    await page.getByRole('button', { name: WORDS.attach }).click();
+    await page.getByText('walkthrough-attach.txt').first().waitFor({ timeout: 15_000 });
+    // The answer is only in the attached file, never in the question.
+    return await askAndExpect('What is the secret fruit in the attached file? Answer with one word.', /kumquat/i);
   }, { critical: false });
 
   await step('close-chat', 'The user closes the chat', async () => {
