@@ -34,7 +34,8 @@ for step in range(8):
     lines = [l.rstrip() for l in screen.splitlines() if l.strip()]
     print(f'===== screen {step} =====')
     print('\n'.join(lines[-25:]) or '(nothing new)')
-    if any(s in screen for s in ('? for shortcuts', 'Try "', '>\xa0')) and step > 0:
+    flat = screen.replace(' ', '')
+    if any(s in flat for s in ('?forshortcuts', 'Try"', 'automodeon')) and step > 0:
         print('===== reached the message box =====')
         os.write(fd, b'Reply with exactly the word: pineapple\r')
         reply = read_for(fd, 40)
