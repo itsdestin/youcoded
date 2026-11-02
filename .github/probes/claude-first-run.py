@@ -37,9 +37,9 @@ for step in range(8):
     flat = screen.replace(' ', '')
     if any(s in flat for s in ('?forshortcuts', 'Try"', 'automodeon')) and step > 0:
         print('===== reached the message box =====')
-        os.write(fd, b'Reply with exactly the word: pineapple\r')
-        reply = read_for(fd, 40)
-        print('pineapple seen in reply:', 'pineapple' in reply.lower())
+        os.write(fd, b'What is six times seven? Answer with digits only.\r')  # answer (42) never appears in the question
+        reply = read_for(fd, 60)
+        print('real reply (42) arrived:', '42' in reply)
         print('\n'.join([l.rstrip() for l in reply.splitlines() if l.strip()][-15:]))
         break
     if 'usethisAPIkey' in screen.replace(' ', ''):   # the terminal drops spaces unpredictably, so compare without them
