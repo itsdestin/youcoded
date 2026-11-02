@@ -360,8 +360,10 @@ try {
   }, { critical: false });
 
   // Back to the chat for the next steps, the way a user would.
-  for (let i = 0; i < 3 && !(await page.getByPlaceholder(WORDS.messageBox).isVisible().catch(() => false)); i++) {
-    await page.keyboard.press('Escape'); await sleep(800);
+  // UNCONFIRMED (2026-11-02): Escape did not close the Word preview here; its ✕ does, so press that.
+  for (let i = 0; i < 4 && !(await page.getByPlaceholder(WORDS.messageBox).isVisible().catch(() => false)); i++) {
+    await page.getByRole('dialog').getByRole('button', { name: /^Close/ }).last().click({ timeout: 3_000 }).catch(() => {});
+    await sleep(800);
     await page.getByRole('button', { name: WORDS.backToChat }).first().click({ timeout: 3_000 }).catch(() => {});
   }
 
