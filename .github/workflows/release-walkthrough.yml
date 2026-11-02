@@ -1,6 +1,6 @@
 # Release walk-through (plan: youcoded-dev docs/active/plans/2026-11-01-real-app-testing.md, Phase 3).
 # Uses test builds only, on throwaway GitHub machines: it never tags, publishes or updates anything.
-# Slice 1: record what a brand-new user sees on the real Linux app.
+# Linux first; Windows, Mac and the phone engine follow once the Linux steps are solid.
 name: Release walk-through
 on:
   push:
@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   linux:
-    name: Linux — a new user's first look
+    name: Linux — walk-through on the real app
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,16 +35,16 @@ jobs:
           ls app | head
       - name: Install the walk-through's browser driver
         run: cd .github/real-app/walkthrough && npm i --no-save --silent playwright-core@1.64.0
-      - name: Open as a new user and record each screen
+      - name: Use the app as a brand-new user
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.YOUCODED_TEST_ANTHROPIC_KEY }}
+          WALKTHROUGH_KEY: ${{ secrets.YOUCODED_TEST_ANTHROPIC_KEY }}
         run: |
           exe=$(find app -maxdepth 1 -type f -iname 'youcoded' | head -1); echo "app: $exe"
-          xvfb-run --auto-servernum -s '-screen 0 1440x900x24' node .github/real-app/walkthrough/first-look.mjs "$PWD/$exe" "$PWD/look"
+          xvfb-run --auto-servernum -s '-screen 0 1440x900x24' node .github/real-app/walkthrough/walkthrough.mjs "$PWD/$exe" "$PWD/look"
       - name: Hide anything key-shaped before saving the recording
         # WHY: artifacts on this public repo can be downloaded; GitHub only masks the whole secret in logs.
         if: always()
         run: find look -type f \( -name '*.log' -o -name '*.json' \) -exec sed -i -E 's/sk-ant-[A-Za-z0-9_.-]+/sk-ant-[hidden]/g' {} +
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: linux-first-look, path: look/, retention-days: 7 }
+        with: { name: linux-walkthrough, path: look/, retention-days: 7 }
