@@ -44,7 +44,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
-import { isWorkbenchDocument, isWorkbenchMode, workbenchScreenFrame } from '../../workbench-mode';
+import { isWorkbenchDocument, isWorkbenchMode, workbenchPageChat, workbenchScreenFrame } from '../../workbench-mode';
+import { ChatIcon } from '../Icons';
+import { PageChatPane } from './PageChatPane';
 import { Button, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageFileEncoding, PageFilesRequest, PageFilesResult, PageHome, PageLoadFailure, PageProgramResult, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
@@ -136,6 +138,9 @@ interface PageHostProps {
   onStartSession?: (req: PageStartSessionRequest) => boolean;
   /** Page settings' Edit in chat, the same as the library's (step 1 review). */
   onEditPage?: (page: PageSummary) => void;
+  /** DESIGN STAGE (pages-finish step 3): the conversation the page's assistant pane shows. The
+   *  workbench passes the current one; the build gives each page its own. Absent = no chat button. */
+  chatSessionId?: string | null;
 }
 
 type Load =
@@ -144,10 +149,15 @@ type Load =
   | { state: 'ready'; page: PageDocument; doc: string }
   | { state: 'failed'; failure: PageLoadFailure };
 
+/** The page's assistant pane beside a page, and floating over one (step 3 design): about the buddy's
+ *  larger chat (440px), where the main chat was judged readable. */
+const PAGE_CHAT_WIDTH = 400;
+const PAGE_CHAT_FLOAT_WIDTH = 380;
+
 /** How long a page's further "Open this website?" asks are ignored after a Cancel. */
 const OPEN_QUIET_MS = 30_000;
 
-export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage, projectRoot = null, onStartSession, onEditPage }: PageHostProps) {
+export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage, projectRoot = null, onStartSession, onEditPage, chatSessionId = null }: PageHostProps) {
   // Narrow selectors (perf, 2026-09-23): only the page flags this host shows.
   const dispatch = useArtifactDispatch();
   const open = useArtifactSelector((s) => s.pageViewOpen);
@@ -290,6 +300,10 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // WHY (Destin, 2026-10-20 draft): the page list can fold down to a slim rail of glyphs so a
   // page gets the width. Session-local for the draft; persistence waits on his sign-off.
   const [railCollapsed, setRailCollapsed] = useState(false);
+  // The page's assistant (pages-finish step 3 design): which side it sits on is the layout round's
+  // question (workbenchPageChat); in the app it is closed until the band's chat button opens it.
+  const [pageChat] = useState(workbenchPageChat);
+  const [chatOpen, setChatOpen] = useState(pageChat.openOnLoad);
   // Only the confirmed first-run state replaces the rail, not loading, errors, or an open page.
   // The first-run card is about the person's OWN pages — Office alone does not count.
   const emptyPages = pageId === null && load.state === 'idle' && loaded && !failed && ownPages.length === 0;
@@ -692,6 +706,15 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     byProject.set(p.home.name, list);
   }
 
+  // The assistant shows over a page that is open and approved. On a phone it is a sheet over the page
+  // (no room beside it); on a computer, wherever the layout round puts it.
+  const showChat = open && chatOpen && !!chatSessionId && !!summary && load.state === 'ready' && !awaitingApproval;
+  const chatPlace: 'left' | 'right' | 'float' | 'sheet' = narrow ? 'sheet' : pageChat.layout;
+  const chatPane = (className: string, style?: React.CSSProperties) => showChat && summary && chatSessionId ? (
+    <PageChatPane page={summary} sessionId={chatSessionId} cwd={projectRoot ?? undefined} onClose={() => setChatOpen(false)}
+      onNewChat={() => { /* design stage: the build starts a fresh chat in the page's project */ }} className={className} {...(style ? { style } : {})} />
+  ) : null;
+
   return (
     // z-40, the same layer as Project View (they replace each other, never
     // coexist) and BELOW the Settings drawer's click-outside backdrop, so the
@@ -736,6 +759,15 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               </Button>
             </Tooltip>
           )}
+          {/* The page's assistant (step 3 design), beside the gear: every page gets it (R-which). */}
+          {summary && summary.home.kind !== 'builtin' && chatSessionId && !awaitingApproval && (
+            <Tooltip text={chatOpen ? 'Close the chat' : 'Chat about this page'} placement="bottom">
+              <Button size="icon-sm" variant="ghost" aria-label={chatOpen ? 'Close the chat' : `Chat about ${summary.name}`} aria-pressed={chatOpen}
+                className={`w-6 h-6 shrink-0 ${chatOpen ? 'bg-inset' : ''}`} onClick={() => setChatOpen((v) => !v)} style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+                <span className="text-fg-muted"><ChatIcon className="w-3.5 h-3.5" /></span>
+              </Button>
+            </Tooltip>
+          )}
         </>}
       />}
 
@@ -747,7 +779,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
             stays beside the first-run card instead of hiding. WHY panel-glass while see-through (ux review 2, U5): the list sat over
             the wallpaper unframed and names ran into tree edges; it gets the same one theme-engine glass as the page pane, and Reduced
             effects removes it the same way. */}
-        {open && !pageFocus && (!emptyPages || builtin.length > 0) && (
+        {/* WHY the list steps aside: in the left layout the chat takes the list's place, so the page keeps its width. */}
+        {open && !pageFocus && !(showChat && chatPlace === 'left') && (!emptyPages || builtin.length > 0) && (
         <aside className={`screen-pane screen-pane--panel ${railCollapsed ? 'w-12' : 'w-60'} shrink-0 relative flex flex-col select-none rounded-xl bg-canvas overflow-hidden${seeThrough ? ' panel-glass' : ''}`}>
           {/* WHY absolute when unfolded (Destin, 2026-10-20: "eliminate this empty space above Built in"):
               the toggle sits in the first group label's row instead of costing the list a row of its own. */}
@@ -811,6 +844,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           </>)}
         </aside>
         )}
+        {chatPlace === 'left' && chatPane(`screen-pane screen-pane--panel relative shrink-0 rounded-xl${seeThrough ? ' panel-glass' : ''}`, { width: PAGE_CHAT_WIDTH })}
         {/* WHY panel-glass while see-through (owner, 2026-10-05: "a glass effect kinda like marketplace or terminal"): it is the
             app's own opt-in for theme-engine's ONE glass rule (blur at the theme's --panels-blur, written only while a wallpaper is
             on and Reduced effects is off), so the page pane frosts exactly like Marketplace's surfaces and "Reduced effects" removes
@@ -866,8 +900,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               title={title}
             />
           )}
+          {chatPlace === 'float' && chatPane('layer-surface absolute right-4 bottom-4 z-10 rounded-xl', { width: PAGE_CHAT_FLOAT_WIDTH, height: '75%' })}
+          {chatPlace === 'sheet' && chatPane('layer-surface absolute inset-x-0 bottom-0 z-10 rounded-t-xl', { height: '72%' })}
           </>}
         </div>
+        {chatPlace === 'right' && chatPane(`screen-pane screen-pane--panel relative shrink-0 rounded-xl${seeThrough ? ' panel-glass' : ''}`, { width: PAGE_CHAT_WIDTH })}
       </div>
     </div>
     <PageSettingsDialog page={pageSettingsOpen ? summary : null} onClose={() => setPageSettingsOpen(false)} onConnect={() => setPageSettingsOpen(false)}

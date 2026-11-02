@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./buddy.css";
+@import "./page-chat.css"; /* WHY here: the page's assistant pane (PageChatPane.tsx), known to the design lint like every other class. */
 @import "./mascot.css";
 @import "./motion.css";
 @import "./float-chrome.css";

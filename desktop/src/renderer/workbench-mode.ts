@@ -147,6 +147,28 @@ export function workbenchScreenFrame(): ScreenFrame {
   return (SCREEN_FRAMES as readonly string[]).includes(raw) ? (raw as ScreenFrame) : 'cards';
 }
 
+/** Where an open page's assistant sits, for the step 3 layout round (pages-finish, 2026-11-02:
+ *  Destin's "a narrow chat session on one side and the live-updating page on the other"):
+ *
+ *  - `left`   the chat takes the page list's place, the page beside it (the list hides while it is open)
+ *  - `right`  the page list stays; the chat is a pane on the right, like Files beside a chat
+ *  - `float`  the page keeps the whole width; the chat is a card floating over its bottom right
+ *
+ *  `?pageChat=open` (or a layout name) also opens it on load, so a picture can show it. Outside the
+ *  workbench it is `left`, closed. */
+export type PageChatLayout = 'left' | 'right' | 'float';
+
+const PAGE_CHAT_LAYOUTS: ReadonlyArray<PageChatLayout> = ['left', 'right', 'float'];
+
+export function workbenchPageChat(): { layout: PageChatLayout; openOnLoad: boolean } {
+  if (!isWorkbenchMode()) return { layout: 'left', openOnLoad: false };
+  const raw = new URLSearchParams(location.search).get('pageChat');
+  if (raw === 'open') return { layout: 'left', openOnLoad: true };
+  return (PAGE_CHAT_LAYOUTS as readonly string[]).includes(raw ?? '')
+    ? { layout: raw as PageChatLayout, openOnLoad: true }
+    : { layout: 'left', openOnLoad: false };
+}
+
 /** Chrome-style override for reviewing a chrome layout on ANY theme, without
  *  editing that theme's manifest — `?chrome=float`.
  *

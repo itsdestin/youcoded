@@ -1,0 +1,29 @@
+/* The page's assistant pane beside an open page (PageChatPane.tsx, pages-finish step 3 design).
+   The main window's chat drawn narrow, as the buddy draws it (buddy.css): the same SPACE-only
+   shrinking, never the text, scoped to .page-chat-pane so the main chat behind the page is untouched.
+   The pane carries its own --top/--bottom-chrome-height (set on the element), which these and the
+   main .chat-scroll rules read before <html>'s. */
+.page-chat-pane {
+  background: var(--canvas);
+}
+/* Solid, with a hairline under it: text scrolling behind a see-through title read as clutter. */
+.page-chat-header {
+  background-color: var(--canvas);
+  border-bottom: 1px solid var(--edge-dim);
+}
+.page-chat-bottom {
+  padding: 0 8px 8px;
+}
+.page-chat-pane .chat-scroll {
+  padding-top: calc(var(--top-chrome-height, 40px) + 4px) !important;
+  padding-bottom: calc(var(--bottom-chrome-height, 56px) + var(--queued-strip-height, 0px) + 8px) !important;
+}
+/* Gutters 16px → 8px and bubbles nearly full width, as in the buddy: at ~400px the main window's
+   gutters and 80% caps leave a dead column. */
+.page-chat-pane .timeline-entry > .px-4,
+.page-chat-pane .chat-scroll .in-view.px-4 {
+  padding-left: 8px !important;
+  padding-right: 8px !important;
+}
+.page-chat-pane .assistant-bubble { max-width: 96% !important; }
+.page-chat-pane .user-bubble { max-width: 88% !important; }
