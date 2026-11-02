@@ -22,7 +22,8 @@ const WORDS = {
   keyBox: 'API key',                    // the key field's accessible name (first-run/ApiKeySetup.tsx)
   verify: 'Verify & Continue',          // its submit button
   skipTour: 'Skip tour',                // the buddy's first-run tour (guide/GuideBubble.tsx)
-  startSession: 'Start session',        // welcome screen
+  newSession: 'New session',            // welcome screen, form folded away
+  startSession: 'Start session',        // welcome screen, form open
   messageBox: 'Message your assistant', // chat input placeholder (InputBar.tsx)
 };
 
@@ -127,8 +128,11 @@ try {
   await step('first-chat', 'A new user starts their first session with the default choices and gets a reply', async () => {
     // The tour may or may not be showing; a new user can skip it.
     await page.getByRole('button', { name: WORDS.skipTour }).click({ timeout: 10_000 }).catch(() => {});
-    const model = await page.getByText(/·/).first().innerText().catch(() => '?');
-    await page.getByRole('button', { name: WORDS.startSession }).click();
+    // The welcome screen shows either the session form or a single button that opens it.
+    const start = page.getByRole('button', { name: WORDS.startSession });
+    if (!(await start.isVisible().catch(() => false))) await page.getByRole('button', { name: WORDS.newSession }).click({ timeout: 15_000 });
+    const model = await page.getByText(/ · /).first().innerText({ timeout: 10_000 }).catch(() => '?');
+    await start.click({ timeout: 15_000 });
     const box = page.getByPlaceholder(WORDS.messageBox);
     await box.waitFor({ timeout: 120_000 });
     // The answer (42) never appears in the question, so seeing it anywhere means a real reply arrived.
@@ -140,9 +144,14 @@ try {
 
   // Not a pass/fail step yet: record what follows, to build the next steps from.
   await recordUntilQuiet('after-first-chat', 60_000, 20_000);
-} catch { /* the failed step is already in the report */ }
+} catch {
+  // The failed step is already in the report; record what the screen does next, to see why.
+  await recordUntilQuiet('after-failure', 30_000, 15_000).catch(() => {});
+}
 finally {
   finish();
+  // The app's own log, for diagnosing a failed step (the workflow blanks key-shaped text before saving).
+  for (const f of ['.claude/desktop.log']) { try { fs.copyFileSync(path.join(home, f), path.join(out, path.basename(f))); } catch { /* not written yet */ } }
   await browser?.close().catch(() => {});
   app.kill();
 }
