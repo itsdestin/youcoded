@@ -290,7 +290,7 @@ function secretDenyReason(rawPath: string, canonical: string, cwd: string): stri
     // Separate from isSensitivePath so the file VIEWER is unaffected — see
     // credential-paths.ts.
     if (isCredentialPath(canonical, home)) {
-      return `Access to ${rawPath} is blocked: it looks like a stored credential. This cannot be overridden.`;
+      return `Access to ${rawPath} is blocked: it looks like a stored credential. This cannot be overridden. If you want help with it, paste the parts you need into the chat (without any passwords or tokens).`;
     }
   }
   return null;
