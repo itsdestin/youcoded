@@ -46,6 +46,7 @@ const WORDS = {
   filesSearch: 'Search files',
   fileListToggle: /^(Show|Hide) list$/, // the drawer's list button (SessionDrawer.tsx)          // the Files panel's search box
   projects: 'Open projects',            // header button
+  backToChat: /Back to chat/,           // Projects' way back (header)
   tipGotIt: 'Got it',                   // the buddy's tip bubble
   closeDialog: 'Close session',         // CloseSessionPrompt.tsx: its title and its confirm button
 };
@@ -339,14 +340,30 @@ try {
     throw new Error('the edit never reached the file on disk');
   }, { critical: false });
 
-  await step('office-explore', 'EXPLORING: where a user opens their own Word and spreadsheet files', async () => {
+  await step('open-spreadsheet', "The user opens their own spreadsheet from Projects and sees its cells and the formula's total", async () => {
     for (const f of ['walkthrough-groceries.xlsx', 'walkthrough-letter.docx']) fs.copyFileSync(path.join(FIXTURES, f), path.join(home, f));
     await page.keyboard.press('Escape');
     await page.getByRole('button', { name: WORDS.projects }).click();
-    await sleep(3000);
-    console.log(`      projects: ${JSON.stringify(await seen()).slice(0, 1500)}`);
-    await snap('office-explore-projects');
+    await page.getByText('walkthrough-groceries.xlsx').first().click({ timeout: 30_000 });
+    await page.getByText('tortillas', { exact: true }).first().waitFor({ timeout: 30_000 });
+    // 12 + 3 + 6: the sheet stores a SUM formula, so 21 showing means formulas are worked out, not just text.
+    await page.getByText('21', { exact: true }).first().waitFor({ timeout: 10_000 });
   }, { critical: false });
+
+  await step('open-word', 'The user opens their own Word document from Projects and sees its text', async () => {
+    await page.keyboard.press('Escape');
+    if (!(await page.getByText('walkthrough-letter.docx').first().isVisible().catch(() => false))) {
+      await page.getByRole('button', { name: WORDS.projects }).click();
+    }
+    await page.getByText('walkthrough-letter.docx').first().click({ timeout: 30_000 });
+    await page.getByText(/about pineapples/).first().waitFor({ timeout: 60_000 });
+  }, { critical: false });
+
+  // Back to the chat for the next steps, the way a user would.
+  for (let i = 0; i < 3 && !(await page.getByPlaceholder(WORDS.messageBox).isVisible().catch(() => false)); i++) {
+    await page.keyboard.press('Escape'); await sleep(800);
+    await page.getByRole('button', { name: WORDS.backToChat }).first().click({ timeout: 3_000 }).catch(() => {});
+  }
 
   await step('close-chat', 'The user closes the chat', async () => {
     // "All sessions" (the arrow beside the chat's name), then the chat row's close ✕. WHY by position: neither
