@@ -176,10 +176,13 @@ export class RemoteDeviceStore {
     device.revokedReason = 'expired';
   }
 
-  /** Sign out every device unused for 90 days. Run at startup and whenever the list is read. Returns their ids. */
-  expireStale(now = Date.now()): string[] {
+  /** Sign out every device unused for 90 days. Run at startup and whenever the list is read. Returns their ids.
+   *  WHY `connected`: a device that is connected right now is in use by definition, whatever its last-used date says
+   *  (the date only moves when it connects or disconnects), so a sweep must never sign it out. */
+  expireStale(now = Date.now(), connected?: ReadonlySet<string>): string[] {
     const out: string[] = [];
     for (const d of this.devices.values()) {
+      if (connected?.has(d.id)) continue;
       if (d.revokedAt === null && now - d.lastUsedAt > DEVICE_EXPIRY_MS) { this.expire(d, now); out.push(d.id); }
     }
     if (out.length) this.save();
@@ -196,6 +199,19 @@ export class RemoteDeviceStore {
     device.lastUsedAt = now;
     device.lastSeenAt = now;
     this.save();
+  }
+
+  /** Mark several connected devices as used now with ONE disk write (the hourly refresh and the shutdown). */
+  touchAll(deviceIds: Iterable<string>, now = Date.now()): void {
+    let changed = false;
+    for (const id of deviceIds) {
+      const device = this.devices.get(id);
+      if (!device || device.revokedAt !== null) continue;
+      device.lastUsedAt = now;
+      device.lastSeenAt = now;
+      changed = true;
+    }
+    if (changed) this.save();
   }
 
   rename(deviceId: string, name: unknown): boolean {

@@ -218,6 +218,7 @@ export class RemoteServer {
   private uploadCleanupTimer: ReturnType<typeof setInterval> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private clients = new Set<AuthenticatedClient>();
+  private lastUsedRefreshAt = Date.now();
   // Sockets that have connected but not yet authenticated. Bounded by
   // MAX_UNAUTH_SOCKETS so a flood of half-open pre-auth sockets can't exhaust
   // memory (2026-09-10 security review, #5).
@@ -608,6 +609,9 @@ export class RemoteServer {
     this.sessionManager.off('session-exit', this.onSessionExit);
     this.sessionManager.off('session-created', this.onSessionCreated);
 
+    // WHY: shutdown clears `clients` without removeClient, so connected phones were never marked as used; after an
+    // update restart on day 100 a phone that had been connected all along would have been signed out.
+    this.devices.touchAll(Array.from(this.clients, (c) => c.deviceId));
     for (const client of this.clients) {
       // WHY: stop clears clients before close events run; invalidate pending starts now.
       this.handoffRoute?.cancelOwner(`remote:${client.id}`);
@@ -666,7 +670,7 @@ export class RemoteServer {
   getDeviceList(): RemoteDeviceView[] {
     const online = new Set<string>();
     for (const c of this.clients) online.add(c.deviceId);
-    this.devices.expireStale(); // a stale device never shows in Settings, even before anyone connects
+    this.devices.expireStale(Date.now(), online); // a stale device never shows in Settings; a connected one is never stale
     return this.devices.list(online);
   }
 
@@ -1017,6 +1021,12 @@ export class RemoteServer {
   private startLiveness(): void {
     if (this.pingTimer) return;
     this.pingTimer = setInterval(() => {
+      // WHY hourly: a phone connected for months only has its last-used date moved at disconnect; a crash or power
+      // cut would otherwise leave an old date behind and the next start could sign it out.
+      if (Date.now() - this.lastUsedRefreshAt > 60 * 60 * 1000) {
+        this.lastUsedRefreshAt = Date.now();
+        this.devices.touchAll(Array.from(this.clients, (c) => c.deviceId));
+      }
       for (const client of this.clients) {
         const missed = (client.missedPings ?? 0) + 1;
         if (missed > MAX_MISSED_PINGS) {

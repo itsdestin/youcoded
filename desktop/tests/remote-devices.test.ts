@@ -195,6 +195,17 @@ describe('paired device store', () => {
       expect(store.isRevoked(fresh.deviceId)).toBe(false);
     });
 
+    it('a device that is connected right now is never signed out by a sweep, and a refresh keeps it fresh', () => {
+      const store = new RemoteDeviceStore(storePath);
+      const t0 = Date.now();
+      const online = store.pair('Always on', t0 - 100 * DAY);
+      const idle = store.pair('Idle', t0 - 100 * DAY);
+      expect(store.expireStale(t0, new Set([online.deviceId]))).toEqual([idle.deviceId]);
+      expect(store.isRevoked(online.deviceId)).toBe(false);
+      store.touchAll([online.deviceId], t0);
+      expect(store.expireStale(t0 + 80 * DAY)).toEqual([]);
+    });
+
     it('a connection that stays open counts as use when it ends', () => {
       const store = new RemoteDeviceStore(storePath);
       const t0 = Date.now();
