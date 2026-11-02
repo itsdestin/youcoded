@@ -18,7 +18,7 @@ export function browserInfo(over: Partial<BrowserInfo> = {}): BrowserInfo {
     browsers: [{ kind: 'chrome', label: 'Google Chrome', executablePath: '/usr/bin/google-chrome' }],
     chosen: { kind: 'chrome', label: 'Google Chrome', executablePath: '/usr/bin/google-chrome' },
     install: { phase: 'idle' },
-    settings: { showWindow: false, useMyChrome: false, preferredBrowser: null, alwaysAllowedSites: [], explainerSeen: true },
+    settings: { showWindow: false, useMyChrome: false, preferredBrowser: null, alwaysAllowedSites: [], alwaysAllowedFormSites: [], explainerSeen: true },
     sessionsWithTabs: 0,
     ...over,
   };

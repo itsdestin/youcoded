@@ -114,6 +114,7 @@ export class BrowserUnavailableError extends Error {
 /** Which answers each kind of card offers (BrowserAskCard.tsx). */
 const ANSWERS_BY_KIND: Record<BrowserPrompt['kind'], readonly PromptAnswer[]> = {
   site: ['allow_chat', 'allow_always', 'no'],
+  form: ['once', 'allow_always', 'no'], // WHY: "Always allow" here means forms on this site only, never the click/type list
   final: ['once', 'no'],
   local: ['allow_chat', 'no'],
   handoff: ['done', 'cant'],

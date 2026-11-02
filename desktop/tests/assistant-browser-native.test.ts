@@ -56,13 +56,13 @@ beforeAll(async () => {
     kill: () => {},
   };
   host = createBrowserHost(port, root, { forceHeadless: true, discover: async () => FOUND, cliPath: '' });
-  client = new BrowserClient({ fork: () => handle, log: diagnostics.log });
+  client = new BrowserClient({ fork: () => handle, log: diagnostics.log, modeOf: () => 'ask' });
   diagnostics.client(client);
-  // The person answers every Browser card "for this chat".
+  // The person answers every Browser card "for this chat" (a form-submit card only offers "once").
   client.on('state', (s: BrowserSessionState) => {
     if (s.prompt && !cards.includes(s.prompt.id)) {
       cards.push(s.prompt.id);
-      void client.command({ cmd: 'answer', sessionId: s.sessionId, promptId: s.prompt.id, answer: 'allow_chat' });
+      void client.command({ cmd: 'answer', sessionId: s.sessionId, promptId: s.prompt.id, answer: s.prompt.kind === 'form' ? 'once' : 'allow_chat' });
     }
   });
 }, 60_000);
@@ -106,7 +106,7 @@ describe('a native session using the Browser', () => {
     expect(texts.join('\n')).toContain('Wombat-7');
     // The session's own permission prompt never fired for a Browser tool…
     expect(sessionAsks).toEqual([]);
-    // …the Browser's cards did (home address, then click-and-type on the site).
+    // …the Browser's cards did (home address, then sending the search form — that card also covers click-and-type).
     expect(cards.length).toBe(2);
     // The screenshot came back as a picture file.
     expect(JSON.stringify(results[3].data)).toMatch(/\.jpg/);

@@ -21,6 +21,7 @@ export const DEFAULT_BROWSER_PREFERENCES: BrowserPreferences = {
   useMyChrome: false,
   preferredBrowser: null,
   alwaysAllowedSites: [],
+  alwaysAllowedFormSites: [],
   explainerSeen: false,
 };
 
@@ -32,14 +33,22 @@ export function sanitizeBrowserPreferences(raw: unknown): BrowserPreferences {
   const sites = Array.isArray(r.alwaysAllowedSites)
     ? [...new Set(r.alwaysAllowedSites.filter((s): s is string => typeof s === 'string' && isHostName(s)).map((s) => s.toLowerCase()))].slice(0, MAX_SITES)
     : [];
+  // WHY a separate list: "may click and type here" must never double as "may submit forms here".
+  const formSites = Array.isArray(r.alwaysAllowedFormSites)
+    ? [...new Set(r.alwaysAllowedFormSites.filter((s): s is string => typeof s === 'string' && isHostName(s)).map((s) => foldHost(s)))].slice(0, MAX_SITES)
+    : [];
   return {
     showWindow: typeof r.showWindow === 'boolean' ? r.showWindow : DEFAULT_BROWSER_PREFERENCES.showWindow,
     useMyChrome: typeof r.useMyChrome === 'boolean' ? r.useMyChrome : DEFAULT_BROWSER_PREFERENCES.useMyChrome,
     preferredBrowser: BROWSER_KINDS.includes(r.preferredBrowser as BrowserKind) ? r.preferredBrowser as BrowserKind : null,
     alwaysAllowedSites: sites,
+    alwaysAllowedFormSites: formSites,
     explainerSeen: typeof r.explainerSeen === 'boolean' ? r.explainerSeen : false,
   };
 }
+
+/** Lower-case and drop a leading "www." so www.example.com and example.com are one site for form asks. */
+export function foldHost(h: string): string { return h.toLowerCase().replace(/^www\./, ''); }
 
 function isHostName(s: string): boolean {
   return s.length > 0 && s.length <= 253 && /^[A-Za-z0-9.\-:[\]]+$/.test(s);
@@ -99,8 +108,19 @@ export class BrowserSettings {
     return this.write({ ...cur, alwaysAllowedSites: [...cur.alwaysAllowedSites, h] });
   }
 
-  async removeSite(host: string): Promise<BrowserPreferences> {
+  async allowFormSite(host: string): Promise<BrowserPreferences> {
     const cur = await this.read();
+    const h = foldHost(host);
+    if (cur.alwaysAllowedFormSites.includes(h)) return cur;
+    return this.write({ ...cur, alwaysAllowedFormSites: [...cur.alwaysAllowedFormSites, h] });
+  }
+
+  async removeSite(host: string, form = false): Promise<BrowserPreferences> {
+    const cur = await this.read();
+    if (form) {
+      const f = foldHost(String(host));
+      return this.write({ ...cur, alwaysAllowedFormSites: cur.alwaysAllowedFormSites.filter((s) => s !== f) });
+    }
     const h = String(host).toLowerCase();
     return this.write({ ...cur, alwaysAllowedSites: cur.alwaysAllowedSites.filter((s) => s !== h) });
   }

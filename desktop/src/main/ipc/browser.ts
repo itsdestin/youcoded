@@ -174,7 +174,7 @@ export const browserChannels: MainChannelDef[] = [
   }),
   defineChannel({
     name: IPC.BROWSER_REMOVE_SITE, kind: 'handle', desktopOnly: true,
-    handler: (payload) => getBrowserClient().command<BrowserInfo>({ cmd: 'remove-site', host: str(payload?.host, 'host') }),
+    handler: (payload) => getBrowserClient().command<BrowserInfo>({ cmd: 'remove-site', host: str(payload?.host, 'host'), form: payload?.form === true }),
   }),
   defineChannel({
     name: IPC.BROWSER_CLEAR_SIGNINS, kind: 'handle', desktopOnly: true,

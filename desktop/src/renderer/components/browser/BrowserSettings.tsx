@@ -193,6 +193,24 @@ export default function BrowserSettings() {
             </div>
           </section>
 
+          <section>
+            {/* Its own list: letting the assistant click and type on a site is not letting it send forms there. */}
+            <SectionLabel className="mb-2">Sites where it can send forms{s.alwaysAllowedFormSites.length ? <span className="ml-1 text-3xs text-fg-faint">{s.alwaysAllowedFormSites.length}</span> : null}</SectionLabel>
+            <div className={`${CARD_LEVEL_1} p-3`}>
+            {s.alwaysAllowedFormSites.length === 0 ? (
+              <p className="text-xs text-fg-muted leading-relaxed">None yet. The first time the assistant sends a form on a site, the browser asks; "Always allow" adds the site here.</p>
+            ) : (
+              <ul className="space-y-1">
+                {s.alwaysAllowedFormSites.map((h) => (
+                  <li key={h}>
+                    <SettingRow title={h} control={<Button variant="secondary" size="sm" onClick={() => void run(() => bridge().removeSite(h, true))}>Remove</Button>} />
+                  </li>
+                ))}
+              </ul>
+            )}
+            </div>
+          </section>
+
           {!s.useMyChrome && (
             <section>
               <SectionLabel className="mb-2">Saved sign-ins</SectionLabel>
