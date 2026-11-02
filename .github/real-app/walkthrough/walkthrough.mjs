@@ -21,6 +21,9 @@ const WORDS = {
   useApiKey: 'Use an API key',          // way in under it
   keyBox: 'API key',                    // the key field's accessible name (first-run/ApiKeySetup.tsx)
   verify: 'Verify & Continue',          // its submit button
+  skipTour: 'Skip tour',                // the buddy's first-run tour (guide/GuideBubble.tsx)
+  startSession: 'Start session',        // welcome screen
+  messageBox: 'Message your assistant', // chat input placeholder (InputBar.tsx)
 };
 
 const [exe, out] = process.argv.slice(2);
@@ -121,8 +124,22 @@ try {
     return (await seen()).headings[0] ?? '';
   });
 
-  // Not a pass/fail step yet: record what a newly signed-in user sees, to build the next steps from.
-  await recordUntilQuiet('after-sign-in');
+  await step('first-chat', 'A new user starts their first session with the default choices and gets a reply', async () => {
+    // The tour may or may not be showing; a new user can skip it.
+    await page.getByRole('button', { name: WORDS.skipTour }).click({ timeout: 10_000 }).catch(() => {});
+    const model = await page.getByText(/·/).first().innerText().catch(() => '?');
+    await page.getByRole('button', { name: WORDS.startSession }).click();
+    const box = page.getByPlaceholder(WORDS.messageBox);
+    await box.waitFor({ timeout: 120_000 });
+    // The answer (42) never appears in the question, so seeing it anywhere means a real reply arrived.
+    await box.fill('What is six times seven? Answer with digits only.');
+    await box.press('Enter');
+    await page.waitForFunction(() => /\b42\b/.test(document.body.innerText), null, { timeout: 180_000 });
+    return `default model shown: ${model.trim()}`;
+  });
+
+  // Not a pass/fail step yet: record what follows, to build the next steps from.
+  await recordUntilQuiet('after-first-chat', 60_000, 20_000);
 } catch { /* the failed step is already in the report */ }
 finally {
   finish();
