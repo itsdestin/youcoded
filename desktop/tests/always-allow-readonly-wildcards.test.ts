@@ -77,13 +77,13 @@ describe('wildcards are expanded and every match is judged (names that look like
   afterEach(() => { fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); });
   const quiet = async (c: string) => (await readOnlyChecksFor(c, root, false))?.pathsOk === true;
 
-  it('expands like the shell: no dot-files, folders walk on, last piece is the match', () => {
+  it('expands like the shell: no dot-files, folders walk on, last piece is the match', async () => {
     touch('a.ts'); touch('b.ts'); touch('c.md'); touch('.hidden.ts'); touch('src', 'x.ts'); touch('src', 'y.ts'); touch('src', 'deep', 'z.ts');
-    expect(expandWildcards(['*.ts'], root)!.sort()).toEqual(['a.ts', 'b.ts']);
-    expect(expandWildcards(['src/*.ts'], root)!.sort()).toEqual(['src/x.ts', 'src/y.ts']);
-    expect(expandWildcards(['*/*.ts'], root)!.sort()).toEqual(['src/x.ts', 'src/y.ts']);
-    expect(expandWildcards(['?.md'], root)).toEqual(['c.md']);
-    expect(expandWildcards(['*.zzz'], root)).toEqual([]);
+    expect((await expandWildcards(['*.ts'], root))!.sort()).toEqual(['a.ts', 'b.ts']);
+    expect((await expandWildcards(['src/*.ts'], root))!.sort()).toEqual(['src/x.ts', 'src/y.ts']);
+    expect((await expandWildcards(['*/*.ts'], root))!.sort()).toEqual(['src/x.ts', 'src/y.ts']);
+    expect((await expandWildcards(['?.md'], root))).toEqual(['c.md']);
+    expect((await expandWildcards(['*.zzz'], root))).toEqual([]);
   });
   it('an ordinary look runs quietly', async () => {
     touch('a.ts'); touch('b.ts');

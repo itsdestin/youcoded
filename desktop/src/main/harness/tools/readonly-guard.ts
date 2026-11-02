@@ -119,7 +119,7 @@ export async function searchTreeHasNoSecrets(words: string[], cwd: string): Prom
 }
 
 /** Most files a wildcard may turn into before the command simply asks (a huge match is not an everyday quiet look). */
-export const MAX_WILDCARD_MATCHES = 400;
+const MAX_WILDCARD_MATCHES = 400;
 /** Most folders read while expanding wildcards. */
 const MAX_WILDCARD_FOLDERS = 200;
 
@@ -131,7 +131,7 @@ const MAX_WILDCARD_FOLDERS = 200;
  *  ask, and all matches go through the credential/outside-project path checks in readOnlyChecksFor. The text rules
  *  already guarantee a wildcard never begins with `.`, so hidden files and folders are never matched.
  *  Returns the matched paths written the way the wildcard word was (`src/*.ts` → `src/a.ts`). */
-export function expandWildcards(globs: string[], here: string): string[] | null {
+export async function expandWildcards(globs: string[], here: string): Promise<string[] | null> {
   const out: string[] = [];
   let folders = 0;
   for (const word of globs) {
@@ -144,12 +144,12 @@ export function expandWildcards(globs: string[], here: string): string[] | null 
       for (const base of level) {
         if (!/[*?]/.test(piece)) {
           const abs = path.join(base.abs, piece);
-          if (fs.existsSync(abs)) next.push({ rel: base.rel + piece, abs });
+          if (await fs.promises.lstat(abs).then(() => true, () => false)) next.push({ rel: base.rel + piece, abs });
           continue;
         }
         if (++folders > MAX_WILDCARD_FOLDERS) return null;
         let names: string[];
-        try { names = fs.readdirSync(base.abs); } catch { continue; } // not a folder / unreadable: the shell matches nothing here
+        try { names = await fs.promises.readdir(base.abs); } catch { continue; } // not a folder / unreadable: the shell matches nothing here
         // * and ? only; the shell never lets them match a leading dot, and the text rules keep dot-pieces out anyway.
         const rx = new RegExp('^' + piece.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]') + '$');
         for (const name of names) {
@@ -159,7 +159,12 @@ export function expandWildcards(globs: string[], here: string): string[] | null 
         }
       }
       // Folders carry on with a slash; the last piece is the match itself.
-      level = last ? next : next.filter((m) => { try { return fs.statSync(m.abs).isDirectory(); } catch { return false; } }).map((m) => ({ rel: m.rel + '/', abs: m.abs }));
+      if (last) level = next;
+      else {
+        const dirs: Array<{ rel: string; abs: string }> = [];
+        for (const m of next) if (await fs.promises.stat(m.abs).then((st) => st.isDirectory(), () => false)) dirs.push({ rel: m.rel + '/', abs: m.abs });
+        level = dirs;
+      }
     }
     for (const m of level) {
       // A match that starts with `-` would be read as an option by the program: ask.
@@ -349,7 +354,7 @@ export async function readOnlyChecksFor(subject: string, here: string, powershel
   // the computer's own settings, so once the chat has changed any, nothing is quiet any more — it asks as it always did.
   if (envChanged) return { pathsOk: false, gitOk: false };
   // Q-4: wildcards are expanded against the real folder and every match is judged like a typed word.
-  const matches = v.globs.length > 0 ? expandWildcards(v.globs, here) : [];
+  const matches = v.globs.length > 0 ? await expandWildcards(v.globs, here) : [];
   return {
     pathsOk: matches !== null && pathIsClean() && pathsAreNotSecret(v.words, here, v.readsFolders, v.readsFromCwd)
       && (matches.length === 0 || pathsAreNotSecret(matches, here, false, false, MAX_WILDCARD_MATCHES))

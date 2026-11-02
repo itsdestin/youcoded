@@ -13,7 +13,7 @@
 // So this module only has to answer one narrow question: "is this path directly inside that folder".
 import type { PermissionRule } from './permission-types';
 
-export type EditGrantScope = 'exact' | 'folder';
+type EditGrantScope = 'exact' | 'folder';
 
 export interface EditGrantChoice {
   scope: EditGrantScope;
@@ -23,7 +23,7 @@ export interface EditGrantChoice {
 
 /** The tools whose approvals mean "change a file". Edit and Write travel together: a folder grant that let
  *  the assistant edit but not create files would ask again for the first new file, which is the annoyance it removes. */
-export const FILE_EDIT_TOOLS: readonly string[] = ['Edit', 'Write'];
+const FILE_EDIT_TOOLS: readonly string[] = ['Edit', 'Write'];
 export function isFileEditTool(tool: string | undefined): boolean {
   return tool !== undefined && FILE_EDIT_TOOLS.includes(tool);
 }
@@ -66,7 +66,7 @@ export function folderRulesFor(subject: string, cwd?: string): PermissionRule[] 
 }
 
 /** How the card names the folder: the typed folder as the assistant wrote it, or the project folder. */
-export function folderDisplay(subject: string): string {
+function folderDisplay(subject: string): string {
   const p = subject.replace(/\\/g, '/');
   const i = p.lastIndexOf('/');
   if (i <= 0) return i === 0 ? '/' : 'the project folder';

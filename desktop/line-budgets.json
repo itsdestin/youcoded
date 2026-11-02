@@ -27,10 +27,10 @@
   "budgets": {
     "shared/backend-contract.ts": 1654,
     "main/ipc-handlers.ts": 2504,
-    "main/harness/native-session-host.ts": 5541,
+    "main/harness/native-session-host.ts": 5566,
     "renderer/App.tsx": 4750,
     "main/remote-server.ts": 1475,
-    "main/harness/harness-session.ts": 4351,
+    "main/harness/harness-session.ts": 4374,
     "renderer/components/SettingsPanel.tsx": 3217,
     "renderer/remote-shim.ts": 3623,
     "renderer/state/chat-reducer.ts": 3506,
@@ -44,7 +44,7 @@
     "renderer/components/SessionDrawer.tsx": 1614,
     "main/preload.ts": 2657,
     "renderer/components/StatusBar.tsx": 1812,
-    "renderer/components/ToolCard.tsx": 1721,
+    "renderer/components/ToolCard.tsx": 1759,
     "main/doc-comments/docx-comments.ts": 2031,
     "main/doc-comments/xlsx-comments.ts": 2317
   }

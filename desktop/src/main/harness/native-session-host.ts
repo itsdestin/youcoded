@@ -2722,7 +2722,7 @@ export class NativeSessionHost extends EventEmitter {
         ? await readOnlyChecksFor(subject, where?.shellCwd ?? cwd, getShell().label === 'PowerShell', where?.envChanged === true) : undefined;
       const layers = { presetRules, modeRules: rulesForMode(mode), denyList: DESTRUCTIVE_DENY_LIST, rememberedRules };
       const powershell = getShell().label === 'PowerShell';
-      let decision = decidePermission(tool, subject, layers, { powershell, readOnlyChecks, cwd });
+      let decision = decidePermission(tool, subject, layers, { powershell: getShell().label === 'PowerShell', readOnlyChecks, cwd });
       // Q-1: a chain no single rule covers is still allowed when every part is (saved per-part grants, look-only list).
       // WHY here and not in decidePermission: each part's look-only file checks are async and depend on where the part
       // runs (a `cd` earlier in the chain moves the shell), so the host computes them part by part.

@@ -15,7 +15,7 @@
 // substitutions or redirects is judged whole, never split) treat the same problem.
 
 /** Most parts a chain may have before it is judged whole (a long chain is not an everyday command). */
-export const MAX_CHAIN_PARTS = 8;
+const MAX_CHAIN_PARTS = 8;
 
 // Harmless redirects removed from a part before it is judged: throw output away, or merge errors
 // into the output. The same two shapes the built-in read-only list accepts.
