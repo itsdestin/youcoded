@@ -53,9 +53,14 @@ function programName(token: string | undefined): string {
 const CURL_SENDING_LONG = [
   'data', 'data-ascii', 'data-binary', 'data-raw', 'data-urlencode', 'form', 'form-string',
   'upload-file', 'json', 'request', 'config', 'telnet-option', 'mail-from', 'mail-rcpt',
+  // Integration review 2026-11-01: these make curl read a file's text into what it sends (`--variable name@file` with an
+  // --expand-* option) or take its settings from a file; a cookie FILE is read too (see fetcherReadsOrWritesFiles).
+  'variable', 'expand-data', 'expand-url', 'expand-form', 'expand-header', 'expand-json', 'expand-request', 'expand-output', 'proxy-header',
 ];
 const WGET_SENDING_LONG = [
   'post-data', 'post-file', 'body-data', 'body-file', 'method', 'execute', 'config',
+  // A list of addresses read from a file, and cookie files read from disk.
+  'input-file', 'load-cookies',
 ];
 // Short letters that send (curl -d -F -T -K -X; wget -e). Looked for inside
 // clusters like `-sSd`.
@@ -81,7 +86,56 @@ function requestIsReadOnly(list: string[], at: number, program: 'curl' | 'wget')
   return /^(GET|HEAD)$/i.test(value ?? '');
 }
 
+/** A destination the wide grant may cover: a plain relative path that stays below where the command runs. Anything
+ *  that names another place (absolute, `~`, `..`, a variable, `-`/devices) is outside "this project" and asks. */
+function stayingInsideFolder(value: string | undefined): boolean {
+  if (value === undefined || value === '') return false;
+  if (value === '-' || /^[/\\~]|^[A-Za-z]:|\$|`|\.\.|%/.test(value)) return false;
+  return true;
+}
+
+// Options that WRITE a file (the value is where) and the ones that READ a file into the request.
+const CURL_WRITES = { short: 'oc' + 'D', long: ['output', 'output-dir', 'cookie-jar', 'dump-header', 'trace', 'trace-ascii', 'stderr', 'libcurl', 'etag-save', 'hsts', 'alt-svc'] };
+const WGET_WRITES = { short: 'OPoa', long: ['output-document', 'directory-prefix', 'output-file', 'append-output', 'save-cookies', 'save-headers-to', 'warc-file', 'rejected-log'] };
+
+/** curl/wget forms that read a file into the request or write one somewhere else (integration review 2026-11-01):
+ *  `-H @file` / `--header @file` send a file's text as a header, `-b FILE` sends a cookie file, and `-o`/`--output`
+ *  and friends can overwrite any file the person owns unless they stay below the current folder. */
+function fetcherReadsOrWritesFiles(program: 'curl' | 'wget', list: string[]): boolean {
+  const writes = program === 'curl' ? CURL_WRITES : WGET_WRITES;
+  for (let i = 1; i < list.length; i++) {
+    const t = list[i];
+    if (t === '--') break;
+    if (t.startsWith('--')) {
+      const name = t.slice(2).split('=')[0];
+      if (name === '') break;
+      const value = t.includes('=') ? t.split('=').slice(1).join('=') : list[i + 1];
+      if (program === 'curl' && ('header'.startsWith(name) || 'proxy-header'.startsWith(name)) && name.length >= 2 && /^@/.test(value ?? '')) return true;
+      if (program === 'curl' && 'cookie'.startsWith(name) && name.length >= 2 && !/=/.test(value ?? '')) return true; // a bare word is a FILE to read
+      if (writes.long.some((l) => l.startsWith(name)) && name.length >= 2 && !stayingInsideFolder(value)) return true;
+      continue;
+    }
+    if (/^-[A-Za-z0-9]/.test(t)) {
+      // Walk the cluster: letters until one takes a value (the rest of the word, else the next word).
+      const letters = t.slice(1);
+      for (let k = 0; k < letters.length; k++) {
+        const ch = letters[k];
+        const takes = program === 'curl' ? /[oHbcDKAeEuxzXmwtTFd]/.test(ch) : /[OPoaeitTUwQ]/.test(ch);
+        if (!takes) continue;
+        const value = k < letters.length - 1 ? letters.slice(k + 1) : list[i + 1];
+        if (program === 'curl' && ch === 'H' && /^@/.test(value ?? '')) return true;
+        if (program === 'curl' && ch === 'b' && !/=/.test(value ?? '')) return true;
+        if (program === 'wget' && ch === 'i') return true;
+        if (writes.short.includes(ch) && !stayingInsideFolder(value)) return true;
+        break;
+      }
+    }
+  }
+  return false;
+}
+
 function fetcherSends(program: 'curl' | 'wget', list: string[]): boolean {
+  if (fetcherReadsOrWritesFiles(program, list)) return true;
   const longs = program === 'curl' ? CURL_SENDING_LONG : WGET_SENDING_LONG;
   const shortRx = program === 'curl' ? CURL_SENDING_SHORT : WGET_SENDING_SHORT;
   for (let i = 1; i < list.length; i++) {

@@ -363,6 +363,11 @@ describe('curl and wget: downloading is not uploading', () => {
     expect(covers('curl*', 'curl -sSL https://e.com/a')).toBe(true);
     expect(covers('curl*', 'curl -X GET https://e.com/a')).toBe(true);
     expect(covers('curl*', 'curl -I https://e.com/a')).toBe(true);
+    // Saving INTO the project folder (a plain relative path) is the everyday download and stays covered.
+    expect(covers('curl*', 'curl -sSL -o out/a.zip https://e.com/a')).toBe(true);
+    expect(covers('curl*', 'curl -O https://e.com/a.zip')).toBe(true);
+    expect(covers('curl*', 'curl -H "Accept: text/html" https://e.com/a')).toBe(true);
+    expect(covers('wget*', 'wget -O a.html https://e.com/a')).toBe(true);
   });
 
   it('an exact grant for an upload still covers exactly that upload', () => {
