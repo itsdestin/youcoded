@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Phase 0 trial (docs/active/plans/2026-11-01-real-app-testing.md in youcoded-dev): can a free GitHub
-# arm64 Linux machine run the Android app's OWN bundled engine, with no phone and no emulator?
+# Morning check, phone half (plan: youcoded-dev docs/active/plans/2026-11-01-real-app-testing.md): runs the
+# Android app's OWN bundled engine on a free GitHub arm64 Linux machine — no phone, no emulator — and checks it
+# starts and answers. Proven 2026-11-01 to catch both 1.3.1–1.3.3 phone show-stoppers (ICU crash, git info/).
 #
 # WHY this works at all: the APK's programs are ordinary aarch64 musl Linux programs. Their loader path is
 # hard-coded to /data/data/<appId>/files/usr/lib (app/runtime/build-runtime.sh), so this script recreates
 # exactly the layout RuntimeInstaller.kt builds on a phone, at that same path, then runs them.
+# KEEP IN STEP with RuntimeInstaller.kt (layout + environment()) and BackendService.kt (how node is started):
+# if those change and this doesn't, this check tests a phone that no longer exists.
 #
-# Usage: android-engine.sh <apk>      Prints a PASS/FAIL line per check; exits 1 if any check failed.
+# Usage: phone-engine.sh <apk>      Prints a PASS/FAIL line per check; exits 1 if any check failed.
 set -uo pipefail
 APK=$(realpath "$1")
 WORK=$(mktemp -d)
@@ -68,6 +71,20 @@ for _ in $(seq 1 60); do
 done
 check "assistant engine starts" grep -q YOUCODED_HEADLESS_READY "$WORK/backend.log"
 grep -q YOUCODED_HEADLESS_READY "$WORK/backend.log" || tail -25 "$WORK/backend.log" | sed 's/^/      log: /'
+
+# The phone's screen talks to the engine over a local connection after signing in with the token
+# (remote-shim.ts → remote-server.ts). auth:ok means the engine is up AND answering, not just printed a line.
+answers() {
+  run "$USR/bin/node" -e '
+    const ws = new WebSocket("ws://127.0.0.1:19951");
+    const give = setTimeout(() => { console.log("no answer in 20s"); process.exit(1); }, 20000);
+    ws.onopen = () => ws.send(JSON.stringify({ type: "auth", token: process.argv[1], refillPush: true, pieces: true }));
+    ws.onmessage = (e) => { const m = JSON.parse(e.data); console.log("got", m.type);
+      if (m.type === "auth:ok") { clearTimeout(give); process.exit(0); }
+      if (m.type === "auth:failed") process.exit(1); };
+    ws.onerror = (e) => { console.log("connection error", e.message || ""); process.exit(1); };' "$TOKEN"
+}
+check "engine answers the phone's screen" answers
 kill $BPID 2>/dev/null
 
 echo "---- $FAILS check(s) failed"

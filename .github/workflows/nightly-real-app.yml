@@ -1,0 +1,78 @@
+# Morning check: does the REAL app still start? (plan: youcoded-dev docs/active/plans/2026-11-01-real-app-testing.md)
+#
+# WHY it exists: 1.3.1–1.3.3 shipped a phone app whose assistant could not start, and ~6,300 tests never noticed,
+# because none starts the finished app. This starts the builds the nightly Desktop CI run already made:
+#   - phone: the releaseTest APK's own bundled engine, on a free arm64 Linux machine (no phone, no emulator);
+#   - computer: the packaged Linux app, opened under a virtual screen until its first screen draws.
+# WHY after the nightly Desktop CI run (workflow_run), not on every change: Destin wants everyday changes to stay
+# fast (2026-11-01). It reuses that run's builds, so it adds no build time either.
+# A failure turns this run red and GitHub emails the repo owner, like the other scheduled checks.
+name: Nightly — real app starts
+on:
+  workflow_run:
+    workflows: ['Desktop CI']
+    types: [completed]
+  push:
+    branches: [session/test-suite-rethink]   # development only; remove when this lands on master
+    paths: ['.github/real-app/**', '.github/workflows/nightly-real-app.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read   # to download the nightly run's builds
+
+jobs:
+  pick:
+    # Only the scheduled nightly run — not every PR's CI run — triggers this.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'schedule'
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.p.outputs.run }}
+      sha: ${{ steps.p.outputs.sha }}
+    steps:
+      - id: p
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROM_RUN: ${{ github.event.workflow_run.id }}
+          FROM_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ -n "$FROM_RUN" ]; then run=$FROM_RUN sha=$FROM_SHA
+          else  # manual or development run: the latest scheduled nightly
+            read -r run sha < <(gh run list -R "$GITHUB_REPOSITORY" --workflow 'Desktop CI' --event schedule --limit 1 \
+              --json databaseId,headSha -q '.[0] | "\(.databaseId) \(.headSha)"')
+          fi
+          echo "Testing the builds from nightly run $run (code $sha)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "run=$run" >> "$GITHUB_OUTPUT"; echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  phone:
+    name: Phone — engine starts and answers
+    needs: pick
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: .github/real-app }
+      - name: Get the phone app the nightly run built
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: gh run download "${{ needs.pick.outputs.run }}" -R "$GITHUB_REPOSITORY" -n youcoded-releasetest -D apk
+      - name: Start its engine
+        shell: bash   # WHY: plain 'run' has no pipefail, so tee would hide a failure
+        run: bash .github/real-app/phone-engine.sh apk/*.apk | tee -a "$GITHUB_STEP_SUMMARY"
+
+  computer-linux:
+    name: Computer (Linux) — app opens and draws
+    needs: pick
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.pick.outputs.sha }}', sparse-checkout: desktop/scripts }
+      - name: Get the packaged app the nightly run built
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          gh run download "${{ needs.pick.outputs.run }}" -R "$GITHUB_REPOSITORY" -n prepared-app -D prepared
+          mkdir app && tar --zstd -xpf prepared/prepared.tar.zst -C app
+      - name: Open it and wait for its first screen
+        shell: bash
+        # smoke-test.js is the same check the release workflows run: it waits for the app's own "[smoke] ready".
+        run: |
+          xvfb-run --auto-servernum node desktop/scripts/smoke-test.js "$PWD/app" \
+            && echo 'PASS  Linux app opened and drew its first screen' | tee -a "$GITHUB_STEP_SUMMARY"
