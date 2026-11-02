@@ -40,8 +40,7 @@ const WORDS = {
   resumeOpen: /^(Resume|Open)\b/,      // a preview's open button, if the list shows one
   resumeOffered: /^Resume \d+$/,        // the "Welcome back" panel after a restart (its Resume N button)
   detailsChip: /walkthrough-tag|Add tags|tag/i, // the status-bar chip that opens the chat's details once it has a tag
-  sessionMenu: 'Walkthrough taco list', // the header's session pill, by the chat's own name
-  resumeMenuItem: 'Resume',             // the All sessions menu's entry into the Resume list (SessionStrip.tsx)
+  closeDialog: 'Close session',         // CloseSessionPrompt.tsx: its title and its confirm button
 };
 
 const [exe, out] = process.argv.slice(2);
@@ -284,27 +283,25 @@ try {
     await page.keyboard.press('Escape');
   }, { critical: false });
 
-  await step('search', 'Searching past chats finds this one by a word in its name', async () => {
-    // The arrow beside the chat's name opens "All sessions". WHY by position: that button has no name of its own
-    // until hovered (its tooltip names it only then), so neither a screen reader nor this script can find it by name.
-    const visibleNames = () => page.getByText(NAME).evaluateAll((els) => els.filter((e) => e.getClientRects().length).length);
-    const headerCount = await visibleNames();
-    await page.getByRole('button', { name: WORDS.sessionMenu }).first().locator('xpath=following::button[1]').click();
-    await page.getByRole('button', { name: WORDS.resumeMenuItem, exact: true }).first().click({ timeout: 10_000 });
+  await step('close-chat', 'The user closes the chat', async () => {
+    // "All sessions" (the arrow beside the chat's name), then the chat row's close ✕. WHY by position: neither
+    // button has a name of its own until hovered (their tooltips name them only then), so a screen reader can't
+    // find them by name either — worth fixing in the app.
+    await page.getByRole('button', { name: NAME, exact: true }).first().locator('xpath=following::button[1]').click();
+    await page.getByRole('button', { name: NAME, exact: true }).last().locator('xpath=following::button[1]').click({ timeout: 10_000 });
+    const confirm = page.getByRole('dialog', { name: WORDS.closeDialog });
+    await confirm.getByRole('button', { name: WORDS.closeDialog }).click({ timeout: 10_000 });
+    await page.getByRole('button', { name: WORDS.resume }).waitFor({ timeout: 30_000 });
+  }, { critical: false });
+
+  await step('search', 'Searching past chats finds this one by a word in its name, and not by nonsense', async () => {
+    await page.getByRole('button', { name: WORDS.resume }).click({ timeout: 10_000 });
     const search = page.getByPlaceholder(WORDS.resumeSearch).first();
-    // The chat's name also sits in the header behind the list, so count it: header + list row when found,
-    // header alone when filtered out. (The list isn't marked as a dialog, so it can't be scoped by role.)
-    const shown = () => page.getByText(NAME).evaluateAll((els) => els.filter((e) => e.getClientRects().length).length);
-    const header = headerCount;            // read before the list opened
-    let before = header;
-    for (let i = 0; i < 30 && before <= header; i++) { await sleep(500); before = await shown(); }
-    if (before <= header) throw new Error('the Resume list never showed the chat');
+    await page.getByText(NAME).first().waitFor({ timeout: 30_000 });
     await search.fill('zzzz-no-such-chat');
-    for (let i = 0; i < 20 && (await shown()) >= before; i++) await sleep(500);
-    if ((await shown()) >= before) throw new Error('a search for nonsense still listed the chat');
+    await page.getByText(NAME).first().waitFor({ state: 'hidden', timeout: 15_000 });
     await search.fill('taco');
-    for (let i = 0; i < 20 && (await shown()) < before; i++) await sleep(500);
-    if ((await shown()) < before) throw new Error('searching "taco" did not list the chat');
+    await page.getByText(NAME).first().waitFor({ timeout: 15_000 });
     await page.keyboard.press('Escape');
   }, { critical: false });
 } catch {
