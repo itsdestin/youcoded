@@ -25,6 +25,10 @@ const WORDS = {
   newSession: 'New session',            // welcome screen, form folded away
   startSession: 'Start session',        // welcome screen, form open
   messageBox: 'Message your assistant', // chat input placeholder (InputBar.tsx)
+  modelMenu: 'Model',                   // the session form's model menu (model/ModelPicker.tsx aria-label)
+  modelSearch: 'Search all models',     // its search box
+  keySource: 'Anthropic',               // the source shown beside models of the app's own assistant (first-run.ts NATIVE_KEY_LABEL)
+  approve: /^(Yes|Allow)\b/,           // a permission card's approve button
 };
 
 const [exe, out] = process.argv.slice(2);
@@ -56,7 +60,7 @@ const results = [];
 let page, browser;
 async function shot(name) { await page?.screenshot({ path: path.join(out, `${String(results.length).padStart(2, '0')}-${name}.png`) }).catch(() => {}); }
 async function snap(label) { await page?.screenshot({ path: path.join(out, `${label}.png`) }).catch(() => {}); }
-async function step(name, what, fn) {
+async function step(name, what, fn, { critical = true } = {}) {
   const t = Date.now();
   try {
     const detail = await fn();
@@ -67,7 +71,7 @@ async function step(name, what, fn) {
     results.push({ name, what, ok: false, secs: Math.round((Date.now() - t) / 1000), detail: String(e?.message ?? e).split('\n')[0] });
     console.log(`FAIL  ${what} — ${results.at(-1).detail}`);
     await shot(name + '-FAILED');
-    throw e;
+    if (critical) throw e;
   }
 }
 function finish() {
@@ -130,54 +134,71 @@ try {
     return (await seen()).headings[0] ?? '';
   });
 
-  await step('first-chat', 'A new user starts their first session with the default choices and gets a reply', async () => {
-    // The tour may or may not be showing; a new user can skip it.
-    await page.getByRole('button', { name: WORDS.skipTour }).click({ timeout: 10_000 }).catch(() => {});
-    // The welcome screen shows either the session form or a single button that opens it.
-    // WHY a settle loop: closing the tour animates the welcome screen, and a button grabbed mid-animation
-    // is gone by the time it's clicked. Wait until one of the two stays put.
+  // The welcome screen shows either the session form or a single button that opens it. WHY a settle loop:
+  // closing the tour animates the screen, and a button grabbed mid-animation is gone by the time it's clicked.
+  async function openSessionForm() {
     const start = page.getByRole('button', { name: WORDS.startSession });
-    const newSession = page.getByRole('button', { name: WORDS.newSession });
+    const fold = page.getByRole('button', { name: WORDS.newSession });
     await sleep(1500);
     for (let i = 0; i < 20; i++) {
-      if (await start.isVisible().catch(() => false)) break;
-      if (await newSession.isVisible().catch(() => false)) { await newSession.click({ timeout: 5_000 }).catch(() => {}); await sleep(1000); }
+      if (await start.isVisible().catch(() => false)) return start;
+      if (await fold.isVisible().catch(() => false)) { await fold.click({ timeout: 5_000 }).catch(() => {}); await sleep(1000); }
       else await sleep(750);
     }
-    const model = await page.getByText(/ · /).first().innerText({ timeout: 10_000 }).catch(() => '?');
-    await snap('first-chat-a-form');
-    await start.click({ timeout: 15_000 });
-    await sleep(3000); await snap('first-chat-b-after-start');
-    console.log(`      seen after Start: ${JSON.stringify(await seen().catch(() => null)).slice(0, 700)}`);
+    throw new Error('the session form never appeared');
+  }
+  // Ask, and pass only when the answer (which never appears in the question) shows up.
+  async function askAndExpect(question, answer, timeout = 180_000) {
     const box = page.getByPlaceholder(WORDS.messageBox);
-    await box.waitFor({ timeout: 120_000 });
-    // The answer (42) never appears in the question, so seeing it anywhere means a real reply arrived.
-    await box.fill('What is six times seven? Answer with digits only.');
+    await box.waitFor({ timeout: 60_000 });
+    await box.fill(question);
     await box.press('Enter');
-    await page.waitForFunction(() => /\b42\b/.test(document.body.innerText), null, { timeout: 180_000 });
-    return `default model shown: ${model.trim()}`;
+    await page.waitForFunction((a) => new RegExp(a).test(document.body.innerText), answer.source, { timeout });
+  }
+
+  // KNOWN FAILURE until the first-run fix lands (plan, Phase 3 findings): after an API-key sign-in the form
+  // defaults to Claude Code, which that route never installs, and Start silently does nothing. Not critical, so
+  // the walk-through records it and carries on.
+  await step('first-chat-default', 'A new user starts their first session with the default choices and gets a reply', async () => {
+    await page.getByRole('button', { name: WORDS.skipTour }).click({ timeout: 10_000 }).catch(() => {});
+    const start = await openSessionForm();
+    const model = await page.getByRole('button', { name: WORDS.modelMenu, exact: true }).innerText().catch(() => '?');
+    await start.click({ timeout: 15_000 });
+    await page.getByPlaceholder(WORDS.messageBox).waitFor({ timeout: 60_000 })
+      .catch(() => { throw new Error(`no chat opened after Start (default model shown: ${model.trim()})`); });
+    await askAndExpect('What is six times seven? Answer with digits only.', /\b42\b/);
+    return `default model: ${model.trim()}`;
+  }, { critical: false });
+
+  await step('first-chat-assistant', "A new user chats with the app's own assistant and gets a reply", async () => {
+    if (!(await page.getByPlaceholder(WORDS.messageBox).isVisible().catch(() => false))) {
+      const start = await openSessionForm();
+      await page.getByRole('button', { name: WORDS.modelMenu, exact: true }).click();
+      await page.getByPlaceholder(WORDS.modelSearch).fill('haiku');
+      // The app's own assistant lists models under the key's service ("Anthropic"); Claude Code's under its own name.
+      const row = page.getByRole('button', { name: /haiku/i }).filter({ hasText: WORDS.keySource }).and(page.locator(':not([disabled])')).first();
+      await row.click({ timeout: 15_000 });
+      await start.click({ timeout: 15_000 });
+    }
+    await askAndExpect('What is six times seven? Answer with digits only.', /\b42\b/);
   });
 
-  // Not a pass/fail step yet: record what follows, to build the next steps from.
-  await recordUntilQuiet('after-first-chat', 60_000, 20_000);
+  await step('save-file', 'The assistant saves a file the user asked for, and it is really on disk', async () => {
+    const file = path.join(home, 'walkthrough-check.txt');
+    const box = page.getByPlaceholder(WORDS.messageBox);
+    await box.fill('Create a file named walkthrough-check.txt in the current folder containing only the word mango.');
+    await box.press('Enter');
+    // A permission card may ask first; a user would approve it. Pass only when the file exists with the word.
+    for (const t = Date.now(); Date.now() - t < 180_000; await sleep(2000)) {
+      if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes('mango')) return 'file found on disk';
+      const yes = page.getByRole('button', { name: WORDS.approve }).first();
+      if (await yes.isVisible().catch(() => false)) await yes.click().catch(() => {});
+    }
+    throw new Error('no walkthrough-check.txt with "mango" appeared in the project folder within 3 minutes');
+  });
 } catch {
-  // The failed step is already in the report; record what the screen does next, to see why.
+  // A critical step failed (already in the report); record what the screen does next, to see why.
   await recordUntilQuiet('after-failure', 30_000, 15_000).catch(() => {});
-  // DIAGNOSTIC ONLY (temporary, not a step): ask the app directly to start a Claude Code chat in the user's
-  // home folder, and record whether it answers, refuses or never answers — to tell an app fault from a missed click.
-  const diag = await page?.evaluate(async (cwd) => {
-    const race = (p) => Promise.race([p.then((v) => ({ answered: v }), (e) => ({ refused: String(e?.message ?? e) })), new Promise((r) => setTimeout(() => r({ noAnswerIn: '45s' }), 45_000))]);
-    return { create: await race(window.claude.session.create({ name: 'diag', cwd, provider: 'claude', skipPermissions: false })) };
-  }, home).catch((e) => ({ error: String(e) }));
-  // Is Claude Code installed for this new user at all? (The API-key route may never install it.)
-  const { spawnSync } = await import('node:child_process');
-  diag.claudeOnPath = spawnSync('bash', ['-lc', 'command -v claude || echo none'], { env, encoding: 'utf8' }).stdout.trim();
-  diag.claudeInHome = ['.local/bin/claude', '.claude/local/claude'].filter((p) => fs.existsSync(path.join(home, p)));
-  await sleep(20_000);
-  diag.afterCreate = await seen().catch(() => null);
-  await snap('diagnostic-after-create');
-  fs.writeFileSync(path.join(out, 'diagnostic.json'), JSON.stringify(diag, null, 2));
-  console.log(`      diagnostic: ${JSON.stringify(diag).slice(0, 600)}`);
 }
 finally {
   finish();
