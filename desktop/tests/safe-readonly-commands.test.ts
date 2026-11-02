@@ -14,7 +14,7 @@ import { execFileSync } from 'child_process';
 import { readOnlyVerdict, readOnlyProgramNames, READONLY_COMMAND_GROUPS, MAX_READONLY_LENGTH } from '../src/shared/safe-readonly-commands';
 import { rulesForMode, DESTRUCTIVE_DENY_LIST } from '../src/shared/permission-types';
 import { decidePermission } from '../src/main/harness/permission-engine';
-import { configRunsPrograms, pathsAreNotSecret, gitSettingsRunNothing, searchTreeHasNoSecrets } from '../src/main/harness/tools/readonly-guard';
+import { configRunsPrograms, pathsAreNotSecret, gitSettingsRunNothing, searchTreeHasNoSecrets, readOnlyChecksFor } from '../src/main/harness/tools/readonly-guard';
 
 const safe = (c: string) => readOnlyVerdict(c).safe;
 
@@ -477,5 +477,13 @@ describe('look-only commands are not quieter than the file tools', () => {
     expect(await searchTreeHasNoSecrets(['grep', '-r', 'x', '.'], tmp)).toBe(true);
     fs.writeFileSync(path.join(tmp, '.git', 'config'), '[remote "origin"]\n\turl = https://me:tok@github.com/a/b.git\n');
     expect(await searchTreeHasNoSecrets(['grep', '-r', 'x', '.'], tmp)).toBe(false);
+  });
+});
+
+describe('a chat that changed the shell\'s saved variables gets no quiet commands', () => {
+  it('asks once the environment was changed, runs quietly before', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-env-'));
+    expect(await readOnlyChecksFor('ls', tmp, false, false)).toMatchObject({ gitOk: true });
+    expect(await readOnlyChecksFor('ls', tmp, false, true)).toEqual({ pathsOk: false, gitOk: false });
   });
 });

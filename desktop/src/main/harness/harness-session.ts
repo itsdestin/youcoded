@@ -243,7 +243,7 @@ export interface HarnessSessionOpts {
   takeReadyBusyMessage?: () => ({ id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; restore?: () => void } | undefined);
   /** Pure permission decision for (tool, subject) — the configured layers
    *  (preset/mode/deny-list/remembered). Absent → every gated tool asks. */
-  decide?: (tool: string, subject: string | undefined, where?: { shellCwd?: string }) => Promise<PermissionDecision>;
+  decide?: (tool: string, subject: string | undefined, where?: { shellCwd?: string; envChanged?: boolean }) => Promise<PermissionDecision>;
   /** Raise an interactive permission ask (broker.ask bound to this session).
    *  Also the surface for the max_steps / doom_loop budget asks. */
   askUser?: (req: AskRequest) => Promise<AskDecision>;
@@ -4143,7 +4143,7 @@ export class HarnessSession extends EventEmitter {
     // 4. Re-read configured rules (including mode-scoped admin consent) on every call.
     const decidedBase: PermissionDecision = externalAsk
       ? { action: 'ask', denyListed: false }
-      : await permissionCallback(() => this.opts.decide?.(call.toolName, subject, { shellCwd: this.shellCwd ?? undefined }) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
+      : await permissionCallback(() => this.opts.decide?.(call.toolName, subject, { shellCwd: this.shellCwd ?? undefined, envChanged: this.shellEnv !== null && Object.keys(this.shellEnv).length > 0 }) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
     // Ask first, websites: a site already approved in this chat (here, or by the parent
     // chat for a helper) turns the first-visit ask into an allow. Only an ASK is
     // softened: a deny rule the person set for the site still denies.

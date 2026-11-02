@@ -2710,7 +2710,7 @@ export class NativeSessionHost extends EventEmitter {
     const inScope = (r: PermissionRule) => (
       scope === undefined ? r.specialist === undefined : (r.specialist === undefined || r.specialist === scope)
     );
-    return async (tool: string, subject: string | undefined, where?: { shellCwd?: string }) => {
+    return async (tool: string, subject: string | undefined, where?: { shellCwd?: string; envChanged?: boolean }) => {
       const mode = this.modeFor.get(sessionId) ?? 'ask';
       // WHY: disk plus synchronous session memory keep new grants effective before
       // persistence finishes; one scope filter also keeps specialist grants isolated.
@@ -2718,7 +2718,7 @@ export class NativeSessionHost extends EventEmitter {
       // "Commands that never ask": the file-level checks the built-in read-only list needs (tools/readonly-guard.ts).
       // Judged from where the shell really is now (a persisted `cd` may have moved it), not the session root.
       const readOnlyChecks = tool === 'Bash' && subject !== undefined && mode !== 'full-auto'
-        ? await readOnlyChecksFor(subject, where?.shellCwd ?? cwd, getShell().label === 'PowerShell') : undefined;
+        ? await readOnlyChecksFor(subject, where?.shellCwd ?? cwd, getShell().label === 'PowerShell', where?.envChanged === true) : undefined;
       const decision = decidePermission(tool, subject, {
         presetRules, modeRules: rulesForMode(mode), denyList: DESTRUCTIVE_DENY_LIST, rememberedRules,
       }, { powershell: getShell().label === 'PowerShell', readOnlyChecks });

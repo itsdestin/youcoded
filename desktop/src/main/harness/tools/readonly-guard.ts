@@ -288,9 +288,13 @@ async function gitDirsRunNothing(dirs: string[]): Promise<boolean> {
 
 /** The checks the engine's built-in read-only rule needs for one command, or undefined when the line is not on the
  *  list at all (then nothing is worth reading from disk). Full auto never calls this: it already allows everything. */
-export async function readOnlyChecksFor(subject: string, here: string, powershell: boolean): Promise<{ pathsOk: boolean; gitOk: boolean } | undefined> {
+export async function readOnlyChecksFor(subject: string, here: string, powershell: boolean, envChanged = false): Promise<{ pathsOk: boolean; gitOk: boolean } | undefined> {
   const v = readOnlyVerdict(subject, { powershell });
   if (!v.safe) return undefined;
+  // WHY (integration review 2026-11-01): an earlier approved command in this chat can have changed the shell's saved
+  // variables (PATH, a git helper…), which changes what a plain `ls` or `git diff` would actually run. The list judges
+  // the computer's own settings, so once the chat has changed any, nothing is quiet any more — it asks as it always did.
+  if (envChanged) return { pathsOk: false, gitOk: false };
   return {
     pathsOk: pathIsClean() && pathsAreNotSecret(v.words, here, v.readsFolders, v.readsFromCwd)
       && (!v.readsFromCwd || await searchTreeHasNoSecrets(v.words, here)),
