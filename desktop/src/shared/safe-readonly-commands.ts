@@ -418,8 +418,8 @@ function sedMatches(args: string[]): boolean {
 // ── printf: format words only ───────────────────────────────────────────────
 // WHY: `printf -v name` stores into a shell variable; the first word must be the format, not a flag.
 function printfMatches(args: string[]): boolean {
-  // WHY a width of thousands is refused: `%2000000000s` would make gigabytes of output.
-  return args.length > 0 && !args[0].startsWith('-') && !/%[-+ #0]*\d{4,}/.test(args[0]) && !/%[-+ #0-9.]*\*/.test(args[0]);
+  // WHY a width or precision of thousands is refused: `%2000000000s` or `%.999999999f` would make gigabytes of output.
+  return args.length > 0 && !args[0].startsWith('-') && !/%[-+ #0]*\d{4,}/.test(args[0]) && !/%[-+ #0-9]*\.\d{4,}/.test(args[0]) && !/%[-+ #0-9.]*\*/.test(args[0]);
 }
 
 // ── `X --version` and friends ───────────────────────────────────────────────

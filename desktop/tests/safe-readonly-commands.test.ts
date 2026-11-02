@@ -88,7 +88,7 @@ const HOSTILE: Record<string, string[]> = {
     'git cat-file --filters HEAD:a', 'git cat-file --batch', 'git grep -O', 'git grep --open-files-in-pager=sh x', 'git grep -Osh x', 'git grep --exec x', 'git ls-remote --upload-pa="sh" r',
     'git ls-remote origin', 'git fetch', 'git pull', 'git push', 'git commit -m x', 'git add .', 'git reset --hard', 'git checkout .', 'git clean -fd', 'git stash', 'git stash pop', 'git stash drop',
     'git branch newbranch', 'git branch -d x', 'git branch -D x', 'git branch -m a b', 'git branch -c a b', 'git branch --set-upstream-to=o/x', 'git branch -f x HEAD', 'git branch -l newname',
-    'git tag v1', 'git tag -d v1', 'git tag -a v1 -m x', 'git tag -f v1', 'git remote -v', 'git remote --verbose', 'git remote get-url origin', 'git remote add o u', 'git remote set-url o u', 'git remote remove o', 'git remote show origin', 'git remote update',
+    'git tag v1', 'git tag -d v1', 'git tag -a v1 -m x', 'git tag -f v1', 'git remote -v', 'git remote --verbose', 'printf %.999999999f 1', 'git remote get-url origin', 'git remote add o u', 'git remote set-url o u', 'git remote remove o', 'git remote show origin', 'git remote update',
     'git config --list', 'git config user.name x', 'git config --get remote.origin.url', 'git help log', 'git log --exec=x', 'git reflog expire --all', 'git reflog delete HEAD@{0}',
     'git worktree add ../x', 'git worktree remove x', 'git submodule status', 'git submodule update', 'git apply p', 'git am p', 'git rebase main', 'git merge x', 'git cherry-pick x',
     'git -c', 'git', 'git --no-pager', 'git status --upload-pack=x', 'git diff --no-index a b --output=c', 'git rev-parse --resolve-git-dir x', 'git log -c core.pager=x',
