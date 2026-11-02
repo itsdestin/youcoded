@@ -92,7 +92,7 @@ async function step(name, what, fn, { critical = true } = {}) {
     console.log(`PASS  ${what}${detail ? ` — ${detail}` : ''}`);
     await shot(name);
   } catch (e) {
-    results.push({ name, what, ok: false, secs: Math.round((Date.now() - t) / 1000), detail: String(e?.message ?? e).split('\n')[0] });
+    results.push({ name, what, ok: false, secs: Math.round((Date.now() - t) / 1000), detail: (() => { const m = String(e?.message ?? e); const w = m.match(/waiting for (.*)/); return m.split('\n')[0] + (w ? ` — waiting for ${w[1].slice(0, 160)}` : ''); })() });
     console.log(`FAIL  ${what} — ${results.at(-1).detail}`);
     await shot(name + '-FAILED');
     if (critical) throw e;
