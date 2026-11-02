@@ -1947,6 +1947,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             // Carried so the full-auto safety-stop footer survives the
             // synthetic→real tool-id handover (spec 2026-08-12, M5 2b).
             permissionMode: synTool.permissionMode,
+            chainsHonoured: synTool.chainsHonoured,
             // A kept card (hook closed, Claude Code's menu possibly still up)
             // must stay kept across the handover — without it the card has no
             // requestId AND no flag: unanswerable and unresolvable.
@@ -2025,6 +2026,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             external: superseded.external,
             floorStop: superseded.floorStop,
             permissionMode: superseded.permissionMode,
+            chainsHonoured: superseded.chainsHonoured,
           }
         : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId, answerPending: superseded?.answerPending, answerUnconfirmed: superseded?.answerUnconfirmed };
       toolCalls.set(action.toolUseId, {
@@ -2509,6 +2511,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             external: action.external,
             floorStop: action.floorStop,
             permissionMode: action.permissionMode,
+            chainsHonoured: action.chainsHonoured,
           };
           const target = inputIdx >= 0 ? inputIdx : nameIdx;
           if (target >= 0) {
@@ -2647,6 +2650,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
           external: action.external,
           floorStop: action.floorStop,
           permissionMode: action.permissionMode,
+          chainsHonoured: action.chainsHonoured,
           ...(action.specialist ? { specialist: action.specialist } : {}),
         });
         found = true;
@@ -2673,6 +2677,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
           external: action.external,
           floorStop: action.floorStop,
           permissionMode: action.permissionMode,
+          chainsHonoured: action.chainsHonoured,
           ...(action.specialist ? { specialist: action.specialist } : {}),
         });
 

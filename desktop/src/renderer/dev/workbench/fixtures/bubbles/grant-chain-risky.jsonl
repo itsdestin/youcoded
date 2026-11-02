@@ -1,0 +1,3 @@
+{"type": "user_message", "text": "rebuild the app and run the tests"}
+{"type": "tool_use", "id": "grant-chain-risky", "name": "Bash", "input": {"command": "cd app && npm install left-pad && python build.py && npm test | tail -20", "description": "Rebuild and test"}}
+{"type": "permission_request", "tool_use_id": "grant-chain-risky", "requestId": "native-grant-chain-risky", "denyListed": false, "permissionMode": "ask"}

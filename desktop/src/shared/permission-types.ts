@@ -19,7 +19,10 @@ export interface PermissionRule {
    *  WHY a field instead of escaping '*' inside the pattern: subjectMatches escapes
    *  '\' as a regex literal, so a backslash escape syntax would break Windows
    *  commands like `del C:\foo\*`. A discriminator sidesteps that entirely. */
-  match?: 'exact' | 'glob' | 'safe-readonly';
+  match?: 'exact' | 'glob' | 'safe-readonly' | 'download-host' | 'folder';
+  // 'download-host' (Q-6): pattern is `curl github.com` — covers a single plain curl/wget download from that website only
+  //   (shared/download-host.ts parses the address at decision time). 'folder' (Q-3): tool is Edit/Write, pattern is a
+  //   project-relative folder ('.' = the project folder); covers files directly in it (shared/edit-grants.ts).
   // 'safe-readonly' (2026-10-31): the built-in "commands that never ask" rule. It has NO pattern: ruleMatches
   // parses the Bash line against shared/safe-readonly-commands.ts instead. Only rulesForMode creates it;
   // it is never stored as a remembered rule.

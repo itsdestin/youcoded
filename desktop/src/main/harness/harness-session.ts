@@ -37,6 +37,8 @@ import type { PermissionDecision, PermissionRule } from '../../shared/permission
 import { adminRuleFor } from '../../shared/admin-approval';
 import { applyAdminApproval } from './admin-approval';
 import { bashGrantOptions, type GrantScope } from '../../shared/bash-grant-shapes';
+import { folderRulesFor, isFileEditTool } from '../../shared/edit-grants';
+import { getShell } from './tools/bash';
 import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServices } from './tools/types';
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
 import { outsideCommentsVerdict } from './tools/doc-comments-tools';
@@ -144,21 +146,32 @@ function isExistingFile(absPath: string): boolean {
  *  goes through here, merging in `specialist` itself (this
  *  function has no concept of a specialist key — it's the same builder a
  *  root session's own ask uses). */
-export function rememberedRuleFor(
+export function rememberedRulesFor(
   toolName: string,
   subject: string | undefined,
   scope: GrantScope | undefined,
-): PermissionRule | null {
+  cwd?: string,
+  opts: { chains?: boolean } = {},
+): PermissionRule[] {
   if (toolName === 'Bash' && typeof subject === 'string') {
     // The subject is passed through untouched — bashGrantOptions does not trim,
     // so the exact rung is byte-identical to what the engine compares later.
-    const options = bashGrantOptions(subject);
+    const options = bashGrantOptions(subject, opts);
     // Empty means no grant of any width may be offered (a bare `git push`, whose
     // target is not in the command and changes underneath the grant). Fail closed.
-    if (options.length === 0) return null;
+    if (options.length === 0) return [];
     // Fall back to the NARROWEST option when the requested width was not offered
     // for this command — never widen past what bashGrantOptions produced.
-    return (options.find((o) => o.scope === (scope ?? 'exact')) ?? options[0]).rule;
+    const picked = options.find((o) => o.scope === (scope ?? 'exact')) ?? options[0];
+    // Q-1: a joined-up command's "each part on its own" choice stores one rule per part.
+    return picked.rules ?? [picked.rule];
+  }
+  // Q-3: "files in this folder" on an edit stores a folder rule for Edit AND Write (so a NEW file in the folder is
+  // covered too). WHY the exact fallback: if the folder cannot be derived (a path outside the project, a `..`), the
+  // narrowest grant is the only honest one. Secret files and outside files never get this far: the card hides Always allow.
+  if (scope === 'folder' && isFileEditTool(toolName) && typeof subject === 'string') {
+    const folderRules = folderRulesFor(subject, cwd);
+    if (folderRules) return folderRules;
   }
   // Fix (Critical 1, final review): Task's subject is undefined ONLY for a
   // task_id management call (steer/resume/interrupt), which never carries a
@@ -173,12 +186,13 @@ export function rememberedRuleFor(
   // call — mirrors the existing "no grant possible" precedent (Bash commands
   // with no safe width, e.g. bare `git push`, above return null the same way).
   // The ask itself still resolves 'allow' for this one call either way.
-  if (toolName === 'Task' && subject === undefined) return null;
-  if (subject === undefined) return { tool: toolName, action: 'allow' };
+  if (toolName === 'Task' && subject === undefined) return [];
+  if (subject === undefined) return [{ tool: toolName, action: 'allow' }];
   // Non-Bash subjects are literal paths / ids. match:'exact' makes them mean what
   // the confirm always claimed — a path containing '*' was a wildcard grant.
-  return { tool: toolName, pattern: subject, action: 'allow', match: 'exact' };
+  return [{ tool: toolName, pattern: subject, action: 'allow', match: 'exact' }];
 }
+
 import { formatAnswers } from './tools/ask-user-question';
 import { formatArgErrors } from './tools/arg-errors';
 import { parseToolArgs } from './tool-args';
@@ -868,6 +882,11 @@ export class HarnessSession extends EventEmitter {
   private shellEnv: Record<string, string> | null = null;
   /** Ephemeral, root-only approval across all outside folders; never serialized. */
   private externalEditsAllowed = false;
+  /** Q-2: "For this conversation" on an edit card — edits and new files INSIDE the project are allowed until this
+   *  conversation ends. Memory-only, root-only (a helper never holds a chat-wide grant), reset on resume; never
+   *  written to permissions.json. Path guards (secrets, outside the project) and the saved-permissions floor still
+   *  ask first: it only quiets the ordinary "may I change this file?" card. */
+  private editsAllowedForChat = false;
   /** Card #207: "Allow for this chat" on a comment tool's outside-file ask.
    *  Covers comments on ANY outside plain file (Destin chose any-file over
    *  per-folder, 2026-10-29), never the files themselves; same memory-only,
@@ -1074,6 +1093,7 @@ export class HarnessSession extends EventEmitter {
     this.shellCwd = null; // a resumed session starts back at the workspace root
     this.shellEnv = null; // same contract — a resumed session starts with a fresh env too
     this.externalEditsAllowed = false; // consent never survives a resume
+    this.editsAllowedForChat = false;
     this.outsideCommentsAllowed = false;
     this.approvedSites.clear();
     this.adminCommandsAllowed = false;
@@ -4173,7 +4193,11 @@ export class HarnessSession extends EventEmitter {
     // retries the identical call until its step budget is gone. The generic
     // sentence stays the default for every decide() that supplies no message.
     if (decision.action === 'deny') return { text: decision.message ?? `The ${call.toolName} call was blocked by a permission rule.`, isError: true };
-    if (decision.action === 'ask') {
+    // Q-2: the person already said "for this conversation" to file edits. Only an ordinary ask is softened: a deny, a
+    // deny-list stop and every forced ask (outside the project, secrets floor, saved-permissions floor) still happen.
+    const editsPreApproved = decision.action === 'ask' && !decision.denyListed && !forcedAsk && this.editsAllowedForChat
+      && !this.opts.isSpecialistChild && (call.toolName === 'Write' || call.toolName === 'Edit');
+    if (decision.action === 'ask' && !editsPreApproved) {
       // An ABSENT handler is a WIRING gap, not a user cancel — surface it as a
       // decline RESULT (the model can't proceed) instead of the 'interrupted'
       // sentinel, so a misconfiguration never masquerades as an ESC/interrupt.
@@ -4198,6 +4222,8 @@ export class HarnessSession extends EventEmitter {
       // exception. Child sessions never inherit it, even when sharing a parent.
       if (externalAsk && !this.opts.isSpecialistChild && d.allowExternalEditsForSession === true
         && (call.toolName === 'Write' || call.toolName === 'Edit')) this.externalEditsAllowed = true;
+      if (d.allowEditsForChat === true && !externalAsk && !floorStop && !this.opts.isSpecialistChild
+        && (call.toolName === 'Write' || call.toolName === 'Edit')) this.editsAllowedForChat = true;
       // Card #207: the comment-tool counterpart — main assistant only.
       if (externalAsk && commentsReach.kind === 'outside' && !this.opts.isSpecialistChild
         && d.allowOutsideCommentsForSession === true) this.outsideCommentsAllowed = true;
@@ -4215,8 +4241,7 @@ export class HarnessSession extends EventEmitter {
         // The card sent a width, not a pattern — rememberedRuleFor derives the
         // rule here, in main. null means this command may not be remembered at
         // any width, so nothing is emitted.
-        const rule = rememberedRuleFor(call.toolName, subject, d.grantScope);
-        if (rule) this.emit('remember-rule', rule);
+        for (const rule of rememberedRulesFor(call.toolName, subject, d.grantScope, this.opts.cwd, { chains: getShell().label !== 'PowerShell' })) this.emit('remember-rule', rule);
       }
     }
 

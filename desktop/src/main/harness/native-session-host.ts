@@ -34,7 +34,8 @@ import { AdminPasswordService, type AdminPasswordServiceLike } from './admin-pas
 import { RunningCalls } from './askpass/running-calls';
 import type { AskpassServer } from './askpass/askpass-server';
 import { resolvePreset, type ResolvedPreset } from './preset-registry';
-import { decidePermission } from './permission-engine';
+import { decidePermission, decideChainParts } from './permission-engine';
+import { splitChain, plainCdTarget } from '../../shared/bash-chain';
 import { readOnlyChecksFor } from './tools/readonly-guard';
 import { getShell } from './tools/bash';
 import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
@@ -2719,9 +2720,33 @@ export class NativeSessionHost extends EventEmitter {
       // Judged from where the shell really is now (a persisted `cd` may have moved it), not the session root.
       const readOnlyChecks = tool === 'Bash' && subject !== undefined && mode !== 'full-auto'
         ? await readOnlyChecksFor(subject, where?.shellCwd ?? cwd, getShell().label === 'PowerShell', where?.envChanged === true) : undefined;
-      const decision = decidePermission(tool, subject, {
-        presetRules, modeRules: rulesForMode(mode), denyList: DESTRUCTIVE_DENY_LIST, rememberedRules,
-      }, { powershell: getShell().label === 'PowerShell', readOnlyChecks });
+      const layers = { presetRules, modeRules: rulesForMode(mode), denyList: DESTRUCTIVE_DENY_LIST, rememberedRules };
+      const powershell = getShell().label === 'PowerShell';
+      let decision = decidePermission(tool, subject, layers, { powershell: getShell().label === 'PowerShell', readOnlyChecks, cwd });
+      // Q-1: a chain no single rule covers is still allowed when every part is (saved per-part grants, look-only list).
+      // WHY here and not in decidePermission: each part's look-only file checks are async and depend on where the part
+      // runs (a `cd` earlier in the chain moves the shell), so the host computes them part by part.
+      if (decision.action === 'ask' && tool === 'Bash' && subject !== undefined && !powershell) {
+        const parts = splitChain(subject);
+        if (parts) {
+          let dir: string | null = where?.shellCwd ?? cwd; // null once a `cd` we cannot follow has run
+          const judged: Array<{ text: string; context: { powershell: boolean; readOnlyChecks?: { pathsOk: boolean; gitOk: boolean }; cwd: string }; free?: boolean }> = [];
+          for (const text of parts) {
+            const step = plainCdTarget(text);
+            if (step !== null) {
+              if (dir !== null) dir = path.join(dir, step);
+              judged.push({ text, context: { powershell, cwd }, free: true });
+              continue;
+            }
+            if (text.startsWith('cd ') || text === 'cd') dir = null; // a cd that leaves the project: later parts are not "look-only"
+            const checks = mode !== 'full-auto' && dir !== null
+              ? await readOnlyChecksFor(text, dir, false, where?.envChanged === true) : undefined;
+            judged.push({ text, context: { powershell, readOnlyChecks: checks, cwd } });
+          }
+          const chain = decideChainParts(judged, layers);
+          if (chain) decision = chain;
+        }
+      }
       // Only explicit admin rules supply this flag, never the Full Auto baseline.
       return tool === 'Bash' && subject !== undefined && hasAdminApproval(rememberedRules, subject, mode)
         ? { ...decision, passwordlessAdminAllowed: true,
@@ -2894,7 +2919,7 @@ export class NativeSessionHost extends EventEmitter {
       // Stamp the CURRENT mode on every ask (read at call time, not wiring
       // time — a mid-session mode flip must show on the next ask). The
       // renderer's full-auto safety-stop footer keys on it.
-      askUser: (req) => this.broker.ask({ ...req, permissionMode: this.modeFor.get(sessionId) ?? 'ask' }),
+      askUser: (req) => this.broker.ask({ ...req, permissionMode: this.modeFor.get(sessionId) ?? 'ask', chainsHonoured: getShell().label !== 'PowerShell' }),
       // Thread injected runtime services (WebSearch's SearchService, Task 6's
       // specialists collaborators) into the HarnessSession opts. `specialists`
       // is ALWAYS present (unlike `search`, which depends on an optional

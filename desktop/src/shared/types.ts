@@ -407,6 +407,7 @@ export type SubagentSegment =
       external?: boolean;
       floorStop?: FloorStop;
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
+      chainsHonoured?: boolean;
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
       resolvedRequestId?: string;
@@ -640,6 +641,7 @@ export interface ToolCallState {
    *  'full-auto' + denyListed swaps the generic button row for the safety-stop
    *  footer (spec 2026-08-12, M5 2b). Absent on CC asks. */
   permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
+  chainsHonoured?: boolean;
   /** Specialists 1c: set on a TOP-LEVEL card only when a child's routed ask
    *  could not be nested (its Task card is not on this timeline) — the card
    *  then labels who asked instead of reading as the parent's own ask. */

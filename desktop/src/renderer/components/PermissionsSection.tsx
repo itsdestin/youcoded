@@ -18,6 +18,7 @@ import {
   describeRule,
   broadNote,
   narrowedNote,
+  wideDownloadNote,
   ruleKind,
   RULE_KIND_ORDER,
   RULE_KIND_LABEL,
@@ -839,7 +840,7 @@ function RuleRow({
   // WHY (audit finding 10): an older grant such as "Any curl command" now covers
   // less than it used to. Say so on the row, in plain words, so a later re-ask
   // is not a mystery.
-  const detail = [described.width === 'tool-wide' ? broadNote(rule.tool) : null, narrowedNote(rule), grantedLabel(rule.grantedAt)]
+  const detail = [described.width === 'tool-wide' ? broadNote(rule.tool) : null, narrowedNote(rule), wideDownloadNote(rule), grantedLabel(rule.grantedAt)]
     .filter(Boolean)
     .join(' · ');
 

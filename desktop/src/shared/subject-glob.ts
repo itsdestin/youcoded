@@ -9,6 +9,8 @@ import type { PermissionRule } from './permission-types';
 import { CODE_RUNNING_CORPUS, HOSTILE_CORPUS } from './bash-hostile-corpus';
 import { riskyVariant } from './bash-risky-variants';
 import { readOnlyVerdict } from './safe-readonly-commands';
+import { downloadHostRuleCovers } from './download-host';
+import { folderRuleCovers } from './edit-grants';
 
 /** Escape a literal run of a pattern for a RegExp, keeping `?` as one character. */
 function globLiteral(text: string): string {
@@ -62,6 +64,8 @@ export const BOUNDED_RUNG_VETO: readonly string[] = [
 
 /** What the decision knows about the session a subject came from. */
 export interface MatchContext {
+  /** The session's project folder. Only a `folder` edit rule reads it (to turn an absolute file path into a project-relative one). */
+  cwd?: string;
   /** The Bash tool is running PowerShell, not bash. */
   powershell?: boolean;
   /** The two checks the built-in read-only list cannot do from text alone (computed in main by
@@ -94,6 +98,19 @@ export function ruleMatches(rule: PermissionRule, subject: string, context: Matc
     if (!checks || !checks.pathsOk) return false;
     const v = readOnlyVerdict(subject, { powershell: context.powershell });
     return v.safe && (!v.usesGit || checks.gitOk);
+  }
+  // Q-6: "downloads from <website> only". The website is PARSED from the command at decision time (shared/download-host.ts);
+  // a glob over the command text could not stop a second address riding along. Same operator rule as wildcard grants:
+  // a chained command is never covered here (the engine judges each part of a chain on its own).
+  if (rule.match === 'download-host') {
+    if (rule.tool !== 'Bash' || rule.action !== 'allow' || context.powershell) return false;
+    return downloadHostRuleCovers(rule.pattern, subject);
+  }
+  // Q-3: "files in this folder". Secret files, files outside the project and linked-out files never reach a rule
+  // (tool-layer path guard runs first), so this only answers "is the file directly in the saved folder".
+  if (rule.match === 'folder') {
+    if (rule.action !== 'allow' || (rule.tool !== 'Edit' && rule.tool !== 'Write')) return false;
+    return folderRuleCovers(rule.pattern, subject, context.cwd);
   }
   if (!subjectMatches(subject, rule.pattern)) return false;
 

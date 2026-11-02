@@ -5,7 +5,7 @@
 // engine, so a change to either one shows up here.
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
-import { HarnessSession, rememberedRuleFor } from '../src/main/harness/harness-session';
+import { HarnessSession, rememberedRulesFor } from '../src/main/harness/harness-session';
 import { decidePermission } from '../src/main/harness/permission-engine';
 import { buildChildDecide } from '../src/main/harness/specialists/child-permissions';
 import { rulesForMode, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../src/shared/permission-types';
@@ -112,7 +112,7 @@ describe('Ask first: what a remembered website rule looks like', () => {
   it('rememberedRuleFor stores the site exactly (never a wildcard, never tool-wide)', () => {
     const subject = WebFetchTool.permissionSubject({ url: 'https://Docs.Example.com/Guide' } as any);
     expect(subject).toBe('docs.example.com');
-    expect(rememberedRuleFor('WebFetch', subject, undefined)).toEqual({ tool: 'WebFetch', pattern: 'docs.example.com', action: 'allow', match: 'exact' });
+    expect(rememberedRulesFor('WebFetch', subject, undefined)).toEqual([{ tool: 'WebFetch', pattern: 'docs.example.com', action: 'allow', match: 'exact' }]);
   });
   it('the tool and the card agree on the site', () => {
     for (const u of ['https://www.Example.com/a', 'http://example.com:81/b']) {
@@ -122,6 +122,6 @@ describe('Ask first: what a remembered website rule looks like', () => {
   it('an unreadable address is asked about as written and never becomes a tool-wide grant', () => {
     const subject = WebFetchTool.permissionSubject({ url: 'not a url' } as any);
     expect(subject).toBe('not a url');
-    expect(rememberedRuleFor('WebFetch', subject, undefined)?.pattern).toBe('not a url');
+    expect(rememberedRulesFor('WebFetch', subject, undefined)[0]?.pattern).toBe('not a url');
   });
 });

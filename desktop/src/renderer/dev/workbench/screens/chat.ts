@@ -132,6 +132,13 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#web-visit', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-web-visit-approval', latency: '150' } },
   // WHY (audit finding 10): the Always-allow choices for a download, an upload and a plain package install.
   ...['curl-download', 'curl-upload', 'npm-install'].map((g) => ({ ...chat(`chat#grant-${g}`, 'view', 'approval'), session: 'wb-2', params: { seed: `bubbles-grant-${g}`, latency: '150' }, open: ['Always allow'] })),
+  // WHY (Always-allow review 2026-11-01): the new Always-allow states — a download limited to one website (and the redirect
+  // case, which keeps only the word-for-word choice), a joined-up command remembered part by part, and the file-edit card
+  // with "For this conversation" plus the this-file / this-folder choice.
+  { ...chat('chat#grant-curl-redirect', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-grant-curl-redirect', latency: '150' }, open: ['Always allow'] },
+  ...['chain', 'chain-risky'].map((g) => ({ ...chat(`chat#grant-${g}`, 'view', 'approval'), session: 'wb-2', params: { seed: `bubbles-grant-${g}`, latency: '150' }, open: ['Always allow', 'Each part on its own'] })),
+  { ...chat('chat#edit-ask', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-edit-ask', latency: '150' } },
+  { ...chat('chat#edit-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-edit-ask', latency: '150' }, open: ['Always allow', 'Files in src/components'] },
   { ...chat('chat#admin-approval', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' } },
   { ...chat('chat#admin-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'] },
   { ...chat('chat#admin-choices-phone', 'view', 'approval', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'], viewport: { width: 390, height: 844 } },
