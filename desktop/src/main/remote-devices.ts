@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { DEVICE_EXPIRY_DAYS } from '../shared/remote-close-codes';
 import path from 'path';
 import crypto from 'crypto';
 import { remoteDeviceStorePath } from './remote-paths';
@@ -29,7 +30,7 @@ export interface RemoteDevice {
 }
 
 /** Destin 2026-10-31: a paired device unused for 90 days must enter the password again. */
-const DEVICE_EXPIRY_MS = 90 * 24 * 60 * 60 * 1000;
+const DEVICE_EXPIRY_MS = DEVICE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
 
 /** What the panel is allowed to see. Never the hash. */
 export type RemoteDeviceView = Pick<RemoteDevice, 'id' | 'name' | 'createdAt' | 'lastSeenAt'> & { online: boolean };

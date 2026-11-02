@@ -14,6 +14,7 @@ import { Button, FieldError, TextInput } from './components/ui';
 import { BrandWordmark } from './components/brand/BrandLockup';
 import BrailleSpinner from './components/BrailleSpinner';
 import type { RemoteConnectionState, SavedKeySignInEvent, SignInFailure } from './remote-shim';
+import { DEVICE_EXPIRY_DAYS } from '../shared/remote-close-codes';
 
 /**
  * Every screen before the app: the brand surface setup wears — lavender, the stacked name, Outfit, one white card.
@@ -83,7 +84,7 @@ const OLD_PAGE_NOTICE: Notice = { kind: 'reload', heading: 'This page needs a re
 // takes over from the first. Only a reload of THIS tab brings it back; the password is not needed.
 const OTHER_TAB_NOTICE: Notice = { kind: 'reload', heading: 'Open in another tab', line: 'YouCoded is open in another tab of this browser. Reload this tab to use it here instead.' };
 // WHY its own sentence (Destin 2026-10-31): a device signed out for sitting unused 90 days should hear that, not the generic refusal.
-const DEVICE_EXPIRED_NOTICE: Notice = { kind: 'password', line: 'This device was signed out after 90 days without use. Enter the password to connect again.' };
+const DEVICE_EXPIRED_NOTICE: Notice = { kind: 'password', line: `This device was signed out after ${DEVICE_EXPIRY_DAYS} days without use. Enter the password to connect again.` };
 const KEY_REFUSED_NOTICE: Notice = { kind: 'password', line: 'This computer no longer accepts this device. Enter the password to connect again.' };
 // WHY exported: the photo-only screen list shows this toast with these very words (dev/workbench/ToastPractice).
 /** WHY by reason (branch review F9): only a refused credential means the saved password is wrong; a computer with remote access
@@ -94,7 +95,7 @@ export const savedPasswordRefusedNotice = (name: string, reason = 'invalid-crede
     : ['invalid-credentials', 'revoked', 'unknown'].includes(reason)
       ? `${name} didn't accept the saved password. Update it in Settings → Connect to Desktop.`
       : reason === 'expired'
-        ? `${name} signed this phone out after 90 days without use. Enter the password again in Settings → Connect to Desktop.`
+        ? `${name} signed this phone out after ${DEVICE_EXPIRY_DAYS} days without use. Enter the password again in Settings → Connect to Desktop.`
         : `${name} refused this sign-in.`;
 const KEY_REFUSALS = new Set(['revoked', 'expired', 'unknown', 'invalid-credentials', 'retired']);
 

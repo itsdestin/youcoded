@@ -53,7 +53,7 @@ import { NativeHome } from './native-home';
 import { UpdateSettings } from './update-settings';
 import { resolveStaticFile } from './remote-static-path';
 import { log } from './logger';
-import { CLOSE_REPLACED, CLOSE_DEVICE_EXPIRED } from '../shared/remote-close-codes';
+import { CLOSE_REPLACED, CLOSE_DEVICE_EXPIRED, DEVICE_EXPIRY_DAYS } from '../shared/remote-close-codes';
 import { AuthThrottle, VerificationQueue } from './remote-auth-throttle';
 
 const AUTH_TIMEOUT_MS = 5000;
@@ -951,7 +951,7 @@ export class RemoteServer {
             // every retired credential arrives at once and must not lock the household out.
             ws.send(JSON.stringify({ type: 'auth:failed', reason: result.reason }));
             ws.close(result.reason === 'revoked' ? 4003 : result.reason === 'expired' ? CLOSE_DEVICE_EXPIRED : 4004,
-              result.reason === 'revoked' ? 'Device unpaired' : result.reason === 'expired' ? 'Signed out after 90 days unused' : 'Credential retired');
+              result.reason === 'revoked' ? 'Device unpaired' : result.reason === 'expired' ? `Signed out after ${DEVICE_EXPIRY_DAYS} days unused` : 'Credential retired');
             return;
           }
         }
