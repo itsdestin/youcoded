@@ -13,7 +13,7 @@ import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage, saidInPlace } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT, OUTCOME_UNKNOWN_EVENT } from './remote-events';
 import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
-import { CLOSE_REPLACED } from '../shared/remote-close-codes';
+import { CLOSE_REPLACED, CLOSE_DEVICE_EXPIRED } from '../shared/remote-close-codes';
 import { firstFrameProtocols, TOOK_FRAMES_PROTOCOL } from '../shared/first-frames';
 import { markPage, startConnection, markConnection, markWake, takeReport } from './remote-timings';
 import { readRemotePlace, remotePlaceStorages, remotePlaceHost } from './state/remote-place';
@@ -101,7 +101,7 @@ export type SavedKeySignInEvent =
 
 /** Refusals that mean the saved key can never sign in again. `no-password-configured` is not
  *  one: remote access is switched off on the computer, and the key works again once it is on. */
-const KEY_IS_DEAD = new Set(['revoked', 'unknown', 'invalid-credentials']);
+const KEY_IS_DEAD = new Set(['revoked', 'expired', 'unknown', 'invalid-credentials']);
 
 /** Which row this browser has on each computer, kept apart from the key. WHY (Destin, 2026-09-11:
  *  "each sign in seems to create a new device entry in the remote access menu? even though all
@@ -1649,7 +1649,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         // attempt asks for the password once, rather than retrying forever.
         localStorage.removeItem('youcoded-remote-token');
         console.warn('[remote-shim] host refused this device permanently:', event.code, event.reason);
-        noteRefusedAfterConnecting(event.code === 4003 ? 'revoked' : event.code === 4004 ? 'retired' : 'unsupported-version');
+        noteRefusedAfterConnecting(event.code === 4003 ? 'revoked' : event.code === CLOSE_DEVICE_EXPIRED ? 'expired' : event.code === 4004 ? 'retired' : 'unsupported-version');
       } else {
         const storedToken = localStorage.getItem('youcoded-remote-token');
         if (storedToken) {
@@ -1670,7 +1670,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
  * on upgrade day every device retrying at once is what would trip the host's own limiter.
  */
 function isTerminalClose(code: number): boolean {
-  return code === 4003 || code === 4004 || code === 4005;
+  return code === 4003 || code === 4004 || code === 4005 || code === CLOSE_DEVICE_EXPIRED; // 4006: signed out after 90 days unused
 }
 
 function scheduleReconnect(token: string): void {

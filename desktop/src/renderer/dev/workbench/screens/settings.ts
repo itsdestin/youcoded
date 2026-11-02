@@ -138,6 +138,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // "Remove backup?" on the default fixture's one backend (drive-1).
   settings('settings/sync/remove-backend', 'dialog'),
   settings('settings/remote', 'dialog'),
+  // Set up, with a paired phone and a paired tablet last used a while ago (the "Last used" line; 90-day sign-out).
+  { ...settings('settings/remote#devices', 'dialog'), params: { remotePreview: 'ready' } },
   settings('settings/help', 'dialog'),
   // Scrolled to its last group, where Get beta builds and (#183) Install updates automatically sit.
   { ...settings('settings/help#updates', 'dialog'), open: [{ do: 'scroll', target: { role: 'button', labelStarts: 'Contribute to YouCoded' }, dir: 'down', times: 3 }] },
