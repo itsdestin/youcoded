@@ -40,6 +40,8 @@ const WORDS = {
   resumeOpen: /^(Resume|Open)\b/,      // a preview's open button, if the list shows one
   resumeOffered: /^Resume \d+$/,        // the "Welcome back" panel after a restart (its Resume N button)
   detailsChip: /walkthrough-tag|Add tags|tag/i, // the status-bar chip that opens the chat's details once it has a tag
+  edit: 'Edit',                         // the file viewer's Edit button
+  projects: 'Open projects',            // header button
   tipGotIt: 'Got it',                   // the buddy's tip bubble
   closeDialog: 'Close session',         // CloseSessionPrompt.tsx: its title and its confirm button
 };
@@ -49,6 +51,7 @@ const KEY = process.env.WALKTHROUGH_KEY;
 fs.mkdirSync(out, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PORT = 9333;
+const FIXTURES = path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures');
 
 // A brand-new user: an empty home folder, so nothing carries over from any earlier run.
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-newuser-'));
@@ -288,8 +291,28 @@ try {
     await page.getByRole('button', { name: WORDS.tipGotIt }).click({ timeout: 2_000 }).catch(() => {});
     await page.getByText('walkthrough-check.txt', { exact: true }).first().click();
     await page.getByText('mango', { exact: true }).first().waitFor({ timeout: 30_000 });
-    // EXPLORING (temporary): what the viewer offers, to write the edit-and-save step from.
-    console.log(`      viewer: ${JSON.stringify(await seen()).slice(0, 1500)}`);
+  }, { critical: false });
+
+  await step('edit-file', 'The user edits the file in the viewer, saves, and the change is on disk', async () => {
+    const file = path.join(home, 'walkthrough-check.txt');
+    await page.getByRole('button', { name: WORDS.edit, exact: true }).first().click();
+    const editor = page.locator('.cm-content[contenteditable="true"]').first();
+    await editor.click();
+    await page.keyboard.press('ControlOrMeta+A');
+    await page.keyboard.type('mango papaya');
+    const save = page.getByRole('button', { name: WORDS.save, exact: true }).first();
+    if (await save.isVisible().catch(() => false)) await save.click(); else await page.keyboard.press('ControlOrMeta+S');
+    for (let i = 0; i < 30; i++) { if (fs.readFileSync(file, 'utf8').includes('papaya')) return 'saved to disk'; await sleep(500); }
+    throw new Error('the edit never reached the file on disk');
+  }, { critical: false });
+
+  await step('office-explore', 'EXPLORING: where a user opens their own Word and spreadsheet files', async () => {
+    for (const f of ['walkthrough-groceries.xlsx', 'walkthrough-letter.docx']) fs.copyFileSync(path.join(FIXTURES, f), path.join(home, f));
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: WORDS.projects }).click();
+    await sleep(3000);
+    console.log(`      projects: ${JSON.stringify(await seen()).slice(0, 1500)}`);
+    await snap('office-explore-projects');
   }, { critical: false });
 
   await step('close-chat', 'The user closes the chat', async () => {
