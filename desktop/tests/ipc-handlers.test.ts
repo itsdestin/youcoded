@@ -816,6 +816,7 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
   let readFile: ReturnType<typeof vi.spyOn>;
   let stat: ReturnType<typeof vi.spyOn>;
   let updateStatus: ReturnType<typeof vi.spyOn>;
+  let updateChange: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
@@ -828,6 +829,10 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
     updateStatus = vi.spyOn(getUpdateService(), 'getUpdateStatus').mockReturnValue(
       { current: '0.0.0-test', latest: '0.0.0-test', update_available: false, download_url: null } as any,
     );
+    // WHY also silenced: a finished release check pushes at once, seen or not (ipc-handlers.ts, #183 T2), so a
+    // check from boot landing late on a busy machine pushed a changed file while the window was hidden
+    // ("expected 2 to be 1" at the hidden step, verify 2026-11-01). These tests pin the gate, not that push.
+    updateChange = vi.spyOn(getUpdateService(), 'onStatusChange').mockReturnValue(() => {});
     usageJson = null;
     readFile = vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p: any) => {
       if (String(p).endsWith('.usage-cache.json') && usageJson != null) return usageJson;
@@ -837,7 +842,7 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
     // (The release check the build kicks is answered offline by the file-wide stub at the top.)
   });
   afterEach(() => {
-    readFile.mockRestore(); stat.mockRestore(); updateStatus.mockRestore();
+    readFile.mockRestore(); stat.mockRestore(); updateStatus.mockRestore(); updateChange.mockRestore();
     vi.useRealTimers();
   });
 
