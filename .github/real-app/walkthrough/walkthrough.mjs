@@ -163,6 +163,14 @@ try {
 } catch {
   // The failed step is already in the report; record what the screen does next, to see why.
   await recordUntilQuiet('after-failure', 30_000, 15_000).catch(() => {});
+  // DIAGNOSTIC ONLY (temporary, not a step): ask the app directly to start a Claude Code chat in the user's
+  // home folder, and record whether it answers, refuses or never answers — to tell an app fault from a missed click.
+  const diag = await page?.evaluate(async (cwd) => {
+    const race = (p) => Promise.race([p.then((v) => ({ answered: v }), (e) => ({ refused: String(e?.message ?? e) })), new Promise((r) => setTimeout(() => r({ noAnswerIn: '45s' }), 45_000))]);
+    return { create: await race(window.claude.session.create({ name: 'diag', cwd, provider: 'claude', skipPermissions: false })) };
+  }, home).catch((e) => ({ error: String(e) }));
+  fs.writeFileSync(path.join(out, 'diagnostic.json'), JSON.stringify(diag, null, 2));
+  console.log(`      diagnostic: ${JSON.stringify(diag).slice(0, 600)}`);
 }
 finally {
   finish();
