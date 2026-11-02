@@ -130,8 +130,16 @@ try {
     // The tour may or may not be showing; a new user can skip it.
     await page.getByRole('button', { name: WORDS.skipTour }).click({ timeout: 10_000 }).catch(() => {});
     // The welcome screen shows either the session form or a single button that opens it.
+    // WHY a settle loop: closing the tour animates the welcome screen, and a button grabbed mid-animation
+    // is gone by the time it's clicked. Wait until one of the two stays put.
     const start = page.getByRole('button', { name: WORDS.startSession });
-    if (!(await start.isVisible().catch(() => false))) await page.getByRole('button', { name: WORDS.newSession }).click({ timeout: 15_000 });
+    const newSession = page.getByRole('button', { name: WORDS.newSession });
+    await sleep(1500);
+    for (let i = 0; i < 20; i++) {
+      if (await start.isVisible().catch(() => false)) break;
+      if (await newSession.isVisible().catch(() => false)) { await newSession.click({ timeout: 5_000 }).catch(() => {}); await sleep(1000); }
+      else await sleep(750);
+    }
     const model = await page.getByText(/ · /).first().innerText({ timeout: 10_000 }).catch(() => '?');
     await snap('first-chat-a-form');
     await start.click({ timeout: 15_000 });
