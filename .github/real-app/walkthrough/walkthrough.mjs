@@ -292,7 +292,8 @@ try {
     await page.getByRole('button', { name: NAME, exact: true }).last().hover();
     await page.getByRole('button', { name: `Rename ${NAME}` }).last().locator('xpath=following::button[1]').click({ timeout: 10_000 });
     const confirm = page.getByRole('dialog', { name: WORDS.closeDialog });
-    await confirm.getByRole('button', { name: WORDS.closeDialog }).click({ timeout: 10_000 });
+    // Its ✕ is also named "Close session"; the confirm button is the one that SHOWS the words.
+    await confirm.getByRole('button', { name: WORDS.closeDialog }).filter({ hasText: WORDS.closeDialog }).click({ timeout: 10_000 });
     await page.getByRole('button', { name: WORDS.resume }).waitFor({ timeout: 30_000 });
   }, { critical: false });
 
