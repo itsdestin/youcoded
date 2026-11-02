@@ -44,6 +44,8 @@ for step in range(8):
     if 'usethisAPIkey' in screen.replace(' ', ''):   # the terminal drops spaces unpredictably, so compare without them
         # Test-only question (a real user signs in instead): its default is No, so pick Yes explicitly.
         os.write(fd, b'\x1b[A'); time.sleep(0.3)
+    if 'Itrustthisfolder' in screen.replace(' ', ''):  # default is "No, exit"; the trial means to trust its own folder
+        os.write(fd, b'\x1b[B'); time.sleep(0.3)
     if 'Paste code here' in screen or 'Pastecodehere' in screen:
         print('===== stuck at browser sign-in: the key was not accepted =====')
         break
