@@ -41,7 +41,8 @@ export const dialog = {
 export const clipboard = {
   readText: vi.fn(() => ''),
   writeText: vi.fn(),
-  readImage: vi.fn(() => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) })),
+  // WHY: Electron 44 replaced the sync readImage() with an async read() returning ClipboardItems.
+  read: vi.fn(() => Promise.resolve([])),
 };
 
 export const nativeImage = {

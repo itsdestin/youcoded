@@ -7,7 +7,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { clipboard, dialog, shell, type BrowserWindow } from 'electron';
+import { clipboard, dialog, nativeImage, shell, type BrowserWindow } from 'electron';
 import { IPC } from '../../shared/backend-contract';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
@@ -89,7 +89,18 @@ export const shellChannels: MainChannelDef[] = [
   defineChannel({
     name: IPC.CLIPBOARD_SAVE_IMAGE, kind: 'handle', desktopOnly: true,
     handler: async () => {
-      const img = clipboard.readImage();
+      // WHY: Electron 44 removed the synchronous clipboard.readImage(); clipboard.read() is now an
+      // async W3C-style call that returns items keyed by MIME type. Take the first image/* entry
+      // (PNG preferred) and let nativeImage normalise whatever format the source app used to PNG,
+      // so the file we hand back is still the same paste-<ts>.png as before.
+      const items = await clipboard.read();
+      const types = items.flatMap((item) => item.types.map((type) => ({ item, type })));
+      const hit = types.find((t) => t.type === 'image/png') ?? types.find((t) => t.type.startsWith('image/'));
+      if (!hit) return null;
+      // getType's declared result also covers the non-image "bookmark" shape; an image/* type is always a Blob.
+      const blob = (await hit.item.getType(hit.type)) as Blob;
+      const bytes = Buffer.from(await blob.arrayBuffer());
+      const img = nativeImage.createFromBuffer(bytes);
       if (img.isEmpty()) return null;
       await fs.promises.mkdir(clipboardTmpDir, { recursive: true });
       if (!clipboardCleanupScheduled) {
