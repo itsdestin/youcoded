@@ -35,6 +35,7 @@ import { RunningCalls } from './askpass/running-calls';
 import type { AskpassServer } from './askpass/askpass-server';
 import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
+import { readOnlyChecksFor } from './tools/readonly-guard';
 import { getShell } from './tools/bash';
 import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
 import { assembleSystemPrompt, assembleSystemPromptParts, gitSnapshotAsync } from './prompt-assembly';
@@ -2709,14 +2710,18 @@ export class NativeSessionHost extends EventEmitter {
     const inScope = (r: PermissionRule) => (
       scope === undefined ? r.specialist === undefined : (r.specialist === undefined || r.specialist === scope)
     );
-    return async (tool: string, subject: string | undefined) => {
+    return async (tool: string, subject: string | undefined, where?: { shellCwd?: string }) => {
       const mode = this.modeFor.get(sessionId) ?? 'ask';
       // WHY: disk plus synchronous session memory keep new grants effective before
       // persistence finishes; one scope filter also keeps specialist grants isolated.
       const rememberedRules = [...await this.permissionStore.rulesFor(cwd), ...(this.rememberedFor.get(sessionId) ?? [])].filter(inScope);
+      // "Commands that never ask": the file-level checks the built-in read-only list needs (tools/readonly-guard.ts).
+      // Judged from where the shell really is now (a persisted `cd` may have moved it), not the session root.
+      const readOnlyChecks = tool === 'Bash' && subject !== undefined && mode !== 'full-auto'
+        ? await readOnlyChecksFor(subject, where?.shellCwd ?? cwd, getShell().label === 'PowerShell') : undefined;
       const decision = decidePermission(tool, subject, {
         presetRules, modeRules: rulesForMode(mode), denyList: DESTRUCTIVE_DENY_LIST, rememberedRules,
-      }, { powershell: getShell().label === 'PowerShell' });
+      }, { powershell: getShell().label === 'PowerShell', readOnlyChecks });
       // Only explicit admin rules supply this flag, never the Full Auto baseline.
       return tool === 'Bash' && subject !== undefined && hasAdminApproval(rememberedRules, subject, mode)
         ? { ...decision, passwordlessAdminAllowed: true,

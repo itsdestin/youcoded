@@ -25,6 +25,7 @@ import {
 } from './permissions/describe-rule';
 import { CROSS_PROJECT_SLUG } from '../../shared/permission-types';
 import { BACKUP_WARNING } from './backup-warning-copy';
+import { NeverAskCommands } from './permissions/NeverAskCommands';
 import type {
   NativePermissionMode,
   PermissionRule,
@@ -195,14 +196,14 @@ const MODES: readonly { id: NativePermissionMode; label: string; line: string }[
     // "Reading and searching never ask" is the explainer's own wording, and it
     // is the fact that stops this reading as "asks about everything".
     // Destin's 2026-08-26/27 copy review: gerunds, one clause shorter.
-    // 2026-10-31: also names the first visit to each new website (Ask first now asks
-    // about those); "reading files and searching" is what still never interrupts.
-    line: 'Checks with you before changing a file, running a command or visiting a new website. Reading files and searching never interrupt you.',
+    // 2026-10-31: also names the first visit to each new website (Ask first now asks about those).
+    // Looking-only commands (ls, git status…) also run without asking — see NeverAskCommands.
+    line: 'Checks with you before changing a file, running a command or visiting a new website. Reading, searching and look-only commands never interrupt you.',
   },
   {
     id: 'auto-edit',
     label: 'Auto edit',
-    line: 'Changes files without asking. Still checks before running a command.',
+    line: 'Changes files without asking. Still checks before running a command, except look-only ones.',
   },
   {
     id: 'full-auto',
@@ -486,6 +487,9 @@ export default function PermissionsSection() {
           </p>
         </div>
       </div>
+
+      {/* ── 1b. Commands that never ask (reference fold, no control) ─────────── */}
+      <NeverAskCommands />
 
       {/* ── 2. What you already waved through ─────────────────────────────── */}
       <div>

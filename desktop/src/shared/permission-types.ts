@@ -19,7 +19,10 @@ export interface PermissionRule {
    *  WHY a field instead of escaping '*' inside the pattern: subjectMatches escapes
    *  '\' as a regex literal, so a backslash escape syntax would break Windows
    *  commands like `del C:\foo\*`. A discriminator sidesteps that entirely. */
-  match?: 'exact' | 'glob';
+  match?: 'exact' | 'glob' | 'safe-readonly';
+  // 'safe-readonly' (2026-10-31): the built-in "commands that never ask" rule. It has NO pattern: ruleMatches
+  // parses the Bash line against shared/safe-readonly-commands.ts instead. Only rulesForMode creates it;
+  // it is never stored as a remembered rule.
   /** Task 11: the specialist agentType (e.g. 'worker') this rule is scoped to.
    *  Absent means the rule is the ROOT session's own grant — a plain
    *  PermissionRule from before specialists existed, or a preset/deny-list/
@@ -238,9 +241,14 @@ export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
     { tool: 'AddComment', action: 'allow' },
     { tool: 'MoveComment', action: 'allow' },
   ];
+  // "Commands that never ask" (Destin 2026-10-31): a built-in list of read-only shell commands. Placed right
+  // after the blanket ask so everything ABOVE it in precedence — the destructive deny-list and remembered
+  // rules — still wins. Not in full-auto, which already allows every command. Ask first and Auto-edit are
+  // the two modes where a person is still being asked about shell commands.
+  const readOnlyShell: PermissionRule[] = [{ tool: 'Bash', match: 'safe-readonly', action: 'allow' }];
   switch (mode) {
     case 'ask':
-      return [{ tool: '*', action: 'ask' }, ...alwaysAllowed,
+      return [{ tool: '*', action: 'ask' }, ...readOnlyShell, ...alwaysAllowed,
         // Websites (Destin, 2026-10-31): in Ask first only, the assistant asks the
         // first time it wants to visit each new website. WebFetch's subject is the
         // SITE (shared/site-key.ts), so this one pattern-less ask — LAST-MATCH-WINS
@@ -280,7 +288,7 @@ export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
         { tool: 'MoveComment', pattern: '*.xlsx', action: 'ask' },
       ];
     case 'auto-edit':
-      return [{ tool: '*', action: 'ask' }, ...alwaysAllowed,
+      return [{ tool: '*', action: 'ask' }, ...readOnlyShell, ...alwaysAllowed,
         { tool: 'Edit', action: 'allow' }, { tool: 'Write', action: 'allow' },
         // Task (Task 6, spec §5 walk-away autonomy — a PINNED decision, not an
         // accident): delegating to a specialist grants that specialist nothing

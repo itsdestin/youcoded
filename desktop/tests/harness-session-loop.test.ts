@@ -1382,7 +1382,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     collect(session);
     await session.send('go');
     expect(askUser).not.toHaveBeenCalled();                          // internal root → no forced ask
-    expect(decide).toHaveBeenCalledWith('Read', `${spillDir}/child-1.report.md`); // reaches decide() normally
+    expect(decide).toHaveBeenCalledWith('Read', `${spillDir}/child-1.report.md`, expect.anything()); // reaches decide() normally
   });
 
   // Driven by EDIT, deliberately. Since 2026-09-05 no read outside the workspace
@@ -1446,7 +1446,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     // Consulted DIRECTLY (never short-circuited to a forced ask) — the guard
     // never ran checkPathGuard against "read-write:/etc/x" as though it were
     // an absolute path outside C:/x.
-    expect(decide).toHaveBeenCalledWith('Task', `read-write:${path.resolve(FAKE_SESSION_CWD, '/etc/x').replace(/\\/g, '/')}`);
+    expect(decide).toHaveBeenCalledWith('Task', `read-write:${path.resolve(FAKE_SESSION_CWD, '/etc/x').replace(/\\/g, '/')}`, expect.anything());
     expect(askUser).not.toHaveBeenCalled();
   });
 

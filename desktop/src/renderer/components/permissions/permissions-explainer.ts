@@ -45,8 +45,8 @@ export const PERMISSIONS_EXPLAINER_SECTIONS: ExplainerSection[] = [
       'Each conversation has its own mode, and you can change it part-way through from the bar at the bottom of the chat.',
     ],
     bullets: [
-      { term: 'Ask first', text: 'asks before anything that changes your files or runs a command, and the first time it visits each new website. Reading files and searching never ask.' },
-      { term: 'Auto edit', text: 'edits files without asking, but still asks before running commands.' },
+      { term: 'Ask first', text: 'asks before anything that changes your files or runs a command, and the first time it visits each new website. Reading, searching and a built-in list of look-only commands never ask.' },
+      { term: 'Auto edit', text: 'edits files without asking, but still asks before running commands, except the look-only ones.' },
       { term: 'Full auto', text: "doesn't ask at all, apart from the things it always asks about. Use it when you're watching." },
     ],
   },
@@ -61,6 +61,14 @@ export const PERMISSIONS_EXPLAINER_SECTIONS: ExplainerSection[] = [
     bullets: [
       { term: 'Assistant', text: 'starts cautious and asks about most things.' },
       { term: 'Coder', text: "starts able to edit files without asking, since that's most of the work." },
+    ],
+  },
+  {
+    // Companion to the "Commands that never ask" fold on the screen (NeverAskCommands.tsx).
+    heading: 'Commands that never ask',
+    paragraphs: [
+      "A built-in list of look-only commands (like listing files, searching, or checking what changed in git) runs without asking in Ask first and Auto edit. Each is only allowed in its looking form: the same command used to change or delete something, send something out, or run another program still asks.",
+      'Anything that points at passwords, keys or saved logins asks first, and so does git in a project whose own settings make git launch other programs. You cannot add to this list; “Always allow” is for everything else.',
     ],
   },
   {
