@@ -40,6 +40,7 @@ const WORDS = {
   resumeOpen: /^(Resume|Open)\b/,      // a preview's open button, if the list shows one
   resumeOffered: /^Resume \d+$/,        // the "Welcome back" panel after a restart (its Resume N button)
   detailsChip: /walkthrough-tag|Add tags|tag/i, // the status-bar chip that opens the chat's details once it has a tag
+  tipGotIt: 'Got it',                   // the buddy's tip bubble
   closeDialog: 'Close session',         // CloseSessionPrompt.tsx: its title and its confirm button
 };
 
@@ -291,6 +292,9 @@ try {
     // In the menu row: name, rename pencil, then the ✕ — which shows only while the row is hovered.
     await page.getByRole('button', { name: NAME, exact: true }).last().hover();
     await page.getByRole('button', { name: `Rename ${NAME}` }).last().locator('xpath=following::button[1]').click({ timeout: 10_000 });
+    // FINDING (2026-11-02): the buddy's tip bubble sits on top of this prompt's "Close session" button, so a
+    // user must dismiss the tip first — as this does.
+    await page.getByRole('button', { name: WORDS.tipGotIt }).click({ timeout: 3_000 }).catch(() => {});
     const confirm = page.getByRole('dialog', { name: WORDS.closeDialog });
     // Its ✕ is also named "Close session"; the confirm button is the one that SHOWS the words.
     await confirm.getByRole('button', { name: WORDS.closeDialog }).filter({ hasText: WORDS.closeDialog }).click({ timeout: 10_000 });
