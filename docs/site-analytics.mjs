@@ -1,7 +1,25 @@
-// Website-only protocol. No identifier escapes this document's memory except in requests.
+// Website-only protocol. The random page identifier never leaves this document's memory except in
+// requests; only the server's opaque capability is kept, per tab, so a reload continues the visit.
 const TARGETS = ['Windows', 'macOS', 'Linux', 'Android'];
 const empty = () => ({ Windows: 0, macOS: 0, Linux: 0, Android: 0 });
+// WHY a "don't count me" flag (analytics deck D-4, 2026-10-31): the owner's own
+// visits and download tests were counted as real interest. Opening /?me once sets
+// it for that browser (/?me=off clears it); it holds no identifier, only "skip".
+export const ME_KEY = 'youcoded-analytics-me';
+export function noteMe(win) {
+  try {
+    const params = new URL(win.location.href).searchParams;
+    if (!params.has('me')) return;
+    if (params.get('me') === 'off') win.localStorage.removeItem(ME_KEY); else win.localStorage.setItem(ME_KEY, '1');
+    params.delete('me');
+    const query = params.toString();
+    win.history?.replaceState?.(null, '', win.location.pathname + (query ? '?' + query : '') + win.location.hash);
+  } catch { /* storage blocked: the visit simply counts */ }
+}
 export function eligible(win) {
+  try {
+    if (win.localStorage?.getItem(ME_KEY) === '1') return false;
+  } catch { /* storage blocked: treat as an ordinary visitor */ }
   try { return win.self === win.top && win.location.origin === 'https://youcoded.ai' && win.location.pathname === '/'; } catch { return false; }
 }
 function label(value) {
@@ -40,10 +58,26 @@ export function installerTarget(key, href) {
     return keys[key];
   } catch { return null; }
 }
-export function createAnalytics({ fetch, crypto, href, referrer, clock = { now: Date.now, setTimeout: globalThis.setTimeout.bind(globalThis), clearTimeout: globalThis.clearTimeout.bind(globalThis) } }) {
-  let stopped = false, nonce, capability, current = { instructions: false, downloads: empty() };
+// WHY `tab` (deck D-4): a reload in the same tab used to start a new visit, so one person
+// refreshing five times read as five visits. The server's opaque capability (never the
+// random page identifier) and the visit's counts so far are kept in that tab's
+// sessionStorage, which the browser deletes when the tab closes, so a reload continues the
+// same visit — and a click after the reload still adds to it.
+const TAB_KEY = 'youcoded-site-visit';
+export const MAX_CLICKS_PER_VISIT = 5;
+export function createAnalytics({ fetch, crypto, href, referrer, tab = null, clock = { now: Date.now, setTimeout: globalThis.setTimeout.bind(globalThis), clearTimeout: globalThis.clearTimeout.bind(globalThis) } }) {
+  let stopped = false, nonce, capability, current = { instructions: false, downloads: empty() }, base = empty();
   let revision = 0, sentRevision = -1, attempts = 0, job = null, timer = null, active = null, token = 0;
-  const createdAt = Math.floor(clock.now() / 1000), attribution = metadata(href, referrer);
+  let createdAt = Math.floor(clock.now() / 1000);
+  const attribution = metadata(href, referrer);
+  let resumed = null;
+  try {
+    const saved = JSON.parse(tab?.getItem(TAB_KEY) ?? 'null');
+    const counts = saved?.d && TARGETS.every(t => Number.isSafeInteger(saved.d[t]) && saved.d[t] >= 0 && saved.d[t] <= MAX_CLICKS_PER_VISIT);
+    if (typeof saved?.c === 'string' && saved.c.length > 0 && saved.c.length <= 256 && typeof saved.i === 'boolean' && counts) resumed = saved;
+  } catch { /* no tab storage, or nothing usable in it */ }
+  const keep = (snapshot) => { try { tab?.setItem(TAB_KEY, JSON.stringify({ c: capability, i: snapshot.instructions, d: snapshot.downloads })); } catch { /* no tab storage: reloads count again */ } };
+  const newNonce = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   function cancelTimer() { if (timer !== null) clock.clearTimeout(timer); timer = null; }
   function stop() {
     stopped = true; cancelTimer(); token++;
@@ -60,7 +94,7 @@ export function createAnalytics({ fetch, crypto, href, referrer, clock = { now: 
     if (!job) {
       if (sentRevision === revision) return;
       const snapshot = { instructions: current.instructions, downloads: { ...current.downloads } };
-      job = { revision, retries: 0, start: !capability, body: JSON.stringify(capability ? { version: 1, capability, ...snapshot } : { version: 1, nonce, createdAt, ...attribution, ...snapshot }) };
+      job = { revision, retries: 0, start: !capability, snapshot, body: JSON.stringify(capability ? { version: 1, capability, ...snapshot } : { version: 1, nonce, createdAt, ...attribution, ...snapshot }) };
     }
     const request = job, myToken = ++token, controller = new AbortController();
     attempts++;
@@ -79,12 +113,22 @@ export function createAnalytics({ fetch, crypto, href, referrer, clock = { now: 
     const result = await Promise.race([response, deadline]);
     if (myToken !== token || stopped) return;
     clock.clearTimeout(deadlineId); active = null;
+    // A kept visit the server no longer accepts (expired): forget it and start a new visit
+    // carrying only what happened on this page load, instead of losing this load entirely.
+    if ([403, 410].includes(result.status) && !request.start && resumed) {
+      try { tab?.removeItem(TAB_KEY); } catch { /* ignore */ }
+      resumed = null; capability = null; nonce = newNonce(); createdAt = Math.floor(clock.now() / 1000); job = null;
+      const downloads = empty(); for (const t of TARGETS) downloads[t] = Math.max(0, current.downloads[t] - base[t]);
+      current = { instructions: current.instructions, downloads }; base = empty();
+      revision++; schedule(); return;
+    }
     if ([403, 404, 410, 429].includes(result.status)) { stop(); return; }
     const valid = result.status === 200 && (request.start
       ? result.data?.version === 1 && typeof result.data.capability === 'string' && result.data.capability.length > 0 && result.data.capability.length <= 256 && result.data.attribution && typeof result.data.attribution === 'object'
       : result.data?.ok === true);
     if (valid) {
       if (request.start) { capability = result.data.capability; nonce = null; }
+      keep(request.snapshot);
       sentRevision = request.revision; job = null;
       if (revision > sentRevision) schedule();
     } else if (request.retries < 2) { request.retries++; schedule(500 * request.retries); }
@@ -92,11 +136,12 @@ export function createAnalytics({ fetch, crypto, href, referrer, clock = { now: 
     else { job = null; sentRevision = request.revision; if (revision > sentRevision) schedule(); }
   }
   try {
-    if (!stopped) { nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join(''); void send().catch(stop); }
+    if (!stopped && resumed) { capability = resumed.c; current = { instructions: resumed.i, downloads: { ...resumed.d } }; base = { ...resumed.d }; sentRevision = revision; }
+    else if (!stopped) { nonce = newNonce(); void send().catch(stop); }
   } catch { stop(); }
   return Object.freeze({
     instructions() { if (!stopped && !current.instructions) { current.instructions = true; revision++; schedule(); } },
-    download(target) { if (!stopped && TARGETS.includes(target) && Object.values(current.downloads).reduce((a, b) => a + b, 0) < 100) { current.downloads[target]++; revision++; schedule(); } },
+    download(target) { if (!stopped && TARGETS.includes(target) && Object.values(current.downloads).reduce((a, b) => a + b, 0) < MAX_CLICKS_PER_VISIT) { current.downloads[target]++; revision++; schedule(); } },
     flush() { if (!stopped && !active && !job) { cancelTimer(); void send().catch(stop); } },
     stop,
   });

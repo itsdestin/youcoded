@@ -94,6 +94,11 @@ jobs:
         # a bare install hits HTTP 404 / exit 100. Refresh the index first.
         run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools
 
+      # Only release builds send analytics check-ins (desktop/src/main/official-build.ts);
+      # stamped before the backend is compiled. Fails loudly.
+      - name: Mark as an official build
+        run: node desktop/scripts/stamp-official-build.mjs
+
       - name: Build React UI
         run: ./scripts/build-web-ui.sh
 

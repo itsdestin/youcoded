@@ -51,7 +51,7 @@ import { registerMarketplaceApiHandlers } from '../marketplace-api-handlers';
 import { reconcileInstalls } from '../install-reconcile';
 import { startSocial } from '../social-handlers';
 import { initArcadeOps } from '../arcade-handlers';
-import { startDailyHeartbeat } from '../analytics-service';
+import { startDailyHeartbeat, setAndroidId } from '../analytics-service';
 import { safeStorage } from 'electron';
 import type { Platform } from '../platform';
 import { hasHost } from './host-bridge';
@@ -122,7 +122,13 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   setSyncSpacesWindowBroadcaster(() => {});
 
   // --- What main.ts does in app.whenReady() before the window ---
-  startDailyHeartbeat();
+  // WHY "android" + the phone's own ID (analytics audit 2026-10-31): this backend
+  // only ever runs inside the Android app, which checked in as "desktop" from
+  // 1.3.1 to 1.3.3 and minted a new random ID on every reinstall. The ID is
+  // read once and removed so programs this backend starts never inherit it.
+  setAndroidId(process.env.YOUCODED_ANDROID_ID);
+  delete process.env.YOUCODED_ANDROID_ID;
+  startDailyHeartbeat({ platform: 'android' });
   let firstRunManager: FirstRunManager | undefined;
   try {
     if (FirstRunManager.isFirstRun()) firstRunManager = new FirstRunManager();

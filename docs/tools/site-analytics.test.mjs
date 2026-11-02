@@ -2,14 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
-import { createAnalytics, metadata, eligible, installerTarget } from '../site-analytics.mjs';
+import { createAnalytics, metadata, eligible, installerTarget, noteMe, ME_KEY } from '../site-analytics.mjs';
 
 const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
-function rig(fetcher) {
+function memoryStorage(seed = {}) {
+  const data = new Map(Object.entries(seed));
+  return { data, getItem: k => data.has(k) ? data.get(k) : null, setItem: (k, v) => data.set(k, String(v)), removeItem: k => data.delete(k) };
+}
+function rig(fetcher, tab = null) {
   let time = 1000000, id = 0;
   const timers = new Map(), calls = [];
   const clock = { now: () => time, setTimeout: (fn, delay) => { timers.set(++id, { fn, at: time + delay }); return id; }, clearTimeout: id => timers.delete(id) };
-  const client = createAnalytics({ fetch: (url, options) => { calls.push({ url, options, body: JSON.parse(options.body) }); return fetcher?.(calls.length, options) ?? Promise.resolve({ status: 200, json: async () => url.endsWith('/start') ? ({ version: 1, capability: 'opaque', attribution: {} }) : ({ ok: true }) }); }, crypto: webcrypto, clock, href: 'https://youcoded.ai/?utm_source=post&utm_campaign=launch&secret=hide', referrer: 'https://Example.com/private?q=hide' });
+  const client = createAnalytics({ fetch: (url, options) => { calls.push({ url, options, body: JSON.parse(options.body) }); return fetcher?.(calls.length, options) ?? Promise.resolve({ status: 200, json: async () => url.endsWith('/start') ? ({ version: 1, capability: 'opaque', attribution: {} }) : ({ ok: true }) }); }, crypto: webcrypto, clock, href: 'https://youcoded.ai/?utm_source=post&utm_campaign=launch&secret=hide', referrer: 'https://Example.com/private?q=hide', tab });
   async function tick(ms) {
     const end = time + ms;
     await settle();
@@ -59,7 +63,7 @@ test('terminal statuses stop immediately', async () => {
 });
 test('click cap and invalid targets', async () => {
   const r = rig(); await r.tick(0); for (let i = 0; i < 120; i++) r.client.download(i % 2 ? 'Linux' : 'Android'); r.client.download('iOS'); r.client.download('__proto__'); await r.tick(250);
-  assert.equal(Object.values(r.calls[1].body.downloads).reduce((a, b) => a + b), 100);
+  assert.equal(Object.values(r.calls[1].body.downloads).reduce((a, b) => a + b), 5);
 });
 test('stop cancels pending work and cannot restart measurement', async () => {
   const r = rig(() => new Promise(() => {})); await r.tick(0); r.client.stop(); assert.equal(r.calls[0].options.signal.aborted, true);
@@ -72,18 +76,55 @@ test('update retry exhaustion preserves newer state and total attempts stop at 1
   await r.tick(1750);
   assert.deepEqual(r.calls[1].body, r.calls[2].body); assert.deepEqual(r.calls[2].body, r.calls[3].body);
   assert.equal(r.calls[4].body.downloads.Android, 1);
+  // After the five-click cap a visit sends nothing more, however long the page stays open.
   for (let i = 0; i < 99; i++) { r.client.download('Linux'); await r.tick(2000); }
-  await r.tick(60000); assert.equal(r.calls.length, 128);
+  await r.tick(60000); assert.ok(r.calls.length < 128);
 });
 test('synchronous fetch throws are caught and stop remains the only shutdown control', async () => {
   const r = rig(() => { throw Error('transport'); }); await r.tick(60000); assert.equal(r.calls.length, 3);
   assert.deepEqual(Object.keys(r.client).sort(), ['download', 'flush', 'instructions', 'stop']);
 });
-test('website analytics never reads or writes browser storage', () => {
+test('browser storage holds only the per-tab capability and the do-not-count flag', () => {
   const client = readFileSync(new URL('../site-analytics.mjs', import.meta.url), 'utf8');
   const ui = readFileSync(new URL('../site-analytics-ui.mjs', import.meta.url), 'utf8');
-  assert.doesNotMatch(client + ui, /\b(?:localStorage|sessionStorage|indexedDB|StorageEvent|addEventListener\(['"]storage['"])/);
-  assert.doesNotMatch(client, /\b(?:createPreference|STORAGE_KEY|preference)\b/);
+  assert.doesNotMatch(client + ui, /\b(?:indexedDB|document\.cookie|StorageEvent|addEventListener\(['"]storage['"])/);
+  // localStorage is touched only for the do-not-count flag; sessionStorage only handed in as `tab`.
+  assert.deepEqual([...new Set((client + ui).match(/'youcoded-[a-z-]+'/g))].sort(), ["'youcoded-analytics-me'", "'youcoded-site-visit'"]);
+  assert.doesNotMatch(client, /tab\?\.setItem\([^)]*nonce/);
+});
+test('a reload in the same tab continues the visit instead of starting a new one', async () => {
+  const tab = memoryStorage();
+  const first = rig(undefined, tab); await first.tick(0);
+  assert.equal(first.calls[0].url.endsWith('/start'), true);
+  assert.equal(JSON.parse(tab.data.get('youcoded-site-visit')).c, 'opaque');
+  assert.equal(JSON.stringify([...tab.data.values()]).includes(first.calls[0].body.nonce), false);
+  first.client.download('macOS'); await first.tick(250);
+  const reload = rig(undefined, tab); await reload.tick(1000);
+  assert.equal(reload.calls.length, 0);
+  // A second click on the same installer after the reload still adds to the visit.
+  reload.client.download('macOS'); await reload.tick(250);
+  assert.equal(reload.calls[0].url.endsWith('/update'), true);
+  assert.equal(reload.calls[0].body.capability, 'opaque');
+  assert.equal(reload.calls[0].body.downloads.macOS, 2);
+});
+test('an expired kept visit starts a new visit carrying only this page load', async () => {
+  const tab = memoryStorage({ 'youcoded-site-visit': JSON.stringify({ c: 'old', i: true, d: { Windows: 2, macOS: 0, Linux: 0, Android: 0 } }) });
+  const r = rig(n => n === 1 ? Promise.resolve({ status: 410 }) : undefined, tab); await r.tick(0);
+  r.client.download('Linux'); await r.tick(2000);
+  assert.equal(r.calls[0].url.endsWith('/update'), true);
+  assert.equal(r.calls[1].url.endsWith('/start'), true);
+  assert.deepEqual(r.calls[1].body.downloads, { Windows: 0, macOS: 0, Linux: 1, Android: 0 });
+  assert.equal(JSON.parse(tab.data.get('youcoded-site-visit')).c, 'opaque');
+});
+test('opening /?me stops this browser counting, /?me=off restores it, and the address is cleaned', () => {
+  const local = memoryStorage(); let replaced = null;
+  const win = (href) => ({ location: new URL(href), top: 1, self: 1, localStorage: local, history: { replaceState: (_s, _t, url) => { replaced = url; } } });
+  const a = win('https://youcoded.ai/?me'); noteMe(a);
+  assert.equal(local.data.get(ME_KEY), '1'); assert.equal(replaced, '/');
+  assert.equal(eligible(win('https://youcoded.ai/')), false);
+  noteMe(win('https://youcoded.ai/?me=off&k7qm2x'));
+  assert.equal(local.data.has(ME_KEY), false); assert.equal(replaced, '/?k7qm2x=');
+  assert.equal(eligible(win('https://youcoded.ai/')), true);
 });
 test('installer variants and real hook static guard', () => {
   const url = 'https://github.com/itsdestin/youcoded/releases/download/v1/YouCoded.dmg';
