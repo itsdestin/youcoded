@@ -169,6 +169,13 @@ try {
     const race = (p) => Promise.race([p.then((v) => ({ answered: v }), (e) => ({ refused: String(e?.message ?? e) })), new Promise((r) => setTimeout(() => r({ noAnswerIn: '45s' }), 45_000))]);
     return { create: await race(window.claude.session.create({ name: 'diag', cwd, provider: 'claude', skipPermissions: false })) };
   }, home).catch((e) => ({ error: String(e) }));
+  // Is Claude Code installed for this new user at all? (The API-key route may never install it.)
+  const { spawnSync } = await import('node:child_process');
+  diag.claudeOnPath = spawnSync('bash', ['-lc', 'command -v claude || echo none'], { env, encoding: 'utf8' }).stdout.trim();
+  diag.claudeInHome = ['.local/bin/claude', '.claude/local/claude'].filter((p) => fs.existsSync(path.join(home, p)));
+  await sleep(20_000);
+  diag.afterCreate = await seen().catch(() => null);
+  await snap('diagnostic-after-create');
   fs.writeFileSync(path.join(out, 'diagnostic.json'), JSON.stringify(diag, null, 2));
   console.log(`      diagnostic: ${JSON.stringify(diag).slice(0, 600)}`);
 }
