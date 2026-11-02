@@ -340,33 +340,6 @@ try {
     throw new Error('the edit never reached the file on disk');
   }, { critical: false });
 
-  await step('open-spreadsheet', "The user opens their own spreadsheet from Projects and sees its cells and the formula's total", async () => {
-    for (const f of ['walkthrough-groceries.xlsx', 'walkthrough-letter.docx']) fs.copyFileSync(path.join(FIXTURES, f), path.join(home, f));
-    await page.keyboard.press('Escape');
-    await page.getByRole('button', { name: WORDS.projects }).click();
-    await page.getByText('walkthrough-groceries.xlsx').first().click({ timeout: 30_000 });
-    await page.getByText('tortillas', { exact: true }).first().waitFor({ timeout: 30_000 });
-    // 12 + 3 + 6: the sheet stores a SUM formula, so 21 showing means formulas are worked out, not just text.
-    await page.getByText('21', { exact: true }).first().waitFor({ timeout: 10_000 });
-  }, { critical: false });
-
-  await step('open-word', 'The user opens their own Word document from Projects and sees its text', async () => {
-    await page.keyboard.press('Escape');
-    if (!(await page.getByText('walkthrough-letter.docx').first().isVisible().catch(() => false))) {
-      await page.getByRole('button', { name: WORDS.projects }).click();
-    }
-    await page.getByText('walkthrough-letter.docx').first().click({ timeout: 30_000 });
-    await page.getByText(/about pineapples/).first().waitFor({ timeout: 60_000 });
-  }, { critical: false });
-
-  // Back to the chat for the next steps, the way a user would.
-  // UNCONFIRMED (2026-11-02): Escape did not close the Word preview here; its ✕ does, so press that.
-  for (let i = 0; i < 4 && !(await page.getByPlaceholder(WORDS.messageBox).isVisible().catch(() => false)); i++) {
-    await page.getByRole('dialog').getByRole('button', { name: /^Close/ }).last().click({ timeout: 3_000 }).catch(() => {});
-    await sleep(800);
-    await page.getByRole('button', { name: WORDS.backToChat }).first().click({ timeout: 3_000 }).catch(() => {});
-  }
-
   await step('close-chat', 'The user closes the chat', async () => {
     // "All sessions" (the arrow beside the chat's name), then the chat row's close ✕. WHY by position: neither
     // button has a name of its own until hovered (their tooltips name them only then), so a screen reader can't
@@ -394,6 +367,25 @@ try {
     await page.getByText(NAME).first().waitFor({ timeout: 15_000 });
     await page.keyboard.press('Escape');
   }, { critical: false });
+  await step('open-spreadsheet', "The user opens their own spreadsheet from Projects and sees its cells and the formula's total", async () => {
+    for (const f of ['walkthrough-groceries.xlsx', 'walkthrough-letter.docx']) fs.copyFileSync(path.join(FIXTURES, f), path.join(home, f));
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: WORDS.projects }).click();
+    await page.getByText('walkthrough-groceries.xlsx').first().click({ timeout: 30_000 });
+    await page.getByText('tortillas', { exact: true }).first().waitFor({ timeout: 30_000 });
+    // 12 + 3 + 6: the sheet stores a SUM formula, so 21 showing means formulas are worked out, not just text.
+    await page.getByText('21', { exact: true }).first().waitFor({ timeout: 10_000 });
+  }, { critical: false });
+
+  await step('open-word', 'The user opens their own Word document from Projects and sees its text', async () => {
+    await page.keyboard.press('Escape');
+    if (!(await page.getByText('walkthrough-letter.docx').first().isVisible().catch(() => false))) {
+      await page.getByRole('button', { name: WORDS.projects }).click();
+    }
+    await page.getByText('walkthrough-letter.docx').first().click({ timeout: 30_000 });
+    await page.getByText(/about pineapples/).first().waitFor({ timeout: 60_000 });
+  }, { critical: false });
+
 } catch {
   // A critical step failed (already in the report); record what the screen does next, to see why.
   await recordUntilQuiet('after-failure', 30_000, 15_000).catch(() => {});
