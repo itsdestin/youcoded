@@ -1,0 +1,24 @@
+# Daily check: do the outside services the app depends on still answer? (.github/real-app/outside-services.mjs)
+# WHY daily and separate: these break with no code change from us (the games server vanished unnoticed in 2026).
+# A failure turns the run red and GitHub emails the repo owner, like the other scheduled checks.
+name: Daily — outside services answer
+on:
+  schedule:
+    - cron: '53 10 * * *'   # off the hour on purpose (GitHub delays :00 cron under load)
+  push:
+    branches: [session/test-suite-rethink]   # development only; remove when this lands on master
+    paths: ['.github/real-app/outside-services.mjs', '.github/workflows/daily-outside-services.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  services:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: .github/real-app }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: node .github/real-app/outside-services.mjs
