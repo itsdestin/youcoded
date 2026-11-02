@@ -15,6 +15,7 @@ unzip -q "$APK" 'lib/arm64-v8a/*' 'assets/*'
 APP_ID=$(tr -d '[:space:]' < assets/runtime/app-id.txt)
 FILES=/data/data/$APP_ID/files
 NATIVE=$WORK/lib/arm64-v8a        # stands in for Android's nativeLibraryDir
+chmod +x "$NATIVE"/*.so           # Android marks native libraries runnable on install; unzip doesn't
 sudo mkdir -p "$FILES" && sudo chown -R "$(id -u):$(id -g)" "/data/data/$APP_ID"
 USR=$FILES/usr
 mkdir -p "$USR/bin" "$USR/lib" "$USR/libexec/git-core" "$USR/etc/ssl/certs" "$USR/share" "$FILES/home" "$FILES/tmp" "$FILES/userdata"
