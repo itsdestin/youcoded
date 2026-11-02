@@ -19,7 +19,7 @@ import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { checkPathGuard, canonicalize, realpathNearestSync } from './guards';
-import { isPhoneDeniedPath } from './credential-paths';
+import { isPhoneDeniedPath, isSearchExcludedPath } from './credential-paths';
 import { readOnlyVerdict } from '../../../shared/safe-readonly-commands';
 
 const execFileAsync = promisify(execFile);
@@ -67,6 +67,57 @@ function isExtraDenied(word: string, cwd: string): boolean {
   return false;
 }
 
+/** Most files a recursive search is checked over before it simply asks (a huge tree is not an everyday quiet search). */
+const MAX_SEARCH_ENTRIES = 60_000;
+
+/**
+ * A recursive content search (`grep -r`, `rg`) prints file contents, so it must not run quietly over a folder that
+ * holds a file the Grep tool refuses (.env, key bundles, saved logins, a git config with web addresses…). Looks at
+ * every file under the folders the command names (or the shell's folder if none), without following links, and says
+ * false — meaning "ask" — if it finds one, finds more than it is willing to look through, or cannot read a folder.
+ * The list of refused files is credential-paths.ts' own (isSearchExcludedPath), not a second copy.
+ */
+export async function searchTreeHasNoSecrets(words: string[], cwd: string): Promise<boolean> {
+  const roots: string[] = [];
+  for (const w of words.slice(1)) {
+    if (w.startsWith('-')) continue;
+    const expanded = w === '~' ? os.homedir() : w.startsWith('~/') ? path.join(os.homedir(), w.slice(2)) : w;
+    const abs = path.resolve(cwd, expanded);
+    if (await fs.promises.lstat(abs).then(() => true, () => false)) roots.push(abs);
+  }
+  // A word like the search text is not a path and is skipped above; with no real path named, the shell's folder is searched.
+  if (roots.length === 0) roots.push(path.resolve(cwd));
+  let seen = 0;
+  // ripgrep on its own skips dot-files and folders (so a project's .env is never read by a plain `rg x`); the
+  // widening flags (-u, --hidden, --no-ignore…) and grep's -r do read them.
+  const rgOnly = words[0] === 'rg' && !words.some((w) => /^(grep|egrep|fgrep)$/.test(w));
+  const widened = words.some((w) => /^--(hidden|unrestricted|no-ignore.*)$/.test(w) || /^-[A-Za-z]*u[A-Za-z]*$/.test(w));
+  const skipsHidden = rgOnly && !widened;
+  const looksSecret = async (p: string): Promise<boolean> => {
+    const norm = p.replace(/\\/g, '/');
+    if (/(^|\/)\.git\/config$/.test(norm)) {
+      // A repo's own settings are only a secret when a saved web address carries a login (https://user:token@host).
+      const text = await fs.promises.readFile(p, 'utf8').catch(() => null);
+      return text === null || /:\/\/[^/\s@]+@/.test(text.slice(0, 65536));
+    }
+    return isSearchExcludedPath(norm);
+  };
+  const walk = async (p: string): Promise<boolean> => {
+    if (++seen > MAX_SEARCH_ENTRIES) return false;
+    if (skipsHidden && path.basename(p).startsWith('.') && !roots.includes(p)) return true;
+    if (await looksSecret(p)) return false;
+    let st: fs.Stats;
+    try { st = await fs.promises.lstat(p); } catch { return false; }
+    if (!st.isDirectory()) return true;
+    let names: string[];
+    try { names = await fs.promises.readdir(p); } catch { return false; }
+    for (const n of names) if (!(await walk(path.join(p, n)))) return false;
+    return true;
+  };
+  for (const r of roots) if (!(await walk(r))) return false;
+  return true;
+}
+
 /** A PATH with an empty or `.` entry would let a file in the project stand in for `ls`. */
 function pathIsClean(pathVar: string | undefined = process.env.PATH): boolean {
   if (!pathVar) return false;
@@ -89,7 +140,13 @@ export function pathsAreNotSecret(words: string[], cwd: string, readsFolders = f
     if (eq > 0) candidates.add(raw.slice(eq + 1));
     for (const c of candidates) {
       if (c === '' || c.startsWith('-') && !c.includes('/') && !c.includes('.')) continue;
-      if (checkPathGuard(c, cwd).kind === 'deny') return false;
+      // WHY not just 'deny': the file tools ask before touching anything OUTSIDE the project ('external'); a look-only
+      // command must not be quieter than they are, or `cat ~/Documents/taxes.txt` would run with no card.
+      if (c === '/dev/null') continue; // reading nothing is harmless
+      const home = os.homedir();
+      // The shell expands a leading ~ before any program sees it; the path guard does not.
+      const real = c === '~' ? home : c.startsWith('~/') ? path.join(home, c.slice(2)) : c;
+      if (checkPathGuard(real, cwd).kind !== 'ok') return false;
       if (isExtraDenied(c, cwd)) return false;
     }
   }
@@ -235,7 +292,8 @@ export async function readOnlyChecksFor(subject: string, here: string, powershel
   const v = readOnlyVerdict(subject, { powershell });
   if (!v.safe) return undefined;
   return {
-    pathsOk: pathIsClean() && pathsAreNotSecret(v.words, here, v.readsFolders, v.readsFromCwd),
+    pathsOk: pathIsClean() && pathsAreNotSecret(v.words, here, v.readsFolders, v.readsFromCwd)
+      && (!v.readsFromCwd || await searchTreeHasNoSecrets(v.words, here)),
     gitOk: v.usesGit ? await gitSettingsRunNothing(here) : true,
   };
 }

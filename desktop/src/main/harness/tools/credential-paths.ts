@@ -212,3 +212,27 @@ export const CREDENTIAL_EXCLUDE_GLOBS: readonly string[] = [
   ...KEY_NAME_PREFIXES.map((k) => `!**/${k}*`),
   ...ASSISTANT_KEY_EXTENSIONS.map((ext) => `!**/*${ext}`),
 ];
+
+// WHY (integration review 2026-11-01): the Bash look-only list lets `grep -r` / `rg` run without asking, but those
+// print file contents, and unlike the Grep tool they cannot be given the exclusion list above. So the guard asks the
+// question the other way round: "would the Grep tool have skipped any file under here?" — answered from the SAME
+// CREDENTIAL_EXCLUDE_GLOBS list (one source of truth), by turning each glob into a pattern.
+const EXCLUDE_PATTERNS: RegExp[] = CREDENTIAL_EXCLUDE_GLOBS.filter((g) => g.startsWith('!')).map((g) => {
+  const body = g.slice(1);
+  let rx = '';
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === '*' && body[i + 1] === '*') {
+      i++;
+      if (body[i + 1] === '/') { i++; rx += '(?:.*/)?'; } else rx += '.*';
+    } else if (ch === '*') rx += '[^/]*';
+    else rx += ch.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`(?:^|/)${rx}$`, 'i');
+});
+
+/** True when the Grep tool would refuse to search this path (a slash-separated path, relative or absolute). */
+export function isSearchExcludedPath(p: string): boolean {
+  const norm = p.replace(/\\/g, '/');
+  return EXCLUDE_PATTERNS.some((rx) => rx.test(norm));
+}

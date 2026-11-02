@@ -14,7 +14,7 @@ import { execFileSync } from 'child_process';
 import { readOnlyVerdict, readOnlyProgramNames, READONLY_COMMAND_GROUPS, MAX_READONLY_LENGTH } from '../src/shared/safe-readonly-commands';
 import { rulesForMode, DESTRUCTIVE_DENY_LIST } from '../src/shared/permission-types';
 import { decidePermission } from '../src/main/harness/permission-engine';
-import { configRunsPrograms, pathsAreNotSecret, gitSettingsRunNothing } from '../src/main/harness/tools/readonly-guard';
+import { configRunsPrograms, pathsAreNotSecret, gitSettingsRunNothing, searchTreeHasNoSecrets } from '../src/main/harness/tools/readonly-guard';
 
 const safe = (c: string) => readOnlyVerdict(c).safe;
 
@@ -50,7 +50,7 @@ const ALLOWED: string[] = [
   'git ls-files', 'git ls-files -m', 'git ls-tree HEAD', 'git ls-tree -r --name-only HEAD', 'git cat-file -p HEAD', 'git cat-file -t HEAD',
   'git describe --tags', 'git rev-list --count HEAD', 'git rev-list --max-count=5 HEAD', 'git merge-base main HEAD', 'git blame a.txt', 'git blame -L 1,5 a.txt',
   'git name-rev HEAD', 'git show-ref', 'git show-ref --heads', 'git for-each-ref --format=%(refname) refs/heads'.replace('%(refname)', 'x'), 'git count-objects -v',
-  'git grep foo', 'git grep -n foo -- src', 'git remote', 'git remote -v', 'git remote get-url origin', 'git worktree list', 'git stash list', 'git reflog', 'git reflog show',
+  'git grep foo', 'git grep -n foo -- src', 'git remote', 'git worktree list', 'git stash list', 'git reflog', 'git reflog show',
   'git --no-pager log', 'git --no-pager diff', 'git --version', 'git version',
   // harmless spellings: padding, end-of-options, bare dash, a lone ~ inside a revision
   ' ls', 'ls ', 'ls --', 'ls -- -la', 'ls -- --all', 'ls -', 'ls --color=', 'git log HEAD~3..HEAD', 'ls a~', 'git show HEAD^', 'git diff main..feature~2',
@@ -88,7 +88,7 @@ const HOSTILE: Record<string, string[]> = {
     'git cat-file --filters HEAD:a', 'git cat-file --batch', 'git grep -O', 'git grep --open-files-in-pager=sh x', 'git grep -Osh x', 'git grep --exec x', 'git ls-remote --upload-pa="sh" r',
     'git ls-remote origin', 'git fetch', 'git pull', 'git push', 'git commit -m x', 'git add .', 'git reset --hard', 'git checkout .', 'git clean -fd', 'git stash', 'git stash pop', 'git stash drop',
     'git branch newbranch', 'git branch -d x', 'git branch -D x', 'git branch -m a b', 'git branch -c a b', 'git branch --set-upstream-to=o/x', 'git branch -f x HEAD', 'git branch -l newname',
-    'git tag v1', 'git tag -d v1', 'git tag -a v1 -m x', 'git tag -f v1', 'git remote add o u', 'git remote set-url o u', 'git remote remove o', 'git remote show origin', 'git remote update',
+    'git tag v1', 'git tag -d v1', 'git tag -a v1 -m x', 'git tag -f v1', 'git remote -v', 'git remote --verbose', 'git remote get-url origin', 'git remote add o u', 'git remote set-url o u', 'git remote remove o', 'git remote show origin', 'git remote update',
     'git config --list', 'git config user.name x', 'git config --get remote.origin.url', 'git help log', 'git log --exec=x', 'git reflog expire --all', 'git reflog delete HEAD@{0}',
     'git worktree add ../x', 'git worktree remove x', 'git submodule status', 'git submodule update', 'git apply p', 'git am p', 'git rebase main', 'git merge x', 'git cherry-pick x',
     'git -c', 'git', 'git --no-pager', 'git status --upload-pack=x', 'git diff --no-index a b --output=c', 'git rev-parse --resolve-git-dir x', 'git log -c core.pager=x',
@@ -337,9 +337,9 @@ describe('folder-reading commands pointed at a folder that holds the credential 
     expect(pathsAreNotSecret(['grep', '-r', 'x', '/'], tmp, true)).toBe(false);
     expect(pathsAreNotSecret(['rg', 'x', path.dirname(os.homedir())], tmp, true)).toBe(false);
   });
-  it('a project folder is fine, and so is listing home by name only', () => {
+  it('a project folder is fine; listing home asks now (outside the project)', () => {
     expect(pathsAreNotSecret(['grep', '-r', 'x', '.'], tmp, true)).toBe(true);
-    expect(pathsAreNotSecret(['ls', '~'], tmp, false)).toBe(true);
+    expect(pathsAreNotSecret(['ls', '~'], tmp, false)).toBe(false);
   });
 });
 
@@ -446,5 +446,36 @@ describe('nested repositories carry their own settings', () => {
     const cfgDir = fs.readFileSync(path.join(outer, 'sub', '.git'), 'utf8').replace('gitdir:', '').trim();
     fs.appendFileSync(path.join(path.resolve(path.join(outer, 'sub'), cfgDir), 'config'), '[core]\n\tfsmonitor = /tmp/evil\n');
     expect(await gitSettingsRunNothing(outer)).toBe(false);
+  });
+});
+
+describe('look-only commands are not quieter than the file tools', () => {
+  it('a path outside the project asks (the file tools ask for it too)', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-ext-'));
+    for (const w of ['/etc/hosts', '../x.txt', '~/Documents/taxes.txt']) expect(pathsAreNotSecret(['cat', w], tmp), w).toBe(false);
+    expect(pathsAreNotSecret(['cat', 'inside.txt'], tmp)).toBe(true);
+  });
+  it('a recursive search over a project holding a secret file asks; a clean one does not', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-tree-'));
+    fs.mkdirSync(path.join(tmp, 'src'));
+    fs.writeFileSync(path.join(tmp, 'src', 'a.ts'), 'x');
+    expect(await searchTreeHasNoSecrets(['grep', '-r', 'key', '.'], tmp)).toBe(true);
+    fs.writeFileSync(path.join(tmp, 'src', 'cert.pem'), 'x');
+    expect(await searchTreeHasNoSecrets(['grep', '-r', 'key', '.'], tmp)).toBe(false);
+    fs.rmSync(path.join(tmp, 'src', 'cert.pem'));
+    fs.writeFileSync(path.join(tmp, '.env'), 'KEY=1');
+    expect(await searchTreeHasNoSecrets(['grep', '-r', 'key'], tmp)).toBe(false);
+    // plain rg never reads dot-files; the widening flags do
+    expect(await searchTreeHasNoSecrets(['rg', 'key'], tmp)).toBe(true);
+    expect(await searchTreeHasNoSecrets(['rg', '-uu', 'key'], tmp)).toBe(false);
+    expect(await searchTreeHasNoSecrets(['rg', '--hidden', 'key'], tmp)).toBe(false);
+  });
+  it('a git config holding a saved login asks, a plain one does not', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-gitcfg-'));
+    fs.mkdirSync(path.join(tmp, '.git'));
+    fs.writeFileSync(path.join(tmp, '.git', 'config'), '[remote "origin"]\n\turl = https://github.com/a/b.git\n');
+    expect(await searchTreeHasNoSecrets(['grep', '-r', 'x', '.'], tmp)).toBe(true);
+    fs.writeFileSync(path.join(tmp, '.git', 'config'), '[remote "origin"]\n\turl = https://me:tok@github.com/a/b.git\n');
+    expect(await searchTreeHasNoSecrets(['grep', '-r', 'x', '.'], tmp)).toBe(false);
   });
 });

@@ -68,7 +68,7 @@ export const PERMISSIONS_EXPLAINER_SECTIONS: ExplainerSection[] = [
     heading: 'Commands that never ask',
     paragraphs: [
       "A built-in list of look-only commands (like listing files, searching, or checking what changed in git) runs without asking in Ask first and Auto edit. Each is only allowed in its looking form: the same command used to change or delete something, send something out, or run another program still asks.",
-      'Anything that points at passwords, keys or saved logins asks first, and so does git in a project whose own settings make git launch other programs. You cannot add to this list; “Always allow” is for everything else.',
+      'Anything that points at passwords, keys or saved logins asks first, and so does a search through a folder that holds such a file, or any file outside the project folder. So does git in a project whose own settings make git launch other programs, and git remote (it can show a saved password). You cannot add to this list; “Always allow” is for everything else.',
     ],
   },
   {

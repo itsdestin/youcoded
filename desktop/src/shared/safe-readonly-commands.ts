@@ -516,7 +516,6 @@ function positionalWords(spec: Spec, args: string[]): string[] {
     if (ended || a === '-' || !a.startsWith('-')) { out.push(a); continue; }
     if (a === '--') { ended = true; continue; }
     if (a.startsWith('--')) {
-      const name = a.slice(2).split('=')[0];
       continue;
     }
     if (spec.numeric && /^-\d+$/.test(a)) continue;
@@ -540,8 +539,9 @@ function gitMatches(args: string[]): boolean {
   const rest = args.slice(i + 1);
   if (sub === 'branch') return gitBranchOk(rest);
   if (sub === 'tag') return gitTagOk(rest);
-  if (sub === 'remote') return rest.length === 0 || (rest.length === 1 && (rest[0] === '-v' || rest[0] === '--verbose')) ||
-    (rest[0] === 'get-url' && argsMatch({ long: L('push all') }, rest.slice(1)) && noDash(rest.slice(1).filter((w) => !w.startsWith('--'))));
+  // WHY only the bare `git remote` (names): -v and get-url print the saved web addresses, and those can carry a
+  // password or token (https://user:token@host/...). They ask like any other command that might show a secret.
+  if (sub === 'remote') return rest.length === 0;
   if (sub === 'worktree') return rest[0] === 'list' && argsMatch({ short: 'v', long: L('porcelain verbose') }, rest.slice(1));
   if (sub === 'stash') return (rest[0] === 'list' || rest[0] === 'show') && argsMatch(GIT_SUB.log, rest.slice(1));
   if (sub === 'reflog') return rest.length === 0 || (rest[0] === 'show' && argsMatch(GIT_SUB.log, rest.slice(1)));
