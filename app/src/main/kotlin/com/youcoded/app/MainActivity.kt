@@ -28,11 +28,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,11 +42,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.youcoded.app.bridge.HostJsBridge
 import com.youcoded.app.runtime.BackendService
 import com.youcoded.app.runtime.RuntimeInstaller
 import com.youcoded.app.ui.AppWebView
+import com.youcoded.app.ui.BrandLoadingScreen
 import com.youcoded.app.ui.QrScannerOverlay
 import com.youcoded.app.ui.theme.AppTheme
 
@@ -99,11 +102,15 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
         setContent {
             AppTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
-                        val state by BackendService.state.collectAsStateWithLifecycle()
+                    val state by BackendService.state.collectAsStateWithLifecycle()
+                    val s0 = state
+                    // WHY outside the padded box: the brand screen fills the whole display, behind the status and
+                    // navigation bars too, instead of a dark strip above and below a lavender middle.
+                    if (s0 is BackendService.State.Starting && loadedToken == null) Starting(s0.message)
+                    else Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
                         when (val s = state) {
                             is BackendService.State.Ready -> Page(s)
-                            is BackendService.State.Starting -> if (loadedToken == null) Starting(s.message) else Page(null)
+                            is BackendService.State.Starting -> Page(null)
                             is BackendService.State.Failed -> Failed(s.message)
                         }
                         showQr.value?.let { done ->
@@ -153,13 +160,19 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
         }
     }
 
+    /** The brand loading screen (ui/BrandLoading.kt). Dark status-bar icons while it shows, so they read on the lavender;
+     *  the page sets its own once it loads, so the previous setting is put back when this screen goes. */
     @Composable
     private fun Starting(message: String) {
-        Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator()
-            Spacer(Modifier.height(16.dp))
-            Text(message, textAlign = TextAlign.Center)
+        val view = LocalView.current
+        DisposableEffect(Unit) {
+            val bars = WindowCompat.getInsetsController(window, view)
+            val wasLight = bars.isAppearanceLightStatusBars to bars.isAppearanceLightNavigationBars
+            bars.isAppearanceLightStatusBars = true
+            bars.isAppearanceLightNavigationBars = true
+            onDispose { bars.isAppearanceLightStatusBars = wasLight.first; bars.isAppearanceLightNavigationBars = wasLight.second }
         }
+        BrandLoadingScreen(message)
     }
 
     /**

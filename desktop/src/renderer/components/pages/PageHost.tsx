@@ -624,9 +624,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       {/* Below the band: the panel in its own rounded container and the page
           pane, both inset by the frame edge, like the chat pane and the
           files/games pane are in a chat session. */}
-      {/* WHY pt-px on a phone (Destin, 2026-11-01: "the top of the page border is cut off"): overflow-hidden (needed for the slide)
-          clipped the panes' 1px outer outline along the top edge, where the body has no padding. */}
-      <div className={`screen-body flex-1 min-h-0 flex${phoneLayout ? ' relative overflow-hidden pt-px' : ''}`}>
+      {/* WHY 1px top padding on a phone (Destin, 2026-11-01: "the top of the page border is cut off"): overflow-hidden (needed
+          for the slide) clipped the panes' 1px outer outline along the top edge, where .screen-body has no padding. Inline,
+          because globals.css's unlayered `.screen-body { padding }` beats a Tailwind `pt-px` (seen on the phone: computed 0px). */}
+      <div className={`screen-body flex-1 min-h-0 flex${phoneLayout ? ' relative overflow-hidden' : ''}`}
+        style={phoneLayout ? { paddingTop: 1 } : undefined}>
         {/* With Office built in the panel always has something to list, so it
             stays beside the first-run card instead of hiding. WHY panel-glass while see-through (ux review 2, U5): the list sat over
             the wallpaper unframed and names ran into tree edges; it gets the same one theme-engine glass as the page pane, and Reduced

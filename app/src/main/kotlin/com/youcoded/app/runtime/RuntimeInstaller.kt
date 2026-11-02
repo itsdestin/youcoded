@@ -57,6 +57,7 @@ class RuntimeInstaller(private val context: Context) {
 
     /** Lay everything out. Safe to repeat: each step replaces what it owns. [progress] gets plain sentences. */
     fun install(progress: (String) -> Unit) {
+        val startedAt = System.currentTimeMillis() // logged at the end: how long an update keeps the user on this screen
         progress("Setting up YouCoded…")
         listOf(bin, lib, File(usr, "libexec/git-core"), etc, home, tmp, userData).forEach { it.mkdirs() }
 
@@ -83,10 +84,8 @@ class RuntimeInstaller(private val context: Context) {
         File(usr, "share").mkdirs()
         untarGz(context.assets.open("runtime/share.tgz"), File(usr, "share"))
 
-        progress("Unpacking the assistant…")
         val staging = File(files, "backend.new")
-        staging.deleteRecursively()
-        untarGz(context.assets.open("backend.tgz"), staging)
+        installBackend(staging, progress)
         // node-pty's native part is a library in the native-lib folder; Node loads it from the real path.
         val ptyDir = File(staging, "node_modules/node-pty/build/Release").apply { mkdirs() }
         File(nativeLibDir, "libptynode.so").copyTo(File(ptyDir, "pty.node"), overwrite = true)
@@ -94,7 +93,7 @@ class RuntimeInstaller(private val context: Context) {
         if (!staging.renameTo(backend)) throw IllegalStateException("Could not move the assistant into place.")
 
         stampFile.writeText(stamp())
-        Log.i(TAG, "runtime laid out for ${stamp()}")
+        Log.i(TAG, "runtime laid out in ${System.currentTimeMillis() - startedAt} ms for ${stamp()}")
     }
 
     /** The environment every backend process (and everything it starts) runs with. */
@@ -155,6 +154,57 @@ class RuntimeInstaller(private val context: Context) {
         context.assets.open(name).use { input -> to.outputStream().use { input.copyTo(it) } }
     }
 
+    /**
+     * Unpack backend.tgz into [staging]. WHY (2026-11-01 phone test: "Unpacking…" took ~11 s after every update): ~15,400 of
+     * its ~17,000 files are third-party code (node_modules + legal) that only changes with the dependencies. The archive
+     * starts with ./.deps-stamp, a fingerprint of that part, and ends with it (build-backend.sh). When the fingerprint matches
+     * the copy already on the phone, that copy is moved over as it is and reading stops at the first dependency entry, so an
+     * ordinary update writes only the app's own files. Anything else (first install, changed dependencies, a missing or
+     * damaged copy) unpacks everything, as before. Moves are renames inside files/, so they are instant.
+     */
+    private fun installBackend(staging: File, progress: (String) -> Unit) {
+        staging.deleteRecursively()
+        staging.mkdirs()
+        val root = staging.canonicalPath + File.separator
+        val keptStamp = File(backend, "node_modules/$DEPS_STAMP_FILE").takeIf { it.isFile }?.readText()?.trim()
+        TarArchiveInputStream(GZIPInputStream(context.assets.open("backend.tgz").buffered(1 shl 16), 1 shl 16)).use { tar ->
+            var entry = tar.nextEntry
+            val stamp = if (entry != null && entry.name.removePrefix("./") == ".deps-stamp") tar.readBytes().toString(Charsets.UTF_8).trim() else null
+            val reuse = stamp != null && stamp == keptStamp && File(backend, "node_modules").isDirectory && File(backend, "legal").isDirectory
+            progress(if (reuse) "Updating the assistant…" else "Unpacking the assistant…")
+            if (reuse) {
+                // The old copy moves into the new layout before anything is written; a crash now just means a full unpack next time.
+                if (!File(backend, "node_modules").renameTo(File(staging, "node_modules")) || !File(backend, "legal").renameTo(File(staging, "legal"))) {
+                    throw IllegalStateException("Could not keep the assistant's existing files.")
+                }
+            }
+            if (stamp != null) entry = tar.nextEntry
+            while (entry != null) {
+                val name = entry.name.removePrefix("./")
+                val isDeps = name == "node_modules" || name == "legal" || name.startsWith("node_modules/") || name.startsWith("legal/")
+                // The dependencies come last in the archive, so with a kept copy there is nothing more to read.
+                if (reuse && isDeps) break
+                extractEntry(tar, entry, File(staging, name), root, staging)
+                entry = tar.nextEntry
+            }
+            // Written only after a full unpack of the dependencies, so a half-written copy is never trusted.
+            if (!reuse && stamp != null) File(staging, "node_modules/$DEPS_STAMP_FILE").writeText(stamp)
+        }
+    }
+
+    private fun extractEntry(tar: TarArchiveInputStream, entry: org.apache.commons.compress.archivers.tar.TarArchiveEntry, out: File, root: String, dest: File) {
+        if (!out.canonicalPath.startsWith(root) && out.canonicalPath != dest.canonicalPath) return
+        when {
+            entry.isDirectory -> out.mkdirs()
+            entry.isSymbolicLink -> { out.parentFile?.mkdirs(); out.delete(); android.system.Os.symlink(entry.linkName, out.path) }
+            else -> {
+                out.parentFile?.mkdirs()
+                out.outputStream().buffered(1 shl 16).use { tar.copyTo(it, 1 shl 16) }
+                if (entry.mode and 0b001_001_001 != 0) out.setExecutable(true, false)
+            }
+        }
+    }
+
     /** Extract a .tar.gz, keeping symlinks and the executable bit; refuses entries that escape [dest]. */
     private fun untarGz(input: InputStream, dest: File) {
         dest.mkdirs()
@@ -177,5 +227,9 @@ class RuntimeInstaller(private val context: Context) {
         }
     }
 
-    companion object { private const val TAG = "RuntimeInstaller" }
+    companion object {
+        private const val TAG = "RuntimeInstaller"
+        /** Inside the unpacked node_modules: the fingerprint of the dependencies it holds (see installBackend). */
+        private const val DEPS_STAMP_FILE = ".youcoded-deps-stamp"
+    }
 }

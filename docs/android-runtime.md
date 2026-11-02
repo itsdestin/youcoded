@@ -85,6 +85,15 @@ is copied from the native-lib folder) · `home/` (HOME: `~/.claude`, conversatio
 backend's userData; `backend.log` is the backend's console) · `tmp/` (TMPDIR). `RuntimeInstaller` rebuilds the
 links whenever the app version or the native-lib folder changes.
 
+**Updates keep the dependencies (2026-11-01).** `backend.tgz` starts with `./.deps-stamp` (a fingerprint of `node_modules/` +
+`legal/`, ~15,400 of its ~17,000 files) and ends with those two folders. When the stamp matches
+`backend/node_modules/.youcoded-deps-stamp`, `RuntimeInstaller.installBackend` moves the existing copy into the new layout and
+stops reading at the first dependency entry ("Updating the assistant…"); otherwise it unpacks everything ("Unpacking the
+assistant…"). Before: ~10.7 s on a Galaxy Z Flip7 after every update. logcat `RuntimeInstaller` "runtime laid out in N ms" and
+`BackendService` "backend ready in N ms" time the two loading screens. Phone sessions also start Claude Code with
+`--messaging-socket-path` (one socket per session in `tmp/`): Android's `/data` is owned by the system account, so Claude
+Code's own socket-folder check always failed and printed "Cross-session messaging is off".
+
 ## Developing
 
 The runtime build currently requires a **Linux x64 host**: `build-runtime.sh` downloads an x86_64 Linux `patchelf` and uses GNU tools such as `nproc`. Use a Linux x64 environment (for example WSL or a VM) rather than running the runtime build directly on Windows, macOS or Linux ARM. Install the Android SDK, JDK 17 or newer (CI uses Temurin 17; 21 verified locally), Node.js/npm, Bash, Python 3, curl, tar, make, clang and lld first.

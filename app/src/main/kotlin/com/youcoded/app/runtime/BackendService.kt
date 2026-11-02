@@ -158,6 +158,7 @@ class BackendService : Service() {
             // and removes it, so programs the backend starts never see it.
             "YOUCODED_ANDROID_ID" to androidId(),
         ))
+        val launchedAt = System.currentTimeMillis() // logged when ready: how long "Starting the assistant…" stays up
         val pb = ProcessBuilder(File(installer.bin, "node").path, "dist/main/headless/headless-main.js")
             .directory(installer.backend)
             .redirectErrorStream(true)
@@ -182,6 +183,7 @@ class BackendService : Service() {
                     out.write(line); out.newLine(); out.flush()
                     if (line.startsWith("YOUCODED_HEADLESS_READY") && gen == generation) {
                         ready = true
+                        Log.i(TAG, "backend ready in ${System.currentTimeMillis() - launchedAt} ms")
                         _state.value = State.Ready(port, token)
                     }
                 }
