@@ -204,7 +204,7 @@ try {
     await panelSearch.waitFor({ timeout: 15_000 });
     // The panel's row reads "<TYPE> <name> created · <when>"; the chat's own mentions never say "created ·".
     await page.getByRole('button', { name: new RegExp(`${name.replace('.', '\\.')}.*created`) }).first().click({ timeout: 15_000 });
-    await page.getByRole('button', { name: WORDS.edit, exact: true }).filter({ visible: true }).first().waitFor({ timeout: 30_000 });
+    await page.getByRole('button', { name: WORDS.edit, exact: true }).first().waitFor({ state: 'attached', timeout: 30_000 });
   }
 
   // KNOWN FAILURE until the first-run fix lands (plan, Phase 3 findings): after an API-key sign-in the form
@@ -309,6 +309,8 @@ try {
 
   await step('edit-file', 'The user edits the file in the viewer, saves, and the change is on disk', async () => {
     const file = path.join(home, 'walkthrough-check.txt');
+    // The viewer shows its Edit button while the pointer is over the file, so point at the file first.
+    await page.getByText('mango', { exact: true }).last().hover();
     await page.getByRole('button', { name: WORDS.edit, exact: true }).filter({ visible: true }).first().click();
     const editor = page.locator('.cm-content[contenteditable="true"]').first();
     await editor.click();
