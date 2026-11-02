@@ -41,6 +41,7 @@ const WORDS = {
   resumeOffered: /^Resume \d+$/,        // the "Welcome back" panel after a restart (its Resume N button)
   detailsChip: /walkthrough-tag|Add tags|tag/i, // the status-bar chip that opens the chat's details once it has a tag
   edit: 'Edit',                         // the file viewer's Edit button
+  filesButton: 'Session files',         // header button (HeaderBar.tsx aria-label)
   filesSearch: 'Search files',          // the Files panel's search box
   projects: 'Open projects',            // header button
   tipGotIt: 'Got it',                   // the buddy's tip bubble
@@ -196,11 +197,10 @@ try {
 
   // Open a file through the Files panel (the header's 📄 button). WHY not the chat: the assistant only sometimes
   // turns a file name in its reply into a clickable chip, so the panel is the dependable way in.
-  // FINDING: that button's only accessible name is its count ("1"), so it's found by its count here.
   // Passes only once the real viewer is up (its Edit button shows) — a preview inside the chat doesn't count.
   async function openFromFilesPanel(name) {
     const panelSearch = page.getByPlaceholder(WORDS.filesSearch);
-    if (!(await panelSearch.isVisible().catch(() => false))) await page.getByRole('button', { name: /^\d+$/ }).first().click();
+    if (!(await panelSearch.isVisible().catch(() => false))) await page.getByRole('button', { name: WORDS.filesButton }).click();
     await panelSearch.waitFor({ timeout: 15_000 });
     // The panel's row reads "<TYPE> <name> created · <when>"; the chat's own mentions never say "created ·".
     await page.getByRole('button', { name: new RegExp(`${name.replace('.', '\\.')}.*created`) }).first().click({ timeout: 15_000 });
