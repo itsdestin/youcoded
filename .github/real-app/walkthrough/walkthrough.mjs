@@ -28,7 +28,10 @@ const WORDS = {
   send: 'Send message',                 // its send button (InputBar.tsx aria-label)
   attach: /^Attach/,
   browseSkills: 'Browse skills',        // compass in the message bar (InputBar.tsx)
-  openMarketplace: 'Open marketplace',  // in the skills drawer (CommandDrawer.tsx)                    // the paperclip (InputBar.tsx)
+  openMarketplace: 'Open marketplace',  // in the skills drawer (CommandDrawer.tsx)
+  marketSearch: 'Search the marketplace',
+  install: /^Install\b/,               // a listing's install button
+  applyTheme: /^(Apply|Use)( theme)?\b/, // an installed theme's apply button                    // the paperclip (InputBar.tsx)
   modelMenu: 'Model',                   // the session form's model menu (model/ModelPicker.tsx aria-label)
   modelSearch: 'Search all models',     // its search box
   keySource: 'Anthropic',               // the source shown beside models of the app's own assistant (first-run.ts NATIVE_KEY_LABEL)
@@ -368,12 +371,36 @@ try {
     return await askAndExpect('What is the secret fruit in the attached file? Answer with one word.', /kumquat/i);
   }, { critical: false });
 
-  await step('market-explore', 'EXPLORING: the marketplace screen', async () => {
+  async function openMarketplace() {
     await page.getByRole('button', { name: WORDS.browseSkills }).click();
     await page.getByRole('button', { name: WORDS.openMarketplace }).click({ timeout: 10_000 });
-    await sleep(5000);
-    console.log(`      market: ${JSON.stringify(await seen()).slice(0, 2500)}`);
-    await snap('market-explore');
+    await page.getByPlaceholder(WORDS.marketSearch).waitFor({ timeout: 30_000 });
+  }
+
+  await step('install-skill', 'The user installs a skill from the marketplace and it is really installed', async () => {
+    await openMarketplace();
+    await page.getByPlaceholder(WORDS.marketSearch).fill('civic report');
+    await page.getByText('Civic Report', { exact: true }).first().click({ timeout: 30_000 });
+    await page.getByRole('button', { name: WORDS.install }).filter({ visible: true }).first().click({ timeout: 15_000 });
+    // Outcome: the plugin is on disk where Claude Code and the app look for it (ClaudeCodeRegistry).
+    const dir = path.join(home, '.claude/plugins/marketplaces/youcoded/plugins/civic-report');
+    for (let i = 0; i < 60 && !fs.existsSync(dir); i++) await sleep(1000);
+    if (!fs.existsSync(dir)) throw new Error('no civic-report folder appeared in the plugins folder within 60s');
+    await page.keyboard.press('Escape');
+  }, { critical: false });
+
+  await step('install-theme', 'The user installs a theme from the marketplace, applies it, and the app switches to it', async () => {
+    await page.keyboard.press('Escape');
+    if (!(await page.getByPlaceholder(WORDS.marketSearch).isVisible().catch(() => false))) await openMarketplace();
+    await page.getByPlaceholder(WORDS.marketSearch).fill('golden sunbreak');
+    await page.getByText('Golden Sunbreak', { exact: true }).first().click({ timeout: 30_000 });
+    await page.getByRole('button', { name: WORDS.install }).filter({ visible: true }).first().click({ timeout: 15_000 });
+    const manifest = path.join(home, '.claude/wecoded-themes/golden-sunbreak/manifest.json');
+    for (let i = 0; i < 60 && !fs.existsSync(manifest); i++) await sleep(1000);
+    if (!fs.existsSync(manifest)) throw new Error('the theme was not saved to the themes folder within 60s');
+    await page.getByRole('button', { name: WORDS.applyTheme }).filter({ visible: true }).first().click({ timeout: 15_000 });
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'golden-sunbreak', null, { timeout: 15_000 });
+    await snap('theme-applied');
     await page.keyboard.press('Escape');
   }, { critical: false });
 
