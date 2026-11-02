@@ -283,6 +283,10 @@ function createUpdateService() {
   async function recordHighestInstalled(): Promise<void> {
     try {
       const running = app.getVersion();
+      // WHY (integration review 2026-11-01): a developer or test build (unpackaged, or a pre-release such as a beta)
+      // often carries a HIGHER number than any real release; remembering it would block every real update below it.
+      // Only a packaged, final release raises the bar.
+      if (app.isPackaged === false || /-/.test(running)) return;
       const stored = await readHighestInstalled();
       if (stored && compareVersions(stored, running) >= 0) return;
       await fs.promises.mkdir(updateCacheDir, { recursive: true });
@@ -458,7 +462,7 @@ function createUpdateService() {
     // a clean copy rather than re-verifying the same corrupt bytes.
     const verifyError = await verifyBeforeLaunch(payload.filePath);
     if (verifyError) {
-      if (verifyError === 'verify-failed') { try { await fs.promises.unlink(payload.filePath); } catch { /* ignore */ } }
+      if (verifyError === 'verify-failed' || verifyError === 'older-than-installed') { try { await fs.promises.unlink(payload.filePath); } catch { /* ignore */ } }
       return { success: false as const, error: verifyError };
     }
     const result = await launchInstaller({ jobId: payload.jobId, filePath: payload.filePath });

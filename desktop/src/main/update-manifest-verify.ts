@@ -184,7 +184,7 @@ export async function verifyDownloadedUpdate(input: VerifyUpdateInput): Promise<
   // release listing offer an old, signed, vulnerable build to a machine that was downgraded or
   // reinstalled. Also refuse anything older than the highest version this machine has ever run.
   if (highestInstalledVersion && compareVersions(manifest.version, highestInstalledVersion) < 0) {
-    throw new UpdateInstallError('verify-failed', `refusing rollback: ${manifest.version} < highest installed ${highestInstalledVersion}`);
+    throw new UpdateInstallError('older-than-installed', `refusing rollback: ${manifest.version} < highest installed ${highestInstalledVersion}`);
   }
 
   // 4. This file's integrity.

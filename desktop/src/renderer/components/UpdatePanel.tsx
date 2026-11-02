@@ -55,6 +55,9 @@ function updateErrorMessage(code: string): string {
   // put the failure inside the button's own label. The reason is a sentence in the notice box;
   // the button beside it reads only "Try again".
   if (code === 'verify-failed') return "The download was damaged, so it wasn't installed.";
+  // WHY its own sentence: this used to share "damaged download" although nothing was damaged — the release is real and
+  // signed, just older than one already run here (e.g. after a faulty release was withdrawn and an older one re-posted).
+  if (code === 'older-than-installed') return "This update is older than a version you've already run on this computer, so it wasn't installed.";
   if (code === 'disk-full') return "There isn't enough free space on this computer for the update.";
   // Installing a Linux system package needs an administrator password (2026-09-20).
   if (code === 'install-cancelled') return 'The password prompt was closed, so nothing was installed.';
@@ -559,7 +562,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 onReportBug={() => setReportMode('report')}
                 onRetry={isRetriableErrorCode(installState.code) ? handleUpdate : undefined}
                 details={installState.output}
-                moreActions={!unknownOutcome && installState.code !== 'verify-failed'
+                moreActions={!unknownOutcome && installState.code !== 'verify-failed' && installState.code !== 'older-than-installed'
                   && !(installState.stage === 'launch' && installState.code === 'busy') ? [
                   { label: 'Open in browser instead', onClick: handleFallbackBrowser },
                 ] : undefined}

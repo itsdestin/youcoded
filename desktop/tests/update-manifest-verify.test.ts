@@ -140,7 +140,7 @@ describe('verifyDownloadedUpdate — the full gate', () => {
     const bytes = bytesOf(manifestFor('1.3.0'));
     await expect(verifyDownloadedUpdate({
       ...base, filePath: installerPath, manifestBytes: bytes, signatureBytes: sign(bytes), highestInstalledVersion: '1.5.0',
-    })).rejects.toMatchObject({ code: 'verify-failed' });
+    })).rejects.toMatchObject({ code: 'older-than-installed' }); // its own code: the UI must not call this a damaged download
   });
 
   it('still accepts a release equal to or newer than the highest installed version', async () => {
