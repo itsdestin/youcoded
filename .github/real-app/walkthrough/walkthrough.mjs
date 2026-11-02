@@ -34,6 +34,9 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-newuser-'));
 const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'),
   XDG_DATA_HOME: path.join(home, '.local/share'), XDG_CACHE_HOME: path.join(home, '.cache') };
 delete env.WALKTHROUGH_KEY; delete env.ANTHROPIC_API_KEY;   // the app must get the key only by the user typing it
+// WHY: Electron picks its secure key storage from the desktop's name. A bare test machine has none, so the app
+// (rightly) refuses to save keys. Present as GNOME, the most common Linux desktop, whose keyring the workflow runs.
+if (process.platform === 'linux') env.XDG_CURRENT_DESKTOP = env.XDG_CURRENT_DESKTOP || 'GNOME';
 // WHY the Chromium switch: release builds never open a debugging port themselves (main.ts gates
 // YOUCODED_DEVTOOLS_PORT to unpackaged builds); this lets the walk-through see the page without changing the app.
 // No --no-sandbox: the workflow sets the sandbox up the way the .deb installer does. (With the switch, the app's
