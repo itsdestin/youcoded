@@ -551,7 +551,8 @@ html {
    own padding (float-chrome.css, more specific). */
 @media (max-width: 639.98px) {
   .terminal-overlay-scroll .xterm {
-    padding-left: 6px;
+    /* 12px, not 6: measured on the phone, 6px still left column 0 (Claude Code's "❯") half under the outline. */
+    padding-left: 12px;
   }
 }
 

@@ -20,6 +20,9 @@
 import type { Publish } from './publish';
 import type { SessionRecords } from './session-record';
 import { detectPermissionMode } from '../shared/permission-mode-detect';
+import type { PermissionMode } from '../shared/types';
+/** How much of the previous terminal piece is kept: the footer line (glyph + phrase + escapes) fits well inside it. */
+const OUTPUT_TAIL_CHARS = 200;
 import { claudeAliasForModelId, isPlaceholderModelId } from '../shared/model-ids';
 import { IPC } from '../shared/backend-contract';
 import { clearDividerId } from '../shared/divider-ids';
@@ -59,6 +62,10 @@ export interface SessionLiveDeps {
   /** Timers are injectable so a test does not wait three minutes. */
   setTimer?: (fn: () => void, ms: number) => { unref?: () => void } | unknown;
   clearTimer?: (handle: unknown) => void;
+  /** The mode just read from the footer. WHY (2026-11-01 phone test): the session's own info kept the launch guess 'normal', and a
+   *  screen that reloads its session list (the phone at start-up or after a reconnect) re-seeded NORMAL from it while Claude Code
+   *  said auto; the footer is not redrawn until the next turn, so it stayed wrong. The caller writes the mode back into the info. */
+  onModeRead?: (sessionId: string, mode: PermissionMode) => void;
 }
 
 export class SessionLiveFacts {
@@ -75,6 +82,8 @@ export class SessionLiveFacts {
   private readonly pendingModel = new Map<string, { alias: string; prev: string | null; at: number; turnStarted: boolean; popup: boolean; confirmed: boolean }>();
   private ids = 0;
   private readonly directReceipts = new Map<string, Set<string>>();
+  /** The end of each Claude Code session's last terminal piece (see noteOutput). */
+  private readonly outputTails = new Map<string, string>();
   private readonly stopTargets = new Map<string, { sessionId: string; epoch: string; userUuid: string; accepted?: boolean }>();
 
   constructor(private readonly deps: SessionLiveDeps) {
@@ -98,11 +107,16 @@ export class SessionLiveFacts {
    */
   noteOutput(sessionId: string, data: string): void {
     if (!this.deps.isClaude(sessionId)) return;
-    const mode = detectPermissionMode(data);
+    // The last bit of the previous piece rides along, so a footer split across two reads is still seen (permission-mode-detect.ts).
+    const tail = this.outputTails.get(sessionId) ?? '';
+    const joined = tail + data;
+    this.outputTails.set(sessionId, joined.slice(-OUTPUT_TAIL_CHARS));
+    const mode = detectPermissionMode(joined, tail.length);
     if (!mode) return;
     const known = this.deps.records.facts(sessionId)?.permissionMode ?? null;
     if (known === mode) return;
     this.deps.publish(sessionId, IPC.SESSION_PERMISSION_MODE, { sessionId, mode });
+    try { this.deps.onModeRead?.(sessionId, mode); } catch { /* bookkeeping only */ }
   }
 
   /**
@@ -367,6 +381,7 @@ export class SessionLiveFacts {
   /** The session ended: nothing left to watch. */
   forget(sessionId: string): void {
     this.directReceipts.delete(sessionId);
+    this.outputTails.delete(sessionId);
     for (const [id, target] of this.stopTargets) if (target.sessionId === sessionId) this.stopTargets.delete(id);
     this.disarm(sessionId);
     const w = this.clearTimers.get(sessionId);
