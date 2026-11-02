@@ -471,8 +471,10 @@ function SignedInBody({
               (Destin, 2026-10-31, security audit): "Sign out" only ends the sign-in on THIS device. If a
               phone is lost, this ends it everywhere. Secondary, with the plain consequence beside it; it does
               not sign this device out unless the server confirmed, so a failure is shown instead of hidden. */}
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="flex-1 min-w-0 text-xs text-fg-2">
+          {/* WHY stacked (2026-11-01 review deck): beside the long button label the sentence was
+              squeezed into a one-word-per-line column; text on its own line, button under it. */}
+          <div className="flex flex-col items-end gap-2">
+            <span className="w-full text-xs text-fg-2">
               Lost a device? Sign out of your YouCoded account everywhere, including this one. Phones paired to this computer are managed under Remote access.
             </span>
             <Button
