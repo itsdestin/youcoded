@@ -26,7 +26,9 @@ const WORDS = {
   startSession: 'Start session',        // welcome screen, form open
   messageBox: 'Message your assistant', // chat input placeholder (InputBar.tsx)
   send: 'Send message',                 // its send button (InputBar.tsx aria-label)
-  attach: /^Attach/,                    // the paperclip (InputBar.tsx)
+  attach: /^Attach/,
+  browseSkills: 'Browse skills',        // compass in the message bar (InputBar.tsx)
+  openMarketplace: 'Open marketplace',  // in the skills drawer (CommandDrawer.tsx)                    // the paperclip (InputBar.tsx)
   modelMenu: 'Model',                   // the session form's model menu (model/ModelPicker.tsx aria-label)
   modelSearch: 'Search all models',     // its search box
   keySource: 'Anthropic',               // the source shown beside models of the app's own assistant (first-run.ts NATIVE_KEY_LABEL)
@@ -364,6 +366,15 @@ try {
     await page.getByText('walkthrough-attach.txt').first().waitFor({ timeout: 15_000 });
     // The answer is only in the attached file, never in the question.
     return await askAndExpect('What is the secret fruit in the attached file? Answer with one word.', /kumquat/i);
+  }, { critical: false });
+
+  await step('market-explore', 'EXPLORING: the marketplace screen', async () => {
+    await page.getByRole('button', { name: WORDS.browseSkills }).click();
+    await page.getByRole('button', { name: WORDS.openMarketplace }).click({ timeout: 10_000 });
+    await sleep(5000);
+    console.log(`      market: ${JSON.stringify(await seen()).slice(0, 2500)}`);
+    await snap('market-explore');
+    await page.keyboard.press('Escape');
   }, { critical: false });
 
   await step('close-chat', 'The user closes the chat', async () => {
