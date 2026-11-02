@@ -103,7 +103,7 @@ function WayIcon({ id }: { id: WayIn }) {
 
 function Facts({ facts }: { facts: Group['facts'] }) {
   return (
-    <ul className="flex flex-col gap-1.5 max-sm:gap-1 text-sm max-sm:text-[13px] text-fg-2">
+    <ul className="flex flex-col gap-1.5 max-sm:gap-1 text-sm max-sm:text-sm-tight text-fg-2">
       {facts.map((f) => (
         <li key={f.kind} className="flex gap-2.5 leading-snug"><FactIcon kind={f.kind} />{f.text}</li>
       ))}
@@ -161,7 +161,7 @@ function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) =
           </span>
           <span className="flex-1 min-w-0">
             <span className="block brand-heading text-lg max-sm:text-base text-fg">{x.title}</span>
-            <span className="block text-sm max-sm:text-[13px] text-fg-dim">{x.summary}</span>
+            <span className="block text-sm max-sm:text-sm-tight text-fg-dim">{x.summary}</span>
           </span>
           {/* Narrow window: the badge waits for the second page, so the row's words get the room. */}
           <span className="brand-badge shrink-0 max-sm:hidden">{x.badge}</span>

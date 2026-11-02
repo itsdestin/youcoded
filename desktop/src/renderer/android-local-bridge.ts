@@ -80,6 +80,18 @@ const hostReceiver = {
   event(type: string, json: string): void {
     let payload: unknown;
     try { payload = json ? JSON.parse(json) : undefined; } catch { return; }
+    // WHY handled here, not in the shim: this push is only a nudge ("a notification was tapped"); the page then asks
+    // for the session id itself (takePendingSession), so a tap that arrived before the page loaded is not lost.
+    if (type === 'system:open-session') { window.dispatchEvent(new CustomEvent(OPEN_SESSION_NUDGE)); return; }
     hostEventSink?.(type, payload);
   },
 };
+
+/** Fired on window when the phone says a "needs you" alert was tapped. */
+export const OPEN_SESSION_NUDGE = 'youcoded:android-open-session';
+
+/** The session whose alert was tapped (once; the phone forgets it when asked), or null. */
+export async function takePendingSession(): Promise<string | null> {
+  const r = await invokeAndroidHost('android:take-pending-session');
+  return typeof r?.sessionId === 'string' && r.sessionId ? r.sessionId : null;
+}

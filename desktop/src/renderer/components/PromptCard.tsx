@@ -10,6 +10,16 @@ import { useCardKeysLive } from '../state/card-keys-context';
 import { usePopupOpen } from '../hooks/use-esc-close';
 import { PROMPT_FAILURE_COPY, PROMPT_UNKNOWN_FAILURE, type PromptAnswerResult } from '../state/prompt-input';
 
+// WHY: the first-run "Security notes" card ends in "Learn more: <url>"; a plain-text address can't be tapped on a phone.
+// Only http(s) addresses become links, and they open through the same shell.openExternal every other link in the app uses.
+function linkifyDescription(text: string): React.ReactNode {
+  return text.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
+    /^https?:\/\//.test(part)
+      ? <a key={i} href={part} className="underline text-accent"
+          onClick={(e) => { e.preventDefault(); void window.claude.shell.openExternal(part); }}>{part}</a>
+      : part);
+}
+
 export type PromptCardButton = InteractivePrompt['buttons'][number];
 
 interface Props {
@@ -233,7 +243,7 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
               CC's prompt box, so replayed transcript output can't leak in here */}
           {prompt.description && (
             <div className="px-3 py-1.5 text-xs text-fg-dim leading-relaxed border-t border-edge whitespace-pre-line">
-              {prompt.description}
+              {linkifyDescription(prompt.description)}
             </div>
           )}
           {/* Options wrap rather than overflow: these labels are CC's own

@@ -100,6 +100,11 @@ class HostJsBridge(
                     }
                 }
             }
+            // A tapped "needs you" alert: the page asks once for the session to open (and the phone forgets it).
+            "android:take-pending-session" -> {
+                val sid = pendingSession; pendingSession = null
+                reply(id, JSONObject().put("sessionId", sid ?: JSONObject.NULL))
+            }
             "system:notify-stack-state" -> { main.post { ui.setBackStackEmpty(p.optBoolean("empty", true)) }; reply(id, null) }
             "voice:status" -> reply(id, voiceReadiness())
             // Android listens itself: nothing to download.
@@ -134,6 +139,15 @@ class HostJsBridge(
         }
     }
 
+    /** Session whose "needs you" alert was tapped, until the page collects it. */
+    @Volatile private var pendingSession: String? = null
+
+    /** An alert was tapped: remember the session and nudge the page (which may not be loaded yet, hence the memory). */
+    fun openSession(sessionId: String) {
+        pendingSession = sessionId
+        push("system:open-session", JSONObject())
+    }
+
     /** A hardware back press, for the page's overlay stack. */
     fun pressBack() = push("system:back", JSONObject())
 
@@ -155,9 +169,14 @@ class HostJsBridge(
         } ?: uri.lastPathSegment ?: "attachment"
         // Keep the name readable but safe: no folders, no odd characters.
         name = name.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._ -]"), "_").take(100).ifBlank { "attachment" }
-        val dir = java.io.File(context.filesDir, "tmp/attachments").apply { mkdirs() }
-        // A time prefix keeps two pickers of "image.jpg" from overwriting each other.
-        val out = java.io.File(dir, "${System.currentTimeMillis()}-$name")
+        // WHY (2026-11-01 phone test): a "<time>-<name>" file name leaked into the chip, the sent message and the
+        // session title. Each pick gets its own folder instead, so the path's last part is the real file name and
+        // two picks of "image.jpg" still cannot overwrite each other.
+        val root = java.io.File(context.filesDir, "tmp/attachments").apply { mkdirs() }
+        var folder = java.io.File(root, "${System.currentTimeMillis()}")
+        var n = 0
+        while (!folder.mkdirs()) folder = java.io.File(root, "${System.currentTimeMillis()}-${++n}")
+        val out = java.io.File(folder, name)
         val input = resolver.openInputStream(uri) ?: return null
         input.use { i -> out.outputStream().use { o -> i.copyTo(o) } }
         return out.path
@@ -193,7 +212,7 @@ class HostJsBridge(
         val TYPES = listOf(
             "android:get-tier", "android:set-tier", "android:get-about", "android:get-paired-devices",
             "android:save-paired-device", "android:remove-paired-device", "android:scan-qr", "android:pick-files",
-            "system:notify-stack-state", "voice:status", "voice:download", "voice:start", "voice:stop", "voice:cancel",
+            "android:take-pending-session", "system:notify-stack-state", "voice:status", "voice:download", "voice:start", "voice:stop", "voice:cancel",
         )
     }
 }

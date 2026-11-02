@@ -20,6 +20,7 @@ import FolderSwitcher from './components/FolderSwitcher';
 import { isTypingTarget } from './utils/is-typing-target';
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { useChatViewHandlers } from './hooks/use-chatview-handlers';
+import { useOpenSessionFromHost } from './hooks/use-open-session-from-host';
 import { useAppScreens } from './shoot-app-screens';
 import { ScreenMark } from './shoot-mode';
 import { DevWindowLabel } from './components/DevWindowLabel';
@@ -1161,6 +1162,9 @@ function AppInner() {
     });
     return off;
   }, []);
+
+  // A tapped "needs you" alert (Android) opens its conversation, switching exactly as the buddy's focus request above does.
+  useOpenSessionFromHost(sessions, useCallback((sid: string) => { if (recoveryBatchRef.current || pendingRef.current?.active) { selectCreatedSession(sid); return; } noteSwitchIntent('other'); setSessionId(sid); (window as any).claude?.session?.switch?.(sid); }, []));
 
   // Push stack-state changes to the host. On Android, MainActivity uses this
   // to flip OnBackPressedCallback.isEnabled so hardware back is intercepted

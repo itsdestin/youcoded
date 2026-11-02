@@ -8,6 +8,7 @@ import { visitParents } from 'unist-util-visit-parents';
 import { rehypeLinkTokens } from './rehype-link-tokens';
 import { Button } from './ui';
 import { FilepathToken } from './FilepathToken';
+import { BareFileCode } from './BareFileCode';
 import { CONVERSATIONS_FENCE, parseConversationRefs } from '../../shared/chatsearch-refs';
 import ChatsearchRefBlock from './tool-views/ChatsearchRefBlock';
 import { SessionRefsEnabled } from './session-refs-context';
@@ -928,6 +929,8 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
     // react-markdown lowercases custom element names, so 'filepath-token' matches the tagName.
     return {
       ...mdComponents,
+      // A bare file name in `backticks` that this session wrote or edited is a file chip (BareFileCode explains why).
+      code: (p: any) => <BareFileCode sessionId={sessionId} Base={mdComponents.code as React.ElementType} {...p} />,
       // react-markdown v10 passes custom hast element props directly.
       // 'data-path' becomes 'data-path' in props (React preserves data-* attrs).
       'filepath-token': ({ node, ...props }: any) => {

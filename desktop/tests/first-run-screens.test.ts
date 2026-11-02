@@ -75,6 +75,29 @@ describe('first-run security notes', () => {
   });
 });
 
+describe('first-run security notes, newer layout (no blank rows between notes)', () => {
+  const NEW = [
+    ' Security notes:', '',
+    ' 1. Claude can make mistakes', "    You're responsible for Claude's actions and should always review", '    them, especially when running code.',
+    ' 2. Due to prompt injection risks, only use it with code you trust', '    Learn more: https://code.claude.com/docs/en/security', '',
+    ' Press Enter to continue…',
+  ].join('\n');
+  it('puts each note on its own line, its sub-line under it, and the link last', () => {
+    expect(parseInkSelect(NEW)!.description).toBe([
+      '1. Claude can make mistakes', "You're responsible for Claude's actions and should always review them, especially when running code.",
+      '2. Due to prompt injection risks, only use it with code you trust',
+      'Learn more: https://code.claude.com/docs/en/security',
+    ].join('\n'));
+  });
+  it('keeps the old layout readable too (blank rows, "For more details see:")', () => {
+    expect(parseInkSelect(SECURITY)!.description).toBe([
+      "1. Claude can make mistakes\nYou should always review Claude's responses, especially when running code.",
+      '2. Due to prompt injection risks, only use it with code you trust',
+      'Learn more: https://code.claude.com/docs/en/security',
+    ].join('\n'));
+  });
+});
+
 describe('real Claude Code capture', () => {
   it('reads the theme picker exactly as Claude Code drew it (slash-theme capture, CC 2.1.286)', async () => {
     const { FixtureTerminal, loadPlanFixture } = await import('./helpers/plan-menu-fixtures');

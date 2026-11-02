@@ -448,21 +448,38 @@ function parseSecurityNotes(lines: string[]): ParsedMenu | null {
     if (/^\s*security notes:?\s*$/i.test(plain[i])) { head = i; break; }
   }
   if (head < 0) return null;
-  // Body = everything between the heading and the Enter line, as blocks split on blank rows. A numbered note keeps its title on its own line and
-  // its explanation (wrapped rows joined) under it — Claude Code's own wording, only re-flowed.
+  // Body = everything between the heading and the Enter line. WHY rows, not blank-separated blocks (2026-11-01 phone test): newer Claude Code
+  // draws the notes with NO blank row between them, so block splitting fused note 2 into note 1 and glued "Learn more:" onto "trust". Now a
+  // numbered row always starts a note; the rows after it (until the next number) are its grey sub-line; a "Learn more / For more details" row
+  // plus its URL is its own line. Claude Code's wording is kept, only re-flowed.
   const body: string[] = [];
-  let block: string[] = [];
-  const flush = () => {
-    if (!block.length) return;
-    body.push(/^\d+\.\s/.test(block[0]) && block.length > 1 ? block[0] + '\n' + block.slice(1).join(' ') : block.join(' '));
-    block = [];
+  let note: { head: string; sub: string[] } | null = null;
+  let link: string[] = [];
+  const flushNote = () => {
+    if (note) body.push(note.sub.length ? note.head + '\n' + note.sub.join(' ') : note.head);
+    note = null;
+  };
+  const flushLink = () => {
+    if (!link.length) return;
+    // "For more details see:" / "Learn more:" then the address: one line, "Learn more: <url>".
+    const url = link.find((t) => /https?:\/\//i.test(t))?.match(/https?:\/\/\S+/i)?.[0];
+    const text = link.join(' ').replace(/\s+/g, ' ').trim();
+    body.push(url ? 'Learn more: ' + url : text);
+    link = [];
   };
   for (let i = head + 1; i <= end; i++) {
     const t = plain[i].trim();
     if (/press enter to/i.test(t) || /^continue…?$/i.test(t)) break;
-    if (!t) flush(); else block.push(t);
+    if (!t) continue;
+    if (/^\d+\.\s/.test(t)) { flushLink(); flushNote(); note = { head: t, sub: [] }; continue; }
+    if (link.length || /^(learn more|for more details)\b/i.test(t) || /^https?:\/\//i.test(t)) { flushNote(); link.push(t); continue; }
+    // A row with a URL inside its text ("... Learn more: https://...") still ends the sub-line there.
+    const inline = t.match(/^(.*?)\s*((?:learn more|for more details)\b.*)$/i);
+    if (inline && note) { if (inline[1]) (note as { sub: string[] }).sub.push(inline[1]); flushNote(); link.push(inline[2]); continue; }
+    if (note) (note as { sub: string[] }).sub.push(t); else body.push(t);
   }
-  flush();
+  flushLink();
+  flushNote();
   if (body.length === 0) return null;
   return {
     id: 'menu_securitynotes',

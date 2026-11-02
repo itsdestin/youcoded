@@ -91,6 +91,7 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
         onBackPressedDispatcher.addCallback(this, backCallback)
         host = HostJsBridge(applicationContext, this)
         current = this
+        openSessionFrom(intent)
         BackendService.start(applicationContext)
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -114,6 +115,22 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
                     }
                 }
             }
+        }
+    }
+
+    // WHY (2026-11-01 phone test): a "needs you" alert put the session id on its intent but nothing read it. The activity is
+    // single-top, so a tap while the app is open arrives in onNewIntent; a tap from a closed app arrives in onCreate.
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openSessionFrom(intent)
+    }
+
+    private fun openSessionFrom(intent: android.content.Intent?) {
+        intent?.getStringExtra(com.youcoded.app.runtime.StatusNotifier.EXTRA_SESSION_ID)?.takeIf { it.isNotBlank() }?.let {
+            host.openSession(it)
+            // Handled: a later rotation or recreate must not replay it.
+            intent.removeExtra(com.youcoded.app.runtime.StatusNotifier.EXTRA_SESSION_ID)
         }
     }
 
