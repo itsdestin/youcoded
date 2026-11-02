@@ -8,8 +8,7 @@
 // `file:` stays in the answer on purpose: the packaged desktop window is also a file:// page, and every caller already checks
 // `window.claude` (desktop's own bridge) before trusting this, exactly as before.
 
-/** The address the Android app serves its bundled page from. Must match AppWebView.kt (PAGE_HOST). */
-const ANDROID_PAGE_ORIGIN = 'https://appassets.androidplatform.net';
+import { ANDROID_PAGE_ORIGIN } from '../shared/android-page-origin';
 
 export function isAndroidAppPage(): boolean {
   if (typeof location === 'undefined') return false;
