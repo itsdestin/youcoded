@@ -32,8 +32,15 @@ describe('repo visibility re-check', () => {
     expect(api).toHaveBeenCalledTimes(2);
   });
 
-  it('never blocks sync when GitHub cannot be asked (offline, signed out, repo not visible)', async () => {
-    await expect(makeRepoVisibilityChecker(async () => { throw new Error('ENOTFOUND'); })(URL_)).resolves.toBeUndefined();
-    await expect(makeRepoVisibilityChecker(async () => ({ status: 404, json: {} }))(URL_)).resolves.toBeUndefined();
+  it('pauses sync (fails closed) when GitHub cannot be asked or gives no clear answer', async () => {
+    await expect(makeRepoVisibilityChecker(async () => { throw new Error('ENOTFOUND'); })(URL_)).rejects.toThrow(/couldn't confirm/);
+    await expect(makeRepoVisibilityChecker(async () => ({ status: 404, json: {} }))(URL_)).rejects.toThrow(/couldn't confirm/);
+    await expect(makeRepoVisibilityChecker(async () => ({ status: 200, json: {} }))(URL_)).rejects.toThrow(/couldn't confirm/);
+    // and a later good answer resumes it
+    let ok = false;
+    const check = makeRepoVisibilityChecker(async () => (ok ? { status: 200, json: { private: true } } : { status: 500, json: {} }));
+    await expect(check(URL_)).rejects.toThrow();
+    ok = true;
+    await expect(check(URL_)).resolves.toBeUndefined();
   });
 });

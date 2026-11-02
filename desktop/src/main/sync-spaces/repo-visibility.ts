@@ -15,6 +15,11 @@ export function parseGithubRepoUrl(url: string): { owner: string; name: string }
 
 type Api = (method: string, apiPath: string) => Promise<{ status: number; json: any }>;
 
+/** Plain pause message when GitHub could not confirm the repo is private. No cause is claimed. */
+export function repoUncheckedError(repoName: string): Error {
+  return new Error(`Sync is paused because YouCoded couldn't confirm that the GitHub repository "${repoName}" is private. It will check again shortly. If this keeps happening, make sure you're connected to GitHub in the Sync settings.`);
+}
+
 /** How long a "still private" answer is trusted before GitHub is asked again. */
 export const VISIBILITY_RECHECK_MS = 30 * 60 * 1000;
 
@@ -22,9 +27,10 @@ export const VISIBILITY_RECHECK_MS = 30 * 60 * 1000;
  * Returns a checker: `await check(remoteUrl)` throws the coded public-repo error when the
  * repo is public, and otherwise returns. A "private" answer is cached for
  * VISIBILITY_RECHECK_MS so the normal 2-minute sync cycle makes at most ~2 extra GitHub
- * calls an hour. A failed lookup (offline, signed out, repo not visible) NEVER blocks
- * sync: those cases already surface through the sync's own errors, and a hiccup must not
- * look like a privacy problem. A "public" answer is never cached, so fixing the repo
+ * calls an hour. A lookup that fails or gives no clear answer (offline, signed out, repo not
+ * visible) now PAUSES that sync cycle with a plain message — fail closed (integration review 2026-11-01): "can't tell" must
+ * not mean "assume private", because a skipped check is exactly how a public repo goes unnoticed. The next cycle asks
+ * again, so a hiccup clears itself. A "public" answer is never cached, so fixing the repo
  * resumes sync on the very next cycle.
  */
 export function makeRepoVisibilityChecker(api: Api, now: () => number = Date.now) {
@@ -38,11 +44,12 @@ export function makeRepoVisibilityChecker(api: Api, now: () => number = Date.now
     try {
       res = await api('GET', `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`);
     } catch (e: any) {
-      if (e?.syncErrorCode === GITHUB_AUTH_ERROR_CODE) return; // sign-in problems are reported by sync itself
-      return;
+      if (e?.syncErrorCode === GITHUB_AUTH_ERROR_CODE) throw e; // its own plain "reconnect GitHub" message
+      throw repoUncheckedError(repo.name);
     }
-    if (res.status !== 200) return;
+    if (res.status !== 200) throw repoUncheckedError(repo.name);
     if (res.json?.private === false) throw repoPublicError(repo.name);
-    if (res.json?.private === true) okUntil.set(key, now() + VISIBILITY_RECHECK_MS);
+    if (res.json?.private !== true) throw repoUncheckedError(repo.name);
+    okUntil.set(key, now() + VISIBILITY_RECHECK_MS);
   };
 }
