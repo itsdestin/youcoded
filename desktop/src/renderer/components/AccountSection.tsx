@@ -342,6 +342,7 @@ function SignedInBody({
   // double-click while the request is in flight.
   const [signingOut, setSigningOut] = useState(false);
   const [signingOutAll, setSigningOutAll] = useState(false);
+  const [confirmAll, setConfirmAll] = useState(false);
   const [signOutAllError, setSignOutAllError] = useState<string | null>(null);
 
   // Blocked users — fetched once when the popup opens (SignedInBody mounts on
@@ -467,41 +468,62 @@ function SignedInBody({
             </Button>
           </div>
           {/* WHY the wording (integration review 2026-11-01): this ends the YouCoded ACCOUNT's sign-ins (marketplace, ratings),
-              not phones paired for remote access; "all devices" read as covering a lost paired phone, which it does not.
-              (Destin, 2026-10-31, security audit): "Sign out" only ends the sign-in on THIS device. If a
-              phone is lost, this ends it everywhere. Secondary, with the plain consequence beside it; it does
-              not sign this device out unless the server confirmed, so a failure is shown instead of hidden. */}
-          {/* WHY stacked (2026-11-01 review deck): beside the long button label the sentence was
-              squeezed into a one-word-per-line column; text on its own line, button under it. */}
-          <div className="flex flex-col items-end gap-2">
-            <span className="w-full text-xs text-fg-2">
-              Lost a device? Sign out of your YouCoded account everywhere, including this one. Phones paired to this computer are managed under Remote access.
-            </span>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={async () => {
-                setSigningOutAll(true);
-                setSignOutAllError(null);
-                try {
-                  const res = await window.claude.account.signOutAll();
-                  if (res.ok) {
-                    await signOut(); // flips this window to signed-out; the server work is already done
-                  } else {
-                    setSignOutAllError(res.status === 404
-                      ? 'The server cannot do this yet. You are still signed in everywhere.'
-                      : 'Could not reach the server, so nothing changed. You are still signed in everywhere. Try again.');
-                  }
-                } finally {
-                  setSigningOutAll(false);
-                }
-              }}
-              disabled={signingOutAll || signingOut}
-              className="shrink-0"
-            >
-              {signingOutAll ? 'Signing out…' : 'Sign out of your YouCoded account everywhere'}
-            </Button>
-          </div>
+              not phones paired for remote access. (Destin, 2026-10-31, security audit): "Sign out" only ends the sign-in on
+              THIS device; if a phone is lost, this ends it everywhere. It does not sign this device out unless the server
+              confirmed, so a failure is shown instead of hidden.
+              WHY so short (Destin, 2026-11-01 deck: "way too much copy bruv. way too busy"): the page holds one short
+              line and one button, like the Sign out row above it; the facts (every device, this one too, paired phones
+              stay paired) appear only after pressing, in a confirm strip - the same replace-the-row confirm the
+              delete-model and deny-listed permission cards use. */}
+          {confirmAll ? (
+            <div className="space-y-2">
+              <p className="text-xs text-fg-2">
+                Ends your YouCoded sign-in on every device, this one too. Phones paired for remote access stay paired.
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <Button variant="secondary" size="sm" onClick={() => setConfirmAll(false)} disabled={signingOutAll}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    setSigningOutAll(true);
+                    setSignOutAllError(null);
+                    try {
+                      const res = await window.claude.account.signOutAll();
+                      if (res.ok) {
+                        await signOut(); // flips this window to signed-out; the server work is already done
+                      } else {
+                        setConfirmAll(false);
+                        setSignOutAllError(res.status === 404
+                          ? 'The server cannot do this yet. You are still signed in everywhere.'
+                          : 'Could not reach the server, so nothing changed. You are still signed in everywhere. Try again.');
+                      }
+                    } finally {
+                      setSigningOutAll(false);
+                    }
+                  }}
+                  disabled={signingOutAll || signingOut}
+                >
+                  {signingOutAll ? 'Signing out…' : 'Sign out everywhere'}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <span className="flex-1 min-w-0 text-xs text-fg-2">Lost a device?</span>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => { setSignOutAllError(null); setConfirmAll(true); }}
+                disabled={signingOut}
+                className="shrink-0"
+              >
+                Sign out everywhere
+              </Button>
+            </div>
+          )}
           {signOutAllError && <FieldError as="p">{signOutAllError}</FieldError>}
         </div>
       </section>

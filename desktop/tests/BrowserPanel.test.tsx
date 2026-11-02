@@ -17,15 +17,22 @@ import { browserInfo, browserState, installBrowserBridge } from './helpers/brows
 afterEach(() => cleanup());
 
 describe('Browser panel', () => {
-  it('says so plainly when the browser had to start without its protective sandbox', () => {
+  it('says so with a small chip that opens its details, and the X hides it', () => {
     installBrowserBridge();
     setBrowserState(browserState({ sandboxOff: true }));
     render(<BrowserPanel sessionId="s1" />);
-    expect(screen.getByText('Extra browser protection is off')).toBeInTheDocument();
+    // Small chip first; the long explanation waits behind it.
+    const chip = screen.getByRole('button', { name: /Extra protection off/ });
+    expect(chip).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(/built-in protection against harmful websites/)).toBeNull();
+    fireEvent.click(chip);
+    expect(screen.getByText(/built-in protection against harmful websites/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide this' }));
+    expect(screen.queryByRole('button', { name: /Extra protection off/ })).toBeNull();
     cleanup();
     setBrowserState(browserState());
     render(<BrowserPanel sessionId="s1" />);
-    expect(screen.queryByText('Extra browser protection is off')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Extra protection off/ })).toBeNull();
   });
 
   it('shows the live picture and asks for pictures only while it is showing', async () => {

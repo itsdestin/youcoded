@@ -15,13 +15,43 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BrowserInfo, BrowserInputEvent, BrowserSessionState } from '../../../shared/browser-types';
 import { closeBrowserPane, toggleBrowserExpanded, useBrowserExpanded, useBrowserState } from '../../state/browser-store';
-import { Button, Callout, Dialog, DocumentTabs, EmptyState, ErrorState, FieldError, LoadingState, TextInput, ZoomPill } from '../ui';
+import { Button, Callout, CloseButton, Dialog, Pill, DocumentTabs, EmptyState, ErrorState, FieldError, LoadingState, TextInput, ZoomPill } from '../ui';
 import { PanelIconButton } from '../panel-icon-button';
 import { BackIcon, ForwardIcon, GlobeIcon, ReloadIcon, StopIcon } from '../Icons';
 import BrailleSpinner from '../BrailleSpinner';
 import { ScreenMark } from '../../shoot-mode';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import BrowserAskCard from './BrowserAskCard';
+import { ChevronDown } from '../ui/ChevronDown';
+
+// WHY module-level (not saved): hiding the chip lasts until YouCoded is next opened. The computer's setting does not
+// change on its own, so showing it again on every panel open would nag; but a relaunch shows it once more, so
+// "the browser has no extra protection" is never hidden for good.
+let sandboxChipDismissedThisLaunch = false;
+
+/** The "extra protection is off" chip: a small warning pill that opens its details and fix, with an X to hide it. */
+function SandboxChip({ onDismiss }: { onDismiss: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mx-3 my-1.5" data-testid="sandbox-chip">
+      <div className="flex items-center gap-1">
+        <button type="button" aria-expanded={open} onClick={() => setOpen(o => !o)}
+          className="inline-flex items-center gap-1 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+          <Pill tone="warning" dot className="gap-1">
+            Extra protection off
+            <ChevronDown className={`w-2.5 h-2.5 shrink-0 text-fg-muted transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={2.5} />
+          </Pill>
+        </button>
+        <CloseButton size="icon-sm" label="Hide this" onClick={onDismiss} />
+      </div>
+      {open && (
+        <p className="mt-1 text-2xs text-fg-2">
+          This computer doesn't allow the browser's built-in protection against harmful websites. Pages still load, but be careful which sites the assistant visits. To turn it back on, allow "unprivileged user namespaces" in your system settings.
+        </p>
+      )}
+    </div>
+  );
+}
 import { ContextMenu } from '../context-menu/ContextMenu';
 
 function bridge() { return (window as any).claude.browser; }
@@ -473,6 +503,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   // Gone the moment it's pressed; the saved setting follows. A failed save
   // only means it shows again next time.
   const [explainerDismissed, setExplainerDismissed] = useState(false);
+  const [sandboxChipHidden, setSandboxChipHidden] = useState(sandboxChipDismissedThisLaunch);
   const dismissExplainer = useCallback(async () => {
     setExplainerDismissed(true);
     const n = ++infoSeq.current;
@@ -680,12 +711,13 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
           <p>Private: separate from your own browser and sign-ins. Sites you sign into here stay signed in until you sign out. You can click, scroll and type in the page yourself.</p>
         </Callout>
       )}
-      {/* WHY a notice (integration review 2026-11-01): on some Linux computers the browser can only start without its
-          protective sandbox; that used to be a log line nobody reads, while everything else implied it was on. */}
-      {state?.sandboxOff && state.run === 'running' && !myChrome && (
-        <Callout className="mx-3 my-2" title="Extra browser protection is off">
-          <p>This computer doesn't allow the browser's built-in protection against harmful websites. Pages still load, but be careful which sites the assistant visits. Allowing "unprivileged user namespaces" in your system settings can turn it back on.</p>
-        </Callout>
+      {/* WHY a small chip, not a notice box (Destin, 2026-11-01 deck: "that just looks bad. and is it not dismissable? it
+          should be a much smaller error/chip or something with details on expansion"). On some Linux computers the browser
+          can only start without its protective sandbox; that used to be a log line nobody reads. Now: one warning pill
+          (the shared Pill, as the guide's "Status and notices" asks for a status label) that opens its details and fix
+          in place, and an X that hides it. */}
+      {state?.sandboxOff && state.run === 'running' && !myChrome && !sandboxChipHidden && (
+        <SandboxChip onDismiss={() => { sandboxChipDismissedThisLaunch = true; setSandboxChipHidden(true); }} />
       )}
       {narrow && state?.prompt && <BrowserAskCard sessionId={sessionId} />}
       {body}

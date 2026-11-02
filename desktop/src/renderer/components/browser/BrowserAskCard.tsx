@@ -12,6 +12,7 @@ import type { BrowserPrompt, PromptAnswer } from '../../../shared/browser-types'
 import { openBrowserPane, useBrowserPaneOpen, useBrowserState } from '../../state/browser-store';
 import { Button, ProgressBar } from '../ui';
 import { GlobeIcon } from '../Icons';
+import { StandardAskCard } from '../permissions/StandardAskCard';
 
 function bridge() { return (window as any).claude.browser; }
 
@@ -30,9 +31,11 @@ export function browserCardCopy(p: BrowserPrompt): Copy {
     case 'form':
       return {
         title: p.message,
+        // WHY short: the standard card's note sits under the buttons at small size, so it
+        // says only what each answer covers (the same job as the web-visit card's note).
         body: p.allowAlways === false
-          ? 'This is your own Chrome, where you\'re signed in. A form can send what you typed in it to the site.'
-          : 'A form can send what you typed in it to the site. Buying, sending and deleting still ask every time.',
+          ? 'Yes lets it send this one form. This is your own Chrome, where you\'re signed in.'
+          : `Yes lets it send this one form.${p.host ? ` Always allow remembers ${p.host}.` : ''}`,
       };
     case 'final':
       return { title: p.message, body: 'This looks like a step that buys, sends, posts, deletes or submits something. It only happens if you allow it.' };
@@ -83,6 +86,21 @@ const BrowserAskCard = memo(function BrowserAskCard({ sessionId }: { sessionId: 
   const p = prompt!;
   const copy = browserCardCopy(p);
   const host = p.host ?? '';
+  // WHY (Destin, 2026-11-01): the form ask is the chat's standard permission card
+  // (header, Yes / Always allow / No, note), not this file's own box. Same component
+  // the tool asks' look is copied into; see StandardAskCard.
+  if (p.kind === 'form') {
+    return (
+      <StandardAskCard
+        ariaLabel="The browser is asking you"
+        label="Sending a form" detail={host || undefined}
+        question={copy.title} note={copy.body} responding={sending}
+        onYes={() => void answer('once')}
+        onAlways={p.allowAlways !== false && host ? () => void answer('allow_always') : undefined}
+        onNo={() => void answer('no')}
+      />
+    );
+  }
   let actions: React.ReactNode;
   switch (p.kind) {
     case 'site':
@@ -93,17 +111,6 @@ const BrowserAskCard = memo(function BrowserAskCard({ sessionId }: { sessionId: 
             <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('allow_always')}>Always allow {host}</Button>
           )}
           <Button variant="primary" size="sm" disabled={sending} onClick={() => void answer('allow_chat')}>Allow for this chat</Button>
-        </>
-      );
-      break;
-    case 'form':
-      actions = (
-        <>
-          <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('no')}>Don't allow</Button>
-          {p.allowAlways !== false && host && (
-            <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('allow_always')}>Always allow on {host}</Button>
-          )}
-          <Button variant="primary" size="sm" disabled={sending} onClick={() => void answer('once')}>Allow once</Button>
         </>
       );
       break;

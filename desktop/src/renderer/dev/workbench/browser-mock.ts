@@ -3,7 +3,7 @@
 // photographed without a main process or a real browser.
 //
 // `?browser=<scene>` picks what the active conversation's browser is doing:
-//   working (default when set) · site · final · local · handoff · no-browser ·
+//   working (default when set) · sandbox (protection off chip) · site · final · local · handoff · no-browser ·
 //   downloading · error · starting · explainer (first-run explainer showing)
 // Without the switch the browser says nothing, exactly like a conversation that
 // never browsed (no header button, no panel).
@@ -42,6 +42,7 @@ export function createBrowserMock(sessionIds: () => string[]) {
       case 'no-browser': return { ...base, run: 'stopped', tabs: [], busy: true, prompt: { kind: 'no-browser', id: 'p5', message: 'The assistant needs a browser for this. YouCoded can download one for it (about 150 MB, kept inside YouCoded).' } };
       case 'downloading': return { ...base, run: 'stopped', tabs: [], busy: false, downloadPercent: 42 };
       case 'error': return { ...base, run: 'error', tabs: [], busy: false, error: 'The browser couldn\'t start because its saved data is in use by another copy of YouCoded. Close the other copy and try again.' };
+      case 'sandbox': return { ...base, sandboxOff: true };
       case 'starting': return { ...base, run: 'starting', tabs: [], busy: true };
       default: return base;
     }

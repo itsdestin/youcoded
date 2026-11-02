@@ -271,14 +271,12 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
       </div>
       <p className="text-xs text-fg-2 whitespace-pre-wrap break-words">{description.trim() || 'No description yet.'}</p>
       <div className="text-2xs text-fg-muted pt-1 space-y-1">{foot ?? <>
-        {/* WHY (Destin, 2026-10-31, security audit: "explain what they're uploading, where it's visible"). Each claim
-            is what submitIssue (main/dev-tools.ts) does: it POSTs the title and body, with the ticked error
-            details, logs and an Environment line (app version, platform, OS name and release), to
-            itsdestin/youcoded using the GitHub connection the person made; with no connection (or on the
-            attachments route) the same text is prefilled into GitHub in their browser instead. */}
-        <p>Sent: the title and description above, plus everything under “Sent with it”.</p>
-        <p>It becomes a public ticket in the itsdestin/youcoded project on GitHub, posted from your GitHub account (if the app isn’t connected to one, you finish in your browser).</p>
-        <p>Anyone on the internet can read it. Closing it doesn’t hide it, and GitHub keeps a visible history of any edits.</p>
+        {/* WHY ONE line (Destin, 2026-11-01 deck: "too much copy and too busy"; his earlier ask still stands:
+            "adequately explain to users what they're uploading, where its visible"). The title and description
+            are visible right above; everything else sent is the "Sent with it" list below, so no sentence
+            repeats either. This line carries only the one fact those cannot: the ticket is public. Where it
+            lands (itsdestin/youcoded on GitHub) is submitIssue's target in main/dev-tools.ts. */}
+        <p>Posted publicly on GitHub in itsdestin/youcoded — anyone can read it.</p>
       </>}</div>
     </div>
   </section>;
