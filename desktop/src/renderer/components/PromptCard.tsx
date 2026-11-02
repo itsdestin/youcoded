@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InteractivePrompt } from '../state/chat-types';
-import { THEME_PICKER_TITLE } from '../../shared/ink-select-parser';
+import { THEME_PICKER_TITLE, TRUST_PROMPT_TITLE } from '../../shared/ink-select-parser';
 import { CheckIcon } from './Icons';
+import { FolderIcon } from './project-view/icons';
 import { Button, ButtonVariant } from './ui/Button';
 import { isAndroid } from '../platform';
 import { useTheme } from '../state/theme-context';
@@ -48,6 +49,21 @@ function isSticky(label: string): boolean {
   // "Use this and all future MCP servers in this project" (CC 2.1.281) is the
   // same kind of choice: it turns on every MCP server the folder ever adds.
   return /don'?t ask (me )?again|never ask|stop asking|all future/i.test(label);
+}
+
+/**
+ * The folder Claude Code's trust dialog names ("Accessing workspace:" then the path on the next line, ink-select-parser's
+ * extractDescription), or null when the card isn't that dialog or the text no longer has that shape — then the card falls
+ * back to showing Claude Code's own words, so a reworded dialog is never summarised wrongly.
+ */
+function trustSummary(prompt: InteractivePrompt): { name: string; path: string } | null {
+  if (prompt.title !== TRUST_PROMPT_TITLE || prompt.buttons.length !== 2) return null;
+  if (prompt.buttons.filter((b) => isExit(b.label)).length !== 1) return null;
+  const m = /Accessing workspace:\s*\n\s*(\S[^\n]*)/.exec(prompt.description ?? '');
+  if (!m) return null;
+  const path = m[1].trim();
+  const name = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path;
+  return { name, path };
 }
 
 /** A choice that backs out of or ends the session rather than continuing. */
@@ -99,7 +115,15 @@ function shortcutOf(button: PromptCardButton): string | null {
  * that can't be taken back. Plus the CLI's own 1–9 number keys.
  */
 export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortcuts = true }: Props) {
-  const buttons = prompt.buttons;
+  // WHY (Destin, 2026-11-01 phone retest: "make this copy a bit prettier while making it take up less space … does this
+  // styling match existing permission cards?"): the folder-trust card is a permission ask, so it is drawn like one —
+  // a short summary of Claude Code's paragraph, the folder named, and green Yes first / red No like the permission row.
+  // Only when the folder could be read from Claude Code's text; otherwise the card stays the plain one below.
+  const trust = useMemo(() => trustSummary(prompt), [prompt]);
+  const buttons = useMemo(
+    () => (trust ? [...prompt.buttons].sort((a, b) => Number(isExit(a.label)) - Number(isExit(b.label))) : prompt.buttons),
+    [trust, prompt.buttons],
+  );
   // WHY (2026-11-01): on Claude Code's first-run theme picker the card starts on the plain "Dark mode" / "Light mode" row that matches the
   // app's own look, instead of wherever Claude Code's cursor happens to sit — the owner asked for the app theme as the sensible default.
   // Only a nudge to which button is highlighted; nothing is sent until the user presses one.
@@ -110,8 +134,10 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
       const i = buttons.findIndex((b) => want.test(b.label.trim()));
       if (i >= 0) return i;
     }
-    return defaultIndex(buttons, prompt.defaultIndex);
-  }, [buttons, prompt.defaultIndex, prompt.title, appIsDark]);
+    // Claude Code's default is an index into ITS order; the trust card shows Yes first, so find that button again.
+    const cliDefault = prompt.buttons[defaultIndex(prompt.buttons, prompt.defaultIndex)];
+    return Math.max(0, buttons.indexOf(cliDefault));
+  }, [buttons, prompt.buttons, prompt.defaultIndex, prompt.title, appIsDark]);
   const [focusIdx, setFocusIdx] = useState(defIdx);
   // Index of a sticky button awaiting its second click, or -1.
   const [confirmIdx, setConfirmIdx] = useState(-1);
@@ -227,6 +253,54 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
   // as ToolCard's permission row: the arrow keys move real DOM focus, so leaving
   // ui/Button's focus ring on as well would stack two rings on one button.
   const ring = 'ring-2 ring-accent/50';
+
+  if (trust) {
+    const pad = isAndroid() ? 'py-2' : 'py-1';
+    return (
+      <div className="flex justify-start px-4 py-1">
+        <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-inset px-2 py-1">
+          <div className="border border-edge rounded-lg overflow-hidden" data-prompt-id={prompt.promptId}>
+            <div className="flex items-center gap-1.5 px-3 py-2">
+              <span className="shrink-0 text-fg-dim"><FolderIcon size={14} /></span>
+              <span className="text-fg-faint text-xs select-none">|</span>
+              <span className="text-xs font-medium text-fg-2">Trust this folder?</span>
+            </div>
+            <div className="px-3 py-2 border-t border-edge space-y-1">
+              {/* The folder by name, its full path under it: the one fact the user is judging. */}
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-fg break-words">{trust.name}</div>
+                <div className="text-3xs text-fg-muted font-mono break-all">{trust.path}</div>
+              </div>
+              <p className="text-xs text-fg-dim leading-snug">Claude Code will be able to read, change and run files here. Only say yes to folders you know.</p>
+            </div>
+            {/* Same buttons as the permission row (ToolCard PermissionButtons): status green/red, not theme
+                surfaces, and the same roving ring — so the two "answer this now" cards read as one family. */}
+            <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-t border-edge bg-inset/30">
+              {buttons.map((btn, index) => (
+                <button
+                  key={btn.label}
+                  ref={(el) => { buttonsRef.current[index] = el; }}
+                  disabled={sending}
+                  onClick={() => activate(index)}
+                  onMouseEnter={() => setFocusIdx(index)}
+                  className={`px-3 ${pad} text-xs font-medium rounded-lg transition-colors disabled:opacity-50 ${isExit(btn.label)
+                    ? 'bg-red-400/60 hover:bg-red-400/80 text-red-100'
+                    : 'bg-green-400/60 hover:bg-green-400/80 text-green-100'} ${focusIdx === index ? 'ring-2 ring-white/40' : ''}`}
+                >
+                  {btn.label}
+                </button>
+              ))}
+            </div>
+            {error && (
+              <div role="alert" className="px-3 py-1.5 text-xs text-fg-dim leading-relaxed border-t border-edge">
+                {error}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex justify-start px-4 py-1">

@@ -262,6 +262,9 @@ export function Dialog({
   // panel instead hugs its content, may grow to the screen minus a 1.5rem scrim margin, and
   // scrolls only past that; the flex wrapper below centres whatever size results.
   const narrow = useNarrowViewport();
+  // WHY tighter on a phone (Destin, 2026-11-01: "optimize popups and reduce dead space in mobile"): the computer's 16px
+  // padding on every side, a 56px header and an 88vw width cap left a 390px phone ~300px of text per line. A phone gets
+  // 12px padding, a 48px header, 12px between groups and the full width less an 8px scrim edge.
 
   if (!open) return null;
 
@@ -272,7 +275,7 @@ export function Dialog({
           position:relative / z-index:auto. pointer-events-none lets clicks fall
           through to the Scrim beneath, which is what closes on outside-click. */}
       <div
-        className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none"
+        className={`fixed inset-0 flex items-center justify-center ${narrow ? 'p-2' : 'p-4'} pointer-events-none`}
         style={{ zIndex: CONTENT_Z[layer] + stackLift(depth) }}
       >
         <OverlayPanel
@@ -286,8 +289,9 @@ export function Dialog({
           style={{
             position: 'relative',
             zIndex: 'auto',
-            maxWidth: DIALOG_WIDTHS[size],
-            maxHeight: narrow ? 'calc(100dvh - 3rem)' : DIALOG_MAX_HEIGHTS[size],
+            // A short confirmation keeps its small card; anything bigger takes the phone's width less the 8px scrim edge.
+            maxWidth: narrow && size !== 'prompt' ? '100%' : DIALOG_WIDTHS[size],
+            maxHeight: narrow ? 'calc(100dvh - 1rem)' : DIALOG_MAX_HEIGHTS[size],
             // `fill` only holds a steady height on desktop; on a phone it is the blank-bottom bug.
             ...(fill && !narrow ? { height: DIALOG_MAX_HEIGHTS[size] } : {}),
           }}
@@ -299,7 +303,7 @@ export function Dialog({
             // h2, matching SettingsPopup. Section labels inside the body are h3
             // (K1), so an h3 title would announce them as its siblings rather
             // than its children.
-            <div className="dialog-header flex items-center justify-between min-h-14 px-4 py-3 shrink-0">
+            <div className={`dialog-header flex items-center justify-between shrink-0 ${narrow ? 'min-h-12 px-3 py-2' : 'min-h-14 px-4 py-3'}`}>
               <div className="flex items-center gap-2 min-w-0">
                 {onBack && (
                   <button
@@ -332,14 +336,14 @@ export function Dialog({
             // dialog-scroll stays as the titled-body marker other code and tests find.
             <div ref={scrollRef} className={`scroll-mask${title ? ' dialog-scroll' : ''} relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-none`}>
               {/* WHY space-y-4 (trial): the guide spaces groups 16px; the body used 20px. */}
-              <div className="px-4 py-4 space-y-4">{children}</div>
+              <div className={narrow ? 'px-3 py-3 space-y-3' : 'px-4 py-4 space-y-4'}>{children}</div>
             </div>
           ) : (
             children
           )}
           {/* No line above it (guide: no full-width line in a popup): the body's own fade
               is the edge. The body's bottom padding is the gap, so the footer has none on top. */}
-          {scrollBody && footer && <div className="dialog-footer shrink-0 px-4 pb-4">{footer}</div>}
+          {scrollBody && footer && <div className={`dialog-footer shrink-0 ${narrow ? 'px-3 pb-3' : 'px-4 pb-4'}`}>{footer}</div>}
         </OverlayPanel>
       </div>
     </>,

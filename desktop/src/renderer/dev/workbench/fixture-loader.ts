@@ -388,6 +388,18 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+      } else if (parsed.type === 'prompt' && typeof parsed.title === 'string') {
+        // WHY (card #213, 2026-11-02): Claude Code's own menus (Trust this folder, Resume, …) arrive
+        // as SHOW_PROMPT from the screen reader, which the workbench has none of — this line lays
+        // one on the timeline so the prompt card can be reviewed at phone width.
+        const action: ChatAction = {
+          type: 'SHOW_PROMPT', sessionId,
+          promptId: parsed.promptId ?? `fixture-prompt-${actions.length}`,
+          title: parsed.title, description: parsed.description,
+          buttons: parsed.buttons ?? [], defaultIndex: parsed.defaultIndex,
+        };
+        state = chatReducer(state, action);
+        actions.push(action);
       } else if (parsed.type === 'password_ask') {
         // The admin password card (design 2026-09-25): a RUNNING Bash call whose
         // sudo waits for the computer password. A real reducer action
