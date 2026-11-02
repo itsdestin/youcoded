@@ -42,3 +42,13 @@
     margin-bottom: 8px;
   }
 }
+
+/* 6. Message times (density-review D-5, Destin: "a smarter/smoother way to hide times on old messages while allowing
+   users to see them when needed"): only the newest message and the first after a 30-minute break keep their time
+   (state/message-time-marks.ts → data-time-mark); a tap on any other message shows its time (ChatTimelineRow →
+   data-time-shown). Only ChatView marks rows, and only on a phone, so previews and the computer keep every time. */
+@media (max-width: 639.98px) {
+  html:not([data-mode^="buddy"]) .timeline-entry[data-time-mark="tap"]:not([data-time-shown]) .bubble-timestamp {
+    display: none;
+  }
+}

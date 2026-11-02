@@ -19,6 +19,8 @@ import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
 import { useEntryFolding } from '../hooks/use-entry-folding';
 import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
+import { messageTimeMarks } from '../state/message-time-marks';
+import { useNarrowViewport } from '../hooks/use-narrow-viewport';
 import { SessionContextBanner } from './SessionContextBanner';
 import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
@@ -293,6 +295,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // With no boundary the projection preserves the original timeline reference.
   const presentation = useMemo(() => projectTimeline(state.timeline, state.assistantTurns), [state.timeline, state.assistantTurns]);
   const archiveBoundary = useMemo(() => findArchiveBoundary(presentation.timeline), [presentation.timeline]);
+  // Phone only: which messages keep their time (state/message-time-marks.ts). Null on a computer, so no row's props
+  // change there when a new message arrives.
+  const narrowView = useNarrowViewport();
+  // Keyed on the reducer's timeline, NOT the turns (performance.md rule 4): the turns change with every streamed word,
+  // the set of messages and their times only when a message arrives, and this walks the whole conversation.
+  const timeMarks = useMemo(() => (narrowView ? messageTimeMarks(presentation.timeline, presentation.assistantTurns) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above: deliberately not per streamed word
+    [narrowView, state.timeline]);
   const streamingTurnId = state.currentTurnId ? presentation.tailTurnIds.get(state.currentTurnId) ?? state.currentTurnId : null;
 
   // PTY-buffer classifier drives the attention banner. Replaces the old
@@ -1137,6 +1147,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     sessionId={sessionId}
                     provider={provider}
                     showTimestamps={showTimestamps}
+                    keepTime={timeMarks ? timeMarks.has(key) : undefined}
                     // WHY currentTurnId: the reducer clears it when a turn ends for ANY reason
                     // (complete, Stop, error), and history replay never sets it — so it is exactly
                     // "the model is writing this turn now". Lets a long open code fence be drawn in

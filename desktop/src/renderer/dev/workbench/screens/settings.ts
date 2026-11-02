@@ -109,6 +109,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/assistant/browser#no-browser', 'dialog', 'browser'), params: { browser: 'no-browser' } },
   { ...settings('settings/assistant/browser#downloading', 'dialog', 'browser'), params: { browser: 'downloading' } },
   settings('settings/sync', 'dialog', 'error-state'),
+  // Card #213 (density-review D-4): on a phone Additional backups folds into one row; this is it opened.
+  { ...settings('settings/sync#phone-additional-open', 'dialog', 'narrow'), viewport: { width: 390, height: 844 }, open: ['Additional backups…'], newIn: 'after' as const },
   { ...settings('settings/sync#log-open', 'dialog', 'fold'), params: { sync: 'ok' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Sync log', { do: 'scroll', dir: 'down', times: 8 }] },
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
   { ...settings('settings/sync#auth-error', 'dialog', 'error-state'), params: { sync: 'auth-error' } },
