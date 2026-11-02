@@ -371,39 +371,6 @@ try {
     return await askAndExpect('What is the secret fruit in the attached file? Answer with one word.', /kumquat/i);
   }, { critical: false });
 
-  async function openMarketplace() {
-    await page.getByRole('button', { name: WORDS.browseSkills }).click();
-    await page.getByRole('button', { name: WORDS.openMarketplace }).click({ timeout: 10_000 });
-    await page.getByPlaceholder(WORDS.marketSearch).waitFor({ timeout: 30_000 });
-  }
-
-  await step('install-skill', 'The user installs a skill from the marketplace and it is really installed', async () => {
-    await openMarketplace();
-    await page.getByPlaceholder(WORDS.marketSearch).fill('civic report');
-    await page.getByText('Civic Report', { exact: true }).first().click({ timeout: 30_000 });
-    await page.getByRole('button', { name: WORDS.install }).filter({ visible: true }).first().click({ timeout: 15_000 });
-    // Outcome: the plugin is on disk where Claude Code and the app look for it (ClaudeCodeRegistry).
-    const dir = path.join(home, '.claude/plugins/marketplaces/youcoded/plugins/civic-report');
-    for (let i = 0; i < 60 && !fs.existsSync(dir); i++) await sleep(1000);
-    if (!fs.existsSync(dir)) throw new Error('no civic-report folder appeared in the plugins folder within 60s');
-    await page.keyboard.press('Escape');
-  }, { critical: false });
-
-  await step('install-theme', 'The user installs a theme from the marketplace, applies it, and the app switches to it', async () => {
-    await page.keyboard.press('Escape');
-    if (!(await page.getByPlaceholder(WORDS.marketSearch).isVisible().catch(() => false))) await openMarketplace();
-    await page.getByPlaceholder(WORDS.marketSearch).fill('golden sunbreak');
-    await page.getByText('Golden Sunbreak', { exact: true }).first().click({ timeout: 30_000 });
-    await page.getByRole('button', { name: WORDS.install }).filter({ visible: true }).first().click({ timeout: 15_000 });
-    const manifest = path.join(home, '.claude/wecoded-themes/golden-sunbreak/manifest.json');
-    for (let i = 0; i < 60 && !fs.existsSync(manifest); i++) await sleep(1000);
-    if (!fs.existsSync(manifest)) throw new Error('the theme was not saved to the themes folder within 60s');
-    await page.getByRole('button', { name: WORDS.applyTheme }).filter({ visible: true }).first().click({ timeout: 15_000 });
-    await page.waitForFunction(() => document.documentElement.dataset.theme === 'golden-sunbreak', null, { timeout: 15_000 });
-    await snap('theme-applied');
-    await page.keyboard.press('Escape');
-  }, { critical: false });
-
   await step('close-chat', 'The user closes the chat', async () => {
     // "All sessions" (the arrow beside the chat's name), then the chat row's close ✕. WHY by position: neither
     // button has a name of its own until hovered (their tooltips name them only then), so a screen reader can't
@@ -431,6 +398,39 @@ try {
     await page.getByText(NAME).first().waitFor({ timeout: 15_000 });
     await page.keyboard.press('Escape');
   }, { critical: false });
+  async function openMarketplace() {
+    await page.getByRole('button', { name: WORDS.browseSkills }).click();
+    await page.getByRole('button', { name: WORDS.openMarketplace }).click({ timeout: 10_000 });
+    await page.getByRole('textbox', { name: WORDS.marketSearch }).waitFor({ timeout: 30_000 });
+  }
+
+  await step('install-skill', 'The user installs a skill from the marketplace and it is really installed', async () => {
+    await openMarketplace();
+    await page.getByRole('textbox', { name: WORDS.marketSearch }).fill('civic report');
+    await page.getByText('Civic Report', { exact: true }).first().click({ timeout: 30_000 });
+    await page.getByRole('button', { name: WORDS.install }).filter({ visible: true }).first().click({ timeout: 15_000 });
+    // Outcome: the plugin is on disk where Claude Code and the app look for it (ClaudeCodeRegistry).
+    const dir = path.join(home, '.claude/plugins/marketplaces/youcoded/plugins/civic-report');
+    for (let i = 0; i < 60 && !fs.existsSync(dir); i++) await sleep(1000);
+    if (!fs.existsSync(dir)) throw new Error('no civic-report folder appeared in the plugins folder within 60s');
+    await page.keyboard.press('Escape');
+  }, { critical: false });
+
+  await step('install-theme', 'The user installs a theme from the marketplace, applies it, and the app switches to it', async () => {
+    await page.keyboard.press('Escape');
+    if (!(await page.getByRole('textbox', { name: WORDS.marketSearch }).isVisible().catch(() => false))) await openMarketplace();
+    await page.getByRole('textbox', { name: WORDS.marketSearch }).fill('golden sunbreak');
+    await page.getByText('Golden Sunbreak', { exact: true }).first().click({ timeout: 30_000 });
+    await page.getByRole('button', { name: WORDS.install }).filter({ visible: true }).first().click({ timeout: 15_000 });
+    const manifest = path.join(home, '.claude/wecoded-themes/golden-sunbreak/manifest.json');
+    for (let i = 0; i < 60 && !fs.existsSync(manifest); i++) await sleep(1000);
+    if (!fs.existsSync(manifest)) throw new Error('the theme was not saved to the themes folder within 60s');
+    await page.getByRole('button', { name: WORDS.applyTheme }).filter({ visible: true }).first().click({ timeout: 15_000 });
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'golden-sunbreak', null, { timeout: 15_000 });
+    await snap('theme-applied');
+    await page.keyboard.press('Escape');
+  }, { critical: false });
+
   await step('open-spreadsheet', "The user opens their own spreadsheet from Projects and sees its cells and the formula's total", async () => {
     for (const f of ['walkthrough-groceries.xlsx', 'walkthrough-letter.docx']) fs.copyFileSync(path.join(FIXTURES, f), path.join(home, f));
     await page.keyboard.press('Escape');
