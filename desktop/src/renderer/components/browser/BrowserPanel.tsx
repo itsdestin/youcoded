@@ -680,6 +680,13 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
           <p>Private: separate from your own browser and sign-ins. Sites you sign into here stay signed in until you sign out. You can click, scroll and type in the page yourself.</p>
         </Callout>
       )}
+      {/* WHY a notice (integration review 2026-11-01): on some Linux computers the browser can only start without its
+          protective sandbox; that used to be a log line nobody reads, while everything else implied it was on. */}
+      {state?.sandboxOff && state.run === 'running' && !myChrome && (
+        <Callout className="mx-3 my-2" title="Extra browser protection is off">
+          <p>This computer doesn't allow the browser's built-in protection against harmful websites. Pages still load, but be careful which sites the assistant visits. Allowing "unprivileged user namespaces" in your system settings can turn it back on.</p>
+        </Callout>
+      )}
       {narrow && state?.prompt && <BrowserAskCard sessionId={sessionId} />}
       {body}
       <Dialog

@@ -17,6 +17,17 @@ import { browserInfo, browserState, installBrowserBridge } from './helpers/brows
 afterEach(() => cleanup());
 
 describe('Browser panel', () => {
+  it('says so plainly when the browser had to start without its protective sandbox', () => {
+    installBrowserBridge();
+    setBrowserState(browserState({ sandboxOff: true }));
+    render(<BrowserPanel sessionId="s1" />);
+    expect(screen.getByText('Extra browser protection is off')).toBeInTheDocument();
+    cleanup();
+    setBrowserState(browserState());
+    render(<BrowserPanel sessionId="s1" />);
+    expect(screen.queryByText('Extra browser protection is off')).toBeNull();
+  });
+
   it('shows the live picture and asks for pictures only while it is showing', async () => {
     const b = installBrowserBridge();
     setBrowserState(browserState());

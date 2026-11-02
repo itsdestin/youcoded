@@ -203,6 +203,8 @@ export class BrowserService extends EventEmitter {
   private windowShown = false;
   private myChrome = false;
   private browserLabel: string | null = null;
+  /** Linux only: the browser had to start without its sandbox (shown to the person, not only logged). */
+  private sandboxOff = false;
   private readonly sessions = new Map<string, SessionEntry>();
   private readonly owner = new WeakMap<Page, string>();
   private browserIdleTimer: NodeJS.Timeout | null = null;
@@ -248,6 +250,7 @@ export class BrowserService extends EventEmitter {
       windowShown: this.windowShown,
       myChrome: this.myChrome,
       browserLabel: this.browserLabel,
+      sandboxOff: this.sandboxOff,
       tabs,
       prompt: e?.prompt ?? null,
       error: this.run === 'error' ? this.lastError : null,
@@ -464,7 +467,10 @@ export class BrowserService extends EventEmitter {
       handleSIGTERM: false,
       handleSIGHUP: false,
     });
-    const ctx = await launchSandboxed(launch, this.opts.platform ?? process.platform, (m, d) => this.log('WARN', m, d), async () => {
+    this.sandboxOff = false;
+    // WHY also remembered (integration review 2026-11-01): the retry without the sandbox used to leave only a log line, so
+    // the person believed the extra protection was on. The panel now says so.
+    const ctx = await launchSandboxed(launch, this.opts.platform ?? process.platform, (m, d) => { this.sandboxOff = true; this.log('WARN', m, d); }, async () => {
       // A failed first start can leave the profile marked in-use; clear it exactly as before a normal start.
       await clearStaleProfileLock(profileDir, this.opts.platform ?? process.platform, (m, d) => this.log('INFO', m, d));
     });

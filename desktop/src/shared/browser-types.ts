@@ -33,6 +33,9 @@ export interface BrowserSessionState {
   windowShown: boolean;
   myChrome: boolean;
   browserLabel: string | null;
+  /** The browser is running without its extra protection (Linux computers that don't allow it). Optional so older
+   *  senders and fixtures still fit. */
+  sandboxOff?: boolean;
   tabs: BrowserTabInfo[];
   prompt: BrowserPrompt | null;
   /** A plain, verified sentence when run === 'error'. */
