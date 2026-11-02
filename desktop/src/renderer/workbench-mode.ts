@@ -160,13 +160,16 @@ export type PageChatLayout = 'left' | 'right' | 'float';
 
 const PAGE_CHAT_LAYOUTS: ReadonlyArray<PageChatLayout> = ['left', 'right', 'float'];
 
-export function workbenchPageChat(): { layout: PageChatLayout; openOnLoad: boolean } {
-  if (!isWorkbenchMode()) return { layout: 'left', openOnLoad: false };
-  const raw = new URLSearchParams(location.search).get('pageChat');
-  if (raw === 'open') return { layout: 'left', openOnLoad: true };
+export function workbenchPageChat(): { layout: PageChatLayout; phone: 'sheet' | 'full'; openOnLoad: boolean } {
+  if (!isWorkbenchMode()) return { layout: 'left', phone: 'sheet', openOnLoad: false };
+  const q = new URLSearchParams(location.search);
+  const raw = q.get('pageChat');
+  // `?pageChatPhone=full`: on a phone the chat takes the whole page area instead of rising as a sheet.
+  const phone = q.get('pageChatPhone') === 'full' ? 'full' : 'sheet';
+  if (raw === 'open') return { layout: 'left', phone, openOnLoad: true };
   return (PAGE_CHAT_LAYOUTS as readonly string[]).includes(raw ?? '')
-    ? { layout: raw as PageChatLayout, openOnLoad: true }
-    : { layout: 'left', openOnLoad: false };
+    ? { layout: raw as PageChatLayout, phone, openOnLoad: true }
+    : { layout: 'left', phone, openOnLoad: false };
 }
 
 /** Chrome-style override for reviewing a chrome layout on ANY theme, without

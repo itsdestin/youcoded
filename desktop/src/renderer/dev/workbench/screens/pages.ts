@@ -38,6 +38,7 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-money#chat-right', 'view', 'money', 'page-chat'), params: { pageChat: 'right', seed: 'bubbles-page-money-cc' } },
   { ...pg('pages/page/page-money#chat-float', 'view', 'money', 'page-chat'), params: { pageChat: 'float', seed: 'bubbles-page-money-cc' } },
   { ...pg('pages/focus/page-money#chat-phone', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'open', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
+  { ...pg('pages/focus/page-money#chat-phone-full', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'open', pageChatPhone: 'full', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
   // WHY: public-demo screenshots must use the site's fictional data and pinned-page
   // focused host, not the internal practice library's personal-shaped fixtures.
   { ...pg('pages/focus/page-home#site', 'view', 'site'), scenario: 'site' },

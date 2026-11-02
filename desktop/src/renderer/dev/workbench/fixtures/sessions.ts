@@ -18,7 +18,8 @@ export function sessions(): SessionInfo[] {
   return [
     {
       id: 'wb-1',
-      name: 'fix chat scroll stick',
+      // The page's-assistant mockup (pages-finish step 3) plays a Money conversation here; its name should match it.
+      name: typeof location !== 'undefined' && new URLSearchParams(location.search).get('seed') === 'bubbles-page-money-cc' ? 'October spending' : 'fix chat scroll stick',
       cwd: '/home/destin/youcoded-dev/youcoded',
       permissionMode: 'normal',
       skipPermissions: false,

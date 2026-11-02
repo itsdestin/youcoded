@@ -4132,7 +4132,7 @@ function AppInner() {
         onStartSession={offerPageSession}
         // Page settings' Edit in chat, opened from an open page's top bar.
         onEditPage={editPage}
-        chatSessionId={sessionId} // DESIGN STAGE (pages-finish step 3): the current chat, until the build gives each page its own.
+        chatSessionId={sessionId} chatSessionName={currentSession?.name} // DESIGN STAGE (pages-finish step 3): the current chat, until the build gives each page its own.
       />
       <PageCreateDialog
         request={pageCreate}

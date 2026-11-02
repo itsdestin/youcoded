@@ -11,9 +11,8 @@
 import React, { useEffect, useRef } from 'react';
 import ChatView from '../ChatView';
 import InputBar from '../InputBar';
-import { Button, CloseButton, Tooltip } from '../ui';
+import { Button, Tooltip } from '../ui';
 import { CompactSurfaceContext, type CompactSurface } from '../../state/compact-surface-context';
-import { PageGlyph } from './page-icons';
 import type { PageSummary } from '../../../shared/pages-types';
 
 const COMPACT: CompactSurface = { tools: 'summary' };
@@ -23,8 +22,11 @@ const HEADER_PX = 40;
 interface PageChatPaneProps {
   page: PageSummary;
   sessionId: string;
+  /** The conversation's own name, as the session list shows it (Destin, layout deck: "a real session name"). */
+  sessionName: string;
   cwd?: string;
-  onClose: () => void;
+  /** Hides the pane; the chat keeps its place and carries on (Destin: an X "reads as end chat permanently"). */
+  onHide: () => void;
   /** Starts a fresh chat for this page (R-memory: the last chat opens, with New chat beside it). */
   onNewChat?: () => void;
   className?: string;
@@ -32,7 +34,7 @@ interface PageChatPaneProps {
   style?: React.CSSProperties;
 }
 
-export function PageChatPane({ page, sessionId, cwd, onClose, onNewChat, className = '', style }: PageChatPaneProps) {
+export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, onNewChat, className = '', style }: PageChatPaneProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -59,16 +61,21 @@ export function PageChatPane({ page, sessionId, cwd, onClose, onNewChat, classNa
       <div ref={paneRef} className={`page-chat-pane overflow-hidden ${className}`}
         style={{ ...style, '--top-chrome-height': `${HEADER_PX}px` } as React.CSSProperties} data-page-chat>
         <div className="page-chat-header absolute top-0 inset-x-0 z-20 flex items-center gap-2 px-3 select-none" style={{ height: HEADER_PX }}>
-          <PageGlyph icon={page.icon} customIcon={page.customIcon} className="w-4 h-4 shrink-0 text-fg-muted" />
-          <span className="flex-1 min-w-0 truncate text-sm font-medium text-fg">{page.name} chat</span>
+          {/* WHY no page icon and no rule under it (layout deck review): the page is right beside the chat, and a
+              full-width line breaks the guide's no-full-width-lines rule. */}
+          <span className="flex-1 min-w-0 truncate text-sm font-medium text-fg" title={sessionName}>{sessionName}</span>
           {onNewChat && (
-            <Tooltip text="New chat" placement="bottom">
-              <Button size="icon-sm" variant="ghost" aria-label="New chat" className="w-7 h-7" onClick={onNewChat}>
-                <NewChatGlyph />
-              </Button>
-            </Tooltip>
+            // WHY words, not an icon: a bare pencil read as "edit something" (layout deck review).
+            <Button size="sm" variant="ghost" onClick={onNewChat} aria-label={`New chat about ${page.name}`}>
+              <PlusGlyph />
+              New chat
+            </Button>
           )}
-          <CloseButton label="Close the chat" size="icon-sm" onClick={onClose} />
+          <Tooltip text="Hide the chat" placement="bottom">
+            <Button size="icon-sm" variant="ghost" aria-label="Hide the chat" className="w-7 h-7" onClick={onHide}>
+              <MinimizeGlyph />
+            </Button>
+          </Tooltip>
         </div>
         <ChatView sessionId={sessionId} visible sessionActive compact cwd={cwd} />
         <div ref={bottomRef} className="page-chat-bottom absolute bottom-0 inset-x-0 z-20">
@@ -79,10 +86,18 @@ export function PageChatPane({ page, sessionId, cwd, onClose, onNewChat, classNa
   );
 }
 
-function NewChatGlyph() {
+function PlusGlyph() {
   return (
-    <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+function MinimizeGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+      <path d="M6 12h12" />
     </svg>
   );
 }
