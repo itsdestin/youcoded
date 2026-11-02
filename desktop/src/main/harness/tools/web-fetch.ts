@@ -23,7 +23,7 @@ import { parseHTML } from 'linkedom';
 // @ts-ignore -- no type declarations for 'turndown'
 import TurndownService from 'turndown';
 import { defineTool } from './registry';
-import { guardedFetch, readBodyCapped, NetGuardError, type GuardedFetchOpts } from './net-guard';
+import { guardedFetch, readBodyCapped, NetGuardError, type GuardedFetchOpts, type HostDecision } from './net-guard';
 import type { ToolResultPayload } from './types';
 import { siteKeyFor } from '../../../shared/site-key';
 
@@ -800,7 +800,20 @@ export const WebFetchTool = defineTool<z.infer<typeof inputSchema>>({
     }
     let res: Response, finalUrl: string;
     try {
-      ({ res, finalUrl } = await guardedFetch(args.url, { signal: ctx.signal, ...testHooks }));
+      ({ res, finalUrl } = await guardedFetch(args.url, {
+        signal: ctx.signal,
+        // WHY (integration review 2026-11-01): the person is asked about the site they were TOLD about (the first
+        // address). A redirect to a different website is a visit to that website, so it must be asked about too:
+        // stop here and name it, and the next WebFetch of that address goes through the normal website question.
+        allowHost: (_h, hop, hopUrl): HostDecision => {
+          if (hop === 0) return { ok: true };
+          const asked = siteKeyFor(args.url);
+          const now = siteKeyFor(hopUrl.toString());
+          return !asked || now === asked ? { ok: true }
+            : { ok: false, message: `${asked} redirected to a different website (${now}). Fetch ${hopUrl.toString()} directly if you want to visit it; the person is asked about each new website.` };
+        },
+        ...testHooks,
+      }));
     } catch (err) {
       if (err instanceof NetGuardError) return { text: `WebFetch blocked: ${err.message}`, isError: true };
       throw err; // defineTool's catch turns it into an actionable error result
