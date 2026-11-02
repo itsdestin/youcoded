@@ -756,6 +756,63 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(askUser).toHaveBeenCalledTimes(2);
   });
 
+  it('"for this conversation" quiets ordinary edits only: secrets and outside files still stop, and a resume forgets it', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-edit-chat-'));
+    const edit = fakeTool('Edit', { permissionSubject: (args: any) => args.file_path });
+    const outside = path.join(os.tmpdir(), 'yc-outside-chat', 'one.ts');
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Edit', { file_path: 'src/a.ts' }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'Edit', { file_path: 'src/b.ts' }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c3', 'Edit', { file_path: '.env' }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c4', 'Edit', { file_path: outside }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (r: AskRequest): Promise<AskDecision> => (r.external ? { behavior: 'deny' } : { behavior: 'allow', allowEditsForChat: true }));
+    const session = new HarnessSession(makeOpts({ cwd: root, tools: [edit], decide: async () => ({ action: 'ask', denyListed: false }), askUser }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    // a.ts asked once; b.ts rode on the grant; .env was refused by the secrets guard before any card; the outside file asked.
+    expect(askUser.mock.calls.map((c) => [c[0].external, c[0].subject])).toEqual([[false, 'src/a.ts'], [true, outside]]);
+    expect((edit as any).calls).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'tool-result').some((e) => /credential or secret/.test(String(e.data.toolResult)))).toBe(true);
+    session.seedHistory([]);
+    (session as any).modelFactory = async () => scriptedModel([
+      stream(toolCallChunk('c5', 'Edit', { file_path: 'src/c.ts' }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]) as any;
+    await session.send('again');
+    expect(askUser.mock.calls.filter((c) => c[0].subject === 'src/c.ts')).toHaveLength(1);
+  });
+
+  it('"for this conversation" never applies to a deny-list stop or to a specialist child', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-edit-chat-'));
+    const edit = fakeTool('Edit', { permissionSubject: (args: any) => args.file_path });
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Edit', { file_path: 'src/a.ts' }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'Edit', { file_path: 'src/b.ts' }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', allowEditsForChat: true }));
+    const child = new HarnessSession(makeOpts({ cwd: root, tools: [edit], decide: async () => ({ action: 'ask', denyListed: false }), askUser, isSpecialistChild: true }), async () => model as any);
+    await child.send('go');
+    expect(askUser).toHaveBeenCalledTimes(2);
+  });
+
+  it('"Always allow" on an edit with the folder choice emits a rule for Edit and Write in that folder', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-edit-chat-'));
+    const edit = fakeTool('Edit', { permissionSubject: (args: any) => args.file_path });
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Edit', { file_path: 'src/ui/a.ts' }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', always: true, grantScope: 'folder' }));
+    const session = new HarnessSession(makeOpts({ cwd: root, tools: [edit], decide: async () => ({ action: 'ask', denyListed: false }), askUser }), async () => model as any);
+    const remembered: any[] = [];
+    session.on('remember-rule', (r) => remembered.push(r));
+    await session.send('go');
+    expect(remembered.map((r) => [r.tool, r.pattern, r.match])).toEqual([['Edit', 'src/ui', 'folder'], ['Write', 'src/ui', 'folder']]);
+  });
+
   it('asks before a comment tool reaches a file outside the project, and "Allow for this chat" covers every later outside file until resume', async () => {
     const read = fakeTool('ReadFileComments', { schema: z.object({ path: z.string() }) });
     const outsideA = path.join(os.tmpdir(), 'yc-outside-a', 'notes.md');

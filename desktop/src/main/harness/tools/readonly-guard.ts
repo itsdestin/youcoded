@@ -118,14 +118,67 @@ export async function searchTreeHasNoSecrets(words: string[], cwd: string): Prom
   return true;
 }
 
+/** Most files a wildcard may turn into before the command simply asks (a huge match is not an everyday quiet look). */
+export const MAX_WILDCARD_MATCHES = 400;
+/** Most folders read while expanding wildcards. */
+const MAX_WILDCARD_FOLDERS = 200;
+
+/** Q-4: what the shell would turn each wildcard word into, from the folder the command runs in — or null meaning "ask".
+ *
+ *  WHY the check happens HERE, on the real folder, and not in the text rules: once the shell expands `*`, the program
+ *  receives file NAMES, and a name can be anything — `-o`, `--output=x`, `id_rsa`. So every match is read back and
+ *  judged like a typed word: a match that starts with `-` (it would be taken as an option) makes the whole command
+ *  ask, and all matches go through the credential/outside-project path checks in readOnlyChecksFor. The text rules
+ *  already guarantee a wildcard never begins with `.`, so hidden files and folders are never matched.
+ *  Returns the matched paths written the way the wildcard word was (`src/*.ts` → `src/a.ts`). */
+export function expandWildcards(globs: string[], here: string): string[] | null {
+  const out: string[] = [];
+  let folders = 0;
+  for (const word of globs) {
+    const pieces = word.split('/');
+    let level: Array<{ rel: string; abs: string }> = [{ rel: '', abs: here }];
+    for (let k = 0; k < pieces.length; k++) {
+      const piece = pieces[k];
+      const last = k === pieces.length - 1;
+      const next: Array<{ rel: string; abs: string }> = [];
+      for (const base of level) {
+        if (!/[*?]/.test(piece)) {
+          const abs = path.join(base.abs, piece);
+          if (fs.existsSync(abs)) next.push({ rel: base.rel + piece, abs });
+          continue;
+        }
+        if (++folders > MAX_WILDCARD_FOLDERS) return null;
+        let names: string[];
+        try { names = fs.readdirSync(base.abs); } catch { continue; } // not a folder / unreadable: the shell matches nothing here
+        // * and ? only; the shell never lets them match a leading dot, and the text rules keep dot-pieces out anyway.
+        const rx = new RegExp('^' + piece.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]') + '$');
+        for (const name of names) {
+          if (name.startsWith('.') || !rx.test(name)) continue;
+          next.push({ rel: base.rel + name, abs: path.join(base.abs, name) });
+          if (next.length + out.length > MAX_WILDCARD_MATCHES) return null;
+        }
+      }
+      // Folders carry on with a slash; the last piece is the match itself.
+      level = last ? next : next.filter((m) => { try { return fs.statSync(m.abs).isDirectory(); } catch { return false; } }).map((m) => ({ rel: m.rel + '/', abs: m.abs }));
+    }
+    for (const m of level) {
+      // A match that starts with `-` would be read as an option by the program: ask.
+      if (m.rel.split('/').pop()!.startsWith('-')) return null;
+      out.push(m.rel);
+      if (out.length > MAX_WILDCARD_MATCHES) return null;
+    }
+  }
+  return out;
+}
+
 /** A PATH with an empty or `.` entry would let a file in the project stand in for `ls`. */
 function pathIsClean(pathVar: string | undefined = process.env.PATH): boolean {
   if (!pathVar) return false;
   return pathVar.split(path.delimiter).every((e) => e !== '' && e !== '.' && path.isAbsolute(e));
 }
 
-export function pathsAreNotSecret(words: string[], cwd: string, readsFolders = false, readsFromCwd = false): boolean {
-  if (words.length > MAX_WORDS_CHECKED) return false;
+export function pathsAreNotSecret(words: string[], cwd: string, readsFolders = false, readsFromCwd = false, maxWords = MAX_WORDS_CHECKED): boolean {
+  if (words.length > maxWords) return false;
   // WHY: `grep -r x ~` never names a secret file, yet reads every one below home. Judged for folder-reading
   // commands only, so `ls ~` and `du -sh /` stay quiet. Every word is tried, so `rg x -- /` is caught too.
   if (readsFolders) {
@@ -295,9 +348,12 @@ export async function readOnlyChecksFor(subject: string, here: string, powershel
   // variables (PATH, a git helper…), which changes what a plain `ls` or `git diff` would actually run. The list judges
   // the computer's own settings, so once the chat has changed any, nothing is quiet any more — it asks as it always did.
   if (envChanged) return { pathsOk: false, gitOk: false };
+  // Q-4: wildcards are expanded against the real folder and every match is judged like a typed word.
+  const matches = v.globs.length > 0 ? expandWildcards(v.globs, here) : [];
   return {
-    pathsOk: pathIsClean() && pathsAreNotSecret(v.words, here, v.readsFolders, v.readsFromCwd)
-      && (!v.readsFromCwd || await searchTreeHasNoSecrets(v.words, here)),
+    pathsOk: matches !== null && pathIsClean() && pathsAreNotSecret(v.words, here, v.readsFolders, v.readsFromCwd)
+      && (matches.length === 0 || pathsAreNotSecret(matches, here, false, false, MAX_WILDCARD_MATCHES))
+      && (!v.readsFromCwd || await searchTreeHasNoSecrets([...v.words, ...(matches ?? [])], here)),
     gitOk: v.usesGit ? await gitSettingsRunNothing(here) : true,
   };
 }

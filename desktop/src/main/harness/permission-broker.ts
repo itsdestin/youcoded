@@ -91,6 +91,8 @@ export interface AskDecision {
   grantScope?: GrantScope;
   /** Memory-only consent to outside-folder file edits; never a stored permission rule. */
   allowExternalEditsForSession?: boolean;
+  /** Q-2: memory-only consent to edit and create files INSIDE the project until this conversation ends. Never stored. */
+  allowEditsForChat?: boolean;
   /** Card #207: memory-only consent to comments on outside files for this chat. */
   allowOutsideCommentsForSession?: boolean;
   /** Validated choice on an admin approval; never accepted on other asks or a deny. */
@@ -150,6 +152,8 @@ interface PendingAsk {
   canGrantExternalEdits?: boolean;
   /** Card #207: only a main assistant's outside-file comment ask may mint it. */
   canGrantOutsideComments?: boolean;
+  /** Q-2: only the main assistant's ordinary Write/Edit ask (not an outside-folder or floor-forced one). */
+  canGrantEditsForChat?: boolean;
   canGrantAdmin?: boolean;
   /** The exact PermissionRequest/PasswordRequest this ask emitted, minus its
    *  timestamp, kept so the heartbeat re-announces something byte-identical.
@@ -247,6 +251,10 @@ export class PermissionBroker extends EventEmitter {
         // comment tool, raised by the main assistant, can grant chat-wide
         // comment access; any other approval carrying the field gets nothing.
         canGrantOutsideComments: req.external === true && !req.raisedBy && bareDocCommentsToolName(req.toolName) !== null,
+        // Q-2: the "this conversation" edit choice exists only on an ordinary Write/Edit card from the main assistant.
+        // Outside-folder and floor-forced asks have their own cards and can never mint it.
+        canGrantEditsForChat: req.external !== true && !req.floorStop && !req.raisedBy
+          && (req.toolName === 'Write' || req.toolName === 'Edit'),
         // WHY: a renderer selector cannot turn an unrelated approval into admin authority.
         canGrantAdmin: req.toolName === 'Bash' && (!req.floorStop || req.floorStop === 'admin')
           && typeof req.toolInput.command === 'string' && adminCommandVerdict(req.toolInput.command)?.kind === 'admin',
@@ -399,7 +407,7 @@ export class PermissionBroker extends EventEmitter {
     // Validate to the two literals and FAIL NARROW on anything else. This value
     // is PERSISTED (unlike permissionMode, which is display-only), so it is
     // checked here AND re-derived at the session rather than trusted.
-    const grantScope: GrantScope = decision.grantScope === 'wide' ? 'wide' : 'exact';
+    const grantScope: GrantScope = decision.grantScope === 'wide' || decision.grantScope === 'folder' ? decision.grantScope : 'exact';
     // Stamp a human "no" so the driver can tell it from a policy refusal (see
     // AskDecision.dismissed).
     const resolved: AskDecision = {
@@ -408,6 +416,8 @@ export class PermissionBroker extends EventEmitter {
         ? { adminApprovalScope: decision.adminApprovalScope } : {}),
       ...(behavior === 'allow' && entry.canGrantExternalEdits && decision.allowExternalEditsForSession === true
         ? { allowExternalEditsForSession: true } : {}),
+      ...(behavior === 'allow' && entry.canGrantEditsForChat && decision.allowEditsForChat === true
+        ? { allowEditsForChat: true } : {}),
       ...(behavior === 'allow' && entry.canGrantOutsideComments && decision.allowOutsideCommentsForSession === true
         ? { allowOutsideCommentsForSession: true } : {}),
       ...(behavior === 'deny' ? { dismissed: true } : {}), ...(updatedInput ? { updatedInput } : {}),

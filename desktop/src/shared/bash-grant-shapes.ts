@@ -5,18 +5,27 @@
 // derivations would eventually disagree, and the disagreement would be a grant
 // that is wider than the sentence describing it — the exact failure this item
 // exists to fix. Same reasoning as subject-glob.ts's own header.
-import { DESTRUCTIVE_DENY_LIST } from './permission-types';
+import { DESTRUCTIVE_DENY_LIST, sameRule } from './permission-types';
 import type { PermissionRule } from './permission-types';
 import { grantAdmitsHostile, ruleMatches } from './subject-glob';
 import { EXACT_ONLY_REASON, riskyVariant, safeFamilyOf, type SafeFamily } from './bash-risky-variants';
+import { splitChain, plainCdTarget } from './bash-chain';
+import { downloadHostPattern, downloadHostVerdict } from './download-host';
+import { readOnlyVerdict } from './safe-readonly-commands';
 
-export type GrantScope = 'exact' | 'wide';
+/** 'folder' is an EDIT choice ("files in this folder", shared/edit-grants.ts); bashGrantOptions never produces it. */
+export type GrantScope = 'exact' | 'wide' | 'folder';
 
 export interface GrantOption {
   scope: GrantScope;
   /** Exactly what gets persisted. The renderer never constructs this — it sends
    *  the `scope` selector and the main process re-derives from the tool call. */
   rule: PermissionRule;
+  /** Q-1: set only on a joined-up command's "each part on its own" choice — one saved rule per part that needs one
+   *  (`rule` is the first of them). The renderer never reads it; main stores them all. */
+  rules?: PermissionRule[];
+  /** Q-1: the same parts in plain words, for the card to list under the choice ("Any npm test command", "Exactly: rm -rf build"). */
+  parts?: string[];
   /** Plain-English label. MUST NOT contain '*' or '?' — this string is rendered
    *  in the confirm and in Settings, on a screen written for people who have
    *  never seen a glob. */
@@ -80,7 +89,7 @@ export function describeBashPattern(pattern: string): string | null {
   // A split program's wide grant reads as what it covers, not "Any curl command".
   // Also what an older "Any curl command" row reads as now: that is all it covers.
   const fetch = /^(curl|wget)\*$/.exec(pattern);
-  if (fetch) return `Downloading with ${fetch[1]}`;
+  if (fetch) return `Downloading with ${fetch[1]} (any website)`;
   const install = /^(npm|pnpm|yarn|bun|cnpm) (\S+)\*$/.exec(pattern);
   if (install && safeFamilyOf(`${install[1]} ${install[2]}`)) return `Installing with ${install[1]}, without package setup scripts`;
   const pip = /^(pip3?) (\S+)\*$/.exec(pattern);
@@ -88,6 +97,16 @@ export function describeBashPattern(pattern: string): string | null {
   const generic = /^([^*?]+?)\*$/.exec(pattern);
   if (generic) return `Any ${generic[1].trim()} command`;
   return null;
+}
+
+/** A saved Bash rule in plain words, covering the rule kinds this module and download-host produce. Null = not ours. */
+export function describeBashRule(rule: PermissionRule): string | null {
+  if (rule.pattern === undefined) return null;
+  if (rule.match === 'download-host') {
+    const m = /^(curl|wget) (\S+)$/.exec(rule.pattern);
+    return m ? `Downloading from ${m[2]} only` : null;
+  }
+  return rule.match === 'glob' ? describeBashPattern(rule.pattern) : null;
 }
 
 interface CommandShape {
@@ -275,6 +294,19 @@ function deriveWide(command: string, tokens: string[]): GrantOption | null {
   if (run) return { scope: 'wide', rule: wideRule(run.pattern), label: run.label, limits: run.limits };
 
   const family = safeFamilyOf(command);
+  // Q-6: a plain download is remembered for ONE website, read from a parsed address (shared/download-host.ts). Anything
+  // that parser will not vouch for (variables, two addresses, redirect-following, odd spellings) is exact-only: returning
+  // null here — never the old "any download" rung — keeps the exact choice as the only one.
+  if (family?.family === 'download') {
+    const v = downloadHostVerdict(command);
+    if (!v || !v.ok) return null;
+    return {
+      scope: 'wide',
+      rule: { tool: 'Bash', pattern: downloadHostPattern(v.program, v.host), action: 'allow', match: 'download-host' },
+      label: `Always allow downloads from ${v.host} only`,
+      limits: "Doesn't cover other websites, following redirects, sending data or files out, or this command chained onto another one.",
+    };
+  }
   if (family) {
     const copy = SAFE_FAMILY_COPY[family.family](family.program);
     return { scope: 'wide', rule: wideRule(`${key}*`), label: copy.label, limits: copy.limits };
@@ -389,6 +421,10 @@ export function bashGrantOptions(command: string): GrantOption[] {
   const tokens = tokenize(command);
   if (tokens.length === 0) return [];
 
+  // Q-1: a joined-up command (`cd app && npm test`) is offered word for word, or each part on its own.
+  const chain = splitChain(command);
+  if (chain) return chainGrantOptions(command, chain);
+
   const shape = COMMAND_SHAPES.find((s) => s.key === shapeKey(tokens));
   if (shape && !shape.rememberable(tokens)) return [];
 
@@ -402,7 +438,7 @@ export function bashGrantOptions(command: string): GrantOption[] {
       label: command,
       // A risky command says WHY nothing wider is on offer (EXACT_ONLY_REASON); an
       // ordinary one keeps the generic sentence.
-      limits: ((r) => (r ? EXACT_ONLY_REASON[r] : GENERIC_LIMITS))(riskyVariant(command)),
+      limits: ((r) => (r ? EXACT_ONLY_REASON[r] : downloadExactReason(command) ?? GENERIC_LIMITS))(riskyVariant(command)),
     },
   ];
   const wide = deriveWide(command, tokens);
@@ -437,4 +473,53 @@ export function bashGrantOptions(command: string): GrantOption[] {
     return offered.filter((o) => o.scope === 'wide');
   }
   return offered;
+}
+
+/** Q-6: why a plain download has no "this website only" choice — shown under its single, word-for-word choice. */
+function downloadExactReason(command: string): string | null {
+  const v = downloadHostVerdict(command);
+  if (!v || v.ok) return null;
+  return v.reason === 'redirects'
+    ? 'Only this exact command is remembered, because it follows links on to other websites.'
+    : 'Only this exact command is remembered, because the website could not be read plainly from it.';
+}
+
+/** Q-1: the choices for a joined-up command. Always the whole line word for word; plus, when every part can be
+ *  remembered, "each part on its own" — one saved rule per part that needs one.
+ *
+ *  Which parts need none: a plain `cd` into a folder below the project, and anything already on the built-in look-only
+ *  list. Which stay word-for-word: whatever bashGrantOptions gives no wider choice (deleting, uploading, installs with
+ *  setup scripts, `python -c`, a push that names no branch is not rememberable at all and removes this choice). */
+function chainGrantOptions(command: string, parts: string[]): GrantOption[] {
+  const exact: GrantOption = {
+    scope: 'exact',
+    rule: { tool: 'Bash', pattern: command, action: 'allow', match: 'exact' },
+    label: command,
+    limits: GENERIC_LIMITS,
+  };
+  const rules: PermissionRule[] = [];
+  const sentences: string[] = [];
+  for (const part of parts) {
+    if (plainCdTarget(part) !== null) continue;
+    if (readOnlyVerdict(part).safe) continue;
+    const options = bashGrantOptions(part);
+    if (options.length === 0) return [exact]; // a part that can never be remembered (bare `git push`) blocks the choice
+    // A `cd` that leaves the project is never widened to "any cd command".
+    const pick = /^cd(\s|$)/.test(part) ? options[0] : options.find((o) => o.scope === 'wide') ?? options[0];
+    if (rules.some((r) => sameRule(r, pick.rule))) continue;
+    rules.push(pick.rule);
+    sentences.push(pick.scope === 'wide' ? describeBashRule(pick.rule) ?? pick.label : `Exactly: ${part}`);
+  }
+  if (rules.length === 0) return [exact];
+  return [
+    exact,
+    {
+      scope: 'wide',
+      rule: rules[0],
+      rules,
+      parts: sentences,
+      label: 'Each part on its own',
+      limits: "Deleting, uploading and installs with setup scripts are remembered word for word. Doesn't cover other commands, or these with different options.",
+    },
+  ];
 }

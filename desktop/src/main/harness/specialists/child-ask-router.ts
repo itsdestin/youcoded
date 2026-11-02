@@ -1,5 +1,5 @@
 import type { AskRequest, AskDecision, PermissionBroker } from '../permission-broker';
-import { rememberedRuleFor, type HarnessSessionOpts } from '../harness-session';
+import { rememberedRulesFor, type HarnessSessionOpts } from '../harness-session';
 import type { PermissionRule } from '../../../shared/permission-types';
 import { adminRuleFor } from '../../../shared/admin-approval';
 
@@ -118,8 +118,7 @@ export function childAskRouter(deps: ChildAskRouterDeps): NonNullable<HarnessSes
       if (rule) deps.remember?.({ ...rule, specialist: deps.agentType });
     }
     if (decision.behavior === 'allow' && decision.always && !decision.adminApprovalScope && !req.floorStop && !BUDGET_ASK_TOOL_NAMES.has(req.toolName)) {
-      const rule = rememberedRuleFor(req.toolName, req.subject, decision.grantScope);
-      if (rule) deps.remember?.({ ...rule, specialist: deps.agentType });
+      for (const rule of rememberedRulesFor(req.toolName, req.subject, decision.grantScope)) deps.remember?.({ ...rule, specialist: deps.agentType });
     }
     return decision;
   };

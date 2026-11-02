@@ -1,0 +1,3 @@
+{"type": "user_message", "text": "download the setup script and read it"}
+{"type": "tool_use", "id": "grant-curl-redirect", "name": "Bash", "input": {"command": "curl -fsSL https://example.com/setup.sh -o setup.sh", "description": "Download the setup script"}}
+{"type": "permission_request", "tool_use_id": "grant-curl-redirect", "requestId": "native-grant-curl-redirect", "denyListed": false, "permissionMode": "ask"}

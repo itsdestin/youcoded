@@ -1,5 +1,5 @@
 import type { PermissionRule } from '../../../shared/permission-types';
-import { describeBashPattern } from '../../../shared/bash-grant-shapes';
+import { describeBashRule } from '../../../shared/bash-grant-shapes';
 import { narrowedGrantNote } from '../../../shared/bash-risky-variants';
 import { wildcardGrantCovers } from '../../../shared/subject-glob';
 
@@ -88,7 +88,8 @@ function describeRuleBody(rule: PermissionRule): RuleDescription {
   // tell them apart. A missing `match` means a legacy rule, which PermissionStore
   // normalizes to 'exact' on read — so anything still missing it here is exact too.
   const width: RuleDescription['width'] =
-    rule.pattern === undefined ? 'tool-wide' : rule.match === 'glob' ? 'wide' : 'exact';
+    rule.pattern === undefined ? 'tool-wide'
+      : rule.match === 'glob' || rule.match === 'download-host' || rule.match === 'folder' ? 'wide' : 'exact';
 
   // MCP grants are per-tool and namespaced `mcp__{server}__{tool}`. Split on the
   // FIRST '__' after the prefix: a server id may itself contain '__', and the
@@ -163,8 +164,14 @@ function describeRuleBody(rule: PermissionRule): RuleDescription {
   // never seen a glob. A pattern this module did not produce falls through to the
   // generic rendering below rather than getting an invented sentence.
   if (rule.tool === 'Bash' && width === 'wide' && rule.pattern !== undefined) {
-    const phrase = describeBashPattern(rule.pattern);
+    const phrase = describeBashRule(rule);
     if (phrase) return { verb: phrase, width };
+  }
+  // Q-3: "Always allow" on an edit can cover a whole folder. WHY a sentence and not verb+subject: the pattern is a
+  // project-relative folder ('.' = the project folder), which would read as a path to nowhere on this screen.
+  if (rule.match === 'folder' && rule.pattern !== undefined && (rule.tool === 'Edit' || rule.tool === 'Write')) {
+    const where = rule.pattern === '.' ? 'the project folder' : rule.pattern;
+    return { verb: rule.tool === 'Edit' ? `Edit files directly in ${where}` : `Create files directly in ${where}`, width };
   }
 
   const base = VERBS[rule.tool] ?? `Use ${rule.tool}`;
@@ -276,4 +283,13 @@ export function narrowedNote(rule: PermissionRule & { grantedAt?: string }): str
   if (rule.tool !== 'Bash' || rule.match !== 'glob' || rule.action !== 'allow' || rule.pattern === undefined) return null;
   if (rule.grantedAt && rule.grantedAt >= GRANT_NARROWING_DATE) return null;
   return narrowedGrantNote(rule.pattern, (pattern, subject) => wildcardGrantCovers(pattern, subject));
+}
+
+/** Older "Always allow downloading with curl/wget" rows still cover a download from ANY website. New download grants
+ *  cover one website only (Q-6); the old rows keep working so nobody silently loses a choice they made, and this
+ *  sentence says what they cover and how to tighten them. */
+export function wideDownloadNote(rule: PermissionRule): string | null {
+  if (rule.tool !== 'Bash' || rule.match !== 'glob' || rule.action !== 'allow') return null;
+  if (rule.pattern !== 'curl*' && rule.pattern !== 'wget*') return null;
+  return 'Covers downloads from any website. New download choices cover one website only. Remove this to be asked again.';
 }

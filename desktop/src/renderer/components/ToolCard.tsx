@@ -13,6 +13,7 @@ import { Button, Pill, Radio, RadioGroup, Textarea, Tooltip } from './ui';
 // The card renders the widths this SHARED derivation produced and sends back only
 // which one was chosen — it never builds a rule pattern of its own.
 import { bashGrantOptions, bashNoGrantNote, type GrantScope } from '../../shared/bash-grant-shapes';
+import { editGrantChoices, isFileEditTool } from '../../shared/edit-grants';
 import { CheckIcon, FailIcon, QuestionIcon, ChevronIcon, NoteIcon, StoppedIcon, ChatIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
 import { isAndroid } from '../platform';
@@ -569,7 +570,7 @@ function grantFolderName(workDir: unknown, sessionCwd?: string): string {
 
 const NATIVE_ALWAYS_ALLOW = 'native:always-allow';
 
-export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, site, permissionMode, onResponded, onFailed, onAnswerNow, answerUnconfirmed = false, bare = false, noKeyboard = false }: {
+export function PermissionButtons({ requestId, suggestions, denyListed, command, filePath, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, site, permissionMode, onResponded, onFailed, onAnswerNow, answerUnconfirmed = false, bare = false, noKeyboard = false }: {
   requestId: string;
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
@@ -584,6 +585,9 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
    *  Bash-only (DESTRUCTIVE_DENY_LIST has no non-Bash entries), so this is
    *  `input.command` — the same string harness-session.ts:562 persists. */
   command?: string;
+  /** Q-2/Q-3: the file a Write/Edit ask is about, as the assistant wrote it. Gives the edit card its extra choices
+   *  ("For this conversation", and "Only this file" vs "Files in <folder>" under Always allow). */
+  filePath?: string;
   /** Basename of the session cwd. The rule is scoped to that directory's slug
    *  (permission-store.ts:35-43), so naming the folder is what makes the grant's
    *  scope checkable — a worktree does NOT inherit its parent repo's rules. */
@@ -682,12 +686,18 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     () => (isNative && typeof command === 'string' ? bashNoGrantNote(command) : null),
     [isNative, command],
   );
+  // Q-2/Q-3: an ordinary file-edit ask (not outside the project, not a helper's, no floor) gets a "For this conversation"
+  // button, and its Always allow asks "this file or this folder?". Same list the shared module gave main, so the
+  // sentence and the stored rule cannot disagree.
+  const editAsk = isNative && !specialistName && isFileEditTool(toolName) && typeof filePath === 'string' && !external && !floorStop;
+  const editChoices = useMemo(() => (editAsk ? editGrantChoices(filePath) : []), [editAsk, filePath]);
+  const choices: Array<{ scope: GrantScope; label: string; limits: string; parts?: string[] }> = grantOptions.length > 0 ? grantOptions : editChoices;
   const noGrantPossible = isNative && typeof command === 'string' && grantOptions.length === 0;
   // Which width the user picked. Preselected narrow; irrelevant when the
   // derivation offered only one option (see chosenScope).
   const [grantPick, setGrantPick] = useState<GrantScope>('exact');
-  const chosenScope: GrantScope = grantOptions.length === 1 ? grantOptions[0].scope : grantPick;
-  const chosen = grantOptions.find((o) => o.scope === chosenScope) ?? grantOptions[0];
+  const chosenScope: GrantScope = choices.length === 1 ? choices[0].scope : grantPick;
+  const chosen = choices.find((o) => o.scope === chosenScope) ?? choices[0];
   const canAlwaysAllow = (hasSuggestions || isNative) && !suppressAlwaysAllow && !noGrantPossible;
   // Both layouts start on index 0 — Yes / Run it, a one-time allow.
   // WHY: the generic row used to start on Always allow, so any Enter the card
@@ -744,9 +754,9 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 
   // Admin commands use the SAME consequence confirmation as other restricted actions.
   const onAlwaysAllow = useCallback(() => {
-    if (canChooseAdmin || denyListed || grantOptions.length > 0) { setConfirmingAlways(true); return; }
+    if (canChooseAdmin || denyListed || choices.length > 0) { setConfirmingAlways(true); return; }
     handleRespond(alwaysAllowDecision());
-  }, [canChooseAdmin, adminApprovalScope, denyListed, grantOptions.length, handleRespond, hasSuggestions, suggestions, chosenScope]);
+  }, [canChooseAdmin, adminApprovalScope, denyListed, choices.length, handleRespond, hasSuggestions, suggestions, chosenScope]);
 
   // Keyboard order matches the visible row: Run it / Deny / Always allow.
   const actions = useRef<(() => void)[]>([]);
@@ -772,10 +782,15 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       ]
     : [
         () => handleRespond({ decision: { behavior: 'allow' } }),
+        ...(editAsk ? [() => handleRespond({ decision: { behavior: 'allow' }, allowEditsForChat: true })] : []),
         ...(canAlwaysAllow ? [onAlwaysAllow] : []),
         () => handleRespond({ decision: { behavior: 'deny' } }),
       ];
   const count = actions.current.length;
+  // Button positions in the default row (keyboard focus and refs follow them).
+  const chatIdx = editAsk ? 1 : -1;
+  const alwaysIdx = canAlwaysAllow ? (editAsk ? 2 : 1) : -1;
+  const noIdx = 1 + (editAsk ? 1 : 0) + (canAlwaysAllow ? 1 : 0);
 
   // Global keyboard navigation: arrows cycle, Enter activates. Suspended while
   // the consequence confirm is open so arrow/Enter don't drive the hidden row,
@@ -826,15 +841,15 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
             named grant like "Always allow pushing to master", and ambiguous when
             there are two options to choose between. */}
         <p className="text-xs font-medium text-fg-2">
-          {canChooseAdmin ? 'Always allow admin commands?' : grantOptions.length > 1
+          {canChooseAdmin ? 'Always allow admin commands?' : choices.length > 1
             ? `Always allow this${folderName ? ` in ${folderName}` : ''}?`
-            : grantOptions.length === 1 && grantOptions[0].scope === 'wide'
-              ? `${grantOptions[0].label}${folderName ? ` in ${folderName}` : ''}?`
+            : choices.length === 1 && choices[0].scope === 'wide'
+              ? `${choices[0].label}${folderName ? ` in ${folderName}` : ''}?`
               : `Always allow this exact command${folderName ? ` in ${folderName}` : ''}?`}
         </p>
-        {command && (
+        {(command ?? (editAsk ? filePath : undefined)) && (
           <p className="text-2xs leading-relaxed text-fg-2 bg-inset/70 px-2 py-1.5 rounded-sm break-all">
-            {command}
+            {command ?? filePath}
           </p>
         )}
         {denyListed && (
@@ -855,15 +870,15 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
         {/* The width choice. Only rendered when the derivation actually produced
             two — a named grant replaces its exact rung rather than sitting beside
             it, so every `git push` lands on the single-option path. */}
-        {canChooseAdmin ? <AdminApprovalChoices scope={adminApprovalScope} onChange={setAdminApprovalScope} responding={responding} /> : grantOptions.length > 1 && (
+        {canChooseAdmin ? <AdminApprovalChoices scope={adminApprovalScope} onChange={setAdminApprovalScope} responding={responding} /> : choices.length > 1 && (
           <RadioGroup
-            options={grantOptions.map((o) => o.scope)}
+            options={choices.map((o) => o.scope)}
             value={chosenScope}
             onChange={(next) => setGrantPick(next as GrantScope)}
             aria-label="How much to allow"
             className="flex flex-col gap-1.5 pt-0.5"
           >
-            {grantOptions.map((o) => (
+            {choices.map((o) => (
               <button
                 key={o.scope}
                 type="button"
@@ -873,7 +888,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
               >
                 <Radio checked={chosenScope === o.scope} onChange={() => setGrantPick(o.scope)} className="mt-0.5" />
                 <span className="text-2xs text-fg-2 break-all">
-                  {o.scope === 'exact' ? 'Only this exact command' : o.label}
+                  {o.scope === 'exact' ? (editAsk ? 'Only this file' : 'Only this exact command') : o.label}
                 </span>
               </button>
             ))}
@@ -883,6 +898,12 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
             the two cases that re-ask anyway (a chained command, a flag that
             changes what the command does) — the after-the-fact explanation was
             deliberately dropped, so this line is load-bearing. Settled R2·C. */}
+        {/* Q-1: a joined-up command's "each part" choice lists what will be remembered, one line per part. */}
+        {!canChooseAdmin && chosen?.parts && chosen.parts.length > 0 && (
+          <ul aria-label="What will be remembered" className="list-disc pl-4 space-y-0.5 text-2xs text-fg-2 break-all">
+            {chosen.parts.map((part) => <li key={part}>{part}</li>)}
+          </ul>
+        )}
         {!canChooseAdmin && chosen && (
           <p className="text-3xs text-fg-muted leading-relaxed">{chosen.limits}</p>
         )}
@@ -960,21 +981,32 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       >
         Yes
       </button>
+      {/* Q-2: edits only. Allows edits until this conversation ends; nothing is saved to Settings. */}
+      {editAsk ? (
+        <button
+          ref={el => { buttonsRef.current[chatIdx] = el; }}
+          disabled={responding}
+          onClick={() => handleRespond({ decision: { behavior: 'allow' }, allowEditsForChat: true })}
+          className={`px-3 ${pad} text-xs font-medium rounded-lg bg-green-400/40 hover:bg-green-400/60 text-green-100 transition-colors disabled:opacity-50 ${focusIdx === chatIdx ? ring : ''}`}
+        >
+          For this conversation
+        </button>
+      ) : null}
       {canAlwaysAllow ? (
         <button
-          ref={el => { buttonsRef.current[1] = el; }}
+          ref={el => { buttonsRef.current[alwaysIdx] = el; }}
           disabled={responding}
           onClick={onAlwaysAllow}
-          className={`px-3 ${pad} text-xs font-medium rounded-lg ${BROAD_ALLOW_COLORS} transition-colors disabled:opacity-50 ${focusIdx === 1 ? ring : ''}`}
+          className={`px-3 ${pad} text-xs font-medium rounded-lg ${BROAD_ALLOW_COLORS} transition-colors disabled:opacity-50 ${focusIdx === alwaysIdx ? ring : ''}`}
         >
           Always allow
         </button>
       ) : null}
       <button
-        ref={el => { buttonsRef.current[canAlwaysAllow ? 2 : 1] = el; }}
+        ref={el => { buttonsRef.current[noIdx] = el; }}
         disabled={responding}
         onClick={() => handleRespond({ decision: { behavior: 'deny' } })}
-        className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-red-100 transition-colors disabled:opacity-50 ${focusIdx === (canAlwaysAllow ? 2 : 1) ? ring : ''}`}
+        className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-red-100 transition-colors disabled:opacity-50 ${focusIdx === noIdx ? ring : ''}`}
       >
         No
       </button>
@@ -1002,6 +1034,11 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       {/* D2: the promise "Always allow" is about to make, in the user's words.
           Gated on canAlwaysAllow so it never describes a button that isn't
           rendered — the failure the noGrantNote above exists to avoid. */}
+      {editAsk && (
+        <p className="text-3xs text-fg-muted leading-relaxed">
+          For this conversation allows file changes in this project until the conversation ends. Nothing is saved.
+        </p>
+      )}
       {canAlwaysAllow && alwaysAllowNote && (
         <p className="text-3xs text-fg-muted leading-relaxed">{alwaysAllowNote}</p>
       )}
@@ -1616,6 +1653,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             specialistName={tool.specialist?.title}
             permissionMode={tool.permissionMode}
             command={typeof (tool.input as any)?.command === 'string' ? (tool.input as any).command : undefined}
+            filePath={typeof (tool.input as any)?.file_path === 'string' ? (tool.input as any).file_path : undefined}
             folderName={sessionCwd ? basename(sessionCwd) : undefined}
             // Budget gates are a plain Yes/No "Continue?" — no "Always allow".
             // `tool.external` joins them: the engine forces an ask for every path

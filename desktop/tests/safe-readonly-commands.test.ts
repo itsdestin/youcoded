@@ -155,7 +155,7 @@ const EXCLUDED = [
   'cd /tmp', 'cd', 'cd ..', 'cd src && ls', 'ps aux', 'ps -ef', 'ps', 'top', 'env', 'printenv', 'printenv HOME', 'set', 'export A=1', 'jq . a.json', 'jq -n env', 'awk "{print}" a', 'awk "BEGIN{system(\\"id\\")}"',
   'xargs ls', 'xargs -t touch echo', 'man ls', 'man --html=x man', 'less a', 'more a', 'tee out', 'tee -a out', 'touch a', 'mkdir a', 'rm a', 'rm -rf a', 'mv a b', 'cp a b', 'ln -s a b', 'chmod 600 a', 'chown x a',
   'curl https://x', 'wget https://x', 'ssh host', 'scp a h:b', 'rsync a b', 'nc host 1', 'sudo ls', 'su', 'doas ls', 'docker ps', 'kubectl get pods', 'history', 'history -s x', 'history -a ~/.bashrc',
-  'sleep 1', 'watch ls', 'time ls', 'timeout 5 ls', 'nice ls', 'nohup ls', 'stdbuf ls', 'command ls', 'builtin ls', 'exec ls', 'eval ls', 'source x', '. x', 'bash -c ls', 'sh -c ls', 'zsh -c ls', 'python -c 1', 'node -e 1', 'perl -e 1', 'ruby -e 1',
+  'sleep 1', 'watch ls', 'time sleep 1', 'timeout 5 sleep 1', 'nice sleep 1', 'nohup sh', 'stdbuf sh', 'command ls', 'builtin ls', 'exec ls', 'eval ls', 'source x', '. x', 'bash -c ls', 'sh -c ls', 'zsh -c ls', 'python -c 1', 'node -e 1', 'perl -e 1', 'ruby -e 1',
   'xxd a b', 'xxd -r a b', 'dd if=a of=b', 'truncate -s 0 a', 'shred a', 'mkfifo a', 'mktemp', 'install a b', 'split a', 'csplit a 1', 'lsof', 'netstat', 'ss -l', 'ip addr', 'ifconfig', 'mount', 'umount x', 'kill 1', 'pkill x', 'killall x',
   'yes', 'cal', 'ping x', 'dig x', 'nslookup x', 'host x', 'traceroute x', 'whois x', 'tar tf a', 'tar xf a', 'unzip -l a', 'gzip -l a', 'zcat a', 'bzcat a', 'xzcat a', 'zgrep x a', 'zless a', 'view a', 'vi a', 'nano a', 'emacs a',
   'make', 'npm test', 'npm ls', 'pip list', 'pip3 list', 'git config --list', 'git ls-remote origin', 'tput cols', 'clear', 'reset', 'sync', 'ulimit -a', 'umask', 'alias', 'unalias x', 'declare -p', 'read x', 'wait', 'jobs', 'fg', 'bg', 'disown', 'trap x', 'getconf -a', 'locale', 'lscpu', 'lsblk', 'lsusb', 'lspci', 'dmesg', 'journalctl', 'last', 'w', 'who', 'finger',
@@ -167,10 +167,10 @@ const FUZZ: string[] = [
   'ls $(id)', 'ls `id`', 'ls $HOME', 'ls ${HOME}', 'ls $\'a\'', 'ls "$(id)"', 'ls "`id`"', 'ls "$HOME"', 'ls ${a:-b}', 'ls $((1))', 'ls $[1]', 'ls <(id)', 'ls >(id)',
   'ls $IFS', 'rg -v -e x$IFS.$IFS--pre=sh', 'echo ${one="$"}${two="$one(id)"}${two@P}', 'ls $(<f)', 'ls {a,b}', 'ls {1..3}', 'ls $({rm,x})', 'cat {a,b}',
   // globs (could expand to a flag-looking file name)
-  'ls *', 'ls *.ts', 'ls ?', 'ls [a-z]*', 'cat *', 'sort *', 'find *', 'ls a*b', 'git diff *', 'ls ~root', 'ls ~/*', 'ls ~+', 'ls ~-',
+  'ls [a-z]*', 'sort *', 'find *', 'git diff *', 'ls ~root', 'ls ~/*', 'ls ~+', 'ls ~-',
   // other operators
   'ls &', 'ls & pwd', 'ls &&', '&& ls', 'ls ||', '|| ls', 'ls |', '| ls', 'ls ;', '; ls', 'ls ;;', 'ls |& cat', 'ls &> out', 'ls &>/dev/null', 'ls &>> out', 'ls >| out', 'ls 3>x', 'ls 2>x', 'ls 1>x', 'ls >x', 'ls >>x', 'ls <x', 'ls <<x', 'ls <<<x', 'ls >/dev/null2', 'ls 2>/dev/null2', 'ls 2>&2', 'ls 2>&1x', 'ls >&2',
-  '(ls)', '{ ls; }', 'ls ; (rm a)', 'if true; then ls; fi', 'for i in 1; do ls; done', 'while true; do ls; done', 'time ls', '! ls', 'ls !', 'ls #x', '#ls', 'ls # x',
+  '(ls)', '{ ls; }', 'ls ; (rm a)', 'if true; then ls; fi', 'for i in 1; do ls; done', 'while true; do ls; done', '! ls', 'ls !', 'ls #x', '#ls', 'ls # x',
   // whitespace and control characters
   'ls\nrm a', 'ls\n', '\nls', 'ls\r', 'ls\rrm a', 'ls\trm', 'ls\tfoo', 'ls\0', 'ls\0rm', 'ls \x1b[0m', 'ls\x07', 'ls\x7f', 'ls\vrm', 'ls\frm', 'ls -la', 'ls rm a', 'ls rm a', 'ls\u0085rm',
   '', ' ', 'ls\\', 'ls \\', 'ls a\\', 'ls a\\\nrm b', 'ls \\;', 'l\\s', 'ls a\\ b', 'ls "a\\"b"', "ls 'a\\'b'",
@@ -180,7 +180,7 @@ const FUZZ: string[] = [
   '/bin/ls', '/usr/bin/ls', './ls', '../ls', '~/ls', '/tmp/ls', 'LS', 'Ls', 'ls.exe', 'ls.sh', 'ls.', '.ls', '.', ':', 'ls=1', 'A=1 ls', 'A=1; ls', 'PATH=/tmp ls', 'LD_PRELOAD=x ls', 'env ls', 'FOO=$(id) ls',
   "'/bin/ls'", '"/bin/ls"', '/bin/../bin/ls', 'command ls', '\\ls', "l''s".replace("''", "\\\\"), 'ｌｓ', 'ⅼs', 'lѕ', 'ls​', '​ls', 'l​s', 'ls‮-la', '﻿ls', 'ls﻿',
   // flags
-  'ls --all=x', 'ls -l=x', 'ls ---all', 'ls -a-l', 'ls -la -z', 'ls -zl', 'ls --alll', 'ls --al', 'ls --ALL', 'ls -A -- *',
+  'ls --all=x', 'ls -l=x', 'ls ---all', 'ls -a-l', 'ls -la -z', 'ls -zl', 'ls --alll', 'ls --al', 'ls --ALL',
   // abbreviated long options
   'git log --oneli', 'git log --one', 'git diff --stat=', 'git diff --nam', 'git status --porc', 'grep --recur foo', 'grep --inc=x foo', 'rg --hid foo', 'ls --almost', 'wc --lin x', 'du --max=1', 'sort --rev a', 'head --lin=2 a',
   // clustered short flags with a bad letter

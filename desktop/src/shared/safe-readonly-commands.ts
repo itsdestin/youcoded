@@ -41,18 +41,25 @@ export interface ReadOnlyVerdict {
   /** Some part reads the CONTENTS of whole folders (grep -r, rg, diff -r, git grep --no-index): a folder that
    *  contains the credential folders (home, /) must ask, even though no credential file is named. */
   readsFolders: boolean;
+  /** Q-4: the unquoted wildcard words (`*.ts`, `src/?.js`) in the line, only ever on a command from GLOB_COMMANDS. The
+   *  caller expands them against the real folder and judges every file they turn into (readonly-guard.ts). */
+  globs: string[];
 }
 
-const NOT_SAFE: ReadOnlyVerdict = { safe: false, usesGit: false, words: [], readsFolders: false, readsFromCwd: false };
+const NOT_SAFE: ReadOnlyVerdict = { safe: false, usesGit: false, words: [], readsFolders: false, readsFromCwd: false, globs: [] };
 export const MAX_READONLY_LENGTH = 2000;
 
 // ── lexer ───────────────────────────────────────────────────────────────────
 
-type Segment = string[];
+type Segment = string[] & { globs?: Set<number> };
 
 // Characters that may appear in an UNQUOTED word. `~` only as a first character
 // (checked below); `[`/`]` only as the whole word (the `test` brackets).
 const PLAIN_CHAR = /[A-Za-z0-9_.\/:=,@%+^-]/;
+// Q-4: the only spelling of a wildcard word accepted. It starts with a letter, digit, `_`, `*` or `?` — never `-` (an option),
+// `.` (hidden files and `..`), `/` or `~` — and every `/`-separated piece must be non-empty and not start with `.`, so a
+// wildcard can never reach dot-folders such as .ssh, .aws or .git. No brackets, braces or `!` (character classes, lists).
+const GLOB_WORD = /^[A-Za-z0-9_*?][A-Za-z0-9_.\/:=,@%+^*?-]*$/;
 // The only redirects accepted: throw output away, or merge errors into the output.
 const SAFE_REDIRECT = /^(?:2>&1|>\/dev\/null|2>\/dev\/null|1>\/dev\/null)(?=[\s;|&]|$)/;
 
@@ -60,7 +67,7 @@ const SAFE_REDIRECT = /^(?:2>&1|>\/dev\/null|2>\/dev\/null|1>\/dev\/null)(?=[\s;
 function lex(command: string): Segment[] | null {
   if (command.length === 0 || command.length > MAX_READONLY_LENGTH) return null;
   const segments: Segment[] = [];
-  let words: string[] = [];
+  let words: Segment = [];
   let i = 0;
   const n = command.length;
   const endSegment = (): boolean => {
@@ -93,6 +100,7 @@ function lex(command: string): Segment[] | null {
     // a word: plain chars and quoted runs glued together, like the shell does
     let word = '';
     let started = false;
+    let hasGlob = false;
     while (i < n) {
       const ch = command[i];
       if (ch === "'") {
@@ -133,10 +141,17 @@ function lex(command: string): Segment[] | null {
         if (!(loneStart || loneEnd)) return null;
         word += ch; started = true; i++; continue;
       }
+      // Q-4: an UNQUOTED * or ? is a wildcard. Accepted only in the narrow spelling GLOB_WORD allows, and only later
+      // on a command from GLOB_COMMANDS; everywhere else it still means "not read-only".
+      if (ch === '*' || ch === '?') { hasGlob = true; word += ch; started = true; i++; continue; }
       if (!PLAIN_CHAR.test(ch)) return null;
       word += ch; started = true; i++;
     }
     if (!started) return null; // a character that starts no valid word (e.g. a stray `&`, `>`)
+    if (hasGlob) {
+      if (!GLOB_WORD.test(word) || word.split('/').some((seg) => seg === '' || seg.startsWith('.'))) return null;
+      (words.globs ??= new Set()).add(words.length);
+    }
     words.push(word);
   }
   if (words.length === 0) {
@@ -558,7 +573,64 @@ function programName(word: string): string | null {
   return /^[A-Za-z0-9_\[.-]+$/.test(word) && !word.includes('/') ? word : null;
 }
 
-function segmentIsReadOnly(words: string[]): { ok: boolean; git: boolean; folders: boolean; cwd: boolean } {
+// Q-4: the timing helpers Claude Code also looks through. Each is stripped ONLY in the exact spelling below, then the real
+// command is judged on its own; any other option on a helper (`timeout --signal`, `timeout -k`, `nice -n -5`, `stdbuf`
+// with an unknown mode, `time -o file`) means "not read-only". The helpers run the next word as a program, so they are
+// never on the command table themselves — a bare `timeout 5 sleep 100` or `nohup sh` stays a question.
+const WRAPPERS = new Set(['timeout', 'time', 'nice', 'nohup', 'stdbuf']);
+const MAX_WRAPPER_DEPTH = 3;
+const TIMEOUT_DURATION = /^\d{1,5}(\.\d{1,3})?[smhd]?$/;
+const STDBUF_MODE = /^(L|\d{1,6})$/;
+
+function stripWrappers(words: string[]): string[] | null {
+  let w = words;
+  for (let depth = 0; depth <= MAX_WRAPPER_DEPTH; depth++) {
+    const name = w[0];
+    if (!WRAPPERS.has(name)) return w;
+    if (depth === MAX_WRAPPER_DEPTH) return null;
+    if (name === 'timeout') {
+      if (!TIMEOUT_DURATION.test(w[1] ?? '')) return null;
+      w = w.slice(2);
+    } else if (name === 'time' || name === 'nohup') {
+      w = w.slice(1);
+    } else if (name === 'nice') {
+      if (w[1] === '-n') {
+        if (!/^\d{1,2}$/.test(w[2] ?? '')) return null;
+        w = w.slice(3);
+      } else w = w.slice(1);
+    } else {
+      // stdbuf: any number of `-i/-o/-e MODE` (or `-oMODE`) pairs, nothing else.
+      let i = 1;
+      while (i < w.length && w[i].startsWith('-')) {
+        const joined = /^-[ioe](.+)$/.exec(w[i]);
+        if (joined && STDBUF_MODE.test(joined[1])) { i++; continue; }
+        if (/^-[ioe]$/.test(w[i]) && STDBUF_MODE.test(w[i + 1] ?? '')) { i += 2; continue; }
+        return null;
+      }
+      w = w.slice(i);
+    }
+    if (w.length === 0) return null;
+  }
+  return null;
+}
+
+// Q-4: the commands that may be given an unquoted wildcard. Only commands that LOOK, where nothing a wildcard could hand
+// them changes what they do: no command that writes its last file argument (uniq, sort -o, cp), takes a program (find
+// -exec, xargs, sed e), or whose options can name a command (git, sort, sed, find are deliberately absent). Options a
+// wildcard might expand into (a file named `-o`) are caught when the wildcard is expanded (readonly-guard.ts refuses
+// any match that starts with `-`), so this list only needs every option the command ACCEPTS to be harmless — it
+// is the same flag tables above, which already leave out everything that writes or runs.
+const GLOB_COMMANDS = new Set([
+  'ls', 'cat', 'tac', 'head', 'tail', 'wc', 'stat', 'file', 'du', 'tree',
+  'grep', 'egrep', 'fgrep', 'rg', 'diff', 'nl', 'strings', 'od', 'hexdump',
+  'md5sum', 'sha1sum', 'sha224sum', 'sha256sum', 'sha384sum', 'sha512sum', 'b2sum', 'cksum',
+]);
+
+function segmentIsReadOnly(rawWords: string[]): { ok: boolean; git: boolean; folders: boolean; cwd: boolean } {
+  const words = stripWrappers(rawWords);
+  if (words === null) return { ok: false, git: false, folders: false, cwd: false };
+  // A wildcard is accepted only on GLOB_COMMANDS, and never as the command word itself. Indexes are of the original
+  // segment, so the check lives in readOnlyVerdict's loop (it knows which positions were wildcards) — here we only judge.
   const r = segmentCheck(words);
   const walks = r.ok && readsFolderContents(words);
   // WHY every git command counts: `git diff ~ ../x` outside a repo silently becomes a folder-to-folder compare.
@@ -605,7 +677,18 @@ export function readOnlyVerdict(command: string, opts?: { powershell?: boolean }
   let readsFolders = false;
   let readsFromCwd = false;
   const words: string[] = [];
+  const globs: string[] = [];
   for (const seg of segments) {
+    if (seg.globs) {
+      // A wildcard may only appear as an ARGUMENT of a GLOB_COMMANDS command (after any timing helpers).
+      const stripped = stripWrappers(seg);
+      if (stripped === null || !GLOB_COMMANDS.has(stripped[0])) return NOT_SAFE;
+      const first = seg.length - stripped.length; // index of the real command inside the segment
+      for (const idx of seg.globs) {
+        if (idx <= first) return NOT_SAFE;
+        globs.push(seg[idx]);
+      }
+    }
     const r = segmentIsReadOnly(seg);
     if (!r.ok) return NOT_SAFE;
     if (r.git) usesGit = true;
@@ -613,7 +696,7 @@ export function readOnlyVerdict(command: string, opts?: { powershell?: boolean }
     if (r.cwd) readsFromCwd = true;
     words.push(...seg);
   }
-  return { safe: true, usesGit, words, readsFolders, readsFromCwd };
+  return { safe: true, usesGit, words, readsFolders, readsFromCwd, globs };
 }
 
 // ── what Settings tells the person ──────────────────────────────────────────

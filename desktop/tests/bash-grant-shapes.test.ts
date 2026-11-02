@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bashGrantOptions, describeBashPattern, HOSTILE_CORPUS } from '../src/shared/bash-grant-shapes';
+import { bashGrantOptions, describeBashPattern, describeBashRule, HOSTILE_CORPUS } from '../src/shared/bash-grant-shapes';
 import { grantAdmitsHostile, ruleMatches } from '../src/shared/subject-glob';
 import { DESTRUCTIVE_DENY_LIST } from '../src/shared/permission-types';
 import { narrowedGrantNote, riskyVariant } from '../src/shared/bash-risky-variants';
@@ -236,7 +236,7 @@ describe('describeBashPattern — the reverse direction', () => {
 
   it('reads a generic wide pattern back', () => {
     expect(describeBashPattern('npm run*')).toBe('Any npm run command');
-    expect(describeBashPattern('curl*')).toBe('Downloading with curl');
+    expect(describeBashPattern('curl*')).toBe('Downloading with curl (any website)');
     expect(describeBashPattern('cargo test*')).toBe('Any cargo test command');
   });
 
@@ -335,10 +335,12 @@ const covers = (pattern: string, cmd: string) => ruleMatches(grant(pattern), cmd
 
 describe('curl and wget: downloading is not uploading', () => {
   it('offers a download-worded wide choice for a plain download', () => {
-    const w = wideOf('curl -sSL https://example.com/a.zip -o a.zip')!;
-    expect(w.label).toBe('Always allow downloading with curl');
-    expect(w.rule.pattern).toBe('curl*');
-    expect(wideOf('wget https://example.com/a.zip')!.label).toBe('Always allow downloading with wget');
+    // Q-6: a plain download is remembered for ONE website. (-L follows redirects, so it gets only the exact choice.)
+    const w = wideOf('curl -sS https://example.com/a.zip -o a.zip')!;
+    expect(w.label).toBe('Always allow downloads from example.com only');
+    expect(w.rule).toMatchObject({ pattern: 'curl example.com', match: 'download-host' });
+    expect(wideOf('curl -sSL https://example.com/a.zip -o a.zip')).toBeUndefined();
+    expect(wideOf('wget --max-redirect=0 https://example.com/a.zip')!.label).toBe('Always allow downloads from example.com only');
   });
 
   it.each([
@@ -476,10 +478,10 @@ describe('older grants that are now narrower tell the user what changed', () => 
     }
   });
   it('the round trip: every offered wide rung covers its own command and reads back plainly', () => {
-    for (const cmd of ['curl https://e.com/a', 'npm install --ignore-scripts x', 'pip install --only-binary=:all: x', 'wget https://e.com/a']) {
+    for (const cmd of ['curl https://e.com/a', 'npm install --ignore-scripts x', 'pip install --only-binary=:all: x', 'wget --max-redirect=0 https://e.com/a']) {
       const w = wideOf(cmd)!;
       expect(ruleMatches(w.rule, cmd)).toBe(true);
-      expect(describeBashPattern(w.rule.pattern!)).not.toMatch(/[*?]/);
+      expect(describeBashRule(w.rule)).not.toMatch(/[*?]/);
     }
   });
 });
