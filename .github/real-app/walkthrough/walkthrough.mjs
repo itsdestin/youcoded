@@ -29,6 +29,15 @@ const WORDS = {
   modelSearch: 'Search all models',     // its search box
   keySource: 'Anthropic',               // the source shown beside models of the app's own assistant (first-run.ts NATIVE_KEY_LABEL)
   approve: /^(Yes|Allow)\b/,           // a permission card's approve button
+  addTags: 'Add tags',                  // status bar chip (tags/SessionTagsChip.tsx)
+  renameDialog: 'Rename session',       // SessionRenameDialog.tsx
+  save: 'Save',
+  tagBox: 'Search or create a tag',     // tags/SessionDetails.tsx
+  addNote: 'Add a note',
+  noteBox: 'Note',
+  resume: 'Resume session',             // welcome screen (App.tsx)
+  resumeSearch: 'Search sessions',      // ResumeBrowser.tsx
+  resumeOpen: /^(Resume|Open)\b/,      // a preview's open button, if the list shows one
 };
 
 const [exe, out] = process.argv.slice(2);
@@ -50,10 +59,16 @@ if (process.platform === 'linux') env.XDG_CURRENT_DESKTOP = env.XDG_CURRENT_DESK
 // No --no-sandbox: the workflow sets the sandbox up the way the .deb installer does. (With the switch, the app's
 // keychain helper — a second copy of the app that doesn't inherit it — crashed and no key could be saved.)
 const args = [`--remote-debugging-port=${PORT}`];
-const app = spawn(exe, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
 const log = fs.createWriteStream(path.join(out, 'app.log'));
-app.stdout.pipe(log); app.stderr.pipe(log);
-let exited = null; app.on('exit', (c) => { exited = c; });
+let app, exited = null;
+// Start the app as this user (same home folder every time, so a restart keeps what they did).
+function launch() {
+  exited = null;
+  app = spawn(exe, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  app.stdout.pipe(log, { end: false }); app.stderr.pipe(log, { end: false });
+  app.on('exit', (c) => { exited = c ?? 'signal'; });
+}
+launch();
 
 // ---- the report --------------------------------------------------------------------------------------------
 const results = [];
@@ -101,24 +116,39 @@ async function recordUntilQuiet(label, maxMs = 120_000, quietMs = 30_000) {
   fs.writeFileSync(path.join(out, `${label}.json`), JSON.stringify(shots, null, 2));
 }
 
+// Attach to the app's main window and keep its own console messages for diagnosis.
+async function connect() {
+  browser = null; page = null;
+  for (let i = 0; i < 60 && !browser; i++) {
+    if (exited !== null) throw new Error(`the app quit at start (code ${exited})`);
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`).catch(() => null);
+    if (!browser) await sleep(1000);
+  }
+  if (!browser) throw new Error('the app never opened a window');
+  for (let i = 0; i < 30 && !page; i++) {
+    page = browser.contexts().flatMap((c) => c.pages()).find((p) => !/[?&](buddy|mode=)/.test(p.url()));
+    if (!page) await sleep(1000);
+  }
+  if (!page) throw new Error('no main window');
+  const rlog = fs.createWriteStream(path.join(out, 'renderer.log'), { flags: 'a' });
+  page.on('console', (m) => rlog.write(`[${m.type()}] ${m.text()}\n`));
+  page.on('pageerror', (e) => rlog.write(`[pageerror] ${e.message}\n`));
+}
+// Quit the app the way a user would (closing it), then open it again as the same user.
+async function restart() {
+  await browser?.close().catch(() => {});
+  app.kill('SIGTERM');
+  for (let i = 0; i < 30 && exited === null; i++) await sleep(500);
+  if (exited === null) { app.kill('SIGKILL'); await sleep(1000); }
+  launch();
+  await connect();
+  await page.waitForSelector('h1, h2, button', { timeout: 60_000 });
+}
+
 // ---- the steps -----------------------------------------------------------------------------------------------
 try {
   await step('open', 'The app opens and shows its first screen', async () => {
-    for (let i = 0; i < 60 && !browser; i++) {
-      if (exited !== null) throw new Error(`the app quit at start (code ${exited})`);
-      browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`).catch(() => null);
-      if (!browser) await sleep(1000);
-    }
-    if (!browser) throw new Error('the app never opened a window');
-    for (let i = 0; i < 30 && !page; i++) {
-      page = browser.contexts().flatMap((c) => c.pages()).find((p) => !/[?&](buddy|mode=)/.test(p.url()));
-      if (!page) await sleep(1000);
-    }
-    if (!page) throw new Error('no main window');
-    // The page's own messages and errors, for diagnosing a failed step (blanked of keys before saving).
-    const rlog = fs.createWriteStream(path.join(out, 'renderer.log'));
-    page.on('console', (m) => rlog.write(`[${m.type()}] ${m.text()}\n`));
-    page.on('pageerror', (e) => rlog.write(`[pageerror] ${e.message}\n`));
+    await connect();
     await page.waitForSelector('h1, h2, button', { timeout: 60_000 });
     return (await seen()).headings[0] ?? '';
   });
@@ -195,6 +225,59 @@ try {
       if (await yes.isVisible().catch(() => false)) await yes.click().catch(() => {});
     }
     throw new Error('no walkthrough-check.txt with "mango" appeared in the project folder within 3 minutes');
+  });
+
+  const NAME = 'Walkthrough taco list';
+  const TAG = 'walkthrough-tag';
+  const NOTE = 'remember the limes';
+  await step('organize', 'The user renames the chat, adds a tag and writes a note', async () => {
+    await page.getByRole('button', { name: WORDS.addTags }).click();
+    // Rename: the name at the top of the details popup opens the rename box.
+    await page.getByRole('button', { name: /^Rename / }).click();
+    const rename = page.getByRole('dialog', { name: WORDS.renameDialog });
+    await rename.getByRole('textbox').fill(NAME);
+    await rename.getByRole('button', { name: WORDS.save }).click();
+    await rename.waitFor({ state: 'detached', timeout: 15_000 });
+    // Tag: type a new one and create it.
+    const tagBox = page.getByLabel(WORDS.tagBox);
+    await tagBox.fill(TAG);
+    await tagBox.press('Enter');
+    // Note: open the note box, type, and leave it (it saves on leaving).
+    await page.getByRole('button', { name: WORDS.addNote }).click();
+    const note = page.getByLabel(WORDS.noteBox, { exact: true });
+    await note.fill(NOTE);
+    await note.blur();
+    await page.keyboard.press('Escape');
+    await sleep(1500);
+  });
+
+  await step('restart-keeps', 'After closing and reopening the app, the chat is listed with its name, tag and note', async () => {
+    await restart();
+    await page.getByRole('button', { name: WORDS.skipTour }).click({ timeout: 5_000 }).catch(() => {});
+    await page.getByRole('button', { name: WORDS.resume }).click({ timeout: 30_000 });
+    await page.getByPlaceholder(WORDS.resumeSearch).first().waitFor({ timeout: 30_000 });
+    const missing = [];
+    for (const t of [NAME, TAG, NOTE]) {
+      if (!(await page.getByText(t, { exact: false }).first().isVisible().catch(() => false))) missing.push(t);
+    }
+    if (missing.length) throw new Error(`not shown after restart: ${missing.join(', ')}`);
+  });
+
+  await step('search', 'Searching past chats finds this one by a word from it', async () => {
+    const search = page.getByPlaceholder(WORDS.resumeSearch).first();
+    await search.fill('taco');
+    await page.getByText(NAME).first().waitFor({ timeout: 15_000 });
+    await search.fill('zzzz-no-such-chat');
+    await page.getByText(NAME).first().waitFor({ state: 'hidden', timeout: 15_000 });
+    await search.fill('');
+  });
+
+  await step('resume', 'Resuming the chat shows its earlier messages and it still answers', async () => {
+    await page.getByText(NAME).first().click();
+    // Some lists open a preview first; a second press resumes it.
+    await page.getByRole('button', { name: WORDS.resumeOpen }).first().click({ timeout: 5_000 }).catch(() => {});
+    await page.getByText('walkthrough-check.txt').first().waitFor({ timeout: 60_000 });
+    await askAndExpect('What is seven times eight? Answer with digits only.', /\b56\b/);
   });
 } catch {
   // A critical step failed (already in the report); record what the screen does next, to see why.
