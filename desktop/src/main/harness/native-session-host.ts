@@ -2919,7 +2919,7 @@ export class NativeSessionHost extends EventEmitter {
       // Stamp the CURRENT mode on every ask (read at call time, not wiring
       // time — a mid-session mode flip must show on the next ask). The
       // renderer's full-auto safety-stop footer keys on it.
-      askUser: (req) => this.broker.ask({ ...req, permissionMode: this.modeFor.get(sessionId) ?? 'ask' }),
+      askUser: (req) => this.broker.ask({ ...req, permissionMode: this.modeFor.get(sessionId) ?? 'ask', chainsHonoured: getShell().label !== 'PowerShell' }),
       // Thread injected runtime services (WebSearch's SearchService, Task 6's
       // specialists collaborators) into the HarnessSession opts. `specialists`
       // is ALWAYS present (unlike `search`, which depends on an optional

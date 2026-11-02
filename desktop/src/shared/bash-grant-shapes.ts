@@ -417,13 +417,15 @@ export function bashNoGrantNote(command: string): string | null {
  *
  *  An EMPTY array means no "Always allow" may be offered at all — the caller must
  *  suppress the button, not fall back to something. */
-export function bashGrantOptions(command: string): GrantOption[] {
+export function bashGrantOptions(command: string, opts: { chains?: boolean } = {}): GrantOption[] {
   const tokens = tokenize(command);
   if (tokens.length === 0) return [];
 
   // Q-1: a joined-up command (`cd app && npm test`) is offered word for word, or each part on its own.
+  // WHY `chains: false` exists: where the engine will not split a joined-up command (PowerShell, or a card that was not told the
+  // shell), "Each part on its own" would save rules that never fire — so only the word-for-word choice is offered.
   const chain = splitChain(command);
-  if (chain) return chainGrantOptions(command, chain);
+  if (chain) return chainGrantOptions(command, opts.chains === false ? [] : chain);
 
   const shape = COMMAND_SHAPES.find((s) => s.key === shapeKey(tokens));
   if (shape && !shape.rememberable(tokens)) return [];
@@ -491,6 +493,7 @@ function downloadExactReason(command: string): string | null {
  *  list. Which stay word-for-word: whatever bashGrantOptions gives no wider choice (deleting, uploading, installs with
  *  setup scripts, `python -c`, a push that names no branch is not rememberable at all and removes this choice). */
 function chainGrantOptions(command: string, parts: string[]): GrantOption[] {
+  // No parts to offer (the engine will not honour them here): just the whole line, word for word.
   const exact: GrantOption = {
     scope: 'exact',
     rule: { tool: 'Bash', pattern: command, action: 'allow', match: 'exact' },

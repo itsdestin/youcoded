@@ -41,6 +41,9 @@ export interface AskRequest {
    *  renderer's cue to swap the generic row for the safety-stop footer
    *  (spec 2026-08-12, M5 2b). Optional: CC-path asks never carry it. */
   permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
+  /** Q-1: this session's Bash shell reads joined-up commands the way the permission engine does (bash, never PowerShell),
+   *  so the card may offer "Each part on its own". Shown to the card; absent means the choice is not offered. */
+  chainsHonoured?: boolean;
   /** Plan 1b Task 8: set by childAskRouter when this ask is being ROUTED from a
    *  specialist child rather than raised directly by `sessionId`'s own turn.
    *  `sessionId` above is already the PARENT's id by the time this reaches
@@ -237,6 +240,7 @@ export class PermissionBroker extends EventEmitter {
           // Spread-omitted (not `undefined`-valued) so the CC-path payload
           // shape is byte-identical to before this field existed.
           ...(req.permissionMode ? { permissionMode: req.permissionMode } : {}),
+          ...(req.chainsHonoured ? { chainsHonoured: true } : {}),
         },
       };
       const entry: PendingAsk = {

@@ -570,7 +570,7 @@ function grantFolderName(workDir: unknown, sessionCwd?: string): string {
 
 const NATIVE_ALWAYS_ALLOW = 'native:always-allow';
 
-export function PermissionButtons({ requestId, suggestions, denyListed, command, filePath, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, site, permissionMode, onResponded, onFailed, onAnswerNow, answerUnconfirmed = false, bare = false, noKeyboard = false }: {
+export function PermissionButtons({ requestId, suggestions, denyListed, command, filePath, chainsHonoured, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, site, permissionMode, onResponded, onFailed, onAnswerNow, answerUnconfirmed = false, bare = false, noKeyboard = false }: {
   requestId: string;
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
@@ -588,6 +588,9 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   /** Q-2/Q-3: the file a Write/Edit ask is about, as the assistant wrote it. Gives the edit card its extra choices
    *  ("For this conversation", and "Only this file" vs "Files in <folder>" under Always allow). */
   filePath?: string;
+  /** Q-1: set by the native host when this session's shell reads a joined-up command the way the engine does. Without it the
+   *  card does not offer "Each part on its own" (rules that never fire would be a silent no-op). */
+  chainsHonoured?: boolean;
   /** Basename of the session cwd. The rule is scoped to that directory's slug
    *  (permission-store.ts:35-43), so naming the folder is what makes the grant's
    *  scope checkable — a worktree does NOT inherit its parent repo's rules. */
@@ -676,8 +679,8 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // only which option was chosen (see alwaysAllowDecision). Only native asks
   // carry a real Bash command — CC asks keep their suggestions-driven behavior.
   const grantOptions = useMemo(
-    () => (isNative && typeof command === 'string' ? bashGrantOptions(command) : []),
-    [isNative, command],
+    () => (isNative && typeof command === 'string' ? bashGrantOptions(command, { chains: chainsHonoured === true }) : []),
+    [isNative, command, chainsHonoured],
   );
   // A Bash ask whose command yields NO option may not be always-allowed at all
   // (a bare `git push`: its target is not in the command and changes underneath
@@ -1654,6 +1657,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             permissionMode={tool.permissionMode}
             command={typeof (tool.input as any)?.command === 'string' ? (tool.input as any).command : undefined}
             filePath={typeof (tool.input as any)?.file_path === 'string' ? (tool.input as any).file_path : undefined}
+            chainsHonoured={tool.chainsHonoured}
             folderName={sessionCwd ? basename(sessionCwd) : undefined}
             // Budget gates are a plain Yes/No "Continue?" — no "Always allow".
             // `tool.external` joins them: the engine forces an ask for every path

@@ -1,5 +1,12 @@
+// @vitest-environment jsdom
 // Q-1 (review deck 2026-11-01): "Always allow" on a joined-up command remembers each safe part on its own.
-import { describe, it, expect } from 'vitest';
+import React from 'react';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import ToolCard from '../src/renderer/components/ToolCard';
+import { ChatProvider } from '../src/renderer/state/chat-context';
+import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
+import type { ToolCallState } from '../src/shared/types';
 import { splitChain, plainCdTarget } from '../src/shared/bash-chain';
 import { bashGrantOptions, describeBashRule } from '../src/shared/bash-grant-shapes';
 import { decidePermission, decideChainParts, type PermissionLayers } from '../src/main/harness/permission-engine';
@@ -129,5 +136,44 @@ describe('the engine honours per-part grants', () => {
   });
   it('grants do not leak into other tools or a different program with the same first word', () => {
     expect(decideLine('npm testing', grants).action).toBe('ask'); // word boundary rule still applies per part
+  });
+});
+
+// ── where the engine will not split a line, the choice is not offered (a rule that never fires is a silent no-op) ──
+describe('"Each part on its own" is only offered where the engine honours it', () => {
+  it('bashGrantOptions with chains:false offers only the whole line', () => {
+    expect(bashGrantOptions('cd app && npm test', { chains: false }).map((o) => o.scope)).toEqual(['exact']);
+    expect(bashGrantOptions('cd app && npm test').map((o) => o.scope)).toEqual(['exact', 'wide']);
+  });
+  it('a stale "wide" answer from a PowerShell session stores the whole line word for word', () => {
+    expect(rememberedRulesFor('Bash', 'cd app && npm test', 'wide', undefined, { chains: false }).map((r) => [r.pattern, r.match])).toEqual([['cd app && npm test', 'exact']]);
+  });
+  it('single commands are unaffected', () => {
+    expect(bashGrantOptions('npm test', { chains: false }).map((o) => o.scope)).toEqual(['exact', 'wide']);
+  });
+});
+
+describe('the card follows the ask, not a guess', () => {
+  const tool = (extra: object) => ({ id: 't', toolUseId: 't', toolName: 'Bash', input: { command: 'cd app && npm test' }, status: 'awaiting-approval', requestId: 'native-x', ...extra }) as unknown as ToolCallState;
+  const open = (t: ToolCallState) => {
+    (window as any).claude = { session: { respondToPermission: vi.fn() }, remote: { broadcastAction: vi.fn() } };
+    render(<ChatProvider><ToolCard tool={t} sessionId="s1" /></ChatProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Always allow' }));
+  };
+  afterEach(cleanup);
+  it('shows the choice when the host says chains are honoured', () => {
+    open(tool({ chainsHonoured: true }));
+    expect(screen.getByText('Each part on its own')).toBeTruthy();
+  });
+  it('hides it when the host did not say so (PowerShell, an older peer, a replay)', () => {
+    open(tool({}));
+    expect(screen.queryByText('Each part on its own')).toBeNull();
+    expect(screen.getByText(/Always allow this exact command/)).toBeTruthy();
+  });
+  it('the dispatcher keeps the flag only when it is literally true', () => {
+    const ev = (v: unknown) => hookEventToAction({ type: 'PermissionRequest', sessionId: 's', payload: { _requestId: 'native-1', tool_name: 'Bash', tool_input: {}, chainsHonoured: v } } as any) as any;
+    expect(ev(true)?.chainsHonoured).toBe(true);
+    expect(ev('true')?.chainsHonoured).toBeUndefined();
+    expect(ev(undefined)?.chainsHonoured).toBeUndefined();
   });
 });

@@ -38,6 +38,7 @@ import { adminRuleFor } from '../../shared/admin-approval';
 import { applyAdminApproval } from './admin-approval';
 import { bashGrantOptions, type GrantScope } from '../../shared/bash-grant-shapes';
 import { folderRulesFor, isFileEditTool } from '../../shared/edit-grants';
+import { getShell } from './tools/bash';
 import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServices } from './tools/types';
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
 import { outsideCommentsVerdict } from './tools/doc-comments-tools';
@@ -150,11 +151,12 @@ export function rememberedRulesFor(
   subject: string | undefined,
   scope: GrantScope | undefined,
   cwd?: string,
+  opts: { chains?: boolean } = {},
 ): PermissionRule[] {
   if (toolName === 'Bash' && typeof subject === 'string') {
     // The subject is passed through untouched — bashGrantOptions does not trim,
     // so the exact rung is byte-identical to what the engine compares later.
-    const options = bashGrantOptions(subject);
+    const options = bashGrantOptions(subject, opts);
     // Empty means no grant of any width may be offered (a bare `git push`, whose
     // target is not in the command and changes underneath the grant). Fail closed.
     if (options.length === 0) return [];
@@ -4239,7 +4241,7 @@ export class HarnessSession extends EventEmitter {
         // The card sent a width, not a pattern — rememberedRuleFor derives the
         // rule here, in main. null means this command may not be remembered at
         // any width, so nothing is emitted.
-        for (const rule of rememberedRulesFor(call.toolName, subject, d.grantScope, this.opts.cwd)) this.emit('remember-rule', rule);
+        for (const rule of rememberedRulesFor(call.toolName, subject, d.grantScope, this.opts.cwd, { chains: getShell().label !== 'PowerShell' })) this.emit('remember-rule', rule);
       }
     }
 

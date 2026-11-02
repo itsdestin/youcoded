@@ -80,6 +80,8 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
         external: external || undefined,
         floorStop,
         permissionMode,
+        // Validated like the mode: only a literal true counts, so an older or foreign peer degrades to "not offered".
+        chainsHonoured: payload.chainsHonoured === true ? true : undefined,
         specialist,
       };
     }
