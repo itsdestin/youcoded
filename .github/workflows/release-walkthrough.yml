@@ -38,9 +38,14 @@ jobs:
       - name: Use the app as a brand-new user
         env:
           WALKTHROUGH_KEY: ${{ secrets.YOUCODED_TEST_ANTHROPIC_KEY }}
+        # WHY the keyring: a normal Linux desktop has one, and the app stores keys in it. Without it the app
+        # (correctly) refuses to save the key — seen on the first run, 2026-11-01.
         run: |
+          sudo apt-get install -y -qq gnome-keyring dbus-x11 > /dev/null
           exe=$(find app -maxdepth 1 -type f -iname 'youcoded' | head -1); echo "app: $exe"
-          xvfb-run --auto-servernum -s '-screen 0 1440x900x24' node .github/real-app/walkthrough/walkthrough.mjs "$PWD/$exe" "$PWD/look"
+          dbus-run-session -- bash -c '
+            echo -n walkthrough | gnome-keyring-daemon --unlock --components=secrets > /dev/null
+            xvfb-run --auto-servernum -s "-screen 0 1440x900x24" node .github/real-app/walkthrough/walkthrough.mjs "$PWD/'"$exe"'" "$PWD/look"'
       - name: Hide anything key-shaped before saving the recording
         # WHY: artifacts on this public repo can be downloaded; GitHub only masks the whole secret in logs.
         if: always()
