@@ -11,8 +11,13 @@
 // Tailwind/React/Vue CDN builds that need eval, and scripts from CDNs, so the page's script-src has to allow them too. The
 // real fix is to serve those frames from their own address (as the Office editor's `office:` scheme already is) so they stop
 // inheriting; only then can script-src become 'self'. Until then this policy still does the part that does not conflict:
-// no network requests (fetch/XHR/beacon) except the app's own, the phone link and the worker API; no plugins; no form posts;
-// frames only from the app's own schemes and https.
+// fetch/XHR/beacon only to the app's own address, the phone link and the worker API; no plugins; no form posts; frames only
+// from the app's own schemes and https.
+//
+// HONEST LIMIT (integration review 2026-11-01): this is NOT protection against sending data out. Images (img-src https:/http:),
+// websockets (connect-src ws:/wss:), frames and scripts from any https address are still allowed, so a script that already
+// runs in the page could still send something out through one of them. Count this policy as a guard against stray
+// fetch calls and plugins, not as a wall around the page's data.
 //
 // The same inheritance means every source list below must stay wide enough for previews (https: images, styles, fonts).
 
