@@ -1,5 +1,7 @@
 import type { PermissionRule } from '../../../shared/permission-types';
 import { describeBashPattern } from '../../../shared/bash-grant-shapes';
+import { narrowedGrantNote } from '../../../shared/bash-risky-variants';
+import { wildcardGrantCovers } from '../../../shared/subject-glob';
 
 export interface RuleDescription {
   /** Plain-language action, e.g. "Run" or "Create or overwrite". For a scoped
@@ -259,4 +261,19 @@ export function broadNote(tool: string): string {
     return 'Covers every file, not just the one it first asked about.';
   }
   return 'Covers every use of this tool, not just the one it first asked about.';
+}
+
+/** Grants saved before this day were made when "Always allow curl / npm install /
+ *  scp…" also meant uploads and package setup scripts. WHY a date and not a stored
+ *  flag: nothing on disk changes (the engine narrows at decision time), and the
+ *  store already stamps grantedAt on every grant — a grant with none predates even
+ *  that, so it is older still. */
+export const GRANT_NARROWING_DATE = '2026-10-31';
+
+/** The plain sentence for an older Always-allow that now covers less, or null.
+ *  Settings shows it under the row and in a one-time note above the list. */
+export function narrowedNote(rule: PermissionRule & { grantedAt?: string }): string | null {
+  if (rule.tool !== 'Bash' || rule.match !== 'glob' || rule.action !== 'allow' || rule.pattern === undefined) return null;
+  if (rule.grantedAt && rule.grantedAt >= GRANT_NARROWING_DATE) return null;
+  return narrowedGrantNote(rule.pattern, (pattern, subject) => wildcardGrantCovers(pattern, subject));
 }

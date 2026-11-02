@@ -17,6 +17,7 @@ import type { ReportContext } from './development/ReportDesign';
 import {
   describeRule,
   broadNote,
+  narrowedNote,
   ruleKind,
   RULE_KIND_ORDER,
   RULE_KIND_LABEL,
@@ -386,6 +387,16 @@ export default function PermissionsSection() {
 
   const names = projects ? folderNames(projects) : new Map<string, string>();
   const withRules = (projects ?? []).filter((project) => project.rules.length > 0);
+  // Older grants this change narrowed (see describe-rule.ts narrowedNote).
+  const narrowedCount = withRules.reduce((n, p) => n + p.rules.filter((r) => narrowedNote(r) !== null).length, 0);
+  // Per-device convenience only; if storage is unavailable the note just shows again.
+  const [narrowedSeen, setNarrowedSeen] = useState(() => {
+    try { return localStorage.getItem('youcoded-narrowed-grants-seen') === '1'; } catch { return false; }
+  });
+  const dismissNarrowed = () => {
+    setNarrowedSeen(true);
+    try { localStorage.setItem('youcoded-narrowed-grants-seen', '1'); } catch { /* shows again next time */ }
+  };
   // D2 (2026-08-26): the cross-project bucket is not a folder and it outranks
   // every folder — the grants in it are in force wherever the user is working,
   // so it reads first rather than sorted in among places it does not belong to.
@@ -509,6 +520,18 @@ export default function PermissionsSection() {
               these. Full auto never asks anyway, except for the four above &mdash; and an
               &ldquo;Always allow&rdquo; on one of those removes even that check.
             </p>
+
+            {narrowedCount > 0 && !narrowedSeen && (
+              // One-time note: only shown when an older grant was actually
+              // narrowed, and dismissed for good on "Got it".
+              <Callout tone="info">
+                <span className="text-2xs leading-relaxed">
+                  {narrowedCount === 1 ? '1 older “Always allow” now covers less' : `${narrowedCount} older “Always allow” choices now cover less`}.
+                  {' '}Downloads, plain installs and similar still work. Sending files out, installs that run package setup scripts and a few other risky forms now ask each time. Each one is marked below.
+                </span>
+                <Button variant="secondary" className="mt-1.5 py-1" onClick={dismissNarrowed}>Got it</Button>
+              </Callout>
+            )}
 
             {projects === null ? (
               <LoadingState what="what you've approved" variant="inline" />
@@ -809,7 +832,10 @@ function RuleRow({
   // grants as exact, and a scoped Bash grant ("Pushing to master") is narrow by
   // construction and says what it covers in its own sentence — putting the scary
   // note on it would teach the user to ignore it where it is true.
-  const detail = [described.width === 'tool-wide' ? broadNote(rule.tool) : null, grantedLabel(rule.grantedAt)]
+  // WHY (audit finding 10): an older grant such as "Any curl command" now covers
+  // less than it used to. Say so on the row, in plain words, so a later re-ask
+  // is not a mystery.
+  const detail = [described.width === 'tool-wide' ? broadNote(rule.tool) : null, narrowedNote(rule), grantedLabel(rule.grantedAt)]
     .filter(Boolean)
     .join(' · ');
 

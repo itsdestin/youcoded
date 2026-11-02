@@ -1,0 +1,3 @@
+{"type":"user_message","text":"download the release notes"}
+{"type":"tool_use","id":"grant-curl-download","name":"Bash","input":{"command":"curl -sSL https://example.com/notes.txt -o notes.txt","description":"Download release notes"}}
+{"type":"permission_request","tool_use_id":"grant-curl-download","requestId":"native-grant-curl-download","denyListed":false,"permissionMode":"ask"}
