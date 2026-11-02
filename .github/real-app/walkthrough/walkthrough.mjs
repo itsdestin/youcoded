@@ -288,7 +288,9 @@ try {
     // button has a name of its own until hovered (their tooltips name them only then), so a screen reader can't
     // find them by name either — worth fixing in the app.
     await page.getByRole('button', { name: NAME, exact: true }).first().locator('xpath=following::button[1]').click();
-    await page.getByRole('button', { name: NAME, exact: true }).last().locator('xpath=following::button[1]').click({ timeout: 10_000 });
+    // In the menu row: name, rename pencil, then the ✕ — which shows only while the row is hovered.
+    await page.getByRole('button', { name: NAME, exact: true }).last().hover();
+    await page.getByRole('button', { name: `Rename ${NAME}` }).last().locator('xpath=following::button[1]').click({ timeout: 10_000 });
     const confirm = page.getByRole('dialog', { name: WORDS.closeDialog });
     await confirm.getByRole('button', { name: WORDS.closeDialog }).click({ timeout: 10_000 });
     await page.getByRole('button', { name: WORDS.resume }).waitFor({ timeout: 30_000 });
