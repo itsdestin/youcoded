@@ -37,7 +37,12 @@ export function hookPipeName(
     // path.posix: this branch is for Linux whatever machine computes it (the test runs it on Windows too).
     return path.posix.join(env.XDG_RUNTIME_DIR, 'youcoded', `claude-desktop-hooks-${pid}.sock`);
   }
-  return path.join(os.tmpdir(), `claude-desktop-hooks-${pid}.sock`);
+  // WHY a per-user subfolder (security hardening 2026-10-30): the bare shared-temp path is guessable,
+  // so on a computer with another account that person could create it first and receive every hook
+  // message (commands, file paths) and even answer permission asks. The subfolder is created 0700
+  // and checked to be ours before use (HookRelay.start); if it cannot be made safe, hooks stay off.
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 'u';
+  return path.join(os.tmpdir(), `youcoded-${uid}`, `claude-desktop-hooks-${pid}.sock`);
 }
 
 /**
@@ -335,11 +340,34 @@ export class HookRelay extends EventEmitter {
    *  or one askpass already made 0700) is left exactly as it is. */
   private async ensureSocketDir(): Promise<void> {
     if (process.platform === 'win32') return;
+    const dir = path.dirname(this.pipeName);
     try {
-      await fs.promises.mkdir(path.dirname(this.pipeName), { recursive: true, mode: 0o700 });
+      await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
     } catch (err) {
       // listen() reports the real failure if the folder is truly unusable.
       log('WARN', 'HookRelay', 'could not create the hook socket folder', { error: String(err) });
+    }
+    // WHY (security hardening 2026-10-30): the socket carries every hook message and the answers to
+    // permission asks, so its folder must be one only THIS user can enter. A folder that already
+    // exists but belongs to someone else (or is open to others) was made by the very person the
+    // socket needs to be hidden from: fail closed (start() throws; main.ts then hands sessions no
+    // socket, so their hooks stay silent) rather than listen there. A folder that is ours but loose
+    // is tightened. Shared sticky folders (a custom path directly under /tmp) are not accepted.
+    try {
+      const st = await fs.promises.lstat(dir);
+      const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+      if (!st.isDirectory() || st.isSymbolicLink() || (uid !== undefined && st.uid !== uid)) {
+        throw new Error(`hook socket folder ${dir} is not private to this user`);
+      }
+      // Tighten only the folders this app names (youcoded / youcoded-<uid>): never chmod an arbitrary
+      // folder a caller happened to point the socket into.
+      if ((st.mode & 0o077) !== 0) {
+        if (/^youcoded/.test(path.basename(dir))) await fs.promises.chmod(dir, 0o700);
+        else log('WARN', 'HookRelay', 'hook socket folder is open to other users', { dir });
+      }
+    } catch (err) {
+      log('ERROR', 'HookRelay', 'refusing to start the hook socket: its folder is not private to this user', { dir, error: String(err) });
+      throw err;
     }
   }
 
