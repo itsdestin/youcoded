@@ -144,6 +144,11 @@ type ClaudeControls = Pick<ClaudeControlBridge, 'prepare' | 'execute' | 'isReady
 interface SessionManagerOptions {
   claudeControls?: ClaudeControls;
   detectClaudeMods?: () => Promise<boolean>;
+  /** Phone only: a folder for Claude Code's cross-session messaging socket. WHY (2026-11-01 phone test): Claude Code refuses
+   *  any socket folder with an ancestor owned by someone other than you or root, and Android's /data belongs to the system
+   *  account, so every session printed "Cross-session messaging is off". Its own --messaging-socket-path option skips that walk
+   *  (checked on the phone: warning gone with it, present without). One socket per session, so two sessions never share one. */
+  claudeMessagingSocketDir?: string;
 }
 
 /** WHY: unknown major/minor families keep the existing path until their mod contracts are checked. */
@@ -327,6 +332,10 @@ export class SessionManager extends EventEmitter {
       }
       if (opts.model) {
         args.push('--model', opts.model);
+      }
+      // Short name: a socket path is capped near 108 characters, and the phone's app folder is already ~50 of them.
+      if (this.controlOptions.claudeMessagingSocketDir) {
+        args.push('--messaging-socket-path', path.join(this.controlOptions.claudeMessagingSocketDir, `ccmsg-${id.slice(0, 8)}.sock`));
       }
       // Attach this session's app-owned MCP servers. Claude Code's
       // `--mcp-config`/`--allowedTools` are both variadic ("Load MCP servers

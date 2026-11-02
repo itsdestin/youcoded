@@ -1307,7 +1307,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         <div
                           role="tablist"
                           aria-label="Synced content"
-                          className="flex gap-2"
+                          // WHY flex-wrap + tighter phone gap (Destin, 2026-11-01: "conversations pill inaccessible"): on a phone the
+                          // third pill ran off the card's edge where it could not be tapped; now it drops to a second line if needed.
+                          className="flex flex-wrap gap-2 max-sm:gap-1.5"
                           onKeyDown={(e) => {
                             // Left/Right arrow roving between the three pills.
                             if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;

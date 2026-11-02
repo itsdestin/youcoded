@@ -46,6 +46,7 @@ import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { isAndroid } from '../../platform';
 import { isWorkbenchDocument, workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
+import { ON_INSET_CONTROL } from '../header/control-states';
 import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageHome, PageLoadFailure, PageProgramResult, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PAGE_PROGRAM_INPUT, MAX_PAGE_SESSION_PROMPT, MAX_PINNED_PAGES, OFFICE_PAGE_ID, PAGE_CHATS_REFUSED, PAGE_PROGRAM_REFUSED, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
@@ -593,13 +594,18 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         // WHY in the band (2026-11-01 phone test): the list ↔ page switch floated over the page's
         // top-left corner and covered its content (a page's approval card had the button on its
         // corner). The band has room on a phone, so the one switch lives there for both directions.
+        // WHY the inset tray + accent-when-open (Destin, 2026-11-01: "should gain the style of the games/file panel button in
+        // chat mode, since it's on the right side"): the same look as HeaderBar's Session files button; lit while the list shows.
         extra={phoneLayout && asideShown && pageId !== null ? (
-          <Tooltip text={listOnTop ? 'Show the page' : 'Show the page list'} placement="bottom">
-            <Button size="icon-sm" variant="ghost" aria-label={listOnTop ? 'Show the page' : 'Show the page list'}
-              onClick={() => setPhoneListOpen(!listOnTop)} className="w-8 h-8">
-              <RailToggleGlyph collapsed={!listOnTop} />
-            </Button>
-          </Tooltip>
+          <div className="bg-inset rounded-md p-0.5">
+            <Tooltip text={listOnTop ? 'Show the page' : 'Show the page list'} placement="bottom">
+              <button type="button" aria-label={listOnTop ? 'Show the page' : 'Show the page list'} aria-pressed={listOnTop}
+                onClick={() => setPhoneListOpen(!listOnTop)}
+                className={`px-2 py-1 rounded-[var(--radius-toggle)] transition-colors flex items-center ${listOnTop ? 'bg-accent text-on-accent' : ON_INSET_CONTROL}`}>
+                <RailToggleGlyph collapsed={!listOnTop} />
+              </button>
+            </Tooltip>
+          </div>
         ) : undefined}
         // WHY icon for Pages home too (decisions "Full-screen titles", H-1: every full
         // screen's title carries its icon): an open page shows its own glyph; the
@@ -618,7 +624,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       {/* Below the band: the panel in its own rounded container and the page
           pane, both inset by the frame edge, like the chat pane and the
           files/games pane are in a chat session. */}
-      <div className={`screen-body flex-1 min-h-0 flex${phoneLayout ? ' relative overflow-hidden' : ''}`}>
+      {/* WHY pt-px on a phone (Destin, 2026-11-01: "the top of the page border is cut off"): overflow-hidden (needed for the slide)
+          clipped the panes' 1px outer outline along the top edge, where the body has no padding. */}
+      <div className={`screen-body flex-1 min-h-0 flex${phoneLayout ? ' relative overflow-hidden pt-px' : ''}`}>
         {/* With Office built in the panel always has something to list, so it
             stays beside the first-run card instead of hiding. WHY panel-glass while see-through (ux review 2, U5): the list sat over
             the wallpaper unframed and names ran into tree edges; it gets the same one theme-engine glass as the page pane, and Reduced

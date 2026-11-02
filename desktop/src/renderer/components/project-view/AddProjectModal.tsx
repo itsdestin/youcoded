@@ -9,7 +9,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ImportProjectModal from '../ImportProjectModal';
 // WHY: "this computer" read wrong on a phone (2026-11-01 phone test); same wording helper as the settings sweep.
-import { deviceNoun } from '../../platform';
+import { deviceNoun, getCapabilities } from '../../platform';
 import { plainMessage } from '../../utils/ipc-error';
 import { Button, Callout, CARD_LEVEL_1, Dialog, FieldError, InputGroup } from '../ui';
 
@@ -168,11 +168,15 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
               </InputGroup>
             </div>
 
-            {/* Choice 2: existing folder → step 2 */}
-            <button onClick={() => void pickExisting()} disabled={busy} className={CHOICE}>
-              <div className="text-sm-tight font-semibold text-fg">Use a folder already on this {deviceNoun()}</div>
-              <div className="mt-0.5 text-xs text-fg-dim">Pick any folder — you'll choose whether it syncs next.</div>
-            </button>
+            {/* Choice 2: existing folder → step 2. WHY openInOs (Destin, 2026-11-01: "can we even offer this honestly?"): only the
+                computer's own window has a folder picker. On a phone the picker silently gave nothing (the app may not read the
+                phone's own folders), and a remote browser is refused it, so the choice is hidden where it cannot work. */}
+            {getCapabilities().openInOs && (
+              <button onClick={() => void pickExisting()} disabled={busy} className={CHOICE}>
+                <div className="text-sm-tight font-semibold text-fg">Use a folder already on this {deviceNoun()}</div>
+                <div className="mt-0.5 text-xs text-fg-dim">Pick any folder — you'll choose whether it syncs next.</div>
+              </button>
+            )}
           </>
         ) : (
           <>

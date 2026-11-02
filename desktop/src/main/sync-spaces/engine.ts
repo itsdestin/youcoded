@@ -381,8 +381,10 @@ export class SpaceSyncEngine {
             const size = (await this.transport.gitDirSizeBytes?.(space)) ?? 0;
             if (size > this.sizeWarnBytes) {
               this.warnedLargeSpaces.add(space.id);
-              const mib = Math.round(size / (1024 * 1024));
-              this.onEvent({ type: 'notice', spaceId: space.id, message: `Sync history for ${space.id} is large (${mib} MiB). Sync still works normally.` });
+              // WHY MB/GB (Destin, 2026-11-01: "show mb/gb so it makes more sense to normal users"): "3775 MiB" read as jargon.
+              // Decimal units, the way phones and file managers show sizes.
+              const shown = size >= 1e9 ? `${(size / 1e9).toFixed(1)} GB` : `${Math.round(size / 1e6)} MB`;
+              this.onEvent({ type: 'notice', spaceId: space.id, message: `Sync history for ${space.id} is large (${shown}). Sync still works normally.` });
             }
           }
           // After the sync, not before: a new folder is picked up by this
