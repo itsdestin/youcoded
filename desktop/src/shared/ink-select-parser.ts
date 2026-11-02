@@ -1,8 +1,7 @@
 const ANSI_ESCAPE = /\u001b\[[0-9;]*[a-zA-Z]/g;
 
-// Canonical title the parser assigns to CC's folder-trust prompt. Exported so
-// TrustGate can exact-match against it — a substring match on 'trust' there
-// once hijacked any prompt whose title contained the word.
+// Canonical title the parser assigns to CC's folder-trust prompt. It is an
+// ordinary prompt card (no special screen) since 2026-11-01.
 export const TRUST_PROMPT_TITLE = 'Trust This Folder?';
 
 // Every key here is matched as a bare substring against the ~10 lines of

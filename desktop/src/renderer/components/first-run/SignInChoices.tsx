@@ -103,7 +103,7 @@ function WayIcon({ id }: { id: WayIn }) {
 
 function Facts({ facts }: { facts: Group['facts'] }) {
   return (
-    <ul className="flex flex-col gap-1.5 text-sm text-fg-2">
+    <ul className="flex flex-col gap-1.5 max-sm:gap-1 text-sm max-sm:text-[13px] text-fg-2">
       {facts.map((f) => (
         <li key={f.kind} className="flex gap-2.5 leading-snug"><FactIcon kind={f.kind} />{f.text}</li>
       ))}
@@ -115,7 +115,7 @@ function Facts({ facts }: { facts: Group['facts'] }) {
 // `brand-way` (brand.css) gives the white, logo-led sign-in button its look.
 function Ways({ ways, onPick }: { ways: Group['ways']; onPick: (w: WayIn) => void }) {
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2 max-sm:gap-1.5">
       {ways.map((w) => (
         <Button key={w.id} variant="secondary" size="lg" className="brand-way w-full" onClick={() => onPick(w.id)}>
           <WayIcon id={w.id} />
@@ -130,7 +130,7 @@ function Head({ g, big = false }: { g: Group; big?: boolean }) {
   return (
     <div className="flex items-start gap-3">
       <div className="flex-1 min-w-0">
-        <h3 className={`brand-heading text-fg ${big ? 'text-xl' : 'text-lg'}`}>{g.title}</h3>
+        <h3 className={`brand-heading text-fg ${big ? 'text-xl max-sm:text-lg' : 'text-lg'}`}>{g.title}</h3>
         <p className="text-sm text-fg-dim">{g.summary}</p>
       </div>
       <span className="brand-badge shrink-0">{g.badge}</span>
@@ -144,7 +144,7 @@ function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) =
   const g = list.find((x) => x.id === open);
   if (g) {
     return (
-      <section className="brand-card w-full p-6 flex flex-col gap-5">
+      <section className="brand-card w-full p-6 max-sm:p-4 flex flex-col gap-5 max-sm:gap-3">
         <button type="button" onClick={() => setOpen(null)} className="self-start text-sm text-fg-dim hover:text-fg transition-colors">‹ All options</button>
         <Head g={g} big />
         <Facts facts={g.facts} />
@@ -153,15 +153,15 @@ function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) =
     );
   }
   return (
-    <div className="w-full flex flex-col gap-3">
+    <div className="w-full flex flex-col gap-3 max-sm:gap-2">
       {list.map((x) => (
-        <button key={x.id} type="button" onClick={() => setOpen(x.id)} className="brand-card brand-card--press w-full p-5 text-left flex items-center gap-4">
+        <button key={x.id} type="button" onClick={() => setOpen(x.id)} className="brand-card brand-card--press w-full p-5 max-sm:p-3.5 text-left flex items-center gap-4 max-sm:gap-3">
           <span className="flex -space-x-1 shrink-0 w-12 justify-center text-fg">
             {x.ways.map((w) => <span key={w.id} className="brand-way-chip"><WayIcon id={w.id} /></span>)}
           </span>
           <span className="flex-1 min-w-0">
-            <span className="block brand-heading text-lg text-fg">{x.title}</span>
-            <span className="block text-sm text-fg-dim">{x.summary}</span>
+            <span className="block brand-heading text-lg max-sm:text-base text-fg">{x.title}</span>
+            <span className="block text-sm max-sm:text-[13px] text-fg-dim">{x.summary}</span>
           </span>
           {/* Narrow window: the badge waits for the second page, so the row's words get the room. */}
           <span className="brand-badge shrink-0 max-sm:hidden">{x.badge}</span>

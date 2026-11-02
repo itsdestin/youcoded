@@ -5,7 +5,7 @@ import { nextTerminalUpdate } from '../hooks/usePlanMenu';
 
 // The one way YouCoded answers a Claude Code Ink select menu (trust dialog,
 // bypass warning, Resume Session, theme/login pickers, usage-limit menu…).
-// Every PromptCard / TrustGate button click funnels through here.
+// Every PromptCard button click funnels through here.
 //
 // This is a DELIBERATE menu-driving write, so it must NOT go through
 // pty-input-gate.ts — driving the live menu is the whole point (see that

@@ -8,7 +8,9 @@
 // later. A tiny useSyncExternalStore store, per performance.md rule 3: only the
 // one screen that shows it subscribes, and only to its own session.
 
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useRef, useSyncExternalStore } from 'react';
+import { useChatStore } from './chat-context';
+import { HISTORY_EXPAND_PROMPT_ID, type TimelineEntry } from './chat-types';
 
 export interface UnreadableStartupDialog {
   /** The dialog's own first line, as Claude Code printed it ('' when none). */
@@ -68,6 +70,10 @@ export function promptShowMeansStarted(promptId: string): boolean {
 /**
  * Is the message box (and, on touch, the terminal key row) switched off?
  *
+ * WHY no trust flag (2026-11-01): the folder-trust question is an ordinary prompt
+ * card now. Before the session starts this already returns true, and sends are
+ * refused while ANY card is unanswered (pty-input-gate hasPendingInteraction).
+ *
  * Chat view: until the session has started — a message typed then would land
  * in a startup dialog. Terminal view on a touch device (phone, remote browser):
  * that box IS the terminal's keyboard — its Send types Enter into whatever
@@ -76,8 +82,8 @@ export function promptShowMeansStarted(promptId: string): boolean {
  * Esc'd away (second review F2). Desktop terminal view types into xterm
  * directly and was never gated.
  */
-export function composerDisabled(s: { trustGate: boolean; moved: boolean; started: boolean; terminalTouch: boolean }): boolean {
-  return s.trustGate || s.moved || (!s.started && !s.terminalTouch);
+export function composerDisabled(s: { moved: boolean; started: boolean; terminalTouch: boolean }): boolean {
+  return s.moved || (!s.started && !s.terminalTouch);
 }
 
 /** The ids of listed sessions that have STARTED (host says so, or is too old
@@ -101,4 +107,32 @@ export function announcedAsStarted(info: { awaitingStart?: boolean }): boolean {
 export function startedFromSummaries(summaries: Record<string, { started?: boolean } | undefined> | null, known: ReadonlySet<string>): string[] {
   if (!summaries) return [];
   return Object.keys(summaries).filter((id) => summaries[id]?.started === true && !known.has(id));
+}
+
+/** Any unanswered Claude Code prompt card in this session's chat (the "See
+ *  previous messages" marker is not one), including the folder-trust question.
+ *  App hides the "Initializing session…" cover while one is up: that cover sits
+ *  OVER the chat, so a startup card was drawn but invisible behind it. */
+export function usePendingPromptActive(sessionId: string | null): boolean {
+  // WHY a cached selector (2026-09-16 A1): App ran this through a whole-state
+  // subscription, so every streamed word re-rendered the shell to re-scan the
+  // timeline. The scan is keyed on the timeline array's identity — a prompt entry
+  // (or its completion) always makes a new array, a streamed word never does —
+  // and returns a boolean so the host re-renders only when the answer flips.
+  const store = useChatStore();
+  const cache = useRef<{ timeline: TimelineEntry[] | null; active: boolean }>({ timeline: null, active: false });
+  const subscribe = useCallback((cb: () => void) => store.subscribeSession(sessionId ?? '', cb), [store, sessionId]);
+  const getSnapshot = useCallback((): boolean => {
+    if (!sessionId) return false;
+    const session = store.getSession(sessionId);
+    if (cache.current.timeline !== session.timeline) {
+      cache.current = {
+        timeline: session.timeline,
+        active: session.timeline.some((e) =>
+          e.kind === 'prompt' && !e.prompt.completed && e.prompt.promptId !== HISTORY_EXPAND_PROMPT_ID),
+      };
+    }
+    return cache.current.active;
+  }, [store, sessionId]);
+  return useSyncExternalStore(subscribe, getSnapshot);
 }

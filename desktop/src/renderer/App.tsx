@@ -89,9 +89,8 @@ import { broadcastExpandAll, broadcastCollapseAll, isInExpandAllMode } from './h
 import { WelcomeAppIcon, ThemeMascot } from './components/Icons';
 import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
-import TrustGate, { useTrustGateActive, usePendingPromptActive } from './components/TrustGate';
 import { InitializingCover } from './components/InitializingCover';
-import { promptShowMeansStarted, composerDisabled, startedIds, announcedAsStarted, startedFromSummaries } from './state/startup-dialog-store';
+import { promptShowMeansStarted, composerDisabled, usePendingPromptActive, startedIds, announcedAsStarted, startedFromSummaries } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import { readBuddyStyle } from './components/BuddyStyleRow';
 import QuitSessionsPrompt from './components/QuitSessionsPrompt';
@@ -805,7 +804,7 @@ function AppInner() {
   // input and its trailing \r would press Enter on the highlighted option,
   // silently answering the prompt (stray-Enter fix, youcoded#110). Same rule
   // InputBar.sendMessage applies to typed messages. Deliberate menu-driving
-  // writes (ToolCard plan keys, TrustGate, prompt option clicks, terminal
+  // writes (ToolCard plan keys, prompt option clicks, terminal
   // view) must NOT use this helper. Returns false when the send was refused.
   const guardedPtySend = useCallback((sid: string, text: string, notice?: 'model-switch'): boolean => {
     // Honest guard (M1): refuse before sending, so callers' `if (!guardedPtySend)`
@@ -3191,8 +3190,6 @@ function AppInner() {
     return () => window.removeEventListener('keydown', handler, true);
   }, []);
 
-  const trustGateActive = useTrustGateActive(sessionId);
-
   // No "trust gate = initialized" shortcut (removed 2026-09-24): it switched the
   // startup safety net off for every dialog after trust. The cover steps aside
   // for any waiting prompt card; the first real hook event marks the start.
@@ -3436,10 +3433,10 @@ function AppInner() {
   const handleOpenSync = useCallback(() => { setSyncAutoOpen(true); setSettingsOpen(true); }, []);
   // Send first, guarded — a refused send must not leave a stale pending "/sync"
   // bubble in the timeline. Hidden for native sessions — no PTY to send to.
-  const handleRunSync = useMemo(() => (!trustGateActive && sessionId && !isNativeSession) ? () => {
+  const handleRunSync = useMemo(() => (!pendingPromptActive && sessionId && !isNativeSession) ? () => {
     if (!guardedPtySend(sessionId, '/sync\r')) return;
     dispatch({ type: 'USER_PROMPT', sessionId, content: '/sync', timestamp: Date.now() });
-  } : undefined, [trustGateActive, sessionId, isNativeSession, guardedPtySend, dispatch]);
+  } : undefined, [pendingPromptActive, sessionId, isNativeSession, guardedPtySend, dispatch]);
   const openModelPicker = useCallback(() => setModelPickerOpen(true), []);
   const openOpenTasksPopup = useCallback(() => setOpenTasksPopupOpen(true), []);
   const openTasksCounts = useMemo(() => sessionId ? { running: openTasks.counts.running, pending: openTasks.counts.pending } : undefined, [sessionId, openTasks.counts.running, openTasks.counts.pending]);
@@ -3715,10 +3712,9 @@ function AppInner() {
               {backToChatHint && currentViewMode === 'terminal' && (
                 <ViewToggleHint onDismiss={() => setBackToChatHint(false)} />
               )}
-              {trustGateActive && sessionId && <TrustGate sessionId={sessionId} />}
               {/* Plan 2b Moved Gate — covers the content area for a taken-over
                  session (the ChatView/TerminalView below are dead). z-10 like
-                 TrustGate so the header strip stays reachable to switch away. */}
+                 the other covers so the header strip stays reachable to switch away. */}
               {movedGate && sessionId && (
                 <MovedGate
                   device={movedGate.device}
@@ -3776,7 +3772,7 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ trustGate: trustGateActive, moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry, block) => {
+                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry, block) => {
                   // Name the blocker so reaching for "Send anyway" is an informed
                   // choice (it presses Esc into Claude Code first — which on a
                   // live permission or plan menu DECLINES it).
@@ -3838,7 +3834,7 @@ function AppInner() {
           <div
             // invisible under Welcome back: that screen takes this one's place
             // until you choose (Q-where), rather than sitting on top of it.
-            className={`flex-1 flex flex-col items-center justify-center gap-3${welcomeBackMode ? ' invisible' : ''}`}
+            className={`flex-1 flex flex-col items-center justify-center gap-3${firstTimeWelcome ? ' max-sm:justify-start max-sm:pt-2' : ''}${welcomeBackMode ? ' invisible' : ''}`}
             // The header is position:absolute over the top of this area, so
             // center the welcome content in the space BELOW it (and above the
             // bare frame's bottom strip) rather than behind it. --top-chrome-
@@ -3880,13 +3876,13 @@ function AppInner() {
               // the buddy here.
               // YT-1 (Destin): header, mascot and text "proportionally a bit bigger compared
               // to the menu box below, and maybe just slightly higher above" it; then "just a bit smaller" (YT2-1); then a bigger buddy, slightly smaller text (GB-2).
-              <div className="flex items-center gap-2 mb-5 select-none max-sm:flex-col max-sm:text-center max-sm:px-4">
-                {/* WHY max-sm:flex-col (2026-11-01 phone test): side-by-side mascot + heading is wider than a phone, so the heading and form labels were cut off. On a phone the mascot stacks above centred text. WHY -translate-y-3 (deck glass-buddy-3 GB3-2, "fix alignment between mascot
+              <div className="flex items-center gap-2 mb-5 select-none max-sm:flex-col max-sm:text-center max-sm:px-4 max-sm:mb-2 max-sm:gap-0">
+                {/* WHY max-sm:flex-col (2026-11-01 phone test): side-by-side mascot + heading is wider than a phone, so the heading and form labels were cut off. On a phone the mascot stacks above centred text. WHY max-sm:justify-start + w-20 mascot on the container/mascot (2026-11-01 owner, Flip7): centring parked the form at 30-83% of a phone, so dropdowns were cut off and the tour bubble covered Start session; now it sits at the top. WHY -translate-y-3 (deck glass-buddy-3 GB3-2, "fix alignment between mascot
                     and text"): the rig box centres the BODY, but the feet hang below it, so the
                     whole figure sat ~13px lower than the text block. Destin then set the text lower than
                     centre, twice (GB4-1 "a smidge", GB5-1 "lower"), and gap-2 closer. */}
                 <div data-guide-anchor="welcome-mascot" className="flex shrink-0 -translate-y-3">
-                  <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-40 h-40 -my-6 text-fg-dim max-sm:w-28 max-sm:h-28 max-sm:my-0" scene />
+                  <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-40 h-40 -my-6 text-fg-dim max-sm:w-20 max-sm:h-20 max-sm:my-0" scene />
                 </div>
                 <div className="flex flex-col gap-1.5 min-w-0 max-w-xs translate-y-1 max-sm:translate-y-0">
                   <p className="brand-heading text-2xl text-fg leading-tight sm:whitespace-nowrap max-sm:text-xl">Start your first session</p>

@@ -7,6 +7,7 @@ import { useScrollFade } from '../../hooks/useScrollFade';
 import { ScreenMark } from '../../shoot-mode';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { useEnterToConfirm } from '../../hooks/use-enter-to-confirm';
+import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 
 /**
  * D1 — the one dialog shell.
@@ -254,6 +255,13 @@ export function Dialog({
   // WHY a depth (final-review#CT-8): a popup opened over another popup lifts its scrim AND its
   // panel above the one beneath, so the blur and dim cover that popup too (Overlay.tsx).
   const depth = useOverlayDepth(open);
+  // WHY (2026-11-01, Destin on a Galaxy Z Flip7: "empty space at the bottom of the backup and
+  // sync panel ... popups need to be fitted to remove the empty space and re-centered"): the
+  // desktop height caps (588px etc.) and `fill` are fixed numbers, so on a 915px-tall phone
+  // they produced a 588px box with a blank bottom, parked ~18% from the top. On a phone the
+  // panel instead hugs its content, may grow to the screen minus a 1.5rem scrim margin, and
+  // scrolls only past that; the flex wrapper below centres whatever size results.
+  const narrow = useNarrowViewport();
 
   if (!open) return null;
 
@@ -279,8 +287,9 @@ export function Dialog({
             position: 'relative',
             zIndex: 'auto',
             maxWidth: DIALOG_WIDTHS[size],
-            maxHeight: DIALOG_MAX_HEIGHTS[size],
-            ...(fill ? { height: DIALOG_MAX_HEIGHTS[size] } : {}),
+            maxHeight: narrow ? 'calc(100dvh - 3rem)' : DIALOG_MAX_HEIGHTS[size],
+            // `fill` only holds a steady height on desktop; on a phone it is the blank-bottom bug.
+            ...(fill && !narrow ? { height: DIALOG_MAX_HEIGHTS[size] } : {}),
           }}
         >
           {screen && <ScreenMark name={screen} />}

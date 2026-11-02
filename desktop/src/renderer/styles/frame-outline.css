@@ -25,6 +25,17 @@
 .chrome-outline--drawer-open {
   --chat-right-offset: calc(var(--frame-edge) * 2 + var(--right-pane-width, 480px));
 }
+/* WHY (2026-11-01, Destin on Android: "a weird second-level outline/corner only on the
+   top/bottom left"): on a phone an open files/games pane fills the width (globals.css
+   @media 700px) and the chat hole is gone, but this ring's right edge is still
+   2*frame-edge + 480px from the right — wider than the screen — so only its LEFT rounded
+   corners landed on screen, as a second outline behind the pane's own ring (below).
+   No hole, no ring. Same 700px breakpoint as the drawer collapse. */
+@media (max-width: 700px) {
+  .chrome-outline--drawer-open {
+    display: none;
+  }
+}
 /* Same two geometry overrides the glass takes (globals.css, same reasons). */
 html[data-platform="electron"][data-view-mode="terminal"] .chrome-outline {
   --bottom-chrome-total: calc(var(--frame-edge) + var(--vvp-offset, 0px));

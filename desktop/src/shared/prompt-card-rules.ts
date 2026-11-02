@@ -28,7 +28,7 @@ const SETUP_PROMPT_TITLES = new Set([
   'Enable auto mode?', // CC v2.1.83+ first-run opt-in: 4-option auto-mode confirmation
   'Message Flagged', // Fable 5 model-safeguard fallback — Switch model / Edit prompt and retry
   // Startup dialog when CLAUDE.md imports files outside the cwd. Previously it was mislabeled 'Trust This Folder?' by the stale trust anchor
-  // and hijacked TrustGate's full-screen takeover; now it gets its own card (2026-07-26).
+  // and hijacked the (since removed) full-screen trust takeover; now it gets its own card (2026-07-26).
   'Allow External Imports?',
   // Project MCP-server approval (a folder with .mcp.json), CC 2.1.281.
   'New MCP Server Found',

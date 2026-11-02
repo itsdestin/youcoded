@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InteractivePrompt } from '../state/chat-types';
-import { TRUST_PROMPT_TITLE, THEME_PICKER_TITLE } from '../../shared/ink-select-parser';
+import { THEME_PICKER_TITLE } from '../../shared/ink-select-parser';
 import { CheckIcon } from './Icons';
 import { Button, ButtonVariant } from './ui/Button';
 import { isAndroid } from '../platform';
@@ -155,14 +155,10 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
   // suspended once answered, matching ToolCard's permission row so the two
   // controls behave identically.
   const completed = prompt.completed;
-  // The folder-trust dialog is owned by TrustGate's full-screen takeover, which
-  // renders this same prompt's options as its own buttons. This card is mounted
-  // BEHIND that overlay, so leaving the shortcuts live would let a stray "1"
-  // trust a folder without the user ever seeing what they answered.
   // A card in a hidden chat (every session's ChatView stays mounted) must not
   // answer keys meant for the chat on screen — see state/card-keys-context.ts.
   const keysLive = useCardKeysLive();
-  const shortcutsOn = keyboardShortcuts && keysLive && prompt.title !== TRUST_PROMPT_TITLE;
+  const shortcutsOn = keyboardShortcuts && keysLive;
   const popupOpen = usePopupOpen();
   useEffect(() => {
     if (completed || !shortcutsOn) return;

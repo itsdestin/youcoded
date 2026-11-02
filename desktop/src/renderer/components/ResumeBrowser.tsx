@@ -1717,13 +1717,15 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>
         <OverlayPanel
           layer={1}
+          // WHY max-sm (2026-11-01): 70vh left a phone's Resume list ~30% shorter than the screen
+          // allows; on phones it may use the screen minus a scrim margin, then scrolls.
           // Preview mode swaps max-h for a DEFINITE height. The
           // note on the list below explains why: with only a max-height, a
           // flex-1 child does not grow in Chromium, and the transcript column
           // needs a real height to scroll inside.
           className={`w-full pointer-events-auto flex flex-col ${previewOn
             ? 'max-w-[1000px] h-[76vh]'
-            : 'max-w-md max-h-[70vh]'}`}
+            : 'max-w-md max-h-[70vh] max-sm:max-h-[calc(100dvh-3rem)]'}`}
           style={{ position: 'relative', zIndex: 'auto' }}
           onClick={(e) => e.stopPropagation()}
         >
