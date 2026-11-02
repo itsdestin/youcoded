@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { KeychainClient } from '../src/main/providers/keychain-client';
+import { KeychainClient, KeychainTransportError } from '../src/main/providers/keychain-client';
+import { NoSecureStorageError } from '../src/main/providers/keychain-launch';
 
 class FakeChild extends EventEmitter {
   connected = true;
@@ -24,6 +25,20 @@ describe('restartable keychain client', () => {
     children[1].emit('message', { ok: true, value: true });
     await expect(retry).resolves.toBe(true);
     client.dispose();
+  });
+
+  it('passes the real reason through when there is no secure storage, and a vague one only for unknown start failures', async () => {
+    // A computer with no keyring must be told so — not "could not start, try again", which can never work.
+    const known = new NoSecureStorageError();
+    const noStorage = new KeychainClient(() => { throw known; });
+    await expect(noStorage.request({ operation: 'available' })).rejects.toThrow(known.message);
+    noStorage.dispose();
+    const unknown = new KeychainClient(() => { throw new Error('spawn EACCES /private/path'); });
+    const err = await unknown.request({ operation: 'available' }).catch((e) => e);
+    expect(err).toBeInstanceOf(KeychainTransportError);
+    expect(err.message).not.toContain('/private/path');   // an unexplained failure never leaks internals
+    expect(err.message).not.toBe(known.message);          // ...and never claims the known cause
+    unknown.dispose();
   });
 
   it('reuses a successful helper and serializes simultaneous requests', async () => {
