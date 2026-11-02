@@ -270,6 +270,27 @@ function createUpdateService() {
     console.error('[update] could not fetch the signed release file:', m.status === 'rejected' ? m.reason : (g as PromiseRejectedResult).reason);
     return { ok: false, pulled: is404(m) || is404(g) };
   }
+  // WHY (audit SC-9): remember the highest version this machine has ever run, so a signed-but-older
+  // release can never be offered as an "update". Stored next to the other update state; a missing or
+  // unreadable file just means no extra protection (the running-version check still applies).
+  const highestVersionPath = path.join(updateCacheDir, 'highest-installed.json');
+  async function readHighestInstalled(): Promise<string | null> {
+    try {
+      const v = JSON.parse(await fs.promises.readFile(highestVersionPath, 'utf8'))?.version;
+      return typeof v === 'string' && v ? v : null;
+    } catch { return null; }
+  }
+  async function recordHighestInstalled(): Promise<void> {
+    try {
+      const running = app.getVersion();
+      const stored = await readHighestInstalled();
+      if (stored && compareVersions(stored, running) >= 0) return;
+      await fs.promises.mkdir(updateCacheDir, { recursive: true });
+      const tmp = `${highestVersionPath}.${process.pid}.tmp`; // the dev instance shares this folder's parent
+      await fs.promises.writeFile(tmp, JSON.stringify({ version: running }));
+      await fs.promises.rename(tmp, highestVersionPath);
+    } catch { /* best effort: protection is additive */ }
+  }
   async function verifyAgainstRelease(filePath: string, target: VerifyTarget, opts: { signed?: { ok: true } & SignedBytes; fileName?: string } = {}): Promise<{ code: UpdateInstallErrorCode | null; transient?: boolean; sha256?: string; pulled?: boolean }> {
     const { manifestUrl, signatureUrl, tag } = target;
     if (!manifestUrl || !signatureUrl || !tag) {
@@ -291,6 +312,7 @@ function createUpdateService() {
         tag,
         currentVersion: app.getVersion(),
         publicKeyPem: UPDATE_SIGNING_PUBLIC_KEY_PEM,
+        highestInstalledVersion: await readHighestInstalled(),
       });
       const entry = manifest?.assets?.find((a: { name: string }) => a.name === fileName);
       return { code: null, sha256: entry?.sha256 };
@@ -628,6 +650,7 @@ function createUpdateService() {
       if (autoInstallSupported) void loadAutoInstall();
       await loadPending().catch(() => {});
       await processAttempt().catch(() => {});
+      await recordHighestInstalled(); // audit SC-9: every launch counts as a successful install of this version
       notifyStatusChanged(); // `needs_password` / `install_refused` just became known
     })();
   }

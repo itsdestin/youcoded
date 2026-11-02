@@ -294,7 +294,16 @@ try {
     const d = new Date();
     const today = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
     if (cache.expires && cache.expires < today) process.exit(0);
-    process.stdout.write('\x1b[1;33m\u2605 ' + cache.message + '\x1b[0m');
+    // WHY strip (security audit SC-8): the message is remote text and is written raw to the
+    // terminal. Drop escape sequences and control characters (older caches may hold them).
+    const msg = String(cache.message)
+        .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\x5c)?/g, '')
+        .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '')
+        .replace(/\x1b[@-_]/g, '')
+        .replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]+/g, ' ')
+        .trim().slice(0, 300);
+    if (!msg) process.exit(0);
+    process.stdout.write('\x1b[1;33m\u2605 ' + msg + '\x1b[0m');
 } catch (_) {}
 " "$CACHE_FILE" 2>/dev/null) || ANNOUNCEMENT_FRAGMENT=""
 fi

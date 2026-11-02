@@ -35,10 +35,10 @@ jobs:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0   # the release tags
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 22
       - name: Find the newest official release
@@ -47,11 +47,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         # /releases/latest never returns a pre-release or a draft.
         run: |
-          tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          tag=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Building the demo from $tag"
       - name: Check out that release's app
-        run: git worktree add --detach "$RUNNER_TEMP/app" "${{ steps.release.outputs.tag }}"
+        # WHY env (security audit): the tag name comes from the GitHub API; keep it out of the script text.
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: git worktree add --detach "$RUNNER_TEMP/app" "$RELEASE_TAG"
       - name: Install the release's app dependencies
         working-directory: ${{ runner.temp }}/app/desktop
         env:
@@ -74,7 +77,7 @@ jobs:
         run: node docs/tools/gen-legal-pages.mjs
       - name: Check the site's own scripts
         run: node --test docs/tools/*.test.mjs
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5
         with:
           path: docs
 
@@ -88,4 +91,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5

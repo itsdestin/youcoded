@@ -102,6 +102,46 @@ describe('RemoteServer — pairing', () => {
     return ws;
   }
 
+  // Security audit RA-1: repeated wrong passwords lock that address out of PASSWORD sign-in only.
+  describe('password lockout', () => {
+    async function attempt(server: unknown, auth: Record<string, unknown>) {
+      const ws = await connect(server, auth);
+      ws.emit('close'); // a refused socket goes away; frees its pre-auth slot like a real one
+      return ws;
+    }
+
+    it('locks password sign-in after 10 wrong guesses, even for the right password, but a saved device key still works', async () => {
+      const { server, config } = await makeServer();
+      const paired = await attempt(server, { password: 'correct-horse', deviceName: 'My phone' });
+      const deviceId = paired.last()!.deviceId as string;
+      const secret = paired.last()!.secret as string;
+
+      for (let i = 0; i < 10; i++) {
+        const w = await attempt(server, { password: `wrong-${i}` });
+        expect(w.last()!.reason).toBe('invalid-credentials');
+      }
+      const calls = config.verifyPassword.mock.calls.length;
+
+      const locked = await attempt(server, { password: 'correct-horse' });
+      expect(locked.last()).toMatchObject({ type: 'auth:failed', reason: 'too-many-attempts' });
+      // The locked attempt never reached the (expensive) password check.
+      expect(config.verifyPassword.mock.calls.length).toBe(calls);
+
+      const phone = await attempt(server, { deviceId, secret });
+      expect(phone.last()!.type).toBe('auth:ok');
+    });
+
+    it('a different address is not locked by someone else\'s failures', async () => {
+      const { server } = await makeServer();
+      for (let i = 0; i < 10; i++) await attempt(server, { password: `wrong-${i}` });
+      const ws = new FakeSocket();
+      (server as any).handleConnection(ws, { socket: { remoteAddress: '100.64.7.7' } });
+      ws.emit('message', JSON.stringify({ type: 'auth', password: 'correct-horse', deviceName: 'Tablet' }));
+      await new Promise(r => setImmediate(r));
+      expect(ws.last()!.type).toBe('auth:ok');
+    });
+  });
+
   describe('pairing over the wire', () => {
     it('hands back a credential once, and accepts it next time without the password', async () => {
       const { server } = await makeServer();
@@ -326,11 +366,12 @@ describe('RemoteServer — auth rate limit', () => {
         return s;
       };
 
-      // Open 64 sockets that never authenticate — each holds a pre-auth slot.
+      // Open 64 sockets that never authenticate — each holds a pre-auth slot. Distinct addresses: one
+      // address is capped lower still (security audit RA-1, tested below).
       const held = [];
       for (let i = 0; i < 64; i++) {
         const s = makeSocket();
-        server.handleConnection(s, { socket: { remoteAddress: '127.0.0.1' } });
+        server.handleConnection(s, { socket: { remoteAddress: `100.64.1.${i + 1}` } });
         held.push(s);
       }
       expect(held.every((s) => s.closes.length === 0)).toBe(true);
@@ -345,6 +386,29 @@ describe('RemoteServer — auth rate limit', () => {
       const afterFree = makeSocket();
       server.handleConnection(afterFree, { socket: { remoteAddress: '127.0.0.1' } });
       expect(afterFree.closes).toHaveLength(0);
+    });
+
+    // Security audit RA-1: one address cannot hold the whole shared pool and starve the owner's phone.
+    it('refuses a single address that holds too many unfinished sign-ins, but not other addresses', async () => {
+      const { EventEmitter } = await import('node:events');
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const sessionManager: any = new EventEmitter();
+      Object.assign(sessionManager, { listSessions: () => [] });
+      const server: any = new RemoteServer(sessionManager, new EventEmitter() as any, {
+        enabled: true, port: 9900, passwordHash: 'x', toSafeObject: () => ({}),
+      } as any);
+      const makeSocket = () => {
+        const s: any = new EventEmitter();
+        Object.assign(s, { readyState: 1, send: () => {}, closes: [] as number[], close: (c: number) => s.closes.push(c), off: EventEmitter.prototype.off.bind(s) });
+        return s;
+      };
+      for (let i = 0; i < 8; i++) server.handleConnection(makeSocket(), { socket: { remoteAddress: '100.64.2.2' } });
+      const ninth = makeSocket();
+      server.handleConnection(ninth, { socket: { remoteAddress: '100.64.2.2' } });
+      expect(ninth.closes).toEqual([4009]);
+      const other = makeSocket();
+      server.handleConnection(other, { socket: { remoteAddress: '100.64.2.3' } });
+      expect(other.closes).toHaveLength(0);
     });
   });
 });

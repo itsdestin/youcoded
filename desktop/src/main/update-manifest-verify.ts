@@ -147,6 +147,9 @@ export interface VerifyUpdateInput {
   currentVersion: string;
   /** The public key to trust (embedded key in production). */
   publicKeyPem: string;
+  /** The highest version this machine has ever run (persisted by update-service). A signed but
+   *  OLDER release than this is refused even if it is newer than the running version. */
+  highestInstalledVersion?: string | null;
 }
 
 /**
@@ -159,7 +162,7 @@ export interface VerifyUpdateInput {
  *                          (retry once: a corrupted download can succeed next time).
  */
 export async function verifyDownloadedUpdate(input: VerifyUpdateInput): Promise<ReleaseManifest> {
-  const { filePath, fileName, manifestBytes, signatureBytes, tag, currentVersion, publicKeyPem } = input;
+  const { filePath, fileName, manifestBytes, signatureBytes, tag, currentVersion, publicKeyPem, highestInstalledVersion } = input;
 
   // 1. Signature first — a manifest we can't trust tells us nothing.
   if (!verifyManifestSignature(manifestBytes, signatureBytes, publicKeyPem)) {
@@ -175,6 +178,13 @@ export async function verifyDownloadedUpdate(input: VerifyUpdateInput): Promise<
   }
   if (compareVersions(manifest.version, currentVersion) <= 0) {
     throw new UpdateInstallError('verify-failed', `refusing downgrade: ${manifest.version} <= running ${currentVersion}`);
+  }
+
+  // WHY (2026-10 security audit SC-9): "newer than running" alone lets someone who controls the
+  // release listing offer an old, signed, vulnerable build to a machine that was downgraded or
+  // reinstalled. Also refuse anything older than the highest version this machine has ever run.
+  if (highestInstalledVersion && compareVersions(manifest.version, highestInstalledVersion) < 0) {
+    throw new UpdateInstallError('verify-failed', `refusing rollback: ${manifest.version} < highest installed ${highestInstalledVersion}`);
   }
 
   // 4. This file's integrity.
