@@ -268,7 +268,7 @@ export function broadNote(tool: string): string {
  *  flag: nothing on disk changes (the engine narrows at decision time), and the
  *  store already stamps grantedAt on every grant — a grant with none predates even
  *  that, so it is older still. */
-export const GRANT_NARROWING_DATE = '2026-10-31';
+const GRANT_NARROWING_DATE = '2026-10-31';
 
 /** The plain sentence for an older Always-allow that now covers less, or null.
  *  Settings shows it under the row and in a one-time note above the list. */

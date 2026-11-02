@@ -9,7 +9,7 @@
 // `window.claude` (desktop's own bridge) before trusting this, exactly as before.
 
 /** The address the Android app serves its bundled page from. Must match AppWebView.kt (PAGE_HOST). */
-export const ANDROID_PAGE_ORIGIN = 'https://appassets.androidplatform.net';
+const ANDROID_PAGE_ORIGIN = 'https://appassets.androidplatform.net';
 
 export function isAndroidAppPage(): boolean {
   if (typeof location === 'undefined') return false;
