@@ -55,6 +55,7 @@ let exited = null; app.on('exit', (c) => { exited = c; });
 const results = [];
 let page, browser;
 async function shot(name) { await page?.screenshot({ path: path.join(out, `${String(results.length).padStart(2, '0')}-${name}.png`) }).catch(() => {}); }
+async function snap(label) { await page?.screenshot({ path: path.join(out, `${label}.png`) }).catch(() => {}); }
 async function step(name, what, fn) {
   const t = Date.now();
   try {
@@ -132,7 +133,10 @@ try {
     const start = page.getByRole('button', { name: WORDS.startSession });
     if (!(await start.isVisible().catch(() => false))) await page.getByRole('button', { name: WORDS.newSession }).click({ timeout: 15_000 });
     const model = await page.getByText(/ · /).first().innerText({ timeout: 10_000 }).catch(() => '?');
+    await snap('first-chat-a-form');
     await start.click({ timeout: 15_000 });
+    await sleep(3000); await snap('first-chat-b-after-start');
+    console.log(`      seen after Start: ${JSON.stringify(await seen().catch(() => null)).slice(0, 700)}`);
     const box = page.getByPlaceholder(WORDS.messageBox);
     await box.waitFor({ timeout: 120_000 });
     // The answer (42) never appears in the question, so seeing it anywhere means a real reply arrived.
