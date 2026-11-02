@@ -48,7 +48,8 @@ export function sanitizeBrowserPreferences(raw: unknown): BrowserPreferences {
 }
 
 /** Lower-case and drop a leading "www." so www.example.com and example.com are one site for form asks. */
-export function foldHost(h: string): string { return h.toLowerCase().replace(/^www\./, ''); }
+// WHY the trailing dots too: shared/site-key.ts (siteKeyFor) drops them, and `example.com.` must be the same site in both lists.
+export function foldHost(h: string): string { return h.toLowerCase().replace(/\.+$/, '').replace(/^www\./, ''); }
 
 function isHostName(s: string): boolean {
   return s.length > 0 && s.length <= 253 && /^[A-Za-z0-9.\-:[\]]+$/.test(s);
