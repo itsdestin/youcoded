@@ -204,7 +204,7 @@ try {
     await panelSearch.waitFor({ timeout: 15_000 });
     // The panel's row reads "<TYPE> <name> created · <when>"; the chat's own mentions never say "created ·".
     await page.getByRole('button', { name: new RegExp(`${name.replace('.', '\\.')}.*created`) }).first().click({ timeout: 15_000 });
-    await page.getByRole('button', { name: WORDS.edit, exact: true }).first().waitFor({ timeout: 30_000 });
+    await page.getByRole('button', { name: WORDS.edit, exact: true }).filter({ visible: true }).first().waitFor({ timeout: 30_000 });
   }
 
   // KNOWN FAILURE until the first-run fix lands (plan, Phase 3 findings): after an API-key sign-in the form
@@ -309,12 +309,12 @@ try {
 
   await step('edit-file', 'The user edits the file in the viewer, saves, and the change is on disk', async () => {
     const file = path.join(home, 'walkthrough-check.txt');
-    await page.getByRole('button', { name: WORDS.edit, exact: true }).first().click();
+    await page.getByRole('button', { name: WORDS.edit, exact: true }).filter({ visible: true }).first().click();
     const editor = page.locator('.cm-content[contenteditable="true"]').first();
     await editor.click();
     await page.keyboard.press('ControlOrMeta+A');
     await page.keyboard.type('mango papaya');
-    const save = page.getByRole('button', { name: WORDS.save, exact: true }).first();
+    const save = page.getByRole('button', { name: WORDS.save, exact: true }).filter({ visible: true }).first();
     if (await save.isVisible().catch(() => false)) await save.click(); else await page.keyboard.press('ControlOrMeta+S');
     for (let i = 0; i < 30; i++) { if (fs.readFileSync(file, 'utf8').includes('papaya')) return 'saved to disk'; await sleep(500); }
     throw new Error('the edit never reached the file on disk');
