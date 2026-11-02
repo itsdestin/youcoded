@@ -42,7 +42,8 @@ const WORDS = {
   detailsChip: /walkthrough-tag|Add tags|tag/i, // the status-bar chip that opens the chat's details once it has a tag
   edit: 'Edit',                         // the file viewer's Edit button
   filesButton: 'Session files',         // header button (HeaderBar.tsx aria-label)
-  filesSearch: 'Search files',          // the Files panel's search box
+  filesSearch: 'Search files',
+  fileListToggle: /^(Show|Hide) list$/, // the drawer's list button (SessionDrawer.tsx)          // the Files panel's search box
   projects: 'Open projects',            // header button
   tipGotIt: 'Got it',                   // the buddy's tip bubble
   closeDialog: 'Close session',         // CloseSessionPrompt.tsx: its title and its confirm button
@@ -309,8 +310,12 @@ try {
 
   await step('edit-file', 'The user edits the file in the viewer, saves, and the change is on disk', async () => {
     const file = path.join(home, 'walkthrough-check.txt');
-    // The viewer shows its Edit button while the pointer is over the file, so point at the file first.
-    await page.getByText('mango', { exact: true }).last().hover();
+    // FINDING (2026-11-02): the floating Edit button stays hidden while the file list is open beside the file
+    // (SessionDrawer.tsx: opacity-0 unless !showList), so a user must close the list first — as this does.
+    if (await page.getByPlaceholder(WORDS.filesSearch).isVisible().catch(() => false)) {
+      await page.getByRole('button', { name: WORDS.fileListToggle }).first().click();
+      await sleep(500);
+    }
     await page.getByRole('button', { name: WORDS.edit, exact: true }).filter({ visible: true }).first().click();
     const editor = page.locator('.cm-content[contenteditable="true"]').first();
     await editor.click();
