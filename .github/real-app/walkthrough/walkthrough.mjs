@@ -193,6 +193,17 @@ try {
     await page.waitForFunction((a) => new RegExp(a).test(document.body.innerText), answer.source, { timeout });
   }
 
+  // Open a file through the Files panel (the header's 📄 button). WHY not the chat: the assistant only sometimes
+  // turns a file name in its reply into a clickable chip, so the panel is the dependable way in.
+  // FINDING: that button's only accessible name is its count ("1"), so it's found by its count here.
+  async function openFromFilesPanel(name) {
+    const row = page.getByRole('button', { name: new RegExp(name.replace('.', '\\.')) }).filter({ hasNotText: 'Created a file' });
+    if (!(await row.first().isVisible().catch(() => false))) {
+      await page.getByRole('button', { name: /^\d+$/ }).first().click();
+    }
+    await page.getByText(name).filter({ hasNotText: 'Created a file' }).last().click({ timeout: 15_000 });
+  }
+
   // KNOWN FAILURE until the first-run fix lands (plan, Phase 3 findings): after an API-key sign-in the form
   // defaults to Claude Code, which that route never installs, and Start silently does nothing. Not critical, so
   // the walk-through records it and carries on.
@@ -289,7 +300,7 @@ try {
 
   await step('open-file', 'Clicking the file in the chat opens it in the file viewer showing its contents', async () => {
     await page.getByRole('button', { name: WORDS.tipGotIt }).click({ timeout: 2_000 }).catch(() => {});
-    await page.getByText('walkthrough-check.txt', { exact: true }).first().click();
+    await openFromFilesPanel('walkthrough-check.txt');
     await page.getByText('mango', { exact: true }).first().waitFor({ timeout: 30_000 });
   }, { critical: false });
 
