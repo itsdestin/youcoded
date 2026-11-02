@@ -25,6 +25,7 @@ const WORDS = {
   newSession: 'New session',            // welcome screen, form folded away
   startSession: 'Start session',        // welcome screen, form open
   messageBox: 'Message your assistant', // chat input placeholder (InputBar.tsx)
+  send: 'Send message',                 // its send button (InputBar.tsx aria-label)
   modelMenu: 'Model',                   // the session form's model menu (model/ModelPicker.tsx aria-label)
   modelSearch: 'Search all models',     // its search box
   keySource: 'Anthropic',               // the source shown beside models of the app's own assistant (first-run.ts NATIVE_KEY_LABEL)
@@ -193,7 +194,18 @@ try {
     await box.waitFor({ timeout: 60_000 });
     await box.fill(question);
     await box.press('Enter');
+    // POSSIBLE FINDING (2026-11-02): once, Enter right after a new chat opened left the message sitting in the
+    // box with no sign why (the chat wasn't ready yet). Retry the send button until the box empties, and note
+    // in the report how long a user would have had to wait.
+    const t0 = Date.now();
+    for (let i = 0; i < 30 && (await box.inputValue().catch(() => '')).trim(); i++) {
+      await sleep(2000);
+      if ((await box.inputValue().catch(() => '')).trim()) await page.getByRole('button', { name: WORDS.send }).click().catch(() => {});
+    }
+    if ((await box.inputValue().catch(() => '')).trim()) throw new Error('the message never left the box (Enter and Send did nothing for 60s)');
+    const waited = Math.round((Date.now() - t0) / 1000);
     await page.waitForFunction((a) => new RegExp(a).test(document.body.innerText), answer.source, { timeout });
+    return waited > 3 ? `the first send was ignored; it went through after ${waited}s` : '';
   }
 
   // Open a file through the Files panel (the header's 📄 button). WHY not the chat: the assistant only sometimes
@@ -232,7 +244,7 @@ try {
       await row.click({ timeout: 15_000 });
       await start.click({ timeout: 15_000 });
     }
-    await askAndExpect('What is six times seven? Answer with digits only.', /\b42\b/);
+    return await askAndExpect('What is six times seven? Answer with digits only.', /\b42\b/);
   });
 
   await step('save-file', 'The assistant saves a file the user asked for, and it is really on disk', async () => {
