@@ -791,31 +791,12 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   }, [visible, releaseStick]);
 
   // The on-screen keyboard (Destin, 2026-11-02: "when keyboard is up, i can no longer see the very latest messages"): the
-  // page no longer shrinks for it, so nothing above re-pins — the scroller's padding grows by the keyboard's height
-  // instead. Re-pin while stuck. In the Android app the keyboard's height arrives once, at the start of its slide, so
-  // the jump is hidden: the messages are held where they were and glide to their new place with the message box
-  // (keyboard.css, same timing). A phone browser reports the keyboard every frame and just re-pins.
+  // page no longer shrinks for it, so nothing above re-pins — the scroller's padding grows with the keyboard instead
+  // (useVisualViewport animates it, a frame at a time). Re-pin on each step while stuck, so the newest message rides up
+  // with the message box.
   useEffect(() => {
     if (!visible) return;
-    const onKeyboard = () => {
-      const scroller = scrollContainerRef.current;
-      const content = contentRef.current;
-      if (!scroller || !content || !stickRef.current) return;
-      const before = scroller.scrollTop;
-      scrollToBottom();
-      const moved = scroller.scrollTop - before;
-      const glide = document.documentElement.dataset.ime === 'native'
-        && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      if (!glide || moved === 0) return;
-      content.style.transition = 'none';
-      content.style.transform = `translateY(${moved}px)`;
-      requestAnimationFrame(() => {
-        content.style.transition = 'transform var(--ime-glide-ms, 300ms) var(--ime-glide-ease, ease-out)';
-        content.style.transform = '';
-        const done = () => { content.style.transition = ''; content.removeEventListener('transitionend', done); };
-        content.addEventListener('transitionend', done);
-      });
-    };
+    const onKeyboard = () => { if (stickRef.current) scrollToBottom(); };
     window.addEventListener(KEYBOARD_OFFSET_EVENT, onKeyboard);
     return () => window.removeEventListener(KEYBOARD_OFFSET_EVENT, onKeyboard);
   }, [visible, scrollToBottom, stickRef]);

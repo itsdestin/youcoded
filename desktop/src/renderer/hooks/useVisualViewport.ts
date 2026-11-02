@@ -19,30 +19,57 @@ import { useEffect } from 'react';
 /** Fired on window each time --vvp-offset changes (the keyboard opened, closed or resized). */
 export const KEYBOARD_OFFSET_EVENT = 'youcoded:keyboard-offset';
 
+/** The Android keyboard's slide: ~340 ms measured on a Galaxy Z Flip7; Android's keyboard curve (fast start, gentle stop). */
+const IME_GLIDE_MS = 300;
+/** cubic-bezier(0.2, 0, 0, 1) at progress t (0-1): x(u) is solved for u by bisection, then y(u). */
+function imeEase(t: number): number {
+  const bez = (a: number, b: number, u: number) => 3 * a * u * (1 - u) ** 2 + 3 * b * u * u * (1 - u) + u ** 3;
+  let lo = 0, hi = 1, u = t;
+  for (let i = 0; i < 20; i++) { u = (lo + hi) / 2; if (bez(0.2, 0, u) < t) lo = u; else hi = u; }
+  return bez(0, 1, u);
+}
+
 export function useVisualViewport() {
   useEffect(() => {
     const vv = typeof window !== 'undefined' ? window.visualViewport : null;
     if (!vv) return;
 
     let frame: number | null = null;
-    // The Android app's own keyboard height, in CSS px (MainActivity → window.__ycImeOffset). WHY: the app no longer
-    // resizes the page for the keyboard (that redrew everything every frame), and an Android WebView whose size does
-    // not change reports no keyboard through visualViewport — so the app tells the page directly, once per frame of
-    // the keyboard's slide. A phone browser over remote access never calls it and keeps using visualViewport.
+    // The Android app's keyboard (MainActivity → window.__ycImeOffset), in CSS px. The app does not resize the page for
+    // the keyboard (that redrew everything every frame), and a WebView whose size does not change reports no keyboard
+    // through visualViewport, so the app sends the keyboard's FINAL height once, as it starts to slide. A phone browser
+    // over remote access never calls this and keeps following visualViewport.
+    //
+    // WHY the page animates the value itself (Destin, 2026-11-02): when the app sent the height every frame it arrived
+    // unevenly ("stuttery/flickery"); when the message box glided on its own transition while everything else jumped,
+    // "the bottom edge of the frame jumps up, then the chips/input bar … slide up after" ("detached and janky"). Here
+    // --vvp-offset itself moves from where it is to the target on the page's own frame clock, with the keyboard's
+    // timing, so the frame's edge, the message box, the messages and the empty-chat hint move in the same frame.
+    let nativeFrom = 0;
+    let nativeTo = 0;
+    let nativeStart = 0;
     let nativeOffset = 0;
     let last = -1;
     const w = window as unknown as { __ycImeOffset?: (px: number) => void };
-    // The app sends the keyboard's FINAL height once, when it starts to slide (not every frame: that kept the page
-    // restyling every frame and still trailed the keyboard). `data-ime="native"` turns on keyboard.css's glide, so the
-    // message box and the messages move up together in one smooth animation timed like the keyboard's.
+    const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     w.__ycImeOffset = (px: number) => {
-      nativeOffset = Number.isFinite(px) ? Math.max(0, px) : 0;
+      const target = Number.isFinite(px) ? Math.max(0, px) : 0;
+      if (target === nativeTo) return;
+      nativeFrom = nativeOffset;
+      nativeTo = target;
+      nativeStart = performance.now();
       document.documentElement.dataset.ime = 'native';
       schedule();
     };
 
     const apply = () => {
       frame = null;
+      let gliding = false;
+      if (nativeOffset !== nativeTo) {
+        const t = reduced() ? 1 : Math.min(1, (performance.now() - nativeStart) / IME_GLIDE_MS);
+        nativeOffset = t >= 1 ? nativeTo : nativeFrom + (nativeTo - nativeFrom) * imeEase(t);
+        gliding = t < 1;
+      }
       // innerHeight is the layout viewport; vv.height is the visible viewport.
       // Their difference equals keyboard + any other overlay chrome the UA is
       // reporting (on Android WebView: essentially just the IME).
@@ -51,6 +78,7 @@ export function useVisualViewport() {
       // Clamp sub-pixel jitter — some devices fire values like 398.6 vs 399.0
       // back-to-back mid-animation.
       const rounded = Math.round(offset);
+      if (gliding) schedule();
       // Skip an unchanged value (performance.md rule 6): a root variable write restyles the whole page.
       if (rounded === last) return;
       last = rounded;
