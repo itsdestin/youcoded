@@ -287,15 +287,19 @@ try {
   await step('search', 'Searching past chats finds this one by a word in its name', async () => {
     // The arrow beside the chat's name opens "All sessions". WHY by position: that button has no name of its own
     // until hovered (its tooltip names it only then), so neither a screen reader nor this script can find it by name.
+    const visibleNames = () => page.getByText(NAME).evaluateAll((els) => els.filter((e) => e.getClientRects().length).length);
+    const headerCount = await visibleNames();
     await page.getByRole('button', { name: WORDS.sessionMenu }).first().locator('xpath=following::button[1]').click();
     await page.getByRole('button', { name: WORDS.resumeMenuItem, exact: true }).first().click({ timeout: 10_000 });
     const search = page.getByPlaceholder(WORDS.resumeSearch).first();
     // The chat's name also sits in the header behind the list, so count it: header + list row when found,
     // header alone when filtered out. (The list isn't marked as a dialog, so it can't be scoped by role.)
     const shown = () => page.getByText(NAME).evaluateAll((els) => els.filter((e) => e.getClientRects().length).length);
-    const before = await shown();
+    const header = headerCount;            // read before the list opened
+    let before = header;
+    for (let i = 0; i < 30 && before <= header; i++) { await sleep(500); before = await shown(); }
+    if (before <= header) throw new Error('the Resume list never showed the chat');
     await search.fill('zzzz-no-such-chat');
-    await page.waitForFunction(async () => true);
     for (let i = 0; i < 20 && (await shown()) >= before; i++) await sleep(500);
     if ((await shown()) >= before) throw new Error('a search for nonsense still listed the chat');
     await search.fill('taco');
