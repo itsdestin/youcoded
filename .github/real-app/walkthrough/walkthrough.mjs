@@ -371,33 +371,6 @@ try {
     return await askAndExpect('What is the secret fruit in the attached file? Answer with one word.', /kumquat/i);
   }, { critical: false });
 
-  await step('close-chat', 'The user closes the chat', async () => {
-    // "All sessions" (the arrow beside the chat's name), then the chat row's close ✕. WHY by position: neither
-    // button has a name of its own until hovered (their tooltips name them only then), so a screen reader can't
-    // find them by name either — worth fixing in the app.
-    await page.getByRole('button', { name: NAME, exact: true }).first().locator('xpath=following::button[1]').click();
-    // In the menu row: name, rename pencil, then the ✕ — which shows only while the row is hovered.
-    await page.getByRole('button', { name: NAME, exact: true }).last().hover();
-    await page.getByRole('button', { name: `Rename ${NAME}` }).last().locator('xpath=following::button[1]').click({ timeout: 10_000 });
-    // FINDING (2026-11-02): the buddy's tip bubble sits on top of this prompt's "Close session" button, so a
-    // user must dismiss the tip first — as this does.
-    await page.getByRole('button', { name: WORDS.tipGotIt }).click({ timeout: 3_000 }).catch(() => {});
-    const confirm = page.getByRole('dialog', { name: WORDS.closeDialog });
-    // Its ✕ is also named "Close session"; the confirm button is the one that SHOWS the words.
-    await confirm.getByRole('button', { name: WORDS.closeDialog }).filter({ hasText: WORDS.closeDialog }).click({ timeout: 10_000 });
-    await page.getByRole('button', { name: WORDS.resume }).waitFor({ timeout: 30_000 });
-  }, { critical: false });
-
-  await step('search', 'Searching past chats finds this one by a word in its name, and not by nonsense', async () => {
-    await page.getByRole('button', { name: WORDS.resume }).click({ timeout: 10_000 });
-    const search = page.getByPlaceholder(WORDS.resumeSearch).first();
-    await page.getByText(NAME).first().waitFor({ timeout: 30_000 });
-    await search.fill('zzzz-no-such-chat');
-    await page.getByText(NAME).first().waitFor({ state: 'hidden', timeout: 15_000 });
-    await search.fill('taco');
-    await page.getByText(NAME).first().waitFor({ timeout: 15_000 });
-    await page.keyboard.press('Escape');
-  }, { critical: false });
   async function openMarketplace() {
     await page.getByRole('button', { name: WORDS.browseSkills }).click();
     await page.getByRole('button', { name: WORDS.openMarketplace }).click({ timeout: 10_000 });
@@ -428,9 +401,43 @@ try {
     await page.getByRole('button', { name: WORDS.applyTheme }).filter({ visible: true }).first().click({ timeout: 15_000 });
     await page.waitForFunction(() => document.documentElement.dataset.theme === 'golden-sunbreak', null, { timeout: 15_000 });
     await snap('theme-applied');
-    await page.keyboard.press('Escape');
   }, { critical: false });
 
+  // Back to the chat, by the marketplace's own way out. FINDING (2026-11-02): with no chat open there is no way
+  // into the skills marketplace at all — it's reached only from the compass in a chat's message bar (Settings has
+  // no entry), which is why these steps run before the chat is closed.
+  for (let i = 0; i < 3 && !(await page.getByPlaceholder(WORDS.messageBox).isVisible().catch(() => false)); i++) {
+    await page.getByRole('button', { name: WORDS.backToChat }).first().click({ timeout: 3_000 }).catch(() => page.keyboard.press('Escape'));
+    await sleep(800);
+  }
+
+  await step('close-chat', 'The user closes the chat', async () => {
+    // "All sessions" (the arrow beside the chat's name), then the chat row's close ✕. WHY by position: neither
+    // button has a name of its own until hovered (their tooltips name them only then), so a screen reader can't
+    // find them by name either — worth fixing in the app.
+    await page.getByRole('button', { name: NAME, exact: true }).first().locator('xpath=following::button[1]').click();
+    // In the menu row: name, rename pencil, then the ✕ — which shows only while the row is hovered.
+    await page.getByRole('button', { name: NAME, exact: true }).last().hover();
+    await page.getByRole('button', { name: `Rename ${NAME}` }).last().locator('xpath=following::button[1]').click({ timeout: 10_000 });
+    // FINDING (2026-11-02): the buddy's tip bubble sits on top of this prompt's "Close session" button, so a
+    // user must dismiss the tip first — as this does.
+    await page.getByRole('button', { name: WORDS.tipGotIt }).click({ timeout: 3_000 }).catch(() => {});
+    const confirm = page.getByRole('dialog', { name: WORDS.closeDialog });
+    // Its ✕ is also named "Close session"; the confirm button is the one that SHOWS the words.
+    await confirm.getByRole('button', { name: WORDS.closeDialog }).filter({ hasText: WORDS.closeDialog }).click({ timeout: 10_000 });
+    await page.getByRole('button', { name: WORDS.resume }).waitFor({ timeout: 30_000 });
+  }, { critical: false });
+
+  await step('search', 'Searching past chats finds this one by a word in its name, and not by nonsense', async () => {
+    await page.getByRole('button', { name: WORDS.resume }).click({ timeout: 10_000 });
+    const search = page.getByPlaceholder(WORDS.resumeSearch).first();
+    await page.getByText(NAME).first().waitFor({ timeout: 30_000 });
+    await search.fill('zzzz-no-such-chat');
+    await page.getByText(NAME).first().waitFor({ state: 'hidden', timeout: 15_000 });
+    await search.fill('taco');
+    await page.getByText(NAME).first().waitFor({ timeout: 15_000 });
+    await page.keyboard.press('Escape');
+  }, { critical: false });
   await step('open-spreadsheet', "The user opens their own spreadsheet from Projects and sees its cells and the formula's total", async () => {
     for (const f of ['walkthrough-groceries.xlsx', 'walkthrough-letter.docx']) fs.copyFileSync(path.join(FIXTURES, f), path.join(home, f));
     await page.keyboard.press('Escape');
