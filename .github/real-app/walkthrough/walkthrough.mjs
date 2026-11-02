@@ -290,12 +290,17 @@ try {
     await page.getByRole('button', { name: WORDS.sessionMenu }).first().locator('xpath=following::button[1]').click();
     await page.getByRole('button', { name: WORDS.resumeMenuItem, exact: true }).first().click({ timeout: 10_000 });
     const search = page.getByPlaceholder(WORDS.resumeSearch).first();
-    // Look only inside the list: the chat's name also sits in the header behind it.
-    const list = page.getByRole('dialog').filter({ has: search });
-    await search.fill('taco');
-    await list.getByText(NAME).first().waitFor({ timeout: 15_000 });
+    // The chat's name also sits in the header behind the list, so count it: header + list row when found,
+    // header alone when filtered out. (The list isn't marked as a dialog, so it can't be scoped by role.)
+    const shown = () => page.getByText(NAME).evaluateAll((els) => els.filter((e) => e.getClientRects().length).length);
+    const before = await shown();
     await search.fill('zzzz-no-such-chat');
-    await list.getByText(NAME).first().waitFor({ state: 'hidden', timeout: 15_000 });
+    await page.waitForFunction(async () => true);
+    for (let i = 0; i < 20 && (await shown()) >= before; i++) await sleep(500);
+    if ((await shown()) >= before) throw new Error('a search for nonsense still listed the chat');
+    await search.fill('taco');
+    for (let i = 0; i < 20 && (await shown()) < before; i++) await sleep(500);
+    if ((await shown()) < before) throw new Error('searching "taco" did not list the chat');
     await page.keyboard.press('Escape');
   }, { critical: false });
 } catch {
