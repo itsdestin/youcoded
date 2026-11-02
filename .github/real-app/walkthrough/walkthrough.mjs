@@ -41,7 +41,7 @@ const WORDS = {
   resumeOffered: /^Resume \d+$/,        // the "Welcome back" panel after a restart (its Resume N button)
   detailsChip: /walkthrough-tag|Add tags|tag/i, // the status-bar chip that opens the chat's details once it has a tag
   sessionMenu: 'Walkthrough taco list', // the header's session pill, by the chat's own name
-  resumeMenuItem: /Resume/,             // the pill menu's entry into the Resume list
+  resumeMenuItem: 'Resume',             // the All sessions menu's entry into the Resume list (SessionStrip.tsx)
 };
 
 const [exe, out] = process.argv.slice(2);
@@ -285,9 +285,10 @@ try {
   }, { critical: false });
 
   await step('search', 'Searching past chats finds this one by a word in its name', async () => {
-    await page.getByRole('button', { name: WORDS.sessionMenu }).first().click();
-    await page.getByRole('button', { name: WORDS.resumeMenuItem }).first().click({ timeout: 10_000 })
-      .catch(() => page.getByRole('menuitem', { name: WORDS.resumeMenuItem }).first().click({ timeout: 10_000 }));
+    // The arrow beside the chat's name opens "All sessions". WHY by position: that button has no name of its own
+    // until hovered (its tooltip names it only then), so neither a screen reader nor this script can find it by name.
+    await page.getByRole('button', { name: WORDS.sessionMenu }).first().locator('xpath=following::button[1]').click();
+    await page.getByRole('button', { name: WORDS.resumeMenuItem, exact: true }).first().click({ timeout: 10_000 });
     const search = page.getByPlaceholder(WORDS.resumeSearch).first();
     await search.fill('taco');
     await page.getByText(NAME).first().waitFor({ timeout: 15_000 });
