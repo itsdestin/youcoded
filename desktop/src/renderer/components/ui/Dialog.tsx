@@ -276,7 +276,9 @@ export function Dialog({
           through to the Scrim beneath, which is what closes on outside-click. */}
       <div
         className={`fixed inset-0 flex items-center justify-center ${narrow ? 'p-2' : 'p-4'} pointer-events-none`}
-        style={{ zIndex: CONTENT_Z[layer] + stackLift(depth) }}
+        // WHY the keyboard's height under a phone popup: the Android app no longer shrinks the page for the keyboard
+        // (useVisualViewport.ts), so a centred popup would sit half behind it; this lifts it into the space above.
+        style={{ zIndex: CONTENT_Z[layer] + stackLift(depth), ...(narrow ? { paddingBottom: 'calc(0.5rem + var(--vvp-offset, 0px))' } : {}) }}
       >
         <OverlayPanel
           ref={panelRef}
@@ -291,7 +293,7 @@ export function Dialog({
             zIndex: 'auto',
             // A short confirmation keeps its small card; anything bigger takes the phone's width less the 8px scrim edge.
             maxWidth: narrow && size !== 'prompt' ? '100%' : DIALOG_WIDTHS[size],
-            maxHeight: narrow ? 'calc(100dvh - 1rem)' : DIALOG_MAX_HEIGHTS[size],
+            maxHeight: narrow ? 'calc(100dvh - 1rem - var(--vvp-offset, 0px))' : DIALOG_MAX_HEIGHTS[size],
             // `fill` only holds a steady height on desktop; on a phone it is the blank-bottom bug.
             ...(fill && !narrow ? { height: DIALOG_MAX_HEIGHTS[size] } : {}),
           }}

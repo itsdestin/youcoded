@@ -69,6 +69,7 @@ import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
 import { usePromptDetector } from './hooks/usePromptDetector';
+import { markBootReady } from './boot-ready';
 import { useVisualViewport } from './hooks/useVisualViewport';
 import { usePresence } from './hooks/usePresence';
 import { usePartyGame } from './hooks/usePartyGame';
@@ -675,7 +676,7 @@ function AppInner() {
   useEffect(() => {
     let resolved = false;
     const resolve = (value: boolean) => {
-      if (!resolved) { resolved = true; setIsFirstRun(value); }
+      if (!resolved) { resolved = true; setIsFirstRun(value); markBootReady(); } // markBootReady: the Android app's loading screen gives way (boot-ready.ts)
     };
     const timeout = setTimeout(() => resolve(false), 3000);
 

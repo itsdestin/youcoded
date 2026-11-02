@@ -21,6 +21,7 @@ import { useEntryFolding } from '../hooks/use-entry-folding';
 import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
 import { messageTimeMarks } from '../state/message-time-marks';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { KEYBOARD_OFFSET_EVENT } from '../hooks/useVisualViewport';
 import { SessionContextBanner } from './SessionContextBanner';
 import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
@@ -789,6 +790,36 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     return () => window.removeEventListener('youcoded:jump-to-ref', onJump);
   }, [visible, releaseStick]);
 
+  // The on-screen keyboard (Destin, 2026-11-02: "when keyboard is up, i can no longer see the very latest messages"): the
+  // page no longer shrinks for it, so nothing above re-pins — the scroller's padding grows by the keyboard's height
+  // instead. Re-pin while stuck. In the Android app the keyboard's height arrives once, at the start of its slide, so
+  // the jump is hidden: the messages are held where they were and glide to their new place with the message box
+  // (keyboard.css, same timing). A phone browser reports the keyboard every frame and just re-pins.
+  useEffect(() => {
+    if (!visible) return;
+    const onKeyboard = () => {
+      const scroller = scrollContainerRef.current;
+      const content = contentRef.current;
+      if (!scroller || !content || !stickRef.current) return;
+      const before = scroller.scrollTop;
+      scrollToBottom();
+      const moved = scroller.scrollTop - before;
+      const glide = document.documentElement.dataset.ime === 'native'
+        && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!glide || moved === 0) return;
+      content.style.transition = 'none';
+      content.style.transform = `translateY(${moved}px)`;
+      requestAnimationFrame(() => {
+        content.style.transition = 'transform var(--ime-glide-ms, 300ms) var(--ime-glide-ease, ease-out)';
+        content.style.transform = '';
+        const done = () => { content.style.transition = ''; content.removeEventListener('transitionend', done); };
+        content.addEventListener('transitionend', done);
+      });
+    };
+    window.addEventListener(KEYBOARD_OFFSET_EVENT, onKeyboard);
+    return () => window.removeEventListener(KEYBOARD_OFFSET_EVENT, onKeyboard);
+  }, [visible, scrollToBottom, stickRef]);
+
   // The find row changes the scroll container's height (it takes its own row
   // above the messages). Shrinking a container does not fire a scroll event
   // and none of the ResizeObservers above watch the container itself, so a
@@ -1038,7 +1069,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             <div
               // select-none: a hint, not content. Ctrl+A must not paint it
               // (Destin, 2026-09-10).
-              className="absolute inset-x-0 flex items-center justify-center text-fg-muted text-sm pointer-events-none select-none"
+              className="empty-chat-hint absolute inset-x-0 flex items-center justify-center text-fg-muted text-sm pointer-events-none select-none"
               style={{ top: 'var(--top-chrome-bottom, 3rem)', bottom: 'var(--bottom-chrome-height, 5rem)' }}
             >
               Start a conversation with {assistantName(provider)}

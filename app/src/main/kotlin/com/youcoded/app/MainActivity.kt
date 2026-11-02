@@ -18,7 +18,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.imeAnimationTarget
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -37,6 +40,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+import kotlinx.coroutines.delay
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -66,6 +77,8 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
 
     private var webView: WebView? = null
     private var loadedToken: String? = null
+    /** The page has drawn something real (see Page). Until then the brand loading screen covers it. */
+    private val pageReady = mutableStateOf(false)
     private lateinit var host: HostJsBridge
     private val showQr = mutableStateOf<((String?) -> Unit)?>(null)
     private var pendingMic: ((Boolean?) -> Unit)? = null
@@ -104,10 +117,13 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val state by BackendService.state.collectAsStateWithLifecycle()
                     val s0 = state
-                    // WHY outside the padded box: the brand screen fills the whole display, behind the status and
-                    // navigation bars too, instead of a dark strip above and below a lavender middle.
-                    if (s0 is BackendService.State.Starting && loadedToken == null) Starting(s0.message)
-                    else Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+                    // WHY one loading screen until the page is really ready (Destin, 2026-11-02: "on the first launch after
+                    // reinstall, there are still a lot of jumps to screens with differently positioned brand name/loading
+                    // lines"): a screen recording showed the brand screen, then a black frame, a grey page with a faint
+                    // spinner and the page's own "Starting YouCoded…" with the logo near the top, before the app. The page
+                    // now loads UNDER this screen, which fades away only once the page says it is ready (pageReady).
+                    val covered = !pageReady.value && s0 !is BackendService.State.Failed
+                    if (!(s0 is BackendService.State.Starting && loadedToken == null)) Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                         when (val s = state) {
                             is BackendService.State.Ready -> Page(s)
                             is BackendService.State.Starting -> Page(null)
@@ -119,6 +135,10 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
                                 onDismiss = { showQr.value = null; done(null) },
                             )
                         }
+                    }
+                    // Outside the padded box: the brand screen fills the whole display, behind the status and navigation bars.
+                    AnimatedVisibility(visible = covered, enter = EnterTransition.None, exit = fadeOut(tween(180))) {
+                        Starting(if (s0 is BackendService.State.Starting) s0.message else "Starting the assistant…")
                     }
                 }
             }
@@ -151,6 +171,37 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
                 filePicker.launch("*/*")
             }.also { webView = it }
         })
+        // WHY no imePadding (Destin, 2026-11-02: "the app responds to the keyboard slowly"): padding the page by the keyboard
+        // resized the whole WebView on every frame of the keyboard's slide — 25 resizes in 340 ms, each re-allocating the
+        // page's surfaces and redrawing all of it, so the graphics thread was busy 370 ms of a 340 ms animation (measured
+        // with a timeline trace on a Galaxy Z Flip7). The page keeps its size; the keyboard covers its bottom, and the
+        // page is told the keyboard's height each frame. The page was built for exactly this (hooks/useVisualViewport.ts,
+        // the --vvp-offset rules in globals.css): the message box rides up on a transform, which costs no redraw.
+        // Measured from the bottom of the navigation bar, which the Box above already keeps clear of.
+        val density = LocalDensity.current
+        // The keyboard's FINAL height, known as soon as it starts to slide (imeAnimationTarget), sent once — the page
+        // glides there by itself (keyboard.css). Sending every frame of the slide kept the page restyling every frame
+        // and still trailed the keyboard (Destin: "still feels a bit stuttery/flickery").
+        @OptIn(ExperimentalLayoutApi::class)
+        val ime = WindowInsets.imeAnimationTarget
+        val nav = WindowInsets.navigationBars
+        LaunchedEffect(Unit) {
+            snapshotFlow { ((ime.getBottom(density) - nav.getBottom(density)).coerceAtLeast(0) / density.density) }
+                .distinctUntilChanged()
+                .collect { dp -> webView?.evaluateJavascript("window.__ycImeOffset&&window.__ycImeOffset($dp)", null) }
+        }
+        // Ask the page whether it is ready (it sets window.__ycBootReady once the app or a sign-in/trouble screen is up,
+        // App.tsx / remote-gate.tsx). Polled, not a bridge message: it is one boolean read every 150 ms only while the
+        // loading screen shows. Twenty seconds at most, so a page that never says so is never hidden for good.
+        LaunchedEffect(ready?.token) {
+            if (ready == null || pageReady.value) return@LaunchedEffect
+            val started = System.currentTimeMillis()
+            while (!pageReady.value) {
+                delay(150)
+                webView?.evaluateJavascript("!!window.__ycBootReady") { if (it == "true") pageReady.value = true }
+                if (System.currentTimeMillis() - started > 20_000) pageReady.value = true
+            }
+        }
         LaunchedEffect(ready?.token) {
             if (ready != null && ready.token != loadedToken) {
                 loadedToken = ready.token
