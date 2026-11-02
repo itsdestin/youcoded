@@ -35,6 +35,8 @@ class HostJsBridge(
         fun scanQr(done: (String?) -> Unit)
         /** Ask for the microphone if needed; call [done] with whether it may be used (null: nobody could ask). */
         fun ensureMicPermission(done: (Boolean?) -> Unit)
+        /** Show the system file picker (several files, any type); call [done] with the chosen content URIs (empty: cancelled). */
+        fun pickFiles(done: (List<android.net.Uri>) -> Unit)
         /** Whether the page has an overlay open (the back button closes it) or not (back leaves the app). */
         fun setBackStackEmpty(empty: Boolean)
     }
@@ -84,6 +86,20 @@ class HostJsBridge(
                 reply(id, true)
             }
             "android:scan-qr" -> main.post { ui.scanQr { url -> reply(id, JSONObject().put("url", url ?: JSONObject.NULL)) } }
+            // WHY (2026-11-01 phone test): the paperclip asked the headless backend for a file dialog, which has no
+            // screen and always answered "cancelled". The system picker lives here, so the phone's paperclip asks
+            // the app; picked files are copied into a folder the backend can read and their paths returned.
+            "android:pick-files" -> main.post {
+                ui.pickFiles { uris ->
+                    io.launch {
+                        try {
+                            reply(id, JSONObject().put("paths", JSONArray(uris.mapNotNull { copyForBackend(it) })))
+                        } catch (e: Exception) {
+                            reply(id, null, e.message ?: "The phone could not read that file.")
+                        }
+                    }
+                }
+            }
             "system:notify-stack-state" -> { main.post { ui.setBackStackEmpty(p.optBoolean("empty", true)) }; reply(id, null) }
             "voice:status" -> reply(id, voiceReadiness())
             // Android listens itself: nothing to download.
@@ -131,6 +147,22 @@ class HostJsBridge(
         else -> JSONObject().put("state", "ready").put("engine", "your phone's speech recognition")
     }
 
+    /** Copy a picked content:// file into files/tmp/attachments (the backend cannot open content:// links); returns its path. */
+    private fun copyForBackend(uri: android.net.Uri): String? {
+        val resolver = context.contentResolver
+        var name = resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+            if (it.moveToFirst()) it.getString(0) else null
+        } ?: uri.lastPathSegment ?: "attachment"
+        // Keep the name readable but safe: no folders, no odd characters.
+        name = name.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._ -]"), "_").take(100).ifBlank { "attachment" }
+        val dir = java.io.File(context.filesDir, "tmp/attachments").apply { mkdirs() }
+        // A time prefix keeps two pickers of "image.jpg" from overwriting each other.
+        val out = java.io.File(dir, "${System.currentTimeMillis()}-$name")
+        val input = resolver.openInputStream(uri) ?: return null
+        input.use { i -> out.outputStream().use { o -> i.copyTo(o) } }
+        return out.path
+    }
+
     private fun readDevices(): JSONArray =
         runCatching { JSONArray(PairedDeviceStore.prefs(context).getString(DEVICES, "[]")) }.getOrElse { JSONArray() }
 
@@ -160,7 +192,7 @@ class HostJsBridge(
         /** Every type [invoke] answers. Pinned against the shim by desktop/tests/android-host-channels.test.ts. */
         val TYPES = listOf(
             "android:get-tier", "android:set-tier", "android:get-about", "android:get-paired-devices",
-            "android:save-paired-device", "android:remove-paired-device", "android:scan-qr",
+            "android:save-paired-device", "android:remove-paired-device", "android:scan-qr", "android:pick-files",
             "system:notify-stack-state", "voice:status", "voice:download", "voice:start", "voice:stop", "voice:cancel",
         )
     }

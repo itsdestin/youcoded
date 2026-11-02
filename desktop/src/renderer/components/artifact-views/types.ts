@@ -17,6 +17,8 @@ export interface ArtifactViewProps {
   absolutePath: string;
   isEditable: boolean;
   onEdit?: (newContent: string) => void;
+  /** Save the file with one markdown task-list item ticked/unticked (the viewer's checkboxes). Only passed when the file can be saved. */
+  onToggleTask?: (nextContent: string) => void;
   // Task 6.4: controlled edit-mode props lifted from MarkdownView into
   // ActiveArtifactView so the conflict banner can manage edit state.
   // Optional — non-editing viewers (Code, Image, etc.) safely ignore them.

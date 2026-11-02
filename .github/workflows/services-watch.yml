@@ -1,0 +1,46 @@
+name: Online services watch
+
+# Are the online services the app depends on still there?
+#
+# WHY (Destin, 2026-11-01): the games server's address disappeared and nobody
+# knew until a hands-on phone test. desktop/test-engine/services-watch.mjs lists
+# each service, the address the app uses, and what users lose without it.
+#
+# Needs NO secrets. A red run is the alarm (GitHub emails a failed scheduled run);
+# the run's summary is a table saying which service is down.
+on:
+  schedule:
+    # 09:41 UTC daily, off the hour on purpose (GitHub delays :00 cron under load).
+    - cron: '41 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: desktop/test-engine/services-watch.mjs
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # One retry before failing: a single network blip must not send a red email.
+      - name: Check every service
+        run: |
+          set +e
+          for attempt in 1 2; do
+            node desktop/test-engine/services-watch.mjs
+            code=$?
+            [ "$code" -eq 0 ] && exit 0
+            [ "$attempt" -eq 1 ] && { echo "::warning::First check was not clean — retrying once in 60s."; sleep 60; }
+          done
+          echo "::error::An online service the app depends on is down — see the summary table."
+          exit 1

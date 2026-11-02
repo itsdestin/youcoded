@@ -19,6 +19,8 @@ export const PROMPT_DEBOUNCE_MS = 350;
 const SETUP_PROMPT_TITLES = new Set([
   'Trust This Folder?',
   'Choose a Theme',
+  // First-run "Security notes" screen (CC 2.1.300): a one-button "Continue" card; without it a fresh install sat on "Initializing session…" (2026-11-01).
+  'Security notes',
   'Select Login Method',
   'Skip Permissions Warning',
   'Resume Session', // Stale session resume — lets user choose summary vs full resume

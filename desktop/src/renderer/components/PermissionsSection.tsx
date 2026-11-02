@@ -227,7 +227,7 @@ export const ALWAYS_ASKS: readonly string[] = [
   'Deleting files or folders',
   'Sending your work to a shared code repository',
   "Throwing away changes you haven't saved anywhere else",
-  "Anything needing your computer's administrator password",
+  "Anything needing an administrator password",
 ];
 
 // ── Small helpers ────────────────────────────────────────────────────────────

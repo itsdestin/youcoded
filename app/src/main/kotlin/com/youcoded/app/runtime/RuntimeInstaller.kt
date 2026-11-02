@@ -111,6 +111,10 @@ class RuntimeInstaller(private val context: Context) {
         put("GIT_SSL_CAINFO", File(etc, "ssl/certs/ca-certificates.crt").path)
         put("GIT_EXEC_PATH", File(usr, "libexec/git-core").path)
         put("GIT_TEMPLATE_DIR", File(usr, "share/git-core/templates").path)
+        // WHY: Alpine's Node carries only a stub ICU; its real data file (usr/share/icu/<version>/icudt<version>l.dat,
+        // packed by build-runtime.sh) must be pointed at, or toLocaleString() throws "Icu error" and the
+        // backend dies at boot. The version folder is found at runtime so an Alpine upgrade needs no code change.
+        File(usr, "share/icu").listFiles { f -> f.isDirectory }?.singleOrNull()?.let { put("NODE_ICU_DATA", it.path) }
         put("YOUCODED_USER_DATA", userData.path)
         // The backend's search tool uses the bundled rg (desktop harness/tools/grep.ts).
         put("YOUCODED_RG_PATH", File(bin, "rg").path)

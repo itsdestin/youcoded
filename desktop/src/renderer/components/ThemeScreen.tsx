@@ -43,7 +43,7 @@ const APPEARANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
         { term: 'App feels slow or laggy', text: 'Turn on "Reduce visual effects". Particles and glass blur use the most power — disabling them usually fixes it instantly.' },
         { term: 'Changing a theme itself', text: "The settings here apply to every theme. To change a theme's own colours or picture, tap 'Build new theme' and describe what you want, or ask Claude to edit one you built." },
         { term: "Theme cycle isn't switching", text: 'Open the status bar widget editor and use the pencil next to "Theme" to pick at least 2 themes for the cycle.' },
-        { term: 'Custom font not showing', text: "YouCoded reads fonts installed on your computer. If the font you want isn't installed system-wide, it can't be selected here. Install it through your operating system first." },
+        { term: 'Custom font not showing', text: "YouCoded reads fonts installed on your device. If the font you want isn't installed system-wide, it can't be selected here. Install it through your operating system first." },
         { term: 'Published theme not appearing in marketplace', text: 'Theme submissions are reviewed before they go live. Yours should appear within a day or two if it passes the safety checks.' },
       ],
     },

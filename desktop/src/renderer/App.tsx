@@ -334,6 +334,8 @@ function AppInner() {
   // 'unknown' is a display-only sentinel (never fed back into the real
   // PermissionMode enforcement logic) — see matchPermissionMode below.
   const [permissionModes, setPermissionModes] = useState<Map<string, PermissionMode | 'unknown'>>(new Map());
+  // Sessions whose Claude Code mode has been read from the terminal (or chosen by the user) — see seedModeUnconfirmed.
+  const modeReadFromTerminal = useRef(new Set<string>());
   // Native sessions carry a SEPARATE permission mode (harness policy, not a CC
   // PTY mode). Kept in its own map so the two unions never mix; default 'ask' is
   // read lazily (no per-session seeding) since NativeSessionHost also defaults to
@@ -1614,6 +1616,7 @@ function AppInner() {
     const sessionPermissionModeHandler = (window.claude.on as any).sessionPermissionMode?.((sid: string, mode: string) => {
       const valid: PermissionMode[] = ['normal', 'auto-accept', 'plan', 'auto', 'bypass'];
       if (!valid.includes(mode as PermissionMode)) return;
+      modeReadFromTerminal.current.add(sid); // the real mode is known now — see seedModeUnconfirmed
       setPermissionModes((prev) => {
         if (prev.get(sid) === mode) return prev;
         return new Map(prev).set(sid, mode as PermissionMode);
@@ -3053,6 +3056,23 @@ function AppInner() {
   // as 'unknown', not 'normal' — 'normal' would claim a specific, possibly wrong
   // permission posture instead of admitting YouCoded hasn't determined it yet.
   const currentPermissionMode: PermissionMode | 'unknown' = sessionId ? (permissionModes.get(sessionId) ?? 'unknown') : 'normal';
+  // WHY (2026-11-01 phone test; Destin's guess confirmed in code): the host seeds EVERY new Claude Code session as
+  // 'normal' (session-manager.ts) and only learns the real mode when Claude Code first draws its "auto mode on"-style
+  // footer (session-live.ts). So a session that really starts in Auto showed NORMAL, then flipped to AUTO. A seeded
+  // 'normal' is a guess: hide the badge for the first few seconds until the terminal confirms a mode (or the user
+  // picks one). After the grace window 'normal' is shown, because Claude Code's footer says nothing at all in its
+  // plain default mode, so waiting forever would hide a correct badge.
+  const MODE_GRACE_MS = 6000;
+  const seedModeUnconfirmed = !!sessionId && !!currentSession && currentSession.provider !== 'native'
+    && currentPermissionMode === 'normal' && !currentSession.skipPermissions
+    && !modeReadFromTerminal.current.has(sessionId)
+    && Date.now() - (currentSession.createdAt ?? 0) < MODE_GRACE_MS;
+  const [, setModeGraceTick] = useState(0);
+  useEffect(() => {
+    if (!seedModeUnconfirmed || !currentSession) return;
+    const t = setTimeout(() => setModeGraceTick((n) => n + 1), Math.max(50, MODE_GRACE_MS - (Date.now() - currentSession.createdAt)));
+    return () => clearTimeout(t);
+  }, [seedModeUnconfirmed, currentSession?.id, currentSession?.createdAt]);
   // Native mode defaults to 'ask' only for the brief window before the async
   // getPermissionMode() call above resolves (mirrors NativeSessionHost's real
   // starting mode) — once it resolves, the map always holds either the real
@@ -3144,6 +3164,7 @@ function AppInner() {
     const next = cycle[(idx + 1) % cycle.length];
     const apply = () => {
       if (cycleClaudeNow(sessionId, currentPermissionMode, next)) return;
+      modeReadFromTerminal.current.add(sessionId); // the user chose it: no longer a guess
       setPermissionModes((prev) => new Map(prev).set(sessionId, next));
       // Send Shift+Tab to the PTY to cycle Claude Code's permission mode
       window.claude.session.sendInput(sessionId, '\x1b[Z');
@@ -3771,7 +3792,7 @@ function AppInner() {
                   modelProviderType={activeProviderType}
                   usagePlan={onChatGptPlan ? 'chatgpt' : 'claude'}
                   provider={isNativeSession ? 'native' : 'claude'}
-                  permissionMode={isPendingTab ? undefined : isNativeSession ? currentNativeMode : currentPermissionMode}
+                  permissionMode={isPendingTab || seedModeUnconfirmed ? undefined : isNativeSession ? currentNativeMode : currentPermissionMode}
                   onCyclePermission={isNativeSession ? cycleNativePermission : cyclePermission}
                   permissionPending={!!sessionId && modePending.has(`mode:${sessionId}`)}
                   fast={fastMode}
@@ -3859,16 +3880,16 @@ function AppInner() {
               // the buddy here.
               // YT-1 (Destin): header, mascot and text "proportionally a bit bigger compared
               // to the menu box below, and maybe just slightly higher above" it; then "just a bit smaller" (YT2-1); then a bigger buddy, slightly smaller text (GB-2).
-              <div className="flex items-center gap-2 mb-5 select-none">
-                {/* WHY -translate-y-3 (deck glass-buddy-3 GB3-2, "fix alignment between mascot
+              <div className="flex items-center gap-2 mb-5 select-none max-sm:flex-col max-sm:text-center max-sm:px-4">
+                {/* WHY max-sm:flex-col (2026-11-01 phone test): side-by-side mascot + heading is wider than a phone, so the heading and form labels were cut off. On a phone the mascot stacks above centred text. WHY -translate-y-3 (deck glass-buddy-3 GB3-2, "fix alignment between mascot
                     and text"): the rig box centres the BODY, but the feet hang below it, so the
                     whole figure sat ~13px lower than the text block. Destin then set the text lower than
                     centre, twice (GB4-1 "a smidge", GB5-1 "lower"), and gap-2 closer. */}
                 <div data-guide-anchor="welcome-mascot" className="flex shrink-0 -translate-y-3">
-                  <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-40 h-40 -my-6 text-fg-dim" scene />
+                  <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-40 h-40 -my-6 text-fg-dim max-sm:w-28 max-sm:h-28 max-sm:my-0" scene />
                 </div>
-                <div className="flex flex-col gap-1.5 min-w-0 max-w-xs translate-y-1">
-                  <p className="brand-heading text-2xl text-fg leading-tight whitespace-nowrap">Start your first session</p>
+                <div className="flex flex-col gap-1.5 min-w-0 max-w-xs translate-y-1 max-sm:translate-y-0">
+                  <p className="brand-heading text-2xl text-fg leading-tight sm:whitespace-nowrap max-sm:text-xl">Start your first session</p>
                   <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
                 </div>
               </div>
@@ -3885,7 +3906,7 @@ function AppInner() {
               </div>
             )}
             {/* Welcome screen: New session (expandable) + Resume session */}
-            <div className={`flex flex-col items-center gap-2 mt-1 ${firstTimeWelcome ? 'w-96' : 'w-64'}${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
+            <div className={`flex flex-col items-center gap-2 mt-1 ${firstTimeWelcome ? 'w-96 max-w-full max-sm:px-4' : 'w-64'}${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
               {welcomeFormOpen ? (
                 /* Expanded new-session form with toggles.
                    data-guide-anchor: the tour's "sessions" stop rings the form. */

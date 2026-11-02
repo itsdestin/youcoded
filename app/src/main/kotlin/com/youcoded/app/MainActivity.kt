@@ -23,6 +23,11 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -71,6 +76,11 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
         pendingMic?.invoke(granted); pendingMic = null
     }
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private var pendingHostPick: ((List<Uri>) -> Unit)? = null
+    // The paperclip's picker (HostJsBridge "android:pick-files"): separate from the WebView's own file chooser below.
+    private val hostFilePicker = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        pendingHostPick?.invoke(uris); pendingHostPick = null
+    }
     private val filePicker = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         pendingFiles?.onReceiveValue(uris.toTypedArray()); pendingFiles = null
     }
@@ -80,6 +90,7 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
         enableEdgeToEdge()
         onBackPressedDispatcher.addCallback(this, backCallback)
         host = HostJsBridge(applicationContext, this)
+        current = this
         BackendService.start(applicationContext)
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -134,20 +145,56 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
         }
     }
 
-    /** The backend could not start. Shows what it said last (its own words, not a guess) and a Retry. */
+    /**
+     * The backend could not start. WHY (2026-11-01 phone test, docs/error-message-standards.md): the old screen dumped
+     * raw log text. Now: a plain sentence that claims no cause, the technical text folded away under "Show details",
+     * Try again, and Report bug (a prefilled GitHub issue carrying the app/Android versions and the end of backend.log).
+     */
     @Composable
     private fun Failed(detail: String) {
         val retrying = remember { mutableStateOf(false) }
-        Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        val showDetails = remember { mutableStateOf(false) }
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(32.dp),
+            verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             Text("YouCoded couldn’t start its assistant", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
             Spacer(Modifier.height(12.dp))
-            Text(detail, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
-            Spacer(Modifier.height(20.dp))
-            Button(enabled = !retrying.value, onClick = { retrying.value = true; BackendService.start(applicationContext, restart = true) }) {
-                // WHY "Try again": every retry button in YouCoded reads exactly this (error-notices-1#EN-Q1).
-                Text(if (retrying.value) "Trying again…" else "Try again")
+            Text(
+                "Something went wrong while starting up. Your chats and files are safe. Trying again often fixes it; if it keeps happening, send us a report.",
+                style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(16.dp))
+            TextButton(onClick = { showDetails.value = !showDetails.value }) { Text(if (showDetails.value) "Hide details" else "Show details") }
+            if (showDetails.value) {
+                Text(detail, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Start)
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = { reportStartupBug(detail) }) { Text("Report bug") }
+                Button(enabled = !retrying.value, onClick = { retrying.value = true; BackendService.start(applicationContext, restart = true) }) {
+                    // WHY "Try again": every retry button in YouCoded reads exactly this (error-notices-1#EN-Q1).
+                    Text(if (retrying.value) "Trying again…" else "Try again")
+                }
             }
         }
+    }
+
+    /** Open a prefilled GitHub issue: app + Android version and the last lines of the backend's log, kept short enough for a link. */
+    private fun reportStartupBug(detail: String) {
+        val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "unknown"
+        val logTail = runCatching {
+            java.io.File(RuntimeInstaller(applicationContext).userData, "backend.log").readLines().takeLast(40)
+        }.getOrElse { listOf(detail) }.ifEmpty { listOf(detail) }
+        fun body(lines: List<String>) =
+            "The assistant could not start.\n\nApp version: $version\nAndroid: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}\n\n" +
+                "Last lines of backend.log:\n```\n${lines.joinToString("\n")}\n```\n"
+        // GitHub rejects very long links, so drop the oldest log lines until the encoded text fits.
+        var lines = logTail.map { it.take(400) }
+        while (Uri.encode(body(lines)).length > 6000 && lines.size > 1) lines = lines.drop(1)
+        val text = Uri.encode(body(lines))
+        val url = "https://github.com/itsdestin/youcoded/issues/new?title=" + Uri.encode("Android: assistant couldn’t start") + "&body=" + text
+        runCatching { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))) }
     }
 
     // --- HostJsBridge.Ui ---------------------------------------------------------------------------------
@@ -167,11 +214,21 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
         micPermission.launch(Manifest.permission.RECORD_AUDIO)
     }
 
+    override fun pickFiles(done: (List<Uri>) -> Unit) {
+        if (isFinishing || isDestroyed) { done(emptyList()); return }
+        pendingHostPick?.invoke(emptyList())
+        pendingHostPick = done
+        hostFilePicker.launch("*/*")
+    }
+
     override fun setBackStackEmpty(empty: Boolean) { backCallback.isEnabled = !empty }
 
     companion object {
         /** On screen right now (Android lets a visible app open links in other apps; BackendService checks this). */
         @Volatile var visible = false
+            private set
+        /** The live window, so the background service can open a sign-in tab on top of it (SignInReturn). */
+        @Volatile var current: MainActivity? = null
             private set
     }
 
@@ -179,6 +236,7 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
     override fun onStop() { visible = false; super.onStop() }
 
     override fun onDestroy() {
+        if (current === this) current = null
         if (isFinishing) { host.release(); webView?.destroy(); webView = null }
         super.onDestroy()
     }

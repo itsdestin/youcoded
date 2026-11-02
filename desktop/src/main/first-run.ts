@@ -6,6 +6,7 @@ import { EventEmitter } from 'events';
 // the flag so prerequisite-installer.ts (also loaded by the native runtime) needs no Electron.
 import { app } from 'electron';
 import { log } from './logger';
+import { returnToApp } from './headless/host-bridge';
 import {
   FirstRunState,
   FirstRunStep,
@@ -510,6 +511,7 @@ export class FirstRunManager extends EventEmitter {
         this.updateState({ authComplete: true });
         this.updatePrereq('auth', { status: 'installed' });
         log('INFO', 'first-run', 'OAuth login succeeded');
+        returnToApp(); // WHY: on the phone, bring YouCoded back from the browser (no-op on desktop)
         this.advanceTo('LAUNCH_WIZARD');
         this.updateState({ statusMessage: 'Launching setup wizard...' });
         this.emit('launch-wizard');

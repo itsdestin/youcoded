@@ -33,6 +33,7 @@ import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from './Resum
 import './ResumeBrowser.css';
 import { resolveNativeBinding } from '../state/welcome-back';
 import { ScreenMark, useScreenOpen } from '../shoot-mode';
+import { prefersTouchInput } from '../utils/touch-input';
 
 // ── The conversation preview panel (2026-09-10) ─────────────────────────────
 // Every decision below is an answered review-deck step, not a default. Five
@@ -710,6 +711,8 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
       setSelectedTagIds(new Set());
       setSortDir('desc');
       loadSessions();
+      // WHY: no autofocus on touch — the on-screen keyboard covered half the list; tapping the box still opens it (2026-11-01 phone test).
+      if (prefersTouchInput()) return;
       const t = setTimeout(() => searchRef.current?.querySelector('input')?.focus(), 50);
       return () => clearTimeout(t);
     }

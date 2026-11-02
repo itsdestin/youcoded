@@ -41,7 +41,8 @@ class HostSocketServer(
         client.use { sock ->
             val reader = BufferedReader(InputStreamReader(sock.inputStream, Charsets.UTF_8))
             val writer = OutputStreamWriter(sock.outputStream, Charsets.UTF_8)
-            while (true) {
+            writers.add(writer)
+            try { while (true) {
                 val line = reader.readLine() ?: break
                 if (line.isBlank()) continue
                 val reply = JSONObject()
@@ -54,8 +55,16 @@ class HostSocketServer(
                     reply.put("error", e.message ?: "The phone could not do that.")
                 }
                 synchronized(writer) { writer.write(reply.toString()); writer.write("\n"); writer.flush() }
-            }
+            } } finally { writers.remove(writer) }
         }
+    }
+
+    // WHY (background notifications, 2026-11-01): the phone must tell the backend when the app comes on or off screen
+    // (host-bridge.ts onHostEvent), so "done" clears only when the person actually looks. One JSON line, no id.
+    private val writers = java.util.concurrent.CopyOnWriteArrayList<OutputStreamWriter>()
+    fun emit(event: String, params: JSONObject) {
+        val line = JSONObject().put("event", event).put("params", params).toString()
+        for (w in writers) runCatching { synchronized(w) { w.write(line); w.write("\n"); w.flush() } }
     }
 
     fun close() {

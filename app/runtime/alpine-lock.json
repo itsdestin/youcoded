@@ -1,0 +1,206 @@
+{
+ "schema": 1,
+ "branch": "v3.24",
+ "packages": {
+  "ada-libs": {
+   "version": "4.0.0-r0",
+   "sha256": "2abf46b79346803a9dbc5dd6de97ddaab907c662805547bff6c6adc76ebb7362"
+  },
+  "bash": {
+   "version": "5.3.9-r1",
+   "sha256": "95f4f976bdf2f4ca18ff41c32916eb6d7b12a0dae12504d55d04427460d6542f"
+  },
+  "binutils": {
+   "version": "2.45.1-r1",
+   "sha256": "bac4a00e73296dfebf5f587c2b304b7d110e7de658cd2b05491f87c2b228420c"
+  },
+  "brotli-libs": {
+   "version": "1.2.1-r0",
+   "sha256": "f802b9d5a329c216f02e73607cb8f662c434767e41686367ac0afcf6d0d45d64"
+  },
+  "busybox": {
+   "version": "1.37.0-r31",
+   "sha256": "18e3490a6f024004b2b13dd4b54bd50ccd82894938023b2d4eab389a4edcba70"
+  },
+  "busybox-binsh": {
+   "version": "1.37.0-r31",
+   "sha256": "f3a1b2257cfa114ff20de05c665f380695385d589908bfc9af5768f39fef9ef5"
+  },
+  "c-ares": {
+   "version": "1.34.9-r0",
+   "sha256": "1bda7f36597a3f6d616b0c8bd25cd611299bf353ec5ee2ae102e97694885c2f1"
+  },
+  "ca-certificates": {
+   "version": "20261020-r0",
+   "sha256": "6e3a34ed8b40718f9b9291319f7890638156a3d63807284a66d9672d3a8b1d3e"
+  },
+  "ca-certificates-bundle": {
+   "version": "20261020-r0",
+   "sha256": "d0a573c27d337c369ad3abe3f39f09ffe67b95af23861577a8d134738375176a"
+  },
+  "compiler-rt": {
+   "version": "22.1.3-r0",
+   "sha256": "4339f4d0ea4e3c0825ce164e9b26289af894c852005f1f08dcd17709d1d9def5"
+  },
+  "gcc": {
+   "version": "15.2.0-r5",
+   "sha256": "ff3fecfc32c9a1bed4a47a32ccfee6f6f575708258f912c218dce8ed0d892221"
+  },
+  "git": {
+   "version": "2.54.0-r0",
+   "sha256": "ea41e2f837f1f6a8b66e72a5ece0fc75cca44f76f49cf5500d467fc5627d0ab7"
+  },
+  "gmp": {
+   "version": "6.3.0-r4",
+   "sha256": "4dab6e86b850fe1b5bc0cf2fac17efa4d7f648bea44f3d9019694cc1e1cb12b7"
+  },
+  "icu-data-en": {
+   "version": "78.1-r0",
+   "sha256": "3fa1dfb91a081f73c32a46f6ec054196caa37c9fd9569c433ddf6b29415dcf13"
+  },
+  "icu-libs": {
+   "version": "78.1-r0",
+   "sha256": "2393882dcf1e3f5be98696665c3468dd0d2a85cd568d50abd232729863df9738"
+  },
+  "isl26": {
+   "version": "0.26-r2",
+   "sha256": "c195ea26929ada2bb9e66b7bc6d64b340123591b8f4c8ed158693e4dac0923d8"
+  },
+  "jansson": {
+   "version": "2.15.0-r0",
+   "sha256": "a13822f5ca1772cced4bb7d3d178ec5dee770d8accba5b4816b2ddc413e6f055"
+  },
+  "libatomic": {
+   "version": "15.2.0-r5",
+   "sha256": "31a45fec053c43a006370f83238f16f959838a9a703fbf26bfd1a36da4f538b2"
+  },
+  "libcrypto3": {
+   "version": "3.5.9-r0",
+   "sha256": "2676a2b0b6e23ea2edccf3ee982b9842a665d52603d047de3d0a185dc316d983"
+  },
+  "libcurl": {
+   "version": "8.23.0-r0",
+   "sha256": "64ae89f6e5d318ed5209778232191806ce49644ce9e09540b7d7830a5330d127"
+  },
+  "libexpat": {
+   "version": "2.9.0-r0",
+   "sha256": "7128bfe18b8a315b9cf90ddf0beffeee454648ae72ff7898ff7d7b09803a559d"
+  },
+  "libgcc": {
+   "version": "15.2.0-r5",
+   "sha256": "369aaa6e9d099a737bad6dd3e6c2fe7bb1547ca26d22b94ee0411228f709b403"
+  },
+  "libgcc-static": {
+   "version": "15.2.0-r5",
+   "sha256": "2ec3dc4be953d842cc51193248367d86829ed699a1ed094fb5149b1b3fc62919"
+  },
+  "libgomp": {
+   "version": "15.2.0-r5",
+   "sha256": "90576a8899c560d3983b8ac8442b5b75957a917bc1c4e950e005945080f8682f"
+  },
+  "libidn2": {
+   "version": "2.3.8-r0",
+   "sha256": "d02ffda4510652f89c5fb89cd2e7ff721afb0c74e7d75476ad60bebe7ac0ae20"
+  },
+  "libncursesw": {
+   "version": "6.6_p20260516-r0",
+   "sha256": "51a7aa4b3ec40b144d0801c0544e0a9f62e2a41d04b6067bb5e95786040741c6"
+  },
+  "libpsl": {
+   "version": "0.21.5-r3",
+   "sha256": "b31e91371425d5f80c1db5cba2a849956b65c802add0b49de844b2ca961aa8da"
+  },
+  "libssl3": {
+   "version": "3.5.9-r0",
+   "sha256": "20ac252b276d73f2c69c1d25f84537c7fba81caefc026c6be1094b394af2082e"
+  },
+  "libstdc++": {
+   "version": "15.2.0-r5",
+   "sha256": "2302e766d4e4926038ec166ecb85837ee884576115236ddb565e3a5fca4a11d7"
+  },
+  "libstdc++-dev": {
+   "version": "15.2.0-r5",
+   "sha256": "8385c811d93b64ee1877005a5473cde8ebabe82d346301f2b153ff8cb6a71510"
+  },
+  "libunistring": {
+   "version": "1.4.2-r0",
+   "sha256": "58abfcbce2459071c505771a572a79953d6043d72b643ed0d5285ca39cdaf85c"
+  },
+  "linux-headers": {
+   "version": "7.0.0-r1",
+   "sha256": "d61656e81116040ebac0bc8d9046a3ba97f01a00ee085809103576e8a437468f"
+  },
+  "mpc1": {
+   "version": "1.3.1-r1",
+   "sha256": "c4e03923cf1b958ba0d3665196f521a00fb091132e79c39493298019fb59ae60"
+  },
+  "mpfr4": {
+   "version": "4.2.2-r0",
+   "sha256": "81cb276c1e050138fed90c8f1ef584cf5bfce26739733753fce138fc0a092b35"
+  },
+  "musl": {
+   "version": "1.2.6-r3",
+   "sha256": "2e17864102278d9049c3a56f1bceed9e8cf287065617e579325123443daed8a5"
+  },
+  "musl-dev": {
+   "version": "1.2.6-r3",
+   "sha256": "45afe0a9f78de3402b6b5d11f5153ed955bf59d59b45344d9c3fed9f4bbf2f66"
+  },
+  "ncurses-terminfo-base": {
+   "version": "6.6_p20260516-r0",
+   "sha256": "e0c546b9461bdce206a90bc720cb69aa4628b5a5b8d908c3e5084e00f28f6a9d"
+  },
+  "nghttp2-libs": {
+   "version": "1.70.0-r0",
+   "sha256": "7ef451f4dcdc065aa872c2f3c78b9d9bb4348caa5bcc70dee0c9e1fcf8e4c1fd"
+  },
+  "nodejs": {
+   "version": "24.22.1-r1",
+   "sha256": "d22660024a36d9d3de74a8957daa386e75e9a39a0460fafd7597bef637fc9e15"
+  },
+  "nodejs-dev": {
+   "version": "24.22.1-r1",
+   "sha256": "07ab863bdbef129df1804d3e1c8c9f80048d896b1d422c85474cdb5c0d2d2f5d"
+  },
+  "nodejs-libs": {
+   "version": "24.22.1-r1",
+   "sha256": "7a753cf8c8d18e29901d8a3ca9a4028bfb2aef26b8d591150f354220d68aa9fb"
+  },
+  "pcre2": {
+   "version": "10.49-r0",
+   "sha256": "03efd0b29f7f38deb10a9ccb54f56e19683eb7ac27eb1f347e6dbd2e59ea000d"
+  },
+  "pkgconf": {
+   "version": "2.5.1-r0",
+   "sha256": "6b716719ac9457bd35c8ea5373da1dc33ae86863bbb0f411aed0cb5e71b9cf2d"
+  },
+  "readline": {
+   "version": "8.3.3-r1",
+   "sha256": "9f0ae0923c02b0d6aba62e9173542b65396ba3f0efefcbf087ea32f1120e7b34"
+  },
+  "ripgrep": {
+   "version": "15.1.0-r0",
+   "sha256": "1bf67cfa4464bc91e1dd1a4f537c40664c473ce92bf16ebba64bc7968d7545eb"
+  },
+  "simdjson": {
+   "version": "4.2.4-r0",
+   "sha256": "8e35f0644c8157c0d5ccdaaf001e70bb6640777b1b680e714e6a453d178829fd"
+  },
+  "simdutf": {
+   "version": "9.0.0-r0",
+   "sha256": "336f5dfe8b0f784462cbccb4b58f71c15d64388c784ebca8568c8615b6f3c6b2"
+  },
+  "sqlite-libs": {
+   "version": "3.53.4-r0",
+   "sha256": "b39d8d73c1208838a436f2d481ba605b52a095f8d6ff781556eafc81cd1a13e9"
+  },
+  "zlib": {
+   "version": "1.3.2-r1",
+   "sha256": "1f77a542ac6634761b9fe38d8bdca19b154071dcfa25432e73f2bc8a0740a33f"
+  },
+  "zstd-libs": {
+   "version": "1.5.7-r2",
+   "sha256": "2bb5136c89f5b0bbe1554c8915a3b520d5aa63ae2a51d4d821eb81698db5a818"
+  }
+ }
+}

@@ -2,11 +2,11 @@
 //
 // It returns the SAME shape `usePartyGame` returns, so the arcade shell calls
 // one signature for every game and picks the client by the id the challenge
-// carried. Chess brings its own room, its own party ('chess' in
-// partykit.json) and its own move shape; nothing here is shared with Connect 4
+// carried. Chess brings its own room, its own party ('chess',
+// the Worker's CHESS room) and its own move shape; nothing here is shared with Connect 4
 // except the socket wrapper and the reducer actions.
 //
-// TRUST MODEL. `chess-room.ts` is a RELAY — it forwards messages between the
+// TRUST MODEL. The chess room (worker/src/games/relay-room.ts) is a RELAY — it forwards messages between the
 // two players and knows no rules. So every move that arrives over the socket is
 // re-validated here with chess.js (`applyMove`) and DROPPED if it is illegal,
 // rather than being applied to the board. A peer cannot corrupt this client's

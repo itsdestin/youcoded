@@ -43,6 +43,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
+import { isAndroid } from '../../platform';
 import { isWorkbenchDocument, workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
@@ -146,7 +147,16 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // WHY: beside a 240px rail, phone pages were crushed into an unusable strip.
   // Reuse pinned-page focus on selection; the band's Pages button restores the
   // list without leaving the page, while Back to chat keeps its separate job.
-  const openFromRail = (id: string) => dispatch({ type: 'PAGE_OPENED', pageId: id, focus: narrow });
+  // WHY phoneLayout (2026-11-01 phone test, #15): a foldable's inner screen is wider than 640px, so width alone left the
+  // squeezed two-pane layout on a phone. The Android app always gets the phone layout.
+  const phoneLayout = narrow || isAndroid();
+  // Phone: the list and the open page are two full-width screens that slide between each other (owner's decision).
+  // Picking a page from the list no longer jumps to the full-screen "focus" view; it slides the list away instead.
+  const [phoneListOpen, setPhoneListOpen] = useState(true);
+  const openPageId = pageId;
+  // WHY: a page opened any other way (a card, a pinned button) must show the page, not leave the list on top; no page = the list.
+  useEffect(() => { setPhoneListOpen(openPageId === null); }, [openPageId]);
+  const openFromRail = (id: string) => { dispatch({ type: 'PAGE_OPENED', pageId: id }); setPhoneListOpen(false); };
   // Back to chat leaves pages altogether (the library over this view goes too).
   const backToChat = () => dispatch({ type: 'PAGE_VIEW_CLOSED' });
   const managePages = () => dispatch({ type: 'PAGES_VIEW_OPENED' });
@@ -222,6 +232,12 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // Only the confirmed first-run state replaces the rail, not loading, errors, or an open page.
   // The first-run card is about the person's OWN pages — Office alone does not count.
   const emptyPages = pageId === null && load.state === 'idle' && loaded && !failed && ownPages.length === 0;
+  // The list is the screen on top while a phone has no page open (or after it was asked for); the first-run card wins over it.
+  const asideShown = open && !pageFocus && (!emptyPages || pages.some((p) => p.home.kind === 'builtin'));
+  // Both panes are full width side by side; sliding both left by one pane + the gap shows the page (WHY not absolute: the
+  // screen body's padding/gap would be ignored and the pane would touch the screen edge).
+  const listOnTop = phoneLayout && asideShown && !emptyPages && (pageId === null || phoneListOpen);
+  const phoneSlide = listOnTop || !asideShown ? 'translateX(0)' : 'translateX(calc(-100% - var(--frame-edge, 10px)))';
   const frameRef = useRef<HTMLIFrameElement>(null);
   // The data the page in the frame is known to hold, so an outside change can
   // be told apart from the echo of the page's own save (see the onData effect).
@@ -591,24 +607,33 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       {/* Below the band: the panel in its own rounded container and the page
           pane, both inset by the frame edge, like the chat pane and the
           files/games pane are in a chat session. */}
-      <div className="screen-body flex-1 min-h-0 flex">
+      <div className={`screen-body flex-1 min-h-0 flex${phoneLayout ? ' relative overflow-hidden' : ''}`}>
         {/* With Office built in the panel always has something to list, so it
             stays beside the first-run card instead of hiding. WHY panel-glass while see-through (ux review 2, U5): the list sat over
             the wallpaper unframed and names ran into tree edges; it gets the same one theme-engine glass as the page pane, and Reduced
             effects removes it the same way. */}
         {open && !pageFocus && (!emptyPages || builtin.length > 0) && (
-        <aside className={`screen-pane screen-pane--panel ${railCollapsed ? 'w-12' : 'w-60'} shrink-0 relative flex flex-col select-none rounded-xl bg-canvas overflow-hidden${seeThrough ? ' panel-glass' : ''}`}>
+        <aside inert={phoneLayout && !listOnTop} aria-hidden={phoneLayout && !listOnTop ? true : undefined}
+          className={`screen-pane screen-pane--panel ${phoneLayout ? 'w-full shrink-0 transition-transform duration-300 motion-reduce:transition-none' : railCollapsed ? 'w-12 shrink-0' : 'w-60 shrink-0'} ${phoneLayout ? '' : 'relative'} flex flex-col select-none rounded-xl bg-canvas overflow-hidden${seeThrough ? ' panel-glass' : ''}`}
+          style={phoneLayout ? { transform: phoneSlide } : undefined}>
+          {/* Photo-only: on a phone the list is the screen, so the view's mark lives on it (the frame is slid away). */}
+          {listOnTop && load.state === 'idle' && loaded && !failed && <ScreenMark name="pages" />}
+          {/* WHY the phone classes: the list is a full-width screen that slides left when a page is shown (owner, 2026-11-01). `inert` while slid away so Tab/screen readers skip it. */}
           {/* WHY absolute when unfolded (Destin, 2026-10-20: "eliminate this empty space above Built in"):
               the toggle sits in the first group label's row instead of costing the list a row of its own. */}
-          <div className={railCollapsed ? 'flex items-center justify-center px-2 pt-2' : 'absolute top-3 right-3 z-10'}>
-            <Tooltip text={railCollapsed ? 'Show the page list' : 'Hide the page list'} placement="bottom">
-              <Button size="icon-sm" variant="ghost" aria-label={railCollapsed ? 'Show the page list' : 'Hide the page list'}
-                aria-expanded={!railCollapsed} onClick={() => setRailCollapsed((c) => !c)} className="w-7 h-7">
-                <RailToggleGlyph collapsed={railCollapsed} />
+          {/* Phone: this button slides back to the open page (only when there is one). Desktop: folds the list to a rail. */}
+          {(!phoneLayout || pageId !== null) && (
+          <div className={!phoneLayout && railCollapsed ? 'flex items-center justify-center px-2 pt-2' : 'absolute top-3 right-3 z-10'}>
+            <Tooltip text={phoneLayout ? 'Show the page' : railCollapsed ? 'Show the page list' : 'Hide the page list'} placement="bottom">
+              <Button size="icon-sm" variant="ghost" aria-label={phoneLayout ? 'Show the page' : railCollapsed ? 'Show the page list' : 'Hide the page list'}
+                aria-expanded={phoneLayout ? undefined : !railCollapsed}
+                onClick={() => (phoneLayout ? setPhoneListOpen(false) : setRailCollapsed((c) => !c))} className="w-7 h-7">
+                <RailToggleGlyph collapsed={phoneLayout ? false : railCollapsed} />
               </Button>
             </Tooltip>
           </div>
-          {railCollapsed ? (
+          )}
+          {!phoneLayout && railCollapsed ? (
             <div className="scroll-mask flex-1 overflow-y-auto flex flex-col items-center gap-1 py-1">
               {[...builtin, ...personal, ...[...byProject.values()].flat()].map((p) => (
                 <Tooltip key={p.id} text={p.name} placement="bottom">
@@ -665,7 +690,15 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
             on and Reduced effects is off), so the page pane frosts exactly like Marketplace's surfaces and "Reduced effects" removes
             it the same way. One element — never a blur per card inside the page. In 'float' chrome the pane already has its own
             heavier frost (!important), which simply wins. Solid pages (plain theme, framed chrome, or the Appearance switch off) do not get the class: unchanged. Office's frame is this same pane, so it frosts too. */}
-        <div className={`screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas${seeThrough ? ' panel-glass' : ''}`}>
+        <div inert={phoneLayout && listOnTop} className={`screen-pane screen-pane--frame ${phoneLayout ? 'w-full shrink-0 transition-transform duration-300 motion-reduce:transition-none' : 'relative flex-1 min-w-0'} rounded-xl overflow-hidden bg-canvas${seeThrough ? ' panel-glass' : ''}`}
+          style={phoneLayout ? { transform: phoneSlide } : undefined}>
+          {/* Phone: the way back to the list from an open page (the list's own button slides forward again). */}
+          {phoneLayout && asideShown && !listOnTop && (
+            <Button size="icon-sm" variant="secondary" aria-label="Show the page list" onClick={() => setPhoneListOpen(true)}
+              className="absolute top-2 left-2 z-20 w-8 h-8">
+              <RailToggleGlyph collapsed />
+            </Button>
+          )}
           {/* First, so its place in the tree never changes whatever else shows (see officeKept). */}
           {(isOffice || officeKept) && (
             <div className={`absolute inset-0 ${open && isOffice ? '' : 'invisible pointer-events-none'}`} aria-hidden={open && isOffice ? undefined : true} inert={!(open && isOffice)}>
@@ -674,7 +707,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           )}
           {open && <>
           {/* Photo-only marks: the view once its list has loaded, or the page once it is ready. */}
-          {load.state === 'idle' && loaded && !failed && !isOffice && <ScreenMark name="pages" />}
+          {load.state === 'idle' && loaded && !failed && !isOffice && !listOnTop && <ScreenMark name="pages" />}
           {load.state === 'ready' && pageId && <ScreenMark name={`pages/${pageFocus ? 'focus' : 'page'}/${pageId}`} />}
           {/* WHY: first-run belongs where the Pages button lands, not a second click into Manage pages. */}
           {load.state === 'idle' && !loaded && <LoadingState what="pages" />}

@@ -22,6 +22,8 @@ OUT="${2:?output dir}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CACHE="${YOUCODED_RUNTIME_CACHE:-$HERE/../build/runtime-cache}"
 source "$HERE/pins.env"
+# WHY: the build may only use the exact Alpine package versions in alpine-lock.json (refresh with update-pins.py).
+export YOUCODED_ALPINE_LOCK="${YOUCODED_ALPINE_LOCK:-$HERE/alpine-lock.json}"
 
 FILES="/data/data/$APP_ID/files"
 INTERP="$FILES/usr/lib/ld-musl-aarch64.so.1"
@@ -175,13 +177,15 @@ echo "$CLAUDE_CODE_VERSION" > "$ASSETS/claude-code-version.txt"
 
 # --- data files ----------------------------------------------------------------------------------
 cp "$R/etc/ssl/certs/ca-certificates.crt" "$ASSETS/ca-certificates.crt"
-# terminfo for bash/readline, git's templates: small trees the app unpacks into files/usr/share.
-(cd "$R/usr/share" && tar czf "$ASSETS/share.tgz" $(for d in terminfo git-core; do [ -d "$d" ] && echo "$d"; done))
+# terminfo for bash/readline, git's templates, ICU data: small trees the app unpacks into files/usr/share.
+# WHY icu: Alpine's Node ships only a stub libicudata; without icu/<ver>/icudt<ver>l.dat, number/date
+# formatting (toLocaleString) throws "Icu error" and the backend dies at boot. RuntimeInstaller sets NODE_ICU_DATA.
+(cd "$R/usr/share" && tar czf "$ASSETS/share.tgz" $(for d in terminfo git-core icu; do [ -d "$d" ] && echo "$d"; done))
 [ -d "$R/etc/terminfo" ] && (cd "$R/etc" && tar czf "$ASSETS/etc-terminfo.tgz" terminfo) || true
 echo "$APP_ID" > "$ASSETS/app-id.txt"
 # Record packaged data ownership as well as executable/library ownership.
 python3 -I "$HERE/runtime-redistribution.py" record "$OUT/evidence/root" "$R" "$R/etc/ssl/certs/ca-certificates.crt" "$ASSETS/ca-certificates.crt"
-for d in terminfo git-core; do
+for d in terminfo git-core icu; do
   if [ -d "$R/usr/share/$d" ]; then
     python3 -I "$HERE/runtime-redistribution.py" record "$OUT/evidence/root" "$R" "$R/usr/share/$d" "$ASSETS/share.tgz"
   fi

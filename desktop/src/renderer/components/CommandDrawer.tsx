@@ -11,6 +11,7 @@ import { isAndroid } from '../platform';
 import { CARD_LEVEL_1, EmptyState, ErrorState, FilterChip, SectionLabel } from './ui';
 import { useDrawerFilter, type DrawerFilterStore } from '../state/drawer-filter-store';
 import { ScreenMark } from '../shoot-mode';
+import { prefersTouchInput } from '../utils/touch-input';
 
 interface Props {
   open: boolean;
@@ -81,7 +82,9 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
   useEffect(() => {
     if (!open || searchMode) return;
     setSearch('');
-    if (isAndroid()) return;
+    // WHY prefersTouchInput, not isAndroid(): isAndroid() read false in the real app, and a touchscreen laptop
+    // has the same problem — the on-screen keyboard covered half the list (2026-11-01 phone test).
+    if (prefersTouchInput() || isAndroid()) return;
     // Small delay to let the transition start before focusing
     const t = setTimeout(() => searchRef.current?.focus(), 50);
     return () => clearTimeout(t);

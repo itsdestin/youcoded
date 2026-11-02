@@ -54,7 +54,8 @@ import { initArcadeOps } from '../arcade-handlers';
 import { startDailyHeartbeat, setAndroidId } from '../analytics-service';
 import { safeStorage } from 'electron';
 import type { Platform } from '../platform';
-import { hasHost } from './host-bridge';
+import { hasHost, hostNotify, onHostEvent, returnToApp } from './host-bridge';
+import { startBackgroundStatus } from '../background-status';
 
 export interface HeadlessOptions {
   /** Loopback port the app's page connects to. */
@@ -198,6 +199,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
     secrets: new SecretsStore(userData, platform.secretStorage),
     appVersion: app.getVersion(),
     openExternal: (url) => platform.openExternal(url),
+    onSignedIn: returnToApp, // WHY: phone only - bring YouCoded back after the browser sign-in
     pollUsage: chatgptEnabled,
     route: process.env.YOUCODED_CHATGPT_ROUTE === 'official' ? 'official' : 'codex',
   });
@@ -206,6 +208,19 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   const ipcWiring = registerIpcHandlers(ipcMain as any, sessionManager, NO_WINDOW as any, skillProvider, commandProvider, hookRelay, remoteConfig, remoteServer, windowRegistry,
     { client: leaseClient, setHolderTakeover: (fn) => { holderTakeoverRef.fn = fn; }, requester, deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
     nativeRuntime, welcomeBackStore);
+
+  // WHY (Android background notifications, 2026-11-01): the phone's always-on notification shows "N working · N waiting · N done" and
+  // alerts when a session needs the person. The backend decides (background-status.ts); the phone only displays what 'status' hands it.
+  // The app tells us when it is on screen ('foreground' event) so "done" clears only when the person actually looks.
+  if (hasHost() && nativeRuntime) {
+    const bg = startBackgroundStatus({
+      records: nativeRuntime.records,
+      nameOf: (id) => sessionManager.listSessions().find((s) => s.id === id)?.name || 'A session',
+      watched: (id) => windowRegistry.getSocketWatchers(id).length > 0,
+      send: (status) => hostNotify('status', status as unknown as Record<string, unknown>),
+    });
+    onHostEvent((event, params) => { if (event === 'foreground') bg.setForeground(!!(params as { on?: boolean } | null)?.on); });
+  }
 
   // First run: the same two paths as main.ts — a fresh install runs the wizard; an existing one checks sign-in lazily.
   if (firstRunManager) {

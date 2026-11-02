@@ -351,6 +351,36 @@ export function ChatGptBlock() {
     return () => clearInterval(t);
   }, [status?.state, refresh]);
 
+  // WHY: backing out of the ChatGPT page in the browser sends nothing back to
+  // the app, so the row said "Waiting for the browser…" forever (2026-11-01
+  // phone test). When the user returns to the app and the sign-in still has not
+  // landed, cancel it so the row offers "Sign in with ChatGPT" again.
+  // The 8s floor + 2.5s grace keep a quick alt-tab, or a sign-in finishing
+  // right as the app regains focus, from being cancelled by mistake.
+  useEffect(() => {
+    if (status?.state !== 'waiting') return;
+    const since = Date.now();
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    const onBack = () => {
+      if (document.visibilityState === 'hidden' || Date.now() - since < 8000) return;
+      clearTimeout(grace);
+      grace = setTimeout(async () => {
+        try {
+          const now = await chatGptApi().status();
+          if (now.state === 'waiting') await chatGptApi().cancelSignIn();
+        } catch { /* the 1s poll shows the truth */ }
+        void refresh();
+      }, 2500);
+    };
+    window.addEventListener('focus', onBack);
+    document.addEventListener('visibilitychange', onBack);
+    return () => {
+      clearTimeout(grace);
+      window.removeEventListener('focus', onBack);
+      document.removeEventListener('visibilitychange', onBack);
+    };
+  }, [status?.state, refresh]);
+
   const run = async (verb: () => Promise<boolean>, failText: string) => {
     setBusy(true);
     setNote(null);

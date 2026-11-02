@@ -18,7 +18,7 @@ import { firstFrameProtocols, TOOK_FRAMES_PROTOCOL } from '../shared/first-frame
 import { markPage, startConnection, markConnection, markWake, takeReport } from './remote-timings';
 import { readRemotePlace, remotePlaceStorages, remotePlaceHost } from './state/remote-place';
 import { markScreensReady } from './state/screens-ready';
-import { setConnectionMode } from './platform';
+import { setConnectionMode, platformAfterHandshake } from './platform';
 markPage('connection-code'); // this module's code has arrived and run (remote-timings.ts)
 import { announce } from './utils/announce';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
@@ -1554,16 +1554,19 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           if (token) localStorage.setItem('youcoded-remote-token', token);
           // Preserve __PLATFORM__ when connecting to a remote desktop from Android —
           // the desktop server responds with platform:"electron" but we're still on a phone
-          if (!preservePlatform) {
-            // WHY the device decides first: the host tells EVERY client `platform: 'desktop'`
-            // (a fact about the computer), and adopting it made a phone browser a non-touch
-            // device — its terminal took typing through xterm's hidden box, so the soft
-            // keyboard and scrolling misbehaved. A touch-first screen is 'browser' (the
-            // Platform value isTouchDevice() means). A mouse-first browser keeps the host's
-            // answer, as before. `(pointer: coarse)` is the PRIMARY pointer only, so a
-            // touchscreen laptop (primary pointer "fine") reads as mouse-first: unchanged too.
-            const platform = isTouchFirstDevice() ? 'browser' : (msg.platform || 'browser');
-            (window as any).__PLATFORM__ = platform;
+          // WHY via platformAfterHandshake: the Android app (file:// page) must stay 'android' even when it talks to its
+          // own on-phone backend (preservePlatform is false then) — otherwise the phone got the desktop's settings.
+          // A phone's plain web browser still becomes 'browser' (touch-first) so its terminal/keyboard behave; a
+          // mouse-first browser keeps the host's answer. `(pointer: coarse)` is the PRIMARY pointer only.
+          {
+            const platform = platformAfterHandshake({
+              current: (window as any).__PLATFORM__,
+              isFilePage: location.protocol === 'file:',
+              preserve: preservePlatform,
+              touchFirst: isTouchFirstDevice(),
+              hostPlatform: msg.platform,
+            });
+            if (platform) (window as any).__PLATFORM__ = platform;
           }
           // Naming capability, straight off the handshake — no extra round
           // trip, and settled before the first paint that could show a naming
@@ -2580,6 +2583,9 @@ export function installShim(): void {
     dialog: {
       openFile: () => targetUrl
         ? pickAndUploadFiles()                   // Remote — pick on device, upload to desktop
+        // WHY: on the phone the backend has no screen, so its dialog always answers "cancelled"; the Android app
+        // owns the system picker and hands back readable copies of the chosen files (HostJsBridge android:pick-files).
+        : hasAndroidHost() ? invokeAndroidHost('android:pick-files').then((r: any) => r?.paths ?? []).catch(() => [] as string[])
         : invoke('dialog:open-file')             // Local Android — native file picker
             .then((r: any) => r?.paths ?? r ?? [])
             .catch(() => [] as string[]),

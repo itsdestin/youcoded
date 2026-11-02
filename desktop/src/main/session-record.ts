@@ -244,6 +244,20 @@ export class SessionRecords {
    */
   onSummaryChange(listener: ((sessionId: string) => void) | null): void { this.summaryListener = listener; }
 
+  // WHY a second, additive listener (Android background notifications, 2026-11-01): onSummaryChange is a single slot that ipc-handlers owns
+  // for the dots push; the phone's background-status notifier needs the same "a session changed" signal without displacing it.
+  private extraSummaryListeners = new Set<(sessionId: string) => void>();
+  addSummaryListener(listener: (sessionId: string) => void): () => void {
+    this.extraSummaryListeners.add(listener);
+    return () => { this.extraSummaryListeners.delete(listener); };
+  }
+  private fireSummary(sessionId: string): void {
+    try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
+    for (const l of this.extraSummaryListeners) {
+      try { l(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
+    }
+  }
+
   /** The fields a summary push is built from, as one string: equal strings mean no dot can have changed. */
   private summaryKeyOf(sessionId: string, rec: Rec): string {
     const f = rec.facts;
@@ -266,7 +280,7 @@ export class SessionRecords {
     const key = this.summaryKeyOf(sessionId, rec);
     if (key !== rec.summaryKey) {
       rec.summaryKey = key;
-      try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
+      this.fireSummary(sessionId);
     }
     // The screen-reading module (main/session-screens.ts) wants to know when what it reads FOR changes: a turn began or ended, a tool started or
     // finished, an ask opened or closed, Claude Code started. Same cheap string compare, so a streamed answer (thousands of events, no change) costs nothing.
@@ -342,7 +356,7 @@ export class SessionRecords {
   drop(sessionId: string): void {
     const existed = this.records.delete(sessionId);
     if (existed) {
-      try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
+      this.fireSummary(sessionId);
       try { this.needListener?.(sessionId); } catch (err) { console.warn('[session-record] screen-need listener failed:', String(err)); }
     }
     this.gone.add(sessionId);

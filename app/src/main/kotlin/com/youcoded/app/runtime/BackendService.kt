@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.LinkProperties
@@ -56,6 +58,8 @@ class BackendService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private lateinit var installer: RuntimeInstaller
+    private lateinit var statusNotifier: StatusNotifier
+    private var lastVisible: Boolean? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -63,6 +67,8 @@ class BackendService : Service() {
         super.onCreate()
         installer = RuntimeInstaller(applicationContext)
         createChannel()
+        statusNotifier = StatusNotifier(applicationContext) { buildNotification(it) }
+        watchForeground()
         val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -203,10 +209,18 @@ class BackendService : Service() {
             // Android blocks an app that is not on screen from opening another app (seen: a sign-in link from
             // `claude auth login` while the phone was locked). Then the link waits in a notification instead.
             val view = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (MainActivity.visible) startActivity(view) else Notifier.showLink(applicationContext, "Open link", url, view)
+            // WHY: sign-in pages open inside YouCoded's own window stack so the app can come back when sign-in ends (SignInReturn).
+            val screen = MainActivity.current
+            if (MainActivity.visible && screen != null && SignInReturn.isSignInLink(url)) {
+                Handler(Looper.getMainLooper()).post { runCatching { SignInReturn.openInTab(screen, url) }.onFailure { startActivity(view) } }
+            } else if (MainActivity.visible) startActivity(view) else Notifier.showLink(applicationContext, "Open link", url, view)
             null
         }
+        // The backend says a sign-in (Claude, ChatGPT) just finished: bring YouCoded back in front of the browser.
+        "bringToFront" -> { SignInReturn.bringBack(applicationContext); null }
         "keepAwake" -> { setKeepAwake(params.optBoolean("on")); null }
+        // The backend's live summary ("2 working · 1 waiting for you"): update the always-on notification and show/clear "needs you" alerts.
+        "status" -> { tellForeground(); statusNotifier.show(params); null }
         "notify" -> { Notifier.show(applicationContext, params.optString("title"), params.optString("body")); null }
         else -> throw IllegalArgumentException("The phone has no '$method'.")
     }
@@ -255,11 +269,33 @@ class BackendService : Service() {
         )
     }
 
-    private fun buildNotification(): Notification {
+    /** WHY: the backend clears "done" only when the person looks, so it must hear when the app is on screen. Fired on every
+     *  screen on/off, and once on the first status call (the backend starts out assuming off screen). */
+    private fun tellForeground(v: Boolean = MainActivity.visible) {
+        if (lastVisible == v) return
+        lastVisible = v
+        hostServer?.emit("foreground", org.json.JSONObject().put("on", v))
+    }
+
+    private fun watchForeground() {
+        // WHY explicit values: the start callback fires inside MainActivity's super.onStart(), before it sets `visible = true`.
+        (application as android.app.Application).registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
+            override fun onActivityStarted(a: android.app.Activity) { if (a is MainActivity) { statusNotifier.cancelNeeds(); tellForeground(true) } }
+            override fun onActivityStopped(a: android.app.Activity) { if (a is MainActivity) tellForeground(false) }
+            override fun onActivityCreated(a: android.app.Activity, b: android.os.Bundle?) {}
+            override fun onActivityResumed(a: android.app.Activity) {}
+            override fun onActivityPaused(a: android.app.Activity) {}
+            override fun onActivitySaveInstanceState(a: android.app.Activity, b: android.os.Bundle) {}
+            override fun onActivityDestroyed(a: android.app.Activity) {}
+        })
+    }
+
+    private fun buildNotification(text: String = "Your assistant is running"): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("YouCoded")
-            .setContentText("Your assistant is running")
+            .setContentText(text)
+            .setOnlyAlertOnce(true)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentIntent(open)
             .setOngoing(true)

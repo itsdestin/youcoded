@@ -24,7 +24,7 @@ import { Button, EmptyState, LoadingState, ScreenError } from "../ui";
 import { ScreenBand } from "../ScreenBand";
 import { LibraryIcon, MarketplaceIcon } from "../screen-icons";
 import { useEscClose } from "../../hooks/use-esc-close";
-import { useCurrentPlatform } from "../../platform";
+import { useCurrentPlatform, deviceNoun } from "../../platform";
 import { platformDisplayName } from "../../../shared/platform-display";
 import type { SkillEntry } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
@@ -79,6 +79,7 @@ export default function MarketplaceScreen({
 }: Props) {
   const mp = useMarketplace();
   const currentPlatform = useCurrentPlatform();
+  const isPhoneDevice = deviceNoun() === 'phone';
   const [filter, setFilter] = useState<FilterState>(() => {
     const f = emptyFilter();
     if (initialTypeChip) f.type = initialTypeChip;
@@ -158,6 +159,8 @@ export default function MarketplaceScreen({
   // semantics the retired IntegrationCard.statusLabel() helper had — without
   // it, integrations would fall back to MarketplaceCard's generic "Installed"
   // badge and lose the connected/needs-auth/error/deprecated nuance.
+  const isIntegrationBlocked = (item: IntegrationCardItem): boolean =>
+    !!(currentPlatform && item.platforms && item.platforms.length > 0 && !item.platforms.includes(currentPlatform as any));
   const integrationStatusBadge = (item: IntegrationCardItem): { text: string; tone: 'ok' | 'warn' | 'err' | 'neutral' | 'locked' } => {
     // Platform lock overrides everything — if the user can't install, the
     // connected/needs-auth state is moot. When platform is still resolving
@@ -165,7 +168,9 @@ export default function MarketplaceScreen({
     if (currentPlatform && item.platforms && item.platforms.length > 0 && !item.platforms.includes(currentPlatform as any)) {
       // WHY sentence case (labels batch): this pill's uppercase CSS is gone,
       // so its own text must already be sentence case, not Title Case.
-      return { text: `${platformDisplayName(item.platforms[0])} only`, tone: 'locked' };
+      // WHY a phone says "Can't run on this device" (2026-11-01 phone test, #20): "macOS only" on a phone reads as a
+      // fact about someone else's computer; the phone user just needs to know this one is not for them.
+      return { text: isPhoneDevice ? "Can't run on this device" : `${platformDisplayName(item.platforms[0])} only`, tone: 'locked' };
     }
     if (item.status === 'planned') return { text: 'Coming soon', tone: 'neutral' };
     if (item.status === 'deprecated') return { text: 'Deprecated', tone: 'neutral' };
@@ -525,7 +530,9 @@ export default function MarketplaceScreen({
                 Hidden when the catalog hasn't loaded. */}
             {integrations.length > 0 && (
               <MarketplaceRail title="Connect your stuff" description="Bring your data in.">
-                {integrations.map((item) => {
+                {/* WHY blocked items go last (owner, 2026-11-01): a card you cannot use should never lead the row. Stable, so the
+                    registry's own order still holds inside each group. */}
+                {[...integrations].sort((a, b) => Number(isIntegrationBlocked(a)) - Number(isIntegrationBlocked(b))).map((item) => {
                   // Previously IntegrationCard resolved the icon path internally;
                   // now we pass a fully-resolved URL to MarketplaceCard's iconUrl
                   // prop. The base URL is hoisted to module scope (see

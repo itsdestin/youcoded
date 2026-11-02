@@ -220,6 +220,8 @@ export interface ChatGptAuthDeps {
   appVersion: string;
   /** `shell.openExternal` in production. */
   openExternal: (url: string) => Promise<void>;
+  /** Called once a sign-in finishes successfully. WHY: the phone uses it to bring YouCoded back in front of the browser. */
+  onSignedIn?: () => void;
   /** WHY this exists: the kill switch (YOUCODED_CHATGPT=0) must leave the
    *  feature genuinely inert, and the launch-time setup check still needs this
    *  object to READ the account file. Without a gate here the constructor would
@@ -414,6 +416,7 @@ export class ChatGptAuth {
   private readonly secrets: SecretsStore;
   private readonly appVersion: string;
   private readonly openExternal: (url: string) => Promise<void>;
+  private readonly onSignedIn?: () => void;
   private readonly realFetch: typeof fetch;
   private readonly beforeModelRequest?: () => Promise<void>;
   private readonly listen: ListenFn;
@@ -481,6 +484,7 @@ export class ChatGptAuth {
     this.secrets = deps.secrets;
     this.appVersion = deps.appVersion;
     this.openExternal = deps.openExternal;
+    this.onSignedIn = deps.onSignedIn;
     this.realFetch = deps.fetch ?? ((input, init) => fetch(input, init));
     this.beforeModelRequest = deps.beforeModelRequest;
     this.listen = deps.listen ?? ((port, host, handler) => defaultListen(port, host, handler, this.log));
@@ -953,6 +957,7 @@ export class ChatGptAuth {
 
     reply(res, 200, CALLBACK_PAGE_DONE);
     await this.finishRound(round, 'signed-in');
+    try { this.onSignedIn?.(); } catch { /* a notification hook must never break sign-in */ }
     this.startPoll();
     // Kick both caches so the bars and the picker are filled by the card's
     // next 1-second poll. Fire-and-forget; both swallow their own failures.

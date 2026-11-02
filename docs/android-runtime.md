@@ -14,7 +14,7 @@ Android app (one APK)
 │   bridge/HostJsBridge  window.YouCodedHost: the page's phone-only calls (voice, saved computers, QR, back, version)
 │   runtime/BackendService  foreground service: lays out programs, starts/restarts node, resolv.conf, wake lock
 │   runtime/RuntimeInstaller files/usr symlinks into the native-lib folder; unpacks backend.tgz
-│   runtime/HostSocketServer the backend's calls to the phone (open a link, keep awake, notify)
+│   runtime/HostSocketServer the backend's calls to the phone (open a link, keep awake, notify, status: live counts + "needs you" alerts from desktop/src/main/background-status.ts)
 ├─ WebView: the shared React page, remote-shim in "android-local" mode → ws://localhost:<port>, token sign-in
 └─ node desktop/dist/main/headless/headless-main.js  (the desktop backend, Electron replaced by a stand-in)
     └─ node-pty → Claude Code 2.1.x (official musl build), bash, git, rg — all bundled
@@ -66,6 +66,17 @@ Code reaches the phone with an app release (bump `CLAUDE_CODE_VERSION` in `pins.
 `/data/data/<appId>/files`, the files folder of the phone's MAIN user. In a work profile, Samsung Secure Folder
 or a second user, the app's files live under `/data/user/<n>/…`, so the bundled programs cannot start there.
 A fix would build the programs with a relative-path launcher or rewrite the paths at first launch.
+
+### Locked versions and the release step
+- `app/runtime/alpine-lock.json` lists the exact Alpine package versions and file hashes the build may use;
+  `build-runtime.sh` stops if the index or a downloaded file differs (set via `YOUCODED_ALPINE_LOCK`).
+- **Each release, first:** `python3 app/runtime/update-pins.py` (add `--apply-claude` to also take the newest
+  Claude Code). It rewrites the lock to the latest versions and prints what changed. Then build and run on a phone;
+  commit the lock and `pins.env` only after that passes. Alpine drops old package files, so an old lock stops
+  building once upstream moves on: refresh it rather than editing it by hand.
+- Needs network and `apk version -t` (see `docs/android-redistribution.md`); not run in CI.
+- ICU: Node needs `usr/share/icu/<ver>/icudt<ver>l.dat` (packed in `share.tgz`; `RuntimeInstaller.environment()`
+  sets `NODE_ICU_DATA` to the one version folder), or `toLocaleString` throws and the backend dies at boot.
 
 ## On-device layout (`files/` = the app's files folder)
 

@@ -59,7 +59,7 @@ export const WARNING_COPY: Record<WarningKind, WarningCopy> = {
   'small-model': {
     title: 'About smaller models',
     body: [
-      'This is a smaller model. Smaller models cost less and can run on your own computer.',
+      'This is a smaller model. Smaller models cost less and can run on your own device.',
       'They also make more mistakes: they misread instructions more often and can damage files they were only meant to read.',
       'Start with work you can undo, and keep Ask mode on until you trust it.',
     ],

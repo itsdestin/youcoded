@@ -109,6 +109,7 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
   // keyboard path below opened the hint on every focus — so the press closed it and the focus reopened it, until
   // focus went somewhere else. Focus that a press caused is not the keyboard and opens nothing.
   const pressing = useRef(false);
+  const lastPointerAt = useRef(0);
   const id = useId();
 
   const child = React.Children.only(children) as React.ReactElement<Record<string, unknown>>;
@@ -225,6 +226,7 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
     },
     onPointerDown: (e: React.PointerEvent) => {
       pressing.current = true;
+      lastPointerAt.current = Date.now();
       if (e.pointerType === 'mouse') {
         // Clicking the thing is an answer in itself; the hint gets out of the way.
         close();
@@ -260,7 +262,15 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
       cancelTimer();
     },
     // Keyboard reaches the hint the same way it reaches everything else — but only the keyboard (see `pressing`).
-    onFocus: () => { if (armed && !pressing.current) setOpen(true); },
+    // WHY the extra checks (2026-11-01 phone test + the owner's touchscreen laptop): on a TAP the browser replays
+    // mouse events AFTER pointerup, so focus lands when `pressing` is already false and the hint opened and stayed
+    // ("Menu" floating over everything). Focus that follows a recent pointer press is never the keyboard, and
+    // `:focus-visible` is false for it.
+    onFocus: () => {
+      if (!armed || pressing.current) return;
+      if (Date.now() - lastPointerAt.current < 1000) return;
+      setOpen(true);
+    },
     onBlur: close,
   };
 

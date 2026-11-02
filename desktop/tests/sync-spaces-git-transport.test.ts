@@ -46,6 +46,30 @@ async function makeHarness(): Promise<TransportHarness> {
 describeTransportContract('GitTransport', makeHarness);
 
 describe('GitTransport specifics', () => {
+  // WHY: the phone's git has an empty template folder, so `git init` makes no info/ and sync died with ENOENT.
+  it('init works when git creates no info/ folder (the phone)', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-gt-noinfo-'));
+    const empty = path.join(tmp, 'empty-templates'); fs.mkdirSync(empty);
+    const root = path.join(tmp, 'space'); fs.mkdirSync(root);
+    const before = process.env.GIT_TEMPLATE_DIR;
+    process.env.GIT_TEMPLATE_DIR = empty;
+    try {
+      const transport = new GitTransport({ deviceName: 'Phone' });
+      const space: SyncSpace = { id: 'project:noinfo', kind: 'project', root };
+      await transport.init(space);
+      const gd = (transport as any).gitDir(space);
+      expect(fs.readFileSync(path.join(gd, 'info', 'attributes'), 'utf8')).toBe('* -text\n');
+      expect(fs.existsSync(path.join(gd, 'info', 'exclude'))).toBe(true);
+      // a repo made earlier without info/ heals on the next init
+      fs.rmSync(path.join(gd, 'info'), { recursive: true });
+      await transport.init(space);
+      expect(fs.existsSync(path.join(gd, 'info', 'exclude'))).toBe(true);
+    } finally {
+      if (before === undefined) delete process.env.GIT_TEMPLATE_DIR; else process.env.GIT_TEMPLATE_DIR = before;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('oversize files are excluded from sync and reported', async () => {
     const h = await makeHarness();
     const a = await h.makeDeviceSpace();

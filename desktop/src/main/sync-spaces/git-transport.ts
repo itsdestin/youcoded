@@ -429,11 +429,17 @@ export class GitTransport implements SyncTransport {
       // Windows checkout — a sync tool must never rewrite the user's line endings.
       // Set via repo-local info/attributes (never a .gitattributes in the user's tree).
       await this.git(space, ['config', 'core.autocrlf', 'false']);
-      fs.writeFileSync(path.join(gd, 'info', 'attributes'), '* -text\n');
+      // WHY: the phone's git is built with an empty template folder, so `git init` leaves no info/ and the
+      // writes below failed with ENOENT ("Couldn't sync" on Android). Desktop git makes it; make it here too.
+      await fs.promises.mkdir(path.join(gd, 'info'), { recursive: true });
+      await fs.promises.writeFile(path.join(gd, 'info', 'attributes'), '* -text\n');
     }
     // info/exclude is OURS (rewritten on every init so ignore updates roll out).
     // The user's own .gitignore still applies on top for their repo, not ours.
-    fs.writeFileSync(path.join(gd, 'info', 'exclude'), DEFAULT_IGNORES.join('\n') + '\n');
+    // WHY: also covers repos created earlier on a phone, where info/ never existed.
+    // (async: init runs on the main process, which must never block — main-blocking-calls.test.ts)
+    await fs.promises.mkdir(path.join(gd, 'info'), { recursive: true });
+    await fs.promises.writeFile(path.join(gd, 'info', 'exclude'), DEFAULT_IGNORES.join('\n') + '\n');
   }
 
   async hasRemote(space: SyncSpace): Promise<boolean> {
@@ -581,6 +587,8 @@ export class GitTransport implements SyncTransport {
       // that grew past the cap is re-staged by `git add -A` on every sync, and
       // an unconditional append grew info/exclude without bound at poll cadence.
       const excludePath = path.join(this.gitDir(space), 'info', 'exclude');
+      // WHY: same as init() - info/ may not exist on a phone-created repo.
+      await fs.promises.mkdir(path.dirname(excludePath), { recursive: true });
       // WHY a per-file queue (review 2026-10-22): the read and the append are separated by an await
       // now, so two overlapping calls for one space could both see "line missing" and both append it.
       // Running them one at a time restores the old read-then-append atomicity within this process.

@@ -1,9 +1,9 @@
-// fake-party.ts — Task 7c. Workbench-only stand-in for the PartyKit Connect
-// Four room (partykit/src/connect-four-room.ts), so the game is playable in a
+// fake-party.ts — Task 7c. Workbench-only stand-in for the Connect
+// Four room (wecoded-marketplace worker/src/games/relay-room.ts), so the game is playable in a
 // browser tab with no socket, no server, and no Destin-facing network call.
 //
 // WHY this exists: the real client (party-client.ts) wraps `partysocket`,
-// which tries to open a real WebSocket to youcoded-games.itsdestin.partykit.dev.
+// which tries to open a real WebSocket to api.youcoded.ai.
 // The workbench never opens sockets (see dev-workbench design spec §2), so the
 // panel sat on "Connecting…" forever. This file speaks the SAME wire protocol
 // the real room does — `{type:'player-joined', username}` and

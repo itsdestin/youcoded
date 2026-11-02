@@ -69,6 +69,35 @@ export function isTouchDevice(): boolean {
   return getPlatform() === 'android' || getPlatform() === 'browser'
 }
 
+/** The word for the device the app's own work happens on: "phone" in the Android app running its own on-phone
+ *  backend, "computer" everywhere else (desktop, a remote browser, or a phone paired to a computer — there the
+ *  work really is on the computer). WHY: phone users read "this computer" as wrong/confusing (2026-11-01 test, #10).
+ *  Read at call time (never cache at import: connection mode changes). */
+export function deviceNoun(): 'phone' | 'computer' {
+  return getPlatform() === 'android' && _connectionMode === 'local' ? 'phone' : 'computer'
+}
+
+/** Which Platform a page adopts once its backend has said hello (remote-shim's auth:ok).
+ *
+ *  WHY this lives here and is pure: the Android app's page is a file:// page that starts as 'android'. The handshake
+ *  used to overwrite that with 'browser' (a rule meant for a phone's plain web browser reaching a computer), so the
+ *  real app showed DESKTOP settings and screens (2026-11-01 phone test, finding 6). The test pins every case.
+ *  - Android app (file:// page): ALWAYS stays 'android' — talking to its own phone backend or to a paired computer.
+ *  - Phone web browser (touch-first, http): 'browser', whatever the computer says.
+ *  - Mouse-first browser: whatever the computer says, defaulting to 'browser'.
+ *  - A reconnect-in-progress from the Android app (preserve) keeps what it has. */
+export function platformAfterHandshake(input: {
+  current: string | undefined
+  isFilePage: boolean
+  preserve: boolean
+  touchFirst: boolean
+  hostPlatform?: string
+}): string | undefined {
+  if (input.isFilePage && input.current === 'android') return 'android'
+  if (input.preserve) return input.current
+  return input.touchFirst ? 'browser' : (input.hostPlatform || 'browser')
+}
+
 // ─── What this screen can do (capabilities) ──────────────────────────────────
 
 /** What this screen can do, as the host said it. Read on every call (never cache it at import): the Android app's answer

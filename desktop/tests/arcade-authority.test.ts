@@ -58,7 +58,7 @@ describe('the game slot', () => {
 
   it("keeps Connect 4's wire id and party name distinct", () => {
     // The shipped wire value is 'connect-four' (usePartyGame.ts) while the
-    // PartyKit party is spelled 'connectfour' (partykit.json). Collapsing these
+    // PartyKit party is spelled 'connectfour' (the Worker's CONNECTFOUR room). Collapsing these
     // into one field silently breaks every existing client.
     const c4 = gameById('connect-four')!;
     expect(c4.party).toBe('connectfour');

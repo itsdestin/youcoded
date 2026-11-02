@@ -40,16 +40,6 @@ updates:
       - dependency-name: "electron-builder"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
-  # ---- PartyKit multiplayer server ----
-  - package-ecosystem: "npm"
-    directory: "/desktop/partykit"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      partykit-minor-patch:
-        update-types: ["minor", "patch"]
-
   # ---- Android (Gradle) ----
   # ONE entry at root. Dependabot resolves the whole multi-project build from "/"
   # (root plugins in build.gradle.kts + app libraries in app/build.gradle.kts via

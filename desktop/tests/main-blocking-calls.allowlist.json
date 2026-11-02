@@ -562,7 +562,6 @@
     {"file": "sync-spaces/git-transport.ts", "fn": "GitTransport.freeCopyName", "call": "fs.existsSync", "count": 1},
     {"file": "sync-spaces/git-transport.ts", "fn": "GitTransport.init", "call": "fs.existsSync", "count": 1},
     {"file": "sync-spaces/git-transport.ts", "fn": "GitTransport.init", "call": "fs.mkdirSync", "count": 1},
-    {"file": "sync-spaces/git-transport.ts", "fn": "GitTransport.init", "call": "fs.writeFileSync", "count": 2},
     {"file": "sync-spaces/git-transport.ts", "fn": "GitTransport.maybeGc", "call": "fs.mkdirSync", "count": 1},
     {"file": "sync-spaces/git-transport.ts", "fn": "GitTransport.maybeGc", "call": "fs.readFileSync", "count": 1},
     {"file": "sync-spaces/git-transport.ts", "fn": "GitTransport.maybeGc", "call": "fs.writeFileSync", "count": 1},

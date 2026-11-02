@@ -75,6 +75,20 @@ def install(cache, destination, evidence, branch, roots):
     indexes = {repo: digest(cache / f'{repo}.idx') for repo in ('main', 'community')}
     if old and (old['indexes'] != indexes or old['roots'] != roots):
         raise ValueError('Cached input lock differs; use a fresh YOUCODED_RUNTIME_CACHE, do not overwrite release evidence')
+    # WHY: reproducible builds. Alpine's index only lists the newest build of each package, so an
+    # unlocked build silently drifts (Node went 24.18 -> 24.22 between two phone tests). When the
+    # build points at the committed lock (alpine-lock.json), any version or file-hash difference stops
+    # the build and names the fix: run app/runtime/update-pins.py, then test on a phone.
+    lock_file = os.environ.get('YOUCODED_ALPINE_LOCK')
+    locked = json.loads(Path(lock_file).read_text()) if lock_file else None
+    if locked:
+        if locked.get('branch') != branch:
+            raise ValueError(f"alpine-lock.json is for {locked.get('branch')}, build uses {branch}; run update-pins.py")
+        for index in resolution['packages']:
+            entry = locked['packages'].get(index['P'])
+            if not entry or entry['version'] != index['V']:
+                raise ValueError(f"{index['P']} {index['V']} differs from alpine-lock.json "
+                                 f"({entry['version'] if entry else 'not listed'}); run app/runtime/update-pins.py and test on a phone")
     destination.mkdir(parents=True, exist_ok=True)
     for index in resolution['packages']:
         name, version, repo = index['P'], index['V'], index['repo']
@@ -86,6 +100,8 @@ def install(cache, destination, evidence, branch, roots):
             urllib.request.urlretrieve(url, temporary)
             temporary.replace(apk)
         sha = digest(apk)
+        if locked and locked['packages'][name]['sha256'] != sha:
+            raise ValueError(f'{name} {version} file differs from alpine-lock.json (changed upstream?); run update-pins.py')
         if old:
             previous = next((p for p in old['packages'] if p['name'] == name), None)
             if not previous or previous['sha256'] != sha:

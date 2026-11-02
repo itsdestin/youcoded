@@ -95,15 +95,23 @@ and **2048** are solo and never touch the network to be playable.
   "31 pipes" and "12,480" are the registry's words. Guarded by
   `tests/arcade-authority.test.ts` and the `arcade-*` ast-grep rules
   (`scripts/ast-grep/rules/` in the workspace).
-- **PartyKit server:** `partykit/` — `connectfour` → `src/connect-four-room.ts`,
-  `chess` → `src/chess-room.ts`. Both are **relays that know no rules**; each
-  client re-validates every incoming move (chess.js lives in the renderer, not in
-  the party). Those two are the ONLY parties any client connects to
+- **Game rooms live in the marketplace Worker** (moved 2026-11-01 — hosted
+  PartyKit shut down 2026-10-23 and deleted its projects; `desktop/partykit/` is
+  gone). `wecoded-marketplace/worker/src/games/relay-room.ts` holds `ConnectFourRoom`
+  and `ChessRoom` (Durable Objects built with the `partyserver` package). Both are
+  **relays that know no rules**; each client re-validates every incoming move
+  (chess.js lives in the renderer). They are the ONLY parties any client connects to
   (`party: 'connectfour'` / `party: 'chess'`).
-  - `src/lobby-room.ts` is still `main` in `partykit.json` but **nothing in the
-    app connects to it** — presence and challenges moved to the marketplace
-    Worker's presence Durable Object. Treat it as legacy, not as the lobby.
-  - Deploy: `cd partykit && npx partykit deploy` · Dev: `npx partykit dev` (:1999)
+  - URL: `wss://api.youcoded.ai/parties/<connectfour|chess>/<room>?username=…`
+    (`party-client.ts` `PARTYKIT_HOST`, overridable with `VITE_PARTYKIT_HOST`;
+    partysocket's default `/parties/` prefix matches the Worker). The party name
+    comes from the Worker binding name (`CONNECTFOUR` → `connectfour`) — renaming a
+    binding breaks every client.
+  - A plain GET to a room answers 404 "Not implemented" (websocket-only);
+    `test-engine/services-watch.mjs` treats exactly that as healthy.
+  - Deploy: automatic with the Worker (marketplace repo master). **Builds older
+    than this change still point at the dead `youcoded-games.itsdestin.partykit.dev`
+    host — online matches stay broken there until the user updates.**
 - **Presence, challenges and head-to-head:** `src/renderer/hooks/usePresence.ts`
   against the Worker's `presence-room.ts` DO. (`usePartyLobby.ts` is deleted.)
   A match becomes a permanent record only when BOTH players report and agree —

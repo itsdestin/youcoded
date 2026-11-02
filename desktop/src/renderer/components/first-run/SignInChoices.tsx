@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Button } from '../ui';
 import { ProviderIcon } from '../ProviderIcon';
+import { deviceNoun } from '../../platform';
 
 /**
  * The sign-in step, explained (first-run deck L-3, Destin 2026-10-04: "walk the users
@@ -61,7 +62,7 @@ function groups(chatGpt: boolean): Group[] {
       summary: 'Download a model and run it yourself.',
       facts: [
         { kind: 'cost', text: 'Free. Needs a few GB of space.' },
-        { kind: 'privacy', text: 'Nothing leaves your computer.' },
+        { kind: 'privacy', text: 'Nothing leaves this computer.' },
         { kind: 'good', text: 'Working offline. Slower and simpler than the big models.' },
       ],
       ways: [{ id: 'local', label: 'Use a local model' }],
@@ -172,8 +173,12 @@ function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) =
 }
 
 export function SignInChoices({ chatGpt, onPick }: { chatGpt: boolean; onPick: (w: WayIn) => void }) {
+  // WHY the local-model row is dropped on a phone: the phone cannot run a model (the old page spun on "Checking this
+  // computer…" forever), so offering it only leads to a dead end (2026-11-01 test, #11). A phone paired to a computer
+  // is not 'phone' here, so that case is unchanged.
   // `?signInPick=<kind>` is the workbench's photo switch for the second page; the real
   // app's address never carries it, so it always opens on the three rows.
   const pick = new URLSearchParams(location.search).get('signInPick') as Group['id'] | null;
-  return <Guided list={groups(chatGpt)} onPick={onPick} initial={pick} />;
+  const list = groups(chatGpt).filter((g) => !(g.id === 'local' && deviceNoun() === 'phone'));
+  return <Guided list={list} onPick={onPick} initial={pick} />;
 }

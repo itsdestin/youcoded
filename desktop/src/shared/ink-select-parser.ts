@@ -228,6 +228,13 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
   const clean = stripAnsi(screenText);
   const lines = clean.split('\n');
 
+  // WHY these two run first (2026-11-01, Android UX test): Claude Code's FIRST-RUN screens (theme picker, security notes) match none of the
+  // shapes below — the theme list is unnumbered with a "✔" in front of the cursor label and no "Enter to confirm" footer, and the security
+  // notes have no cursor at all — so a fresh install sat on "Initializing session…" while Claude Code waited on them. Each reader is strict
+  // and returns null when unsure, so a screen it does not recognise still falls through to the old readers and the old fallback.
+  const firstRun = parseThemePicker(lines) ?? parseSecurityNotes(lines);
+  if (firstRun) return firstRun;
+
   // Find the line with the ❯ selector (search bottom-up for the most recent)
   let selectorIdx = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -350,6 +357,125 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
     heading: readHeading(lines, promptTop, firstOptionLine, 0),
     dialog: hasFooterBelow(lines, lastOptionLine),
     signature: signatureOf(options),
+  };
+}
+
+export const THEME_PICKER_TITLE = 'Choose a Theme';
+const SECURITY_NOTES_TITLE = 'Security notes';
+
+/**
+ * Claude Code's theme picker ("Choose the text style that looks best with your terminal", CC 2.1.286+). Options are unnumbered; the row with the
+ * cursor reads "❯ ✔ Dark mode" (✔ = the current theme, which may sit on another row), every other row is indented to the same LABEL column.
+ * A code-diff preview and "Syntax theme: …" sit under the list. Both first run and /theme draw it.
+ * Refuses (null) when: the heading is not directly above the list, fewer than 3 rows, no dark+light mode rows (a truncated or wrapped list), a
+ * row below the list is a wrapped continuation, the cursor is on "New custom theme…" (a sub-flow we do not model), or Claude Code's message box
+ * (a "─" rule followed by a "❯" row) sits under the list — then it is only a quoted menu in the conversation.
+ */
+function parseThemePicker(lines: string[]): ParsedMenu | null {
+  const plain = lines.map((l) => stripAnsi(l).replace(/\s+$/, ''));
+  let cursor = -1;
+  for (let i = 0; i < plain.length; i++) {
+    // The cursor row, with the optional "✔ " current-theme mark before the label.
+    if (/^\s*[❯>]\s+(?:[✔✓]\s+)?\S/.test(plain[i]) && /(dark|light) mode|auto \(match terminal\)/i.test(plain[i])) { cursor = i; break; }
+  }
+  if (cursor < 0) return null;
+  const labelColOf = (l: string): number => {
+    const m = /^(\s*)(?:[❯>]\s+)?(?:[✔✓]\s+)?(?=\S)/.exec(l.replace(/^(\s*)[❯>]/, (_, sp) => sp + ' '));
+    return m ? m[0].length : -1;
+  };
+  const labelCol = labelColOf(plain[cursor]);
+  if (labelCol < 0) return null;
+  // A row of the list: its label starts at labelCol (a "✔ " mark sits in the two columns before it).
+  const rowLabel = (l: string): string | null => {
+    if (!l.trim() || /^\s*[╌─]+$/.test(l.trim())) return null;
+    const m = /^(\s*)([✔✓]\s+)?(\S.*)$/.exec(l.replace(/^(\s*)[❯>]/, (_, sp) => sp + ' '));
+    if (!m) return null;
+    return m[1].length + (m[2] ? m[2].length : 0) === labelCol ? m[3].trim() : null;
+  };
+  let first = cursor;
+  while (first - 1 >= 0 && rowLabel(plain[first - 1]) !== null && !/^\s*[❯>]/.test(plain[first - 1])) first--;
+  let last = cursor;
+  while (last + 1 < plain.length && rowLabel(plain[last + 1]) !== null && !/^\s*[❯>]/.test(plain[last + 1])) last++;
+
+  const labels: string[] = [];
+  for (let i = first; i <= last; i++) labels.push(rowLabel(plain[i])!);
+  if (labels.length < 3 || !labels.some((o) => /^dark mode/i.test(o)) || !labels.some((o) => /^light mode/i.test(o))) return null;
+  // The heading, which may wrap on a phone-width terminal: the few rows above the list, joined.
+  const above = plain.slice(Math.max(0, first - 5), first).join(' ').replace(/\s+/g, ' ').toLowerCase();
+  if (!above.includes('text style that looks best')) return null;
+  // A wrapped continuation of the last label (deeper indent, no rule) would mean a label was cut short.
+  const next = plain[last + 1];
+  if (next && next.trim() && !/^[╌─\s]+$/.test(next) && indentOf(next) > labelCol) return null;
+  // A live message box under the list = a quoted menu, not this dialog.
+  let sawRule = false;
+  for (let i = last + 1; i < plain.length; i++) {
+    const t = plain[i].trim();
+    if (PROMPT_BOUNDARY.test(t) && !/^[╌]+$/.test(t)) sawRule = true;
+    else if (sawRule && /^[❯>]/.test(t)) return null;
+  }
+  // "New custom theme…" opens a naming flow; it is not offered as a button, and a cursor parked on it is not readable.
+  const options = labels.filter((o) => !/^new custom theme/i.test(o));
+  const selectedIndex = cursor - first;
+  if (/^new custom theme/i.test(labels[selectedIndex])) return null;
+  if (options.length !== labels.length && !/^new custom theme/i.test(labels[labels.length - 1])) return null;
+  return {
+    id: 'menu_' + options.map((o) => o.slice(0, 10)).join('_').toLowerCase().replace(/[^a-z0-9_]/g, ''),
+    title: THEME_PICKER_TITLE,
+    options,
+    selectedIndex,
+    optionNumbers: options.map(() => null),
+    promptLines: [],
+    heading: 'Choose the text style that looks best with your terminal',
+    dialog: true,
+    signature: signatureOf(options),
+  };
+}
+
+/**
+ * Claude Code's first-run "Security notes:" screen ("1. Claude can make mistakes … 2. Due to prompt injection risks, only use it with code you
+ * trust … Press Enter to continue…"). No cursor and no options: Enter is the only answer, so it reads as a one-option menu "Continue" (the
+ * verified-answer driver then sends Enter alone). Needs BOTH the "Security notes" heading and the "Press Enter to continue" line as the last
+ * thing on screen; anything else is null.
+ */
+function parseSecurityNotes(lines: string[]): ParsedMenu | null {
+  const plain = lines.map((l) => stripAnsi(l).replace(/\s+$/, ''));
+  let end = plain.length - 1;
+  while (end >= 0 && !plain[end].trim()) end--;
+  // The prompt may wrap on a narrow terminal ("Press Enter to" / "continue…"): look at the last two rows.
+  const tail = plain.slice(Math.max(0, end - 1), end + 1).join(' ').replace(/\s+/g, ' ');
+  if (!/press enter to continue/i.test(tail)) return null;
+  let head = -1;
+  for (let i = end; i >= Math.max(0, end - 30); i--) {
+    if (/^\s*security notes:?\s*$/i.test(plain[i])) { head = i; break; }
+  }
+  if (head < 0) return null;
+  // Body = everything between the heading and the Enter line, as blocks split on blank rows. A numbered note keeps its title on its own line and
+  // its explanation (wrapped rows joined) under it — Claude Code's own wording, only re-flowed.
+  const body: string[] = [];
+  let block: string[] = [];
+  const flush = () => {
+    if (!block.length) return;
+    body.push(/^\d+\.\s/.test(block[0]) && block.length > 1 ? block[0] + '\n' + block.slice(1).join(' ') : block.join(' '));
+    block = [];
+  };
+  for (let i = head + 1; i <= end; i++) {
+    const t = plain[i].trim();
+    if (/press enter to/i.test(t) || /^continue…?$/i.test(t)) break;
+    if (!t) flush(); else block.push(t);
+  }
+  flush();
+  if (body.length === 0) return null;
+  return {
+    id: 'menu_securitynotes',
+    title: SECURITY_NOTES_TITLE,
+    options: ['Continue'],
+    selectedIndex: 0,
+    description: body.join('\n'),
+    optionNumbers: [null],
+    promptLines: [],
+    heading: 'Security notes:',
+    dialog: true,
+    signature: signatureOf(['Continue']),
   };
 }
 

@@ -2,10 +2,15 @@ import PartySocket from "partysocket";
 
 // Injected by Vite's `define` config when VITE_PARTYKIT_HOST is set;
 // falls back to the production URL at build time.
+// WHY api.youcoded.ai: hosted PartyKit shut down 2026-10-23. The Connect 4 and
+// Chess rooms now run inside the marketplace Worker, at
+// wss://api.youcoded.ai/parties/<connectfour|chess>/<room>. partysocket's
+// default URL prefix is already "parties", so no extra option is needed.
+// Builds from before this change still point at the dead PartyKit host.
 declare const __PARTYKIT_HOST__: string | undefined;
 const PARTYKIT_HOST =
   (typeof __PARTYKIT_HOST__ !== 'undefined' ? __PARTYKIT_HOST__ : null)
-  ?? "youcoded-games.itsdestin.partykit.dev";
+  ?? "api.youcoded.ai";
 
 // Structural subset of PartySocket (really: ReconnectingWebSocket) that this
 // file actually calls. The real PartySocket satisfies it automatically; a

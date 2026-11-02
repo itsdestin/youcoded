@@ -22,6 +22,9 @@ function toOnlineUser(u: ServerUser): OnlineUser {
   };
 }
 
+/** Gaps between re-asserting "connect" while the backend has said nothing at all; the last repeats. */
+const CONNECT_REASSERT_MS = [4_000, 8_000, 15_000, 30_000];
+
 /** Backoff for re-reading the incognito choice after a failed read; the last value repeats. */
 const INCOGNITO_READ_RETRY_MS = [2_000, 5_000, 15_000, 30_000];
 
@@ -96,6 +99,13 @@ export function usePresence(isLeader: boolean = true) {
     return () => { try { unsub?.(); } catch { /* already gone */ } };
   }, []);
 
+  // Counts events that prove the backend answered a connect (see the desired-state effect). A deliberate local
+  // disconnect does not count: it can arrive late, from the previous intent.
+  const liveEventsRef = useRef(0);
+  // After a remote reconnect the pushes sent during the drop are gone for good, so ask again (replays connected + roster).
+  const [reassertTick, setReassertTick] = useState(0);
+  useOnRemoteReconnect(() => setReassertTick(t => t + 1));
+
   // Desired-state effect: connect only when signed in, not incognito, and this
   // is the leader window. The platform layer owns the actual socket; we just
   // express intent. Connection-state + presence events (below) drive reducer
@@ -112,12 +122,30 @@ export function usePresence(isLeader: boolean = true) {
     const shouldConnect = signedIn && isLeader;
     // WHY the .catch (R4-1): presence belongs to the computer's own windows (the table refuses it for a phone), so on a phone the
     // call is answered "unsupported" and rejected. Nothing is wrong, so it must not surface as an unhandled error in the console.
-    if (shouldConnect) {
-      void window.claude.social.presenceConnect({ hidden: incognito }).catch(() => {});
-    } else {
+    if (!shouldConnect) {
       void window.claude.social.presenceDisconnect().catch(() => {});
+      return;
     }
-  }, [signedIn, incognito, incognitoLoaded, isLeader]);
+    // WHY connect is re-asserted until the backend says SOMETHING (2026-11-01 phone: Games stuck on "Connecting…" forever, yet a
+    // hand-typed presenceConnect afterwards connected at once): this used to be one fire-and-forget call. On a phone that call
+    // travels over the page's own socket to the backend, and presence events come back as pushes, which are not queued — a call
+    // or a push lost while that socket was (re)connecting at startup left nothing to ask again, and the only way out was a second
+    // call, whose replay of {connected} + the roster is exactly what the hand-typed one produced. Asking again is safe: the backend
+    // treats a connect on an open socket as "replay the current state". Any live event (connected, roster, error, a drop, a
+    // hidden-mode notice) proves the backend heard us, and its own reconnect backoff takes over.
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const heardAtStart = liveEventsRef.current;
+    const attempt = (n: number) => {
+      void window.claude.social.presenceConnect({ hidden: incognito }).catch(() => {});
+      timer = setTimeout(() => {
+        if (!alive || liveEventsRef.current !== heardAtStart) return;
+        attempt(n + 1);
+      }, CONNECT_REASSERT_MS[Math.min(n, CONNECT_REASSERT_MS.length - 1)]);
+    };
+    attempt(0);
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+  }, [signedIn, incognito, incognitoLoaded, isLeader, reassertTick]);
 
   // Read by the send helpers below without re-creating them on every toggle.
   const incognitoRef = useRef(incognito);
@@ -128,6 +156,7 @@ export function usePresence(isLeader: boolean = true) {
   useEffect(() => {
     const unsub = window.claude.social.onPresenceEvent((ev) => {
       const e = ev as any;
+      if (!(ev.type === 'disconnected' && e.reason === 'local')) liveEventsRef.current++;
       switch (ev.type) {
         case 'connected':
           dispatch({ type: 'PARTY_CONNECTED', username: nameRef.current });

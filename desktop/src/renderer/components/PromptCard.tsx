@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InteractivePrompt } from '../state/chat-types';
-import { TRUST_PROMPT_TITLE } from '../../shared/ink-select-parser';
+import { TRUST_PROMPT_TITLE, THEME_PICKER_TITLE } from '../../shared/ink-select-parser';
 import { CheckIcon } from './Icons';
 import { Button, ButtonVariant } from './ui/Button';
 import { isAndroid } from '../platform';
+import { useTheme } from '../state/theme-context';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useCardKeysLive } from '../state/card-keys-context';
 import { usePopupOpen } from '../hooks/use-esc-close';
@@ -89,7 +90,18 @@ function shortcutOf(button: PromptCardButton): string | null {
  */
 export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortcuts = true }: Props) {
   const buttons = prompt.buttons;
-  const defIdx = useMemo(() => defaultIndex(buttons, prompt.defaultIndex), [buttons, prompt.defaultIndex]);
+  // WHY (2026-11-01): on Claude Code's first-run theme picker the card starts on the plain "Dark mode" / "Light mode" row that matches the
+  // app's own look, instead of wherever Claude Code's cursor happens to sit — the owner asked for the app theme as the sensible default.
+  // Only a nudge to which button is highlighted; nothing is sent until the user presses one.
+  const appIsDark = useTheme().activeTheme?.dark;
+  const defIdx = useMemo(() => {
+    if (prompt.title === THEME_PICKER_TITLE && typeof appIsDark === 'boolean') {
+      const want = appIsDark ? /^dark mode$/i : /^light mode$/i;
+      const i = buttons.findIndex((b) => want.test(b.label.trim()));
+      if (i >= 0) return i;
+    }
+    return defaultIndex(buttons, prompt.defaultIndex);
+  }, [buttons, prompt.defaultIndex, prompt.title, appIsDark]);
   const [focusIdx, setFocusIdx] = useState(defIdx);
   // Index of a sticky button awaiting its second click, or -1.
   const [confirmIdx, setConfirmIdx] = useState(-1);
@@ -224,7 +236,7 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
           {/* Description — the prompt's OWN body text. The parser bounds it to
               CC's prompt box, so replayed transcript output can't leak in here */}
           {prompt.description && (
-            <div className="px-3 py-1.5 text-xs text-fg-dim leading-relaxed border-t border-edge">
+            <div className="px-3 py-1.5 text-xs text-fg-dim leading-relaxed border-t border-edge whitespace-pre-line">
               {prompt.description}
             </div>
           )}

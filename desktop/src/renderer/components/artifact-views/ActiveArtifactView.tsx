@@ -585,6 +585,46 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     return false;
   }, [office, absolutePath, projectRoot, projectId, projectName, artifact.id, draft, sessionId, onContentChange, onDiskRead, tier, content, contentInfo, conflict]);
 
+  // Ticking a task-list checkbox in the reading view (MarkdownView → onToggleTask): save the file with that one item
+  // changed. WHY it re-reads the disk first and refuses on any difference: the reading view holds no concurrency token,
+  // and a tick must never overwrite a newer version (same rule as handleSave's no-token path). On any refusal the
+  // viewer is refreshed to what is on disk and the reason is shown, so the box never lies about what was saved.
+  const handleToggleTask = useCallback(async (next: string) => {
+    if (office || editing || content === null || conflict || next === content) return;
+    if (!canEditArtifact(contentInfo, content, tier) || tier === 'needs-confirm') return;
+    let disk: any = null;
+    try { disk = await (window.claude as any).artifacts.get(projectRoot, artifact.id); } catch { disk = null; }
+    if (!disk || !disk.ok || disk.orphan || typeof disk.mtimeMs !== 'number') {
+      setSaveError("YouCoded couldn't check this file before saving, so the checkbox wasn't saved. Try again.");
+      return;
+    }
+    if ((disk.content ?? '') !== content) {
+      // Changed since it was drawn: show the new version instead and let the person tick again.
+      if (onDiskRead) onDiskRead(disk); else onContentChange(disk.content ?? '');
+      setSaveError('This file changed while you had it open, so the checkbox wasn\'t saved. It now shows the latest version.');
+      return;
+    }
+    const res = await (window.claude as any).artifacts.save(projectRoot, projectId, projectName, artifact.id, next, sessionId, { baseMtimeMs: disk.mtimeMs });
+    if (res && res.ok) {
+      if (typeof res.mtimeMs === 'number') mtimeRef.current = res.mtimeMs;
+      setSaveError(null);
+      if (onDiskRead) {
+        onDiskRead({ ok: true, content: next, binary: false, truncated: false,
+                     sizeBytes: new TextEncoder().encode(next).length, mtimeMs: res.mtimeMs });
+      } else {
+        onContentChange(next);
+      }
+      return;
+    }
+    if (res && res.error === 'conflict') {
+      const again = await (window.claude as any).artifacts.get(projectRoot, artifact.id);
+      if (again && again.ok && !again.orphan) { if (onDiskRead) onDiskRead(again); else onContentChange(again.content ?? ''); }
+      setSaveError('This file changed while you had it open, so the checkbox wasn\'t saved. It now shows the latest version.');
+      return;
+    }
+    setSaveError(saveErrorMessage(res));
+  }, [office, editing, content, conflict, contentInfo, tier, projectRoot, projectId, projectName, artifact.id, sessionId, onDiskRead, onContentChange]);
+
   const handleCancel = useCallback(() => {
     clearDraft(draftKey(projectRoot, artifact.id));
     setDraft(content ?? '');
@@ -1016,6 +1056,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
               onDraftChange={changeDraft}
               onStartEdit={handleStartEdit}
               onSaveEdit={handleSave}
+              onToggleTask={isEditable ? handleToggleTask : undefined}
               onCancelEdit={handleCancel}
               hideControls={controlsInHeader}
               findBarOpen={findBarOpen}

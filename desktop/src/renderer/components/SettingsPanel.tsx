@@ -7,7 +7,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { RemoteAccessView, RemoteAccessAction, RemoteAccessPreview } from './remote/preview-types';
 import { QRCodeSVG } from 'qrcode.react';
-import { isAndroid, useCurrentPlatform } from '../platform';
+import { isAndroid, isTouchDevice, useCurrentPlatform } from '../platform';
 import ThemeScreen from './ThemeScreen';
 import SyncSection from './SyncPanel';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
@@ -3086,7 +3086,9 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
         {/* The Browser's settings are a page of Assistant settings (Destin, 2026-10-15). */}
         <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
-        <BuddyButton />
+        {/* WHY hidden on a phone's web browser: the buddy floater is a separate always-on-top computer window; a
+            touch screen has nothing to float it over (Android hides it too). Settings here are the host's, but this row can't act. */}
+        {!isTouchDevice() && <BuddyButton />}
 
         <SoundButton />
 
@@ -3158,7 +3160,9 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
         <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
         <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
 
-        {/* Keyboard Shortcuts */}
+        {/* WHY hidden on touch screens (phone browser): no physical keyboard, so a hotkey list is noise. Android's own
+            settings already omit it; this keeps both phones consistent. */}
+        {!isTouchDevice() && (<>
         <SettingRow
           icon={
             <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
@@ -3171,6 +3175,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onClick={() => setShowShortcuts(true)}
         />
         <ShortcutsPopup open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+        </>)}
 
         <SettingRow
           icon={

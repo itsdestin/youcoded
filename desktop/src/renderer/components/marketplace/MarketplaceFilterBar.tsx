@@ -135,6 +135,12 @@ export default function MarketplaceFilterBar({ value, onChange }: Props) {
             onToggleFilter={() => setSheetOpen(true)}
             filterLabel="Filters"
           />
+          {/* WHY a type row right under the search on a phone (2026-11-01, #20; owner: "like a Play Store"): Themes and the other
+              kinds used to hide inside Filters, off-screen in a sideways row. Here they are one swipe away, and the picked one is
+              scrolled into view. The Filters sheet still holds everything. */}
+          <div className="scroll-mask scroll-mask--chips w-full overflow-x-auto mt-2 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <TypeRow tabs={typeTabs} value={value.type ?? "all"} onChange={setTypeTab} />
+          </div>
         </div>
         {sheetOpen && (
           <FilterSheet
@@ -241,14 +247,15 @@ function FilterSheet({
             {/* P-1 #1: same pick-one switch as the wide bar. Seven segments do
                 not fit a phone — the row scrolls sideways INSIDE the sheet's
                 padding (round 1 bled past the edge, which read as a bug). */}
-            <div className="scroll-mask scroll-mask--chips w-full overflow-x-auto">
-              <SegmentedTabs
-                variant="pill"
-                tabs={typeTabs}
-                value={value.type ?? "all"}
-                onChange={setTypeTab}
-                aria-label="Type"
-              />
+            {/* WHY wrapped buttons instead of the sideways row (2026-11-01): Themes sat past the right edge on a phone and was
+                easy to miss. Wrapping shows every kind at once. */}
+            <div role="group" aria-label="Type" className="flex flex-wrap gap-2 !w-full">
+              {typeTabs.map((t) => (
+                <Button key={t.id} type="button" size="sm" variant={(value.type ?? "all") === t.id ? "primary" : "secondary"}
+                  aria-pressed={(value.type ?? "all") === t.id} onClick={() => setTypeTab(t.id)} className="!w-auto">
+                  {t.label}
+                </Button>
+              ))}
             </div>
           </SheetGroup>
           <SheetGroup label="Vibe">
@@ -280,6 +287,21 @@ function SheetGroup({ label, children }: { label: string; children: React.ReactN
     <div className="flex flex-col gap-2">
       <SectionLabel>{label}</SectionLabel>
       <div className="flex flex-wrap gap-2 [&>*]:w-full [&>*]:min-w-0">{children}</div>
+    </div>
+  );
+}
+
+// The pill switch, with the picked segment brought into view when it is off-screen (a phone's row scrolls sideways).
+function TypeRow({ tabs, value, onChange }: { tabs: ReturnType<typeof useTypeTabs>; value: string; onChange(id: string): void }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    // Reaches the active segment (the pill marks it aria-selected); a no-op where scrollIntoView is missing (tests).
+    const el = ref.current?.querySelector<HTMLElement>('[aria-selected="true"],[aria-pressed="true"]');
+    el?.scrollIntoView?.({ inline: "center", block: "nearest" });
+  }, [value]);
+  return (
+    <div ref={ref} className="w-max min-w-full">
+      <SegmentedTabs variant="pill" tabs={tabs} value={value} onChange={onChange} aria-label="Type" />
     </div>
   );
 }

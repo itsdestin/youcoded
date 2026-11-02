@@ -236,3 +236,33 @@ describe('usePresence on a phone', () => {
     expect(connect.calls[0]).toHaveBeenCalled();
   });
 });
+
+// WHY (2026-11-01 phone: Games stuck on "Connecting…" until a hand-typed presenceConnect): the one fire-and-forget call could be
+// lost while the phone's page socket was still settling, and nothing asked again.
+describe('usePresence — connect is re-asserted until the backend answers', () => {
+  it('asks again when the first connect gets no answer, and stops once an event arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const connect = vi.fn().mockRejectedValueOnce(new Error('not ready')).mockResolvedValue({ ok: true });
+      (window as any).claude.social = makeSocial({ presenceConnect: connect });
+      renderHook(() => usePresence());
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(connect).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(4_100); });
+      expect(connect).toHaveBeenCalledTimes(2);
+      act(() => eventCb({ type: 'connected' }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(connect).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('asks again after the page socket reconnects (pushes sent during the drop are gone)', async () => {
+    const { REMOTE_RECONNECTED_EVENT } = await import('../src/renderer/remote-events');
+    renderHook(() => usePresence());
+    const connect = (window as any).claude.social.presenceConnect as ReturnType<typeof vi.fn>;
+    await waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
+    act(() => eventCb({ type: 'connected' }));
+    act(() => { window.dispatchEvent(new CustomEvent(REMOTE_RECONNECTED_EVENT)); });
+    await waitFor(() => expect(connect).toHaveBeenCalledTimes(2));
+  });
+});
