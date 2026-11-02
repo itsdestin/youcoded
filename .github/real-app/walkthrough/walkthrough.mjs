@@ -284,6 +284,14 @@ try {
     await page.keyboard.press('Escape');
   }, { critical: false });
 
+  await step('open-file', 'Clicking the file in the chat opens it in the file viewer showing its contents', async () => {
+    await page.getByRole('button', { name: WORDS.tipGotIt }).click({ timeout: 2_000 }).catch(() => {});
+    await page.getByText('walkthrough-check.txt', { exact: true }).first().click();
+    await page.getByText('mango', { exact: true }).first().waitFor({ timeout: 30_000 });
+    // EXPLORING (temporary): what the viewer offers, to write the edit-and-save step from.
+    console.log(`      viewer: ${JSON.stringify(await seen()).slice(0, 1500)}`);
+  }, { critical: false });
+
   await step('close-chat', 'The user closes the chat', async () => {
     // "All sessions" (the arrow beside the chat's name), then the chat row's close ✕. WHY by position: neither
     // button has a name of its own until hovered (their tooltips name them only then), so a screen reader can't
