@@ -750,22 +750,43 @@ function extractDescription(
   title: string,
   bodyStart = Math.max(0, firstOptionLine - 15),
 ): string | undefined {
+  // WHY line breaks (2026-11-01 phone test): every row used to be joined with a space, so the trust
+  // card read as one run-on block ("…/Trust two Quick safety check: Is this…"). Claude Code's own
+  // paragraphs are kept: a blank row starts a new paragraph — but on a narrow (phone) terminal Claude
+  // Code draws NO blank rows (recorded: tests/fixtures/startup-dialogs/*-50x30), so a row also starts
+  // a new line when the one before ended a sentence or a label (. ? ! ) :) and it starts with a
+  // capital, and a folder path keeps its own line (its wrapped lowercase tail stays with it).
+  // Anything else is a wrapped continuation, joined with a space as before. The card draws "\n".
   const descLines: string[] = [];
+  let breakNext = false;
+  let prev = '';
+  let inPath = false;
 
   for (let i = bodyStart; i < firstOptionLine; i++) {
     const clean = stripAnsi(lines[i]).trim();
-    if (!clean) continue;
+    if (!clean) { if (descLines.length) breakNext = true; continue; }
     // Skip side borders and short decorative runs inside the box
     if (/^[─┌┐└┘│╭╮╯╰┬┴├┤┼╔╗╚╝║═━]+$/.test(clean)) continue;
     // Skip the line that became the title (avoid duplication)
     if (clean.replace(/[:?]$/, '').trim() === title.replace(/[:?]$/, '').trim()) continue;
     // Skip footer instructions (e.g., "Enter to confirm - Esc to cancel")
     if (/enter to confirm/i.test(clean)) continue;
+    const isPathStart = /^(\/|~\/|[A-Za-z]:\\)/.test(clean);
+    const startsCapital = /^[A-Z]/.test(clean);
+    let sep = ' ';
+    if (breakNext) sep = '\n\n';
+    else if (/:$/.test(prev) || isPathStart) sep = '\n';
+    else if (inPath) sep = startsCapital ? '\n' : ' ';
+    else if (/[.?!):]$/.test(prev) && startsCapital) sep = '\n';
+    if (descLines.length) descLines.push(sep);
     descLines.push(clean);
+    inPath = isPathStart || (inPath && sep === ' ');
+    prev = clean;
+    breakNext = false;
   }
 
   if (descLines.length === 0) return undefined;
-  return descLines.join(' ');
+  return descLines.join('');
 }
 
 /**

@@ -288,7 +288,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
     .catch((e) => log('ERROR', 'Headless', 'SyncSpaces start failed', { error: String(e) }));
   try {
     const pr = getManagedRoots()?.personalRoot;
-    if (pr && machineIdentity) void upsertSelf(pr, { id: machineIdentity.id, platform: process.platform }).catch(() => {});
+    if (pr && machineIdentity) void upsertSelf(pr, { id: machineIdentity.id, platform: 'android' /* WHY: process.platform is the bundled Linux's "linux"; this backend only runs on phones */ }).catch(() => {});
     if (pr) sweepLegacyLeaseDir(pr);
   } catch { /* sync not configured */ }
   void startConversationStore({ pauseSweeps: true })

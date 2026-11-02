@@ -1216,7 +1216,7 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
       {questions.map((q, qi) => (
         <div key={qi}>
           <div className="text-xs font-medium text-fg-2 mb-1">
-            {q.header && <span className="text-fg-muted mr-1">{q.header}:</span>}
+            {q.header && <span className="text-fg-muted mr-1">{/[?:]$/.test(q.header) ? q.header : `${q.header}:`}</span>}
             {q.question}
           </div>
           <div className="space-y-1">

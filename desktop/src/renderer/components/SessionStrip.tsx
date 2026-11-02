@@ -470,7 +470,8 @@ export default function SessionStrip({
   // Launch the new session in its own peer window instead of this one.
   // Hidden on platforms without multi-window support (Android / remote-shim).
   const [launchInNewWindow, setLaunchInNewWindow] = useState(false);
-  const detachAvailable = typeof (window as any).claude?.detach?.openDetached === 'function';
+  // WHY nativeWindows too (2026-11-01 phone test): the remote shim defines openDetached as a no-op, so a phone offered "Launch in new window".
+  const detachAvailable = getCapabilities().nativeWindows && typeof (window as any).claude?.detach?.openDetached === 'function';
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);

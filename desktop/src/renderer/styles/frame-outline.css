@@ -62,3 +62,10 @@ body:not([data-chrome-style='floating']):not([data-chrome-style='float']):not([d
 body:not([data-chrome-style='floating']):not([data-chrome-style='float']):not([data-input-style='floating']) .screen-pane--panel {
   box-shadow: 0 0 0 1px var(--edge-card);
 }
+/* WHY (2026-11-01 phone test): on a phone the Pages list and the open page are two
+   full-width panes that slide past each other (PageHost). The one slid off screen is
+   marked `inert`, but its 1px ring sits just outside its box and peeked in as a thin
+   line along the screen's left edge. A pane slid away draws no ring. */
+.screen-pane[inert] {
+  box-shadow: none !important;
+}

@@ -1555,10 +1555,13 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         const severity = deriveWarningSeverity(syncWarnings ?? []);
         if (severity === null) return null;
         const isFailing = severity === 'failing';
-        const label = isFailing ? 'Sync failing' : 'Sync warning';
+        // WHY (2026-11-01 phone test): a user who never turned sync on was told "Sync failing" —
+        // nothing failed. When the only alarm is "No sync configured", say what is true.
+        const notSetUp = isFailing && (syncWarnings ?? []).every((w) => w.level !== 'danger' || w.code === 'PERSONAL_NOT_CONFIGURED');
+        const label = notSetUp ? 'Sync off' : isFailing ? 'Sync failing' : 'Sync warning';
         const styleClass = isFailing ? warnStyles.danger : warnStyles.warn;
         return (
-          <Tooltip text={isFailing ? 'Sync is failing — click for details' : 'Sync warnings — click for details'}>
+          <Tooltip text={notSetUp ? 'Nothing is backed up yet — click to set up sync' : isFailing ? 'Sync is failing — click for details' : 'Sync warnings — click for details'}>
           <button
             onClick={handler}
             className={`px-1.5 py-0.5 rounded-sm border text-4xs sm:text-3xs ${styleClass} ${handler ? 'cursor-pointer hover:brightness-125 transition-all' : ''}`}

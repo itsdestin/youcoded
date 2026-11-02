@@ -8,6 +8,8 @@
 // existing?); step 2 makes the sync decision explicit with its consequence.
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ImportProjectModal from '../ImportProjectModal';
+// WHY: "this computer" read wrong on a phone (2026-11-01 phone test); same wording helper as the settings sweep.
+import { deviceNoun } from '../../platform';
 import { plainMessage } from '../../utils/ipc-error';
 import { Button, Callout, CARD_LEVEL_1, Dialog, FieldError, InputGroup } from '../ui';
 
@@ -168,7 +170,7 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
 
             {/* Choice 2: existing folder → step 2 */}
             <button onClick={() => void pickExisting()} disabled={busy} className={CHOICE}>
-              <div className="text-sm-tight font-semibold text-fg">Use a folder already on this computer</div>
+              <div className="text-sm-tight font-semibold text-fg">Use a folder already on this {deviceNoun()}</div>
               <div className="mt-0.5 text-xs text-fg-dim">Pick any folder — you'll choose whether it syncs next.</div>
             </button>
           </>
@@ -176,7 +178,7 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
           <>
             <button onClick={() => void keepInPlace()} disabled={busy} className={CHOICE}>
               <div className="text-sm-tight font-semibold text-fg">Keep it where it is</div>
-              <div className="mt-0.5 text-xs text-fg-dim">Only on this computer. The folder doesn't move and nothing changes.</div>
+              <div className="mt-0.5 text-xs text-fg-dim">Only on this {deviceNoun()}. The folder doesn't move and nothing changes.</div>
             </button>
 
             <button

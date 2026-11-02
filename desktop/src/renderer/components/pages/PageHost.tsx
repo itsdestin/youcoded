@@ -590,6 +590,17 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         settingsDangerBadge={settingsDangerBadge}
         active={pageFocus ? null : 'pages'}
         onBack={backToChat}
+        // WHY in the band (2026-11-01 phone test): the list ↔ page switch floated over the page's
+        // top-left corner and covered its content (a page's approval card had the button on its
+        // corner). The band has room on a phone, so the one switch lives there for both directions.
+        extra={phoneLayout && asideShown && pageId !== null ? (
+          <Tooltip text={listOnTop ? 'Show the page' : 'Show the page list'} placement="bottom">
+            <Button size="icon-sm" variant="ghost" aria-label={listOnTop ? 'Show the page' : 'Show the page list'}
+              onClick={() => setPhoneListOpen(!listOnTop)} className="w-8 h-8">
+              <RailToggleGlyph collapsed={!listOnTop} />
+            </Button>
+          </Tooltip>
+        ) : undefined}
         // WHY icon for Pages home too (decisions "Full-screen titles", H-1: every full
         // screen's title carries its icon): an open page shows its own glyph; the
         // page list showed none.
@@ -621,14 +632,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           {/* WHY the phone classes: the list is a full-width screen that slides left when a page is shown (owner, 2026-11-01). `inert` while slid away so Tab/screen readers skip it. */}
           {/* WHY absolute when unfolded (Destin, 2026-10-20: "eliminate this empty space above Built in"):
               the toggle sits in the first group label's row instead of costing the list a row of its own. */}
-          {/* Phone: this button slides back to the open page (only when there is one). Desktop: folds the list to a rail. */}
-          {(!phoneLayout || pageId !== null) && (
+          {/* Desktop: folds the list to a rail. (Phone: the list ↔ page switch is in the band — see ScreenBand extra.) */}
+          {!phoneLayout && (
           <div className={!phoneLayout && railCollapsed ? 'flex items-center justify-center px-2 pt-2' : 'absolute top-3 right-3 z-10'}>
-            <Tooltip text={phoneLayout ? 'Show the page' : railCollapsed ? 'Show the page list' : 'Hide the page list'} placement="bottom">
-              <Button size="icon-sm" variant="ghost" aria-label={phoneLayout ? 'Show the page' : railCollapsed ? 'Show the page list' : 'Hide the page list'}
-                aria-expanded={phoneLayout ? undefined : !railCollapsed}
-                onClick={() => (phoneLayout ? setPhoneListOpen(false) : setRailCollapsed((c) => !c))} className="w-7 h-7">
-                <RailToggleGlyph collapsed={phoneLayout ? false : railCollapsed} />
+            <Tooltip text={railCollapsed ? 'Show the page list' : 'Hide the page list'} placement="bottom">
+              <Button size="icon-sm" variant="ghost" aria-label={railCollapsed ? 'Show the page list' : 'Hide the page list'}
+                aria-expanded={!railCollapsed}
+                onClick={() => setRailCollapsed((c) => !c)} className="w-7 h-7">
+                <RailToggleGlyph collapsed={railCollapsed} />
               </Button>
             </Tooltip>
           </div>
@@ -692,13 +703,6 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
             heavier frost (!important), which simply wins. Solid pages (plain theme, framed chrome, or the Appearance switch off) do not get the class: unchanged. Office's frame is this same pane, so it frosts too. */}
         <div inert={phoneLayout && listOnTop} className={`screen-pane screen-pane--frame ${phoneLayout ? 'w-full shrink-0 transition-transform duration-300 motion-reduce:transition-none' : 'relative flex-1 min-w-0'} rounded-xl overflow-hidden bg-canvas${seeThrough ? ' panel-glass' : ''}`}
           style={phoneLayout ? { transform: phoneSlide } : undefined}>
-          {/* Phone: the way back to the list from an open page (the list's own button slides forward again). */}
-          {phoneLayout && asideShown && !listOnTop && (
-            <Button size="icon-sm" variant="secondary" aria-label="Show the page list" onClick={() => setPhoneListOpen(true)}
-              className="absolute top-2 left-2 z-20 w-8 h-8">
-              <RailToggleGlyph collapsed />
-            </Button>
-          )}
           {/* First, so its place in the tree never changes whatever else shows (see officeKept). */}
           {(isOffice || officeKept) && (
             <div className={`absolute inset-0 ${open && isOffice ? '' : 'invisible pointer-events-none'}`} aria-hidden={open && isOffice ? undefined : true} inert={!(open && isOffice)}>

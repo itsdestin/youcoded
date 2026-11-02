@@ -932,7 +932,7 @@ function AppInner() {
   // multiple peer windows are open. When detach isn't available (remote
   // shim / Android), myWindowId stays null so isLeader is false — fall
   // back to true-by-default so the lobby still connects.
-  const lobbyLeader = (window as any).claude?.detach?.openDetached ? isLeader : true;
+  const lobbyLeader = getCapabilities().nativeWindows ? isLeader : true; // WHY nativeWindows (2026-11-01 phone: Games stuck "Connecting…"): the shim's no-op openDetached made the phone a non-leader that disconnected
   // Presence socket lives in the platform layer now (spec §3); usePresence
   // expresses desired state and maps relayed events onto the same reducer
   // actions the retired PartyKit lobby hook used. Same public API shape.
@@ -2596,7 +2596,7 @@ function AppInner() {
     });
     setSessionId((id) => id === tabId ? info.id : id);
     setViewModes((prev) => new Map(prev).set(info.id, 'chat'));
-    setPermissionModes((prev) => new Map(prev).set(info.id, matchPermissionMode(info.permissionMode)));
+    setPermissionModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(info.id, matchPermissionMode(info.permissionMode))); // WHY keep (2026-11-01): the footer's real mode may land first; overwriting it with the seeded 'normal' showed NORMAL until the first reply
     setSessionModels((prev) => new Map(prev).set(info.id, matchModelAlias(info.model)));
     if (info.provider === 'native') setInitializedSessions((prev) => new Set(prev).add(info.id));
     dispatch({ type: 'SESSION_INIT', sessionId: info.id });

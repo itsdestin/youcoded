@@ -544,6 +544,16 @@ html {
 .xterm {
   height: 100%;
 }
+/* WHY (2026-11-01 phone test): on a phone the terminal grid runs edge to edge inside the
+   frame, and the frame's 1px outline painted over the first column — "Quick" read "uick".
+   A little inner space on the left; xterm's fit step subtracts .xterm padding, so the
+   columns still fit. Phone width only (the 640px breakpoint); the float chrome keeps its
+   own padding (float-chrome.css, more specific). */
+@media (max-width: 639.98px) {
+  .terminal-overlay-scroll .xterm {
+    padding-left: 6px;
+  }
+}
 
 .xterm-viewport {
   height: 100% !important;

@@ -45,6 +45,8 @@ interface ProjectSwitcherProps {
 import { SearchIcon, PlusIcon, TrashIcon } from './icons';
 import { Button, CloseButton, Pill, SectionLabel } from '../ui';
 import { ScreenMark } from '../../shoot-mode';
+import { prefersTouchInput } from '../../utils/touch-input';
+import { isAndroid } from '../../platform';
 
 export function ProjectSwitcher({
   projects,
@@ -68,7 +70,10 @@ export function ProjectSwitcher({
 
   // Focus the search field on open. WHY: autoFocus inside an overlay can race the
   // mount/scrim; the ref pattern is reliable.
+  // Not on touch (2026-11-01 phone test): the on-screen keyboard jumped up and covered the
+  // project list on open, the same problem the command drawer and Resume had. Tap the field to type.
   useEffect(() => {
+    if (prefersTouchInput() || isAndroid()) return;
     inputRef.current?.focus();
   }, []);
 

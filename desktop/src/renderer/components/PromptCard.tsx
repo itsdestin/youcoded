@@ -215,7 +215,7 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
           <div className="border border-edge rounded-lg px-3 py-2 flex items-center gap-1.5">
             <CheckIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
             <span className="text-fg-faint text-xs select-none">|</span>
-            <span className="text-xs font-medium text-fg-2">{prompt.title}:</span>
+            <span className="text-xs font-medium text-fg-2">{/[?:]$/.test(prompt.title) ? prompt.title : `${prompt.title}:`}</span>{/* WHY: "Trust This Folder?:" (2026-11-01 phone test) — no colon after a question */}
             <span className="text-xs text-fg font-medium">{completed}</span>
           </div>
         </div>
@@ -242,7 +242,7 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
           {/* Description — the prompt's OWN body text. The parser bounds it to
               CC's prompt box, so replayed transcript output can't leak in here */}
           {prompt.description && (
-            <div className="px-3 py-1.5 text-xs text-fg-dim leading-relaxed border-t border-edge whitespace-pre-line">
+            <div className="px-3 py-1.5 text-xs text-fg-dim leading-relaxed border-t border-edge whitespace-pre-line break-words">
               {linkifyDescription(prompt.description)}
             </div>
           )}

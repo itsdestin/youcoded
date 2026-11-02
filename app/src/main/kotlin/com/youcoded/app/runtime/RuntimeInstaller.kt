@@ -1,6 +1,8 @@
 package com.youcoded.app.runtime
 
 import android.content.Context
+import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import java.io.File
 import java.io.InputStream
@@ -116,6 +118,10 @@ class RuntimeInstaller(private val context: Context) {
         // backend dies at boot. The version folder is found at runtime so an Alpine upgrade needs no code change.
         File(usr, "share/icu").listFiles { f -> f.isDirectory }?.singleOrNull()?.let { put("NODE_ICU_DATA", it.path) }
         put("YOUCODED_USER_DATA", userData.path)
+        // WHY: the bundled Linux's hostname is always "localhost", so the phone listed itself as
+        // "localhost" in Backup & sync's device list. Hand the backend the phone's own name (the one
+        // set in the phone's settings, else its model, e.g. "Galaxy Z Flip7"; device-registry.ts).
+        put("YOUCODED_DEVICE_NAME", phoneName())
         // The backend's search tool uses the bundled rg (desktop harness/tools/grep.ts).
         put("YOUCODED_RG_PATH", File(bin, "rg").path)
         // Links Claude Code opens (sign-in) go to the app: usr/bin/xdg-open is yc-open (app/runtime/yc-open.c).
@@ -123,6 +129,15 @@ class RuntimeInstaller(private val context: Context) {
         // Claude Code ships inside the app; its self-updater would download a binary Android cannot run.
         put("DISABLE_AUTOUPDATER", "1")
         putAll(extra)
+    }
+
+    /** The name the person gave this phone (Settings → About phone), else maker and model. */
+    private fun phoneName(): String {
+        val set = runCatching { Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME) }.getOrNull()
+        if (!set.isNullOrBlank()) return set.trim()
+        val model = Build.MODEL.orEmpty()
+        val maker = Build.MANUFACTURER.orEmpty().replaceFirstChar { it.uppercase() }
+        return if (model.startsWith(maker, ignoreCase = true) || maker.isBlank()) model.ifBlank { "Android phone" } else "$maker $model"
     }
 
     private fun clearDir(dir: File) { dir.listFiles()?.forEach { it.deleteRecursively() }; dir.mkdirs() }
