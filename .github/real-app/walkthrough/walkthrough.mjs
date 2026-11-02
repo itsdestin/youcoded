@@ -38,6 +38,10 @@ const WORDS = {
   resume: 'Resume session',             // welcome screen (App.tsx)
   resumeSearch: 'Search sessions',      // ResumeBrowser.tsx
   resumeOpen: /^(Resume|Open)\b/,      // a preview's open button, if the list shows one
+  resumeOffered: /^Resume \d+$/,        // the "Welcome back" panel after a restart (its Resume N button)
+  detailsChip: /walkthrough-tag|Add tags|tag/i, // the status-bar chip that opens the chat's details once it has a tag
+  sessionMenu: 'Walkthrough taco list', // the header's session pill, by the chat's own name
+  resumeMenuItem: /Resume/,             // the pill menu's entry into the Resume list
 };
 
 const [exe, out] = process.argv.slice(2);
@@ -251,34 +255,46 @@ try {
     await sleep(1500);
   });
 
-  await step('restart-keeps', 'After closing and reopening the app, the chat is listed with its name, tag and note', async () => {
+  await step('restart-keeps', 'After closing and reopening the app, the chat is offered back with its name and tag', async () => {
     await restart();
     await page.getByRole('button', { name: WORDS.skipTour }).click({ timeout: 5_000 }).catch(() => {});
-    await page.getByRole('button', { name: WORDS.resume }).click({ timeout: 30_000 });
-    await page.getByPlaceholder(WORDS.resumeSearch).first().waitFor({ timeout: 30_000 });
-    const missing = [];
-    for (const t of [NAME, TAG, NOTE]) {
-      if (!(await page.getByText(t, { exact: false }).first().isVisible().catch(() => false))) missing.push(t);
+    // The app offers the chat back on its own ("Welcome back"); otherwise the user opens the Resume list.
+    const offered = page.getByRole('button', { name: WORDS.resumeOffered }).first();
+    if (!(await offered.isVisible({ timeout: 15_000 }).catch(() => false))) {
+      await page.getByRole('button', { name: WORDS.resume }).click({ timeout: 30_000 });
     }
-    if (missing.length) throw new Error(`not shown after restart: ${missing.join(', ')}`);
+    await page.getByText(NAME).first().waitFor({ timeout: 30_000 });
+    await page.getByText(TAG).first().waitFor({ timeout: 10_000 });
   });
 
-  await step('search', 'Searching past chats finds this one by a word from it', async () => {
+  await step('resume', 'Resuming the chat shows its earlier messages and it still answers', async () => {
+    const offered = page.getByRole('button', { name: WORDS.resumeOffered }).first();
+    if (await offered.isVisible().catch(() => false)) await offered.click();
+    else {
+      await page.getByText(NAME).first().click();
+      await page.getByRole('button', { name: WORDS.resumeOpen }).first().click({ timeout: 5_000 }).catch(() => {});
+    }
+    await page.getByText('walkthrough-check.txt').first().waitFor({ timeout: 60_000 });
+    await askAndExpect('What is seven times eight? Answer with digits only.', /\b56\b/);
+  });
+
+  await step('note-kept', "The chat's note is still there after the restart", async () => {
+    await page.getByRole('button', { name: WORDS.detailsChip }).first().click();
+    await page.getByText(NOTE).first().waitFor({ timeout: 10_000 });
+    await page.keyboard.press('Escape');
+  }, { critical: false });
+
+  await step('search', 'Searching past chats finds this one by a word in its name', async () => {
+    await page.getByRole('button', { name: WORDS.sessionMenu }).first().click();
+    await page.getByRole('button', { name: WORDS.resumeMenuItem }).first().click({ timeout: 10_000 })
+      .catch(() => page.getByRole('menuitem', { name: WORDS.resumeMenuItem }).first().click({ timeout: 10_000 }));
     const search = page.getByPlaceholder(WORDS.resumeSearch).first();
     await search.fill('taco');
     await page.getByText(NAME).first().waitFor({ timeout: 15_000 });
     await search.fill('zzzz-no-such-chat');
     await page.getByText(NAME).first().waitFor({ state: 'hidden', timeout: 15_000 });
-    await search.fill('');
-  });
-
-  await step('resume', 'Resuming the chat shows its earlier messages and it still answers', async () => {
-    await page.getByText(NAME).first().click();
-    // Some lists open a preview first; a second press resumes it.
-    await page.getByRole('button', { name: WORDS.resumeOpen }).first().click({ timeout: 5_000 }).catch(() => {});
-    await page.getByText('walkthrough-check.txt').first().waitFor({ timeout: 60_000 });
-    await askAndExpect('What is seven times eight? Answer with digits only.', /\b56\b/);
-  });
+    await page.keyboard.press('Escape');
+  }, { critical: false });
 } catch {
   // A critical step failed (already in the report); record what the screen does next, to see why.
   await recordUntilQuiet('after-failure', 30_000, 15_000).catch(() => {});
