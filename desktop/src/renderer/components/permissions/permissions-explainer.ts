@@ -42,10 +42,10 @@ export const PERMISSIONS_EXPLAINER_SECTIONS: ExplainerSection[] = [
     // persisted default-mode setting — the mode belongs to the conversation.
     heading: 'How much it asks',
     paragraphs: [
-      'Each conversation has its own mode, and you can change it part-way through from the bar at the bottom of the chat.',
+      'Each conversation has its own mode, and you can change it part-way through from the bar at the bottom of the chat. These modes are for chats with the built-in assistant; chats in Claude Code follow Claude Code\'s own rules.',
     ],
     bullets: [
-      { term: 'Ask first', text: 'asks before anything that changes your files or runs a command, and the first time it visits each new website. Reading, searching and a built-in list of look-only commands never ask.' },
+      { term: 'Ask first', text: 'asks before anything that changes your files or runs a command, and the first time it visits each new website. Reading and searching inside your project, and a built-in list of look-only commands, never ask.' },
       { term: 'Auto edit', text: 'edits files without asking, but still asks before running commands, except the look-only ones.' },
       { term: 'Full auto', text: "doesn't ask at all, apart from the things it always asks about. Use it when you're watching." },
     ],

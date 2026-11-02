@@ -198,7 +198,7 @@ const MODES: readonly { id: NativePermissionMode; label: string; line: string }[
     // Destin's 2026-08-26/27 copy review: gerunds, one clause shorter.
     // 2026-10-31: also names the first visit to each new website (Ask first now asks about those).
     // Looking-only commands (ls, git status…) also run without asking — see NeverAskCommands.
-    line: 'Checks with you before changing a file, running a command or visiting a new website. Reading, searching and look-only commands never interrupt you.',
+    line: 'Checks with you before changing a file, running a command or visiting a new website. Reading and searching inside your project, and look-only commands, never interrupt you.',
   },
   {
     id: 'auto-edit',
