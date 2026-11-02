@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import pkg from './package.json';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { buildAppCsp } from './src/shared/app-csp';
 
 // Keep Vite's port in sync with the main process via YOUCODED_PORT_OFFSET.
 // Duplicated (not imported from src/shared/ports.ts) because vite.config runs
@@ -80,8 +81,23 @@ function atStartup(id: string, graph: ModuleGraph): boolean {
   return walk(id);
 }
 
+// WHY (2026-10-30 security audit F4): the main page had no Content-Security-Policy. Stamped into index.html as a <meta> so
+// it covers the desktop window (file://), a phone's browser and the Android WebView alike. Left out of the public landing-page
+// demo build (`build:site`: VITE_WORKBENCH=1 without VITE_SHOOT; the screenshot build keeps it so shoot can see violations), which is a different product surface that fetches fixtures from other places.
+// The policy and the reasons for each part: src/shared/app-csp.ts. Pinned by tests/app-csp.test.ts.
+const appContentSecurityPolicy = {
+  name: 'youcoded-content-security-policy',
+  apply: (_config: unknown, env: { command: string }) => !(env.command === 'build' && process.env.VITE_WORKBENCH === '1' && process.env.VITE_SHOOT !== '1'),
+  // Written straight after <meta charset> (the charset tag must stay within the first 1024 bytes of the file, and the policy
+  // must come before the first script and style it governs). The policy only uses single quotes, so a double-quoted attribute is safe.
+  transformIndexHtml: {
+    order: 'pre' as const,
+    handler: (html: string) => html.replace(/(<meta charset="[^"]*"\s*\/?>)/i, `$1\n  <meta http-equiv="Content-Security-Policy" content="${buildAppCsp({ workbench: process.env.VITE_WORKBENCH === '1' })}" />`),
+  },
+};
+
 export default defineConfig({
-  plugins: [shareMascotPictures, react(), preloadConnectionCode],
+  plugins: [shareMascotPictures, react(), preloadConnectionCode, appContentSecurityPolicy],
   // WHY: Vite resolves --outDir from this root, not the shell directory. build:site
   // therefore needs ../../../docs/site; ../docs/site silently left the public embed stale.
   root: 'src/renderer',

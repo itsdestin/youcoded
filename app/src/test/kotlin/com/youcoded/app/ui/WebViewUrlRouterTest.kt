@@ -144,10 +144,29 @@ class WebViewUrlRouterTest {
             "http://100.64.0.9:9900/",
             "https://example.com/some/download/nested",
             "mailto:someone@example.com",
-            "intent://scan/#Intent;scheme=zxing;end",
+            "HTTPS://example.com/upper-case-scheme",
         )) {
             assertEquals(url, UrlDecision.OPEN_EXTERNALLY, decide(url))
         }
+    }
+
+    // 2026-10-30 security audit A3: only web and mail links may start another app.
+    @Test fun `links that are not web or mail addresses are refused, not handed to Android`() {
+        for (url in listOf(
+            "intent://scan/#Intent;scheme=zxing;end",
+            "market://details?id=com.example",
+            "content://com.android.contacts/contacts",
+            "sms:5551234", "tel:5551234", "geo:0,0?q=x", "android-app://com.example",
+            "javascript:alert(1)", "data:text/html,hi", "blob:https://x/abc", "ftp://example.com/file",
+            " https://leading-space.example/", "\thttps://leading-tab.example/", "", "not a url",
+        )) {
+            assertEquals(url, UrlDecision.BLOCK, decide(url))
+        }
+        val actions = FakeActions()
+        val router = WebViewUrlRouter(actions, paired)
+        assertTrue("a refused link is consumed", router.onNavigation("intent://scan/#Intent;scheme=zxing;end"))
+        router.onDownloadRequested("market://details?id=com.example")
+        assertEquals(emptyList<String>(), actions.external)
     }
 
     @Test fun `the navigation override downloads, loads, or hands out`() {

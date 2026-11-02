@@ -12,7 +12,7 @@
 //   - open-folder is the one place the two really differ: the computer opens the folder itself, a phone
 //     is handed the address to open (Drive and GitHub only, as before). That stays a door branch below.
 import { execFile } from 'child_process';
-import { shell } from 'electron';
+import { safeOpenExternal, openPathSafely } from '../safe-open';
 import { IPC } from '../../shared/backend-contract';
 import {
   getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning,
@@ -81,8 +81,9 @@ export const syncChannels: MainChannelDef[] = [
       if (ctx.door === 'remote') return { url: target?.url ?? '' };
       if (!target) return undefined;
       // Only the computer's own door gets here (a phone returned above), so `shell` is this machine's.
-      if (target.url) void shell.openExternal(target.url);
-      else if (target.path) void shell.openPath(target.path);
+      // WHY the safe versions (audit F2/F7): the address and path come from saved sync settings, not from this click.
+      if (target.url) void safeOpenExternal(target.url);
+      else if (target.path) await openPathSafely(target.path);   // awaited: it checks the file type first, then opens
       return undefined;
     },
   }),
