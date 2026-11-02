@@ -294,6 +294,8 @@ export interface HarnessSessionOpts {
    *  either check alone still cannot let a specialist spawn its own
    *  specialists. Absent/false for every ordinary (non-child) session. */
   isSpecialistChild?: boolean;
+  /** A helper reads the sites its parent chat already approved (Ask first). */
+  parentApprovedSites?: () => ReadonlySet<string>;
   /** Task 10 (plan 1b): directories checkPathGuard treats as internal to THIS
    *  session — readable without an external_directory ask, the same way
    *  Bash's own spillRoot() is (tools/guards.ts). Wired by NativeSessionHost
@@ -871,6 +873,11 @@ export class HarnessSession extends EventEmitter {
    *  per-folder, 2026-10-29), never the files themselves; same memory-only,
    *  root-only, reset-on-resume contract as externalEditsAllowed. */
   private outsideCommentsAllowed = false;
+  /** Ask-first websites: sites (shared/site-key.ts) the person said Yes to in this
+   *  chat, so a second page on the same site does not ask again. Memory-only and
+   *  reset on resume like the grants above. A helper writes only its OWN set; it
+   *  also reads its parent's (opts.parentApprovedSites), never the other way. */
+  readonly approvedSites = new Set<string>();
   private adminCommandsAllowed = false; // memory-only consent, never serialized
   private retryDelays: number[];
   // Resolved capability profile (Task 5). Drives the doom-loop window + tool
@@ -1068,6 +1075,7 @@ export class HarnessSession extends EventEmitter {
     this.shellEnv = null; // same contract — a resumed session starts with a fresh env too
     this.externalEditsAllowed = false; // consent never survives a resume
     this.outsideCommentsAllowed = false;
+    this.approvedSites.clear();
     this.adminCommandsAllowed = false;
   }
 
@@ -4133,9 +4141,16 @@ export class HarnessSession extends EventEmitter {
     }
     const isAdmin = adminVerdict?.kind === 'admin';
     // 4. Re-read configured rules (including mode-scoped admin consent) on every call.
-    const configuredBase: PermissionDecision = externalAsk
+    const decidedBase: PermissionDecision = externalAsk
       ? { action: 'ask', denyListed: false }
       : await permissionCallback(() => this.opts.decide?.(call.toolName, subject) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
+    // Ask first, websites: a site already approved in this chat (here, or by the parent
+    // chat for a helper) turns the first-visit ask into an allow. Only an ASK is
+    // softened: a deny rule the person set for the site still denies.
+    const siteApproved = call.toolName === 'WebFetch' && typeof subject === 'string'
+      && (this.approvedSites.has(subject) || (this.opts.parentApprovedSites?.().has(subject) ?? false));
+    const configuredBase: PermissionDecision = siteApproved && decidedBase.action === 'ask' && !decidedBase.denyListed
+      ? { action: 'allow', denyListed: false } : decidedBase;
     let skipUpfrontAdminPassword = isAdmin && (this.adminCommandsAllowed || configuredBase.passwordlessAdminAllowed === true);
     const configured = isAdmin ? applyAdminApproval(configuredBase, subject!, skipUpfrontAdminPassword) : configuredBase;
     const checkOtherFloors = isBash && (!isAdmin || skipUpfrontAdminPassword);
@@ -4177,6 +4192,8 @@ export class HarnessSession extends EventEmitter {
       // was ever asked. Falls back to the real-decline copy
       // (still accurate for an actual respond({behavior:'deny'})).
       if (d.behavior !== 'allow') return { text: d.message ?? 'The user declined this action. Ask what they would like instead, or try a different approach.', isError: true };
+      // Yes on a website's first-visit card covers that site for the rest of this chat.
+      if (call.toolName === 'WebFetch' && typeof subject === 'string') this.approvedSites.add(subject);
       // WHY: only the specific outside-file ask can authorize this memory-only
       // exception. Child sessions never inherit it, even when sharing a parent.
       if (externalAsk && !this.opts.isSpecialistChild && d.allowExternalEditsForSession === true

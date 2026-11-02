@@ -45,7 +45,7 @@ export const PERMISSIONS_EXPLAINER_SECTIONS: ExplainerSection[] = [
       'Each conversation has its own mode, and you can change it part-way through from the bar at the bottom of the chat.',
     ],
     bullets: [
-      { term: 'Ask first', text: 'asks before anything that changes your files or runs a command. Reading and searching never ask.' },
+      { term: 'Ask first', text: 'asks before anything that changes your files or runs a command, and the first time it visits each new website. Reading files and searching never ask.' },
       { term: 'Auto edit', text: 'edits files without asking, but still asks before running commands.' },
       { term: 'Full auto', text: "doesn't ask at all, apart from the things it always asks about. Use it when you're watching." },
     ],

@@ -3867,6 +3867,9 @@ export class NativeSessionHost extends EventEmitter {
         // filtering alone still cannot let a specialist spawn its own
         // specialists.
         isSpecialistChild: true,
+        // Ask first, websites: the helper starts with the sites its parent chat has
+        // already approved, so it is not asked about them again.
+        parentApprovedSites: () => this.live.get(parentId)?.session.approvedSites ?? new Set<string>(),
       },
       this.modelFactory,
     );

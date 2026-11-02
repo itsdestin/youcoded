@@ -16,6 +16,7 @@ import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import { scriptedModel, stream, textChunks, toolCallChunk, finishChunk } from './helpers/scripted-model';
 import { resolveSpecialist } from '../src/main/harness/specialists/registry';
+import { __setWebFetchTestHooks } from '../src/main/harness/tools/web-fetch';
 import { SpecialistCatalog } from '../src/main/harness/specialists/catalog';
 import { formatLongRunningNotice } from '../src/main/harness/shell-registry';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_NOTE_MAX_CHARS, SPECIALIST_SPAWN_BUDGET_PER_SESSION } from '../src/main/harness/specialists/limits';
@@ -3245,6 +3246,42 @@ describe('NativeSessionHost', () => {
       await sendPromise; // the child's own turn unwinds via the 'canceled' interrupt path
       expect(asks.some((e) => e.type === 'PermissionExpired')).toBe(true); // card cleared
       await h.destroyAll();
+    });
+
+    // Ask first, websites (2026-10-31): the helper's launch approval never named any
+    // website, so its first visit to a site reaches the person through the PARENT's
+    // card (naming the helper), and approving it lets the fetch run.
+    it('a helper visiting a new website in Ask first asks the person, even with its launch approved', async () => {
+      const RESEARCHER = resolveSpecialist('researcher')!;
+      __setWebFetchTestHooks({
+        lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+        fetchImpl: async () => new Response('<html><body><p>hello</p></body></html>', { status: 200, headers: { 'content-type': 'text/html' } }),
+      });
+      try {
+        const visit = () => scriptedModel([
+          stream(toolCallChunk('c1', 'WebFetch', { url: 'https://www.Example.com/a' }), finishChunk('tool-calls')),
+          stream(...textChunks('t', 'done'), finishChunk('stop')),
+        ]) as any;
+        const { h } = await withParent(async () => visit());
+        const { childId } = await h.createChild('root-1', {
+          specialist: RESEARCHER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
+        });
+        const requests: any[] = [];
+        h.on('hook-event', (e) => { if (e.type === 'PermissionRequest') requests.push(e.payload); });
+        const askArrived = firstAsk(h);
+        const sendPromise = childSession(h, childId).send('go');
+        const requestId = await askArrived;
+        expect(requests[0]).toMatchObject({ tool_name: 'WebFetch' });
+        expect(requests[0].tool_input.url).toBe('https://www.Example.com/a');
+        expect(h.respondPermission(requestId, { decision: { behavior: 'allow' } })).toBe(true);
+        await sendPromise;
+        // Yes covers the site for the helper's chat; the parent's own set is untouched.
+        expect(childSession(h, childId).approvedSites.has('example.com')).toBe(true);
+        expect((h as any).live.get('root-1').session.approvedSites.size).toBe(0);
+        await h.destroyAll();
+      } finally {
+        __setWebFetchTestHooks({});
+      }
     });
 
     // ---- Task 11: the dropped-decision finding (previous task's review) ----

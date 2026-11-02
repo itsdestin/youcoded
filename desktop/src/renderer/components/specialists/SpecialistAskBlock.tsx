@@ -4,6 +4,7 @@ import { PermissionButtons } from '../ToolCard';
 import { AdminPasswordPrompt } from '../permissions/AdminPasswordPrompt';
 import { useChatDispatch } from '../../state/chat-context';
 import { useArtifactSelectorOptional } from '../../state/ArtifactContext';
+import { siteKeyFor } from '../../../shared/site-key';
 
 type ToolSegment = Extract<SubagentSegment, { type: 'tool' }>;
 
@@ -86,6 +87,7 @@ export function SpecialistAskBlock({ segment, sessionId, specialistName, compact
       denyListed={segment.denyListed}
       toolName={segment.toolName}
       external={segment.external}
+      site={segment.toolName === 'WebFetch' ? siteKeyFor(segment.input?.url) : undefined}
       specialistName={specialistName ?? 'the specialist'}
       permissionMode={segment.permissionMode}
       command={typeof segment.input?.command === 'string' ? (segment.input.command as string) : undefined}

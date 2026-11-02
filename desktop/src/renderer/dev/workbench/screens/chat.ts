@@ -125,6 +125,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#native', 'view'), session: 'wb-2' },
   // WHY: photograph the real admin confirmation and the unchanged push confirmation it reuses.
   { ...chat('chat#push-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-push-approval', latency: '150' }, open: ['Always allow'] },
+  // WHY (Ask first, websites): the first-visit question a native chat raises for a new site.
+  { ...chat('chat#web-visit', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-web-visit-approval', latency: '150' } },
   { ...chat('chat#admin-approval', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' } },
   { ...chat('chat#admin-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'] },
   { ...chat('chat#admin-choices-phone', 'view', 'approval', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'], viewport: { width: 390, height: 844 } },

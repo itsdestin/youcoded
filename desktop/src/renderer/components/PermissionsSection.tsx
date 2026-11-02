@@ -194,7 +194,9 @@ const MODES: readonly { id: NativePermissionMode; label: string; line: string }[
     // "Reading and searching never ask" is the explainer's own wording, and it
     // is the fact that stops this reading as "asks about everything".
     // Destin's 2026-08-26/27 copy review: gerunds, one clause shorter.
-    line: 'Checks with you before changing a file or running a command. Reading and searching never interrupt you.',
+    // 2026-10-31: also names the first visit to each new website (Ask first now asks
+    // about those); "reading files and searching" is what still never interrupts.
+    line: 'Checks with you before changing a file, running a command or visiting a new website. Reading files and searching never interrupt you.',
   },
   {
     id: 'auto-edit',

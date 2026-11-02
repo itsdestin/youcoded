@@ -164,7 +164,8 @@ export const DESTRUCTIVE_DENY_LIST: PermissionRule[] = [
 
 /** Mode baselines (spec §2.4 layer 2). Reads + web are free in EVERY preset and
  *  mode (spec §3.4 "reads + web free"): local reads (Read/Glob/Grep), TodoWrite,
- *  and the web pair (WebFetch/WebSearch) never prompt at the baseline. Higher
+ *  and the web pair (WebFetch/WebSearch) never prompt at the baseline (except WebFetch
+ *  in Ask first, which asks once per website — see the 'ask' case below). Higher
  *  layers (deny-list, remembered/denied rules) still override via last-match-wins. */
 export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
   const alwaysAllowed: PermissionRule[] = [
@@ -240,6 +241,15 @@ export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
   switch (mode) {
     case 'ask':
       return [{ tool: '*', action: 'ask' }, ...alwaysAllowed,
+        // Websites (Destin, 2026-10-31): in Ask first only, the assistant asks the
+        // first time it wants to visit each new website. WebFetch's subject is the
+        // SITE (shared/site-key.ts), so this one pattern-less ask — LAST-MATCH-WINS
+        // over the pattern-less allow in `alwaysAllowed` above — covers every site,
+        // and a remembered "Always allow" for one site (rememberedRules, the last
+        // layer) beats it for that site only. auto-edit and full-auto add no such
+        // override, so they keep fetching freely, exactly as before. WebSearch has no
+        // address to ask about and stays free in every mode.
+        { tool: 'WebFetch', action: 'ask' },
         // A Word/Excel-targeted comment mutation writes DIRECTLY into that
         // file's own bytes (design doc-comments-build-design.md §3.3/§4.3a) —
         // functionally the same act as an Edit/Write call on that file, which

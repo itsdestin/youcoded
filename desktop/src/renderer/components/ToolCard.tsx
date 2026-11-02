@@ -43,6 +43,7 @@ import { toolActionLabel } from '../utils/tool-group-summary';
 import { PlanApprovalCard } from './PlanApprovalCard';
 import { ExpiredApprovalActions } from './ExpiredApprovalActions';
 import { shellEndKind } from '../state/native-run-facts';
+import { siteKeyFor } from '../../shared/site-key';
 
 // --- Helpers for friendly display ---
 
@@ -568,7 +569,7 @@ function grantFolderName(workDir: unknown, sessionCwd?: string): string {
 
 const NATIVE_ALWAYS_ALLOW = 'native:always-allow';
 
-export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, permissionMode, onResponded, onFailed, onAnswerNow, answerUnconfirmed = false, bare = false, noKeyboard = false }: {
+export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, site, permissionMode, onResponded, onFailed, onAnswerNow, answerUnconfirmed = false, bare = false, noKeyboard = false }: {
   requestId: string;
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
@@ -604,6 +605,10 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
    *  when the button is actually offered — a note about a control that is not
    *  there is noise. */
   alwaysAllowNote?: string;
+  /** Ask first, websites: the site a WebFetch ask is about (shared/site-key.ts), so
+   *  the card can name it plainly. Only a native ask shows it; Claude Code asks about
+   *  websites in its own words. */
+  site?: string;
   /** The session's mode when the ask fired (native broker only). 'full-auto'
    *  + denyListed renders the safety-stop footer instead of the generic row —
    *  Full auto's only rule-based ask IS the destructive-command stop, and a
@@ -647,6 +652,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     && !specialistName && (toolName === 'Write' || toolName === 'Edit');
   const budgetStop = isNative && permissionMode === 'full-auto'
     && (toolName === 'doom_loop' || toolName === 'max_steps');
+  const siteAsk = isNative && toolName === 'WebFetch' && !!site;
   const [confirmingExternal, setConfirmingExternal] = useState(false);
   // WHY (card #207): a comment tool reaching a file outside the chat's project
   // gets its own three-choice row — once / this chat / no — like the Browser's
@@ -941,6 +947,10 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     // paint an accent ring on top of this one on the selected button. Left alone
     // on purpose; don't "finish the migration" by adding FOCUS_RING here.
     <div className={bare ? 'space-y-1.5' : 'px-3 py-2 border-t border-edge bg-inset/30 space-y-1.5'}>
+    {/* Ask first, websites: the question names the site, like the other asks' headings
+        ("Always allow this exact command?"), so the person never has to infer it from
+        the card's header line. */}
+    {siteAsk && <p className="text-xs font-medium text-fg-2 break-all">Visit {site}?</p>}
     <div className="flex items-center gap-2">
       <button
         ref={el => { buttonsRef.current[0] = el; }}
@@ -980,6 +990,14 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
           shape note above so the card never gives two reasons. */}
       {floorStop && (
         <p className="text-3xs text-fg-muted leading-relaxed">{floorAskNote(floorStop)}</p>
+      )}
+      {/* What each answer covers, in words — Yes is per chat (not per page) and
+          Always allow is per site and folder, which the buttons alone cannot say. */}
+      {siteAsk && (
+        <p className="text-3xs text-fg-muted leading-relaxed">
+          Yes lets the assistant visit {site} for the rest of this chat.
+          {canAlwaysAllow ? ` Always allow remembers ${site}${folderName ? ` in ${folderName}` : ''}.` : ''}
+        </p>
       )}
       {/* D2: the promise "Always allow" is about to make, in the user's words.
           Gated on canAlwaysAllow so it never describes a button that isn't
@@ -1625,6 +1643,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             // lookup POSITIVELY resolves (never shown-then-hidden), and an
             // unresolved hire must never be offered a grant optimistically —
             // we would not know which width it was even asking for.
+            site={tool.toolName === 'WebFetch' ? siteKeyFor((tool.input as any)?.url) : undefined}
             floorStop={tool.floorStop}
             // `tool.floorStop`: a floor (protected-folder removal, secret file)
             // forced this ask below every rule, so a grant could never skip it.
