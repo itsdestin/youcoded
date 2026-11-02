@@ -315,7 +315,7 @@ try {
     await page.keyboard.press('Escape');
   }, { critical: false });
 
-  await step('open-file', 'Clicking the file in the chat opens it in the file viewer showing its contents', async () => {
+  await step('open-file', 'Opening the file from the Files panel shows it in the file viewer', async () => {
     await page.getByRole('button', { name: WORDS.tipGotIt }).click({ timeout: 2_000 }).catch(() => {});
     await openFromFilesPanel('walkthrough-check.txt');
     await page.getByText('mango', { exact: true }).first().waitFor({ timeout: 30_000 });
