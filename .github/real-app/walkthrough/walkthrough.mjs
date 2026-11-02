@@ -290,10 +290,12 @@ try {
     await page.getByRole('button', { name: WORDS.sessionMenu }).first().locator('xpath=following::button[1]').click();
     await page.getByRole('button', { name: WORDS.resumeMenuItem, exact: true }).first().click({ timeout: 10_000 });
     const search = page.getByPlaceholder(WORDS.resumeSearch).first();
+    // Look only inside the list: the chat's name also sits in the header behind it.
+    const list = page.getByRole('dialog').filter({ has: search });
     await search.fill('taco');
-    await page.getByText(NAME).first().waitFor({ timeout: 15_000 });
+    await list.getByText(NAME).first().waitFor({ timeout: 15_000 });
     await search.fill('zzzz-no-such-chat');
-    await page.getByText(NAME).first().waitFor({ state: 'hidden', timeout: 15_000 });
+    await list.getByText(NAME).first().waitFor({ state: 'hidden', timeout: 15_000 });
     await page.keyboard.press('Escape');
   }, { critical: false });
 } catch {
