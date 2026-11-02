@@ -16,7 +16,7 @@ export function parseGithubRepoUrl(url: string): { owner: string; name: string }
 type Api = (method: string, apiPath: string) => Promise<{ status: number; json: any }>;
 
 /** Plain pause message when GitHub could not confirm the repo is private. No cause is claimed. */
-export function repoUncheckedError(repoName: string): Error {
+function repoUncheckedError(repoName: string): Error {
   return new Error(`Sync is paused because YouCoded couldn't confirm that the GitHub repository "${repoName}" is private. It will check again shortly. If this keeps happening, make sure you're connected to GitHub in the Sync settings.`);
 }
 

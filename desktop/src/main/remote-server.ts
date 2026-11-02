@@ -609,8 +609,7 @@ export class RemoteServer {
     this.sessionManager.off('session-exit', this.onSessionExit);
     this.sessionManager.off('session-created', this.onSessionCreated);
 
-    // WHY: shutdown clears `clients` without removeClient, so connected phones were never marked as used; after an
-    // update restart on day 100 a phone that had been connected all along would have been signed out.
+    // WHY: shutdown skips removeClient, so a phone connected all along was never marked used and a restart could expire it.
     this.devices.touchAll(Array.from(this.clients, (c) => c.deviceId));
     for (const client of this.clients) {
       // WHY: stop clears clients before close events run; invalidate pending starts now.
@@ -1021,12 +1020,8 @@ export class RemoteServer {
   private startLiveness(): void {
     if (this.pingTimer) return;
     this.pingTimer = setInterval(() => {
-      // WHY hourly: a phone connected for months only has its last-used date moved at disconnect; a crash or power
-      // cut would otherwise leave an old date behind and the next start could sign it out.
-      if (Date.now() - this.lastUsedRefreshAt > 60 * 60 * 1000) {
-        this.lastUsedRefreshAt = Date.now();
-        this.devices.touchAll(Array.from(this.clients, (c) => c.deviceId));
-      }
+      // WHY hourly: a phone connected for months only has its last-used date moved at disconnect; a crash must not leave an old one.
+      if (Date.now() - this.lastUsedRefreshAt > 3_600_000) { this.lastUsedRefreshAt = Date.now(); this.devices.touchAll(Array.from(this.clients, (c) => c.deviceId)); }
       for (const client of this.clients) {
         const missed = (client.missedPings ?? 0) + 1;
         if (missed > MAX_MISSED_PINGS) {

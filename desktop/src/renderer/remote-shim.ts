@@ -1613,11 +1613,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         // the cleartext-traffic policy or a wrong host/port/firewall.
         let message: string;
         if (!didOpen) {
-          message = `Cannot reach host at ${url}. Check the host, port, and network (VPN/firewall).`;
-          // WHY (integration review 2026-11-01): a computer on an older YouCoded refuses this app's page address when it
-          // opens the connection, and the phone cannot tell that apart from "unreachable" (both fail before the
-          // socket opens). So on the phone app, talking to a computer, the message also names the one fix we can offer.
-          if (isAndroidAppPage() && !localBridge) message += ' If YouCoded on your computer is not up to date, update it to connect.';
+          message = `Cannot reach host at ${url}. Check the host, port, and network (VPN/firewall).${isAndroidAppPage() && !localBridge ? ' If YouCoded on your computer is not up to date, update it to connect.' : ''}`; // WHY the added sentence: a computer on an older YouCoded refuses the phone app's page address and the phone cannot tell that from "unreachable"
         } else if (code === 4029) {
           message = 'Too many failed attempts. Wait a minute and try again.';
         } else if (code === 4000) {
