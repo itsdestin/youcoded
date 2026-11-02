@@ -329,8 +329,8 @@ try {
       await sleep(500);
     }
     await page.getByRole('button', { name: WORDS.edit, exact: true }).filter({ visible: true }).first().click();
-    const editor = page.locator('.cm-content[contenteditable="true"]').first();
-    await editor.click();
+    // Click into the file's text, as a person would (whatever kind of editing box the viewer uses).
+    await page.getByText('mango', { exact: true }).last().click();
     await page.keyboard.press('ControlOrMeta+A');
     await page.keyboard.type('mango papaya');
     const save = page.getByRole('button', { name: WORDS.save, exact: true }).filter({ visible: true }).first();
