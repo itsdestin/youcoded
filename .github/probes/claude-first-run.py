@@ -41,7 +41,7 @@ for step in range(8):
         print('pineapple seen in reply:', 'pineapple' in reply.lower())
         print('\n'.join([l.rstrip() for l in reply.splitlines() if l.strip()][-15:]))
         break
-    if 'want to use this API key' in screen or 'want to usethis' in screen.replace(' ', ''):
+    if 'usethisAPIkey' in screen.replace(' ', ''):   # the terminal drops spaces unpredictably, so compare without them
         # Test-only question (a real user signs in instead): its default is No, so pick Yes explicitly.
         os.write(fd, b'\x1b[A'); time.sleep(0.3)
     if 'Paste code here' in screen or 'Pastecodehere' in screen:
