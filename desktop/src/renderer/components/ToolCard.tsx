@@ -44,6 +44,7 @@ import { PlanApprovalCard } from './PlanApprovalCard';
 import { ExpiredApprovalActions } from './ExpiredApprovalActions';
 import { shellEndKind } from '../state/native-run-facts';
 import { siteKeyFor } from '../../shared/site-key';
+import type { ToolCardAsk } from './permissions/ToolCardAsk';
 
 // --- Helpers for friendly display ---
 
@@ -569,8 +570,11 @@ function grantFolderName(workDir: unknown, sessionCwd?: string): string {
 
 const NATIVE_ALWAYS_ALLOW = 'native:always-allow';
 
-export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, site, permissionMode, onResponded, onFailed, onAnswerNow, answerUnconfirmed = false, bare = false, noKeyboard = false }: {
+export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, site, permissionMode, onResponded, onFailed, onAnswerNow, answerUnconfirmed = false, bare = false, noKeyboard = false, custom }: {
   requestId: string;
+  /** A non-tool ask (the browser's) that must look and behave exactly like a tool ask (Destin, 2026-11-02): same
+   *  colours, keys and click-only rule, with its own question, note and place to send the answer. */
+  custom?: { question: string; note?: React.ReactNode; answer: (decision: object) => Promise<unknown> };
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
    *  buttons on the same line as the request. Confirm and safety-stop paths
@@ -704,7 +708,8 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     setResponding(true);
     setUnconfirmed(false);
     try {
-      const delivered = await (window as any).claude.session.respondToPermission(requestId, decision);
+      // A non-tool ask is answered through its own channel, not the session's permission socket.
+      const delivered = await (custom ? custom.answer(decision) : (window as any).claude.session.respondToPermission(requestId, decision));
       if (delivered === false) {
         // The host confirmed the request is already closed — that one IS expired.
         console.warn('Permission response not delivered — socket already closed');
@@ -724,7 +729,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       // stays answerable instead, and says what is actually known.
       setUnconfirmed(true);
     }
-  }, [requestId, onResponded, onFailed, onAnswerNow]);
+  }, [requestId, onResponded, onFailed, onAnswerNow, custom]);
   // Same sentence in every button layout below (and in the question card and the
   // buddy's compact strip): the answer's fate is unknown, so it says only that.
   const unconfirmedNote = unconfirmed || answerUnconfirmed ? (
@@ -951,6 +956,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
         ("Always allow this exact command?"), so the person never has to infer it from
         the card's header line. */}
     {siteAsk && <p className="text-xs font-medium text-fg-2 break-all">Visit {site}?</p>}
+    {custom && <p className="text-xs font-medium text-fg-2 break-words">{custom.question}</p>}
     <div className="flex items-center gap-2">
       <button
         ref={el => { buttonsRef.current[0] = el; }}
@@ -999,6 +1005,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
           {canAlwaysAllow ? ` Always allow remembers ${site}${folderName ? ` in ${folderName}` : ''}.` : ''}
         </p>
       )}
+      {custom?.note && <p className="text-3xs text-fg-muted leading-relaxed">{custom.note}</p>}
       {/* D2: the promise "Always allow" is about to make, in the user's words.
           Gated on canAlwaysAllow so it never describes a button that isn't
           rendered — the failure the noGrantNote above exists to avoid. */}
@@ -1341,9 +1348,11 @@ interface Props {
   // the "lifted card" color only shows inside groups; standalone cards stay
   // transparent and inherit the bubble color.
   inGroup?: boolean;
+  /** A permission ask that is not a tool call (the assistant browser's): same card, the caller's words and answer. */
+  ask?: ToolCardAsk;
 }
 
-export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }: Props) {
+export default React.memo(function ToolCard({ tool, sessionId, inGroup = false, ask }: Props) {
   // Seed from the module-level mode so a card that mounts AFTER Ctrl+O fired
   // (e.g. when its parent tool group just opened) starts in the right state.
   // Chatsearch cards used to force-open here (their whole point was the
@@ -1391,7 +1400,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   // the helper or command it acts on — look up that one name (a narrow selector; every
   // other card has no target and subscribes to nothing).
   const targetLabel = useBackgroundTarget(sessionId, managementTargetId(tool.toolName, tool.input));
-  const display = friendlyToolDisplay(tool, {
+  const display = ask ? { label: ask.label, detail: ask.detail ?? '' } : friendlyToolDisplay(tool, {
     taskTargetTitle: taskTarget?.title,
     taskTargetRunning: taskTarget ? taskTarget.status === 'running' : undefined,
     targetLabel,
@@ -1420,6 +1429,8 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   // is pure ceremony. Render header only, no chevron, non-interactive, with a
   // lighter dashed border so it reads as an annotation, not an expandable card.
   const isCompactSkill = tool.toolName === 'Skill';
+  // A non-tool ask has nothing to expand: a plain header line like a compact skill's, with the normal border.
+  const staticHeader = isCompactSkill || !!ask;
   // Same helper the header label and the body use, so all three agree.
   const isChatsearch = !!describeChatsearchCall(tool);
 
@@ -1485,7 +1496,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
       {runIcon === 'stopped' && (
         <span className="text-4xs uppercase tracking-wide text-fg-muted shrink-0">stopped</span>
       )}
-      {!isCompactSkill && (
+      {!staticHeader && (
         <span data-testid="tool-card-chevron" className="shrink-0 inline-flex">
           <ChevronIcon className="w-3.5 h-3.5 text-fg-muted" expanded={expanded} />
         </span>
@@ -1496,8 +1507,8 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   return (
     <div className={`${cardBorder} rounded-lg overflow-hidden ${inGroup ? 'bg-inset' : ''}`} data-tool-use-id={tool.toolUseId}>
       {/* Header */}
-      {isCompactSkill ? (
-        <div className={headerClass}>{headerContent}</div>
+      {staticHeader ? (
+        <div className={isCompactSkill ? headerClass : 'w-full flex items-center gap-1.5 px-3 py-1.5 text-left select-none'}>{headerContent}</div>
       ) : (
         <button onClick={() => setExpanded(!expanded)} className={headerClass}>
           {headerContent}
@@ -1607,8 +1618,9 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         ) : (
           <PermissionButtons
             requestId={tool.requestId}
+            custom={ask && { question: ask.question, note: ask.note, answer: ask.answer }}
             // A helper's request is click-only — see PermissionButtons.noKeyboard.
-            noKeyboard={!!tool.specialist}
+            noKeyboard={!!tool.specialist || !!ask?.noKeyboard}
             suggestions={tool.permissionSuggestions}
             denyListed={tool.denyListed}
             toolName={tool.toolName}
@@ -1647,7 +1659,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             floorStop={tool.floorStop}
             // `tool.floorStop`: a floor (protected-folder removal, secret file)
             // forced this ask below every rule, so a grant could never skip it.
-            suppressAlwaysAllow={tool.toolName === 'max_steps' || tool.toolName === 'doom_loop' || tool.external === true
+            suppressAlwaysAllow={!!ask?.noAlways || tool.toolName === 'max_steps' || tool.toolName === 'doom_loop' || tool.external === true
               || !!tool.floorStop
               || (tool.toolName === 'Task' && !!tool.input?.task_id)
               || (tool.toolName === 'Task' && !tool.input?.task_id && !hireDefinition)
@@ -1670,9 +1682,10 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
                     ? `Always allow covers this helper in ${grantFolderName(tool.input?.work_dir, sessionCwd)} only, because it is defined inside the project. If its file changes, you'll be asked again.`
                     : undefined)
               : undefined}
-            onResponded={onRespondedCb}
-            onFailed={onFailedCb}
-            onAnswerNow={answerNow}
+            // A non-tool ask has no tool record or phone pending-answer to update: its `answer` is the whole round trip.
+            onResponded={ask ? undefined : onRespondedCb}
+            onFailed={ask ? undefined : onFailedCb}
+            onAnswerNow={ask ? undefined : answerNow}
             answerUnconfirmed={tool.answerUnconfirmed}
           />
         );
@@ -1711,7 +1724,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
       {/* Expanded details — per-tool parsed views, raw fallback otherwise.
           Skill cards never render a body (the only response is the redundant
           "Launching skill: X" line). */}
-      {!isCompactSkill && expanded && (
+      {!staticHeader && expanded && (
         <div data-testid="tool-card-body">
           <ToolBody tool={tool} sessionId={sessionId} />
         </div>

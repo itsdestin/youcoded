@@ -97,9 +97,9 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/browser#explainer', 'pane', 'browser'), params: { browser: 'explainer' } },
   { ...chat('chat/browser#starting', 'pane', 'browser'), params: { browser: 'starting' } },
   { ...chat('chat/browser#error', 'pane', 'browser', 'error-state'), params: { browser: 'error' } },
-  // WHY (2026-11-01 rework): the "extra protection is off" chip had no screen. Closed, and opened by its own click.
+  // WHY (2026-11-02 rework 3): the "extra protection is off" notice had no screen. Closed, and with its Details folded open.
   { ...chat('chat/browser#protection-off', 'pane', 'browser'), params: { browser: 'sandbox' } },
-  { ...chat('chat/browser#protection-off-open', 'pane', 'browser'), params: { browser: 'sandbox' }, open: ['Extra protection off'], newIn: 'after' },
+  { ...chat('chat/browser#protection-off-open', 'pane', 'browser'), params: { browser: 'sandbox' }, open: ['Details'], newIn: 'after' },
   { ...chat('chat/browser#narrow', 'pane', 'browser', 'narrow'), params: { browser: 'working' }, viewport: { width: 390, height: 844 } },
   ...['site', 'form', 'final', 'local', 'handoff', 'no-browser', 'downloading'].map((b) => ({ ...chat(`chat#browser-${b}`, 'view', 'browser'), params: { browser: b } })),
   // Right-click menus, opened on the first visible element of each kind.

@@ -56,9 +56,12 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // WHY (2026-09-29): the signed-in Account view was never photographed, so it
   // missed the card sweep — Destin found it bare in the live app.
   { ...settings('settings/account#signed-in', 'dialog'), params: { signedIn: '1' } },
-  // WHY (2026-11-01 rework): the sentence about every device lives behind this press, so the confirm strip
-  // needs its own picture.
-  { ...settings('settings/account#sign-out-everywhere', 'dialog'), params: { signedIn: '1' }, open: ['Sign out everywhere'], newIn: 'after' },
+  // WHY (2026-11-02 rework 3): Sign out everywhere now sits one level down, in the Danger zone on Edit account, beside Delete
+  // account - the app's own pattern for a destructive action. Three states: the Danger zone, the delete two-step it copies (the
+  // reference), and the sign-out-everywhere confirm.
+  { ...settings('settings/account#danger-zone', 'dialog'), params: { signedIn: '1' }, open: ['Edit account', { do: 'scroll', dir: 'down', times: 4 }], newIn: 'after' },
+  { ...settings('settings/account#sign-out-everywhere', 'dialog'), params: { signedIn: '1' }, open: ['Edit account', { do: 'scroll', dir: 'down', times: 4 }, 'Sign out everywhere'], newIn: 'after' },
+  { ...settings('settings/account#delete-account', 'dialog'), params: { signedIn: '1' }, open: ['Edit account', { do: 'scroll', dir: 'down', times: 4 }, 'Delete account'] },
   settings('settings/account/connections', 'dialog'),
   { ...settings('settings/assistant', 'dialog'), sameAs: { name: 'settings/assistant/general', why: 'the panel opens on its General page' } },
   settings('settings/assistant/general', 'dialog'),

@@ -15,41 +15,31 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BrowserInfo, BrowserInputEvent, BrowserSessionState } from '../../../shared/browser-types';
 import { closeBrowserPane, toggleBrowserExpanded, useBrowserExpanded, useBrowserState } from '../../state/browser-store';
-import { Button, Callout, CloseButton, Dialog, Pill, DocumentTabs, EmptyState, ErrorState, FieldError, LoadingState, TextInput, ZoomPill } from '../ui';
+import { Button, Callout, Dialog, DocumentTabs, EmptyState, ErrorState, FieldError, LoadingState, TextInput, ZoomPill } from '../ui';
 import { PanelIconButton } from '../panel-icon-button';
 import { BackIcon, ForwardIcon, GlobeIcon, ReloadIcon, StopIcon } from '../Icons';
 import BrailleSpinner from '../BrailleSpinner';
 import { ScreenMark } from '../../shoot-mode';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import BrowserAskCard from './BrowserAskCard';
-import { ChevronDown } from '../ui/ChevronDown';
 
 // WHY module-level (not saved): hiding the chip lasts until YouCoded is next opened. The computer's setting does not
 // change on its own, so showing it again on every panel open would nag; but a relaunch shows it once more, so
 // "the browser has no extra protection" is never hidden for good.
-let sandboxChipDismissedThisLaunch = false;
+let sandboxNoticeDismissedThisLaunch = false;
 
-/** The "extra protection is off" chip: a small warning pill that opens its details and fix, with an X to hide it. */
-function SandboxChip({ onDismiss }: { onDismiss: () => void }) {
-  const [open, setOpen] = useState(false);
+/** The "extra protection is off" notice: the app's one notice box (Callout, warning tone) with its words folded
+ *  under "Details" and a "Got it" to hide it - the same shape as every other notice that has a cause behind it
+ *  (an install that failed, a download that stopped) and the same "Got it" this panel's own explainer uses.
+ *  WHY (Destin, 2026-11-02, rejecting a custom amber chip: "look for similar examples of errors with details and
+ *  follow the examples"): an invented chip matched nothing. Nothing new is drawn here. */
+function SandboxNotice({ onDismiss }: { onDismiss: () => void }) {
   return (
-    <div className="mx-3 my-1.5" data-testid="sandbox-chip">
-      <div className="flex items-center gap-1">
-        <button type="button" aria-expanded={open} onClick={() => setOpen(o => !o)}
-          className="inline-flex items-center gap-1 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
-          <Pill tone="warning" dot className="gap-1">
-            Extra protection off
-            <ChevronDown className={`w-2.5 h-2.5 shrink-0 text-fg-muted transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={2.5} />
-          </Pill>
-        </button>
-        <CloseButton size="icon-sm" label="Hide this" onClick={onDismiss} />
-      </div>
-      {open && (
-        <p className="mt-1 text-2xs text-fg-2">
-          This computer doesn't allow the browser's built-in protection against harmful websites. Pages still load, but be careful which sites the assistant visits. To turn it back on, allow "unprivileged user namespaces" in your system settings.
-        </p>
-      )}
-    </div>
+    <Callout tone="warning" compact className="mx-3 my-2"
+      details={'This computer doesn\'t allow the browser\'s built-in protection against harmful websites. Pages still load, but be careful which sites the assistant visits. To turn it back on, allow "unprivileged user namespaces" in your system settings.'}
+      actions={<Button variant="secondary" size="sm" onClick={onDismiss}>Got it</Button>}>
+      Extra browser protection is off.
+    </Callout>
   );
 }
 import { ContextMenu } from '../context-menu/ContextMenu';
@@ -503,7 +493,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   // Gone the moment it's pressed; the saved setting follows. A failed save
   // only means it shows again next time.
   const [explainerDismissed, setExplainerDismissed] = useState(false);
-  const [sandboxChipHidden, setSandboxChipHidden] = useState(sandboxChipDismissedThisLaunch);
+  const [sandboxNoticeHidden, setSandboxNoticeHidden] = useState(sandboxNoticeDismissedThisLaunch);
   const dismissExplainer = useCallback(async () => {
     setExplainerDismissed(true);
     const n = ++infoSeq.current;
@@ -520,9 +510,14 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
     if (!active) return;
     navigator.clipboard?.writeText(active.url).then(() => {
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      // WHY kept and cleared on unmount: an un-cancelled timer fired after a test's page was torn down ("window is not
+      // defined"), failing the full suite under load; it would also set state on a closed panel in the app.
+      if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
     }).catch(() => {});
   }, [active]);
+  const copiedTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => { if (copiedTimer.current) window.clearTimeout(copiedTimer.current); }, []);
   // WHY the open button shows the assistant's OWN browser as a real window
   // (Destin, 2026-10-22): handing the address to the person's default browser
   // opened it in their own Chrome profile — without the assistant's sign-ins,
@@ -711,13 +706,11 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
           <p>Private: separate from your own browser and sign-ins. Sites you sign into here stay signed in until you sign out. You can click, scroll and type in the page yourself.</p>
         </Callout>
       )}
-      {/* WHY a small chip, not a notice box (Destin, 2026-11-01 deck: "that just looks bad. and is it not dismissable? it
-          should be a much smaller error/chip or something with details on expansion"). On some Linux computers the browser
-          can only start without its protective sandbox; that used to be a log line nobody reads. Now: one warning pill
-          (the shared Pill, as the guide's "Status and notices" asks for a status label) that opens its details and fix
-          in place, and an X that hides it. */}
-      {state?.sandboxOff && state.run === 'running' && !myChrome && !sandboxChipHidden && (
-        <SandboxChip onDismiss={() => { sandboxChipDismissedThisLaunch = true; setSandboxChipHidden(true); }} />
+      {/* WHY a one-line notice with Details (Destin, 2026-11-01: "much smaller ... details on expansion"; 2026-11-02: follow the
+          existing error examples). On some Linux computers the browser can only start without its protective sandbox; that
+          used to be a log line nobody reads. Now: the shared notice box, one line, the explanation under Details, and Got it to hide it. */}
+      {state?.sandboxOff && state.run === 'running' && !myChrome && !sandboxNoticeHidden && (
+        <SandboxNotice onDismiss={() => { sandboxNoticeDismissedThisLaunch = true; setSandboxNoticeHidden(true); }} />
       )}
       {narrow && state?.prompt && <BrowserAskCard sessionId={sessionId} />}
       {body}

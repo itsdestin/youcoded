@@ -341,9 +341,6 @@ function SignedInBody({
   // MarketplaceApiClient.logout). Show that something is happening and prevent a
   // double-click while the request is in flight.
   const [signingOut, setSigningOut] = useState(false);
-  const [signingOutAll, setSigningOutAll] = useState(false);
-  const [confirmAll, setConfirmAll] = useState(false);
-  const [signOutAllError, setSignOutAllError] = useState<string | null>(null);
 
   // Blocked users — fetched once when the popup opens (SignedInBody mounts on
   // open). null while loading / on error; we render nothing in either case so
@@ -467,64 +464,6 @@ function SignedInBody({
               {signingOut ? 'Signing out…' : 'Sign out'}
             </Button>
           </div>
-          {/* WHY the wording (integration review 2026-11-01): this ends the YouCoded ACCOUNT's sign-ins (marketplace, ratings),
-              not phones paired for remote access. (Destin, 2026-10-31, security audit): "Sign out" only ends the sign-in on
-              THIS device; if a phone is lost, this ends it everywhere. It does not sign this device out unless the server
-              confirmed, so a failure is shown instead of hidden.
-              WHY so short (Destin, 2026-11-01 deck: "way too much copy bruv. way too busy"): the page holds one short
-              line and one button, like the Sign out row above it; the facts (every device, this one too, paired phones
-              stay paired) appear only after pressing, in a confirm strip - the same replace-the-row confirm the
-              delete-model and deny-listed permission cards use. */}
-          {confirmAll ? (
-            <div className="space-y-2">
-              <p className="text-xs text-fg-2">
-                Ends your YouCoded sign-in on every device, this one too. Phones paired for remote access stay paired.
-              </p>
-              <div className="flex items-center justify-end gap-2">
-                <Button variant="secondary" size="sm" onClick={() => setConfirmAll(false)} disabled={signingOutAll}>
-                  Cancel
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={async () => {
-                    setSigningOutAll(true);
-                    setSignOutAllError(null);
-                    try {
-                      const res = await window.claude.account.signOutAll();
-                      if (res.ok) {
-                        await signOut(); // flips this window to signed-out; the server work is already done
-                      } else {
-                        setConfirmAll(false);
-                        setSignOutAllError(res.status === 404
-                          ? 'The server cannot do this yet. You are still signed in everywhere.'
-                          : 'Could not reach the server, so nothing changed. You are still signed in everywhere. Try again.');
-                      }
-                    } finally {
-                      setSigningOutAll(false);
-                    }
-                  }}
-                  disabled={signingOutAll || signingOut}
-                >
-                  {signingOutAll ? 'Signing out…' : 'Sign out everywhere'}
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center gap-3">
-              <span className="flex-1 min-w-0 text-xs text-fg-2">Lost a device?</span>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => { setSignOutAllError(null); setConfirmAll(true); }}
-                disabled={signingOut}
-                className="shrink-0"
-              >
-                Sign out everywhere
-              </Button>
-            </div>
-          )}
-          {signOutAllError && <FieldError as="p">{signOutAllError}</FieldError>}
         </div>
       </section>
 
@@ -591,6 +530,7 @@ function SignedInBody({
     // initializers re-seed from the CURRENT profile every time.
     <EditAccountBody
       user={user}
+      signOut={signOut}
       updateProfile={updateProfile}
       setHandle={setHandle}
       deleteAccount={deleteAccount}
@@ -602,6 +542,7 @@ function SignedInBody({
 
 function EditAccountBody({
   user,
+  signOut,
   updateProfile,
   setHandle,
   deleteAccount,
@@ -609,12 +550,18 @@ function EditAccountBody({
   onDone,
 }: {
   user: MarketplaceUser;
+  signOut: () => Promise<void>;
   updateProfile: (name: string) => Promise<void>;
   setHandle: (handle: string) => Promise<void>;
   deleteAccount: () => Promise<void>;
   onClose: () => void;
   onDone: () => void;
 }) {
+  // Sign out everywhere: armed in the Danger zone below, confirmed there (see the WHY by its button).
+  const [signOutAllArmed, setSignOutAllArmed] = useState(false);
+  const [signingOutAll, setSigningOutAll] = useState(false);
+  const [signOutAllError, setSignOutAllError] = useState<string | null>(null);
+
   const [nameDraft, setNameDraft] = useState(user.display_name ?? user.login);
   const [nameSaving, setNameSaving] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
@@ -826,7 +773,55 @@ function EditAccountBody({
             the callout and the button variant below, where it belongs.
             WHY SectionLabel (labels batch): guide "no spaced capitals". */}
         <SectionLabel className="mb-2">Danger zone</SectionLabel>
-        <div className={`${CARD_LEVEL_1} p-3`}>
+        <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+        {/* WHY here, in the same two-step as Delete account (Destin, 2026-11-02, on the Sign out everywhere
+            row that sat on the main Account page: "look at how we handle destructive actions elsewhere, with
+            second level menus. we should do the same"): an action that ends sign-ins on every device lives one
+            level down, on Edit account, in the Danger zone, as a red outlined button that opens a red notice and
+            then Cancel / the action. The facts (every device, this one too, paired phones stay paired) show only
+            after pressing. No typed word: unlike deleting the account, signing in again undoes it. */}
+        {!signOutAllArmed ? (
+          <Button variant="danger-outline" onClick={() => { setSignOutAllError(null); setSignOutAllArmed(true); }} className="w-full">
+            Sign out everywhere
+          </Button>
+        ) : (
+          <div className="space-y-2">
+            <Callout tone="danger">
+              Ends your YouCoded sign-in on every device, this one too. Phones paired for remote access stay paired.
+            </Callout>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setSignOutAllArmed(false)} disabled={signingOutAll} className="flex-1">
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                disabled={signingOutAll}
+                className="flex-1"
+                onClick={async () => {
+                  setSigningOutAll(true);
+                  setSignOutAllError(null);
+                  try {
+                    const res = await window.claude.account.signOutAll();
+                    if (res.ok) {
+                      await signOut(); // flips this window to signed-out; the server work is already done
+                    } else {
+                      // Nothing changed, so say so; never leave the person thinking they are signed out.
+                      setSignOutAllArmed(false);
+                      setSignOutAllError(res.status === 404
+                        ? 'The server cannot do this yet. You are still signed in everywhere.'
+                        : 'Could not reach the server, so nothing changed. You are still signed in everywhere. Try again.');
+                    }
+                  } finally {
+                    setSigningOutAll(false);
+                  }
+                }}
+              >
+                {signingOutAll ? 'Signing out…' : 'Sign out everywhere'}
+              </Button>
+            </div>
+          </div>
+        )}
+        {signOutAllError && <FieldError as="p">{signOutAllError}</FieldError>}
         {!deleteExpanded ? (
           // Arming step -> danger-outline. red-500 becomes the --destructive
           // token so packs can restyle it (#C62828 today — no longer identical

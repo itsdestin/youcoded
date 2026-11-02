@@ -17,22 +17,25 @@ import { browserInfo, browserState, installBrowserBridge } from './helpers/brows
 afterEach(() => cleanup());
 
 describe('Browser panel', () => {
-  it('says so with a small chip that opens its details, and the X hides it', () => {
+  it('says so in the shared notice box: one line, the explanation under Details, Got it hides it', () => {
     installBrowserBridge();
     setBrowserState(browserState({ sandboxOff: true }));
     render(<BrowserPanel sessionId="s1" />);
-    // Small chip first; the long explanation waits behind it.
-    const chip = screen.getByRole('button', { name: /Extra protection off/ });
-    expect(chip).toHaveAttribute('aria-expanded', 'false');
+    // The app's one warning box (Callout, warning tone), not a one-off chip: tinted + bordered like every notice.
+    const line = screen.getByText('Extra browser protection is off.');
+    const box = line.closest('.border-amber-500\\/25');
+    expect(box).not.toBeNull();
+    // The long explanation waits behind the shared Details fold, inside the box.
     expect(screen.queryByText(/built-in protection against harmful websites/)).toBeNull();
-    fireEvent.click(chip);
-    expect(screen.getByText(/built-in protection against harmful websites/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Hide this' }));
-    expect(screen.queryByRole('button', { name: /Extra protection off/ })).toBeNull();
+    fireEvent.click(within(box as HTMLElement).getByRole('button', { name: /Details/ }));
+    expect(within(box as HTMLElement).getByText(/built-in protection against harmful websites/)).toBeInTheDocument();
+    // "Got it" is the same dismiss word the panel's own explainer uses.
+    fireEvent.click(screen.getByRole('button', { name: 'Got it' }));
+    expect(screen.queryByText('Extra browser protection is off.')).toBeNull();
     cleanup();
     setBrowserState(browserState());
     render(<BrowserPanel sessionId="s1" />);
-    expect(screen.queryByRole('button', { name: /Extra protection off/ })).toBeNull();
+    expect(screen.queryByText('Extra browser protection is off.')).toBeNull();
   });
 
   it('shows the live picture and asks for pictures only while it is showing', async () => {
