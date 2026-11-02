@@ -11,6 +11,8 @@
 // App still cannot be mounted in a unit test, so that wiring stays covered only by this file's
 // pure-function tests plus manual/E2E verification.
 
+import { isAndroidAppPage } from '../android-page';
+
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 export interface PlaceStorages { session: StorageLike; local: StorageLike }
 
@@ -57,7 +59,9 @@ export function remotePlaceStorages(): PlaceStorages {
 export function remotePlaceHost(): string {
   let target: string | null = null;
   try { target = window.localStorage.getItem('youcoded-remote-target'); } catch { /* none */ }
-  return remotePlaceHostId(target, window.location.host);
+  // WHY '' on the Android app's page: its old file:// address had no host, so the saved place keys are "youcoded-remote-place:" with
+  // nothing after the colon; the new https address must keep reading them (2026-10-30 A2) or every phone forgets its last conversation.
+  return remotePlaceHostId(target, isAndroidAppPage() ? '' : window.location.host);
 }
 
 /**

@@ -259,7 +259,7 @@ describe('remote-shim — send queue', () => {
 
       // Initiate connect to a remote directly. connectToHost calls disconnect()
       // first (no-op since no prior ws), then sets targetUrl and connects.
-      const remoteConnect = shim.connectToHost('192.168.1.100', 9900, 'remote-pw');
+      const remoteConnect = shim.connectToHost('100.64.1.100', 9900, 'remote-pw');
       // Let the async checkTailscaleIfNeeded + dynamic import('./platform')
       // microtasks resolve so the new WS instance is created. The dynamic
       // import() needs more than one microtask to settle on first invocation

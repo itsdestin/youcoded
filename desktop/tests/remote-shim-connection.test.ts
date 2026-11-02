@@ -986,17 +986,17 @@ describe('remote-shim — overlapping connections', () => {
   describe('an Android app paired to a computer that refuses it', () => {
     async function pairThenReconnectRefused(reason: string) {
       await setup({ protocol: 'file:', search: '?bridgeToken=bt&bridgePort=9901' });
-      const pairing = shim.connectToHost('desk', 9900, 'pw');
+      const pairing = shim.connectToHost('desk.tail1234.ts.net', 9900, 'pw');
       for (let i = 0; i < 200 && FakeWebSocket.instances.length === 0; i++) await new Promise((r) => setImmediate(r));
       const first = latest();
-      expect(first.url).toBe('ws://desk:9900/ws');
+      expect(first.url).toBe('ws://desk.tail1234.ts.net:9900/ws');
       first.open();
       first.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
       await pairing;
       first.fireClose(1006);                          // the computer went away
       await vi.advanceTimersByTimeAsync(1000);        // the app comes back with its key
       const retry = latest();
-      expect(retry.url).toBe('ws://desk:9900/ws');
+      expect(retry.url).toBe('ws://desk.tail1234.ts.net:9900/ws');
       retry.open();
       retry.receive({ type: 'auth:failed', reason });
       await settle();
@@ -1025,20 +1025,20 @@ describe('remote-shim — overlapping connections', () => {
     it('keeps its computer through a long outage instead of falling back to its own runtime', async () => {
       // A laptop asleep for 20 minutes used to cost the pairing after ten tries (3.5–6 min).
       await setup({ protocol: 'file:', search: '?bridgeToken=bt&bridgePort=9901' });
-      const pairing = shim.connectToHost('desk', 9900, 'pw');
+      const pairing = shim.connectToHost('desk.tail1234.ts.net', 9900, 'pw');
       for (let i = 0; i < 200 && FakeWebSocket.instances.length === 0; i++) await new Promise((r) => setImmediate(r));
       latest().open();
       latest().receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
       await pairing;
-      expect(JSON.parse(store['youcoded-last-computer'])).toEqual({ host: 'desk', port: 9900 });
+      expect(JSON.parse(store['youcoded-last-computer'])).toEqual({ host: 'desk.tail1234.ts.net', port: 9900 });
       latest().fireClose(1006);
       for (let i = 0; i < 25; i++) {                   // far past the old limit of ten
         await vi.advanceTimersByTimeAsync(60_000);
         latest().fireClose(1006);
       }
       expect(FakeWebSocket.instances.filter((s) => s.url.startsWith('ws://localhost:'))).toHaveLength(0);
-      expect(latest().url).toBe('ws://desk:9900/ws');
-      expect(store['youcoded-remote-target']).toBe('ws://desk:9900/ws');
+      expect(latest().url).toBe('ws://desk.tail1234.ts.net:9900/ws');
+      expect(store['youcoded-remote-target']).toBe('ws://desk.tail1234.ts.net:9900/ws');
       expect(store['youcoded-remote-token']).toBe('dev-1:s');
     });
 
@@ -1049,7 +1049,7 @@ describe('remote-shim — overlapping connections', () => {
 
     it('keeps the pairing when the computer only switched remote access off', async () => {
       await pairThenReconnectRefused('no-password-configured');
-      expect(store['youcoded-remote-target']).toBe('ws://desk:9900/ws');
+      expect(store['youcoded-remote-target']).toBe('ws://desk.tail1234.ts.net:9900/ws');
       expect(store['youcoded-remote-token']).toBe('dev-1:s');
       expect(FakeWebSocket.instances.filter((s) => s.url.startsWith('ws://localhost:'))).toHaveLength(0);
     });
@@ -1061,7 +1061,7 @@ describe('remote-shim — overlapping connections', () => {
   describe('an Android app paired to a computer edits the saved computers on the phone', () => {
     async function paired() {
       await setup({ protocol: 'file:', search: '?bridgeToken=bt&bridgePort=9901' });
-      const pairing = shim.connectToHost('desk', 9900, 'pw');
+      const pairing = shim.connectToHost('desk.tail1234.ts.net', 9900, 'pw');
       for (let i = 0; i < 200 && FakeWebSocket.instances.length === 0; i++) await new Promise((r) => setImmediate(r));
       const desk = latest();
       desk.open();
@@ -1084,8 +1084,8 @@ describe('remote-shim — overlapping connections', () => {
     it('removing a computer goes to the Android app, which answers it', async () => {
       const desk = await paired();
       const sockets = FakeWebSocket.instances.length;
-      const removing = claude().android.removePairedDevice('desk', 9900);
-      expect(calls.map(({ type, payload }) => ({ type, payload }))).toEqual([{ type: 'android:remove-paired-device', payload: { host: 'desk', port: 9900 } }]);
+      const removing = claude().android.removePairedDevice('desk.tail1234.ts.net', 9900);
+      expect(calls.map(({ type, payload }) => ({ type, payload }))).toEqual([{ type: 'android:remove-paired-device', payload: { host: 'desk.tail1234.ts.net', port: 9900 } }]);
       // The app answers only calls carrying this run's page token (it hands its object to every frame).
       expect(calls[0].token).toBe('bt');
       reply(0, true);
@@ -1098,17 +1098,17 @@ describe('remote-shim — overlapping connections', () => {
     it('the list and a save reach the app too', async () => {
       await paired();
       const listing = claude().android.getPairedDevices();
-      reply(0, { devices: [{ host: 'desk', port: 9900 }] });
-      await expect(listing).resolves.toEqual({ devices: [{ host: 'desk', port: 9900 }] });
-      const saving = claude().android.savePairedDevice({ name: 'Desk', host: 'desk', port: 9900, password: 'pw' });
-      expect(calls[1]).toMatchObject({ type: 'android:save-paired-device', payload: { name: 'Desk', host: 'desk', port: 9900, password: 'pw' } });
+      reply(0, { devices: [{ host: 'desk.tail1234.ts.net', port: 9900 }] });
+      await expect(listing).resolves.toEqual({ devices: [{ host: 'desk.tail1234.ts.net', port: 9900 }] });
+      const saving = claude().android.savePairedDevice({ name: 'Desk', host: 'desk.tail1234.ts.net', port: 9900, password: 'pw' });
+      expect(calls[1]).toMatchObject({ type: 'android:save-paired-device', payload: { name: 'Desk', host: 'desk.tail1234.ts.net', port: 9900, password: 'pw' } });
       reply(1, true);
       await expect(saving).resolves.toBe(true);
     });
 
     it('an app that refuses fails the call instead of pretending it worked', async () => {
       await paired();
-      const removing = claude().android.removePairedDevice('desk', 9900);
+      const removing = claude().android.removePairedDevice('desk.tail1234.ts.net', 9900);
       reply(0, null, 'The phone could not remove it.');
       await expect(removing).rejects.toThrow('The phone could not remove it.');
     });
@@ -1270,7 +1270,7 @@ describe('remote-shim — overlapping connections', () => {
 
     it('the Android app whose old connection was replaced just reconnects', async () => {
       await setup({ protocol: 'file:', search: '?bridgeToken=bt&bridgePort=9901' });
-      const pairing = shim.connectToHost('desk', 9900, 'pw');
+      const pairing = shim.connectToHost('desk.tail1234.ts.net', 9900, 'pw');
       for (let i = 0; i < 200 && FakeWebSocket.instances.length === 0; i++) await new Promise((r) => setImmediate(r));
       latest().open();
       // The app's own page is not the computer's: nothing is sent ahead of the sign-in until that computer has said it may.
@@ -1279,7 +1279,7 @@ describe('remote-shim — overlapping connections', () => {
       await pairing;
       latest().fireClose(4011);
       await vi.advanceTimersByTimeAsync(1000);
-      expect(latest().url).toBe('ws://desk:9900/ws');
+      expect(latest().url).toBe('ws://desk.tail1234.ts.net:9900/ws');
       expect(FakeWebSocket.instances).toHaveLength(2);
     });
   });

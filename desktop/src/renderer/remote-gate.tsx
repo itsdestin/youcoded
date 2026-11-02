@@ -339,6 +339,14 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
       setResume('none');
     } catch (err: any) {
       if (r.cancelled) return;
+      if (err?.cleartextRefused) {
+        // A saved computer at a non-Tailscale address can never connect (2026-10-30 audit A1): retrying forever would only say
+        // "can't reach". Open the phone's own runtime and say why, in the same words the pairing form uses.
+        setResume('none');
+        const { announce } = await import('./utils/announce');
+        window.setTimeout(() => announce(String(err.message), 8000), 1500);
+        return;
+      }
       if (err?.signInFailure?.kind === 'refused') {
         // A changed password will not fix itself: open the phone's own runtime and say where to fix it.
         setResume('none');

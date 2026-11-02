@@ -14,6 +14,7 @@
 //     watching, which changes WHEN state is available (catching up after a drop), not what the screen can do.
 import { useEffect, useState } from 'react';
 import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
+import { isAndroidAppPage } from './android-page';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, type Capabilities } from '../shared/capabilities';
 
 // ─── Startup: decide the platform before any component module evaluates ──────
@@ -38,7 +39,7 @@ if (typeof window !== 'undefined' && !(window as any).__PLATFORM__) {
   // (window.claude is installed later by remote-shim.ts), so it falls through to the file: branch.
   if ((window as any).claude) {
     (window as any).__PLATFORM__ = 'electron';
-  } else if (typeof location !== 'undefined' && location.protocol === 'file:') {
+  } else if (typeof location !== 'undefined' && isAndroidAppPage()) {
     (window as any).__PLATFORM__ = 'android';
   }
 }
@@ -122,7 +123,7 @@ async function fetchOsPlatform(): Promise<OsPlatform> {
   const w = window as any;
   if (!w.claude?.getPlatform) {
     // Defensive fallback for older shims — detect Android via file: protocol.
-    const fallback: OsPlatform = location.protocol === 'file:' ? 'android' : 'linux';
+    const fallback: OsPlatform = isAndroidAppPage() ? 'android' : 'linux';
     cachedOs = fallback;
     return fallback;
   }

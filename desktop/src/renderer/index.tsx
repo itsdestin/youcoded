@@ -3,6 +3,7 @@
 // right value. See platform.ts (the startup block) for why.
 import './platform';
 import React from 'react';
+import { isAndroidAppPage } from './android-page';
 import { createRoot } from 'react-dom/client';
 import './styles/globals.css';
 import App from './App';
@@ -102,7 +103,7 @@ if (navigator.platform === 'MacIntel' || navigator.platform === 'MacPPC') {
 // Capture before any shim can modify window.claude
 const isElectron = !!(window as any).claude;
 // Android WebView loads from file:// — always auto-connects, never needs a password screen
-const isAndroid = location.protocol === 'file:';
+const isAndroid = isAndroidAppPage();
 
 // __PLATFORM__ is already set by platform.ts for electron/android;
 // browser/remote path leaves it undefined until remote-shim auth:ok fills it in.

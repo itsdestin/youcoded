@@ -42,6 +42,7 @@ import com.youcoded.app.bridge.HostJsBridge
 import com.youcoded.app.runtime.BackendService
 import com.youcoded.app.runtime.RuntimeInstaller
 import com.youcoded.app.ui.AppWebView
+import com.youcoded.app.ui.LegacyStorageMigration
 import com.youcoded.app.ui.QrScannerOverlay
 import com.youcoded.app.ui.theme.AppTheme
 
@@ -120,7 +121,12 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
             if (ready != null && ready.token != loadedToken) {
                 loadedToken = ready.token
                 host.expectedToken = ready.token
-                webView?.loadUrl(AppWebView.pageUrl(ready.port, ready.token))
+                val view = webView
+                if (view != null) {
+                    // WHY (2026-10-30 audit A2): the page moved from a file:// address to an https one, and saved look settings are kept
+                    // per address, so they are copied across once first. Always opens the page, even if the copy fails.
+                    LegacyStorageMigration.prepare(applicationContext, view) { view.loadUrl(AppWebView.pageUrl(ready.port, ready.token)) }
+                }
             }
         }
     }

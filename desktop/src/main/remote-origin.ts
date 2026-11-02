@@ -61,6 +61,9 @@ export function isAllowedWsOrigin(origin: string | undefined | null, host: strin
   if (!o || o.toLowerCase() === 'null') return true;
   // Some engines report the page's own file:// URL instead of "null" — same case.
   if (o.toLowerCase().startsWith('file:')) return true;
+  // The Android app now serves its page from this private https name (2026-10-30 audit A2), so its socket carries this Origin
+  // instead of "null". Same client, same reasoning: it still cannot authenticate without the password or a stored secret.
+  if (o.toLowerCase() === 'https://appassets.androidplatform.net') return true;
   const originHost = hostOf(o, 'origin');
   const hostHeaderHost = hostOf(host ?? '', 'host');
   if (!originHost || !hostHeaderHost) return false;
