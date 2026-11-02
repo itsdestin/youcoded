@@ -466,12 +466,14 @@ function SignedInBody({
               {signingOut ? 'Signing out…' : 'Sign out'}
             </Button>
           </div>
-          {/* WHY (Destin, 2026-10-31, security audit): "Sign out" only ends the sign-in on THIS device. If a
+          {/* WHY the wording (integration review 2026-11-01): this ends the YouCoded ACCOUNT's sign-ins (marketplace, ratings),
+              not phones paired for remote access; "all devices" read as covering a lost paired phone, which it does not.
+              (Destin, 2026-10-31, security audit): "Sign out" only ends the sign-in on THIS device. If a
               phone is lost, this ends it everywhere. Secondary, with the plain consequence beside it; it does
               not sign this device out unless the server confirmed, so a failure is shown instead of hidden. */}
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="flex-1 min-w-0 text-xs text-fg-2">
-              Lost a device? Sign out everywhere, including this one.
+              Lost a device? Sign out of your YouCoded account everywhere, including this one. Phones paired to this computer are managed under Remote access.
             </span>
             <Button
               variant="secondary"
@@ -495,7 +497,7 @@ function SignedInBody({
               disabled={signingOutAll || signingOut}
               className="shrink-0"
             >
-              {signingOutAll ? 'Signing out…' : 'Sign out of all devices'}
+              {signingOutAll ? 'Signing out…' : 'Sign out of your YouCoded account everywhere'}
             </Button>
           </div>
           {signOutAllError && <FieldError as="p">{signOutAllError}</FieldError>}
