@@ -188,7 +188,7 @@ class Fixtures(unittest.TestCase):
         entry(project, 'app/runtime/pins.env', 'fixture pins')
         for relative in ('app/build.gradle.kts', 'app/src/main/kotlin/com/youcoded/app/runtime/RuntimeInstaller.kt',
                          'app/src/main/kotlin/com/youcoded/app/runtime/BackendService.kt',
-                         'LICENSE', 'TERMS.md', 'gradle.properties', 'build.gradle.kts', 'settings.gradle.kts',
+                         'LICENSE', 'NOTICE', 'TERMS.md', 'gradle.properties', 'build.gradle.kts', 'settings.gradle.kts',
                          'desktop/package-lock.json', 'desktop/package.json',
                          'desktop/node_modules/node-pty/src/pty.cc',
                          'desktop/node_modules/node-pty/third_party/NOTICE',
@@ -208,6 +208,7 @@ class Fixtures(unittest.TestCase):
             run.return_value.stdout = 'synthetic tool version'
             r.finalize(output, cache, cache / 'musl-1.tar.gz', cache / 'claude-code-1.tgz')
         self.assertIn('DEVELOPMENT BUILD', (output / 'assets/legal/THIRD-PARTY-NOTICES.txt').read_text())
+        self.assertTrue((output / 'assets/legal/YouCoded-NOTICE.txt').is_file())
         self.assertIn('YouCoded-1.2.3-fixture-android-corresponding-source.tar.xz', (output / 'assets/legal/SOURCE-CODE.txt').read_text())
         self.assertEqual((output / 'evidence/musl-1.tar.gz').read_text(), 'original synthetic tarball')
         self.assertTrue((output / 'evidence/youcoded-runtime/native-npm/node-pty/src/pty.cc').is_file())

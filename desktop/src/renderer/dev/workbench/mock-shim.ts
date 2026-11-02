@@ -3099,6 +3099,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // listFolder) — the only way to reach that error without a real disk.
   const lockedSwitch = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('filesLocked') === '1';
+  // Pretend files on disk beside fixture rows, for card #40's nearby search:
+  // one only there (a short path opens it), and `summary.md` in two folders
+  // (the "more than one folder" note). Nothing lists them; only a tap finds them.
+  const NEARBY_DISK_FILES = [
+    '/tmp/youcoded-scratch/latency-chart-before.png',
+    '/tmp/youcoded-scratch/summary.md',
+    '/home/you/Projects/community-garden/summary.md',
+  ];
   // A file only a phone would balk at: 24 MB is over the 10 MB image/PDF ceiling
   // but well under the desktop's 50 MB, so the same row previews fine at the
   // desk and shows the too-large card on the phone. Appended to the lists only in
@@ -3157,14 +3165,32 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // real lookup (read-service.ts resolveArtifactPath): the fixture row whose
     // FULL path is exactly the tapped one, else outside-project / not-found
     // decided from the strings (the workbench has no disk to look at).
-    resolvePath: async (projectRoot: string, filePath: string) => {
+    resolvePath: async (projectRoot: string, filePath: string, sessionId?: string) => {
       if (filesRefused()) return refuseAsToday('artifacts:resolve-path');
       const root = projectRoot.replace(/\/+$/, '');
       const abs = filePath.startsWith('/') ? filePath : `${root}/${filePath.replace(/^\.\//, '')}`;
       const rows = filesIn(projectRoot);
       const hit = rows.find((r) => (r.kind === 'internal' ? `${root}/${r.path}` : r.absolutePath) === abs);
       if (hit) return { ok: true, artifact: hit };
-      return { ok: false, error: abs.startsWith(`${root}/`) ? 'not-found' : 'outside-project' };
+      // A pretend on-disk file beside a fixture row (card #40). The real host
+      // answers outside-project here and the renderer records it; the workbench
+      // has no recorder, so it answers the record directly — same open, same note.
+      if (NEARBY_DISK_FILES.includes(abs)) {
+        return { ok: true, artifact: { id: `nearby:${abs}`, path: abs.split('/').pop()!, kind: 'external', absolutePath: abs,
+          lastModified: new Date().toISOString(), status: 'active', versions: [], comments: [], tags: [] } };
+      }
+      if (!abs.startsWith(`${root}/`)) return { ok: false, error: 'outside-project' };
+      // Card #40's nearby search: the short path placed beside each fixture
+      // row's folder, kept where the pretend disk has a file.
+      if (!sessionId || filePath.startsWith('/')) return { ok: false, error: 'not-found' };
+      const segs = filePath.replace(/^\.\//, '').split('/');
+      const dirs = new Set(rows.map((r) => r.absolutePath?.split('/').slice(0, -1).join('/')).filter((d): d is string => !!d));
+      const want = segs.slice(0, -1).join('/');
+      const elsewhere = [...dirs]
+        .filter((d) => !want || d.endsWith(`/${want}`))
+        .map((d) => `${want ? d.slice(0, -want.length - 1) : d}/${segs.join('/')}`)
+        .filter((c) => NEARBY_DISK_FILES.includes(c));
+      return { ok: false, error: 'not-found', searchedNearby: true, ...(elsewhere.length ? { elsewhere } : {}) };
     },
     // Batch 3, Q-7 (yes): save a copy to the phone. The real channel
     // (remote-download.ts) mints a short-lived link on the host and the shim
@@ -3473,7 +3499,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // App.tsx calls this on mount specifically to avoid racing the
     // onDirectoryUpdated push — pulling `leaderWindowId: WORKBENCH_WINDOW_ID`
     // here is what makes `isLeader` resolve true.
-    getDirectory: async () => ({ leaderWindowId: WORKBENCH_WINDOW_ID, windows: [] }),
+    // WHY the buddy chat view gets the sessions (buddy rebuild, 2026-10-25): its session switcher lists the
+    // directory, so an empty one drew a buddy with nothing to switch to. App's own window never reads its own row.
+    getDirectory: async () => (typeof location !== 'undefined' && new URLSearchParams(location.search).get('view') === 'buddy-chat'
+      ? { leaderWindowId: WORKBENCH_WINDOW_ID, windows: [{ window: { id: WORKBENCH_WINDOW_ID, label: 'Window 1', createdAt: 0 }, sessions: store.getState().sessions as any }] }
+      : { leaderWindowId: WORKBENCH_WINDOW_ID, windows: [] }),
     // The first page of a RESUMED session's history (App.tsx loadFirstPage).
     // The catch-all's `[]` has no `.events`, so a resume in the workbench used
     // to show an empty conversation. Student mode answers a resume of the
@@ -3910,6 +3940,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   let buddyHelperInstalled = buddyHelperMode === 'installed' || buddyHelperMode === 'not-needed-installed';
   const buddyHelperSupported = buddyHelperNeeded && buddyHelperMode !== 'none';
   let buddyDismissed = false;
+  let buddyViewed: string | null = null;
   const buddyStatusSubs = new Set<(s: unknown) => void>();
   const pushBuddyStatus = () => {
     const snap = { dismissed: buddyDismissed };
@@ -3938,6 +3969,18 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       buddyStatusSubs.add(cb);
       return () => buddyStatusSubs.delete(cb);
     },
+    // WHY (buddy rebuild, 2026-10-25): the buddy CHAT window's own calls, so `?view=buddy-chat` can draw the
+    // shipping chat against the workbench's conversations. The buddy views the first session unless told otherwise;
+    // subscribing is a no-op because the workbench's chat is seeded in place, never streamed per window.
+    getViewedSession: async () => buddyViewed ?? (typeof location !== 'undefined' ? new URLSearchParams(location.search).get('buddySession') : null) ?? store.getState().sessions[0]?.id ?? null,
+    setSession: async (sessionId: string) => { buddyViewed = sessionId; },
+    toggleChatSize: async () => {},
+    toggleChat: async () => {},
+    onChatState: () => () => {},
+    onChatSize: () => () => {},
+    onAttachFile: () => () => {},
+    onAttentionSummary: () => () => {},
+    onSeenInBuddy: () => () => {},
     onFocusSession: (cb: (sessionId: string) => void) => {
       focusSessionSubs.add(cb);
       return () => { focusSessionSubs.delete(cb); };
@@ -4113,6 +4156,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
+    // WHY only on the buddy chat view (buddy rebuild, 2026-10-25): the buddy draws every dot from main's merged summary, and its
+    // review needs each colour on screen. The main window computes its own dots and is left exactly as it was.
+    ...(typeof location !== 'undefined' && new URLSearchParams(location.search).get('view') === 'buddy-chat' ? { attention: { getSummary: async () => {
+      const colours = ['green', 'red', 'blue', 'amber'];
+      const perSession: Record<string, { status: string }> = {};
+      store.getState().sessions.forEach((x: any, i: number) => { perSession[x.id] = { status: colours[i] ?? 'gray' }; });
+      return { anyNeedsAttention: true, perSession };
+    } } } : {}),
     skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, integrations, dev: devMock, voiceVocabulary, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario),

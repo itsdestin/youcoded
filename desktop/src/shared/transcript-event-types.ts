@@ -146,7 +146,7 @@ interface UserMessageData extends SubagentStamp {
    * Task 4 (native specialists, background execution) — marks this as a
    * SYNTHETIC turn the host injected (a background specialist's finished
    * report, or its typed failure notice), not something the user actually
-   * typed. The reducer stamps it on the timeline entry, and ChatView/BubbleFeed
+   * typed. The reducer stamps it on the timeline entry, and ChatView (main window and buddy)
    * draw it as a compact card instead of a user bubble — the text is what the
    * PARENT MODEL reads, and showing it as the user's own words put text in the
    * chat nobody actually said (Destin, 1b hands-on).
@@ -309,7 +309,7 @@ interface CompactSummaryData extends SubagentStamp {
 
 /** Terminal marker appended by the TRANSCRIPT_REPLAY handler — never parsed from
  *  a transcript, never persisted. DECLARED (not just commented) because producer
- *  (ipc-handlers.ts) and consumers (App.tsx, BubbleFeed.tsx) were otherwise
+ *  (ipc-handlers.ts) and consumers (App.tsx, useBuddyFeed.ts) were otherwise
  *  linked by nothing but a matching string literal through an `any`: a typo read
  *  undefined → false and silently disabled the orphan reap (PR #287, 2026-08-10). */
 interface ReplayCompleteData {

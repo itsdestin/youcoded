@@ -33,7 +33,3 @@ See `docs/build-and-release.md` in the workspace scaffold. Shortest path:
 - **Desktop iteration:** `bash scripts/run-dev.sh` from the workspace root.
 - **Android iteration:** `./gradlew assembleDebug` from this repo (needs clang + lld). `bundleWebUi`, `buildBackend` and `buildRuntimeDebug` run automatically and are skipped as UP-TO-DATE when their inputs did not change.
 - **Release:** tag `vX.Y.Z`. One tag triggers both platform workflows; `android-release.yml` stamps `versionName` from the tag and `versionCode` from its run number (since 2026-09-10), so the hand-set values in `app/build.gradle.kts` only matter for local builds.
-
-## Workspace scaffold
-
-Day-to-day development happens in the `youcoded-dev` workspace repo, which clones this repo alongside `youcoded-core` (the toolkit), `wecoded-themes`, and `wecoded-marketplace`. The workspace root has the cross-cutting docs (`docs/PITFALLS.md`, `docs/android-runtime.md`, `docs/chat-reducer.md`, etc.) and the `/audit` command for doc/code drift detection.

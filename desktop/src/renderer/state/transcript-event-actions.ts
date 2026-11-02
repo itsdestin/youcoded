@@ -19,7 +19,7 @@ function switchedModelLabel(model: string): string {
  * hand-mirrored copy (and drifted: the buddy once missed `replay-complete`, and
  * once the tool timestamp):
  *  - the main window's live stream (App.tsx), `live: true`;
- *  - the buddy window's live stream (BubbleFeed.tsx), `live: true`, through the SAME
+ *  - the buddy window's live stream (useBuddyFeed.ts), `live: true`, through the SAME
  *    listener (state/screen-feed.ts); it skips no event type;
  *  - a history page read off disk (`pageEventToActions`), `live: false`.
  *

@@ -46,7 +46,7 @@ export interface FilesChannelTypes {
   'artifacts:list-all-files': { request: { projectId: string; opts?: { force?: boolean } }; response: Answer<typeof ReadService.listAllFiles> };
   'artifacts:list-folder': { request: { projectId: string; relDir: string; opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean } }; response: Answer<typeof ReadService.listFolder> };
   /** `trackedOnly` is set by the phone door's policy, never by a caller. */
-  'artifacts:resolve-path': { request: { projectRoot: string; path: string; trackedOnly?: boolean }; response: Answer<typeof ReadService.resolveArtifactPath> };
+  'artifacts:resolve-path': { request: { projectRoot: string; path: string; trackedOnly?: boolean; sessionId?: string }; response: Answer<typeof ReadService.resolveArtifactPath> };
   'artifacts:list-projects-index': { request: { withCounts?: boolean } | undefined; response: Answer<typeof listProjectsIndex> };
   /** `maxBytes` is set by the phone door's policy, never by a caller. */
   'artifacts:get': { request: { projectRoot: string; artifactId: string; full?: boolean; maxBytes?: number }; response: Answer<typeof ReadService.readArtifactText> };

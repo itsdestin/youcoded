@@ -1839,10 +1839,10 @@ export function registerIpcHandlers(
     remoteServer?.broadcast({ type: 'session:renamed', payload: { sessionId: desktopId, name } });
     remoteServer?.setLastTopic(desktopId, name);
     // Fan out a directory refresh so any renderer that reads session names
-    // from WINDOW_DIRECTORY_UPDATED (buddy SessionPill, main SessionStrip)
+    // from WINDOW_DIRECTORY_UPDATED (the main and the buddy's SessionStrip)
     // picks up the new name. sendForSession(SESSION_RENAMED) only reaches
-    // the session's owner + subscribers — the buddy only subscribes to its
-    // ONE viewed session, so without this its dropdown shows stale names
+    // the session's owner + subscribers — the buddy chat is subscribed only to
+    // its viewed session (setViewedSession), so without this its list shows stale names
     // for every OTHER session. getDirectory() is the lazy snapshot; emit
     // 'changed' triggers broadcastWindowState() in main.ts which rebuilds
     // and pushes it.

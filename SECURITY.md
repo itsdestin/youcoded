@@ -23,13 +23,13 @@ In scope:
 - The YouCoded desktop application (`youcoded/desktop/`).
 - The YouCoded Android application (`youcoded/app/`).
 - The marketplace Cloudflare Worker (`wecoded-marketplace/worker/`).
-- The bundled plugins (`youcoded-core`, `wecoded-themes-plugin`, `wecoded-marketplace-publisher`).
+- The bundled plugins (Theme Builder, Marketplace Publisher, Conversation Search, Page Builder) and the app's built-in safety hooks.
 - The theme and marketplace registries (`wecoded-themes`, `wecoded-marketplace`) where they affect what end users download.
 
 Out of scope (please report to the upstream project instead):
 
-- Vulnerabilities in Anthropic's Claude Code CLI itself.
-- Vulnerabilities in Electron, Node.js, Termux, or other underlying frameworks.
+- Vulnerabilities in Anthropic's Claude Code CLI itself, or in an AI provider's service.
+- Vulnerabilities in Electron, Node.js, the Android runtime's Alpine packages, or other underlying frameworks.
 - Vulnerabilities in third-party plugins or themes contributed by community members — those should be reported to the plugin/theme author, though I'm happy to receive a copy and help coordinate.
 
 ## Disclosure
@@ -38,4 +38,4 @@ I'll work with you on a coordinated disclosure timeline. Once a fix is shipped, 
 
 ## Trademark / Affiliation Note
 
-YouCoded is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic. Please do not report YouCoded vulnerabilities to Anthropic — they don't maintain this project.
+YouCoded is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic, OpenAI or OpenRouter. Please do not report YouCoded vulnerabilities to them — they don't maintain this project.

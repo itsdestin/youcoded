@@ -21,13 +21,16 @@ import { useExpandAllToggle, getInitialExpanded } from '../hooks/useExpandAllTog
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useCardKeysLive } from '../state/card-keys-context';
 import { usePopupOpen } from '../hooks/use-esc-close';
+import { useCompactSurface } from '../state/compact-surface-context';
+import { AskQuestionCompact } from './AskQuestionCompact';
 import { asString } from '../utils/tool-input';
 import { managementTargetId, useBackgroundTarget } from '../hooks/useBackgroundTarget';
 import { managementDisplay } from './management-labels';
-import { normalizeQuestions, isValidQuestions } from './ask-question-normalize';
+import { normalizeQuestions, isValidQuestions, OTHER, OTHER_LABEL, OTHER_DESCRIPTION, textPlaceholder } from './ask-question-normalize';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
 // status-bar chip colors, so the footer band can never drift from the chip.
 import { FullAutoStops, BROAD_ALLOW_COLORS } from './permissions/FullAutoStops';
+import { OutsideCommentsAsk } from './permissions/OutsideCommentsAsk';
 import { floorAskNote } from './permissions/deny-list-copy';
 import { AdminPasswordPrompt } from './permissions/AdminPasswordPrompt';
 import { AdminApprovalChoices, type AdminApprovalScope } from './permissions/AdminApprovalChoices';
@@ -35,6 +38,7 @@ import { AdminRunStrip } from './permissions/AdminRunStrip';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../shared/send-user-link';
+import { bareDocCommentsToolName } from '../../shared/doc-comments-mcp';
 import { toolActionLabel } from '../utils/tool-group-summary';
 import { PlanApprovalCard } from './PlanApprovalCard';
 import { ExpiredApprovalActions } from './ExpiredApprovalActions';
@@ -66,7 +70,7 @@ function truncate(s: string, max: number): string {
  * management call names (steer / resume / stop read differently — the same
  * card copy for all three was the informed-consent gap in ROADMAP).
  */
-export function taskDisplay(
+function taskDisplay(
   input: Record<string, unknown>,
   ctx?: { title?: string; targetTitle?: string; targetRunning?: boolean; runStatus?: string; active?: boolean },
 ): { label: string; detail: string } {
@@ -104,7 +108,7 @@ export function taskDisplay(
 /** The skill's name as English: the plugin namespace is stripped
  *  ("superpowers:brainstorming" → "brainstorming") so a card reads as a word,
  *  not a technical id. Shared by the single Skill card and StackedSkillsCard. */
-export function skillBareName(input: Record<string, unknown>): string {
+function skillBareName(input: Record<string, unknown>): string {
   // Fix: a non-string skill crashed .includes() — optional chaining doesn't
   // guard objects (they're not nullish). Non-string args rendered as
   // "[object Object]".
@@ -644,6 +648,14 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   const budgetStop = isNative && permissionMode === 'full-auto'
     && (toolName === 'doom_loop' || toolName === 'max_steps');
   const [confirmingExternal, setConfirmingExternal] = useState(false);
+  // WHY (card #207): a comment tool reaching a file outside the chat's project
+  // gets its own three-choice row — once / this chat / no — like the Browser's
+  // site ask. "This chat" covers comments on any outside file until the chat
+  // ends (Destin chose any-file over per-folder, 2026-10-29); it never covers
+  // editing those files. Both surfaces flag the ask `external`: the native
+  // path guard, and main.ts for Claude Code's comment server. A helper's ask
+  // keeps the plain row — a helper can never hold a chat-wide grant.
+  const outsideComments = external === true && !specialistName && bareDocCommentsToolName(toolName ?? '') !== null;
   // Consequence-gated confirm strip (deny-listed asks) — mirrors the delete-model
   // confirm in LocalModelsSection: replace the button row with a plain-language
   // warning + Cancel / confirm.
@@ -732,7 +744,13 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 
   // Keyboard order matches the visible row: Run it / Deny / Always allow.
   const actions = useRef<(() => void)[]>([]);
-  actions.current = externalStop || budgetStop
+  actions.current = outsideComments
+    ? [
+        () => handleRespond({ decision: { behavior: 'allow' } }),
+        () => handleRespond({ decision: { behavior: 'allow' }, allowOutsideCommentsForSession: true }),
+        () => handleRespond({ decision: { behavior: 'deny' } }),
+      ]
+    : externalStop || budgetStop
     ? [
         () => handleRespond({ decision: { behavior: 'allow' } }),
         () => handleRespond({ decision: { behavior: 'deny' } }),
@@ -894,6 +912,11 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     );
   }
 
+  if (outsideComments) return (
+    <OutsideCommentsAsk inset={bare} responding={responding} focusIdx={focusIdx} buttonsRef={buttonsRef}
+      pad={pad} ring={ring} unconfirmedNote={unconfirmedNote} onChoose={(i) => actions.current[i]()} />
+  );
+
   if (confirmingExternal || externalStop || budgetStop || fullAutoStop) return (
     <FullAutoStops
       kind={externalStop || confirmingExternal ? 'external' : budgetStop ? 'budget' : 'danger'}
@@ -988,14 +1011,6 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 // The sentinel is an internal selection key only; it never reaches the model.
 // A model-authored option literally labelled "__other__" would collide, which
 // is not a real risk worth a second code path.
-const OTHER = '__other__';
-const OTHER_LABEL = 'Other';
-const OTHER_DESCRIPTION = 'Type your own answer';
-
-/** What the text box is FOR depends on what is selected — say so in the placeholder. */
-function textPlaceholder(sel: Set<string> | undefined): string {
-  return sel?.has(OTHER) ? 'Explain…' : 'Add a note…';
-}
 
 function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   tool: ToolCallState;
@@ -1021,6 +1036,8 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   const [unconfirmed, setUnconfirmed] = useState(false);
   // Track which question is "active" for keyboard nav, and which option is focused
   const [focusedOption, setFocusedOption] = useState(0);
+  // The buddy's small window draws this card one question at a time (AskQuestionCompact).
+  const compact = useCompactSurface();
 
   const allAnswered = questions.every((q, qi) => {
     const sel = answers[keyFor(q.question, qi)];
@@ -1180,6 +1197,17 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
 
   const pad = isAndroid() ? 'py-2' : 'py-1.5';
   let flatIdx = 0; // Running index across all questions' options for keyboard focus
+
+  if (compact) {
+    // The buddy's small window: the same answers through a smaller drawing (AskQuestionCompact.tsx says why).
+    return (
+      <AskQuestionCompact
+        questions={questions} keyFor={keyFor} answers={answers} text={text} setText={setText} textRefs={textRefs}
+        responding={responding} unconfirmed={unconfirmed} focusedOption={focusedOption} allAnswered={allAnswered}
+        onSelect={handleSelect} onSubmit={handleSubmit} onDeny={handleDeny}
+      />
+    );
+  }
 
   return (
     <div className="border-t border-edge px-3 py-2 space-y-3">

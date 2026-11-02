@@ -1,6 +1,8 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { describe, it, expect } from 'vitest';
 import {
-  BAR_CONTENT, BAR_PADDING, BAR_GAP_PX, BAR_SIZE, CHAT_SIZE, CHAT_GAP_PX, MASCOT_SIZE,
+  BAR_CONTENT, BAR_PADDING, BAR_PADDING_X, BAR_TOOLTIP_ROOM, BAR_GAP_PX, BAR_SIZE, CHAT_SIZE, CHAT_GAP_PX, MASCOT_SIZE,
   computeBarContentRect, computeBarPosition, computeGroupLayout, chatOffsetX,
   mascotXRangeForChat, mascotInkRect, computeTrayLayout,
 } from '../src/main/buddy-bar-geometry';
@@ -19,13 +21,11 @@ const rectsOverlap = (
   && a.y < b.y + bSize.height && a.y + aSize.height > b.y;
 
 describe('computeBarContentRect', () => {
-  it('sits to the right of the mascot, centered on his hands (not his midline)', () => {
+  it('sits to the right of the mascot, its bottom level with his feet', () => {
     const r = computeBarContentRect(mascot(500, 300));
     expect(r.x).toBe(500 + 112 + BAR_GAP_PX);
-    // Hands sit at 58.3% of the mascot's height, below the 50% midline.
-    const handsY = 300 + Math.round(112 * 0.583);
-    expect(r.y).toBe(handsY - BAR_CONTENT.height / 2);
-    expect(handsY).toBeGreaterThan(300 + 56); // strictly below center
+    const ink = mascotInkRect(mascot(500, 300));
+    expect(r.y + r.height).toBe(ink.y + ink.height);
   });
 
   it('never flips sides — it is always to the mascot\'s right', () => {
@@ -41,18 +41,18 @@ describe('computeBarContentRect', () => {
     const range = mascotXRangeForChat(mascot(0, 300), SHORT_WA);
     for (let x = range.min; x <= range.max; x += 1) {
       const bar = computeBarContentRect(mascot(x, 300));
-      expect(bar.x - BAR_PADDING).toBeGreaterThanOrEqual(SHORT_WA.x);
-      expect(bar.x + bar.width + BAR_PADDING).toBeLessThanOrEqual(SHORT_WA.x + SHORT_WA.width);
+      expect(bar.x - BAR_PADDING_X).toBeGreaterThanOrEqual(SHORT_WA.x);
+      expect(bar.x + bar.width + BAR_PADDING_X).toBeLessThanOrEqual(SHORT_WA.x + SHORT_WA.width);
     }
   });
 });
 
 describe('computeBarPosition', () => {
-  it('is the content rect grown by BAR_PADDING', () => {
+  it('is the content rect grown by its side padding and the tooltip room above', () => {
     const c = computeBarContentRect(mascot(500, 300));
     expect(computeBarPosition(mascot(500, 300), wa)).toEqual({
-      x: c.x - BAR_PADDING,
-      y: c.y - BAR_PADDING,
+      x: c.x - BAR_PADDING_X,
+      y: c.y - BAR_TOOLTIP_ROOM,
     });
   });
 
@@ -60,9 +60,9 @@ describe('computeBarPosition', () => {
     expect(computeBarPosition(mascot(500, -40), wa).y).toBe(0);
   });
 
-  it('window size accounts for the padding on both sides', () => {
-    expect(BAR_SIZE.width).toBe(BAR_CONTENT.width + BAR_PADDING * 2);
-    expect(BAR_SIZE.height).toBe(BAR_CONTENT.height + BAR_PADDING * 2);
+  it('window size holds the panel, its side padding, the hint room above and the padding below', () => {
+    expect(BAR_SIZE.width).toBe(BAR_CONTENT.width + BAR_PADDING_X * 2);
+    expect(BAR_SIZE.height).toBe(BAR_CONTENT.height + BAR_TOOLTIP_ROOM + BAR_PADDING);
   });
 });
 
@@ -101,9 +101,8 @@ describe('computeGroupLayout', () => {
     const l = computeGroupLayout(mascot(600, 100), wa);
     expect(l.mascot).toEqual({ x: 600, y: 100 });
     expect(inkGap(l)).toBe(CHAT_GAP_PX);
-    // Unchanged from the window-gap era Destin was happy with: 13 - 7px of
-    // foot padding = the old 6px window gap.
-    expect(l.chat.y).toBe(100 + 112 + 6);
+    // 4px under his feet, which are drawn 15px above his window's bottom edge.
+    expect(l.chat.y).toBe(100 + 112 - 11);
   });
 
   it('flips the chat above when it would not fit below, leaving him put', () => {
@@ -230,6 +229,15 @@ describe('computeTrayLayout', () => {
     expect(chat.x + CHAT_SIZE.width / 2).toBe(1712);
     expect(bar.y).toBe(chat.y + CHAT_SIZE.height);
     expect(bar.y + BAR_SIZE.height).toBe(1040 - 8);
+  });
+  it('the button row sits just under the chat, not a hint-room away (the bar draws it at its window top here)', () => {
+    // WHY: the bar window has BAR_TOOLTIP_ROOM for hover hints. Drawn at the window's bottom (the floating style),
+    // that room became a 34px gap under the chat; in this style buddy.css [data-under="1"] draws the row at the top.
+    const { chat, bar } = computeTrayLayout({ x: 1700, y: 1048, width: 24, height: 24 }, WA);
+    const rowTop = bar.y + BAR_PADDING;
+    expect(rowTop - (chat.y + CHAT_SIZE.height)).toBe(BAR_PADDING);
+    const css = readFileSync(join(__dirname, '../src/renderer/styles/buddy.css'), 'utf8');
+    expect(css).toMatch(new RegExp(`\\.buddy-bar-root\\[data-under="1"\\] \\{[^}]*align-items: flex-start;[^}]*padding-top: ${BAR_PADDING}px`));
   });
   it('top bar (macOS menu bar): the chat hangs from the top', () => {
     const { chat } = computeTrayLayout({ x: 1500, y: 2, width: 22, height: 22 }, { x: 0, y: 25, width: 1920, height: 1055 });

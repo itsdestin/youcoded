@@ -84,6 +84,8 @@ interface Props {
   sendBlocked?: boolean;
   minimal?: boolean;
   compact?: boolean;                // NEW: hides QuickChips for buddy chat
+  /** One more tool beside Attach (the buddy's screenshot button, buddy rebuild 2026-10-25). */
+  extraTool?: React.ReactNode;
   view?: ViewMode;                  // Current view mode — forwarded to dispatcher (e.g. /config behaves differently in terminal view)
   onOpenDrawer?: (searchMode: boolean) => void;
   onCloseDrawer?: () => void;
@@ -140,7 +142,7 @@ function fileNameFromPath(p: string): string {
   return p.replace(/\\/g, '/').split('/').pop() || p;
 }
 
-const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked: externalSendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider, connection }, ref) {
+const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, extraTool, disabled, sendBlocked: externalSendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider, connection }, ref) {
   const startup = useNativeStartup(provider === 'native' ? sessionId : null);
   const sendBlocked = externalSendBlocked || nativeStartupBlocked(startup);
   const draftAuthority = useRef(createQueueDraft(sessionId));
@@ -1155,7 +1157,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           >
             <AttachIcon className="w-5 h-5" />
           </BrailleBurst>
-          {!minimal && (
+          {extraTool}
+          {/* WHY `onOpenDrawer`: the skills drawer belongs to the main window. The buddy's compact bar has no drawer to
+              open, and drew a compass that did nothing when pressed. */}
+          {!minimal && (!compact || onOpenDrawer) && (
             <BrailleBurst
               onTrigger={() => onOpenDrawer?.(false)}
               disabled={disabled}

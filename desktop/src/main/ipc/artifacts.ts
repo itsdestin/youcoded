@@ -142,11 +142,18 @@ export const artifactsChannels: MainChannelDef[] = [
     remotePayload: async (p) => ({ ...p, trackedOnly: !(await isKnownRoot(p.projectRoot)) }),
     // WHY (2026-10-01 one-core R3-8, R3-7 review): the old desktop handler ignored `trackedOnly` (it never took one),
     // so the computer's door ignores it too: only the phone's door sets it, and a window that sent one gets no change.
-    handler: ({ projectRoot, path: filePath, trackedOnly }, ctx) =>
+    handler: ({ projectRoot, path: filePath, trackedOnly, sessionId }, ctx) =>
       resolveArtifactPath(projectRoot, filePath, ctx.door === 'remote'
         // WHY refusePrivate (2026-10-01 one-core R3-SEC): only the phone's door; the computer's answer is unchanged.
+        // A phone's `sessionId` is dropped here: looking beside a chat's files checks paths OUTSIDE the
+        // folder on disk, which a phone must never be able to ask about (card #40).
         ? { ...(trackedOnly !== undefined ? { trackedOnly } : {}), refusePrivate: true }
-        : undefined),
+        // WHY nearSession (card #40): a short path the assistant gave relative to a folder it `cd`d into
+        // is also looked for beside this chat's own files. conversationIdFor, as list-session uses, so a
+        // resumed Claude Code chat's earlier files count too.
+        : typeof sessionId === 'string' && sessionId
+          ? { nearSession: { sessionId, conversationId: conversationIdFor(ctx, sessionId) } }
+          : undefined),
   }),
 
   // The Project View project list — saved folders reconciled with the central index (projects-index.ts).

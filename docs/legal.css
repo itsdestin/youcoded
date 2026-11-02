@@ -103,7 +103,10 @@ a:active { color: var(--fg); }
   .site-footer { margin-left: 24px; margin-right: 24px; }
 }
 @media (max-width: 520px) {
-  .site-nav { min-height: 80px; padding: 16px 20px; gap: 12px; }
+  /* WHY: four page links (Privacy, Terms, Security, Changelog) no longer fit beside
+     the logo on a phone; they drop to their own row instead of running off-screen. */
+  .site-nav { min-height: 80px; padding: 16px 20px; gap: 12px; flex-wrap: wrap; }
+  .site-nav .policy-nav { width: 100%; flex-wrap: wrap; margin: 0 -11px; }
   .logo { gap: 6px; }
   .logo img { width: 30px; height: 30px; }
   .wordmark { font-size: 22px; }

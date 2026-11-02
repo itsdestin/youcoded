@@ -33,7 +33,6 @@ const SMOOTH_OK: Record<string, string> = {
   'comp-pulse': 'theme companion SVG — visibility-gated with the scene',
   'comp-bob': 'theme companion SVG — visibility-gated with the scene',
   'mascot-comp-float': 'theme companion float — visibility-gated with the scene',
-  'buddy-breathe': 'buddy window is alwaysOnTop so visibilitychange never fires, and quantized breathing is visible; accepted cost of an opt-in feature',
   'model-load-sweep': 'bounded by the model load (two sites: .model-load-track::after, .model-load-finalize::after), and disabled by Reduced Effects + prefers-reduced-motion',
   'boot-spin': 'bounded by the remote boot gate; ends when the app loads',
 };

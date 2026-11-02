@@ -24,6 +24,7 @@ import { findProjectInstructionsPath, locateContextFile, readWholeContextFile } 
 import { isPhoneDeniedFile, KEPT_ON_COMPUTER } from '../phone-read-deny';
 import { noteModelUsed } from '../conversations/service';
 import { defineChannel, type MainChannelCtx, type MainChannelDef } from './channel-def';
+import { noteMilestone } from '../analytics-service';
 import { deliverableImageMediaType } from '../harness/image-support';
 import type { ModelAttachment } from '../harness/busy-message-boundary';
 import type { RemoteNativeRuntime } from '../create-runtime';
@@ -124,6 +125,8 @@ export const nativeChannels: MainChannelDef[] = [
         // The host took it (sent now, or queued behind the running turn): note the id so a phone that lost the answer can learn so (R5-4b).
         // A 'failed' answer is NOT noted: the host did not accept it, which is exactly what "not received" means.
         if (sendId !== undefined && result && result.status !== 'failed') runtime.records.noteSend(sessionId, sendId);
+        // The setup staircase's last step (deck U-2); an in-memory check after the first send.
+        if (result && result.status !== 'failed') noteMilestone('first_message');
         return result;
       });
       const tail = turn.catch(() => undefined);

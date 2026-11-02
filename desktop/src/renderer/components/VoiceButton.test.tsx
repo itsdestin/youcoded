@@ -98,6 +98,18 @@ describe('VoiceButton card — first run (R8, R22)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Download' }));
     expect(h.onDownload).toHaveBeenCalledTimes(1);
   });
+
+  it('stays inside a window barely wider than itself, 12px clear of the left edge', () => {
+    // The buddy chat: a 320px window with the mic near its right edge and a 288px card.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(
+      { left: 264, right: 280, top: 400, bottom: 416, width: 16, height: 16, x: 264, y: 400, toJSON() {} } as DOMRect,
+    );
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(288);
+    renderCard({ readiness: NEEDS });
+    tapMic();
+    // The card hangs leftward from `left`, so its left edge is left - 288.
+    expect(screen.getByRole('dialog', { name: 'Voice' }).style.left).toBe('300px');
+  });
 });
 
 describe('VoiceButton card — unpacking (R23)', () => {

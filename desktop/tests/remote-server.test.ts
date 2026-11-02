@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -116,6 +116,12 @@ async function restore(server: any, ws: any) {
 // runtime through the `getNativeRuntime` accessor main.ts gives it. Tests hand it a (partial) fake
 // by replacing that accessor on the instance — evaluated once, so a fake keeps its identity.
 function giveRuntime(server: any, runtime: any): void { server.getNativeRuntime = () => runtime; }
+
+// WHY warmed here (test-suite-hygiene, "a file's one-time cost is warmed in beforeAll"): every test imports
+// remote-server lazily, and the FIRST one paid the whole module graph's load — 30 s+ when the full suite shared the
+// machine with the screenshot run (2026-10-30), timing out a test with nothing slow of its own. Measured ~1 s alone.
+const REMOTE_SERVER_IMPORT_BUDGET_MS = 120_000;
+beforeAll(async () => { await import('../src/main/remote-server'); }, REMOTE_SERVER_IMPORT_BUDGET_MS);
 
 describe('RemoteServer', () => {
   let mockSessionManager: any;

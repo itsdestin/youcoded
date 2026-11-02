@@ -1,154 +1,48 @@
-# YouCoded
+# youcoded
 
-**Your AI assistant, on your terms.** An open-source, cross-platform agent for Windows, macOS, Linux, and Android — with remote access from any web browser.
+**Your personal AI assistant and open source everything app.**
 
-> Built entirely without coding experience, using Claude Code itself. Download the app at https://youcoded.ai.
+<!-- WHY: screenshots are of the default YouCoded theme, taken with the workspace's shoot tool (practice data, no real accounts). Retake with: node scripts/shoot/shoot.mjs welcome office/spreadsheet 'pages/focus/page-home#site' 'pages/focus/page-money#site' --themes youcoded --width 1440 --height 900 -->
+<p align="center">
+  <img src="docs/readme/empty-chat.webp" alt="Youcoded's start screen: pick a folder and a model, then start a session" width="49%">
+  <img src="docs/readme/spreadsheet.webp" alt="An Excel spreadsheet open in youcoded's built-in Office editor" width="49%">
+</p>
+<p align="center">
+  <img src="docs/readme/home.webp" alt="A Home page showing lights, a thermostat and speakers" width="49%">
+  <img src="docs/readme/finance.webp" alt="A Finance page showing net worth, upcoming bills and accounts" width="49%">
+</p>
+## What is youcoded?
 
----
+Well.... kind of everything? Youcoded is an AI assistant at its core, but it's also designed from the ground up to become anything you want it to be. Much like Claude Cowork or ChatGPT, youcoded can perform advanced agentic tasks on your computer like managing your files, searching the web, or reading and writing documents. Unlike those proprietary projects, however, youcoded is completely open source, meaning anyone can see the source code and modify it themselves. It is also built to be fully modular, meaning you can add, combine, or reorganize features and app pages as you please. Ask for a new look, a new feature, an app page to manage your smarthome or track your finances, and watch youcoded build it for you (the home and money pages above are tested, fully-functional examples, but not yet built-in - try making your own!). It also runs on whichever AI you choose: Claude or ChatGPT on the plan you already have, hundreds of cheap or expensive models through OpenRouter, or a small free model running offline on your own computer. It will always ask before it acts.
 
-## What is YouCoded?
+Free and open source for Windows, macOS, Linux and Android, plus any web browser through remote access. iOS/iPadOS in exploration. **[Download at youcoded.ai](https://youcoded.ai)**
 
-YouCoded is an open-source, multi-model AI assistant that helps you work with files, projects, research, and everyday tasks. Its own permission-based agent can use tools, skills, and specialists; you choose the AI behind it: a local model on your computer, a cloud provider or API key, a ChatGPT plan, or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) as a first-class integration.
+## What's inside
 
-It's designed for students, professionals, and anyone who uses AI regularly — not just developers.
+- Themes, Pages and skills you create by describing them, and a community marketplace to share them
+- Word, Excel and PowerPoint editing, plus a browser the assistant can use with your permission (desktop)
+- Sync across devices through your own private GitHub; on Android the assistant runs on the phone itself
+- Chess, Connect Four, Flappy and 2048 to play while it works
 
-**Disclaimer:** YouCoded is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic, OpenAI, or OpenRouter.
+Every line of youcoded was written through conversation with AI. [Read the story](https://youcoded.ai/#story).
 
-## Features
+## Help build it
 
-**Chat & Terminal**
-- Chat interface with structured message rendering, tool cards, and markdown
-- Full terminal emulator for direct shell access
-- Multiple concurrent sessions with color-coded status
-- Model selector — choose Claude Code, ChatGPT, OpenRouter and compatible cloud providers, or local models
-- Folder switcher — quick-access saved directories for session creation
-- Permission mode cycling (Normal, Auto-Accept, Plan Mode)
+You don't need to code to help. Report bugs and ideas in [Issues](https://github.com/itsdestin/youcoded/issues), share skills and themes from inside the app, or open a pull request (see [CONTRIBUTING.md](./CONTRIBUTING.md)). Feel free to ask your assistant to try taking a crack at your youcoded bug! Report security problems privately through [SECURITY.md](./SECURITY.md).
 
-**Documents, Pages & Browser**
-- Edit Word (`.docx`), Excel (`.xlsx`) and PowerPoint (`.pptx`) files inside the desktop app, with autosave, version history and PDF export
-- Let the assistant add comments to documents and spreadsheets, including files open in the built-in Office editors
-- Build personal or project Pages with `/page-builder` and pin them in the header
-- Give the assistant a browser on desktop: read pages, click and type, with its own permission cards and a view you can follow
-- Office editing and the assistant's browser are desktop-only, not available through remote access
-
-**Social AI**
-- Create custom skills and share them with friends, classmates, or coworkers
-- Play multiplayer games (Connect Four and chess) while your assistant works
-- Build and share custom theme packs with the community
-
-**Skill Marketplace**
-- Browse and install community skills and tools from the marketplace
-- Create your own prompt skills and share them via deep links
-- Quick-launch chips for your most-used skills
-- Theme Builder, Marketplace Publisher, Conversation Search and Page Builder are bundled (automatically installed if missing and not removable through the app)
-
-**Commands**
-- Browse and search slash commands directly in the command drawer
-- Three sources: YouCoded-handled (clickable, dispatched in-app), filesystem-scanned user/project/plugin commands (forwarded to the terminal), and Claude Code built-ins (visible reference, run in Terminal View)
-
-**Themes**
-- 6 built-in themes (YouCoded, YouCoded Night, Light, Dark, Midnight, Crème) + community theme packs
-- Custom wallpapers, particle effects, mascot characters, and icon overrides
-- Build your own themes with `/theme-builder`
-
-**Announcements**
-- Maintainer announcements (release notices, status updates) are fetched hourly and shown in the status bar
-- Source: [`announcements.txt`](https://github.com/itsdestin/youcoded/blob/master/announcements.txt) in this repo
-
-**Remote Access**
-- Access YouCoded from any web browser on your network
-- Use it from your phone, tablet, or another computer
-- Same full UI — just open a URL
-- The Android app permits cleartext WebSocket connections to paired desktop hosts on your LAN or Tailscale network. Use Tailscale (WireGuard encryption) for sensitive traffic — every connection is still gated by a bcrypt password handshake regardless
-
-**Multiplayer Lobby (Privacy Note)**
-- The multiplayer game lobby (powered by [PartyKit](https://www.partykit.io/) on Cloudflare Durable Objects) shares your GitHub username and idle/in-game status with other signed-in YouCoded users so they can challenge you
-- Toggle **Incognito** in the multiplayer settings to stay hidden — no presence is broadcast in incognito mode
-
-**Personalization**
-- Community plugins from the [YouCoded marketplace](https://github.com/itsdestin/wecoded-marketplace) add journaling, a personal encyclopedia, task inbox processing, and text messaging — browse and install them from inside the app
-- Cross-device sync is built into the app — no plugin required
-
-## Platforms
-
-| Platform | Status | Install |
-|----------|--------|---------|
-| Windows | Available | Download `.exe` from [Releases](https://github.com/itsdestin/youcoded/releases) |
-| macOS | Available | Download `.dmg` from [Releases](https://github.com/itsdestin/youcoded/releases) |
-| Linux | Available | Download `.AppImage`, `.deb`, `.rpm` or `.pacman` from [Releases](https://github.com/itsdestin/youcoded/releases) |
-| Android | Available | Download `.apk` from [Releases](https://github.com/itsdestin/youcoded/releases) |
-| Web browser | Via remote access | Open the app on any device, then access from any browser on your network |
-
-## Requirements
-
-Choose a model path that works for you:
-
-- A local model you download and run on your computer
-- An [OpenRouter](https://openrouter.ai/) account or a supported provider API key
-- A ChatGPT plan
-- A [Claude Pro or Max plan](https://claude.ai/) for Claude Code
-
-The app itself is free and open source. Android requires Android 9+ (arm64); desktop requires Windows 10+, macOS 11+, or Linux (x64).
-
-## Building from Source
-
-### Desktop (Electron)
+To build the desktop app:
 
 ```bash
 git clone https://github.com/itsdestin/youcoded.git
 cd youcoded/desktop
 npm ci
-npm run dev       # Development mode with hot reload
-npm test          # Run tests
-npm run build     # Build distributable installer
+npm run dev
 ```
 
-### Android
-
-The Android runtime currently builds on **Linux x64**; on Windows or macOS, use a Linux x64 environment such as WSL or a VM. It needs an Android SDK, JDK 21, Node.js/npm, Bash, Python 3, curl, tar, make, clang and lld. Gradle builds the shared React UI and desktop backend and downloads the pinned runtime programs. See [Android runtime](docs/android-runtime.md) for details and side-by-side development builds.
-
-```bash
-git clone https://github.com/itsdestin/youcoded.git
-cd youcoded
-./gradlew assembleDebug
-```
-
-Debug APK at `app/build/outputs/apk/debug/app-debug.apk`.
-
-## Project Structure
-
-```
-youcoded/
-  desktop/     # Electron app (Windows, macOS, Linux)
-  app/         # Android shell, WebView and bundled headless desktop backend
-  scripts/     # Shared build scripts
-```
-
-## Contributing
-
-Contributions welcome — bug fixes, features, documentation, testing on different devices.
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-Commits need a sign-off line (`git commit -s`) — see [CONTRIBUTING.md](./CONTRIBUTING.md) for the how and why.
-
-## Related Projects
-
-- [YouCoded Core](https://github.com/itsdestin/youcoded-core) — Archived legacy plugin; current apps bundle their own safety hooks
-- [YouCoded Themes](https://github.com/itsdestin/wecoded-themes) — Community theme registry
-- [YouCoded Marketplace](https://github.com/itsdestin/wecoded-marketplace) — Skill marketplace registry
-
-## Policies
-
-- [Privacy Policy](./PRIVACY.md)
-- [Terms of Service](./TERMS.md)
-- [Security Policy](./SECURITY.md)
+The Android app builds with `./gradlew assembleDebug` on Linux x64; see [Android runtime](docs/android-runtime.md) for what it needs.
 
 ## License
 
-YouCoded-authored code, shared UI, scripts and docs are **MIT** unless stated otherwise. See the root [LICENSE](LICENSE); copies also live at [desktop/LICENSE](desktop/LICENSE) and [app/LICENSE](app/LICENSE).
+Youcoded's own code is **MIT** ([LICENSE](LICENSE), [NOTICE](NOTICE)). Bundled third-party components, including the Android runtime, keep their own licenses; see [Android redistribution](docs/android-redistribution.md). [Privacy Policy](./PRIVACY.md) · [Terms](./TERMS.md)
 
-Bundled third-party components retain their own licenses. Android includes Alpine programs and libraries (including GPL/LGPL components), modified musl, npm packages and Claude Code under separate terms. The release-specific inventory, offline notices and corresponding-source materials must accompany redistribution; the app's MIT license does not replace their requirements. See [Android redistribution](docs/android-redistribution.md) for the fail-closed packaging gate and unresolved review requirements.
+Youcoded is an independent, community-built project, not affiliated with, endorsed by, or supported by Anthropic, OpenAI or OpenRouter.

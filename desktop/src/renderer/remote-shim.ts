@@ -2847,9 +2847,9 @@ export function installShim(): void {
       // root gate as the other reads). Its { ok:false, error } answers are DATA
       // the caller words for the person (not-found, not-allowed…), so this
       // channel is deliberately NOT in REJECT_ON_NOT_OK. On the Android app the
-      // bridge answers not-implemented-on-mobile and the caller falls back.
-      resolvePath: (projectRoot: string, filePath: string) =>
-        invoke('artifacts:resolve-path', { projectRoot, path: filePath }),
+      // bridge answers not-implemented-on-mobile and the caller falls back. The host drops `sessionId` for this door (card #40).
+      resolvePath: (projectRoot: string, filePath: string, sessionId?: string) =>
+        invoke('artifacts:resolve-path', { projectRoot, path: filePath, sessionId }),
       listProjectsIndex: (opts?: { withCounts?: boolean }) =>
         invoke('artifacts:list-projects-index', opts ?? {}),
       // This transport sends an OBJECT payload, not positional args — `full`
@@ -3278,8 +3278,7 @@ export function installShim(): void {
       hide: () => { throw new Error('Buddy is desktop-only in this version'); },
       toggleChat: () => { throw new Error('Buddy is desktop-only in this version'); },
       setSession: () => { throw new Error('Buddy is desktop-only in this version'); },
-      subscribe: () => { throw new Error('Buddy is desktop-only in this version'); },
-      unsubscribe: () => { throw new Error('Buddy is desktop-only in this version'); },
+      toggleChatSize: () => { throw new Error('Buddy is desktop-only in this version'); },
       getViewedSession: () => { throw new Error('Buddy is desktop-only in this version'); },
       // No-op (not throw): drag handlers fire constantly while the user moves
       // the pointer; throwing would spam the console on any platform where
@@ -3300,7 +3299,9 @@ export function installShim(): void {
       onBarState: () => () => { /* no-op unsubscribe */ },
       onMascotState: () => () => { /* no-op unsubscribe */ },
       onChatState: () => () => { /* no-op unsubscribe */ },
+      onChatSize: () => () => { /* no-op unsubscribe */ },
       onFocusSession: () => () => { /* no-op unsubscribe */ },
+      onSeenInBuddy: () => () => { /* no-op unsubscribe: the buddy is a desktop window */ },
       // ── The Linux/KDE buddy helper (design §4) ──
       // Answered locally, not thrown and not sent over the wire. Two reasons.
       // First, the honest answer really is this one: a phone or a remote browser

@@ -1,0 +1,87 @@
+<!doctype html>
+<!-- Generated from SECURITY.md by docs/tools/gen-legal-pages.mjs. Do not edit the text here. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Security Policy — YouCoded Assistant</title>
+<meta name="description" content="How to report a security problem in YouCoded privately.">
+<link rel="icon" type="image/png" href="legal-assets/brand.png">
+<link rel="stylesheet" href="legal.css">
+</head>
+<body id="top">
+<a class="skip-link" href="#policy-content">Skip to content</a>
+<nav class="site-nav" aria-label="Main navigation">
+  <a class="logo" href="index.html" aria-label="YouCoded home"><img src="legal-assets/brand.png" width="36" height="36" alt=""><span class="wordmark"><span>you</span>coded</span></a>
+  <div class="policy-nav"><a href="privacy.html">Privacy</a>
+<a href="terms.html">Terms</a>
+<a href="security.html" aria-current="page">Security</a>
+<a href="changelog.html">Changelog</a></div>
+</nav>
+<main>
+  <div class="document-layout">
+    <aside class="toc-desktop" aria-label="On this page"><div class="toc-panel"><h2>On this page</h2><ol><li><a href="#reporting-a-vulnerability"><span>Reporting a Vulnerability</span></a></li>
+<li><a href="#scope"><span>Scope</span></a></li>
+<li><a href="#disclosure"><span>Disclosure</span></a></li>
+<li><a href="#trademark-affiliation-note"><span>Trademark / Affiliation Note</span></a></li></ol><a class="toc-home" href="index.html">← Back to home</a></div></aside>
+    <div class="reading-column">
+      <header class="hero">
+        <p class="eyebrow">Help</p>
+        <h1 id="security-policy" tabindex="-1">Security Policy</h1>
+        <div class="policy-meta">
+          <a class="source-link" href="https://github.com/itsdestin/youcoded/blob/master/SECURITY.md">View source ↗</a>
+        </div>
+      </header>
+      <!-- WHY: native details works with keyboards and with JavaScript disabled;
+           a separate desktop TOC avoids forcing the mobile disclosure open. -->
+      <details class="toc-mobile"><summary><span>On this page</span><svg class="toc-chevron" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></summary><nav aria-label="Page sections"><ol><li><a href="#reporting-a-vulnerability"><span>Reporting a Vulnerability</span></a></li>
+<li><a href="#scope"><span>Scope</span></a></li>
+<li><a href="#disclosure"><span>Disclosure</span></a></li>
+<li><a href="#trademark-affiliation-note"><span>Trademark / Affiliation Note</span></a></li></ol></nav></details>
+      <article class="policy-content" id="policy-content" tabindex="-1" aria-label="Security Policy">
+<h2 id="reporting-a-vulnerability" tabindex="-1">Reporting a Vulnerability</h2>
+<p>If you&#x27;ve found a security issue in YouCoded — desktop, Android, the marketplace worker, or any of the bundled plugins — <strong>please report it privately rather than opening a public GitHub issue</strong>.</p>
+<p><strong>Email:</strong> support@youcoded.ai
+<strong>Subject line:</strong> <code>[YouCoded Security] &lt;short description&gt;</code></p>
+<p>What helps:</p>
+<ul>
+<li>A clear description of the issue and the impact you observed.</li>
+<li>Steps to reproduce, or a proof-of-concept if you have one.</li>
+<li>The platform (Windows / macOS / Linux / Android) and YouCoded version.</li>
+<li>Whether you&#x27;ve shared the issue with anyone else, and any timeline you&#x27;d like respected before public disclosure.</li>
+</ul>
+<p>I aim to acknowledge reports within <strong>5 days</strong> and to triage / fix or explain the constraint within <strong>30 days</strong>, depending on severity. YouCoded is a small, hobbyist-scale project maintained by one person, so timing isn&#x27;t enterprise-grade — please bear with me.</p>
+<h2 id="scope" tabindex="-1">Scope</h2>
+<p>In scope:</p>
+<ul>
+<li>The YouCoded desktop application (<code>youcoded/desktop/</code>).</li>
+<li>The YouCoded Android application (<code>youcoded/app/</code>).</li>
+<li>The marketplace Cloudflare Worker (<code>wecoded-marketplace/worker/</code>).</li>
+<li>The bundled plugins (Theme Builder, Marketplace Publisher, Conversation Search, Page Builder) and the app&#x27;s built-in safety hooks.</li>
+<li>The theme and marketplace registries (<code>wecoded-themes</code>, <code>wecoded-marketplace</code>) where they affect what end users download.</li>
+</ul>
+<p>Out of scope (please report to the upstream project instead):</p>
+<ul>
+<li>Vulnerabilities in Anthropic&#x27;s Claude Code CLI itself, or in an AI provider&#x27;s service.</li>
+<li>Vulnerabilities in Electron, Node.js, the Android runtime&#x27;s Alpine packages, or other underlying frameworks.</li>
+<li>Vulnerabilities in third-party plugins or themes contributed by community members — those should be reported to the plugin/theme author, though I&#x27;m happy to receive a copy and help coordinate.</li>
+</ul>
+<h2 id="disclosure" tabindex="-1">Disclosure</h2>
+<p>I&#x27;ll work with you on a coordinated disclosure timeline. Once a fix is shipped, I&#x27;ll credit you in the release notes if you want the credit (and won&#x27;t if you don&#x27;t). I won&#x27;t take legal action against good-faith security research that follows this policy.</p>
+<h2 id="trademark-affiliation-note" tabindex="-1">Trademark / Affiliation Note</h2>
+<p>YouCoded is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic, OpenAI or OpenRouter. Please do not report YouCoded vulnerabilities to them — they don&#x27;t maintain this project.</p>
+      </article>
+    </div>
+  </div>
+</main>
+<footer class="site-footer">
+  <a href="index.html">← Back to home</a>
+  <nav class="policy-nav" aria-label="Site pages"><a href="privacy.html">Privacy</a>
+<a href="terms.html">Terms</a>
+<a href="security.html" aria-current="page">Security</a>
+<a href="changelog.html">Changelog</a></nav>
+  <a href="https://github.com/itsdestin/youcoded/blob/master/SECURITY.md">Source Markdown ↗</a>
+</footer>
+</body>
+</html>

@@ -156,7 +156,7 @@ describe('the buddy and the preview run the same page case', () => {
     const fs = await import('node:fs');
     const read = (p: string) => fs.readFileSync(new URL(`../src/renderer/${p}`, import.meta.url), 'utf8');
     // The buddy fills through the shared fill (sync-fix3), so its page lands through the same function the main window's does.
-    expect(read('components/buddy/BubbleFeed.tsx')).toContain('createFirstPageLoader');
+    expect(read('components/buddy/useBuddyFeed.ts')).toContain('createFirstPageLoader');
     expect(read('state/first-page-loader.ts')).toContain("applyOpenReply");
     expect(read('state/session-fill.ts')).toContain("type: 'HISTORY_PAGE_LOADED'");
     expect(read('state/chat-context.ts')).toContain('chatReducer');

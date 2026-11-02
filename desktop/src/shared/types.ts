@@ -1259,8 +1259,8 @@ export interface AttentionSummary {
     attentionState: AttentionState;
     awaitingApproval: boolean;
     // Derived dot color from the main window's reducer (matches what the
-    // main session switcher renders). Pushed to buddy surfaces so the
-    // SessionPill's dot is visually identical to the same session's dot
+    // main session switcher renders). Pushed to the buddy too, so its
+    // SessionStrip's dots are visually identical to the same session's dot
     // in the main window. Absent for sessions that haven't reported yet.
     status?: SessionStatusDotColor;
   }>;
@@ -1367,8 +1367,8 @@ export interface BuddyApi {
   hide(): Promise<void>;
   toggleChat(): Promise<void>;
   setSession(sessionId: string): Promise<void>;
-  subscribe(sessionId: string): Promise<void>;
-  unsubscribe(sessionId: string): Promise<void>;
+  /** Switch the chat between its two sizes (the bar's size button); main answers on onChatSize. */
+  toggleChatSize(): Promise<void>;
   getViewedSession(): Promise<string | null>;
   // Fire-and-forget. Called by BuddyMascot during pointer drag; main
   // places the mascot at the supplied target (clamped to visible workArea).
@@ -1397,10 +1397,14 @@ export interface BuddyApi {
   dismiss(): Promise<void>;
   getStatus(): Promise<{ dismissed: boolean; visible: boolean }>;
   onStatusChanged(cb: (s: { dismissed: boolean; visible: boolean }) => void): () => void;
-  onBarState(cb: (s: { visible: boolean }) => void): () => void;
+  onBarState(cb: (s: { visible: boolean; under?: boolean }) => void): () => void;
   onMascotState(cb: (s: { mode: 'free' | 'docked' | 'peeking'; edge: string | null }) => void): () => void;
-  onChatState(cb: (s: { visible: boolean }) => void): () => void;
+  /** `mascot`: which side of the chat he is on, so the chat grows out of him. */
+  onChatState(cb: (s: { visible: boolean; mascot?: 'above' | 'below'; resize?: 'out' | 'in' }) => void): () => void;
+  onChatSize(cb: (size: 'small' | 'large') => void): () => void;
   onFocusSession(cb: (sessionId: string) => void): () => void;
+  /** The buddy chat is showing this session, so the window that owns it counts it as seen (clears its blue dot). */
+  onSeenInBuddy(cb: (sessionId: string) => void): () => void;
 }
 
 // Marketplace redesign Phase 1 — per-entry component inventory for the

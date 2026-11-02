@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
-import { generatePage, policies, renderPolicy, root } from './gen-legal-pages.mjs';
+import { generatePage, pages, pageSource, policies, renderPolicy, root } from './gen-legal-pages.mjs';
 
 const require = createRequire(resolve(root, 'desktop/package.json'));
 const { JSDOM } = require('jsdom');
@@ -25,26 +25,28 @@ for (const name of policies) {
   });
 
   test(`${name}: all legal text, date, formatting and links match canonical Markdown`, () => {
-    const markdown = readFileSync(resolve(root, `${name.toUpperCase()}.md`), 'utf8');
+    const markdown = pageSource(name);
+    const { dated } = pages[name];
     // WHY: independently render the ENTIRE canonical document. A generator that
     // drops a paragraph, moves a date incorrectly or flattens formatting fails.
     const expected = parse(renderToStaticMarkup(createElement(Markdown, { children: markdown })));
     const actual = parse(generatePage(name));
     const content = actual.querySelector('.policy-content');
     const reconstructed = parse(actual.querySelector('.hero h1').outerHTML
-      + '\n' + actual.querySelector('.effective-date').innerHTML + '\n' + content.innerHTML);
+      + (dated ? '\n' + actual.querySelector('.effective-date').innerHTML : '') + '\n' + content.innerHTML);
     assert.equal(text(reconstructed.body), text(expected.body));
     for (const tag of ['h1', 'h2', 'h3', 'p', 'strong', 'em', 'code', 'li', 'hr']) {
       assert.deepEqual([...reconstructed.querySelectorAll(tag)].map(text), [...expected.querySelectorAll(tag)].map(text), tag);
     }
     const expectedLinks = [...expected.querySelectorAll('a')].map((a) => {
       const href = a.getAttribute('href');
-      const policy = href.match(/^(?:\.\/)?(PRIVACY|TERMS)\.md$/);
-      return policy ? `${policy[1].toLowerCase()}.html` : href === './SECURITY.md' ? `${github}SECURITY.md` : href;
+      const page = href.match(/^(?:\.\/)?(PRIVACY|TERMS|SECURITY|CHANGELOG)\.md$/);
+      return page ? `${page[1].toLowerCase()}.html` : href;
     });
     assert.deepEqual([...content.querySelectorAll('a')].map((a) => a.getAttribute('href')), expectedLinks);
     assert.equal(actual.querySelector('.hero h1').textContent, expected.querySelector('h1').textContent);
-    assert.equal(text(actual.querySelector('.effective-date')), text(expected.querySelector('p')));
+    if (dated) assert.equal(text(actual.querySelector('.effective-date')), text(expected.querySelector('p')));
+    else assert.equal(actual.querySelector('.effective-date'), null);
     assert.equal(actual.querySelector('article').getAttribute('tabindex'), '-1');
     assert.equal(actual.querySelector('.source-link').getAttribute('href'), `${github}${name.toUpperCase()}.md`);
   });
@@ -64,7 +66,7 @@ for (const name of policies) {
     for (const nav of doc.querySelectorAll('.policy-nav')) {
       assert.equal(nav.querySelectorAll('[aria-current="page"]').length, 1);
       assert.equal(nav.querySelector('[aria-current="page"]').getAttribute('href'), `${name}.html`);
-      assert.deepEqual([...nav.querySelectorAll('a')].map((a) => a.getAttribute('href')), ['privacy.html', 'terms.html']);
+      assert.deepEqual([...nav.querySelectorAll('a')].map((a) => a.getAttribute('href')), policies.map((page) => `${page}.html`));
     }
     const summary = doc.querySelector('.toc-mobile summary');
     assert.equal(text(summary), 'On this page');
@@ -92,13 +94,12 @@ for (const name of policies) {
 test('anchor collision handling and relative policy rewrites preserve fragments', () => {
   const { html, headings } = renderPolicy('## Same *heading*\n\n## Same heading\n\n[Terms](./TERMS.md#17-contact) [Privacy](PRIVACY.md) [Security](./SECURITY.md)');
   assert.deepEqual(headings.map((h) => h.id), ['same-heading', 'same-heading-1']);
-  assert.deepEqual([...parse(html).querySelectorAll('a')].map((a) => a.getAttribute('href')), ['terms.html#17-contact', 'privacy.html', `${github}SECURITY.md`]);
+  assert.deepEqual([...parse(html).querySelectorAll('a')].map((a) => a.getAttribute('href')), ['terms.html#17-contact', 'privacy.html', 'security.html']);
 });
 
 test('CLI --check and shared CSS keep static publishing and accessibility contract', () => {
   const output = execFileSync(process.execPath, [resolve(root, 'docs/tools/gen-legal-pages.mjs'), '--check'], { encoding: 'utf8' });
-  assert.match(output, /OK privacy.html matches canonical Markdown/);
-  assert.match(output, /OK terms.html matches canonical Markdown/);
+  for (const name of policies) assert.match(output, new RegExp(`OK ${name}\\.html matches canonical Markdown`));
   const css = readFileSync(resolve(root, 'docs/legal.css'), 'utf8');
   assert.match(css, /@media print/);
   assert.match(css, /prefers-reduced-motion/);
@@ -112,4 +113,13 @@ test('CLI --check and shared CSS keep static publishing and accessibility contra
     assert.equal(doc.querySelector('.logo').textContent.trim(), 'youcoded');
   }
   assert.doesNotMatch(css, /@import|https?:|url\(['"]?\/\//);
+});
+
+test('changelog page drops only the empty Unreleased heading and version brackets', () => {
+  const raw = readFileSync(resolve(root, 'CHANGELOG.md'), 'utf8');
+  const shown = pageSource('changelog');
+  // WHY: only headings may change; every other line of the release notes must reach the page.
+  const body = (md) => md.split('\n').filter((line) => !line.startsWith('## '));
+  assert.deepEqual(body(shown).filter(Boolean), body(raw).filter(Boolean));
+  assert.doesNotMatch(shown, /^## \[/m);
 });

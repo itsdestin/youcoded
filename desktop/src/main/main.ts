@@ -40,6 +40,7 @@ import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
 import { shouldAutoApprove, shouldAutoApproveDocComment } from './permission-auto-approve';
+import { trackOutsideComments, judgeCommentAsk } from './cc-outside-comments';
 import { getPermissionOverrides, setForgetSessionAttention } from './app-signals';
 import { IPC, type AttentionState, type AttentionSummary, type SessionOwnershipAcquired } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
@@ -563,6 +564,25 @@ function recomputeAndBroadcastAttention(): void {
   }
   // Dock/peek activity signal: attention pops a peeking buddy out (spec §6.2).
   buddyManagerRef?.setAttentionNeeded(anyNeedsAttention);
+  // A reply that finishes while the buddy chat is showing it was seen as it arrived.
+  tellOwnerSeenInBuddy(summary);
+}
+
+/**
+ * The buddy chat is open on a session whose dot is blue: tell the window that owns it the reply has been seen, so it
+ * clears the blue the way switching to the session there does. WHY here: the owner window derives the colour every
+ * screen shows (it alone knows what it has looked at), and nothing told it about the buddy (Destin, 2026-10-30:
+ * "clicking into a session never clears blue status dots in the buddy"). Only on blue, so this costs a lookup per
+ * summary and sends nothing once the dot is clear.
+ */
+function tellOwnerSeenInBuddy(summary: AttentionSummary): void {
+  const sid = buddyManagerRef?.watchedSession();
+  if (!sid || summary.perSession[sid]?.status !== 'blue') return;
+  for (const [wcId, byWin] of attentionReports) {
+    if (!byWin.has(sid)) continue;
+    const wc = webContents.fromId(wcId);
+    if (wc && !wc.isDestroyed()) wc.send(IPC.SESSION_SEEN_IN_BUDDY, sid);
+  }
 }
 
 // 100ms debounce — coalesces bursts of classifier transitions so buddy
@@ -1150,6 +1170,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
   sessionManager.on('session-exit', (sessionId: string) => {
     docCommentsServerIdsBySession.delete(sessionId);
   });
+  trackOutsideComments(sessionManager, hookRelay);
 
   // The windows' leg of a Claude Code hook event: the window that owns the session, else the main window; an event that ENDS an ask also reaches the
   // watching buddy chat (hook-window-route.ts). WHY here and not in publish (one-core R5-2): publish delivers the phones' leg and the record.
@@ -1213,7 +1234,13 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
       // bypassPermissions); `plan`, `default`, an unrecognized mode, or a
       // missing `permissionMode` all fall through to the ordinary ask below
       // (see permission-auto-approve.ts's own header for the full reasoning).
-      if (requestId && (shouldAutoApproveDocComment(toolName, toolInput, permissionMode, docCommentsServerId) || shouldAutoApprove(toolName, toolInput, getPermissionOverrides()))) {
+      // Card #207: a comment tool aimed at a file outside the project asks
+      // with the outside-file card (or is approved by this chat's earlier
+      // "Allow for this chat"); an in-project comment read is approved here
+      // now that it is no longer pre-allowed. 'ask' must beat the rules
+      // below, which would otherwise wave a plain-file comment change through.
+      const commentAsk = judgeCommentAsk(event);
+      if (requestId && commentAsk !== 'ask' && (commentAsk === 'approve' || shouldAutoApproveDocComment(toolName, toolInput, permissionMode, docCommentsServerId) || shouldAutoApprove(toolName, toolInput, getPermissionOverrides()))) {
         hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
         autoApproved = true;
       }
@@ -1605,6 +1632,8 @@ void app.whenReady().then(async () => {
   interface BuddyPositionsFile {
     mascot?: { x: number; y: number };
     dock?: 'left' | 'right' | 'top' | 'bottom';
+    /** The chat's size, from the bar's size button (buddy rebuild, 2026-10-25). */
+    chatSize?: 'small' | 'large';
     // A `keepAbove` key may still sit in files written before 2026-09-16 (the
     // deleted overlay's KDE pin preference). It is carried through the
     // parse/save round trip untouched and read by nothing.
@@ -1650,36 +1679,28 @@ void app.whenReady().then(async () => {
   // never told where the compositor really put him. This asks KDE directly.
   // Everywhere else Electron's own answer is right and stays in use, untouched.
   const buddyWorkArea = helperAtLaunch.needed ? new WorkAreaResolver() : null;
-  if (buddyWorkArea) {
-    // Start the lookup now instead of at the first show(): the buddy's first
-    // appearance waits for this answer either way (BuddyWindowManager.show
-    // defers until it settles), and starting it here means the wait is normally
-    // already over by the time the user switches him on.
-    void buddyWorkArea.refresh();
-
-    // Screens being plugged in, unplugged or rearranged all invalidate which
-    // KDE screen each of Electron's displays is, so all three events re-ask.
-    //
-    // Debounced because KDE fires display-metrics-changed THREE TIMES within
-    // 200 ms of a window appearing (measured 2026-07-23 on the buddy overlay),
-    // so an undebounced handler would run the whole lookup three times over
-    // every time the buddy is shown.
-    //
-    // Moving a taskbar, or setting it to auto-hide, fires NO event at all —
-    // nothing in KDE publishes one (verified: its strut service has zero
-    // signals) — so that case is caught when the buddy is shown and again at
-    // the start of each drag, which BuddyWindowManager already does.
-    const reresolveWorkArea = (() => {
-      let t: NodeJS.Timeout | null = null;
-      return () => {
-        if (t) clearTimeout(t);
-        t = setTimeout(() => { void buddyWorkArea.refresh(); }, 250);
-      };
-    })();
-    screen.on('display-metrics-changed', reresolveWorkArea);
-    screen.on('display-added', reresolveWorkArea);
-    screen.on('display-removed', reresolveWorkArea);
-  }
+  // Start the lookup now instead of at the first show(): the buddy's first
+  // appearance waits for this answer either way (BuddyWindowManager.show
+  // defers until it settles), and starting it here means the wait is normally
+  // already over by the time the user switches him on.
+  void buddyWorkArea?.refresh();
+  // Screens plugged in, unplugged, rearranged or TURNED: re-ask KDE which screen is which (where it must be asked), then
+  // put the buddy back together. WHY the regroup: on a turn to portrait the desktop rescues his three windows one by one
+  // and never says where, so they came apart (Destin, 2026-10-30). Debounced: KDE fires display-metrics-changed THREE
+  // TIMES within 200 ms of any window appearing (measured 2026-07-23). A moved or auto-hidden taskbar fires nothing at
+  // all; BuddyWindowManager re-asks at show and at each drag start.
+  const reresolveWorkArea = (() => {
+    let t: NodeJS.Timeout | null = null;
+    return () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => {
+        void (buddyWorkArea?.refresh() ?? Promise.resolve()).then(() => buddyManagerRef?.screenChanged());
+      }, 250);
+    };
+  })();
+  screen.on('display-metrics-changed', reresolveWorkArea);
+  screen.on('display-added', reresolveWorkArea);
+  screen.on('display-removed', reresolveWorkArea);
 
   // The buddy is three windows (mascot, chat, bar) on every platform. A second
   // one-window "overlay" strategy for Linux Wayland was built behind a chooser
@@ -1694,6 +1715,12 @@ void app.whenReady().then(async () => {
           buddyPositions[key] = pos;
           saveBuddyPositions(buddyPositions);
         },
+        // The size button's choice (buddy rebuild, 2026-10-25), in the same small file as his position.
+        getPersistedChatSize: () => buddyPositions.chatSize ?? null,
+        setPersistedChatSize: (size) => {
+          buddyPositions.chatSize = size;
+          saveBuddyPositions(buddyPositions);
+        },
         getPersistedDock: () => buddyPositions.dock ?? null,
         setPersistedDock: (edge) => {
           if (edge) buddyPositions.dock = edge;
@@ -1702,6 +1729,7 @@ void app.whenReady().then(async () => {
         },
         registry: windowRegistry,
         mainWindow: () => mainWindow,
+        onWatchedSessionChanged: () => tellOwnerSeenInBuddy(buildAttentionSummary()),
         // Status pushes go to every window (main app Settings panels + buddy
         // surfaces) so the "Hidden until restart" row state renders live.
         onStatusChanged: (status) => {

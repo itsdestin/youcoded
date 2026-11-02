@@ -1138,6 +1138,22 @@ function AppInner() {
     }
   }, [sessionAttention, sessions]);
 
+  // The buddy chat is showing one of this window's sessions: count it as seen, exactly as switching to it here does.
+  // WHY: this window draws the dot every screen shows (main merges each owner's colours), and only its own
+  // viewedSessions could clear blue — so opening a finished reply in the buddy left it blue everywhere
+  // (Destin, 2026-10-30: "clicking into a session never clears blue status dots in the buddy").
+  useEffect(() => {
+    const off = window.claude?.buddy?.onSeenInBuddy?.((sid: string) => {
+      setViewedSessions((prev) => {
+        if (prev.has(sid)) return prev;
+        const next = new Set(prev);
+        next.add(sid);
+        return next;
+      });
+    });
+    return off;
+  }, []);
+
   // Buddy "open main app" → its viewed session; sessionsRef keeps this subscription stable.
   useEffect(() => {
     const off = window.claude?.buddy?.onFocusSession?.((sid: string) => {
@@ -1364,7 +1380,7 @@ function AppInner() {
 
     // Specialists 1c: the host's delegation feed — a hire's ledger record
     // changed (status/steps/stale/model/notes). Lands on the launching Task
-    // card. MUST mirror BubbleFeed.tsx. Task 10: typed bridge — `on.specialistEvent`
+    // card. MUST mirror useBuddyFeed.ts. Task 10: typed bridge — `on.specialistEvent`
     // RETURNS the unsubscribe function directly (it does not hand back a raw
     // listener for `.off()`, unlike most of this file's other `on.X` calls);
     // there is also no separate 'note' event kind any more — a note is a
@@ -1377,7 +1393,7 @@ function AppInner() {
     });
 
     // G-1: a background command's run record changed — lands on its Bash card.
-    // MUST mirror BubbleFeed.tsx. WHY the flush: same drop class as the hook
+    // MUST mirror useBuddyFeed.ts. WHY the flush: same drop class as the hook
     // handler below — this dispatches immediately, its card's own tool-use may not.
     const shellHandler = window.claude.on.shellEvent((event) => {
       flushTranscriptActions();

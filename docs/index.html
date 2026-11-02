@@ -164,6 +164,11 @@ a{color:inherit}
 .kicker{font-family:var(--font-mono);font-size:.8rem;font-weight:500;letter-spacing:.15em;
   text-transform:uppercase;opacity:.9;margin-bottom:9px;
   text-shadow:0 1px 14px rgba(var(--canvas-rgb),.6)}
+/* WHY: "MIT" links to the license (Destin, 2026-10-27). A thin, faint underline marks it
+   as a link without making the kicker read like a button. */
+.kicker a{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px;
+  text-decoration-color:color-mix(in srgb,currentColor 40%,transparent)}
+.kicker a:hover{text-decoration-color:currentColor}
 h1{font-family:var(--font-ui);font-size:clamp(3rem,7.4vw,5.6rem);font-weight:900;letter-spacing:-.05em;
   line-height:.97;text-shadow:0 2px 30px rgba(var(--canvas-rgb),.55)}
 h1 em{font-style:normal;color:var(--accent)}
@@ -2000,7 +2005,7 @@ html{-webkit-tap-highlight-color:transparent}
 
 <header class="hero hero-centred hero-flank" id="top">
   <div class="wrap">
-    <p class="kicker">Free &middot; Easy &middot; Open source</p>
+    <p class="kicker">Free &middot; Easy &middot; <a href="https://github.com/itsdestin/youcoded/blob/master/LICENSE" target="_blank" rel="noopener">MIT</a></p>
     <div class="flankrow">
       <div class="mrow mrow-l">
 <button class="mascot" data-theme="youcoded" data-idle="float" data-acts="wave cheer" data-face="welcome"
@@ -2340,57 +2345,57 @@ Contract: mascots/README.md (from the repo root)
 </div></section>
 
 <section id="demo" class="demo-deck deck-fade"><div class="wrap">
-  <p class="eyebrow">Features</p><h2>Yours to shape. Yours to use.</h2>
+  <p class="eyebrow">Features</p><h2>Yours to decide.</h2>
   <div class="deck" id="deck">
     <div class="decktext" id="steps"><div class="step" data-i="0" data-card="yours">
-          <div class="step-label">Make it yours</div>
-          <h3>Describe the look you want.</h3>
-          <p>Wallpapers, colors, mascots, fonts. Say what you are going for and the app changes to match. Not quite? Say so.</p>
+          <div class="step-label">Pick your theme</div>
+          <h3>Change how the app looks, just by talking to it.</h3>
+          <p>Wallpapers, colors, curve radii, mascots, fonts, and more. Say what you are going for and the app changes to match. Or, you can browse themes shared by other users in the marketplace!</p>
         </div>
-        <div class="step" data-i="1" data-card="home">
-          <div class="step-label">Your home, your way <span class="rmchip">Sample page, not included</span></div>
-          <h3>A smart-home panel, made by asking for one.</h3>
-          <p>Not a built-in feature: a page one person asked for, for his own house, and uses every day. Lights, thermostat, speakers and TVs on one screen, arranged the way he wanted. Ask for yours and it will be different. The demo house here is fictional.</p>
+        <div class="step" data-i="1" data-card="play">
+          <div class="step-label">with your friends</div>
+          <h3>Play multiplayer games while the assistant works.</h3>
+          <p>Long tasks take a minute, so open the arcade in the side panel. Play connect 4 or chess against a friend who is online, or Flappy/2048 on your own. Share skills and themes via the marketplace.</p>
         </div>
-        <div class="step" data-i="2" data-card="money">
-          <div class="step-label">Your money, your way <span class="rmchip">Sample page, not included</span></div>
-          <h3>Every account on one page, made by asking for it.</h3>
-          <p>Not a built-in feature either: a page built through the chat for one person’s real accounts, with the view he wished his bank had. Yours could track anything. The numbers here are invented.</p>
+        <div class="step" data-i="2" data-card="home">
+          <div class="step-label">control your devices <span class="rmchip">Sample page, not included</span></div>
+          <h3>Add a light control panel or a TV remote, just by asking.</h3>
+          <p>Connect to your network and build interfaces for TVs, thermostats, doorbells, or anything else you can imagine. Set up a network that runs fully locally, without relying on Google or Apple Home outages or data collection policies.</p>
         </div>
-        <div class="step" data-i="3" data-card="device">
-          <div class="step-label">Your whole device <span class="rmchip">Built on Linux</span></div>
-          <h3>Don’t just customize the app. Customize your whole device.</h3>
-          <p>Build a new control center or quick settings chip for your Linux device, rearrange your desktop or files, or build real utilities that change how you interact with your computer. <a href="https://github.com/itsdestin/swipe-keyboard#readme" target="_blank" rel="noopener">Swipe Keyboard for KDE Plasma</a> is just one example of what’s possible.</p>
+        <div class="step" data-i="3" data-card="any-ai">
+          <div class="step-label">choose your models</div>
+          <h3>Use any AI you'd like, and switch mid-conversation.</h3>
+          <p>Access Claude or ChatGPT models with your own subscription, or access hundreds of pay-as-you-go models through OpenRouter. You can also utilize free, offline models on your own computer. Tools and conversations work with all of them.</p>
         </div>
-        <div class="step" data-i="4" data-card="any-ai">
-          <div class="step-label">Any model</div>
-          <h3>Use whichever AI you like. Switch mid-conversation.</h3>
-          <p>Hundreds of models through OpenRouter, Claude or OpenAI on your own subscription, or an offline model on your own computer. Your tools and conversations work the same with all of them.</p>
+        <div class="step" data-i="4" data-card="money">
+          <div class="step-label">keep your data</div>
+          <h3>Connect directly with your services, or stay local.</h3>
+          <p>You may connect any external service with API keys or other means, but youcoded can also run entirely offline with no external connections. Further, youcoded does not collect any personal data aside from a count of active users on each platform. We do not care to know who you are, what's on your devices, or what services you've connected *ahem*. Verify this by viewing our published source code.</p>
         </div>
-        <div class="step" data-i="5" data-card="artifact">
-          <div class="step-label">Real work, edited live</div>
+        <div class="step" data-i="5" data-card="everywhere">
+          <div class="step-label">on your adventures</div>
+          <h3>Start it on the home PC, use remote access via Safari.</h3>
+          <p>Start the app on a Windows, macOS, or Linux device, then access it via any web browser with remote access via Tailscale.</p>
+        </div>
+        <div class="step" data-i="6" data-card="device">
+          <div class="step-label">manage Your computer <span class="rmchip">Built on Linux</span></div>
+          <h3>Personalize and control your desktop.</h3>
+          <p>Build a new control center or quick settings chip for your Linux computer, rearrange your desktop or files, or build real utilities that change how you interact with your devices. <a href="https://github.com/itsdestin/swipe-keyboard#readme" target="_blank" rel="noopener">Swipe Keyboard for KDE Plasma</a> is one example of what’s possible.</p>
+        </div>
+        <div class="step" data-i="7" data-card="artifact">
+          <div class="step-label">meet your challenges</div>
           <h3>Hand it a spreadsheet, get charts and analysis.</h3>
           <p>Attach a file and ask for what you want out of it. The assistant reads it, does the work, and hands it back in the panel beside the conversation, where you can open it, change it yourself, and hand it back for more.</p>
         </div>
-        <div class="step" data-i="6" data-card="control">
-          <div class="step-label">You’re in control</div>
-          <h3>Nothing happens without your permission.</h3>
+        <div class="step" data-i="8" data-card="control">
+          <div class="step-label">needs your permission</div>
+          <h3>Nothing happens unless you approve.</h3>
           <p>It asks before it acts. Permission modes set how much it may do on its own, and every standing permission is listed on one screen where you can revoke it. The whole app is open source, so anyone can check what it does.</p>
         </div>
-        <div class="step" data-i="7" data-card="organized">
-          <div class="step-label">Stay organized</div>
-          <h3>Projects, tags, notes and shortcuts.</h3>
+        <div class="step" data-i="9" data-card="organized">
+          <div class="step-label">organize your conversations</div>
+          <h3>Pick projects, tags, notes and shortcuts.</h3>
           <p>Each project keeps its files, conversations and instructions together. Tag and annotate conversations, pin the ones that matter, hide the rest. Quick chips run the prompts you use every day in one tap.</p>
-        </div>
-        <div class="step" data-i="8" data-card="everywhere">
-          <div class="step-label">Works everywhere</div>
-          <h3>Start on your laptop. Finish on your phone.</h3>
-          <p>Windows, macOS, Linux, Android, or any web browser through remote access. Conversations and files stay in sync through your own private GitHub, so you start on one device and resume on any other.</p>
-        </div>
-        <div class="step" data-i="9" data-card="play">
-          <div class="step-label">Play while it works</div>
-          <h3>Multiplayer games, right beside the conversation.</h3>
-          <p>Long tasks take a minute, so open the arcade in the side panel. Connect 4 or chess against a friend who is online, Flappy or 2048 on your own, then back to the answer when it is ready.</p>
         </div>
         <div class="step" data-i="10" data-card="roadmap">
           <div class="step-label">On the roadmap <span class="rmchip">Roadmap</span></div>
@@ -2398,9 +2403,12 @@ Contract: mascots/README.md (from the repo root)
           <p>Set up a job once: what to do, which tools it may use, where to stop and check with you. Then run it on a schedule or send it from your phone. Results and approvals land in an inbox.</p>
         </div></div>
     <div class="deckmedia" id="stage"><video data-i="0" data-clip="yours" muted loop playsinline preload="none" poster="media/yours--youcoded.webp"><source src="media/yours--youcoded.webm" type="video/webm"></video>
-        <video data-i="1" data-clip="home" muted loop playsinline preload="none" poster="media/home--youcoded.webp"><source src="media/home--youcoded.webm" type="video/webm"></video>
-        <video data-i="2" data-clip="money" muted loop playsinline preload="none" poster="media/money--youcoded.webp"><source src="media/money--youcoded.webm" type="video/webm"></video>
-        <div class="devdemo" data-i="3" aria-hidden="true">
+        <video data-i="1" data-clip="play" muted loop playsinline preload="none" poster="media/play--youcoded.webp"><source src="media/play--youcoded.webm" type="video/webm"></video>
+        <video data-i="2" data-clip="home" muted loop playsinline preload="none" poster="media/home--youcoded.webp"><source src="media/home--youcoded.webm" type="video/webm"></video>
+        <video data-i="3" data-clip="any-ai" muted loop playsinline preload="none" poster="media/any-ai--youcoded.webp"><source src="media/any-ai--youcoded.webm" type="video/webm"></video>
+        <video data-i="4" data-clip="money" muted loop playsinline preload="none" poster="media/money--youcoded.webp"><source src="media/money--youcoded.webm" type="video/webm"></video>
+        <video data-i="5" data-clip="follow" muted loop playsinline preload="none" poster="media/follow--youcoded.webp"><source src="media/follow--youcoded.webm" type="video/webm"></video><div class="deck-phone" data-phone-for="5"><video data-clip="phone" muted loop playsinline preload="none" width="390" height="844" poster="media/phone--youcoded.webp" aria-label="The same conversation on a phone"><source src="media/phone--youcoded.webm" type="video/webm"></video></div>
+        <div class="devdemo" data-i="6" aria-hidden="true">
 <svg width="0" height="0" style="position:absolute"><defs>
 <symbol id="d-wifi" viewBox="0 0 24 24"><path d="M2 9a15 15 0 0 1 20 0M5.5 12.8a10 10 0 0 1 13 0M9 16.5a5 5 0 0 1 6 0M12 20h.01"/></symbol>
 <symbol id="d-bt" viewBox="0 0 24 24"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></symbol>
@@ -2453,12 +2461,9 @@ Contract: mascots/README.md (from the repo root)
 <div class="abs warm"></div>
 <div class="abs fin"></div>
 </div>
-        <video data-i="4" data-clip="any-ai" muted loop playsinline preload="none" poster="media/any-ai--youcoded.webp"><source src="media/any-ai--youcoded.webm" type="video/webm"></video>
-        <video data-i="5" data-clip="artifact-edit" muted loop playsinline preload="none" poster="media/artifact-edit--youcoded.webp"><source src="media/artifact-edit--youcoded.webm" type="video/webm"></video>
-        <video data-i="6" data-clip="does-things" muted loop playsinline preload="none" poster="media/does-things--youcoded.webp"><source src="media/does-things--youcoded.webm" type="video/webm"></video>
-        <video data-i="7" data-clip="organized" muted loop playsinline preload="none" poster="media/organized--youcoded.webp"><source src="media/organized--youcoded.webm" type="video/webm"></video>
-        <video data-i="8" data-clip="follow" muted loop playsinline preload="none" poster="media/follow--youcoded.webp"><source src="media/follow--youcoded.webm" type="video/webm"></video><div class="deck-phone" data-phone-for="8"><video data-clip="phone" muted loop playsinline preload="none" width="390" height="844" poster="media/phone--youcoded.webp" aria-label="The same conversation on a phone"><source src="media/phone--youcoded.webm" type="video/webm"></video></div>
-        <video data-i="9" data-clip="play" muted loop playsinline preload="none" poster="media/play--youcoded.webp"><source src="media/play--youcoded.webm" type="video/webm"></video>
+        <video data-i="7" data-clip="artifact-edit" muted loop playsinline preload="none" poster="media/artifact-edit--youcoded.webp"><source src="media/artifact-edit--youcoded.webm" type="video/webm"></video>
+        <video data-i="8" data-clip="does-things" muted loop playsinline preload="none" poster="media/does-things--youcoded.webp"><source src="media/does-things--youcoded.webm" type="video/webm"></video>
+        <video data-i="9" data-clip="organized" muted loop playsinline preload="none" poster="media/organized--youcoded.webp"><source src="media/organized--youcoded.webm" type="video/webm"></video>
         <div class="sketch" data-i="10">
           <div><div class="k">Agents</div><div class="li on2">Weekly grocery list</div><div class="li">Inbox digest &middot; 7am</div><div class="li">Receipts &rarr; spreadsheet</div></div>
           <div><div class="k">Weekly grocery list</div><div class="li">1 &middot; Read this week's plan</div><div class="li">2 &middot; Draft the list</div><div class="li on2">3 &middot; Check with me before ordering</div><div class="li">4 &middot; Send to my phone</div><div class="k" style="margin-top:14px">Inbox</div><div class="li">Needs approval &middot; Weekly grocery list &middot; 2 min ago</div></div>
@@ -2547,7 +2552,7 @@ Contract: mascots/README.md (from the repo root)
 <footer><div class="wrap"><div class="panel foot">
   <a href="#top" class="logo" aria-label="YouCoded, back to top"><img class="logo-icon" src="brand/default-128.png" alt="" width="44" height="44"><span class="wm"><span class="wm-you">you</span>coded</span></a>
   <span class="badge">Open Source</span>
-  <div class="flinks"><a href="https://github.com/itsdestin/youcoded" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/itsdestin" target="_blank" rel="noopener">Built by Destin</a><a href="https://github.com/itsdestin/youcoded/blob/master/PRIVACY.md" target="_blank" rel="noopener">Privacy</a><a href="https://github.com/itsdestin/youcoded/blob/master/TERMS.md" target="_blank" rel="noopener">Terms</a></div>
+  <div class="flinks"><a href="https://github.com/itsdestin/youcoded" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/itsdestin" target="_blank" rel="noopener">Built by Destin</a><a href="changelog.html">Changelog</a><a href="security.html">Security</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a></div>
   <p class="legal">MIT License &middot; YouCoded is an independent, community-built project. Not affiliated with, endorsed by, or officially supported by Anthropic, OpenAI, or OpenRouter.</p>
 </div></div></footer>
 
@@ -3277,6 +3282,12 @@ var steps  = [].slice.call(document.querySelectorAll('.step'));
 // The phone overlay is a #stage child too but is NOT a slide -- counting it
 // would shift every card's clip by one.
 var slides = [].slice.call(document.querySelectorAll('#stage > *:not(.deck-phone)'));
+// WHY: the phone overlay names its card by position, and the Linux move above shifts
+// positions. Re-point it at the clip it sits right after so it never lands on another card.
+[].forEach.call(document.querySelectorAll('#stage > .deck-phone'), function(ph){
+  var n = slides.indexOf(ph.previousElementSibling);
+  if (n >= 0) ph.setAttribute('data-phone-for', String(n));
+});
 var dotsEl = document.getElementById('dots');
 var dots = [];
 if (dotsEl) {

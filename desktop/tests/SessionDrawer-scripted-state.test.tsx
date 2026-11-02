@@ -254,6 +254,28 @@ describe('SessionDrawer while a tapped file is being looked up', () => {
     expect(screen.queryByText('Opening CLAUDE.md…')).toBeNull();
   });
 
+  // With a file showing, the list is hidden — a tap that could not open used to
+  // put its note only there, so the chip looked like it did nothing.
+  it('a tap that could not open shows its note over the open file', async () => {
+    setViewport(false);
+    const tracked = {
+      id: 'a1', path: 'notes.md', kind: 'internal', absolutePath: null, lastModified: '', status: 'active',
+      versions: [{ id: 'v1', kind: 'create', at: '', sessionId: SESSION }], comments: [], tags: [],
+    };
+    Object.assign((window as any).claude.artifacts, {
+      get: vi.fn().mockResolvedValue({ ok: true, content: '# notes', orphan: false, binary: false, truncated: false, sizeBytes: 7, mtimeMs: 1 }),
+      onChanged: () => () => {},
+    });
+    listSession.mockResolvedValue({ ok: true, artifacts: [tracked] });
+    const open = { ...baseState(null), sessionArtifacts: { [SESSION]: [tracked] }, activeArtifactBySession: { [SESSION]: 'a1' } };
+    mocks.state = { ...open, pillError: { [SESSION]: 'Couldn’t open old.png — it isn’t here.' } };
+    renderDrawer();
+    // The collapsed list keeps its own copy (width 0, unseen); the one that counts is over the file.
+    const notes = await screen.findAllByText('Couldn’t open old.png — it isn’t here.');
+    expect(notes.some((n) => n.closest('.drawer-content'))).toBe(true);
+
+  });
+
   it('shows the note on a phone-width screen as well', async () => {
     setViewport(true);
     mocks.state = baseState('report.xlsx');

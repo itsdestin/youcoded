@@ -9,11 +9,12 @@ name: Website
 on:
   push:
     branches: [master]
-    paths: ['docs/**', '.github/workflows/site-deploy.yml']
+    # The four root Markdown files are the source of privacy/terms/security/changelog.html.
+    paths: ['docs/**', 'PRIVACY.md', 'TERMS.md', 'SECURITY.md', 'CHANGELOG.md', '.github/workflows/site-deploy.yml']
   # A pull request touching the site builds and checks it (never publishes), so a broken demo or
   # download script is caught before it merges.
   pull_request:
-    paths: ['docs/**', '.github/workflows/site-deploy.yml']
+    paths: ['docs/**', 'PRIVACY.md', 'TERMS.md', 'SECURITY.md', 'CHANGELOG.md', '.github/workflows/site-deploy.yml']
   workflow_run:
     workflows: ['Desktop Release']
     types: [completed]
@@ -64,11 +65,15 @@ jobs:
         run: rsync -a --delete "$RUNNER_TEMP/app/docs/site/" docs/site/
       - name: Shoot the demo's stills
         run: node docs/tools/embed-stills.mjs docs
+      - name: Reuse the release's app dependencies
+        # The page generator and site tests load react/jsdom from desktop/node_modules.
+        run: ln -s "$RUNNER_TEMP/app/desktop/node_modules" desktop/node_modules
+      - name: Rebuild the text pages from their Markdown
+        # WHY: every release edits CHANGELOG.md (outside docs/), so a committed changelog.html
+        # would fall a release behind with nothing to flag it. Regenerate on every publish.
+        run: node docs/tools/gen-legal-pages.mjs
       - name: Check the site's own scripts
-        # The site tests load jsdom from desktop/node_modules; reuse the release checkout's install.
-        run: |
-          ln -s "$RUNNER_TEMP/app/desktop/node_modules" desktop/node_modules
-          node --test docs/tools/*.test.mjs
+        run: node --test docs/tools/*.test.mjs
       - uses: actions/upload-pages-artifact@v5
         with:
           path: docs
