@@ -111,6 +111,10 @@ try {
       if (!page) await sleep(1000);
     }
     if (!page) throw new Error('no main window');
+    // The page's own messages and errors, for diagnosing a failed step (blanked of keys before saving).
+    const rlog = fs.createWriteStream(path.join(out, 'renderer.log'));
+    page.on('console', (m) => rlog.write(`[${m.type()}] ${m.text()}\n`));
+    page.on('pageerror', (e) => rlog.write(`[pageerror] ${e.message}\n`));
     await page.waitForSelector('h1, h2, button', { timeout: 60_000 });
     return (await seen()).headings[0] ?? '';
   });
