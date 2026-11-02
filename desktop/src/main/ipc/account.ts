@@ -87,10 +87,25 @@ export const accountChannels: MainChannelDef[] = [
     handler: ({ deviceCode }) => wrap(async () => {
       const { client, store, installedSkillSource } = need();
       const listener = signinListeners.get(deviceCode);
-      // Bound to this computer: until the browser delivered the secret to our listener there is
-      // nothing to collect, so do not ask the Worker (it would only say pending).
-      if (listener && listener.secret() === null) return { status: 'pending' as const };
-      const res = await client.authPoll(deviceCode, listener?.secret() ?? undefined);
+      // Bound to this computer: the Worker only hands over the session to an app holding the secret its browser
+      // redirect delivered to our listener. Every secret that arrived is tried once (junk sent to the port is
+      // answered "pending" by the Worker and dropped); the real one completes the sign-in.
+      let res: Awaited<ReturnType<typeof client.authPoll>> = { status: 'pending' };
+      if (!listener) {
+        res = await client.authPoll(deviceCode); // an older flow with no listener: nothing local to wait for
+      } else {
+        for (let secret = listener.take(); secret !== null; secret = listener.take()) {
+          res = await client.authPoll(deviceCode, secret);
+          if (res.status === 'complete') break;
+        }
+        // WHY an error instead of "pending" forever: if the listener has shut down with no working secret, the
+        // browser never reached this computer (a different computer, a blocked local address, or a sign-in service
+        // that has not been updated) and waiting longer cannot help.
+        if (res.status !== 'complete' && listener.isClosed()) {
+          signinListeners.delete(deviceCode);
+          throw new Error("YouCoded didn't hear back from your web browser. Finish signing in on this computer, then try again.");
+        }
+      }
       if (res.status === 'complete') {
         listener?.close(); signinListeners.delete(deviceCode);
         // The Worker returns the profile alongside the token: store both so user() works at once

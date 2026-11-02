@@ -37,17 +37,24 @@ describe('sign-in loopback listener', () => {
       expect((await get(open.port, p)).status, p).toBe(404);
     }
     expect((await get(open.port, '/youcoded-signin?secret=' + SECRET, 'POST')).status).toBe(404);
-    expect(open.secret()).toBeNull();
+    expect(open.take()).toBeNull();
   });
 
-  it('accepts exactly one valid GET, shows a tiny local page, then closes', async () => {
+  it('queues every well-formed secret and keeps waiting (junk cannot block the real one)', async () => {
     open = await startSigninListener();
     const port = open.port;
-    const r = await get(port, '/youcoded-signin?secret=' + SECRET);
+    const junk = 'b2'.repeat(32);
+    const r = await get(port, '/youcoded-signin?secret=' + junk);
     expect(r.status).toBe(200);
     expect(r.body).toContain('return to YouCoded');
     expect(r.body).not.toMatch(/https?:\/\/|<script|<img|<link/i);
-    expect(open.secret()).toBe(SECRET);
+    expect((await get(port, '/youcoded-signin?secret=' + SECRET)).status).toBe(200);
+    expect(open.take()).toBe(junk);
+    expect(open.take()).toBe(SECRET);
+    expect(open.take()).toBeNull();
+    expect(open.isClosed()).toBe(false);
+    open.close();
+    expect(open.isClosed()).toBe(true);
     // WHY waitFor: a fixed pause outruns a busy machine; wait until the listener has actually closed.
     await vi.waitFor(async () => expect(await refused(port)).toBe(true));
   });
@@ -56,7 +63,8 @@ describe('sign-in loopback listener', () => {
     open = await startSigninListener(150);
     const port = open.port;
     await vi.waitFor(async () => expect(await gone(port)).toBe(true), { timeout: 3000 });
-    expect(open.secret()).toBeNull();
+    expect(open.take()).toBeNull();
+    expect(open.isClosed()).toBe(true);
   });
 });
 
