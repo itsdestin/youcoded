@@ -797,13 +797,23 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // value and the view re-pins, in the same frame the transform is removed.
   useEffect(() => {
     if (!visible) return;
+    // The scroller as the glide began (height of everything, visible height, position): the messages move only as far
+    // as the re-pin at the end will really scroll. WHY (Destin, 2026-11-02: "the 'started with' banner at the top is
+    // jumping around strangely"): a short conversation does not scroll at all, so moving it by the keyboard's full
+    // height lifted it, then dropped it back when the glide settled.
+    let start: { h: number; c: number; top: number } | null = null;
     const onKeyboard = (e: Event) => {
       const content = contentRef.current;
+      const scroller = scrollContainerRef.current;
       const lift = (e as CustomEvent<{ lift?: number }>).detail?.lift ?? 0;
       if (lift !== 0) {
-        if (content && stickRef.current) content.style.transform = `translateY(${-lift}px)`;
+        if (!content || !scroller || !stickRef.current) return;
+        start ??= { h: scroller.scrollHeight, c: scroller.clientHeight, top: scroller.scrollTop };
+        const willScroll = Math.max(0, start.h + lift - start.c) - start.top;
+        content.style.transform = willScroll ? `translateY(${-willScroll}px)` : '';
         return;
       }
+      start = null;
       if (content) content.style.transform = '';
       if (stickRef.current) scrollToBottom();
     };
