@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import { projectTimeline } from '../src/renderer/state/timeline-presentation';
-import { ChatState, ChatAction, serializeChatState, deserializeChatState } from '../src/renderer/state/chat-types';
+import { ChatState, ChatAction, serializeChatState, deserializeChatState, createSessionChatState } from '../src/renderer/state/chat-types';
 import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
 import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
 import type { HookEvent } from '../src/shared/types';
@@ -1252,12 +1252,6 @@ describe('native runtime reducer paths', () => {
 
   // ---- Task 12: queued messages leave the timeline — docked strip list ----
   describe('QUEUE_SYNCED / QUEUED_MESSAGE_REMOVED', () => {
-    it('a queue snapshot sets to queuedMessages, not the timeline', () => {
-      state = queueRow(state, SESSION, 'q-1', 'queued msg', 1);
-      expect(state.get(SESSION)!.timeline).toHaveLength(0);
-      expect(state.get(SESSION)!.queuedMessages).toEqual([{ queueId: 'q-1', content: 'queued msg', timestamp: 1 }]);
-    });
-
     it('QUEUED_MESSAGE_REMOVED removes only the matching entry, leaving others untouched', () => {
       state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'keep me (sent)', timestamp: 1 });
       state = queueRow(state, SESSION, 'q-1', 'cancel me', 2);
@@ -1291,18 +1285,6 @@ describe('native runtime reducer paths', () => {
       const before = state;
       state = dispatch(state, { type: 'QUEUED_MESSAGE_REMOVED', sessionId: 'ghost-session', queueId: 'q-1' });
       expect(state).toBe(before);
-    });
-
-    it('TRANSCRIPT_USER_MESSAGE appends the drained queued message at the END (true position), not in place of a bubble that was never written', () => {
-      state = queueRow(state, SESSION, 'q-1', 'confirm me', 1);
-      expect(state.get(SESSION)!.timeline).toHaveLength(0);
-      state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'u-1', text: 'confirm me', timestamp: 2 });
-      const timeline = state.get(SESSION)!.timeline;
-      expect(timeline).toHaveLength(1);
-      const entry = timeline[0];
-      expect(entry).toMatchObject({ kind: 'user', pending: false });
-      if (entry.kind === 'user') expect(entry.message.content).toBe('confirm me');
-      expect(state.get(SESSION)!.queuedMessages).toEqual([]);
     });
   });
 
@@ -1923,5 +1905,357 @@ describe('a sent message the computer may not have received', () => {
     busy = dispatch(busy, { type: 'USER_PROMPT', sessionId: SESSION, content: 'more', timestamp: 3, sendId: 'id9' } as ChatAction);
     expect(busy.get(SESSION)!.currentTurnId).toBeTruthy();
     expect(dispatch(busy, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id9', note: 'not-sent' }).get(SESSION)!.isThinking).toBe(true);
+  });
+});
+
+// ---- Interrupts, replay dedup, tool cards, permission identity, queue, silent turns ----
+const tu = (toolUseId: string, toolName = 'Bash', toolInput: unknown = { command: 'ls' }, uuid = `u-${toolUseId}`) =>
+  ({ type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid, toolUseId, toolName, toolInput }) as ChatAction;
+const perm = (requestId: string, toolName: string, input: unknown) =>
+  ({ type: 'PERMISSION_REQUEST', sessionId: SESSION, requestId, toolName, input }) as ChatAction;
+const userMsg = (uuid: string, text: string, timestamp = 1) =>
+  ({ type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid, text, timestamp }) as ChatAction;
+const toolText = (s: ChatState) =>
+  [...s.get(SESSION)!.assistantTurns.values()].flatMap((t) => t.segments).filter((x) => x.type === 'text') as any[];
+const userCount = (s: ChatState) => s.get(SESSION)!.timeline.filter((e) => e.kind === 'user').length;
+const cardCount = (s: ChatState, id: string) =>
+  // Count rendered slots (group.toolIds), not Map entries: a doubled id is a doubled card on screen.
+  [...s.get(SESSION)!.toolGroups.values()].flatMap((g) => g.toolIds).filter((x) => x === id).length;
+const calls = (s: ChatState) => s.get(SESSION)!.toolCalls;
+const question = (s: ChatState, id: string) => ((calls(s).get(id)!.input as any).questions[0].question);
+
+describe('TRANSCRIPT_INTERRUPT', () => {
+  function inFlight(): ChatState {
+    const session = createSessionChatState();
+    session.currentTurnId = 'turn-1';
+    session.isThinking = true;
+    session.toolCalls.set('tool-1', { toolUseId: 'tool-1', toolName: 'Bash', status: 'running', input: {} } as any);
+    session.toolCalls.set('tool-2', { toolUseId: 'tool-2', toolName: 'Edit', status: 'awaiting-approval', input: {} } as any);
+    session.activeTurnToolIds.add('tool-1').add('tool-2');
+    session.assistantTurns.set('turn-1', { id: 'turn-1', segments: [], timestamp: 1000, stopReason: null, model: null, usage: null, anthropicRequestId: null });
+    return new Map([[SESSION, session]]);
+  }
+  const interrupt = (s: ChatState, sessionId = SESSION) =>
+    dispatch(s, { type: 'TRANSCRIPT_INTERRUPT', sessionId, uuid: 'u-1', timestamp: 2000, kind: 'plain' });
+
+  it('stamps the turn interrupted, fails running/awaiting tools, and clears turn-scoped state', () => {
+    const session = interrupt(inFlight()).get(SESSION)!;
+    expect(session.assistantTurns.get('turn-1')?.stopReason).toBe('interrupted');
+    for (const id of ['tool-1', 'tool-2']) {
+      expect(session.toolCalls.get(id)?.status).toBe('failed');
+      expect((session.toolCalls.get(id) as any).error).toBe('Turn interrupted');
+    }
+    expect(session.isThinking).toBe(false);
+    expect(session.currentTurnId).toBeNull();
+    expect(session.activeTurnToolIds.size).toBe(0);
+    expect(session.attentionState).toBe('ok');
+  });
+
+  it('is safe with no turn in flight, and returns the same state for an unknown session', () => {
+    const idle = interrupt(initState()).get(SESSION)!;
+    expect(idle.isThinking).toBe(false);
+    expect(idle.currentTurnId).toBeNull();
+    const state = inFlight();
+    expect(interrupt(state, 'no-such-session')).toBe(state);
+  });
+});
+
+describe('transcript replay dedup', () => {
+  // After a renderer reload the replay and the live stream both deliver; the reducer dedups on the JSONL line uuid.
+  it('drops a repeated user message and a repeated assistant text with the same uuid', () => {
+    let state = dispatch(dispatch(initState(), userMsg('user-uuid-1', 'hello')), userMsg('user-uuid-1', 'hello'));
+    expect(userCount(state)).toBe(1);
+    const text = { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'a1', text: 'the answer', timestamp: 2000 } as ChatAction;
+    state = dispatch(dispatch(state, text), text);
+    expect(toolText(state)).toHaveLength(1);
+  });
+
+  it('keeps two messages with the same text but different uuids ("yes yes yes"): dedup is never content-based', () => {
+    const state = dispatch(dispatch(initState(), userMsg('u-a', 'yes')), userMsg('u-b', 'yes', 1001));
+    expect(userCount(state)).toBe(2);
+  });
+
+  it('merges native streaming deltas (fresh uuid each, shared partId) instead of dropping them', () => {
+    let state = dispatch(initState(), { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'd1', text: 'Hel', timestamp: 1, partId: 'text-0' });
+    state = dispatch(state, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'd2', text: 'lo', timestamp: 2, partId: 'text-0' });
+    expect(toolText(state).map((s) => s.content)).toEqual(['Hello']);
+  });
+
+  it('confirms a pending optimistic bubble, then drops the replayed duplicate', () => {
+    let state = dispatch(initState(), { type: 'USER_PROMPT', sessionId: SESSION, content: 'run it', timestamp: 900 });
+    state = dispatch(dispatch(state, userMsg('confirm-uuid', 'run it', 1000)), userMsg('confirm-uuid', 'run it', 1000));
+    expect(userCount(state)).toBe(1);
+    expect(state.get(SESSION)!.timeline.find((e) => e.kind === 'user')).toMatchObject({ pending: false });
+  });
+});
+
+describe('tool cards do not duplicate on re-emit', () => {
+  // The watcher deliberately re-emits tool-use for a repeated uuid (a rewritten CC line may carry new tool_use
+  // blocks), so the reducer absorbs repeats by toolUseId, not uuid — a uuid guard would swallow new tools.
+  const ask = tu('toolu_ask_1', 'AskUserQuestion', { questions: [{ question: 'Which?', header: 'Pick', options: [] }] }, 'line-uuid-1');
+
+  it('renders one card for a re-emitted tool_use, also after the turn ended (stale currentGroupId minted a 2nd group)', () => {
+    let state = dispatch(dispatch(dispatch(initState(), ask), ask), ask);
+    expect(cardCount(state, 'toolu_ask_1')).toBe(1);
+    state = dispatch(state, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'turn-1' } as any);
+    state = dispatch(state, ask);
+    expect(cardCount(state, 'toolu_ask_1')).toBe(1);
+    expect(state.get(SESSION)!.toolGroups.size).toBe(1);
+  });
+
+  it('still renders a genuinely new tool that shares the rewritten line uuid', () => {
+    const state = dispatch(dispatch(initState(), ask), { ...tu('toolu_bash_2', 'Bash', { command: 'ls' }), uuid: 'line-uuid-1' } as ChatAction);
+    expect(cardCount(state, 'toolu_ask_1')).toBe(1);
+    expect(cardCount(state, 'toolu_bash_2')).toBe(1);
+  });
+
+  it('does not mint a second perm-* placeholder for a re-delivered requestId', () => {
+    const p = perm('req-1', 'AskUserQuestion', (ask as any).toolInput);
+    const state = dispatch(dispatch(dispatch(initState(), ask), p), p);
+    expect(cardCount(state, 'toolu_ask_1')).toBe(1);
+    expect([...calls(state).keys()].filter((k) => k.startsWith('perm-'))).toHaveLength(0);
+  });
+});
+
+describe('a permission ask renders the input it is about', () => {
+  // The 2nd AskUserQuestion of a session used to re-display the 1st one's questions: PERMISSION_REQUEST bound to an
+  // older same-name card (hook beats the watcher) and never refreshed its input.
+  const Q1 = { questions: [{ question: 'Which framework?', header: 'Framework', options: [{ label: 'React' }] }] };
+  const Q2 = { questions: [{ question: 'Which database?', header: 'Database', options: [{ label: 'Postgres' }] }] };
+  const ASK = 'AskUserQuestion';
+  const responded = (requestId: string) => ({ type: 'PERMISSION_RESPONDED', sessionId: SESSION, requestId }) as ChatAction;
+  const awaiting = (s: ChatState, requestId: string) =>
+    [...calls(s).values()].find((t) => t.requestId === requestId && t.status === 'awaiting-approval');
+
+  it('shows the NEW questions when a later ask binds to an earlier answered ask card', () => {
+    let state = dispatch(dispatch(dispatch(initState(), tu('toolu_ask_1', ASK, Q1)), perm('req-1', ASK, Q1)), responded('req-1'));
+    state = dispatch(state, perm('req-2', ASK, Q2));
+    expect((awaiting(state, 'req-2')!.input as any).questions[0].question).toBe('Which database?');
+  });
+
+  it('does not strand an answered perm-* placeholder as a permanent match target', () => {
+    // Answering before the watcher delivers tool_use used to leave the placeholder 'running' forever.
+    let state = dispatch(dispatch(initState(), perm('req-1', ASK, Q1)), responded('req-1'));
+    state = dispatch(state, tu('toolu_ask_1', ASK, Q1));
+    state = dispatch(state, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u2', toolUseId: 'toolu_ask_1', result: 'answered', isError: false } as any);
+    expect([...calls(state).entries()].filter(([id, t]) => id.startsWith('perm-') && t.status === 'running')).toHaveLength(0);
+  });
+
+  it('does not let a later same-name tool_use steal an answered placeholder', () => {
+    let state = dispatch(dispatch(initState(), perm('req-1', ASK, Q1)), responded('req-1'));
+    state = dispatch(state, tu('toolu_ask_2', ASK, Q2));
+    expect(question(state, 'toolu_ask_2')).toBe('Which database?');
+    expect(question(state, 'perm-req-1')).toBe('Which framework?');
+  });
+
+  it('does not swap input onto a card of a DIFFERENT tool, nor blank a card when the hook omits tool_input', () => {
+    let state = dispatch(dispatch(initState(), tu('toolu_bash_1')), perm('req-1', ASK, Q1));
+    expect((calls(state).get('toolu_bash_1')!.input as any).command).toBe('ls');
+    state = dispatch(dispatch(initState(), tu('toolu_ask_1', ASK, Q1)), perm('req-2', ASK, {}));
+    expect(question(state, 'toolu_ask_1')).toBe('Which framework?');
+  });
+
+  it('still prefers the exact-input match over an older same-name card', () => {
+    const state = dispatch(dispatch(dispatch(initState(), tu('toolu_ask_1', ASK, Q1)), tu('toolu_ask_2', ASK, Q2)), perm('req-2', ASK, Q2));
+    expect(awaiting(state, 'req-2')?.toolUseId).toBe('toolu_ask_2');
+    expect(question(state, 'toolu_ask_1')).toBe('Which framework?');
+  });
+
+  // Consent bug (2026-08-09): "Allow Bash 1?" was shown while the buttons authorised Read.
+  it('does not bind an ask to a running tool with a DIFFERENT name; it gets its own card naming its tool', () => {
+    const state = dispatch(dispatch(initState(), tu('toolu_bash_1')), perm('req-read-1', 'Read', { file_path: '/etc/hosts' }));
+    const bash = calls(state).get('toolu_bash_1')!;
+    expect(bash).toMatchObject({ toolName: 'Bash', status: 'running' });
+    expect(bash.requestId).toBeUndefined();
+    expect(calls(state).get('perm-req-read-1')).toMatchObject({ toolName: 'Read', status: 'awaiting-approval' });
+  });
+});
+
+describe('queued messages leave the timeline', () => {
+  // A queued native send only touches queuedMessages — never the timeline or turn state — and joins the timeline at
+  // the END when TRANSCRIPT_USER_MESSAGE drains it (a frozen enqueue-time position put it above still-streaming content).
+  function streaming(): ChatState {
+    const session = createSessionChatState();
+    Object.assign(session, { currentTurnId: 't1', currentGroupId: 'g1', isThinking: true });
+    return new Map([[SESSION, session]]);
+  }
+
+  it('a queue snapshot touches neither the timeline nor the live turn', () => {
+    const sess = queueRow(streaming(), SESSION, 'q-1', 'next msg', 5).get(SESSION)!;
+    expect(sess).toMatchObject({ currentTurnId: 't1', currentGroupId: 'g1', timeline: [] });
+    expect(sess.queuedMessages).toEqual([{ queueId: 'q-1', content: 'next msg', timestamp: 5 }]);
+  });
+
+  it('a snapshot for an unknown session, and removal of an unknown queueId or session, return the same state', () => {
+    const empty: ChatState = new Map();
+    expect(queueRow(empty, 'ghost', 'q-1', 'x', 1)).toBe(empty);
+    const state = queueRow(initState(), SESSION, 'q-1', 'first', 1);
+    expect(dispatch(state, { type: 'QUEUED_MESSAGE_REMOVED', sessionId: SESSION, queueId: 'ghost-id' })).toBe(state);
+    expect(dispatch(state, { type: 'QUEUED_MESSAGE_REMOVED', sessionId: 'ghost-session', queueId: 'q-1' })).toBe(state);
+  });
+
+  it('a drained queued message with no pending bubble lands at the END mid-stream, and the OLDEST same-content entry is removed', () => {
+    let state = queueRow(queueRow(streaming(), SESSION, 'q-1', 'hi', 1), SESSION, 'q-2', 'hi', 2);
+    state = dispatch(state, userMsg('u-1', 'hi', 3));
+    const sess = state.get(SESSION)!;
+    expect(sess.timeline).toHaveLength(1);
+    expect(sess.timeline[0]).toMatchObject({ kind: 'user', pending: false });
+    expect('queued' in sess.timeline[0]).toBe(false);
+    expect(sess.queuedMessages).toEqual([{ queueId: 'q-2', content: 'hi', timestamp: 2 }]);
+  });
+
+  it('a sent-path pending bubble is confirmed in place; a queued entry with the same content is still cleaned up', () => {
+    let state = dispatch(initState(), { type: 'USER_PROMPT', sessionId: SESSION, content: 'same text', timestamp: 1 });
+    state = queueRow(state, SESSION, 'q-1', 'same text', 2);
+    state = dispatch(state, userMsg('u-1', 'same text', 3));
+    expect(state.get(SESSION)!.timeline).toHaveLength(1);
+    expect(state.get(SESSION)!.timeline[0]).toMatchObject({ kind: 'user', pending: false });
+    expect(state.get(SESSION)!.queuedMessages).toEqual([]);
+  });
+});
+
+describe('tool-group collapse', () => {
+  // Group membership comes from currentGroupId; text/reasoning reset it on purpose, heartbeats must not.
+  const groupOf = (s: ChatState, id: string) => [...s.get(SESSION)!.toolGroups.values()].find((g) => g.toolIds.includes(id))?.id;
+
+  it('tools batched in one step share one group', () => {
+    const state = ['t1', 't2', 't3'].reduce((s, id) => dispatch(s, tu(id)), initState());
+    expect(groupOf(state, 't1')).toBeDefined();
+    expect(groupOf(state, 't1')).toBe(groupOf(state, 't2'));
+    expect(groupOf(state, 't2')).toBe(groupOf(state, 't3'));
+    expect(state.get(SESSION)!.toolGroups.size).toBe(1);
+  });
+
+  it.each([
+    ['a reasoning delta', { type: 'TRANSCRIPT_ASSISTANT_REASONING', sessionId: SESSION, uuid: 'r-1', text: 'thinking', timestamp: 1000 }, 2],
+    ['a thinking heartbeat', { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION }, 1],
+    ['a stall-warning heartbeat', { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION, stallWarning: { retryInMs: 5000, willRetry: true } }, 1],
+  ])('%s between tools yields %i group(s)', (_n, between, groups) => {
+    const state = [tu('t1'), between as ChatAction, tu('t2')].reduce(dispatch, initState());
+    expect(state.get(SESSION)!.toolGroups.size).toBe(groups);
+    expect(groupOf(state, 't1') === groupOf(state, 't2')).toBe(groups === 1);
+  });
+});
+
+describe('COMPACTION_COMPLETE for a native auto-compaction', () => {
+  it('inserts a compact marker without compactionPending (it bypasses the stale-event guard), but a non-auto stale event is ignored', () => {
+    const state = initState();
+    expect(state.get(SESSION)!.compactionPending).toBeNull();
+    const next = dispatch(state, { type: 'COMPACTION_COMPLETE', sessionId: SESSION, markerId: 'auto-marker-1', afterContextTokens: null, auto: true, summary: 'Earlier: user asked X; did Y.' });
+    const marker = next.get(SESSION)!.timeline.find((e) => e.kind === 'system-marker') as any;
+    expect(marker.marker).toMatchObject({ variant: 'compact', summary: 'Earlier: user asked X; did Y.' });
+    expect(dispatch(state, { type: 'COMPACTION_COMPLETE', sessionId: SESSION, markerId: 'stale-marker', afterContextTokens: null })).toBe(state);
+  });
+});
+
+describe('TRANSCRIPT_REPLAY_COMPLETE reaping', () => {
+  const replayDone = (s: ChatState, sessionIdle: boolean, sessionId = SESSION) =>
+    dispatch(s, { type: 'TRANSCRIPT_REPLAY_COMPLETE', sessionId, sessionIdle } as ChatAction);
+
+  it('fails a tool left running by an interrupted transcript (not "complete": it may never have run) when the session is idle', () => {
+    const state = replayDone(dispatch(initState(), tu('toolu_1', 'Bash', { command: 'sleep 1000' })), true);
+    const tool = calls(state).get('toolu_1')!;
+    expect(tool.status).toBe('failed');
+    expect(tool.error).toMatch(/closed/i);
+    expect(state.get(SESSION)!.isThinking).toBe(false);
+  });
+
+  it('leaves a completed tool alone, leaves a running tool alone when the session is NOT idle (re-dock mid-turn), and ignores an unknown session', () => {
+    let done = dispatch(initState(), tu('toolu_1'));
+    done = dispatch(done, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u-2', toolUseId: 'toolu_1', result: 'a.txt', isError: false } as any);
+    expect(calls(replayDone(done, true)).get('toolu_1')!.status).toBe('complete');
+    expect(calls(replayDone(dispatch(initState(), tu('toolu_1')), false)).get('toolu_1')!.status).toBe('running');
+    const state = initState();
+    expect(replayDone(state, true, 'nope')).toBe(state);
+  });
+});
+
+describe('NATIVE_TOOL_PREPARING', () => {
+  const prep = (chars: number, extra: Record<string, unknown> = {}) =>
+    ({ type: 'NATIVE_TOOL_PREPARING', sessionId: SESSION, toolCallId: 'c1', toolName: 'Write', chars, ...extra }) as ChatAction;
+  const firstGroupId = (s: ChatState) => [...s.get(SESSION)!.toolGroups.values()][0].id;
+
+  it('creates a running+preparing card in a group; later progress changes only the count', () => {
+    let state = dispatch(initState(), prep(0));
+    const session = state.get(SESSION)!;
+    expect(session.toolCalls.get('c1')).toMatchObject({ toolUseId: 'c1', toolName: 'Write', status: 'running', preparing: true, preparingChars: 0, input: {} });
+    expect(cardCount(state, 'c1')).toBe(1);
+    expect(session.activeTurnToolIds.has('c1')).toBe(true);
+    const groupId = firstGroupId(state);
+    state = dispatch(dispatch(state, prep(512)), prep(2048));
+    expect(calls(state).size).toBe(1);
+    expect(calls(state).get('c1')!.preparingChars).toBe(2048);
+    expect(cardCount(state, 'c1')).toBe(1);
+    expect(firstGroupId(state)).toBe(groupId);
+  });
+
+  it('TRANSCRIPT_TOOL_USE with the same id supersedes it IN PLACE (provider id is shared; idempotent group placement)', () => {
+    let state = dispatch(initState(), prep(2048));
+    const groupId = firstGroupId(state);
+    state = dispatch(state, tu('c1', 'Write', { file_path: 'a.ts', content: 'x' }));
+    expect(calls(state).get('c1')).toMatchObject({ status: 'running', input: { file_path: 'a.ts', content: 'x' } });
+    expect(calls(state).get('c1')!.preparing).toBeUndefined();
+    expect(cardCount(state, 'c1')).toBe(1);
+    expect(firstGroupId(state)).toBe(groupId);
+  });
+
+  it('cleared prunes the card, its emptied group and turn segment; it is a no-op once the id is a real tool card', () => {
+    let state = dispatch(initState(), prep(2048));
+    const turnId = state.get(SESSION)!.currentTurnId!;
+    const cleared = dispatch(state, prep(2048, { cleared: true })).get(SESSION)!;
+    expect(cleared.toolCalls.has('c1')).toBe(false);
+    expect(cleared.activeTurnToolIds.has('c1')).toBe(false);
+    expect(cleared.toolGroups.size).toBe(0);
+    expect(cleared.assistantTurns.get(turnId)!.segments).toEqual([]);
+    // A retry-clear racing a landed tool-use must not delete a real card whose result is still coming.
+    state = dispatch(dispatch(state, tu('c1', 'Write', { file_path: 'a.ts' })), prep(2048, { cleared: true }));
+    expect(calls(state).get('c1')!.input).toEqual({ file_path: 'a.ts' });
+  });
+
+  it('endTurn DELETES preparing cards (no tool ever ran) but still FAILS real running ones', () => {
+    let state = dispatch(dispatch(initState(), prep(2048)), tu('real-1'));
+    state = dispatch(state, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'u-2', timestamp: 2000 } as any);
+    expect(calls(state).has('c1')).toBe(false);
+    expect(calls(state).get('real-1')!.status).toBe('failed');
+  });
+});
+
+describe('TRANSCRIPT_TURN_COMPLETE for a fully-silent turn', () => {
+  // Turns are minted by content actions, so a contentless turn had nowhere to show its honest stopReason.
+  const complete = (over: Record<string, unknown> = {}) =>
+    ({ type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'u-1', timestamp: 1000, model: null, anthropicRequestId: null, usage: null, stopReason: 'empty_response', ...over }) as any;
+  const turns = (s: ChatState) => [...s.get(SESSION)!.assistantTurns.values()];
+  const turnRows = (s: ChatState) => s.get(SESSION)!.timeline.filter((e: any) => e.kind === 'assistant-turn');
+
+  it('mints a footer-only turn for an abnormal stopReason, stamped with the EVENT timestamp, and still ends the turn', () => {
+    const state = dispatch(initState(), complete({ model: 'stealth/ox-alpha', usage: { inputTokens: 21, outputTokens: 5 }, timestamp: 12345 }));
+    const session = state.get(SESSION)!;
+    const [turn] = turns(state);
+    expect(turns(state)).toHaveLength(1);
+    expect(turn).toMatchObject({ segments: [], stopReason: 'empty_response', model: 'stealth/ox-alpha', timestamp: 12345 });
+    expect(turn.usage).toMatchObject({ inputTokens: 21, outputTokens: 5 });
+    expect(session.timeline.some((e: any) => e.kind === 'assistant-turn' && e.turnId === turn.id)).toBe(true);
+    expect(session.currentTurnId).toBeNull();
+    expect(session.isThinking).toBe(false);
+  });
+
+  it('end_turn with no content creates no ghost turn', () => {
+    const state = dispatch(initState(), complete({ stopReason: 'end_turn' }));
+    expect(turns(state)).toHaveLength(0);
+    expect(state.get(SESSION)!.timeline).toEqual([]);
+  });
+
+  it('the mint is idempotent by uuid: replayed turn-completes never add a ghost turn, with or without real content', () => {
+    // Replay drops content actions via seenUuids, so currentTurnId is null when the turn-complete re-arrives.
+    let state = [complete(), complete(), complete()].reduce(dispatch, initState());
+    expect(turns(state)).toHaveLength(1);
+    expect(turnRows(state)).toHaveLength(1);
+
+    const text = { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'text-1', timestamp: 900, text: 'partial answer' } as ChatAction;
+    const maxed = complete({ uuid: 'u-2', stopReason: 'max_tokens' });
+    state = [text, maxed, text, maxed].reduce(dispatch, initState());
+    expect(turns(state)).toHaveLength(1);
+    expect(turnRows(state)).toHaveLength(1);
+    expect(turns(state)[0].stopReason).toBe('max_tokens');
   });
 });

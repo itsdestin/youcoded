@@ -44,268 +44,86 @@ vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 // ---------------------------------------------------------------------------
 describe('parseTranscriptLine', () => {
   const sessionId = 'desktop-session-1';
+  const parse = (o: object, sid = sessionId) => parseTranscriptLine(JSON.stringify(o), sid);
+  const assistant = (content: unknown[], extra: Record<string, unknown> = {}, msgExtra: Record<string, unknown> = {}) =>
+    ({ type: 'assistant', uuid: 'uuid-1', message: { role: 'assistant', content, stop_reason: null, ...msgExtra }, ...extra });
+  const userLine = (content: unknown, extra: Record<string, unknown> = {}) =>
+    ({ type: 'user', uuid: 'uuid-3', message: { role: 'user', content }, ...extra });
+  const bridge = { kind: 'plugin', name: 'youcoded-control-bridge' };
 
   it('recognizes an app mod command envelope even without promptId', () => {
-    const events = parseTranscriptLine(JSON.stringify({ type: 'user', uuid: 'mod-model', origin: { kind: 'plugin', name: 'youcoded-control-bridge' }, message: { role: 'user', content: '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>' } }), sessionId);
     // A /model command line draws nothing itself; the "Set model to" reply after it draws the divider.
-    expect(events).toEqual([]);
+    const content = '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>';
+    expect(parse(userLine(content, { uuid: 'mod-model', origin: bridge }))).toEqual([]);
   });
 
   it('drops only the bridge command\'s extra compact row, not actual user text or other plugins', () => {
-    const row = { type: 'user', uuid: 'extra', promptId: 'p', origin: { kind: 'plugin', name: 'youcoded-control-bridge' }, message: { role: 'user', content: '/compact preserve details' } };
-    expect(parseTranscriptLine(JSON.stringify(row), sessionId)).toEqual([]);
-    expect(parseTranscriptLine(JSON.stringify({ ...row, origin: { ...row.origin, asUser: true } }), sessionId)).toMatchObject([{ type: 'user-message', data: { text: '/compact preserve details' } }]);
-    expect(parseTranscriptLine(JSON.stringify({ ...row, origin: { kind: 'plugin', name: 'someone-else' } }), sessionId)).toMatchObject([{ type: 'user-message', data: { text: '/compact preserve details' } }]);
-    expect(parseTranscriptLine(JSON.stringify({ type: 'user', uuid: 'hidden', message: { role: 'user', content: 'still not a user prompt' } }), sessionId)).toEqual([]);
+    const row = userLine('/compact preserve details', { uuid: 'extra', promptId: 'p', origin: bridge });
+    expect(parse(row)).toEqual([]);
+    expect(parse({ ...row, origin: { ...bridge, asUser: true } })).toMatchObject([{ type: 'user-message', data: { text: '/compact preserve details' } }]);
+    expect(parse({ ...row, origin: { kind: 'plugin', name: 'someone-else' } })).toMatchObject([{ type: 'user-message', data: { text: '/compact preserve details' } }]);
+    expect(parse(userLine('still not a user prompt', { uuid: 'hidden' }))).toEqual([]);
   });
 
-  it('parses assistant text block → assistant-text event', () => {
-    const line = JSON.stringify({
-      type: 'assistant',
-      uuid: 'uuid-1',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'text', text: 'Hello, world!' }],
-        stop_reason: null,
-      },
-    });
+  it('parses assistant text, tool_use, tool_result and a prompted user line into typed events', () => {
+    const text = parse(assistant([{ type: 'text', text: 'Hello, world!' }]));
+    expect(text).toHaveLength(1);
+    expect(text[0]).toMatchObject({ type: 'assistant-text', sessionId, uuid: 'uuid-1' });
+    expect(looseData(text[0]).text).toBe('Hello, world!');
 
-    const events = parseTranscriptLine(line, sessionId);
+    const use = parse(assistant([{ type: 'tool_use', id: 'toolu_abc', name: 'Read', input: { file_path: '/tmp/test.ts' } }]));
+    expect(use).toHaveLength(1);
+    expect(use[0].type).toBe('tool-use');
+    expect(looseData(use[0])).toMatchObject({ toolUseId: 'toolu_abc', toolName: 'Read', toolInput: { file_path: '/tmp/test.ts' } });
+
+    const result = parse(userLine([{ type: 'tool_result', tool_use_id: 'toolu_abc', content: 'file contents here', is_error: false }]));
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('tool-result');
+    expect(looseData(result[0])).toMatchObject({ toolUseId: 'toolu_abc', toolResult: 'file contents here', isError: false });
+
+    const prompt = parse(userLine('Fix the bug in main.ts', { promptId: 'prompt-xyz' }));
+    expect(prompt).toHaveLength(1);
+    expect(prompt[0].type).toBe('user-message');
+    expect(looseData(prompt[0]).text).toBe('Fix the bug in main.ts');
+  });
+
+  it('joins array tool_result text blocks with a newline', () => {
+    const events = parse(userLine([{ type: 'tool_result', tool_use_id: 'toolu_arr', content: [{ type: 'text', text: 'line one' }, { type: 'text', text: 'line two' }], is_error: false }]));
     expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('assistant-text');
-    expect(events[0].sessionId).toBe(sessionId);
-    expect(events[0].uuid).toBe('uuid-1');
-    expect(looseData(events[0]).text).toBe('Hello, world!');
-  });
-
-  it('parses tool_use block → tool-use event with id, name, input', () => {
-    const line = JSON.stringify({
-      type: 'assistant',
-      uuid: 'uuid-2',
-      message: {
-        role: 'assistant',
-        content: [
-          {
-            type: 'tool_use',
-            id: 'toolu_abc',
-            name: 'Read',
-            input: { file_path: '/tmp/test.ts' },
-          },
-        ],
-        stop_reason: null,
-      },
-    });
-
-    const events = parseTranscriptLine(line, sessionId);
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('tool-use');
-    expect(looseData(events[0]).toolUseId).toBe('toolu_abc');
-    expect(looseData(events[0]).toolName).toBe('Read');
-    expect(looseData(events[0]).toolInput).toEqual({ file_path: '/tmp/test.ts' });
-  });
-
-  it('parses tool_result from user message → tool-result event', () => {
-    const line = JSON.stringify({
-      type: 'user',
-      uuid: 'uuid-3',
-      message: {
-        role: 'user',
-        content: [
-          {
-            type: 'tool_result',
-            tool_use_id: 'toolu_abc',
-            content: 'file contents here',
-            is_error: false,
-          },
-        ],
-      },
-    });
-
-    const events = parseTranscriptLine(line, sessionId);
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('tool-result');
-    expect(looseData(events[0]).toolUseId).toBe('toolu_abc');
-    expect(looseData(events[0]).toolResult).toBe('file contents here');
-    expect(looseData(events[0]).isError).toBe(false);
-  });
-
-  it('parses user prompt (has promptId) → user-message event', () => {
-    const line = JSON.stringify({
-      type: 'user',
-      uuid: 'uuid-4',
-      promptId: 'prompt-xyz',
-      message: {
-        role: 'user',
-        content: 'Fix the bug in main.ts',
-      },
-    });
-
-    const events = parseTranscriptLine(line, sessionId);
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('user-message');
-    expect(looseData(events[0]).text).toBe('Fix the bug in main.ts');
-  });
-
-  it('emits turn-complete for end_turn stop reason (in addition to content events)', () => {
-    const line = JSON.stringify({
-      type: 'assistant',
-      uuid: 'uuid-5',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'text', text: 'Done.' }],
-        stop_reason: 'end_turn',
-      },
-    });
-
-    const events = parseTranscriptLine(line, sessionId);
-    expect(events).toHaveLength(2);
-    expect(events[0].type).toBe('assistant-text');
-    expect(looseData(events[0]).text).toBe('Done.');
-    expect(events[1].type).toBe('turn-complete');
-    expect(looseData(events[1]).stopReason).toBe('end_turn');
-  });
-
-  it('returns [] for file-history-snapshot lines', () => {
-    const line = JSON.stringify({
-      type: 'file-history-snapshot',
-      uuid: 'uuid-6',
-      files: ['/tmp/test.ts'],
-    });
-
-    const events = parseTranscriptLine(line, sessionId);
-    expect(events).toEqual([]);
-  });
-
-  it('returns [] for invalid JSON', () => {
-    const events = parseTranscriptLine('not json at all{{{', sessionId);
-    expect(events).toEqual([]);
-  });
-
-  it('handles mixed content blocks (text + tool_use) → multiple events', () => {
-    const line = JSON.stringify({
-      type: 'assistant',
-      uuid: 'uuid-7',
-      message: {
-        role: 'assistant',
-        content: [
-          { type: 'text', text: 'Let me read that file.' },
-          {
-            type: 'tool_use',
-            id: 'toolu_def',
-            name: 'Read',
-            input: { file_path: '/tmp/foo.ts' },
-          },
-        ],
-        stop_reason: null,
-      },
-    });
-
-    const events = parseTranscriptLine(line, sessionId);
-    expect(events).toHaveLength(2);
-    expect(events[0].type).toBe('assistant-text');
-    expect(looseData(events[0]).text).toBe('Let me read that file.');
-    expect(events[1].type).toBe('tool-use');
-    expect(looseData(events[1]).toolName).toBe('Read');
-  });
-
-  it('emits assistant-thinking heartbeat alongside text for reasoning blocks', () => {
-    const line = JSON.stringify({
-      type: 'assistant',
-      uuid: 'uuid-8',
-      message: {
-        role: 'assistant',
-        content: [
-          { type: 'thinking', thinking: 'Let me think about this...' },
-          { type: 'text', text: 'Here is my answer.' },
-        ],
-        stop_reason: null,
-      },
-    });
-
-    const events = parseTranscriptLine(line, sessionId);
-    // Thinking blocks now surface as a lightweight heartbeat so the
-    // attention classifier doesn't misread extended-thinking pauses as 'stuck'.
-    expect(events).toHaveLength(2);
-    expect(events[0].type).toBe('assistant-thinking');
-    expect(events[1].type).toBe('assistant-text');
-    expect(looseData(events[1]).text).toBe('Here is my answer.');
-  });
-
-  it('skips user messages without promptId (tool result wrappers)', () => {
-    const line = JSON.stringify({
-      type: 'user',
-      uuid: 'uuid-9',
-      message: {
-        role: 'user',
-        content: 'some automatic content',
-      },
-    });
-
-    const events = parseTranscriptLine(line, sessionId);
-    expect(events).toEqual([]);
-  });
-
-  it('handles tool_result with array content (extracts text blocks, joins with \\n)', () => {
-    const line = JSON.stringify({
-      type: 'user',
-      uuid: 'uuid-10',
-      message: {
-        role: 'user',
-        content: [
-          {
-            type: 'tool_result',
-            tool_use_id: 'toolu_arr',
-            content: [
-              { type: 'text', text: 'line one' },
-              { type: 'text', text: 'line two' },
-            ],
-            is_error: false,
-          },
-        ],
-      },
-    });
-
-    const events = parseTranscriptLine(line, sessionId);
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('tool-result');
     expect(looseData(events[0]).toolResult).toBe('line one\nline two');
   });
 
-  it('returns [] for lines missing message field', () => {
-    const line = JSON.stringify({
-      type: 'user',
-      uuid: 'uuid-11',
-    });
-
-    const events = parseTranscriptLine(line, sessionId);
-    expect(events).toEqual([]);
+  it.each([
+    ['a file-history-snapshot line', JSON.stringify({ type: 'file-history-snapshot', uuid: 'u6', files: ['/tmp/test.ts'] })],
+    ['invalid JSON', 'not json at all{{{'],
+    ['a user line without promptId (tool result wrapper)', JSON.stringify(userLine('some automatic content'))],
+    ['a line missing the message field', JSON.stringify({ type: 'user', uuid: 'u11' })],
+  ])('returns [] for %s', (_n, line) => {
+    expect(parseTranscriptLine(line, sessionId)).toEqual([]);
   });
 
-  it('emits stopReason on turn-complete for max_tokens stops', () => {
-    const line = JSON.stringify({
-      type: 'assistant',
-      sessionId: 's1',
-      uuid: 'u1',
-      timestamp: '2026-04-17T00:00:00.000Z',
-      requestId: 'req_abc',
-      message: {
-        model: 'claude-opus-4-7',
-        role: 'assistant',
-        content: [{ type: 'text', text: 'truncated...' }],
-        stop_reason: 'max_tokens',
-        usage: { input_tokens: 10, output_tokens: 4096, cache_read_input_tokens: 5, cache_creation_input_tokens: 2 },
-      },
-    });
-    const events = parseTranscriptLine(line, 's1');
-    const turnComplete = events.find((e) => e.type === 'turn-complete');
-    expect(turnComplete).toBeDefined();
-    expect(turnComplete!.data).toEqual({
-      stopReason: 'max_tokens',
-      model: 'claude-opus-4-7',
-      anthropicRequestId: 'req_abc',
-      // inputTokens is the WHOLE prompt now (10 raw + 5 read + 2 created = 17),
-      // matching what the native runtime and the Claude Code statusline both
-      // mean by it. See the TurnUsageTally comment in transcript-watcher.ts.
+  it('emits turn-complete after content events for end_turn, and content blocks in order (text + tool_use, thinking heartbeat)', () => {
+    const done = parse(assistant([{ type: 'text', text: 'Done.' }], {}, { stop_reason: 'end_turn' }));
+    expect(done.map((e) => e.type)).toEqual(['assistant-text', 'turn-complete']);
+    expect(looseData(done[0]).text).toBe('Done.');
+    expect(looseData(done[1]).stopReason).toBe('end_turn');
+
+    const mixed = parse(assistant([{ type: 'text', text: 'Let me read that file.' }, { type: 'tool_use', id: 'toolu_def', name: 'Read', input: { file_path: '/tmp/foo.ts' } }]));
+    expect(mixed.map((e) => e.type)).toEqual(['assistant-text', 'tool-use']);
+    expect(looseData(mixed[1]).toolName).toBe('Read');
+
+    // Thinking surfaces as a heartbeat so the attention classifier doesn't read extended-thinking pauses as 'stuck'.
+    const thinking = parse(assistant([{ type: 'thinking', thinking: 'hmm' }, { type: 'text', text: 'Here is my answer.' }]));
+    expect(thinking.map((e) => e.type)).toEqual(['assistant-thinking', 'assistant-text']);
+    expect(looseData(thinking[1]).text).toBe('Here is my answer.');
+  });
+
+  it('emits stopReason, model, request id and whole-prompt usage on turn-complete for max_tokens', () => {
+    const events = parse(assistant([{ type: 'text', text: 'truncated...' }], { sessionId: 's1', uuid: 'u1', timestamp: '2026-04-17T00:00:00.000Z', requestId: 'req_abc' },
+      { model: 'claude-opus-4-7', stop_reason: 'max_tokens', usage: { input_tokens: 10, output_tokens: 4096, cache_read_input_tokens: 5, cache_creation_input_tokens: 2 } }), 's1');
+    // inputTokens is the WHOLE prompt (10 raw + 5 read + 2 created), as in the native runtime and the CC statusline.
+    expect(events.find((e) => e.type === 'turn-complete')!.data).toEqual({
+      stopReason: 'max_tokens', model: 'claude-opus-4-7', anthropicRequestId: 'req_abc',
       usage: { inputTokens: 17, outputTokens: 4096, cacheReadTokens: 5, cacheCreationTokens: 2 },
     });
   });
@@ -320,8 +138,7 @@ describe('TranscriptWatcher', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tw-test-'));
-    // Short poll interval so the "falls back to polling" test still passes
-    // within ~1s. Production default is 2000ms.
+    // Short poll interval so the "falls back to polling" test passes within ~1s. Production default is 2000ms.
     watcher = new TranscriptWatcher(tmpDir, 500);
   });
 
@@ -330,322 +147,98 @@ describe('TranscriptWatcher', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('emits transcript-event when lines are appended to the file', async () => {
-    const desktopSessionId = 'desktop-1';
-    const claudeSessionId = 'claude-session-abc';
-    const cwd = 'C:\\Users\\alice';
-
-    // Create the project directory and JSONL file
-    const projectDir = path.join(tmpDir, 'proj');
-    fs.mkdirSync(projectDir, { recursive: true });
-    const jsonlPath = path.join(projectDir, `${claudeSessionId}.jsonl`);
-    fs.writeFileSync(jsonlPath, '');
-
-    const events: TranscriptEvent[] = [];
-    watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
-
-    watcher.startWatching(desktopSessionId, claudeSessionId, cwd, jsonlPath);
-
-    // Append a line
-    const line = JSON.stringify({
-      type: 'assistant',
-      uuid: 'uuid-watch-1',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'text', text: 'Hello from watcher' }],
-        stop_reason: null,
-      },
-    });
-    fs.appendFileSync(jsonlPath, line + '\n');
-
-    // Wait for fs.watch or polling to pick up the change.
-    // readNewLinesForSession triggers an async read, so retry
-    // until events arrive or timeout.
-    for (let i = 0; i < POLL_TRIES_100MS; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      watcher.readNewLinesForSession(desktopSessionId);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      if (events.length > 0) break;
-    }
-
-    expect(events.length).toBeGreaterThanOrEqual(1);
-    expect(events[0].type).toBe('assistant-text');
-    expect(looseData(events[0]).text).toBe('Hello from watcher');
+  const textLine = (uuid: string, text: string, stop_reason: string | null = null) => JSON.stringify({
+    type: 'assistant', uuid, message: { role: 'assistant', content: [{ type: 'text', text }], stop_reason },
   });
-
-  it('startWatching on an existing file starts at EOF and emits nothing for old content', async () => {
-    // Perf cycle 2: history is the page reader's job (transcript-page.ts). The
-    // tailer used to start at byte 0, re-reading and re-emitting the WHOLE file
-    // on every resume/re-dock — the double-delivery this pins shut.
-    const desktopSessionId = 'desktop-eof';
-    const claudeSessionId = 'claude-session-eof';
-    const cwd = 'C:\\Users\\alice';
-    const projectDir = path.join(tmpDir, 'proj-eof');
-    fs.mkdirSync(projectDir, { recursive: true });
-    const jsonlPath = path.join(projectDir, `${claudeSessionId}.jsonl`);
-
-    const makeLine = (uuid: string, text: string) => JSON.stringify({
-      type: 'assistant', uuid,
-      message: { role: 'assistant', content: [{ type: 'text', text }], stop_reason: null },
-    });
-    fs.writeFileSync(jsonlPath, makeLine('old-1', 'old one') + '\n' + makeLine('old-2', 'old two') + '\n');
-    const startSize = fs.statSync(jsonlPath).size;
-
+  const SID = 'desktop-1';
+  /** Starts watching a transcript (created with `initial`, or not at all when null); returns its path and the collected events. */
+  function tail(initial: string | null = '') {
+    const projectDir = path.join(tmpDir, 'proj');
+    const jsonlPath = path.join(projectDir, 'claude-session.jsonl');
+    if (initial !== null) { fs.mkdirSync(projectDir, { recursive: true }); fs.writeFileSync(jsonlPath, initial); }
     const events: TranscriptEvent[] = [];
     watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
-    watcher.startWatching(desktopSessionId, claudeSessionId, cwd, jsonlPath);
+    watcher.startWatching(SID, 'claude-session', '/home/user/project', jsonlPath);
+    return { jsonlPath, projectDir, events };
+  }
+  // The tailer starts at EOF, so content must be appended AFTER startWatching; earlier content is the page reader's job.
+  const appendAndRead = (jsonlPath: string, data: string) => { fs.appendFileSync(jsonlPath, data); watcher.readNewLinesForSession(SID); };
 
-    // Negative assertion: give the read every chance to fire, then require silence.
-    // DELIBERATELY a small fixed count, NOT a poll ceiling: this loop has no
-    // break condition — it is "wait a bounded while and confirm nothing arrived",
-    // so every iteration is paid on every run. Sizing it like the wait-for-success
-    // loops below turned a 250ms pause into 15s and made this file 6x slower for
-    // no added confidence (caught 2026-08-28 by measuring, before it was pushed).
-    for (let i = 0; i < 5; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      watcher.readNewLinesForSession(desktopSessionId);
-    }
-    await new Promise((r) => setTimeout(r, 100));
+  it('emits transcript-event when lines are appended, including a live append after starting at EOF on an existing file', async () => {
+    // History is the page reader's job: the tailer used to start at byte 0 and re-emit the WHOLE file on every re-dock.
+    const old = textLine('old-1', 'old one') + '\n' + textLine('old-2', 'old two') + '\n';
+    const { jsonlPath, events } = tail(old);
+    // Negative assertion: give the read every chance to fire, then require silence. A small FIXED count on purpose
+    // (no break condition, so every iteration is paid on every run; sizing it like a poll ceiling made the file 6x slower).
+    for (let i = 0; i < 5; i++) { await wait(50); watcher.readNewLinesForSession(SID); }
+    await wait(100);
     expect(events).toHaveLength(0);
-    expect(watcher.getStartOffset(desktopSessionId)).toBe(startSize);
+    expect(watcher.getStartOffset(SID)).toBe(fs.statSync(jsonlPath).size);
 
-    // A genuinely NEW append still streams live.
-    fs.appendFileSync(jsonlPath, makeLine('new-1', 'brand new') + '\n');
+    fs.appendFileSync(jsonlPath, textLine('new-1', 'Hello from watcher') + '\n');
     for (let i = 0; i < POLL_TRIES_100MS; i++) {
-      await new Promise((r) => setTimeout(r, 100));
-      watcher.readNewLinesForSession(desktopSessionId);
-      await new Promise((r) => setTimeout(r, 50));
+      await wait(100);
+      watcher.readNewLinesForSession(SID);
+      await wait(50);
       if (events.length > 0) break;
     }
-    expect(events.map((e) => looseData(e).text)).toContain('brand new');
-    expect(events.map((e) => looseData(e).text)).not.toContain('old one');
+    expect(events.map((e) => looseData(e).text)).toEqual(['Hello from watcher']);
   });
 
   it('deduplicates events by uuid', async () => {
-    const desktopSessionId = 'desktop-2';
-    const claudeSessionId = 'claude-session-dedup';
-    const cwd = '/home/user/project';
-
-    const projectDir = path.join(tmpDir, 'proj');
-    fs.mkdirSync(projectDir, { recursive: true });
-    const jsonlPath = path.join(projectDir, `${claudeSessionId}.jsonl`);
-
-    // Write two lines with the same uuid (simulates Claude's incremental writes)
-    const makeLine = (text: string) =>
-      JSON.stringify({
-        type: 'assistant',
-        uuid: 'uuid-dup',
-        message: {
-          role: 'assistant',
-          content: [{ type: 'text', text }],
-          stop_reason: null,
-        },
-      });
-
-    fs.writeFileSync(jsonlPath, '');
-
-    const events: TranscriptEvent[] = [];
-    watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
-
-    watcher.startWatching(desktopSessionId, claudeSessionId, cwd, jsonlPath);
-    // Perf cycle 2: the tailer starts at EOF, so content must be appended AFTER
-    // startWatching to stream. Pre-existing content is the page reader's job.
-    fs.appendFileSync(jsonlPath, makeLine('first') + '\n' + makeLine('second') + '\n');
-    watcher.readNewLinesForSession(desktopSessionId);
-    // readNewLines is async — poll for the initial read rather than betting on a
-    // fixed 100ms, which lost under vitest's parallel pool.
+    const { jsonlPath, events } = tail();
+    appendAndRead(jsonlPath, textLine('uuid-dup', 'first') + '\n' + textLine('uuid-dup', 'second') + '\n');
     await vi.waitFor(() => expect(events.length).toBeGreaterThanOrEqual(1), { timeout: SETTLE_MS });
-    // Settle before the dedup assertion: both lines were written before the
-    // watch started so they arrive in ONE read, but waiting only for "length is
-    // 1" would let a regression that DOES emit the dup pass at the instant the
-    // count first hits 1.
-    // settle (negative assertion): the duplicate must not be emitted (see the comment above).
+    // settle: waiting only for "length is 1" would let a regression that DOES emit the duplicate pass at that instant.
     await wait(50);
-
-    // Only the first occurrence should be emitted (second uuid-dup is deduplicated)
     expect(events).toHaveLength(1);
     expect(looseData(events[0]).text).toBe('first');
   });
 
-  it('stopWatching cleans up the session', () => {
-    const desktopSessionId = 'desktop-3';
-    const claudeSessionId = 'claude-session-stop';
-    const cwd = 'C:\\Users\\alice';
-
-    const projectDir = path.join(tmpDir, 'proj');
-    fs.mkdirSync(projectDir, { recursive: true });
-    const jsonlPath = path.join(projectDir, `${claudeSessionId}.jsonl`);
-    fs.writeFileSync(jsonlPath, '');
-
-    watcher.startWatching(desktopSessionId, claudeSessionId, cwd, jsonlPath);
-    watcher.stopWatching(desktopSessionId);
-
-    // Should not throw when stopping a non-existent session
-    watcher.stopWatching(desktopSessionId);
+  it('stopWatching cleans up the session and does not throw for one that is gone', () => {
+    tail();
+    watcher.stopWatching(SID);
+    watcher.stopWatching(SID);
   });
 
   it('handles partial lines across reads', async () => {
-    const desktopSessionId = 'desktop-4';
-    const claudeSessionId = 'claude-session-partial';
-    const cwd = '/home/user/project';
-
-    const projectDir = path.join(tmpDir, 'proj');
-    fs.mkdirSync(projectDir, { recursive: true });
-    const jsonlPath = path.join(projectDir, `${claudeSessionId}.jsonl`);
-
-    const fullLine = JSON.stringify({
-      type: 'assistant',
-      uuid: 'uuid-partial',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'text', text: 'partial test' }],
-        stop_reason: null,
-      },
-    });
-
-    fs.writeFileSync(jsonlPath, '');
-
-    const events: TranscriptEvent[] = [];
-    watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
-
-    watcher.startWatching(desktopSessionId, claudeSessionId, cwd, jsonlPath);
-    // Perf cycle 2: the tailer starts at EOF, so content must be appended AFTER
-    // startWatching to stream. Pre-existing content is the page reader's job.
-    // Append a partial line (no newline) — should not emit events
-    fs.appendFileSync(jsonlPath, fullLine.substring(0, 50));
-    watcher.readNewLinesForSession(desktopSessionId);
-    await wait(200); // negative assertion below — a fixed settle is correct here
-    expect(events).toHaveLength(0); // Incomplete line, no events
-
-    // Append the rest with newline — now the full line is parseable
+    const fullLine = textLine('uuid-partial', 'partial test');
+    const { jsonlPath, events } = tail();
+    appendAndRead(jsonlPath, fullLine.substring(0, 50));
+    await wait(200); // settle: a fixed wait is correct before a negative assertion
+    expect(events).toHaveLength(0);
     fs.appendFileSync(jsonlPath, fullLine.substring(50) + '\n');
-    // fs.watch/poll delivery — poll for it instead of betting 2500ms.
     await vi.waitFor(() => expect(events).toHaveLength(1), { timeout: WATCH_MS });
     expect(looseData(events[0]).text).toBe('partial test');
   });
 
   it('emits all events from a single line (dedup is per-line, not per-event)', async () => {
-    const desktopSessionId = 'desktop-6';
-    const claudeSessionId = 'claude-session-multi';
-    const cwd = '/home/user/project';
-
-    const projectDir = path.join(tmpDir, 'proj');
-    fs.mkdirSync(projectDir, { recursive: true });
-    const jsonlPath = path.join(projectDir, `${claudeSessionId}.jsonl`);
-
-    // A line with text + end_turn should emit both assistant-text and turn-complete
-    const line = JSON.stringify({
-      type: 'assistant',
-      uuid: 'uuid-multi-event',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'text', text: 'Done.' }],
-        stop_reason: 'end_turn',
-      },
-    });
-    fs.writeFileSync(jsonlPath, '');
-
-    const events: TranscriptEvent[] = [];
-    watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
-
-    watcher.startWatching(desktopSessionId, claudeSessionId, cwd, jsonlPath);
-    // Perf cycle 2: the tailer starts at EOF, so content must be appended AFTER
-    // startWatching to stream. Pre-existing content is the page reader's job.
-    fs.appendFileSync(jsonlPath, line + '\n');
-    watcher.readNewLinesForSession(desktopSessionId);
-    // readNewLines is async — poll for the initial read, don't bet on 100ms.
+    const { jsonlPath, events } = tail();
+    appendAndRead(jsonlPath, textLine('uuid-multi-event', 'Done.', 'end_turn') + '\n');
     await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: SETTLE_MS });
-
-    expect(events[0].type).toBe('assistant-text');
-    expect(events[1].type).toBe('turn-complete');
+    expect(events.map((e) => e.type)).toEqual(['assistant-text', 'turn-complete']);
   });
 
-  it('falls back to polling if file does not exist yet', async () => {
-    const desktopSessionId = 'desktop-5';
-    const claudeSessionId = 'claude-session-poll';
-    const cwd = 'C:\\Users\\alice\\newproject';
-
-    const events: TranscriptEvent[] = [];
-    watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
-
-    // Path is known up front (this is what the hook would hand us) even
-    // though the file itself doesn't exist yet.
-    const projectDir = path.join(tmpDir, 'proj');
-    const jsonlPath = path.join(projectDir, `${claudeSessionId}.jsonl`);
-
-    // Start watching before the file exists — should not throw
-    watcher.startWatching(desktopSessionId, claudeSessionId, cwd, jsonlPath);
-
-    // Now create the file
+  it('falls back to polling if the file does not exist yet', async () => {
+    const { jsonlPath, projectDir, events } = tail(null);   // must not throw
     fs.mkdirSync(projectDir, { recursive: true });
-    const line = JSON.stringify({
-      type: 'assistant',
-      uuid: 'uuid-poll',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'text', text: 'From polling' }],
-        stop_reason: null,
-      },
-    });
-    fs.writeFileSync(jsonlPath, line + '\n');
-
-    // Poll until the watcher's own poll interval picks the file up — a fixed
-    // 1500ms is under the interval's worst case on a loaded machine.
+    fs.writeFileSync(jsonlPath, textLine('uuid-poll', 'From polling') + '\n');
     await vi.waitFor(() => expect(events.length).toBeGreaterThanOrEqual(1), { timeout: WATCH_MS });
-
     expect(looseData(events[0]).text).toBe('From polling');
   });
 
-  // Regression: if a listener threw mid-batch, session.offset had already
-  // advanced past the un-emitted chunks, permanently stranding them. A later
-  // file growth couldn't recover them because readNewLines reads from the new
-  // (advanced) offset forward. Fix: emits must not abort the batch loop.
+  // Regression: a throwing listener used to abort the batch loop after session.offset had advanced, stranding the
+  // un-emitted chunks forever. Emits must not abort the batch.
   it('continues emitting remaining events when a listener throws on one', async () => {
-    const desktopSessionId = 'desktop-throw';
-    const claudeSessionId = 'claude-session-throw';
-    const cwd = '/home/user/project';
-
-    const projectDir = path.join(tmpDir, 'proj');
-    fs.mkdirSync(projectDir, { recursive: true });
-    const jsonlPath = path.join(projectDir, `${claudeSessionId}.jsonl`);
-
-    const makeLine = (uuid: string, text: string) =>
-      JSON.stringify({
-        type: 'assistant',
-        uuid,
-        message: {
-          role: 'assistant',
-          content: [{ type: 'text', text }],
-          stop_reason: null,
-        },
-      });
-
-    fs.writeFileSync(jsonlPath, '');
-
     const received: string[] = [];
-    // Listener throws on B; with the fix, A and C still reach this listener.
     watcher.on('transcript-event', (ev: TranscriptEvent) => {
       if (ev.type !== 'assistant-text') return;
       if (ev.data.text === 'msg B') throw new Error('boom');
       received.push(ev.data.text as string);
     });
-
-    watcher.startWatching(desktopSessionId, claudeSessionId, cwd, jsonlPath);
-    // Perf cycle 2: the tailer starts at EOF, so content must be appended AFTER
-    // startWatching to stream. Pre-existing content is the page reader's job.
-    fs.appendFileSync(
-      jsonlPath,
-      [
-        makeLine('uuid-a', 'msg A'),
-        makeLine('uuid-b', 'msg B'),
-        makeLine('uuid-c', 'msg C'),
-      ].join('\n') + '\n',
-    );
-    watcher.readNewLinesForSession(desktopSessionId);
-    await vi.waitFor(() => {
-      expect(received).toContain('msg A');
-      expect(received).toContain('msg C');
-    }, { timeout: SETTLE_MS });
+    const { jsonlPath } = tail();
+    appendAndRead(jsonlPath, ['A', 'B', 'C'].map((x) => textLine(`uuid-${x}`, `msg ${x}`)).join('\n') + '\n');
+    await vi.waitFor(() => expect(received).toEqual(['msg A', 'msg C']), { timeout: SETTLE_MS });
   });
 
   // WHY live, not replay (2026-09-24, B1): TranscriptWatcher.getHistory — the

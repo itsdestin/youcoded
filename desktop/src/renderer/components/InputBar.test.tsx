@@ -26,6 +26,21 @@ class NoopResizeObserver {
   disconnect() {}
 }
 
+// QuickChips (rendered unconditionally by InputBar) reads skills through SkillProvider; empty lists are enough on mount.
+const stubSkills = () => ({
+  list: vi.fn().mockResolvedValue([]),
+  getFavorites: vi.fn().mockResolvedValue([]),
+  getChips: vi.fn().mockResolvedValue([]),
+  getCuratedDefaults: vi.fn().mockResolvedValue([]),
+});
+
+// Default bridge every composer needs; a describe overrides `window.claude` in its own beforeEach when it needs more.
+beforeEach(() => {
+  (global as any).ResizeObserver = NoopResizeObserver;
+  (window as any).claude = { native: { supported: true, send: vi.fn() }, session: { sendInput: vi.fn() }, skills: stubSkills() };
+});
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
 // Drive the real reducer/selectors for Stop visibility rather than mocking chat state.
 beforeEach(()=>{Object.defineProperty(window,'localStorage',{value:queueBrowserStorage(),configurable:true});});
 let capturedDispatch: ((a: any) => void) | null = null;
@@ -44,12 +59,7 @@ describe('InputBar — context-menu image paste', () => {
       native: { supported: true, send: vi.fn().mockResolvedValue({ status: 'sent' }) },
       session: { sendInput: vi.fn() },
       dialog: { saveClipboardImage },
-      skills: {
-        list: vi.fn().mockResolvedValue([]),
-        getFavorites: vi.fn().mockResolvedValue([]),
-        getChips: vi.fn().mockResolvedValue([]),
-        getCuratedDefaults: vi.fn().mockResolvedValue([]),
-      },
+      skills: stubSkills(),
     };
   });
 
@@ -163,10 +173,6 @@ describe('InputBar — context-menu image paste', () => {
 describe('InputBar native send — failure keeps the draft (reviewer Critical fix)', () => {
   beforeEach(() => {
     (global as any).ResizeObserver = NoopResizeObserver;
-    // Minimal window.claude surface: only native.send is exercised by this
-    // test's path (provider='native', plain non-slash text, no attachments).
-    // session.sendInput is stubbed defensively — the CC/PTY branch is never
-    // reached here, but other InputBar effects/handlers reference it.
     (window as any).claude = {
       native: {
         supported: true,
@@ -175,21 +181,8 @@ describe('InputBar native send — failure keeps the draft (reviewer Critical fi
       session: {
         sendInput: vi.fn(),
       },
-      // QuickChips (rendered unconditionally by InputBar) reads skills via
-      // SkillProvider — stub every call it makes on mount so the tree doesn't
-      // throw. Empty lists are fine; this test never interacts with chips.
-      skills: {
-        list: vi.fn().mockResolvedValue([]),
-        getFavorites: vi.fn().mockResolvedValue([]),
-        getChips: vi.fn().mockResolvedValue([]),
-        getCuratedDefaults: vi.fn().mockResolvedValue([]),
-      },
+      skills: stubSkills(),
     };
-  });
-
-  afterEach(() => {
-    cleanup();
-    vi.restoreAllMocks();
   });
 
   it('restores the typed draft and shows a toast when the ack is failed', async () => {
@@ -384,18 +377,8 @@ describe('InputBar — stop button (Task 10 placement)', () => {
       session: {
         sendInput: vi.fn(),
       },
-      skills: {
-        list: vi.fn().mockResolvedValue([]),
-        getFavorites: vi.fn().mockResolvedValue([]),
-        getChips: vi.fn().mockResolvedValue([]),
-        getCuratedDefaults: vi.fn().mockResolvedValue([]),
-      },
+      skills: stubSkills(),
     };
-  });
-
-  afterEach(() => {
-    cleanup();
-    vi.restoreAllMocks();
   });
 
   function renderInputBar(provider: 'claude' | 'native' = 'claude') {
@@ -585,25 +568,6 @@ describe('InputBar — stop button (Task 10 placement)', () => {
 // applied AFTER it succeeds (fillDraft). See InputBarHandle's WHY comment for
 // why this extends the existing ref rather than introducing new App state.
 describe('InputBar — InputBarHandle hasDraft/fillDraft (Task 11)', () => {
-  beforeEach(() => {
-    (global as any).ResizeObserver = NoopResizeObserver;
-    (window as any).claude = {
-      native: { supported: true, send: vi.fn() },
-      session: { sendInput: vi.fn() },
-      skills: {
-        list: vi.fn().mockResolvedValue([]),
-        getFavorites: vi.fn().mockResolvedValue([]),
-        getChips: vi.fn().mockResolvedValue([]),
-        getCuratedDefaults: vi.fn().mockResolvedValue([]),
-      },
-    };
-  });
-
-  afterEach(() => {
-    cleanup();
-    vi.restoreAllMocks();
-  });
-
   function renderWithRef() {
     const ref = React.createRef<InputBarHandle>();
     render(
@@ -616,21 +580,12 @@ describe('InputBar — InputBarHandle hasDraft/fillDraft (Task 11)', () => {
     return ref;
   }
 
-  it('hasDraft() is false on an empty composer', () => {
-    const ref = renderWithRef();
-    expect(ref.current!.hasDraft()).toBe(false);
-  });
-
-  it('hasDraft() is false for a whitespace-only draft (trimmed)', () => {
+  it('hasDraft() is false when empty or whitespace-only (trimmed), true once something is typed', () => {
     const ref = renderWithRef();
     const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    expect(ref.current!.hasDraft()).toBe(false);
     fireEvent.change(textarea, { target: { value: '   ' } });
     expect(ref.current!.hasDraft()).toBe(false);
-  });
-
-  it('hasDraft() is true once the user has typed something', () => {
-    const ref = renderWithRef();
-    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'a draft in progress' } });
     expect(ref.current!.hasDraft()).toBe(true);
   });
@@ -646,25 +601,7 @@ describe('InputBar — InputBarHandle hasDraft/fillDraft (Task 11)', () => {
 
 // A 'queued' native ack writes neither a timeline bubble nor a strip row from this screen: the computer announces its queue (QUEUE_SYNCED).
 describe('InputBar native send — a queued ack draws nothing itself: the computer\'s queue does (one-core R5-4a)', () => {
-  beforeEach(() => {
-    (global as any).ResizeObserver = NoopResizeObserver;
-    capturedDispatch = null;
-    (window as any).claude = {
-      native: { supported: true, send: vi.fn() },
-      session: { sendInput: vi.fn() },
-      skills: {
-        list: vi.fn().mockResolvedValue([]),
-        getFavorites: vi.fn().mockResolvedValue([]),
-        getChips: vi.fn().mockResolvedValue([]),
-        getCuratedDefaults: vi.fn().mockResolvedValue([]),
-      },
-    };
-  });
-
-  afterEach(() => {
-    cleanup();
-    vi.restoreAllMocks();
-  });
+  beforeEach(() => { capturedDispatch = null; });
 
   it('writes no strip row and no timeline entry for a queued ack (the host announces the queue to every screen)', async () => {
     (window as any).claude.native.send.mockResolvedValue({ status: 'queued', queueId: 'q-99' });
@@ -739,12 +676,7 @@ describe('InputBar — voice prompting (T9)', () => {
     (window as any).claude = {
       native: { supported: true, send: vi.fn().mockResolvedValue({ status: 'sent' }) },
       session: { sendInput: vi.fn() },
-      skills: {
-        list: vi.fn().mockResolvedValue([]),
-        getFavorites: vi.fn().mockResolvedValue([]),
-        getChips: vi.fn().mockResolvedValue([]),
-        getCuratedDefaults: vi.fn().mockResolvedValue([]),
-      },
+      skills: stubSkills(),
     };
     installVoice();
   });
@@ -992,12 +924,7 @@ describe('InputBar — hold the space bar to talk (T9)', () => {
     (window as any).claude = {
       native: { supported: true, send: vi.fn().mockResolvedValue({ status: 'sent' }) },
       session: { sendInput: vi.fn() },
-      skills: {
-        list: vi.fn().mockResolvedValue([]),
-        getFavorites: vi.fn().mockResolvedValue([]),
-        getChips: vi.fn().mockResolvedValue([]),
-        getCuratedDefaults: vi.fn().mockResolvedValue([]),
-      },
+      skills: stubSkills(),
       voice: voiceBridge,
     };
   });
@@ -1277,12 +1204,7 @@ describe('InputBar — idle unfocus vs the on-screen keyboard', () => {
     (window as any).claude = {
       native: { supported: true, send: vi.fn().mockResolvedValue({ status: 'sent' }) },
       session: { sendInput: vi.fn() },
-      skills: {
-        list: vi.fn().mockResolvedValue([]),
-        getFavorites: vi.fn().mockResolvedValue([]),
-        getChips: vi.fn().mockResolvedValue([]),
-        getCuratedDefaults: vi.fn().mockResolvedValue([]),
-      },
+      skills: stubSkills(),
     };
   });
 
@@ -1367,7 +1289,7 @@ describe('InputBar — instant send on a phone', () => {
     (window as any).claude = {
       native: { supported: true, send: vi.fn(() => new Promise((res) => { reply = res; })) },
       session: { sendInput: vi.fn(), canSend: () => true },
-      skills: { list: vi.fn().mockResolvedValue([]), getFavorites: vi.fn().mockResolvedValue([]), getChips: vi.fn().mockResolvedValue([]), getCuratedDefaults: vi.fn().mockResolvedValue([]) },
+      skills: stubSkills(),
     };
     render(<ChatProvider><SkillProvider><Probe />
       <InputBar sessionId="sess-1" provider="native" onToast={onToast} getSessionState={(id) => store.getSession(id)} />
@@ -1416,7 +1338,7 @@ describe('InputBar — words restored by Discard', () => {
     (window as any).claude = {
       native: { supported: true, send: vi.fn() },
       session: { sendInput: vi.fn() },
-      skills: { list: vi.fn().mockResolvedValue([]), getFavorites: vi.fn().mockResolvedValue([]), getChips: vi.fn().mockResolvedValue([]), getCuratedDefaults: vi.fn().mockResolvedValue([]) },
+      skills: stubSkills(),
     };
   });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -1452,7 +1374,7 @@ describe('InputBar — the empty box re-measures when the theme font arrives', (
     (global as any).ResizeObserver = NoopResizeObserver;
     (window as any).claude = {
       session: { sendInput: vi.fn() },
-      skills: { list: vi.fn().mockResolvedValue([]), getFavorites: vi.fn().mockResolvedValue([]), getChips: vi.fn().mockResolvedValue([]), getCuratedDefaults: vi.fn().mockResolvedValue([]) },
+      skills: stubSkills(),
     };
   });
   afterEach(() => { cleanup(); delete (window as any).claude; });

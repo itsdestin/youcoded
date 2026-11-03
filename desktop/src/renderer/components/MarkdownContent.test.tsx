@@ -108,43 +108,27 @@ describe('syntax highlighter', () => {
   });
 });
 
+/** Clicks the Copy button number `index` and returns everything written to the clipboard. */
+function copiedBy(md: string, index = 0): string[] {
+  const writes: string[] = [];
+  Object.assign(navigator, { clipboard: { writeText: (t: string) => { writes.push(t); return Promise.resolve(); } } });
+  render(<MarkdownContent content={md} />);
+  screen.getAllByRole('button', { name: /copy/i })[index].click();
+  return writes;
+}
+
 describe('MarkdownContent fenced code blocks', () => {
-  for (const f of FENCES) {
-    it(`renders a Copy button for ${f.name}`, () => {
-      render(<MarkdownContent content={f.md} />);
-      expect(screen.getByRole('button', { name: /copy/i })).toBeInTheDocument();
-    });
-
-    it(`copies the full source text for ${f.name}`, async () => {
-      const writes: string[] = [];
-      Object.assign(navigator, {
-        clipboard: { writeText: (t: string) => { writes.push(t); return Promise.resolve(); } },
-      });
-      const { getByRole } = render(<MarkdownContent content={f.md} />);
-      getByRole('button', { name: /copy/i }).click();
-      // Must be the raw source, not the highlighted markup — the whole point of
-      // reading the hast node instead of the rendered children.
-      expect(writes).toEqual([f.code]);
-    });
-
-    it(`styles ${f.name} as a block, not inline code`, () => {
-      const { container } = render(<MarkdownContent content={f.md} />);
-      const code = container.querySelector('pre code');
-      expect(code).not.toBeNull();
-      // text-code is the INLINE styling. A fenced block must never carry it —
-      // an unlanguaged fence used to, because "no className" was read as
-      // "inline" and an unlanguaged fence gets no class from the highlighter.
-      expect(code!.className).not.toContain('text-code');
-    });
-
-    it(`keeps the yc-code hook on the <pre> for ${f.name}`, () => {
-      const { container } = render(<MarkdownContent content={f.md} />);
-      // globals.css out-specifies highlight.js's own `pre code.hljs` box via
-      // `pre.yc-code code.hljs`. Drop the class and the double-rectangle
-      // regression returns, with nothing else to catch it.
-      expect(container.querySelector('pre.yc-code')).not.toBeNull();
-    });
-  }
+  it.each(FENCES)('$name: has a Copy button that copies the raw source, and is styled as a block with the yc-code hook', (f) => {
+    // Raw source, not the highlighted markup — the point of reading the hast node instead of the rendered children.
+    expect(copiedBy(f.md)).toEqual([f.code]);
+    const { container } = render(<MarkdownContent content={f.md} />);
+    const code = container.querySelector('pre code');
+    expect(code).not.toBeNull();
+    // text-code is the INLINE styling; an unlanguaged fence used to carry it ("no className" read as inline).
+    expect(code!.className).not.toContain('text-code');
+    // globals.css out-specifies highlight.js's `pre code.hljs` via `pre.yc-code code.hljs`; without it the double rectangle returns.
+    expect(container.querySelector('pre.yc-code')).not.toBeNull();
+  });
 
   it('leaves inline code as inline', () => {
     const { container } = render(<MarkdownContent content={'some `inline` code'} />);
@@ -153,15 +137,8 @@ describe('MarkdownContent fenced code blocks', () => {
   });
 
   it('copies only the block that was clicked when several are present', () => {
-    const writes: string[] = [];
-    Object.assign(navigator, {
-      clipboard: { writeText: (t: string) => { writes.push(t); return Promise.resolve(); } },
-    });
-    render(<MarkdownContent content={'```json\n{"a": 1}\n```\n\ntext\n\n```python\ndef f(): pass\n```'} />);
-    const buttons = screen.getAllByRole('button', { name: /copy/i });
-    expect(buttons).toHaveLength(2);
-    buttons[1].click();
-    expect(writes).toEqual(['def f(): pass\n']);
+    expect(copiedBy('```json\n{"a": 1}\n```\n\ntext\n\n```python\ndef f(): pass\n```', 1)).toEqual(['def f(): pass\n']);
+    expect(screen.getAllByRole('button', { name: /copy/i })).toHaveLength(2);
   });
 });
 
@@ -288,15 +265,7 @@ describe('MarkdownContent links', () => {
   });
 
   it('keeps the URL in what a code block copies', () => {
-    const writes: string[] = [];
-    Object.assign(navigator, {
-      clipboard: { writeText: (t: string) => { writes.push(t); return Promise.resolve(); } },
-    });
-    const { getByRole } = render(
-      <MarkdownContent content={'```\nopen http://127.0.0.1:8931/\n```'} />,
-    );
-    getByRole('button', { name: /copy/i }).click();
-    expect(writes).toEqual(['open http://127.0.0.1:8931/\n']);
+    expect(copiedBy('```\nopen http://127.0.0.1:8931/\n```')).toEqual(['open http://127.0.0.1:8931/\n']);
   });
 
   it('links a URL in a table cell, a heading and bold text', () => {
@@ -768,21 +737,13 @@ describe('MarkdownContent while a reply streams in', { timeout: CPU_BOUND_WALL_L
     for (const c of costs) expect(c.drawn.length, `after ${JSON.stringify(c.md.slice(-40))}`).toBeLessThanOrEqual(2);
   });
 
-  // A reply that ends in one big block with no blank line in it: the splitter
-  // must not parse that block again on top of drawing it.
-  it('never does more work per word than the whole message while one long list grows', () => {
-    const list = lines(150, (i) => `- item ${i} with **bold** and \`code\` and a [link](https://e.com/${i})`);
-    expectNoMoreThanToday(streamCosts('Intro', `Intro\n\n${list}\n- last`, tokenDeltas(' words that keep arriving\n- and another item\n- a third')));
-  });
-
-  it('never does more work per word than the whole message while one long table grows', () => {
-    const table = `| # | name | value |\n| - | - | - |\n${lines(150, (i) => `| ${i} | name ${i} | **v** \`${i}\` |`)}`;
-    expectNoMoreThanToday(streamCosts('Intro', `Intro\n\n${table}\n| last`, tokenDeltas(' | row | words |\n| next | row | here |')));
-  });
-
-  it('never does more work per word than the whole message while one long quote grows', () => {
-    const quote = lines(150, (i) => `> quoted line ${i} with *emphasis* and a [link](https://e.com/${i})`);
-    expectNoMoreThanToday(streamCosts('Intro', `Intro\n\n${quote}\n> last`, tokenDeltas(' words that keep arriving\n> and one more line')));
+  // A reply that ends in one big block with no blank line in it: the splitter must not parse that block again on top of drawing it.
+  it.each([
+    ['list', (l: (f: (i: number) => string) => string) => `Intro\n\n${l((i) => `- item ${i} with **bold** and \`code\` and a [link](https://e.com/${i})`)}\n- last`, ' words that keep arriving\n- and another item\n- a third'],
+    ['table', (l: (f: (i: number) => string) => string) => `Intro\n\n| # | name | value |\n| - | - | - |\n${l((i) => `| ${i} | name ${i} | **v** \`${i}\` |`)}\n| last`, ' | row | words |\n| next | row | here |'],
+    ['quote', (l: (f: (i: number) => string) => string) => `Intro\n\n${l((i) => `> quoted line ${i} with *emphasis* and a [link](https://e.com/${i})`)}\n> last`, ' words that keep arriving\n> and one more line'],
+  ])('never does more work per word than the whole message while one long %s grows', (_kind, base, tail) => {
+    expectNoMoreThanToday(streamCosts('Intro', base((f) => lines(150, f)), tokenDeltas(tail)));
   });
 
   // Code usually holds blank lines, so this one has them too.
