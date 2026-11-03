@@ -1570,6 +1570,13 @@ body[data-input-style="floating"]:not([data-chrome-style="floating"]) {
 .stepped-hover {
   transition-timing-function: steps(4);
 }
+/* WHY no colour fade on a touch screen (phone speed lab, 2026-11-02, Z Flip7): tapping a Settings row that opens a
+   popup (Appearance) started the row's colour fade BEHIND the popup's blurred backdrop, and every step of that fade
+   made the phone redo the blur over the whole screen — 12 frames drawn while the popup opened instead of 5, most of
+   them late. A finger has no hover to ease into, so the colour simply changes. */
+@media (hover: none) {
+  .stepped-hover { transition: none; }
+}
 .card-interactive:active {
   background-color: var(--edge);
 }

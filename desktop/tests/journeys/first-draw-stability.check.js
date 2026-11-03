@@ -47,7 +47,7 @@
   await wait(1000);
   rep.flickFramesWithSpacerInWindow = flickSpacerFrames;
   // SCROLL up to the top (the chat un-pins on WHEEL INTENT, so announce it as a real wheel would).
-  let worstDrift = 0, spacerFrames = 0, steps = 0;
+  let worstDrift = 0, spacerFrames = 0, steps = 0, driftAt = null, lastDrift = 0;
   while (s.scrollTop > 0 && steps++ < 200) {
     s.dispatchEvent(new WheelEvent('wheel', { deltaY: -1200, bubbles: true }));
     s.scrollTop = Math.max(0, s.scrollTop - 1200);
@@ -58,13 +58,21 @@
     while (performance.now() - ts < 450) {
       await raf();
       const cur = key && s.querySelector('[data-entry-key="' + CSS.escape(key) + '"]');
-      if (cur) worstDrift = Math.max(worstDrift, Math.abs(cur.getBoundingClientRect().top - top0));
+      if (cur) {
+        const d = Math.abs(cur.getBoundingClientRect().top - top0);
+        // WHY the detail (failed once under a busy machine, 2026-11-03, 20px, never alone): a drift seen for one
+        // frame and corrected by the next is the place-holding running a frame late; one still there after 450 ms
+        // is a real jump. The failure now says which, and on what entry, so the next one explains itself.
+        if (d > worstDrift) { worstDrift = d; driftAt = { key, frame: Math.round(performance.now() - ts), step: steps }; }
+        lastDrift = d;
+      }
       if (spacersInWindow() > 0) spacerFrames++;
     }
+    if (driftAt && driftAt.step === steps) driftAt.after450ms = r1(lastDrift);
   }
   await wait(800);
   const box = s.getBoundingClientRect();
-  rep.scrollSteps = steps; rep.worstDriftPx = r1(worstDrift); rep.framesWithSpacerInWindow = spacerFrames;
+  rep.scrollSteps = steps; rep.worstDriftPx = r1(worstDrift); rep.worstDriftAt = driftAt; rep.framesWithSpacerInWindow = spacerFrames;
   rep.spacersNearWindowAtTop = entriesOf(s).filter((e) => { const b = e.getBoundingClientRect(); return isSpacer(e) && b.bottom > box.top - 1000 && b.top < box.bottom + 1000; }).length;
   // PLACEHOLDER  a code block the browser has not drawn yet (content-visibility: auto) holds a placeholder height;
   //              it must equal the height the block has once drawn, or drawing it later pushes the reader's text
@@ -85,7 +93,7 @@
   if (rep.drawnAtFirstFrame >= rep.entries * 0.5) why.push(`drew ${rep.drawnAtFirstFrame} of ${rep.entries} entries at the first frame (expected only the newest screens)`);
   if (rep.bottomMovePx > 1) why.push(`the bottom moved ${rep.bottomMovePx}px after opening`);
   if (rep.flickFramesWithSpacerInWindow > 0) why.push(`${rep.flickFramesWithSpacerInWindow} flick frames showed a blank spacer in the window`);
-  if (rep.worstDriftPx > 1) why.push(`scrolling up moved the entry in view by ${rep.worstDriftPx}px`);
+  if (rep.worstDriftPx > 1) why.push(`scrolling up moved the entry in view by ${rep.worstDriftPx}px (${driftAt ? `${driftAt.frame} ms into step ${driftAt.step}, ${driftAt.after450ms ?? '?'}px off 450 ms later — ${driftAt.after450ms > 1 ? 'a lasting jump' : 'corrected a frame late'}` : 'no detail'})`);
   if (rep.framesWithSpacerInWindow > 0) why.push(`${rep.framesWithSpacerInWindow} frames showed a blank spacer in the window while scrolling up`);
   if (rep.spacersNearWindowAtTop > 0) why.push(`${rep.spacersNearWindowAtTop} entries near the window are still blank at the top`);
   return { ok: why.length === 0, why: why.join('; '), report: rep };
