@@ -17,7 +17,7 @@ import type { PageSummary } from '../../../shared/pages-types';
 
 const COMPACT: CompactSurface = { tools: 'summary' };
 // The header row's height, which the chat clears at its top (page-chat.css reads it).
-const HEADER_PX = 40;
+const HEADER_PX = 36;
 
 interface PageChatPaneProps {
   page: PageSummary;
@@ -29,12 +29,14 @@ interface PageChatPaneProps {
   onHide: () => void;
   /** Starts a fresh chat for this page (R-memory: the last chat opens, with New chat beside it). */
   onNewChat?: () => void;
+  /** A control before the name: the page list's expand icon while the chat holds the list's place (round 3). */
+  leading?: React.ReactNode;
   className?: string;
   /** Size and place, from the layout the host chose. */
   style?: React.CSSProperties;
 }
 
-export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, onNewChat, className = '', style }: PageChatPaneProps) {
+export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, onNewChat, leading, className = '', style }: PageChatPaneProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -60,10 +62,11 @@ export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, onNewC
           two would fight, and `relative` won — the floating card and the phone sheet landed top-left. */}
       <div ref={paneRef} className={`page-chat-pane overflow-hidden ${className}`}
         style={{ ...style, '--top-chrome-height': `${HEADER_PX}px` } as React.CSSProperties} data-page-chat>
-        <div className="page-chat-header absolute top-0 inset-x-0 z-20 flex items-center gap-2 px-3 select-none" style={{ height: HEADER_PX }}>
+        <div className="page-chat-header absolute top-0 inset-x-0 z-20 flex items-center gap-1.5 px-2 select-none" style={{ height: HEADER_PX }}>
+          {leading}
           {/* WHY no page icon and no rule under it (layout deck review): the page is right beside the chat, and a
               full-width line breaks the guide's no-full-width-lines rule. */}
-          <span className="flex-1 min-w-0 truncate text-sm font-medium text-fg" title={sessionName}>{sessionName}</span>
+          <span className={`flex-1 min-w-0 truncate text-xs font-medium text-fg ${leading ? '' : 'pl-1'}`} title={sessionName}>{sessionName}</span>
           {onNewChat && (
             // WHY words, not an icon: a bare pencil read as "edit something" (layout deck review).
             <Button size="sm" variant="ghost" onClick={onNewChat} aria-label={`New chat about ${page.name}`}>

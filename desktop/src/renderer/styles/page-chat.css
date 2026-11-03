@@ -26,3 +26,24 @@
 }
 .page-chat-pane .assistant-bubble { max-width: 96% !important; }
 .page-chat-pane .user-bubble { max-width: 88% !important; }
+
+/* Round 3 (Destin, C-phone: "much more compact text"; C-left: "i still dont like how the chat window is styled"):
+   unlike the buddy, this chat shrinks its TEXT too: it is a side tool for one page, not the main conversation,
+   so it reads one size down (13px, the app's xs-to-sm step) with tighter bubbles. Sizes only; every colour and
+   shape still comes from the theme. */
+.page-chat-pane .assistant-bubble,
+.page-chat-pane .user-bubble {
+  font-size: 0.8125rem !important;
+  line-height: 1.45;
+  padding: 8px 12px !important;
+  border-radius: 14px;
+}
+.page-chat-pane .assistant-bubble { border-bottom-left-radius: 4px; }
+.page-chat-pane .user-bubble { border-bottom-right-radius: 4px; }
+.page-chat-pane .assistant-bubble p,
+.page-chat-pane .assistant-bubble li { margin-top: 0.15em; margin-bottom: 0.15em; }
+.page-chat-pane .assistant-bubble ul,
+.page-chat-pane .assistant-bubble ol { margin-top: 0.25em; margin-bottom: 0.25em; padding-left: 1.1em; }
+.page-chat-pane .timeline-entry { margin-bottom: 0; }
+/* The floating button over a page lifts off it the way floating cards do. */
+.page-chat-fab { box-shadow: var(--shadow-card); }

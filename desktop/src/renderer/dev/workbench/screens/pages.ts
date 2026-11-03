@@ -35,10 +35,10 @@ export const PAGES: readonly ScreenEntry[] = [
   // The page's assistant beside Money, one per layout of the step 3 round (pages-finish, 2026-11-02),
   // holding a conversation about the page (fixtures/bubbles/page-money-cc.jsonl).
   { ...pg('pages/page/page-money#chat-left', 'view', 'money', 'page-chat'), params: { pageChat: 'left', seed: 'bubbles-page-money-cc' } },
-  { ...pg('pages/page/page-money#chat-right', 'view', 'money', 'page-chat'), params: { pageChat: 'right', seed: 'bubbles-page-money-cc' } },
   { ...pg('pages/page/page-money#chat-float', 'view', 'money', 'page-chat'), params: { pageChat: 'float', seed: 'bubbles-page-money-cc' } },
-  { ...pg('pages/focus/page-money#chat-phone', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'open', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
-  { ...pg('pages/focus/page-money#chat-phone-full', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'open', pageChatPhone: 'full', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
+  { ...pg('pages/page/page-money#chat-float-closed', 'view', 'money', 'page-chat'), params: { pageChat: 'float', pageChatClosed: '1', seed: 'bubbles-page-money-cc' } },
+  { ...pg('pages/focus/page-money#chat-phone', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'float', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
+  { ...pg('pages/focus/page-money#chat-phone-closed', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'float', pageChatClosed: '1', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
   // WHY: public-demo screenshots must use the site's fictional data and pinned-page
   // focused host, not the internal practice library's personal-shaped fixtures.
   { ...pg('pages/focus/page-home#site', 'view', 'site'), scenario: 'site' },
