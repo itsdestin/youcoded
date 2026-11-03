@@ -772,6 +772,51 @@ describe('RemoteServer unhandled channels', () => {
     expect(sent[0].payload.outcomes['phone-b:1:9']).toBe('unknown');
   });
 
+  it('remembers finished requests for ten minutes and the last 200 per device, then answers unknown', async () => {
+    // A phone that lost its connection asks "did my action run?". The host answers only what it can still see:
+    // a restart, an old request or one pushed out of the memory is "unknown", never a guessed "completed".
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+      expect(server.outcomeOf('phone-a:1:1')).toBe('unknown'); // fresh start: nothing remembered
+      server.noteCompleted('phone-a:1:1');
+      vi.advanceTimersByTime(9 * 60_000);
+      expect(server.outcomeOf('phone-a:1:1')).toBe('completed');
+      vi.advanceTimersByTime(2 * 60_000);
+      expect(server.outcomeOf('phone-a:1:1')).toBe('unknown');
+      for (let n = 0; n < 201; n++) server.noteCompleted(`phone-a:2:${n}`);
+      expect(server.outcomeOf('phone-a:2:0')).toBe('unknown'); // the memory has a limit
+      expect(server.outcomeOf('phone-a:2:200')).toBe('completed');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('closes a connection that stops answering checks, but not one that misses a few', async () => {
+    // A half-open socket is otherwise invisible until a 30 s request timeout. A phone that locks for a moment
+    // must survive: three missed checks are tolerated, the fourth ends it, at once (terminate, not a close
+    // handshake a vanished network never finishes). Every drop is logged with the time and how long it was silent.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+      const fakeSocket = () => Object.assign(new EventEmitter(), { readyState: 1, send: vi.fn(), ping: vi.fn(), close: vi.fn(), terminate: vi.fn() });
+      const quiet: any = fakeSocket();
+      const lively: any = fakeSocket();
+      lively.ping.mockImplementation(() => lively.emit('pong'));
+      server.addClient(quiet, 'phone-quiet', '100.64.0.2');
+      server.addClient(lively, 'phone-lively', '100.64.0.3');
+      await vi.advanceTimersByTimeAsync(3 * 20_000);
+      expect(quiet.terminate).not.toHaveBeenCalled(); // three missed checks: still connected
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(quiet.terminate).toHaveBeenCalledTimes(1);
+      expect(lively.terminate).not.toHaveBeenCalled();
+      lively.emit('close', 1006, Buffer.from(''));
+      const drop = logged.mock.calls.map((c) => String(c[0])).find((l) => l.includes('disconnected'));
+      expect(drop).toMatch(/\d{4}-\d\d-\d\dT.*silent for \d+ s/);
+    } finally { logged.mockRestore(); vi.useRealTimers(); }
+  });
+
   it('answers an unknown channel instead of dropping it', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
