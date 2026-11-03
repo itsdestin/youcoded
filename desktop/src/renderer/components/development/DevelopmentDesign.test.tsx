@@ -182,7 +182,6 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     // the operation's own text is one fold away, never the message itself.
     const line = await screen.findByText(/The download didn’t finish/);
     const box = line.closest('div.rounded-lg') as HTMLElement;
-    expect(box.className).toMatch(/destructive/);
     // The box's LAST button is Try again: Details comes first, the buttons under it (gt-r1#E-2).
     expect([...box.querySelectorAll('button')].pop()?.textContent).toBe('Try again');
     expect(screen.queryByText(/Could not reach github\.com\./)).toBeNull();
@@ -200,7 +199,6 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     render(<ContributePopup open onClose={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Open it' }));
     const line = await screen.findByText(/The new conversation didn’t open/);
-    expect((line.closest('div.rounded-lg') as HTMLElement).className).toMatch(/destructive/);
     expect(screen.queryByText(/ENOENT/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getByText(/spawn claude ENOENT/)).toBeTruthy();

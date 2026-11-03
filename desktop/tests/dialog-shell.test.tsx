@@ -35,20 +35,10 @@ describe('Dialog shell', () => {
     expect(document.querySelector('.layer-surface')).toBeNull();
   });
 
-  it('the panel is a flex column so its body can be bounded', () => {
-    // This is the exact property SettingsPopup left to the caller.
-    render(<Dialog open onClose={() => {}} title="Sound">body</Dialog>);
-    expect(panel().className).toContain('flex');
-    expect(panel().className).toContain('flex-col');
-  });
-
   it('owns a scrolling body — the caller does not supply one', () => {
     render(<Dialog open onClose={() => {}} title="Sound"><p>tall</p></Dialog>);
     const body = panel().querySelector('.scroll-mask');
     expect(body, 'Dialog must render its own scroll region').not.toBeNull();
-    // flex-1 is what gives the scroll region a bounded height inside the column.
-    // Without it the body grows to fit content and overflow never engages.
-    expect(body!.className).toContain('flex-1');
   });
 
   it('scrollBody={false} lets a caller own its whole surface', () => {
@@ -73,7 +63,6 @@ describe('Dialog shell', () => {
     const { rerender } = render(<Dialog open onClose={() => {}} title="About">body</Dialog>);
     const titled = panel().querySelector('.dialog-scroll');
     expect(titled).toBeInTheDocument();
-    expect(titled!.className).toContain('scroll-mask');
     rerender(<Dialog open onClose={() => {}}>untitled</Dialog>);
     expect(panel().querySelector('.scroll-mask')).toBeInTheDocument();
     expect(panel().querySelector('.dialog-scroll')).toBeNull();

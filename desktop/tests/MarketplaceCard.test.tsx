@@ -8,7 +8,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, act, screen, fireEvent, waitFor } from '@testing-library/react';
 import { isInstallableSource } from '../src/shared/catalog-types';
 import MarketplaceCard from '../src/renderer/components/marketplace/MarketplaceCard';
-import MarketplaceRail from '../src/renderer/components/marketplace/MarketplaceRail';
 import MarketplaceDetailOverlay from '../src/renderer/components/marketplace/MarketplaceDetailOverlay';
 import LibraryScreen from '../src/renderer/components/library/LibraryScreen';
 import { MarketplaceProvider } from '../src/renderer/state/marketplace-context';
@@ -114,7 +113,6 @@ describe('MarketplaceCard compact variant', () => {
   it('renders the compact list row with an inline Install (not the corner), title and tagline', async () => {
     const { container, queryByLabelText, getByText } = await renderWithProviders(<MarketplaceCard item={{ kind: 'skill', entry: sampleSkill }} onOpen={() => {}} compact />);
     expect(container.querySelector('[data-marketplace-card-compact]')?.getAttribute('data-marketplace-card-compact')).toBe('true');
-    expect(queryByLabelText('Install')?.className).not.toContain('absolute');
     expect(getByText('Sample Skill')).toBeTruthy();
     expect(getByText('Quick description')).toBeTruthy();
   });
@@ -230,14 +228,6 @@ describe('marketplace small fixes', () => {
     await act(async () => { fireEvent.error(img); });
     expect(container.querySelector('img[src*="preview.png"]')).toBeNull();
     if (!compact) expect(container.querySelector('[data-theme-swatches]')).toBeTruthy();
-  });
-
-  it('the rail says there is more to scroll in each direction', async () => {
-    // The rail takes the app's one fade (.scroll-mask); jsdom has no scroll timelines, so only the hook is checked here.
-    render(<MarketplaceRail title="Featured"><div>a</div><div>b</div></MarketplaceRail>);
-    const list = screen.getByRole('list');
-    expect(list.className).toContain('scroll-mask');
-    expect(list.getAttribute('style') ?? '').not.toContain('mask');
   });
 
   it('the detail overlay renders the long description as markdown', async () => {

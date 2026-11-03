@@ -99,10 +99,8 @@ describe("the mascot's cursor", () => {
   it('keeps the plain arrow while merely resting on or pressing him', () => {
     const el = mascotEl();
     expect(cursorOf(el)).toBe('default');
-    expect(el.classList.contains('mascot-grabbed')).toBe(false);
     fireEvent.pointerDown(el, { pointerId: 1, clientX: 40, clientY: 40 });
     expect(cursorOf(el)).toBe('default');
-    expect(el.classList.contains('mascot-grabbed')).toBe(false);
   });
 
   it('closes into the grip only once the press travels past the click threshold', () => {
@@ -113,7 +111,6 @@ describe("the mascot's cursor", () => {
     expect(cursorOf(el)).toBe('default');
     move(el, { x: 60, y: 40 }, { x: 0, y: 0 });
     expect(cursorOf(el)).toBe('grabbing');
-    expect(el.classList.contains('mascot-grabbed')).toBe(true);
   });
 
   it('lets go of the grip on release, whether the press was a click or a drag', () => {

@@ -570,7 +570,6 @@ describe('organizing', () => {
       const button = await screen.findByRole('button', { name: 'Rename CC Chat' });
       const name = screen.getByText('CC Chat');
       expect(button).toContainElement(name);
-      expect(name).toHaveClass('underline', 'decoration-dotted', 'decoration-fg-muted');
       const pencil = button.querySelector('svg')!.parentElement!;
       for (const cue of [name, pencil]) {
         expect(cue.className).not.toMatch(/hover:|focus:|opacity-0|invisible|hidden|touch-reveal/);

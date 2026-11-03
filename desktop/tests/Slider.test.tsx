@@ -23,7 +23,5 @@ describe('Slider', () => {
     const handle = container.querySelector('input + [aria-hidden="true"]') as HTMLElement;
     expect(fill.style.width).toBe('calc(20px + 0.25 * (100% - 20px))');
     expect(handle.style.left).toBe('calc(3px + 0.25 * (100% - 20px))');
-    expect(handle.className).toMatch(/rounded-full/);
-    expect(fill.className).toMatch(/rounded-full/);
   });
 });

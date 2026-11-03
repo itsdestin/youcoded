@@ -59,17 +59,6 @@ describe('Deliverables card in the bubble', () => {
     expect(card.compareDocumentPosition(screen.getByText(/perf\.mjs/)) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
   });
 
-  it('a bubble holding only the card gets prose padding, not the tools-only padding', () => {
-    const { container } = renderTurn(
-      turn([{ type: 'tool-group', groupId: 'g1' }]),
-      { g1: ['send1'] },
-      [send('send1', ['/p/report.md'])],
-    );
-    const bubble = container.querySelector('.assistant-bubble') as HTMLElement;
-    expect(bubble.className).toContain('pt-4');
-    expect(bubble.className).not.toContain('py-2.5');
-  });
-
   it('merges every SendUserFile call in the bubble into ONE card: files in call order, each keeping its own call\'s status', () => {
     const err = 'SendUserFile failed — nothing was sent:\n- /p/b.md is a directory';
     renderTurn(

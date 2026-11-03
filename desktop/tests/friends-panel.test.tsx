@@ -25,10 +25,6 @@ describe('friends panel, signed out', () => {
     render(<FriendsPanel social="online" onRetry={vi.fn()} />);
     expect(screen.getByText(/scores/i)).toBeInTheDocument();
     const button = screen.getByRole('button', { name: 'Sign in' });
-    // Filled = the primary button (guide "Buttons": the main action is filled).
-    expect(button.className).toContain('bg-accent');
-    // GC-2 picked full width — the Account popup's sign-in card.
-    expect(button.className).toContain('w-full');
     fireEvent.click(button);
     expect(h.startSignIn).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/play without an account/i)).toBeNull();

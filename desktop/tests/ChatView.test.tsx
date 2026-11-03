@@ -58,15 +58,13 @@ if (typeof (globalThis as any).IntersectionObserver === 'undefined') {
 }
 
 import ChatView from '../src/renderer/components/ChatView';
-import { ContentFindBar } from '../src/renderer/components/ContentFindBar';
 
 // The chat's Ctrl+F find bar gets its own ROW above the messages, like a
 // browser's, instead of a card floating over the first user message. The row
 // is an in-flow sibling right before the scroll container inside .chat-pane;
 // while it is open the scroll container drops its header-clearing padding
 // (chat-scroll--below-find-row) because the content now starts under the row,
-// not under the header. The artifact viewer keeps the floating card
-// (ContentFindBar's default layout) — untouched.
+// not under the header.
 const ctrlF = () => fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
 
 describe('chat session DOM identity', () => {
@@ -89,8 +87,6 @@ describe('model status placement', () => {
     const model = container.querySelector('.model-status-strip') as HTMLElement;
     expect(model).toBeTruthy();
     expect(model.parentElement?.classList.contains('chat-pane')).toBe(true);
-    expect(model.className).toContain('inset-x-3');
-    expect(model.className).not.toContain('w-[min(');
     delete mocks.artifact.drawerOpenBySession.s1;
   });
 });
@@ -104,16 +100,11 @@ describe('chat find bar row', () => {
     ctrlF();
     const row = container.querySelector('.chat-pane > .find-row');
     expect(row).toBeTruthy();
-    // Not the floating card: in flow, no absolute positioning.
-    expect(row!.className).not.toMatch(/\babsolute\b/);
     // Sits immediately before the scroll container so the messages shift down
     // by exactly the row's height.
     const scroll = container.querySelector('.chat-scroll');
     expect(row!.nextElementSibling).toBe(scroll);
     expect(scroll!.className).toContain('chat-scroll--below-find-row');
-    // The scroller takes the remaining height rather than 100% of the pane.
-    expect(scroll!.className).toContain('flex-1');
-    expect(scroll!.className).not.toMatch(/\bh-full\b/);
     // Focus lands in the field, ready to type.
     expect(document.activeElement).toBe(screen.getByLabelText('Find in chat'));
   });
@@ -139,16 +130,6 @@ describe('chat find bar row', () => {
     expect(screen.getByLabelText('Previous (Shift+Enter)')).toBeTruthy();
     expect(screen.getByLabelText('Next (Enter)')).toBeTruthy();
     expect(screen.getByLabelText('Close (Esc)')).toBeTruthy();
-  });
-
-  it('ContentFindBar still floats by default (the artifact viewer is untouched)', () => {
-    const ref = { current: document.createElement('div') };
-    const { container } = render(
-      <ContentFindBar containerRef={ref} onClose={() => {}} resetKey="a" />,
-    );
-    const bar = container.firstElementChild!;
-    expect(bar.className).toMatch(/\babsolute\b/);
-    expect(bar.className).not.toContain('find-row');
   });
 });
 

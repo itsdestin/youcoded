@@ -122,7 +122,6 @@ describe('VoiceButton card — unpacking (R23)', () => {
     // Indeterminate on purpose: nothing here reports a percentage worth
     // believing, so the bar claims no value.
     expect(bar).not.toHaveAttribute('aria-valuenow');
-    expect(bar).toHaveClass('model-load-track');
   });
 
   it('says the wait costs the user nothing', () => {

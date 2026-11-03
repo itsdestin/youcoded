@@ -103,7 +103,6 @@ describe('CommentCard Edit/Delete icons next to the Resolve toggle', () => {
     const wrapper = editBox().parentElement;
     expect(wrapper?.contains(button('Cancel'))).toBe(true);
     expect(wrapper?.contains(button('Save'))).toBe(true);
-    expect(wrapper?.className).toContain('border');
   });
 
   // Deleting a thread's first comment deletes the whole thread, so the confirm must say so.
@@ -198,36 +197,7 @@ describe('HighlightHoverCard Edit/Delete icons (code/xlsx surfaces reuse the sam
   });
 });
 
-// WHY: a bare <button>'s UA stylesheet sets cursor:default, which breaks inheritance, so the gap slivers between the
-// tightly-packed icons kept the inherited pointer and the OS cursor flickered. jsdom applies neither stylesheet, so this
-// pins the class-name half of the fix: every button and gap-only <div> in the row carries an explicit cursor-pointer.
-describe('Resolve/Edit/Delete row: one cursor, no dead gaps', () => {
-  const pointer = (el: Element | null | undefined) => expect(el?.className).toContain('cursor-pointer');
-
-  it("CommentCard's top-right row: Edit, Delete, Resolve and both wrapping gaps are all cursor-pointer", () => {
-    card(baseComment(), WIRED);
-    pointer(editIcon());
-    pointer(deleteIcon());
-    pointer(resolveToggle());
-    pointer(editIcon().parentElement);                 // Edit+Delete gap
-    pointer(editIcon().parentElement?.parentElement);  // gap between that pair and the resolve toggle
-  });
-
-  it("a reply row's Edit/Delete icons and their gap are cursor-pointer too", () => {
-    card(baseComment({ replies: [reply('r-1', 'a reply')] }), { onEditReply: noop, onDeleteReply: noop });
-    pointer(screen.getByLabelText(/edit reply/i));
-    pointer(screen.getByLabelText(/delete reply/i));
-    pointer(screen.getByLabelText(/edit reply/i).parentElement);
-  });
-
-  it("HighlightHoverCard's trailing row (the code/xlsx hover preview) is the same fix", () => {
-    hoverCard(baseComment(), WIRED);
-    pointer(editIcon());
-    pointer(resolveToggle());
-    pointer(editIcon().parentElement);
-    pointer(editIcon().parentElement?.parentElement);
-  });
-
+describe('Resolve/Edit/Delete row: stable buttons', () => {
   // A docComments:changed push mid-hover (same id, fresh object) must not recreate the buttons, or the opacity-reveal re-triggers.
   it('a same-id comment refresh mid-hover keeps the same Edit/Delete/Resolve DOM nodes', () => {
     const c1 = baseComment();

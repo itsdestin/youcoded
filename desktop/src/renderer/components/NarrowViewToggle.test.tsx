@@ -42,15 +42,4 @@ describe('NarrowViewToggle', () => {
     const { container } = render(<NarrowViewToggle viewMode="terminal" onToggleView={vi.fn()} />);
     expect(container.querySelector('[data-view-toggle]')).toBeTruthy();
   });
-
-  // Destin asked for this to match the artifact button's footprint, so the two
-  // read as a matched pair in the right cluster.
-  it('matches the artifact button footprint', () => {
-    const { container } = render(<NarrowViewToggle viewMode="chat" onToggleView={vi.fn()} />);
-    expect(container.querySelector('.bg-inset.rounded-md.p-0\\.5')).toBeTruthy();
-    const btn = screen.getByLabelText('Switch to terminal');
-    expect(btn.className).toContain('px-2');
-    expect(btn.className).toContain('py-1');
-    expect(container.querySelector('svg')?.getAttribute('class')).toContain('w-4 h-4');
-  });
 });

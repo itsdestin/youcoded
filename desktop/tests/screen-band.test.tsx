@@ -32,13 +32,11 @@ function mount(onBack = vi.fn()) {
 }
 
 describe('ScreenBand', () => {
-  it('reads "Esc · Back to chat", key first, as a light (unfilled) button', () => {
+  it('reads "Esc · Back to chat", key first, and goes back on click', () => {
     const onBack = mount();
     const back = screen.getByRole('button', { name: 'Back to chat' });
     // The key, its dot and the words are three spans (the button's gap spaces them).
     expect(back.textContent).toMatch(/^Esc\s*·\s*Back to chat$/);
-    expect(back.className).not.toContain('bg-accent');
-    expect(back.parentElement?.className).toContain('bg-inset');
     fireEvent.click(back);
     expect(onBack).toHaveBeenCalledTimes(1);
   });

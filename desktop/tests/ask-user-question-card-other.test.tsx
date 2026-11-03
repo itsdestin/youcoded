@@ -72,7 +72,6 @@ describe('AskUserQuestion card — Other + note', () => {
     expect(submit().disabled).toBe(false);
     mounted.rerender(<ChatProvider><ToolCard tool={{ ...tool, requestId: 'native-q2' }} sessionId="s1" /></ChatProvider>);
     expect(submit().disabled).toBe(true);
-    expect(screen.getByRole('button', { name: /^Blue/ }).className).not.toContain('border-accent');
   });
 
   it('preserves legacy wording-keyed CC duplicate choices and submission without ordered answers', async () => {

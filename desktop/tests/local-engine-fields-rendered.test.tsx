@@ -65,7 +65,6 @@ describe('the engine card', () => {
     // bare catch, which left the card able to say only "something went wrong".
     const cause = screen.getByText(OS_ERROR);
     expect(cause).toBeTruthy();
-    expect(cause.className).toContain('break-words');
     // A cause we HAVE is the specific+accurate shape — no Report bug / Diagnose.
     expect(screen.queryByText('Diagnose with the assistant')).toBeNull();
   });

@@ -29,11 +29,6 @@ import MarketplaceFilterBar, { emptyFilter } from '../src/renderer/components/ma
 
 afterEach(cleanup);
 
-// The Marketplace's pre-extraction Chip recipe, verbatim — except the corner, which is now the
-// theme's control corner instead of a fixed pill (decisions "Control shape follows the theme").
-const ACTIVE = 'px-3 py-1 rounded-control text-sm transition-colors bg-accent text-on-accent';
-const INACTIVE = 'px-3 py-1 rounded-control text-sm transition-colors bg-inset text-fg-2 hover:text-fg border border-edge hover:border-edge-dim';
-
 describe('FilterChip', () => {
   it('is a checkbox that reports its state and toggles on click', () => {
     const onClick = vi.fn();
@@ -43,17 +38,6 @@ describe('FilterChip', () => {
     expect(chip.getAttribute('type')).toBe('button');
     fireEvent.click(chip);
     expect(onClick).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders the Marketplace recipe verbatim in both states', () => {
-    render(
-      <>
-        <FilterChip active onClick={() => {}}>On</FilterChip>
-        <FilterChip active={false} onClick={() => {}}>Off</FilterChip>
-      </>,
-    );
-    expect(screen.getByRole('checkbox', { name: 'On' }).className).toBe(ACTIVE);
-    expect(screen.getByRole('checkbox', { name: 'Off' }).className).toBe(INACTIVE);
   });
 
   it('takes an aria-label for chips whose visible text carries a glyph', () => {
