@@ -23,7 +23,6 @@ describe('TRANSCRIPT_* reducer actions', () => {
     state = initState();
   });
 
-  // --- Test 1: TRANSCRIPT_USER_MESSAGE adds a user bubble and sets isThinking ---
   it('TRANSCRIPT_USER_MESSAGE adds a user bubble and sets isThinking', () => {
     state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Hello Claude', timestamp: 1000 });
 
@@ -38,7 +37,6 @@ describe('TRANSCRIPT_* reducer actions', () => {
     expect(session.currentGroupId).toBeNull();
   });
 
-  // --- Test 2: TRANSCRIPT_ASSISTANT_TEXT adds an assistant bubble (isThinking stays true) ---
   it('TRANSCRIPT_ASSISTANT_TEXT adds an assistant bubble (isThinking stays true)', () => {
     // Send user message first to set isThinking
     state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Hello', timestamp: 1000 });
@@ -61,18 +59,10 @@ describe('TRANSCRIPT_* reducer actions', () => {
     expect(session.isThinking).toBe(true);
   });
 
-  // --- Test 3: TRANSCRIPT_TOOL_USE creates a tool group within an assistant turn ---
   it('TRANSCRIPT_TOOL_USE creates a tool group with a running tool', () => {
     state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Read a file', timestamp: 1000 });
 
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
-      sessionId: SESSION,
-      uuid: 'uuid-2',
-      toolUseId: 'tool-1',
-      toolName: 'Read',
-      toolInput: { file_path: '/tmp/test.ts' },
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-2', toolUseId: 'tool-1', toolName: 'Read', toolInput: { file_path: '/tmp/test.ts' } });
 
     const session = state.get(SESSION)!;
     // Timeline should have user message + assistant-turn (containing the tool group)
@@ -100,18 +90,10 @@ describe('TRANSCRIPT_* reducer actions', () => {
     }
   });
 
-  // --- Test 4: TRANSCRIPT_TOOL_RESULT completes a tool ---
   it('TRANSCRIPT_TOOL_RESULT completes a tool (status -> complete, stores response)', () => {
     state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Read a file', timestamp: 1000 });
 
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
-      sessionId: SESSION,
-      uuid: 'uuid-2',
-      toolUseId: 'tool-1',
-      toolName: 'Read',
-      toolInput: { file_path: '/tmp/test.ts' },
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-2', toolUseId: 'tool-1', toolName: 'Read', toolInput: { file_path: '/tmp/test.ts' } });
 
     state = dispatch(state, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-3', toolUseId: 'tool-1', result: 'File contents here', isError: false });
 
@@ -122,18 +104,10 @@ describe('TRANSCRIPT_* reducer actions', () => {
     expect(tool!.response).toBe('File contents here');
   });
 
-  // --- Test 5: TRANSCRIPT_TOOL_RESULT with isError marks tool as failed ---
   it('TRANSCRIPT_TOOL_RESULT with isError: true marks tool as failed', () => {
     state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Read a file', timestamp: 1000 });
 
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
-      sessionId: SESSION,
-      uuid: 'uuid-2',
-      toolUseId: 'tool-1',
-      toolName: 'Read',
-      toolInput: { file_path: '/tmp/nope.ts' },
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-2', toolUseId: 'tool-1', toolName: 'Read', toolInput: { file_path: '/tmp/nope.ts' } });
 
     state = dispatch(state, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-3', toolUseId: 'tool-1', result: 'File not found', isError: true });
 
@@ -144,42 +118,24 @@ describe('TRANSCRIPT_* reducer actions', () => {
     expect(tool!.error).toBe('File not found');
   });
 
-  // --- Test 6: TRANSCRIPT_TURN_COMPLETE clears isThinking ---
   it('TRANSCRIPT_TURN_COMPLETE clears isThinking', () => {
     state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Hello', timestamp: 1000 });
 
     expect(state.get(SESSION)!.isThinking).toBe(true);
 
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_TURN_COMPLETE',
-      sessionId: SESSION,
-      uuid: 'uuid-done',
-      timestamp: 2000,
-      stopReason: null,
-      model: null,
-      anthropicRequestId: null,
-      usage: null,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'uuid-done', timestamp: 2000, stopReason: null, model: null, anthropicRequestId: null, usage: null });
 
     const session = state.get(SESSION)!;
     expect(session.isThinking).toBe(false);
     expect(session.currentGroupId).toBeNull();
   });
 
-  // --- Test 7: TRANSCRIPT_ASSISTANT_TEXT after a completed tool group resets currentGroupId ---
   it('TRANSCRIPT_ASSISTANT_TEXT after completed tool group resets currentGroupId so next tool starts new group', () => {
     // User message
     state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Do two things', timestamp: 1000 });
 
     // First tool use — creates group 1
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
-      sessionId: SESSION,
-      uuid: 'uuid-2',
-      toolUseId: 'tool-1',
-      toolName: 'Read',
-      toolInput: { file_path: '/tmp/a.ts' },
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-2', toolUseId: 'tool-1', toolName: 'Read', toolInput: { file_path: '/tmp/a.ts' } });
 
     const groupId1 = state.get(SESSION)!.currentGroupId;
     expect(groupId1).not.toBeNull();
@@ -193,14 +149,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
     expect(state.get(SESSION)!.currentGroupId).toBeNull();
 
     // Second tool use — should create a NEW group
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
-      sessionId: SESSION,
-      uuid: 'uuid-5',
-      toolUseId: 'tool-2',
-      toolName: 'Write',
-      toolInput: { file_path: '/tmp/b.ts', content: 'hello' },
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-5', toolUseId: 'tool-2', toolName: 'Write', toolInput: { file_path: '/tmp/b.ts', content: 'hello' } });
 
     const session = state.get(SESSION)!;
     const groupId2 = session.currentGroupId;
@@ -225,7 +174,6 @@ describe('TRANSCRIPT_* reducer actions', () => {
     }
   });
 
-  // --- Test 9: TRANSCRIPT_USER_MESSAGE deduplicates against optimistic USER_PROMPT ---
   it('TRANSCRIPT_USER_MESSAGE deduplicates against optimistic USER_PROMPT from InputBar', () => {
     // Simulate InputBar sending USER_PROMPT first (optimistic)
     state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'Hello Claude', timestamp: 1000 });
@@ -242,7 +190,6 @@ describe('TRANSCRIPT_* reducer actions', () => {
     expect(session.isThinking).toBe(true);
   });
 
-  // --- Test 10: Rapid-fire identical USER_PROMPTs — each gets its own bubble ---
   // Regression: old content-based dedup scanned the last 10 timeline entries
   // and silently suppressed any USER_PROMPT whose content matched a prior
   // user message. Sending "yes" twice meant the second "yes" vanished.
@@ -257,7 +204,6 @@ describe('TRANSCRIPT_* reducer actions', () => {
     expect(userEntries).toHaveLength(2);
   });
 
-  // --- Test 11: transcript confirms each pending entry individually ---
   // With the new pattern, each TRANSCRIPT_USER_MESSAGE consumes the OLDEST
   // matching pending entry. Two rapid sends + two transcript events = two
   // confirmed bubbles, no duplicates.
@@ -273,7 +219,6 @@ describe('TRANSCRIPT_* reducer actions', () => {
     expect(userEntries).toHaveLength(2);
   });
 
-  // --- Test 12: transcript arrives without a pending match → append new ---
   // Remote/replay path: TRANSCRIPT_USER_MESSAGE fires without a prior optimistic
   // USER_PROMPT (e.g. viewer-only client, or user typed straight in terminal).
   // Should add a new timeline entry, not silently drop it.
@@ -297,28 +242,12 @@ describe('Subagent threading', () => {
   });
 
   function emitParentAgentToolUse(): ChatState {
-    return chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
-      sessionId: SESSION,
-      uuid: 'uuid-parent',
-      toolUseId: 'toolu_parent',
-      toolName: 'Agent',
-      toolInput: { description: 'Find bug', subagent_type: 'Explore', prompt: 'go' },
-    });
+    return chatReducer(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-parent', toolUseId: 'toolu_parent', toolName: 'Agent', toolInput: { description: 'Find bug', subagent_type: 'Explore', prompt: 'go' } });
   }
 
   it('subagent tool_use appends a subagent segment to the parent Agent tool', () => {
     state = emitParentAgentToolUse();
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
-      sessionId: SESSION,
-      uuid: 'uuid-s1',
-      toolUseId: 'toolu_child',
-      toolName: 'Read',
-      toolInput: { file_path: '/a' },
-      parentAgentToolUseId: 'toolu_parent',
-      agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1', toolUseId: 'toolu_child', toolName: 'Read', toolInput: { file_path: '/a' }, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
 
     const session = state.get(SESSION)!;
     const parent = session.toolCalls.get('toolu_parent')!;
@@ -337,16 +266,8 @@ describe('Subagent threading', () => {
 
   it('subagent tool_result flips the matching segment to complete', () => {
     state = emitParentAgentToolUse();
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
-      toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-s2',
-      toolUseId: 'toolu_child', result: 'file contents', isError: false,
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1', toolUseId: 'toolu_child', toolName: 'Read', toolInput: {}, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-s2', toolUseId: 'toolu_child', result: 'file contents', isError: false, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
 
     const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
     const seg = parent.subagentSegments![0];
@@ -359,12 +280,7 @@ describe('Subagent threading', () => {
 
   it('subagent assistant text appends a text segment', () => {
     state = emitParentAgentToolUse();
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-s1',
-      text: "I'll check the Android side.",
-      timestamp: 1000,
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-s1', text: "I'll check the Android side.", timestamp: 1000, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
     const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
     expect(parent.subagentSegments!.length).toBe(1);
     const seg = parent.subagentSegments![0];
@@ -378,16 +294,8 @@ describe('Subagent threading', () => {
   // markdown blocks. Same-partId deltas must merge into ONE segment.
   it('subagent assistant text deltas sharing a partId coalesce into one segment', () => {
     state = emitParentAgentToolUse();
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-d1',
-      text: 'The bug is ', timestamp: 1000, partId: 'part-1',
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-d2',
-      text: 'in the Android build.', timestamp: 1001, partId: 'part-1',
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-d1', text: 'The bug is ', timestamp: 1000, partId: 'part-1', parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
+    state = chatReducer(state, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-d2', text: 'in the Android build.', timestamp: 1001, partId: 'part-1', parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
     const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
     expect(parent.subagentSegments!.length).toBe(1);
     const seg = parent.subagentSegments![0];
@@ -399,16 +307,8 @@ describe('Subagent threading', () => {
 
   it('subagent assistant text with different partIds stays as separate segments', () => {
     state = emitParentAgentToolUse();
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-d1',
-      text: 'First delta.', timestamp: 1000, partId: 'part-1',
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-d2',
-      text: 'Second block.', timestamp: 1001, partId: 'part-2',
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-d1', text: 'First delta.', timestamp: 1000, partId: 'part-1', parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
+    state = chatReducer(state, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-d2', text: 'Second block.', timestamp: 1001, partId: 'part-2', parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
     const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
     expect(parent.subagentSegments!.length).toBe(2);
     expect(parent.subagentSegments![0].type).toBe('text');
@@ -423,11 +323,7 @@ describe('Subagent threading', () => {
 
   it('subagent event for unknown parent is a no-op', () => {
     const before = state;
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
-      toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
-      parentAgentToolUseId: 'toolu_nonexistent', agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1', toolUseId: 'toolu_child', toolName: 'Read', toolInput: {}, parentAgentToolUseId: 'toolu_nonexistent', agentId: 'abc' });
     expect(state).toBe(before);
   });
 
@@ -437,11 +333,7 @@ describe('Subagent threading', () => {
     const activeIdsBefore = new Set(beforeSession.activeTurnToolIds);
     const groupsBefore = new Map(beforeSession.toolGroups);
 
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
-      toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1', toolUseId: 'toolu_child', toolName: 'Read', toolInput: {}, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
 
     const afterSession = state.get(SESSION)!;
     expect(afterSession.activeTurnToolIds).toEqual(activeIdsBefore);
@@ -450,32 +342,16 @@ describe('Subagent threading', () => {
 
   it('duplicate subagent tool_use for same toolUseId updates in place (no duplicate segment)', () => {
     state = emitParentAgentToolUse();
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
-      toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
-      toolUseId: 'toolu_child', toolName: 'Read', toolInput: { file_path: '/updated' },
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1', toolUseId: 'toolu_child', toolName: 'Read', toolInput: {}, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1', toolUseId: 'toolu_child', toolName: 'Read', toolInput: { file_path: '/updated' }, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
     const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
     expect(parent.subagentSegments!.length).toBe(1);
   });
 
   it('subagent tool_result with isError:true flips segment to failed', () => {
     state = emitParentAgentToolUse();
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
-      toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-s2',
-      toolUseId: 'toolu_child', result: 'ENOENT: no such file', isError: true,
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1', toolUseId: 'toolu_child', toolName: 'Read', toolInput: {}, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-s2', toolUseId: 'toolu_child', result: 'ENOENT: no such file', isError: true, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
     const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
     const seg = parent.subagentSegments![0];
     expect(seg.type).toBe('tool');
@@ -488,19 +364,9 @@ describe('Subagent threading', () => {
 
   it('subagent tool_result carries structuredPatch onto the segment', () => {
     state = emitParentAgentToolUse();
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
-      toolUseId: 'toolu_child', toolName: 'Edit',
-      toolInput: { file_path: '/a', old_string: 'x', new_string: 'y' },
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1', toolUseId: 'toolu_child', toolName: 'Edit', toolInput: { file_path: '/a', old_string: 'x', new_string: 'y' }, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
     const patch = [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [' x', '-y', '+z'] }];
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-s2',
-      toolUseId: 'toolu_child', result: 'edited', isError: false,
-      structuredPatch: patch,
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-s2', toolUseId: 'toolu_child', result: 'edited', isError: false, structuredPatch: patch, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
     const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
     const seg = parent.subagentSegments![0];
     expect(seg.type).toBe('tool');
@@ -512,21 +378,9 @@ describe('Subagent threading', () => {
 
   it('interleaved subagent text and tool segments preserve order', () => {
     state = emitParentAgentToolUse();
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-t1',
-      text: 'First thought', timestamp: 1000,
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1000, sessionId: SESSION, uuid: 'uuid-tool1',
-      toolUseId: 'toolu_mid', toolName: 'Read', toolInput: {},
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-t2',
-      text: 'Second thought', timestamp: 1001,
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-t1', text: 'First thought', timestamp: 1000, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1000, sessionId: SESSION, uuid: 'uuid-tool1', toolUseId: 'toolu_mid', toolName: 'Read', toolInput: {}, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
+    state = chatReducer(state, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-t2', text: 'Second thought', timestamp: 1001, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
     const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
     expect(parent.subagentSegments!.length).toBe(3);
     expect(parent.subagentSegments![0].type).toBe('text');
@@ -541,11 +395,7 @@ describe('Subagent threading', () => {
   // duplicate the text it produced the first time.
   it('replaying the same subagent assistant-text delta twice does not duplicate the segment content', () => {
     state = emitParentAgentToolUse();
-    const deliver = (s: ChatState) => chatReducer(s, {
-      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-report',
-      text: 'The bug is in the Android build.', timestamp: 1000, partId: 'part-1',
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
+    const deliver = (s: ChatState) => chatReducer(s, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-report', text: 'The bug is in the Android build.', timestamp: 1000, partId: 'part-1', parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
     state = deliver(state);
     state = deliver(state); // second delivery of the SAME event (identical uuid) — replay-twice
     const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
@@ -581,14 +431,8 @@ describe('Subagent threading', () => {
 
   it('CLEAR_TIMELINE preserves subagentSegments on toolCalls entries', () => {
     state = emitParentAgentToolUse();
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
-      toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
-      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
-    });
-    state = chatReducer(state, {
-      type: 'CLEAR_TIMELINE', sessionId: SESSION, markerId: 'm1', timestamp: 1000,
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1', toolUseId: 'toolu_child', toolName: 'Read', toolInput: {}, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
+    state = chatReducer(state, { type: 'CLEAR_TIMELINE', sessionId: SESSION, markerId: 'm1', timestamp: 1000 });
     const session = state.get(SESSION)!;
     const parent = session.toolCalls.get('toolu_parent')!;
     expect(parent.subagentSegments!.length).toBe(1);
@@ -604,14 +448,7 @@ describe('Subagent threading', () => {
     state = chatReducer(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-user', text: 'Run an agent for me', timestamp: 999 });
     // Parent emits assistant text on its own turn so turn.model is set to the
     // parent's model (opus), then dispatches the Agent tool_use.
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_ASSISTANT_TEXT',
-      sessionId: SESSION,
-      uuid: 'uuid-parent-text',
-      text: 'Dispatching an agent…',
-      timestamp: 1000,
-      model: 'claude-opus-4-7',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-parent-text', text: 'Dispatching an agent…', timestamp: 1000, model: 'claude-opus-4-7' });
     state = emitParentAgentToolUse();
 
     const parentTurnId = state.get(SESSION)!.currentTurnId!;
@@ -621,18 +458,7 @@ describe('Subagent threading', () => {
 
     // Sub-agent's final assistant message: parseTranscriptLine emits a
     // turn-complete event, SubagentWatcher stamps it with parentAgentToolUseId.
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_TURN_COMPLETE',
-      sessionId: SESSION,
-      uuid: 'uuid-subagent-done',
-      timestamp: 2000,
-      stopReason: 'end_turn',
-      model: 'claude-haiku-4-5-20251001',
-      anthropicRequestId: 'req_subagent',
-      usage: null,
-      parentAgentToolUseId: 'toolu_parent',
-      agentId: 'abc',
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'uuid-subagent-done', timestamp: 2000, stopReason: 'end_turn', model: 'claude-haiku-4-5-20251001', anthropicRequestId: 'req_subagent', usage: null, parentAgentToolUseId: 'toolu_parent', agentId: 'abc' });
 
     const session = state.get(SESSION)!;
     // Parent turn.model must remain the parent's model — the drift-reconciliation

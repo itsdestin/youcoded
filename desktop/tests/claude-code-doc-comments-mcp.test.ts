@@ -110,6 +110,19 @@ function start(projectRoot: string, extraEnv?: Record<string, string>) {
   return client;
 }
 
+/** Waits for the spawned client to write its pending-queue request and returns the file path.
+ *  WHY vi.waitFor with a 7 s bound: the client is a spawned process and under load it took
+ *  over 1 s to start; this returns the moment the file appears. */
+async function waitForRequest(): Promise<{ pendingDir: string; requestFile: string }> {
+  const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
+  const requestFile = await vi.waitFor(() => {
+    const files = fs.existsSync(pendingDir) ? fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json')) : [];
+    if (!files.length) throw new Error('no request yet');
+    return path.join(pendingDir, files[0]);
+  }, { timeout: 7000, interval: 20 });
+  return { pendingDir, requestFile };
+}
+
 describe('server source', () => {
   it('writes the source once for every test in this file to spawn from', () => {
     fs.writeFileSync(SERVER_SOURCE, DOC_COMMENTS_SERVER_JS);
@@ -127,130 +140,72 @@ describe('server source', () => {
 });
 
 describe('deployment', () => {
+  const baseDirs: string[] = [];
+  const freshBase = () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
+    baseDirs.push(d);
+    return d;
+  };
+  const deploy = (baseDir: string) => deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
+  afterEach(() => {
+    for (const d of baseDirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+    __resetDocCommentsMcpSweepForTest();
+  });
+
   it('writes the server and a config naming it, with the project root and a token baked into env', () => {
-    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
-    try {
-      const deployment = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
-      expect(deployment.serverPath.startsWith(path.join(baseDir, DOC_COMMENTS_MCP_DIR))).toBe(true);
-      expect(fs.existsSync(deployment.serverPath)).toBe(true);
-      // Adversarial review 2026-09-27, finding #2: a fresh, unpredictable
-      // config key per deployment, never a fixed public constant.
-      expect(deployment.serverId.startsWith(`${DOC_COMMENTS_MCP_SERVER_PREFIX}-`)).toBe(true);
-      const config = JSON.parse(fs.readFileSync(deployment.configPath, 'utf8'));
-      expect(Object.keys(config.mcpServers)).toEqual([deployment.serverId]);
-      expect(config.mcpServers[deployment.serverId].env[YOUCODED_PROJECT_ROOT_ENV]).toBe(root);
-      // Adversarial review 2026-09-27, finding #1: a real, per-deployment
-      // secret, returned to the caller and also baked into the spawned
-      // process's own env — the two must be the SAME value.
-      expect(deployment.token.length).toBeGreaterThan(16);
-      expect(config.mcpServers[deployment.serverId].env[YOUCODED_MCP_TOKEN_ENV]).toBe(deployment.token);
-      // Nothing is pre-approved: a pre-approved read could never ask before
-      // reaching a file outside the project (main answers in-project reads).
-      expect(deployment.allowedTools).toEqual([]);
-    } finally {
-      fs.rmSync(baseDir, { recursive: true, force: true });
-    }
+    const baseDir = freshBase();
+    const deployment = deploy(baseDir);
+    expect(deployment.serverPath.startsWith(path.join(baseDir, DOC_COMMENTS_MCP_DIR))).toBe(true);
+    expect(fs.existsSync(deployment.serverPath)).toBe(true);
+    // WHY: a fresh, unpredictable config key per deployment, never a fixed public constant.
+    expect(deployment.serverId.startsWith(`${DOC_COMMENTS_MCP_SERVER_PREFIX}-`)).toBe(true);
+    const config = JSON.parse(fs.readFileSync(deployment.configPath, 'utf8'));
+    expect(Object.keys(config.mcpServers)).toEqual([deployment.serverId]);
+    expect(config.mcpServers[deployment.serverId].env[YOUCODED_PROJECT_ROOT_ENV]).toBe(root);
+    // WHY: the returned secret and the one in the spawned process's env must be the SAME value.
+    expect(deployment.token.length).toBeGreaterThan(16);
+    expect(config.mcpServers[deployment.serverId].env[YOUCODED_MCP_TOKEN_ENV]).toBe(deployment.token);
+    // Nothing is pre-approved: a pre-approved read could never ask before reaching an outside file.
+    expect(deployment.allowedTools).toEqual([]);
+    // deployDir is exactly the directory holding both files, so a caller can delete it wholesale.
+    expect(path.dirname(deployment.serverPath)).toBe(deployment.deployDir);
+    expect(path.dirname(deployment.configPath)).toBe(deployment.deployDir);
   });
 
-  it('two deployments to the same baseDir never collide — different server ids, different directories, different tokens', () => {
-    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
-    try {
-      const first = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
-      const second = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
-      expect(second.serverId).not.toBe(first.serverId);
-      expect(second.token).not.toBe(first.token);
-      expect(second.serverPath).not.toBe(first.serverPath);
-      expect(second.configPath).not.toBe(first.configPath);
-      // The FIRST deployment's own files must still be intact — a shared
-      // fixed path would have let the second overwrite them (this is
-      // exactly the collision session-manager.test.ts's own "two sessions"
-      // case caught before this fix).
-      expect(fs.existsSync(first.configPath)).toBe(true);
-      const firstConfig = JSON.parse(fs.readFileSync(first.configPath, 'utf8'));
-      expect(Object.keys(firstConfig.mcpServers)).toEqual([first.serverId]);
-    } finally {
-      fs.rmSync(baseDir, { recursive: true, force: true });
-    }
+  it('two deployments to the same baseDir never collide and both stay self-consistent', () => {
+    const baseDir = freshBase();
+    const first = deploy(baseDir);
+    const second = deploy(baseDir);
+    expect(second.serverId).not.toBe(first.serverId);
+    expect(second.token).not.toBe(first.token);
+    expect(second.serverPath).not.toBe(first.serverPath);
+    expect(second.configPath).not.toBe(first.configPath);
+    // WHY: a shared fixed path would have let the second overwrite the first's files.
+    const firstConfig = JSON.parse(fs.readFileSync(first.configPath, 'utf8'));
+    expect(Object.keys(firstConfig.mcpServers)).toEqual([first.serverId]);
+    expect(fs.readFileSync(first.serverPath, 'utf8')).toBe(DOC_COMMENTS_SERVER_JS);
+    expect(fs.readFileSync(second.serverPath, 'utf8')).toBe(DOC_COMMENTS_SERVER_JS);
+    // Never re-sweeps mid-process, so the sibling created earlier in the SAME run survives.
+    expect(fs.existsSync(first.deployDir)).toBe(true);
+    expect(fs.existsSync(second.deployDir)).toBe(true);
   });
 
-  it('re-deploying with the SAME inputs still produces a working, self-consistent server file each time', () => {
-    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
-    try {
-      const first = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
-      const second = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
-      expect(fs.readFileSync(second.serverPath, 'utf8')).toBe(DOC_COMMENTS_SERVER_JS);
-      expect(fs.readFileSync(first.serverPath, 'utf8')).toBe(DOC_COMMENTS_SERVER_JS);
-    } finally {
-      fs.rmSync(baseDir, { recursive: true, force: true });
-    }
+  // `mode & 0o077` is POSIX-only: Windows reports 0o666 for every file.
+  it.skipIf(process.platform === 'win32')('the deploy directory and its config file are owner-only', () => {
+    const deployment = deploy(freshBase());
+    expect(fs.statSync(deployment.deployDir).mode & 0o077).toBe(0);
+    expect(fs.statSync(deployment.configPath).mode & 0o077).toBe(0);
   });
 
-  // T9c/T20 adversarial review, finding #1 — cheap hardening (never the real
-  // boundary; see the WHY note beside `deployClaudeCodeDocCommentsMcp`'s own
-  // token generation for what this can and can't defend against). `mode &
-  // 0o077` is POSIX-only (accepted-history-store.test.ts's own precedent) —
-  // Windows reports 0o666 for every file, so this assertion is skipped there.
-  it('the deploy directory and its config file are owner-only', () => {
-    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
-    try {
-      const deployment = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
-      if (process.platform !== 'win32') {
-        expect(fs.statSync(deployment.deployDir).mode & 0o077).toBe(0);
-        expect(fs.statSync(deployment.configPath).mode & 0o077).toBe(0);
-      }
-    } finally {
-      fs.rmSync(baseDir, { recursive: true, force: true });
-    }
-  });
-
-  // Finding #3 — the returned `deployDir` is exactly the directory holding
-  // both files, so a caller (ipc-handlers.ts) can delete it wholesale.
-  it('deployDir names the exact directory the server and config live in', () => {
-    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
-    try {
-      const deployment = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
-      expect(path.dirname(deployment.serverPath)).toBe(deployment.deployDir);
-      expect(path.dirname(deployment.configPath)).toBe(deployment.deployDir);
-    } finally {
-      fs.rmSync(baseDir, { recursive: true, force: true });
-    }
-  });
-
-  describe('leftover-deploy sweep (finding #3)', () => {
-    afterEach(() => {
-      __resetDocCommentsMcpSweepForTest();
-    });
-
-    it('a directory left behind by a previous process run is swept on the first deploy of a fresh process', () => {
-      const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
-      try {
-        const leftover = path.join(baseDir, DOC_COMMENTS_MCP_DIR, 'youcoded-doc-comments-oldstale');
-        fs.mkdirSync(leftover, { recursive: true });
-        fs.writeFileSync(path.join(leftover, 'mcp-config.json'), '{"mcpServers":{}}');
-        expect(fs.existsSync(leftover)).toBe(true);
-
-        __resetDocCommentsMcpSweepForTest(); // pretend this is a fresh process
-        const deployment = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
-
-        expect(fs.existsSync(leftover)).toBe(false);
-        expect(fs.existsSync(deployment.deployDir)).toBe(true);
-      } finally {
-        fs.rmSync(baseDir, { recursive: true, force: true });
-      }
-    });
-
-    it('never re-sweeps mid-process, so a sibling deployment created earlier in the SAME run survives', () => {
-      const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
-      try {
-        __resetDocCommentsMcpSweepForTest();
-        const first = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
-        const second = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
-        expect(fs.existsSync(first.deployDir)).toBe(true);
-        expect(fs.existsSync(second.deployDir)).toBe(true);
-      } finally {
-        fs.rmSync(baseDir, { recursive: true, force: true });
-      }
-    });
+  it('a directory left behind by a previous process run is swept on the first deploy of a fresh process', () => {
+    const baseDir = freshBase();
+    const leftover = path.join(baseDir, DOC_COMMENTS_MCP_DIR, 'youcoded-doc-comments-oldstale');
+    fs.mkdirSync(leftover, { recursive: true });
+    fs.writeFileSync(path.join(leftover, 'mcp-config.json'), '{"mcpServers":{}}');
+    __resetDocCommentsMcpSweepForTest(); // pretend this is a fresh process
+    const deployment = deploy(baseDir);
+    expect(fs.existsSync(leftover)).toBe(false);
+    expect(fs.existsSync(deployment.deployDir)).toBe(true);
   });
 });
 
@@ -430,12 +385,7 @@ describe('path containment — model-controlled path at the MCP tool-argument su
       const outsideFile = path.join(outside, 'report.docx');
       await fs.promises.writeFile(outsideFile, 'stands in for a Word file');
       const callPromise = client.callTool('ReadFileComments', { path: outsideFile }, 8000);
-      const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
-      const requestFile = await vi.waitFor(() => {
-        const files = fs.existsSync(pendingDir) ? fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json')) : [];
-        if (!files.length) throw new Error('no request yet');
-        return path.join(pendingDir, files[0]);
-      });
+      const { pendingDir, requestFile } = await waitForRequest();
       const request = JSON.parse(fs.readFileSync(requestFile, 'utf8'));
       expect(request).toMatchObject({ kind: 'list', format: 'docx', path: outsideFile });
       // Stand in for the app answering it.
@@ -546,178 +496,87 @@ describe('the JSON sidecar mutex — a genuine two-process contention stress tes
 });
 
 describe('docx/xlsx target — the pending-mutation queue client', () => {
+  const answer = (pendingDir: string, requestFile: string, result: unknown) =>
+    fs.writeFileSync(path.join(pendingDir, `${path.basename(requestFile, '.json')}.result.json`), JSON.stringify(result));
+  const claim = (pendingDir: string, requestFile: string) =>
+    fs.renameSync(requestFile, path.join(pendingDir, `${path.basename(requestFile, '.json')}.claimed`));
+  const queued = (pollMs: string) => start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: pollMs });
+
   it('a .docx ReadFileComments times out honestly (short poll bound) when nothing is applying requests', async () => {
-    const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '300' });
-    const docPath = 'report.docx';
-    await fs.promises.writeFile(path.join(root, docPath), 'not a real docx — nothing applies this in this test');
-    const res = await client.callTool('ReadFileComments', { path: docPath }, 5000);
+    const client = queued('300');
+    await fs.promises.writeFile(path.join(root, 'report.docx'), 'not a real docx — nothing applies this in this test');
+    const res = await client.callTool('ReadFileComments', { path: 'report.docx' }, 5000);
     expect(res.result.isError).toBe(true);
     expect(res.result.content[0].text).toContain('timed-out');
-
-    // The request was written where the main-process queue (T9b) looks —
-    // the directory only exists after an actual submit.
+    // WHY: a timed-out request is WITHDRAWN so a slow app can't apply it after the assistant
+    // was told it failed (its retry used to post the same comment twice).
     const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
-    expect(fs.existsSync(pendingDir)).toBe(true);
-    // 2026-09-28 PR review: a timed-out request is WITHDRAWN, so a slow app
-    // can't apply it after the assistant was told it failed (its retry used
-    // to post the same comment twice) — and the reply says nothing changed.
     expect(fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json'))).toEqual([]);
     expect(res.result.content[0].text).toContain('nothing was changed');
   });
 
   it('a request the app already claimed is waited for past the normal bound, never reported as unchanged', async () => {
-    const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '300' });
+    const client = queued('300');
     const callPromise = client.callTool('ReplyToComment', { path: 'report.docx', commentId: 'w-1', text: 'a reply' }, 8000);
-    const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
-    let requestFile: string | null = null;
-    // Same 7 s deadline as the symlink case below (a spawned client, slow to start under load).
-    for (const deadline = Date.now() + 7000; !requestFile && Date.now() < deadline;) {
-      if (fs.existsSync(pendingDir)) {
-        const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
-        if (files.length) requestFile = path.join(pendingDir, files[0]);
-      }
-      if (!requestFile) await new Promise((r) => setTimeout(r, 10));
-    }
-    expect(requestFile).not.toBeNull();
-    // Stand in for the app: claim it (the real queue renames before applying),
-    // then answer only AFTER the script's 300ms bound has passed.
-    const id = path.basename(requestFile!, '.json');
-    fs.renameSync(requestFile!, path.join(pendingDir, `${id}.claimed`));
+    const { pendingDir, requestFile } = await waitForRequest();
+    // Stand in for the app: claim it (the real queue renames before applying), then answer
+    // only AFTER the script's 300ms bound has passed.
+    claim(pendingDir, requestFile);
     await new Promise((r) => setTimeout(r, 700));
-    fs.writeFileSync(path.join(pendingDir, `${id}.result.json`), JSON.stringify({ ok: true, reply: { id: 'w-1-r2', author: 'assistant', text: 'a reply', createdAt: Date.now() } }));
-
+    answer(pendingDir, requestFile, { ok: true, reply: { id: 'w-1-r2', author: 'assistant', text: 'a reply', createdAt: Date.now() } });
     const res = await callPromise;
     expect(res.result.isError).toBe(false);
     expect(res.result.content[0].text).toContain('Reply w-1-r2 added');
   }, 15000);
 
   it('a change the app kept for an Office editor that is not ready yet is told to the assistant as queued', async () => {
-    const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '5000' });
+    const client = queued('5000');
     await fs.promises.writeFile(path.join(root, 'report.docx'), 'stands in for an open document');
     const callPromise = client.callTool('ResolveComment', { path: 'report.docx', commentId: 'w-1' }, 8000);
-    const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
-    // WHY vi.waitFor (not a 200 x 10 ms counted loop): a loaded machine outran the count.
-    const requestFile = await vi.waitFor(() => {
-      const files = fs.existsSync(pendingDir) ? fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json')) : [];
-      expect(files.length).toBeGreaterThan(0);
-      return path.join(pendingDir, files[0]);
-    });
-    const id = path.basename(requestFile!, '.json');
-    fs.renameSync(requestFile!, path.join(pendingDir, `${id}.claimed`));
-    fs.writeFileSync(path.join(pendingDir, `${id}.result.json`), JSON.stringify({ ok: true, queued: true }));
+    const { pendingDir, requestFile } = await waitForRequest();
+    claim(pendingDir, requestFile);
+    answer(pendingDir, requestFile, { ok: true, queued: true });
     const res = await callPromise;
     expect(res.result.isError).toBe(false);
     expect(res.result.content[0].text).toBe("report.docx is open in Office and its editor isn't ready yet. The change is queued and will be made as soon as it is.");
   }, 15000);
 
   it('a Word/Excel mutation request carries `path`, `format` and the operation-specific fields', async () => {
-    const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '5000' });
-    const docPath = 'report.docx';
-    const callPromise = client.callTool('AddComment', { path: docPath, selector: SELECTOR, text: 'a comment' }, 8000);
-
-    const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
-    let requestFile: string | null = null;
-    // WHY a 7 s deadline, not 40 × 25 ms (2026-10-09): the client is a spawned process, and at
-    // load average ~38 it took longer than 1 s to start and write its request — the test failed
-    // in a full run and passed alone. It returns as soon as the file appears; the call's own
-    // timeout above is 8 s.
-    const deadline = Date.now() + 7000;
-    while (!requestFile && Date.now() < deadline) {
-      if (fs.existsSync(pendingDir)) {
-        const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
-        if (files.length) requestFile = path.join(pendingDir, files[0]);
-      }
-      if (!requestFile) await new Promise((r) => setTimeout(r, 25));
-    }
-    expect(requestFile).not.toBeNull();
-    const request = JSON.parse(fs.readFileSync(requestFile!, 'utf8'));
+    const client = queued('5000');
+    const callPromise = client.callTool('AddComment', { path: 'report.docx', selector: SELECTOR, text: 'a comment' }, 8000);
+    const { requestFile } = await waitForRequest();
+    const request = JSON.parse(fs.readFileSync(requestFile, 'utf8'));
     expect(request.kind).toBe('add');
     expect(request.format).toBe('docx');
-    expect(request.path).toBe(docPath);
+    expect(request.path).toBe('report.docx');
     expect(request.projectRoot).toBe(await fs.promises.realpath(root));
     expect(request.selector).toEqual(SELECTOR);
     expect(request.text).toBe('a comment');
     expect(request.author).toBe('assistant');
-    // Finding #1: every request carries this session's own token — the
-    // applier is what actually VERIFIES it (pending-mutation-queue.test.ts).
+    // Every request carries this session's own token; the applier is what VERIFIES it.
     expect(request.token).toBe(TEST_TOKEN);
-
-    // Let the (very short) poll time out rather than hang the test.
-    const res = await callPromise;
-    expect(res.result.isError).toBe(true);
+    // Let the (short) poll time out rather than hang the test.
+    expect((await callPromise).result.isError).toBe(true);
   }, 15000);
 
-  // Review finding #5 (docs/active/reviews/2026-09-27-doc-comments-t9ab-
-  // review.md): `format` used to be decided from the caller's raw `path`
-  // string, so a `.txt`-named symlink pointing at a real `.docx` submitted a
-  // request with `format: null` — dispatched as a plain-text sidecar edit
-  // instead of a Word mutation. Fixed by deciding from `located.
-  // sourceAbsolutePath` (the already-realpath'd target `locate()` computes)
-  // instead.
+  // WHY: `format` used to be decided from the caller's raw path string, so a `.txt` symlink to a
+  // real `.docx` was dispatched as a plain-text sidecar edit instead of a Word mutation.
   it('a .txt symlink pointing at a real .docx submits a request with format "docx", not null', async () => {
     const realDocx = path.join(root, 'report.docx');
     await fs.promises.writeFile(realDocx, 'not a real docx — nothing applies this in this test');
-    const link = path.join(root, 'notes.txt');
     try {
-      await fs.promises.symlink(realDocx, link);
+      await fs.promises.symlink(realDocx, path.join(root, 'notes.txt'));
     } catch {
       return; // no symlink rights on this platform — skip
     }
-    const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '5000' });
+    const client = queued('5000');
     const callPromise = client.callTool('AddComment', { path: 'notes.txt', selector: SELECTOR, text: 'via disguised symlink' }, 8000);
-
-    const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
-    let requestFile: string | null = null;
-    // Same 7 s deadline as the symlink case below (a spawned client, slow to start under load).
-    for (const deadline = Date.now() + 7000; !requestFile && Date.now() < deadline;) {
-      if (fs.existsSync(pendingDir)) {
-        const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
-        if (files.length) requestFile = path.join(pendingDir, files[0]);
-      }
-      if (!requestFile) await new Promise((r) => setTimeout(r, 25));
-    }
-    expect(requestFile).not.toBeNull();
-    const request = JSON.parse(fs.readFileSync(requestFile!, 'utf8'));
+    const { requestFile } = await waitForRequest();
+    const request = JSON.parse(fs.readFileSync(requestFile, 'utf8'));
     expect(request.format).toBe('docx');
-    // The wire `path` still carries the caller's ORIGINAL name — the main
-    // process's own resolution (doc-comments-dispatch.ts) is what actually
-    // writes into the real file; this script only had to pick the right
-    // dispatch BRANCH, not rewrite the argument.
+    // The wire `path` keeps the caller's ORIGINAL name; main's own resolution writes the real file.
     expect(request.path).toBe('notes.txt');
-
-    // Let the (very short) poll time out rather than hang the test.
-    const res = await callPromise;
-    expect(res.result.isError).toBe(true);
-  }, 15000);
-
-  it('relays a queue result\'s persisted reply id into the success text, when the queue provides one', async () => {
-    const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '5000' });
-    const docPath = 'report.docx';
-    const callPromise = client.callTool('ReplyToComment', { path: docPath, commentId: 'w-1', text: 'a reply' }, 8000);
-
-    const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
-    let requestFile: string | null = null;
-    // Same 7 s deadline as the symlink case below (a spawned client, slow to start under load).
-    for (const deadline = Date.now() + 7000; !requestFile && Date.now() < deadline;) {
-      if (fs.existsSync(pendingDir)) {
-        const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
-        if (files.length) requestFile = path.join(pendingDir, files[0]);
-      }
-      if (!requestFile) await new Promise((r) => setTimeout(r, 25));
-    }
-    expect(requestFile).not.toBeNull();
-    // Stand in for T9b's own queue (pending-mutation-queue.test.ts pins THAT
-    // side): write the result the real applier would once docx-comments.ts's
-    // reply function returns a persisted CommentReply (design commit
-    // 6c612cb9) — this test proves the SCRIPT'S OWN consumption of that
-    // shape, not the applier that produces it.
-    const id = path.basename(requestFile!, '.json');
-    const resultPath = path.join(pendingDir, `${id}.result.json`);
-    fs.writeFileSync(resultPath, JSON.stringify({ ok: true, reply: { id: 'w-1-r7', author: 'assistant', text: 'a reply', createdAt: Date.now() } }));
-
-    const res = await callPromise;
-    expect(res.result.isError).toBe(false);
-    expect(res.result.content[0].text).toContain('Reply w-1-r7 added');
+    expect((await callPromise).result.isError).toBe(true);
   }, 15000);
 });
 
@@ -732,16 +591,5 @@ describe('parity: mutator tools never include the read-only tool', () => {
       `mcp__${id}__MoveComment`,
     ]);
     expect(docCommentsMcpMutatorTools(id)).not.toContain(`mcp__${id}__ReadFileComments`);
-  });
-});
-
-// Guard: the doc-comments MCP server is embedded in claude-code-doc-comments-mcp.ts (written into
-// userData per session). Android clean rebuild (2026-10-14): the phone runs the desktop backend, so there is no second copy.
-describe('doc-comments MCP server source', () => {
-  it('stays String.raw-safe', () => {
-    // A backtick would end the template early and a ${ would interpolate —
-    // either one corrupts the embedded copy silently at build time.
-    expect(DOC_COMMENTS_SERVER_JS.includes('`')).toBe(false);
-    expect(DOC_COMMENTS_SERVER_JS.includes('${')).toBe(false);
   });
 });

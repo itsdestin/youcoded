@@ -11,6 +11,19 @@ import { markAppGenerated } from '../src/main/harness/compaction';
 import { stream, textChunks, finishChunk } from './helpers/scripted-model';
 import { COMPACTION_PROMPT } from '../src/main/harness/prompts/compaction';
 
+/** Wraps a scripted model and records every doStream call's options. */
+function recording(inner: ReturnType<typeof scriptModel>) {
+  const calls: any[] = [];
+  const model = new MockLanguageModelV4({ doStream: async (o: any) => { calls.push(o); return inner.doStream(o); } });
+  return { model, calls };
+}
+
+/** Runs `fn` with an active turn abort controller, as maybeCompact/generateSummary expect, then clears it. */
+async function withAbort<T>(session: unknown, fn: () => Promise<T>): Promise<T> {
+  (session as any).abort = new AbortController();
+  try { return await fn(); } finally { (session as any).abort = null; }
+}
+
 it('compaction prompt carries handoff structure, provenance rules, and active Goal across notices', () => {
   expect(COMPACTION_PROMPT).toContain('## Goal');
   expect(COMPACTION_PROMPT).toContain('## User decisions');
@@ -27,16 +40,12 @@ describe('driver compaction', () => {
     session.seedHistory([{ role: 'user', content: 'old ' + 'x'.repeat(9000) },
       markAppGenerated({ role: 'user', content: text } as any), { role: 'assistant', content: 'ack' },
       { role: 'user', content: 'next' }, { role: 'assistant', content: 'ack' }, { role: 'user', content: 'latest' }] as any);
-    (session as any).abort = new AbortController();
-    try { expect(await (session as any).maybeCompact(model, {}, true)).toBe(true); }
-    finally { (session as any).abort = null; }
+    expect(await withAbort(session, () => (session as any).maybeCompact(model, {}, true))).toBe(true);
     expect((session as any).retainedTriggerMessages.has(text)).toBe(false);
     expect((session as any).history[0].content).toContain('RULE-OLD');
   });
   it('checks fresh input even after a low-usage completed turn, without front trimming', async () => {
-    const calls: any[] = [];
-    const inner = scriptModel([{ text: 'handoff', usage: { inputTokens: 3800 } }, { text: 'done' }]);
-    const model = new MockLanguageModelV4({ doStream: async (o: any) => { calls.push(o); return inner.doStream(o); } });
+    const { model, calls } = recording(scriptModel([{ text: 'handoff', usage: { inputTokens: 3800 } }, { text: 'done' }]));
     const events: any[] = [];
     const session = makeSession({ contextLength: 8192, model, tools: [], onEvent: e => events.push(e) });
     await session.send('first task ' + 'a'.repeat(15000));
@@ -47,24 +56,19 @@ describe('driver compaction', () => {
   });
 
   it('does not run a second automatic summary for the exact failed history', async () => {
-    const calls: any[] = [];
-    const inner = scriptModel([{ throwError: 'summary unavailable' }]);
-    const model = new MockLanguageModelV4({ doStream: async (o: any) => { calls.push(o); return inner.doStream(o); } });
+    const { model, calls } = recording(scriptModel([{ throwError: 'summary unavailable' }]));
     const session = makeSession({ contextLength: 8192, model, tools: [] });
     session.seedHistory([{ role: 'user', content: 'goal ' + 'a'.repeat(12000) },
       { role: 'assistant', content: 'ack' }, { role: 'user', content: 'continue ' + 'b'.repeat(11000) }] as any);
-    (session as any).abort = new AbortController();
-    try {
+    await withAbort(session, async () => {
       expect(await (session as any).maybeCompact(model, {})).toBe(false);
       expect(await (session as any).maybeCompact(model, {})).toBe(false);
-      expect(calls).toHaveLength(1);
-    } finally { (session as any).abort = null; }
+    });
+    expect(calls).toHaveLength(1);
   });
 
   it('a failed summary fences the same history; new input releases the fence without inventing a summary', async () => {
-    const calls: any[] = [];
-    const inner = scriptModel([{ throwError: 'summary failed' }, { text: 'done' }, { text: 'handoff' }, { text: 'done' }]);
-    const model = new MockLanguageModelV4({ doStream: async (o: any) => { calls.push(o); return inner.doStream(o); } });
+    const { model, calls } = recording(scriptModel([{ throwError: 'summary failed' }, { text: 'done' }, { text: 'handoff' }, { text: 'done' }]));
     const events: any[] = [];
     const session = makeSession({ contextLength: 8192, model, tools: [], onEvent: e => events.push(e) });
     session.seedHistory([{ role: 'user', content: 'original ' + 'a'.repeat(12000) }, { role: 'assistant', content: 'ack' }] as any);
@@ -78,11 +82,7 @@ describe('driver compaction', () => {
   });
 
   it('fits only the outgoing request on an old reopened history whose summary cannot fit', async () => {
-    const prompts: any[] = [];
-    const inner = scriptModel([{ text: 'done' }]);
-    const model = new MockLanguageModelV4({ doStream: async (options: any) => {
-      prompts.push(options.prompt); return inner.doStream(options);
-    } });
+    const { model, calls: prompts } = recording(scriptModel([{ text: 'done' }]));
     const events: any[] = [];
     const session = makeSession({ contextLength: 8192, tools: [],
       harness: { ...HARNESS, limits: { maxTokens: 16_000 } },
@@ -92,7 +92,7 @@ describe('driver compaction', () => {
     await session.send('continue');
     expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(0);
     expect(prompts).toHaveLength(1); // no unsafe summary call
-    expect(JSON.stringify(prompts[0])).not.toContain('x'.repeat(24_000));
+    expect(JSON.stringify(prompts[0].prompt)).not.toContain('x'.repeat(24_000));
     expect(JSON.stringify(session.acceptedHistory().messages)).toContain('x'.repeat(24_000));
     expect(events.some(e => e.type === 'turn-complete')).toBe(true);
   });
@@ -110,18 +110,13 @@ describe('driver compaction', () => {
     expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(0);
   });
   it('reserves margin and final instruction message framing when fitting summary input', async () => {
-    const calls: any[] = [];
-    const inner = scriptModel([{ text: 'summary' }]);
-    const model = new MockLanguageModelV4({ doStream: async (options: any) => {
-      calls.push(options); return inner.doStream(options);
-    } });
+    const { model, calls } = recording(scriptModel([{ text: 'summary' }]));
     const session = makeSession({ contextLength: 8192, model });
     const span = [
       { role: 'user', content: 'goal' },
       { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'big', toolName: 'Read', output: { type: 'text', value: 'x'.repeat(28000) } }] },
     ] as any;
-    (session as any).abort = new AbortController();
-    try {
+    await withAbort(session, async () => {
       await (session as any).generateSummary(model, span, {});
       expect(calls).toHaveLength(1);
       const plan = planContextBudget({ contextLength: 8192,
@@ -131,7 +126,7 @@ describe('driver compaction', () => {
       const sentSpan = body.slice(0, -1);
       expect(plan.fixedCost + messagesTokens(sentSpan) + messageTokens({ role: 'user', content: summarizePrompt() })
         + plan.summaryAllowance + plan.margin).toBeLessThanOrEqual(plan.contextLength);
-    } finally { (session as any).abort = null; }
+    });
   });
 
   it('cleans a throwing summary stream watchdog before a subsequent operation', async () => {
@@ -176,12 +171,7 @@ describe('driver compaction', () => {
   });
 
   it('shortens an oversized retired tool output only in the summary request', async () => {
-    const calls: any[] = [];
-    const inner = scriptModel([{ text: '## Goal\n- Continue the task.' }]);
-    const model = new MockLanguageModelV4({ doStream: async (options: any) => {
-      calls.push(options);
-      return inner.doStream(options);
-    } });
+    const { model, calls } = recording(scriptModel([{ text: '## Goal\n- Continue the task.' }]));
     const session = makeSession({ contextLength: 8192, model });
     const history = [
       { role: 'user', content: 'original goal' },

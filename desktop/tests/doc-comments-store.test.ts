@@ -1,15 +1,6 @@
-// Pins T1 of the doc-comments build (docs/active/specs/2026-09-26-doc-comments-
-// build-design.md §1.5): the one-sidecar-per-file store, its containment check
-// (review 1 F3, corrected review 2 F1 — realpath the FULL joined path, not
-// just the root, so a symlink inside the project can't dodge it), and its
-// lock-path canonicalization (review 2 F3 — the project root only, never a
-// possibly-nonexistent leaf, so a first-ever write's lock is still stable
-// across two aliases of the same project). Also pins the commit a219ab9dd
-// implementation-review fixes: F1's `rel` now comes from the resolved,
-// containment-verified target (never the unresolved path, which could carry
-// stray `..` through an outside-rooted symlink); F3's corrupt/unsupported-
-// version sidecar refusal; F4's absolute-path requirement on the fallback
-// path; and F5's walk-up depth cap.
+// The one-sidecar-per-file doc-comments store: round trips, path containment (realpath of the FULL joined
+// path, so an in-project symlink can't dodge it), lock-path canonicalization (project root only, never a
+// possibly-nonexistent leaf), corrupt-sidecar refusal, and concurrent writers.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
@@ -54,6 +45,20 @@ async function readSidecar(sidecarPath: string): Promise<CommentsSidecarFile> {
   return JSON.parse(await fs.promises.readFile(sidecarPath, 'utf8'));
 }
 
+const sidecarOf = (rel: string) => path.join(root, '.youcoded', 'comments', 'docs', `${rel}.json`);
+
+/** Add a text comment on docs/plan.md; setup fails loudly rather than asserting on a bad seed. */
+async function seed(text: string) {
+  const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text, author: 'user' });
+  if (!added.ok) throw new Error('setup');
+  return added;
+}
+async function seedReply(id: string, text: string, author: 'user' | 'assistant') {
+  const r = await replyToComment({ path: 'docs/plan.md', projectRoot: root, id, text, author });
+  if (!r.ok) throw new Error('setup');
+  return r;
+}
+
 describe('listComments — missing-file default', () => {
   it('a file with no sidecar returns an empty list, never an error', async () => {
     const result = await listComments({ path: 'docs/plan.md', projectRoot: root });
@@ -73,7 +78,7 @@ describe('read-modify-write', () => {
     expect(added.ok).toBe(true);
     if (!added.ok) return;
 
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    const sidecarPath = sidecarOf('plan.md');
     const onDisk = await readSidecar(sidecarPath);
     expect(onDisk.version).toBe(1);
     expect(onDisk.comments).toHaveLength(1);
@@ -126,7 +131,7 @@ describe('read-modify-write', () => {
     // cleanly rather than creating an empty sidecar as a side effect.
     const result = await replyToComment({ path: 'docs/none.md', projectRoot: root, id: 'c-missing', text: 'x', author: 'user' });
     expect(result).toEqual({ ok: false, error: 'comment-not-found' });
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'none.md.json');
+    const sidecarPath = sidecarOf('none.md');
     await expect(fs.promises.access(sidecarPath)).rejects.toThrow();
   });
 });
@@ -137,65 +142,52 @@ describe('read-modify-write', () => {
 // thread (replies included).
 describe('edit / delete', () => {
   it('editComment overwrites text in place, with no edited marker anywhere in the record', async () => {
-    const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'original', author: 'user' });
-    if (!added.ok) throw new Error('setup');
+    const added = await seed('original');
     const edited = await editComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'rewritten' });
     expect(edited).toEqual({ ok: true });
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    const sidecarPath = sidecarOf('plan.md');
     const onDisk = await readSidecar(sidecarPath);
     expect(onDisk.comments[0].text).toBe('rewritten');
     expect(Object.keys(onDisk.comments[0])).not.toContain('edited');
     expect(Object.keys(onDisk.comments[0])).not.toContain('editedAt');
   });
 
-  it('editComment against an unknown id refuses cleanly', async () => {
-    const result = await editComment({ path: 'docs/plan.md', projectRoot: root, id: 'c-missing', text: 'x' });
-    expect(result).toEqual({ ok: false, error: 'comment-not-found' });
-  });
 
   it('editReply overwrites one reply and returns the persisted CommentReply, leaving the parent and other replies untouched', async () => {
-    const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'original', author: 'user' });
-    if (!added.ok) throw new Error('setup');
+    const added = await seed('original');
     await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'reply one', author: 'assistant' });
-    const second = await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'reply two', author: 'user' });
-    if (!second.ok) throw new Error('setup');
+    const second = await seedReply(added.id, 'reply two', 'user');
     const edited = await editReply({ path: 'docs/plan.md', projectRoot: root, id: added.id, replyId: second.reply.id, text: 'reply two, edited' });
     expect(edited).toEqual({ ok: true, reply: { id: second.reply.id, author: 'user', text: 'reply two, edited', createdAt: expect.any(Number) } });
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    const sidecarPath = sidecarOf('plan.md');
     const onDisk = await readSidecar(sidecarPath);
     expect(onDisk.comments[0].text).toBe('original'); // parent untouched
     expect(onDisk.comments[0].replies.map((r) => r.text)).toEqual(['reply one', 'reply two, edited']);
   });
 
   it('deleteComment removes a thread\'s FIRST comment and every reply with it (decisions.json)', async () => {
-    const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'root', author: 'user' });
-    if (!added.ok) throw new Error('setup');
+    const added = await seed('root');
     await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'a reply', author: 'assistant' });
     const other = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: { kind: 'text', selector: { ...TEXT_QUOTE, exact: 'other' } }, text: 'unrelated thread', author: 'user' });
     if (!other.ok) throw new Error('setup');
 
     const deleted = await deleteComment({ path: 'docs/plan.md', projectRoot: root, id: added.id });
     expect(deleted).toEqual({ ok: true });
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    const sidecarPath = sidecarOf('plan.md');
     const onDisk = await readSidecar(sidecarPath);
     expect(onDisk.comments.map((c) => c.id)).toEqual([other.id]); // the OTHER thread survives, replies-and-all gone with the deleted one
   });
 
-  it('deleteComment against an unknown id refuses cleanly', async () => {
-    const result = await deleteComment({ path: 'docs/plan.md', projectRoot: root, id: 'c-missing' });
-    expect(result).toEqual({ ok: false, error: 'comment-not-found' });
-  });
 
   it('deleteReply removes ONE reply, leaving the parent comment and its other replies intact', async () => {
-    const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'root', author: 'user' });
-    if (!added.ok) throw new Error('setup');
+    const added = await seed('root');
     const first = await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'reply one', author: 'assistant' });
     const second = await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'reply two', author: 'user' });
     if (!first.ok || !second.ok) throw new Error('setup');
 
     const deleted = await deleteReply({ path: 'docs/plan.md', projectRoot: root, id: added.id, replyId: first.reply.id });
     expect(deleted).toEqual({ ok: true });
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    const sidecarPath = sidecarOf('plan.md');
     const onDisk = await readSidecar(sidecarPath);
     expect(onDisk.comments[0].id).toBe(added.id); // the thread itself survives
     expect(onDisk.comments[0].replies).toEqual([expect.objectContaining({ id: second.reply.id, text: 'reply two' })]);
@@ -205,8 +197,7 @@ describe('edit / delete', () => {
   // middle reply was deleted (r1, r3 left) the next reply was ALSO r3 —
   // editing it changed the old one, and deleting it removed both.
   it('a reply added after a middle reply was deleted gets an unused id, and edits/deletes touch only it', async () => {
-    const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'root', author: 'user' });
-    if (!added.ok) throw new Error('setup');
+    const added = await seed('root');
     const replies = [];
     for (const text of ['one', 'two', 'three']) {
       const r = await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text, author: 'user' });
@@ -220,13 +211,19 @@ describe('edit / delete', () => {
 
     await editReply({ path: 'docs/plan.md', projectRoot: root, id: added.id, replyId: fresh.reply.id, text: 'four, edited' });
     await deleteReply({ path: 'docs/plan.md', projectRoot: root, id: added.id, replyId: fresh.reply.id });
-    const onDisk = await readSidecar(path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json'));
+    const onDisk = await readSidecar(sidecarOf('plan.md'));
     expect(onDisk.comments[0].replies.map((r: CommentReply) => r.text)).toEqual(['one', 'three']);
   });
 
+  it.each([
+    ['editComment', () => editComment({ path: 'docs/plan.md', projectRoot: root, id: 'c-missing', text: 'x' })],
+    ['deleteComment', () => deleteComment({ path: 'docs/plan.md', projectRoot: root, id: 'c-missing' })],
+  ])('%s against an unknown id refuses cleanly', async (_name, call) => {
+    expect(await call()).toEqual({ ok: false, error: 'comment-not-found' });
+  });
+
   it('deleteReply against an unknown reply id refuses cleanly, leaving the comment untouched', async () => {
-    const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'root', author: 'user' });
-    if (!added.ok) throw new Error('setup');
+    const added = await seed('root');
     const result = await deleteReply({ path: 'docs/plan.md', projectRoot: root, id: added.id, replyId: `${added.id}-r9` });
     expect(result).toEqual({ ok: false, error: 'comment-not-found' });
   });
@@ -237,7 +234,7 @@ describe('every mutation carries its own path, so no warm list() cache is needed
     // Write the sidecar directly, bypassing this store entirely — simulates a
     // FRESH process (the MCP script, §9) acting on a comment id it only knows
     // from a prior session, with no in-memory cache from an earlier list().
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'cold.md.json');
+    const sidecarPath = sidecarOf('cold.md');
     await fs.promises.mkdir(path.dirname(sidecarPath), { recursive: true });
     const seeded: CommentsSidecarFile = {
       version: 1,
@@ -301,7 +298,7 @@ describe('fallback path for a file with no project root', () => {
 
 describe('corrupt or unsupported-version sidecar (F3)', () => {
   it('listComments refuses a sidecar with invalid JSON instead of throwing', async () => {
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'broken.md.json');
+    const sidecarPath = sidecarOf('broken.md');
     await fs.promises.mkdir(path.dirname(sidecarPath), { recursive: true });
     await fs.promises.writeFile(sidecarPath, '{ not valid json');
 
@@ -312,7 +309,7 @@ describe('corrupt or unsupported-version sidecar (F3)', () => {
   });
 
   it('listComments refuses a sidecar with an unsupported/missing version instead of treating it as valid', async () => {
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'future.md.json');
+    const sidecarPath = sidecarOf('future.md');
     await fs.promises.mkdir(path.dirname(sidecarPath), { recursive: true });
     await fs.promises.writeFile(sidecarPath, JSON.stringify({ version: 2, comments: [] }));
 
@@ -323,7 +320,7 @@ describe('corrupt or unsupported-version sidecar (F3)', () => {
   });
 
   it('a mutation against a corrupt sidecar refuses without writing anything', async () => {
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'broken2.md.json');
+    const sidecarPath = sidecarOf('broken2.md');
     await fs.promises.mkdir(path.dirname(sidecarPath), { recursive: true });
     await fs.promises.writeFile(sidecarPath, 'not json at all');
     const before = await fs.promises.readFile(sidecarPath, 'utf8');
@@ -452,7 +449,7 @@ describe('concurrent-lock behavior — a true concurrency race, not just a seque
     expect(a.ok).toBe(true);
     expect(b.ok).toBe(true);
 
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'race.md.json');
+    const sidecarPath = sidecarOf('race.md');
     const onDisk = await readSidecar(sidecarPath);
     expect(onDisk.comments).toHaveLength(2);
     const texts = onDisk.comments.map((c) => c.text).sort();
@@ -470,7 +467,7 @@ describe('concurrent-lock behavior — a true concurrency race, not just a seque
       )
     );
 
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'burst.md.json');
+    const sidecarPath = sidecarOf('burst.md');
     const onDisk = await readSidecar(sidecarPath);
     expect(onDisk.comments[0].replies).toHaveLength(5);
     const replyIds = onDisk.comments[0].replies.map((r) => r.id).sort();
@@ -503,7 +500,7 @@ describe('lock-path canonicalization uses the project root only, never the possi
 
       // Both writes must have landed in the ONE real sidecar — proving they
       // shared a lock and neither clobbered the other's read-modify-write.
-      const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'alias-race.md.json');
+      const sidecarPath = sidecarOf('alias-race.md');
       const onDisk = await readSidecar(sidecarPath);
       expect(onDisk.comments).toHaveLength(2);
       expect(onDisk.comments.map((c) => c.text).sort()).toEqual(['via-alias', 'via-root']);
@@ -524,7 +521,7 @@ describe('addComment — caller-supplied id (F4, T5 review)', () => {
       path: 'docs/id.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'x', author: 'user', id: CALLER_ID,
     });
     expect(added).toEqual({ ok: true, id: CALLER_ID });
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'id.md.json');
+    const sidecarPath = sidecarOf('id.md');
     const onDisk = await readSidecar(sidecarPath);
     expect(onDisk.comments[0].id).toBe(CALLER_ID);
   });
@@ -553,7 +550,7 @@ describe('addComment — caller-supplied id (F4, T5 review)', () => {
     });
     expect(second).toEqual({ ok: false, error: 'duplicate-id' });
     // The FIRST comment is untouched — a refused duplicate never overwrites.
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'id4.md.json');
+    const sidecarPath = sidecarOf('id4.md');
     const onDisk = await readSidecar(sidecarPath);
     expect(onDisk.comments).toHaveLength(1);
     expect(onDisk.comments[0].text).toBe('first');

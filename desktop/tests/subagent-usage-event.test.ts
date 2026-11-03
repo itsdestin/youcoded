@@ -222,68 +222,61 @@ describe('subagent-usage — the producer half', () => {
     return { seen, childId };
   }
 
-  // Fix 2026-09-16 (Destin: "lets also fix 1"). runSpecialist summed the run's
-  // spend in a CLOSURE LOCAL and only returned it on the success path, and
-  // runDelegation reported it only there — so a helper that was STOPPED, or that
-  // hit a provider error after several real turns, reported nothing at all. The
-  // parent's Cost chip went quietly short with nothing to trace it to, which is
-  // the exact loss the teardown-race branch already logs an ERROR about.
-  //
-  // Both tests drive the REAL failure paths through runDelegation's catch.
-  describe('a run that does not finish still reports what it spent', () => {
-    /** Run a specialist, injecting one event on the CHILD's own session as soon
-     *  as the child names itself — which is how the harness ends a run early. */
-    async function runInterruptedBy(data: Record<string, unknown>, type: 'user-interrupt' | 'session-error') {
-      boot(RUN);
-      await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-      const seen: any[] = [];
-      let injected = false;
-      host.on('transcript-event', (e: any) => {
-        seen.push(e);
-        if (injected || !e.data?.agentId) return;
-        const child = (host as any).live.get(e.data.agentId);
-        if (!child) return;
-        injected = true;
-        child.session.emit('transcript-event', {
-          type, sessionId: e.data.agentId, uuid: `child-${type}`, timestamp: 1, data,
-        });
-      });
-      let threw: unknown;
-      try {
-        await host.spawnSpecialist('root-1', {
-          specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
-          binding: { providerId: 'openrouter', modelId: 'child-model' },
-          token: { parentId: 'root-1', writer: false }, description: 'find it',
-        } as any);
-      } catch (err) { threw = err; }
-      await host.drain('root-1');
-      expect(injected).toBe(true);
-      return { seen, threw };
-    }
+  /** Spawn the standard specialist under root-1 on `child-model` and wait for the parent to go idle. */
+  async function spawnChild() {
+    const { childId } = await host.spawnSpecialist('root-1', {
+      specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
+      binding: { providerId: 'openrouter', modelId: 'child-model' },
+      token: { parentId: 'root-1', writer: false }, description: 'find it',
+    } as any);
+    await host.drain('root-1');
+    return childId;
+  }
 
+  /** Run a specialist, injecting one event on the CHILD's own session as soon as the child names itself —
+   *  how the harness ends a run early ('user-interrupt' / 'session-error') or a child compacts mid-run. */
+  async function runInjecting(type: string, data: Record<string, unknown>) {
+    boot(RUN);
+    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const seen: any[] = [];
+    let injected = false;
+    host.on('transcript-event', (e: any) => {
+      seen.push(e);
+      if (injected || !e.data?.agentId) return;
+      const child = (host as any).live.get(e.data.agentId);
+      if (!child) return;
+      injected = true;
+      child.session.emit('transcript-event', { type, sessionId: e.data.agentId, uuid: `child-${type}`, timestamp: 1, data });
+    });
+    let threw: unknown;
+    try { await spawnChild(); } catch (err) { threw = err; }
+    await host.drain('root-1');
+    expect(injected).toBe(true);
+    return { seen, threw };
+  }
+
+  // WHY: a helper that was STOPPED, or hit a provider error after several real turns, used to report nothing
+  // (the spend was summed in a closure local returned only on success), so the parent's Cost chip went quietly short.
+  describe('a run that does not finish still reports what it spent', () => {
     const SPENT = { inputTokens: 300_000, outputTokens: 8_000, cacheReadTokens: 0, cacheCreationTokens: 0 };
 
     it('a STOPPED specialist reports the tokens its completed steps already spent', async () => {
-      const { seen, threw } = await runInterruptedBy({ usage: SPENT }, 'user-interrupt');
-      // The run still fails — this fix changes the accounting, not the outcome.
+      const { seen, threw } = await runInjecting('user-interrupt', { usage: SPENT });
+      // The run still fails — only the accounting changed.
       expect(String((threw as Error)?.message)).toMatch(/stopped before it could report/);
-
       const reports = seen.filter((e) => e.type === 'subagent-usage');
       expect(reports).toHaveLength(1);
-      // The abandoned turn's 300k, on top of whatever the run had completed
-      // before it — never zero, which is what it used to be.
+      // The abandoned turn's 300k, on top of whatever the run had completed — never zero.
       expect(reports[0].data.usage.inputTokens).toBeGreaterThanOrEqual(300_000);
       expect(reports[0].data.usage.outputTokens).toBeGreaterThanOrEqual(8_000);
-      // …and priced at the CHILD's own model, exactly like a finished run.
+      // Priced at the CHILD's own model, exactly like a finished run.
       expect(reports[0].data.usage.costUsd).toBeGreaterThan(0);
       expect(reports[0].data.model).toBe('child-model');
       expect(reports[0].sessionId).toBe('root-1');
     });
 
     it('a FAILED specialist reports it too', async () => {
-      const { seen, threw } = await runInterruptedBy(
-        { text: 'the provider gave up', usage: SPENT }, 'session-error',
-      );
+      const { seen, threw } = await runInjecting('session-error', { text: 'the provider gave up', usage: SPENT });
       expect(String((threw as Error)?.message)).toMatch(/the provider gave up/);
       const reports = seen.filter((e) => e.type === 'subagent-usage');
       expect(reports).toHaveLength(1);
@@ -291,57 +284,25 @@ describe('subagent-usage — the producer half', () => {
     });
 
     it('a run that measured nothing reports nothing — never a fabricated zero', async () => {
-      // No usage on the ending event. The run's own completed steps are still
-      // counted (RUN's first step lands before the injection), but nothing is
-      // invented for the abandoned one.
-      const { seen } = await runInterruptedBy({}, 'user-interrupt');
+      // No usage on the ending event: completed steps still count, nothing is invented for the abandoned one.
+      const { seen } = await runInjecting('user-interrupt', {});
       const reports = seen.filter((e) => e.type === 'subagent-usage');
       expect(reports).toHaveLength(1);
       expect(reports[0].data.usage.inputTokens).toBeLessThan(300_000);
     });
   });
 
-  // Fix 2026-09-16. A specialist that compacts pays for its own summarize call,
-  // and that money was counted absolutely nowhere: runSpecialist's accumulator
-  // only read `turn-complete`, and a child's `compact-summary` is not in
-  // SUBAGENT_DISPLAY_TYPES either, so it never reached the parent's stream to be
-  // picked up downstream. Not an edge case — the wrap-up steer in runSpecialist
-  // exists precisely because a small local window makes a specialist compact
-  // repeatedly mid-run.
+  // WHY: a specialist that compacts pays for its own summarize call, which was counted nowhere (a child's
+  // `compact-summary` never reaches the parent's stream) — and small local windows make it compact repeatedly.
   it('folds the CHILD\'s own compaction spend into the run it reports', async () => {
-    boot(RUN);
-    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-    const seen: any[] = [];
-    let injected = false;
-    host.on('transcript-event', (e: any) => {
-      seen.push(e);
-      // The first stamped child event names the child; emit a compaction on its
-      // OWN session, which is exactly what maybeCompact does mid-run.
-      if (injected || !e.data?.agentId) return;
-      const child = (host as any).live.get(e.data.agentId);
-      if (!child) return;
-      injected = true;
-      child.session.emit('transcript-event', {
-        type: 'compact-summary', sessionId: e.data.agentId, uuid: 'child-compact-1', timestamp: 1,
-        data: {
-          summary: 'earlier steps condensed', autoCompaction: true,
-          usage: { inputTokens: 4000, outputTokens: 120, cacheReadTokens: 0, cacheCreationTokens: 0 },
-        },
-      });
+    const { seen } = await runInjecting('compact-summary', {
+      summary: 'earlier steps condensed', autoCompaction: true,
+      usage: { inputTokens: 4000, outputTokens: 120, cacheReadTokens: 0, cacheCreationTokens: 0 },
     });
-    await host.spawnSpecialist('root-1', {
-      specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
-      binding: { providerId: 'openrouter', modelId: 'child-model' },
-      token: { parentId: 'root-1', writer: false }, description: 'find it',
-    } as any);
-    await host.drain('root-1');
-
-    expect(injected).toBe(true);
     const ev = seen.filter((e) => e.type === 'subagent-usage')[0];
-    // The run's three steps (6000/600) PLUS the summarize call (4000/120).
+    // The run's three steps (6000/600) PLUS the summarize call (4000/120), priced so the Cost chip moves.
     expect(ev.data.usage.inputTokens).toBe(10_000);
     expect(ev.data.usage.outputTokens).toBe(720);
-    // …and it is priced, so the parent's Cost chip moves with it.
     expect(ev.data.usage.costUsd).toBeCloseTo((10_000 / 1e6) * 3 + (720 / 1e6) * 15, 10);
   });
 
@@ -357,11 +318,9 @@ describe('subagent-usage — the producer half', () => {
     // Summed across the run's three steps (1000+2000+3000 / 100+200+300).
     expect(ev.data.usage.inputTokens).toBe(6000);
     expect(ev.data.usage.outputTokens).toBe(600);
-    // (6000/1e6)*3 + (600/1e6)*15 = 0.018 + 0.009
-    expect(ev.data.usage.costUsd).toBeCloseTo(0.027, 10);
+    expect(ev.data.usage.costUsd).toBeCloseTo(0.027, 10);   // (6000/1e6)*3 + (600/1e6)*15
     expect(ev.data.usage.free).toBe(false);
-    // The child's own turn-complete is NEVER re-emitted under the parent's id —
-    // that is what would double-count this exact spend.
+    // The child's own turn-complete is NEVER re-emitted under the parent's id (that would double-count).
     expect(seen.filter((e) => e.type === 'turn-complete')).toEqual([]);
   });
 
@@ -379,19 +338,12 @@ describe('subagent-usage — the producer half', () => {
     expect(parentEvents[0].data.usage?.inputTokens).toBe(6000);
     expect(parentEvents[0].data.usage?.costUsd).toBeCloseTo(0.027, 10);
     expect(parentEvents[0].data.agentId).toBe(childId);
-    // And it comes back out of getHistory() — the exact list the replay handler
-    // streams to a resuming window.
+    // And it comes back out of getHistory() — the list the replay handler streams to a resuming window.
     expect(host.getHistory('root-1')!.filter((e) => e.type === 'subagent-usage')).toHaveLength(1);
   });
 
-  // Task 23 item 1 — the specialist-path twin of Task 22 item 1 (which fixed
-  // the same contradiction for a parent's own turn-complete, in
-  // harness-session.ts). `free` comes from the provider TYPE and `costUsd`
-  // comes from the rate card: two independent answers with nothing stopping
-  // them disagreeing. A specialist delegated to a model that runs on this
-  // machine, whose model id ALSO carries a published rate, reported a run that
-  // was billed AND cost nothing to run. The status bar has to trust one of
-  // them; `free` wins, and a free run is reported as null, never $0.00.
+  // WHY: `free` comes from the provider TYPE and `costUsd` from the rate card — two independent answers that
+  // used to disagree (a local-engine run whose model id also had a rate was billed AND free). `free` wins.
   it('never reports a specialist run as billed AND free', async () => {
     const { seen } = await runOne('child-model', 'local-engine');
     const ev = seen.find((e) => e.type === 'subagent-usage');
@@ -399,170 +351,77 @@ describe('subagent-usage — the producer half', () => {
     expect(ev.data.usage.costUsd).toBeNull();
   });
 
-  // Task 23 item 2. The report is only emitted when BOTH sessions are still
-  // live — the child must still be in `this.live` for its price card to be
-  // readable. That `if` had no `else`, so a teardown race between the run
-  // finishing and the report being priced took a path that logged NOTHING: the
-  // parent's totals silently went short by a whole delegated run. A cost figure
-  // that is quietly short is worse than one that is visibly missing.
-  it('says so in the log when a finished specialist\'s spend cannot reach its parent', async () => {
-    const logSpy = vi.spyOn(logger, 'log');
-    store = new SessionStore(new NativeHome(root));
-    let call = 0;
-    let childId = '';
-    // Drops the PARENT's live entry as the child's final step begins — the
-    // teardown race the missing `else` was hiding. Reaching into `live` is the
-    // only way to stage it deterministically: the real race is a destroy
-    // landing inside a window a test cannot otherwise aim at.
-    //
-    // Task 25 item 1 — this comment used to say the CHILD half could not
-    // genuinely go missing, because runSpecialist's own throwIfEnded notices a
-    // missing child. That was wrong, and it invited a future reader to delete a
-    // live branch as dead code. throwIfEnded checks `this.live.has(childId)`
-    // only DURING the run and never again once runSpecialist has RETURNED,
-    // while the spend is priced after that return. Worse, the cascade order
-    // makes the child half the MORE likely of the two in production:
-    // destroy(parent) awaits destroyChildrenOf(parent) — which destroys each
-    // child, deleting the child's own live entry — BEFORE it reaches
-    // `this.live.delete(parent)`. A parent teardown landing in that await gap
-    // therefore removes the CHILD first and leaves the parent live.
-    //
-    // So the split here is only about what each test can STAGE, not about what
-    // can happen: a doStream hook runs while the run is still going, which is
-    // the parent half; the child half needs a hook that fires after
-    // runSpecialist resolves, which is the test right below this one.
-    const model = new MockLanguageModelV4({
-      doStream: async () => {
-        const chunks = RUN[Math.min(call, RUN.length - 1)];
-        call++;
-        if (call === RUN.length) {
-          for (const [id, entry] of (host as any).live as Map<string, any>) {
-            if (entry.parentSessionId === 'root-1') childId = id;
+  // WHY: the report is only emitted while BOTH sessions are live; that `if` once had no `else`, so a teardown race
+  // silently left the parent's totals short. The log must name the half that was missing — three distinct phrases,
+  // each pinned so collapsing the ternary to one string cannot pass. The parent half is staged from a doStream hook
+  // while the run is going; the child/both halves need a hook after runSpecialist resolves (destroy(parent) tears
+  // children down BEFORE the parent, so the child half is the likelier one in production).
+  describe('a spend that cannot reach its parent is logged, naming the half that went missing', () => {
+    const logged = (which: string) => [
+      'ERROR', 'NativeSessionHost',
+      `could not report a specialist's spend to its parent (${which}) — the parent's session totals will be short by this run`,
+    ] as const;
+
+    async function expectUnreported(logSpy: ReturnType<typeof vi.spyOn>, seen: any[], childId: string, which: string) {
+      expect(childId).not.toBe('');
+      expect(seen.filter((e) => e.type === 'subagent-usage')).toEqual([]);
+      // States only what was looked up and found absent — never a guessed cause.
+      expect(logSpy).toHaveBeenCalledWith(...logged(which), expect.objectContaining({ childId, parentId: 'root-1' }));
+      logSpy.mockRestore();
+    }
+
+    it('names the PARENT half when the parent session is gone as the final step begins', async () => {
+      const logSpy = vi.spyOn(logger, 'log');
+      store = new SessionStore(new NativeHome(root));
+      let call = 0;
+      let childId = '';
+      // Reaching into `live` is the only deterministic way to stage a destroy landing inside this window.
+      const model = new MockLanguageModelV4({
+        doStream: async () => {
+          const chunks = RUN[Math.min(call, RUN.length - 1)];
+          call++;
+          if (call === RUN.length) {
+            for (const [id, entry] of (host as any).live as Map<string, any>) if (entry.parentSessionId === 'root-1') childId = id;
+            (host as any).live.delete('root-1');
           }
-          (host as any).live.delete('root-1');
-        }
-        return { stream: simulateReadableStream({ chunks }) };
-      },
+          return { stream: simulateReadableStream({ chunks }) };
+        },
+      });
+      host = new NativeSessionHost(
+        store, async () => model as any, async () => ({ contextLength: null, totalSlots: null }),
+        async () => null, async () => null,
+        async (binding) => PRICES[binding.modelId] ?? null,
+      );
+      await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const seen: any[] = [];
+      host.on('transcript-event', (e) => seen.push(e));
+      await spawnChild();
+      await expectUnreported(logSpy, seen, childId, 'the parent session was no longer live');
     });
-    host = new NativeSessionHost(
-      store, async () => model as any, async () => ({ contextLength: null, totalSlots: null }),
-      async () => null, async () => null,
-      async (binding) => PRICES[binding.modelId] ?? null,
-    );
-    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-    const seen: any[] = [];
-    host.on('transcript-event', (e) => seen.push(e));
-    await host.spawnSpecialist('root-1', {
-      specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
-      binding: { providerId: 'openrouter', modelId: 'child-model' },
-      token: { parentId: 'root-1', writer: false }, description: 'find it',
-    } as any);
-    await host.drain('root-1');
 
-    expect(childId).not.toBe('');
-    // Nothing was reported — that is the condition being logged, not a bug here.
-    expect(seen.filter((e) => e.type === 'subagent-usage')).toEqual([]);
-    // ...and the log names WHICH half was missing. It states only what was
-    // looked up and found absent — never a guessed cause
-    // (docs/error-message-standards.md).
-    expect(logSpy).toHaveBeenCalledWith(
-      'ERROR', 'NativeSessionHost',
-      "could not report a specialist's spend to its parent (the parent session was no longer live) — the parent's session totals will be short by this run",
-      expect.objectContaining({ childId, parentId: 'root-1' }),
-    );
-    logSpy.mockRestore();
-  });
-
-  // Task 25 items 1 + 2. The CHILD half of the same race — and the proof that
-  // the branch the test above's old comment called unreachable is not only
-  // reachable but the more likely one (the cascade order is spelled out there).
-  // It also pins a SECOND of the three `missing` phrases: with only the parent
-  // phrase pinned, collapsing that three-way ternary to one hardcoded string
-  // passed the suite while telling the user the wrong half had gone missing.
-  it('names the SPECIALIST half when the child is the session that went missing', async () => {
-    const logSpy = vi.spyOn(logger, 'log');
-    boot(RUN);
-    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-    // The post-return hook the comment above describes: wrap runSpecialist so
-    // the child's live entry disappears the instant the run RESOLVES — after
-    // throwIfEnded's last check, before the spend is priced. That is the exact
-    // window destroy() opens by tearing children down ahead of the parent.
-    const runSpecialist = (host as any).runSpecialist.bind(host);
-    let childId = '';
-    (host as any).runSpecialist = async (cid: string, prompt: string) => {
-      const result = await runSpecialist(cid, prompt);
-      childId = cid;
-      (host as any).live.delete(cid);   // the child goes; the parent stays live
-      return result;
-    };
-    const seen: any[] = [];
-    host.on('transcript-event', (e) => seen.push(e));
-    await host.spawnSpecialist('root-1', {
-      specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
-      binding: { providerId: 'openrouter', modelId: 'child-model' },
-      token: { parentId: 'root-1', writer: false }, description: 'find it',
-    } as any);
-    await host.drain('root-1');
-
-    expect(childId).not.toBe('');
-    expect(seen.filter((e) => e.type === 'subagent-usage')).toEqual([]);
-    // Names the CHILD, not the parent — the parent is right there and live, so
-    // saying the parent had gone would be a false statement of cause.
-    expect(logSpy).toHaveBeenCalledWith(
-      'ERROR', 'NativeSessionHost',
-      "could not report a specialist's spend to its parent (the specialist session was no longer live) — the parent's session totals will be short by this run",
-      expect.objectContaining({ childId, parentId: 'root-1' }),
-    );
-    logSpy.mockRestore();
-  });
-
-  // Task 28 item 3. The THIRD `missing` phrase — the one for when BOTH halves
-  // are gone. It was the last one left unpinned: with only the parent and child
-  // phrases covered (the two tests above), this arm could be rewritten to
-  // either of theirs and all 16 tests stayed green, so a teardown that took
-  // both sessions would have named ONE of them and implied the other was fine.
-  //
-  // Reachable by the same cascade as the child half, one step further along it:
-  // destroy(parent) deletes the child's live entry (via destroyChildrenOf) and
-  // then the parent's, and destroyAll() at app quit walks every live session
-  // doing exactly that. A specialist run whose spend is priced after both
-  // deletions have landed — the background path in particular, which nothing is
-  // awaiting — finds neither session to price it against.
-  it('says NEITHER was live when both entries are gone by the time the spend is priced', async () => {
-    const logSpy = vi.spyOn(logger, 'log');
-    boot(RUN);
-    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-    // The same post-return hook the test above uses, dropping BOTH entries: the
-    // window opens after throwIfEnded's last check and before the spend is
-    // priced, which is the only place this arm can be observed.
-    const runSpecialist = (host as any).runSpecialist.bind(host);
-    let childId = '';
-    (host as any).runSpecialist = async (cid: string, prompt: string) => {
-      const result = await runSpecialist(cid, prompt);
-      childId = cid;
-      (host as any).live.delete(cid);        // the child goes...
-      (host as any).live.delete('root-1');   // ...and so does the parent
-      return result;
-    };
-    const seen: any[] = [];
-    host.on('transcript-event', (e) => seen.push(e));
-    await host.spawnSpecialist('root-1', {
-      specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
-      binding: { providerId: 'openrouter', modelId: 'child-model' },
-      token: { parentId: 'root-1', writer: false }, description: 'find it',
-    } as any);
-    await host.drain('root-1');
-
-    expect(childId).not.toBe('');
-    expect(seen.filter((e) => e.type === 'subagent-usage')).toEqual([]);
-    // Names BOTH. Picking either half here would be a true sentence that reads
-    // as a false one — "the parent session was no longer live" tells the reader
-    // the child was still there, and it wasn't.
-    expect(logSpy).toHaveBeenCalledWith(
-      'ERROR', 'NativeSessionHost',
-      "could not report a specialist's spend to its parent (neither session was still live) — the parent's session totals will be short by this run",
-      expect.objectContaining({ childId, parentId: 'root-1' }),
-    );
-    logSpy.mockRestore();
+    // Child half: the entry vanishes the instant runSpecialist RESOLVES (after throwIfEnded's last check, before pricing).
+    // Both: the parent goes too (destroyAll at app quit; a background run nothing awaits). Naming either half alone
+    // would be a true sentence that reads as a false one.
+    it.each([
+      ['the specialist session was no longer live', false],
+      ['neither session was still live', true],
+    ])('names %s', async (which, dropParentToo) => {
+      const logSpy = vi.spyOn(logger, 'log');
+      boot(RUN);
+      await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const runSpecialist = (host as any).runSpecialist.bind(host);
+      let childId = '';
+      (host as any).runSpecialist = async (cid: string, prompt: string) => {
+        const result = await runSpecialist(cid, prompt);
+        childId = cid;
+        (host as any).live.delete(cid);
+        if (dropParentToo) (host as any).live.delete('root-1');
+        return result;
+      };
+      const seen: any[] = [];
+      host.on('transcript-event', (e) => seen.push(e));
+      await spawnChild();
+      await expectUnreported(logSpy, seen, childId, which);
+    });
   });
 });
