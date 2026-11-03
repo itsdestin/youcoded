@@ -791,12 +791,22 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   }, [visible, releaseStick]);
 
   // The on-screen keyboard (Destin, 2026-11-02: "when keyboard is up, i can no longer see the very latest messages"): the
-  // page no longer shrinks for it, so nothing above re-pins — the scroller's padding grows with the keyboard instead
-  // (useVisualViewport animates it, a frame at a time). Re-pin on each step while stuck, so the newest message rides up
-  // with the message box.
+  // page no longer shrinks for it, so nothing above re-pins — the scroller's padding grows by the keyboard instead.
+  // While the Android keyboard glides, the padding is not touched (that would re-check the whole page each step,
+  // useVisualViewport.ts): the messages ride up by transform (`lift`); when it settles the padding takes the new
+  // value and the view re-pins, in the same frame the transform is removed.
   useEffect(() => {
     if (!visible) return;
-    const onKeyboard = () => { if (stickRef.current) scrollToBottom(); };
+    const onKeyboard = (e: Event) => {
+      const content = contentRef.current;
+      const lift = (e as CustomEvent<{ lift?: number }>).detail?.lift ?? 0;
+      if (lift !== 0) {
+        if (content && stickRef.current) content.style.transform = `translateY(${-lift}px)`;
+        return;
+      }
+      if (content) content.style.transform = '';
+      if (stickRef.current) scrollToBottom();
+    };
     window.addEventListener(KEYBOARD_OFFSET_EVENT, onKeyboard);
     return () => window.removeEventListener(KEYBOARD_OFFSET_EVENT, onKeyboard);
   }, [visible, scrollToBottom, stickRef]);

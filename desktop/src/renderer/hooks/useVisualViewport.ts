@@ -72,14 +72,50 @@ export function useVisualViewport() {
       return t < 1;
     };
 
+    // WHY the glide does not write the page-wide variable each step (Destin, 2026-11-02: "it still feels jumpy/stuttery"):
+    // measured on the Z Flip7, one change to a variable on <html> makes the page re-check every element's styles, 6-7 ms
+    // on a calm page (up to 75 ms when busy), close to the whole 8 ms frame. So while gliding, only the few things that
+    // visibly move are changed, directly and cheaply — the message box and the empty-chat hint by transform, the frame's
+    // two bottom-edge elements (.chrome-glass, .chrome-outline, which hold nothing inside), and the messages (ChatView,
+    // through the event's `lift`). When the glide ends, --vvp-offset takes the final value once and the direct changes
+    // are removed in the same frame, so nothing moves at the hand-over.
+    let settled = 0;                // what --vvp-offset on <html> says
+    let edgeBase: Map<HTMLElement, string> | null = null;
+    const liveEls = () => ({
+      bar: document.querySelector<HTMLElement>('.bottom-float:not(.buddy-chat-bottom)'),
+      hint: document.querySelector<HTMLElement>('.empty-chat-hint'),
+      edges: [...document.querySelectorAll<HTMLElement>('.chrome-glass, .chrome-outline')],
+    });
+    const showLive = (c: number) => {
+      const lift = c - settled;
+      const { bar, hint, edges } = liveEls();
+      if (bar) bar.style.transform = `translateY(${-c}px)`;
+      if (hint) hint.style.transform = `translateY(${-c / 2}px)`;
+      if (!edgeBase) edgeBase = new Map(edges.map((el) => [el, getComputedStyle(el).getPropertyValue('--bottom-chrome-total').trim()]));
+      for (const [el, base] of edgeBase) if (base) el.style.setProperty('--bottom-chrome-total', `calc(${base} + ${lift}px)`);
+      window.dispatchEvent(new CustomEvent(KEYBOARD_OFFSET_EVENT, { detail: { lift } }));
+    };
+    const clearLive = () => {
+      const { bar, hint } = liveEls();
+      if (bar) bar.style.transform = '';
+      if (hint) hint.style.transform = '';
+      if (edgeBase) for (const el of edgeBase.keys()) el.style.removeProperty('--bottom-chrome-total');
+      edgeBase = null;
+    };
+    const settle = (c: number) => {
+      settled = c;
+      lastChat = c;
+      document.documentElement.style.setProperty('--vvp-offset', `${c}px`);
+      clearLive();
+      // ChatView keeps the newest message in view above the keyboard (it no longer gets a smaller window to notice).
+      window.dispatchEvent(new CustomEvent(KEYBOARD_OFFSET_EVENT, { detail: { lift: 0 } }));
+    };
+
     let lastStep = 0;
     const apply = () => {
       frame = null;
       const now = performance.now();
-      // WHY an even 60 steps a second while gliding (Destin, 2026-11-02: "it overshoots briefly now before falling back
-      // down"): a frame-by-frame recording on the Z Flip7 (120 Hz) showed the page and the keyboard on the same curve,
-      // but each step (a restyle of the page, ~5 ms) sometimes missed a 8 ms frame — the page got ahead of the keyboard,
-      // held still for a frame, then went on. Every other frame is a steady rhythm the phone always makes.
+      // An even 60 steps a second while gliding: a 120 Hz frame is 8 ms and an uneven rhythm reads as a stutter.
       if ((kb.cur !== kb.to || chat.cur !== chat.to) && now - lastStep < 14) { schedule(); return; }
       lastStep = now;
       // innerHeight is the layout viewport; vv.height is the visible viewport.
@@ -90,20 +126,18 @@ export function useVisualViewport() {
       const forChat = !!document.activeElement?.closest?.('.bottom-float');
       // Only the Android app's keyboard glides; a phone browser already reports it a frame at a time.
       const glide = native && !reduced();
-      aim(kb, reported, glide, now);
+      // Popups and menus take the keyboard's final height at once: one re-check, not one per step.
+      aim(kb, reported, false, now);
       aim(chat, forChat ? reported : 0, glide, now);
-      const moving = [step(kb, now), step(chat, now)].some(Boolean);
-      if (moving) schedule();
-      // Clamp sub-pixel jitter — some devices fire values like 398.6 vs 399.0 back-to-back mid-animation. Skip an
-      // unchanged value (performance.md rule 6): a root variable write restyles the whole page.
+      step(kb, now);
+      const moving = step(chat, now);
       const k = Math.round(kb.cur);
       if (k !== lastKb) { lastKb = k; document.documentElement.style.setProperty('--kb-offset', `${k}px`); }
+      // Clamp sub-pixel jitter — some devices fire values like 398.6 vs 399.0 back-to-back mid-animation.
       const c = Math.round(chat.cur);
-      if (c === lastChat) return;
-      lastChat = c;
-      document.documentElement.style.setProperty('--vvp-offset', `${c}px`);
-      // ChatView keeps the newest message in view above the keyboard (it no longer gets a smaller window to notice).
-      window.dispatchEvent(new CustomEvent(KEYBOARD_OFFSET_EVENT));
+      if (moving) { schedule(); showLive(c); return; }
+      if (c === lastChat && !edgeBase) return;
+      settle(c);
     };
 
     const schedule = () => {
