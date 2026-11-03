@@ -105,7 +105,8 @@ async function step(name, what, fn, { critical = true } = {}) {
     console.log(`PASS  ${what}${detail ? ` — ${detail}` : ''}`);
     await shot(name);
   } catch (e) {
-    results.push({ name, what, ok: false, secs: Math.round((Date.now() - t) / 1000), detail: (() => { const m = String(e?.message ?? e); const w = m.match(/waiting for (.*)/); return m.split('\n')[0] + (w ? ` — waiting for ${w[1].slice(0, 160)}` : ''); })() });
+    // WHY the call log's last lines too: they hold the real reason a click stalled ("covered by…", "not enabled").
+    results.push({ name, what, ok: false, secs: Math.round((Date.now() - t) / 1000), detail: (() => { const m = String(e?.message ?? e); const w = m.match(/waiting for (.*)/); const tail = m.split('\n').map((l) => l.trim()).filter(Boolean).slice(-3).filter((l) => !/waiting for/.test(l)).join(' / ').slice(0, 300); return m.split('\n')[0] + (w ? ` — waiting for ${w[1].slice(0, 160)}` : '') + (tail && !m.startsWith(tail) ? ` — last: ${tail}` : ''); })() });
     console.log(`FAIL  ${what} — ${results.at(-1).detail}`);
     await shot(name + '-FAILED');
     if (critical) throw e;
