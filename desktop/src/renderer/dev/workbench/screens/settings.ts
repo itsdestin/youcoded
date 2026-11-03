@@ -59,7 +59,9 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // WHY (2026-11-02 rework 3): Sign out everywhere now sits one level down, in the Danger zone on Edit account, beside Delete
   // account - the app's own pattern for a destructive action. Three states: the Danger zone, the delete two-step it copies (the
   // reference), and the sign-out-everywhere confirm.
-  { ...settings('settings/account#danger-zone', 'dialog'), params: { signedIn: '1' }, open: ['Edit account', { do: 'scroll', dir: 'down', times: 4 }], newIn: 'after' },
+  // WHY no newIn on the Danger zone itself (round-4 deck A-1b: "i need to review all of these surfaces"): the Danger zone
+  // exists before this work too (Delete account alone), so a before/after pair must photograph both sides.
+  { ...settings('settings/account#danger-zone', 'dialog'), params: { signedIn: '1' }, open: ['Edit account', { do: 'scroll', dir: 'down', times: 4 }] },
   { ...settings('settings/account#sign-out-everywhere', 'dialog'), params: { signedIn: '1' }, open: ['Edit account', { do: 'scroll', dir: 'down', times: 4 }, 'Sign out everywhere'], newIn: 'after' },
   { ...settings('settings/account#delete-account', 'dialog'), params: { signedIn: '1' }, open: ['Edit account', { do: 'scroll', dir: 'down', times: 4 }, 'Delete account'] },
   settings('settings/account/connections', 'dialog'),
