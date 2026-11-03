@@ -185,10 +185,29 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
         @OptIn(ExperimentalLayoutApi::class)
         val ime = WindowInsets.imeAnimationTarget
         val nav = WindowInsets.navigationBars
+        // WHY measured against where the page really ends on screen, not minus the navigation bar's inset (Destin,
+        // 2026-11-03: "the frame/input area still slightly overshoots the keyboard sometimes before falling back down";
+        // a recorder in the page caught it): once in ~20 opens the height arrived 29 dp too tall (284, then 255 a
+        // third of a second later), the size of the gesture bar — the bar's inset read at that instant disagreed with
+        // the layout the page actually has. The page's own bottom edge is what the message box sits on, so the
+        // keyboard's top is measured from it. The raw numbers are logged (tag YcIme) to confirm which one moved.
         LaunchedEffect(Unit) {
-            snapshotFlow { ((ime.getBottom(density) - nav.getBottom(density)).coerceAtLeast(0) / density.density) }
+            snapshotFlow {
+                val target = ime.getBottom(density)
+                val navPx = nav.getBottom(density)
+                val wv = webView
+                val gapPx = if (wv != null && wv.isLaidOut) {
+                    val loc = IntArray(2).also { wv.getLocationInWindow(it) }
+                    wv.rootView.height - (loc[1] + wv.height)
+                } else navPx
+                Triple(target, navPx, gapPx)
+            }
                 .distinctUntilChanged()
-                .collect { dp -> webView?.evaluateJavascript("window.__ycImeOffset&&window.__ycImeOffset($dp)", null) }
+                .collect { (target, navPx, gapPx) ->
+                    val dp = (target - gapPx).coerceAtLeast(0) / density.density
+                    android.util.Log.d("YcIme", "target=$target nav=$navPx pageGap=$gapPx -> ${dp}dp")
+                    webView?.evaluateJavascript("window.__ycImeOffset&&window.__ycImeOffset($dp)", null)
+                }
         }
         // Ask the page whether it is ready (it sets window.__ycBootReady once the app or a sign-in/trouble screen is up,
         // App.tsx / remote-gate.tsx). Polled, not a bridge message: it is one boolean read every 150 ms only while the
