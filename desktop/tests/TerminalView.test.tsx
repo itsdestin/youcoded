@@ -747,6 +747,13 @@ describe('workbench screen and terminal surface', () => {
       // when transparent — see workbench-mode.ts).
       expect(terminalCtorArgs[0].allowTransparency).toBeUndefined();
       expect(terminalCtorArgs[0].theme.background).toBe(THEME_PANEL);
+      // The gap above the grid (behind the header) repeats the same panel sheet, so the tint does not start in a
+      // hard line at the header's bottom edge — the wallpaper picture layer alone left it bare.
+      expect(container().parentElement!.querySelector('.terminal-wallpaper')).not.toBeNull();
+      const gap = [...container().parentElement!.querySelectorAll<HTMLElement>('div[aria-hidden]')]
+        .find((d) => d.style.height === 'var(--terminal-top-inset, 0px)');
+      expect(gap?.style.backgroundColor).toBe('var(--panel)');
+      expect(gap?.style.opacity).toBe('var(--terminal-xterm-opacity, 0.6)');
     });
 
     it('a pack declaring terminal-opacity 0.4 under a wallpaper is floored to 0.8', () => {

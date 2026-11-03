@@ -778,7 +778,11 @@ function TerminalView({ sessionId, visible }: Props) {
           continuous surface. Solid themes need nothing (the strip already shows
           --canvas); wallpaper themes are covered by the full-bleed terminalBg.
           Workbench mock-ups pin the variant's own opacity so the gap matches. */}
-      {seeThrough && !terminalBg && (
+      {/* WHY also under a wallpaper when the grid is FILLED (Destin, 2026-11-03: "no weird hard edges in all chrome
+          modes"): since P-20.2 the grid container is a tinted panel sheet under a wallpaper, so the header gap above
+          it showed the bare wallpaper and the tint began in a hard line at the header's bottom edge — measured on a
+          Z Flip7, where the header is see-through. The strip repeats the sheet over the gap so it reads as one. */}
+      {seeThrough && (!terminalBg || fillContainer) && (
         <div
           aria-hidden
           style={{
