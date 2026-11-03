@@ -17,6 +17,8 @@ const MODELSDEV_PAYLOAD = { anthropic: { models: {
     cost: { input: 3, output: 15 } },
 } } };
 
+const OR_PROVIDER = { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true };
+
 describe('ModelCatalog', () => {
   let dir: string; let fetchMock: any; let cat: ModelCatalog;
   beforeEach(() => {
@@ -31,7 +33,7 @@ describe('ModelCatalog', () => {
 
   it('merges OpenRouter + models.dev into CatalogModel rows scoped to enabled providers', async () => {
     const models = await cat.get([
-      { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true },
+      OR_PROVIDER,
       { id: 'anth1', type: 'anthropic', label: 'Anthropic', enabled: true, builtIn: false, hasKey: true, ready: true },
     ] as any);
     const or = models.find((m) => m.providerId === 'openrouter');
@@ -47,14 +49,8 @@ describe('ModelCatalog', () => {
     expect(models).toHaveLength(0);
   });
 
-  // The COST property, pinned in both directions. Nothing guarded it before,
-  // which is how a local-only session start silently acquired two internet
-  // fetches when the vision resolver started reading the catalog for local
-  // models (T18): ensureFresh() runs before get() looks at WHICH providers it
-  // was handed, so a call that cannot consume either source still paid for
-  // both. MEASURED 2026-09-05 on a network that accepts and never answers:
-  // 4 fetches, 15.1 s per get(), and no memoization, so it repeated on every
-  // create / resume / model swap.
+  // WHY: a local-only session start once paid two internet fetches (15 s per get() on a dead network)
+  // because ensureFresh() ran before get() looked at which providers it was handed. Pinned both ways.
   describe('does not touch the network for a provider list no catalog source can serve', () => {
     const LOCAL = { id: 'local', type: 'local-engine', label: 'Local models', enabled: true, builtIn: true, hasKey: false, ready: true };
     const CUSTOM = { id: 'ollama', type: 'openai-compatible', label: 'Ollama', baseUrl: 'http://localhost:11434/v1', enabled: true, builtIn: false, hasKey: false, ready: true };
@@ -64,8 +60,6 @@ describe('ModelCatalog', () => {
         localModels: async () => [{ id: 'tiny-Q4_K_M', providerId: 'local', label: 'tiny-Q4_K_M' }],
       });
       const models = await local.get([LOCAL] as any);
-      // Both halves matter: zero fetches is the fix, and the rows still
-      // arriving is proof the fix did not just short-circuit get() itself.
       expect(fetchMock).not.toHaveBeenCalled();
       expect(models.map((m) => m.id)).toEqual(['tiny-Q4_K_M']);
     });
@@ -92,14 +86,12 @@ describe('ModelCatalog', () => {
     });
 
     it('a DISABLED OpenRouter beside a local provider still costs nothing', async () => {
-      // A disabled provider contributes no models, so it must not drag the
-      // network in either — the gate reads `enabled` exactly as the loop does.
       await cat.get([LOCAL, { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: false, builtIn: true, hasKey: true, ready: false }] as any);
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('but an ENABLED OpenRouter beside the local provider DOES fetch — the gate is not over-broad', async () => {
-      const models = await cat.get([LOCAL, { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true }] as any);
+      const models = await cat.get([LOCAL, OR_PROVIDER] as any);
       expect(fetchMock).toHaveBeenCalled();
       expect(models.some((m) => m.providerId === 'openrouter')).toBe(true);
     });
@@ -112,7 +104,7 @@ describe('ModelCatalog', () => {
   });
 
   it('serves from disk cache within TTL (single fetch pair across two calls)', async () => {
-    const providers = [{ id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true }] as any;
+    const providers = [OR_PROVIDER] as any;
     await cat.get(providers);
     const callsAfterFirst = fetchMock.mock.calls.length;
     await cat.get(providers);
@@ -120,11 +112,8 @@ describe('ModelCatalog', () => {
   });
 
   it('serves repeat calls from the in-memory memo — no disk or network after a fresh fetch', async () => {
-    // Session start calls contextLengthFor + get back-to-back; before the memo
-    // each call re-read and re-parsed the whole cache file synchronously on
-    // the main process. Deleting the file between calls proves the second
-    // call was served from memory: without the memo it would refetch.
-    const providers = [{ id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true }] as any;
+    // WHY: session start calls contextLengthFor + get back-to-back; deleting the file proves call two came from memory.
+    const providers = [OR_PROVIDER] as any;
     await cat.get(providers);                       // fetches, writes cache, sets memo
     const fetchCallsAfterPrime = fetchMock.mock.calls.length;
     fs.rmSync(path.join(dir, 'provider-catalog-cache.json'));
@@ -134,10 +123,8 @@ describe('ModelCatalog', () => {
   });
 
   it('a failed fetch falls back to stale cache instead of throwing', async () => {
-    const providers = [{ id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true }] as any;
+    const providers = [OR_PROVIDER] as any;
     await cat.get(providers);                    // primes cache
-    // Second instance over the same dir with the TEST-ONLY ttlMs knob makes
-    // the on-disk cache read as expired.
     const expired = new ModelCatalog(dir, fetchMock, { ttlMs: -1 });
     fetchMock.mockRejectedValue(new Error('offline'));
     const models = await expired.get(providers);
@@ -146,12 +133,12 @@ describe('ModelCatalog', () => {
 
   it('no cache + failed fetch yields an empty catalog, never a throw', async () => {
     fetchMock.mockRejectedValue(new Error('offline'));
-    const models = await cat.get([{ id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true }] as any);
+    const models = await cat.get([OR_PROVIDER] as any);
     expect(models).toEqual([]);
   });
 
   it('contextLengthFor answers from the merged catalog', async () => {
-    const providers = [{ id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true }] as any;
+    const providers = [OR_PROVIDER] as any;
     await cat.get(providers);
     expect(await cat.contextLengthFor({ providerId: 'openrouter', modelId: 'meta-llama/llama-3-8b' }, providers)).toBe(8192);
     expect(await cat.contextLengthFor({ providerId: 'openrouter', modelId: 'unknown' }, providers)).toBeNull();
@@ -203,13 +190,13 @@ describe('ModelCatalog', () => {
         ? { data: [{ id: 'good-model', name: 'Good' }, { name: 'no id — skip me' }, null, 'garbage'] }
         : { weird: 'shape' },
     }));
-    const models = await cat.get([{ id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true }] as any);
+    const models = await cat.get([OR_PROVIDER] as any);
     expect(models.map((m) => m.id)).toEqual(['good-model']);
   });
 
   it('converts OpenRouter per-token string pricing to USD per 1M tokens (×1e6)', async () => {
     const models = await cat.get([
-      { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true },
+      OR_PROVIDER,
     ] as any);
     const or = models.find((m) => m.id === 'meta-llama/llama-3-8b');
     // '0.00000005'/token → $0.05 per 1M; '0.0000001'/token → $0.10 per 1M.
@@ -230,10 +217,8 @@ describe('ModelCatalog', () => {
         : {},
     }));
     const models = await cat.get([
-      { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true },
+      OR_PROVIDER,
     ] as any);
-    // Number(null) and Number('') are 0 — without the string gate these rows
-    // would all read as "free". Pinned here so the guard can't regress.
     for (const m of models) expect(m.pricing).toBeUndefined();
   });
 
@@ -247,7 +232,7 @@ describe('ModelCatalog', () => {
 
   it('partial refresh persists the good source but retries BOTH on the next call', async () => {
     const providers = [
-      { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true },
+      OR_PROVIDER,
       { id: 'anth1', type: 'anthropic', label: 'Anthropic', enabled: true, builtIn: false, hasKey: true, ready: true },
     ] as any;
     // First call: OpenRouter up, models.dev down.
@@ -271,97 +256,28 @@ describe('ModelCatalog', () => {
     expect(second.some((m) => m.providerId === 'anth1')).toBe(true); // gap filled
   });
 
-  describe('OpenRouter vision detection (architecture.input_modalities)', () => {
-    const providers = [{ id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true }] as any;
-
-    it('sets supportsVision: true when input_modalities includes "image"', async () => {
-      fetchMock.mockImplementation(async (url: string) => ({
-        ok: true,
-        json: async () => url.includes('openrouter')
-          ? { data: [{ id: 'vision-model', name: 'Vision', architecture: { input_modalities: ['text', 'image'] } }] }
-          : {},
-      }));
-      const models = await cat.get(providers);
-      expect(models.find((m) => m.id === 'vision-model')?.supportsVision).toBe(true);
-    });
-
-    it('sets supportsVision: false when input_modalities is present without "image"', async () => {
-      fetchMock.mockImplementation(async (url: string) => ({
-        ok: true,
-        json: async () => url.includes('openrouter')
-          ? { data: [{ id: 'text-model', name: 'Text', architecture: { input_modalities: ['text'] } }] }
-          : {},
-      }));
-      const models = await cat.get(providers);
-      expect(models.find((m) => m.id === 'text-model')?.supportsVision).toBe(false);
-    });
-
-    it('leaves supportsVision undefined when architecture is missing entirely', async () => {
-      fetchMock.mockImplementation(async (url: string) => ({
-        ok: true,
-        json: async () => url.includes('openrouter')
-          ? { data: [{ id: 'no-architecture', name: 'None' }] }
-          : {},
-      }));
-      const models = await cat.get(providers);
-      expect(models.find((m) => m.id === 'no-architecture')?.supportsVision).toBeUndefined();
-    });
-
+  describe('OpenRouter vision detection (architecture.input_modalities, legacy modality string)', () => {
+    // undefined = "don't know"; the legacy `modality` string is trusted only when it contains '->'.
     it.each([
-      ['architecture: null', { architecture: null }],
-      ['architecture: a string', { architecture: 'image' }],
-      ['architecture with neither input_modalities nor modality', { architecture: {} }],
-      ['input_modalities: not an array', { architecture: { input_modalities: 'image' } }],
-      // Legacy `modality` fallback (below) is only trusted with a string that
-      // contains the '->' delimiter — these two stay "don't know" instead.
-      ['modality: not a string', { architecture: { modality: 123 } }],
-      ['modality: a string with no "->"', { architecture: { modality: 'text' } }],
-    ])('leaves supportsVision undefined for malformed shape: %s', async (_label, extra) => {
+      ['input_modalities includes image', { architecture: { input_modalities: ['text', 'image'] } }, true],
+      ['input_modalities without image', { architecture: { input_modalities: ['text'] } }, false],
+      ['legacy "text+image->text"', { architecture: { modality: 'text+image->text' } }, true],
+      ['legacy "text->text"', { architecture: { modality: 'text->text' } }, false],
+      ['input_modalities wins over a conflicting legacy string', { architecture: { input_modalities: ['text'], modality: 'text+image->text' } }, false],
+      ['no architecture at all', {}, undefined],
+      ['architecture: null', { architecture: null }, undefined],
+      ['architecture: a string', { architecture: 'image' }, undefined],
+      ['architecture with neither field', { architecture: {} }, undefined],
+      ['input_modalities: not an array', { architecture: { input_modalities: 'image' } }, undefined],
+      ['modality: not a string', { architecture: { modality: 123 } }, undefined],
+      ['modality: a string with no "->"', { architecture: { modality: 'text' } }, undefined],
+    ])('supportsVision for %s', async (_label, extra, want) => {
       fetchMock.mockImplementation(async (url: string) => ({
         ok: true,
-        json: async () => url.includes('openrouter')
-          ? { data: [{ id: 'malformed', name: 'Malformed', ...extra }] }
-          : {},
+        json: async () => url.includes('openrouter') ? { data: [{ id: 'm', name: 'M', ...extra }] } : {},
       }));
-      const models = await cat.get(providers);
-      expect(models.find((m) => m.id === 'malformed')?.supportsVision).toBeUndefined();
-    });
-
-    // Legacy `architecture.modality` string, predating input_modalities
-    // (e.g. still served for some older OpenRouter catalog rows).
-    it('sets supportsVision: true from legacy modality string "text+image->text" when input_modalities is absent', async () => {
-      fetchMock.mockImplementation(async (url: string) => ({
-        ok: true,
-        json: async () => url.includes('openrouter')
-          ? { data: [{ id: 'legacy-vision', name: 'Legacy Vision', architecture: { modality: 'text+image->text' } }] }
-          : {},
-      }));
-      const models = await cat.get(providers);
-      expect(models.find((m) => m.id === 'legacy-vision')?.supportsVision).toBe(true);
-    });
-
-    it('sets supportsVision: false from legacy modality string "text->text" when input_modalities is absent', async () => {
-      fetchMock.mockImplementation(async (url: string) => ({
-        ok: true,
-        json: async () => url.includes('openrouter')
-          ? { data: [{ id: 'legacy-text', name: 'Legacy Text', architecture: { modality: 'text->text' } }] }
-          : {},
-      }));
-      const models = await cat.get(providers);
-      expect(models.find((m) => m.id === 'legacy-text')?.supportsVision).toBe(false);
-    });
-
-    it('prefers input_modalities over a conflicting legacy modality string when both are present', async () => {
-      fetchMock.mockImplementation(async (url: string) => ({
-        ok: true,
-        json: async () => url.includes('openrouter')
-          ? { data: [{ id: 'both-fields', name: 'Both', architecture: { input_modalities: ['text'], modality: 'text+image->text' } }] }
-          : {},
-      }));
-      const models = await cat.get(providers);
-      // input_modalities says no image -> that wins, even though the legacy
-      // string alone would have said true.
-      expect(models.find((m) => m.id === 'both-fields')?.supportsVision).toBe(false);
+      const models = await cat.get([OR_PROVIDER] as any);
+      expect(models.find((m) => m.id === 'm')?.supportsVision).toBe(want);
     });
   });
 
@@ -408,14 +324,7 @@ describe('ModelCatalog', () => {
       expect(models).toEqual([]);
     });
 
-    // §4.6: when OpenAI blocks the account the registry keeps the row listed
-    // (ready: false) so the card can still show who is signed in and offer Sign
-    // out — but the models must leave the catalog. ChatGptAuth deliberately
-    // keeps its cached list through a block, so `enabled` alone would still
-    // hand them out. The two pickers filter on ready themselves; the app's own
-    // ModelSearch tool reads the catalog raw, so without this gate the
-    // assistant would be offered plan models it cannot use and the user would
-    // get "Codex is disabled for this workspace." instead of an answer.
+    // WHY: a blocked account keeps its cached list, but ModelSearch reads the catalog raw and would offer unusable plan models.
     it('get(): a BLOCKED plan (ready:false) contributes no models even though the cache still holds them', async () => {
       const cat = new ModelCatalog(dir, fetchMock, {
         chatgptModels: async () => [{ id: 'gpt-5.5', providerId: 'chatgpt', label: 'GPT-5.5' }],
@@ -435,10 +344,7 @@ describe('ModelCatalog', () => {
   });
 });
 
-// ── Catalog pricing ──────────────────────────────────────────────────────────
-// The app's copy of the price list used to drop the cache rates, which forced
-// the session-cost chip to over-report and apologise for it in a tooltip. The
-// rates are in the payload; carry them (spec §5).
+// Cache rates are carried so the session-cost chip does not over-report.
 describe('catalog pricing', () => {
   it('maps OpenRouter per-token strings to per-1M, cache rates included', () => {
     const rows = (ModelCatalog as any).prototype.openrouterModels.call({}, {
@@ -467,10 +373,7 @@ describe('catalog pricing', () => {
     expect(rows[0].pricing).toEqual({ in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 });
   });
 
-  // A field of pure whitespace ('  ', '\t') is a published-nothing, same as ''.
-  // Number('  ') is 0 and '  ' !== '', so a bare non-empty-string gate turns a
-  // padded field into a REAL rate of zero — cached reads billed at $0, or the
-  // whole model priced free. These pin the trim.
+  // WHY: Number('  ') is 0, so an untrimmed whitespace field would become a REAL rate of zero (billed $0).
   it('treats a whitespace-only cache rate as "not published", never as free', () => {
     const rows = (ModelCatalog as any).prototype.openrouterModels.call({}, {
       data: [{
@@ -491,10 +394,7 @@ describe('catalog pricing', () => {
     expect(rows[0].pricing).toBeUndefined();
   });
 
-  // models.dev half of the never-guess rule (the OpenRouter half is pinned
-  // above). cost.cache_read/cache_write must be NUMBERS to be carried; absent,
-  // null, or string-shaped means the source published no cache rate, and the
-  // cost chip must fall back to the full input rate rather than bill $0.
+  // cache_read/cache_write must be NUMBERS; otherwise the chip falls back to the input rate, not $0.
   it('omits models.dev cache rates that are absent, null, or non-numeric', () => {
     const call = (models: any) => (ModelCatalog as any).prototype.modelsdevModels.call(
       {}, { anthropic: { models } }, 'anthropic', 'anthropic');
@@ -663,7 +563,7 @@ describe('refresh() — "Check for new models"', () => {
   let dir: string;
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-refresh-')); });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
-  const OR = { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true };
+  const OR = OR_PROVIDER;
 
   it('skips the 24-hour cache and reports what is new', async () => {
     let rows = [{ id: 'old' }];

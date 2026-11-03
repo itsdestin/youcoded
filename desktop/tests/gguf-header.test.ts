@@ -96,279 +96,179 @@ function gemma4Kvs(): Kv[] {
   ];
 }
 
+// Fixtures: `<arch>.<suffix>` entries, written through the GGUF writer above.
+type E = [suffix: string, type: number, value: any, elemType?: number];
+const hdr = (arch: string, entries: E[]) => parseGgufHeader(buildGguf([
+  { key: 'general.architecture', type: T.string, value: arch },
+  ...entries.map(([k, type, value, elemType]) => ({ key: `${arch}.${k}`, type, value, elemType })),
+])).header;
+const U = T.u32;
+// A header followed by raw bytes the reader cannot size; kv count bumped to match.
+const withRawKv = (tail: Buffer[]) => {
+  const good = buildGguf([
+    { key: 'general.architecture', type: T.string, value: 'llama' },
+    { key: 'llama.block_count', type: T.u32, value: 32 },
+  ]);
+  const b = Buffer.concat([good, ...tail]);
+  b.writeBigUInt64LE(BigInt(3), 16);
+  return b;
+};
+
 describe('parseGgufHeader — the two sliding_window_pattern shapes', () => {
   it('Gemma 4: reads the 35-element BOOL ARRAY (GGUF type 9), not a number', () => {
     const { header, complete } = parseGgufHeader(buildGguf(gemma4Kvs()));
     expect(complete).toBe(true);
     expect(header.architecture).toBe('gemma4');
-    // The scalar field stays null — a reader that mistook the array header for a
-    // u32 would put a number here (and a nonsense one).
+    // A reader that mistook the array header for a u32 would put a number here.
     expect(header.slidingWindowPattern).toBeNull();
     expect(header.slidingWindowPatternLayers).toEqual(GEMMA4_PATTERN);
-    expect(header.slidingWindowPatternLayers).toHaveLength(35);
-    expect(header.slidingWindowPatternLayers!.filter(Boolean)).toHaveLength(28); // slide
-    expect(header.slidingWindowPatternLayers!.filter((v) => !v)).toHaveLength(7); // full
     expect(header.slidingLayers).toEqual(GEMMA4_PATTERN);
-    // Gemma 4 is a recognised family, so the estimate must be stated exactly.
+    expect(header.slidingLayers!.filter(Boolean)).toHaveLength(28);
     expect(header.contextBytesIsUpperBound).toBe(false);
   });
 
   it('Gemma 4: the half-width _swa lengths and shared_kv_layers are read', () => {
     const { header } = parseGgufHeader(buildGguf(gemma4Kvs()));
-    expect(header.keyLength).toBe(512);
-    expect(header.valueLength).toBe(512);
-    expect(header.keyLengthSwa).toBe(256);
-    expect(header.valueLengthSwa).toBe(256);
-    expect(header.sharedKvLayers).toBe(20);
-    expect(header.blockCount).toBe(35);
-    expect(header.headCountKv).toBe(1);
-    expect(header.contextLength).toBe(131072);
+    expect([header.keyLength, header.valueLength, header.keyLengthSwa, header.valueLengthSwa]).toEqual([512, 512, 256, 256]);
+    expect([header.sharedKvLayers, header.blockCount, header.headCountKv, header.contextLength]).toEqual([20, 35, 1, 131072]);
   });
 
   it('Gemma 3: reads the SCALAR shape and expands it with the arch layer rule', () => {
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'gemma3' },
-      { key: 'gemma3.block_count', type: T.u32, value: 48 },
-      { key: 'gemma3.context_length', type: T.u32, value: 131072 },
-      { key: 'gemma3.attention.head_count', type: T.u32, value: 16 },
-      { key: 'gemma3.attention.head_count_kv', type: T.u32, value: 8 },
-      { key: 'gemma3.attention.key_length', type: T.u32, value: 256 },
-      { key: 'gemma3.attention.value_length', type: T.u32, value: 256 },
-      { key: 'gemma3.attention.sliding_window', type: T.u32, value: 1024 },
-      { key: 'gemma3.attention.sliding_window_pattern', type: T.u32, value: 6 },
-    ]));
+    const header = hdr('gemma3', [
+      ['block_count', U, 48], ['attention.head_count_kv', U, 8],
+      ['attention.sliding_window', U, 1024], ['attention.sliding_window_pattern', U, 6],
+    ]);
     expect(header.slidingWindowPattern).toBe(6);
     expect(header.slidingWindowPatternLayers).toBeNull();
     expect(header.slidingLayers).toEqual(swaPatternMask(48, 6, false));
-    // Every 6th layer is full attention: 40 slide, 8 don't.
-    expect(header.slidingLayers!.filter(Boolean)).toHaveLength(40);
+    expect(header.slidingLayers!.filter(Boolean)).toHaveLength(40); // every 6th is full attention
     expect(header.slidingLayers!.slice(0, 6)).toEqual([true, true, true, true, true, false]);
     expect(header.contextBytesIsUpperBound).toBe(false);
   });
 
   it('Gemma 3 with a sliding window but NO pattern key falls back to llama.cpp\'s period of 6', () => {
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'gemma3' },
-      { key: 'gemma3.block_count', type: T.u32, value: 48 },
-      { key: 'gemma3.attention.sliding_window', type: T.u32, value: 1024 },
-    ]));
+    const header = hdr('gemma3', [['block_count', U, 48], ['attention.sliding_window', U, 1024]]);
     expect(header.slidingLayers).toEqual(swaPatternMask(48, 6, false));
     expect(header.contextBytesIsUpperBound).toBe(false);
   });
 });
 
 describe('parseGgufHeader — per-layer head counts (llama.cpp get_key_or_arr)', () => {
-  // Measured 2026-09-05 against unsloth/gemma-4-12b-it-GGUF's real header via
-  // probe-headers.mjs: 48 layers, `attention.head_count_kv` written as a
-  // 48-element int32 ARRAY — 8 KV heads on the five sliding layers of each
-  // repeat, 1 on the sixth (full-attention) layer. Reading only the first entry
-  // would over-size that model's KV cache six-fold on one layer in six; reading
-  // the array header as a number would produce nonsense.
+  // Real gemma-4-12b header: head_count_kv is a 48-element int32 ARRAY (8 on sliding layers, 1 on every 6th).
+  // Reading only the first entry over-sizes the KV cache; reading the array header as a number is nonsense.
   const KV_HEADS_12B = Array.from({ length: 48 }, (_, i) => ((i + 1) % 6 === 0 ? 1 : 8));
 
-  const kvs12b = (): Kv[] => [
-    { key: 'general.architecture', type: T.string, value: 'gemma4' },
-    { key: 'gemma4.block_count', type: T.u32, value: 48 },
-    { key: 'gemma4.attention.head_count', type: T.u32, value: 16 },
-    { key: 'gemma4.attention.head_count_kv', type: T.array, elemType: T.i32, value: KV_HEADS_12B },
-    { key: 'gemma4.attention.key_length', type: T.u32, value: 512 },
-    { key: 'gemma4.attention.value_length', type: T.u32, value: 512 },
-    { key: 'gemma4.attention.sliding_window', type: T.u32, value: 1024 },
-    { key: 'gemma4.attention.shared_kv_layers', type: T.u32, value: 0 },
-    { key: 'gemma4.attention.sliding_window_pattern', type: T.array, elemType: T.bool, value: Array.from({ length: 48 }, (_, i) => (i + 1) % 6 !== 0) },
-  ];
-
-  it('keeps the whole per-layer array, and is still exact', () => {
-    const { header } = parseGgufHeader(buildGguf(kvs12b()));
+  it('keeps the whole per-layer array and stays exact; the scalar is the MAXIMUM (over-count, never under)', () => {
+    const header = hdr('gemma4', [
+      ['block_count', U, 48], ['attention.head_count', U, 16],
+      ['attention.head_count_kv', T.array, KV_HEADS_12B, T.i32],
+      ['attention.key_length', U, 512], ['attention.value_length', U, 512],
+      ['attention.sliding_window', U, 1024], ['attention.shared_kv_layers', U, 0],
+      ['attention.sliding_window_pattern', T.array, Array.from({ length: 48 }, (_, i) => (i + 1) % 6 !== 0), T.bool],
+    ]);
     expect(header.headCountKvLayers).toEqual(KV_HEADS_12B);
+    expect(header.headCountKv).toBe(8);
     expect(header.contextBytesIsUpperBound).toBe(false);
   });
 
-  it('the scalar alongside it is the MAXIMUM, so a naive reader over-counts, never under-counts', () => {
-    const { header } = parseGgufHeader(buildGguf(kvs12b()));
-    expect(header.headCountKv).toBe(8);
-  });
-
   it('a uniform array collapses to a plain number', () => {
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'gemma4' },
-      { key: 'gemma4.block_count', type: T.u32, value: 4 },
-      { key: 'gemma4.attention.head_count_kv', type: T.array, elemType: T.i32, value: [4, 4, 4, 4] },
-    ]));
+    const header = hdr('gemma4', [['block_count', U, 4], ['attention.head_count_kv', T.array, [4, 4, 4, 4], T.i32]]);
     expect(header.headCountKv).toBe(4);
     expect(header.headCountKvLayers).toBeNull();
   });
 
   it('no head_count_kv at all means multi-head attention — it inherits head_count', () => {
-    // llama.cpp seeds n_head_kv_arr from n_head_arr before looking for the key.
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'llama' },
-      { key: 'llama.block_count', type: T.u32, value: 32 },
-      { key: 'llama.attention.head_count', type: T.u32, value: 32 },
-    ]));
+    const header = hdr('llama', [['block_count', U, 32], ['attention.head_count', U, 32]]);
     expect(header.headCountKv).toBe(32);
     expect(header.contextBytesIsUpperBound).toBe(false);
   });
 });
 
 describe('parseGgufHeader — Qwen3.5 / Qwen3.6', () => {
-  // Read out of ~/.cache/llama.cpp/Qwen3.5-2B-Q8_0.gguf. full_attention_interval
-  // is a GENUINE scalar (GGUF type 4) — the contrast that makes the array case
-  // above a real hazard rather than a hypothetical one.
-  it('reads full_attention_interval as a scalar and finds no sliding layers', () => {
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'qwen35' },
-      { key: 'qwen35.block_count', type: T.u32, value: 24 },
-      { key: 'qwen35.context_length', type: T.u32, value: 262144 },
-      { key: 'qwen35.embedding_length', type: T.u32, value: 2048 },
-      { key: 'qwen35.attention.head_count', type: T.u32, value: 8 },
-      { key: 'qwen35.attention.head_count_kv', type: T.u32, value: 2 },
-      { key: 'qwen35.attention.key_length', type: T.u32, value: 256 },
-      { key: 'qwen35.attention.value_length', type: T.u32, value: 256 },
-      { key: 'qwen35.full_attention_interval', type: T.u32, value: 4 },
-    ]));
+  it('reads full_attention_interval as a scalar (GGUF type 4) and finds no sliding layers', () => {
+    const header = hdr('qwen35', [
+      ['block_count', U, 24], ['attention.head_count_kv', U, 2], ['full_attention_interval', U, 4],
+    ]);
     expect(header.fullAttentionInterval).toBe(4);
     expect(header.slidingWindow).toBeNull();
-    expect(header.slidingLayers).toBeNull(); // no sliding window at all
+    expect(header.slidingLayers).toBeNull();
     expect(header.contextBytesIsUpperBound).toBe(false);
-    expect(header.blockCount).toBe(24);
-    expect(header.headCountKv).toBe(2);
+    expect([header.blockCount, header.headCountKv]).toEqual([24, 2]);
   });
 
   it('derives the recurrent layers from full_attention_interval — every 4th holds KV', () => {
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'qwen35' },
-      { key: 'qwen35.block_count', type: T.u32, value: 24 },
-      { key: 'qwen35.full_attention_interval', type: T.u32, value: 4 },
-    ]));
-    // llama.cpp qwen35.cpp: is_recr[i] = (i + 1) % interval != 0.
+    const header = hdr('qwen35', [['block_count', U, 24], ['full_attention_interval', U, 4]]);
     expect(header.recurrentLayers!.slice(0, 8)).toEqual([true, true, true, false, true, true, true, false]);
-    expect(header.recurrentLayers!.filter((r) => !r)).toHaveLength(6); // 6 of 24 keep KV
+    expect(header.recurrentLayers!.filter((r) => !r)).toHaveLength(6);
     expect(header.contextBytesIsUpperBound).toBe(false);
   });
 
   it('an MTP/NextN block is never recurrent, even where the interval says it would be', () => {
-    // Measured in ~/.cache/llama.cpp/Qwen3.6-35B-A3B-UD-Q6_K_XL.gguf: 41 blocks
-    // with nextn_predict_layers = 1. block_count is llama.cpp's n_layer_all and
-    // the derivation runs over n_layer() = n_layer_all - nextn, so the last
-    // block is a dense attention layer that DOES hold KV. (41 + 0) % 4 != 0
-    // would otherwise mark index 40 recurrent and under-count the cache.
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'qwen35moe' },
-      { key: 'qwen35moe.block_count', type: T.u32, value: 41 },
-      { key: 'qwen35moe.full_attention_interval', type: T.u32, value: 4 },
-      { key: 'qwen35moe.nextn_predict_layers', type: T.u32, value: 1 },
-    ]));
+    // 41 blocks, nextn_predict_layers = 1: the derivation runs over 40, so block 40 is dense attention that DOES hold KV.
+    const header = hdr('qwen35moe', [['block_count', U, 41], ['full_attention_interval', U, 4], ['nextn_predict_layers', U, 1]]);
     expect(header.nextnPredictLayers).toBe(1);
     expect(header.recurrentLayers![40]).toBe(false);
     expect(header.recurrentLayers).toHaveLength(41);
   });
 
   it('attention.recurrent_layers WINS over full_attention_interval when the file has both', () => {
-    // llama.cpp qwen35.cpp:21 reads the array first and only computes the
-    // interval when that key is ABSENT. Scoring a file that carries the array
-    // off its interval instead would put the wrong layers in the cache — this
-    // fixture makes the two disagree on every layer so nothing can coincide.
-    const byArray = [false, false, false, true, false, false, false, true]; // only layers 3 and 7 are recurrent
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'qwen35' },
-      { key: 'qwen35.block_count', type: T.u32, value: 8 },
-      { key: 'qwen35.attention.recurrent_layers', type: T.array, elemType: T.bool, value: byArray },
-      { key: 'qwen35.full_attention_interval', type: T.u32, value: 4 },
-    ]));
+    // llama.cpp reads the array first; this one disagrees with the interval on every layer.
+    const byArray = [false, false, false, true, false, false, false, true];
+    const header = hdr('qwen35', [
+      ['block_count', U, 8], ['attention.recurrent_layers', T.array, byArray, T.bool], ['full_attention_interval', U, 4],
+    ]);
     expect(header.recurrentLayers).toEqual(byArray);
-    // The interval is still reported raw, but it must NOT be what was used:
-    // its derivation is the exact inverse of the array here.
     expect(header.fullAttentionInterval).toBe(4);
-    const fromInterval = Array.from({ length: 8 }, (_, il) => (il + 1) % 4 !== 0);
-    expect(header.recurrentLayers).not.toEqual(fromInterval);
     expect(header.contextBytesIsUpperBound).toBe(false);
   });
 
-  it('a recurrent_layers array of the wrong shape is an upper bound, never a silent fallback', () => {
-    const wrongType = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'qwen35' },
-      { key: 'qwen35.block_count', type: T.u32, value: 8 },
-      { key: 'qwen35.attention.recurrent_layers', type: T.array, elemType: T.i32, value: [1, 1, 1, 0, 1, 1, 1, 0] },
-      { key: 'qwen35.full_attention_interval', type: T.u32, value: 4 },
-    ])).header;
-    expect(wrongType.recurrentLayers).toBeNull();
-    expect(wrongType.contextBytesIsUpperBound).toBe(true);
-
-    const tooShort = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'qwen35' },
-      { key: 'qwen35.block_count', type: T.u32, value: 24 },
-      { key: 'qwen35.attention.recurrent_layers', type: T.array, elemType: T.bool, value: [true, false] },
-    ])).header;
-    expect(tooShort.recurrentLayers).toBeNull();
-    expect(tooShort.contextBytesIsUpperBound).toBe(true);
+  it.each([
+    ['wrong element type', 8, [1, 1, 1, 0, 1, 1, 1, 0], T.i32],
+    ['too short', 24, [true, false], T.bool],
+  ])('a recurrent_layers array that is %s is an upper bound, never a silent fallback', (_n, blocks, arr, elem) => {
+    const header = hdr('qwen35', [['block_count', U, blocks], ['attention.recurrent_layers', T.array, arr, elem], ['full_attention_interval', U, 4]]);
+    expect(header.recurrentLayers).toBeNull();
+    expect(header.contextBytesIsUpperBound).toBe(true);
   });
 
   it('no interval and no array means no recurrent layers — nothing is invented', () => {
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'llama' },
-      { key: 'llama.block_count', type: T.u32, value: 32 },
-    ]));
+    const header = hdr('llama', [['block_count', U, 32]]);
     expect(header.recurrentLayers).toBeNull();
     expect(header.contextBytesIsUpperBound).toBe(false);
   });
 
   it('falls back to embedding_length / head_count when the explicit widths are absent', () => {
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'llama' },
-      { key: 'llama.block_count', type: T.u32, value: 32 },
-      { key: 'llama.embedding_length', type: T.u32, value: 4096 },
-      { key: 'llama.attention.head_count', type: T.u32, value: 32 },
-      { key: 'llama.attention.head_count_kv', type: T.u32, value: 8 },
-    ]));
-    expect(header.keyLength).toBe(128);
-    expect(header.valueLength).toBe(128);
+    const header = hdr('llama', [
+      ['block_count', U, 32], ['embedding_length', U, 4096], ['attention.head_count', U, 32], ['attention.head_count_kv', U, 8],
+    ]);
+    expect([header.keyLength, header.valueLength]).toEqual([128, 128]);
     expect(header.contextBytesIsUpperBound).toBe(false);
   });
 });
 
 describe('swaPatternMask — llama.cpp\'s set_swa_pattern, per architecture', () => {
-  // Transcribed from /home/destin/src/llama.cpp/src/llama-hparams.cpp:
-  //   dense_first ? (il % n != 0) : (il % n < n - 1)
-  // The two examples below are the ones spelled out in llama-hparams.h's own
-  // comment, so this test fails if either side drifts.
-  it('matches llama-hparams.h example 1 (n_pattern = 3, dense_first = false)', () => {
-    expect(swaPatternMask(6, 3, false)).toEqual([true, true, false, true, true, false]);
-  });
-  it('matches llama-hparams.h example 2 (n_pattern = 2, dense_first = true)', () => {
-    expect(swaPatternMask(4, 2, true)).toEqual([false, true, false, true]);
-  });
-  it('n_pattern 0 = every layer slides; 1 = none do', () => {
-    expect(swaPatternMask(4, 0, false)).toEqual([true, true, true, true]);
-    expect(swaPatternMask(4, 1, false)).toEqual([false, false, false, false]);
+  // Formula: dense_first ? (il % n != 0) : (il % n < n - 1); examples 1 and 2 are llama-hparams.h's own.
+  it.each([
+    [6, 3, false, [true, true, false, true, true, false]],
+    [4, 2, true, [false, true, false, true]],
+    [4, 0, false, [true, true, true, true]], // n_pattern 0 = every layer slides
+    [4, 1, false, [false, false, false, false]], // 1 = none do
+  ])('swaPatternMask(%i, %i, dense_first=%s)', (layers, n, denseFirst, want) => {
+    expect(swaPatternMask(layers, n, denseFirst)).toEqual(want);
   });
 
-  // The dense_first flag is the third argument to set_swa_pattern in
-  // llama.cpp/src/models/*.cpp. Verified 2026-09-05:
-  //   rg -n "set_swa_pattern" src/models/  →  17 call sites, exactly three of
-  //   which pass `true` (cohere2moe.cpp:33, smallthinker.cpp:11,
-  //   modern-bert.cpp:10). Every other caller takes the default, false.
+  // set_swa_pattern has 17 call sites in llama.cpp src/models; exactly three pass dense_first = true.
   it('exactly three architectures are dense-first', () => {
     expect([...DENSE_FIRST_ARCHITECTURES].sort()).toEqual(['cohere2moe', 'modern-bert', 'smallthinker']);
   });
 
   it('cohere2moe puts the DENSE layer first; cohere2 puts it last', () => {
-    const kvs = (arch: string): Kv[] => [
-      { key: 'general.architecture', type: T.string, value: arch },
-      { key: `${arch}.block_count`, type: T.u32, value: 8 },
-      { key: `${arch}.attention.sliding_window`, type: T.u32, value: 4096 },
-      { key: `${arch}.attention.sliding_window_pattern`, type: T.u32, value: 4 },
-    ];
-    expect(parseGgufHeader(buildGguf(kvs('cohere2moe'))).header.slidingLayers)
-      .toEqual([false, true, true, true, false, true, true, true]);
-    expect(parseGgufHeader(buildGguf(kvs('cohere2'))).header.slidingLayers)
-      .toEqual([true, true, true, false, true, true, true, false]);
+    const kvs = (): E[] => [['block_count', U, 8], ['attention.sliding_window', U, 4096], ['attention.sliding_window_pattern', U, 4]];
+    expect(hdr('cohere2moe', kvs()).slidingLayers).toEqual([false, true, true, true, false, true, true, true]);
+    expect(hdr('cohere2', kvs()).slidingLayers).toEqual([true, true, true, false, true, true, true, false]);
   });
 
-  // Each default is the local `uint32_t swa_period = N;` in that architecture's
-  // src/models/*.cpp, read 2026-09-05. They are the periods llama.cpp uses when
-  // the file carries no pattern key, so getting one wrong silently mis-sizes
-  // the KV cache for that whole family.
+  // Each default is the `swa_period` in that architecture's src/models/*.cpp; a wrong one mis-sizes the whole family's KV cache.
   it('the per-architecture default periods match llama.cpp', () => {
     expect(SWA_PATTERN_DEFAULTS).toEqual({
       afmoe: 4, cohere2: 4, cohere2moe: 4, 'exaone-moe': 4, exaone4: 4,
@@ -376,190 +276,104 @@ describe('swaPatternMask — llama.cpp\'s set_swa_pattern, per architecture', ()
       llama4: 4, mellum: 4, 'modern-bert': 3, olmo2: 4, plamo3: 8, smallthinker: 4,
     });
   });
-
-  it('an architecture with a sliding window but no known period is an UPPER BOUND, not a guess', () => {
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'some-future-arch' },
-      { key: 'some-future-arch.block_count', type: T.u32, value: 32 },
-      { key: 'some-future-arch.attention.sliding_window', type: T.u32, value: 1024 },
-    ]));
-    expect(header.slidingLayers).toBeNull();
-    expect(header.contextBytesIsUpperBound).toBe(true);
-  });
 });
 
-describe('parseGgufHeader — a key type the reader does not handle sets the upper-bound flag', () => {
-  it('a wanted key in the wrong scalar type (a string block_count)', () => {
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'llama' },
-      { key: 'llama.block_count', type: T.string, value: '32' },
-      { key: 'llama.attention.head_count_kv', type: T.u32, value: 8 },
-    ]));
-    expect(header.blockCount).toBeNull();
+describe('parseGgufHeader — what the reader cannot interpret sets the upper-bound flag', () => {
+  it.each([
+    ['a wanted key in the wrong scalar type (a string block_count)', 'llama',
+      [['block_count', T.string, '32'], ['attention.head_count_kv', U, 8]] as E[], 'blockCount'],
+    ['sliding_window_pattern as an array of the WRONG element type', 'gemma4',
+      [['block_count', U, 4], ['attention.sliding_window', U, 512], ['attention.sliding_window_pattern', T.array, [1, 0, 1, 0], T.f32]] as E[], 'slidingLayers'],
+    ['a per-layer pattern array that does not cover every layer', 'gemma4',
+      [['block_count', U, 35], ['attention.sliding_window_pattern', T.array, [true, false], T.bool]] as E[], 'slidingLayers'],
+    ['an architecture with a sliding window but no known period (not a guess)', 'some-future-arch',
+      [['block_count', U, 32], ['attention.sliding_window', U, 1024]] as E[], 'slidingLayers'],
+  ])('%s', (_n, arch, entries, nullField) => {
+    const header = hdr(arch, entries) as any;
+    expect(header[nullField]).toBeNull();
     expect(header.contextBytesIsUpperBound).toBe(true);
   });
 
-  it('sliding_window_pattern as an array of the WRONG element type', () => {
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'gemma4' },
-      { key: 'gemma4.block_count', type: T.u32, value: 4 },
-      { key: 'gemma4.attention.sliding_window', type: T.u32, value: 512 },
-      { key: 'gemma4.attention.sliding_window_pattern', type: T.array, elemType: T.f32, value: [1, 0, 1, 0] },
-    ]));
-    expect(header.slidingLayers).toBeNull();
+  it('a GGUF value type id this reader cannot even measure stops there; what came before still counts', () => {
+    const { header } = parseGgufHeader(withRawKv([str('llama.mystery'), u32(99), u32(1)]));
+    expect(header.blockCount).toBe(32);
     expect(header.contextBytesIsUpperBound).toBe(true);
   });
 
-  it('a per-layer pattern array that does not cover every layer', () => {
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'gemma4' },
-      { key: 'gemma4.block_count', type: T.u32, value: 35 },
-      { key: 'gemma4.attention.sliding_window_pattern', type: T.array, elemType: T.bool, value: [true, false] },
-    ]));
-    expect(header.slidingLayers).toBeNull();
-    expect(header.contextBytesIsUpperBound).toBe(true);
-  });
-
-  it('a GGUF value type id this reader cannot even measure', () => {
-    // Type 99 does not exist. The reader cannot skip a value it cannot size, so
-    // it stops there and reports everything after it as unknown.
-    const good = buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'llama' },
-      { key: 'llama.block_count', type: T.u32, value: 32 },
-    ]);
-    const tail = Buffer.concat([str('llama.mystery'), u32(99), u32(1)]);
-    const withUnknown = Buffer.concat([good, tail]);
-    withUnknown.writeBigUInt64LE(BigInt(3), 16); // bump the kv count to 3
-    const { header } = parseGgufHeader(withUnknown);
-    expect(header.blockCount).toBe(32); // what was read before it still counts
-    expect(header.contextBytesIsUpperBound).toBe(true);
-  });
-
-  it('a header with no architecture keys at all is an upper bound', () => {
+  it('a header with no architecture keys is NOT flagged — the ESTIMATOR sees blockCount === null and refuses', () => {
     const { header } = parseGgufHeader(buildGguf([
       { key: 'general.architecture', type: T.string, value: 'llama' },
       { key: 'general.name', type: T.string, value: 'nothing useful' },
     ]));
     expect(header.blockCount).toBeNull();
     expect(header.slidingLayers).toBeNull();
-    // Nothing was mis-read, so the flag is not set here — the ESTIMATOR sees
-    // blockCount === null and is the one that refuses to state a number.
     expect(header.contextBytesIsUpperBound).toBe(false);
   });
 });
 
 describe('parseGgufHeader — refuses bytes that are not a GGUF v3 header', () => {
+  const llamaOnly: Kv[] = [{ key: 'general.architecture', type: T.string, value: 'llama' }];
   it('names the magic it actually found', () => {
-    const bad = buildGguf([{ key: 'general.architecture', type: T.string, value: 'llama' }], { magic: 'NOPE' });
-    expect(() => parseGgufHeader(bad)).toThrow(/expected the magic "GGUF", found "NOPE"/);
+    expect(() => parseGgufHeader(buildGguf(llamaOnly, { magic: 'NOPE' }))).toThrow(/expected the magic "GGUF", found "NOPE"/);
   });
   it('names the version it actually found', () => {
-    const bad = buildGguf([{ key: 'general.architecture', type: T.string, value: 'llama' }], { version: 1 });
-    expect(() => parseGgufHeader(bad)).toThrow(/Unsupported GGUF version 1/);
-  });
-
-  it('ACCEPTS v2 — its KV table is laid out exactly like v3', () => {
-    // TheBloke's Llama-2 GGUFs are v2 and still among the most-downloaded on
-    // the Hub. Refusing them would show an error on that card where every other
-    // model shows a memory line. Only v1 used 32-bit lengths, which this reader
-    // genuinely cannot walk. Verified 2026-09-05 against
-    // TheBloke/Llama-2-7B-GGUF's real header.
-    const v2 = buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'llama' },
-      { key: 'llama.block_count', type: T.u32, value: 32 },
-      { key: 'llama.context_length', type: T.u32, value: 4096 },
-      { key: 'llama.embedding_length', type: T.u32, value: 4096 },
-      { key: 'llama.attention.head_count', type: T.u32, value: 32 },
-    ], { version: 2 });
-    const { header } = parseGgufHeader(v2);
-    expect(header.blockCount).toBe(32);
-    expect(header.headCountKv).toBe(32);
-    expect(header.keyLength).toBe(128);
-    expect(header.contextBytesIsUpperBound).toBe(false);
+    expect(() => parseGgufHeader(buildGguf(llamaOnly, { version: 1 }))).toThrow(/Unsupported GGUF version 1/);
   });
   it('names how few bytes it was given', () => {
     expect(() => parseGgufHeader(Buffer.from('GG'))).toThrow(/only 2 bytes/);
+  });
+
+  it('ACCEPTS v2 — its KV table is laid out like v3 (TheBloke Llama-2 GGUFs are v2; refusing them shows an error on that card)', () => {
+    const { header } = parseGgufHeader(buildGguf([
+      { key: 'general.architecture', type: T.string, value: 'llama' },
+      { key: 'llama.block_count', type: T.u32, value: 32 },
+      { key: 'llama.embedding_length', type: T.u32, value: 4096 },
+      { key: 'llama.attention.head_count', type: T.u32, value: 32 },
+    ], { version: 2 }));
+    expect([header.blockCount, header.headCountKv, header.keyLength]).toEqual([32, 32, 128]);
+    expect(header.contextBytesIsUpperBound).toBe(false);
   });
 });
 
 describe('parseGgufHeader — hostile or corrupt bytes never crash the app', () => {
   it('a NESTED array is refused instead of blowing the call stack', () => {
-    // GGUF defines no array-of-arrays, but a crafted file can nest one at
-    // twelve bytes per level. The parser used to recurse per level and die with
-    // a raw "Maximum call stack size exceeded" — a message the user can do
-    // nothing with, in front of a model they merely searched for.
-    const head = buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'llama' },
-      { key: 'llama.block_count', type: T.u32, value: 32 },
-    ]);
-    // One array whose ELEMENT type is itself an array, 50,000 deep.
-    const depth = 50_000;
+    // A crafted file can nest arrays 12 bytes per level; the parser once recursed per level and died with "Maximum call stack size exceeded".
     const nest: Buffer[] = [];
-    for (let i = 0; i < depth; i++) nest.push(u32(T.array), u64(1));
+    for (let i = 0; i < 50_000; i++) nest.push(u32(T.array), u64(1));
     nest.push(u32(T.u32), u64(1), u32(7));
-    const withNested = Buffer.concat([head, str('llama.nested'), u32(T.array), ...nest]);
-    withNested.writeBigUInt64LE(BigInt(3), 16); // kv count 2 -> 3
-
-    const { header } = parseGgufHeader(withNested); // must NOT throw
-    expect(header.blockCount).toBe(32);             // what came before still counts
+    const { header } = parseGgufHeader(withRawKv([str('llama.nested'), u32(T.array), ...nest])); // must NOT throw
+    expect(header.blockCount).toBe(32);
     expect(header.contextBytesIsUpperBound).toBe(true);
   });
 
-  it('a per-layer head-count array that is shorter than the model is dropped', () => {
-    // The estimator indexes headCountKvLayers per layer; a short array would
-    // give it undefined -> NaN -> a nonsense number on the card.
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'gemma4' },
-      { key: 'gemma4.block_count', type: T.u32, value: 48 },
-      { key: 'gemma4.attention.head_count_kv', type: T.array, elemType: T.i32, value: [8, 1, 8] },
-    ]));
+  it('a per-layer head-count array shorter than the model is dropped (a short one would index undefined -> NaN on the card)', () => {
+    const header = hdr('gemma4', [['block_count', U, 48], ['attention.head_count_kv', T.array, [8, 1, 8], T.i32]]);
     expect(header.headCountKvLayers).toBeNull();
-    expect(header.headCountKv).toBe(8); // the array's maximum — an over-count
+    expect(header.headCountKv).toBe(8);
     expect(header.contextBytesIsUpperBound).toBe(true);
   });
 
-  it('the per-head width fallback divides by the SMALLEST head count, not the largest', () => {
-    // Dividing by the max gives the narrowest head, i.e. an UNDER-count of the
-    // cache — the one direction that can turn "tight" into a wrong "fits".
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'gemma4' },
-      { key: 'gemma4.block_count', type: T.u32, value: 4 },
-      { key: 'gemma4.embedding_length', type: T.u32, value: 1024 },
-      { key: 'gemma4.attention.head_count', type: T.array, elemType: T.i32, value: [8, 2, 8, 2] },
-    ]));
-    expect(header.headCount).toBe(8);   // the max, safe as a multiplier
-    expect(header.keyLength).toBe(512); // 1024 / 2, not 1024 / 8
-    expect(header.valueLength).toBe(512);
-    // One width for a model whose heads vary per layer is an estimate.
+  it('the per-head width fallback divides by the SMALLEST head count (the max would under-count and turn "tight" into "fits")', () => {
+    const header = hdr('gemma4', [
+      ['block_count', U, 4], ['embedding_length', U, 1024], ['attention.head_count', T.array, [8, 2, 8, 2], T.i32],
+    ]);
+    expect(header.headCount).toBe(8);
+    expect([header.keyLength, header.valueLength]).toEqual([512, 512]);
     expect(header.contextBytesIsUpperBound).toBe(true);
   });
 });
 
 describe('parseGgufHeader — the architectures llama.cpp overrides or gates', () => {
   it('phi3 has NO sliding layers even when its file advertises a window and a pattern', () => {
-    // phi3.cpp turns SWA back OFF when it finds a window (swa_type = NONE,
-    // n_swa = 0, set_swa_pattern(1)) — a deliberate upstream workaround for
-    // converters that fill the key in wrongly. Believing the file's pattern of
-    // 4 would say three layers in four slide, under-counting the cache.
-    const { header } = parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'phi3' },
-      { key: 'phi3.block_count', type: T.u32, value: 32 },
-      { key: 'phi3.attention.sliding_window', type: T.u32, value: 2048 },
-      { key: 'phi3.attention.sliding_window_pattern', type: T.u32, value: 4 },
-    ]));
+    // phi3.cpp switches SWA back off; believing the file's pattern of 4 would under-count the cache.
+    const header = hdr('phi3', [['block_count', U, 32], ['attention.sliding_window', U, 2048], ['attention.sliding_window_pattern', U, 4]]);
     expect(header.slidingLayers).toEqual(new Array(32).fill(false));
-    expect(header.slidingLayers!.some(Boolean)).toBe(false);
     expect(header.contextBytesIsUpperBound).toBe(false);
   });
 
   it('exaone4 slides only at 64 layers — llama.cpp gates the whole block on it', () => {
-    const exaone = (layers: number) => parseGgufHeader(buildGguf([
-      { key: 'general.architecture', type: T.string, value: 'exaone4' },
-      { key: 'exaone4.block_count', type: T.u32, value: layers },
-      { key: 'exaone4.attention.sliding_window', type: T.u32, value: 4096 },
-    ])).header;
+    const exaone = (layers: number) => hdr('exaone4', [['block_count', U, layers], ['attention.sliding_window', U, 4096]]);
     expect(exaone(64).slidingLayers).toEqual(swaPatternMask(64, 4, false));
-    // A 30-layer EXAONE 4 carries the same key and still has no sliding layers.
     expect(exaone(30).slidingLayers).toBeNull();
     expect(exaone(30).contextBytesIsUpperBound).toBe(false);
   });
@@ -570,33 +384,25 @@ describe('the 1 MB early stop', () => {
 
   it('one 1 MB read is enough, even though the file continues for megabytes', () => {
     const full = withTail();
-    expect(full.length).toBeGreaterThan(2 * CHUNK_BYTES); // the tail really is big
+    expect(full.length).toBeGreaterThan(2 * CHUNK_BYTES);
     const { header, complete } = parseGgufHeader(full.subarray(0, CHUNK_BYTES));
     expect(complete).toBe(true);
     expect(header.slidingLayers).toEqual(GEMMA4_PATTERN);
     expect(header.sharedKvLayers).toBe(20);
     expect(header.contextBytesIsUpperBound).toBe(false);
-    // Every architecture key is inside the first few kilobytes — the probed
-    // fact the whole one-request design rests on.
-    expect(header.archBytes).toBeLessThan(4096);
+    expect(header.archBytes).toBeLessThan(4096); // the fact the one-request design rests on
   });
 
   it('does NOT stop early while the architecture keys are still coming', () => {
-    // Cut the buffer inside the architecture block: the reader must ask for more
-    // rather than report a half-read header as final.
-    const full = withTail();
-    // 952 bytes in, the last architecture key is behind us (header.archBytes,
-    // asserted above); 800 is still inside the block.
-    const { header, complete } = parseGgufHeader(full.subarray(0, 800));
+    // archBytes is ~952; 800 bytes is still inside the block, so the reader must ask for more.
+    const { header, complete } = parseGgufHeader(withTail().subarray(0, 800));
     expect(complete).toBe(false);
     expect(header.blockCount).toBe(35);
-    expect(header.slidingWindowPatternLayers).toBeNull(); // not reached yet
+    expect(header.slidingWindowPatternLayers).toBeNull();
   });
 
   it('a half-read header is ALWAYS an upper bound, whatever architecture it is', () => {
-    // gemma3 IS in SWA_PATTERN_DEFAULTS, so no layer-map condition can fire
-    // here: the flag has to come from the truncation itself. (The gemma4 case
-    // above would pass either way, which is why this fixture exists.)
+    // gemma3 has a default period, so no layer-map condition fires: the flag must come from the truncation itself.
     const full = buildGguf([
       { key: 'general.architecture', type: T.string, value: 'gemma3' },
       { key: 'gemma3.block_count', type: T.u32, value: 48 },
@@ -677,40 +483,20 @@ describe('fetchRemoteGgufHeader', () => {
     await expect(fetchRemoteGgufHeader('https://example.invalid/m.gguf', fetchImpl as any)).rejects.toThrow(/HTTP 403/);
   });
 
-  it('refuses to buffer a whole model when the server ignores the range request', async () => {
-    const fetchImpl = async () => ({
-      ok: true, status: 200,
-      headers: { get: (n: string) => (n === 'content-length' ? '5048350848' : null) },
-      arrayBuffer: async () => new ArrayBuffer(0),
-    });
-    await expect(fetchRemoteGgufHeader('https://example.invalid/m.gguf', fetchImpl as any))
-      .rejects.toThrow(/ignored the range request \(HTTP 200, 5048350848 bytes\)/);
-  });
-
-  it('refuses the same way when the response has NO content-length at all', async () => {
-    // A chunked 200 advertises no length. The old guard read that as 0, decided
-    // 0 was small, and buffered the whole file into the Electron main process —
-    // a freeze or an OOM kill for any mirror that answers this way, on a repo
-    // the user merely searched for. The body must never be read.
+  // A 200 to a range request must never be buffered whole (a chunked 200 once read as length 0 and OOM'd the main process).
+  it.each([
+    ['a huge content-length', '5048350848', /ignored the range request \(HTTP 200, 5048350848 bytes\)/],
+    ['NO content-length at all', null, /ignored the range request \(HTTP 200, no content-length\)/],
+    ['an unparseable content-length', 'lots', /ignored the range request \(HTTP 200, lots bytes\)/],
+  ])('refuses to buffer the body when the server ignores the range request (%s)', async (_n, len, msg) => {
     let bodyRead = 0;
     const fetchImpl = async () => ({
       ok: true, status: 200,
-      headers: { get: () => null },
+      headers: { get: (n: string) => (n === 'content-length' || len === 'lots' ? len : null) },
       arrayBuffer: async () => { bodyRead++; return new ArrayBuffer(8 * 1024 * 1024); },
     });
-    await expect(fetchRemoteGgufHeader('https://example.invalid/m.gguf', fetchImpl as any))
-      .rejects.toThrow(/ignored the range request \(HTTP 200, no content-length\)/);
+    await expect(fetchRemoteGgufHeader('https://example.invalid/m.gguf', fetchImpl as any)).rejects.toThrow(msg);
     expect(bodyRead).toBe(0);
-  });
-
-  it('refuses an unparseable content-length too', async () => {
-    const fetchImpl = async () => ({
-      ok: true, status: 200,
-      headers: { get: () => 'lots' },
-      arrayBuffer: async () => new ArrayBuffer(0),
-    });
-    await expect(fetchRemoteGgufHeader('https://example.invalid/m.gguf', fetchImpl as any))
-      .rejects.toThrow(/ignored the range request \(HTTP 200, lots bytes\)/);
   });
 });
 

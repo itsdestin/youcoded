@@ -71,9 +71,7 @@ describe('ProviderRegistry', () => {
 
   it('init propagates a missing atomic-write temp file instead of reporting success', async () => {
     const rename = fs.promises.rename;
-    // WHY: reproduce the failing temp -> providers.json rename at the real I/O
-    // boundary. Only the ownership fixture may skip seeding; a real registry must
-    // still reject if another actor removes its in-flight file.
+    // WHY: a real registry must reject if another actor removes its in-flight temp file.
     const spy = vi.spyOn(fs.promises, 'rename').mockImplementationOnce(async (from, to) => {
       await fs.promises.unlink(from);
       return rename(from, to);
@@ -138,20 +136,15 @@ describe('ProviderRegistry', () => {
     expect(typeof (model as any).modelId).toBe('string');
   });
 
-  // Plan Task 27. OpenRouter reports the real dollar figure it charged on every
-  // response; nothing else this app can talk to does. The hook that reads it is
-  // attached to THIS branch only, and pricing.ts is emphatic that a provider
-  // which reports nothing must read as nothing rather than as $0 — so a stray
-  // extractor on a provider that never fills it in would be worse than none.
+  // OpenRouter alone reports the dollar figure it charged; the cost hook is attached to THIS branch only
+  // (a provider that reports nothing must read as nothing, not $0).
   it('openrouter asks the SDK to read the provider’s own cost off the wire', async () => {
     await reg.setKey('openrouter', 'sk-or-abc');
     const model = await reg.languageModel({ providerId: 'openrouter', modelId: 'openai/gpt-4o' });
     expect((model as any).config.metadataExtractor).toBe(openRouterCostExtractor);
   });
 
-  // A custom endpoint DOES carry an extractor since 2026-10-20 — the one that
-  // counts DeepSeek-style cache hits (compatibleCacheExtractor) — so the guard is
-  // on what it produces: never a cost, even when the body carries a `usage.cost`.
+  // A custom endpoint carries compatibleCacheExtractor, which must never produce a cost even when usage.cost is present.
   it('no other provider claims to report a cost', async () => {
     const id = await reg.upsert({ type: 'openai-compatible', label: 'Ollama', baseUrl: 'http://localhost:11434/v1', enabled: true });
     const model = await reg.languageModel({ providerId: id, modelId: 'llama3' });
@@ -163,19 +156,8 @@ describe('ProviderRegistry', () => {
     expect(JSON.stringify(s.buildMetadata())).not.toContain('cost');
   });
 
-  // The plan expected a `usage: { include: true }` request body alongside the
-  // extractor. OpenRouter's own Usage Accounting docs (fetched 2026-08-27) say
-  // that parameter — and `stream_options: { include_usage: true }` — are
-  // "deprecated and have no effect", because full usage details are now always
-  // included automatically. Sending it would be code that claims to ask for
-  // something it cannot ask for, so the body stays exactly as the SDK builds it.
-  // NAME NARROWED (plan Task 30 item 3): this asserts one specific thing — that
-  // no body-rewriting hook is installed — and the old name claimed it proved
-  // the whole body asks for nothing, which it did not: the body still carried
-  // `stream_options: { include_usage: true }` while this passed. The claim
-  // about the BODY is now guarded by reading the real captured body, in
-  // provider-cost-check.test.ts ("asks for the cost in NO request-body
-  // parameter"). Both are kept: this one is the cheap structural check.
+  // WHY: OpenRouter's usage accounting is always on (include:true is deprecated), so no body-rewriting hook may be installed.
+  // The body itself is checked in provider-cost-check.test.ts.
   it('installs no request-body rewriting hook on the OpenRouter branch', async () => {
     await reg.setKey('openrouter', 'sk-or-abc');
     const model = await reg.languageModel({ providerId: 'openrouter', modelId: 'openai/gpt-4o' });
@@ -204,15 +186,8 @@ describe('ProviderRegistry', () => {
     expect(typeof (model as any).modelId).toBe('string');
   });
 
-  // Same bug as the local-engine pin below, on the branch that serves Ollama,
-  // LM Studio and every custom endpoint: @ai-sdk/openai-compatible only sends
-  // `stream_options:{include_usage:true}` when includeUsage is configured, and
-  // a STREAMING response without it carries no usage block at all — so every
-  // turn records inputTokens:0 and falls back to a chars/4 guess, starving both
-  // the context gauge and the compaction trigger that read the same number.
-  // This branch had no test of its own: deleting the flag here left the whole
-  // desktop suite green (found reviewing 51e8b80e), and it is the same defect
-  // the local branch actually shipped on 2026-07-28.
+  // WHY: without includeUsage a streaming response has no usage block, so every turn records 0 input tokens and
+  // starves the context gauge and compaction trigger (shipped on the local branch 2026-07-28).
   it('openai-compatible: asks the server for real token counts', async () => {
     const id = await reg.upsert({ type: 'openai-compatible', label: 'Ollama', baseUrl: 'http://localhost:11434/v1', enabled: true });
     const model = await reg.languageModel({ providerId: id, modelId: 'llama3' });
@@ -266,9 +241,7 @@ describe('ProviderRegistry', () => {
         .rejects.toThrow(/one-time engine install/);
     });
 
-    // The router discovers GGUFs at boot and re-scans only when asked, so a model
-    // downloaded since is a selectable picker row it has never heard of. This is
-    // the chokepoint every local send crosses — create, mid-session swap, remote.
+    // The router scans GGUFs at boot, so a freshly downloaded model is a picker row it has never heard of.
     it('languageModel(local): asks whether the router can actually serve the model', async () => {
       const servable = vi.fn(async () => true);
       const reg = new ProviderRegistry(new NativeHome(root), secrets, makeHook({ ensureServable: servable }));
@@ -280,9 +253,7 @@ describe('ProviderRegistry', () => {
     it('languageModel(local): an unservable model fails with the REAL cause, not the router 400', async () => {
       const reg = new ProviderRegistry(new NativeHome(root), secrets, makeHook({ ensureServable: async () => false }));
       await reg.init();
-      // The raw router error is `model 'X' not found (provider error 400)`, which
-      // reads as "your 29 GB download is corrupt" and invites a needless
-      // re-download. Name the model, name the real cause, name the remedy.
+      // The raw router 400 reads as "your download is corrupt"; the error must name the real cause and remedy.
       await expect(reg.languageModel({ providerId: 'local', modelId: 'gone-Q4_K_M' }))
         .rejects.toThrow(/could not find the model file for 'gone-Q4_K_M'.*re-download/s);
     });
@@ -294,12 +265,7 @@ describe('ProviderRegistry', () => {
         .rejects.toThrow(/not available yet/);
     });
 
-    // Serial-only constraint (Task 10 / spec §4.2): small local models can't handle
-    // parallel tool calls, so when the harness asks for serialToolCalls the
-    // local-engine model must inject `parallel_tool_calls:false` into the request
-    // body. We assert on the createOpenAICompatible config's transformRequestBody
-    // hook (verified against @ai-sdk/openai-compatible@3.0.7: the config object,
-    // incl. our hook, is stored on the model instance as `.config`).
+    // Small local models cannot handle parallel tool calls, so serialToolCalls injects parallel_tool_calls:false.
     it('languageModel(local): serialToolCalls injects parallel_tool_calls:false via transformRequestBody', async () => {
       const reg = new ProviderRegistry(new NativeHome(root), secrets, makeHook());
       await reg.init();
@@ -310,13 +276,8 @@ describe('ProviderRegistry', () => {
       expect(body.model).toBe('m');
     });
 
-    // T19: the fetch handed to the SDK for a local send must report the finished
-    // reply's speed back to the engine, so the card's fact line can show it.
-    // Reaches through `.config.fetch` (same seam the transformRequestBody tests
-    // use) and drives a REAL captured b10665 stream through it.
+    // The SDK's fetch for a local send must report the finished reply's speed back to the engine (real captured b10665 frame).
     it('languageModel(local): the SDK\'s fetch reports the reply speed back to the engine', async () => {
-      // Verbatim frames from the pinned b10665 capture (2026-09-05) — see the
-      // same payload in prefill-progress.test.ts.
       const finalFrame = {
         choices: [], created: 1788649092, model: 'Qwen3.5-2B-Q8_0',
         object: 'chat.completion.chunk',
@@ -350,14 +311,7 @@ describe('ProviderRegistry', () => {
       expect((model as any).config.transformRequestBody).toBeUndefined();
     });
 
-    // The bug this pins: @ai-sdk/openai-compatible only sends
-    // `stream_options:{include_usage:true}` when includeUsage is configured, and
-    // a STREAMING OpenAI-compatible response without it carries no usage block at
-    // all. We shipped without it, so every native turn recorded inputTokens:0 and
-    // fell back to a chars/4 guess for output — starving both the context gauge
-    // and the compaction trigger, which reads the same number. Nothing asserted
-    // token counts were real, which is exactly why it survived to dogfooding
-    // (Destin, 2026-07-28).
+    // WHY: see the openai-compatible includeUsage pin above — the local branch shipped without it.
     it('languageModel(local): asks the server for real token counts', async () => {
       const reg = new ProviderRegistry(new NativeHome(root), secrets, makeHook());
       await reg.init();
@@ -366,10 +320,7 @@ describe('ProviderRegistry', () => {
     });
   });
 
-  // Sign in with ChatGPT — backend design §2 (the virtual row), §4.1/§4.2 (the
-  // request shape), §6 (the kill switch). Everything here runs against a fake
-  // ChatGptAuth whose fetch() records what would have gone on the wire and
-  // answers with a recorded-shape Responses stream — no network, no browser.
+  // Runs against a fake ChatGptAuth that records what would go on the wire; no network, no browser.
   describe('Sign in with ChatGPT (virtual row + request path)', () => {
     const NOT_A_KEY = 'ChatGPT is signed in through OpenAI, not with a key — use Sign out on its card.';
     const TURNED_OFF = 'ChatGPT sign-in is turned off in this build.';
@@ -403,9 +354,6 @@ describe('ProviderRegistry', () => {
         signedInAccount: () => {
           if (!signedIn) throw new Error(SIGN_IN_REQUIRED);
           if (o.blockedReason) { const e = new Error(o.blockedReason); e.name = 'ChatGptBlockedError'; throw e; }
-          // credentialEpoch: the durable half of continuation identity (Task
-          // 1) — fixed per fake so `continuationIdentity()` produces a stable,
-          // well-formed string in tests without a real ChatGptAuth.
           return { accountId: 'acct_123', email: 'd@example.com', plan: 'free', authGeneration: 1, credentialEpoch: o.credentialEpoch ?? 'epoch-1' };
         },
         models: async () => [],
@@ -423,10 +371,7 @@ describe('ProviderRegistry', () => {
       return { auth: auth as unknown as ChatGptAuth, requests };
     }
 
-    /** A Responses-API SSE body in the shapes the Phase 0 probe recorded
-     *  (docs/active/investigations/2026-09-05-chatgpt-phase0-findings.md):
-     *  response.created → output_item.added → output_text.delta →
-     *  output_item.done → response.completed with the usage block. */
+    /** A Responses-API SSE body in the recorded shapes (created, item added/done, text delta, completed+usage). */
     function responsesStream(o: { text?: string; toolCall?: { name: string; args: string } }): string {
       const ev: any[] = [
         { type: 'response.created', response: { id: 'resp_1', created_at: 1757000000, model: 'gpt-5.5' } },
@@ -465,12 +410,8 @@ describe('ProviderRegistry', () => {
       expect(withAuth.map((p) => p.id)).toEqual(['local', 'openrouter', 'chatgpt']);
     });
 
-    // The new-session form defaults to the FIRST ready provider and blocks
-    // Create when that provider has no models to pick. ChatGPT's list is
-    // cache-first: right after signing in — and for as long as the manifest
-    // fetch keeps failing — it is ready with zero models. Putting the plan
-    // first made that the default and left Create dead with no explanation,
-    // with the user's OpenRouter models one dropdown away. So: last.
+    // WHY: the new-session form defaults to the first ready provider and blocks Create when it has no models; the plan's
+    // list is empty right after sign-in, so it must come LAST.
     it('signed in with an EMPTY model cache, the first READY provider still has models — a session is still creatable', async () => {
       const reg = make(fakeChatGpt({ signedIn: true }).auth);   // models() → []
       await reg.setKey('openrouter', 'sk-or-abc');
@@ -498,8 +439,7 @@ describe('ProviderRegistry', () => {
       const reg = make(fakeChatGpt().auth);
       await reg.init();
       await reg.init();
-      // The file itself, not list(): the bug this pins is a stray persisted row
-      // that an older build on the same machine would render as a key card.
+      // The file itself, not list(): a stray persisted row would render as a key card in an older build.
       const file = JSON.parse(fs.readFileSync(path.join(root, '.youcoded', 'providers.json'), 'utf8'));
       expect(file.providers.map((p: any) => p.id)).toEqual(['local', 'openrouter']);
       expect(file.providers.some((p: any) => p.type === 'chatgpt')).toBe(false);
@@ -588,8 +528,7 @@ describe('ProviderRegistry', () => {
     });
 
     it.each(['codex', 'official'] as const)('sends unambiguous browser schemas through the %s request route', async (route) => {
-      // WHY: schema parity before transport does not prove what an agent receives.
-      // Capture the real harness -> SDK -> middleware request, without paid calls.
+      // WHY: capture the real harness -> SDK -> middleware request (no paid calls).
       const tools = browserToolsForRequest();
       const { auth, requests } = fakeChatGpt({ route });
       const model = await make(auth).languageModel({ providerId: 'chatgpt', modelId: 'gpt-5.5' });
@@ -601,8 +540,6 @@ describe('ProviderRegistry', () => {
 
     it.each(['openai', 'openai-compatible'] as const)('preserves browser contracts on the %s wire', async (type) => {
       const bodies: any[] = [];
-      // WHY: exercise both Responses and Chat Completions schema encoders; the
-      // mock rejects unexpected destinations, so this test cannot spend a key.
       vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         expect(url).toBe(type === 'openai' ? 'https://api.openai.com/v1/responses' : 'https://browser-tools.invalid/v1/chat/completions');
@@ -621,13 +558,8 @@ describe('ProviderRegistry', () => {
       } finally { vi.unstubAllGlobals(); }
     });
 
-    // The `include` assertion on gpt-5.5 above cannot fail: the SDK recognises
-    // any gpt-5.x as a reasoning model and adds `reasoning.encrypted_content`
-    // itself whenever store is false. So this repeats it on an id the SDK does
-    // NOT recognise — which is the only case the middleware's own `include` is
-    // there for, and the normal case for a model the plan's manifest names
-    // before the SDK has heard of it. Without it, reasoning would come back
-    // with nothing we can carry to the next step of the same turn.
+    // WHY: the SDK adds reasoning.encrypted_content itself for gpt-5.x, so the middleware's own include is only
+    // exercised on an id the SDK does not recognise.
     it('include: an id the SDK does not treat as a reasoning model still asks for encrypted reasoning', async () => {
       const { auth, requests } = fakeChatGpt();
       const model = await make(auth).languageModel({ providerId: 'chatgpt', modelId: 'codex-auto-review' });
@@ -644,9 +576,7 @@ describe('ProviderRegistry', () => {
       expect(requests[0].body.input.some((i: any) => i.role === 'system')).toBe(false);
     });
 
-    // Phase 0 P0-5: the endpoint refuses a non-streaming call outright (HTTP
-    // 400 "Stream must be set to true"). The auto-title feeder uses
-    // generateText, so the middleware must stream for it and fold the answer.
+    // The endpoint refuses non-streaming calls (HTTP 400), so generateText must stream under the hood and fold the answer.
     it('generateText on the model streams under the hood and returns the folded text', async () => {
       const { auth, requests } = fakeChatGpt();
       const model = await make(auth).languageModel({ providerId: 'chatgpt', modelId: 'gpt-5.5' }, { cacheKey: 'sess-1' });
@@ -674,9 +604,7 @@ describe('ProviderRegistry', () => {
       expect(out.usage.inputTokens.total).toBe(12);
     });
 
-    // The card's limit / expired / blocked copy keys on the thrown message
-    // byte for byte, and the SDK's retry logic keys on statusCode — so the
-    // wrapper's own errors must come through with neither wrapped nor added.
+    // The card keys on the thrown message and the SDK's retry on statusCode, so wrapper errors pass through unwrapped.
     it('a limit error thrown by the fetch reaches the caller unwrapped, with no statusCode', async () => {
       const msg = 'You have hit your ChatGPT plan limit. It resets in 3 hours.';
       const { auth } = fakeChatGpt({ reply: () => { throw limitError(msg); } });
@@ -697,10 +625,7 @@ describe('ProviderRegistry', () => {
         .rejects.toThrow('Codex is disabled for this workspace.');
     });
 
-    // Task 1: continuationIdentity() is the ONE place this string is built —
-    // the harness's continuationOwner closure and the future restore path
-    // both call it, so they can never disagree (cache-stage4-architecture §
-    // "Identity strings").
+    // continuationIdentity() is the one place this string is built, so the harness and the restore path cannot disagree.
     describe('continuationIdentity()', () => {
       it('a non-ChatGPT binding is provider\\0model, with no ChatGptAuth involved', () => {
         const reg = make(null);
@@ -736,9 +661,7 @@ describe('ProviderRegistry', () => {
       const reg = make(null);
       expect((await reg.list()).some((p) => p.id === 'chatgpt')).toBe(false);
       await expect(reg.languageModel({ providerId: 'chatgpt', modelId: 'gpt-5.5' })).rejects.toThrow(TURNED_OFF);
-      // ONE state, ONE explanation: Test on a leftover ChatGPT card used to say
-      // "not configured", which reads as "you forgot to set it up" and sends
-      // the user looking for a setting that isn't there.
+      // Test on a leftover ChatGPT card must say "turned off", not "not configured".
       expect(await reg.testConnection('chatgpt')).toEqual({ ok: false, message: TURNED_OFF });
     });
   });

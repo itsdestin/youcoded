@@ -1,32 +1,10 @@
 // @vitest-environment jsdom
 //
-// Pins the first-run wizard's "Log in with ChatGPT" half (design
-// docs/active/specs/2026-09-05-chatgpt-signin-backend-design.md §5, §8):
-//
-//   - FirstRunManager.handleChatGptLogin: the waiting line, then every outcome
-//     of the browser round-trip — signed-in finishes setup exactly like the
-//     Claude path; timed-out / cancelled / { error } put the buttons back with
-//     one accurate line; a THROW from signIn() (port 1455 held, no keychain) is
-//     folded into lastError verbatim (review R3-3 — both IPC handlers swallow
-//     throws, so without this the button would silently do nothing).
-//   - handleOpenRouterLogin: the OpenRouter button signs in through the browser
-//     and finishes setup on OpenRouter; every other outcome puts the buttons back.
-//   - FirstRunView's completion path: a ChatGPT-only install remembers 'native'
-//     as its runtime default and seeds the model picker with the plan's first
-//     model only when the catalog already has one (review R2-12) — and never
-//     blocks the hand-off to the app on the catalog.
-//   - The ChatGPT button vanishes under the kill switch (chatgpt.supported).
-//   - setupIsUsable: the launch-time "can this install start a session?" test
-//     that main.ts asks on every launch after setup. It used to live inline in
-//     main.ts where nothing could reach it; reverting it to the Claude-only
-//     question would lock a ChatGPT-only install out of its own app on EVERY
-//     launch, and this branch removed the Skip link, so there is no way out.
-//   - markSetupCompleted: forcing the wizard back to AUTHENTICATE must not
-//     demote an established install to "brand new machine" on the next launch.
-//   - The wizard's state folder honours YOUCODED_TOOLKIT_STATE_DIR, so a dev
-//     instance cannot overwrite the installed app's setup state.
-//   - Settings' Claude Code row does not claim a Claude account after a
-//     ChatGPT-only first run.
+// First-run wizard sign-ins and launch gating: FirstRunManager.handleChatGptLogin / handleOpenRouterLogin / cancelAuth /
+// handleNativeApiKey outcomes, FirstRunView's completion path and kill switch, setupIsUsable (a ChatGPT-only install must not be
+// locked out on every launch; the Skip link is gone), markSetupCompleted (forcing AUTHENTICATE must not demote an established
+// install to "brand new machine"), YOUCODED_TOOLKIT_STATE_DIR (a dev instance must not overwrite the installed app's setup state),
+// and Settings' Claude Code card reading the live sign-in.
 import React from 'react';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -36,10 +14,7 @@ import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-libra
 import type { FirstRunState } from '../src/shared/first-run-types';
 import { INITIAL_PREREQUISITES } from '../src/shared/first-run-types';
 
-// FirstRunManager persists its state under ~/.claude/toolkit-state at every
-// transition. Point homedir at a scratch directory so the test never reads or
-// writes the real wizard state on this machine. The path is computed inside
-// the factory (vi.mock is hoisted above every top-level const).
+// Point homedir at a scratch directory so the test never reads or writes the real wizard state (computed inside the hoisted factory).
 vi.mock('os', async (importOriginal) => {
   const real = await importOriginal<typeof import('os')>();
   const pathMod = await import('path');
@@ -106,8 +81,7 @@ describe('FirstRunManager.handleChatGptLogin', () => {
     const m = managerAtAuth();
     let seen: FirstRunState | null = null;
     const auth = fakeAuth('cancelled');
-    // Deep copy: getState() is a shallow copy whose prerequisites array is the
-    // live one, and the outcome that follows mutates it.
+    // Deep copy: getState() is shallow and the outcome that follows mutates the live prerequisites array.
     auth.signIn.mockImplementation(async () => { seen = JSON.parse(JSON.stringify(m.getState())); return true; });
 
     await m.handleChatGptLogin(auth);
@@ -127,8 +101,7 @@ describe('FirstRunManager.handleChatGptLogin', () => {
     const launched = vi.fn();
     m.on('launch-wizard', launched);
     const auth = fakeAuth('signed-in');
-    // A failed first attempt leaves a red line on screen; the sign-in that
-    // then works must take it away with it (fix 7).
+    // A failed first attempt leaves a red line; the sign-in that then works must clear it.
     await m.handleOpenRouterLogin({ signIn: async () => true, waitForSignIn: async () => 'timed-out', cancelSignIn: async () => true });
     expect(m.getState().lastError).toBe('Sign-in timed out. Try again?');
 
@@ -147,59 +120,35 @@ describe('FirstRunManager.handleChatGptLogin', () => {
     expect(JSON.stringify(s)).not.toContain('sk-secret');
   });
 
-  it("timed-out → authMode 'none', 'Sign-in timed out. Try again?', auth failed, still on AUTHENTICATE", async () => {
+  it.each([
+    ['timed-out', 'Sign-in timed out. Try again?'],
+    ['cancelled', 'Sign-in was cancelled.'],
+    [{ error: 'YouCoded could not save the sign-in: the keychain vanished mid-flow' }, 'YouCoded could not save the sign-in: the keychain vanished mid-flow'],
+  ] as const)("%s → authMode 'none', that line verbatim, auth failed, still on AUTHENTICATE", async (outcome, line) => {
     const m = managerAtAuth();
-    await m.handleChatGptLogin(fakeAuth('timed-out'));
+    await m.handleChatGptLogin(fakeAuth(outcome as Outcome));
     const s = m.getState();
     expect(s.authMode).toBe('none');
-    expect(s.lastError).toBe('Sign-in timed out. Try again?');
+    expect(s.lastError).toBe(line);
     expect(s.authComplete).toBe(false);
     expect(s.currentStep).toBe('AUTHENTICATE');
     expect(authPrereq(m).status).toBe('failed');
   });
 
-  it("cancelled → 'Sign-in was cancelled.'", async () => {
+  // Both IPC handlers swallow throws, so without folding the thrown sentence into lastError the button would silently do nothing.
+  it.each([['port 1455 held', PORT_HELD], ['no keychain', NO_KEYCHAIN]])('a throw from signIn() (%s) → lastError is the thrown sentence verbatim and the wait never starts', async (_n, sentence) => {
     const m = managerAtAuth();
-    await m.handleChatGptLogin(fakeAuth('cancelled'));
-    const s = m.getState();
-    expect(s.authMode).toBe('none');
-    expect(s.lastError).toBe('Sign-in was cancelled.');
-    expect(authPrereq(m).status).toBe('failed');
-  });
-
-  it('{ error } → that text, verbatim', async () => {
-    const m = managerAtAuth();
-    const text = 'YouCoded could not save the sign-in: the keychain vanished mid-flow';
-    await m.handleChatGptLogin(fakeAuth({ error: text }));
-    const s = m.getState();
-    expect(s.authMode).toBe('none');
-    expect(s.lastError).toBe(text);
-    expect(authPrereq(m).status).toBe('failed');
-    expect(authPrereq(m).error).toBe(text);
-  });
-
-  it('a throw from signIn() (port 1455 held) → lastError is the thrown sentence verbatim and the wait never starts', async () => {
-    const m = managerAtAuth();
-    const auth = fakeAuth('signed-in', { throwOnSignIn: PORT_HELD });
+    const auth = fakeAuth('signed-in', { throwOnSignIn: sentence });
     await expect(m.handleChatGptLogin(auth)).resolves.toBeUndefined();
     const s = m.getState();
     expect(s.authMode).toBe('none');
-    expect(s.lastError).toBe(PORT_HELD);
+    expect(s.lastError).toBe(sentence);
     expect(s.authComplete).toBe(false);
     expect(authPrereq(m).status).toBe('failed');
     expect(auth.waitForSignIn).not.toHaveBeenCalled();
   });
-
-  it('a throw from signIn() (no keychain) → the store\'s own sentence, verbatim', async () => {
-    const m = managerAtAuth();
-    await m.handleChatGptLogin(fakeAuth('signed-in', { throwOnSignIn: NO_KEYCHAIN }));
-    expect(m.getState().lastError).toBe(NO_KEYCHAIN);
-    expect(m.getState().authMode).toBe('none');
-  });
 });
 
-// Sign in with OpenRouter (2026-09-18) — replaced the "coming in a later
-// update" line the button used to answer with.
 describe('FirstRunManager.handleOpenRouterLogin', () => {
   const auth = (outcome: Awaited<ReturnType<Parameters<FirstRunManager['handleOpenRouterLogin']>[0]['waitForSignIn']>>, throwOnSignIn?: string) => ({
     signIn: vi.fn(async (_o?: { timeoutMs?: number }) => { if (throwOnSignIn) throw new Error(throwOnSignIn); return true; }),
@@ -239,15 +188,7 @@ describe('FirstRunManager.handleOpenRouterLogin', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// setupIsUsable — the launch-time lock-out test (main.ts calls this on every
-// launch after setup). Answering `false` puts the user back on the sign-in
-// screen, and this branch removed the Skip link, so `false` means locked out.
-// ---------------------------------------------------------------------------
-
-// The wait screen's Cancel (Destin, 2026-10-03 VM test: "no way to go back/cancel once i click
-// log in with openrouter"). Cancelling returns to the choices with no error, stops the browser
-// round, and a late answer from the cancelled round changes nothing.
+// The wait screen's Cancel returns to the choices with no error, stops the browser round, and a late answer changes nothing.
 describe('FirstRunManager.cancelAuth', () => {
   function pending() {
     let answer!: (o: Outcome) => void;
@@ -305,8 +246,7 @@ describe('setupIsUsable', () => {
   it('a ChatGPT-only install is usable — even with the Claude CLI not logged in, and without spawning it', async () => {
     const deps = io({ signedIn: true });
     expect(await setupIsUsable(deps)).toBe(true);
-    // The `claude auth status` subprocess is the expensive one; a signed-in
-    // ChatGPT account must never pay for it on launch.
+    // `claude auth status` is the expensive subprocess; a signed-in ChatGPT account must never pay for it on launch.
     expect(deps.hasUsableProvider).not.toHaveBeenCalled();
     expect(deps.detectAuth).not.toHaveBeenCalled();
   });
@@ -332,11 +272,6 @@ describe('setupIsUsable', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// markSetupCompleted — forcing the wizard back to AUTHENTICATE must not turn
-// an install that has worked for months into a "brand new machine".
-// ---------------------------------------------------------------------------
-
 describe('markSetupCompleted and isFirstRun', () => {
   it('forceStep alone demotes a finished install back to first-run on the next launch', () => {
     const m = new FirstRunManager();
@@ -344,8 +279,7 @@ describe('markSetupCompleted and isFirstRun', () => {
     expect(FirstRunManager.isFirstRun()).toBe(false);
 
     m.forceStep('AUTHENTICATE'); // the launch-time "sign in again" nudge
-    // This is the bug the flag exists to stop: the wizard would re-run the
-    // Node/Git/Claude installers against a working install.
+    // The bug the flag stops: the wizard would re-run the Node/Git/Claude installers against a working install.
     expect(FirstRunManager.isFirstRun()).toBe(true);
   });
 
@@ -368,13 +302,7 @@ describe('markSetupCompleted and isFirstRun', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Where the wizard's state file lives. `scripts/run-dev.sh` shifts Electron's
-// userData but cannot shift HOME, so without this override a dev instance
-// walking the setup wizard overwrites the INSTALLED app's setup state — and
-// Destin's real app opens on the setup wizard at its next launch.
-// ---------------------------------------------------------------------------
-
+// run-dev.sh shifts userData but not HOME, so without this override a dev wizard overwrites the INSTALLED app's setup state.
 describe('YOUCODED_TOOLKIT_STATE_DIR', () => {
   const ENV_DIR = join(tmpdir(), `first-run-state-dir-${process.pid}`);
   afterEach(() => {
@@ -407,10 +335,6 @@ describe('YOUCODED_TOOLKIT_STATE_DIR', () => {
     expect(existsSync(join(ENV_DIR, 'first-run-state.json'))).toBe(false);
   });
 });
-
-// ---------------------------------------------------------------------------
-// FirstRunView — completion path and the kill-switch gate
-// ---------------------------------------------------------------------------
 
 // jsdom exposes no usable `localStorage` here (same as runtime-default.test.tsx),
 // and RuntimeBinding writes the bare global, so stand up a Map-backed one.
@@ -561,21 +485,16 @@ describe('FirstRunView — the ChatGPT button and the kill switch', () => {
     expect(screen.getByText('Log in with OpenRouter')).toBeTruthy();
   });
 
-  it('hides it when the chatgpt namespace is missing entirely (old preload, remote shim)', async () => {
-    stubClaude({ state: viewState({}) });
-    render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
-
-    await openKind('A plan you already pay for');
-    expect(screen.getByText('Log in with Claude')).toBeTruthy();
-    expect(screen.queryByText('Log in with ChatGPT')).toBeNull();
-  });
-
-  it('does not offer a browser sign-in from a visiting remote client', async () => {
-    stubClaude({ state: viewState({}), chatgptSupported: true });
-    (window as any).claude.capabilities.openExternal = false;
+  it.each([
+    ['the chatgpt namespace is missing (old preload, remote shim)', undefined, true],
+    ['the client is a visiting remote one (no openExternal)', true, false],
+  ])('hides it when %s', async (_n, supported, openExternal) => {
+    stubClaude({ state: viewState({}), chatgptSupported: supported });
+    (window as any).claude.capabilities.openExternal = openExternal;
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
     await openKind('A plan you already pay for');
     expect(screen.queryByText('Log in with ChatGPT')).toBeNull();
+    if (openExternal) expect(screen.getByText('Log in with Claude')).toBeTruthy();
   });
 
   it('shows it when chatgpt.supported is true, and the click starts the chatgpt auth mode', async () => {
@@ -587,10 +506,6 @@ describe('FirstRunView — the ChatGPT button and the kill switch', () => {
     expect(firstRun.startAuth).toHaveBeenCalledWith('chatgpt');
   });
 });
-
-// ---------------------------------------------------------------------------
-// The wizard's error line and its Try again button
-// ---------------------------------------------------------------------------
 
 describe('FirstRunView — Retry is offered only when something actually failed', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
@@ -668,18 +583,12 @@ describe('FirstRunView — Retry is offered only when something actually failed'
   });
 });
 
-// ---------------------------------------------------------------------------
-// The runtime seeding must wait for the sign-in to FINISH
-// ---------------------------------------------------------------------------
-
 describe('FirstRunView — a ChatGPT sign-in still in progress seeds nothing', () => {
   beforeEach(() => { localStorage.clear(); });
   afterEach(() => { cleanup(); localStorage.clear(); delete (window as any).claude; });
 
   it("authMode 'chatgpt' at AUTHENTICATE writes neither key and never asks for the catalog", async () => {
-    // authMode flips to 'chatgpt' the instant the browser opens, minutes before
-    // the outcome is known. Seeding here would switch someone who then gives up
-    // and signs in with Claude onto the wrong engine for their first session.
+    // authMode flips to 'chatgpt' minutes before the outcome is known; seeding now would put someone who then signs in with Claude on the wrong engine.
     const { catalog } = stubClaude({
       state: viewState({ currentStep: 'AUTHENTICATE', authMode: 'chatgpt' }),
       catalog: async () => [{ id: 'gpt-5-codex', providerId: 'chatgpt', label: 'GPT-5 Codex' }],
@@ -696,18 +605,8 @@ describe('FirstRunView — a ChatGPT sign-in still in progress seeds nothing', (
   });
 });
 
-// ---------------------------------------------------------------------------
-// Settings → Cloud providers: the Claude Code card reads the LIVE sign-in
-// ---------------------------------------------------------------------------
-//
-// This block used to drive the card through `firstRun.getState()` — the setup
-// wizard's saved notes. That was the bug found on 2026-09-09: on every launch
-// after the first, main answers that call with a bare `{currentStep:'COMPLETE'}`
-// carrying no auth fields at all, so a signed-in install read as signed-out and
-// the card said "Not set up yet" while every Claude model in the picker was
-// greyed out with "Sign in to use". The card now asks Claude Code itself
-// (`claude-code:status`), so these tests drive that channel instead.
-
+// WHY: the card once read the wizard's saved notes, which main answers with a bare {currentStep:'COMPLETE'} after the first launch, so a
+// signed-in install said "Not set up yet". It now asks Claude Code itself (`claude-code:status`).
 describe('ModelProvidersPopup — the Claude Code card reads the live sign-in', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
@@ -776,9 +675,7 @@ describe('ModelProvidersPopup — the Claude Code card reads the live sign-in', 
   });
 });
 
-// Connection trust (2026-09-18): "Use an API key" with an OpenRouter key checks
-// the key BEFORE saving it. A made-up key used to finish setup, because the old
-// check asked OpenRouter's public model list, which answers any key.
+// "Use an API key" checks an OpenRouter key BEFORE saving it (the old check asked the public model list, which answers any key).
 describe('FirstRunManager.handleNativeApiKey — OpenRouter', () => {
   function deps(verdict: 'verified' | 'rejected' | 'unchecked') {
     const setKey = vi.fn(async () => {});

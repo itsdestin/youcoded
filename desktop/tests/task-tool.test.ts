@@ -1,18 +1,6 @@
-// Task 6 — the Task tool's own gating: unknown specialist / trivial prompt /
-// at-capacity / writer-busy typed refusals. Drives execute() directly against
-// a fake ToolContext, mirroring harness-tools-core.test.ts's makeCtx pattern —
-// the actual spawn (Task 7's runSpecialist) is stubbed per-test via the fake
-// ToolServices.specialists.spawn, since none of these tests are meant to
-// reach it (each refuses before ever calling spawn).
-//
-// Task 1 (plan 1b): the fake reserve()/release() below stand in for the host's
-// real reserveSpecialist()/releaseReservation() (native-session-host.ts) — the
-// pair that folds the slot AND writer-busy checks into one synchronous
-// reserve-or-refuse step. These fakes intentionally do NOT re-implement that
-// atomicity (there is nothing to race against in a single synchronous test
-// call); they only need to hand execute() the same shaped answers the real
-// host would, so task.ts's reason-mapping and release-in-finally logic is what
-// gets exercised.
+// The Task tool's own gating (typed refusals), task_id management, roster/consent keys and model resolution.
+// Drives execute() against a fake ToolContext; the fake reserve()/release() stand in for the host's synchronous reserve-or-refuse
+// step and only hand back the same shaped answers, so task.ts's reason-mapping and release-in-finally logic is what runs.
 import { describe, it, expect, vi } from 'vitest';
 import { createTaskTool } from '../src/main/harness/tools/task';
 import type { ToolContext } from '../src/main/harness/tools/types';
@@ -21,28 +9,15 @@ import { DelegatedModels } from '../src/main/harness/specialists/delegated-model
 import { NativeHome } from '../src/main/native-home';
 import type { CatalogModel, ModelBinding } from '../src/shared/provider-types';
 import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path';
-// Task 6 — the "belongs to a DIFFERENT parent" refusal is only a REAL test
-// against the real host: a fake that always answers 'not-yours' would prove
-// nothing about own-children-only actually holding. NativeSessionHost/
-// SessionStore drive that one test; every other Task 6 test below stays on
-// fakes, same as the rest of this file.
+// The real host is needed for the one "belongs to a DIFFERENT parent" test; a fake that always answers 'not-yours' proves nothing.
 import { NativeSessionHost } from '../src/main/harness/native-session-host';
 import { SessionStore } from '../src/main/harness/session-store';
 import { resolveSpecialist as resolveRealSpecialist, type SpecialistDefinition, type SpecialistRoster } from '../src/main/harness/specialists/registry';
-// Task 4 (plan 1c) — the permission-subject test below drives the REAL
-// matcher (never a string comparison stand-in for it), so a passing test
-// actually proves a remembered grant does/doesn't apply, not just that the
-// two subject strings look different to a human reader.
+// The permission-subject tests drive the REAL matcher, so a pass proves a remembered grant does/doesn't apply.
 import { ruleMatches } from '../src/shared/subject-glob';
 import type { PermissionRule } from '../src/shared/permission-types';
 
-// Windows resolves a POSIX-absolute fixture path onto the CURRENT DRIVE
-// (`/proj` -> `D:\proj`), which `toPosix` then renders as `D:/proj`. Hardcoding
-// '/proj' in an expectation therefore asserts POSIX, not the tool's contract —
-// that was 7 of the 19 tests red on the Windows CI leg, whose redness had been
-// written off as "pre-existing". Resolve the fixture exactly the way
-// permissionSubject does (`toPosix(resolveP(work_dir, sessionCwd ?? cwd))`) so
-// the assertion states the contract on both platforms and is unchanged on POSIX.
+// Windows resolves '/proj' onto the current drive, so expectations resolve the fixture the way permissionSubject does.
 const subjectDir = (workDir: string, sessionCwd?: string): string =>
   path.resolve(sessionCwd ?? process.cwd(), workDir).replace(/\\/g, '/');
 
@@ -54,25 +29,24 @@ const subjectDir = (workDir: string, sessionCwd?: string): string =>
 type Specialists = NonNullable<NonNullable<ToolContext['services']>['specialists']>;
 const fakeSpecialists = (partial: Record<string, unknown>): Specialists => partial as unknown as Specialists;
 
+// A ToolContext wired with only the specialist services a test names.
+const directCtx = (specialists: Record<string, unknown>): ToolContext => ({
+  sessionId: 'parent-1', cwd: '/work', signal: new AbortController().signal, readRegistry: new Map(), todos: [],
+  services: { specialists: fakeSpecialists(specialists) },
+});
+
 interface RunOpts {
   slotFree?: boolean;
   writerBusy?: boolean;
   spawn?: ReturnType<typeof vi.fn>;
   spawnBackground?: ReturnType<typeof vi.fn>;
   release?: ReturnType<typeof vi.fn>;
-  // Task 12, item 3: the per-conversation spawn budget is a SEPARATE gate from
-  // the concurrency slot above (reserve) — default true (budget available)
-  // so every existing test in this file, which never cares about the budget,
-  // keeps passing unmodified.
+  // The per-conversation spawn budget is a SEPARATE gate from the concurrency slot; default available.
   budgetOk?: boolean;
-  // Production native sessions always wire both. Tests may override them for
-  // a specific provider/catalog scenario; the helper supplies a safe default.
+  // Production native sessions always wire both binding and models; the helper supplies safe defaults.
   binding?: ModelBinding;
   models?: { designated: DelegatedModels; catalog: () => Promise<CatalogModel[] | null> };
-  // Task 4 (plan 1c) — undefined means "use BUILTIN_ROSTER" (createTaskTool's
-  // own default), so every pre-Task-4 test in this file keeps testing the
-  // built-in roster unmodified; only the new per-cwd-roster tests below pass
-  // a fake one.
+  // undefined = BUILTIN_ROSTER (createTaskTool's default).
   roster?: SpecialistRoster;
   listStatus?: string | null;
 }
@@ -100,10 +74,7 @@ function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
       specialists: fakeSpecialists({
         reserve: (parentId: string, reserveOpts: { writer: boolean }) => {
           if (reserveOpts.writer && opts.writerBusy) return { ok: false, reason: 'writer-busy' } as const;
-          // Task 13: the real reserveSpecialist() now carries the RESOLVED
-          // ceiling on an at-capacity refusal (native-session-host.ts) —
-          // this fake mirrors that shape so task.ts's copy-interpolation
-          // (`reservation.max`) is what actually gets exercised here.
+          // The real reserveSpecialist() carries the resolved ceiling on an at-capacity refusal.
           if (opts.slotFree === false) return { ok: false, reason: 'at-capacity', max: HOSTED_MAX_CONCURRENT_SPECIALISTS } as const;
           return { ok: true, token: { parentId, writer: reserveOpts.writer } } as const;
         },
@@ -157,12 +128,7 @@ describe('Task tool — typed refusals', () => {
     expect(r.text).toMatch(/self-contained brief/i);   // minimal weak-model hardening; full pass is plan 1b
   });
 
-  // Task 12, item 2 — placeholder prompt rejection (spec §3). The regex only
-  // matches the WHOLE trimmed prompt, so a bare "todo"/"tbd"/"fixme" is already
-  // caught by the 40-char floor above — these cases specifically pin the ones
-  // the floor MISSES: longer placeholder-shaped junk that clears 40 chars
-  // while still being nothing but an unexpanded marker (never real content
-  // padded around a real marker — that would legitimately not match, by design).
+  // The placeholder regex matches only the WHOLE trimmed prompt; these clear the 40-char floor but are still unexpanded markers.
   describe('placeholder prompt rejection', () => {
     const PLACEHOLDER_PROMPTS = [
       '<placeholder text goes right here please>',      // <[^>]*>
@@ -182,8 +148,7 @@ describe('Task tool — typed refusals', () => {
       });
     }
 
-    // The pinned false-positive boundary (external review 2026-08-12): a real,
-    // self-contained ~45-char sentence must NOT be caught by the narrow regex.
+    // False-positive boundary: a real ~45-char sentence must NOT be caught.
     it('a real ~45-char sentence is NOT rejected as a placeholder', async () => {
       const realPrompt = 'Find every call site of parseConfig() in src/.';   // 46 chars
       expect(realPrompt.length).toBeGreaterThanOrEqual(45);
@@ -194,9 +159,7 @@ describe('Task tool — typed refusals', () => {
     });
   });
 
-  // Task 12, item 3 — per-conversation spawn budget: a runaway-loop backstop
-  // distinct from the concurrency slot (HOSTED_MAX_CONCURRENT_SPECIALISTS) —
-  // this one is a LIFETIME cap per parent conversation, never released.
+  // A lifetime cap per parent conversation (runaway-loop backstop), never released.
   it('refuses once the per-conversation spawn budget is exhausted, naming the budget', async () => {
     const r = await runTaskTool({ agent: 'explorer' }, { budgetOk: false });
     expect(r.isError).toBe(true);
@@ -216,10 +179,6 @@ describe('Task tool — typed refusals', () => {
   it('returns a typed at-capacity result when this parent has no slot free', async () => {
     const r = await runTaskTool({ agent: 'explorer' }, { slotFree: false });
     expect(r.isError).toBe(true);
-    // Relaxed to not require the paren to close right after the digits — the
-    // copy fix moved "concurrent specialists" inside the parenthetical
-    // ("at capacity (max N concurrent specialists)"), and this regex should
-    // survive that phrasing rather than pin the exact punctuation.
     expect(r.text).toMatch(/at capacity \(max \d+/i);
     expect(r.text).toMatch(/wait/i);      // tells the model what it CAN do
   });
@@ -256,12 +215,9 @@ describe('Task tool — typed refusals', () => {
     expect(r.text).toMatch(/child-9/);
   });
 
-  // ---- Task 6 review fix 4: the consent key is CHARTER-SCOPED, not a bare
-  // work_dir. Before this fix `permissionSubject` returned only `a.work_dir`,
-  // so a remembered "Always allow" for a read-only explorer at a path silently
-  // pre-approved a future read-write worker at the SAME path — the charter is
-  // the unit of envelope consent (spec §5). ----
-  describe('permissionSubject — charter-scoped consent key (Fix 4)', () => {
+  // WHY: the consent key is charter-scoped, not a bare work_dir; otherwise a remembered "Always allow" for a read-only explorer
+  // silently pre-approved a read-write worker at the same path.
+  describe('permissionSubject — charter-scoped consent key', () => {
     it('prefixes the subject with the resolved specialist\'s charter', () => {
       const tool = createTaskTool();
       // explorer is read-only (specialists/builtins.ts); worker is read-write.
@@ -272,20 +228,13 @@ describe('Task tool — typed refusals', () => {
     });
 
     it('falls back to the bare work_dir for an unresolvable agent name', () => {
-      // execute() above already refuses an unknown specialist before ever
-      // spawning, so this text is only ever shown on an ask that's about to be
-      // declined anyway — never a real standing grant.
+      // execute() refuses an unknown specialist before spawning, so this text only shows on an ask about to be declined.
       const tool = createTaskTool();
       expect(tool.permissionSubject({ agent: 'wizard', work_dir: '/proj', description: 'd', prompt: 'p' } as any))
         .toBe(subjectDir('/proj'));
     });
 
-    // Task 11 (ROADMAP fold-in): '.', './x', and the absolute form of the SAME
-    // directory used to mint THREE different remembered-rule keys — approving
-    // one left the other two spellings still asking every time. permissionSubject
-    // has no session cwd to resolve a relative work_dir against (the NativeTool
-    // contract passes only the raw args), so it normalizes against the process's
-    // own cwd — the same base a bare path.resolve(p) would use.
+    // WHY: '.', './x' and the absolute form of one directory minted three consent keys; approving one left the others asking.
     it('canonicalizes work_dir so "." and process.cwd() mint the SAME consent key', () => {
       const tool = createTaskTool();
       expect(tool.permissionSubject({ agent: 'wizard', work_dir: '.', description: 'd', prompt: 'p' } as any))
@@ -298,15 +247,9 @@ describe('Task tool — typed refusals', () => {
         .toBe(tool.permissionSubject({ agent: 'explorer', work_dir: process.cwd(), description: 'd', prompt: 'p' } as any));
     });
 
-    // Fix pass, Finding 1: the consent key doubles as DISPLAY TEXT — describe-
-    // rule.ts slices this exact string into what the permissions screen
-    // renders. The old implementation reused guards.ts's `canonicalize()`,
-    // which case-folds the WHOLE path on win32 (right for the sensitive-path
-    // comparison sets it was built for, wrong for anything a user reads back
-    // — see that function's own doc comment). Forced via a platform stub
-    // since canonicalize's lowercasing branch only engages when
-    // `process.platform === 'win32'`, which this test suite normally isn't.
-    it('preserves the real casing of work_dir even on win32 (Fix 1 — the key doubles as display text)', () => {
+    // WHY: the key doubles as display text; guards.ts canonicalize() case-folds on win32, wrong for anything a user reads back.
+    // Forced via a platform stub.
+    it('preserves the real casing of work_dir even on win32 (the key doubles as display text)', () => {
       const realPlatform = process.platform;
       Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
       try {
@@ -320,10 +263,7 @@ describe('Task tool — typed refusals', () => {
     });
   });
 
-  // ---- Task 4: background: true dispatches through spawnBackground, not
-  // spawn, and the reservation's release ownership moves off this call site
-  // (the detached delivery chain releases it once the run settles) — the ONE
-  // exception is a THROWN launch, where ownership never transferred anywhere.
+  // background: true dispatches through spawnBackground and the detached chain owns the release — except on a THROWN launch.
   describe('background: true', () => {
     it('calls spawnBackground (not spawn) and returns the launch ack without releasing the reservation', async () => {
       const spawn = vi.fn(async () => ({ childId: 'child-1', report: 'done' }));
@@ -331,11 +271,7 @@ describe('Task tool — typed refusals', () => {
       const release = vi.fn();
       const tool = createTaskTool();
       const token = { parentId: 'parent-1', writer: false };
-      const ctx: ToolContext = {
-        sessionId: 'parent-1', cwd: '/work', signal: new AbortController().signal,
-        readRegistry: new Map(), todos: [],
-        services: { specialists: fakeSpecialists({ reserve: () => ({ ok: true, token }), release, spawn, spawnBackground, trySpendSpawnBudget: () => true }) },
-      };
+      const ctx = directCtx({ reserve: () => ({ ok: true, token }), release, spawn, spawnBackground, trySpendSpawnBudget: () => true });
       const r = await tool.execute(
         { description: 'find the bug', prompt: 'a'.repeat(60), agent: 'explorer', work_dir: '.', background: true, model: 'parent' } as any,
         ctx,
@@ -348,9 +284,7 @@ describe('Task tool — typed refusals', () => {
       expect(r.isError).toBeFalsy();
       expect(r.text).toMatch(/working in the background/);
       expect(r.text).toMatch(/task_id: child-9/);
-      // Ownership transferred: this call site does NOT release on the
-      // successful-launch path — the detached chain does, once it settles.
-      expect(release).not.toHaveBeenCalled();
+      expect(release).not.toHaveBeenCalled(); // ownership transferred to the detached chain
     });
 
     it('a thrown background launch still releases the reservation — ownership never transferred', async () => {
@@ -358,11 +292,7 @@ describe('Task tool — typed refusals', () => {
       const release = vi.fn();
       const tool = createTaskTool();
       const token = { parentId: 'parent-1', writer: false };
-      const ctx: ToolContext = {
-        sessionId: 'parent-1', cwd: '/work', signal: new AbortController().signal,
-        readRegistry: new Map(), todos: [],
-        services: { specialists: fakeSpecialists({ reserve: () => ({ ok: true, token }), release, spawn: vi.fn(), spawnBackground, trySpendSpawnBudget: () => true }) },
-      };
+      const ctx = directCtx({ reserve: () => ({ ok: true, token }), release, spawn: vi.fn(), spawnBackground, trySpendSpawnBudget: () => true });
       const r = await tool.execute(
         { description: 'x', prompt: 'a'.repeat(60), agent: 'explorer', work_dir: '.', background: true, model: 'parent' } as any,
         ctx,
@@ -377,38 +307,15 @@ describe('Task tool — typed refusals', () => {
     const release = vi.fn();
     const tool = createTaskTool();
     const token = { parentId: 'parent-1', writer: false };
-    const ctx: ToolContext = {
-      sessionId: 'parent-1',
-      cwd: '/work',
-      signal: new AbortController().signal,
-      readRegistry: new Map(),
-      todos: [],
-      services: {
-        specialists: fakeSpecialists({
-          reserve: () => ({ ok: true, token }),
-          release,
-          trySpendSpawnBudget: () => true,
-          spawn: async () => { throw new Error('boom'); },
-        }),
-      },
-    };
+    const ctx = directCtx({ reserve: () => ({ ok: true, token }), release, trySpendSpawnBudget: () => true, spawn: async () => { throw new Error('boom'); } });
     await tool.execute({ description: 'x', prompt: 'a'.repeat(50), agent: 'explorer', work_dir: '.', model: 'parent' } as any, ctx);
     expect(release).toHaveBeenCalledWith(token);
   });
 });
 
-// ---------------------------------------------------------------------------
-// Task 14 — the `model` input's resolution. Every test in this block sets
-// opts.binding + opts.models explicitly. The few direct-context tests above
-// opt into model: 'parent' because their subject is reservation ownership,
-// not automatic model selection. An omitted model now resolves to budget and
-// therefore requires both production bindings.
-// ---------------------------------------------------------------------------
-// 2026-08-16 (Destin's 1b hands-on, Test 8): the parent model hired the
-// read-only explorer to run `git log` because the roster said only
-// "read-only" vs "can edit files" — nothing told it the explorer has NO
-// SHELL. The description a model reads must name each specialist's tools,
-// and say plainly which one can run commands.
+// An omitted model resolves to budget and needs both production bindings; the direct-context tests above opt into model: 'parent'.
+// The description a model reads must name each specialist's tools and say which one has a shell (a model once hired the
+// read-only explorer to run `git log`).
 describe('Task tool — roster names each specialist\'s tools', () => {
   it('lists every built-in specialist\'s allowedTools and singles out the shell', () => {
     const tool = createTaskTool();
@@ -426,15 +333,7 @@ describe('Task tool — roster names each specialist\'s tools', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Task 4 (plan 1c) — createTaskTool(roster) is now built from the CALLER's
-// roster, never a module-level snapshot of the built-ins: the roster is
-// per-project-folder (SpecialistCatalog, Task 3), so a module-level enum
-// would show every session on the machine the same specialist list. Every
-// test above this block passes createTaskTool() with no argument and keeps
-// exercising BUILTIN_ROSTER unmodified (the default) — these are the only
-// tests that inject a different one.
-// ---------------------------------------------------------------------------
+// createTaskTool(roster) is built from the CALLER's per-project roster, never a module-level snapshot of the built-ins.
 describe('Task tool — per-cwd roster', () => {
   const DOCS_WRITER: SpecialistDefinition = {
     id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
@@ -451,13 +350,9 @@ describe('Task tool — per-cwd roster', () => {
     const tool = createTaskTool(FAKE_ROSTER);
     expect(tool.description).toContain('docs-writer');
     expect(tool.description).toContain('Writes and edits project docs.');
-    // Never the built-in roster this fake roster doesn't include — proves
-    // this really came FROM the injected roster, not BUILTIN_ROSTER leaking
-    // through a stale default somewhere.
+    // Proves it came FROM the injected roster, not a stale BUILTIN_ROSTER default.
     expect(tool.description).not.toContain('explorer');
-    // The schema's own `agent` field description is what the model actually
-    // reads to pick a value — built inside createTaskTool (buildSchema),
-    // never at module load, so it enumerates THIS roster's ids too.
+    // The schema's `agent` field is what the model reads to pick a value; built per tool, so it enumerates THIS roster too.
     const agentFieldDescription = (tool.inputSchema as any).shape.agent.description as string;
     expect(agentFieldDescription).toContain('docs-writer');
     expect(agentFieldDescription).not.toContain('explorer');
@@ -468,21 +363,12 @@ describe('Task tool — per-cwd roster', () => {
   it('permissionSubject uses the roster to find the charter', () => {
     const tool = createTaskTool(FAKE_ROSTER);
     const subject = tool.permissionSubject!({ agent: 'docs-writer', work_dir: '/proj' } as any);
-    // docs-writer's charter (read-write, from its allowedTools) drives the
-    // subject prefix — this fake roster is the ONLY place that charter comes
-    // from, since 'docs-writer' isn't a built-in.
-    // D2: a PERSONAL-folder specialist is 'user'-scoped, so the work dir is
-    // deliberately absent — that is what makes one grant cover every project.
+    // A PERSONAL-folder specialist is 'user'-scoped, so the work dir is deliberately absent: one grant covers every project.
     expect(subject).toBe('read-write:file:docs-writer@aaaaaaaaaaaa');
   });
 
-  // The two-mechanism reasoning this pins (global-constraints.md, "Hire
-  // grants — do not simplify this into one mechanism"): permissionSubject is
-  // half (a) — it stops an OLD remembered grant (minted before this file ever
-  // existed) from silently covering a specialist a repository just shipped.
-  // Half (b) (the renderer suppressing Always-allow on a non-builtin hire) is
-  // a DIFFERENT file's job (Task 10) — this test only proves half (a) by
-  // driving the real decision-path matcher, never a string comparison.
+  // permissionSubject stops an OLD remembered grant from silently covering a specialist a repository just shipped
+  // (the renderer suppressing Always-allow on a non-builtin hire is a separate file's job). Driven through the real matcher.
   // eslint-disable-next-line no-template-curly-in-string -- the title quotes the permission-subject FORMAT, not an interpolation.
   it('permissionSubject: a built-in hire is `${charter}:${workDir}` (unchanged — old grants still match); a file-defined hire is `${charter}:${workDir}:file:${id}` (a remembered read-write grant for the Worker does NOT cover it)', () => {
     const BUILTIN_WORKER = resolveRealSpecialist('worker')!; // source: 'builtin', charter: 'read-write'
@@ -502,18 +388,14 @@ describe('Task tool — per-cwd roster', () => {
     expect(builtinSubject).toBe(`read-write:${subjectDir('/proj')}`);                    // unchanged shape — old grants still match
     expect(fileSubject).toBe(`read-write:${subjectDir('/proj')}:file:repo-worker@bbbbbbbbbbbb`); // file's own id AND its contents
 
-    // A user's PRE-EXISTING remembered grant for the built-in Worker at this
-    // path (the exact shape harness-session.ts's remember-rule persists).
+    // A pre-existing remembered grant for the built-in Worker (the shape harness-session.ts persists).
     const workerGrant: PermissionRule = { tool: 'Task', pattern: `read-write:${subjectDir('/proj')}`, action: 'allow', match: 'exact' };
     expect(ruleMatches(workerGrant, builtinSubject!)).toBe(true);   // still covers the built-in it was granted for
     expect(ruleMatches(workerGrant, fileSubject!)).toBe(false);     // must NOT auto-approve a repo-shipped helper
   });
 
-  // ---- D2 (2026-08-26): how wide an "Always allow" on a hire may be. ----
-  // These drive the REAL decision-path matcher (ruleMatches) against the REAL
-  // shape harness-session.ts's rememberedRuleFor persists, so they fail if
-  // either end drifts — a string comparison here would prove nothing.
-  describe('D2 — grant width follows grantScope, not the helper\'s name', () => {
+  // How wide an "Always allow" on a hire may be; drives the REAL matcher against the shape rememberedRuleFor persists.
+  describe('grant width follows grantScope, not the helper\'s name', () => {
     const mk = (over: Partial<SpecialistDefinition>): SpecialistDefinition => ({
       id: 'code-reviewer', displayName: 'code-reviewer', description: 'Reviews code.',
       systemPrompt: 'Review.', allowedTools: ['Read', 'Grep'], charter: 'read-only',
@@ -539,8 +421,7 @@ describe('Task tool — per-cwd roster', () => {
       const inRepoX = tool.permissionSubject!({ agent: 'code-reviewer', work_dir: '/repoX' } as any)!;
       const inRepoY = tool.permissionSubject!({ agent: 'code-reviewer', work_dir: '/repoY' } as any)!;
       expect(inRepoX).not.toBe(inRepoY);
-      // THE hazard this exists for: repo Y ships its own code-reviewer.md under
-      // the same id. Always-allowing repo X's must never pre-approve it.
+      // Repo Y may ship its own code-reviewer.md under the same id; always-allowing repo X's must not pre-approve it.
       expect(ruleMatches(grantFor(inRepoX), inRepoY)).toBe(false);
     });
 
@@ -550,9 +431,7 @@ describe('Task tool — per-cwd roster', () => {
       const granted = grantFor(subjectBefore);
       expect(ruleMatches(granted, subjectBefore)).toBe(true);
 
-      // Same id, same folder, same charter — only the file's CONTENTS changed
-      // (e.g. someone added Bash to its tools). The standing grant must not
-      // carry over to a definition the user never saw.
+      // Only the file's CONTENTS changed (e.g. Bash added): the grant must not carry to a definition the user never saw.
       const after = createTaskTool(rosterOf(mk({ grantScope: 'user', fingerprint: 'bbbb33334444' })));
       const subjectAfter = after.permissionSubject!({ agent: 'code-reviewer', work_dir: '/repoX' } as any)!;
       expect(ruleMatches(granted, subjectAfter)).toBe(false);
@@ -584,17 +463,9 @@ describe('Task tool — per-cwd roster', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// D2 (2026-08-26, review Major — check-then-use). permissionSubject and
-// execute() each called roster.resolve() independently, and the catalog's
-// resolve reads LIVE state: `specialists:list` calls catalog.reload(), which
-// the renderer fires while a consent card is on screen. So the definition
-// whose fingerprint the user approved could be a DIFFERENT object from the one
-// that then spawned — the "the hash pins what you approved" promise is about
-// resolution TIME, and there were two of those. createTaskTool now resolves
-// once per id and reuses it for the life of that tool instance (= one turn).
-// ---------------------------------------------------------------------------
-describe('Task tool — one roster lookup per id, per tool instance (D2)', () => {
+// WHY: permissionSubject and execute() each resolved the roster against LIVE state (a reload while a consent card is open),
+// so the approved fingerprint could belong to a different object than the one that spawned. Resolve once per id per tool instance (one turn).
+describe('Task tool — one roster lookup per id, per tool instance', () => {
   const BASE: SpecialistDefinition = {
     id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
     systemPrompt: 'Write docs.', allowedTools: ['Read', 'Write'], charter: 'read-write',
@@ -603,9 +474,7 @@ describe('Task tool — one roster lookup per id, per tool instance (D2)', () =>
   };
   const ARGS = { agent: 'docs-writer', work_dir: '/proj', description: 'd', prompt: 'a'.repeat(60), model: 'parent' };
 
-  /** A roster whose resolve() hands back a FRESH object every call — exactly
-   *  what SpecialistCatalog does after a reload, and the only way a second
-   *  lookup is observable at all (identical field values would hide it). */
+  // A roster whose resolve() hands back a FRESH object each call (as SpecialistCatalog does after a reload), the only way a second lookup is observable.
   function freshRoster() {
     const handedOut: SpecialistDefinition[] = [];
     const resolve = vi.fn((id: string) => {
@@ -620,26 +489,14 @@ describe('Task tool — one roster lookup per id, per tool instance (D2)', () =>
   it('permissionSubject then execute() look the id up ONCE, and spawn gets the very object the subject was built from', async () => {
     const { handedOut, resolve, roster } = freshRoster();
     const tool = createTaskTool(roster);
-    // The card the user sees is built from this subject...
-    const subject = tool.permissionSubject!(ARGS as any);
+    const subject = tool.permissionSubject!(ARGS as any); // the card the user sees is built from this
     expect(subject).toBe(`read-write:${subjectDir('/proj')}:file:docs-writer@aaaaaaaaaaaa`);
 
     const spawn = vi.fn<Specialists['spawn']>(async () => ({ childId: 'child-1', report: 'done' }));
-    const ctx: ToolContext = {
-      sessionId: 'parent-1', cwd: '/work', signal: new AbortController().signal,
-      readRegistry: new Map(), todos: [],
-      services: {
-        specialists: fakeSpecialists({
-          reserve: () => ({ ok: true, token: { parentId: 'parent-1', writer: true } }),
-          release: vi.fn(), trySpendSpawnBudget: () => true, spawn,
-        }),
-      },
-    };
+    const ctx = directCtx({ reserve: () => ({ ok: true, token: { parentId: 'parent-1', writer: true } }), release: vi.fn(), trySpendSpawnBudget: () => true, spawn });
     const r = await tool.execute(ARGS as any, ctx);
     expect(r.isError).toBeFalsy();
 
-    // ...and this is what actually ran. One lookup, one object: there is no
-    // window between approval and spawn for a reload to swap the definition.
     expect(resolve).toHaveBeenCalledTimes(1);
     expect(handedOut).toHaveLength(1);
     expect(spawn.mock.calls[0][1].specialist).toBe(handedOut[0]);
@@ -657,25 +514,16 @@ describe('Task tool — one roster lookup per id, per tool instance (D2)', () =>
 
   it('a NEW tool instance looks the id up again — the memo is per-turn, never a permanent cache', () => {
     const { resolve, roster } = freshRoster();
-    // harness-session.ts rebuilds the Task tool at the start of EVERY turn, so
-    // an edited definition still takes effect at the next turn. A memo that
-    // outlived the instance would freeze the roster for the whole session.
+    // harness-session.ts rebuilds the tool every turn, so an edited definition takes effect next turn; a longer-lived memo would freeze it.
     createTaskTool(roster).permissionSubject!(ARGS as any);
     createTaskTool(roster).permissionSubject!(ARGS as any);
     expect(resolve).toHaveBeenCalledTimes(2);
   });
 });
 
-// ---------------------------------------------------------------------------
-// D2 (2026-08-26, review Major): permissionSubject resolved a relative
-// `work_dir` against `process.cwd()` — the Electron process's own directory,
-// which has nothing to do with the conversation. Two consequences, both bad
-// once a grant is pinned to that path: the remembered rule named a folder the
-// user was never in (so the grant they were told was saved never fired again),
-// and `work_dir: '.'` produced the SAME subject in every project, letting a
-// project-scoped grant travel between projects — exactly what D2 prevents.
-// ---------------------------------------------------------------------------
-describe('Task tool — work_dir resolves against the SESSION folder (D2)', () => {
+// WHY: resolving against process.cwd() (the Electron process's directory) made a remembered grant name a folder the user was never in,
+// and made work_dir '.' mint the SAME subject in every project, letting a project-scoped grant travel.
+describe('Task tool — work_dir resolves against the SESSION folder', () => {
   const posix = (p: string) => p.replace(/\\/g, '/');
 
   it('a relative work_dir resolves against the session folder the host passes', () => {
@@ -689,9 +537,7 @@ describe('Task tool — work_dir resolves against the SESSION folder (D2)', () =
     expect(tool.permissionSubject!({ agent: 'explorer', work_dir: '/elsewhere' } as any)).toBe(`read-only:${subjectDir('/elsewhere', '/sess/root')}`);
   });
 
-  // THE hazard: two conversations in two different projects, both hiring with
-  // the natural `work_dir: '.'`. Driven through the REAL decision-path matcher,
-  // never a string comparison, so this fails if either end drifts.
+  // Two projects both hiring with work_dir '.', through the real matcher.
   it('the same work_dir "." in two projects mints two DIFFERENT keys — a grant cannot travel', () => {
     const inA = createTaskTool(undefined, '/work/projA').permissionSubject!({ agent: 'explorer', work_dir: '.' } as any)!;
     const inB = createTaskTool(undefined, '/work/projB').permissionSubject!({ agent: 'explorer', work_dir: '.' } as any)!;
@@ -797,9 +643,7 @@ describe('Task tool — model resolution', () => {
     }));
   });
 
-  // Task 5 (plan 1c) — the ledger record (and later the run view) needs to
-  // know what model actually ran, not just what binding was passed. `label`
-  // is always the raw model id — never a pretty name (see task.ts's own WHY).
+  // The ledger needs what model actually ran; `label` is always the raw model id.
   it('Task passes model {label: modelId, via: tier|named|parent, fallback} into spawn opts', async () => {
     // via: 'budget' — a tier that IS configured, no fallback.
     const budgetBinding: ModelBinding = { providerId: 'openrouter', modelId: 'cheap-model' };
@@ -832,8 +676,7 @@ describe('Task tool — model resolution', () => {
       model: { label: 'deepseek/deepseek-v4-flash-0731', via: 'budget', fallback: false },
     }));
 
-    // via: 'frontier' — the unset tier resolves to its provider-matched
-    // curated model, never to the conversation parent.
+    // via: 'frontier': the unset tier resolves to its provider-matched curated model, never the conversation parent.
     const designated4 = await designatedWith({});
     const spawn4 = vi.fn(async () => ({ childId: 'child-4', report: 'done' }));
     await runTaskTool(
@@ -853,14 +696,8 @@ describe('Task tool — model resolution', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Task 6 — the task_id management surface: steer a running child, resume a
-// finished/interrupted one, or interrupt one, all through the SAME Task tool
-// (task_id + interrupt, no new agent/work_dir/description/prompt needed).
-// Fakes throughout except the "different parent" test, which needs the REAL
-// host to prove own-children-only actually holds rather than assuming a fake
-// that always answers 'not-yours' is trustworthy.
-// ---------------------------------------------------------------------------
+// task_id management: steer a running child, resume a finished one, or interrupt one. Fakes throughout except the
+// "different parent" test, which uses the real host to prove own-children-only holds.
 describe('Task tool — task_id management surface', () => {
   function manageCtx(overrides: Partial<{
     steerSpecialist: any; interruptSpecialist: any; resumeSpecialist: any; reserve: any; release: any;
@@ -964,17 +801,11 @@ describe('Task tool — task_id management surface', () => {
     expect(r.text).toBe('Refused: that task_id does not belong to a specialist of this session.');
   });
 
-  // The only test in this describe block against the REAL host: proves a
-  // task_id belonging to a DIFFERENT parent is refused the SAME way as one
-  // that never existed at all (spec §5 own-children-only) — a fake that
-  // always answers 'not-yours' would only prove task.ts's OWN wiring, not
-  // that the host actually enforces the boundary.
   it('refuses a task_id belonging to a DIFFERENT parent, identically to a nonexistent one', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'task-tool-manage-'));
     const home = new NativeHome(root);
     const store = new SessionStore(home);
-    // The model factory is never called: createChild only constructs and
-    // wires the child session, it never dispatches a turn.
+    // createChild never dispatches a turn, so the model factory is never called.
     const neverCalledFactory = async () => { throw new Error('model factory should never be called in this test — no turn ever runs'); };
     const host = new NativeSessionHost(
       store, neverCalledFactory, async () => ({ contextLength: null, totalSlots: null }), async () => null, async () => null, undefined,
@@ -1025,17 +856,10 @@ describe('Task tool — task_id management surface', () => {
     }
   });
 
-  // ---- D2 (2026-08-26, review Critical): a resume rebuilds the child from
-  // the definition file AS IT IS NOW, while the consent the user gave was for
-  // the file as it was at the hire. A task_id call carries no work_dir, so it
-  // has no permission subject, so no consent card can render for it — under
-  // auto-edit the pattern-less Task allow answers first. The host catches this
-  // and returns a typed 'definition-changed'; these pin that the tool turns
-  // that into an error the model can ACT on, naming the one path that re-asks
-  // the user, on BOTH resume branches. ----
-  describe('a resume whose definition file changed since the hire (D2)', () => {
-    // Only a file-defined helper can ever hit this — a built-in has nothing on
-    // disk to change, so it carries no fingerprint to compare.
+  // WHY: a resume rebuilds the child from the definition file as it is NOW, but consent was for the file at hire. A task_id call carries
+  // no work_dir, so no consent card can render; the host returns 'definition-changed' and the tool must turn it into an error the
+  // model can act on, on BOTH resume branches.
+  describe('a resume whose definition file changed since the hire', () => {
     const DOCS_WRITER: SpecialistDefinition = {
       id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
       systemPrompt: 'Write docs.', allowedTools: ['Read', 'Write'], charter: 'read-write',
@@ -1046,8 +870,7 @@ describe('Task tool — task_id management surface', () => {
       list: () => [DOCS_WRITER],
       resolve: (id) => (id === 'docs-writer' ? DOCS_WRITER : undefined),
     };
-    // 'not-running' means "this parent's own child, already finished" — the
-    // one answer that routes a task_id call into the resume path.
+    // 'not-running' = this parent's own child, already finished: the answer that routes a task_id call into resume.
     const notRunning = () => vi.fn(() => ({ status: 'not-running', agentType: 'docs-writer' }));
 
     function expectRefusal(text: string) {
@@ -1069,8 +892,7 @@ describe('Task tool — task_id management surface', () => {
         { task_id: 'child-1', prompt: 'continue from where you left off' } as any,
         manageCtx({ steerSpecialist: notRunning(), reserve, release, resumeSpecialist }),
       );
-      // docs-writer is read-write, so the resume re-takes the writer lock —
-      // and must hand it straight back when the resume is refused.
+      // read-write, so the resume re-takes the writer lock and must hand it back when refused.
       expect(reserve).toHaveBeenCalledWith('parent-1', { writer: true });
       expect(r.isError).toBe(true);
       expectRefusal(r.text);
@@ -1089,9 +911,7 @@ describe('Task tool — task_id management surface', () => {
       );
       expect(r.isError).toBe(true);
       expectRefusal(r.text);
-      // The background branch owns its own release on every refusal — nothing
-      // downstream took ownership of this reservation, so a leak here would
-      // silently burn a concurrency slot for the rest of the conversation.
+      // The background branch owns its release on every refusal; a leak would burn a concurrency slot for the conversation.
       expect(release).toHaveBeenCalledWith(token);
       // Never the launch ack: a refusal must not read as "it started".
       expect(r.text).not.toMatch(/working in the background/);

@@ -1,12 +1,5 @@
-// ChatGptAuth — the stateful half of Sign in with ChatGPT. Pins design §8's
-// row for tests/chatgpt-auth.test.ts: every arrow of the §3 state machine
-// with injected I/O — a REAL http listener on an ephemeral port (the callback
-// branches are exercised over real HTTP), a routed fake `fetch` standing in
-// for OpenAI, a hand-rolled clock/timer set, the real SecretsStore against the
-// electron mock's reversible safeStorage, and a tmp userData dir.
-//
-// Design: docs/active/specs/2026-09-05-chatgpt-signin-backend-design.md
-// (workspace repo) §2, §3, §4.1, §4.3–4.6, §8.
+// ChatGptAuth: every arrow of the sign-in state machine with injected I/O — a REAL http listener on an ephemeral port,
+// a routed fake `fetch` for OpenAI, a manual clock/timer set, the real SecretsStore, and a tmp userData dir.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -50,16 +43,11 @@ import { createExperimentRequestGuard, experimentGuardForProfile } from '../src/
 import { createOpenAI } from '@ai-sdk/openai';
 import { wrapLanguageModel, streamText } from 'ai';
 
-// The lock primitive is real everywhere except the one test that pins the
-// retry-then-throw, which makes it report "lock held" five times.
+// The lock primitive is real except in the one test that makes it report "lock held" five times.
 vi.mock('../src/main/artifacts/cas-write', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/main/artifacts/cas-write')>();
   return { ...actual, mutateFileUnderLock: vi.fn(actual.mutateFileUnderLock) };
 });
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 const T0 = Date.parse('2026-09-05T12:00:00.000Z');
 const HOUR = 60 * 60 * 1000;
@@ -342,10 +330,6 @@ const exchangeCalls = () => h.fetch.calls.filter((c) => c.url === CHATGPT_TOKEN_
 const refreshCalls = () => h.fetch.calls.filter((c) => c.url === CHATGPT_TOKEN_URL && String(c.init.body).includes('grant_type=refresh_token'));
 const usageCalls = () => h.fetch.calls.filter((c) => c.url === CHATGPT_USAGE_URL);
 const modelsCalls = () => h.fetch.calls.filter((c) => c.url === chatGptModelsUrl(APP_VERSION));
-
-// ---------------------------------------------------------------------------
-// The sign-in round (§3)
-// ---------------------------------------------------------------------------
 
 describe('ChatGptAuth: credential ownership races', () => {
   it.each([0, 10 * DAY])('signout during decrypt rejects without fetching (expiry %s)', async (expiresInMs) => {
@@ -1063,10 +1047,6 @@ describe('ChatGptAuth: accessToken', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The credential-owning fetch (§4.1, §4.5, §4.6)
-// ---------------------------------------------------------------------------
-
 describe('experiment request guard', () => {
   it('sends only a bodyless loopback reservation', async () => {
     const fake = vi.fn(async () => new Response(null, { status: 204 })) as unknown as typeof fetch;
@@ -1099,23 +1079,17 @@ describe('experiment request guard', () => {
     }
   });
 
-  it('validates experiment profile before main can set Electron userData', () => {
+  // Source-order guards on main.ts: the experiment profile is validated before userData is set, the env var is cleared
+  // unless the guard is active (tool jails stay off in the installed app), and the built app's device identity is not read.
+  it('main.ts wires the experiment guard in a safe order', () => {
     const main = fs.readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
     const validation = main.indexOf('const LUNA_REQUEST_GUARD = experimentGuardForProfile(');
     expect(validation).toBeGreaterThan(0);
     expect(validation).toBeLessThan(main.indexOf("app.setPath('userData'"));
     expect(validation).toBeLessThan(main.indexOf("const BUILT_APP_USER_DATA = app.getPath('userData')"));
-  });
-
-  it('clears the experiment variable unless the guard is active, so tool jails stay off in the installed app', () => {
-    const main = fs.readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
     const clear = main.indexOf('if (!LUNA_REQUEST_GUARD) delete process.env.YOUCODED_LUNA_EXPERIMENT;');
-    expect(clear).toBeGreaterThan(main.indexOf('const LUNA_REQUEST_GUARD = experimentGuardForProfile('));
+    expect(clear).toBeGreaterThan(validation);
     expect(clear).toBeLessThan(main.indexOf('void app.whenReady().then('));
-  });
-
-  it('does not read the built app device identity in the experiment profile', () => {
-    const main = fs.readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
     expect(main).toContain('machineIdentity = LUNA_REQUEST_GUARD ? null : getMachineIdentity(BUILT_APP_USER_DATA)');
   });
 
