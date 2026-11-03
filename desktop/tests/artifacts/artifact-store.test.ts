@@ -11,11 +11,11 @@ import sampleJson from '../../../shared-fixtures/artifacts/sample-sidecar.json';
 // can't satisfy ProjectSidecar's literal unions even though the runtime shape matches.
 const sample = sampleJson as unknown as ProjectSidecar;
 
-// The 60-iteration concurrency loop below does real fs work (mkdtemp, fsync,
-// rename, rm x60) and takes ~1.3s locally — under vitest's default 5000ms
-// testTimeout, but only ~4x headroom, and fs work is exactly what inflates
-// under a loaded parallel pool. Bounding the file explicitly keeps this PR from
-// trading one load-dependent budget for another.
+/** An appendVersion input for an internal file; override only what a test cares about. */
+const V = (path: string, o: Record<string, unknown> = {}) =>
+  ({ path, kind: 'internal' as const, absolutePath: null, sessionId: 's', type: 'create' as const, author: 'agent' as const, ...o }) as any;
+
+// WHY: the 60-iteration concurrency loop does real fs work (~1.3s alone, inflates under a loaded pool); bound the file explicitly.
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 describe('readSidecar', () => {
@@ -82,47 +82,25 @@ describe('appendVersion', () => {
   });
 
   it('creates a new artifact when path is unseen', async () => {
-    await appendVersion(projectRoot, sample.projectId, sample.name, {
-      path: 'docs/new.md',
-      kind: 'internal',
-      absolutePath: null,
-      sessionId: 'sess-1',
-      type: 'create',
-      author: 'agent',
-    });
+    await appendVersion(projectRoot, sample.projectId, sample.name, V('docs/new.md', {sessionId: 'sess-1' }));
     const sidecar = await readSidecar(projectRoot);
     expect((sidecar as ProjectSidecar).artifacts[0].path).toBe('docs/new.md');
     expect((sidecar as ProjectSidecar).artifacts[0].versions).toHaveLength(1);
   });
 
   it('appends a version to an existing artifact', async () => {
-    await appendVersion(projectRoot, sample.projectId, sample.name, {
-      path: 'docs/x.md', kind: 'internal', absolutePath: null,
-      sessionId: 'sess-1', type: 'create', author: 'agent',
-    });
-    await appendVersion(projectRoot, sample.projectId, sample.name, {
-      path: 'docs/x.md', kind: 'internal', absolutePath: null,
-      sessionId: 'sess-1', type: 'edit', author: 'agent',
-    });
+    await appendVersion(projectRoot, sample.projectId, sample.name, V('docs/x.md', {sessionId: 'sess-1' }));
+    await appendVersion(projectRoot, sample.projectId, sample.name, V('docs/x.md', {sessionId: 'sess-1', type: 'edit' }));
     const sidecar = await readSidecar(projectRoot);
     expect((sidecar as ProjectSidecar).artifacts).toHaveLength(1);
     expect((sidecar as ProjectSidecar).artifacts[0].versions).toHaveLength(2);
   });
 
   it('retries on CAS conflict up to MAX_RETRIES', async () => {
-    await appendVersion(projectRoot, sample.projectId, sample.name, {
-      path: 'a.md', kind: 'internal', absolutePath: null,
-      sessionId: 's', type: 'create', author: 'agent',
-    });
+    await appendVersion(projectRoot, sample.projectId, sample.name, V('a.md'));
     const [r1, r2] = await Promise.all([
-      appendVersion(projectRoot, sample.projectId, sample.name, {
-        path: 'b.md', kind: 'internal', absolutePath: null,
-        sessionId: 's', type: 'create', author: 'agent',
-      }),
-      appendVersion(projectRoot, sample.projectId, sample.name, {
-        path: 'c.md', kind: 'internal', absolutePath: null,
-        sessionId: 's', type: 'create', author: 'agent',
-      }),
+      appendVersion(projectRoot, sample.projectId, sample.name, V('b.md')),
+      appendVersion(projectRoot, sample.projectId, sample.name, V('c.md')),
     ]);
     expect(r1.committed).toBe(true);
     expect(r2.committed).toBe(true);
@@ -130,13 +108,8 @@ describe('appendVersion', () => {
     expect(sidecar.artifacts).toHaveLength(3);
   });
 
-  // ROADMAP L696: the CREATION sibling of the same-millisecond ABA race below.
-  // The update path has been CAS-guarded since PR #198, but the create path
-  // was not: two writers that both found NO sidecar each built a fresh
-  // page-one and the second silently overwrote the first, both reporting
-  // committed: true. Window is narrow (it needs the first-ever two artifact
-  // writes in a project to land together) but the loss is invisible and
-  // permanent, so this loops.
+  // WHY: the create path was once not CAS-guarded: two writers that both found NO sidecar each built a fresh page-one and the
+  // second silently overwrote the first, both reporting committed. Deterministic, so 3 iterations (the ABA sibling below needs 60).
   it('two concurrent FIRST-EVER writes lose no record (ROADMAP L696)', async () => {
     // THREE iterations, not the 60 its ABA sibling below needs. That one races a
     // millisecond-resolution timestamp and only loses a record when both writes
@@ -151,19 +124,10 @@ describe('appendVersion', () => {
     for (let i = 0; i < 3; i++) {
       const root = mkdtempSync(join(tmpdir(), 'as-create-race-'));
       try {
-        // No sidecar exists yet: both calls read null and both build page-one.
-        // appendVersionsDirect, not appendVersion — the latter coalesces
-        // same-process callers into one batch, so it cannot reach this race.
-        // A second YouCoded instance on the same project still can.
+        // appendVersionsDirect, not appendVersion (which coalesces same-process callers): a second YouCoded instance still races here.
         const [a, b] = await Promise.all([
-          appendVersionsDirect(root, sample.projectId, sample.name, [{
-            path: 'a.md', kind: 'internal', absolutePath: null,
-            sessionId: 's', type: 'create', author: 'agent',
-          }]),
-          appendVersionsDirect(root, sample.projectId, sample.name, [{
-            path: 'b.md', kind: 'internal', absolutePath: null,
-            sessionId: 's', type: 'create', author: 'agent',
-          }]),
+          appendVersionsDirect(root, sample.projectId, sample.name, [V('a.md')]),
+          appendVersionsDirect(root, sample.projectId, sample.name, [V('b.md')]),
         ]);
         expect(a[0].committed).toBe(true);
         expect(b[0].committed).toBe(true);
@@ -176,18 +140,12 @@ describe('appendVersion', () => {
   });
 
   it('a corrupt sidecar is still replaced, not refused (ROADMAP L696)', async () => {
-    // The other half of splitting `null`: corruption recovery deliberately
-    // overwrites what is on disk, so it must NOT be caught by the new
-    // must-not-exist rule. Without CAS_REPLACE_ANY this write is refused and
-    // the user is stuck with a broken sidecar forever.
+    // Corruption recovery deliberately overwrites what is on disk, so the must-not-exist rule must not catch it (else the user is stuck).
     const root = mkdtempSync(join(tmpdir(), 'as-corrupt-'));
     try {
       mkdirSync(join(root, '.youcoded'), { recursive: true });
       writeFileSync(join(root, '.youcoded', 'artifacts.json'), '{ this is not json');
-      const [r] = await appendVersionsDirect(root, sample.projectId, sample.name, [{
-        path: 'a.md', kind: 'internal', absolutePath: null,
-        sessionId: 's', type: 'create', author: 'agent',
-      }]);
+      const [r] = await appendVersionsDirect(root, sample.projectId, sample.name, [V('a.md')]);
       expect(r.committed).toBe(true);
       const sidecar = await readSidecar(root) as ProjectSidecar;
       expect(sidecar.artifacts.map((x) => x.path)).toEqual(['a.md']);
@@ -196,31 +154,15 @@ describe('appendVersion', () => {
     }
   });
 
-  // Pins the same-millisecond CAS ABA fix. The single-shot case above only
-  // caught it ~1 run in 3 (it needs both writes inside one millisecond), which
-  // read as a flaky test for months; at 60 iterations the old code loses a
-  // record essentially every run. If this ever goes red again, a writer is
-  // producing an updatedAt that does NOT advance past the value it read.
-  // Uses appendVersionsDirect, NOT appendVersion: since 2026-08-15 appendVersion
-  // coalesces same-process callers into one batch, so two concurrent calls no
-  // longer race the CAS at all — the direct path is what a SECOND process
-  // (another YouCoded instance on the same project) still exercises.
+  // WHY: a same-millisecond CAS ABA once lost a record (needs both writes inside one ms). 60 iterations make it fail every run; if it goes
+  // red, a writer produced an updatedAt that does not advance. Uses appendVersionsDirect: appendVersion coalesces same-process callers.
   it('concurrent appends never lose a record (same-millisecond CAS)', async () => {
     for (let i = 0; i < 60; i++) {
       const root = mkdtempSync(join(tmpdir(), 'as-aba-'));
-      await appendVersion(root, sample.projectId, sample.name, {
-        path: 'a.md', kind: 'internal', absolutePath: null,
-        sessionId: 's', type: 'create', author: 'agent',
-      });
+      await appendVersion(root, sample.projectId, sample.name, V('a.md'));
       await Promise.all([
-        appendVersionsDirect(root, sample.projectId, sample.name, [{
-          path: 'b.md', kind: 'internal', absolutePath: null,
-          sessionId: 's', type: 'create', author: 'agent',
-        }]),
-        appendVersionsDirect(root, sample.projectId, sample.name, [{
-          path: 'c.md', kind: 'internal', absolutePath: null,
-          sessionId: 's', type: 'create', author: 'agent',
-        }]),
+        appendVersionsDirect(root, sample.projectId, sample.name, [V('b.md')]),
+        appendVersionsDirect(root, sample.projectId, sample.name, [V('c.md')]),
       ]);
       const s = await readSidecar(root) as ProjectSidecar;
       expect(s.artifacts.map((a) => a.path).sort()).toEqual(['a.md', 'b.md', 'c.md']);
@@ -229,11 +171,8 @@ describe('appendVersion', () => {
     }
   });
 
-  // 2026-08-15 — "YouCoded dies 16–21 s after opening one big session". The
-  // tracker fires appendVersion once per replayed tool call (~1,000 for a long
-  // session) and every call used to parse + hold + rewrite the whole sidecar
-  // concurrently until the main process OOM'd. Callers inside one process now
-  // coalesce into a per-project batch: one read and one write per drain.
+  // WHY: the tracker fires appendVersion once per replayed tool call (~1,000 for a long session); each used to parse and rewrite the
+  // whole sidecar concurrently until the main process ran out of memory. Callers now coalesce into one read and write per drain.
   describe('burst coalescing', () => {
     afterEach(() => { vi.restoreAllMocks(); });
 
@@ -261,25 +200,18 @@ describe('appendVersion', () => {
     it('a rejected batch rejects every caller in it and the queue keeps working afterwards', async () => {
       // Append now reuses the shared parsed copy and skips the read when the file is absent: give it a
       // real file and a cold cache so the injected read failure is actually hit.
-      await appendVersion(projectRoot, sample.projectId, sample.name, { path: 'seed.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent' });
+      await appendVersion(projectRoot, sample.projectId, sample.name, V('seed.md'));
       _resetSidecarCacheForTests();
       const spy = vi.spyOn(fsPromises, 'readFile').mockRejectedValueOnce(Object.assign(new Error('EIO'), { code: 'EIO' }));
-      const p1 = appendVersion(projectRoot, sample.projectId, sample.name, {
-        path: 'x.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent',
-      });
+      const p1 = appendVersion(projectRoot, sample.projectId, sample.name, V('x.md'));
       await expect(p1).rejects.toThrow('EIO');
       spy.mockRestore();
-      const r2 = await appendVersion(projectRoot, sample.projectId, sample.name, {
-        path: 'y.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent',
-      });
+      const r2 = await appendVersion(projectRoot, sample.projectId, sample.name, V('y.md'));
       expect(r2.committed).toBe(true);
     });
   });
 
-  // Replay dedupe: re-opening a conversation replays every tool call it ever
-  // made through the tracker. Without this every open appended the same edits
-  // again — 14k versions / 4.4 MB in youcoded-dev by 2026-08-15. toolUseId is
-  // the stable identity of one tool call across replays.
+  // WHY: re-opening a conversation replays every tool call through the tracker; toolUseId is the stable identity across replays.
   describe('replay dedupe by (sessionId, toolUseId)', () => {
     const base = {
       path: 'docs/plan.md', kind: 'internal' as const, absolutePath: null,
@@ -333,14 +265,9 @@ describe('appendVersion', () => {
     });
   });
 
-  // The invariant the fix rests on, asserted directly: a committed write always
-  // leaves a token strictly greater than the one the writer read. Without this,
-  // a concurrent reader holding the old token passes CAS on stale data.
+  // A committed write always leaves a token strictly greater than the one the writer read, else a stale reader passes CAS.
   it('a committed write always advances updatedAt past the expected token', async () => {
-    await appendVersion(projectRoot, sample.projectId, sample.name, {
-      path: 'a.md', kind: 'internal', absolutePath: null,
-      sessionId: 's', type: 'create', author: 'agent',
-    });
+    await appendVersion(projectRoot, sample.projectId, sample.name, V('a.md'));
     const before = (await readSidecar(projectRoot)) as ProjectSidecar;
     // Same-millisecond write: hand back a timestamp that has NOT moved.
     const next = { ...before, updatedAt: before.updatedAt };
@@ -360,54 +287,23 @@ describe('appendVersion — read semantics + artifact id', () => {
   });
 
   it('returns the artifact id (new and existing records)', async () => {
-    const first = await appendVersion(projectRoot, 'p1', 'proj', {
-      path: 'a.md', kind: 'internal', absolutePath: null,
-      sessionId: 's', type: 'create', author: 'agent',
-    });
+    const first = await appendVersion(projectRoot, 'p1', 'proj', V('a.md'));
     expect(first.artifactId).toBeTruthy();
-    const second = await appendVersion(projectRoot, 'p1', 'proj', {
-      path: 'a.md', kind: 'internal', absolutePath: null,
-      sessionId: 's', type: 'edit', author: 'agent',
-    });
-    // Same record → same id (this id feeds the artifacts:changed broadcast the
-    // edit-conflict banner matches on).
+    const second = await appendVersion(projectRoot, 'p1', 'proj', V('a.md', {type: 'edit' }));
+    // Same record -> same id (feeds the artifacts:changed broadcast the edit-conflict banner matches on).
     expect(second.artifactId).toBe(first.artifactId);
   });
 
-  it("a 'read' version does NOT bump lastModified on an existing record", async () => {
-    await appendVersion(projectRoot, 'p1', 'proj', {
-      path: 'a.md', kind: 'internal', absolutePath: null,
-      sessionId: 's', type: 'edit', author: 'agent',
-    });
-    const before = (await readSidecar(projectRoot)) as ProjectSidecar;
-    const stamp = before.artifacts[0].lastModified;
+  // A view or a hand-over is not a modification: neither may jump the record to the top of "recently modified".
+  it.each([['read', 'user'], ['delivered', 'agent']] as const)("a '%s' version does NOT bump lastModified on an existing record", async (type, author) => {
+    await appendVersion(projectRoot, 'p1', 'proj', V('a.md', { type: 'edit' }));
+    const stamp = ((await readSidecar(projectRoot)) as ProjectSidecar).artifacts[0].lastModified;
     await new Promise((r) => setTimeout(r, 5));
-    await appendVersion(projectRoot, 'p1', 'proj', {
-      path: 'a.md', kind: 'internal', absolutePath: null,
-      sessionId: 's2', type: 'read', author: 'user',
-    });
-    const after = (await readSidecar(projectRoot)) as ProjectSidecar;
-    expect(after.artifacts[0].lastModified).toBe(stamp);   // unchanged — a view is not a modification
-    expect(after.artifacts[0].versions).toHaveLength(2);   // the read IS still recorded
-  });
-
-  it("a 'delivered' version does NOT bump lastModified on an existing record", async () => {
-    // Handing the user an old file is not a modification — it must not jump
-    // to the top of "recently modified" (spec 2026-08-25 §4.2).
-    await appendVersion(projectRoot, 'p1', 'proj', {
-      path: 'a.md', kind: 'internal', absolutePath: null,
-      sessionId: 's', type: 'edit', author: 'agent',
-    });
-    const before = (await readSidecar(projectRoot)) as ProjectSidecar;
-    const stamp = before.artifacts[0].lastModified;
-    await new Promise((r) => setTimeout(r, 5));
-    await appendVersion(projectRoot, 'p1', 'proj', {
-      path: 'a.md', kind: 'internal', absolutePath: null,
-      sessionId: 's2', type: 'delivered', author: 'agent', toolUseId: 'toolu_d',
-    });
+    await appendVersion(projectRoot, 'p1', 'proj', V('a.md', { sessionId: 's2', type, author, ...(type === 'delivered' ? { toolUseId: 'toolu_d' } : {}) }));
     const after = (await readSidecar(projectRoot)) as ProjectSidecar;
     expect(after.artifacts[0].lastModified).toBe(stamp);
-    expect(after.artifacts[0].versions.at(-1)?.type).toBe('delivered');
+    expect(after.artifacts[0].versions).toHaveLength(2); // still recorded
+    expect(after.artifacts[0].versions.at(-1)?.type).toBe(type);
   });
 });
 
@@ -418,10 +314,7 @@ describe('removeArtifactRecord', () => {
   });
 
   it('removes the tracking record (never touches disk files)', async () => {
-    const { artifactId } = await appendVersion(projectRoot, 'p1', 'proj', {
-      path: 'a.md', kind: 'internal', absolutePath: null,
-      sessionId: 's', type: 'create', author: 'agent',
-    });
+    const { artifactId } = await appendVersion(projectRoot, 'p1', 'proj', V('a.md'));
     const res = await removeArtifactRecord(projectRoot, artifactId!);
     expect(res.ok).toBe(true);
     const sidecar = (await readSidecar(projectRoot)) as ProjectSidecar;
@@ -429,10 +322,7 @@ describe('removeArtifactRecord', () => {
   });
 
   it('reports artifact-not-found for unknown ids', async () => {
-    await appendVersion(projectRoot, 'p1', 'proj', {
-      path: 'a.md', kind: 'internal', absolutePath: null,
-      sessionId: 's', type: 'create', author: 'agent',
-    });
+    await appendVersion(projectRoot, 'p1', 'proj', V('a.md'));
     const res = await removeArtifactRecord(projectRoot, 'nope');
     expect(res).toEqual({ ok: false, error: 'artifact-not-found' });
   });
@@ -461,9 +351,7 @@ describe('runSidecarMigration', () => {
   it('repairs relative externals and is a no-op on the second call', async () => {
     await writeSidecar(projectRoot, null, legacy() as any);
 
-    // ROADMAP L598: a repair that rewrites artifact history must announce
-    // exactly what it rewrote and where the backup is — it is the only
-    // detector for a repair that over-reclassifies.
+    // A repair that rewrites artifact history must announce what it rewrote and where the backup is.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const first = await runSidecarMigration(projectRoot);
     expect(first).toMatchObject({ migrated: true, reclassified: 1, merged: 0 });
@@ -478,27 +366,15 @@ describe('runSidecarMigration', () => {
       path: 'flappy-bird/play.html', kind: 'internal', absolutePath: null,
     });
 
-    // Both calls share this test's projectRoot AND this test's module instance,
-    // so the first call's `migrationChecked.add(projectRoot)` is still warm here
-    // — this second call short-circuits on the MEMO, before readSidecar ever
-    // runs. That's cheap and worth pinning (repeat calls in one process should
-    // not re-scan), but it proves nothing about the production run-once gate
-    // (`reclassified === 0` from the pure migration). See the next test for that.
+    // The second call short-circuits on the in-process memo (cheap, worth pinning); the cold-memo test below covers the real gate.
     const second = await runSidecarMigration(projectRoot);
     expect(second).toMatchObject({ migrated: false, reclassified: 0 });
     const unchanged = await readSidecar(projectRoot) as ProjectSidecar;
     expect(unchanged.updatedAt).toBe(after.updatedAt);   // it did not rewrite
   });
 
-  // The test above cannot reach the real gate: same process + same projectRoot
-  // means the memo is always warm on the second call. This test forces a COLD
-  // memo — via vi.resetModules() + a dynamic re-import, which re-evaluates
-  // artifact-store.ts and so constructs a brand new, empty `migrationChecked`
-  // Set — and re-runs the migration against the already-repaired sidecar on
-  // disk. If this ever regresses to relying on the memo, a peer device that
-  // wrote a fresh relative-external record after this process's memo was
-  // populated would never get it repaired; if it regresses to re-writing
-  // unconditionally, every LIST_SESSION call would rewrite the sidecar.
+  // WHY: vi.resetModules() + re-import gives a brand-new empty memo, so the already-repaired sidecar on disk is what must decline
+  // the rewrite (else every LIST_SESSION call would rewrite it, or a peer device's fresh relative record would never be repaired).
   it('declines to rewrite an already-repaired sidecar even with a cold memo', async () => {
     await writeSidecar(projectRoot, null, legacy() as any);
     await runSidecarMigration(projectRoot);
@@ -523,24 +399,7 @@ describe('runSidecarMigration', () => {
     expect(readdirSync(join(projectRoot, '.youcoded')).filter((f) => f.includes('.bak'))).toHaveLength(0);
   });
 
-  // Pins the FIXED backup name (not one file per attempt). The second
-  // migration call in the old version of this test was a memo short-circuit —
-  // it never reached the copyFile/EEXIST branch a second time — so it proved
-  // nothing beyond what one call already does; calling once is honest about
-  // what's being checked.
-  //
-  // This test also pins the backup's CONTENT, not just its name. The backup
-  // exists so a maintainer can recover a sidecar if the repair turns out
-  // wrong for a record nobody anticipated — a file merely existing at the
-  // right name proves nothing about whether it's actually restorable. So we
-  // capture the sidecar's raw bytes BEFORE migration runs, then assert the
-  // backup holds exactly those pre-migration bytes (byte for byte — if the
-  // copy read from the wrong source, ran too late, or wrote empty/truncated
-  // output, this catches it). We also assert the live sidecar's bytes CHANGED
-  // from that snapshot; without that check, a migration that silently did
-  // nothing at all would still make the backup content match trivially
-  // (backup == pre-migration == post-migration, all identical), so the
-  // byte-equality assertion above would pass for the wrong reason.
+  // The backup must hold the exact pre-migration bytes (restorable) and the live file must have changed (else a no-op migration passes trivially).
   it('backs the sidecar up under a fixed name before rewriting it', async () => {
     await writeSidecar(projectRoot, null, legacy() as any);
     const sidecarPath = join(projectRoot, '.youcoded/artifacts.json');
@@ -557,13 +416,7 @@ describe('runSidecarMigration', () => {
     expect(readFileSync(sidecarPath, 'utf8')).not.toBe(preMigrationBytes);
   });
 
-  // The backup is the only way back from a bad migration, so it must protect
-  // the OLDEST copy — a retry (or a second window racing the same repair)
-  // must never clobber it with already-half-migrated state. Pre-creating the
-  // backup file with a sentinel and asserting the sentinel survives is what
-  // actually exercises the COPYFILE_EXCL + swallowed-EEXIST branch; without
-  // COPYFILE_EXCL (a plain copyFile) this test fails because the sentinel
-  // gets overwritten.
+  // WHY: the backup is the only way back from a bad migration, so a retry must never clobber the OLDEST copy (COPYFILE_EXCL + swallowed EEXIST).
   it('never overwrites an existing backup', async () => {
     await writeSidecar(projectRoot, null, legacy() as any);
     const backupPath = join(projectRoot, '.youcoded/artifacts.json.pre-migration.bak');
@@ -574,16 +427,8 @@ describe('runSidecarMigration', () => {
     expect(readFileSync(backupPath, 'utf8')).toBe('SENTINEL-PRE-EXISTING-BACKUP');
   });
 
-  // Finding 1 (final review): runSidecarMigration is called from THREE
-  // handlers that were read-only before this branch (LIST_SESSION,
-  // LIST_PROJECT, LIST_ALL_FILES). fs.copyFile's EEXIST-only swallow and
-  // writeSidecar's CAS write can both throw unexpected errors (ENOSPC, EROFS,
-  // EACCES, Windows EPERM from AV). Before the fix, that rejection propagated
-  // straight out of this function into those handlers; FilesTab.tsx's
-  // `listAllFiles(...).then(...)` has no `.catch`, so the Files tab's loading
-  // state would never clear. This pins the fail-closed contract: never throw,
-  // report NOTHING migrated, and don't retry the doomed work on every
-  // subsequent call in this process.
+  // WHY: runSidecarMigration runs inside read-only list handlers whose callers have no .catch, so an unexpected copy/write error
+  // (ENOSPC, EROFS, EACCES) must never throw: report nothing migrated and don't retry the doomed work every call.
   it('resolves to the NOTHING result — never throws — when the backup copy fails unexpectedly', async () => {
     await writeSidecar(projectRoot, null, legacy() as any);
 
@@ -615,12 +460,7 @@ describe('renameArtifact — guards against a relative absolutePath', () => {
   });
   afterEach(() => rmSync(projectRoot, { recursive: true, force: true }));
 
-  // This is the same escape write-authorization's four sites already close,
-  // now closed at the fifth: a RELATIVE absolutePath (the pre-fix classifier
-  // bug, or a record deliberately left external because its real path escapes
-  // the project root with `..`) must never reach fs.access/fs.rename, which
-  // would resolve it against the PROCESS cwd — a real filesystem mutation
-  // outside the project, not just a stale read.
+  // WHY: a RELATIVE absolutePath must never reach fs.access/fs.rename, which would resolve it against the process cwd (a real mutation outside the project).
   it('refuses to rename an external record whose absolutePath is a relative string', async () => {
     const { artifactId } = await appendVersion(projectRoot, 'p1', 'proj', {
       path: 'play.html', kind: 'external', absolutePath: 'flappy-bird/play.html',
@@ -646,8 +486,7 @@ describe('renameArtifact — guards against a relative absolutePath', () => {
     renameSpy.mockRestore();
   });
 
-  // Sanity check that the guard doesn't over-fire: a genuinely absolute
-  // external path still renames normally.
+  // The guard must not over-fire: a genuinely absolute external path still renames.
   it('still renames an external record with a genuinely absolute absolutePath', async () => {
     const filePath = join(projectRoot, 'outside.txt');
     writeFileSync(filePath, 'hello');
@@ -664,9 +503,7 @@ describe('renameArtifact — guards against a relative absolutePath', () => {
   });
 });
 
-// 2026-08-27 OOM fix — see tests/artifacts/sidecar-cache.test.ts for the read
-// side. This pins the write side: the CAS check must not unpack the on-disk
-// file to read its one timestamp.
+// WHY: the CAS check must not unpack the on-disk file to read its one timestamp (out-of-memory fix; read side: sidecar-cache.test.ts).
 describe('writeSidecar — CAS check reads the timestamp without parsing the file', () => {
   let projectRoot: string;
   beforeEach(() => {
@@ -691,9 +528,7 @@ describe('writeSidecar — CAS check reads the timestamp without parsing the fil
   });
 });
 
-// Files the agent wrote through `../` (Destin, 2026-09-23, option A): repaired
-// only inside a project folder and outside the deny list; everything else is
-// left untouched, still refused.
+// Files the agent wrote through `../`: repaired only inside a saved project folder and outside the deny list; the rest stays refused.
 describe('repairRelativeExternals', () => {
   let parent: string;
   let projectRoot: string;
@@ -744,8 +579,7 @@ describe('repairRelativeExternals', () => {
   });
 
   it('re-runs the repair when the saved-folder list changes, not only once per launch', async () => {
-    // Re-review: the "repair done" memo is keyed on the saved-folder list, so a
-    // folder saved as a project mid-session makes its `../` files repairable.
+    // The "repair done" memo is keyed on the saved-folder list, so a folder saved mid-session makes its `../` files repairable.
     await writeSidecar(projectRoot, null, sidecarOf(rec('a', '../notes/plan.md')));
     let saved: string[] = [];
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -773,9 +607,8 @@ describe('repairRelativeExternals', () => {
   });
 });
 
-// 2026-10-22 freeze hunt: appends reuse the shared parsed copy instead of re-parsing a 27 MB file per
-// cycle, and write compact JSON. These pin that the reuse never hides an outside change, never edits
-// what readers hold, and that the bytes on disk still parse to exactly the same data.
+// WHY: appends reuse the shared parsed copy (a 27 MB file re-parsed per cycle froze the app) and write compact JSON; the reuse must never
+// hide an outside change or edit what readers hold, and the bytes must still parse to the same data.
 describe('appendVersion — shared parsed copy + compact file', () => {
   let projectRoot: string;
   const input = (p: string, extra: object = {}) => ({
@@ -825,15 +658,15 @@ describe('appendVersion — shared parsed copy + compact file', () => {
   });
 });
 
-// A writer from another process can replace the sidecar between our committed write and the
-// stat that seeds the shared copy. Our object must never end up cached under THEIR file's stat.
+// A writer from another process can replace the sidecar between our committed write and the stat that seeds the shared copy;
+// our object must never be cached under THEIR file's stat.
 describe('shared sidecar cache — a replace racing our seed', () => {
   let projectRoot: string;
   beforeEach(() => { projectRoot = mkdtempSync(join(tmpdir(), 'as-race-')); _resetSidecarCacheForTests(); });
   afterEach(() => { vi.restoreAllMocks(); });
 
   it('does not cache our content under the other writer\'s stat, and the next append still commits', async () => {
-    await appendVersion(projectRoot, 'p', 'n', { path: 'a.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent' });
+    await appendVersion(projectRoot, 'p', 'n', V('a.md'));
     const file = join(projectRoot, '.youcoded/artifacts.json');
     const current = JSON.parse(readFileSync(file, 'utf8'));
     // The other process's version of the file: different content, newer token.
@@ -849,19 +682,19 @@ describe('shared sidecar cache — a replace racing our seed', () => {
         await realRename(file + '.theirs', file);
       }
     });
-    await appendVersion(projectRoot, 'p', 'n', { path: 'b.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent' });
+    await appendVersion(projectRoot, 'p', 'n', V('b.md'));
     vi.restoreAllMocks();
     // Readers must see what is on disk (theirs), not the object we wrote.
     const seen = (await readSidecarShared(projectRoot)) as ProjectSidecar;
     expect(seen.artifacts.some((a) => a.id === 'THEIRS')).toBe(true);
     // And appending again must work against the real file (not loop on a stale cache).
-    const r = await appendVersion(projectRoot, 'p', 'n', { path: 'c.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent' });
+    const r = await appendVersion(projectRoot, 'p', 'n', V('c.md'));
     expect(r.committed).toBe(true);
     expect(((await readSidecar(projectRoot)) as ProjectSidecar).artifacts.some((a) => a.path === 'c.md')).toBe(true);
   });
 
   it('a refused (CAS conflict) write drops the cached copy', async () => {
-    await appendVersion(projectRoot, 'p', 'n', { path: 'a.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent' });
+    await appendVersion(projectRoot, 'p', 'n', V('a.md'));
     const cached = (await readSidecarShared(projectRoot)) as ProjectSidecar;
     const r = await writeSidecar(projectRoot, '1999-01-01T00:00:00.000Z', { ...cached });  // wrong token: refused
     expect(r.committed).toBe(false);

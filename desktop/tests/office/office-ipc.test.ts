@@ -91,6 +91,16 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 3 });
 });
 
+/** Re-register the IPC channels with extra options (fake dialogs, translator, walk) on a fresh fake ipcMain. */
+function reregister(extra: Record<string, unknown> = {}) {
+  ipc = fakeIpcMain();
+  registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), ...extra } as never);
+}
+
+/** Open a document through the real channel and return its token. */
+const openTok = async (sender: ReturnType<typeof fakeSender>, file: string) =>
+  (await call('office:open', sender, file)) as { token: string };
+
 async function aDocx(name = 'memo.docx'): Promise<string> {
   const file = path.join(dir, name);
   await copyFile(MEMO, file);
@@ -125,19 +135,19 @@ describe('office IPC channels', () => {
   });
 
   it('refuses an editor request from a window that did not open the document', async () => {
-    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    const { token } = await openTok(win1, await aDocx());
     await expect(call('office:invoke', win2, token, 'get_current_path', {})).rejects.toThrow('refused');
     // ...while the window that opened it is answered, by the real command set.
     await expect(call('office:invoke', win1, token, 'get_current_path', {})).resolves.toBe('memo.docx');
   });
 
   it('refuses a command the editor bridge is not allowed to ask for', async () => {
-    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    const { token } = await openTok(win1, await aDocx());
     await expect(call('office:invoke', win1, token, 'read_any_file', { path: '/etc/passwd' })).rejects.toThrow('refused');
   });
 
   it('remembers the editor settings a document changed, keeping only settings keys', async () => {
-    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    const { token } = await openTok(win1, await aDocx());
     await expect(call('office:invoke', win1, token, 'save_editor_settings', { settings: { 'de-settings-unit': '1', 'guest-username': 'someone', 'ui-theme-id': 'x' } })).resolves.toBeNull();
     expect(await readEditorSettings(path.join(dir, 'userData'))).toEqual({ 'de-settings-unit': '1' });
     // Only the window that opened the document may send them.
@@ -146,13 +156,13 @@ describe('office IPC channels', () => {
   });
 
   it('refuses an editor request whose token or command is not text', async () => {
-    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    const { token } = await openTok(win1, await aDocx());
     await expect(call('office:invoke', win1, { token }, 'get_current_path', {})).rejects.toThrow('refused');
     await expect(call('office:invoke', win1, token, ['get_current_path'], {})).rejects.toThrow('refused');
   });
 
   it('closing a document ends its session', async () => {
-    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    const { token } = await openTok(win1, await aDocx());
     await call('office:close', win1, token);
     expect(sessions.get(token)).toBeUndefined();
     await expect(call('office:invoke', win1, token, 'get_current_path', {})).rejects.toThrow('refused');
@@ -160,8 +170,8 @@ describe('office IPC channels', () => {
 
   it('keeps a document open until every place in the window that opened it has closed it', async () => {
     const file = await aDocx();
-    const tab = (await call('office:open', win1, file)) as { token: string };
-    const panel = (await call('office:open', win1, file)) as { token: string };
+    const tab = await openTok(win1, file);
+    const panel = await openTok(win1, file);
     expect(panel.token).toBe(tab.token);
     await call('office:close', win1, tab.token);
     expect(sessions.get(tab.token)).toBeDefined();
@@ -172,19 +182,19 @@ describe('office IPC channels', () => {
 
   it('closes a document opened twice when its window goes away, whatever the count', async () => {
     const file = await aDocx();
-    const { token } = (await call('office:open', win1, file)) as { token: string };
+    const { token } = await openTok(win1, file);
     await call('office:open', win1, file);
     win1.emit('destroyed');
     await vi.waitFor(() => expect(sessions.get(token)).toBeUndefined());
     // A fresh open after that starts from a count of one again.
-    const again = (await call('office:open', win1, file)) as { token: string };
+    const again = await openTok(win1, file);
     await call('office:close', win1, again.token);
     expect(sessions.get(again.token)).toBeUndefined();
   });
 
   it('releases document ownership when its renderer dies without destroying the window', async () => {
     const file = await aDocx();
-    const { token } = (await call('office:open', win1, file)) as { token: string };
+    const { token } = await openTok(win1, file);
     win1.emit('render-process-gone', {}, { reason: 'crashed' });
     await vi.waitFor(() => expect(sessions.get(token)).toBeUndefined());
     await expect(call('office:open', win2, file)).resolves.toMatchObject({ ok: true });
@@ -192,12 +202,12 @@ describe('office IPC channels', () => {
 
   it('releases old editor references on main-page navigation, not iframe navigation', async () => {
     const file = await aDocx();
-    const { token } = (await call('office:open', win1, file)) as { token: string };
+    const { token } = await openTok(win1, file);
     win1.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false });
     expect(sessions.get(token)).toBeDefined();
     win1.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
     await vi.waitFor(() => expect(sessions.get(token)).toBeUndefined());
-    const again = (await call('office:open', win1, file)) as { token: string };
+    const again = await openTok(win1, file);
     await call('office:close', win1, again.token);
     expect(sessions.get(again.token)).toBeUndefined();
   });
@@ -210,12 +220,12 @@ describe('office IPC channels', () => {
   });
 
   it("a stray extra close only affects that window's own document", async () => {
-    const a = (await call('office:open', win1, await aDocx('a.docx'))) as { token: string };
-    const b = (await call('office:open', win1, await aDocx('b.docx'))) as { token: string };
-    const other = (await call('office:open', win2, await aDocx('c.docx'))) as { token: string };
+    const a = await openTok(win1, await aDocx('a.docx'));
+    const b = await openTok(win1, await aDocx('b.docx'));
+    const other = await openTok(win2, await aDocx('c.docx'));
     await call('office:close', win1, a.token);
     await call('office:close', win1, a.token); // stray: already closed
-    const again = (await call('office:open', win1, path.join(dir, 'a.docx'))) as { token: string };
+    const again = await openTok(win1, path.join(dir, 'a.docx'));
     await call('office:close', win1, a.token); // stray, with the file open again under a new token
     expect(sessions.get(again.token)).toBeDefined();
     expect(sessions.get(b.token)).toBeDefined();
@@ -223,15 +233,15 @@ describe('office IPC channels', () => {
   });
 
   it('does not let another window close a document it did not open', async () => {
-    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    const { token } = await openTok(win1, await aDocx());
     await call('office:close', win2, token);
     expect(sessions.get(token)).toBeDefined();
   });
 
   it('closes every document of a window when that window goes away', async () => {
-    const a = (await call('office:open', win1, await aDocx('a.docx'))) as { token: string };
-    const b = (await call('office:open', win1, await aDocx('b.docx'))) as { token: string };
-    const other = (await call('office:open', win2, await aDocx('c.docx'))) as { token: string };
+    const a = await openTok(win1, await aDocx('a.docx'));
+    const b = await openTok(win1, await aDocx('b.docx'));
+    const other = await openTok(win2, await aDocx('c.docx'));
     win1.emit('destroyed');
     await vi.waitFor(() => {
       expect(sessions.get(a.token)).toBeUndefined();
@@ -244,9 +254,9 @@ describe('office IPC channels', () => {
     const file = await aDocx();
     const link = path.join(dir, 'link-to-memo.docx');
     await symlink(file, link);
-    const first = (await call('office:open', win1, file)) as { token: string };
-    const again = (await call('office:open', win1, file)) as { token: string };
-    const viaLink = (await call('office:open', win1, link)) as { token: string };
+    const first = await openTok(win1, file);
+    const again = await openTok(win1, file);
+    const viaLink = await openTok(win1, link);
     expect(again.token).toBe(first.token);
     expect(viaLink.token).toBe(first.token);
     expect(sessions.get(first.token)?.path).toBe(file);
@@ -358,8 +368,7 @@ describe('the start screen: Recent, the project list, New and Open', () => {
       opendir: async (d: string) => { if (hold) { hold = false; await gate; } return fsp.opendir(d); },
       stat: (p: string) => fsp.stat(p),
     };
-    ipc = fakeIpcMain();
-    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => true, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), documents, walkFs });
+    reregister({ available: async () => true, documents, walkFs });
     const first = call('office:status', win1, project);
     await vi.waitFor(() => expect(hold).toBe(false));
     const made = await call('office:create', win1, 'document', project) as { ok: true; file: { name: string } };
@@ -372,8 +381,7 @@ describe('the start screen: Recent, the project list, New and Open', () => {
 
   it('starts only one walk of a folder that never answers, and at most two walks at once', async () => {
     const hung = { opendir: () => new Promise<never>(() => {}), stat: (p: string) => fsp.stat(p) };
-    ipc = fakeIpcMain();
-    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => true, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), walkFs: hung, walkDeadlineMs: 20 });
+    reregister({ available: async () => true, walkFs: hung, walkDeadlineMs: 20 });
     const [a, b, c] = ['a', 'b', 'c'].map((n) => path.join(dir, n));
     for (const f of [a, b, c]) await mkdir(f);
     vi.mocked(startWalk).mockClear();
@@ -469,14 +477,13 @@ describe('the editor asks for a file dialog (Insert → Picture)', () => {
   /** Re-registers with a fake open dialog that answers `paths`. */
   function withPicker(paths: string[] | null) {
     const pick = vi.fn(async () => paths);
-    ipc = fakeIpcMain();
-    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), pickEditorFiles: pick });
+    reregister({ pickEditorFiles: pick });
     return pick;
   }
 
   it('shows the dialog for the asking window and answers handles, never the folders', async () => {
     const pick = withPicker([path.join(dir, 'pics', 'cat.png'), path.join(dir, 'pics', 'dog.jpg')]);
-    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    const { token } = await openTok(win1, await aDocx());
     const filters = [{ name: 'Images', extensions: ['png'] }];
     const many = (await call('office:invoke', win1, token, 'open_dialog', { multiple: true, filters })) as string[];
     expect(pick).toHaveBeenCalledWith(win1, { multiple: true, filters });
@@ -491,16 +498,15 @@ describe('the editor asks for a file dialog (Insert → Picture)', () => {
 
   it('answers null when the dialog is cancelled', async () => {
     const pick = withPicker(null);
-    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    const { token } = await openTok(win1, await aDocx());
     await expect(call('office:invoke', win1, token, 'open_dialog', { filters: PICS })).resolves.toBeNull();
     expect(pick).toHaveBeenCalledTimes(1);
   });
 
   it('a dialog that fails answers null and keeps its error out of the frame', async () => {
     const pick = vi.fn(async () => { throw Object.assign(new Error('GTK failed at /home/secret/folder'), { code: 'EACCES' }); });
-    ipc = fakeIpcMain();
-    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), pickEditorFiles: pick });
-    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    reregister({ pickEditorFiles: pick });
+    const { token } = await openTok(win1, await aDocx());
     await expect(call('office:invoke', win1, token, 'open_dialog', { filters: PICS })).resolves.toBeNull();
     // the log gets a reason, never the error's text (it named a folder)
     const logged = vi.mocked(log).mock.calls.filter((c) => c[2] === 'editor file dialog failed');
@@ -512,7 +518,7 @@ describe('the editor asks for a file dialog (Insert → Picture)', () => {
 
   it("never shows a dialog for another window's document", async () => {
     const pick = withPicker(['/p/a.png']);
-    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    const { token } = await openTok(win1, await aDocx());
     await expect(call('office:invoke', win2, token, 'open_dialog', { filters: PICS })).rejects.toThrow('refused');
     expect(pick).not.toHaveBeenCalled();
   });
@@ -521,7 +527,7 @@ describe('the editor asks for a file dialog (Insert → Picture)', () => {
   // answer made the editor reload the file and drop unsaved edits. Only pictures are answered.
   it('shows no dialog for anything but pictures (the editor\'s own Open asks for documents)', async () => {
     const pick = withPicker([path.join(dir, 'other.docx')]);
-    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    const { token } = await openTok(win1, await aDocx());
     const docs = [{ name: 'Documents', extensions: ['docx', 'xlsx', 'pptx', 'pdf'] }, { name: 'All files', extensions: ['*'] }];
     await expect(call('office:invoke', win1, token, 'open_dialog', { multiple: false, filters: docs })).resolves.toBeNull();
     await expect(call('office:invoke', win1, token, 'open_dialog', { filters: [{ name: 'All files', extensions: ['*'] }] })).resolves.toBeNull();
@@ -538,13 +544,12 @@ describe('the editor asks for a save dialog (Save As, Export)', () => {
   /** Re-registers with a fake save dialog answering `answer`, and a translator that writes a zip. */
   function withSaver(answer: string | null | { refused: string } | Error) {
     const pick = vi.fn(async () => { if (answer instanceof Error) throw answer; return answer; });
-    ipc = fakeIpcMain();
-    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), pickSaveTarget: pick, convert: fakeDoc });
+    reregister({ pickSaveTarget: pick, convert: fakeDoc });
     return pick;
   }
   async function openEdited() {
     const file = await aDocx();
-    const { token } = (await call('office:open', win1, file)) as { token: string };
+    const { token } = await openTok(win1, file);
     await call('office:invoke', win1, token, 'write_editor_bin', { data: Buffer.from('edits').toString('base64') });
     return { file, token };
   }
@@ -577,7 +582,7 @@ describe('the editor asks for a save dialog (Save As, Export)', () => {
   it("refuses a made-up handle, a path, and another document's handle", async () => {
     withSaver(path.join(dir, 'Report.docx'));
     const { token } = await openEdited();
-    const other = (await call('office:open', win1, await aDocx('other.docx'))) as { token: string };
+    const other = await openTok(win1, await aDocx('other.docx'));
     const theirs = await call('office:invoke', win1, other.token, 'save_dialog', {});
     await expect(call('office:invoke', win1, token, 'save_file_as', { path: theirs })).rejects.toThrow('refused');
     await expect(call('office:invoke', win1, token, 'save_file_as', { path: `yc-save/${'0'.repeat(32)}/Report.docx` })).rejects.toThrow('refused');
@@ -638,7 +643,7 @@ describe('the editor asks to print', () => {
   async function openEdited(name = 'memo.docx') {
     const file = name.endsWith('.docx') ? await aDocx(name) : path.join(dir, name);
     if (!name.endsWith('.docx')) await copyFile(MEMO, file);
-    const { token } = (await call('office:open', win1, file)) as { token: string };
+    const { token } = await openTok(win1, file);
     await call('office:invoke', win1, token, 'write_editor_bin', { data: Buffer.from('edits').toString('base64') });
     return { file, token };
   }
@@ -746,29 +751,28 @@ describe('office:save-copy', () => {
   /** Re-registers with a fake save dialog that answers `target`. */
   function withDialog(target: string | null) {
     const pick = vi.fn(async () => target);
-    ipc = fakeIpcMain();
-    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), pickCopyTarget: pick });
+    reregister({ pickCopyTarget: pick });
     return pick;
   }
 
   it('changes nothing when the save dialog is cancelled', async () => {
     const pick = withDialog(null);
     const file = await aDocx();
-    const r = (await call('office:open', win1, file)) as { token: string };
+    const r = await openTok(win1, file);
     await expect(call('office:save-copy', win1, r.token, 'save')).resolves.toEqual({ ok: false, cancelled: true });
     expect(pick).toHaveBeenCalledWith(win1, file);
   });
 
   it("refuses another window's document without asking where", async () => {
     const pick = withDialog(path.join(dir, 'x.docx'));
-    const r = (await call('office:open', win1, await aDocx())) as { token: string };
+    const r = await openTok(win1, await aDocx());
     await expect(call('office:save-copy', win2, r.token, 'save')).resolves.toEqual({ ok: false, message: 'refused' });
     expect(pick).not.toHaveBeenCalled();
   });
 
   it('says a copy is not possible before any edited copy exists', async () => {
     withDialog(null);
-    const r = (await call('office:open', win1, await aDocx())) as { token: string };
+    const r = await openTok(win1, await aDocx());
     await expect(call('office:save-copy', win1, r.token, 'check')).resolves.toEqual({ ok: true, possible: false });
   });
 });
@@ -780,20 +784,19 @@ describe('a window closed before its last save', () => {
   beforeEach(() => {
     // As in the app: closing a document waits for its commands and its journal before its temp goes.
     registry = createSessions(path.join(dir, 'base'), { drain: (s) => drainSession(s, 1_000) });
-    ipc = fakeIpcMain();
-    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), convert: copying as never });
+    reregister({ convert: copying as never });
   });
 
   it('keeps its edits for the next open of the file', async () => {
     const file = await aDocx();
     const w = fakeSender(9);
-    const { token } = (await call('office:open', w, file)) as { token: string };
+    const { token } = await openTok(w, file);
     await call('office:invoke', w, token, 'open_file', {});
     await call('office:invoke', w, token, 'recovery_begin', { docType: 'word' });
     await call('office:invoke', w, token, 'save_changes', { changes: ['typed'], deleteIndex: null, count: 1 });
     w.emit('destroyed'); // the window went before any save
     await vi.waitFor(async () => {
-      const next = (await call('office:open', win1, file)) as { token: string };
+      const next = await openTok(win1, file);
       const offered = (await call('office:invoke', win1, next.token, 'recovery_candidates', {})) as Array<{ id: string; name: string }>;
       expect(offered.map((c) => c.name)).toEqual([path.basename(file)]);
     });
@@ -973,7 +976,7 @@ describe.skipIf(!HAS_ADDON)('a copy from kept typing after a restore, with the b
     const file = path.join(dir, 'pictures.docx');
     await copyFile(PICTURE, file);
     const w = Object.assign(fakeSender(9), { send: vi.fn() });
-    const { token } = (await call('office:open', w, file)) as { token: string };
+    const { token } = await openTok(w, file);
     const kept = (await call('office:invoke', w, token, 'open_file', {})) as string; // the editor's bytes
     // A kept version without the picture, restored while the editor still holds the old document.
     const plain = await snapshot(path.join(dir, 'userData'), file, 'autosave', await readFile(MEMO));
@@ -992,7 +995,7 @@ describe.skipIf(!HAS_ADDON)('a copy from kept typing after a restore, with the b
     const w = Object.assign(fakeSender(10), { send: vi.fn() });
     const file = path.join(dir, 'p2.docx');
     await copyFile(PICTURE, file);
-    const { token } = (await call('office:open', w, file)) as { token: string };
+    const { token } = await openTok(w, file);
     await expect(call('office:save-copy', w, token, 'save', 42)).resolves.toEqual({ ok: false, message: 'refused' });
     w.removeAllListeners();
   });

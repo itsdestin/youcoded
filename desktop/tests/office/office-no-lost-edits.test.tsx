@@ -40,6 +40,17 @@ function withOffice(over: Partial<OfficeBridge> = {}) {
   return office;
 }
 
+/** Play the editor: answer each yc:office-save request with its bytes (write_editor_bin), then save_file. */
+function answerSaves(posted: { mockImplementation: (fn: (msg: unknown) => void) => unknown }, container: HTMLElement) {
+  const iframe = frameOf(container) as HTMLIFrameElement;
+  posted.mockImplementation((msg: unknown) => {
+    if ((msg as { type?: string }).type !== 'yc:office-save') return;
+    queueMicrotask(() => act(() => {
+      for (const cmd of ['write_editor_bin', 'save_file']) window.dispatchEvent(new MessageEvent('message', { data: { yc: 'rpc', id: Math.random(), cmd, args: {} }, origin: 'office://t1', source: iframe.contentWindow }));
+    }));
+  });
+}
+
 const frameOf = (c: HTMLElement) => c.querySelector('iframe[title="plan.docx"]');
 
 beforeEach(() => { resetOfficeStoreForTests(); resetOfficeAvailabilityForTests(); snapshot.current.pages = [OFFICE_PAGE_SUMMARY]; });
@@ -159,14 +170,7 @@ describe('when an Office save fails', () => {
       saveCopy,
       invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file') throw new Error("This file is on a read-only disk, so Office couldn't save it."); return null; }),
     });
-    // The editor's side of the save that runs before the copy (bytes, then save_file).
-    const iframe = frameOf(container) as HTMLIFrameElement;
-    posted.mockImplementation((msg: unknown) => {
-      if ((msg as { type?: string }).type !== 'yc:office-save') return;
-      queueMicrotask(() => act(() => {
-        for (const cmd of ['write_editor_bin', 'save_file']) window.dispatchEvent(new MessageEvent('message', { data: { yc: 'rpc', id: Math.random(), cmd, args: {} }, origin: 'office://t1', source: iframe.contentWindow }));
-      }));
-    });
+    answerSaves(posted, container); // the editor's side of the save that runs before the copy
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
     await waitFor(() => expect(saveCopy).toHaveBeenCalledWith('t1', 'save'));
     expect(await screen.findByText("This file is on a read-only disk, so Office couldn't save it.")).toBeInTheDocument();
@@ -181,14 +185,7 @@ describe('when an Office save fails', () => {
       invoke,
       saveCopy: vi.fn(async (_t: string, mode: string) => (mode === 'check' ? { ok: true as const, possible: true } : { ok: true as const, folder: 'Documents', path: COPY, unchanged: true })),
     });
-    // The editor answers each save with its bytes, then save_file (fix round 5: a copy needs them).
-    const iframe = frameOf(container) as HTMLIFrameElement;
-    posted.mockImplementation((msg: unknown) => {
-      if ((msg as { type?: string }).type !== 'yc:office-save') return;
-      queueMicrotask(() => act(() => {
-        for (const cmd of ['write_editor_bin', 'save_file']) window.dispatchEvent(new MessageEvent('message', { data: { yc: 'rpc', id: Math.random(), cmd, args: {} }, origin: 'office://t1', source: iframe.contentWindow }));
-      }));
-    });
+    answerSaves(posted, container); // a copy needs the editor's bytes, then save_file
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
     expect(await screen.findByText(/copy.*Documents/i)).toBeInTheDocument();
     // Same tab, now the copy; the original's session is handed back with nothing to save.
