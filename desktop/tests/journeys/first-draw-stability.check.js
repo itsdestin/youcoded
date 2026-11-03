@@ -54,7 +54,7 @@
     const box = s.getBoundingClientRect(); const mid = box.top + box.height / 2;
     const ref = entriesOf(s).find((e) => { const b = e.getBoundingClientRect(); return b.top <= mid && b.bottom >= mid && !isSpacer(e); });
     const key = ref && ref.dataset.entryKey; const top0 = ref ? ref.getBoundingClientRect().top : 0;
-    const ts = performance.now();
+    const ts = performance.now(); const st0 = s.scrollTop, sh0 = s.scrollHeight;
     while (performance.now() - ts < 450) {
       await raf();
       const cur = key && s.querySelector('[data-entry-key="' + CSS.escape(key) + '"]');
@@ -63,7 +63,7 @@
         // WHY the detail (failed once under a busy machine, 2026-11-03, 20px, never alone): a drift seen for one
         // frame and corrected by the next is the place-holding running a frame late; one still there after 450 ms
         // is a real jump. The failure now says which, and on what entry, so the next one explains itself.
-        if (d > worstDrift) { worstDrift = d; driftAt = { key, frame: Math.round(performance.now() - ts), step: steps }; }
+        if (d > worstDrift) { worstDrift = d; driftAt = { key, frame: Math.round(performance.now() - ts), step: steps, scrollTopMoved: r1(s.scrollTop - st0), scrollHeightMoved: r1(s.scrollHeight - sh0), spacer: isSpacer(cur) }; }
         lastDrift = d;
       }
       if (spacersInWindow() > 0) spacerFrames++;

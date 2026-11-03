@@ -172,13 +172,27 @@ export function useEntryFolding(
   // `overflow-anchor`), so this holds the topmost visible entry and puts it back, like ChatView's
   // `prependAnchorRef` does for a prepended page. Idempotent: when the browser already compensated, the
   // measured drift is 0 and nothing is written.
+  // WHY `top` is the entry's place in the scrolled DOCUMENT (screen top + scrollTop), not its place on screen:
+  // the draw that follows a capture is not always in the same frame (the observer path is an ordinary
+  // setState, so on a busy machine the reader can scroll again between capture and commit). A screen-relative
+  // anchor then read that scroll as "drift" and scrolled the reader BACK by it (journey under 40x CPU throttle:
+  // a lasting 1,200 px jump). A document position is unchanged by scrolling, so only content above the entry
+  // changing height is ever corrected - the same rule ChatView's prepend anchor follows.
+  //
+  // WHY the browser's own anchoring is switched off from capture until the correction (journey, 40x CPU
+  // throttle: the view ended 1,739 px off): with two correctors, a spacer shrinking by N px above the reader
+  // was undone twice - once by the browser, once here - so the reader was thrown 2N px. Off in between, this
+  // is the only corrector; ChatView's prepend window does the same for the same reason.
   const anchor = useRef<{ el: HTMLElement; top: number } | null>(null);
+  const priorAnchoring = useRef<string | null>(null);
   /** Keys unfolded since the last commit, whose real height is read once they are drawn. */
   const justUnfolded = useRef(new Set<string>());
   const captureAnchor = useCallback(() => {
     const root = rootRef.current;
     anchor.current = null;
     if (!root) return;
+    if (priorAnchoring.current === null) priorAnchoring.current = root.style.overflowAnchor;
+    root.style.overflowAnchor = 'none';
     const rootTop = root.getBoundingClientRect().top;
     const entries = root.querySelectorAll<HTMLElement>('[data-entry-key]');
     // Entries are in layout order, so binary search for the first one still on screen.
@@ -197,7 +211,7 @@ export function useEntryFolding(
     while (pick < entries.length && folded.current.has(entries[pick].dataset.entryKey ?? '')
       && entries[pick].getBoundingClientRect().top < rootBottom) pick++;
     const el = entries[pick] && entries[pick].getBoundingClientRect().top < rootBottom ? entries[pick] : entries[lo];
-    if (el) anchor.current = { el, top: el.getBoundingClientRect().top - rootTop };
+    if (el) anchor.current = { el, top: el.getBoundingClientRect().top - rootTop + root.scrollTop };
   }, [rootRef]);
   const removalPublishPending = useRef(false);
   const publishRemovals = useCallback(() => {
@@ -460,9 +474,10 @@ export function useEntryFolding(
     anchor.current = null;
     const root = rootRef.current;
     if (a && root && a.el.isConnected) {
-      const drift = a.el.getBoundingClientRect().top - root.getBoundingClientRect().top - a.top;
+      const drift = a.el.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop - a.top;
       if (Math.abs(drift) > 0.5) root.scrollTop += drift;
     }
+    if (root && priorAnchoring.current !== null) { root.style.overflowAnchor = priorAnchoring.current; priorAnchoring.current = null; }
     for (const key of justUnfolded.current) {
       const h = elements.current.get(key)?.offsetHeight ?? 0;
       if (h > 0) heights.current.set(key, h);
