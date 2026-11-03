@@ -156,6 +156,10 @@ const SHARED_TEST = {
   // YOUCODED_REAL_HOME lets the isolation guard prove the redirect actually
   // moved (it cannot read the original HOME once overridden).
   env: {
+    // WHY: the release workflow runs this suite AFTER stamping the build official, so a
+    // test that boots the backend would otherwise send real analytics check-ins.
+    // analytics-service.test.ts clears it for the cases that exercise sending.
+    YOUCODED_NO_ANALYTICS: '1',
     HOME: TEST_HOME,
     USERPROFILE: TEST_HOME,
     // See TMP_REAL above: the realpath spelling of the temp dir, on every platform.

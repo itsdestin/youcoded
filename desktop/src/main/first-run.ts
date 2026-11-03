@@ -28,6 +28,7 @@ import {
 import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { CuratedModel, DownloadProgress } from '../shared/model-manager-types';
 import { writeSetupDownload } from './first-run-local';
+import { noteMilestone } from './analytics-service';
 
 // WHY (2026-09-30 one-core R3-3): NativeKeyService moved to shared/first-run-types.ts (the
 // first-run:submit-api-key channel row names it); re-exported so existing imports keep working.
@@ -835,6 +836,8 @@ export class FirstRunManager extends EventEmitter {
 
   private advanceTo(step: FirstRunStep): void {
     this.state.currentStep = step;
+    // Setup staircase (analytics deck U-2): sent once per fresh install, ever.
+    if (step === 'COMPLETE') noteMilestone('setup_done');
     this.saveState();
     this.emitState();
   }
@@ -853,6 +856,9 @@ export class FirstRunManager extends EventEmitter {
     if (!prereq) return;
 
     Object.assign(prereq, updates);
+    // Which setup step people get stuck on (deck U-2). Only the step's name is
+    // sent — never the error text, which can hold paths and user names.
+    if (updates.status === 'failed') noteMilestone(`setup_failed_${name.toLowerCase().replace(/[^a-z]/g, '')}`);
 
     // Recalculate overall progress: (installed count / total) * 90, capped at 90.
     // WHY skipped rows don't count (2026-10-02): Claude Code and Node are now

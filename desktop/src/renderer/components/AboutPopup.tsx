@@ -139,6 +139,8 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
                   <li>Country and approximate region (e.g. US state), derived from your IP address by Cloudflare. IP addresses are never stored.</li>
                 </ul>
                   )}
+                  {/* WHY (analytics deck U-2/U-6, 2026-10-31): the two one-time messages analytics-service.ts can send besides the daily one. */}
+                  <p className="text-2xs text-fg-dim leading-relaxed">Two more messages are sent at most once each: while you first set up the app, whether setup finished, the name of a setup step that failed, and whether you sent a first message; and if you turn this off, one last notice saying so, without the device hash.</p>
                   <p className="text-2xs text-fg-dim leading-relaxed">No message content, no usernames, no tokens, no file paths. The collection of this information helps improve YouCoded for yourself and future users. You may disable this below at any time.</p>
                 </div>
               </FoldRow>

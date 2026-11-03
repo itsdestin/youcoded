@@ -127,6 +127,11 @@ class BackendService : Service() {
         }
     }
 
+    @android.annotation.SuppressLint("HardwareIds") // the analytics identity; hashed before it leaves the phone
+    private fun androidId(): String =
+        runCatching { android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID) }
+            .getOrNull().orEmpty()
+
     /** One run of the backend. True when it became ready before it exited. */
     private fun runBackendOnce(gen: Int): Boolean {
         _state.value = State.Starting("Starting the assistant…")
@@ -141,6 +146,11 @@ class BackendService : Service() {
             "YOUCODED_SECRETS_ON_STDIN" to "1",
             "YOUCODED_HOST_SOCKET" to "@$hostName",
             "YOUCODED_APP_VERSION" to appVersion(),
+            // WHY: the backend's daily analytics check-in identifies a phone by this ID
+            // (hashed on the phone before sending), exactly as the 1.3.0 app did, so a
+            // reinstall is not counted as a new person. headless-boot.ts reads it once
+            // and removes it, so programs the backend starts never see it.
+            "YOUCODED_ANDROID_ID" to androidId(),
         ))
         val pb = ProcessBuilder(File(installer.bin, "node").path, "dist/main/headless/headless-main.js")
             .directory(installer.backend)
