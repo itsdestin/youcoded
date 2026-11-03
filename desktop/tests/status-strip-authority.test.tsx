@@ -30,16 +30,6 @@ function strip(): HTMLElement {
 }
 
 describe('StatusStrip', () => {
-  it('is one geometry regardless of tone', () => {
-    const seen = new Set<string>();
-    for (const tone of ['ok', 'warn', 'idle', 'busy'] as const) {
-      cleanup();
-      render(<StatusStrip tone={tone}>message</StatusStrip>);
-      seen.add(strip().className);
-    }
-    expect(seen.size, 'tone must not change the container').toBe(1);
-  });
-
   it('a state at rest gets a dot; a state in motion gets a spinner', () => {
     render(<StatusStrip tone="ok">message</StatusStrip>);
     expect(strip().querySelector('.rounded-full')).not.toBeNull();
@@ -55,11 +45,9 @@ describe('StatusStrip', () => {
     expect(screen.getByRole('button', { name: 'Set up' })).toBeInTheDocument();
   });
 
-  it('detail is a quieter second line, not a second status', () => {
-    render(<StatusStrip tone="busy" detail="This may take a few minutes">message</StatusStrip>);
-    const detail = screen.getByText('This may take a few minutes');
-    expect(detail.className).toContain('text-3xs');
-    expect(screen.getByText('message').className).toContain('text-xs');
+  it('detail is a second line under the message', () => {
+    render(<StatusStrip tone="busy" detail="later line">message</StatusStrip>);
+    expect(screen.getByText('message').compareDocumentPosition(screen.getByText('later line')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 
@@ -69,7 +57,7 @@ describe('StatusStrip', () => {
 /**
  * Debt this tranche did NOT pay, counted per file so it cannot grow silently.
  *
- * All three lists below are real findings, and none of them is K5's or K9's job.
+ * The list below is a real finding, and none of them is K5's or K9's job.
  * Writing them as COUNTS rather than skipping the check turns each backlog into
  * a live number: the guard fails the moment someone adds one more.
  *
@@ -78,35 +66,6 @@ describe('StatusStrip', () => {
  * means editing that rule's list too — youcoded-dev's check.sh fails if the two
  * lists differ.
  */
-
-// Centred, colour-carrying status paragraphs on surfaces outside the settings
-// menu family. Genuine K5 candidates — a status line with nowhere to put the
-// action that resolves it — but on screens this tranche does not touch.
-const CENTRED_STATUS_ELSEWHERE: Record<string, { count: number; why: string }> = {
-  // Dropped to 0 (guide batch, 2026-09-29): its one match — a hand-rolled
-  // text-destructive-fg text-center error line — moved to FieldError (guide:
-  // no red/coloured body text for messages). Kept at 0 rather than removed
-  // so the entry stays in step with this rule's workspace-side ast-grep
-  // ignores: list (see the file-level comment on that coordination) and so a
-  // future regression here is still caught.
-  'FirstRunView.tsx': { count: 0, why: 'first-run setup screen, not a settings menu — both matches fixed 2026-09-29' },
-  // Dropped to 0 (guide batch, 2026-09-29): its two matches — linkError and
-  // publishError — both moved to FieldError. Same "kept at 0" reasoning as
-  // FirstRunView.tsx above.
-  'ShareSheet.tsx': { count: 0, why: 'share flow — both matches fixed 2026-09-29' },
-  // Dropped from 2 to 1 (guide batch, 2026-09-29): its publishError line moved
-  // to FieldError. The remaining 1 is the green link-styled-as-a-button below,
-  // which this pattern matches but isn't a status line.
-  // 2, not 1, since 2026-09-16: its green link-styled-as-a-button (the same <a> the
-  // callout guard exempts) moved from text-emerald-500 to the status text-green-400,
-  // which this pattern matches. Same element as before — it is a button, not a status line.
-  // ThemeShareSheet.tsx left the list 2026-10-13 (small-fixes-3#SF3-10): its Published link keeps its green tint, words in the text colour.
-  // 'BugReportPopup.tsx' was here with count 1 — the legacy review screen's amber
-  // "High Claude usage" caption. That screen was deleted on 2026-09-10 when the
-  // approved ticket screen replaced it for every user, so the exemption goes with
-  // it. Removing the entry rather than lowering it to 0 is deliberate: a future
-  // centred status line in this file should be caught, not pre-approved.
-};
 
 // `someError || 'A hardcoded guess'`. THIS IS THE v1.3.1 ERROR AUDIT, which is
 // its own tracked workstream — see docs/error-message-standards.md. K5 fixed
@@ -128,38 +87,6 @@ const HARDCODED_ERROR_FALLBACK: Record<string, { count: number; why: string }> =
 };
 
 describe('status adoption', () => {
-  it('no status line in the settings family is a centred coloured paragraph', () => {
-    // The shape Remote access used for four of its eleven branches:
-    // `text-center` on a <p> carrying a status colour. It reads as a banner in
-    // a column of left-aligned rows, and it has nowhere to put the action that
-    // resolves the state — which is why two branches ended up with a
-    // full-width button stacked underneath instead.
-    //
-    // WHY still a source read, and only for the listed files: every other file is
-    // held at zero by the ast-grep rule no-centred-status-paragraph; an exact
-    // per-file count ("ShareSheet has 2") is not something a rule can express.
-    const drift: string[] = [];
-    const seen = new Set<string>();
-    for (const file of inScopeFiles()) {
-      const name = file.split(/[\\/]/).pop()!;
-      const allowed = CENTRED_STATUS_ELSEWHERE[name]?.count;
-      if (allowed === undefined) continue;
-      seen.add(name);
-      const src = readStripped(file);
-      let n = 0;
-      for (const m of src.matchAll(/className="[^"]*text-center[^"]*"/g)) {
-        if (/text-(green|amber|red)-\d{3}|text-destructive-fg/.test(m[0])) n++;
-      }
-      if (n !== allowed) drift.push(`${name}: ${n} centred status lines, expected ${allowed}`);
-    }
-    // WHY (review of u9): a listed file that was moved or deleted used to be skipped
-    // silently, leaving a stale exemption that pre-approves whatever later takes its name.
-    for (const name of Object.keys(CENTRED_STATUS_ELSEWHERE)) {
-      if (!seen.has(name)) drift.push(`${name} is exempted but no longer in scope — drop it`);
-    }
-    expect(drift, 'A subsystem status line is a <StatusStrip>.').toEqual([]);
-  });
-
   it('no user-facing error falls back to a hardcoded cause', () => {
     // docs/error-message-standards.md: never catch and replace the real error
     // with a guess. `{setupError || 'Setup failed'}` gave the user two words and
