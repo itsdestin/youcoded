@@ -31,7 +31,7 @@ const WORDS = {
   browseSkills: 'Browse skills',        // compass in the message bar (InputBar.tsx)
   openMarketplace: 'Open marketplace',  // in the skills drawer (CommandDrawer.tsx)
   marketSearch: 'Search the marketplace',
-  install: /^Install\b/,               // a listing's install button
+  install: /^Install$/,               // a listing's install button  // exact: the star and share icons say "Install to favorite/share" and are greyed until installed
   applyTheme: /^(Apply|Use)( theme)?\b/, // an installed theme's apply button                    // the paperclip (InputBar.tsx)
   modelMenu: 'Model',                   // the session form's model menu (model/ModelPicker.tsx aria-label)
   modelSearch: 'Search all models',     // its search box
