@@ -2292,8 +2292,8 @@ export default function SessionStrip({
             // form run below short windows. Cap the complete menu at the space
             // below its trigger; the list is the flexing, scrollable portion.
             const belowTrigger = triggerRect
-              ? `calc(100vh - ${triggerRect.bottom + 8}px - var(--vvp-offset, 0px))`
-              : 'calc(100vh - 8px - var(--vvp-offset, 0px))';
+              ? `calc(100vh - ${triggerRect.bottom + 8}px - var(--kb-offset, 0px))`
+              : 'calc(100vh - 8px - var(--kb-offset, 0px))';
             // Compute left-edge directly (no transform: translateX(-50%))
             // so backdrop-filter isn't broken by a persistent transform
             return {

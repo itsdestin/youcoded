@@ -1,21 +1,15 @@
 import { useEffect } from 'react';
 
-// Populates --vvp-offset on <html> with the current soft-keyboard (IME) height
-// in pixels, driven by window.visualViewport. globals.css uses it in
-// `height: calc(100dvh - var(--vvp-offset, 0px))` on html/body/#root so the
-// bottom input bar stays glued to the top of the keyboard as it animates up.
+// The on-screen keyboard's height, for the page. Writes two variables on <html> (see the comment in the hook):
+// --vvp-offset (the keyboard while it types into the chat's message box; globals.css lifts the message box with a
+// transform and pads the chat by it) and --kb-offset (any keyboard; popups and menus keep clear of it).
 //
-// WHY this matters on Android: AndroidManifest sets
-// windowSoftInputMode="adjustNothing" and index.html declares
-// interactive-widget=overlays-content in the viewport meta. Together that tells
-// the OS + browser to let the keyboard overlay the page without resizing it,
-// and to report keyboard geometry through visualViewport. This hook is the one
-// place we consume that geometry — updates happen in a single rAF per
-// visualViewport event, in lockstep with the OS animation, eliminating the
-// prior jitter caused by ResizeObserver races mid-animation.
+// Where the height comes from: a phone browser over remote access reports it through visualViewport
+// (index.html's interactive-widget=resizes-visual), a frame at a time. The Android app does not resize its WebView for
+// the keyboard (MainActivity, card #213 — resizing redrew the whole page every frame) and sends the keyboard's final
+// height once through window.__ycImeOffset; the page glides there itself.
 //
-// Desktop is unaffected: visualViewport.height === innerHeight when no
-// keyboard is open, so --vvp-offset stays 0.
+// Desktop is unaffected: visualViewport.height === innerHeight and nothing calls __ycImeOffset, so both stay 0.
 /** Fired on window each time --vvp-offset changes (the keyboard opened, closed or resized). */
 export const KEYBOARD_OFFSET_EVENT = 'youcoded:keyboard-offset';
 
@@ -45,44 +39,62 @@ export function useVisualViewport() {
     // "the bottom edge of the frame jumps up, then the chips/input bar … slide up after" ("detached and janky"). Here
     // --vvp-offset itself moves from where it is to the target on the page's own frame clock, with the keyboard's
     // timing, so the frame's edge, the message box, the messages and the empty-chat hint move in the same frame.
-    let nativeFrom = 0;
+    // Two values, because not every keyboard is for the chat (Destin, 2026-11-02: "when the command drawer is up and i
+    // tap in its input area, i can see the chat input area slide up behind it"):
+    //   --kb-offset  — the keyboard, whatever it types into: popups, the session menu and the file editor keep clear of it.
+    //   --vvp-offset — the keyboard only while it types into the chat's own message box (.bottom-float); the chat's
+    //                  frame edge, message box, messages and empty-chat hint follow this one, and stay put otherwise.
+    type Glide = { from: number; to: number; start: number; cur: number };
+    const kb: Glide = { from: 0, to: 0, start: 0, cur: 0 };
+    const chat: Glide = { from: 0, to: 0, start: 0, cur: 0 };
     let nativeTo = 0;
-    let nativeStart = 0;
-    let nativeOffset = 0;
-    let last = -1;
+    let native = false;
+    let lastKb = -1;
+    let lastChat = -1;
     const w = window as unknown as { __ycImeOffset?: (px: number) => void };
     const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     w.__ycImeOffset = (px: number) => {
-      const target = Number.isFinite(px) ? Math.max(0, px) : 0;
-      if (target === nativeTo) return;
-      nativeFrom = nativeOffset;
-      nativeTo = target;
-      nativeStart = performance.now();
+      nativeTo = Number.isFinite(px) ? Math.max(0, px) : 0;
+      native = true;
       document.documentElement.dataset.ime = 'native';
       schedule();
+    };
+    const aim = (g: Glide, to: number, glide: boolean, now: number) => {
+      if (to === g.to) return;
+      g.from = g.cur; g.to = to; g.start = now;
+      if (!glide) g.cur = to;
+    };
+    // True while the glide is still moving.
+    const step = (g: Glide, now: number): boolean => {
+      if (g.cur === g.to) return false;
+      const t = Math.min(1, (now - g.start) / IME_GLIDE_MS);
+      g.cur = t >= 1 ? g.to : g.from + (g.to - g.from) * imeEase(t);
+      return t < 1;
     };
 
     const apply = () => {
       frame = null;
-      let gliding = false;
-      if (nativeOffset !== nativeTo) {
-        const t = reduced() ? 1 : Math.min(1, (performance.now() - nativeStart) / IME_GLIDE_MS);
-        nativeOffset = t >= 1 ? nativeTo : nativeFrom + (nativeTo - nativeFrom) * imeEase(t);
-        gliding = t < 1;
-      }
+      const now = performance.now();
       // innerHeight is the layout viewport; vv.height is the visible viewport.
       // Their difference equals keyboard + any other overlay chrome the UA is
       // reporting (on Android WebView: essentially just the IME).
       // Math.max guards against negative values during orientation changes.
-      const offset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop, nativeOffset);
-      // Clamp sub-pixel jitter — some devices fire values like 398.6 vs 399.0
-      // back-to-back mid-animation.
-      const rounded = Math.round(offset);
-      if (gliding) schedule();
-      // Skip an unchanged value (performance.md rule 6): a root variable write restyles the whole page.
-      if (rounded === last) return;
-      last = rounded;
-      document.documentElement.style.setProperty('--vvp-offset', `${rounded}px`);
+      const reported = Math.max(0, window.innerHeight - vv.height - vv.offsetTop, nativeTo);
+      const forChat = !!document.activeElement?.closest?.('.bottom-float');
+      // Only the Android app's keyboard glides; a phone browser already reports it a frame at a time.
+      const glide = native && !reduced();
+      aim(kb, reported, glide, now);
+      aim(chat, forChat ? reported : 0, glide, now);
+      const moving = [step(kb, now), step(chat, now)].some(Boolean);
+      if (moving) schedule();
+      // Clamp sub-pixel jitter — some devices fire values like 398.6 vs 399.0 back-to-back mid-animation. Skip an
+      // unchanged value (performance.md rule 6): a root variable write restyles the whole page.
+      const k = Math.round(kb.cur);
+      if (k !== lastKb) { lastKb = k; document.documentElement.style.setProperty('--kb-offset', `${k}px`); }
+      const c = Math.round(chat.cur);
+      if (c === lastChat) return;
+      lastChat = c;
+      document.documentElement.style.setProperty('--vvp-offset', `${c}px`);
       // ChatView keeps the newest message in view above the keyboard (it no longer gets a smaller window to notice).
       window.dispatchEvent(new CustomEvent(KEYBOARD_OFFSET_EVENT));
     };
@@ -95,13 +107,19 @@ export function useVisualViewport() {
     apply();
     vv.addEventListener('resize', schedule);
     vv.addEventListener('scroll', schedule);
+    // Typing moves between the chat and something else (a drawer, a popup) while the keyboard stays up.
+    document.addEventListener('focusin', schedule);
+    document.addEventListener('focusout', schedule);
     return () => {
       if (frame != null) cancelAnimationFrame(frame);
       vv.removeEventListener('resize', schedule);
       vv.removeEventListener('scroll', schedule);
+      document.removeEventListener('focusin', schedule);
+      document.removeEventListener('focusout', schedule);
       delete w.__ycImeOffset;
       delete document.documentElement.dataset.ime;
       document.documentElement.style.removeProperty('--vvp-offset');
+      document.documentElement.style.removeProperty('--kb-offset');
     };
   }, []);
 }
