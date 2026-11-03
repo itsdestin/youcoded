@@ -11,6 +11,8 @@ import { readSource } from './helpers/guard-scope';
 
 const app = readSource(path.join(__dirname, '..', 'src', 'renderer', 'App.tsx'));
 const css = readSource(path.join(__dirname, '..', 'src', 'renderer', 'styles', 'globals.css'));
+// The keyboard lift rule lives with the other keyboard rules.
+const keyboardCss = readSource(path.join(__dirname, '..', 'src', 'renderer', 'styles', 'keyboard.css'));
 
 describe('touch terminal bottom chrome', () => {
   it('App gives the bottom chrome the floating and docked classes in touch terminal view', () => {
@@ -18,10 +20,15 @@ describe('touch terminal bottom chrome', () => {
     expect(app).toMatch(/currentViewMode === 'chat' \? ' bottom-float' : isTerminalTouch \? ' bottom-float bottom-docked' : ''/);
   });
 
-  it('off Electron, the terminal grid stops above the floating bar and the settled keyboard', () => {
+  it('off Electron, the terminal grid stops above the floating bar and SLIDES with the keyboard, never shrinks', () => {
     const rule = css.match(/html:not\(\[data-platform="electron"\]\)\s*\{([^}]*)\}/);
     expect(rule, 'touch terminal bottom inset rule missing').toBeTruthy();
-    expect(rule![1]).toMatch(/--terminal-bottom-inset:\s*calc\(var\(--bottom-chrome-height[^;]*--vvp-offset/);
+    expect(rule![1]).toMatch(/--terminal-bottom-inset:\s*calc\(var\(--bottom-chrome-height/);
+    // A keyboard height in the inset resized the terminal on every open, and Claude Code printed its screen again.
+    expect(rule![1]).not.toMatch(/--vvp-offset/);
+    const lift = keyboardCss.match(/html:not\(\[data-platform="electron"\]\) \[data-term-lift\]\s*\{([^}]*)\}/);
+    expect(lift, 'terminal keyboard lift rule missing').toBeTruthy();
+    expect(lift![1]).toMatch(/transform:\s*translateY\(calc\(-1 \* var\(--vvp-offset/);
   });
 
   it('the docked class sits on the same layer as the floating one, above the glass', () => {

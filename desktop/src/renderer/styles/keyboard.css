@@ -6,3 +6,13 @@
 .empty-chat-hint {
   transform: translateY(calc(-0.5 * var(--vvp-offset, 0px)));
 }
+
+/* WHY the terminal SLIDES up with the keyboard instead of shrinking (Destin, 2026-11-03, a phone screenshot: Claude
+   Code's banner and first reply printed twice): every new terminal size makes Claude Code redraw, and a redraw on a
+   resize leaves the old copy above it. Shrinking to fit above the keyboard resized it on every open and close. Now
+   its grid, its tinted strips and its scroll arrows ([data-term-lift]) move up with the bar — the top lines pass
+   under the header while typing — and Claude Code never sees the keyboard. During the slide useVisualViewport moves
+   them directly; once it settles this rule holds them. */
+html:not([data-platform="electron"]) [data-term-lift] {
+  transform: translateY(calc(-1 * var(--vvp-offset, 0px)));
+}

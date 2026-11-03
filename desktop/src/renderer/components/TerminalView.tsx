@@ -785,6 +785,7 @@ function TerminalView({ sessionId, visible }: Props) {
       {seeThrough && (!terminalBg || fillContainer) && (
         <div
           aria-hidden
+          data-term-lift=""
           style={{
             position: 'absolute',
             top: 0,
@@ -804,6 +805,7 @@ function TerminalView({ sessionId, visible }: Props) {
         <div
           aria-hidden
           data-terminal-gap="bottom"
+          data-term-lift=""
           style={{
             position: 'absolute',
             bottom: 0,
@@ -823,6 +825,8 @@ function TerminalView({ sessionId, visible }: Props) {
       <div
         ref={containerRef}
         data-term-backing={workbenchBacking}
+        // Rides up with the keyboard on a touch screen rather than shrinking (globals.css, [data-term-lift] — why).
+        data-term-lift=""
         style={{
           position: 'absolute',
           // Content (the xterm grid) starts BELOW the header. Claude Code wipes

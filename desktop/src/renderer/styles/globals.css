@@ -850,12 +850,10 @@ body[data-input-style="floating"]:not([data-chrome-style="floating"]) {
    input bar, especially in floating themes"; and tapping the bar in terminal view left it behind the keyboard): docked
    in the layout, the terminal's tinted sheet stopped in a line at the bar's top edge, and only a floating bar rides
    up with the keyboard (useVisualViewport). The terminal now runs to the screen's bottom behind the bar, and its text
-   grid stops above the bar and the keyboard (--terminal-bottom-inset below). */
+   grid stops above the bar (--terminal-bottom-inset below). */
 .bottom-docked { position: absolute; z-index: 20; }
 html:not([data-platform="electron"]) {
-  /* The bar's measured height plus the keyboard's once it has settled: the grid gets one new size per keyboard open,
-     as it did when the whole page resized with the keyboard. */
-  --terminal-bottom-inset: calc(var(--bottom-chrome-height, 0px) + var(--input-edge-inset, 0px) + var(--vvp-offset, 0px));
+  --terminal-bottom-inset: calc(var(--bottom-chrome-height, 0px) + var(--input-edge-inset, 0px));
 }
 
 .bottom-float {

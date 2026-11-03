@@ -84,20 +84,24 @@ export function useVisualViewport() {
     const liveEls = () => ({
       bar: document.querySelector<HTMLElement>('.bottom-float:not(.buddy-chat-bottom)'),
       hint: document.querySelector<HTMLElement>('.empty-chat-hint'),
+      // A touch terminal's grid, strips and arrows ride up with the bar instead of shrinking (globals.css, [data-term-lift]).
+      lifts: document.querySelectorAll<HTMLElement>('[data-term-lift]'),
       edges: [...document.querySelectorAll<HTMLElement>('.chrome-glass, .chrome-outline')],
     });
     const showLive = (c: number) => {
       const lift = c - settled;
-      const { bar, hint, edges } = liveEls();
+      const { bar, hint, lifts, edges } = liveEls();
       if (bar) bar.style.transform = `translateY(${-c}px)`;
+      for (const el of lifts) el.style.transform = `translateY(${-c}px)`;
       if (hint) hint.style.transform = `translateY(${-c / 2}px)`;
       if (!edgeBase) edgeBase = new Map(edges.map((el) => [el, getComputedStyle(el).getPropertyValue('--bottom-chrome-total').trim()]));
       for (const [el, base] of edgeBase) if (base) el.style.setProperty('--bottom-chrome-total', `calc(${base} + ${lift}px)`);
       window.dispatchEvent(new CustomEvent(KEYBOARD_OFFSET_EVENT, { detail: { lift } }));
     };
     const clearLive = () => {
-      const { bar, hint } = liveEls();
+      const { bar, hint, lifts } = liveEls();
       if (bar) bar.style.transform = '';
+      for (const el of lifts) el.style.transform = '';
       if (hint) hint.style.transform = '';
       if (edgeBase) for (const el of edgeBase.keys()) el.style.removeProperty('--bottom-chrome-total');
       edgeBase = null;
