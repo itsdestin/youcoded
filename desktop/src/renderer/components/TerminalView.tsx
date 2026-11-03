@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef } from 'react';
 import { hiddenTerminalSize, savedTerminalBottomInset, saveTerminalBottomInset } from './terminal-hidden-size';
+import { keepProgramSize, gridOverflow, type SizeBasis } from './terminal-size-lock';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { applyClaudeCodeWidths } from '../../shared/terminal-widths';
@@ -14,7 +15,7 @@ import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { attachRenderPause, type RenderPause } from './xterm-render-pause';
 import { useTheme } from '../state/theme-context';
-import { getCapabilities, isTouchDevice } from '../platform';
+import { getCapabilities, getPlatform, isTouchDevice } from '../platform';
 import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } from '../workbench-mode';
 import { computeTerminalSurface } from '../themes/theme-engine';
 import { ScreenMark } from '../shoot-mode';
@@ -393,10 +394,32 @@ function TerminalView({ sessionId, visible }: Props) {
     // have is worked out from the box it will fill (terminal-hidden-size.ts, FitAddon's own arithmetic) and sent at
     // once, so showing it later changes nothing. The terminal view's own bottom inset is remembered from the last time
     // it was on screen: on a phone its input bar is not chat view's.
+    // WHY a size basis (terminal-size-lock.ts — the measurements): on a touch screen the program's size follows the
+    // WINDOW, not the chrome over the terminal. A hidden terminal's guess below, or the first fit, decides it; after
+    // that a fit with the same window, character size and column count keeps the rows and only slides the grid (see
+    // fitAndSync). Desktop (Electron) is unchanged: its terminal is not covered by a floating box, so it always fits.
+    const holdRowsOnTouch = getPlatform() !== 'electron';   // the same test as keyboard.css's [data-term-lift] rule
+    let basis: SizeBasis | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FitAddon reads the same private field
+    const cellSize = (): { width: number; height: number } | undefined => (terminal as any)._core?._renderService?.dimensions?.css?.cell;
+    const basisFor = (cols: number): SizeBasis => {
+      const cell = cellSize();
+      return { winW: window.innerWidth, winH: window.innerHeight, cellW: cell?.width ?? 0, cellH: cell?.height ?? 0, cols };
+    };
+    /** Slide the grid up by however much its rows overhang its box (0 when they fit). keyboard.css adds it to the lift. */
+    let liftPx = -1;
+    const setGridLift = (el: HTMLElement) => {
+      if (!holdRowsOnTouch) return;
+      const xs = terminal.element ? getComputedStyle(terminal.element) : null;
+      const padY = xs ? (parseFloat(xs.paddingTop) || 0) + (parseFloat(xs.paddingBottom) || 0) : 0;
+      const px = gridOverflow(terminal.rows, cellSize()?.height ?? 0, padY, el.clientHeight);
+      if (px === liftPx) return;   // performance rule 6: skip an unchanged write
+      liftPx = px;
+      el.style.setProperty('--term-grid-lift', `${px}px`);
+    };
     const proposeHidden = (el: HTMLElement) => {
       const host = el.parentElement?.parentElement;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FitAddon reads the same private field
-      const cell = (terminal as any)._core?._renderService?.dimensions?.css?.cell;
+      const cell = cellSize();
       if (!host || !terminal.element || !cell) return;
       const cs = getComputedStyle(el);
       const xs = getComputedStyle(terminal.element);
@@ -409,7 +432,11 @@ function TerminalView({ sessionId, visible }: Props) {
         cellWidth: cell.width, cellHeight: cell.height,
       });
       if (!size) return;
+      // Same window and columns as the size already decided: keep it. The guess uses a remembered (or chat view's)
+      // bottom inset, so it can be a row or two off the real fit; that is not worth a redraw.
+      if (holdRowsOnTouch && keepProgramSize(basis, basisFor(size.cols))) return;
       if (terminal.cols !== size.cols || terminal.rows !== size.rows) terminal.resize(size.cols, size.rows);
+      basis = basisFor(size.cols);
       queueSize(size.cols, size.rows);
     };
     const queueSize = (cols: number, rows: number) => {
@@ -431,13 +458,24 @@ function TerminalView({ sessionId, visible }: Props) {
         const el = containerRef.current;
         if (!el) return;
         if (el.clientWidth === 0 || el.clientHeight === 0) { proposeHidden(el); return; }
+        if (visibleRef.current) saveTerminalBottomInset(parseFloat(getComputedStyle(el).bottom) || 0);
+        // Touch screen, same window, same columns: only the chrome over the terminal moved (a second line in the
+        // message box, the first show after a hidden guess). Keep the program's size — a resize would make Claude Code
+        // print lines twice — and slide the grid so its last rows stay above the box (terminal-size-lock.ts).
+        const proposed = holdRowsOnTouch ? fitAddon.proposeDimensions() : undefined;
+        if (proposed?.cols && keepProgramSize(basis, basisFor(proposed.cols))) {
+          setGridLift(el);
+          updateThumb();
+          return;
+        }
         fitAddon.fit();
         writeWorkbenchScreenOnce();
         // Container height changed → thumb proportions need to recompute.
         updateThumb();
         const dims = fitAddon.proposeDimensions();
         if (!dims || !dims.cols || !dims.rows) return;
-        if (visibleRef.current) saveTerminalBottomInset(parseFloat(getComputedStyle(el).bottom) || 0);
+        basis = basisFor(dims.cols);
+        setGridLift(el);
         queueSize(dims.cols, dims.rows);
       } catch {
         // Ignore fit errors during teardown

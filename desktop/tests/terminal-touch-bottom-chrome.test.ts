@@ -28,7 +28,9 @@ describe('touch terminal bottom chrome', () => {
     expect(rule![1]).not.toMatch(/--vvp-offset/);
     const lift = keyboardCss.match(/html:not\(\[data-platform="electron"\]\) \[data-term-lift\]\s*\{([^}]*)\}/);
     expect(lift, 'terminal keyboard lift rule missing').toBeTruthy();
-    expect(lift![1]).toMatch(/transform:\s*translateY\(calc\(-1 \* var\(--vvp-offset/);
+    // The grid also slides by --term-grid-lift (TerminalView: rows overhanging a taller message box), so a taller box
+    // never shrinks the terminal either (terminal-size-lock.ts).
+    expect(lift![1]).toMatch(/transform:\s*translateY\(calc\(-1 \* \(var\(--vvp-offset, 0px\) \+ var\(--term-grid-lift, 0px\)\)\)\)/);
   });
 
   it('the docked class sits on the same layer as the floating one, above the glass', () => {

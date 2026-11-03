@@ -101,7 +101,9 @@ export function useVisualViewport() {
       const lift = c - settled;
       const { bar, hint, lifts, edges } = liveEls();
       if (bar) bar.style.transform = `translateY(${-c}px)`;
-      for (const el of lifts) el.style.transform = `translateY(${-c}px)`;
+      // WHY the grid lift too: the terminal grid may already be slid up over a taller message box (keyboard.css,
+      // --term-grid-lift); dropping it for the glide would make the grid jump down and back.
+      for (const el of lifts) el.style.transform = `translateY(calc(${-c}px - var(--term-grid-lift, 0px)))`;
       if (hint) hint.style.transform = `translateY(${-c / 2}px)`;
       if (!edgeBase) edgeBase = new Map(edges.map((el) => [el, getComputedStyle(el).getPropertyValue('--bottom-chrome-total').trim()]));
       for (const [el, base] of edgeBase) if (base) el.style.setProperty('--bottom-chrome-total', `calc(${base} + ${lift}px)`);

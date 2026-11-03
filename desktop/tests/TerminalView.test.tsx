@@ -893,3 +893,81 @@ describe('hidden terminals and theme switches', () => {
     });
   });
 });
+
+// Claude Code redraws its screen on every new size, and when its conversation is taller than the screen the redraw
+// prints lines twice or loses them (measured with the phone's Claude Code 2.1.300; terminal-size-lock.ts). On a touch
+// screen the terminal's box shrinks whenever the message box floating over it grows a line — that must NOT resize the
+// program; only a change of the window or of the column count may. Desktop (Electron) keeps fitting every change.
+describe('program size when the chrome over the terminal changes', () => {
+  let boxHeight = 600;
+  let restores: Array<() => void> = [];
+  const stubBox = () => {
+    for (const [prop, get] of [['clientWidth', () => 360], ['clientHeight', () => boxHeight]] as const) {
+      const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, prop);
+      Object.defineProperty(HTMLElement.prototype, prop, { configurable: true, get });
+      restores.push(() => { if (original) Object.defineProperty(HTMLElement.prototype, prop, original); else delete (HTMLElement.prototype as any)[prop]; });
+    }
+  };
+  const setWindow = (w: number, h: number) => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: w });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: h });
+  };
+  /** The shown terminal is re-fitted (as its ResizeObserver or a window resize would do), then the debounce passes. */
+  const refit = () => { window.dispatchEvent(new Event('resize')); vi.advanceTimersByTime(120); };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    boxHeight = 600;
+    stubBox();
+    setWindow(360, 788);
+    (globalThis as any).window.claude = { session: { signalReady: vi.fn(), sendInput: vi.fn(), resize: vi.fn() } };
+  });
+  afterEach(() => {
+    cleanup();
+    restores.forEach((r) => r()); restores = [];
+    vi.useRealTimers();
+    vi.mocked(platform.getPlatform).mockReturnValue('electron');
+    delete (globalThis as any).window.claude;
+  });
+
+  it('on a phone, a taller message box keeps the program at its size', () => {
+    vi.mocked(platform.getPlatform).mockReturnValue('android');
+    proposedDims = { cols: 47, rows: 35 };
+    render(<TerminalView sessionId="s1" visible={true} />);
+    vi.advanceTimersByTime(100 + 120);
+    expect(window.claude.session.resize).toHaveBeenCalledTimes(1);
+    expect(window.claude.session.resize).toHaveBeenLastCalledWith('s1', 47, 35);
+
+    // A second line in the message box: the box over the terminal grows, the grid's box shrinks by two rows.
+    boxHeight = 570;
+    proposedDims = { cols: 47, rows: 33 };
+    refit();
+    // And back to one line.
+    boxHeight = 600;
+    proposedDims = { cols: 47, rows: 35 };
+    refit();
+    expect(window.claude.session.resize).toHaveBeenCalledTimes(1);
+  });
+
+  it('on a phone, turning or folding it (a new window size) still resizes the program', () => {
+    vi.mocked(platform.getPlatform).mockReturnValue('android');
+    proposedDims = { cols: 47, rows: 35 };
+    render(<TerminalView sessionId="s1" visible={true} />);
+    vi.advanceTimersByTime(100 + 120);
+
+    setWindow(788, 360);
+    proposedDims = { cols: 110, rows: 12 };
+    refit();
+    expect(window.claude.session.resize).toHaveBeenLastCalledWith('s1', 110, 12);
+  });
+
+  it('on desktop, every new fit still resizes the program', () => {
+    vi.mocked(platform.getPlatform).mockReturnValue('electron');
+    proposedDims = { cols: 100, rows: 35 };
+    render(<TerminalView sessionId="s1" visible={true} />);
+    vi.advanceTimersByTime(100 + 120);
+    proposedDims = { cols: 100, rows: 33 };
+    refit();
+    expect(window.claude.session.resize).toHaveBeenLastCalledWith('s1', 100, 33);
+  });
+});
