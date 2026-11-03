@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.imeAnimationTarget
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -48,6 +49,8 @@ import androidx.compose.animation.core.tween
 import kotlinx.coroutines.delay
 import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -185,28 +188,41 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
         @OptIn(ExperimentalLayoutApi::class)
         val ime = WindowInsets.imeAnimationTarget
         val nav = WindowInsets.navigationBars
-        // WHY measured against where the page really ends on screen, not minus the navigation bar's inset (Destin,
-        // 2026-11-03: "the frame/input area still slightly overshoots the keyboard sometimes before falling back down";
-        // a recorder in the page caught it): once in ~20 opens the height arrived 29 dp too tall (284, then 255 a
-        // third of a second later), the size of the gesture bar — the bar's inset read at that instant disagreed with
-        // the layout the page actually has. The page's own bottom edge is what the message box sits on, so the
-        // keyboard's top is measured from it. The raw numbers are logged (tag YcIme) to confirm which one moved.
+        // The page's own bottom edge is what the message box sits on, so the keyboard's top is measured from it (the
+        // navigation bar inset alone said the same on a Z Flip7, but the page's edge is the one that matters).
+        val imeNow = WindowInsets.ime
+        val gapPx = {
+            val wv = webView
+            if (wv != null && wv.isLaidOut) {
+                val loc = IntArray(2).also { wv.getLocationInWindow(it) }
+                wv.rootView.height - (loc[1] + wv.height)
+            } else nav.getBottom(density)
+        }
         LaunchedEffect(Unit) {
-            snapshotFlow {
-                val target = ime.getBottom(density)
-                val navPx = nav.getBottom(density)
-                val wv = webView
-                val gapPx = if (wv != null && wv.isLaidOut) {
-                    val loc = IntArray(2).also { wv.getLocationInWindow(it) }
-                    wv.rootView.height - (loc[1] + wv.height)
-                } else navPx
-                Triple(target, navPx, gapPx)
-            }
+            snapshotFlow { ime.getBottom(density) }
                 .distinctUntilChanged()
-                .collect { (target, navPx, gapPx) ->
-                    val dp = (target - gapPx).coerceAtLeast(0) / density.density
-                    android.util.Log.d("YcIme", "target=$target nav=$navPx pageGap=$gapPx -> ${dp}dp")
+                .collect { target ->
+                    val dp = (target - gapPx()).coerceAtLeast(0) / density.density
+                    android.util.Log.d("YcIme", "target=$target -> ${dp}dp")
                     webView?.evaluateJavascript("window.__ycImeOffset&&window.__ycImeOffset($dp)", null)
+                }
+        }
+        // WHY the keyboard's RESTING height is sent too, once its slide ends (Destin, 2026-11-03: "the frame/input area
+        // still slightly overshoots the keyboard sometimes before falling back down"; the log above caught it): Samsung's
+        // keyboard on a Z Flip7 often announces its final height as 284 dp when it starts to slide and corrects it to
+        // 255 dp a third of a second later, after the slide — so the page glided to 284 and fell back. The page cannot
+        // know at the start; with the resting height it corrects at once AND remembers the pair, so the next open
+        // aims at 255 straight away (useVisualViewport.ts). Read per frame here (no page work), sent only when the
+        // slide has come to rest (the current height equals the announced one).
+        LaunchedEffect(Unit) {
+            snapshotFlow { imeNow.getBottom(density) to ime.getBottom(density) }
+                .filter { (now, target) -> now == target }
+                .map { it.first }
+                .distinctUntilChanged()
+                .collect { rest ->
+                    val dp = (rest - gapPx()).coerceAtLeast(0) / density.density
+                    android.util.Log.d("YcIme", "rest=$rest -> ${dp}dp")
+                    webView?.evaluateJavascript("window.__ycImeOffset&&window.__ycImeOffset($dp,true)", null)
                 }
         }
         // Ask the page whether it is ready (it sets window.__ycBootReady once the app or a sign-in/trouble screen is up,

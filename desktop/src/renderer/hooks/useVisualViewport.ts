@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { createImeRestMemory, type ImeRestMemory } from '../state/ime-rest-memory';
 
 // The on-screen keyboard's height, for the page. Writes two variables on <html> (see the comment in the hook):
 // --vvp-offset (the keyboard while it types into the chat's message box; globals.css lifts the message box with a
@@ -51,10 +52,18 @@ export function useVisualViewport() {
     let native = false;
     let lastKb = -1;
     let lastChat = -1;
-    const w = window as unknown as { __ycImeOffset?: (px: number) => void };
+    const w = window as unknown as { __ycImeOffset?: (px: number, rest?: boolean) => void };
     const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    w.__ycImeOffset = (px: number) => {
-      nativeTo = Number.isFinite(px) ? Math.max(0, px) : 0;
+    // WHY a remembered "announced → real" height (Destin, 2026-11-03: the box "overshoots the keyboard sometimes before
+    // falling back down"; the phone's log caught it): Samsung's keyboard on a Z Flip7 often announces 284 when it
+    // starts to slide and settles at 255 a third of a second later, after the slide. MainActivity now also sends the
+    // RESTING height (`rest`); the page corrects to it, and remembers the pair so the next open aims at the real
+    // height straight away. If a remembered pair is ever wrong (the keyboard really is that tall this time), the
+    // resting height corrects it and the pair is forgotten — the box can never stay under the keyboard.
+    let restMemory: ImeRestMemory;
+    try { restMemory = createImeRestMemory(window.localStorage); } catch { restMemory = createImeRestMemory(null); }
+    w.__ycImeOffset = (px: number, rest?: boolean) => {
+      nativeTo = rest ? restMemory.rest(px) : restMemory.announce(px);
       native = true;
       document.documentElement.dataset.ime = 'native';
       schedule();
