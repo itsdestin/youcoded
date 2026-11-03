@@ -136,7 +136,7 @@ ROOMS[0].scenes = ['Tokyo', 'Relax', 'Read', 'Concentrate', 'Energize', 'Nightli
   .map((n, i) => ({ id: `scene.destins_room_${n.toLowerCase().replace(/ /g, '_')}`, name: `Destin's Room ${n}`, last: ago(i === 6 ? 1 : 30 + i), ...SCENE_INFO[n] }));
 ROOMS[1].scenes = ['Relax', 'Read', 'Bright'].map((n, i) => ({ id: `scene.living_room_${n.toLowerCase()}`, name: `Living Room ${n}`, last: ago(40 + i) }));
 // A fresh house for each test: everything above is copied once, and this puts it back
-// (tests/home-page-harness.ts calls it after every test, so what one test leaves behind never reaches the next).
+// (tests/personal-pages/home-page-harness.ts calls it after every test, so what one test leaves behind never reaches the next).
 const SEED = structuredClone(ROOMS);
 export function fakeHomeAssistantReset(): void {
   ROOMS.splice(0, ROOMS.length, ...structuredClone(SEED));

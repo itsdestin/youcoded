@@ -1,4 +1,4 @@
-import { defineConfig, type UserWorkspaceConfig } from 'vitest/config';
+import { configDefaults, defineConfig, type UserWorkspaceConfig } from 'vitest/config';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -173,8 +173,11 @@ const SHARED_TEST = {
   },
 } satisfies UserWorkspaceConfig['test'];
 
+/** Tests of Destin's personal pages (see the 'unit' project's exclude). */
+export const PERSONAL_PAGES = 'tests/personal-pages/**';
+
 /** One test project: SHARED_TEST plus its own files and options. */
-function project(test: NonNullable<UserWorkspaceConfig['test']>): UserWorkspaceConfig {
+export function project(test: NonNullable<UserWorkspaceConfig['test']>): UserWorkspaceConfig {
   return {
     // Fix: include the React plugin so TSX test files (JSX transform) compile correctly
     plugins: [react()],
@@ -196,6 +199,10 @@ export default defineConfig({
       project({
         name: 'unit',
         include: ['tests/**/*.{test,spec}.{ts,tsx}', 'src/**/*.{test,spec}.{ts,tsx}'],
+        // WHY: Destin's hand-installed Home and Money pages never ship in the app (decision 2026-11-01), so their
+        // tests don't run on every app change. They run with `npm run test:personal-pages`
+        // (vitest.personal-pages.config.ts).
+        exclude: [...configDefaults.exclude, PERSONAL_PAGES],
       }),
     ],
   },
