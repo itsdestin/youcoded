@@ -12,6 +12,7 @@
 // Env:   WALKTHROUGH_KEY — the capped test key, typed into setup like a user pasting theirs.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
@@ -369,6 +370,35 @@ try {
     await page.getByText('walkthrough-attach.txt').first().waitFor({ timeout: 15_000 });
     // The answer is only in the attached file, never in the question.
     return await askAndExpect('What is the secret fruit in the attached file? Answer with one word.', /kumquat/i);
+  }, { critical: false });
+
+  await step('browser', "The assistant opens a web page in its own browser and reports what's on it", async () => {
+    // WHY a page served by this script: the word on it is made up just now, so the assistant can only answer by
+    // really visiting — and the server sees the visit. It's on this computer, so the app asks once whether the
+    // assistant may open a local address; a user would allow it.
+    const secret = `plum${Math.floor(1000 + Math.random() * 9000)}`;
+    let visited = '';
+    const server = http.createServer((req, res) => {
+      visited = String(req.headers['user-agent'] || 'unknown');
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<!doctype html><title>Walk-through page</title><h1>The code word is ${secret}</h1>`);
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    try {
+      const box = page.getByPlaceholder(WORDS.messageBox);
+      await box.fill(`Use your web browser to open ${url} and tell me the code word written on that page.`);
+      await box.press('Enter');
+      for (const t = Date.now(); Date.now() - t < 240_000; await sleep(2000)) {
+        if (visited && new RegExp(secret).test(await page.locator('body').innerText().catch(() => ''))) {
+          return `page visited by ${/Chrome\/[\d.]+/.exec(visited)?.[0] ?? visited}`;
+        }
+        const yes = page.getByRole('button', { name: WORDS.approve }).first();
+        if (await yes.isVisible().catch(() => false)) await yes.click().catch(() => {});
+      }
+      throw new Error(visited ? 'the browser visited the page but the code word never appeared in the chat'
+        : 'the assistant\'s browser never visited the page within 4 minutes');
+    } finally { server.close(); }
   }, { critical: false });
 
   async function openMarketplace() {
