@@ -72,9 +72,16 @@ export function useVisualViewport() {
       return t < 1;
     };
 
+    let lastStep = 0;
     const apply = () => {
       frame = null;
       const now = performance.now();
+      // WHY an even 60 steps a second while gliding (Destin, 2026-11-02: "it overshoots briefly now before falling back
+      // down"): a frame-by-frame recording on the Z Flip7 (120 Hz) showed the page and the keyboard on the same curve,
+      // but each step (a restyle of the page, ~5 ms) sometimes missed a 8 ms frame — the page got ahead of the keyboard,
+      // held still for a frame, then went on. Every other frame is a steady rhythm the phone always makes.
+      if ((kb.cur !== kb.to || chat.cur !== chat.to) && now - lastStep < 14) { schedule(); return; }
+      lastStep = now;
       // innerHeight is the layout viewport; vv.height is the visible viewport.
       // Their difference equals keyboard + any other overlay chrome the UA is
       // reporting (on Android WebView: essentially just the IME).
