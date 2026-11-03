@@ -164,19 +164,24 @@ describe('SessionManager', () => {
     manager.destroyAll();
   });
 
-  it.each(['window close', 'remote destroy'])('fences a transferred lease on direct manager destroy (%s)', async () => {
+  /** A session whose exit is wired through the transferred-lease gate; `teardown` is what session-exit awaits. */
+  function leaseFixture(opts: { teardown?: Promise<void>; pinById?: boolean; passTeardownToAdmission?: boolean } = {}) {
     const info = manager.createSession({ name: 'transferred', cwd: tmpDir, skipPermissions: false });
     const release = vi.fn(async () => {});
     const admission = createResumeAdmission({ acquire: vi.fn(async () => ({ ok: true })), release, getLive: () => undefined });
     const pinRelease = vi.fn();
-    let pinned = true;
-    const gate = createTransferredExitGate(admission, (id: string) => id === info.id && pinned, () => {
-      pinned = false; pinRelease();
-    });
+    const state = { pinned: true };
+    const teardown = opts.teardown ?? Promise.resolve();
+    const gate = createTransferredExitGate(admission, (id: string) => (opts.pinById ? id === info.id : true) && state.pinned, () => { state.pinned = false; pinRelease(); });
     manager.on('session-stopped', gate.onStopped);
     manager.on('session-exit', (id: string) => {
-      if (!gate.onExit(id, 'conversation', Promise.resolve())) admission.markExit('conversation');
+      if (!gate.onExit(id, 'conversation', teardown)) admission.markExit('conversation', ...(opts.passTeardownToAdmission ? [teardown] : []) as []);
     });
+    return { info, release, admission, pinRelease, state, gate, teardown };
+  }
+
+  it.each(['window close', 'remote destroy'])('fences a transferred lease on direct manager destroy (%s)', async () => {
+    const { info, release, admission, pinRelease } = leaseFixture({ pinById: true });
     // Both routes call SessionManager directly, bypassing SESSION_DESTROY.
     manager.destroySession(info.id);
     await Promise.resolve();
@@ -190,16 +195,7 @@ describe('SessionManager', () => {
   });
 
   it('releases a direct destroy only if its worker reports PTY exit before disconnect', async () => {
-    const info = manager.createSession({ name: 'transferred', cwd: tmpDir, skipPermissions: false });
-    const release = vi.fn(async () => {});
-    const admission = createResumeAdmission({ acquire: vi.fn(async () => ({ ok: true })), release, getLive: () => undefined });
-    const pinRelease = vi.fn();
-    let pinned = true;
-    const gate = createTransferredExitGate(admission, () => pinned, () => { pinned = false; pinRelease(); });
-    manager.on('session-stopped', gate.onStopped);
-    manager.on('session-exit', (id: string) => {
-      if (!gate.onExit(id, 'conversation', Promise.resolve())) admission.markExit('conversation');
-    });
+    const { info, release, pinRelease, gate } = leaseFixture();
     manager.destroySession(info.id);
     expect(release).not.toHaveBeenCalled();
     handlers.message({ type: 'exit', exitCode: 0 });
@@ -213,37 +209,21 @@ describe('SessionManager', () => {
   });
 
   it('retains a transferred lease when PTY proof arrives but teardown fails', async () => {
-    const info = manager.createSession({ name: 'transferred', cwd: tmpDir, skipPermissions: false });
-    const release = vi.fn(async () => {});
-    const admission = createResumeAdmission({ acquire: vi.fn(async () => ({ ok: true })), release, getLive: () => undefined });
-    let pinned = true;
-    const gate = createTransferredExitGate(admission, () => pinned, () => { pinned = false; });
-    manager.on('session-stopped', gate.onStopped);
-    manager.on('session-exit', (id: string) => {
-      if (!gate.onExit(id, 'conversation', Promise.reject(new Error('native teardown failed'))))
-        admission.markExit('conversation');
-    });
+    const rejected = Promise.reject(new Error('native teardown failed'));
+    rejected.catch(() => {}); // handled by the gate; avoid an unhandled-rejection report
+    const { info, release, admission, state } = leaseFixture({ teardown: rejected });
     manager.destroySession(info.id);
     handlers.message({ type: 'exit', exitCode: 0 });
     await vi.waitFor(() => expect(admission.isUnsafe('conversation')).toBe(true));
     expect(release).not.toHaveBeenCalled();
-    expect(pinned).toBe(true);
+    expect(state.pinned).toBe(true);
   });
 
   it.each(['resolves', 'rejects'])('spontaneous PTY exit keeps the pin until teardown %s', async (outcome) => {
-    const info = manager.createSession({ name: 'transferred', cwd: tmpDir, skipPermissions: false });
-    const release = vi.fn(async () => {});
-    const admission = createResumeAdmission({ acquire: vi.fn(async () => ({ ok: true })), release, getLive: () => undefined });
-    const pinRelease = vi.fn();
-    let pinned = true;
     let finish!: () => void;
     let fail!: (error: Error) => void;
     const teardown = new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; });
-    const gate = createTransferredExitGate(admission, () => pinned, () => { pinned = false; pinRelease(); });
-    manager.on('session-stopped', gate.onStopped);
-    manager.on('session-exit', (id: string) => {
-      if (!gate.onExit(id, 'conversation', teardown)) admission.markExit('conversation', teardown);
-    });
+    const { info, release, admission, pinRelease, gate } = leaseFixture({ teardown, passTeardownToAdmission: true });
     handlers.message({ type: 'exit', exitCode: 0 });
     expect(pinRelease).not.toHaveBeenCalled();
     expect(release).not.toHaveBeenCalled();
@@ -268,18 +248,7 @@ describe('SessionManager', () => {
   });
 
   it('releases transferred lease and pin exactly once on the PTY exit frame', async () => {
-    const info = manager.createSession({ name: 'transferred', cwd: tmpDir, skipPermissions: false });
-    const release = vi.fn(async () => {});
-    const admission = createResumeAdmission({ acquire: vi.fn(async () => ({ ok: true })), release, getLive: () => undefined });
-    const pinRelease = vi.fn();
-    let pinned = true;
-    const gate = createTransferredExitGate(admission, (id: string) => id === info.id && pinned, () => {
-      pinned = false; pinRelease();
-    });
-    manager.on('session-stopped', gate.onStopped);
-    manager.on('session-exit', (id: string) => {
-      if (!gate.onExit(id, 'conversation', Promise.resolve())) admission.markExit('conversation');
-    });
+    const { release, pinRelease } = leaseFixture({ pinById: true });
     expect(release).not.toHaveBeenCalled();
     handlers.message({ type: 'exit', exitCode: 0 });
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
@@ -440,16 +409,8 @@ describe('SessionManager', () => {
     expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__youcoded__SendUserLink');
   });
 
-  // T9a: the doc-comments MCP server rides the SAME two flags, combined into
-  // one occurrence each rather than a second `--mcp-config`/`--allowedTools`
-  // pair (claude --help documents both as variadic — see
-  // youcoded/docs/cc-dependencies.md's own entry for why repeating either
-  // flag was avoided). Only ReadFileComments is pre-approved; the five
-  // mutation tools are deliberately absent (§5.2a's own permission gate).
-  // The `mcpServers` config KEY is a fresh random id per deployment
-  // (adversarial review 2026-09-27, finding #2 — no fixed, guessable,
-  // checked-into-a-repo-able string), so this test reads it back off the
-  // config file itself rather than asserting a literal.
+  // The doc-comments MCP server rides the SAME two flags, combined into one occurrence each (both are variadic; see cc-dependencies.md).
+  // Only ReadFileComments is pre-approved. The mcpServers key is a random id per deployment, so it is read back off the config file.
   it('attaches the doc-comments MCP server to every Claude Code session, combined into the SAME flags as SendUserLink', () => {
     manager.createSession({ name: 'doc-comments', cwd: tmpDir, skipPermissions: false });
     const args: string[] = mockWorker.send.mock.calls[0][0].args;
@@ -503,13 +464,8 @@ describe('SessionManager', () => {
       .not.toBe(configB.mcpServers[serverIdB].env[YOUCODED_MCP_TOKEN_ENV]);
   });
 
-  // Adversarial review 2026-09-27, finding #1: the token/server id must
-  // reach the pending-mutation queue and the permission check WITHOUT
-  // riding through the renderer-facing `session-created` broadcast (that
-  // event is sent to the owning window verbatim, over IPC — a renderer-side
-  // script reading it back could otherwise forge a request or impersonate
-  // the server). `doc-comments-mcp-attached` is a SEPARATE, private event
-  // for exactly this.
+  // The token/server id must reach the pending-mutation queue WITHOUT riding the renderer-facing `session-created` broadcast
+  // (a renderer script could forge requests); `doc-comments-mcp-attached` is a separate, private event.
   it('emits a PRIVATE doc-comments-mcp-attached event carrying the token/server id, never inside session-created', () => {
     const attached = vi.fn();
     const created = vi.fn();
@@ -660,12 +616,8 @@ describe('SessionManager', () => {
     expect(emitted[0].initialInput).toBe('prefill text');
   });
 
-  // --- broadcastReloadPlugins gating (stray-Enter fix) ---
-  //
-  // `/reload-plugins\r` typed into a session whose PTY is showing a live Ink
-  // select menu (permission prompt / AskUserQuestion) presses Enter on the
-  // highlighted option. The broadcast must defer per-session while a
-  // permission request is pending there.
+  // broadcastReloadPlugins gating: `/reload-plugins\r` typed into a live Ink select menu (permission prompt) presses Enter on the
+  // highlighted option, so the broadcast must defer per-session while a permission request is pending.
 
   describe('broadcastReloadPlugins gating', () => {
     const reloadSends = () =>
@@ -749,14 +701,8 @@ describe('SessionManager', () => {
   });
 });
 
-// The plain-shell session provider.
-//
-// A shell session is the user's own terminal running inside the app — no AI in
-// it at all. It exists so "Run in terminal" can put a set-up command in front of
-// the user instead of sending them off to find a terminal. Everything pinned
-// here is a way that could go wrong SILENTLY: a command that never arrives, a
-// command that runs itself, a hook pipe that makes a plain shell look like a
-// Claude Code session, or the app typing "/reload-plugins" at someone's prompt.
+// Plain-shell provider: the user's own terminal in the app, so "Run in terminal" can put a set-up command in front of them. Each
+// pin is a SILENT failure: a command that never arrives, one that runs itself, a hook pipe making a shell look like Claude Code.
 
 /** The 'spawn' message SessionManager sent to the worker. */
 function spawnMessage() {
@@ -908,32 +854,13 @@ describe('shell sessions', () => {
     });
   });
 
-  // THE property this feature rests on. The app deliberately does not APPEND a
-  // carriage return, because pressing Enter is the user's decision — but "we
-  // didn't add one" is not the same as "there isn't one". Measured on real
-  // bash, zsh and fish: a \r ALREADY INSIDE the command runs it with nobody at
-  // the keyboard. The command reaches this validator from a WebSocket frame a
-  // remote browser controls, and (in future) from a prerequisite table that
-  // could be CRLF-shaped on Windows.
-  // The validator only protects what routes through it. This is the assertion
-  // that nothing builds a shell session around it.
-  // WHY the source shapes are not here (Plan B, 2026-09-16): that both entry
-  // points call the validator, that the initial command takes the chunked
-  // channel, that ordinary typing keeps its single write, and that the remote
-  // session:create case refuses a shell provider are ast-grep rules in
-  // youcoded-dev's scripts/ast-grep/rules/ — run-in-terminal-entry-points-validate
-  // (+ -remote), run-in-terminal-chunked-write, pty-worker-passthrough-single-write
-  // and remote-session-create-refuses-shell-provider.
+  // The app doesn't APPEND a carriage return (Enter is the user's call), but a \r already INSIDE the command runs it unattended on
+  // bash/zsh/fish — and commands arrive from a remote WebSocket frame. The validator only protects what routes through it, so assert
+  // nothing builds a shell session around it. Source-shape checks are ast-grep rules (run-in-terminal-* in scripts/ast-grep/rules/).
   describe('every way to open a shell goes through the validator', () => {
     it('and there is no third way to build one — the gate is the token, not a grep', () => {
-      // This used to be a source scan for the exact string `provider: 'shell',`,
-      // which two evasions walked straight past while staying green: a whole new
-      // file in main/, and a second site in this same file written as
-      // `const SHELL_PROVIDER = 'shell' as const; … provider: SHELL_PROVIDER`.
-      // Different quoting, no trailing comma, a one-line object or a spread
-      // evaded it identically. createSession now DEMANDS a Symbol only
-      // prepareRunInTerminal mints, so however the call is written, a site that
-      // skipped the validator throws instead of opening an unchecked shell.
+      // createSession DEMANDS a Symbol only prepareRunInTerminal mints (a string scan for `provider: 'shell'` was evaded by a new file or
+      // a constant), so however the call is written, a site that skipped the validator throws.
       expect(() => manager.createSession({
         name: 'fish', cwd: tmpDir, skipPermissions: false, provider: 'shell',
         initialCommand: 'echo hi',

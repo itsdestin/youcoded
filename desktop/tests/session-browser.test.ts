@@ -8,14 +8,8 @@ import { nativeStoreSlug } from '../src/main/slug-encoding';
 // needs none of the reset-and-reimport the listPastSessions cases use.
 import { readSessionTranscriptMetaCached, __clearTranscriptMetaCacheForTests } from '../src/main/session-browser';
 
-// Task 7 (store union): session-browser reads the Conversation Store via a
-// dynamic import of './conversations/service' inside listPastSessions. The real
-// service singleton is only non-null after startConversationStore() runs (which
-// drags in the whole sync-spaces graph). We mock the service module to a thin
-// facade whose getConversationStore() reads a mutable holder — each store test
-// drops a REAL createConversationStore(tempRoot) into the holder, exercising the
-// genuine store read path without booting sync-spaces. resetModules re-applies
-// vi.mock automatically, so the harness's per-call reset still works.
+// listPastSessions reads the Conversation Store via a dynamic import of the service singleton (null until startConversationStore).
+// The module is mocked to a facade whose getConversationStore() reads a holder; store tests put a REAL createConversationStore(tempRoot) in it.
 const storeHolder = vi.hoisted(() => ({ current: null as any }));
 // Saved folders the mocked buildLocalProjectResolver resolves against. Empty by
 // default → resolution is originalPath-only (the pre-fix behavior most tests
@@ -238,11 +232,8 @@ describe('listPastSessions — existing gates still hold', () => {
   });
 });
 
-// A Claude Code conversation has no provider binding to resolve, so the ONLY
-// place its model is recorded is `message.model` on each assistant line in the
-// transcript. Reading it here is what puts a model on a CC card in the Resume
-// Browser; without it the chip is native-only. The read piggybacks on the tail
-// chunk that was already being scanned for the last timestamp.
+// A CC conversation has no provider binding, so its model lives only in `message.model` on assistant lines; read from the tail
+// chunk already scanned for the last timestamp.
 describe('listPastSessions — last model used (Claude Code)', () => {
   it('derives lastUsedModel from the last assistant message', async () => {
     writeTranscript('C--proj-alpha', SID_A, { model: 'claude-sonnet-4-5-20250929' });
@@ -385,13 +376,8 @@ describe('listPastSessions — Conversation Store union (Phase 2a)', () => {
   const absentProject = () => path.join(tmpHome, 'not-on-this-device', 'remote-proj');
 
   it('a record poisoned with <synthetic> does not override the transcript scan', async () => {
-    // The bug the FIRST placeholder fix missed. The store overlay assigns
-    // rec.lastUsedModel over the freshly-scanned transcript value
-    // (session-browser.ts, `if (rec.lastUsedModel)`), so a record written
-    // before the writer was guarded defeated the transcript-side fix entirely
-    // — and 3 of Destin's 1,855 real records were in exactly that state,
-    // including the card that started this whole investigation. The read-side
-    // filter in store-core's sanitizeModelRef is what heals them.
+    // The store overlay assigns rec.lastUsedModel over the scanned transcript value, so a record written before the writer was guarded
+    // defeated the transcript-side fix (3 of 1,855 real records); store-core's sanitizeModelRef read-side filter heals them.
     const store = seedStore();
     writeTranscript('C--proj-alpha', SID_A, { model: 'claude-opus-5' });
     await store.upsert({
@@ -538,12 +524,8 @@ describe('listPastSessions — Conversation Store union (Phase 2a)', () => {
 
   it('never resurfaces a LIVE session from the store (double-attach hazard)', async () => {
     const store = seedStore();
-    // A live session gains a store record within seconds of starting (live
-    // intake upserts on transcript events). The union must honor the same
-    // activeSessionIds exclusion the legacy scan applies — otherwise the
-    // running session shows up as a resumable store-only row, and resuming it
-    // spawns a second `claude --resume` against the transcript the live
-    // session is appending to.
+    // A live session gains a store record within seconds; the union must honor activeSessionIds like the legacy scan, or the running
+    // session shows as resumable and resume spawns a second `claude --resume` on a transcript being appended to.
     await store.upsert({
       id: SID_A,
       provider: 'claude',
@@ -603,11 +585,8 @@ describe('listPastSessions — Conversation Store union (Phase 2a)', () => {
     const sessions = await listSessions();
     expect(sessions).toHaveLength(1);
     const row = sessions[0];
-    // Before the fix, the foreign originalPath resolved to null → the row was
-    // (wrongly) missingProject and, if launched, resume ran in the foreign cwd →
-    // blank spawn + exit. Now it resolves to THIS device's folder: an accurate
-    // 'not synced yet' row (transcript not materialized in this test) carrying a
-    // LOCAL cwd, never the foreign path.
+    // A foreign originalPath must resolve to THIS device's folder (an accurate 'not synced yet' row with a LOCAL cwd), never the
+    // foreign path (which gave missingProject / a blank spawn + exit).
     expect(row.missingProject).toBeUndefined();
     expect(row.notSyncedYet).toBe(true);
     expect(row.projectPath).toBe(localProj);

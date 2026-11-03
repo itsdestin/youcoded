@@ -1,5 +1,5 @@
 // desktop/tests/sync-spaces-git-transport.test.ts
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -8,17 +8,20 @@ import { GitTransport } from '../src/main/sync-spaces/git-transport';
 import type { SyncSpace } from '../src/main/sync-spaces/types';
 import { describeTransportContract, TransportHarness } from './sync-transport-contract';
 
-// INTEGRATION test, not a unit test: every case spawns real `git` subprocesses,
-// so its wall-clock scales with machine load — and vitest's parallel pool
-// guarantees load. The 5s default (and even 30s) is a fixed-budget bet that
-// loses on a busy machine, which made this file time out nondeterministically
-// and block release builds (`npm test` gates the Build step). A generous ceiling
-// only bounds the FAILURE case; passing tests return as soon as they finish.
-// Applies to the describeTransportContract() cases below too — verified.
+// INTEGRATION test: every case spawns real `git`, so wall-clock scales with load; the generous ceiling only bounds failure
+// (the 5s/30s defaults timed out nondeterministically and blocked release builds). Covers describeTransportContract() too.
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 // Real git, local bare repo as the "GitHub" remote. Needs git on PATH (CI has it).
+// Every harness is cleaned in afterEach (even when a case fails), so cases never call cleanup() themselves.
+const made: TransportHarness[] = [];
+afterEach(async () => { for (const h of made.splice(0)) await h.cleanup(); });
 async function makeHarness(): Promise<TransportHarness> {
+  const h = makeRawHarness();
+  made.push(h);
+  return h;
+}
+function makeRawHarness(): TransportHarness {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-gt-'));
   const bare = path.join(tmp, 'remote.git');
   fs.mkdirSync(bare);
@@ -57,7 +60,6 @@ describe('GitTransport specifics', () => {
     const r = await small.push(a, 'mixed');
     expect(r.pushed).toBe(true);
     expect(r.oversize).toEqual(['big.bin']);
-    await h.cleanup();
   });
 
   it('a tracked file that grows past the cap is excluded ONCE, not re-appended every sync', async () => {
@@ -76,7 +78,6 @@ describe('GitTransport specifics', () => {
     expect(r2.oversize).toEqual(['log.txt']);
     const exclude = fs.readFileSync(path.join(a.root, '.youcoded', 'sync.git', 'info', 'exclude'), 'utf8');
     expect(exclude.split('\n').filter(l => l === '/log.txt').length).toBe(1);
-    await h.cleanup();
   });
 
   // 2026-09-16 incident: a second app copy syncing the same folder raced the
@@ -122,7 +123,6 @@ describe('GitTransport specifics', () => {
       expect(fs.readFileSync(path.join(b.root, 'chat.jsonl'), 'utf8')).toBe('tiny');
       // Nothing on this device was touched.
       expect(fs.readFileSync(path.join(a.root, 'chat.jsonl'), 'utf8')).toBe('x'.repeat(11));
-      await h.cleanup();
     });
 
     it('drops an oversize blob that only exists in an intermediate unpublished commit', async () => {
@@ -139,7 +139,6 @@ describe('GitTransport specifics', () => {
       const r = await small.push(a, 'next');
       expect(r.pushed).toBe(true);
       expect(largestRemoteBlob(bareOf(a))).toBeLessThanOrEqual(10);
-      await h.cleanup();
     });
 
     // Review 2026-09-16 F2/F11: when the over-cap file is the ONLY unpublished
@@ -156,7 +155,6 @@ describe('GitTransport specifics', () => {
       const r = await small.push(a, 'next');
       expect(r).toMatchObject({ pushed: false, oversize: ['chat.jsonl'] });
       expect(gitIn(a, ['ls-remote', bareOf(a), 'refs/heads/main'])).toBe(before);
-      await h.cleanup();
     });
 
     // Review F3: a name git would read as pathspec magic must still be held back.
@@ -178,7 +176,6 @@ describe('GitTransport specifics', () => {
       expect([...r.oversize].sort()).toEqual(colon ? [':big', 'f[1].md'] : ['f[1].md']);
       expect(largestRemoteBlob(bareOf(a))).toBeLessThanOrEqual(10);
       expect(gitIn(a, ['show', 'origin/main:f1.md'])).toBe('v2');
-      await h.cleanup();
     });
 
     // Review F7: a big file already published and unchanged is not "held back".
@@ -193,7 +190,6 @@ describe('GitTransport specifics', () => {
       commitRaw(a, 'leaked');
       const r = await small.push(a, 'next');
       expect(r.oversize).toEqual(['new.bin']);
-      await h.cleanup();
     });
   });
 
@@ -209,7 +205,6 @@ describe('GitTransport specifics', () => {
     expect((await small.push(a, 'two')).oversize).toEqual(['video [raw].bin']);
     fs.rmSync(path.join(a.root, 'video [raw].bin'));
     expect((await small.push(a, 'three')).oversize).toEqual([]);
-    await h.cleanup();
   });
 
   describe('first push guard', () => {
@@ -236,7 +231,6 @@ describe('GitTransport specifics', () => {
       const r = await small.push(a, 'first');
       expect(r).toMatchObject({ pushed: false, oversize: ['big.bin'] });
       expect(gitIn(a, ['ls-remote', bareOf(a)])).toBe('');
-      await h.cleanup();
     });
 
     it('also holds on the very first push, before GitHub has any history', async () => {
@@ -251,7 +245,6 @@ describe('GitTransport specifics', () => {
       expect(r.oversize).toEqual(['big.bin']);
       expect(largestRemoteBlob(bareOf(a))).toBeLessThanOrEqual(10);
       expect(fs.existsSync(path.join(a.root, 'big.bin'))).toBe(true);
-      await h.cleanup();
     });
   });
 
@@ -283,7 +276,6 @@ describe('GitTransport specifics', () => {
     expect(retry.updated).toBe(true);
     expect(retry.conflictCopies.length).toBe(1);
     expect(fs.readFileSync(path.join(b.root, 'plan.md'), 'utf8')).toBe('A version\n');
-    await h.cleanup();
   });
 
   it('maybeGc advances the persisted counter and gc actually repacks on the Nth sync', async () => {
@@ -298,23 +290,11 @@ describe('GitTransport specifics', () => {
     const git = (...args: string[]) => execFileSync('git', args, { env: gitEnv });
     const packCount = () => { try { return fs.readdirSync(packDir).filter(f => f.endsWith('.pack')).length; } catch { return 0; } };
 
-    // The production command is `git gc --auto`, which decides to run via a
-    // heuristic. `--auto`'s LOOSE-object sampler is unreliable on a tiny repo
-    // (it samples a single fanout bucket), so instead drive the deterministic
-    // TOO-MANY-PACKS trigger: set gc.autoPackLimit=1 and manufacture 2 packs,
-    // so `git gc --auto` MUST run and consolidate them back to 1. That proves
-    // the gc had a real EFFECT rather than the command silently no-op'ing/failing
-    // (both git() and maybeGc swallow failures, so counter-advance alone wouldn't).
+    // Drive the deterministic TOO-MANY-PACKS trigger (gc.autoPackLimit=1 + 2 packs): `git gc --auto`'s loose-object sampler is
+    // unreliable on a tiny repo, and git()/maybeGc swallow failures, so only a consolidated pack count proves gc had an EFFECT.
     git('config', 'gc.autoPackLimit', '1');
-    // gc.autoDetach defaults to TRUE, so `git gc --auto` forks and returns
-    // immediately wherever git can daemonize() — i.e. Linux/macOS but NOT
-    // Windows. The packCount() assertion below then races the background gc and
-    // reads the pre-gc value, which is why this test passed locally on Windows
-    // and failed on every ubuntu/macos CI run from 2026-07-14 (ffd17fe5) on.
-    // Verified on Linux: with autoDetach default the count is still 2 right
-    // after gc and only drops to 1 ~2s later; with it false it's 1 immediately.
-    // Pinned here rather than in maybeGc because BACKGROUND gc is the behavior
-    // we want in production — a sync must never block on repacking.
+    // gc.autoDetach defaults to TRUE: on Linux/macOS gc forks and returns, so packCount() raced the background gc and failed every
+    // ubuntu/macos CI run (count drops 2s later). Pinned here, not in maybeGc, because a sync must never block on repacking.
     git('config', 'gc.autoDetach', 'false');
     fs.writeFileSync(path.join(a.root, 'f.md'), 'v1');
     await t.push(a, 'c1');
@@ -337,7 +317,6 @@ describe('GitTransport specifics', () => {
     fs.writeFileSync(counterFile, 'not-a-number');
     await expect(t.maybeGc(a)).resolves.toBeUndefined();
     expect(fs.readFileSync(counterFile, 'utf8').trim()).toBe('1');
-    await h.cleanup();
   });
 
   it('ignoredDirs names folders the project .gitignore and the default list skip, and no folder that still syncs', async () => {
@@ -357,7 +336,6 @@ describe('GitTransport specifics', () => {
     expect(dirs).toEqual(expect.arrayContaining(['.venv-rocm', 'data/cache', 'build']));
     expect(dirs).not.toContain('data');
     expect(dirs).not.toContain('kept');
-    await h.cleanup();
   });
 
   it('gitDirSizeBytes returns >0 for a real repo and 0 for a missing dir', async () => {
@@ -373,16 +351,10 @@ describe('GitTransport specifics', () => {
     const empty: SyncSpace = { id: 'project:none', kind: 'project', root: path.join(a.root, 'nope') };
     fs.mkdirSync(empty.root, { recursive: true });
     expect(await t.gitDirSizeBytes(empty)).toBe(0);
-    await h.cleanup();
   });
 
-  // New (Task 1C): the async walk must keep the SAME behavior as the sync one
-  // it replaces — sums real files and skips symlinks outright (never
-  // follows). Built directly under a fake .youcoded/sync.git (no real git
-  // needed) so the byte counts are exact and controllable.
-  // Renamed (review round 1): this case never writes anywhere near
-  // SIZE_WALK_MAX_ENTRIES (200_000), so it does not exercise the entry cap —
-  // the old name overclaimed. No test in this file currently reaches the cap.
+  // The async walk must match the sync one it replaced: sums real files, never follows symlinks (exact byte counts, no real git).
+  // Does not reach SIZE_WALK_MAX_ENTRIES, so it does not exercise the entry cap.
   it('gitDirSizeBytes sums files and skips symlinks', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-gt-walk-'));
     try {
@@ -428,7 +400,6 @@ describe('GitTransport specifics', () => {
     corruptHeadObject(a.root);
     fs.writeFileSync(path.join(a.root, 'two.md'), 'second');
     await expect(h.transport.push(a, 'after crash')).rejects.toMatchObject({ syncErrorCode: 'repo-corrupt' });
-    await h.cleanup();
   });
 
   it('pull() on a crash-corrupted repo throws coded repo-corrupt — never a silent {updated:false}', async () => {
@@ -439,7 +410,6 @@ describe('GitTransport specifics', () => {
     corruptHeadObject(a.root);
     fs.writeFileSync(path.join(a.root, 'two.md'), 'second'); // dirty → pull's snapshot commit must run
     await expect(h.transport.pull(a)).rejects.toMatchObject({ syncErrorCode: 'repo-corrupt' });
-    await h.cleanup();
   });
 
   it('benign paths stay silent: first push against an empty remote still works end-to-end', async () => {
@@ -452,7 +422,6 @@ describe('GitTransport specifics', () => {
     expect(pulled.updated).toBe(false);
     const r = await h.transport.push(a, 'first push'); // no origin/main yet — benign probe failure
     expect(r.pushed).toBe(true);
-    await h.cleanup();
   });
 
   it('an unexplained local git failure surfaces the real stderr, not a guess', async () => {
@@ -460,22 +429,9 @@ describe('GitTransport specifics', () => {
     const a = await h.makeDeviceSpace();
     fs.writeFileSync(path.join(a.root, 'one.md'), 'first');
     await h.transport.push(a, 'seed');
-    // Corruption vs. unexplained-failure discrimination: the PRIOR technique
-    // here — replacing objects/ with a plain file — was verified empirically
-    // to make git print
-    // `fatal: not a git repository: '<path>'`, which IS one of
-    // CORRUPTION_PATTERNS in sync-error-classifier.ts. So this test was
-    // silently exercising throwRepoCorrupt() while its assertion
-    // (`/Sync failed for|needs repair/`) passed for EITHER branch — the "real
-    // stderr, not a guess" half of the contract (the generic, non-coded throw)
-    // was never actually pinned.
-    //
-    // A git pre-commit hook gives us a LOCAL git failure we fully author:
-    // deterministic stderr, guaranteed not to match any CORRUPTION_PATTERNS or
-    // benign predicate (LOCK_CONTENDED / "nothing to commit" / NOTHING_TO_PUSH_YET),
-    // and portable — git invokes a hook with a `#!/bin/sh` shebang via its own
-    // bundled shell on every CI OS this suite runs on (Git for Windows ships
-    // one for exactly this reason).
+    // Corruption vs unexplained failure: replacing objects/ with a file makes git print 'not a git repository' (a CORRUPTION_PATTERN),
+    // which let the old version pass via the wrong branch. A pre-commit hook gives a local failure we author, matching no corruption
+    // or benign pattern, and portable (Git for Windows bundles sh).
     const hooksDir = path.join(a.root, '.youcoded', 'sync.git', 'hooks');
     fs.mkdirSync(hooksDir, { recursive: true });
     const hookPath = path.join(hooksDir, 'pre-commit');
@@ -488,17 +444,11 @@ describe('GitTransport specifics', () => {
     expect(err.syncErrorCode).toBeUndefined();
     // AND the real git/hook-emitted text reached the message, not a guess.
     expect(String(err.message)).toContain('simulated-disk-hiccup: pre-commit refused');
-    await h.cleanup();
   });
 });
 
-// Stale git-lock recovery: a git write killed mid-operation (5-min timeout
-// SIGTERM, app quit, machine sleep, or a second instance racing the same
-// sync.git) leaves an orphaned `*.lock` behind. Git then refuses EVERY
-// subsequent write ("Unable to create index.lock: File exists"), wedging the
-// space forever until the file is deleted by hand. The transport reaps locks
-// older than its stale threshold before each sync so the space self-heals —
-// age-gated so we never yank a lock a genuinely-live writer still holds.
+// Stale-lock recovery: a git write killed mid-operation leaves an orphaned `*.lock` that wedges every later write forever.
+// The transport reaps locks older than its stale threshold before each sync, age-gated so a live writer's lock is kept.
 describe('GitTransport stale-lock recovery', () => {
   const gitDirOf = (space: SyncSpace) => path.join(space.root, '.youcoded', 'sync.git');
   // Backdate a file's mtime so the age gate treats it as stale. utimes takes seconds.
@@ -522,7 +472,6 @@ describe('GitTransport stale-lock recovery', () => {
     const r = await t.push(a, 'v2');
     expect(r.pushed).toBe(true);
     expect(fs.existsSync(lock)).toBe(false);
-    await h.cleanup();
   });
 
   it('reaps a stale index.lock so a wedged pull merge no longer throws', async () => {
@@ -539,7 +488,6 @@ describe('GitTransport stale-lock recovery', () => {
     fs.writeFileSync(path.join(a.root, 'note.md'), 'v2');
     await expect(t.pull(a)).resolves.toBeDefined();
     expect(fs.existsSync(lock)).toBe(false);
-    await h.cleanup();
   });
 
   it('leaves a FRESH lock untouched (a live writer may still hold it)', async () => {
@@ -556,7 +504,6 @@ describe('GitTransport stale-lock recovery', () => {
     // The fresh lock must survive, and because it survived the push could not commit.
     expect(fs.existsSync(lock)).toBe(true);
     expect(r.pushed).toBe(false);
-    await h.cleanup();
   });
 
   it('reaps a stale ref lock under refs/, not just index.lock', async () => {
@@ -575,16 +522,11 @@ describe('GitTransport stale-lock recovery', () => {
     const r = await t.push(a, 'v2');
     expect(r.pushed).toBe(true);
     expect(fs.existsSync(refLock)).toBe(false);
-    await h.cleanup();
   });
 });
 
-// ---------------------------------------------------------------------------
-// Phase 2 (2026-07-22): app-token credentials + auth-failure surfacing.
-// The invocation builder and the classifier are PURE — pinned directly. The
-// throw-wiring in pull()/push() is pinned by overriding the private git()
-// (cast) so no test ever needs a real network/auth failure.
-// ---------------------------------------------------------------------------
+// App-token credentials + auth-failure surfacing: the invocation builder and classifier are PURE; throw-wiring is pinned by
+// overriding the private git() so no test needs a real network/auth failure.
 
 import {
   credentialedGitInvocation,
@@ -722,17 +664,8 @@ describe('GitTransport auth-failure surfacing', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Benign-allowlist intent pins.
-// LOCK_CONTENDED and NOTHING_TO_PUSH_YET were previously covered only
-// INCIDENTALLY, by tests written before the constants existed (pinning the
-// OLD "swallow every failure" behavior, not the deliberate allowlist). Without
-// a test that names the intent, anyone narrowing these regexes later gets a
-// failure that reads as "stale-lock reaping broke" or "first-push broke",
-// never "you narrowed the benign allowlist". These state the intent directly,
-// via the same scripted-git() technique as the auth-failure block above (no
-// real git subprocess, no real race needed to prove a policy decision).
-// ---------------------------------------------------------------------------
+// Benign-allowlist intent pins: LOCK_CONTENDED and NOTHING_TO_PUSH_YET were only covered incidentally, so narrowing the
+// regexes would fail as 'stale-lock reaping broke'. These name the intent via the scripted-git() technique (no real git).
 describe('GitTransport benign-allowlist intent', () => {
   const space: SyncSpace = { id: 'personal', kind: 'personal', root: '/nowhere' };
   const LOCK_STDERR = "Unable to create '/nowhere/.youcoded/sync.git/index.lock': File exists.";
@@ -766,15 +699,8 @@ describe('GitTransport benign-allowlist intent', () => {
       diff: { code: 0, stdout: 'file.md' }, // something staged, so push() attempts a commit
       commit: { code: 128, stderr: LOCK_STDERR },
     });
-    // Must resolve, not throw — the lock at commit is exactly as benign as at
-    // add. Pin the EXACT shape, not just "resolves": a bare `.toBeDefined()`
-    // passes identically whether the fix's early return runs (real result
-    // {pushed:false, oversize:[]}) or the fix is missing entirely and every
-    // downstream unscripted call falls through to its `{code:0}` default,
-    // producing {pushed:true, commit:'', oversize:[]} — a silently wrong
-    // result that still satisfies `toBeDefined()`.
-    // `contacted: false`: the lock was lost before any push ran, so origin
-    // was never reached and "Last synced" must not move.
+    // Must resolve with the EXACT shape {pushed:false, oversize:[]}: a bare toBeDefined() passes equally when the early return is
+    // missing and unscripted calls default to {code:0}. `contacted: false` because the lock was lost before any push reached origin.
     await expect(t.push(space, 'msg')).resolves.toEqual({ pushed: false, contacted: false, oversize: [] });
   });
 
@@ -796,13 +722,8 @@ describe('GitTransport benign-allowlist intent', () => {
   it('LOCK_CONTENDED on `add` in pull() resolves benignly and never falls through to merge (`add` is the FIRST lock-taking op, so losing the race there leaves the tree state unknown — proceeding to merge would risk running on a dirty tree)', async () => {
     const t = scripted({
       add: { code: 128, stderr: LOCK_STDERR },
-      // Every other call is left unscripted, so it defaults to `{code:0}`.
-      // If the early return after `add` were missing, execution would sail
-      // straight through diff/hasRemote/fetch/rev-parse/rev-list all the way
-      // to `merge`, which would ALSO default to success — silently reporting
-      // `updated: true` for a pull that never actually ran a merge. The
-      // exact-shape assertion below catches that value; the mock-calls check
-      // proves `merge` specifically never ran.
+      // Other calls are unscripted and default to {code:0}: without the early return after `add` execution would reach `merge` and
+      // report `updated: true`. The exact-shape assertion catches that value; the mock-calls check proves `merge` never ran.
     });
     // Lost the lock race BEFORE the fetch: origin was never reached, so this
     // cycle must not stamp "Last synced" either.
@@ -820,25 +741,16 @@ describe('GitTransport benign-allowlist intent', () => {
       'rev-list': { code: 1, stderr: 'fatal: Invalid revision range' }, // origin/main doesn't exist yet
       push: { code: 1, stderr: 'error: src refspec main does not match any known revisions' },
     });
-    // Exact-shape pin, not a partial match: a bare `pushed: false` partial
-    // match passes for ANY resolution shape, including a false positive where
-    // `commit` ends up truthy (e.g. from a lock-contended commit leaking the
-    // prior HEAD sha) — the field that actually decides whether the "nothing
-    // was pushed" story is honest never gets checked. Pin the full result so
-    // a future regression at any field surfaces here.
-    // `contacted: true` — the recovery pull's fetch DID reach origin; only the
-    // push itself had nothing to send.
+    // Exact-shape pin: a partial `pushed: false` match passes for any shape, including a truthy `commit` leaking the prior HEAD sha.
+    // `contacted: true` because the recovery pull's fetch DID reach origin; only the push had nothing to send.
     await expect(t.push(space, 'msg')).resolves.toEqual({
       pushed: false, contacted: true, commit: undefined, oversize: [], updated: false, conflictCopies: [],
     });
   });
 
   it('corruption evidence wins over a co-occurring lock line: a stderr carrying BOTH lock contention AND corruption evidence throws repo-corrupt, never gets swallowed as benign', async () => {
-    // The 2026-07-27 incident shape: an orphaned index.lock not yet aged past
-    // lockStaleMs, sitting alongside a truncated loose object in the same
-    // stderr. Corruption must win — assertLocalOk checks corruption evidence
-    // BEFORE the benign allowlist, so this case can't be misclassified as a
-    // simple lock race.
+    // 2026-07-27 incident shape: an unaged index.lock beside a truncated loose object. Corruption must win — assertLocalOk checks
+    // corruption evidence BEFORE the benign allowlist.
     const t = scripted({
       add: {
         code: 128,
@@ -850,11 +762,8 @@ describe('GitTransport benign-allowlist intent', () => {
   });
 });
 
-// REAL-GIT PIN: the credentialed invocation must not disturb actual git ops.
-// A file:// remote never consults credential helpers, so what this validates
-// is that real git (all 3 CI OSes — incl. Git for Windows's sh, which executes
-// the `!`-prefixed inline helper) ACCEPTS the prepended -c flags + env on the
-// full init→push→pull cycle, and that no token ever lands in the repo config.
+// REAL-GIT PIN: real git on all 3 CI OSes (incl. Git for Windows's sh running the `!` inline helper) must ACCEPT the prepended
+// -c flags + env across init→push→pull, and no token may land in the repo config (a file:// remote never consults helpers).
 describe('GitTransport credentialed against real git', () => {
   it('full sync cycle succeeds with a token provider; token never reaches any git config', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-gtc-'));
@@ -1109,7 +1018,6 @@ describe('GitTransport downloads', () => {
     expect(r.code).not.toBe(0);
     expect(r.stderr).toMatch(/fetch stopped: no data/);
     await expect(t.pull(a)).resolves.toEqual({ updated: false, conflictCopies: [], contacted: false });
-    await h.cleanup();
   });
 
   it('pull removes partial downloads a dead fetch left behind, but not a fresh one', async () => {
@@ -1126,7 +1034,6 @@ describe('GitTransport downloads', () => {
     await h.transport.pull(a);
     expect(fs.existsSync(old)).toBe(false);
     expect(fs.existsSync(fresh)).toBe(true);
-    await h.cleanup();
   });
 
   it('a push refused because the download behind it never finished stays quiet, then lands once it can', async () => {
@@ -1146,6 +1053,5 @@ describe('GitTransport downloads', () => {
     // WHY use the normal transport after removing the fault: a healthy Windows fetch
     // can exceed the injected 300ms stall budget under CI load. Recovery is not a speed test.
     await expect(h.transport.push(a, 'recovered')).resolves.toMatchObject({ pushed: true });
-    await h.cleanup();
   });
 });

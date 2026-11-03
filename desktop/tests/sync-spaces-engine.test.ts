@@ -78,28 +78,12 @@ afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
-// These are fs.watch INTEGRATION tests — they wait on real filesystem events,
-// so their wall-clock scales with machine load and vitest's parallel pool
-// guarantees load. The 5000ms literal these replaced took the macOS leg of beta
-// run 29701441150 red TWICE on 2026-07-19, with a DIFFERENT victim test each
-// run ('debounces file changes…' then 'emits error events…') — the signature of
-// a too-tight budget, not a broken assertion. Windows and Linux passed both times.
-//
-// Note for whoever touches this next: PR #163 swapped this family's fixed
-// sleep()s for vi.waitFor bounded-retry polling, which was right — but
-// vi.waitFor carries its OWN fixed ceiling, so the budget moved rather than
-// disappeared. One named knob per file; do NOT reintroduce inline literals (an
-// inline third arg on it() silently overrides vi.setConfig — the #163 trap).
+// fs.watch INTEGRATION tests: wall-clock scales with load (a 5000ms literal took macOS beta red twice with a different victim each
+// run). vi.waitFor has its OWN ceiling, so keep ONE named knob per file; an inline 3rd arg on it() silently overrides vi.setConfig.
 const WAIT_MS = 60_000;
 
-// The knob above bounds the vi.waitFor POLLING. It does NOT bound the test, and
-// without this line the file inherits vitest's default 5000ms testTimeout — so
-// every 60s wait above was in fact capped at 5s and PR #180's ceiling was
-// unreachable. That is the "Test timed out in 5000ms" macOS flake on PR #181
-// (ROADMAP :252): #180 replaced the six inline `{ timeout: 5000 }` literals here
-// but never added the setConfig its two sibling files got in #163
-// (sync-spaces-project-discovery.test.ts:23, sync-spaces-git-transport.test.ts
-// :18). Both knobs are required — one bounds the poll, one bounds the test.
+// The knob above bounds only the vi.waitFor POLLING; without setConfig the file inherits the 5000ms testTimeout (the macOS
+// 'Test timed out' flake). Both knobs are required: one bounds the poll, one bounds the test.
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 describe('SpaceSyncEngine', () => {
@@ -118,11 +102,8 @@ describe('SpaceSyncEngine', () => {
   });
 
 
-  // The debounce test above can no longer tell a live watcher from a dead one:
-  // addSpace() syncs once by design, so it would pass with chokidar delivering
-  // nothing. This is the test that fails if watching itself breaks — the write
-  // happens after the startup sync has landed, so only a real event can cause
-  // the second one.
+  // The debounce test cannot tell a live watcher from a dead one (addSpace() syncs once by design). This fails if watching breaks:
+  // the write happens after the startup sync landed, so only a real event can cause the second one.
   it('syncs a change made after the startup sync has landed', async () => {
     const t = fakeTransport();
     const engine = new SpaceSyncEngine(t, { debounceMs: 100, pollMs: 0, onEvent: () => {} });
@@ -133,12 +114,8 @@ describe('SpaceSyncEngine', () => {
     await engine.stop();
   });
 
-// addSpace() deliberately schedules ONE sync (engine.ts — it closes the macOS
-// window where fs.watch has returned but the OS watch is not armed yet, during
-// which changes are dropped entirely). Tests that assert "this change caused NO
-// sync" must let that one land first, or they are really asserting the
-// reconcile away. Draining it keeps them testing the ignore filter, which is
-// what they are for.
+// addSpace() deliberately schedules ONE sync (closes the macOS window where fs.watch returned but the OS watch isn't armed).
+// 'caused NO sync' tests must drain it first, or they assert the reconcile away instead of the ignore filter.
 async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
   await vi.waitFor(() => expect(t.pushes.length).toBe(1), { timeout: WAIT_MS });
   t.pushes.length = 0;
@@ -468,11 +445,8 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
     await engine.stop();
   });
 
-  // ---- Honest-state-machine pins (2026-07-22) ----------------------------
-  // A space with no remote must NEVER emit 'synced': pull/push silently no-op
-  // without one, and that phantom success superseded the real provisioning
-  // error under latestUnresolvedError — a fresh device showed green
-  // "All synced" while it had never contacted GitHub (beta.8 macOS VM bug).
+  // Honest state machine: a space with no remote must NEVER emit 'synced' — pull/push silently no-op, and that phantom success
+  // superseded the real provisioning error (a fresh device showed green 'All synced' having never contacted GitHub).
 
   it('never emits synced for a remote-less space (no provisioner: errors instead)', async () => {
     const t = fakeTransport();
@@ -633,12 +607,8 @@ describe('corruption self-heal', () => {
     await engine.syncSpace(space);
     await vi.waitFor(() => expect(events.some(e => e.type === 'error' && e.errorCode === REPO_REPAIR_FAILED_ERROR_CODE)).toBe(true), { timeout: WAIT_MS });
     expect(events.some(e => e.type === 'synced')).toBe(false);
-    // A FAILED repair still consumes the launch's one heal attempt — the guard
-    // is "one attempt per launch," not "one attempt until it succeeds." Drive a
-    // second cycle against the still-corrupt repo and confirm repair is NOT
-    // retried: call count stays at 1, and the corruption forwards as a plain
-    // repo-corrupt error (not another repo-repair-failed) — proof the engine
-    // took the "already healed this launch" branch instead of re-attempting.
+    // A FAILED repair still consumes the launch's one heal attempt: a second cycle must not retry repair (call count stays 1) and the
+    // corruption forwards as a plain repo-corrupt error, not another repo-repair-failed.
     events.length = 0;
     await engine.syncSpace(space);
     expect((t as any).repair).toHaveBeenCalledTimes(1);
@@ -649,14 +619,8 @@ describe('corruption self-heal', () => {
   });
 
   it('repair succeeds but the healed re-run still fails: no phantom synced, plain error surfaces', async () => {
-    // The existing "repairs once" test's push always throws, so its own
-    // `expect(events.some(synced)).toBe(false)` assertion never actually
-    // exercises the repair-succeeded-but-still-broken shape (synced is
-    // unreachable there for an unrelated reason). Realistic case this test
-    // pins: repair() itself resolves cleanly, but the healed rerun's push
-    // hits a DIFFERENT, uncoded failure (e.g. disk full) — the engine must
-    // still forward it as a plain error, never mistake the repair's own
-    // success for a synced space.
+    // Repair resolves cleanly but the healed rerun's push hits a DIFFERENT uncoded failure (disk full): the engine must forward it as
+    // a plain error, never mistake the repair's own success for a synced space.
     const t = fakeTransport();
     (t as any).repair = vi.fn(async () => {}); // Tier 1/2 succeeds
     t.push = vi.fn(async () => { throw new Error('no space left on device'); }) as any; // uncoded, unrelated to corruption

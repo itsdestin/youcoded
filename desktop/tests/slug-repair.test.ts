@@ -14,50 +14,21 @@ const write = (name: string, content: string) => {
 };
 
 describe('classifyPair — the merge-safety contract', () => {
-  it('identical bytes → identical', () => {
-    const a = write('a.jsonl', L('u1') + L('u2'));
-    const b = write('b.jsonl', L('u1') + L('u2'));
-    expect(classifyPair(a, b)).toBe('identical');
-  });
-  it('strict subset → wrong-is-subset', () => {
-    const a = write('a.jsonl', L('u1'));
-    const b = write('b.jsonl', L('u1') + L('u2'));
-    expect(classifyPair(a, b)).toBe('wrong-is-subset');
-  });
-  it('strict superset → wrong-is-superset', () => {
-    const a = write('a.jsonl', L('u1') + L('u2') + L('u3'));
-    const b = write('b.jsonl', L('u1') + L('u2'));
-    expect(classifyPair(a, b)).toBe('wrong-is-superset');
-  });
-  it('bidirectional divergence → fork (NEVER merged)', () => {
-    const a = write('a.jsonl', L('u1') + L('uA'));
-    const b = write('b.jsonl', L('u1') + L('uB'));
-    expect(classifyPair(a, b)).toBe('fork');
-  });
-  it('equal uuid sets but different bytes (metadata drift) → wrong-is-subset (correct-dir copy wins)', () => {
-    const a = write('a.jsonl', L('u1') + JSON.stringify({ type: 'mode' }) + '\n');
-    const b = write('b.jsonl', L('u1') + JSON.stringify({ type: 'last-prompt' }) + '\n');
-    expect(classifyPair(a, b)).toBe('wrong-is-subset');
-  });
-  it('same uuid, same set, but the shared message content diverges → fork (never subset)', () => {
-    const a = write('a.jsonl', JSON.stringify({ type: 'user', uuid: 'u1', message: { content: 'truncat' } }) + '\n' + L('u2'));
-    const b = write('b.jsonl', JSON.stringify({ type: 'user', uuid: 'u1', message: { content: 'truncated properly' } }) + '\n' + L('u2'));
-    expect(classifyPair(a, b)).toBe('fork');
-  });
-  it('empty vs empty → identical', () => {
-    const a = write('a.jsonl', '');
-    const b = write('b.jsonl', '');
-    expect(classifyPair(a, b)).toBe('identical');
-  });
-  it('empty wrongCopy vs non-empty correctCopy → wrong-is-subset', () => {
-    const a = write('a.jsonl', '');
-    const b = write('b.jsonl', L('u1') + L('u2'));
-    expect(classifyPair(a, b)).toBe('wrong-is-subset');
-  });
-  it('non-empty wrongCopy vs empty correctCopy → wrong-is-superset', () => {
-    const a = write('a.jsonl', L('u1') + L('u2'));
-    const b = write('b.jsonl', '');
-    expect(classifyPair(a, b)).toBe('wrong-is-superset');
+  const M = (type: string) => JSON.stringify({ type }) + '\n';
+  const U = (content: string) => JSON.stringify({ type: 'user', uuid: 'u1', message: { content } }) + '\n' + L('u2');
+  // [title, wrong-dir copy, correct-dir copy, verdict]
+  it.each([
+    ['identical bytes', L('u1') + L('u2'), L('u1') + L('u2'), 'identical'],
+    ['strict subset', L('u1'), L('u1') + L('u2'), 'wrong-is-subset'],
+    ['strict superset', L('u1') + L('u2') + L('u3'), L('u1') + L('u2'), 'wrong-is-superset'],
+    ['bidirectional divergence is a fork (NEVER merged)', L('u1') + L('uA'), L('u1') + L('uB'), 'fork'],
+    ['equal uuid sets but different bytes (metadata drift): correct-dir copy wins', L('u1') + M('mode'), L('u1') + M('last-prompt'), 'wrong-is-subset'],
+    ['same uuid and set but the shared message content diverges is a fork (never subset)', U('truncat'), U('truncated properly'), 'fork'],
+    ['empty vs empty', '', '', 'identical'],
+    ['empty wrong copy vs non-empty correct copy', '', L('u1') + L('u2'), 'wrong-is-subset'],
+    ['non-empty wrong copy vs empty correct copy', L('u1') + L('u2'), '', 'wrong-is-superset'],
+  ])('%s -> %s'.replace(' -> %s', ''), (_title, wrong, correct, verdict) => {
+    expect(classifyPair(write('a.jsonl', wrong), write('b.jsonl', correct))).toBe(verdict);
   });
 });
 

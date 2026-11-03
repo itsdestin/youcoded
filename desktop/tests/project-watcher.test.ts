@@ -1,16 +1,7 @@
-// Pins the project-watcher invariants from the 2026-07-20 spec §8:
-// - ignore predicate agrees with project-file-discovery (skip dirs, dot dirs,
-//   *.tmp) so the watcher never emits events for files the UI will not list
-// - events carry by:'external' and NEVER 'agent' (a watcher cannot know who wrote)
-// - the app's own writes are suppressed (save→watch→reload loop, §8.4)
-// - refcounting: last unsubscribe (or a dead renderer) PARKS the watcher, and
-//   it closes only after the grace period — a resubscribe inside the grace must
-//   reuse the same chokidar instance, never start a second walk
-// - nested git repositories are not watched (they are separate projects, their
-//   files are never listed here, and walking them is what made starts expensive)
-// - tracked files resolve to their SIDECAR id, not their path — without this the
-//   renderer's `evt.artifactId === artifact.id` filter never matches and the
-//   conflict banner stays dead for exactly the files that matter
+// Project-watcher invariants: the ignore predicate agrees with project-file-discovery; events are
+// by:'external' (never 'agent'); the app's own writes are suppressed; the last unsubscribe PARKS the
+// watcher and a resubscribe inside the grace reuses it; nested git repos are not watched; tracked
+// files resolve to their sidecar id (else the renderer's artifactId filter never matches).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs, { type Stats } from 'fs';
 import chokidar, { FSWatcher } from 'chokidar';
@@ -37,6 +28,9 @@ import {
 import { readSource } from './helpers/guard-scope';
 import { vi } from 'vitest';
 
+// WHY: lets queued microtasks/IO continuations run before a negative assertion.
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+
 describe('isWatchIgnoredPath', () => {
   const root = '/proj';
   it('ignores files under skip dirs and dot dirs', () => {
@@ -57,13 +51,8 @@ describe('isWatchIgnoredPath', () => {
     expect(isWatchIgnoredPath(root, '/proj')).toBe(false);
   });
   it('skip-dir set stays in lockstep with project-file-discovery', () => {
-    // The discovery SKIP_DIRS is not exported (it is a walk-stop detail), so pin
-    // the agreement textually: every entry there must be in WATCH_SKIP_DIRS and
-    // vice versa. A mismatch means the watcher emits events for files the UI
-    // never lists (or goes blind to listed ones).
-    // WHY still a text read (Plan B, 2026-09-16): equality of two sets in two files,
-    // one of them unexported, is a cross-file check no ast-grep rule can express.
-    // readSource normalises CRLF so a Windows checkout reads the same entries.
+    // WHY a text read: equality of two sets in two files (one unexported) is a cross-file check no
+    // ast-grep rule can express; a mismatch makes the watcher emit for files the UI never lists.
     const src = readSource(path.join(__dirname, '../src/main/artifacts/project-file-discovery.ts'));
     const block = src.match(/const SKIP_DIRS = new Set\(\[([\s\S]*?)\]\)/);
     expect(block, 'SKIP_DIRS not found in project-file-discovery.ts').toBeTruthy();
@@ -79,6 +68,11 @@ describe('project watcher metadata probes', () => {
   let ignored: (p: string, stats?: Stats) => boolean;
   let watcher: EventEmitter & { add: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> };
   let releases: (() => void)[];
+
+  // Every fs.promises.access call hangs until its release() rejects it with ENOENT.
+  const holdAccess = () => vi.spyOn(fs.promises, 'access').mockImplementation(() => new Promise<void>((_resolve, reject) => {
+    releases.push(() => reject(new Error('ENOENT')));
+  }));
 
   beforeEach(() => {
     releases = [];
@@ -97,16 +91,14 @@ describe('project watcher metadata probes', () => {
   afterEach(async () => {
     stopProjectWatchers();
     for (const release of releases) release();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await tick();
     vi.restoreAllMocks();
     __resetProjectWatchersForTest();
   });
 
   it('defers directory metadata without sync calls, while the event loop and raw file events stay free', async () => {
     const sync = vi.spyOn(fs, 'accessSync').mockImplementation(() => { throw new Error('must not block main'); });
-    const access = vi.spyOn(fs.promises, 'access').mockImplementation(() => new Promise<void>((_resolve, reject) => {
-      releases.push(() => reject(new Error('ENOENT')));
-    }));
+    const access = holdAccess();
     await watchProject(root, 1);
     const dir = path.join(root, 'ordinary');
     expect(ignored(dir, directory)).toBe(true);
@@ -117,7 +109,7 @@ describe('project watcher metadata probes', () => {
       expect(ignored(path.join(root, `file-${i}.txt`), file)).toBe(false);
       expect(ignored(dir, directory)).toBe(true);
     }
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await tick();
     expect(access).toHaveBeenCalledTimes(1);
     expect(watcher.add).not.toHaveBeenCalled();
     releases.shift()!();
@@ -128,21 +120,19 @@ describe('project watcher metadata probes', () => {
 
   it('bounds concurrent probes, deduplicates queued directories, and discards the queue on stop', async () => {
     vi.spyOn(fs, 'accessSync').mockImplementation(() => { throw new Error('must not block main'); });
-    const access = vi.spyOn(fs.promises, 'access').mockImplementation(() => new Promise<void>((_resolve, reject) => {
-      releases.push(() => reject(new Error('ENOENT')));
-    }));
+    const access = holdAccess();
     await watchProject(root, 1);
     for (let repeat = 0; repeat < 3; repeat++) {
       for (let i = 0; i < 100; i++) ignored(path.join(root, `dir-${i}`), directory);
     }
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await tick();
     expect(access).toHaveBeenCalledTimes(2);
     releases.shift()!();
     await vi.waitFor(() => expect(access).toHaveBeenCalledTimes(3));
     expect(watcher.add).toHaveBeenCalledTimes(1);
     stopProjectWatchers();
     for (const release of releases.splice(0)) release();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await tick();
     expect(access).toHaveBeenCalledTimes(3);
     expect(watcher.add).toHaveBeenCalledTimes(1);
     expect(watcher.close).toHaveBeenCalledTimes(1);
@@ -160,9 +150,7 @@ describe('project watcher metadata probes', () => {
       queueMicrotask(() => fake.emit('ready'));
       return fake as unknown as FSWatcher;
     });
-    const access = vi.spyOn(fs.promises, 'access').mockImplementation(() => new Promise<void>((_resolve, reject) => {
-      releases.push(() => reject(new Error('ENOENT')));
-    }));
+    const access = holdAccess();
     __setWatchGraceMsForTest(60_000);
     for (let i = 0; i < 3; i++) {
       const r = path.join(root, `root-${i}`);
@@ -179,7 +167,7 @@ describe('project watcher metadata probes', () => {
     await vi.waitFor(() => expect(access).toHaveBeenCalledTimes(3));
     expect(access.mock.calls[2][0]).toBe(path.join(root, 'reopened', '.git'));
     releases.shift()!();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await tick();
     expect(access).toHaveBeenCalledTimes(3); // closed root-2's queued request was removed
   });
 
@@ -216,12 +204,12 @@ describe('project watcher metadata probes', () => {
     const dir = path.join(root, 'deferred');
     expect(ignored(dir, directory)).toBe(true);
     await vi.waitFor(() => expect(access).toHaveBeenCalledTimes(1));
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await tick();
     expect(watcher.add).not.toHaveBeenCalled();
     expect(ignored(dir, directory)).toBe(true); // pending through all parent scans
     first.resume(); first.end();
     second.resume(); second.end();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await tick();
     expect(cleaned).toBe(true);
     expect(watcher.add).not.toHaveBeenCalled(); // third scan is still active
     let cleanupObserved = false;
@@ -247,12 +235,12 @@ describe('project watcher metadata probes', () => {
     fake._readdirp(root);
     const dir = path.join(root, 'waiting');
     ignored(dir, directory);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await tick();
     expect(watcher.add).not.toHaveBeenCalled();
     if (terminal === 'stop') stopProjectWatchers();
     else if (terminal === 'error') stream.emit('error', new Error('provider stream failed'));
     else stream.emit('close');
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await tick();
     if (terminal === 'stop') {
       stream.emit('close');
       expect(watcher.add).not.toHaveBeenCalled();
@@ -269,7 +257,7 @@ describe('project watcher metadata probes', () => {
     const repo = path.join(root, 'repo');
     expect(ignored(repo, directory)).toBe(true);
     await vi.waitFor(() => expect(access).toHaveBeenCalledTimes(1));
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await tick();
     expect(ignored(repo)).toBe(true);
     expect(ignored(repo, directory)).toBe(true);
     expect(watcher.add).not.toHaveBeenCalled();
@@ -285,31 +273,13 @@ describe('project watcher lifecycle', () => {
   let events: ExternalChangeEvent[];
   let probes: ExternalChangeEvent[];
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  // Used ONLY before a negative assertion ("nothing arrived"), and only after a
-  // positive signal has proved the watcher is delivering: awaitWriteFinish
-  // stability is 500ms, so this is the window in which an unwanted event would
-  // have shown up. Never used to wait FOR an event — see untilLive / seen.
+  // Only before a negative assertion, after a positive signal proved delivery (stability is 500ms).
   const settle = () => wait(1200);
 
-  // WHY signals instead of fixed sleeps (2026-09-18): this block failed on macOS
-  // CI only, a different case each run — `expected [] to include 'src/app.ts'`,
-  // `expected 0 to be greater than 0`, `expected ['add'] to include 'edit'` —
-  // while Linux and Windows passed. Two separate causes, both timing:
-  //  1. On macOS a DIRECTORY watch is not live when chokidar says 'ready'. Node's
-  //     fs.watch goes through libuv's FSEvents backend, whose uv__fsevents_init
-  //     only SIGNALS a CoreFoundation thread and returns; that thread later
-  //     destroys the process's one FSEventStream and recreates it with the new
-  //     path list, starting at kFSEventStreamEventIdSinceNow (libuv
-  //     src/unix/fsevents.c). A write that lands before the new stream exists is
-  //     never reported — no wait, however long, sees it. inotify (Linux) and
-  //     ReadDirectoryChangesW (Windows) are armed synchronously, hence mac-only.
-  //  2. Every event passes chokidar's awaitWriteFinish (500ms stable + 100ms
-  //     polls on stat), so the delay to emit is load-dependent, and 1200ms was a
-  //     guess. When the 'add' of a.ts had not finished stabilising before the
-  //     second write, chokidar folded that write into the pending add
-  //     (`_pendingWrites` → lastChange) and no 'edit' ever came: `['add']`.
-  // So each case first proves the watch is delivering (untilLive), then waits
-  // for the event it is about (seen). Neither changes what is asserted.
+  // WHY signals, not sleeps: this block failed on macOS CI only. (1) A macOS directory watch is not live
+  // at chokidar's 'ready' (libuv recreates the one FSEventStream later), so early writes are never seen;
+  // (2) awaitWriteFinish (500ms stable) folds a quick second write into the pending 'add', so no 'edit'.
+  // Each case proves the watch is delivering (untilLive), then waits for its event (seen).
   const PROBE = /(^|\/)watch-probe-\d+\.txt$/;
   const record = (evt: ExternalChangeEvent) =>
     (PROBE.test(evt.artifactId ?? '') ? probes : events).push(evt);
@@ -351,9 +321,7 @@ describe('project watcher lifecycle', () => {
     events = [];
     probes = [];
     initProjectWatchers(record);
-    // The shipped grace is 60s — far too long to wait for a close. Every case
-    // below either re-subscribes immediately (well inside any grace) or waits
-    // this out, so shortening it changes nothing the tests are asserting.
+    // Shipped grace is 60s; shortening it changes nothing asserted.
     __setWatchGraceMsForTest(100);
   });
   afterEach(async () => {
@@ -522,7 +490,7 @@ describe('project watcher lifecycle', () => {
         starting = watchProject(root, 1).finally(() => { startFinished = true; });
       }
       await seen(() => { expect(enumerationFinished).toBe(true); expect(probeSettled).toBe(true); });
-      await new Promise<void>((resolve) => setImmediate(resolve)); // drain probe continuations
+      await tick(); // drain probe continuations
       expect(Object.keys(watcher.getWatched()).map((dir) => path.resolve(dir))).not.toContain(path.resolve(early));
       expect(ready).toBe(phase === 'live');
       if (phase === 'stopped') {
@@ -530,7 +498,7 @@ describe('project watcher lifecycle', () => {
         await seen(() => { expect(startFinished).toBe(true); expect(watcher.closed).toBe(true); });
         expect(await starting).toEqual({ ok: false });
         releaseRoot();
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await tick();
         expect(Object.keys(watcher.getWatched())).toEqual([]);
         return;
       }
@@ -622,10 +590,7 @@ describe('project watcher lifecycle', () => {
   });
 
   it('re-subscribing inside the grace reuses the watcher instead of rebuilding it', async () => {
-    // THE tab-thrash fix: Files → Conversations → Files unsubscribes and
-    // resubscribes, and a rebuild would re-walk the whole project tree on the
-    // main thread. Inverting parkEntry back to an immediate close makes the
-    // count 4 and this test red.
+    // Tab-thrash fix: a rebuild would re-walk the project tree on the main thread.
     __setWatchGraceMsForTest(10_000);
     const before = __watchersStartedForTest();
     await watchProject(root, 1);
@@ -651,12 +616,7 @@ describe('project watcher lifecycle', () => {
   });
 
   it('still watches a project root that is ITSELF a git repo', async () => {
-    // The failure this guards is silent and total: the nested-repo rule applied
-    // to the root would ignore the root, chokidar would watch nothing, and the
-    // only symptom is that the file list quietly stops noticing outside edits.
-    // Most real projects ARE repos, so this is the common case, not an edge one.
-    // (A root the watcher ignores never delivers the probe either, so untilLive
-    // fails by name in that case — the guard is intact.)
+    // Silent and total if broken: the nested-repo rule applied to the root would watch nothing. Most projects ARE repos.
     await fs.promises.mkdir(path.join(root, '.git'), { recursive: true });
     await fs.promises.mkdir(path.join(root, 'src'), { recursive: true });
     await watchProject(root, 1);
@@ -666,8 +626,7 @@ describe('project watcher lifecycle', () => {
   });
 
   it('parks at most MAX_GRACE_ENTRIES watchers, closing the oldest', async () => {
-    // The bound on parked OS watch handles (inotify is capped per user), so a
-    // click through a long project list cannot accumulate them.
+    // Bounds parked OS watch handles (inotify is capped per user).
     __setWatchGraceMsForTest(10_000);
     const roots: string[] = [];
     for (let i = 0; i < 6; i++) {
@@ -692,11 +651,7 @@ describe('project watcher lifecycle', () => {
   });
 
   it('leaving mid-walk and coming back does not abandon the walk in flight', async () => {
-    // The worst version of the reported symptom: click away DURING the initial
-    // scan and back again. The entry exists but has no watcher yet, and treating
-    // "no watcher" as "nothing to keep" would throw the half-finished walk away
-    // and start a second one — the restart this whole change removes. No timing
-    // here: watchProject registers its entry synchronously, before it awaits.
+    // Leaving DURING the initial scan must not discard the half-done walk and start a second one.
     __setWatchGraceMsForTest(10_000);
     const before = __watchersStartedForTest();
     const first = watchProject(root, 1);   // deliberately NOT awaited
@@ -710,10 +665,7 @@ describe('project watcher lifecycle', () => {
   });
 
   it('does not watch inside a NESTED git repo, but does watch its siblings', async () => {
-    // youcoded-dev holds 43 worktrees and several clones: 9,583 directories
-    // within the depth cap, 4 s to chokidar-ready with 300 ms+ event-loop
-    // freezes. Discovery already stops at a nested .git, so those files are
-    // never listed — watching them was pure cost.
+    // Watching nested repos (thousands of dirs, 4s to ready) was pure cost: discovery never lists them.
     const nested = path.join(root, 'vendored');
     await fs.promises.mkdir(path.join(nested, 'src'), { recursive: true });
     await fs.promises.writeFile(path.join(nested, '.git'), 'gitdir: /elsewhere'); // worktree form
