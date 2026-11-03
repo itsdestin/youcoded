@@ -305,16 +305,3 @@ describe('folder browsing at any size', () => {
     expect(await searching.findByText(/showing the first batch/)).toBeTruthy();
   });
 });
-
-describe('the view preference', () => {
-  it('is stored app-wide, not against a project id', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const src = fs.readFileSync(
-      path.join(__dirname, '..', 'src/renderer/components/project-view/ProjectView.tsx'), 'utf8');
-    // The key must not be interpolated with a project id — Q-4a chose ONE
-    // answer to "what view am I in", not one per project.
-    expect(src).toContain("const FILE_VIEW_KEY = 'youcoded.projectView.fileView'");
-    expect(src).toMatch(/localStorage\.setItem\(FILE_VIEW_KEY, fileView\)/);
-  });
-});

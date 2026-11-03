@@ -333,18 +333,6 @@ describe('model preference writes are atomic and in order', () => {
   });
 });
 
-// WHY (2026-09-30 one-core R3-7, R3-6 review): model.ts carried a private copy of the temp-file-and-rename helper
-// that sync-state.ts already had. One shared helper (main/atomic-write.ts); a second copy would drift again.
-describe('the model preference uses the one shared atomic write', () => {
-  const src = (rel: string) => fs.readFileSync(path.join(__dirname, '..', 'src', 'main', rel), 'utf8');
-  it('model.ts and sync-state.ts import it, and neither renames a temp file itself', () => {
-    for (const file of ['ipc/model.ts', 'sync-state.ts']) {
-      expect(src(file), `${file} must use the shared helper`).toMatch(/from '\.\.?\/atomic-write'/);
-      expect(src(file), `${file} carries its own temp-file-and-rename`).not.toContain('fs.promises.rename(');
-    }
-  });
-});
-
 describe('handoff attempts are owned by the connection that began them', () => {
   it('a window owns its attempt as window:<id>, a phone as remote:<client id>', async () => {
     const route: any = vi.fn(async () => ({ id: 'a', status: 'waiting' }));

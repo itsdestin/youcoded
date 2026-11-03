@@ -77,7 +77,7 @@ export type { FilterChipProps } from './FilterChip';
 export { FilterMenuChip } from './FilterMenuChip';
 export { ChevronDown } from './ChevronDown';
 export type { FilterMenuChipProps } from './FilterMenuChip';
-export { Dialog, DIALOG_WIDTHS } from './Dialog';
+export { Dialog } from './Dialog';
 export type { DialogProps, DialogSize } from './Dialog';
 
 export { SettingRow, RowStatus } from './SettingRow';

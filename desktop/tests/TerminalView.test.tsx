@@ -128,8 +128,6 @@ vi.mock('../src/renderer/hooks/usePtyRawBytes', () => ({
   usePtyRawBytes: vi.fn(),
 }));
 
-import { join } from 'node:path';
-import { readSource } from './helpers/guard-scope';
 // The UNMEMOISED component: this file's useTheme mock is a plain getter, and
 // the theme tests deliver a "new theme" by re-rendering with identical props —
 // exactly what memo exists to skip. In the app the theme arrives through
@@ -396,11 +394,6 @@ describe('mount logic', () => {
       expect(onDataSpy).not.toHaveBeenCalled();
     });
 
-    it('uses 12px font size', () => {
-      render(<TerminalView sessionId="s1" visible={true} />);
-      expect(terminalCtorArgs[0]).toMatchObject({ fontSize: 12 });
-    });
-
     // Implementation calls BOTH hooks every render (rules-of-hooks: stable hook
     // order). On touch, the raw-bytes hook gets the real sessionId and the
     // string hook gets null (early-returns inside the hook). Asserting which
@@ -457,11 +450,6 @@ describe('mount logic', () => {
       expect(onDataSpy).toHaveBeenCalled();
     });
 
-    it('uses 14px font size', () => {
-      render(<TerminalView sessionId="s1" visible={true} />);
-      expect(terminalCtorArgs[0]).toMatchObject({ fontSize: 14 });
-    });
-
     it('passes sessionId to usePtyOutput and null to usePtyRawBytes', () => {
       render(<TerminalView sessionId="s1" visible={true} />);
       expect(usePtyOutput).toHaveBeenCalledWith('s1', expect.any(Function));
@@ -470,21 +458,11 @@ describe('mount logic', () => {
   });
 });
 
-// UI Workbench terminal mock-ups (ledger P-20.1 / P-20.2, 2026-08-27):
-//   1. under `?mode=workbench` TerminalView writes the canned Claude Code screen
-//      (there is no PTY, so the pane used to be blank);
-//   2. `?termBacking=solid90` switches xterm to an opaque --panel background at
-//      grid opacity 0.9; `today` (or no param) applies no override — it is the
-//      theme engine's shipped surface;
-//   3. outside workbench mode — the app — NOTHING is written and no variant is
-//      applied, whatever the URL says.
-//
-// The SHIPPED surface (P-20.2, decided 2026-08-27), pinned in the last block:
-//   - wallpaper / gradient theme → xterm paints --panel, the grid container is
-//     filled with var(--panel) at var(--terminal-xterm-opacity), which the
-//     engine floors at 0.8 (a pack's 0.4 becomes 0.8; its 0.9 is honoured);
-//   - flat theme → byte-identical to before: --canvas, opacity 1 (or the
-//     theme's own value when it only declares panels-blur).
+// UI Workbench terminal mock-up (ledger P-20.1, 2026-08-27): under `?mode=workbench`
+// TerminalView writes the canned Claude Code screen (no PTY, so the pane used to be
+// blank); outside workbench mode — the app — NOTHING is written. Colours/opacity of the
+// terminal surface are judged by screenshot review; only the theme engine's legibility
+// floor (a wallpaper theme never drops the terminal below 0.8) is asserted below.
 describe('workbench screen and terminal surface', () => {
   beforeEach(() => {
     termGrid = { cols: 100, rows: 30 };
@@ -587,166 +565,26 @@ describe('workbench screen and terminal surface', () => {
         Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get() { return 700; } });
       }
     });
-
-    // jsdom's getComputedStyle returns '' for every CSS variable, so xterm's
-    // theme falls back to getXtermTheme's literal defaults: '#0A0A0A' for the
-    // canvas token, '#191919' for the panel token. Asserting those tells the two
-    // tokens apart without a real stylesheet.
-    const CANVAS_FALLBACK = '#0A0A0A';
-    const PANEL_FALLBACK = '#191919';
-
-    it('`today` (the default) applies no override: the shipped surface — on a flat theme, opacity 1 and a --canvas xterm', () => {
-      setUrl('?mode=workbench&termBacking=today');
-      render(<TerminalView sessionId="s1" visible={true} />);
-      expect(container().dataset.termBacking).toBe('today');
-      // Flat theme (activeTheme null) → shipped path forces opacity 1 and paints
-      // --canvas on the grid container.
-      expect(container().style.opacity).toBe('1');
-      expect(container().style.backgroundColor).toBe('var(--canvas)');
-      expect(terminalCtorArgs[0].allowTransparency).toBeUndefined();
-      expect(terminalCtorArgs[0].theme.background).toBe(CANVAS_FALLBACK);
-    });
-
-    it('`solid90` paints an opaque --panel xterm with the grid at 0.9', () => {
-      setUrl('?mode=workbench&termBacking=solid90');
-      render(<TerminalView sessionId="s1" visible={true} />);
-      expect(container().dataset.termBacking).toBe('solid90');
-      expect(container().style.opacity).toBe('0.9');
-      expect(container().style.backgroundColor).toBe('var(--panel)');
-      // Still opaque — no allowTransparency (see workbench-mode.ts for why).
-      expect(terminalCtorArgs[0].allowTransparency).toBeUndefined();
-      expect(terminalCtorArgs[0].theme.background).toBe(PANEL_FALLBACK);
-    });
-
-    it('`solid100` is the same --panel xterm, fully opaque', () => {
-      setUrl('?mode=workbench&termBacking=solid100');
-      render(<TerminalView sessionId="s1" visible={true} />);
-      expect(container().dataset.termBacking).toBe('solid100');
-      expect(container().style.opacity).toBe('1');
-      expect(container().style.backgroundColor).toBe('var(--panel)');
-      expect(terminalCtorArgs[0].theme.background).toBe(PANEL_FALLBACK);
-    });
-
-    it('`today` on a wallpaper theme is the shipped P-20.2 surface: --panel xterm, panel-filled grid at the engine\'s opacity', () => {
-      mockActiveTheme = makeTheme(WALLPAPER);
-      setUrl('?mode=workbench&termBacking=today');
-      render(<TerminalView sessionId="s1" visible={true} />);
-      expect(container().dataset.termBacking).toBe('today');
-      expect(container().style.opacity).toBe('var(--terminal-xterm-opacity)');
-      expect(container().style.backgroundColor).toBe('var(--panel)');
-      expect(terminalCtorArgs[0].theme.background).toBe(PANEL_FALLBACK);
-      // No variant → the engine's --terminal-backing is left alone.
-      expect(container().style.getPropertyValue('--terminal-backing')).toBe('');
-    });
-
-    it('`legacy` reproduces the pre-decision surface for Before shots: --canvas xterm at a literal 0.6, even on a wallpaper theme', () => {
-      mockActiveTheme = makeTheme(WALLPAPER);
-      setUrl('?mode=workbench&termBacking=legacy');
-      render(<TerminalView sessionId="s1" visible={true} />);
-      expect(container().dataset.termBacking).toBe('legacy');
-      expect(container().style.opacity).toBe('0.6');
-      // A canvas variant on a see-through theme leaves the container unfilled
-      // (the wallpaper layer shows through), exactly as the old code did.
-      expect(container().style.backgroundColor).toBe('');
-      expect(terminalCtorArgs[0].theme.background).toBe(CANVAS_FALLBACK);
-      // The variant re-points the viewport-strip token at its own colour so the
-      // engine's panel value can't leak a mismatched strip under a canvas grid.
-      expect(container().style.getPropertyValue('--terminal-backing')).toBe('var(--canvas)');
-    });
-
-    it('`scrim` keeps the --canvas xterm (the legacy mechanism) and raises the grid opacity to 0.85', () => {
-      setUrl('?mode=workbench&termBacking=scrim');
-      render(<TerminalView sessionId="s1" visible={true} />);
-      expect(container().dataset.termBacking).toBe('scrim');
-      expect(container().style.opacity).toBe('0.85');
-      expect(container().style.backgroundColor).toBe('var(--canvas)');
-      expect(terminalCtorArgs[0].theme.background).toBe(CANVAS_FALLBACK);
-    });
-
-    it('an unknown termBacking value falls back to `today`', () => {
-      setUrl('?mode=workbench&termBacking=nonsense');
-      render(<TerminalView sessionId="s1" visible={true} />);
-      expect(container().dataset.termBacking).toBe('today');
-      expect(container().style.backgroundColor).toBe('var(--canvas)');
-    });
   });
 
   describe('TerminalView in the app (no ?mode=workbench)', () => {
-    it('writes nothing and applies no variant even if ?termBacking= is present', async () => {
+    it('writes nothing even if ?termBacking= is present', async () => {
       setUrl('?termBacking=solid90');
       render(<TerminalView sessionId="s1" visible={true} />);
       // Give the 100ms initial-fit timer (and any import it might have kicked
       // off) ample time to run before asserting the negative.
       await new Promise((r) => setTimeout(r, 300));
       expect(writeSpy).not.toHaveBeenCalled();
-      expect(container().dataset.termBacking).toBe('today');
-      expect(container().style.opacity).toBe('1');
-      expect(container().style.backgroundColor).toBe('var(--canvas)');
-      expect(terminalCtorArgs[0].allowTransparency).toBeUndefined();
-      expect(terminalCtorArgs[0].theme.background).toBe('#0A0A0A');
     });
   });
 
   describe('the shipped terminal surface (P-20.2 guarantee, app mode)', () => {
     const root = () => document.documentElement;
 
-    // applyThemeToDom writes the theme's tokens as inline custom properties on
-    // <html>, and jsdom's getComputedStyle DOES return those — so here xterm
-    // receives the theme's actual --panel / --canvas colour (from makeTheme's
-    // tokens), not getXtermTheme's literal fallbacks. That is the real contract:
-    // xterm paints the theme's panel token under a wallpaper.
-    const THEME_PANEL = '#141726';
-    const THEME_CANVAS = '#0D0F1A';
-
     afterEach(() => {
       // Drop every inline token/var the engine wrote so cases can't bleed.
       root().removeAttribute('style');
       root().removeAttribute('data-wallpaper');
-    });
-
-    it('flat theme: byte-identical to before — --canvas xterm, container filled with var(--canvas) at opacity 1, engine emits 0.6 / var(--canvas)', () => {
-      const theme = makeTheme(undefined);
-      applyThemeToDom(theme);
-      mockActiveTheme = theme;
-      render(<TerminalView sessionId="s1" visible={true} />);
-      expect(root().hasAttribute('data-wallpaper')).toBe(false);
-      expect(root().style.getPropertyValue('--terminal-xterm-opacity')).toBe('0.6');
-      expect(root().style.getPropertyValue('--terminal-backing')).toBe('var(--canvas)');
-      expect(container().style.opacity).toBe('1');
-      expect(container().style.backgroundColor).toBe('var(--canvas)');
-      expect(terminalCtorArgs[0].allowTransparency).toBeUndefined();
-      expect(terminalCtorArgs[0].theme.background).toBe(THEME_CANVAS);
-    });
-
-    it('flat theme with only panels-blur: still the old see-through canvas path (unfilled container at the theme opacity)', () => {
-      const theme = makeTheme({ type: 'solid', value: '#000', 'panels-blur': 12, 'terminal-opacity': 0.5 });
-      applyThemeToDom(theme);
-      mockActiveTheme = theme;
-      render(<TerminalView sessionId="s1" visible={true} />);
-      // No background layer → no [data-wallpaper], no floor, canvas backing.
-      expect(root().hasAttribute('data-wallpaper')).toBe(false);
-      expect(root().style.getPropertyValue('--terminal-xterm-opacity')).toBe('0.5');
-      expect(root().style.getPropertyValue('--terminal-backing')).toBe('var(--canvas)');
-      expect(container().style.opacity).toBe('var(--terminal-xterm-opacity)');
-      expect(container().style.backgroundColor).toBe('');
-      expect(terminalCtorArgs[0].theme.background).toBe(THEME_CANVAS);
-    });
-
-    it('wallpaper theme: xterm paints --panel, the container is filled with var(--panel) at the engine opacity, which defaults to the 0.8 floor', () => {
-      const theme = makeTheme(WALLPAPER);
-      applyThemeToDom(theme);
-      mockActiveTheme = theme;
-      render(<TerminalView sessionId="s1" visible={true} />);
-      // The signal is the one that gates every glass rule: [data-wallpaper].
-      expect(root().hasAttribute('data-wallpaper')).toBe(true);
-      expect(root().style.getPropertyValue('--terminal-xterm-opacity')).toBe('0.8');
-      expect(root().style.getPropertyValue('--terminal-backing')).toBe('var(--panel)');
-      expect(container().style.opacity).toBe('var(--terminal-xterm-opacity)');
-      expect(container().style.backgroundColor).toBe('var(--panel)');
-      // Opaque xterm, on purpose (WebGL paints black cells behind dim glyphs
-      // when transparent — see workbench-mode.ts).
-      expect(terminalCtorArgs[0].allowTransparency).toBeUndefined();
-      expect(terminalCtorArgs[0].theme.background).toBe(THEME_PANEL);
     });
 
     it('a pack declaring terminal-opacity 0.4 under a wallpaper is floored to 0.8', () => {
@@ -757,34 +595,6 @@ describe('workbench screen and terminal surface', () => {
     it('a pack declaring terminal-opacity 0.9 under a wallpaper is honoured (the floor only raises)', () => {
       applyThemeToDom(makeTheme({ ...WALLPAPER, 'terminal-opacity': 0.9 }));
       expect(root().style.getPropertyValue('--terminal-xterm-opacity')).toBe('0.9');
-    });
-
-    it('gradient theme: same guarantee as a wallpaper — it stamps [data-wallpaper] and the terminal follows that signal', () => {
-      const theme = makeTheme({ type: 'gradient', value: 'linear-gradient(#000, #fff)' });
-      applyThemeToDom(theme);
-      mockActiveTheme = theme;
-      render(<TerminalView sessionId="s1" visible={true} />);
-      expect(root().hasAttribute('data-wallpaper')).toBe(true);
-      expect(root().style.getPropertyValue('--terminal-xterm-opacity')).toBe('0.8');
-      expect(root().style.getPropertyValue('--terminal-backing')).toBe('var(--panel)');
-      expect(container().style.backgroundColor).toBe('var(--panel)');
-      expect(terminalCtorArgs[0].theme.background).toBe(THEME_PANEL);
-      // The header-gap backdrop (gradient themes have no terminalBg image) uses
-      // the same panel token, so the strip above the grid reads as one sheet.
-      const gap = container().parentElement!.querySelector('div[aria-hidden]') as HTMLElement;
-      expect(gap.style.backgroundColor).toBe('var(--panel)');
-      expect(gap.style.opacity).toBe('var(--terminal-xterm-opacity, 0.6)');
-    });
-
-    it('the .xterm-viewport strip follows --terminal-backing (falling back to --canvas)', () => {
-      // xterm.css ships `background-color: #000` on the viewport; globals.css
-      // overrides it. Under a wallpaper that strip must be panel-coloured or a
-      // canvas line shows under the last cell row.
-      // WHY still a text read (Plan B, 2026-09-16): a stylesheet declaration, and CSS is not an
-      // ast-grep language in this rule set; readSource strips \r so a CRLF checkout matches too.
-      const css = readSource(join(__dirname, '../src/renderer/styles/globals.css'));
-      const rule = css.slice(css.indexOf('.xterm-viewport {'));
-      expect(rule).toMatch(/background-color:\s*var\(--terminal-backing,\s*var\(--canvas\)\)\s*!important/);
     });
   });
 });

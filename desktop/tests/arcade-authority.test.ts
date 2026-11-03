@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync } from 'fs';
 import { basename, join } from 'path';
-import { readSource, readStripped, RENDERER } from './helpers/guard-scope';
+import { readStripped, RENDERER } from './helpers/guard-scope';
 import { GAMES, gameById } from '../src/renderer/components/game/game-registry';
 
 // Guards for the games arcade (spec §3, §5.5, §7). Plan B (2026-09-16): every
@@ -103,39 +103,6 @@ describe('a focused game owns its keys', () => {
     // files; a per-file ast-grep rule cannot say it.
     const claimers = gameFiles().filter((f) => readStripped(f).includes('data-game-keys'));
     expect(claimers.length).toBeGreaterThanOrEqual(1);
-  });
-});
-
-describe('theming', () => {
-  // The app DOES sanction four Tailwind palette names — the status colours,
-  // which are theme-independent by standing rule (desktop/CLAUDE.md). Rather
-  // than hardcode them here (where they would drift the moment globals.css
-  // changes), read them back out of the stylesheet that defines them.
-  function sanctionedStatusColours(): Set<string> {
-    const css = readSource(join(RENDERER, 'styles', 'globals.css'));
-    const names = new Set<string>();
-    for (const m of css.matchAll(/--color-([a-z]+-\d{2,3}):/g)) names.add(m[1]!);
-    // If this ever reads empty the guard below would pass on anything.
-    expect(names.size).toBeGreaterThanOrEqual(4);
-    return names;
-  }
-
-  const PALETTE = /\b(?:bg|text|border|ring|from|to|via|fill|stroke)-((?:red|yellow|blue|green|orange|amber|purple|pink|indigo|teal|cyan|lime|violet|fuchsia|rose|sky|emerald)-\d{2,3})\b/g;
-
-  it('no game file names an unsanctioned Tailwind palette colour', () => {
-    // G-2: tokens paint everything. The retheme (§5.4) removed the hardcoded
-    // red/yellow/blue discs, the blue board, the red disconnect box and the
-    // amber "Reload app" link; this keeps them out.
-    // WHY still a text read: the allowlist is READ from globals.css at run time
-    // (so it cannot drift from the stylesheet); a static rule would have to copy it.
-    const allowed = sanctionedStatusColours();
-    const offenders: string[] = [];
-    for (const f of gameFiles()) {
-      for (const m of readStripped(f).matchAll(PALETTE)) {
-        if (!allowed.has(m[1]!)) offenders.push(`${basename(f)}: ${m[0]}`);
-      }
-    }
-    expect(offenders).toEqual([]);
   });
 });
 

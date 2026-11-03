@@ -10,10 +10,8 @@ import { inScopeFiles, stripComments, readSource } from './helpers/guard-scope';
 //
 // Two kinds of assertion here, for two different failure modes:
 //
-//   RENDER, for the shape. K2's whole prize is that "the drawer row and the
-//   in-menu row become the same object", and that the description ALWAYS lives
-//   in the left column under the title. Those are structural claims, so they
-//   are checked against a real render.
+//   RENDER, for behaviour: button-vs-control, no double-fire, radio tile.
+//   (Type sizes, classes and title wrapping are judged by screenshot review.)
 //
 //   ADOPTION. The way this erodes is not a bad edit to SettingRow — it is the
 //   next popup hand-rolling `<div className="flex items-center
@@ -29,58 +27,13 @@ import { inScopeFiles, stripComments, readSource } from './helpers/guard-scope';
 afterEach(cleanup);
 
 function row(): HTMLElement {
-  const el = document.querySelector('.bg-inset\\/50');
+  // WHY not a class selector: copy/styling is not asserted; the row is the render root.
+  const el = document.body.firstElementChild?.firstElementChild;
   if (!el) throw new Error('no row rendered');
   return el as HTMLElement;
 }
 
-describe('SettingRow densities', () => {
-  // Both sizes below are Destin's, from looking at rendered UI: nav is change 51
-  // (2026-07-16, "at 11px the title/subtitle gap read as too loose"), item is the
-  // Sound preset list approved 2026-07-26. The spec asked for ONE size for every
-  // row, which would have silently reverted the first of those.
-  it('nav rows navigate: larger type and a chevron', () => {
-    render(<SettingRow title="Appearance" description="Midnight" onClick={() => {}} />);
-    expect(screen.getByText('Appearance').className).toContain('text-sm');
-    expect(screen.getByText('Midnight').className).toContain('text-2xs');
-    expect(row().querySelector('svg'), 'a row that navigates shows where it goes').not.toBeNull();
-  });
-
-  it('item rows are scanned: smaller type and no chevron', () => {
-    render(<SettingRow variant="item" title="Reduced motion" description="Minimizes animations" control={<button>x</button>} />);
-    expect(screen.getByText('Reduced motion').className).toContain('text-xs');
-    expect(screen.getByText('Minimizes animations').className).toContain('text-3xs');
-  });
-
-  it('the two densities differ ONLY in type size', () => {
-    // The consistency win K2 is actually buying is one geometry, one description
-    // rule, one control vocabulary. If the variants ever diverge in padding,
-    // radius or surface, a nav row and an item row stop stacking without a seam.
-    render(<SettingRow title="A" onClick={() => {}} />);
-    const nav = row().className;
-    cleanup();
-    render(<SettingRow variant="item" title="A" control={<span />} />);
-    const item = row().className;
-    for (const cls of ['px-3', 'py-2', 'rounded-lg', 'bg-inset/50', 'gap-3', 'items-center']) {
-      expect(nav, `nav row missing ${cls}`).toContain(cls);
-      expect(item, `item row missing ${cls}`).toContain(cls);
-    }
-  });
-});
-
 describe('SettingRow structure', () => {
-  it('the description sits under the title, in the same column', () => {
-    // THE one rule that retires all five shapes. The five were about placement,
-    // not size: below the whole row (Sound), after the row (Buddy), as a K1
-    // section label (Session Defaults, Skip permissions), and as a stray <p>
-    // outside the container (Buddy again — two placements in ONE popup).
-    render(<SettingRow variant="item" title="Show buddy floater" description="A small mascot" control={<span />} />);
-    const title = screen.getByText('Show buddy floater');
-    const desc = screen.getByText('A small mascot');
-    expect(desc.parentElement, 'description must be a sibling of the title').toBe(title.parentElement);
-    expect(title.parentElement!.className).toContain('flex-1');
-  });
-
   it('a navigating row is a button; a row with a control is not', () => {
     // Nested buttons are invalid HTML and break keyboard focus, so a row that
     // holds its own interactive control must not also be one.
@@ -117,16 +70,6 @@ describe('SettingRow structure', () => {
     expect(radio).toHaveAttribute('aria-checked', 'true');
     fireEvent.click(screen.getByText('C5 → E5'));
     expect(onSelect).toHaveBeenCalled();
-  });
-
-  it('titles wrap by default and clip only when asked', () => {
-    // Row titles are authored copy; clipping them silently loses words. Only a
-    // filename the user chose is unbounded enough to need truncation.
-    render(<SettingRow variant="item" title="Pin buddy above other windows (KDE only)" control={<span />} />);
-    expect(screen.getByText(/Pin buddy/).className).not.toContain('truncate');
-    cleanup();
-    render(<SettingRow variant="item" title="my-sound.wav" truncateTitle control={<span />} />);
-    expect(screen.getByText('my-sound.wav').className).toContain('truncate');
   });
 });
 

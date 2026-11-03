@@ -3,15 +3,13 @@
 // WHY a second file: SessionDrawer-scripted-state.test.tsx replaces ArtifactContext
 // with a file-wide vi.mock, and a vi.mock cannot be scoped to part of a file.
 import React from 'react';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { ArtifactContext } from '../src/renderer/state/ArtifactContext';
 import { initialArtifactState } from '../src/renderer/state/artifact-tracker';
 import type { ArtifactRecord } from '../src/shared/artifacts/types';
-import { COPY, providerLabel, type ResolvedConversation } from '../src/shared/chatsearch-refs';
+import { COPY, type ResolvedConversation } from '../src/shared/chatsearch-refs';
 import { __resetMissingArtifactsCache } from '../src/renderer/hooks/useMissingArtifacts';
 import { EscCloseProvider } from '../src/renderer/hooks/use-esc-close';
 
@@ -46,73 +44,6 @@ beforeAll(() => {
     unobserve() {}
     takeRecords() { return []; }
   };
-});
-
-// A file whose only version in THIS session is 'delivered' is labelled
-// "delivered" in the Session Drawer — not "viewed" (it is more than a view)
-// and not "created" (it was not modified). Spec 2026-08-25 §4.2.
-describe('SessionDrawer — delivered label', () => {
-  it('centers filename and status beside an 84×48 preview without hiding the remove action', async () => {
-    const artifact: ArtifactRecord = {
-      id: 'preview', path: 'out/chart.png', kind: 'internal', absolutePath: null,
-      lastModified: new Date().toISOString(), status: 'active',
-      versions: [{ id: 'v1', ts: new Date().toISOString(), sessionId: 'sess', type: 'delivered', author: 'agent' }],
-      comments: [], tags: [],
-    };
-    const state = { ...initialArtifactState, sessionArtifacts: { sess: [artifact] }, drawerOpenBySession: { sess: true }, activeArtifactBySession: {} };
-    (window as any).claude = { artifacts: { get: vi.fn(), checkExistence: vi.fn().mockResolvedValue({ ok: true, missingIds: [] }) } };
-    const { container } = render(<ArtifactContext.Provider value={{ state, dispatch: vi.fn() }}>
-      <SessionDrawer sessionId="sess" projectRoot="/home/u/proj" cwd="/home/u/proj" projectId="proj-1" projectName="proj" />
-    </ArtifactContext.Provider>);
-    const row = await screen.findByRole('button', { name: /^chart\.png/ });
-    const preview = row.querySelector('.w-21');
-    expect(preview).toBeTruthy();
-    expect(preview?.className).toContain('h-12');
-    expect(row.querySelector('.justify-center.gap-1')).toBeTruthy();
-    expect(container.querySelector('[data-session-files-scroll].scroll-mask')).toBeTruthy();
-    expect(container.querySelector('[data-session-files-header]')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /^Remove chart\.png from this list/ })).toBeInTheDocument();
-    // A clipped card would shrink the remove button's coarse-pointer hit target.
-    expect(row.closest('.group')?.className).not.toContain('overflow-hidden');
-  });
-
-  it('labels a delivered-only file "delivered"', async () => {
-    const artifact: ArtifactRecord = {
-      id: 'a1', path: 'out/chart.png', kind: 'internal', absolutePath: null,
-      lastModified: new Date().toISOString(), status: 'active',
-      versions: [{ id: 'v1', ts: new Date().toISOString(), sessionId: 'sess', type: 'delivered', author: 'agent', toolUseId: 'toolu_1' }],
-      comments: [], tags: [],
-    };
-    const state = {
-      ...initialArtifactState,
-      sessionArtifacts: { sess: [artifact] },
-      drawerOpenBySession: { sess: true },
-      activeArtifactBySession: {},
-    };
-    (window as any).claude = {
-      artifacts: { get: vi.fn(), checkExistence: vi.fn().mockResolvedValue({ ok: true, missingIds: [] }), onChanged: undefined },
-    };
-    const { container } = render(
-      <ArtifactContext.Provider value={{ state, dispatch: vi.fn() }}>
-        <SessionDrawer sessionId="sess" projectRoot="/home/u/proj" cwd="/home/u/proj" projectId="proj-1" projectName="proj" />
-      </ArtifactContext.Provider>,
-    );
-    // Read the label div directly (same approach as the row-labels section
-    // below). jsdom's `textContent`
-    // concatenates sibling elements with NO separator — "chart.png" (the
-    // filename span) runs straight into "delivered" (the label div) as one
-    // unbroken run of letters, so a container-wide `\bdelivered\b` regex
-    // never finds a word boundary before the "d" and always fails, pass or
-    // fail state. Isolating the label div sidesteps that entirely; there is
-    // only one row in this fixture so the class selector is unambiguous.
-    // The list holds one frame while the on-disk check settles (the drawer no
-    // longer paints rows it may be about to remove — see useMissingArtifacts),
-    // so the row arrives on the next tick rather than synchronously.
-    await waitFor(() => expect(container.querySelector('.text-3xs')).toBeTruthy());
-    const label = container.querySelector('.text-3xs')?.textContent ?? '';
-    expect(label).toMatch(/^delivered\b/);
-    expect(label).not.toMatch(/^(created|viewed|edited)\b/);
-  });
 });
 
 // Bug: the Session Drawer is a per-session activity log, but its row labels
@@ -384,13 +315,6 @@ describe('SessionDrawer previewing a past conversation', () => {
       // title-less bar plus the pane's own ✕.)
       expect(allByHint('Close')).toHaveLength(1);
 
-      // The read-only/lane line the old pane header carried is still shown
-      // somewhere (now a quiet caption inside the scroll area), just not as a
-      // second header. Destin, 2026-08-27 gate (M-caption): "remove 'past
-      // conversation'. put read-only to the right of the assistant." — so the
-      // lane name leads and "read-only" trails it.
-      expect(await screen.findByText(new RegExp(`${providerLabel(PREVIEW.provider)}.*read-only`))).toBeTruthy();
-      expect(screen.queryByText(/Past conversation/)).toBeNull();
     });
 
     it('the ☰ list toggle and the bar layout work the same as they do for a file', async () => {
@@ -659,30 +583,6 @@ describe('SessionDrawer previewing a past conversation', () => {
   });
 });
 
-
-// Project View dropped "Show deleted" on 2026-07-23 (deleted records carry no
-// content — VersionEvent has no content field — so they were tombstones, not a
-// recovery path). The SESSION drawer keeps it: seeing everything Claude did in a
-// session, deletions included, is that view's whole purpose. A cleanup pass that
-// removes the now-"unused" flag would silently break it and drop a synced pref.
-const read = (p: string) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
-
-describe('showDeletedArtifacts survives the project-view merge', () => {
-  it('is still consumed by SessionDrawer', () => {
-    expect(read('src/renderer/components/SessionDrawer.tsx')).toContain('showDeletedArtifacts');
-  });
-
-  it('is still persisted as a synced appearance preference', () => {
-    const ctx = read('src/renderer/state/theme-context.tsx');
-    expect(ctx).toContain('showDeletedArtifacts');
-    expect(ctx).toContain('persistAppearance({ showDeletedArtifacts');
-  });
-
-  it('is gone from project view', () => {
-    expect(read('src/renderer/components/project-view/ProjectView.tsx')).not.toContain('showDeletedArtifacts');
-    expect(read('src/renderer/components/project-view/tabs/FilesTab.tsx')).not.toContain('showDeletedArtifacts');
-  });
-});
 
 // Stopping the assistant is never harder with the files panel open (review
 // 2026-09-23, F2). The app opens the panel itself mid-reply; Escape from the

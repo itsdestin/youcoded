@@ -72,7 +72,7 @@ import { useEnterToConfirm } from '../../hooks/use-enter-to-confirm';
  *
  * Each is capped at 88vw so a narrow window shrinks it rather than clipping.
  */
-export const DIALOG_WIDTHS = {
+const DIALOG_WIDTHS = {
   prompt: 'min(340px, 88vw)',
   panel: 'min(420px, 88vw)',
   document: 'min(600px, 88vw)',

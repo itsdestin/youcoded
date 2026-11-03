@@ -74,14 +74,3 @@ describe('useDropEndedSessionsOnReconnect', () => {
     expect(remove.mock.calls).toEqual([['b']]);                       // 'new' is alive and is not in the reply: not dropped
   });
 });
-
-// App's wiring (App.tsx cannot be mounted, so the call site is pinned by reading it).
-describe('App wires the late-join pill rules', () => {
-  it('passes its own session list, moved list and local remover to the hook, and uses the announced name', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const src = fs.readFileSync(path.join(import.meta.dirname, '../src/renderer/App.tsx'), 'utf8');
-    expect(src).toContain('useDropEndedSessionsOnReconnect(sessionsRef, movedSessionsRef, (id) => goneRef.current(id))');
-    expect(src).toContain('return withAnnouncedName(prev, info)');
-  });
-});

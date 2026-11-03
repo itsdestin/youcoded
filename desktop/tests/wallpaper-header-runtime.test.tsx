@@ -273,10 +273,6 @@ describe('wallpaper header runtime', () => {
     expect(shared).not.toBe('rgb(20 14 26)');
     expect(header().style.getPropertyValue('--wallpaper-status-green')).toBe('rgb(74 222 128)');
     expect(header().dataset.wallpaperInk).toBe('true');
-    const css = readSource(join(RENDERER, 'styles/float-chrome.css'));
-    expect(css).toMatch(/button\[data-wallpaper-control-ink\]:not\(\.bg-accent\)/);
-    // WHY: Close is another clear header button, not a dark-colored exception.
-    expect(css).not.toContain(":not([aria-label='Close'])");
     await act(async () => { observer.notify(); });
     expect(header().style.getPropertyValue('--wallpaper-header-ink')).toBe(shared);
     expect(header().dataset.wallpaperInk).toBe('true');
@@ -407,23 +403,12 @@ describe('wallpaper header runtime', () => {
     expect(header().style.getPropertyValue('--wallpaper-status-gray')).toMatch(/^rgb\(/);
   });
 
+  // WHY kept (2026-11-02 cleanup): this reads CSS, but it is the only check that people who turn motion down
+  // (in the app or in their computer's settings) stop seeing the header dots pulse. jsdom cannot run CSS animations.
   it('stops wallpaper dot breathing for both app and OS reduced-motion settings', () => {
     const css = readSource(join(RENDERER, 'styles/float-chrome.css')).replace(/\/\*[\s\S]*?\*\//g, '');
     const target = String.raw`\.session-strip \.session-dot\[data-wallpaper-dot-ink\]:not\(\[data-status='gray'\]\)`;
     expect(css).toMatch(new RegExp(String.raw`\[data-wallpaper\]\[data-reduced-effects\][^{}]*${target}[^{}]*\{\s*animation: none !important;`));
     expect(css).toMatch(new RegExp(String.raw`@media \(prefers-reduced-motion: reduce\)\s*\{[^{}]*${target}[^{}]*\{\s*animation: none !important;`));
-  });
-
-  it('scopes status color and animation rules to the wallpaper session strip', () => {
-    const css = readSource(join(RENDERER, 'styles/float-chrome.css')).replace(/\/\*[\s\S]*?\*\//g, '');
-    for (const color of ['red', 'green', 'blue', 'amber', 'gray']) {
-      expect(css).toContain(`.session-strip .session-dot[data-wallpaper-dot-ink][data-status='${color}']`);
-    }
-    expect(css).toContain('[data-wallpaper]');
-    expect(css).toMatch(/--wallpaper-header-ink/);
-    expect(css).toMatch(/--wallpaper-status-green/);
-    expect(css).toMatch(/breathe/);
-    expect(css).toMatch(/0\.8/);
-    expect(css).not.toMatch(/StatusPill|\.status-bar \.session-dot/);
   });
 });

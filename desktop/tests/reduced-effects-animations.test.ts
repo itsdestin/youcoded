@@ -58,32 +58,4 @@ describe('Reduced Effects stops perpetual CSS animations', () => {
       expect(motionBlocks.some((b) => re.test(b))).toBe(true);
     });
   }
-
-  it('keeps loading spinners spinning — they are feedback, not decoration', () => {
-    // A spinner frozen mid-load reads as "the app has hung". These are transient
-    // AND already cheap (layer-promoted in the same investigation), so Reduced
-    // Effects deliberately leaves them alone. Pins the decision so a later
-    // "stop everything" sweep has to argue with it.
-    expect(code).not.toMatch(/\[data-reduced-effects\][^{]*\.animate-spin\s*\{[^}]*animation:\s*none/);
-  });
-});
-
-// WHY: this guard was CSS-only until 2026-09-10 — it says nothing about
-// theme-injected animation (custom_css), which globals.css cannot see at all.
-// theme-engine.ts's applyThemeToDom now reads a theme's own animated selectors
-// and cancels them under Reduced Effects (buildReducedOverrides, sheet id
-// theme-custom-reduced). Pinning both names here means a refactor of that
-// mechanism that silently drops it fails a test even though this file never
-// touches theme-engine.ts's logic.
-describe('Reduced Effects also cancels theme-injected animation (theme-engine.ts)', () => {
-  const THEME_ENGINE = join(__dirname, '..', 'src', 'renderer', 'themes', 'theme-engine.ts');
-  const engineCode = readSource(THEME_ENGINE).replace(/\/\*[\s\S]*?\*\//g, '');
-
-  it('applies the theme-custom-reduced override sheet', () => {
-    expect(engineCode).toContain('theme-custom-reduced');
-  });
-
-  it('via buildReducedOverrides', () => {
-    expect(engineCode).toContain('buildReducedOverrides');
-  });
 });

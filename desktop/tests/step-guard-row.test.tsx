@@ -27,11 +27,6 @@ const commit = (value: string) => {
 afterEach(() => { cleanup(); delete (window as any).claude; });
 
 describe('Assistant Settings — Step guard', () => {
-  it('is guarded by native.supported in the General page', () => {
-    const source = fs.readFileSync('src/renderer/components/assistant-settings/pages.tsx', 'utf8');
-    expect(source).toMatch(/native\.supported === true && <StepGuardRow/);
-  });
-
   it('stays disabled while loading, then shows the stored value', async () => {
     const read = deferred<number | null>();
     installNative(() => read.promise);

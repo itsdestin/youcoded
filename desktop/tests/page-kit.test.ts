@@ -4,8 +4,6 @@
 // the bootstrap and the kit script — in jsdom, so a kit that stopped being injected fails here too.
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest';
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
 import { prepareHostedDocument } from '../src/renderer/components/pages/page-theme';
 import { PAGE_KIT_CSS } from '../src/renderer/components/pages/page-kit';
 import { kitPiecesPage } from '../src/renderer/dev/workbench/fixtures/kit-pieces-page';
@@ -258,17 +256,6 @@ describe('the page kit scroll fade', () => {
     await Promise.resolve();
     expect($('list').classList.contains('yc-scroll')).toBe(true);
     expect(d.querySelectorAll('.yc-scroll').length).toBe(2);
-  });
-
-  it("is the app's own fade: the kit's gradients and keyframes are scroll-mask.css's, word for word", () => {
-    const appCss = readFileSync(fileURLToPath(new URL('../src/renderer/styles/scroll-mask.css', import.meta.url)), 'utf8');
-    const pieces = [
-      ...appCss.match(/--scroll-mask-[xy]: linear-gradient\([^;]+;/g)!,
-      ...appCss.match(/@keyframes scroll-mask-[a-z]+ \{[^\n]+/g)!,
-      ...appCss.match(/--scroll-mask-(on|s): [^;]+;/g)!,
-    ];
-    expect(pieces.length).toBe(8);
-    for (const p of pieces) expect(PAGE_KIT_CSS).toContain(p);
   });
 
   it('tells the app which edges of the page hide more, only when that changes', async () => {

@@ -526,7 +526,7 @@ const ANIMATION_DECL = /(^|[\s;{])(-webkit-)?animation(-name)?\s*:\s*(?!none\b)/
  *  `selectorText` first is correct in both engines and is not a jsdom-only
  *  workaround: a real CSSMediaRule/CSSKeyframesRule has no selectorText, so
  *  it still falls through to the nested walk exactly as intended. */
-export function buildReducedOverrides(styleEl: HTMLStyleElement): string {
+function buildReducedOverrides(styleEl: HTMLStyleElement): string {
   const sheet = styleEl.sheet as CSSStyleSheet | null;
   if (!sheet) return '';
   const selectors = new Set<string>();

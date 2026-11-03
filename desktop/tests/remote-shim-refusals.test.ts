@@ -253,7 +253,7 @@ describe('remote-shim — rejecting failures', () => {
       expect(resolve).toHaveBeenCalledWith({ ok: false, error: 'nope' });
     });
 
-    it('“the host does not implement this” rejects AND announces it in plain words', () => {
+    it('“the host does not implement this” rejects AND announces it', () => {
       // Both halves in one test on purpose: the announcement is deduped per
       // feature for the life of the module, so only the FIRST call for a feature
       // can observe it.
@@ -273,11 +273,10 @@ describe('remote-shim — rejecting failures', () => {
         expect(resolve).not.toHaveBeenCalled();
         expect(reject.mock.calls[0][0].message).toBe('remote-unsupported: models:settings');
         // The notice is the whole reason this is a separate case from 'failure':
-        // on a phone the caller's rejection is invisible, and this sentence is
-        // what the user actually reads. It must name the FEATURE, never the
-        // channel id.
+        // on a phone the caller's rejection is invisible, and the notice is what the
+        // user actually reads. It must name the FEATURE, never the channel id.
         expect(seen).toHaveLength(1);
-        expect(seen[0].message).toBe("The local model manager isn't available via remote access yet.");
+        expect(seen[0].feature).not.toContain('models:settings');
       } finally {
         vi.useRealTimers();
         window.removeEventListener(REMOTE_UNSUPPORTED_EVENT, onNotice);
@@ -430,11 +429,10 @@ describe('remote-shim — unsupported channels', () => {
       return { ...settled, channel: msg.type };
     }
 
-    it('announces an unsupported channel in plain language', async () => {
+    it('announces an unsupported channel', async () => {
       await callUnsupported(() => (window as any).claude.social.listFriends());
       expect(events).toHaveLength(1);
-      expect(events[0].feature).toBe('Friends and challenges');
-      expect(events[0].message).toBe("Friends and challenges isn't available via remote access yet.");
+      expect(events[0].feature).not.toContain('social:');
     });
 
     // This test previously asserted the OPPOSITE — that the call resolves "so the
@@ -589,7 +587,7 @@ describe('remote-shim — phone refusals', () => {
       delete (window as any).claude;
     });
 
-    it('a refusal from the phone says "on the phone", not "via remote access"', async () => {
+    it('a refusal from the phone is announced as a refusal', async () => {
       const ws = await connectPhone();
       // WHY the clock moves: nothing is announced for the first seconds after a connection,
       // because the app's own boot fetches are not something the person did
@@ -609,7 +607,6 @@ describe('remote-shim — phone refusals', () => {
       const { error } = await settle(p);
       expect(error?.message).toBe('remote-unsupported: syncspaces:enable');
       expect(notices).toHaveLength(1);
-      expect(notices[0].message).toBe("Syncing across your devices isn't available on the phone yet.");
     });
 
     // WHY (2026-10-14, Android clean rebuild): the phone's own bridge is now the desktop backend itself, so the

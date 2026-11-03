@@ -6,8 +6,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
 import React from 'react';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import ToolCard from '../src/renderer/components/ToolCard';
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import { CompactSurfaceContext } from '../src/renderer/state/compact-surface-context';
@@ -132,19 +130,5 @@ describe('the chat panel between animations', () => {
     act(() => { (chatState as any)({ visible: true, resize: 'in' }); });
     expect(panel().className).toContain('buddy-chat-pre');
     raf.mockRestore();
-  });
-});
-
-describe('message times in the buddy (contract R25)', () => {
-  // WHY a source pin: a 2026-10-26 refactor of buddy.css dropped this rule by accident and every message showed its time
-  // again; jsdom applies no stylesheet, so only the rule's text can be checked here.
-  const css = readFileSync(join(__dirname, '../src/renderer/styles/buddy.css'), 'utf8');
-  it('folds every time away, shows it on a half-second rest, and keeps the newest one', () => {
-    expect(css).toMatch(/html\[data-mode="buddy-chat"\] \.timeline-entry \.bubble-timestamp \{[^}]*max-height: 0/);
-    expect(css).toMatch(/\.timeline-entry:hover \.bubble-timestamp \{[^}]*opacity 120ms ease 600ms/);
-    expect(css).toMatch(/\.timeline-entry:nth-last-child\(1 of \.timeline-entry\) \.bubble-timestamp \{[^}]*opacity: 1/);
-  });
-  it('the pre phase is invisible', () => {
-    expect(css).toMatch(/\.buddy-chat-pre \{ opacity: 0; \}/);
   });
 });

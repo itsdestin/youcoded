@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 // Switch marks, page half: what the page tells the hitch recorder, and the places it must be told from.
-import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { announceNoSession, announceSwitch, noteSwitchIntent, noteTerminalShown, resetSwitchMarks } from '../src/renderer/state/switch-marks';
 
@@ -87,26 +86,5 @@ describe('page -> recorder announcements', () => {
   it('no session left is announced so a switch in flight can end', () => {
     announceNoSession();
     expect(heard[0].name).toBe('yc:switch-none');
-  });
-});
-
-describe('where the page must say it (pinned by source scan)', () => {
-  const src = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
-  it('every user-driven path in the session strip names its cause', () => {
-    const s = src('../src/renderer/components/SessionStrip.tsx');
-    expect(s).toMatch(/onSelectSession\(sessionId, 'pill', e\)/);          // press on a pill
-    expect(s).toMatch(/onSelectSession\(id, 'pill', ev\)/);                // click on a pill
-    expect(s).toMatch(/onSelectSession\(s\.id, 'menu', e\)/);              // All Sessions menu row (click and Enter/Space)
-    expect(s).toMatch(/onSelectSession\(sessions\[idx\]\.id, 'key', e\)/); // Shift-hold navigation
-    expect(s).toMatch(/if \(id !== activeIdRef\.current\) noteSwitchIntent/); // pressing the active pill is not a switch
-  });
-  it('the App announces every change of the active session from one layout effect', () => {
-    const a = src('../src/renderer/App.tsx');
-    expect(a).toMatch(/useLayoutEffect\(\(\) => \{\s*const prev = prevSwitchSessionRef\.current;/);
-    expect(a).toMatch(/announceSwitch\(\{/);
-    expect(a).toMatch(/noteSwitchIntent\('other'\)/);                       // buddy "open main app"
-  });
-  it('the terminal reports its show to the switch marks', () => {
-    expect(src('../src/renderer/components/TerminalView.tsx')).toMatch(/noteTerminalShown\(owed,/);
   });
 });

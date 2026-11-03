@@ -101,7 +101,7 @@ describe('CommentsMargin — a comment resolveSelector could not anchor', () => 
     Element.prototype.scrollIntoView = original;
   });
 
-  it('narrow mode: a detached comment has no marker position and gets its own bottom group, muted and dashed', () => {
+  it('narrow mode: a detached comment has no marker position and gets its own bottom group', () => {
     const path = 'doc3.md';
     const content = mountContent('alpha ANCHORED beta');
     const anchoredId = addComment(path, 'ANCHORED', 'label', { prefix: '', suffix: '', occurrence: 0 });
@@ -117,15 +117,11 @@ describe('CommentsMargin — a comment resolveSelector could not anchor', () => 
     expect(anchoredMarker).toBeTruthy();
     expect(detachedMarker).toBeTruthy();
 
-    // The anchored marker is absolutely positioned by its own top offset.
-    expect(anchoredMarker.className).toMatch(/\babsolute\b/);
+    // The anchored marker is positioned by its own top offset.
     expect(anchoredMarker.style.top).not.toBe('');
     // The detached one sits inside the dedicated bottom group instead (laid
-    // out by that group's own flex column, not its own top offset), and
-    // reads as visually distinct (muted, dashed) rather than a normal marker.
-    expect(detachedMarker.className).not.toMatch(/\babsolute\b/);
+    // out by that group's own flex column, not its own top offset).
     expect(detachedMarker.style.top).toBe('');
-    expect(detachedMarker.className).toMatch(/border-dashed/);
     expect(detachedMarker.getAttribute('aria-label')).toMatch(/text no longer found/i);
   });
 

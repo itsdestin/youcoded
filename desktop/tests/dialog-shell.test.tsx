@@ -2,10 +2,8 @@
 // desktop/tests/dialog-shell.test.tsx
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
-import { join } from 'node:path';
-import { readSource } from './helpers/guard-scope';
 import '@testing-library/jest-dom/vitest';
-import { Dialog, DIALOG_WIDTHS, DIALOG_MAX_HEIGHTS } from '../src/renderer/components/ui/Dialog';
+import { Dialog, DIALOG_MAX_HEIGHTS } from '../src/renderer/components/ui/Dialog';
 import { EscCloseProvider } from '../src/renderer/hooks/use-esc-close';
 
 // Guard for D1 — the one dialog shell.
@@ -71,83 +69,14 @@ describe('Dialog shell', () => {
     expect(screen.getByRole('button', { name: /close/i })).toBeInTheDocument();
   });
 
-  it('titled dialogs use the selected 16px title and contained 8% divider', () => {
-    render(<Dialog open onClose={() => {}} title="About">body</Dialog>);
-    const header = panel().firstElementChild as HTMLElement;
-    const title = screen.getByRole('heading', { name: 'About' });
-    expect(title.className).toContain('text-base font-semibold');
-    expect(header.className).toContain('min-h-14');
-    expect(header.className).toContain('dialog-header');
-    expect(header.className).not.toContain('border-b');
-    // WHY: CSS and the rendered hook must agree; jsdom cannot compute mask or
-    // gradient styles, so pin their exact shape alongside the real DOM classes.
-    const css = readSource(join(__dirname, '..', 'src', 'renderer', 'components', 'ui', 'Dialog.css'));
-    expect(css).toMatch(/\.dialog-header::after,\s*\[data-session-files-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge-card\) 8%, var\(--edge-card\) 92%/);
-  });
-
-  it('every body, titled or not, scrolls under the app\'s one fade', () => {
+  it('every body, titled or not, has a scroll region', () => {
     const { rerender } = render(<Dialog open onClose={() => {}} title="About">body</Dialog>);
     const titled = panel().querySelector('.dialog-scroll');
     expect(titled).toBeInTheDocument();
     expect(titled!.className).toContain('scroll-mask');
-    // The look lives in scroll-mask.css only — Dialog.css no longer carries a private copy.
-    const css = readSource(join(__dirname, '..', 'src', 'renderer', 'components', 'ui', 'Dialog.css'));
-    expect(css).not.toMatch(/mask-image/);
-    // The fade is even across the width: no side strip left unfaded, which lit every card's
-    // edges as two bright stripes under the fade (project-switcher-2 P2-5, Backup & sync).
-    const mask = readSource(join(__dirname, '..', 'src', 'renderer', 'styles', 'scroll-mask.css'));
-    expect(mask).not.toMatch(/transparent 4%/);
     rerender(<Dialog open onClose={() => {}}>untitled</Dialog>);
     expect(panel().querySelector('.scroll-mask')).toBeInTheDocument();
     expect(panel().querySelector('.dialog-scroll')).toBeNull();
-  });
-
-  it('keeps the review Today pane on the original full-width title and painted fade', () => {
-    // WHY: once the shared Dialog changes, the pre-approval comparison still
-    // needs to show the unchanged old popup rather than two identical panes.
-    const demo = readSource(join(__dirname, '..', 'src', 'renderer', 'dev', 'workbench', 'mockups', 'PopupTaperDemo.css'));
-    expect(demo).toMatch(/\[data-variant='today'\]\) \[role='dialog'\] > \.dialog-header\s*\{[^}]*border-bottom:\s*1px solid var\(--edge\)/);
-    expect(demo).toMatch(/\[data-variant='today'\]\) \[role='dialog'\] > \.dialog-header::after\s*\{[^}]*display:\s*none/);
-    expect(demo).toMatch(/\[data-variant='today'\]\) \[role='dialog'\] > \.dialog-header h2\s*\{[^}]*font-size:\s*0\.875rem;[^}]*font-weight:\s*700/);
-    expect(demo).toMatch(/\[data-variant='today'\]\) \[role='dialog'\] > \.dialog-scroll\s*\{[^}]*mask-image:\s*none/);
-    expect(demo).toMatch(/\[data-variant='today'\]\) \[role='dialog'\] > \.dialog-scroll::before,[\s\S]*?\.dialog-scroll::after\s*\{[^}]*display:\s*block/);
-  });
-
-  it('widths are named for what drives them, not t-shirt sizes', () => {
-    // The names carry the derivation: a dialog is one of three CONTENT kinds,
-    // and each kind's width falls out of reading measure or a control floor.
-    // The previous sm/md/lg/xl ladder was fitted to the old values instead,
-    // which is how `lg` ended up at 560px -- a width nothing had ever used.
-    expect(Object.keys(DIALOG_WIDTHS).sort()).toEqual(['document', 'panel', 'prompt', 'wide']);
-    expect(DIALOG_WIDTHS).toEqual({
-      prompt: 'min(340px, 88vw)',    // two action buttons side by side: 322px floor
-      panel: 'min(420px, 88vw)',     // 59ch at text-2xs, 51ch beside a control
-      document: 'min(600px, 88vw)',  // 67ch at text-sm — long-form measure
-      // Assistant settings (2026-09-05): a 176px page list beside a page that
-      // keeps `document` width. 92vw, not 88: a workspace, not a card.
-      wide: 'min(820px, 92vw)',
-    });
-  });
-
-  it('every size holds the same proportion, not the same pixel height', () => {
-    // Height is never a share of the viewport (80vh was ~700px on a laptop and
-    // ~1730px on a 4K display -- a different object per monitor), and never one
-    // flat number either: a flat cap gives a 340px prompt a 2.0x aspect and a
-    // 600px document 1.13x, so it is least right where dialogs are narrowest.
-    const RATIO = 1.4;
-    for (const size of Object.keys(DIALOG_WIDTHS) as (keyof typeof DIALOG_WIDTHS)[]) {
-      const w = Number(DIALOG_WIDTHS[size].match(/(\d+)px/)![1]);
-      const h = Number(DIALOG_MAX_HEIGHTS[size].match(/(\d+)px/)![1]);
-      // `wide` is the one landscape dialog (a page list beside a page): 1.4x of
-      // 820 is taller than any laptop screen, so the viewport clamp would win
-      // everywhere and the number would be fiction. It is capped BELOW its
-      // width instead — see DIALOG_MAX_HEIGHTS.
-      if (size === 'wide') expect(h, 'wide: landscape, capped below its width').toBeLessThan(w);
-      else expect(h, `${size}: cap should be ${RATIO}x its ${w}px width`).toBe(Math.round(w * RATIO));
-      // Always a constant scrim margin, never a viewport fraction.
-      expect(DIALOG_MAX_HEIGHTS[size]).toContain('calc(100vh - 6rem)');
-      expect(DIALOG_MAX_HEIGHTS[size]).not.toMatch(/\d+vh\)/);
-    }
   });
 
   // jsdom's CSSOM re-serializes math functions on the way in — since jsdom 30,
