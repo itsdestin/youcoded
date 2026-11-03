@@ -12,9 +12,6 @@ on:
   workflow_run:
     workflows: ['Desktop CI']
     types: [completed]
-  push:
-    branches: [session/test-suite-rethink]   # development only; remove when this lands on master
-    paths: ['.github/real-app/**', '.github/workflows/nightly-real-app.yml']
   workflow_dispatch:
 
 permissions:

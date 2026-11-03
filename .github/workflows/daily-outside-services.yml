@@ -5,9 +5,6 @@ name: Daily — outside services answer
 on:
   schedule:
     - cron: '53 10 * * *'   # off the hour on purpose (GitHub delays :00 cron under load)
-  push:
-    branches: [session/test-suite-rethink]   # development only; remove when this lands on master
-    paths: ['.github/real-app/outside-services.mjs', '.github/workflows/daily-outside-services.yml']
   workflow_dispatch:
 
 permissions:

@@ -3,9 +3,6 @@
 # Linux tests the nightly build; Windows and Mac install the real installers silently and walk the same steps.
 name: Release walk-through
 on:
-  push:
-    branches: [session/test-suite-rethink]   # development only
-    paths: ['.github/real-app/walkthrough/**', '.github/workflows/release-walkthrough.yml']
   workflow_dispatch:
     inputs:
       run:
