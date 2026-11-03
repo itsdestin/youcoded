@@ -222,7 +222,7 @@ describe('minting a link', () => {
 });
 
 describe('GET /download/<token>', () => {
-  it('carries the save-only headers: attachment, nosniff, octet-stream, no-store — even for an .html file (R20)', async () => {
+  it('carries the save-only headers: attachment, nosniff, octet-stream, no-store — even for an .html file', async () => {
     const res = await fetch((await mint(path.join(root, 'page.html'))).url);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename="page\.html"; filename\*=UTF-8''page\.html$/);
@@ -318,7 +318,7 @@ describe('GET /download/<token>', () => {
     expect(await dead.text()).toBe('');
   });
 
-  it('a device removed from the computer loses its links (R10)', async () => {
+  it('a device removed from the computer loses its links', async () => {
     const { url } = await mint(path.join(root, 'notes.md'));
     revoked.add(phone.deviceId);
     expect((await fetch(url)).status).toBe(404);
@@ -464,7 +464,7 @@ describe('through the WS host', () => {
 describe('download hardening', () => {
   const closeServer = (srv: http.Server) => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); });
 
-  it('a burst of GETs cannot beat the stream cap, and a hang-up while the file is opening releases its slot and handle (findings 1, 2)', async () => {
+  it('a burst of GETs cannot beat the stream cap, and a hang-up while the file is opening releases its slot and handle', async () => {
     let releaseOpen!: () => void;
     const gate = new Promise<void>((r) => { releaseOpen = r; });
     const opened: fs.promises.FileHandle[] = [];
@@ -762,7 +762,7 @@ describe('download hardening', () => {
 });
 
 // ── The second review of the download fixes (2026-09-10) ──────────────────────
-describe('download hardening, second review', () => {
+describe('download connection and link lifetimes', () => {
   const closeServer = (srv: http.Server) => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); });
 
   it("a completed download leaves the connection to the server's own keep-alive timeout", async () => {

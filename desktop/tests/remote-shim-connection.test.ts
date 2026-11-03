@@ -1,25 +1,8 @@
 // The remote shim (src/renderer/remote-shim.ts) — its connection: signing in with a saved key,
 // the device row it names, client:ready, noticing a silent or dead socket, and the order of
 // events around a close. Run in node with fake WebSockets; see remote-shim.test.ts for the rest.
+import { isolateGlobals, makeFakeWebSocket, type FakeSocket } from './helpers/remote-shim-rig';
 import { describe, it, expect, beforeEach, afterEach, vi, beforeAll, afterAll } from 'vitest';
-
-// WHY each section starts with isolateGlobals(): every section below was its own file, so each
-// began with a clean global object and a fresh module graph. The sections install fakes on
-// globalThis (WebSocket, window, location, localStorage, document…) and not all of them remove
-// every one; putting the globals back after each section, and dropping the loaded shim, keeps
-// one section's fakes from leaking into the next.
-const ISOLATED_GLOBALS = ['WebSocket', 'window', 'location', 'localStorage', 'document', 'addEventListener', 'removeEventListener', 'dispatchEvent', 'claude'];
-function isolateGlobals() {
-  let saved: [string, PropertyDescriptor | undefined][] = [];
-  beforeAll(() => { saved = ISOLATED_GLOBALS.map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)]); });
-  afterAll(() => {
-    for (const [k, d] of saved) {
-      if (d) Object.defineProperty(globalThis, k, d);
-      else delete (globalThis as Record<string, unknown>)[k];
-    }
-    vi.resetModules();
-  });
-}
 
 // Destin, 2026-09-11, phone pass of remote access batches 2/3: "password screen occasionally
 // flickering before loading back into the thing without actually needing a password".
@@ -31,23 +14,8 @@ function isolateGlobals() {
 describe('remote-shim — saved-key sign-in', () => {
   isolateGlobals();
 
-  class FakeWebSocket {
-    static instances: FakeWebSocket[] = [];
-    static OPEN = 1;
-    static CONNECTING = 0;
-    readyState = FakeWebSocket.CONNECTING;
-    sent: string[] = [];
-    onopen: (() => void) | null = null;
-    onmessage: ((e: { data: string }) => void) | null = null;
-    onclose: ((e: { code: number; reason: string }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    constructor(public url: string) { FakeWebSocket.instances.push(this); }
-    send(data: string) { if (this.readyState !== FakeWebSocket.OPEN) throw new Error('not open'); this.sent.push(data); }
-    close(code = 1000, reason = '') { if (this.readyState === 3) return; this.readyState = 3; this.onclose?.({ code, reason }); }
-    open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
-    receive(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }); }
-    sentOf(type: string) { return this.sent.map((s) => JSON.parse(s)).filter((m) => m.type === type); }
-  }
+  const FakeWebSocket = makeFakeWebSocket({ close: 'fire-once' });
+  type FakeWebSocket = FakeSocket;
 
   const KEY = 'youcoded-remote-token';
 
@@ -257,23 +225,8 @@ describe('remote-shim — saved-key sign-in', () => {
 describe('remote-shim — device row', () => {
   isolateGlobals();
 
-  class FakeWebSocket {
-    static instances: FakeWebSocket[] = [];
-    static OPEN = 1;
-    static CONNECTING = 0;
-    readyState = FakeWebSocket.CONNECTING;
-    sent: string[] = [];
-    onopen: (() => void) | null = null;
-    onmessage: ((e: { data: string }) => void) | null = null;
-    onclose: ((e: { code: number; reason: string }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    constructor(public url: string) { FakeWebSocket.instances.push(this); }
-    send(data: string) { if (this.readyState !== FakeWebSocket.OPEN) throw new Error('not open'); this.sent.push(data); }
-    close() { this.readyState = 3; }
-    open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
-    receive(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }); }
-    sentOf(type: string) { return this.sent.map((s) => JSON.parse(s)).filter((m) => m.type === type); }
-  }
+  const FakeWebSocket = makeFakeWebSocket({ close: 'silent' });
+  type FakeWebSocket = FakeSocket;
 
   const g = globalThis as any;
   let store: Record<string, string>;
@@ -340,27 +293,8 @@ describe('remote-shim — device row', () => {
 describe('remote-shim — client:ready', () => {
   isolateGlobals();
 
-  class FakeWebSocket {
-    static instances: FakeWebSocket[] = [];
-    static OPEN = 1;
-    static CONNECTING = 0;
-    readyState = FakeWebSocket.CONNECTING;
-    sent: string[] = [];
-    onopen: (() => void) | null = null;
-    onmessage: ((e: { data: string }) => void) | null = null;
-    onclose: ((e: { code: number; reason: string }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    protocol = '';
-    constructor(public url: string, public protocols?: string[]) { FakeWebSocket.instances.push(this); }
-    send(data: string) {
-      if (this.readyState !== FakeWebSocket.OPEN) throw new Error('WebSocket is not OPEN');
-      this.sent.push(data);
-    }
-    close() { this.readyState = 3; this.onclose?.({ code: 1000, reason: '' }); }
-    open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
-    receive(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }); }
-    sentOf(type: string) { return this.sent.map((s) => JSON.parse(s)).filter((m) => m.type === type); }
-  }
+  const FakeWebSocket = makeFakeWebSocket();
+  type FakeWebSocket = FakeSocket;
 
   describe('remote-shim client:ready', () => {
     let shim: typeof import('../src/renderer/remote-shim');
@@ -591,23 +525,8 @@ describe('remote-shim — client:ready', () => {
 describe('remote-shim — heartbeat', () => {
   isolateGlobals();
 
-  class FakeWebSocket {
-    static instances: FakeWebSocket[] = [];
-    static OPEN = 1;
-    static CONNECTING = 0;
-    readyState = FakeWebSocket.CONNECTING;
-    sent: string[] = [];
-    onopen: (() => void) | null = null;
-    onmessage: ((e: { data: string }) => void) | null = null;
-    onclose: ((e: { code: number; reason: string }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    constructor(public url: string) { FakeWebSocket.instances.push(this); }
-    send(data: string) { if (this.readyState !== FakeWebSocket.OPEN) throw new Error('not open'); this.sent.push(data); }
-    close(code = 1000, reason = '') { if (this.readyState === 3) return; this.readyState = 3; this.onclose?.({ code, reason }); }
-    open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
-    receive(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }); }
-    sentOf(type: string) { return this.sent.map((s) => JSON.parse(s)).filter((m) => m.type === type); }
-  }
+  const FakeWebSocket = makeFakeWebSocket({ close: 'fire-once' });
+  type FakeWebSocket = FakeSocket;
 
   describe('the page watches its own connection while it is in front', () => {
     let shim: typeof import('../src/renderer/remote-shim');
@@ -784,23 +703,8 @@ describe('remote-shim — heartbeat', () => {
 describe('remote-shim — wake check', () => {
   isolateGlobals();
 
-  class FakeWebSocket {
-    static instances: FakeWebSocket[] = [];
-    static OPEN = 1;
-    static CONNECTING = 0;
-    readyState = FakeWebSocket.CONNECTING;
-    sent: string[] = [];
-    onopen: (() => void) | null = null;
-    onmessage: ((e: { data: string }) => void) | null = null;
-    onclose: ((e: { code: number; reason: string }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    constructor(public url: string) { FakeWebSocket.instances.push(this); }
-    send(data: string) { if (this.readyState !== FakeWebSocket.OPEN) throw new Error('not open'); this.sent.push(data); }
-    close(code = 1000, reason = '') { if (this.readyState === 3) return; this.readyState = 3; this.onclose?.({ code, reason }); }
-    open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
-    receive(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }); }
-    sentOf(type: string) { return this.sent.map((s) => JSON.parse(s)).filter((m) => m.type === type); }
-  }
+  const FakeWebSocket = makeFakeWebSocket({ close: 'fire-once' });
+  type FakeWebSocket = FakeSocket;
 
   describe('checking the connection when the phone wakes', () => {
     let shim: typeof import('../src/renderer/remote-shim');
@@ -918,24 +822,8 @@ describe('remote-shim — wake check', () => {
 describe('remote-shim — overlapping connections', () => {
   isolateGlobals();
 
-  class FakeWebSocket {
-    static instances: FakeWebSocket[] = [];
-    static OPEN = 1;
-    static CONNECTING = 0;
-    readyState = FakeWebSocket.CONNECTING;
-    sent: string[] = [];
-    onopen: (() => void) | null = null;
-    onmessage: ((e: { data: string }) => void) | null = null;
-    onclose: ((e: { code: number; reason: string }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    constructor(public url: string) { FakeWebSocket.instances.push(this); }
-    send(data: string) { if (this.readyState !== FakeWebSocket.OPEN) throw new Error('not open'); this.sent.push(data); }
-    close() { if (this.readyState === 3) return; this.readyState = 2; }
-    fireClose(code = 1006) { this.readyState = 3; this.onclose?.({ code, reason: '' }); }
-    open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
-    receive(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }); }
-    sentOf(type: string) { return this.sent.map((s) => JSON.parse(s)).filter((m) => m.type === type); }
-  }
+  const FakeWebSocket = makeFakeWebSocket({ close: 'closing' });
+  type FakeWebSocket = FakeSocket;
 
   const g = globalThis as any;
   let shim: typeof import('../src/renderer/remote-shim');

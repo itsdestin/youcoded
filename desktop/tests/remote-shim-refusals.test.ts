@@ -3,6 +3,7 @@
 // than resolving, an unbridged channel is announced in plain words, the phone's own bridge
 // refuses as "on the phone", and voice typing exists only on that bridge.
 // WHY a separate file: these cases need jsdom (window events, location); remote-shim.test.ts runs in node.
+import { isolateGlobals, makeFakeWebSocket, type FakeSocket } from './helpers/remote-shim-rig';
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,24 +15,6 @@ import {
 } from '../src/renderer/remote-shim';
 import { REMOTE_UNSUPPORTED_EVENT } from '../src/renderer/remote-unsupported';
 import { TABLE_ERROR_FLAG } from '../src/shared/backend-contract';
-
-// WHY each section starts with isolateGlobals(): every section below was its own file, so each
-// began with a clean global object and a fresh module graph. The sections install fakes on
-// globalThis (WebSocket, window, location, localStorage, document…) and not all of them remove
-// every one; putting the globals back after each section, and dropping the loaded shim, keeps
-// one section's fakes from leaking into the next.
-const ISOLATED_GLOBALS = ['WebSocket', 'window', 'location', 'localStorage', 'document', 'addEventListener', 'removeEventListener', 'dispatchEvent', 'claude'];
-function isolateGlobals() {
-  let saved: [string, PropertyDescriptor | undefined][] = [];
-  beforeAll(() => { saved = ISOLATED_GLOBALS.map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)]); });
-  afterAll(() => {
-    for (const [k, d] of saved) {
-      if (d) Object.defineProperty(globalThis, k, d);
-      else delete (globalThis as Record<string, unknown>)[k];
-    }
-    vi.resetModules();
-  });
-}
 
 describe('remote-shim — rejecting failures', () => {
   isolateGlobals();
@@ -334,22 +317,8 @@ describe('remote-shim — rejecting failures', () => {
 describe('remote-shim — unsupported channels', () => {
   isolateGlobals();
 
-  class FakeWebSocket {
-    static instances: FakeWebSocket[] = [];
-    static OPEN = 1;
-    static CONNECTING = 0;
-    readyState = FakeWebSocket.CONNECTING;
-    sent: string[] = [];
-    onopen: (() => void) | null = null;
-    onmessage: ((e: { data: string }) => void) | null = null;
-    onclose: ((e: { code: number; reason: string }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    constructor(public url: string) { FakeWebSocket.instances.push(this); }
-    send(data: string) { this.sent.push(data); }
-    close() { this.readyState = 3; }
-    open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
-    receive(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }); }
-  }
+  const FakeWebSocket = makeFakeWebSocket({ strictSend: false, close: 'silent' });
+  type FakeWebSocket = FakeSocket;
 
   describe('remote-shim unsupported-channel reporting', () => {
     let shim: typeof import('../src/renderer/remote-shim');
@@ -513,22 +482,8 @@ describe('remote-shim — phone refusals', () => {
    *     notice fires and nothing is sent to the bridge.
    */
 
-  class FakeWebSocket {
-    static instances: FakeWebSocket[] = [];
-    static OPEN = 1;
-    static CONNECTING = 0;
-    readyState = FakeWebSocket.CONNECTING;
-    sent: string[] = [];
-    onopen: (() => void) | null = null;
-    onmessage: ((e: { data: string }) => void) | null = null;
-    onclose: ((e: { code: number; reason: string }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    constructor(public url: string) { FakeWebSocket.instances.push(this); }
-    send(data: string) { this.sent.push(data); }
-    close() { this.readyState = 3; }
-    open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
-    receive(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }); }
-  }
+  const FakeWebSocket = makeFakeWebSocket({ strictSend: false, close: 'silent' });
+  type FakeWebSocket = FakeSocket;
 
   /** `file:` + no remote target is how the shim recognises the phone's own bridge. */
   function setProtocol(protocol: 'file:' | 'http:') {
@@ -660,22 +615,8 @@ describe('remote-shim — phone refusals', () => {
 describe('remote-shim — voice gate', () => {
   isolateGlobals();
 
-  class FakeWebSocket {
-    static instances: FakeWebSocket[] = [];
-    static OPEN = 1;
-    static CONNECTING = 0;
-    readyState = FakeWebSocket.CONNECTING;
-    sent: string[] = [];
-    onopen: (() => void) | null = null;
-    onmessage: ((e: { data: string }) => void) | null = null;
-    onclose: ((e: { code: number; reason: string }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    constructor(public url: string) { FakeWebSocket.instances.push(this); }
-    send(data: string) { this.sent.push(data); }
-    close() { this.readyState = 3; }
-    open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
-    receive(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }); }
-  }
+  const FakeWebSocket = makeFakeWebSocket({ strictSend: false, close: 'silent' });
+  type FakeWebSocket = FakeSocket;
 
   /** Point jsdom's `location.protocol` at a scheme. The shim reads it directly,
    *  and jsdom's own location is read-only, so replace the whole object — the

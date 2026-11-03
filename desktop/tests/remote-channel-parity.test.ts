@@ -176,7 +176,7 @@ describe('remote channels — every channel is answered', () => {
   // the string, the other must — rather than as presence, because batch 2 is
   // built on a sibling branch: presence would be red here until the merge, and a
   // one-sided name after the merge is exactly the drift this file exists to catch.
-  describe('the bare frames batch 2 adds are named on both ends or neither', () => {
+  describe('the bare frames are named on both ends or neither', () => {
     // pty:reset is no longer pushed by the host (one-core R5-2): a session:open answer carries `reset`, and the shim replays it locally.
     for (const name of ['client:ready']) {
       it(`${name}`, () => {

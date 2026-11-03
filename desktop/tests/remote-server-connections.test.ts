@@ -10,6 +10,18 @@ import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
 import { authOkMessage, choosePhonePageSource } from '../src/main/remote-server';
 
+// A phone's socket as the server sees it (the sign-in tests below use their own, which records the close reason).
+class FakeSocket extends EventEmitter {
+  frames: any[] = [];
+  readyState = 1;
+  bufferedAmount = 0;
+  send(raw: string) { this.frames.push(JSON.parse(raw)); }
+  close(code = 1000, reason = '') { this.readyState = 3; this.emit('close', code, Buffer.from(reason)); }
+  ping() {}
+  types() { return this.frames.map((f) => f.type); }
+  ofType(type: string) { return this.frames.filter((f) => f.type === type); }
+}
+
 // WHY account visibility and signing in differ: the account belongs to the backend,
 // but the browser callback must return to the device running that backend.
 describe('ChatGPT account capabilities', () => {
@@ -353,15 +365,6 @@ describe('RemoteServer — auth rate limit', () => {
 // then sends the global state a screen needs (the session list, topic names, the last status). There is no restore sequence, no queue and
 // no cut line any more: a conversation's content comes from `session:open` (tests/session-open.test.ts, tests/session-fill-reconnect.test.ts).
 describe('RemoteServer — readiness', () => {
-  class FakeSocket extends EventEmitter {
-    frames: any[] = [];
-    readyState = 1;
-    bufferedAmount = 0;
-    send(raw: string) { this.frames.push(JSON.parse(raw)); }
-    close() { this.readyState = 3; this.emit('close'); }
-    ping() {}
-    types() { return this.frames.map((f) => f.type); }
-  }
   async function makeServer(topics: Array<[string, string]> = []) {
     const { RemoteServer } = await import('../src/main/remote-server');
     const sm = Object.assign(new EventEmitter(), { listSessions: vi.fn(() => [{ id: 's1', name: 's1', cwd: '/tmp', status: 'active' }]) });
@@ -495,15 +498,6 @@ describe('RemoteServer — readiness', () => {
 //  - reads a phone's screens load at start were "unhandled channel", so those screens were empty;
 //  - the host logged no connects, drops or catch-ups, so none of this could be traced.
 describe('RemoteServer — reliability', () => {
-  class FakeSocket extends EventEmitter {
-    frames: any[] = [];
-    readyState = 1;
-    bufferedAmount = 0;
-    send(raw: string) { this.frames.push(JSON.parse(raw)); }
-    close(code = 1000, reason = '') { this.readyState = 3; this.emit('close', code, Buffer.from(reason)); }
-    ping() {}
-    ofType(type: string) { return this.frames.filter((f) => f.type === type); }
-  }
 
   let dir: string;
   beforeEach(() => {
@@ -679,15 +673,6 @@ describe('RemoteServer — session focus', () => {
 // an old theme until reloaded). A theme change made on one phone must reach the computer's
 // windows and every OTHER phone; a change made on the computer must reach every phone.
 describe('RemoteServer — appearance relay', () => {
-  class FakeSocket extends EventEmitter {
-    frames: any[] = [];
-    readyState = 1;
-    bufferedAmount = 0;
-    send(raw: string) { this.frames.push(JSON.parse(raw)); }
-    close() { this.readyState = 3; this.emit('close'); }
-    ping() {}
-    ofType(type: string) { return this.frames.filter((f) => f.type === type); }
-  }
 
   async function makeServer() {
     const { RemoteServer } = await import('../src/main/remote-server');
@@ -743,14 +728,6 @@ describe('RemoteServer — appearance relay', () => {
 // A phone that drops must take its page sockets with it: the live-socket caps count them, so one left
 // behind for its 60 s lease made the reconnecting phone's reopen fail with "at most 2 live connections".
 describe('RemoteServer — a phone\'s live page sockets', () => {
-  class FakeSocket extends EventEmitter {
-    frames: any[] = [];
-    readyState = 1;
-    bufferedAmount = 0;
-    send(raw: string) { this.frames.push(JSON.parse(raw)); }
-    close() { this.readyState = 3; this.emit('close'); }
-    ping() {}
-  }
   const HOME = { id: 'ha', kind: 'device', service: 'Home Assistant', address: '192.168.4.54:8123', access: 'full', socketHello: '{"type":"auth","access_token":"{{key}}"}' };
   let root: string;
   let service: ReturnType<typeof import('../src/main/pages/pages-service').initPagesService>;

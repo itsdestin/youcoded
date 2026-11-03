@@ -268,7 +268,7 @@ describe('reading a file: same answer, except the phone ceiling', () => {
     expect(remote.sizeBytes).toBe(ipc.sizeBytes);
   });
 
-  it('a 1.5 MB text file: content on IPC, too-large with its size over remote (R8, R19)', async () => {
+  it('a 1.5 MB text file: content on IPC, too-large with its size over remote', async () => {
     const size = fs.statSync(path.join(root, 'big.txt')).size;
     expect(size).toBeGreaterThan(REMOTE_TEXT_PREVIEW_MAX_BYTES);
     const ipc = await overIpc('artifacts:get', { projectRoot: root, artifactId: 'big.txt' });
@@ -310,7 +310,7 @@ describe('reading a file: same answer, except the phone ceiling', () => {
   });
 });
 
-describe('the roots a phone may name are the ones the desktop shows (R7)', () => {
+describe('the roots a phone may name are the ones the desktop shows', () => {
   it('a root the desktop never showed is refused over remote, on every read; the desktop transport keeps its behaviour', async () => {
     fs.writeFileSync(path.join(outside, 'plain.md'), 'not a secret, just not yours\n');
     // The desktop's own transport is unchanged: its renderer only asks about roots it was given.
@@ -451,7 +451,7 @@ describe('artifacts:resolve-path over remote', () => {
   });
 });
 
-describe('live refresh over remote (R12)', () => {
+describe('live refresh over remote', () => {
   it('a watcher event reaches the WS client that subscribed, and a socket that closed is dropped', async () => {
     const a = fakeClient('sock-watch-a');
     const b = fakeClient('sock-watch-b');

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { remoteConfigPath, remoteDeviceStorePath, remoteProfile } from '../src/main/remote-paths';
 
 // Must mock before importing the module
 vi.mock('fs');
@@ -351,5 +352,40 @@ describe('RemoteConfig dev-profile isolation', () => {
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ enabled: true, port: 9950 }));
     const { RemoteConfig } = await import('../src/main/remote-config');
     expect(new RemoteConfig().port).toBe(9950);
+  });
+});
+
+const FAKE_HOME = '/tmp/fake-home';
+// WHY path.join: the module joins with the platform separator, so a literal
+// '/tmp/fake-home/.claude/…' could never match on Windows (failed every Windows CI run).
+const under = (name: string) => path.join(FAKE_HOME, '.claude', name);
+
+describe('remote file paths (per-profile)', () => {
+  it('scopes both files by profile, so a dev instance cannot write the built app store', () => {
+    // WHY this is the point of the module: remote-server.ts used to hardcode the token path
+    // with no profile while remote-config.ts scoped its own, so dev runs shared real pairings.
+    expect(remoteConfigPath('', FAKE_HOME)).toBe(under('youcoded-remote.json'));
+    expect(remoteDeviceStorePath('', FAKE_HOME)).toBe(under('.remote-devices.json'));
+    expect(remoteConfigPath('dev', FAKE_HOME)).toBe(under('youcoded-remote.dev.json'));
+    expect(remoteDeviceStorePath('dev', FAKE_HOME)).toBe(under('.remote-devices.dev.json'));
+  });
+
+  it('gives two profiles different files in the same process', () => {
+    // A module-level process.env read could not do this: it is evaluated once per process.
+    expect(remoteDeviceStorePath('dev', FAKE_HOME)).not.toBe(remoteDeviceStorePath('dev2', FAKE_HOME));
+    expect(remoteConfigPath('dev', FAKE_HOME)).not.toBe(remoteConfigPath('dev2', FAKE_HOME));
+  });
+
+  it('never reuses the retired token filename', () => {
+    // The old store kept several clear-text secrets per device with no identity; batch 1
+    // retires it, so a collision would resurrect it as if it were the new format.
+    for (const p of [remoteDeviceStorePath('', FAKE_HOME), remoteDeviceStorePath('dev', FAKE_HOME)]) {
+      expect(p).not.toContain('remote-tokens');
+    }
+  });
+
+  it('reads the profile from the environment it is given, not the real one', () => {
+    expect(remoteProfile({ YOUCODED_PROFILE: 'dev2' } as NodeJS.ProcessEnv)).toBe('dev2');
+    expect(remoteProfile({} as NodeJS.ProcessEnv)).toBe('');
   });
 });

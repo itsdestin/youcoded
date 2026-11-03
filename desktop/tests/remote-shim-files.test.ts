@@ -2,29 +2,12 @@
 // The remote shim (src/renderer/remote-shim.ts) — files over remote: downloads open through an
 // <a download> link, and the file lists and watchers come back after a reconnect.
 // WHY a separate file: these cases need jsdom (anchors, React hooks); remote-shim.test.ts runs in node.
+import { isolateGlobals, makeFakeWebSocket, type FakeSocket } from './helpers/remote-shim-rig';
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import React from 'react';
 import { render } from '@testing-library/react';
 import { REMOTE_RECONNECTED_EVENT } from '../src/renderer/remote-events';
 import { useProjectWatch } from '../src/renderer/hooks/useProjectWatch';
-
-// WHY each section starts with isolateGlobals(): every section below was its own file, so each
-// began with a clean global object and a fresh module graph. The sections install fakes on
-// globalThis (WebSocket, window, location, localStorage, document…) and not all of them remove
-// every one; putting the globals back after each section, and dropping the loaded shim, keeps
-// one section's fakes from leaking into the next.
-const ISOLATED_GLOBALS = ['WebSocket', 'window', 'location', 'localStorage', 'document', 'addEventListener', 'removeEventListener', 'dispatchEvent', 'claude'];
-function isolateGlobals() {
-  let saved: [string, PropertyDescriptor | undefined][] = [];
-  beforeAll(() => { saved = ISOLATED_GLOBALS.map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)]); });
-  afterAll(() => {
-    for (const [k, d] of saved) {
-      if (d) Object.defineProperty(globalThis, k, d);
-      else delete (globalThis as Record<string, unknown>)[k];
-    }
-    vi.resetModules();
-  });
-}
 
 // Remote access batch 3, design §10 — the phone's half of Download: the shim
 // asks the host for a link, makes it ABSOLUTE (the paired target's origin when
@@ -35,23 +18,8 @@ function isolateGlobals() {
 describe('remote-shim — downloads', () => {
   isolateGlobals();
 
-  class FakeWebSocket {
-    static instances: FakeWebSocket[] = [];
-    static OPEN = 1;
-    static CONNECTING = 0;
-    readyState = FakeWebSocket.CONNECTING;
-    sent: string[] = [];
-    onopen: (() => void) | null = null;
-    onmessage: ((e: { data: string }) => void) | null = null;
-    onclose: ((e: { code: number; reason: string }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    constructor(public url: string) { FakeWebSocket.instances.push(this); }
-    send(data: string) { this.sent.push(data); }
-    close() { this.readyState = 3; }
-    open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
-    receive(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }); }
-    frames(): any[] { return this.sent.map((s) => JSON.parse(s)); }
-  }
+  const FakeWebSocket = makeFakeWebSocket({ strictSend: false, close: 'silent' });
+  type FakeWebSocket = FakeSocket;
 
   let shim: typeof import('../src/renderer/remote-shim');
   let clicks: { href: string; download: string }[];
@@ -142,28 +110,8 @@ describe('remote-shim — downloads', () => {
 describe('remote-shim — files after a reconnect', () => {
   isolateGlobals();
 
-  class FakeWebSocket {
-    static instances: FakeWebSocket[] = [];
-    static OPEN = 1;
-    static CONNECTING = 0;
-    readyState = FakeWebSocket.CONNECTING;
-    sent: string[] = [];
-    onopen: (() => void) | null = null;
-    onmessage: ((e: { data: string }) => void) | null = null;
-    onclose: ((e: { code: number; reason: string }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    url: string;
-    constructor(url: string) { this.url = url; FakeWebSocket.instances.push(this); }
-    send(data: string) {
-      if (this.readyState !== FakeWebSocket.OPEN) throw new Error('WebSocket is not OPEN');
-      this.sent.push(data);
-    }
-    close() { this.readyState = 3; this.onclose?.({ code: 1000, reason: '' }); }
-    open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
-    receive(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }); }
-    types(): string[] { return this.sent.map((s) => JSON.parse(s).type); }
-    frames(): any[] { return this.sent.map((s) => JSON.parse(s)); }
-  }
+  const FakeWebSocket = makeFakeWebSocket();
+  type FakeWebSocket = FakeSocket;
 
   describe('remote-shim: the file lists after a reconnect', () => {
     let shim: typeof import('../src/renderer/remote-shim');
