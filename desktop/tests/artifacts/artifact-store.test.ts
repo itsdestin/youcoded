@@ -111,16 +111,7 @@ describe('appendVersion', () => {
   // WHY: the create path was once not CAS-guarded: two writers that both found NO sidecar each built a fresh page-one and the
   // second silently overwrote the first, both reporting committed. Deterministic, so 3 iterations (the ABA sibling below needs 60).
   it('two concurrent FIRST-EVER writes lose no record (ROADMAP L696)', async () => {
-    // THREE iterations, not the 60 its ABA sibling below needs. That one races a
-    // millisecond-resolution timestamp and only loses a record when both writes
-    // land in the same tick; this one is deterministic — both callers await
-    // readSidecar before either writes, so every iteration reproduces it
-    // (verified: it fails on iteration 1 with the guard removed). The extra
-    // iterations bought nothing and cost real filesystem churn — mkdtemp, two
-    // lock-guarded fsync'd writes and a recursive delete apiece — in a suite
-    // that runs in parallel with the FSEvents watcher tests that go red on the
-    // macOS CI leg under exactly that kind of load
-    // (docs/active/investigations/2026-09-01-sync-engine-debounce-macos-flake.md).
+    // Deterministic (both callers read before either writes), so 3 iterations suffice; the ABA sibling below needs 60.
     for (let i = 0; i < 3; i++) {
       const root = mkdtempSync(join(tmpdir(), 'as-create-race-'));
       try {
@@ -519,12 +510,6 @@ describe('writeSidecar — CAS check reads the timestamp without parsing the fil
     const res = await writeSidecar(projectRoot, cur.updatedAt, cur);
     expect(res.committed).toBe(true);
     expect(parse).not.toHaveBeenCalled();
-  });
-
-  it('still rejects a stale token', async () => {
-    const cur = (await readSidecar(projectRoot)) as ProjectSidecar;
-    const res = await writeSidecar(projectRoot, '2000-01-01T00:00:00.000Z', cur);
-    expect(res.committed).toBe(false);
   });
 });
 

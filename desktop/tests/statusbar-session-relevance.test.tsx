@@ -1,9 +1,6 @@
 // @vitest-environment jsdom
-// desktop/tests/statusbar-session-relevance.test.tsx
-//
-// The bar must not render another runtime's furniture. 5h/7d describe a Claude
-// subscription a native session doesn't spend; Fast mode is a Claude Code
-// toggle nothing native honours (spec §3).
+// The status bar must not render another runtime's furniture (5h/7d are a Claude subscription, Fast is a Claude Code
+// toggle), must hide chips with no value, and must draw session totals and cost correctly.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render as rtlRender, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -12,15 +9,7 @@ import '@testing-library/jest-dom/vitest';
 import StatusBar from '../src/renderer/components/StatusBar';
 import { emptyTotals, addTurnUsage, addSubagentUsage } from '../src/renderer/state/session-totals';
 
-/**
- * Find a chip by the words of its hover hint.
- *
- * These assertions used to be `screen.getByTitle(...)`. The hints are now the
- * app's own `<Tooltip>` rather than the browser's `title=` bubble, so the copy
- * lives on the control as `data-hint` and in a portal while the bubble is open.
- * The assertions are unchanged in substance — still about the WORDS the chip
- * offers, not about how it draws them.
- */
+// Find a chip by its hover hint: the app's own <Tooltip> keeps the copy on the control as `data-hint`.
 const hintNodes = () => Array.from(document.querySelectorAll('[data-hint]'));
 const matchHint = (re: RegExp | string) =>
   hintNodes().filter((el) => {
@@ -39,42 +28,33 @@ function byHint(re: RegExp | string): HTMLElement {
 }
 const queryByHint = (re: RegExp | string): HTMLElement | null => (matchHint(re)[0] as HTMLElement) ?? null;
 
-// Master added <SpecialistsChip> to the bar (useSpecialistSummary → useChatStore),
-// so StatusBar can no longer mount outside a ChatProvider. Every render here
-// goes through the REAL store + reducer this branch already uses for hook tests
-// (helpers/chat-store-harness.ts), seeded with the 's1' session these tests name.
-// With no specialist runs in that session the chip renders null, so the bar's
-// DOM — and every assertion below — is unchanged.
+// StatusBar reads the chat store (SpecialistsChip), so every render goes through the REAL store + reducer, seeded with 's1'.
 function render(ui: ReactElement) {
   return rtlRender(ui, { wrapper: makeStoreWrapper(['s1']).wrapper });
 }
 
-// Multiple <StatusBar> renders share one jsdom document in this file — without
-// explicit cleanup a later test's queryByText/getByText would see the
-// previous test's DOM too (this repo doesn't enable vitest's `globals`, so
-// Testing Library's implicit afterEach cleanup never registers).
+// Explicit cleanup: this repo doesn't enable vitest `globals`, so Testing Library's implicit afterEach never registers.
 afterEach(cleanup);
 
 beforeEach(() => {
-  // This repo's jsdom ships no localStorage (Node's experimental global
-  // storage needs --localstorage-file, which isn't passed) — stub it the same
-  // way tests/remote-shim-refusals.test.ts does.
+  // jsdom ships no localStorage here (Node's experimental one needs --localstorage-file): stub it.
   (window as any).localStorage = {
     _s: {} as Record<string, string>,
     getItem(k: string) { return this._s[k] ?? null; },
     setItem(k: string, v: string) { this._s[k] = v; },
     removeItem(k: string) { delete this._s[k]; },
   };
-  // StatusBar renders SessionTagsChip unconditionally whenever sessionId is
-  // set; that chip reads the tag registry and session meta over
-  // window.claude. Stub the minimal surface so mounting it doesn't crash in
-  // this DOM-only harness — none of these values are under test here.
+  // SessionTagsChip (always rendered with a sessionId) reads tags and session meta over window.claude; stub the minimal surface.
   (window as any).claude = {
     tags: { list: async () => [] },
     session: { getMeta: async () => ({}) },
     on: { tagsChanged: () => () => {}, sessionMetaChanged: () => () => {} },
   };
 });
+
+/** Positive control for absence-only tests: SessionTagsChip renders "Add tags" for any runtime once sessionId is set, so
+ *  its presence proves the bar mounted (else the absence checks would pass vacuously on an empty container). */
+const mounted = () => expect(screen.getByText('Add tags')).toBeInTheDocument();
 
 const statusData = {
   usage: {
@@ -94,10 +74,7 @@ describe('StatusBar runtime relevance', () => {
     render(<StatusBar statusData={statusData} provider="claude" fast sessionId="s1" />);
     expect(screen.getByText('5h:')).toBeInTheDocument();
     expect(screen.getByText('7d:')).toBeInTheDocument();
-    // The Fast chip is icon-only (FastIcon, no text node) — its only
-    // accessible name is aria-label="Fast mode on", so getByText can never
-    // find it regardless of the runtime gate. getByRole reads the computed
-    // accessible name instead.
+    // The Fast chip is icon-only: find it by its accessible name.
     expect(screen.getByRole('button', { name: /fast/i })).toBeInTheDocument();
   });
 
@@ -106,13 +83,7 @@ describe('StatusBar runtime relevance', () => {
     expect(screen.queryByText('5h:')).toBeNull();
     expect(screen.queryByText('7d:')).toBeNull();
     expect(screen.queryByRole('button', { name: /fast/i })).toBeNull();
-    // Positive control: an assertion that only checks absences would also pass
-    // if the whole bar failed to render. SessionTagsChip renders for ANY
-    // runtime whenever sessionId is set (verified against its source: the only
-    // gate is `!isAndroid()`) and shows "Add tags" synchronously — before the
-    // stubbed getMeta() promise resolves — since useSessionMeta initializes
-    // tags/note empty. Its presence here proves the bar actually mounted.
-    expect(screen.getByText('Add tags')).toBeInTheDocument();
+    mounted();
   });
 
   it('treats an unwired provider as Claude Code, so nothing hides by accident', () => {
@@ -122,28 +93,21 @@ describe('StatusBar runtime relevance', () => {
 });
 
 describe('StatusBar renders no empty chips', () => {
-  // Rule 1 (spec §3): a chip with no value hides. Verified today: Session
-  // Duration (StatusBar.tsx:1289) and Active ratio (:1377) both print a literal
-  // '--' in every native session, forever, and the token/speed chips do the same
-  // before their first turn.
+  // A chip with no value hides: Session Duration, Active ratio and the token/speed chips once printed a literal '--'.
   const widgets = ['session-time', 'active-ratio', 'tokens-in', 'tokens-out', 'output-speed', 'cache-stats', 'cache-hit-rate'];
 
   it('renders no "--" anywhere in a native session with no data', () => {
     window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(widgets));
     const { container } = render(<StatusBar statusData={statusData} provider="native" sessionId="s1" />);
     expect(container.textContent).not.toContain('--');
-    // Positive control (see the runtime-relevance describe above for why):
-    // proves this render actually mounted the bar rather than the assertion
-    // above passing vacuously on an empty container.
-    expect(screen.getByText('Add tags')).toBeInTheDocument();
+    mounted();
   });
 
   it('renders no "--" in a Claude Code session whose stats have not arrived yet', () => {
     window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(widgets));
     const { container } = render(<StatusBar statusData={statusData} provider="claude" sessionId="s1" />);
     expect(container.textContent).not.toContain('--');
-    // Positive control, same reasoning as above.
-    expect(screen.getByText('Add tags')).toBeInTheDocument();
+    mounted();
   });
 
   it('still renders the chip once it has a value', () => {
@@ -205,12 +169,9 @@ describe('StatusBar session totals', () => {
     withWidgets(['tokens-in', 'tokens-out']);
     const totals = { ...emptyTotals(), inputTokens: 12_345, outputTokens: 678 };
     render(<StatusBar statusData={statusData} provider="native" nativeTotals={totals} sessionId="s1" />);
-    // The chip's displayed value stays abbreviated (formatTokens) even though
-    // this is now a whole-session total that can run much larger than a
-    // single turn — a status-bar chip must not read "1,234,567".
+    // Displayed value stays abbreviated (a chip must not read "1,234,567"); the exact count lives in the tooltip.
     expect(screen.getByText('12.3k')).toBeInTheDocument();
     expect(screen.getByText('678')).toBeInTheDocument();
-    // The exact count is still pinned somewhere: the tooltip.
     expect(byHint(/Input tokens: 12,345\./)).toBeInTheDocument();
     expect(byHint(/Output tokens: 678\./)).toBeInTheDocument();
   });
@@ -228,12 +189,7 @@ describe('StatusBar session totals', () => {
     render(<StatusBar statusData={statusData} provider="native" nativeTotals={emptyTotals()} sessionId="s1" />);
     expect(screen.queryByText(/no changes/i)).toBeNull();
     expect(screen.queryByText(/lines/i)).toBeNull();
-    // Positive control (Finding 3): the two assertions above only check
-    // absence, so a total render failure (bar never mounted) would pass them
-    // too. SessionTagsChip renders "Add tags" for any runtime the instant
-    // sessionId is set (see the earlier positive controls in this file) —
-    // its presence proves the bar actually mounted around the missing chip.
-    expect(screen.getByText('Add tags')).toBeInTheDocument();
+    mounted();
   });
 
   it('says what the numbers include', () => {
@@ -245,13 +201,7 @@ describe('StatusBar session totals', () => {
 });
 
 describe('StatusBar — a brand-new native session has measured nothing', () => {
-  // createSessionChatState() seeds a fresh native session's totals with
-  // emptyTotals() — all-zero, NOT null — the instant the session enters the
-  // store, before any turn has completed. The token chips used to gate on
-  // `value != null`, and 0 != null is true, so In/Out/Cached rendered "0"
-  // from session creation onward for anyone with those opt-in chips on. This
-  // pins the fix: a chip must gate on having measured something, not merely
-  // on the value being present.
+  // WHY: a fresh session's totals are all-zero, NOT null; chips gated on `value != null` rendered "0" from creation. They must gate on having measured something.
   it('renders no In, Out, Cached or Reuse chip for a session that has completed no turns', () => {
     withWidgets(['tokens-in', 'tokens-out', 'cache-stats', 'cache-hit-rate']);
     render(<StatusBar statusData={statusData} provider="native" nativeTotals={emptyTotals()} sessionId="s1" />);
@@ -259,9 +209,7 @@ describe('StatusBar — a brand-new native session has measured nothing', () => 
     expect(screen.queryByText('Out:')).toBeNull();
     expect(screen.queryByText('Cached:')).toBeNull();
     expect(screen.queryByText('Reuse:')).toBeNull();
-    // Positive control: proves the bar mounted rather than the four absence
-    // checks above passing vacuously on an empty container.
-    expect(screen.getByText('Add tags')).toBeInTheDocument();
+    mounted();
   });
 
   it('still renders In, Out and Cached once the session has a real measurement', () => {
@@ -296,16 +244,7 @@ describe('StatusBar — a brand-new native session has measured nothing', () => 
 });
 
 describe('StatusBar — a measured zero is a real reading, not an unmeasured one (regression)', () => {
-  // A reviewer once caught a version of the zero-collapse that swallowed a
-  // genuine reading of 0 — Out: 0 on a turn that produced none, or Cached: 0 on
-  // a cold/expired prompt cache (common, not an edge case). This pins it back.
-  //
-  // Rewritten 2026-09-03: the fixture used to be a Claude Code STATUSLINE with
-  // zeros, because that was where the chips read tokens from. It isn't any more
-  // — the statusline's token fields describe one request, so a 42-hour session
-  // showed Out: 713 — and the chips read session totals on both runtimes. The
-  // invariant is unchanged and now has a single expression of it: inputTokens
-  // > 0 means "a turn was counted", and every other zero beside it is real.
+  // inputTokens > 0 means "a turn was counted", so the zeros beside it (Out: 0, a cold prompt cache's Cached: 0) are real readings and must show.
   it('renders Out: 0 and Cached: 0 for a Claude Code session with real zeros', () => {
     withWidgets(['tokens-in', 'tokens-out', 'cache-stats']);
     const withStats = { ...statusData };
@@ -323,13 +262,10 @@ describe('StatusBar — a measured zero is a real reading, not an unmeasured one
         }}
       />,
     );
-    // Non-zero In still renders (sanity — proves the fixture is wired right).
     expect(screen.getByText('In:')).toBeInTheDocument();
     expect(screen.getByText('1.5k')).toBeInTheDocument();
-    // The regression: Out: 0 and Cached: 0 are REAL measurements and must show.
     expect(screen.getByText('Out:')).toBeInTheDocument();
     expect(screen.getByText('Cached:')).toBeInTheDocument();
-    // Both chips display the literal measured value: 0.
     expect(screen.getAllByText('0')).toHaveLength(2);
   });
 });
@@ -346,23 +282,14 @@ describe('Session cost chip', () => {
 
   it('renders NOTHING — never $0.00 — for a local session that costs nothing to run', () => {
     withWidgets(['session-cost']);
-    // Destin declined a "Free" chip (checkpoint #2): silence stays the answer
-    // for a local session. This fixture used to be `{ anyUnpriced: true }`,
-    // which now has a chip of its own ("not listed") — free-to-run and
-    // metered-but-unpriced are opposite situations and no longer share a
-    // branch, which is the whole point of checkpoint #3.
+    // Silence is the answer for a free local session; "not listed" (metered but unpriced) is the opposite situation.
     render(<StatusBar statusData={statusData} provider="native" sessionId="s1"
       nativeTotals={costTotals({ costUsd: 0, anyFree: true })} />);
-    // Assert the CHIP is gone, not just the '$' glyph: an earlier version of
-    // this test looked for /\$/, which the pre-fix code satisfied by rendering
-    // the literal '--' — so it passed against the very defect it claimed to
-    // guard. The chip's label is the thing that must be absent.
+    // Assert the CHIP's label is gone, not just the '$' glyph (the pre-fix code rendered '--' and satisfied a /\$/ check).
     expect(screen.queryByText('Cost:')).toBeNull();
     expect(screen.queryByText(/\$/)).toBeNull();
     expect(screen.queryByText('not listed')).toBeNull();
-    // Positive control: the three absence checks above would also pass if the
-    // bar never mounted.
-    expect(screen.getByText('Add tags')).toBeInTheDocument();
+    mounted();
   });
 
   it('renders NOTHING when the session has measured nothing at all', () => {
@@ -371,13 +298,10 @@ describe('Session cost chip', () => {
       nativeTotals={costTotals({})} />);
     expect(screen.queryByText('Cost:')).toBeNull();
     expect(screen.queryByText('not listed')).toBeNull();
-    expect(screen.getByText('Add tags')).toBeInTheDocument();
+    mounted();
   });
 
-  // Checkpoint #3. Before this, a free local session and a metered session
-  // whose model has no published price rendered an IDENTICAL bar (verified
-  // with `magick compare`: 0 differing pixels) because both simply hid the
-  // chip. One of those two is spending the user's money.
+  // WHY: a free local session and a metered session with an unpriced model once rendered an IDENTICAL bar; one of them spends the user's money.
   it('says "not listed" when the provider bills but this model has no published price', () => {
     withWidgets(['session-cost']);
     render(<StatusBar statusData={statusData} provider="native" sessionId="s1"
@@ -386,19 +310,13 @@ describe('Session cost chip', () => {
     expect(screen.getByText('not listed')).toBeInTheDocument();
     // It is an absence, not a figure — no dollar amount may appear.
     expect(screen.queryByText(/\$/)).toBeNull();
-    // "not available", not "not published": pricingFor returns null for ANY
-    // model missing from the catalog, and an empty catalog after a failed
-    // fetch looks exactly like a model with no rate. Saying "no price is
-    // published" states a cause that was never checked
-    // (docs/error-message-standards.md). This wording is true either way.
+    // "not available", not "not published": an empty catalog after a failed fetch looks exactly like a model with no rate.
     expect(byHint(
       "This provider bills for usage, but no price is available for this model here, so the session cost can't be totalled."
     )).toBeInTheDocument();
   });
 
-  // Both flags can be true at once: a free local parent that delegated to a
-  // metered specialist. A real figure must win — "not listed" alongside a
-  // number would read as two different answers to the same question.
+  // Both flags at once (free local parent, metered specialist): a real figure must win over "not listed".
   it('prefers a real figure over "not listed" when free, unpriced and priced work all happened', () => {
     withWidgets(['session-cost']);
     render(<StatusBar statusData={statusData} provider="native" sessionId="s1"
@@ -411,8 +329,6 @@ describe('Session cost chip', () => {
     expect(screen.queryByText('not listed')).toBeNull();
   });
 
-  // Checkpoint #4: name where the money came from on the chip itself, not only
-  // in a tooltip nobody hovers.
   it('names specialist spend on the chip and splits it in the tooltip', () => {
     withWidgets(['session-cost']);
     render(<StatusBar statusData={statusData} provider="native" sessionId="s1"
@@ -432,8 +348,7 @@ describe('Session cost chip', () => {
     expect(queryByHint(/specialists this session delegated to/)).toBeNull();
   });
 
-  // The sub-cent guard from commit 4c5b06d3 must survive the new marker: the
-  // marker is appended to the SAME chip that guard protects.
+  // The sub-cent guard must survive the specialist marker appended to the same chip.
   it('keeps the <$0.01 guard when the specialist marker is appended', () => {
     withWidgets(['session-cost']);
     render(<StatusBar statusData={statusData} provider="native" sessionId="s1"
@@ -441,14 +356,10 @@ describe('Session cost chip', () => {
     expect(screen.getByText('<$0.01')).toBeInTheDocument();
     expect(screen.getByText('· specialists')).toBeInTheDocument();
     expect(screen.queryByText('$0.00')).toBeNull();
-    // The tooltip's split figure gets the same guard — a sub-cent split must
-    // not read "$0.00 of this was spent by…".
     expect(byHint(/<\$0\.01 of this was spent by 1 specialist this session delegated to\./)).toBeInTheDocument();
   });
 
-  // A fraction of a cent is REAL money. toFixed(2) alone rounds it to "$0.00",
-  // which spec §5 forbids — and it is the first thing a native session on a
-  // cheap metered model shows (a few hundred tokens ≈ $0.0004).
+  // A fraction of a cent is REAL money: toFixed(2) alone would show "$0.00".
   it('renders <$0.01 for a real sub-cent cost, never $0.00', () => {
     withWidgets(['session-cost']);
     render(<StatusBar statusData={statusData} provider="native" sessionId="s1"
@@ -458,8 +369,6 @@ describe('Session cost chip', () => {
     expect(screen.queryByText('$0.00')).toBeNull();
   });
 
-  // Same guard on the Claude Code side — that runtime HAD this behaviour
-  // before the native-cost work and must keep it.
   it('renders <$0.01 for a sub-cent Claude Code session cost', () => {
     withWidgets(['session-cost']);
     const withCost = { ...statusData, sessionStats: { costUsd: 0.003 } };
@@ -479,31 +388,17 @@ describe('Session cost chip', () => {
     withWidgets(['session-cost']);
     render(<StatusBar statusData={statusData} provider="native" sessionId="s1"
       nativeTotals={costTotals({ costUsd: 0.42, anyPriced: true, anyUnpriced: true })} />);
-    // Task 24: the full sentence, not a fragment. The chip's title is a
-    // concatenation, so this is matched inside it — but the whole sentence is
-    // pinned, byte-for-byte with UsageCard's PARTIAL_NOTE, because the bar and
-    // the card saying different things about the same total is the bug this
-    // pair of assertions exists to catch. "available", not "published": the
-    // price lookup returns nothing for a model with no rate AND for a catalog
-    // that never loaded, so "published" asserted a cause nobody checked
-    // (docs/error-message-standards.md).
+    // Matched inside the chip's concatenated title; kept in step with UsageCard's PARTIAL_NOTE so bar and card never disagree.
     expect(
       byHint(/Models with no available price are not included in this total\./),
     ).toBeInTheDocument();
   });
 });
 
-// Task 21 — the gap between two individually-correct unit tests. The totals
-// unit tests fed the accumulator hand-written flags; the chip tests fed the
-// bar hand-written flags. Neither ever fed the REAL bar what the REAL
-// accumulator produces from what main actually stamps, and the defect lived
-// exactly there: a local-engine turn is stamped `costUsd: null, free: true`
-// (a local model has no rate card), the accumulator read the null alone as
-// "unpriced", and the bar drew "Cost: not listed" with a tooltip claiming the
-// provider bills the user for a model running on their own machine.
+// WHY end to end: a local-engine turn is stamped `costUsd: null, free: true`; the accumulator once read the null alone as
+// "unpriced" and the bar claimed the provider bills for a model on the user's own machine. Hand-built flags hid it, so
+// these totals come from the real accumulator.
 describe('Session cost — a purely local session, end to end', () => {
-  // Built through the real accumulator, never by hand: hand-built flags are
-  // what let this through the first time.
   const localSessionTotals = () => {
     let t = emptyTotals();
     t = addTurnUsage(t, { inputTokens: 1200, outputTokens: 340, costUsd: null, free: true });
@@ -517,13 +412,9 @@ describe('Session cost — a purely local session, end to end', () => {
       sessionId="s1" nativeTotals={localSessionTotals()} />);
     expect(screen.queryByText('Cost:')).toBeNull();
     expect(screen.queryByText('not listed')).toBeNull();
-    // textContent as well as queryByText: the string must not appear anywhere
-    // on the bar, however it happens to be split across elements.
     expect(container.textContent).not.toContain('not listed');
     expect(screen.queryByText(/\$/)).toBeNull();
-    // Positive control: every assertion above is an absence, and absences pass
-    // just as happily against a bar that never mounted.
-    expect(screen.getByText('Add tags')).toBeInTheDocument();
+    mounted();
   });
 
   it('still draws no cost chip when that local session delegated to a free local specialist', () => {
@@ -534,12 +425,10 @@ describe('Session cost — a purely local session, end to end', () => {
       sessionId="s1" nativeTotals={t} />);
     expect(screen.queryByText('Cost:')).toBeNull();
     expect(container.textContent).not.toContain('not listed');
-    expect(screen.getByText('Add tags')).toBeInTheDocument();
+    mounted();
   });
 
-  // The other half of the same defect: the Customize menu's local sentence is
-  // gated on !anyUnpriced, so a wrongly-unpriced local session made it
-  // unreachable dead code. Same real totals, driven through the real menu.
+  // The Customize menu's local sentence is gated on !anyUnpriced, so the defect made it unreachable.
   it('offers the Cost row with the local sentence the defect made unreachable', () => {
     render(<StatusBar statusData={statusData} provider="native"
       sessionId="s1" nativeTotals={localSessionTotals()} />);
@@ -548,9 +437,7 @@ describe('Session cost — a purely local session, end to end', () => {
     expect(screen.queryByText('not listed')).toBeNull();
   });
 
-  // Guard the other direction so the fix can't be "never mark anything
-  // unpriced": a metered model with no published rate is a different state and
-  // still has to say so.
+  // Other direction: a metered model with no published rate must still say so.
   it('still says "not listed" for a metered session whose model has no published price', () => {
     withWidgets(['session-cost']);
     let t = emptyTotals();

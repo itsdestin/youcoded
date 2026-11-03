@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions, gitSnapshotAsync } from '../src/main/harness/prompt-assembly';
 import { execFileSync } from 'child_process';
+import { prepareProjectInstructions } from '../src/main/harness/injection/project-instructions';
 import { CODER_DEFAULT_BODY } from '../src/main/harness/prompts/coder-default';
 
 // Each test gets a fresh tmp sandbox so filesystem walk-up state never leaks.
@@ -93,27 +94,11 @@ describe('assembleSystemPrompt — project instructions walk-up', () => {
 });
 
 describe('assembleSystemPrompt — fixture .git containment', () => {
-  // Fix 1 (Task 3 review, 2026-08-12): the harness eval fixture
-  // (eval/fixture-workspace.ts's seedFixtureWorkspace) plants an empty `.git`
-  // directory specifically so this walk-up can't escape the fixture and pick up
-  // a stray AGENTS.md/CLAUDE.md above it — that's the CONTROL arm for every
-  // instruction A/B this evaluator will ever run. Until now nothing tested that
-  // the marker actually does this: the fixture test only asserted `.git` exists,
-  // and the "no <project-instructions>" test in harness-eval-runner.test.ts
-  // passed identically with or without the marker, because in a clean CI/dev
-  // environment nothing stray lives above os.tmpdir() anyway. This proves the
-  // real containment by seeding a genuine decoy ABOVE a hand-built fixture-shaped
-  // tree — see the mutation evidence in the Task 3 Fix pass 1 report for proof
-  // this test actually fails without the `.git` marker.
-  //
-  // WHY hand-built rather than seedFixtureWorkspace(): that helper creates its
-  // tree via fs.mkdtempSync under os.tmpdir() and has no way to nest it inside a
-  // caller-supplied parent directory, so it can't be used to plant a decoy
-  // ABOVE the fixture root. This tree mirrors its shape exactly (a `.git` dir at
-  // the fixture root, nothing more) without changing seedFixtureWorkspace's
-  // signature for a test-only need.
+  // WHY: the harness eval fixture plants an empty `.git` so this walk-up cannot escape it and pick up a stray AGENTS.md/CLAUDE.md
+  // (the CONTROL arm of every instruction A/B). Nothing proved the marker works: a clean CI has nothing above os.tmpdir() anyway.
+  // This seeds a genuine decoy ABOVE a hand-built fixture-shaped tree (seedFixtureWorkspace cannot nest inside a given parent).
   it('the .git marker actually stops the walk-up from reaching a decoy instruction file above the fixture root', () => {
-    const parent = dir; // the tmp sandbox from beforeEach — stands in for "somewhere above the fixture"
+    const parent = dir; // stands in for "somewhere above the fixture"
     fs.writeFileSync(path.join(parent, 'AGENTS.md'), 'DECOY_CONTENT_FROM_ABOVE_THE_FIXTURE');
     const fixtureRoot = path.join(parent, 'fixture-root');
     fs.mkdirSync(fixtureRoot);
@@ -128,7 +113,6 @@ describe('assembleSystemPrompt — fixture .git containment', () => {
 
 describe('captured ancestor instruction inventory', () => {
   it('loads broad to narrow across git directory and worktree file, selecting one per folder', async () => {
-    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), 'OUTSIDE_GIT');
     const repo = path.join(dir, 'repo');
     const nested = path.join(repo, 'nested');
@@ -150,7 +134,6 @@ describe('captured ancestor instruction inventory', () => {
   });
 
   it('gives the session folder\'s own file first claim on space, and still names a squeezed parent', async () => {
-    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
     const child = path.join(dir, 'project'); fs.mkdirSync(child);
     const big = (tag: string) => Array.from({ length: 10 }, (_, i) => `## ${tag} ${i}\n${'Detail line. '.repeat(40)}`).join('\n\n');
     fs.writeFileSync(path.join(dir, 'CLAUDE.md'), big('Parent'));
@@ -164,7 +147,6 @@ describe('captured ancestor instruction inventory', () => {
   });
 
   it('describes a shortened file to the person in plain words, never the model-facing notice', async () => {
-    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
     const body = Array.from({ length: 12 }, (_, i) => `## Section ${i}\n${'Detail line. '.repeat(80)}`).join('\n\n');
     fs.writeFileSync(path.join(dir, 'CLAUDE.md'), body);
     const [file] = (await prepareProjectInstructions(dir, 600)).filter(f => f.path.startsWith(dir));
@@ -174,7 +156,6 @@ describe('captured ancestor instruction inventory', () => {
   });
 
   it('includes ancestors outside a git directory without looking up a dedicated global file or repeating one source', async () => {
-    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
     const repo = path.join(dir, 'repo'); const child = path.join(repo, 'child');
     fs.mkdirSync(child, { recursive: true });
     fs.mkdirSync(path.join(repo, '.git'));
@@ -190,7 +171,6 @@ describe('captured ancestor instruction inventory', () => {
   });
 
   it('deduplicates a symlinked ancestor file by physical identity while retaining first source spelling', async () => {
-    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
     const child = path.join(dir, 'child'); fs.mkdirSync(child);
     const parent = path.join(dir, 'AGENTS.md');
     fs.writeFileSync(parent, 'PHYSICAL_INSTRUCTION');
@@ -203,7 +183,6 @@ describe('captured ancestor instruction inventory', () => {
   });
 
   it.each([0, 1, 5, 30, 80, 400])('bounds final labelled project part and records omissions at %i tokens', async (tokens) => {
-    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
     const child = path.join(dir, 'child'); fs.mkdirSync(child);
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Parent\n' + 'a'.repeat(3000));
     fs.writeFileSync(path.join(child, 'CLAUDE.md'), '# Child\n' + 'b'.repeat(3000));
@@ -222,7 +201,6 @@ describe('captured ancestor instruction inventory', () => {
   });
 
   it('compares legacy nearest-only selection with the captured full ancestor chain', async () => {
-    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
     const child = path.join(dir, 'child'); fs.mkdirSync(child);
     fs.mkdirSync(path.join(dir, '.git'));
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), 'PARENT_RULE');
@@ -233,7 +211,6 @@ describe('captured ancestor instruction inventory', () => {
   });
 
   it('fits the entire chain to one budget with honest per-source cuts and no fresh reads', async () => {
-    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
     const child = path.join(dir, 'child'); fs.mkdirSync(child);
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Parent\n' + 'a'.repeat(3000));
     fs.writeFileSync(path.join(child, 'CLAUDE.md'), '# Child\n' + 'b'.repeat(3000));
@@ -253,8 +230,6 @@ describe('captured ancestor instruction inventory', () => {
 
 describe('assembleSystemPrompt — byte stability (KV-cache pin)', () => {
   it('is byte-identical across two calls with the same inputs (non-git dir)', () => {
-    // Non-git tmp dir → gitSnapshot returns the stable "not a repository" line,
-    // and the date string is stable within a single test run.
     const inputs = { presetBody: PRESET, cwd: dir, appVersion: '2.3.4' };
     const a = assembleSystemPrompt(inputs);
     const b = assembleSystemPrompt(inputs);
@@ -263,9 +238,7 @@ describe('assembleSystemPrompt — byte stability (KV-cache pin)', () => {
   });
 });
 
-// 2026-09-16 smoothness sweep, C3: the host reads the git line ahead, off the
-// main thread, and passes it in. The assembled prompt must be byte-identical
-// either way, and the async reader must say exactly what the sync one says.
+// The host reads the git line ahead, off the main thread: the prompt must be byte-identical either way, and the async reader must say what the sync one says.
 describe('gitSnapshot — precomputed and async', () => {
   it('a supplied gitSnapshot lands in <env> verbatim and the prompt equals the sync assembly', async () => {
     const sync = assembleSystemPrompt({ presetBody: PRESET, cwd: dir, appVersion: '2.3.4' });
@@ -285,14 +258,12 @@ describe('gitSnapshot — precomputed and async', () => {
     try {
       execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'main']);
       fs.writeFileSync(path.join(repo, 'a.txt'), 'x');
-      // A repository with no commits has no HEAD, and both readers answer
-      // "not a repository" for it — so commit first, then leave one change.
+      // A repository with no commits has no HEAD (both readers say "not a repository"): commit first, then leave one change.
       execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'add', 'a.txt']);
       execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'one']);
       fs.writeFileSync(path.join(repo, 'b.txt'), 'y');
       const line = await gitSnapshotAsync(repo);
       expect(line).toBe('Git branch: main (1 uncommitted change(s))');
-      // The sync form is what the prompt falls back to; both must agree.
       expect(assembleSystemPrompt({ presetBody: PRESET, cwd: repo, appVersion: '1' })).toContain(line);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
@@ -315,14 +286,9 @@ describe('CODER_DEFAULT_BODY', () => {
   });
 });
 
-// WHY cwd '/tmp', not process.cwd(): these byte-identity checks assemble the prompt
-// up to four times, and each assembly shells out to `git status` in its cwd with the
-// app's 3 s timeout. In this real checkout the line reads "Git branch: … (clean)" —
-// until one call on a loaded machine overruns 3 s and reads "Git: not a repository",
-// so a prompt "differs" from itself (reproduced with a git that stalls 3.5 s one
-// call in three). Outside a repo every outcome — fast failure or timeout — is the
-// same line, so only the variant/tool behaviour under test can change the bytes.
-// It also stops the real checkout's CLAUDE.md files from leaking into the prompt.
+// WHY cwd '/tmp', not process.cwd(): byte-identity checks assemble the prompt several times, each shelling out to `git status`
+// with a 3 s timeout; in this checkout one call overrunning on a loaded machine reads "not a repository" and the prompt "differs"
+// from itself. Outside a repo every outcome is the same line (and the checkout's CLAUDE.md files cannot leak in).
 describe('prompt variant overlay', () => {
   const base = { presetBody: 'PRESET_BODY', cwd: '/tmp', appVersion: '9.9.9' };
 
@@ -342,17 +308,14 @@ describe('prompt variant overlay', () => {
 });
 
 describe('assembleSystemPrompt — tool-less models (hasTools:false)', () => {
-  // WHY '/tmp': the same git-timeout race as 'prompt variant overlay' above — the
-  // explicit-true vs default comparison assembled twice against the real checkout.
+  // '/tmp' for the same git-timeout reason as 'prompt variant overlay' above.
   const base = { presetBody: 'PRESET_BODY', cwd: '/tmp', appVersion: '9.9.9' };
 
   it('omits the tool-guidance line AND the variant overlay when hasTools is false', () => {
-    // A tool-less model (profile.supportsTools === false, e.g. Gemma 3n) gets no
-    // tools attached, so it must not be told to prefer tools or call one at a time.
+    // A tool-less model (e.g. Gemma 3n) gets no tools attached, so it must not be told to prefer them.
     const p = assembleSystemPrompt({ ...base, promptVariant: 'local-small', hasTools: false });
     expect(p).not.toContain('Prefer dedicated tools');
     expect(p).not.toContain('one tool at a time');
-    // Identity + preset body are tool-agnostic and must still be present.
     expect(p).toContain('YouCoded assistant');
     expect(p).toContain('PRESET_BODY');
   });
@@ -394,9 +357,7 @@ describe('assembleSystemPrompt — shared doctrine', () => {
   });
 });
 
-// The panel's System tab shows the prompt in pieces (Destin, review-5 G-2). The
-// pieces and the prompt must be the same thing — see assembleSystemPromptParts's
-// own WHY comment on why two parallel implementations would drift invisibly.
+// The panel's System tab shows the prompt in pieces; they must be the same thing as the prompt (two parallel implementations would drift invisibly).
 describe('assembleSystemPromptParts — the pieces ARE the prompt', () => {
   const base = { presetBody: PRESET, cwd: '/tmp', appVersion: '1.0.0' };
 
@@ -416,8 +377,7 @@ describe('assembleSystemPromptParts — the pieces ARE the prompt', () => {
   });
 
   it('drops the parts the joined prompt drops, rather than leaving them blank', () => {
-    // No instructions file in the cwd, and the default variant is a no-op — the
-    // prompt has never carried either, so the panel must not list an empty row.
+    // No instructions file and a no-op variant: the prompt never carried either, so the panel must not list an empty row.
     const ids = assembleSystemPromptParts(base).map((p) => p.id);
     expect(ids).not.toContain('project');
     expect(ids).not.toContain('steering');

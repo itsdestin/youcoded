@@ -1,18 +1,9 @@
 // @vitest-environment jsdom
-// Perf cycle 1, N1 (docs/active/handoffs/2026-08-27-perf-cycle-1-handoff.md §3).
-//
-// findArchiveBoundary scans the WHOLE timeline backwards. ChatView used to call
-// it inline in the render body, so a streaming session — which renders once per
-// delta — paid a full-timeline scan per token. The timeline array's identity
-// only changes when an entry is appended (a delta replaces assistantTurns, not
-// timeline), so the scan must run once per appended entry and NOT per delta.
-//
-// Scaffolding mirrors chatview-empty-response-gate.test.tsx (the established
-// ChatView mounting pattern). The archive-boundary module is wrapped in a spy
-// around the REAL implementation so the render output is unchanged and only
-// the call count is observed.
+// Render-cost guards for ChatView: the archive-boundary scan runs once per appended entry (not per streamed
+// delta), auto-scroll never forces a layout read on a timestamp-only change, a streamed word re-renders only the
+// live reply, and Find (open/refresh/navigate) stays off the streaming hot path.
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, fireEvent, screen, act } from '@testing-library/react';
 import { FOLD_IDLE_MS, FOLD_ROOT_MARGIN } from '../src/renderer/hooks/use-entry-folding';
 import { ChatMessageFindIndex } from '../src/renderer/components/chat-message-find';
@@ -162,53 +153,80 @@ function sessionState(overrides: Record<string, unknown>) {
 }
 
 const view = () => <ChatView sessionId="s1" visible={true} sessionActive={true} />;
+const oneTurn = (text = 'hello') => {
+  const timeline = [{ kind: 'assistant-turn', turnId: 'a' }];
+  mocks.state = sessionState({ timeline, assistantTurns: new Map([['a', textTurn('a', text)]]) });
+  return timeline;
+};
+const setText = (text: string) => { mocks.state = { ...mocks.state, assistantTurns: new Map([['a', textTurn('a', text)]]) }; };
+const FIND = () => screen.getByLabelText('Find in chat');
+const openFind = (value?: string) => {
+  fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+  if (value !== undefined) fireEvent.change(FIND(), { target: { value } });
+};
+const findCounter = (c: HTMLElement) => c.querySelector('.find-row .tabular-nums')?.textContent;
+/** Highlight API stubs jsdom lacks; removed after every test by the afterEach below. */
+const stubHighlights = () => {
+  (globalThis as any).CSS = { highlights: new Map() };
+  (window as any).Highlight = class { constructor(public range: Range) {} };
+};
+afterEach(() => { delete (globalThis as any).CSS; delete (window as any).Highlight; vi.useRealTimers(); });
+/** The reducer's TRANSCRIPT_ASSISTANT_TEXT shape: fresh turn Map + restamped activity, SAME timeline array. */
+const streamDeltas = (r: { rerender: (ui: React.ReactElement) => void }) => {
+  for (const content of ['Hello', 'Hello, ', 'Hello, wor', 'Hello, world']) {
+    mocks.state = {
+      ...mocks.state, assistantTurns: new Map([['turn_1', textTurn('turn_1', content)]]),
+      lastActivityAt: mocks.state.lastActivityAt + 7, lastOutputAt: mocks.state.lastOutputAt + 7,
+    };
+    r.rerender(view());
+  }
+};
+/** Append a second entry (new timeline reference). */
+const appendSecond = () => {
+  mocks.state = {
+    ...mocks.state, timeline: [...mocks.state.timeline, { kind: 'assistant-turn', turnId: 'turn_2' }],
+    assistantTurns: new Map([...mocks.state.assistantTurns, ['turn_2', textTurn('turn_2', 'Second')]]),
+    lastActivityAt: mocks.state.lastActivityAt + 7,
+  };
+};
 
-describe('ChatView — the archive-boundary scan runs per appended entry, not per streamed delta', () => {
+describe('ChatView Find and the archive-boundary scan stay off the streaming hot path', () => {
   it('mounts the search controller only while Find is open, never on ordinary streamed words', () => {
     const controller = vi.mocked(useChatMessageFind);
     controller.mockClear();
-    const timeline = [{ kind: 'assistant-turn', turnId: 'a' }];
-    mocks.state = sessionState({ timeline, assistantTurns: new Map([['a', textTurn('a', 'hello')]]) });
+    oneTurn();
     const r = render(view());
-    for (let i = 0; i < 40; i++) {
-      mocks.state = { ...mocks.state, assistantTurns: new Map([['a', textTurn('a', `hello ${i}`)]]) };
-      r.rerender(view());
-    }
+    for (let i = 0; i < 40; i++) { setText(`hello ${i}`); r.rerender(view()); }
     expect(controller).not.toHaveBeenCalled();
-    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    openFind();
     expect(controller).toHaveBeenCalled();
-    fireEvent.keyDown(screen.getByLabelText('Find in chat'), { key: 'Escape' });
+    fireEvent.keyDown(FIND(), { key: 'Escape' });
     controller.mockClear();
-    mocks.state = { ...mocks.state, assistantTurns: new Map([['a', textTurn('a', 'after close')]]) };
+    setText('after close');
     r.rerender(view());
     expect(controller).not.toHaveBeenCalled();
     r.unmount();
   });
   it('a source and mounted Markdown mismatch leaves the Find counter pending instead of a wrong count', () => {
-    // This suite's MarkdownContent mock shows literal syntax; the real renderer
-    // strips it. The adapter must notice that mismatch before reporting a hit.
-    mocks.state = sessionState({ timeline: [{ kind: 'assistant-turn', turnId: 'a' }], assistantTurns: new Map([['a', textTurn('a', '**bold**')]]) });
-    const view = render(<ChatView sessionId="s1" visible sessionActive />);
-    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
-    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'bold' } });
-    const counter = view.container.querySelector('.find-row .tabular-nums');
-    expect(counter?.textContent).toBe('');
-    view.unmount();
+    // The MarkdownContent mock shows literal syntax; the real renderer strips it. The adapter must notice before reporting a hit.
+    oneTurn('**bold**');
+    const r = render(view());
+    openFind('bold');
+    expect(findCounter(r.container)).toBe('');
+    r.unmount();
   });
 
   it('refreshes active Find after streamed text, appended page and removal without Enter', async () => {
-    (globalThis as any).CSS = { highlights: new Map() };
-    (window as any).Highlight = class { constructor(public range: Range) {} };
-    const timeline = [{ kind: 'assistant-turn', turnId: 'a' }];
-    mocks.state = sessionState({ timeline, assistantTurns: new Map([['a', textTurn('a', 'hello')]]) });
+    stubHighlights();
+    const timeline = oneTurn();
     const spy = vi.spyOn(ChatMessageFindIndex.prototype, 'prepareSearch');
     const r = render(view());
-    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    openFind();
     expect(spy).not.toHaveBeenCalled(); // opening an empty Find never parses history
-    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'hello' } });
+    fireEvent.change(FIND(), { target: { value: 'hello' } });
     await vi.waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
     spy.mockClear();
-    mocks.state = { ...mocks.state, assistantTurns: new Map([['a', textTurn('a', 'hello hello')]]) };
+    setText('hello hello');
     r.rerender(view());
     expect(spy).not.toHaveBeenCalled(); // never reconcile synchronously per streamed word
     await vi.waitFor(() => expect(screen.getByText('1/2')).toBeTruthy());
@@ -218,33 +236,29 @@ describe('ChatView — the archive-boundary scan runs per appended entry, not pe
     mocks.state = { ...mocks.state, timeline: [{ kind: 'assistant-turn', turnId: 'b' }] };
     r.rerender(view());
     await vi.waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
-    r.unmount(); spy.mockRestore(); delete (globalThis as any).CSS; delete (window as any).Highlight;
+    r.unmount(); spy.mockRestore();
   });
 
   it('continuous sub-80ms source updates still publish a completed Find count', async () => {
-    const timeline = [{ kind: 'assistant-turn', turnId: 'a' }];
-    mocks.state = sessionState({ timeline, assistantTurns: new Map([['a', textTurn('a', 'hello')]]) });
+    oneTurn();
     const r = render(view());
-    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
-    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'hello' } });
+    openFind('hello');
     await vi.waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
     vi.useFakeTimers();
     for (let i = 0; i < 12; i++) {
-      mocks.state = { ...mocks.state, assistantTurns: new Map([['a', textTurn('a', `hello ${i}`)]]) };
+      setText(`hello ${i}`);
       r.rerender(view());
       await act(async () => { await vi.advanceTimersByTimeAsync(40); });
-      expect(r.container.querySelector('.find-row .tabular-nums')?.textContent).not.toBe('');
+      expect(findCounter(r.container)).not.toBe('');
     }
-    vi.useRealTimers();
     r.unmount();
   });
 
   it('recovers pending count after a transient rendered-body mismatch without Enter', async () => {
-    mocks.state = sessionState({ timeline: [{ kind: 'assistant-turn', turnId: 'a' }], assistantTurns: new Map([['a', textTurn('a', '**bold**')]]) });
+    oneTurn('**bold**');
     const r = render(view());
-    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
-    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'bold' } });
-    expect(r.container.querySelector('.find-row .tabular-nums')?.textContent).toBe('');
+    openFind('bold');
+    expect(findCounter(r.container)).toBe('');
     // The mocked markdown catches up with the source projection on its own.
     const body = r.container.querySelector('[data-message-find-body]')!;
     await act(async () => { body.querySelector('[data-testid="md"]')!.textContent = 'bold'; await Promise.resolve(); });
@@ -253,27 +267,22 @@ describe('ChatView — the archive-boundary scan runs per appended entry, not pe
   });
 
   it('a streamed word refreshes only on Find navigation, not on every history render', async () => {
-    const highlights = new Map();
-    (globalThis as any).CSS = { highlights };
-    (window as any).Highlight = class { constructor(public range: Range) {} };
-    mocks.state = sessionState({ timeline: [{ kind: 'assistant-turn', turnId: 'a' }], assistantTurns: new Map([['a', textTurn('a', 'hello')]]) });
+    stubHighlights();
+    oneTurn();
     const spy = vi.spyOn(ChatMessageFindIndex.prototype, 'prepareSearch');
-    const view = render(<ChatView sessionId="s1" visible sessionActive />);
-    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
-    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'hello' } });
+    const r = render(view());
+    openFind('hello');
     await vi.waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
     spy.mockClear();
-    mocks.state = { ...mocks.state, assistantTurns: new Map([['a', textTurn('a', 'hello hello')]]) };
-    view.rerender(<ChatView sessionId="s1" visible sessionActive />);
+    setText('hello hello');
+    r.rerender(view());
     expect(spy).not.toHaveBeenCalled();
     fireEvent.click(screen.getByLabelText('Next (Enter)'));
     await vi.waitFor(() => expect(spy).toHaveBeenCalled());
     await vi.waitFor(() => expect(screen.getByText('2/2')).toBeTruthy());
     expect(spy.mock.calls.length).toBeLessThanOrEqual(2); // navigation and the coalesced source push
-    view.unmount();
+    r.unmount();
     spy.mockRestore();
-    delete (globalThis as any).CSS;
-    delete (window as any).Highlight;
   });
 
   it('Find selection releases bottom-stick before scrolling and growth cannot repin it', async () => {
@@ -295,8 +304,7 @@ describe('ChatView — the archive-boundary scan runs per appended entry, not pe
       constructor(cb: () => void) { resizeCallbacks.push(cb); }
       observe() {} disconnect() {} unobserve() {}
     };
-    (globalThis as any).CSS = { highlights: new Map() };
-    (window as any).Highlight = class { constructor(public range: Range) {} };
+    stubHighlights();
     let scroller: HTMLElement;
     Range.prototype.getBoundingClientRect = () => ({ top: scroller?.scrollTop === 250 ? 200 : -500, bottom: scroller?.scrollTop === 250 ? 220 : -480 } as DOMRect);
     const scroll = vi.fn(function (this: HTMLElement) { this.closest('.chat-scroll')!.scrollTop = 250; });
@@ -317,10 +325,10 @@ describe('ChatView — the archive-boundary scan runs per appended entry, not pe
     });
     vi.useRealTimers();
     expect(older.querySelector('[data-message-find-body]')).toBeNull();
-    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    openFind();
     expect(older.querySelector('[data-message-find-body]')).toBeNull();
     expect(screen.queryByText('Jump to bottom')).toBeNull(); // opening Find is not navigation
-    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'needle' } });
+    fireEvent.change(FIND(), { target: { value: 'needle' } });
     await vi.waitFor(() => expect(scroll).toHaveBeenCalled());
     expect(older.querySelector('[data-message-find-body]')).toBeTruthy();
     expect(scroller.scrollTop).toBe(250);
@@ -338,7 +346,6 @@ describe('ChatView — the archive-boundary scan runs per appended entry, not pe
     globalThis.IntersectionObserver = originalIO;
     if (originalHeight) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', originalHeight);
     else delete (HTMLElement.prototype as any).offsetHeight;
-    delete (globalThis as any).CSS; delete (window as any).Highlight;
   });
 
   it('Find leaves offscreen loaded rows folded and reveals only the selected message', async () => {
@@ -350,38 +357,32 @@ describe('ChatView — the archive-boundary scan runs per appended entry, not pe
       observe() {} unobserve() {} disconnect() {} takeRecords() { return []; }
     };
     Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get() { return this.hasAttribute('data-entry-key') ? 120 : 0; } });
-    const highlights = new Map();
-    (globalThis as any).CSS = { highlights };
-    (window as any).Highlight = class { constructor(public range: Range) {} };
+    stubHighlights();
     const timeline = ['a', 'b', 'c'].map((id) => ({ kind: 'assistant-turn', turnId: id }));
     mocks.state = sessionState({ timeline, assistantTurns: new Map(timeline.map(({ turnId }) => [turnId, textTurn(turnId, `message ${turnId}`)])) });
-    const view = render(<ChatView sessionId="s1" visible sessionActive />);
-    const entries = [...view.container.querySelectorAll<HTMLElement>('[data-entry-key]')];
+    const r = render(view());
+    const entries = [...r.container.querySelectorAll<HTMLElement>('[data-entry-key]')];
     // Geometry makes a/c distant while b is the viewport's sole neighbor.
     entries.forEach((el, i) => { el.getBoundingClientRect = () => ({ top: (i - 1) * 5000, bottom: (i - 1) * 5000 + 120 } as DOMRect); });
     vi.useFakeTimers();
     act(() => { report(entries.map((target) => ({ target, isIntersecting: false }) as unknown as IntersectionObserverEntry)); vi.advanceTimersByTime(FOLD_IDLE_MS); });
     vi.useRealTimers();
     expect(entries.every((el) => !el.querySelector('[data-message-find-body]'))).toBe(true);
-    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    openFind();
     expect(entries.every((el) => !el.querySelector('[data-message-find-body]'))).toBe(true);
-    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'message b' } });
+    fireEvent.change(FIND(), { target: { value: 'message b' } });
     await vi.waitFor(() => expect(entries[1].querySelector('[data-message-find-body]')).toBeTruthy());
     expect(entries[0].querySelector('[data-message-find-body]')).toBeNull();
     expect(entries[2].querySelector('[data-message-find-body]')).toBeNull();
     expect(screen.getByText('1/1')).toBeTruthy();
-    view.unmount();
+    r.unmount();
     if (previousHeight) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', previousHeight);
     else delete (HTMLElement.prototype as any).offsetHeight;
     globalThis.IntersectionObserver = previousIO;
-    delete (globalThis as any).CSS;
-    delete (window as any).Highlight;
   });
 
   it('Find uses message-only source rather than reasoning and metadata on the real timeline', async () => {
-    const highlights = new Map();
-    (globalThis as any).CSS = { highlights };
-    (window as any).Highlight = class { constructor(public range: Range) {} };
+    stubHighlights();
     mocks.state = sessionState({ timeline: [
       { kind: 'user', message: { id: 'u', content: 'Hello user', timestamp: 1000 } },
       { kind: 'assistant-turn', turnId: 'a' },
@@ -391,82 +392,44 @@ describe('ChatView — the archive-boundary scan runs per appended entry, not pe
       { type: 'text', content: 'Hello assistant', messageId: 'reply' },
     ] }]]) });
     const r = render(view());
-    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
-    const input = screen.getByLabelText('Find in chat');
+    openFind();
+    const input = FIND();
     fireEvent.change(input, { target: { value: 'Secret' } });
     await vi.waitFor(() => expect(screen.getByText('0/0')).toBeTruthy());
     fireEvent.change(input, { target: { value: 'Hello' } });
     await vi.waitFor(() => expect(screen.getByText('1/2')).toBeTruthy());
     expect(r.container.querySelectorAll('[data-message-find-body]')).toHaveLength(2);
     r.unmount();
-    delete (globalThis as any).CSS;
-    delete (window as any).Highlight;
   });
   it('a delta (same timeline reference, new turn object, new timestamps) does not rescan', () => {
-    const timeline = [{ kind: 'assistant-turn', turnId: 'turn_1' }];
     mocks.state = sessionState({
-      timeline,
+      timeline: [{ kind: 'assistant-turn', turnId: 'turn_1' }],
       assistantTurns: new Map([['turn_1', textTurn('turn_1', 'Hel')]]),
     });
     const r = render(view());
     const afterMount = scan.mock.calls.length;
     expect(afterMount).toBeGreaterThanOrEqual(1);
-
-    // Exactly what the reducer does on TRANSCRIPT_ASSISTANT_TEXT with a partId:
-    // a fresh assistantTurns Map holding a fresh turn object, lastActivityAt /
-    // lastOutputAt re-stamped, and the SAME timeline array.
-    for (const content of ['Hello', 'Hello, ', 'Hello, wor', 'Hello, world']) {
-      mocks.state = {
-        ...mocks.state,
-        assistantTurns: new Map([['turn_1', textTurn('turn_1', content)]]),
-        lastActivityAt: mocks.state.lastActivityAt + 7,
-        lastOutputAt: mocks.state.lastOutputAt + 7,
-      };
-      r.rerender(view());
-    }
+    streamDeltas(r);
     expect(r.container.textContent).toContain('Hello, world');
     expect(scan.mock.calls.length).toBe(afterMount);
   });
-
   it('an appended entry (new timeline reference) rescans exactly once', () => {
-    const timeline = [{ kind: 'assistant-turn', turnId: 'turn_1' }];
     mocks.state = sessionState({
-      timeline,
+      timeline: [{ kind: 'assistant-turn', turnId: 'turn_1' }],
       assistantTurns: new Map([['turn_1', textTurn('turn_1', 'First')]]),
     });
     const r = render(view());
     scan.mockClear();
-
-    mocks.state = {
-      ...mocks.state,
-      timeline: [...timeline, { kind: 'assistant-turn', turnId: 'turn_2' }],
-      assistantTurns: new Map([
-        ...mocks.state.assistantTurns,
-        ['turn_2', textTurn('turn_2', 'Second')],
-      ]),
-      lastActivityAt: mocks.state.lastActivityAt + 7,
-    };
+    appendSecond();
     r.rerender(view());
     expect(r.container.textContent).toContain('Second');
     expect(scan.mock.calls.length).toBe(1);
   });
 });
 
-// Perf cycle 1, N2 (docs/active/handoffs/2026-08-27-perf-cycle-1-handoff.md §3).
-//
-// ChatView's auto-scroll effect calls scrollToBottom(), which READS scrollHeight
-// and WRITES scrollTop. Reading scrollHeight after a commit whose DOM is still
-// dirty forces a synchronous layout of the document — the hook's own PERF note
-// calls it "a FULL forced reflow of a large transcript". That effect used to
-// depend on state.lastActivityAt, a timestamp the reducer re-stamps on EVERY
-// streamed delta (and on tool events, heartbeats, …), so a streaming session
-// paid one forced reflow per token even though the content growth those deltas
-// cause is already re-pinned by the ResizeObserver on the content wrapper —
-// which runs AFTER layout, where the read is free.
-//
-// This pins the fix: a state change that touches only the timestamps (and the
-// live turn's object) must not read the scroll container's geometry; a change
-// that appends a timeline entry still must.
+// WHY: scrollToBottom() READS scrollHeight (a forced reflow on a dirty DOM). The auto-scroll effect used to depend on
+// lastActivityAt, which the reducer re-stamps on every streamed delta, so streaming paid one forced reflow per token;
+// content growth is already re-pinned by the ResizeObserver, after layout. A timestamp-only change must not read geometry.
 
 /** Count reads of the layout-forcing property on the scroll container. jsdom
  *  never lays out, so the value is a stand-in; only the COUNT matters. */
@@ -479,7 +442,7 @@ function countScrollHeightReads(scroller: HTMLElement): () => number {
   return () => reads;
 }
 
-describe('ChatView — auto-scroll pins on content, never on the activity timestamp', () => {
+describe('ChatView auto-scroll pins on content, never on the activity timestamp', () => {
   it('re-pins after a late content shrink while stuck, but does not steal Find or wheel navigation', () => {
     const oldResize = globalThis.ResizeObserver;
     const observers: Array<{ target: Element | null; fire: () => void }> = [];
@@ -522,48 +485,25 @@ describe('ChatView — auto-scroll pins on content, never on the activity timest
     } finally { (globalThis as any).ResizeObserver = oldResize; }
   });
   it('a streamed delta (timestamps + live turn changed, same timeline) forces no layout read', () => {
-    const timeline = [{ kind: 'assistant-turn', turnId: 'turn_1' }];
     mocks.state = sessionState({
-      timeline,
+      timeline: [{ kind: 'assistant-turn', turnId: 'turn_1' }],
       assistantTurns: new Map([['turn_1', textTurn('turn_1', 'Hel')]]),
     });
     const r = render(view());
-    const scroller = r.container.querySelector('.chat-scroll') as HTMLElement;
-    expect(scroller).not.toBeNull();
-    const reads = countScrollHeightReads(scroller);
-
-    for (const content of ['Hello', 'Hello, ', 'Hello, wor', 'Hello, world']) {
-      mocks.state = {
-        ...mocks.state,
-        assistantTurns: new Map([['turn_1', textTurn('turn_1', content)]]),
-        lastActivityAt: mocks.state.lastActivityAt + 7,
-        lastOutputAt: mocks.state.lastOutputAt + 7,
-      };
-      r.rerender(view());
-    }
+    const reads = countScrollHeightReads(r.container.querySelector('.chat-scroll') as HTMLElement);
+    streamDeltas(r);
     expect(r.container.textContent).toContain('Hello, world');
     expect(reads()).toBe(0);
   });
 
-  it('an appended timeline entry still pins to the bottom (reads the geometry once)', () => {
-    const timeline = [{ kind: 'assistant-turn', turnId: 'turn_1' }];
+  it('an appended timeline entry still pins to the bottom (reads the geometry)', () => {
     mocks.state = sessionState({
-      timeline,
+      timeline: [{ kind: 'assistant-turn', turnId: 'turn_1' }],
       assistantTurns: new Map([['turn_1', textTurn('turn_1', 'First')]]),
     });
     const r = render(view());
-    const scroller = r.container.querySelector('.chat-scroll') as HTMLElement;
-    const reads = countScrollHeightReads(scroller);
-
-    mocks.state = {
-      ...mocks.state,
-      timeline: [...timeline, { kind: 'assistant-turn', turnId: 'turn_2' }],
-      assistantTurns: new Map([
-        ...mocks.state.assistantTurns,
-        ['turn_2', textTurn('turn_2', 'Second')],
-      ]),
-      lastActivityAt: mocks.state.lastActivityAt + 7,
-    };
+    const reads = countScrollHeightReads(r.container.querySelector('.chat-scroll') as HTMLElement);
+    appendSecond();
     r.rerender(view());
     expect(reads()).toBeGreaterThanOrEqual(1);
   });
@@ -585,20 +525,9 @@ describe('ChatView — auto-scroll pins on content, never on the activity timest
   });
 });
 
-// Perf (2026-09-24): a word streamed into the chat on screen re-renders only
-// the reply being written.
-//
-// ChatView re-renders once per streamed word — it has to, the live reply is
-// growing. It used to build every timeline row inline, so each word also
-// re-rendered every card that is not memoised on its own: with the 24-entry
-// conversation below and 40 words, 40 renders EACH of the /clear and model
-// markers, the skill, prompt, usage and copy cards, and all seven archived-entry
-// hints. Now each row is ChatTimelineRow (memoised, stable props), so a word
-// reaches only the live turn. User bubbles, finished turns and their tool cards
-// were already 0 (memoised themselves) and must stay 0.
-//
-// State is built by the REAL reducer, so the entry/turn/Map identities the
-// memo depends on are exactly the ones the app produces.
+// WHY: ChatView re-renders once per streamed word; each row is ChatTimelineRow (memoised, stable props), so a word must
+// reach only the live turn (before, every unmemoised card re-rendered per word). State is built by the REAL reducer so
+// the entry/turn/Map identities the memo depends on are the ones the app produces.
 describe('ChatView — a streamed word re-renders only the entry being written', () => {
   /** Renders of every OTHER entry for a whole 40-word reply. */
   const BUDGET_OTHER_ENTRIES_PER_REPLY = 0;

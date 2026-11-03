@@ -1,11 +1,6 @@
-// Guards for "Add vision" (design §E4, task T17).
-//
-// The load-bearing one is "the shadowing pair" below. `<cacheDir>/X.gguf` and
-// `<cacheDir>/X/` are ONE model id to llama-server, which serves exactly one of
-// them and silently drops the other — unpredictably, because the outcome follows
-// directory-entry order. So these tests do not merely check the end state: they
-// re-check the invariant after EVERY filesystem mutation the move makes, on the
-// success path, on a failure at every single step, and through the rollback.
+// Guards for "Add vision". Load-bearing: the shadowing pair. `<cacheDir>/X.gguf` and `<cacheDir>/X/` are ONE model id
+// to llama-server, which silently serves only one (by directory-entry order). So the invariant is re-checked after
+// EVERY filesystem mutation the move makes: on success, on a failure at every step, and through the rollback.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -73,15 +68,9 @@ function assertNoShadowPair(modelId: string): void {
   }
 }
 
-/** Wrap every filesystem mutation the move makes so the invariant is re-checked
- *  the instant each one lands — not only at the end — and record the order.
- *  `failAt` makes the Nth rename (0-based) throw, standing in for a real
- *  EACCES/EBUSY; `undoAlsoFails` then breaks the rollback too.
- *
- *  It goes through the MoveOps seam because `import * as fs` is an ESM namespace
- *  vi.spyOn cannot redefine — measured: the spy records nothing and the real
- *  rename runs anyway, which is a green test proving the opposite of what it
- *  claims. */
+/** Wrap every mutation the move makes so the invariant is re-checked as each lands, and record the order. `failAt`
+ *  makes the Nth rename (0-based) throw; `undoAlsoFails` breaks the rollback too. WHY the MoveOps seam: `import * as fs`
+ *  is an ESM namespace vi.spyOn cannot redefine (the spy records nothing and the real rename runs). */
 function watchMoves(
   modelId: string, order: string[], failAt?: number, undoAlsoFails = false
 ): MoveOps {
@@ -110,16 +99,11 @@ describe('moveIntoOwnFolder — the shadowing pair can never exist', () => {
   it('moves a single-file model with no instant where both layouts are loadable', () => {
     const id = installFlat();
     const order: string[] = [];
-    // The inode BEFORE. A rename keeps it; a copy-then-delete does not — and a
-    // copy is precisely the implementation that would put a loadable file in the
-    // folder while the loadable flat one is still there, which the per-step
-    // check below cannot see because both halves happen inside one call.
+    // A rename keeps the inode; copy-then-delete (which would briefly leave both layouts loadable inside one call) does not.
     const inodeBefore = fs.statSync(path.join(cacheDir, `${id}.gguf`)).ino;
     moveIntoOwnFolder(cacheDir, id, `${id}.gguf`, 1, watchMoves(id, order));
     expect(fs.statSync(path.join(cacheDir, id, `${id}.gguf`)).ino).toBe(inodeBefore);
-    // The manifest goes first: a folder holding only a manifest is not a model,
-    // so the flat file stays the ONLY loadable copy until the one atomic rename
-    // that hands the model over.
+    // Manifest first: a folder holding only a manifest is not a model, so the flat file stays the only loadable copy until the atomic handover.
     expect(order).toEqual([`${id}.gguf.download.json`, `${id}.gguf`]);
     expect(fs.existsSync(path.join(cacheDir, `${id}.gguf`))).toBe(false);
     expect(fs.readFileSync(path.join(cacheDir, id, `${id}.gguf`), 'utf8')).toBe('weights-0');
@@ -131,8 +115,7 @@ describe('moveIntoOwnFolder — the shadowing pair can never exist', () => {
     const inodes = fs.readdirSync(cacheDir)
       .map((n) => [n, fs.statSync(path.join(cacheDir, n)).ino] as const);
     moveIntoOwnFolder(cacheDir, id, `${id}.gguf`, 3, watchMoves(id, order));
-    // Every file is the SAME file, moved — never a copy (see the single-file
-    // case above for why a copy is the dangerous implementation).
+    // Every file is the SAME file, moved, never copied.
     for (const [name, ino] of inodes) {
       expect(fs.statSync(path.join(cacheDir, id, name)).ino).toBe(ino);
     }
@@ -170,9 +153,7 @@ describe('moveIntoOwnFolder — the shadowing pair can never exist', () => {
 
   it('reports the OS error when the folder cannot be created, and changes nothing', () => {
     const id = installFlat();
-    // A REAL collision, not a stubbed one: something is already sitting at the
-    // name the folder needs. mkdir is deliberately non-recursive so this is an
-    // error rather than a silent merge into whatever is there.
+    // A REAL collision: something already sits at the folder's name; mkdir is non-recursive so this errors instead of merging.
     fs.writeFileSync(path.join(cacheDir, id), 'in the way');
     const before = snapshot();
     expect(() => moveIntoOwnFolder(cacheDir, id, `${id}.gguf`, 1)).toThrow(
@@ -184,10 +165,7 @@ describe('moveIntoOwnFolder — the shadowing pair can never exist', () => {
 
   it('refuses to merge into a folder that is already there — mkdir is deliberately not recursive', () => {
     const id = installFlat();
-    // A DIRECTORY in the way, not a file: `mkdir(dir, {recursive: true})` does
-    // not throw on one, so this is the case that pins the non-recursive form —
-    // which is both the "don't silently merge into someone else's folder" rule
-    // and the mutex that makes two concurrent Add-vision calls safe.
+    // A DIRECTORY in the way (recursive mkdir would not throw): pins the non-recursive form, which is both the no-merge rule and the mutex for concurrent Add-vision calls.
     const folder = path.join(cacheDir, id);
     fs.mkdirSync(folder);
     fs.writeFileSync(path.join(folder, 'someone-elses-notes.txt'), 'keep me');
@@ -203,10 +181,7 @@ describe('moveIntoOwnFolder — the shadowing pair can never exist', () => {
     const id = installFlat();
     const stray = path.join(cacheDir, id, 'another-instance-wrote-this.txt');
     const ops = watchMoves(id, [], 1);          // fail the model file's move
-    // Another app instance drops a file into the folder just before the undo
-    // finishes — the dev instance and the built app really do share this cache
-    // dir. A recursive force would delete it; rmdir refuses, which is the
-    // difference between "a check" and "a force".
+    // Another app instance (dev and built app share this cache dir) drops a file in just before the undo finishes: rmdir refuses where a recursive force would delete it.
     const guarded: MoveOps = { ...ops, rmdir: (dir) => { fs.writeFileSync(stray, 'not mine'); ops.rmdir(dir); } };
     let message = '';
     try { moveIntoOwnFolder(cacheDir, id, `${id}.gguf`, 1, guarded); } catch (e: any) { message = e.message; }
@@ -315,9 +290,7 @@ describe('addVisionToModel — order of operations', () => {
   it('an unanswerable router is "do not know", never "unloaded" — and says THAT, not "busy"', async () => {
     const id = installFlat();
     const r = recorder({ states: [null] });
-    // Two different facts, two different sentences. Reporting "still busy" here
-    // would state a cause nobody established — the substitution
-    // docs/error-message-standards.md exists to stop.
+    // "Do not know" and "still busy" are different facts; reporting busy would state a cause nobody established.
     await expect(addVisionToModel(cacheDir, id, r.engine, start(r), r.timing)).rejects.toThrow(
       `The engine did not answer when asked whether ${id} is still loaded, so its file was left alone.`
     );
@@ -338,8 +311,7 @@ describe('addVisionToModel — order of operations', () => {
     const id = installFlat();
     const r = recorder({ running: false, states: [null] });
     await addVisionToModel(cacheDir, id, r.engine, start(r), r.timing);
-    // Nothing holds the file and there is no router to ask; polling `null` for
-    // fifteen seconds would refuse a move that was always safe.
+    // Nothing holds the file and there is no router to ask; polling `null` would refuse a safe move.
     expect(r.log).toEqual(['reload', 'download']);
   });
 
@@ -429,9 +401,7 @@ describe('addVisionToModel — what it refuses, and why', () => {
       totalSizeBytes: 100, sha256ByFile: {}, startedAt: 1, completedAt: 2, visionFile: VISION,
     }));
     const r = recorder();
-    // Left unchecked the projector would be fetched into `Other-Q4_K_M/`, a
-    // folder the engine never reads this model from, and the row would look
-    // unchanged for ever.
+    // Unchecked, the projector would land in `Other-Q4_K_M/`, which the engine never reads this model from.
     await expect(addVisionToModel(cacheDir, 'Odd-Q4_K_M', r.engine, start(r), r.timing)).rejects.toThrow(
       "Odd-Q4_K_M's download record describes a different file (Other-Q4_K_M), "
       + 'so its vision file cannot be placed where the engine would read it. '
@@ -441,10 +411,7 @@ describe('addVisionToModel — what it refuses, and why', () => {
   });
 });
 
-// The move is two or more syscalls. No ordering makes a crash between them
-// impossible — only harmless for what the ENGINE serves, which the ordering
-// above does guarantee. What it cannot do is tidy up, and both states below were
-// dead ends until this healing existed (reproduced 2026-09-05).
+// A crash between the move's syscalls is harmless to what the engine serves but leaves untidy states that were dead ends before healing existed.
 describe('healInterruptedMove — a crash mid-move is not a dead end', () => {
   /** The record moved, the weights did not: steps 1–2 done, step 3 not. */
   function crashAfterTheRecord(): string {
@@ -468,9 +435,7 @@ describe('healInterruptedMove — a crash mid-move is not a dead end', () => {
 
   it('puts the record back beside the weights — instead of advising a delete that would destroy them', async () => {
     const id = crashAfterTheRecord();
-    // Before healing this told the user "There is no record of where … came
-    // from. Delete it in Local Models and download it again" — while the record
-    // sat one directory away and the model itself was fine.
+    // Before healing, the user was told to delete and re-download while the record sat one directory away.
     expect(interruptedMoveIds(cacheDir)).toEqual([id]);
     expect(healInterruptedMove(cacheDir, id)).toBe(true);
     expect(Object.keys(snapshot()).sort()).toEqual([`${id}.gguf`, `${id}.gguf.download.json`]);
@@ -483,9 +448,7 @@ describe('healInterruptedMove — a crash mid-move is not a dead end', () => {
 
   it('puts a half-moved split set back together — instead of leaving it out of the picker for ever', async () => {
     const id = crashAfterPartOne();
-    // Every byte was on disk, split across two directories: scanGgufCache needs
-    // a COMPLETE set in one place, so the model vanished from the model picker
-    // and Local Models offered only Delete.
+    // Split across two directories, scanGgufCache (which needs a COMPLETE set in one place) hid the model from the picker.
     expect(scanGgufCache(cacheDir)).toEqual([]);
     expect(healInterruptedMove(cacheDir, id)).toBe(true);
     expect(scanGgufCache(cacheDir).map((m) => m.id)).toEqual([id]);
@@ -495,10 +458,7 @@ describe('healInterruptedMove — a crash mid-move is not a dead end', () => {
     expect(fs.existsSync(path.join(cacheDir, id, `${id}.gguf`))).toBe(true);
   });
 
-  /** A 3-part set with the record, part 1 AND part 2 moved: step 4 got half way.
-   *  This is the fixture the healing ORDER matters for — undo it forwards and
-   *  part 1 lands back flat while part 2 is still in the folder, which is the
-   *  shadowing pair. */
+  /** Record, part 1 AND part 2 moved. Healing ORDER matters here: undoing forwards puts part 1 flat while part 2 is still in the folder (the shadowing pair). */
   function crashMidFollowers(): string {
     const id = installFlat({ parts: 3 });
     fs.mkdirSync(path.join(cacheDir, id));
@@ -536,19 +496,12 @@ describe('healInterruptedMove — a crash mid-move is not a dead end', () => {
       fs.writeFileSync(path.join(cacheDir, id, 'mmproj-F16.gguf'), 'eye');
       return id;
     }],
-    // Isolates the projector refusal: the folder holds a projector and NO
-    // weights (a vision model whose weights were deleted — cache-scan reports
-    // that folder on purpose), so every OTHER condition is satisfied and only
-    // "there is a projector in there" stops the heal from eating it.
     ['a leftover projector folder beside a complete flat model', () => {
       const id = installFlat();
       fs.mkdirSync(path.join(cacheDir, id));
       fs.writeFileSync(path.join(cacheDir, id, 'mmproj-F16.gguf'), 'eye');
       return id;
     }],
-    // Isolates the parts-add-up refusal: two DIFFERENT downloads of one split
-    // filename, one flat and one in a folder. Nothing here is an interrupted
-    // move, and merging them would build one set out of two builds' bytes.
     ['two unrelated part-sets of the same name that do not add up', () => {
       const id = 'M-Q4_K_M-00001-of-00003';
       fs.writeFileSync(path.join(cacheDir, `${id}.gguf`), 'build A part 1');

@@ -7,9 +7,7 @@ import path from 'node:path';
 // store functions and broadcast" — we assert on the calls, and use real files
 // in a tmp home for the mailbox itself (same rule as chatsearch-index-service-reschedule).
 const flagCalls: any[] = []; const noteCalls: any[] = []; const broadcasts: any[] = [];
-// Finding 5: captures the 4th (isNative) arg noteFlagChanged actually receives,
-// kept SEPARATE from flagCalls (a 3-tuple) so existing flagCalls assertions
-// throughout this file don't have to change shape.
+// The 4th (isNative) arg noteFlagChanged receives, kept apart from the 3-tuple flagCalls.
 const flagNativeArgs: boolean[] = [];
 let metaChanged = 0; let storeAvailable = true; let tagsChanged = 0;
 const records = new Map<string, { note: string; flags: Record<string, { value: boolean }> }>();
@@ -32,14 +30,12 @@ vi.mock('../src/main/conversations/tag-registry-service', () => ({
     create: async (label: string, color: string) => { const t = { id: `tag_${label}`, label, color, archived: false, createdAt: '' }; tags.push(t); created.push(t); return t; },
   }),
 }));
-// Finding 3: capture the tags-changed push too. WHY (2026-09-29 one-core R1): the drainer no longer
-// imports the broadcasters from ipc-handlers; the caller (main.ts) hands them in, so the test does too.
+// The drainer takes its broadcasters from the caller (main.ts), so the test hands them in.
 const testBroadcast = {
   sessionMeta: (id: string, p: any) => { broadcasts.push([id, p]); },
   tagsChanged: () => { tagsChanged++; },
 };
-// Finding 4: capture log() calls so a test can assert the foreign-store
-// message is logged once per file, not once per poll pass.
+// Captured so the foreign-store message can be asserted once per file, not once per poll pass.
 const logCalls: any[] = [];
 vi.mock('../src/main/logger', () => ({ log: (...args: any[]) => { logCalls.push(args); } }));
 
@@ -82,8 +78,6 @@ describe('parseOutboxRequest', () => {
 describe('appendNoteText', () => {
   it('no leading newlines on an empty note', () => { expect(appendNoteText('', '2026-08-27', 'x')).toBe('2026-08-27: x'); });
   it('two newlines after an existing note', () => { expect(appendNoteText('old', '2026-08-27', 'x')).toBe('old\n\n2026-08-27: x'); });
-  // Also-fix (minor): trailing whitespace on the existing note must not
-  // accumulate extra newlines on every append.
   it('does not accumulate newlines when the existing note already ends in blank lines', () => {
     expect(appendNoteText('old\n\n', '2026-08-27', 'x')).toBe('old\n\n2026-08-27: x');
   });
@@ -95,9 +89,7 @@ describe('hasDatedLine', () => {
     expect(hasDatedLine('old\n\n2026-08-26: superseded by X', 'superseded')).toBe(false);
     expect(hasDatedLine('superseded', 'superseded')).toBe(false); // undated body text is not a dated line
   });
-  // Finding 1: `text` itself may contain a newline (an ordinary multi-line
-  // close note) — appendNoteText writes it as ONE block, so the previous
-  // per-line comparison could never match it and every retry re-appended.
+  // WHY: a multi-line note is written as ONE block, so a per-line comparison never matched and every retry re-appended.
   it('matches a multi-line block, not just a single line', () => {
     const block = '2026-08-26: first line\nsecond line';
     expect(hasDatedLine(`old\n\n${block}`, 'first line\nsecond line')).toBe(true);
@@ -122,10 +114,6 @@ describe('applyOutboxRequest', () => {
     const rc = await applyOutboxRequest(req([{ op: 'flag', targets: [{ provider: 'claude', id: 'zz' }, ...T], flag: 'priority', value: true }]) as any, deps);
     expect(rc.results.map((r) => r.status)).toEqual(['not-found', 'applied']);
   });
-  // Finding 5: pins the actual argument passed to noteFlagChanged — a target
-  // naming the 'native' provider must pass isNative=true. (The code was
-  // already correct; only a stale comment described it wrong. This test just
-  // makes sure it stays correct.)
   it('passes isNative=true to noteFlagChanged for a native-provider target', async () => {
     records.set('n1', { note: '', flags: {} });
     const rc = await applyOutboxRequest(req([{ op: 'flag', targets: [{ provider: 'native', id: 'n1' }], flag: 'complete', value: true }]) as any, deps);
@@ -148,11 +136,7 @@ describe('applyOutboxRequest', () => {
     const rc = await applyOutboxRequest(req([{ op: 'note', targets: T, mode: 'append', text: 'superseded' }]) as any, deps);
     expect(rc.results[0].status).toBe('already'); expect(noteCalls).toEqual([]);
   });
-  // Finding 1: the same regression, but for a multi-line close note — the bug
-  // this finding describes as "the common case" (a two-sentence note with a
-  // line break). Simulates persistence between the two applies (the mock
-  // store doesn't write back on its own) the same way a real retried `close`
-  // would see its own prior write on the second attempt.
+  // Persistence between the two applies is simulated (the mock store doesn't write back), as a real retried `close` would see its own write.
   it('append is idempotent for multi-line text — applied then already, and writes only once', async () => {
     const text = 'first line\nsecond line';
     const rc1 = await applyOutboxRequest(req([{ op: 'note', targets: T, mode: 'append', text }]) as any, deps);
@@ -177,9 +161,7 @@ describe('applyOutboxRequest', () => {
     expect(created).toHaveLength(1); expect(r2.createdTags).toEqual([{ id: 'tag_perms', label: 'perms' }]);
     expect(flagCalls).toEqual([['c1', 'tag:tag_perms', true], ['c2', 'tag:tag_perms', true]]);
   });
-  // Finding 3: reg.create() bypasses the TAGS_CREATE IPC handler entirely, so
-  // the drainer must fire the same tags-changed broadcast itself, and exactly
-  // once per REQUEST (two targets tagged here, one tag created).
+  // reg.create() bypasses the TAGS_CREATE IPC handler, so the drainer fires tags-changed itself, once per REQUEST.
   it('create:true fires the tags-changed broadcast exactly once per request', async () => {
     const rc = await applyOutboxRequest(req([{ op: 'tag', targets: [{ provider: 'claude', id: 'c1' }, { provider: 'claude', id: 'c2' }], add: ['brandnew'], remove: [], create: true }]) as any, deps);
     expect(rc.createdTags).toEqual([{ id: 'tag_brandnew', label: 'brandnew' }]);
@@ -217,16 +199,7 @@ describe('drainOutboxOnce', () => {
     const ack = JSON.parse(fs.readFileSync(path.join(outboxDir(home), 'done', '22222222-2222-3333-4444-555555555555.ack.json'), 'utf8'));
     expect(ack.error).toMatch(/not valid JSON/); expect(ack.results).toEqual([]);
   });
-  it('a request for another store is left in outbox untouched', async () => {
-    write('33333333-2222-3333-4444-555555555555.json', req([{ op: 'flag', targets: T, flag: 'complete', value: true }], { storeRoot: '/store/B' }));
-    expect(await drainOutboxOnce(opts())).toBe(0);
-    expect(fs.existsSync(path.join(outboxDir(home), '33333333-2222-3333-4444-555555555555.json'))).toBe(true);
-    expect(flagCalls).toEqual([]);
-  });
-  // Finding 4: the foreign-store message must log once per FILE, not once per
-  // poll pass — two passes over the same untouched orphan must produce one log
-  // line, or a single stuck orphan floods the trimmed 500-line log within
-  // minutes at the 5s poll interval.
+  // WHY: one stuck orphan would flood the trimmed 500-line log within minutes at the 5s poll.
   it('a request for another store logs once, not once per pass', async () => {
     write('99999999-2222-3333-4444-555555555555.json', req([{ op: 'flag', targets: T, flag: 'complete', value: true }], { storeRoot: '/store/B' }));
     await drainOutboxOnce(opts());
@@ -247,17 +220,9 @@ describe('drainOutboxOnce', () => {
     sweepOutbox(home); // the hourly housekeeping pass (audit W9), not the drain itself
     expect(await drainOutboxOnce(opts())).toBe(1);
   });
-  // Finding 2: rename() preserves mtime, so a request the CLI wrote 20 minutes
-  // ago (queued while the app was closed — a supported case) must NOT read as
-  // "claimed 20 minutes ago" the instant it's claimed. Proven by racing two
-  // overlapping drainOutboxOnce calls: the first claims the file synchronously
-  // (rename happens before any await) then suspends mid-apply; the second
-  // starts while the first is still in flight and runs recoverStaleProcessing
-  // over the now-claimed file. Before the fix, the claimed file still carries
-  // the CLI's old write-time mtime, so the second call's recoverStaleProcessing
-  // treats it as abandoned, renames it back to the outbox root, and re-claims
-  // + re-applies it — a double apply. After the fix, the claim re-stamps the
-  // mtime to "now", so the second call sees a fresh file and leaves it alone.
+  // WHY: rename() preserves mtime, so a request queued while the app was closed would read as "claimed 20 minutes ago"
+  // the instant it is claimed. Two overlapping passes race: the second's stale-recovery must see a fresh claim stamp
+  // (not re-claim and double-apply).
   it('a request claimed while old (queued while the app was closed) is not re-claimed by an overlapping pass', async () => {
     write('77777777-2222-3333-4444-555555555555.json', req([{ op: 'flag', targets: T, flag: 'complete', value: true }]));
     const src = path.join(outboxDir(home), '77777777-2222-3333-4444-555555555555.json');
@@ -276,21 +241,14 @@ describe('drainOutboxOnce', () => {
     sweepOutbox(home);
     expect(fs.existsSync(p)).toBe(false);
   });
-  // F1: a request for another store is left alone while it's still plausibly
-  // going to be claimed by the instance it belongs to (existing behaviour,
-  // covered above) — but must expire if it never will be. Recent mtime case:
-  // still just sits there, unchanged from before this fix.
   it('a foreign-store request with a recent mtime is still left alone, no receipt', async () => {
     write('88888888-2222-3333-4444-555555555555.json', req([{ op: 'flag', targets: T, flag: 'complete', value: true }], { storeRoot: '/store/B' }));
     expect(await drainOutboxOnce(opts())).toBe(0);
     expect(fs.existsSync(path.join(outboxDir(home), '88888888-2222-3333-4444-555555555555.json'))).toBe(true);
     expect(fs.existsSync(path.join(outboxDir(home), 'done', '88888888-2222-3333-4444-555555555555.ack.json'))).toBe(false);
+    expect(flagCalls).toEqual([]);
   });
-  // F1: a foreign-store request older than FOREIGN_STORE_TTL_MS (3 days) can
-  // never be claimed by any instance — the CLI already told the user it was
-  // "Queued," so it must get an error receipt naming the store it was
-  // addressed to (not a guessed cause), and must be removed from the outbox
-  // so it doesn't sit there forever.
+  // Past FOREIGN_STORE_TTL_MS (3 days) no instance will claim it; the CLI said "Queued", so it gets an error receipt naming its store and is removed.
   it('a foreign-store request past the expiry threshold gets an error receipt naming the foreign root, and is removed', async () => {
     write('aa111111-2222-3333-4444-555555555555.json', req([{ op: 'flag', targets: T, flag: 'complete', value: true }], { storeRoot: '/store/B' }));
     const src = path.join(outboxDir(home), 'aa111111-2222-3333-4444-555555555555.json');
@@ -303,9 +261,7 @@ describe('drainOutboxOnce', () => {
     expect(ack.results).toEqual([]);
     expect(flagCalls).toEqual([]); // never applied
   });
-  // F6: the CLI's own crash-recovery litter (a tmp file left behind by a kill
-  // between writeFile and rename) must eventually be swept too, on the same
-  // age rule, with no receipt — there's no request to answer.
+  // The CLI's crash litter (a tmp file left by a kill between writeFile and rename) is swept on the same age rule, with no receipt.
   it('a stale CLI tmp file in the outbox root is removed, with no receipt', async () => {
     const dir = outboxDir(home); fs.mkdirSync(dir, { recursive: true });
     const tmp = path.join(dir, 'bb222222-2222-3333-4444-555555555555.json.tmp-12345');
@@ -324,9 +280,7 @@ describe('drainOutboxOnce', () => {
     expect(fs.existsSync(tmp)).toBe(true);
   });
   it('a file another instance already claimed is skipped, not applied twice', async () => {
-    // WHY not two drainers in Promise.all: everything up to the rename claim is
-    // synchronous, so the second call would always see an empty folder and the
-    // test would pass without exercising the race. Simulate the loser instead.
+    // WHY not two drainers in Promise.all: everything up to the claim is synchronous, so the second would see an empty folder; simulate the loser.
     write('66666666-2222-3333-4444-555555555555.json', req([{ op: 'flag', targets: T, flag: 'complete', value: true }]));
     const proc = path.join(outboxDir(home), 'processing'); fs.mkdirSync(proc, { recursive: true });
     fs.renameSync(path.join(outboxDir(home), '66666666-2222-3333-4444-555555555555.json'), path.join(proc, '66666666-2222-3333-4444-555555555555.json'));
@@ -335,17 +289,9 @@ describe('drainOutboxOnce', () => {
   });
 });
 
-// Finding 6: startOutboxDrain/liveOpts/drainSerialized were entirely
-// unexercised — nothing proved YOUCODED_PROFILE / YOUCODED_CHATSEARCH_OUTBOX
-// are read correctly, and a dev instance wrongly draining the user's REAL
-// conversation metadata is the exact failure the gate exists to prevent.
-//
-// liveOpts()/drainSerialized() resolve homeRoot from os.homedir(), which
-// vitest.config.ts redirects for the whole suite to a throwaway sandbox (see
-// tests/home-isolation.test.ts) — never the developer's real home — so it's
-// safe to let these calls touch the real filesystem here. No other test
-// touches <sandbox>/.youcoded/chatsearch/outbox, so there's nothing to
-// collide with; cleaned up below regardless.
+// A dev instance wrongly draining the user's REAL conversation metadata is the failure the gate prevents. liveOpts()/
+// drainSerialized() resolve homeRoot from os.homedir(), which vitest.config.ts redirects to a throwaway sandbox, so the
+// real filesystem is safe to touch here.
 describe('liveOpts / drainSerialized (dev-instance gate, as actually wired)', () => {
   const origProfile = process.env.YOUCODED_PROFILE;
   const origOverride = process.env.YOUCODED_CHATSEARCH_OUTBOX;
@@ -389,30 +335,21 @@ describe('liveOpts / drainSerialized (dev-instance gate, as actually wired)', ()
       path.join(sandboxOutbox, name),
       JSON.stringify(req([{ op: 'flag', targets: [{ provider: 'claude', id }], flag, value: true }])),
     );
-    // c1: 'complete' unset -> will apply. c2: 'complete' already true (outer
-    // beforeEach default), so use 'priority' (unset) for it to also apply —
-    // otherwise it would report 'already' and never call noteFlagChanged,
-    // masking whether the rerun pass ran at all.
+    // c2 uses 'priority' (c2's 'complete' is already true, which would report 'already' and mask whether the rerun ran).
     writeReq('aaaaaaaa-2222-3333-4444-555555555555.json', 'c1', 'complete');
     const p1 = drainSerialized(); // claims + starts applying 'aaaaaaaa' synchronously, then suspends
-    // Written DURING p1's in-flight pass — only the rerun pass triggered by p2
-    // can find this, since p1 already read the (then-empty-of-this-file) dir.
+    // Written DURING p1's pass: only the rerun pass triggered by p2 can find it.
     writeReq('bbbbbbbb-2222-3333-4444-555555555555.json', 'c2', 'priority');
     const p2 = drainSerialized(); // sees a drain already running -> requests one more pass, returns immediately
     await Promise.all([p1, p2]);
-    // Both requests applied — 'bbbbbbbb' proves the rerun pass actually ran
-    // (it didn't exist yet when p1's pass started); 'aaaaaaaa' isn't
-    // re-applied a second time, proving the loop isn't unbounded.
+    // 'bbbbbbbb' proves the rerun ran; 'aaaaaaaa' applied once proves the loop is bounded.
     expect(flagCalls).toEqual([['c1', 'complete', true], ['c2', 'priority', true]]);
     expect(fs.existsSync(path.join(sandboxOutbox, 'done', 'aaaaaaaa-2222-3333-4444-555555555555.ack.json'))).toBe(true);
     expect(fs.existsSync(path.join(sandboxOutbox, 'done', 'bbbbbbbb-2222-3333-4444-555555555555.ack.json'))).toBe(true);
   });
 });
 
-// Simplification audit W9: the outbox used to do four directory listings every
-// 5 s beside a watcher on the same directory, three of them housekeeping. The
-// sweeps now run once at start and hourly; the 5 s poll exists only where the
-// watch cannot be trusted (Windows) or could not be attached.
+// Sweeps run once at start and hourly; the 5 s poll exists only where the watch cannot be trusted (Windows) or could not attach.
 describe('startOutboxDrain timers', () => {
   const sandboxOutbox = outboxDir(os.homedir());
   const realPlatform = process.platform;
@@ -438,8 +375,7 @@ describe('startOutboxDrain timers', () => {
   it('off Windows a healthy watch means no 5 s poll: the only interval is the hourly sweep', () => {
     setPlatform('linux');
     startOutboxDrain(testBroadcast);
-    // fake setTimeout too, so the count is exact: 1 hourly sweep interval, and no
-    // store-wait timer because the (mocked) store is already up.
+    // setTimeout is faked too, so the count is exact: the hourly sweep only (the mocked store is already up).
     expect(intervals()).toBe(1);
     stopOutboxDrain();
     expect(intervals()).toBe(0);
@@ -478,8 +414,7 @@ describe('startOutboxDrain timers', () => {
 
   it('the hourly tick also drains, so a store that came up after the start-up wait still applies queued requests', async () => {
     setPlatform('linux');
-    // A watch that never fires: off Windows nothing else drains, so only the
-    // hourly tick can apply what was queued.
+    // A watch that never fires: only the hourly tick can apply what was queued.
     vi.spyOn(fs, 'watch').mockImplementation((() => ({ on() { /* inert */ }, close() { /* inert */ } })) as any);
     fs.mkdirSync(sandboxOutbox, { recursive: true });
     storeAvailable = false;
@@ -490,8 +425,6 @@ describe('startOutboxDrain timers', () => {
       path.join(sandboxOutbox, 'eeeeeeee-2222-3333-4444-555555555555.json'),
       JSON.stringify(req([{ op: 'flag', targets: T, flag: 'complete', value: true }])),
     );
-    // Written while nothing was listening for it: fs.watch may fire, but the
-    // hourly tick must apply it even if it did not.
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     await vi.waitFor(() => expect(flagCalls).toEqual([['c1', 'complete', true]]));
   });

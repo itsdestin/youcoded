@@ -34,29 +34,32 @@ function toolUseLine(uuid: string, toolUseId: string, toolName: string, input: a
   };
 }
 
-// Fixed sleep. ONLY valid before a NEGATIVE assertion ("nothing was emitted"),
-// where there is no condition to poll for — a too-short sleep there fails safe
-// (the assertion still holds). NEVER sleep before a POSITIVE assertion: the
-// watcher's reads are async and fs.watch delivery is load-dependent (macOS
-// FSEvents coalescing, Windows under vitest's parallel pool), so a fixed budget
-// is a bet that loses as the machine gets busy — that was this file's flake.
-// Use `vi.waitFor(...)` to poll until the condition actually holds instead.
+// Fixed sleep: ONLY before a NEGATIVE assertion ("nothing was emitted"). Before a positive one use
+// vi.waitFor — fs.watch delivery is load-dependent (macOS FSEvents, Windows parallel pool).
 function wait(ms = 50): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-// Generous ceilings — these only bound the FAILURE case. A passing assertion
-// returns as soon as it holds, so raising them costs nothing on green runs.
+// Ceilings only bound the FAILURE case; green runs return as soon as the condition holds.
 const SETTLE_MS = 5_000;   // in-process: watcher read + emit
 const WATCH_MS = 15_000;   // fs.watch/stat-poll delivery of an external write
-
-// ...and the second knob, without which the ceilings above are fiction: a file
-// with no vi.setConfig inherits vitest's DEFAULT 5000ms testTimeout, so a
-// 15_000ms vi.waitFor can never actually wait 15s — the test dies at 5s first.
-// Same gap that kept sync-spaces-engine.test.ts flaking on macOS after PR #180
-// raised its poll ceiling and nothing else. One bounds the poll, one bounds the
-// test; both are required.
+// WHY: without this a 15s vi.waitFor dies at vitest's default 5s test timeout.
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
+// One temp-dir + index + watcher rig; each describe's beforeEach destructures it into its own lets.
+function makeRig(prefix: string, opts: { mkdir?: boolean; replay?: boolean } = {}) {
+  const { mkdir = true, replay = true } = opts;
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const subagentsDir = path.join(tmpRoot, 'subagents');
+  if (mkdir) fs.mkdirSync(subagentsDir, { recursive: true });
+  const index = new SubagentIndex();
+  const emitted: TranscriptEvent[] = [];
+  // replayExisting:true because most tests write a file first, then start; the default is pinned in its own describe.
+  const watcher = new SubagentWatcher({
+    sessionId: 's', subagentsDir, index, emit: e => emitted.push(e), ...(replay ? { replayExisting: true } : {}),
+  });
+  return { tmpRoot, subagentsDir, index, emitted, watcher };
+}
 
 describe('SubagentWatcher', () => {
   let tmpRoot: string;
@@ -65,20 +68,7 @@ describe('SubagentWatcher', () => {
   let emitted: TranscriptEvent[];
   let watcher: SubagentWatcher;
 
-  beforeEach(() => {
-    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-watcher-'));
-    subagentsDir = path.join(tmpRoot, 'subagents');
-    fs.mkdirSync(subagentsDir, { recursive: true });
-    index = new SubagentIndex();
-    emitted = [];
-    watcher = new SubagentWatcher({
-      sessionId: 'sess-1',
-      subagentsDir,
-      index,
-      emit: e => emitted.push(e),
-      replayExisting: true, // these tests write a file first, then start; the default (no replay) is pinned in its own describe below
-    });
-  });
+  beforeEach(() => { ({ tmpRoot, subagentsDir, index, emitted, watcher } = makeRig('subagent-watcher-')); });
 
   afterEach(() => {
     watcher.stop();
@@ -106,9 +96,6 @@ describe('SubagentWatcher', () => {
     writeMeta(subagentsDir, 'abc', 'Find bug', 'Explore');
     appendLine(subagentsDir, 'abc', toolUseLine('u1', 'toolu_X', 'Read', { file_path: '/a' }));
 
-    // Was `await wait(1500) // allow fs.watch/poll to fire`, which failed every
-    // macOS build: FSEvents coalescing latency exceeds 1500ms under runner load.
-    // Poll for the event instead of betting on a fixed budget.
     await vi.waitFor(() => {
       const stamped = emitted.find(e => e.type === 'tool-use');
       expect(stamped?.data.parentAgentToolUseId).toBe('toolu_parent');
@@ -141,15 +128,10 @@ describe('SubagentWatcher', () => {
 
     watcher.start();
     await wait(100);
-    // Negative assertion, so the fixed sleep is fine: with no parent binding the
-    // watcher CANNOT emit, whether or not its read has landed yet.
     expect(emitted).toHaveLength(0); // buffered
 
     index.recordParentAgentToolUse('toolu_parent', 'Find bug', 'Explore');
-    // Retry the flush rather than flushing once behind a fixed sleep: the read
-    // is async, so under load the single flush ran against an empty buffer and
-    // the assertion below never saw the event. A flush with nothing pending is a
-    // no-op, so retrying is safe.
+    // WHY retry: the read is async, so a single flush under load ran against an empty buffer.
     await vi.waitFor(() => {
       watcher.flushPendingFor('abc');
       expect(emitted).toHaveLength(1);
@@ -198,14 +180,10 @@ describe('SubagentWatcher', () => {
 
     watcher.start();
     await wait(100);
-    // Negative — safe as a fixed sleep (no parent binding ⇒ no emit possible).
     expect(emitted).toHaveLength(0); // both lines buffered, no parent yet
 
     index.recordParentAgentToolUse('toolu_parent', 'Find bug', 'Explore');
-    // Retry the flush until the async read has buffered both lines. This is the
-    // exact case that failed on Windows under vitest's parallel pool: the read
-    // landed after the fixed 100ms sleep, so flushAllPending() found an empty
-    // buffer and the length-2 assertion below saw nothing.
+    // WHY retry: on Windows the read landed after the sleep, so a single flush found an empty buffer.
     await vi.waitFor(() => {
       watcher.flushAllPending();
       expect(emitted).toHaveLength(2);
@@ -218,8 +196,6 @@ describe('SubagentWatcher', () => {
     expect(looseData(emitted[1]).parentAgentToolUseId).toBe('toolu_parent');
     expect(looseData(emitted[0]).agentId).toBe('abc');
   });
-
-  // ---- Blocking-call batch B1 (2026-09-24): the scan and replay are async ----
 
   it('getHistory never touches a blocking fs call, and a missing directory is an empty replay', async () => {
     writeMeta(subagentsDir, 'abc', 'Find bug', 'Explore');
@@ -318,10 +294,7 @@ describe('SubagentWatcher', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// UTF-8 boundary safety (2026-07-10 review) — mirrors the TranscriptWatcher
-// byte-carry fix: a multi-byte char split across two reads must reassemble.
-// ---------------------------------------------------------------------------
+// A multi-byte char split across two reads must reassemble (mirrors the TranscriptWatcher byte-carry fix).
 describe('SubagentWatcher read integrity', () => {
   let tmpRoot: string;
   let subagentsDir: string;
@@ -329,20 +302,7 @@ describe('SubagentWatcher read integrity', () => {
   let emitted: TranscriptEvent[];
   let watcher: SubagentWatcher;
 
-  beforeEach(() => {
-    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-utf8-'));
-    subagentsDir = path.join(tmpRoot, 'subagents');
-    fs.mkdirSync(subagentsDir, { recursive: true });
-    index = new SubagentIndex();
-    emitted = [];
-    watcher = new SubagentWatcher({
-      sessionId: 'sess-utf8',
-      subagentsDir,
-      index,
-      emit: e => emitted.push(e),
-      replayExisting: true, // test writes the file first (see the default-behaviour describe)
-    });
-  });
+  beforeEach(() => { ({ tmpRoot, subagentsDir, index, emitted, watcher } = makeRig('subagent-utf8-')); });
 
   afterEach(() => {
     watcher.stop();
@@ -374,8 +334,7 @@ describe('SubagentWatcher read integrity', () => {
     await wait(150);
     expect(emitted).toHaveLength(0);
 
-    // Second half completes the line. Poll the reread until the carried bytes
-    // reassemble (was a 20x50ms loop — a 1s ceiling is the same fixed-budget bet).
+    // Second half completes the line; poll the reread until the carried bytes reassemble.
     fs.appendFileSync(jsonlPath, full.subarray(splitAt));
     await vi.waitFor(() => {
       watcher.forceRereadFor('utf8');
@@ -389,12 +348,7 @@ describe('SubagentWatcher read integrity', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Timer lifecycle (2026-07-10 perf pass): event-driven kick + poll settle.
-// The old behavior leaked one 1s dir poll per session forever (even sessions
-// that never ran a subagent) and a 2s stat-poll per subagent file that was
-// never pruned — the main "idle CPU creeps up over a long day" candidate.
-// ---------------------------------------------------------------------------
+// WHY: timers once leaked per session (a dir poll) and per helper file (a stat poll), never pruned: idle CPU crept up.
 describe('SubagentWatcher timer lifecycle', () => {
   let tmpRoot: string;
   let subagentsDir: string;
@@ -402,19 +356,7 @@ describe('SubagentWatcher timer lifecycle', () => {
   let emitted: TranscriptEvent[];
   let watcher: SubagentWatcher;
 
-  beforeEach(() => {
-    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-timers-'));
-    subagentsDir = path.join(tmpRoot, 'subagents');
-    index = new SubagentIndex();
-    emitted = [];
-    watcher = new SubagentWatcher({
-      sessionId: 'sess-timers',
-      subagentsDir,
-      index,
-      emit: e => emitted.push(e),
-      replayExisting: true, // test writes the file first (see the default-behaviour describe)
-    });
-  });
+  beforeEach(() => { ({ tmpRoot, subagentsDir, index, emitted, watcher } = makeRig('subagent-timers-', { mkdir: false })); });
 
   afterEach(() => {
     watcher.stop();
@@ -458,8 +400,7 @@ describe('SubagentWatcher timer lifecycle', () => {
     expect(watcher.hasActiveWatch('done')).toBe(true);
     await watcher.settleByParent('toolu_parent_done');
     expect(watcher.hasActivePoll('done')).toBe(false);
-    // Perf (many tabs): a finished helper no longer holds its own fs.watch —
-    // every helper ever spawned used to keep one until the session closed.
+    // Perf (many tabs): a finished helper must not hold its own fs.watch until the session closes.
     expect(watcher.hasActiveWatch('done')).toBe(false);
     // The entry stays (offset only) so a re-scan never replays it from byte 0.
     expect(watcher.trackedCount()).toBe(1);
@@ -468,8 +409,6 @@ describe('SubagentWatcher timer lifecycle', () => {
     // watch sees the write and drains the settled helper's file.
     const before = emitted.length;
     appendLine(subagentsDir, 'done', toolUseLine('u-d2', 'toolu_D2', 'Grep', { pattern: 'x' }));
-    // fs.watch delivery of an external append — the old 20x50ms (1s) ceiling was
-    // far under macOS FSEvents coalescing latency on a loaded runner.
     await vi.waitFor(() => expect(emitted.length).toBeGreaterThan(before), { timeout: WATCH_MS });
   });
 
@@ -511,11 +450,7 @@ describe('SubagentWatcher timer lifecycle', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Timers are armed on demand (simplification audit W8). Every session used to
-// start two 5 s timers for helper files that usually never exist, and each
-// helper added a third beside its own watch, on every platform.
-// ---------------------------------------------------------------------------
+// Timers are armed on demand: sessions without helpers must not run 5s polls.
 describe('SubagentWatcher arms timers only when there is something to poll', () => {
   let tmpRoot: string;
   let subagentsDir: string;
@@ -527,11 +462,7 @@ describe('SubagentWatcher arms timers only when there is something to poll', () 
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
-    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-lazy-'));
-    subagentsDir = path.join(tmpRoot, 'subagents');
-    index = new SubagentIndex();
-    emitted = [];
-    watcher = new SubagentWatcher({ sessionId: 'sess-lazy', subagentsDir, index, emit: e => emitted.push(e), replayExisting: true });
+    ({ tmpRoot, subagentsDir, index, emitted, watcher } = makeRig('subagent-lazy-', { mkdir: false }));
   });
 
   afterEach(() => {
@@ -652,13 +583,7 @@ describe('SubagentWatcher arms timers only when there is something to poll', () 
 // helpers that appear or grow afterwards are still delivered in full.
 describe('SubagentWatcher default: existing helper files are not replayed', () => {
   let tmpRoot: string; let subagentsDir: string; let index: SubagentIndex; let emitted: TranscriptEvent[]; let watcher: SubagentWatcher;
-  beforeEach(() => {
-    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-noreplay-'));
-    subagentsDir = path.join(tmpRoot, 'subagents');
-    fs.mkdirSync(subagentsDir, { recursive: true });
-    index = new SubagentIndex(); emitted = [];
-    watcher = new SubagentWatcher({ sessionId: 's', subagentsDir, index, emit: (e) => emitted.push(e) });
-  });
+  beforeEach(() => { ({ tmpRoot, subagentsDir, index, emitted, watcher } = makeRig('subagent-noreplay-', { replay: false })); });
   afterEach(() => { watcher.stop(); fs.rmSync(tmpRoot, { recursive: true, force: true }); });
 
   it('emits nothing for lines already in an existing file, but streams what is appended after start', async () => {

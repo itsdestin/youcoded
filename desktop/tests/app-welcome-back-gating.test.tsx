@@ -1,17 +1,9 @@
 // @vitest-environment jsdom
-// App.tsx's gate on the Welcome back effect (design §5,
-// docs/active/specs/2026-09-24-welcome-back-design.md in the workspace): the
-// screen must ask only once, only when the strip is empty, and only in the
-// ONE window allowed to show it — never in remote mode, never on Android,
-// never in a window that isn't the directory's leader.
-//
-// WHY a dedicated lightweight mount rather than tests/helpers/busy-app.tsx:
-// that harness always seeds one live session ('busy-1') before <App/> ever
-// renders, so a strip-empty case is unreachable through it. This file mounts
-// the real App directly against the workbench's fake backend
-// (installMock()), using its 'welcome-back' scenario (sessions: [],
-// reopen: [...] — built for exactly this) for the empty-strip cases, and
-// overrides the store's `sessions` directly for the non-empty case.
+// App.tsx's gate on the Welcome back screen: it asks only once, only when the strip is empty, and only in the ONE window
+// allowed to show it (never remote, never Android, never a non-leader window), and restores/handoffs stay correct
+// across connection-host changes. Mounts the real App against the workbench fake backend (installMock()): the
+// 'welcome-back' scenario seeds an empty strip with a reopen list, which tests/helpers/busy-app.tsx cannot reach (it
+// always seeds one live session).
 import React from 'react';
 import { beforeAll, describe, it, expect, vi, afterEach } from 'vitest';
 import { act, render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
@@ -81,15 +73,9 @@ function wrapConsoleForCrashes(): void {
   };
 }
 
-/** Mounts the real App against the workbench fake backend.
- *  `search` picks the mock scenario (`?scenario=welcome-back` seeds an empty
- *  strip with four rows in `reopen` — the exact fixture this feature exists
- *  to show). `overrideSessions` replaces the store's live-session list AFTER
- *  install, for the "strip is not empty" case. `overrideWindowGetId` replaces
- *  `window.claude.window.getId` (a non-leader window) — the whole namespace,
- *  per the documented gotcha (app-close-request-prompt.test.tsx): every
- *  namespace off `claude` is a caching Proxy with no `set` trap, so mutating a
- *  single member silently lands on the Proxy's own throwaway target. */
+/** Mounts the real App against the workbench fake backend. `search` picks the mock scenario; `overrideSessions` replaces
+ *  the store's live sessions AFTER install; `overrideWindowGetId` replaces the whole `window.claude.window` namespace
+ *  (every namespace off `claude` is a caching Proxy with no `set` trap, so mutating one member lands on a throwaway). */
 async function mountApp(opts: {
   search?: string;
   platform?: string;
@@ -109,12 +95,10 @@ async function mountApp(opts: {
   window.history.pushState({}, '', `/?${opts.search ?? 'scenario=welcome-back'}`);
   installMock();
   if (opts.overrideSessions) {
-    const store = (window as any).__workbenchStore;
-    store.setState((s: any) => ({ ...s, sessions: opts.overrideSessions }));
+    store().setState((s: any) => ({ ...s, sessions: opts.overrideSessions }));
   }
   if (opts.overrideDefaults) {
-    const store = (window as any).__workbenchStore;
-    store.setState((s: any) => ({ ...s, defaults: { ...s.defaults, ...opts.overrideDefaults } }));
+    store().setState((s: any) => ({ ...s, defaults: { ...s.defaults, ...opts.overrideDefaults } }));
   }
   if (opts.overrideWindowGetId != null) {
     const id = opts.overrideWindowGetId;
@@ -153,80 +137,69 @@ beforeAll(async () => { await import('../src/renderer/App'); }, APP_IMPORT_MS);
 // file passed alone. A found screen returns at once, so only a broken one pays the wait (under
 // the 30 s test timeout); the negative checks do not use this number.
 const APPEAR_MS = 20_000;
+const welcome = () => screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+const resumeAll = async (): Promise<void> => { fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ })); };
+const active = () => document.querySelector('[data-chat-session-id]:not([aria-hidden="true"])')?.getAttribute('data-chat-session-id');
+const store = () => (window as any).__workbenchStore;
+const reopeningGone = () => waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+/** `api` with some members replaced (the fake's namespaces ignore assignment, so wrap instead). */
+const override = <T extends object>(api: T, members: Record<string, unknown>): T =>
+  new Proxy(api, { get: (target, key) => (typeof key === 'string' && key in members ? members[key] : Reflect.get(target, key)) });
+/** A create() whose results are held until `release[i]()` is called; each release runs the real create once. */
+function heldCreate(api: any, hold: (args: any) => boolean = () => true) {
+  const release: Array<() => Promise<any>> = [];
+  const create = vi.fn((args: any) => !hold(args) ? api.create(args) : new Promise<any>((resolve, reject) => {
+    let result: Promise<any> | undefined;
+    release.push(() => { result ??= api.create(args).then((value: any) => { resolve(value); return value; }, reject); return result!; });
+  }));
+  return { create, release };
+}
 
 describe('App — the Welcome back screen only ever opens once, in the leader window, never remote or Android', () => {
   it('asks once when the strip is empty and this window is the leader', async () => {
     await mountApp();
-    expect(await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS })).toBeInTheDocument();
+    expect(await welcome()).toBeInTheDocument();
   });
 
-  it('skips when this window is not the directory leader', async () => {
-    // Workbench default: getDirectory() answers leaderWindowId 1. Naming a
-    // different id for THIS window's getId makes it decisively not the leader
-    // (not merely "not yet resolved" — both settle from the mock's fixed
-    // values, so there is no race to wait out).
-    await mountApp({ overrideWindowGetId: 999 });
-    // Give every async hop (session list, directory, reopen list) room to
-    // settle before trusting the negative — an app that hasn't finished
-    // booting yet would also show nothing, which would prove nothing.
+  // The negative needs the app fully booted (Settings visible) plus a settle, else an unbooted app would also show nothing.
+  const ACTIVE_SESSION = {
+    id: 'active-1', name: 'Active session', cwd: '/tmp/active', permissionMode: 'normal',
+    skipPermissions: false, status: 'active', createdAt: Date.now(), provider: 'native', harnessId: 'coder', model: 'qwen2.5-coder:14b',
+  };
+  it.each([
+    // Workbench default leaderWindowId is 1; naming another id makes THIS window decisively not the leader.
+    ['this window is not the directory leader', () => mountApp({ overrideWindowGetId: 999 })],
+    ['in remote mode', () => { setConnectionMode('remote'); return mountApp(); }],
+    ['on Android', () => mountApp({ platform: 'android' })],
+    ['the strip is not empty', () => mountApp({ overrideSessions: [ACTIVE_SESSION] })],
+  ])('skips when %s', async (_why, mount) => {
+    await mount();
     await screen.findByLabelText('Settings');
-    await new Promise((r) => setTimeout(r, 1000));
-    expect(screen.queryByText('Welcome back')).not.toBeInTheDocument();
-  });
-
-  it('skips in remote mode', async () => {
-    setConnectionMode('remote');
-    await mountApp();
-    await screen.findByLabelText('Settings');
-    await new Promise((r) => setTimeout(r, 1000));
-    expect(screen.queryByText('Welcome back')).not.toBeInTheDocument();
-  });
-
-  it('skips on Android', async () => {
-    await mountApp({ platform: 'android' });
-    await screen.findByLabelText('Settings');
-    await new Promise((r) => setTimeout(r, 1000));
-    expect(screen.queryByText('Welcome back')).not.toBeInTheDocument();
-  });
-
-  it('skips when the strip is not empty', async () => {
-    await mountApp({
-      overrideSessions: [{
-        id: 'active-1', name: 'Active session', cwd: '/tmp/active', permissionMode: 'normal',
-        skipPermissions: false, status: 'active', createdAt: Date.now(), provider: 'native',
-        harnessId: 'coder', model: 'qwen2.5-coder:14b',
-      }],
-    });
-    await screen.findByLabelText('Settings');
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1000)); // settle
     expect(screen.queryByText('Welcome back')).not.toBeInTheDocument();
   });
 
   it('onDone (Start fresh) forgets exactly the ids the screen showed', async () => {
     await mountApp();
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
-    const store = (window as any).__workbenchStore;
+    await welcome();
     // The fixture's full offer, per scenarios.ts's 'welcome-back' case.
-    expect(store.getState().reopen).toEqual(['wb-past-0', 'wb-past-1', 'wb-past-2', 'wb-past-4']);
+    expect(store().getState().reopen).toEqual(['wb-past-0', 'wb-past-1', 'wb-past-2', 'wb-past-4']);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Start fresh' }));
 
     // forgetReopen mutates the SAME store field with exactly the ids
     // session:reopen-list handed the screen — this is the round trip design
     // §5's "onDone → forgetReopen(ids) with the ids shown" pins.
-    await waitFor(() => expect(store.getState().reopen).toEqual([]));
+    await waitFor(() => expect(store().getState().reopen).toEqual([]));
   });
 
   it('starts independent restores before a slow restore acknowledges', async () => {
     await mountApp();
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    await welcome();
     const api = window.claude.session;
-    const release: Array<() => void> = [];
-    const create = vi.fn((args: Parameters<typeof api.create>[0]) => new Promise<Awaited<ReturnType<typeof api.create>>>((resolve, reject) => {
-      release.push(() => { void api.create(args).then(resolve, reject); });
-    }));
-    window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
-    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    const { create, release } = heldCreate(api);
+    window.claude.session = override(api, { create });
+    await resumeAll();
     try {
       // No clock budget: the slow create is deliberately unresolved. Other
       // conversations must reach backend admission without waiting for it.
@@ -235,8 +208,8 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     } finally {
       // Drain the original serial implementation too, so a red test leaves no work behind.
       window.claude.session = api;
-      await act(async () => { for (const done of release) done(); });
-      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+      await act(async () => { await Promise.all(release.map((done) => done())); });
+      await reopeningGone();
     }
   });
 
@@ -244,22 +217,16 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     let choose!: (payload: { sessionId: string; refocusOnly: boolean }) => void;
     await mountApp({ beforeRender: () => {
       const detach = window.claude.detach;
-      window.claude.detach = new Proxy(detach, { get: (target, key) => key === 'onOwnershipAcquired'
-        ? (cb: typeof choose) => { choose = cb; return () => {}; } : Reflect.get(target, key) });
+      window.claude.detach = override(detach, { onOwnershipAcquired: (cb: typeof choose) => { choose = cb; return () => {}; } });
     } });
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    await welcome();
     // Welcome back is desktop-only. Switch after it opens to exercise the
     // remote reply-adoption path as well as the normal created announcement.
     setConnectionMode(mode);
     const api = window.claude.session;
-    const release: Array<() => Promise<unknown>> = [];
-    const create = vi.fn((args: Parameters<typeof api.create>[0]) => new Promise<Awaited<ReturnType<typeof api.create>>>((resolve, reject) => {
-      let result: ReturnType<typeof api.create> | undefined;
-      release.push(() => { result ??= api.create(args).then(value => { resolve(value); return value; }, reject); return result; });
-    }));
-    window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
-    const active = () => document.querySelector('[data-chat-session-id]:not([aria-hidden="true"])')?.getAttribute('data-chat-session-id');
-    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    const { create, release } = heldCreate(api);
+    window.claude.session = override(api, { create });
+    await resumeAll();
     try {
       await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
       await act(async () => { await release[0](); });
@@ -267,7 +234,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
       const first = active();
       await act(async () => { await release[1](); });
       expect(active()).toBe(first);
-      const second = (window as any).__workbenchStore.getState().sessions.find((s: any) => s.id !== first).id;
+      const second = store().getState().sessions.find((s: any) => s.id !== first).id;
       // The session switcher's explicit focus-existing-session choice.
       act(() => { choose({ sessionId: second, refocusOnly: true }); });
       await waitFor(() => expect(active()).toBe(second));
@@ -280,7 +247,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     } finally {
       window.claude.session = api;
       await act(async () => { await Promise.all(release.map(done => done())); });
-      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+      await reopeningGone();
     }
   });
 
@@ -288,16 +255,15 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     const pushes: Array<() => void> = [];
     await mountApp({ beforeRender: () => {
       const api = window.claude.on;
-      window.claude.on = new Proxy(api, { get: (target, key) => key === 'sessionCreated'
-        ? (cb: (...args: any[]) => void) => api.sessionCreated((...args: any[]) => { pushes.push(() => cb(...args)); })
-        : Reflect.get(target, key) });
+      window.claude.on = override(api, {
+        sessionCreated: (cb: (...args: any[]) => void) => api.sessionCreated((...args: any[]) => { pushes.push(() => cb(...args)); }),
+      });
     } });
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    await welcome();
     act(() => { setConnectionMode(mode); });
-    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
-    await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+    await resumeAll();
+    await reopeningGone();
     await waitFor(() => expect(pushes).toHaveLength(3));
-    const active = () => document.querySelector('[data-chat-session-id]:not([aria-hidden="true"])')?.getAttribute('data-chat-session-id');
     await waitFor(() => expect(active()).toBeTruthy());
     const first = active();
     await act(async () => { for (const push of pushes) push(); });
@@ -310,10 +276,10 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     const create = vi.fn();
     await mountApp({ beforeRender: () => {
       const api = window.claude.session, sync = window.claude.syncSpaces!;
-      window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
-      window.claude.syncSpaces = new Proxy(sync, { get: (target, key) => key === 'leaseQuery' ? query : Reflect.get(target, key) });
+      window.claude.session = override(api, { create });
+      window.claude.syncSpaces = override(sync, { leaseQuery: query });
     } });
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    await welcome();
     act(() => { setConnectionMode('remote'); window.dispatchEvent(new CustomEvent('youcoded:resume-session', { detail: {
       claudeSessionId: 'old-conversation', projectSlug: 'old', projectPath: '/tmp/old', provider: 'claude',
     } })); });
@@ -328,13 +294,10 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     const create = vi.fn();
     await mountApp({ beforeRender: () => {
       const api = window.claude.session, sync = window.claude.syncSpaces!;
-      const handoff = new Proxy(api.handoff, { get: (target, key) => key === 'begin' ? begin : Reflect.get(target, key) });
-      window.claude.session = new Proxy(api, { get: (target, key) => key === 'handoff' ? handoff
-        : key === 'create' ? create : Reflect.get(target, key) });
-      window.claude.syncSpaces = new Proxy(sync, { get: (target, key) => key === 'leaseQuery'
-        ? async () => ({ held: true, self: false, device: 'old computer' }) : Reflect.get(target, key) });
+      window.claude.session = override(api, { handoff: override(api.handoff, { begin }), create });
+      window.claude.syncSpaces = override(sync, { leaseQuery: async () => ({ held: true, self: false, device: 'old computer' }) });
     } });
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    await welcome();
     act(() => { setConnectionMode('remote'); window.dispatchEvent(new CustomEvent('youcoded:resume-session', { detail: {
       claudeSessionId: 'old-conversation', projectSlug: 'old', projectPath: '/tmp/old', provider: 'claude',
     } })); });
@@ -349,15 +312,15 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
 
   it('does not launch an old recovery batch after its provider lookup crosses a host change', async () => {
     await mountApp();
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    await welcome();
     const providers = window.claude.providers, api = window.claude.session;
     let finish!: (value: any[]) => void;
     // WHY only hold the batch lookup: ResumeBrowser also refreshes its model picker.
     const list = vi.fn(providers.list).mockImplementationOnce(() => new Promise<any[]>(resolve => { finish = resolve; }));
     const create = vi.fn();
-    window.claude.providers = new Proxy(providers, { get: (target, key) => key === 'list' ? list : Reflect.get(target, key) });
-    window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
-    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    window.claude.providers = override(providers, { list });
+    window.claude.session = override(api, { create });
+    await resumeAll();
     await waitFor(() => expect(finish).toBeTypeOf('function'));
     act(() => { setConnectionMode('remote'); });
     await act(async () => { finish([]); });
@@ -369,7 +332,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     const create = vi.fn(() => new Promise<any>(resolve => { reply = resolve; }));
     await mountApp({ beforeRender: () => {
       const api = window.claude.session;
-      window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
+      window.claude.session = override(api, { create });
     } });
     fireEvent.click(await screen.findByRole('button', { name: 'Start fresh' }));
     fireEvent.click(await screen.findByRole('button', { name: /^New session$/ }));
@@ -383,16 +346,12 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
 
   it.each(['local', 'remote'] as const)('selects an explicit manual resume while an unrelated recovery reply is still pending (%s)', async (mode) => {
     await mountApp();
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    await welcome();
     act(() => { setConnectionMode(mode); });
     const api = window.claude.session;
-    const release: Array<() => Promise<unknown>> = [];
-    const create = vi.fn((args: any) => args.resumeSessionId === 'manual-conversation' ? api.create(args)
-      : new Promise<any>((resolve, reject) => { let result: Promise<any> | undefined;
-        release.push(() => { result ??= api.create(args).then(value => { resolve(value); return value; }, reject); return result; }); }));
-    window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
-    const active = () => document.querySelector('[data-chat-session-id]:not([aria-hidden="true"])')?.getAttribute('data-chat-session-id');
-    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    const { create, release } = heldCreate(api, (args) => args.resumeSessionId !== 'manual-conversation');
+    window.claude.session = override(api, { create });
+    await resumeAll();
     try {
       await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
       await act(async () => { await release[0](); });
@@ -411,16 +370,12 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
 
   it.each(['local', 'remote'] as const)('selects an explicit new chat during a held recovery batch (%s)', async (mode) => {
     await mountApp();
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    await welcome();
     act(() => { setConnectionMode(mode); });
     const api = window.claude.session;
-    const release: Array<() => Promise<unknown>> = [];
-    const create = vi.fn((args: any) => !args.resumeSessionId ? api.create(args)
-      : new Promise<any>((resolve, reject) => { let result: Promise<any> | undefined;
-        release.push(() => { result ??= api.create(args).then(value => { resolve(value); return value; }, reject); return result; }); }));
-    window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
-    const active = () => document.querySelector('[data-chat-session-id]:not([aria-hidden="true"])')?.getAttribute('data-chat-session-id');
-    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    const { create, release } = heldCreate(api, (args) => !!args.resumeSessionId);
+    window.claude.session = override(api, { create });
+    await resumeAll();
     try {
       await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
       await act(async () => { await release[0](); });
@@ -449,7 +404,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
       window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create
         : key === 'open' ? open : Reflect.get(target, key) });
     } });
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    await welcome();
     act(() => { setConnectionMode('remote'); });
     act(() => { window.dispatchEvent(new CustomEvent('youcoded:resume-session', { detail: {
       claudeSessionId: 'old-conversation', projectSlug: 'old-project', projectPath: '/tmp/old-project', provider: 'claude',
@@ -464,44 +419,41 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
 
   it('keeps successful restores when another startup fails later', async () => {
     await mountApp();
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    await welcome();
     const api = window.claude.session;
     let fail!: () => void;
     const create = vi.fn((args: Parameters<typeof api.create>[0]) => args.resumeSessionId === 'wb-past-0'
       ? new Promise<Awaited<ReturnType<typeof api.create>>>((_, reject) => { fail = () => reject(new Error('startup failed')); })
       : api.create(args));
-    window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
-    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    window.claude.session = override(api, { create });
+    await resumeAll();
     try {
       await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
-      const store = (window as any).__workbenchStore;
-      await waitFor(() => expect(store.getState().sessions).toHaveLength(2));
+        await waitFor(() => expect(store().getState().sessions).toHaveLength(2));
       expect(screen.getByText('Reopening…')).toBeInTheDocument();
       await act(async () => { fail(); });
       expect(await screen.findByText('2 reopened. The 2 left didn’t reopen.')).toBeInTheDocument();
-      expect(store.getState().sessions).toHaveLength(2);
+      expect(store().getState().sessions).toHaveLength(2);
     } finally {
       await act(async () => { fail?.(); });
       window.claude.session = api;
-      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+      await reopeningGone();
     }
   });
 
   it('queues ownership questions without blocking an unrelated restore', async () => {
     await mountApp();
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    await welcome();
     const api = window.claude.syncSpaces!;
     const queried: string[] = [];
-    window.claude.syncSpaces = new Proxy(api, { get: (target, key) => key === 'leaseQuery'
-      ? async (id: string) => {
-        queried.push(id);
-        return id === 'wb-past-4' ? { held: false } : { held: true, self: false, device: `device-${id}` };
-      } : Reflect.get(target, key) });
-    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    window.claude.syncSpaces = override(api, { leaseQuery: async (id: string) => {
+      queried.push(id);
+      return id === 'wb-past-4' ? { held: false } : { held: true, self: false, device: `device-${id}` };
+    } });
+    await resumeAll();
     try {
       await waitFor(() => expect(queried).toHaveLength(3));
-      const store = (window as any).__workbenchStore;
-      await waitFor(() => expect(store.getState().sessions).toHaveLength(1));
+        await waitFor(() => expect(store().getState().sessions).toHaveLength(1));
       expect(await screen.findByText('device-wb-past-0')).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Never mind' }));
       expect(await screen.findByText('device-wb-past-1')).toBeInTheDocument();
@@ -511,7 +463,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
       while (screen.queryByRole('button', { name: 'Never mind' })) {
         await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Never mind' })); });
       }
-      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+      await reopeningGone();
       window.claude.syncSpaces = api;
     }
   });
@@ -525,21 +477,18 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
       const sessionApi = window.claude.session;
       const syncApi = window.claude.syncSpaces!;
       // PendingHandoff captures its API during App's first render.
-      const handoff = new Proxy(sessionApi.handoff, { get: (target, key) => key === 'begin' ? begin
-        : key === 'wait' ? () => waiting : Reflect.get(target, key) });
+      const handoff = override(sessionApi.handoff, { begin, wait: () => waiting });
       const create = (args: Parameters<typeof sessionApi.create>[0]) => new Promise<Awaited<ReturnType<typeof sessionApi.create>>>((resolve, reject) => {
         let result: ReturnType<typeof sessionApi.create> | undefined;
         release = () => { result ??= sessionApi.create(args).then(value => { resolve(value); return value; }, reject); return result; };
       });
-      window.claude.session = new Proxy(sessionApi, { get: (target, key) => key === 'handoff' ? handoff
-        : key === 'create' ? create : Reflect.get(target, key) });
-      window.claude.syncSpaces = new Proxy(syncApi, { get: (target, key) => key === 'leaseQuery'
-        ? async (id: string) => id === 'wb-past-4' ? { held: false }
-          : { held: true, self: false, device: `device-${id}` } : Reflect.get(target, key) });
+      window.claude.session = override(sessionApi, { handoff, create });
+      window.claude.syncSpaces = override(syncApi, { leaseQuery: async (id: string) => id === 'wb-past-4' ? { held: false }
+        : { held: true, self: false, device: `device-${id}` } });
     } });
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    await welcome();
     setConnectionMode(mode);
-    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    await resumeAll();
     try {
       await screen.findByText('device-wb-past-0');
       fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
@@ -559,7 +508,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
         await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Never mind' })); });
       }
       await act(async () => { await release?.(); finish(); });
-      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+      await reopeningGone();
     }
   });
 
@@ -567,20 +516,19 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
   // carry a "skip" default into every reopened session unseen.
   it('Resume all reopens sessions with approvals on even when the default is to skip them', async () => {
     await mountApp({ overrideDefaults: { skipPermissions: true } });
-    const store = (window as any).__workbenchStore;
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
-    const before = store.getState().sessions.length;
+    await welcome();
+    const before = store().getState().sessions.length;
 
-    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    await resumeAll();
 
-    await waitFor(() => expect(store.getState().sessions.length).toBeGreaterThan(before), { timeout: 8000 });
-    const opened = store.getState().sessions.slice(before);
+    await waitFor(() => expect(store().getState().sessions.length).toBeGreaterThan(before), { timeout: 8000 });
+    const opened = store().getState().sessions.slice(before);
     expect(opened.every((s: any) => s.skipPermissions === false)).toBe(true);
     // WHY wait for the button to leave "Reopening…" (2026-10-02): the sessions appear
     // before Resume all's own finally-block runs, so the test used to end mid-resume and
     // its last state updates landed after the file's jsdom was torn down — two
     // "window is not defined" unhandled errors that failed verify.sh at random.
-    await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+    await reopeningGone();
   });
 
   it('Resume all reopens a session that ran with Skip permissions on with it still on, and only that one', async () => {
@@ -588,28 +536,26 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
       beforeRender: () => {
         // WHY wrap rather than assign: the fake's namespaces ignore assignment,
         // and the bridge itself takes a replaced namespace.
-        const store = (window as any).__workbenchStore;
-        const claude = (window as any).claude;
+            const claude = (window as any).claude;
         const real = claude.session;
         claude.session = new Proxy({}, {
           get: (_t, key) => key === 'reopenList'
-            ? async () => store.getState().reopen.map((id: string) => ({ id, skipPermissions: id === 'wb-past-0' }))
+            ? async () => store().getState().reopen.map((id: string) => ({ id, skipPermissions: id === 'wb-past-0' }))
             : real[key],
         });
       },
     });
-    const store = (window as any).__workbenchStore;
-    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
-    const before = store.getState().sessions.length;
+    await welcome();
+    const before = store().getState().sessions.length;
 
-    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    await resumeAll();
 
-    await waitFor(() => expect(store.getState().sessions.some((s: any) => s.resumeSessionId === 'wb-past-0')).toBe(true), { timeout: 8000 });
-    const opened = store.getState().sessions.slice(before);
+    await waitFor(() => expect(store().getState().sessions.some((s: any) => s.resumeSessionId === 'wb-past-0')).toBe(true), { timeout: 8000 });
+    const opened = store().getState().sessions.slice(before);
     expect(opened.find((s: any) => s.resumeSessionId === 'wb-past-0')?.skipPermissions).toBe(true);
     // settle: wait for the whole batch, then check no other row picked the setting up.
-    await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
-    const others = store.getState().sessions.slice(before).filter((s: any) => s.resumeSessionId !== 'wb-past-0');
+    await reopeningGone();
+    const others = store().getState().sessions.slice(before).filter((s: any) => s.resumeSessionId !== 'wb-past-0');
     expect(others.length).toBeGreaterThan(0);
     expect(others.every((s: any) => s.skipPermissions === false)).toBe(true);
   });

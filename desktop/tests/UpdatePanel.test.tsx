@@ -6,11 +6,29 @@ import '@testing-library/jest-dom/vitest';
 import UpdatePanel from '../src/renderer/components/UpdatePanel';
 import { resetAutoInstallStoreForTests } from '../src/renderer/components/BetaChannelToggle';
 
-// The StatusBar version pill popup.
-//
-// Covers the two display modes (update available vs up-to-date), the forceRefresh
-// flag passed to the changelog IPC, the filter-with-fallback logic when the
-// changelog lags a release, error fallback to Open on GitHub, and close behavior.
+const claude = () => (window as any).claude;
+const CACHED_FILE = { filePath: '/tmp/YouCoded-setup.exe', version: '1.3.0' };
+
+/** The window.claude update/shell surface UpdatePanel's effects need; `update` overrides individual members. */
+function installUpdateApi(update: Record<string, unknown> = {}, changelog: unknown = { markdown: null, entries: [], fromCache: false }) {
+  (window as any).claude = {
+    update: {
+      changelog: vi.fn().mockResolvedValue(changelog),
+      onProgress: vi.fn().mockReturnValue(() => {}),
+      onInstallProgress: vi.fn().mockReturnValue(() => {}),
+      getCachedDownload: vi.fn().mockResolvedValue(null),
+      download: vi.fn().mockResolvedValue({ jobId: 'test-job', filePath: '/tmp/YouCoded-setup.exe', bytesTotal: 0 }),
+      cancel: vi.fn().mockResolvedValue({ success: true }),
+      launch: vi.fn().mockResolvedValue({ success: true, quitPending: true }),
+      restartToUpdate: vi.fn().mockResolvedValue({ restarting: false }),
+      ...update,
+    },
+    shell: { openExternal: vi.fn().mockResolvedValue(undefined), openChangelog: vi.fn().mockResolvedValue(undefined) },
+  };
+}
+
+// The StatusBar version pill popup: update-available vs up-to-date modes, changelog forceRefresh, filtering with
+// fallback when the changelog lags a release, the Open on GitHub error fallback, and close behavior.
 describe('UpdatePanel — the version pill popup', () => {
   // WHY: createPortal renders into document.body — cleanup after each test prevents
   // DOM accumulation that causes "multiple elements found" errors in subsequent tests.
@@ -57,25 +75,7 @@ describe('UpdatePanel — the version pill popup', () => {
 
   const CHANGELOG_ERROR = { markdown: null, entries: [], fromCache: false, error: true };
 
-  beforeEach(() => {
-    (window as any).claude = {
-      update: {
-        changelog: vi.fn().mockResolvedValue(CHANGELOG_OK),
-        // New methods — no-op defaults so UpdatePanel's useEffects don't crash in tests.
-        onProgress: vi.fn().mockReturnValue(() => {}),
-        onInstallProgress: vi.fn().mockReturnValue(() => {}),
-        getCachedDownload: vi.fn().mockResolvedValue(null),
-        download: vi.fn().mockResolvedValue({ jobId: 'test-job', filePath: '/tmp/YouCoded-setup.exe', bytesTotal: 0 }),
-        cancel: vi.fn().mockResolvedValue({ success: true }),
-        launch: vi.fn().mockResolvedValue({ success: true, quitPending: true }),
-        restartToUpdate: vi.fn().mockResolvedValue({ restarting: false }),
-      },
-      shell: {
-        openExternal: vi.fn().mockResolvedValue(undefined),
-        openChangelog: vi.fn().mockResolvedValue(undefined),
-      },
-    };
-  });
+  beforeEach(() => installUpdateApi({}, CHANGELOG_OK));
 
   describe('UpdatePanel — update available', () => {
     it('renders "Update available" header and Update now button', async () => {
@@ -86,7 +86,7 @@ describe('UpdatePanel — the version pill popup', () => {
 
     it('calls changelog with forceRefresh=true when update is available', async () => {
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
-      await waitFor(() => expect((window as any).claude.update.changelog).toHaveBeenCalledWith({ forceRefresh: true }));
+      await waitFor(() => expect(claude().update.changelog).toHaveBeenCalledWith({ forceRefresh: true }));
     });
 
     it('Update now is one press: it downloads, then goes straight into Restart to update (#183 T3)', async () => {
@@ -94,19 +94,19 @@ describe('UpdatePanel — the version pill popup', () => {
       render(<UpdatePanel open={true} onClose={onClose} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       const btn = await screen.findByRole('button', { name: /update now/i });
       fireEvent.click(btn);
-      expect((window as any).claude.update.download).toHaveBeenCalled();
-      await waitFor(() => expect((window as any).claude.update.restartToUpdate).toHaveBeenCalledTimes(1));
-      expect((window as any).claude.update.launch).not.toHaveBeenCalled(); // no second "Launch installer" press
+      expect(claude().update.download).toHaveBeenCalled();
+      await waitFor(() => expect(claude().update.restartToUpdate).toHaveBeenCalledTimes(1));
+      expect(claude().update.launch).not.toHaveBeenCalled(); // no second "Launch installer" press
     });
 
     it('a download that finishes after the popup was closed does not restart the app behind the person', async () => {
       let finish!: (v: unknown) => void;
-      (window as any).claude.update.download.mockReturnValue(new Promise((r) => { finish = r; }));
+      claude().update.download.mockReturnValue(new Promise((r) => { finish = r; }));
       const { rerender } = render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
       rerender(<UpdatePanel open={false} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       await act(async () => { finish({ jobId: 'j', filePath: '/tmp/x.exe', bytesTotal: 0 }); });
-      expect((window as any).claude.update.restartToUpdate).not.toHaveBeenCalled();
+      expect(claude().update.restartToUpdate).not.toHaveBeenCalled();
     });
 
     it('filters entries to those newer than current version', async () => {
@@ -137,7 +137,7 @@ describe('UpdatePanel — the version pill popup', () => {
         ],
         fromCache: false,
       };
-      (window as any).claude.update.changelog.mockResolvedValue(resetChangelog);
+      claude().update.changelog.mockResolvedValue(resetChangelog);
       const status = { current: '1.1.1', latest: '1.1.2', update_available: true, download_url: 'http://x' };
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={status} />);
       // User is on 1.1.1 (index 1). Entries above it: [1.1.2]. Pre-reset entries MUST NOT be shown.
@@ -158,7 +158,7 @@ describe('UpdatePanel — the version pill popup', () => {
 
     it('calls changelog with forceRefresh=false when up to date', async () => {
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_OK} />);
-      await waitFor(() => expect((window as any).claude.update.changelog).toHaveBeenCalledWith({ forceRefresh: false }));
+      await waitFor(() => expect(claude().update.changelog).toHaveBeenCalledWith({ forceRefresh: false }));
     });
 
     it('renders full changelog markdown (both entries visible)', async () => {
@@ -170,23 +170,22 @@ describe('UpdatePanel — the version pill popup', () => {
 
   describe('UpdatePanel — error states', () => {
     it('shows Open on GitHub fallback link when IPC returns error=true', async () => {
-      (window as any).claude.update.changelog.mockResolvedValue(CHANGELOG_ERROR);
+      claude().update.changelog.mockResolvedValue(CHANGELOG_ERROR);
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_OK} />);
       const link = await screen.findByRole('button', { name: /open on github/i });
       fireEvent.click(link);
-      expect((window as any).claude.shell.openChangelog).toHaveBeenCalled();
+      expect(claude().shell.openChangelog).toHaveBeenCalled();
     });
 
     it('Update now button stays visible even when changelog failed to load', async () => {
-      (window as any).claude.update.changelog.mockResolvedValue(CHANGELOG_ERROR);
+      claude().update.changelog.mockResolvedValue(CHANGELOG_ERROR);
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       expect(await screen.findByRole('button', { name: /update now/i })).toBeInTheDocument();
     });
 
     it('signature-invalid: blocks the update, explains, and offers NO browser fallback', async () => {
-      (window as any).claude.update.launch.mockResolvedValue({ success: false, error: 'signature-invalid' });
-      // The interactive installer is reached from a file already on disk (a popup opened onto a cached download).
-      (window as any).claude.update.getCachedDownload.mockResolvedValue({ filePath: '/tmp/YouCoded-setup.exe', version: '1.1.2' });
+      claude().update.launch.mockResolvedValue({ success: false, error: 'signature-invalid' });
+      claude().update.getCachedDownload.mockResolvedValue(CACHED_FILE); // interactive installer is reached from a cached download
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
       await waitFor(() => expect(screen.getByRole('button', { name: /update blocked/i })).toBeInTheDocument());
@@ -198,17 +197,14 @@ describe('UpdatePanel — the version pill popup', () => {
     });
 
     it('verify-failed: offers a retry but NOT the raw-binary browser fallback', async () => {
-      (window as any).claude.update.launch.mockResolvedValue({ success: false, error: 'verify-failed' });
-      // The interactive installer is reached from a file already on disk (a popup opened onto a cached download).
-      (window as any).claude.update.getCachedDownload.mockResolvedValue({ filePath: '/tmp/YouCoded-setup.exe', version: '1.1.2' });
+      claude().update.launch.mockResolvedValue({ success: false, error: 'verify-failed' });
+      claude().update.getCachedDownload.mockResolvedValue(CACHED_FILE);
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
-      // small-fixes-1#SF-1: the reason is a sentence; the button reads exactly "Try again".
       expect(await screen.findByText(/download was damaged/i)).toBeInTheDocument();
       const retry = screen.getByRole('button', { name: 'Try again' });
       expect(retry).toBeEnabled();
-      // The "Open in browser instead" link opens the raw installer — the very file
-      // that failed verification — so it must be absent here.
+      // "Open in browser instead" would open the very file that failed verification, so it must be absent.
       expect(screen.queryByRole('button', { name: /open in browser instead/i })).not.toBeInTheDocument();
     });
   });
@@ -224,12 +220,12 @@ describe('UpdatePanel — the version pill popup', () => {
 
     it('closing the popup mid-download sends no cancel and keeps the download going', async () => {
       let finish!: (r: { jobId: string; filePath: string; bytesTotal: number }) => void;
-      (window as any).claude.update.download.mockReturnValue(new Promise((r) => { finish = r; }));
+      claude().update.download.mockReturnValue(new Promise((r) => { finish = r; }));
       const { rerender } = render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
       await screen.findByRole('button', { name: /downloading/i });
       rerender(<UpdatePanel open={false} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
-      expect((window as any).claude.update.cancel).not.toHaveBeenCalled();
+      expect(claude().update.cancel).not.toHaveBeenCalled();
       // It was not reset either: reopening still shows a download in progress, not "Update now".
       rerender(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       expect(await screen.findByRole('button', { name: /downloading/i })).toBeInTheDocument();
@@ -237,22 +233,22 @@ describe('UpdatePanel — the version pill popup', () => {
       // (#183 T3: nothing quits behind the person's back).
       rerender(<UpdatePanel open={false} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       await act(async () => { finish({ jobId: 'j', filePath: '/tmp/x.exe', bytesTotal: 1 }); });
-      expect((window as any).claude.update.restartToUpdate).not.toHaveBeenCalled();
+      expect(claude().update.restartToUpdate).not.toHaveBeenCalled();
       rerender(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       expect(await screen.findByRole('button', { name: /launch installer/i })).toBeInTheDocument();
     });
 
     it('reopening while a job is running shows its progress', async () => {
-      (window as any).claude.update.getCachedDownload.mockResolvedValue({ downloading: { percent: 45, jobId: 'job-9' } });
+      claude().update.getCachedDownload.mockResolvedValue({ downloading: { percent: 45, jobId: 'job-9' } });
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       expect(await screen.findByRole('button', { name: /downloading.*45%/i })).toBeInTheDocument();
-      expect((window as any).claude.update.download).not.toHaveBeenCalled(); // asked, did not start a second job
+      expect(claude().update.download).not.toHaveBeenCalled(); // asked, did not start a second job
     });
 
     it('a download that dies leaves "Downloading…" for the normal error with Try again, open or closed', async () => {
       const handlers: Array<(ev: unknown) => void> = [];
-      (window as any).claude.update.onProgress.mockImplementation((h: (ev: unknown) => void) => { handlers.push(h); return () => {}; });
-      (window as any).claude.update.getCachedDownload.mockResolvedValue({ downloading: { percent: 10, jobId: 'bg' } });
+      claude().update.onProgress.mockImplementation((h: (ev: unknown) => void) => { handlers.push(h); return () => {}; });
+      claude().update.getCachedDownload.mockResolvedValue({ downloading: { percent: 10, jobId: 'bg' } });
       const { rerender } = render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       await screen.findByRole('button', { name: /downloading.*10%/i });
       rerender(<UpdatePanel open={false} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
@@ -265,72 +261,45 @@ describe('UpdatePanel — the version pill popup', () => {
 
     it('does not fetch when open=false', () => {
       render(<UpdatePanel open={false} onClose={() => {}} updateStatus={UPDATE_STATUS_OK} />);
-      expect((window as any).claude.update.changelog).not.toHaveBeenCalled();
+      expect(claude().update.changelog).not.toHaveBeenCalled();
     });
   });
 });
 
-/**
- * The update button names the step that actually failed.
- *
- * Error inventory 2026-09-10, false message 17: a failed DOWNLOAD read "Launch failed"
- * with the button disabled. The panel read the error code as the text before the first
- * colon — but on desktop a rejected invoke arrives as
- * "Error invoking remote method 'update:download': network-failed: …", so the "code"
- * was "Error invoking remote method 'update", matched nothing, and every download
- * failure fell into the can't-retry branch, labelled as a launch that never happened.
- * A plain network blip — the one failure a second try usually fixes — lost its Retry.
- */
+// WHY: the update button must name the step that FAILED. A rejected invoke arrives as "Error invoking remote method
+// 'update:download': network-failed: …", so the old code parse (text before the first colon) matched nothing and every
+// download failure was labelled "Launch failed" with no Retry.
 describe('UpdatePanel — the update button after a failure', () => {
   const STATUS = { current: '1.1.1', latest: '1.1.2', update_available: true, download_url: 'https://example.com/YouCoded-1.1.2-setup.exe' };
 
-  // The exact shape Electron gives a handler's thrown UpdateInstallError
-  // (update-installer.ts: `super(detail ? \`${code}: ${detail}\` : code)`).
-  // Electron replies with the thrown error's toString(), and UpdateInstallError sets `name`,
-  // so the real text carries "UpdateInstallError: " after the wrapper. The first version of
-  // this fixture left that out and passed a fix that never read a code (code review
-  // 2026-09-11, F2/F3).
+  // The exact shape Electron gives a thrown UpdateInstallError: the real text carries "UpdateInstallError: " after the
+  // wrapper (a fixture without it passed a fix that never read a code).
   const wrapped = (code: string, detail: string) =>
     new Error(`Error invoking remote method 'update:download': UpdateInstallError: ${code}: ${detail}`);
 
-  beforeEach(() => {
-    (window as any).claude = {
-      update: {
-        changelog: vi.fn().mockResolvedValue({ markdown: null, entries: [], fromCache: false }),
-        onProgress: vi.fn().mockReturnValue(() => {}),
-        onInstallProgress: vi.fn().mockReturnValue(() => {}),
-        getCachedDownload: vi.fn().mockResolvedValue(null),
-        download: vi.fn().mockResolvedValue({ jobId: 'job', filePath: '/tmp/YouCoded-setup.exe', bytesTotal: 0 }),
-        cancel: vi.fn().mockResolvedValue({ success: true }),
-        launch: vi.fn().mockResolvedValue({ success: true, quitPending: true }),
-      },
-      shell: { openExternal: vi.fn(), openChangelog: vi.fn() },
-    };
-  });
+  beforeEach(() => installUpdateApi({ restartToUpdate: undefined }));
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
   async function clickUpdate(opts: { cached?: boolean } = {}) {
-    // WHY (#183 T3): "Update now" is one press that ends in Restart to update. The interactive installer
-    // is still what a popup opened onto an already-downloaded file shows ("Launch installer"), so the
-    // tests of that path open the popup that way; download-failure tests still press Update now.
-    if (opts.cached) (window as any).claude.update.getCachedDownload = vi.fn().mockResolvedValue({ filePath: '/tmp/YouCoded-setup.exe', version: '1.3.0' });
+    // WHY: "Update now" is one press that ends in Restart to update; the interactive installer ("Launch installer") is what
+    // a popup opened onto an already-downloaded file shows, so those tests open it that way.
+    if (opts.cached) claude().update.getCachedDownload = vi.fn().mockResolvedValue(CACHED_FILE);
     render(<UpdatePanel open={true} onClose={() => {}} updateStatus={STATUS} />);
     if (!opts.cached) fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
   }
 
   describe('UpdatePanel — the failure label names the failed step', () => {
     it('a network failure during download offers Retry, not "Launch failed"', async () => {
-      (window as any).claude.update.download = vi.fn().mockRejectedValue(wrapped('network-failed', 'getaddrinfo ENOTFOUND github.com'));
+      claude().update.download = vi.fn().mockRejectedValue(wrapped('network-failed', 'getaddrinfo ENOTFOUND github.com'));
       await clickUpdate();
 
-      // small-fixes-1#SF-1: the failure is a sentence in the notice box, the button just "Try again".
       expect(await screen.findByText(/didn.t download/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
       expect(screen.queryByText(/installer didn't start/i)).toBeNull();
     });
 
     it('a download refused for a reason retry cannot fix still does not claim a launch', async () => {
-      (window as any).claude.update.download = vi.fn().mockRejectedValue(wrapped('busy', 'another download is already active'));
+      claude().update.download = vi.fn().mockRejectedValue(wrapped('busy', 'another download is already active'));
       await clickUpdate();
 
       // The sentence names the download; no Try again — a retry that cannot help (code review F3).
@@ -341,7 +310,7 @@ describe('UpdatePanel — the update button after a failure', () => {
     });
 
     it('a launch that failed is still called a launch failure', async () => {
-      (window as any).claude.update.launch = vi.fn().mockResolvedValue({ success: false, error: 'dmg-corrupt' });
+      claude().update.launch = vi.fn().mockResolvedValue({ success: false, error: 'dmg-corrupt' });
       await clickUpdate({ cached: true });
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
 
@@ -356,11 +325,11 @@ describe('UpdatePanel — the update button after a failure', () => {
     const COMMAND = 'sudo pacman -U /home/u/.config/youcoded/update-cache/youcoded-1.3.0.pacman';
 
     beforeEach(() => {
-      (window as any).claude.engine = { runInTerminal: vi.fn().mockResolvedValue(undefined) };
+      claude().engine = { runInTerminal: vi.fn().mockResolvedValue(undefined) };
     });
 
     async function launchWith(result: unknown) {
-      (window as any).claude.update.launch = vi.fn().mockResolvedValue(result);
+      claude().update.launch = vi.fn().mockResolvedValue(result);
       await clickUpdate({ cached: true });
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
     }
@@ -371,17 +340,17 @@ describe('UpdatePanel — the update button after a failure', () => {
       expect(await screen.findByText(COMMAND)).toBeInTheDocument();
       expect(screen.getByText(/asks for your password/i)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /run in terminal/i }));
-      await waitFor(() => expect((window as any).claude.engine.runInTerminal).toHaveBeenCalledWith(COMMAND));
+      await waitFor(() => expect(claude().engine.runInTerminal).toHaveBeenCalledWith(COMMAND));
     });
 
     it('shows real installer activity and ignores another job’s output', async () => {
       let finish!: (result: unknown) => void;
-      (window as any).claude.update.launch = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+      claude().update.launch = vi.fn(() => new Promise(resolve => { finish = resolve; }));
       await clickUpdate({ cached: true });
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
       expect(await screen.findByRole('button', { name: 'Preparing the installer…' })).toBeDisabled();
       expect(screen.getByRole('button', { name: 'Preparing the installer…' })).toHaveClass('w-full');
-      const progress = (window as any).claude.update.onInstallProgress.mock.calls[0][0];
+      const progress = claude().update.onInstallProgress.mock.calls[0][0];
       act(() => progress({ jobId: 'other', phase: 'installing', output: 'Unrelated output' }));
       expect(screen.queryByText('Unrelated output')).not.toBeInTheDocument();
       act(() => progress({ jobId: 'cached', phase: 'authorizing', output: '' }));
@@ -400,38 +369,38 @@ describe('UpdatePanel — the update button after a failure', () => {
     });
 
     it('does not preserve a running install after the browser fallback completed', async () => {
-      (window as any).claude.update.launch.mockResolvedValue({ success: true, quitPending: false, fallback: 'browser' });
+      claude().update.launch.mockResolvedValue({ success: true, quitPending: false, fallback: 'browser' });
       const onClose = vi.fn();
-      (window as any).claude.update.getCachedDownload = vi.fn().mockResolvedValue({ filePath: '/tmp/YouCoded-setup.exe', version: '1.3.0' }); // opened onto a downloaded file: the interactive installer path
+      claude().update.getCachedDownload = vi.fn().mockResolvedValue(CACHED_FILE); // opened onto a downloaded file: the interactive installer path
       const view = render(<UpdatePanel open onClose={onClose} updateStatus={STATUS} />);
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
       await waitFor(() => expect(onClose).toHaveBeenCalled());
-      (window as any).claude.update.getCachedDownload = vi.fn().mockResolvedValue(null); // the file is gone after the browser fallback
+      claude().update.getCachedDownload = vi.fn().mockResolvedValue(null); // the file is gone after the browser fallback
       view.rerender(<UpdatePanel open={false} onClose={onClose} updateStatus={STATUS} />);
       view.rerender(<UpdatePanel open onClose={onClose} updateStatus={STATUS} />);
       expect(await screen.findByRole('button', { name: /update now/i })).toBeEnabled();
     });
 
     it('keeps an in-flight install when the popup closes and reopens', async () => {
-      (window as any).claude.update.launch = vi.fn(() => new Promise(() => {}));
+      claude().update.launch = vi.fn(() => new Promise(() => {}));
       const props = { onClose: () => {}, updateStatus: STATUS };
-      (window as any).claude.update.getCachedDownload = vi.fn().mockResolvedValue({ filePath: '/tmp/YouCoded-setup.exe', version: '1.3.0' }); // opened onto a downloaded file: the interactive installer path
+      claude().update.getCachedDownload = vi.fn().mockResolvedValue(CACHED_FILE); // opened onto a downloaded file: the interactive installer path
       const view = render(<UpdatePanel open {...props} />);
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
       view.rerender(<UpdatePanel open={false} {...props} />);
       view.rerender(<UpdatePanel open {...props} />);
       expect(await screen.findByText('Preparing the installer…')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /update now|launch installer/i })).not.toBeInTheDocument();
-      expect((window as any).claude.update.launch).toHaveBeenCalledTimes(1);
+      expect(claude().update.launch).toHaveBeenCalledTimes(1);
     });
 
     it('restores progress received while the popup was hidden', async () => {
-      (window as any).claude.update.launch = vi.fn(() => new Promise(() => {}));
+      claude().update.launch = vi.fn(() => new Promise(() => {}));
       const props = { onClose: () => {}, updateStatus: STATUS };
-      (window as any).claude.update.getCachedDownload = vi.fn().mockResolvedValue({ filePath: '/tmp/YouCoded-setup.exe', version: '1.3.0' }); // opened onto a downloaded file: the interactive installer path
+      claude().update.getCachedDownload = vi.fn().mockResolvedValue(CACHED_FILE); // opened onto a downloaded file: the interactive installer path
       const view = render(<UpdatePanel open {...props} />);
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
-      const progress = (window as any).claude.update.onInstallProgress.mock.calls[0][0];
+      const progress = claude().update.onInstallProgress.mock.calls[0][0];
       view.rerender(<UpdatePanel open={false} {...props} />);
       act(() => progress({ jobId: 'cached', phase: 'installing', output: 'Running post-install hooks…' }));
       view.rerender(<UpdatePanel open {...props} />);
@@ -441,9 +410,9 @@ describe('UpdatePanel — the update button after a failure', () => {
 
     it.each(['install-failed', 'install-timeout'])('retains %s received while closed', async (error) => {
       let finish!: (result: unknown) => void;
-      (window as any).claude.update.launch = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+      claude().update.launch = vi.fn(() => new Promise(resolve => { finish = resolve; }));
       const props = { onClose: () => {}, updateStatus: STATUS };
-      (window as any).claude.update.getCachedDownload = vi.fn().mockResolvedValue({ filePath: '/tmp/YouCoded-setup.exe', version: '1.3.0' }); // opened onto a downloaded file: the interactive installer path
+      claude().update.getCachedDownload = vi.fn().mockResolvedValue(CACHED_FILE); // opened onto a downloaded file: the interactive installer path
       const view = render(<UpdatePanel open {...props} />);
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
       view.rerender(<UpdatePanel open={false} {...props} />);
@@ -457,7 +426,7 @@ describe('UpdatePanel — the update button after a failure', () => {
     });
 
     it('a rejected launch shows an unknown outcome with the real error, never a stuck button', async () => {
-      (window as any).claude.update.launch = vi.fn().mockRejectedValue(new Error('connection closed'));
+      claude().update.launch = vi.fn().mockRejectedValue(new Error('connection closed'));
       await clickUpdate({ cached: true });
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
       expect(await screen.findByText(/confirm the installation result/i)).toBeInTheDocument();
@@ -484,13 +453,13 @@ describe('UpdatePanel — the update button after a failure', () => {
     });
 
     it('replaces a timed-out outcome with a confirmed late cancellation, even while hidden', async () => {
-      (window as any).claude.update.launch.mockResolvedValue({ success: false, error: 'install-timeout' });
+      claude().update.launch.mockResolvedValue({ success: false, error: 'install-timeout' });
       const props = { onClose: () => {}, updateStatus: STATUS };
-      (window as any).claude.update.getCachedDownload = vi.fn().mockResolvedValue({ filePath: '/tmp/YouCoded-setup.exe', version: '1.3.0' }); // opened onto a downloaded file: the interactive installer path
+      claude().update.getCachedDownload = vi.fn().mockResolvedValue(CACHED_FILE); // opened onto a downloaded file: the interactive installer path
       const view = render(<UpdatePanel open {...props} />);
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
       expect(await screen.findByText(/confirm the installation result/i)).toBeInTheDocument();
-      const progress = (window as any).claude.update.onInstallProgress.mock.calls[0][0];
+      const progress = claude().update.onInstallProgress.mock.calls[0][0];
       view.rerender(<UpdatePanel open={false} {...props} />);
       act(() => progress({ jobId: 'cached', phase: 'failed', error: 'install-cancelled', output: 'Authentication cancelled', command: COMMAND }));
       view.rerender(<UpdatePanel open {...props} />);
@@ -532,20 +501,16 @@ describe('UpdatePanel — the update button after a failure', () => {
   });
 });
 
-// Code review F5 / F7 / design note (#183).
 describe('UpdatePanel — what it promises and how a failed Restart is worded', () => {
   const READY = { current: '1.1.1', latest: '1.1.2', update_available: true, download_url: 'http://x', downloaded: true } as Record<string, unknown> as never;
   const INSTALLS = 'Downloaded. Installs by itself the next time you quit YouCoded.';
   const MANUAL = 'Downloaded. Restart when you are ready.';
   function mountApi(switchState: unknown, extra: Record<string, unknown> = {}) {
     resetAutoInstallStoreForTests();
-    (window as any).claude = { update: {
+    installUpdateApi({
       changelog: vi.fn().mockResolvedValue({ markdown: '# x', entries: [{ version: '1.1.2', body: 'b' }], fromCache: false }),
-      onProgress: vi.fn(() => () => {}), onInstallProgress: vi.fn(() => () => {}),
-      getCachedDownload: vi.fn().mockResolvedValue(null), download: vi.fn().mockResolvedValue({ jobId: 'j', filePath: '/tmp/x', bytesTotal: 0 }),
-      cancel: vi.fn(), launch: vi.fn(), restartToUpdate: vi.fn().mockResolvedValue({ restarting: false }),
-      getAutoInstall: vi.fn().mockResolvedValue(switchState), setAutoInstall: vi.fn(), ...extra,
-    }, shell: { openExternal: vi.fn(), openChangelog: vi.fn() } };
+      cancel: vi.fn(), launch: vi.fn(), getAutoInstall: vi.fn().mockResolvedValue(switchState), setAutoInstall: vi.fn(), ...extra,
+    });
   }
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
@@ -593,8 +558,8 @@ describe('UpdatePanel — what it promises and how a failed Restart is worded', 
     const status = { current: '1.1.1', latest: '1.1.2', update_available: true, download_url: 'http://x', needs_password: true } as never;
     render(<UpdatePanel open onClose={() => {}} updateStatus={status} />);
     fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
-    await waitFor(() => expect((window as any).claude.update.download).toHaveBeenCalled());
+    await waitFor(() => expect(claude().update.download).toHaveBeenCalled());
     await screen.findByRole('button', { name: /launch installer|restart to update/i });
-    expect((window as any).claude.update.restartToUpdate).not.toHaveBeenCalled();
+    expect(claude().update.restartToUpdate).not.toHaveBeenCalled();
   });
 });

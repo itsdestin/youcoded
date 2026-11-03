@@ -10,14 +10,7 @@ import { render, cleanup, fireEvent, act, screen, waitFor } from '@testing-libra
 import { SizeLine, LocalModelRow, setModelSettingsPollMs } from '../src/renderer/components/LocalModelsSection';
 import type { DownloadProgress, FitEstimate, InstalledLocalModel, StoredModelSettings } from '../src/shared/model-manager-types';
 
-// ── The row ─────────────────────────────────────────────────────────────────
-//
-// The copy asserted here is the copy from Destin's design review, which is
-// LATER than the draft strings in the implementation plan: the live row's stop
-// button says "Pause" (every downloaded byte is kept), removal says "Delete",
-// and the state word lives in the coloured band rather than in the progress
-// line.
-
+// One installer for every window.claude.models stub in this file; `overrides` replace the defaults.
 function setupModelsMock(overrides: Record<string, any> = {}) {
   (globalThis as any).window = (globalThis as any).window ?? {};
   (globalThis as any).window.claude = {
@@ -32,8 +25,7 @@ function setupModelsMock(overrides: Record<string, any> = {}) {
   return (globalThis as any).window.claude.models;
 }
 
-// Destin's real 2026-08-26 interruption. The app's gb() is binary, so these
-// render as 74.2 GB of 113.0 GB (66%), not Hugging Face's 79.7 of 121.3.
+// A real interrupted download. The app's gb() is binary: 74.2 GB of 113.0 GB (66%), not Hugging Face's 79.7 of 121.3.
 const unfinished: InstalledLocalModel = {
   id: 'Half-UD-Q4_K_XL-00001-of-00004', sizeBytes: 79_674_559_677,
   quant: 'UD-Q4_K_XL', quantDescription: 'Balanced', parts: 4, status: 'unfinished',
@@ -54,8 +46,6 @@ describe('LocalModelRow', () => {
 
   it('an unfinished row shows an interrupted notice with Resume and Delete inside it, real progress, and resumes by model id', async () => {
     render(<LocalModelRow model={unfinished} onRefresh={async () => {}} />);
-    // The shared notice box, not a coloured strip: its options sit INSIDE it
-    // (decisions.md "Problem on a list item").
     const notice = screen.getByText('Download interrupted').closest('.rounded-lg.border') as HTMLElement;
     expect(notice.className).toContain('bg-amber-500/10');
     expect(notice.contains(screen.getByText('Resume'))).toBe(true);
@@ -67,32 +57,22 @@ describe('LocalModelRow', () => {
 
   it('a REFUSED resume says why instead of doing nothing visible', async () => {
     const models = setupModelsMock();
-    // The message wears Electron's wrapper, because that is how it ARRIVES: a
-    // rejected ipcRenderer.invoke is re-thrown as "Error invoking remote method
-    // '<channel>': Error: <the real one>". This test used to mock an
-    // already-clean string, so it could not tell a stripped message from an
-    // unstripped one and passed either way — the whole class went unguarded.
+    // WHY the wrapper: a rejected ipcRenderer.invoke arrives as "Error invoking remote method '<channel>': Error: <real>"; a clean mock could not tell stripped from unstripped.
     models.resume.mockRejectedValue(new Error(
       "Error invoking remote method 'models:resume': Error: Not enough free space: this download needs about 40.0 GB but only 5.0 GB is free.",
     ));
     render(<LocalModelRow model={unfinished} onRefresh={async () => {}} />);
     await act(async () => { fireEvent.click(screen.getByText('Resume')); });
-    // Exact text, anchored at the start: a substring match would still pass with
-    // forty characters of Electron machinery in front of it.
     await waitFor(() => expect(screen.getByText(
       'Not enough free space: this download needs about 40.0 GB but only 5.0 GB is free.',
     )).toBeTruthy());
   });
 
-  // The start-up window this branch deliberately created: over the remote link
-  // the host can have no engine wired yet, and its honest answer to both of
-  // these is nothing at all. Neither may become developer text or a spinner
-  // that never ends.
+  // Over the remote link the host may have no engine wired yet and answers nothing: never developer text or an endless spinner.
   it('says so plainly when the engine is not ready to READ a model\u2019s settings', async () => {
     setupModelsMock({ settings: vi.fn().mockResolvedValue(null) });
     render(<LocalModelRow model={{ ...unfinished, status: 'complete' }} onRefresh={async () => {}} />);
     await act(async () => { fireEvent.click(screen.getByText('Settings')); });
-    // Not "Cannot read properties of null (reading 'contextLength')".
     await waitFor(() => expect(screen.getByText(
       'This model\u2019s settings are not available yet. Try again in a moment.',
     )).toBeTruthy());
@@ -117,7 +97,6 @@ describe('LocalModelRow', () => {
     await waitFor(() => expect(screen.getByText(
       'That did not save \u2014 the engine is not ready yet. Try again in a moment.',
     )).toBeTruthy());
-    // The dialog is still a dialog, not "Loading settings…" for ever.
     expect(screen.queryByText('Loading settings…')).toBeNull();
     expect(screen.getByLabelText('Keep loaded')).toBeTruthy();
   });
@@ -137,9 +116,7 @@ describe('LocalModelRow', () => {
   });
 
   it("a download that FAILED after it started shows the downloader's own message", () => {
-    // resume() returns as soon as the download starts; an HTTP error or an
-    // integrity failure arrives later as an 'error' progress event. This row is
-    // the only place that message reaches the user.
+    // resume() returns at once; an HTTP/integrity failure arrives later as an 'error' progress event, and only this row shows it.
     render(<LocalModelRow model={unfinished}
       progress={liveOf('error', { message: 'Hugging Face responded with HTTP 503.' })}
       onRefresh={async () => {}} />);
@@ -149,13 +126,10 @@ describe('LocalModelRow', () => {
 
   it('a live download shows a progress bar and Pause in place of Resume and Delete', () => {
     render(<LocalModelRow model={unfinished} progress={liveOf('downloading')} onRefresh={async () => {}} />);
-    // The progress line carries the state word (the coloured band is gone).
     expect(screen.getByText('Downloading · 70% — 79.2 of 113.0 GB · part 3 of 4')).toBeTruthy();
     expect(screen.getByLabelText('Download progress')).toBeTruthy();
     expect(screen.queryByText('Resume')).toBeNull();
-    // WHY Delete is absent while bytes move: two stop-shaped buttons differing
-    // only in whether you lose 74 GB is a mistake waiting to happen (Destin,
-    // 2026-08-27). Pause keeps every byte, which is the point of the feature.
+    // WHY no Delete while bytes move: two stop-shaped buttons differing only in losing 74 GB invite a mistake; Pause keeps every byte.
     expect(screen.queryByText('Delete')).toBeNull();
     expect(screen.getByText('Pause')).toBeTruthy();
   });
@@ -165,8 +139,6 @@ describe('LocalModelRow', () => {
     expect(screen.queryByText('Resume')).toBeNull();
     expect(screen.queryByText(/%/)).toBeNull();      // no total on disk = no honest percentage
     expect(screen.getByText('74.2 GB downloaded')).toBeTruthy();
-    // A danger notice inside the card says what to do, in plain grey text, with
-    // Delete inside it — no red strip, no explanation hidden behind an (i).
     const notice = screen.getByText('Damaged download').closest('.rounded-lg.border') as HTMLElement;
     expect(notice.className).toContain('bg-destructive/10');
     expect(notice.textContent).toMatch(/Find the model in search and download\s+it again/);
@@ -180,13 +152,8 @@ describe('LocalModelRow', () => {
   });
 
   it('deleting cancels first and waits for the cancelled event when the stream still shows it live', async () => {
-    // WHY this ordering matters: removing the .partial out from under an open
-    // write stream races. The row hides Delete while a download is live, so the
-    // only way in is a STALE stream — confirm on a stopped row, then a progress
-    // event lands before the confirm is pressed. That is exactly the window the
-    // guard exists for, and it is what this test drives.
-    // Order is recorded in a plain array — vitest has no toHaveBeenCalledBefore
-    // without jest-extended, which this repo does not use.
+    // WHY: deleting the .partial under an open write stream races. Delete is hidden while live, so the only way in is a STALE
+    // stream: confirm on a stopped row, then a progress event lands before the confirm.
     const models = setupModelsMock();
     const order: string[] = [];
     let emit: ((p: DownloadProgress) => void) | null = null;
@@ -206,19 +173,10 @@ describe('LocalModelRow', () => {
   });
 });
 
-// ── Fields main computes that the row must draw ─────────────────────────────
-//
-// WHY THESE EXIST. Every field below was already being produced by the
-// backend and thrown away by the renderer, which is invisible in every other
-// kind of test: types pass, main's own tests pass, and the user simply never
-// finds out. Each guard therefore comes in a PAIR — the text appears when the
-// field is set, and it is ABSENT when the field is not there at all. Absence,
-// not zero: this feature already shipped a guard that passed because a timeout
-// produced the same value as success.
+// Fields main computes that the row must draw. Each guard is a PAIR: text appears when the field is set and is
+// ABSENT when it is not (absence, not zero: an earlier guard passed because a timeout equalled success).
 
-// The exact sentence the contract signs off (R8). It is written ONCE, in
-// fit-estimator.ts; the renderer only passes it through. Hard-coded here so a
-// reworded estimator has to come past this test.
+// Written once in fit-estimator.ts; the renderer only passes it through. Hard-coded so a reworded estimator has to come past this test.
 const ADVICE = "Lower this model's context length in its Settings to shrink this.";
 
 // A 4B-class model at the engine's 32k default: 2.4 GB of weights, 1.6 GB of
@@ -238,24 +196,16 @@ function quantWith(breakdown: Partial<NonNullable<FitEstimate['breakdown']>>, fi
   };
 }
 
-/** Hover the dotted number with a MOUSE to open the breakdown bubble.
- *  pointerType matters since 2026-09-06: the bubble ignores the phantom mouse
- *  events a touchscreen replays after a tap (contract R20), so a hover has to
- *  say it came from a mouse. */
+/** Hover with a MOUSE pointer: the bubble ignores the phantom mouse events a touchscreen replays after a tap. */
 function openBubble() {
   fireEvent.pointerEnter(screen.getByLabelText(/is made of$/), { pointerType: 'mouse' });
 }
 
-// The dialog's own poll interval, wound down. Every guard below still watches a
-// REAL poll happen against the real component — this only shortens the gap
-// between them, using the value the dialog itself reads, so no test can drift
-// away from the shipped number by keeping a copy of it.
+// The dialog's poll interval is wound down via its own setter (no copied constant); real polls still run.
 let shippedPollMs = 0;
-/** Comfortably longer than one poll tick, so "nothing happened" means the poll
- *  really did get its chance and chose not to act. */
+/** Longer than one poll tick, so "nothing happened" means the poll got its chance and declined. */
 const APOLL = 250;
-/** Waiting on something the poll must eventually do. Generous next to a 50 ms
- *  interval, so a loaded machine cannot fail a correct guard. */
+/** Generous next to the 50 ms interval, so a loaded machine cannot fail a correct guard. */
 const POLLED = { timeout: 3_000, interval: 20 } as const;
 
 // ── A model's own Settings dialog ────────────────────────────────────────────
@@ -276,21 +226,15 @@ function deferredModels(firstRead: StoredModelSettings) {
   const reads: Array<{ resolve: (v: StoredModelSettings) => void; reject: (e: unknown) => void }> = [];
   const saves: Array<{ resolve: (v: StoredModelSettings) => void; reject: (e: unknown) => void }> = [];
   let readCount = 0;
-  const models = {
+  const models = setupModelsMock({
+    // The first read resolves at once so the dialog can open; every later one is held for the test.
     settings: vi.fn(() => {
       readCount += 1;
-      // The first read resolves at once so the dialog can open; every later one
-      // is held for the test.
       if (readCount === 1) return Promise.resolve(firstRead);
       return new Promise<StoredModelSettings>((resolve, reject) => { reads.push({ resolve, reject }); });
     }),
     setSettings: vi.fn(() => new Promise<StoredModelSettings>((resolve, reject) => { saves.push({ resolve, reject }); })),
-    delete: vi.fn().mockResolvedValue(true),
-    downloadCancel: vi.fn().mockResolvedValue(true),
-    onDownloadProgress: vi.fn().mockReturnValue(() => {}),
-  };
-  (globalThis as any).window = (globalThis as any).window ?? {};
-  (globalThis as any).window.claude = { models };
+  });
   return { models, reads, saves };
 }
 
@@ -301,37 +245,20 @@ async function openDialog() {
   await waitFor(() => expect(screen.getByText('Context length')).toBeTruthy());
 }
 
-/** Mount the row with a stubbed models API and open its Settings dialog.
- *  `later`, when given, is what fetches answer once the returned `land()` has
- *  been called — which is how a pending save landing in the background is
- *  driven. WHY a gate the test opens, not "every fetch after the first": the
- *  poll runs every 50 ms here, so on a loaded machine the second fetch could
- *  land before the test had even checked the BEFORE state, failing a correct
- *  component (seen 2026-09-26 under a full verify run — the same race master
- *  independently fixed with a holdLater/reveal() opt-in; this gate is
- *  unconditional so every `later`-bearing call site is safe by default). */
+/** Stub the models API and open the Settings dialog. `later` is what fetches answer once the returned `land()` is called.
+ *  WHY a gate the test opens, not "every fetch after the first": the 50 ms poll could land the second fetch before the
+ *  test checked the BEFORE state on a loaded machine. */
 async function openSettings(settings: StoredModelSettings, later?: StoredModelSettings): Promise<() => void> {
-  (globalThis as any).window = (globalThis as any).window ?? {};
   let landed = false;
-  (globalThis as any).window.claude = {
-    models: {
-      settings: vi.fn(async () => (later && landed ? later : settings)),
-      setSettings: vi.fn().mockResolvedValue(settings),
-      delete: vi.fn().mockResolvedValue(true),
-      downloadCancel: vi.fn().mockResolvedValue(true),
-      onDownloadProgress: vi.fn().mockReturnValue(() => {}),
-    },
-  };
-  render(<LocalModelRow model={COMPLETE} onRefresh={async () => {}} />);
-  await act(async () => { fireEvent.click(screen.getByLabelText(/^Settings for /)); });
-  // The dialog fetches asynchronously; nothing below is meaningful until the
-  // settings have landed and the rows exist.
-  await waitFor(() => expect(screen.getByText('Context length')).toBeTruthy());
+  setupModelsMock({
+    settings: vi.fn(async () => (later && landed ? later : settings)),
+    setSettings: vi.fn().mockResolvedValue(settings),
+  });
+  await openDialog();
   return () => { landed = true; };
 }
 
-// The opening words of the load-error sentence (no longer a separate red title — 2026-10-05,
-// plain error boxes app-wide); the engine's own words follow in their own span.
+// Opening words of the load-error sentence; the engine's own words follow in their own span.
 const LOAD_ERROR_TITLE = /This model failed to load last time/;
 
 describe('fields main computes', () => {
@@ -347,8 +274,7 @@ describe('fields main computes', () => {
     });
 
     it('R8: the advice is the LAST thing in the bubble', () => {
-      // The contract says the bubble "ends with" it. Moved above the memory
-      // figure, every other assertion in this file still passed.
+      // WHY: moved above the memory figure, every other assertion still passed.
       render(<SizeLine q={quantWith({ advice: ADVICE })} />);
       openBubble();
       const rows = screen.getByText(ADVICE).parentElement as HTMLElement;
@@ -356,9 +282,7 @@ describe('fields main computes', () => {
     });
 
     it('hedges the RUNNING-MEMORY total too, not just the small print', () => {
-      // 2.4 GB of weights + 1.6 GB of context = 4.0 GB. The total contains the
-      // estimated term, so stating it exactly is the same fake precision one line
-      // lower down — and the total is the number a user actually decides on.
+      // The total (2.4 + 1.6 GB) contains the estimated term, so it must be hedged too: it is the number users decide on.
       render(<SizeLine q={quantWith({ contextBytesIsUpperBound: true })} />);
       openBubble();
       expect(screen.getByText('up to 4.0 GB')).toBeTruthy();
@@ -371,8 +295,7 @@ describe('fields main computes', () => {
     it('R8: has NO advice line when the estimator sent none', () => {
       render(<SizeLine q={quantWith({}, 'fits')} />);
       openBubble();
-      // The bubble really is open — otherwise "no advice" would pass for a bubble
-      // that never rendered anything at all.
+      // Bubble really open, else "no advice" passes vacuously.
       expect(screen.getByText('Model file')).toBeTruthy();
       expect(screen.queryByText(ADVICE)).toBeNull();
     });
@@ -394,21 +317,16 @@ describe('fields main computes', () => {
   describe('a model’s settings dialog', () => {
     it('R26: shows why the model last failed to load, in the ENGINE’S own words', async () => {
       await openSettings({ ...SETTINGS, lastLoadError: 'error: invalid argument: --tempp' });
-      // "last time": main clears this only on a SUCCESSFUL load, so the card
-      // outlives the problem and must not claim the model is broken right now.
+      // "last time": main clears this only on a SUCCESSFUL load, so the card must not claim the model is broken right now.
       expect(screen.getByText(LOAD_ERROR_TITLE)).toBeTruthy();
-      // Verbatim. A paraphrase would send the user to fix something else.
       const line = screen.getByText('error: invalid argument: --tempp');
       expect(line).toBeTruthy();
-      // Engine errors carry long unbroken paths; without this they overflow the
-      // dialog and hide everything after them.
+      // Long unbroken engine paths must wrap, not overflow the dialog.
       expect(line.className).toContain('break-words');
     });
 
     it('R26: the load-error card is the FIRST thing in the dialog', async () => {
-      // Its own WHY comment argues this at length — the extra-flags box that most
-      // often causes it is behind a collapsed Advanced row, and a message under
-      // that is a message nobody reads. Nothing enforced the position.
+      // WHY first: the extra-flags box that most often causes it is behind a collapsed Advanced row.
       await openSettings({ ...SETTINGS, lastLoadError: 'error: invalid argument: --tempp' });
       const body = screen.getByTestId('model-settings');
       const first = body.firstElementChild as HTMLElement;
@@ -416,9 +334,6 @@ describe('fields main computes', () => {
     });
 
     it('R26: opens Advanced when the model failed to load, and leaves it shut otherwise', async () => {
-      // The flags box lives inside Advanced. The card above still does NOT name
-      // the flags as the cause — an unreadable file and a machine out of memory
-      // arrive in exactly the same field.
       await openSettings({ ...SETTINGS, lastLoadError: "error: option '--tempp' not recognized in preset 'x'" });
       expect(screen.getByLabelText('Extra engine flags')).toBeTruthy();
       cleanup();
@@ -442,10 +357,7 @@ describe('fields main computes', () => {
     });
 
     it('the waiting line CLEARS once the change lands, without closing the dialog', async () => {
-      // There is no push channel for per-model settings, so the dialog re-asks.
-      // Fetched once, it would sit there saying "Applies after the current reply"
-      // for as long as it is open — the user closes it, reopens it, and concludes
-      // the setting never stuck.
+      // No push channel for per-model settings, so the dialog re-asks; fetched once it would say "waiting" until reopened.
       const land = await openSettings(
         { ...SETTINGS, keepLoaded: true, pendingApply: true },
         { ...SETTINGS, keepLoaded: true },
@@ -459,9 +371,7 @@ describe('fields main computes', () => {
     });
 
     it('re-asking main never wipes what the user is halfway through typing', async () => {
-      // The poll re-reads every field. Seeded into the two text drafts on every
-      // pass instead of once, a user typing a context length while a save is
-      // pending watches it vanish under them two seconds later.
+      // WHY: the poll must seed the text drafts once, not every pass, or typing vanishes under the user.
       await openSettings({ ...SETTINGS, contextLength: 8192, pendingApply: true });
       const box = screen.getByLabelText('Context length for this model') as HTMLInputElement;
       fireEvent.change(box, { target: { value: '4096' } });
@@ -471,11 +381,7 @@ describe('fields main computes', () => {
     });
 
     it('a read already IN FLIGHT cannot undo the switch the user just flipped', async () => {
-      // The bug the first version of the poll shipped. Refusing to START a read
-      // during a save does nothing about one already in the air: it carries the
-      // values main held BEFORE the save and lands after it. What the user saw —
-      // "Keep loaded" turns on, flips itself off a moment later, then back on two
-      // seconds after that. The setting saved perfectly; only the screen lied.
+      // A read already in the air carries pre-save values and lands after the save: the switch flipped itself off, then on again.
       const { reads, saves } = deferredModels({ ...SETTINGS, keepLoaded: false });
       await openDialog();
       // A poll goes out, and is still in the air…
@@ -490,8 +396,6 @@ describe('fields main computes', () => {
     });
 
     it('two reads in the air, and the SLOWER one cannot win by finishing last', async () => {
-      // Whenever a read takes longer than the poll interval there are two of them
-      // outstanding, and order of arrival is not order of issue.
       const { reads } = deferredModels({ ...SETTINGS, keepLoaded: false });
       await openDialog();
       await waitFor(() => expect(reads.length).toBeGreaterThanOrEqual(2), POLLED);
@@ -504,32 +408,20 @@ describe('fields main computes', () => {
     });
 
     it('one failed read does not leave a red line under a working dialog', async () => {
-      // Before the poll this could not happen: the read failed and the dialog
-      // stayed on the failure. Now the next read succeeds two seconds later and
-      // draws the whole working dialog — with a stale "could not read" line under
-      // it for as long as it is open.
-      // WHY the gate: the poll runs every 50 ms here, so on a busy machine the
-      // second (working) read could land and wipe the line before waitFor's
-      // first look — the test then failed on a dialog that behaved correctly.
-      // Later reads wait until the test has SEEN the failure.
+      // The next read succeeds and draws the working dialog; a stale "could not read" line must not remain.
+      // WHY the gate: on a busy machine the working read could wipe the line before waitFor's first look; later reads wait until the failure was SEEN.
       let calls = 0;
       let seen!: () => void;
       const sawFailure = new Promise<void>((r) => { seen = r; });
-      (globalThis as any).window = (globalThis as any).window ?? {};
-      (globalThis as any).window.claude = {
-        models: {
-          settings: vi.fn(async () => {
-            calls += 1;
-            if (calls === 1) throw new Error('Could not read this model’s settings.');
-            await sawFailure;
-            return SETTINGS;
-          }),
-          setSettings: vi.fn().mockResolvedValue(SETTINGS),
-          delete: vi.fn().mockResolvedValue(true),
-          downloadCancel: vi.fn().mockResolvedValue(true),
-          onDownloadProgress: vi.fn().mockReturnValue(() => {}),
-        },
-      };
+      setupModelsMock({
+        settings: vi.fn(async () => {
+          calls += 1;
+          if (calls === 1) throw new Error('Could not read this model’s settings.');
+          await sawFailure;
+          return SETTINGS;
+        }),
+        setSettings: vi.fn().mockResolvedValue(SETTINGS),
+      });
       render(<LocalModelRow model={COMPLETE} onRefresh={async () => {}} />);
       await act(async () => { fireEvent.click(screen.getByLabelText(/^Settings for /)); });
       await waitFor(() => expect(screen.getByText('Could not read this model’s settings.')).toBeTruthy());
@@ -542,33 +434,22 @@ describe('fields main computes', () => {
     });
 
     it('a save that FAILS does not freeze the dialog’s live values', async () => {
-      // The suppression is released in a `finally`. Left set, one failed save
-      // would stop every poll for as long as the dialog stayed open — and the
-      // pending line and the load-error card are exactly what the poll is for.
+      // The poll suppression is released in a `finally`; left set, one failed save would stop every poll.
       let calls = 0;
-      (globalThis as any).window = (globalThis as any).window ?? {};
-      (globalThis as any).window.claude = {
-        models: {
-          settings: vi.fn(async () => { calls += 1; return calls > 1 ? { ...SETTINGS, lastLoadError: 'error: out of memory' } : SETTINGS; }),
-          setSettings: vi.fn().mockRejectedValue(new Error('Disk is full.')),
-          delete: vi.fn().mockResolvedValue(true),
-          downloadCancel: vi.fn().mockResolvedValue(true),
-          onDownloadProgress: vi.fn().mockReturnValue(() => {}),
-        },
-      };
+      setupModelsMock({
+        settings: vi.fn(async () => { calls += 1; return calls > 1 ? { ...SETTINGS, lastLoadError: 'error: out of memory' } : SETTINGS; }),
+        setSettings: vi.fn().mockRejectedValue(new Error('Disk is full.')),
+      });
       await openDialog();
       await act(async () => { fireEvent.click(screen.getByLabelText('Keep loaded')); });
       await waitFor(() => expect(screen.getByText('Disk is full.')).toBeTruthy());
       await waitFor(() => expect(screen.getByText('error: out of memory')).toBeTruthy(), POLLED);
-      // …and the save failure is still on screen: it is the user's, not the
-      // poll's, and a successful read must not wipe it.
+      // The save failure is the user's, not the poll's: a successful read must not wipe it.
       expect(screen.getByText('Disk is full.')).toBeTruthy();
     });
 
     it('no read is even ASKED FOR while a save is in flight', async () => {
-      // The check inside the answer catches a read that was already in the air.
-      // This is the other half: not starting one at all, so an answer that
-      // predates the save's write cannot exist in the first place.
+      // Other half of the in-flight guard: don't START a read during a save.
       const { models, saves, reads } = deferredModels({ ...SETTINGS, keepLoaded: false });
       await openDialog();
       const before = models.settings.mock.calls.length;
@@ -583,11 +464,7 @@ describe('fields main computes', () => {
     });
 
     it('two saves in flight — the SLOWER one cannot repaint the older value', async () => {
-      // Reachable without contriving anything: saving Extra engine flags makes
-      // main RUN the engine binary to check them, which takes seconds, while
-      // saving a toggle comes back at once. Type a flag, blur, then hit Keep
-      // loaded, and the flags answer lands last carrying the value from before
-      // the toggle — the switch turns itself back off under the user's hand.
+      // Real shape: saving flags makes main RUN the engine binary (seconds) while a toggle answers at once, so the late flags answer carries the pre-toggle value.
       const { saves } = deferredModels({ ...SETTINGS, keepLoaded: false, extraFlags: '' });
       await openDialog();
       // The slow save first: a flag, which main validates by running the binary.
@@ -606,11 +483,7 @@ describe('fields main computes', () => {
     });
 
     it('two saves REFUSED at once — neither message is swallowed by the other', async () => {
-      // Same reachable shape as the ordering bug, on the failure path: a bad
-      // extra flag is checked by RUNNING the engine binary and is refused seconds
-      // later, while a bad context length is refused at once. One slot means the
-      // late refusal overwrites the early one and the user never learns their
-      // context length was rejected — and which survives is pure timing.
+      // Failure-path twin: a slow flag refusal must not overwrite a quick context-length refusal (one message slot would).
       const { saves } = deferredModels({ ...SETTINGS, extraFlags: '' });
       await openDialog();
       await act(async () => { fireEvent.click(screen.getByText('Advanced')); });
@@ -619,8 +492,6 @@ describe('fields main computes', () => {
       const box = screen.getByLabelText('Context length for this model');
       await act(async () => { fireEvent.change(box, { target: { value: '999999' } }); fireEvent.blur(box); });
       expect(saves).toHaveLength(2);
-      // The quick refusal first, then the slow one — the order that loses a
-      // message when there is only one slot.
       await act(async () => { saves[1].reject(new Error('Context length must be at most 131072 tokens.')); await Promise.resolve(); });
       await act(async () => { saves[0].reject(new Error("error: option '--tempp' not recognized")); await Promise.resolve(); });
       expect(screen.getByText('Context length must be at most 131072 tokens.')).toBeTruthy();
@@ -628,7 +499,6 @@ describe('fields main computes', () => {
     });
 
     it('the same refusal twice is one message, not two', async () => {
-      // Additive must not mean repetitive: the same sentence twice is noise.
       const { saves } = deferredModels({ ...SETTINGS, extraFlags: '' });
       await openDialog();
       await act(async () => { fireEvent.click(screen.getByText('Advanced')); });
@@ -651,8 +521,7 @@ describe('fields main computes', () => {
     });
 
     it('two overlapping saves — the first one finishing does not unblock the poll', async () => {
-      // A flag, rather than a count, would have the first save's cleanup announce
-      // that nothing is saving while the second is still in the air.
+      // WHY: a boolean flag would let the first save's cleanup announce nothing is saving.
       const { models, saves } = deferredModels({ ...SETTINGS, keepLoaded: false });
       await openDialog();
       const before = models.settings.mock.calls.length;
@@ -682,8 +551,6 @@ describe('fields main computes', () => {
     });
 
     it('a load error that arrives while the dialog is open reaches the user', async () => {
-      // Same staleness, other field: a model fails on its next request, and a
-      // dialog that read main once would never say so.
       const land = await openSettings(SETTINGS, { ...SETTINGS, lastLoadError: 'error: out of memory' });
       expect(screen.queryByText(LOAD_ERROR_TITLE)).toBeNull();
       land();

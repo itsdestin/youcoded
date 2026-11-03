@@ -1,12 +1,7 @@
-// Pins T3's IPC-surface plumbing (docs/active/specs/2026-09-26-doc-comments-
-// build-design.md §1.6, review 3 F1): registerDocCommentsHandlers wires
-// docComments:list/add/reply/resolve/reopen/move so EVERY ONE of them —
-// not just list/add — reaches the store's own containment check with the
-// payload's `path` field, refusing a `../../etc/passwd`-shaped path and a
-// symlink-outside-the-project path exactly the same way at the IPC surface
-// as doc-comments-store.test.ts already pins at the store's own API. Also
-// pins the docComments:changed broadcast (un-filtered — design §1.5
-// "Broadcast scope") and the watch/unwatch wiring.
+// IPC surface of the doc-comments feature: every docComments:* channel reaches the store's containment check with the
+// payload's `path` (refusing ../ and symlink escapes exactly as doc-comments-store.test.ts pins at the store API),
+// refuses unknown project roots, dispatches by file format (docx/xlsx native writers vs the sidecar), broadcasts
+// docComments:changed un-filtered, and wires watch/unwatch.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
@@ -54,6 +49,7 @@ function fakeEvent(senderId = 1) {
 describe('registerDocCommentsHandlers', () => {
   let root: string;
   let deps: { getAllWebContents: () => any[]; sent: any[]; sessionRoots: () => string[] };
+  let ipcMain: ReturnType<typeof fakeIpcMain>;
 
   beforeEach(async () => {
     root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-doc-comments-ipc-'));
@@ -61,306 +57,187 @@ describe('registerDocCommentsHandlers', () => {
     deps = {
       sent,
       getAllWebContents: () => [{ isDestroyed: () => false, send: (channel: string, payload: any) => sent.push({ channel, payload }) }],
-      // F1 fix (post-T3 build review, blocker): every handler now refuses an
-      // unrecognized projectRoot before touching the store — `root` here is a
-      // bare mkdtemp() dir, never a saved folder or indexed project, so every
-      // EXISTING test in this file needs it to count as a "known" root via the
-      // live-session-cwd carve-out (design §1.4's useActiveProject.ts
-      // precedent), exactly the way a real desktop window would supply it.
+      // Every handler refuses an unrecognized projectRoot; `root` is a bare mkdtemp dir, so it counts as known via the
+      // live-session-cwd carve-out, the way a real desktop window supplies it.
       sessionRoots: () => [root],
     };
+    ipcMain = fakeIpcMain();
+    registerDocCommentsHandlers(ipcMain, deps);
   });
   afterEach(async () => {
     __resetDocCommentsWatcherForTest();
     await fs.promises.rm(root, { recursive: true, force: true });
   });
 
+  const call = (channel: string, payload: any, e?: any) => ipcMain.call(channel, payload, e);
+  const WORD_SELECTOR: CommentSelector = {
+    kind: 'text',
+    selector: { type: 'TextQuoteSelector', exact: 'Marketing emails go out', prefix: '', suffix: '', occurrence: 0 },
+  };
+  const SHEET_SELECTOR: CommentSelector = { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1', sheet: 'Q3' } as CellSelector };
+  async function copyFixture(fixture: string, rel: string) {
+    await fs.promises.mkdir(path.dirname(path.join(root, rel)), { recursive: true });
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, fixture), path.join(root, rel));
+  }
+  /** A payload for each of the ten list/mutation channels against one path and root. */
+  const tenCalls = (p: string, projectRoot: string): Array<[string, any]> => [
+    [DOC_COMMENTS_IPC.LIST, { path: p, projectRoot }],
+    [DOC_COMMENTS_IPC.ADD, { path: p, projectRoot, selector: CELL_SELECTOR, text: 'x', author: 'user' }],
+    [DOC_COMMENTS_IPC.REPLY, { path: p, projectRoot, id: 'c-x', text: 'x', author: 'user' }],
+    [DOC_COMMENTS_IPC.RESOLVE, { path: p, projectRoot, id: 'c-x', by: 'user' }],
+    [DOC_COMMENTS_IPC.REOPEN, { path: p, projectRoot, id: 'c-x', by: 'user' }],
+    [DOC_COMMENTS_IPC.MOVE, { path: p, projectRoot, id: 'c-x', newSelector: CELL_SELECTOR }],
+    [DOC_COMMENTS_IPC.EDIT, { path: p, projectRoot, id: 'c-x', text: 'x' }],
+    [DOC_COMMENTS_IPC.EDIT_REPLY, { path: p, projectRoot, id: 'c-x', replyId: 'c-x-r1', text: 'x' }],
+    [DOC_COMMENTS_IPC.DELETE, { path: p, projectRoot, id: 'c-x' }],
+    [DOC_COMMENTS_IPC.DELETE_REPLY, { path: p, projectRoot, id: 'c-x', replyId: 'c-x-r1' }],
+  ];
+
   it('list/add succeed for an ordinary in-project path', async () => {
-    const ipcMain = fakeIpcMain();
-    registerDocCommentsHandlers(ipcMain as any, deps);
-    const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+    const added = await call(DOC_COMMENTS_IPC.ADD, {
       path: 'docs/plan.md', projectRoot: root, selector: CELL_SELECTOR, text: 'hello', author: 'user',
     });
     expect(added).toEqual({ ok: true, id: expect.any(String) });
-    const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
+    const listed = await call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
     expect(listed.ok).toBe(true);
     expect(listed.comments).toHaveLength(1);
   });
 
-  // Code review 2026-09-27, Android F1 (cross-platform parity gap):
-  // Android's DocCommentsBridge.kt already refuses a missing/malformed
-  // `selector` on docComments:add with `{ok:false, error:"missing-field",
-  // field:"selector"}` before ever calling addComment — desktop's IPC
-  // handler used to cast `payload?.selector as CommentSelector` straight
-  // through with no check at all, silently persisting a comment with no
-  // selector. This pins that desktop now refuses the SAME shapes, the same
-  // way, on the same channel.
-  describe('a missing or malformed selector is refused (Android parity)', () => {
-    it('refuses when selector is entirely absent', async () => {
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
-      const result = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
-        path: 'docs/plan.md', projectRoot: root, text: 'hello', author: 'user',
-      });
-      expect(result).toEqual({ ok: false, error: 'missing-field', field: 'selector' });
-      const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
-      expect(listed.comments ?? []).toHaveLength(0);
-    });
-
-    it('refuses when selector has no recognized `kind`', async () => {
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
-      const result = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
-        path: 'docs/plan.md', projectRoot: root, selector: { kind: 'bogus', selector: {} }, text: 'hello', author: 'user',
-      });
-      expect(result).toEqual({ ok: false, error: 'missing-field', field: 'selector' });
-    });
-
-    it('refuses when selector.selector (the inner object) is missing', async () => {
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
-      const result = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
-        path: 'docs/plan.md', projectRoot: root, selector: { kind: 'cell' }, text: 'hello', author: 'user',
-      });
-      expect(result).toEqual({ ok: false, error: 'missing-field', field: 'selector' });
-    });
-
-    it('still accepts a selector missing only INNER fields — Android defaults those, never refuses', async () => {
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
-      // No `exact`/`prefix`/`suffix`/`occurrence` — Android's
-      // TextQuoteSelector.fromJson defaults every one of these rather than
-      // refusing, so desktop must not be STRICTER than Android here.
-      const result = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
-        path: 'docs/plan.md', projectRoot: root, selector: { kind: 'text', selector: {} }, text: 'hello', author: 'user',
-      });
-      expect(result.ok).toBe(true);
-    });
+  // Parity with Android's DocCommentsBridge.kt: a missing/malformed selector is refused before addComment (desktop once
+  // cast it straight through and persisted a selector-less comment).
+  it.each([
+    ['entirely absent', undefined],
+    ['without a recognized `kind`', { kind: 'bogus', selector: {} }],
+    ['without its inner selector object', { kind: 'cell' }],
+  ])('refuses a selector that is %s', async (_label, selector) => {
+    const result = await call(DOC_COMMENTS_IPC.ADD, { path: 'docs/plan.md', projectRoot: root, selector, text: 'hello', author: 'user' });
+    expect(result).toEqual({ ok: false, error: 'missing-field', field: 'selector' });
+    const listed = await call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
+    expect(listed.comments ?? []).toHaveLength(0);
   });
 
-  // F4 (T5 implementation review): the renderer mints the comment id and
-  // sends it on the `add` payload — this IPC handler forwards it through to
-  // the store rather than always minting its own.
-  it('forwards a caller-supplied id straight through to the store (F4, T5 review)', async () => {
-    const ipcMain = fakeIpcMain();
-    registerDocCommentsHandlers(ipcMain as any, deps);
+  it('still accepts a selector missing only INNER fields — Android defaults those, so desktop must not be stricter', async () => {
+    const result = await call(DOC_COMMENTS_IPC.ADD, {
+      path: 'docs/plan.md', projectRoot: root, selector: { kind: 'text', selector: {} }, text: 'hello', author: 'user',
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  // The renderer mints the comment id and sends it on `add`; the handler must forward it, not mint its own.
+  it('forwards a caller-supplied id straight through to the store', async () => {
     const callerId = 'c-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
-    const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+    const added = await call(DOC_COMMENTS_IPC.ADD, {
       path: 'docs/plan.md', projectRoot: root, selector: CELL_SELECTOR, text: 'hello', author: 'user', id: callerId,
     });
     expect(added).toEqual({ ok: true, id: callerId });
-    const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
+    const listed = await call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
     expect(listed.comments[0].id).toBe(callerId);
   });
 
-  // T13 (redesigned 2026-09-27, threaded-comments-only, §4): a .xlsx target's
-  // mutations are REAL now — same wiring T11 already proved for .docx,
-  // exercised here through the IPC surface. q3.xlsx has two sheets (Q3, By
-  // rep), so a write-side selector must name `sheet` (§4.2). The fixture's
-  // own genuine legacy Notes are never surfaced any more (§4.1) — a real
-  // THREAD is added first so there is something real to reply/resolve/move.
+  // A .xlsx target's mutations are real writes. q3.xlsx has two sheets, so a write selector must name `sheet`; its legacy
+  // Notes are never surfaced, so a real THREAD is added first to have something to reply/resolve/move.
   it('list on a .xlsx target reads the file’s own comments; add/reply/resolve/reopen/move all write for real', async () => {
-    await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
-    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'q3-sales-by-rep.xlsx'), path.join(root, 'reports', 'q3.xlsx'));
-    const ipcMain = fakeIpcMain();
-    registerDocCommentsHandlers(ipcMain as any, deps);
-    const listedBefore = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'reports/q3.xlsx', projectRoot: root });
+    await copyFixture('q3-sales-by-rep.xlsx', 'reports/q3.xlsx');
+    const listedBefore = await call(DOC_COMMENTS_IPC.LIST, { path: 'reports/q3.xlsx', projectRoot: root });
     expect(listedBefore.ok).toBe(true);
     expect(listedBefore.comments).toEqual([]);
 
-    const cellSelector: CommentSelector = { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1', sheet: 'Q3' } as CellSelector };
-    const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
-      path: 'reports/q3.xlsx', projectRoot: root, selector: cellSelector, text: 'x', author: 'user',
+    const added = await call(DOC_COMMENTS_IPC.ADD, {
+      path: 'reports/q3.xlsx', projectRoot: root, selector: SHEET_SELECTOR, text: 'x', author: 'user',
     });
     expect(added).toEqual({ ok: true, id: expect.stringMatching(/^xt-/), text: 'x' });
 
-    const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'reports/q3.xlsx', projectRoot: root });
+    const listed = await call(DOC_COMMENTS_IPC.LIST, { path: 'reports/q3.xlsx', projectRoot: root });
     expect(listed.comments.length).toBeGreaterThan(0);
     const id = added.id;
 
-    // Review leftover (a): reply is now enriched with the persisted
-    // CommentReply, mirroring docx's own already-enriched reply response.
-    const replied = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
+    // reply returns the persisted CommentReply, like docx.
+    const replied = await call(DOC_COMMENTS_IPC.REPLY, {
       path: 'reports/q3.xlsx', projectRoot: root, id, text: 'thanks', author: 'user',
     });
     expect(replied).toEqual({ ok: true, reply: { id: expect.stringMatching(/^xt-.*-r1$/), author: 'user', text: 'thanks', createdAt: expect.any(Number) } });
 
-    const resolved = await ipcMain.call(DOC_COMMENTS_IPC.RESOLVE, {
-      path: 'reports/q3.xlsx', projectRoot: root, id, by: 'user',
-    });
-    expect(resolved).toEqual({ ok: true });
+    expect(await call(DOC_COMMENTS_IPC.RESOLVE, { path: 'reports/q3.xlsx', projectRoot: root, id, by: 'user' })).toEqual({ ok: true });
+    expect(await call(DOC_COMMENTS_IPC.REOPEN, { path: 'reports/q3.xlsx', projectRoot: root, id, by: 'user' })).toEqual({ ok: true });
 
-    const reopened = await ipcMain.call(DOC_COMMENTS_IPC.REOPEN, {
-      path: 'reports/q3.xlsx', projectRoot: root, id, by: 'user',
-    });
-    expect(reopened).toEqual({ ok: true });
-
-    // Review F3 (Medium) partial fix: move now returns the FRESH,
-    // hint-accurate id (embedding the new cell) rather than a bare {ok:true}.
-    const moved = await ipcMain.call(DOC_COMMENTS_IPC.MOVE, {
+    // move returns the FRESH, hint-accurate id (embedding the new cell), not a bare {ok:true}.
+    const moved = await call(DOC_COMMENTS_IPC.MOVE, {
       path: 'reports/q3.xlsx', projectRoot: root, id,
       newSelector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'C2', sheet: 'Q3' } },
     });
     expect(moved).toEqual({ ok: true, id: expect.stringMatching(/^xt-\d+-C2-/) });
 
     // An id this file doesn't have refuses honestly rather than guessing.
-    const missing = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
+    const missing = await call(DOC_COMMENTS_IPC.REPLY, {
       path: 'reports/q3.xlsx', projectRoot: root, id: 'x-999-Z99', text: 'x', author: 'user',
     });
     expect(missing).toEqual({ ok: false, error: 'comment-not-found' });
   });
 
   it('list on a .docx target reads the file’s own comments; add/reply/resolve/reopen/move all write for real', async () => {
-    await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
-    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), path.join(root, 'docs', 'launch-brief.docx'));
-    const ipcMain = fakeIpcMain();
-    registerDocCommentsHandlers(ipcMain as any, deps);
-    const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/launch-brief.docx', projectRoot: root });
+    await copyFixture('launch-brief.docx', 'docs/launch-brief.docx');
+    const docx = 'docs/launch-brief.docx';
+    const listed = await call(DOC_COMMENTS_IPC.LIST, { path: docx, projectRoot: root });
     expect(listed.ok).toBe(true);
     expect(listed.comments.length).toBeGreaterThan(0);
 
-    const textSelector: CommentSelector = {
-      kind: 'text',
-      selector: { type: 'TextQuoteSelector', exact: 'Marketing emails go out', prefix: '', suffix: '', occurrence: 0 },
-    };
-    const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
-      path: 'docs/launch-brief.docx', projectRoot: root, selector: textSelector, text: 'x', author: 'user',
-    });
+    const added = await call(DOC_COMMENTS_IPC.ADD, { path: docx, projectRoot: root, selector: WORD_SELECTOR, text: 'x', author: 'user' });
     expect(added).toEqual({ ok: true, id: expect.stringMatching(/^w-/), text: 'x' });
 
-    const replied = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
-      path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', text: 'thanks', author: 'user',
-    });
-    // T5 review (design §1.6, F2): `reply`'s response is enriched to carry the
-    // real persisted `CommentReply` — a docx reply's id depends on the file's
-    // own current state at write time (§1.6's own reasoning), so it can't be
-    // asserted as a literal here; just prove the shape and the ordinal.
+    // A docx reply's id depends on the file's state at write time, so assert its shape and ordinal, not a literal.
+    const replied = await call(DOC_COMMENTS_IPC.REPLY, { path: docx, projectRoot: root, id: 'w-1', text: 'thanks', author: 'user' });
     expect(replied).toEqual({ ok: true, reply: expect.objectContaining({ text: 'thanks', author: 'user' }) });
     expect((replied as any).reply.id).toMatch(/^w-1-r\d+$/);
 
-    const resolved = await ipcMain.call(DOC_COMMENTS_IPC.RESOLVE, {
-      path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', by: 'user',
-    });
-    expect(resolved).toEqual({ ok: true });
+    expect(await call(DOC_COMMENTS_IPC.RESOLVE, { path: docx, projectRoot: root, id: 'w-1', by: 'user' })).toEqual({ ok: true });
+    expect(await call(DOC_COMMENTS_IPC.REOPEN, { path: docx, projectRoot: root, id: 'w-1', by: 'user' })).toEqual({ ok: true });
+    expect(await call(DOC_COMMENTS_IPC.MOVE, { path: docx, projectRoot: root, id: 'w-1', newSelector: WORD_SELECTOR })).toEqual({ ok: true });
 
-    const reopened = await ipcMain.call(DOC_COMMENTS_IPC.REOPEN, {
-      path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', by: 'user',
-    });
-    expect(reopened).toEqual({ ok: true });
-
-    const moved = await ipcMain.call(DOC_COMMENTS_IPC.MOVE, {
-      path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', newSelector: textSelector,
-    });
-    expect(moved).toEqual({ ok: true });
-
-    // A cell selector reaching a Word target is a caller bug, not a
-    // format-not-yet-built refusal — refused honestly, not silently coerced.
-    const badAdd = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
-      path: 'docs/launch-brief.docx', projectRoot: root, selector: CELL_SELECTOR, text: 'x', author: 'user',
-    });
+    // A cell selector reaching a Word target is a caller bug: refused, not silently coerced.
+    const badAdd = await call(DOC_COMMENTS_IPC.ADD, { path: docx, projectRoot: root, selector: CELL_SELECTOR, text: 'x', author: 'user' });
     expect(badAdd).toEqual({ ok: false, error: 'invalid-selector' });
 
-    // An id this file doesn't have refuses honestly rather than guessing.
-    const missing = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
-      path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-999', text: 'x', author: 'user',
-    });
+    const missing = await call(DOC_COMMENTS_IPC.REPLY, { path: docx, projectRoot: root, id: 'w-999', text: 'x', author: 'user' });
     expect(missing).toEqual({ ok: false, error: 'comment-not-found' });
   });
 
-  // Review finding #5 (docs/active/reviews/2026-09-27-doc-comments-t9ab-
-  // review.md): the format decision used to run on the caller's OWN path
-  // string (nativeFormatFor(filePath)) before it was ever resolved, so a
-  // `.txt`-named symlink pointing at a real `.docx` extension-matched as
-  // plain text and its comment silently landed in the inert JSON sidecar
-  // instead of the real document. Fixed by deciding format from
-  // `resolveNativeFormat` (the SAME realpath `resolveSourceFilePath` already
-  // computes for containment) — this pins that a project-RELATIVE symlinked
-  // path (the common shape for an assistant/renderer call, since `projectRoot`
-  // is known here) now dispatches to the real document.
+  // WHY: the format decision once ran on the caller's own path string, so a `.txt` symlink to a real `.docx` was
+  // treated as plain text and its comment landed in the inert JSON sidecar. It must use the resolved realpath.
   it('a .txt symlink pointing at a real .docx is dispatched as the Word document it actually is, not the sidecar', async () => {
-    await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
-    const realDocx = path.join(root, 'docs', 'launch-brief.docx');
-    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), realDocx);
-    const link = path.join(root, 'docs', 'notes.txt');
+    await copyFixture('launch-brief.docx', 'docs/launch-brief.docx');
     try {
-      await fs.promises.symlink(realDocx, link);
+      await fs.promises.symlink(path.join(root, 'docs', 'launch-brief.docx'), path.join(root, 'docs', 'notes.txt'));
     } catch {
       return; // no symlink rights on this platform — skip, same precedent as doc-comments-store.test.ts
     }
-    const ipcMain = fakeIpcMain();
-    registerDocCommentsHandlers(ipcMain as any, deps);
-    const textSelector: CommentSelector = {
-      kind: 'text',
-      selector: { type: 'TextQuoteSelector', exact: 'Marketing emails go out', prefix: '', suffix: '', occurrence: 0 },
-    };
-    const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
-      path: 'docs/notes.txt', projectRoot: root, selector: textSelector, text: 'via disguised symlink', author: 'user',
+    const added = await call(DOC_COMMENTS_IPC.ADD, {
+      path: 'docs/notes.txt', projectRoot: root, selector: WORD_SELECTOR, text: 'via disguised symlink', author: 'user',
     });
-    // A docx-shaped id (w-N) proves this dispatched to the NATIVE writer, not
-    // the sidecar store (which would have minted a c-<uuid> instead).
+    // A docx-shaped id (w-N) proves the NATIVE writer ran (the sidecar would mint c-<uuid>).
     expect(added).toEqual({ ok: true, id: expect.stringMatching(/^w-/), text: 'via disguised symlink' });
-
-    // The comment actually landed in the REAL document...
-    const listedViaRealName = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/launch-brief.docx', projectRoot: root });
-    expect(listedViaRealName.ok).toBe(true);
+    const listedViaRealName = await call(DOC_COMMENTS_IPC.LIST, { path: 'docs/launch-brief.docx', projectRoot: root });
     expect(listedViaRealName.comments.some((c: any) => c.text === 'via disguised symlink')).toBe(true);
-
-    // ...and no inert JSON sidecar was ever created for the disguised name —
-    // the exact silent mis-routing this finding warned about.
-    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'notes.txt.json');
-    await expect(fs.promises.access(sidecarPath)).rejects.toThrow();
+    await expect(fs.promises.access(path.join(root, '.youcoded', 'comments', 'docs', 'notes.txt.json'))).rejects.toThrow();
   });
 
   it('refuses a ../../etc/passwd-shaped path on EVERY one of the ten channels', async () => {
-    const ipcMain = fakeIpcMain();
-    registerDocCommentsHandlers(ipcMain as any, deps);
-    const evil = '../../../../../../etc/passwd';
-    const calls: Array<[string, any]> = [
-      [DOC_COMMENTS_IPC.LIST, { path: evil, projectRoot: root }],
-      [DOC_COMMENTS_IPC.ADD, { path: evil, projectRoot: root, selector: CELL_SELECTOR, text: 'x', author: 'user' }],
-      [DOC_COMMENTS_IPC.REPLY, { path: evil, projectRoot: root, id: 'c-x', text: 'x', author: 'user' }],
-      [DOC_COMMENTS_IPC.RESOLVE, { path: evil, projectRoot: root, id: 'c-x', by: 'user' }],
-      [DOC_COMMENTS_IPC.REOPEN, { path: evil, projectRoot: root, id: 'c-x', by: 'user' }],
-      [DOC_COMMENTS_IPC.MOVE, { path: evil, projectRoot: root, id: 'c-x', newSelector: CELL_SELECTOR }],
-      // Edit/delete build (2026-09-28, design doc §"Edit and delete") — the
-      // same containment check every other id-carrying mutation already has.
-      [DOC_COMMENTS_IPC.EDIT, { path: evil, projectRoot: root, id: 'c-x', text: 'x' }],
-      [DOC_COMMENTS_IPC.EDIT_REPLY, { path: evil, projectRoot: root, id: 'c-x', replyId: 'c-x-r1', text: 'x' }],
-      [DOC_COMMENTS_IPC.DELETE, { path: evil, projectRoot: root, id: 'c-x' }],
-      [DOC_COMMENTS_IPC.DELETE_REPLY, { path: evil, projectRoot: root, id: 'c-x', replyId: 'c-x-r1' }],
-    ];
-    for (const [channel, payload] of calls) {
-      const result = await ipcMain.call(channel, payload);
-      expect(result, `${channel} did not refuse ${evil}`).toEqual({ ok: false, error: 'path-outside-project' });
+    for (const [channel, payload] of tenCalls('../../../../../../etc/passwd', root)) {
+      expect(await call(channel, payload), `${channel} did not refuse the traversal`).toEqual({ ok: false, error: 'path-outside-project' });
     }
   });
 
-  it('refuses a symlink-outside-the-project path on all eight id-based mutations (review 3, F1)', async () => {
+  it('refuses a symlink-outside-the-project path on all eight id-based mutations', async () => {
     const secret = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-doc-comments-secret-'));
     const secretFile = path.join(secret, 'x.md');
     await fs.promises.writeFile(secretFile, 'do not comment on me');
-    const link = path.join(root, 'escape.md');
     try {
-      await fs.promises.symlink(secretFile, link);
+      await fs.promises.symlink(secretFile, path.join(root, 'escape.md'));
     } catch {
       return; // no symlink rights on this platform — skip, same precedent as doc-comments-store.test.ts
     }
     try {
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
-      const calls: Array<[string, any]> = [
-        [DOC_COMMENTS_IPC.REPLY, { path: 'escape.md', projectRoot: root, id: 'c-x', text: 'x', author: 'user' }],
-        [DOC_COMMENTS_IPC.RESOLVE, { path: 'escape.md', projectRoot: root, id: 'c-x', by: 'user' }],
-        [DOC_COMMENTS_IPC.REOPEN, { path: 'escape.md', projectRoot: root, id: 'c-x', by: 'user' }],
-        [DOC_COMMENTS_IPC.MOVE, { path: 'escape.md', projectRoot: root, id: 'c-x', newSelector: CELL_SELECTOR }],
-        [DOC_COMMENTS_IPC.EDIT, { path: 'escape.md', projectRoot: root, id: 'c-x', text: 'x' }],
-        [DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'escape.md', projectRoot: root, id: 'c-x', replyId: 'c-x-r1', text: 'x' }],
-        [DOC_COMMENTS_IPC.DELETE, { path: 'escape.md', projectRoot: root, id: 'c-x' }],
-        [DOC_COMMENTS_IPC.DELETE_REPLY, { path: 'escape.md', projectRoot: root, id: 'c-x', replyId: 'c-x-r1' }],
-      ];
-      for (const [channel, payload] of calls) {
-        const result = await ipcMain.call(channel, payload);
-        expect(result, `${channel} did not refuse the symlink escape`).toEqual({ ok: false, error: 'path-outside-project' });
+      for (const [channel, payload] of tenCalls('escape.md', root).slice(2)) {  // LIST and ADD excluded
+        expect(await call(channel, payload), `${channel} did not refuse the symlink escape`).toEqual({ ok: false, error: 'path-outside-project' });
       }
     } finally {
       await fs.promises.rm(secret, { recursive: true, force: true });
@@ -368,78 +245,63 @@ describe('registerDocCommentsHandlers', () => {
   });
 
   it('reply/resolve/reopen/move succeed against a comment never list()-ed in THIS process (review 3, F1)', async () => {
-    // A fresh call to the real store (not through this test's ipcMain) —
-    // mirrors doc-comments-store.test.ts's own "no warm list() cache" case,
-    // exercised here at the IPC surface instead of the store's bare API.
+    // Seeded straight into the real store (no warm list() cache), then driven through the IPC surface.
     const added = await addComment({ path: 'docs/cold.md', projectRoot: root, selector: CELL_SELECTOR, text: 'seed', author: 'user' });
     expect(added.ok).toBe(true);
     if (!added.ok) return;
-    const ipcMain = fakeIpcMain();
-    registerDocCommentsHandlers(ipcMain as any, deps);
     const args = { path: 'docs/cold.md', projectRoot: root, id: added.id };
-    // T5 review (design §1.6, F2): the plain-sidecar `reply` path is enriched
-    // too, uniformly with docx/xlsx (§1.6's table entry is general).
-    await expect(ipcMain.call(DOC_COMMENTS_IPC.REPLY, { ...args, text: 'hi', author: 'assistant' })).resolves.toEqual({
+    await expect(call(DOC_COMMENTS_IPC.REPLY, { ...args, text: 'hi', author: 'assistant' })).resolves.toEqual({
       ok: true, reply: expect.objectContaining({ text: 'hi', author: 'assistant' }),
     });
-    await expect(ipcMain.call(DOC_COMMENTS_IPC.RESOLVE, { ...args, by: 'assistant' })).resolves.toEqual({ ok: true });
-    await expect(ipcMain.call(DOC_COMMENTS_IPC.REOPEN, { ...args, by: 'user' })).resolves.toEqual({ ok: true });
-    await expect(ipcMain.call(DOC_COMMENTS_IPC.MOVE, { ...args, newSelector: CELL_SELECTOR })).resolves.toEqual({ ok: true });
-    // Edit/delete build (2026-09-28): same cold-process guarantee.
-    await expect(ipcMain.call(DOC_COMMENTS_IPC.EDIT, { ...args, text: 'edited cold' })).resolves.toEqual({ ok: true });
-    const relisted = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/cold.md', projectRoot: root });
+    await expect(call(DOC_COMMENTS_IPC.RESOLVE, { ...args, by: 'assistant' })).resolves.toEqual({ ok: true });
+    await expect(call(DOC_COMMENTS_IPC.REOPEN, { ...args, by: 'user' })).resolves.toEqual({ ok: true });
+    await expect(call(DOC_COMMENTS_IPC.MOVE, { ...args, newSelector: CELL_SELECTOR })).resolves.toEqual({ ok: true });
+    await expect(call(DOC_COMMENTS_IPC.EDIT, { ...args, text: 'edited cold' })).resolves.toEqual({ ok: true });
+    const relisted = await call(DOC_COMMENTS_IPC.LIST, { path: 'docs/cold.md', projectRoot: root });
     const replyId = relisted.comments[0].replies[0].id;
-    await expect(ipcMain.call(DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'docs/cold.md', projectRoot: root, id: added.id, replyId, text: 'edited reply cold' }))
+    await expect(call(DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'docs/cold.md', projectRoot: root, id: added.id, replyId, text: 'edited reply cold' }))
       .resolves.toEqual({ ok: true, reply: expect.objectContaining({ text: 'edited reply cold' }) });
-    await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE_REPLY, { path: 'docs/cold.md', projectRoot: root, id: added.id, replyId })).resolves.toEqual({ ok: true });
-    await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE, { path: 'docs/cold.md', projectRoot: root, id: added.id })).resolves.toEqual({ ok: true });
+    await expect(call(DOC_COMMENTS_IPC.DELETE_REPLY, { path: 'docs/cold.md', projectRoot: root, id: added.id, replyId })).resolves.toEqual({ ok: true });
+    await expect(call(DOC_COMMENTS_IPC.DELETE, { path: 'docs/cold.md', projectRoot: root, id: added.id })).resolves.toEqual({ ok: true });
   });
 
-  // Edit/delete build (2026-09-28, design doc §"Edit and delete"): the SAME
-  // format dispatch (resolveNativeFormat -> native docx/xlsx vs. the plain
-  // sidecar) every other mutation above already proved, exercised here for
-  // the four new channels on all three target shapes.
+  // The same format dispatch (native docx/xlsx vs the plain sidecar), for the four edit/delete channels on all three target shapes.
   describe('docComments:edit / :edit-reply / :delete / :delete-reply — format dispatch', () => {
     it('a plain markdown target round-trips edit/edit-reply/delete-reply/delete through the sidecar', async () => {
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
-      const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+      const added = await call(DOC_COMMENTS_IPC.ADD, {
         path: 'docs/plan.md', projectRoot: root, selector: CELL_SELECTOR, text: 'original', author: 'user',
       });
       expect(added.ok).toBe(true);
-      const replied = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, { path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'a reply', author: 'user' });
+      const replied = await call(DOC_COMMENTS_IPC.REPLY, { path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'a reply', author: 'user' });
       const replyId = replied.reply.id;
 
-      await expect(ipcMain.call(DOC_COMMENTS_IPC.EDIT, { path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'rewritten' }))
+      await expect(call(DOC_COMMENTS_IPC.EDIT, { path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'rewritten' }))
         .resolves.toEqual({ ok: true });
-      await expect(ipcMain.call(DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'docs/plan.md', projectRoot: root, id: added.id, replyId, text: 'reply rewritten' }))
+      await expect(call(DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'docs/plan.md', projectRoot: root, id: added.id, replyId, text: 'reply rewritten' }))
         .resolves.toEqual({ ok: true, reply: expect.objectContaining({ text: 'reply rewritten' }) });
-      const afterEdit = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
+      const afterEdit = await call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
       expect(afterEdit.comments[0]).toMatchObject({ text: 'rewritten' });
       expect(afterEdit.comments[0].replies[0]).toMatchObject({ text: 'reply rewritten' });
 
-      await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE_REPLY, { path: 'docs/plan.md', projectRoot: root, id: added.id, replyId })).resolves.toEqual({ ok: true });
-      await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE, { path: 'docs/plan.md', projectRoot: root, id: added.id })).resolves.toEqual({ ok: true });
-      const afterDelete = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
+      await expect(call(DOC_COMMENTS_IPC.DELETE_REPLY, { path: 'docs/plan.md', projectRoot: root, id: added.id, replyId })).resolves.toEqual({ ok: true });
+      await expect(call(DOC_COMMENTS_IPC.DELETE, { path: 'docs/plan.md', projectRoot: root, id: added.id })).resolves.toEqual({ ok: true });
+      const afterDelete = await call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
       expect(afterDelete.comments).toEqual([]);
     });
 
     it('a .docx target dispatches edit/delete to the real Word writer, not the sidecar', async () => {
-      await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
-      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), path.join(root, 'docs', 'launch-brief.docx'));
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
+      await copyFixture('launch-brief.docx', 'docs/launch-brief.docx');
 
-      const edited = await ipcMain.call(DOC_COMMENTS_IPC.EDIT, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', text: 'edited via IPC' });
+      const edited = await call(DOC_COMMENTS_IPC.EDIT, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', text: 'edited via IPC' });
       expect(edited).toEqual({ ok: true, text: 'edited via IPC' });
-      const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/launch-brief.docx', projectRoot: root });
+      const listed = await call(DOC_COMMENTS_IPC.LIST, { path: 'docs/launch-brief.docx', projectRoot: root });
       expect(listed.comments.find((c: any) => c.id === 'w-1')?.text).toBe('edited via IPC');
       const replyId = listed.comments.find((c: any) => c.id === 'w-1')?.replies[0]?.id;
 
-      await expect(ipcMain.call(DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', replyId, text: 'reply via IPC' }))
+      await expect(call(DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', replyId, text: 'reply via IPC' }))
         .resolves.toEqual({ ok: true, reply: expect.objectContaining({ text: 'reply via IPC' }) });
-      await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1' })).resolves.toEqual({ ok: true });
-      const afterDelete = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/launch-brief.docx', projectRoot: root });
+      await expect(call(DOC_COMMENTS_IPC.DELETE, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1' })).resolves.toEqual({ ok: true });
+      const afterDelete = await call(DOC_COMMENTS_IPC.LIST, { path: 'docs/launch-brief.docx', projectRoot: root });
       expect(afterDelete.comments.some((c: any) => c.id === 'w-1')).toBe(false);
 
       // No inert JSON sidecar was ever created for this native-format target.
@@ -448,20 +310,16 @@ describe('registerDocCommentsHandlers', () => {
     });
 
     it('a .xlsx target dispatches edit/delete to the real Excel writer, not the sidecar', async () => {
-      await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
-      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'q3-sales-by-rep.xlsx'), path.join(root, 'reports', 'q3.xlsx'));
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
-      const cellSelector: CommentSelector = { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1', sheet: 'Q3' } as CellSelector };
-      const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, { path: 'reports/q3.xlsx', projectRoot: root, selector: cellSelector, text: 'x', author: 'user' });
+      await copyFixture('q3-sales-by-rep.xlsx', 'reports/q3.xlsx');
+      const added = await call(DOC_COMMENTS_IPC.ADD, { path: 'reports/q3.xlsx', projectRoot: root, selector: SHEET_SELECTOR, text: 'x', author: 'user' });
       expect(added.ok).toBe(true);
       const id = added.id;
 
-      const edited = await ipcMain.call(DOC_COMMENTS_IPC.EDIT, { path: 'reports/q3.xlsx', projectRoot: root, id, text: 'edited via IPC' });
+      const edited = await call(DOC_COMMENTS_IPC.EDIT, { path: 'reports/q3.xlsx', projectRoot: root, id, text: 'edited via IPC' });
       expect(edited).toEqual({ ok: true, text: 'edited via IPC' });
 
-      await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE, { path: 'reports/q3.xlsx', projectRoot: root, id })).resolves.toEqual({ ok: true });
-      const afterDelete = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'reports/q3.xlsx', projectRoot: root });
+      await expect(call(DOC_COMMENTS_IPC.DELETE, { path: 'reports/q3.xlsx', projectRoot: root, id })).resolves.toEqual({ ok: true });
+      const afterDelete = await call(DOC_COMMENTS_IPC.LIST, { path: 'reports/q3.xlsx', projectRoot: root });
       expect(afterDelete.comments.some((c: any) => c.id === id)).toBe(false);
 
       const sidecarPath = path.join(root, '.youcoded', 'comments', 'reports', 'q3.xlsx.json');
@@ -469,68 +327,37 @@ describe('registerDocCommentsHandlers', () => {
     });
 
     it('an id this file does not have refuses honestly, on both channels and every format', async () => {
-      await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
-      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), path.join(root, 'docs', 'launch-brief.docx'));
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
-      await expect(ipcMain.call(DOC_COMMENTS_IPC.EDIT, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-999', text: 'x' }))
+      await copyFixture('launch-brief.docx', 'docs/launch-brief.docx');
+      await expect(call(DOC_COMMENTS_IPC.EDIT, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-999', text: 'x' }))
         .resolves.toEqual({ ok: false, error: 'comment-not-found' });
-      await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-999' }))
+      await expect(call(DOC_COMMENTS_IPC.DELETE, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-999' }))
         .resolves.toEqual({ ok: false, error: 'comment-not-found' });
     });
   });
 
   it('a caller that omits path gets a distinct missing-field refusal, never a throw or a coerced "undefined" string (F2)', async () => {
-    // F2 fix (optional, post-T3 build review): `reqStr` used to coerce a
-    // missing field via `String(undefined)` — the literal text "undefined" —
-    // which the store then resolved as if it were a real (if nonsensical)
-    // path. It now refuses honestly before ever reaching the store.
-    const ipcMain = fakeIpcMain();
-    registerDocCommentsHandlers(ipcMain as any, deps);
-    await expect(ipcMain.call(DOC_COMMENTS_IPC.REPLY, { projectRoot: root, id: 'c-x', text: 'x', author: 'user' }))
+    // WHY: reqStr once coerced a missing field via String(undefined), so the store resolved the literal path "undefined".
+    await expect(call(DOC_COMMENTS_IPC.REPLY, { projectRoot: root, id: 'c-x', text: 'x', author: 'user' }))
       .resolves.toEqual({ ok: false, error: 'missing-field', field: 'path' });
   });
 
   it('a caller that supplies path but omits id gets a missing-field refusal for id (F2)', async () => {
-    const ipcMain = fakeIpcMain();
-    registerDocCommentsHandlers(ipcMain as any, deps);
-    await expect(ipcMain.call(DOC_COMMENTS_IPC.RESOLVE, { path: 'docs/plan.md', projectRoot: root, by: 'user' }))
+    await expect(call(DOC_COMMENTS_IPC.RESOLVE, { path: 'docs/plan.md', projectRoot: root, by: 'user' }))
       .resolves.toEqual({ ok: false, error: 'missing-field', field: 'id' });
   });
 
-  describe('projectRoot gate (post-T3 build review, F1 — blocker)', () => {
-    // RED-BEFORE-GREEN: against the pre-fix commit (58ee463df) every case in
-    // this block resolves ok:true (or a store-level error unrelated to the
-    // root) instead of refusing — the store's own containment check only
-    // proves `path` resolves inside WHATEVER root it is given, so it never
-    // caught a forged root at all.
+  describe('projectRoot gate', () => {
+    // WHY: the store's containment check only proves `path` is inside WHATEVER root it is given, so a forged root went unnoticed.
     it('refuses "/" as projectRoot on every one of the ten mutation/list channels', async () => {
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
-      const calls: Array<[string, any]> = [
-        [DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: '/' }],
-        [DOC_COMMENTS_IPC.ADD, { path: 'docs/plan.md', projectRoot: '/', selector: CELL_SELECTOR, text: 'x', author: 'user' }],
-        [DOC_COMMENTS_IPC.REPLY, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', text: 'x', author: 'user' }],
-        [DOC_COMMENTS_IPC.RESOLVE, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', by: 'user' }],
-        [DOC_COMMENTS_IPC.REOPEN, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', by: 'user' }],
-        [DOC_COMMENTS_IPC.MOVE, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', newSelector: CELL_SELECTOR }],
-        [DOC_COMMENTS_IPC.EDIT, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', text: 'x' }],
-        [DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', replyId: 'c-x-r1', text: 'x' }],
-        [DOC_COMMENTS_IPC.DELETE, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x' }],
-        [DOC_COMMENTS_IPC.DELETE_REPLY, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', replyId: 'c-x-r1' }],
-      ];
-      for (const [channel, payload] of calls) {
-        const result = await ipcMain.call(channel, payload);
-        expect(result, `${channel} did not refuse projectRoot: '/'`).toEqual({ ok: false, error: 'unknown-project-root' });
+      for (const [channel, payload] of tenCalls('docs/plan.md', '/')) {
+        expect(await call(channel, payload), `${channel} did not refuse projectRoot: '/'`).toEqual({ ok: false, error: 'unknown-project-root' });
       }
     });
 
     it('refuses a temp directory that was never registered as a project (not "/", still unknown)', async () => {
       const forged = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-doc-comments-ipc-forged-'));
       try {
-        const ipcMain = fakeIpcMain();
-        registerDocCommentsHandlers(ipcMain as any, deps);
-        const result = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+        const result = await call(DOC_COMMENTS_IPC.ADD, {
           path: 'docs/plan.md', projectRoot: forged, selector: CELL_SELECTOR, text: 'x', author: 'user',
         });
         expect(result).toEqual({ ok: false, error: 'unknown-project-root' });
@@ -540,75 +367,40 @@ describe('registerDocCommentsHandlers', () => {
     });
 
     it('refuses watch/unwatch for an unknown projectRoot too', async () => {
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
-      await expect(ipcMain.call(DOC_COMMENTS_IPC.WATCH, { path: 'docs/plan.md', projectRoot: '/' }))
+      await expect(call(DOC_COMMENTS_IPC.WATCH, { path: 'docs/plan.md', projectRoot: '/' }))
         .resolves.toEqual({ ok: false, error: 'unknown-project-root' });
-      await expect(ipcMain.call(DOC_COMMENTS_IPC.UNWATCH, { path: 'docs/plan.md', projectRoot: '/' }))
+      await expect(call(DOC_COMMENTS_IPC.UNWATCH, { path: 'docs/plan.md', projectRoot: '/' }))
         .resolves.toEqual({ ok: false, error: 'unknown-project-root' });
-    });
-
-    it('a legitimate projectRoot (this suite’s own live-session-cwd temp dir) keeps working — the gate only refuses UNKNOWN roots', async () => {
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
-      const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
-        path: 'docs/plan.md', projectRoot: root, selector: CELL_SELECTOR, text: 'legit', author: 'user',
-      });
-      expect(added).toEqual({ ok: true, id: expect.any(String) });
     });
   });
 
-  // Live-refresh review (2026-09-27, finding 1 — high): every OTHER
-  // native-format entry point with no `projectRoot` (list/add/reply/resolve/
-  // reopen/move) already ran the resolved absolute path through
-  // `authorizeBytesRead`, refusing `path-not-tracked` for anything that isn't
-  // a saved folder, an indexed project, or a tracked external artifact
-  // (doc-comments-dispatch.test.ts's own "fallback (no projectRoot)
-  // source-file gate" tests) — `docComments:watch` skipped this gate
-  // entirely, letting a caller start a live filesystem watch on an arbitrary
-  // absolute `.docx`/`.xlsx` path. Mirrors doc-comments-remote-relay.test.ts's
-  // identically-named block for the WS surface.
-  describe('fallback (no projectRoot) source-file gate (F1 blocker, Gate 2)', () => {
+  // WHY: docComments:watch once skipped the authorizeBytesRead gate every other no-projectRoot entry point runs, so a
+  // caller could start a live watch on an arbitrary absolute .docx/.xlsx path.
+  describe('fallback (no projectRoot) source-file gate', () => {
     it('refuses to watch an untracked absolute .docx path with no projectRoot', async () => {
       const untrackedDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-doc-comments-ipc-untracked-'));
       try {
         const loose = path.join(untrackedDir, 'untracked.docx');
         await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), loose);
-        const ipcMain = fakeIpcMain();
-        registerDocCommentsHandlers(ipcMain as any, deps);
-        // No projectRoot in the payload at all — the fallback path — so
-        // Gate 1 (refuseUnknownProjectRoot) never even runs; Gate 2
-        // (authorizeBytesRead) is what must refuse this.
-        await expect(ipcMain.call(DOC_COMMENTS_IPC.WATCH, { path: loose }))
-          .resolves.toEqual({ ok: false, error: 'path-not-tracked' });
+        // No projectRoot, so the unknown-root gate never runs; the source-file gate must refuse.
+        await expect(call(DOC_COMMENTS_IPC.WATCH, { path: loose })).resolves.toEqual({ ok: false, error: 'path-not-tracked' });
       } finally {
         await fs.promises.rm(untrackedDir, { recursive: true, force: true });
       }
     });
 
-    it('the identical untracked path with a real projectRoot is unaffected by Gate 2 (judged by ordinary containment instead)', async () => {
-      await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
-      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), path.join(root, 'docs', 'launch-brief.docx'));
-      const ipcMain = fakeIpcMain();
-      registerDocCommentsHandlers(ipcMain as any, deps);
-      await expect(ipcMain.call(DOC_COMMENTS_IPC.WATCH, { path: 'docs/launch-brief.docx', projectRoot: root }))
+    it('the identical untracked path with a real projectRoot is unaffected by the source-file gate (judged by ordinary containment instead)', async () => {
+      await copyFixture('launch-brief.docx', 'docs/launch-brief.docx');
+      await expect(call(DOC_COMMENTS_IPC.WATCH, { path: 'docs/launch-brief.docx', projectRoot: root }))
         .resolves.toEqual({ ok: true });
     });
   });
 
   it('broadcasts docComments:changed to every webContents, un-filtered', async () => {
-    const ipcMain = fakeIpcMain();
-    registerDocCommentsHandlers(ipcMain as any, deps);
-    // Deliberately NO pre-created .youcoded/comments/ directory: this is the
-    // very-first-comment-on-a-fresh-project case doc-comments-watcher.ts's
-    // watchComments() pre-creates the directory for BEFORE starting chokidar
-    // specifically so it is caught (see its own WHY comment).
-    const watched = await ipcMain.call(DOC_COMMENTS_IPC.WATCH, { path: 'docs/live.md', projectRoot: root });
+    // Deliberately NO pre-created .youcoded/comments/: the very-first-comment case watchComments() pre-creates it for.
+    const watched = await call(DOC_COMMENTS_IPC.WATCH, { path: 'docs/live.md', projectRoot: root });
     expect(watched.ok).toBe(true);
-    // Retried, not a single write: the FIRST write also creates
-    // .youcoded/comments/ itself, which chokidar may still be arming a watch
-    // for (project-watcher.test.ts's own documented macOS/first-write gap) —
-    // a retry loop is the same discipline that file's untilLive() uses.
+    // Retried: the first write also creates .youcoded/comments/, which chokidar may still be arming (macOS first-write gap).
     const deadline = Date.now() + 12_500;
     let sawChange = false;
     for (let attempt = 0; Date.now() < deadline && !sawChange; attempt++) {
@@ -621,16 +413,13 @@ describe('registerDocCommentsHandlers', () => {
     }
     expect(sawChange).toBe(true);
     const evt = deps.sent.find((s) => s.channel === DOC_COMMENTS_IPC.CHANGED);
-    // F3 (T5 review): the push now carries `projectRoot` too, so a renderer
-    // watching two projects that share a relative path can tell them apart.
+    // The push carries projectRoot so a renderer watching two projects with a shared relative path can tell them apart.
     expect(evt.payload).toEqual({ path: 'docs/live.md', projectRoot: root });
   });
 
   it('unwatch stops the push and drops the ref on renderer destroy', async () => {
-    const ipcMain = fakeIpcMain();
-    registerDocCommentsHandlers(ipcMain as any, deps);
     const e = fakeEvent(7);
-    await ipcMain.call(DOC_COMMENTS_IPC.WATCH, { path: 'docs/gone.md', projectRoot: root }, e);
+    await call(DOC_COMMENTS_IPC.WATCH, { path: 'docs/gone.md', projectRoot: root }, e);
     e.__fireDestroyed(); // a crashed renderer never sends unwatch
     deps.sent.length = 0;
     await addComment({ path: 'docs/gone.md', projectRoot: root, selector: CELL_SELECTOR, text: 'x', author: 'user' });

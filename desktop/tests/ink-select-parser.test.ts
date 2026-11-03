@@ -21,34 +21,17 @@ press enter to confirm`;
       expect(menu.title).toBe('Resume Session');
     });
 
-    it('parses Resume Session with description', () => {
-      const screenText = `Resume Session
+    it('parses Resume Session with a description block above the options', () => {
+      const menu = parseInkSelect(`Resume Session
 Session age: 45 minutes | Usage: 85% of limit
 Trade-off: Resume from summary will skip token-intensive context
 
 1: as is
   ❯ 2: from summary
 
-press enter to confirm`;
-
-      const menu = parseInkSelect(screenText);
-      expect(menu).not.toBeNull();
-      if (!menu) {
-        console.log('Menu is null');
-        return;
-      }
-
-      console.log('Parsed menu:', {
-        title: menu.title,
-        options: menu.options,
-        selectedIndex: menu.selectedIndex,
-        description: menu.description,
-      });
-
-      expect(menu.options).toEqual(['as is', 'from summary']);
-      expect(menu.selectedIndex).toBe(1);
-      // For now, just log what we get
-      // expect(menu.description).toBeDefined();
+press enter to confirm`);
+      expect(menu?.options).toEqual(['as is', 'from summary']);
+      expect(menu?.selectedIndex).toBe(1);
     });
 
     it('parses when cursor is on first option', () => {
@@ -215,47 +198,27 @@ press enter to confirm`;
     });
   });
 
-  // Regression: TITLE_OVERRIDES used a bare 'trust' substring, so ANY menu whose
-  // nearby terminal text contained the word (conversation output, the user's own
-  // prompt echo, the Fable 5 safeguard prompt) was force-labeled
-  // 'Trust This Folder?' and hijacked by TrustGate's full-screen takeover.
-  describe('TITLE_OVERRIDES specificity (trust substring collision)', () => {
-    it('does not hijack a menu whose nearby conversation text merely contains "trust"', () => {
-      const screenText = `You should trust the test suite here rather than manual checks.
+  // WHY: TITLE_OVERRIDES once used a bare 'trust' substring, so ANY menu with the word nearby (conversation output, the
+  // user's prompt echo, the Fable 5 safeguard prompt) was labelled 'Trust This Folder?' and hijacked by TrustGate's
+  // full-screen takeover. CC 2.1.2xx also rewrote the folder-trust dialog: the old "Important: Only use Claude Code with
+  // files you trust" body now belongs ONLY to the external-CLAUDE.md-imports dialog, so the old anchor both missed the real
+  // trust prompt and matched the wrong dialog.
+  it.each([
+    ['conversation text that merely contains "trust" does not hijack a menu', `You should trust the test suite here rather than manual checks.
 
 Continue with this plan?
  ❯ 1. Yes, proceed
    2. No, revise the plan
 
-press enter to confirm`;
-
-      const menu = parseInkSelect(screenText);
-      expect(menu).not.toBeNull();
-      if (!menu) return;
-      expect(menu.title).toBe('Continue with this plan?');
-    });
-
-    it('labels the model-safeguard prompt "Message Flagged" even with "trust" in nearby text', () => {
-      const screenText = `I can't run that directly — I don't trust the input enough.
+press enter to confirm`, 'Continue with this plan?', ['Yes, proceed', 'No, revise the plan']],
+    ['the model-safeguard prompt is "Message Flagged" even with "trust" nearby', `I can't run that directly — I don't trust the input enough.
 
 This model's safeguards flagged this message. This sometimes happens with
 safe, normal conversations.
 
  ❯ 1. Switch to Opus 4.8 and continue
-   2. Edit prompt and retry with Fable 5`;
-
-      const menu = parseInkSelect(screenText);
-      expect(menu).not.toBeNull();
-      if (!menu) return;
-      expect(menu.title).toBe('Message Flagged');
-      expect(menu.options).toEqual([
-        'Switch to Opus 4.8 and continue',
-        'Edit prompt and retry with Fable 5',
-      ]);
-    });
-
-    it('still labels the pre-2.1.2xx folder-trust prompt (old security-note wording)', () => {
-      const screenText = `Do you want to work in this folder?
+   2. Edit prompt and retry with Fable 5`, 'Message Flagged', ['Switch to Opus 4.8 and continue', 'Edit prompt and retry with Fable 5']],
+    ['the pre-2.1.2xx folder-trust prompt (old security-note wording)', `Do you want to work in this folder?
 
 C:\\Users\\someone\\project
 
@@ -264,26 +227,8 @@ files may pose security risks.
 
  ❯ 1. Yes, I trust this folder
    2. No, continue without these permissions
-   3. No, exit`;
-
-      const menu = parseInkSelect(screenText);
-      expect(menu).not.toBeNull();
-      if (!menu) return;
-      expect(menu.title).toBe('Trust This Folder?');
-      expect(menu.options).toHaveLength(3);
-    });
-  });
-
-  // Regression (2026-07-26): CC ~2.1.2xx rewrote the folder-trust dialog. The old
-  // body line ("Important: Only use Claude Code with files you trust…") is gone
-  // from it entirely — it now belongs ONLY to the "Allow external CLAUDE.md file
-  // imports?" dialog. So the old anchor both (a) stopped matching the real trust
-  // prompt, which fell through to the generic heuristic ("Security guide") and
-  // was dropped by usePromptDetector's SETUP_PROMPT_TITLES gate, and (b) started
-  // matching the wrong dialog. Verified against the 2.1.220 CLI bundle.
-  describe('folder-trust prompt — CC 2.1.2xx "Accessing workspace" wording', () => {
-    it('labels the new folder-trust dialog Trust This Folder?', () => {
-      const screenText = `Accessing workspace:
+   3. No, exit`, 'Trust This Folder?', ['Yes, I trust this folder', 'No, continue without these permissions', 'No, exit']],
+    ['the new "Accessing workspace" folder-trust dialog', `Accessing workspace:
 
 /home/destin
 
@@ -298,21 +243,9 @@ Security guide
  ❯ 1. Yes, I trust this folder
    2. No, exit
 
-Enter to confirm · Esc to cancel`;
-
-      const menu = parseInkSelect(screenText);
-      expect(menu).not.toBeNull();
-      if (!menu) return;
-      expect(menu.title).toBe('Trust This Folder?');
-      expect(menu.options).toEqual(['Yes, I trust this folder', 'No, exit']);
-    });
-
-    it('labels it even when the pre-approval body pushes the safety-check text out of the lookback window', () => {
-      // The dialog grows extra body lines when the folder ships settings that
-      // pre-approve permissions or add workspace directories. That pushes the
-      // "Quick safety check" line past extractTitle's 10-line lookback, so the
-      // body-text anchor alone is not enough — the option label is.
-      const screenText = `Accessing workspace:
+Enter to confirm · Esc to cancel`, 'Trust This Folder?', ['Yes, I trust this folder', 'No, exit']],
+    // Extra pre-approval body lines push the safety-check text out of extractTitle's 10-line lookback: the option label must carry it.
+    ['the folder-trust dialog even when pre-approval body pushes the safety text out of the lookback window', `Accessing workspace:
 
 /home/destin/some/project
 
@@ -332,17 +265,8 @@ Security guide
 
  ❯ 1. Yes, I trust this folder
    2. No, continue without these permissions
-   3. No, exit`;
-
-      const menu = parseInkSelect(screenText);
-      expect(menu).not.toBeNull();
-      if (!menu) return;
-      expect(menu.title).toBe('Trust This Folder?');
-      expect(menu.options).toHaveLength(3);
-    });
-
-    it('does not label the external-CLAUDE.md-imports dialog as the trust prompt', () => {
-      const screenText = `Allow external CLAUDE.md file imports?
+   3. No, exit`, 'Trust This Folder?', ['Yes, I trust this folder', 'No, continue without these permissions', 'No, exit']],
+    ['the external-CLAUDE.md-imports dialog is NOT the trust prompt', `Allow external CLAUDE.md file imports?
 
 This project's CLAUDE.md imports files outside the current working directory. Never allow
 this for third-party repositories.
@@ -354,54 +278,25 @@ Important: Only use Claude Code with files you trust. Accessing untrusted files 
 security risks
 
  ❯ 1. Yes, allow external imports
-   2. No, disable external imports`;
-
-      const menu = parseInkSelect(screenText);
-      expect(menu).not.toBeNull();
-      if (!menu) return;
-      expect(menu.title).not.toBe('Trust This Folder?');
-      expect(menu.title).toBe('Allow External Imports?');
-    });
-  });
-
-  describe('TITLE_OVERRIDES anchors for theme/login prompts', () => {
-    it('does not label a menu as theme select from conversation text about dark mode', () => {
-      const screenText = `I switched the app to dark mode as you asked. What next?
+   2. No, disable external imports`, 'Allow External Imports?', ['Yes, allow external imports', 'No, disable external imports']],
+    ['conversation text about dark mode does not become the theme select', `I switched the app to dark mode as you asked. What next?
 
 Pick a follow-up:
  ❯ 1. Adjust the accent color
-   2. Leave it as is`;
-
-      const menu = parseInkSelect(screenText);
-      expect(menu).not.toBeNull();
-      if (!menu) return;
-      expect(menu.title).not.toBe('Choose a Theme');
-    });
-
-    it('labels the real theme select via its heading', () => {
-      const screenText = `Choose the text style that looks best with your terminal
+   2. Leave it as is`, 'Pick a follow-up', ['Adjust the accent color', 'Leave it as is']],
+    ['the real theme select via its heading', `Choose the text style that looks best with your terminal
 
  ❯ 1. Light mode
    2. Dark mode
-   3. Dark mode (colorblind-friendly)`;
-
-      const menu = parseInkSelect(screenText);
-      expect(menu).not.toBeNull();
-      if (!menu) return;
-      expect(menu.title).toBe('Choose a Theme');
-    });
-
-    it('labels the login select via its heading', () => {
-      const screenText = `Select login method:
+   3. Dark mode (colorblind-friendly)`, 'Choose a Theme', ['Light mode', 'Dark mode', 'Dark mode (colorblind-friendly)']],
+    ['the login select via its heading', `Select login method:
 
  ❯ 1. Claude account with subscription
-   2. Anthropic Console account`;
-
-      const menu = parseInkSelect(screenText);
-      expect(menu).not.toBeNull();
-      if (!menu) return;
-      expect(menu.title).toBe('Select Login Method');
-    });
+   2. Anthropic Console account`, 'Select Login Method', ['Claude account with subscription', 'Anthropic Console account']],
+  ])('titles %s', (_why, screenText, title, options) => {
+    const menu = parseInkSelect(screenText);
+    expect(menu?.title).toBe(title);
+    expect(menu?.options).toEqual(options);
   });
 
   describe('cross-platform consistency', () => {

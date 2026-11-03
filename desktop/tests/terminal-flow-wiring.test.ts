@@ -5,7 +5,7 @@
 //  * only desktop windows that mounted a terminal for the session count, a second window mounting cannot zero
 //    the owner's books, and the ack rule follows the ROUTING rule when a session has no owner;
 //  * a window going away or ownership moving releases the brake at once and the session goes back to buffering.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 
 const wcs = vi.hoisted(() => new Map<number, any>());
@@ -29,68 +29,38 @@ vi.mock('electron', () => {
   };
 });
 
+// Inert stub of the surface registerIpcHandlers touches at registration time; none of it runs on the code path under test.
 vi.mock('../src/main/harness/native-session-host', () => {
   class NativeSessionHostStub {
-    constructor(..._args: any[]) { void _args; /* ctor deps unused by this test */ }
-
-    async resume(_id: string, _cwd: string, _binding?: any) { return true; }
-
-    async create(_opts: any) { /* no-op */ }
-
-    getHarnessId(_id: string) { return undefined; }
-
-    getBinding(_id: string) { return undefined; }
-
-    modelForSession(_id: string) { return undefined; }
-
-    async destroy(_id: string) { /* no-op */ }
-
-    // Remaining surface registerIpcHandlers touches at registration time (or
-    // could touch from a sibling handler) — inert stubs, none of them run on
-    // the code path this test exercises.
-    setModelReleasedHandler(_fn: any) { /* no-op */ }
-
-    async destroyAll() { /* no-op */ }
-
-    async clear(_id: string) { /* no-op */ }
-
-    async compact(_id: string) { /* no-op */ }
-
-    async quiesce(_id: string) { /* no-op */ }
-
-    async interrupt(_id: string) { /* no-op */ }
-
-    async send(_id: string, _text: string) { /* no-op */ }
-
-    async invokeSkill() { /* no-op */ }
-
-    getHistory(_id: string) { return []; }
-
-    getPermissionMode(_id: string) { return 'normal'; }
-
-    setPermissionMode() { /* no-op */ }
-
-    respondPermission() { /* no-op */ }
-
-    removeQueued() { /* no-op */ }
-
-    setBinding() { /* no-op */ }
-
-    sessionsForModel(_modelId: string) { return [] as string[]; }
-
-    isNativeSessionId(_id: string) { return true; }
-
+    async resume() { return true; }
+    async create() {}
+    async destroy() {}
+    async destroyAll() {}
+    async clear() {}
+    async compact() {}
+    async quiesce() {}
+    async interrupt() {}
+    async send() {}
+    async invokeSkill() {}
+    getHarnessId() { return undefined; }
+    getBinding() { return undefined; }
+    modelForSession() { return undefined; }
+    setModelReleasedHandler() {}
+    getHistory() { return []; }
+    getPermissionMode() { return 'normal'; }
+    setPermissionMode() {}
+    respondPermission() {}
+    removeQueued() {}
+    setBinding() {}
+    sessionsForModel() { return [] as string[]; }
+    isNativeSessionId() { return true; }
     list() { return [] as any[]; }
-
     on() { return this; }
-
     off() { return this; }
-
     removeAllListeners() { return this; }
   }
   return { NativeSessionHost: NativeSessionHostStub };
 });
-
 
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
 import { WindowRegistry } from '../src/main/window-registry';
@@ -136,6 +106,7 @@ function world() {
 
 describe('terminal flow wiring: nothing can brake a session no desktop terminal will answer', () => {
   beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.useRealTimers(); });
 
   it('a session with no mounted terminal is released at once (phone-driven, tray, orphaned)', () => {
     const t = world();
@@ -210,17 +181,15 @@ describe('terminal flow wiring: nothing can brake a session no desktop terminal 
 
   it('a second window that stops answering cannot hold the owner hostage (dropped after 5 s of silence)', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      const t = world();
-      t.registry.assignSession(SID, 2); t.registry.subscribe(SID, 3);
-      t.ready(t.w2); t.ready(t.w3);
-      t.out('x'.repeat(1000));
-      t.ack(t.w2, 1000);
-      expect(t.released()).toBe(0);                        // waiting for the subscriber too
-      vi.setSystemTime(Date.now() + 5100);
-      t.out('y'.repeat(10)); t.ack(t.w2, 10);              // the owner keeps going; the quiet subscriber no longer counts
-      expect(t.released()).toBe(1010);
-    } finally { vi.useRealTimers(); }
+    const t = world();
+    t.registry.assignSession(SID, 2); t.registry.subscribe(SID, 3);
+    t.ready(t.w2); t.ready(t.w3);
+    t.out('x'.repeat(1000));
+    t.ack(t.w2, 1000);
+    expect(t.released()).toBe(0);                        // waiting for the subscriber too
+    vi.setSystemTime(Date.now() + 5100);
+    t.out('y'.repeat(10)); t.ack(t.w2, 10);              // the owner keeps going; the quiet subscriber no longer counts
+    expect(t.released()).toBe(1010);
   });
 
   it('with no owner, the window the output is routed to drives the brake (ack rule = routing rule)', () => {
@@ -314,36 +283,32 @@ describe('terminal flow wiring: nothing can brake a session no desktop terminal 
 
   it('a session sole consumer (no owner) is never dropped for a 5 s ack gap: the brake stays on', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      const t = world();
-      t.registry.subscribe(SID, 3); t.ready(t.w3);          // buddy-only: no owner
-      t.out('x'.repeat(1000));
-      vi.setSystemTime(Date.now() + 30_000);                      // a long task: no ack for 30 s
-      t.out('y'.repeat(10));
-      expect(t.released()).toBe(0);                        // still braked
-      t.ack(t.w3, 1010);
-      expect(t.released()).toBe(1010);
-    } finally { vi.useRealTimers(); }
+    const t = world();
+    t.registry.subscribe(SID, 3); t.ready(t.w3);          // buddy-only: no owner
+    t.out('x'.repeat(1000));
+    vi.setSystemTime(Date.now() + 30_000);                      // a long task: no ack for 30 s
+    t.out('y'.repeat(10));
+    expect(t.released()).toBe(0);                        // still braked
+    t.ack(t.w3, 1010);
+    expect(t.released()).toBe(1010);
   });
 
   it('a dropped quiet second window counts again as soon as it answers (rejoins on its next ack)', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      const t = world();
-      t.registry.assignSession(SID, 2); t.registry.subscribe(SID, 3);
-      t.ready(t.w2); t.ready(t.w3);
-      t.out('x'.repeat(1000));
-      t.ack(t.w2, 1000);
-      vi.setSystemTime(Date.now() + 5100);
-      t.out('y'.repeat(10)); t.ack(t.w2, 10);              // w3 is quiet and ignored
-      expect(t.released()).toBe(1010);
-      t.out('z'.repeat(100));                              // w3 now owes 1110 and answers a little
-      t.ack(t.w3, 1000);                                   // its ack revives it: it counts again with 110 still owed
-      t.ack(t.w2, 100);
-      expect(t.released()).toBe(1010);                     // held by w3's remaining 110 of z... not released yet
-      t.ack(t.w3, 110);
-      expect(t.released()).toBe(1110);
-    } finally { vi.useRealTimers(); }
+    const t = world();
+    t.registry.assignSession(SID, 2); t.registry.subscribe(SID, 3);
+    t.ready(t.w2); t.ready(t.w3);
+    t.out('x'.repeat(1000));
+    t.ack(t.w2, 1000);
+    vi.setSystemTime(Date.now() + 5100);
+    t.out('y'.repeat(10)); t.ack(t.w2, 10);              // w3 is quiet and ignored
+    expect(t.released()).toBe(1010);
+    t.out('z'.repeat(100));                              // w3 now owes 1110 and answers a little
+    t.ack(t.w3, 1000);                                   // its ack revives it: it counts again with 110 still owed
+    t.ack(t.w2, 100);
+    expect(t.released()).toBe(1010);                     // held by w3's remaining 110 of z... not released yet
+    t.ack(t.w3, 110);
+    expect(t.released()).toBe(1110);
   });
 
   it('a window that leaves the routing and returns without remounting does not bring a stale debt back', () => {
@@ -415,15 +380,13 @@ describe('terminal flow wiring: nothing can brake a session no desktop terminal 
 
   it('a buggy renderer cannot bounce a PTY in a loop: at most one repaint a second per session', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      const t = world();
-      t.registry.assignSession(SID, 2); t.ready(t.w2);
-      t.repaint(t.w2); t.repaint(t.w2); t.repaint(t.w2);
-      expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
-      vi.setSystemTime(Date.now() + 1100);
-      t.repaint(t.w2);
-      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
-    } finally { vi.useRealTimers(); }
+    const t = world();
+    t.registry.assignSession(SID, 2); t.ready(t.w2);
+    t.repaint(t.w2); t.repaint(t.w2); t.repaint(t.w2);
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(Date.now() + 1100);
+    t.repaint(t.w2);
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -440,7 +403,8 @@ describe('the real SessionManager provides everything the terminal router calls'
 // new window, a buddy window opening) starts EMPTY and nothing makes the program redraw: the terminal stays blank and
 // the chat send gate cannot read an input box. Main asks the program to repaint once per such mount (2026-10-05).
 describe('terminal flow wiring: a re-mounted terminal is given a picture', () => {
-  beforeEach(() => { vi.clearAllMocks(); vi.useRealTimers(); });
+  beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.useRealTimers(); });
   const reload = (w: any) => w.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
 
   it('the very first mount never asks for a repaint (startup trust prompt etc.)', () => {
@@ -466,38 +430,34 @@ describe('terminal flow wiring: a re-mounted terminal is given a picture', () =>
 
   it('a repaint request inside the 1 s window is NOT dropped: exactly one trailing request fires when the window ends', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-    try {
-      const t = world();
-      t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('x');
-      reload(t.w2); t.ready(t.w2);                           // first re-mount: repaint now
-      expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
-      vi.advanceTimersByTime(200);
-      reload(t.w2); t.ready(t.w2);                           // second reload 200 ms later: rate-limited, must still happen
-      t.ready(t.w2);                                         // and a third request in the window adds nothing (one timer)
-      expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
-      vi.advanceTimersByTime(900);                           // window (1000 ms from the first) ends
-      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
-      vi.advanceTimersByTime(5000);
-      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
-    } finally { vi.useRealTimers(); }
+    const t = world();
+    t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('x');
+    reload(t.w2); t.ready(t.w2);                           // first re-mount: repaint now
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(200);
+    reload(t.w2); t.ready(t.w2);                           // second reload 200 ms later: rate-limited, must still happen
+    t.ready(t.w2);                                         // and a third request in the window adds nothing (one timer)
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(900);                           // window (1000 ms from the first) ends
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(5000);
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
   });
 
   it('a renderer repaint request right after a re-mount repaint is also deferred, not lost; the trailing timer dies with the session', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-    try {
-      const t = world();
-      t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('x');
-      reload(t.w2); t.ready(t.w2);
-      vi.advanceTimersByTime(100);
-      t.repaint(t.w2);
-      vi.advanceTimersByTime(950);
-      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
-      vi.advanceTimersByTime(10);
-      t.repaint(t.w2);                                       // limited again (window restarted by the trailing bounce)
-      t.sm.emit('session-exit', SID, 0);
-      vi.advanceTimersByTime(5000);
-      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);      // ended session: no stray bounce
-    } finally { vi.useRealTimers(); }
+    const t = world();
+    t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('x');
+    reload(t.w2); t.ready(t.w2);
+    vi.advanceTimersByTime(100);
+    t.repaint(t.w2);
+    vi.advanceTimersByTime(950);
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(10);
+    t.repaint(t.w2);                                       // limited again (window restarted by the trailing bounce)
+    t.sm.emit('session-exit', SID, 0);
+    vi.advanceTimersByTime(5000);
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);      // ended session: no stray bounce
   });
 
   it('the replay is queued BEFORE the repaint request (the repaint lands on top of the replayed text)', () => {
