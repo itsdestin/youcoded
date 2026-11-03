@@ -83,7 +83,18 @@ function Preview({ theme, fallback, className }: { theme: LoadedTheme; fallback?
   if (!src) {
     return <div className={className} style={{ background: `linear-gradient(135deg, ${theme.tokens.canvas}, ${theme.tokens.accent})` }} aria-hidden="true" />;
   }
-  return <img src={src} alt="" className={`${className} object-cover object-top`} onError={() => setAttempt((n) => n + 1)} />;
+  // WHY decoding="async" and the theme's own colours behind the picture (phone speed lab, 2026-11-02: opening
+  // Appearance on a Z Flip7 showed 7 of 15 frames late, worst ~70 ms): every card's picture was unpacked inside the
+  // frame that showed the popup, so the popup waited for all of them. Now the popup shows at once and each picture
+  // fills in a moment later, over its theme's colours rather than an empty box.
+  return (
+    <img
+      src={src} alt="" decoding="async"
+      className={`${className} object-cover object-top`}
+      style={{ background: `linear-gradient(135deg, ${theme.tokens.canvas}, ${theme.tokens.accent})` }}
+      onError={() => setAttempt((n) => n + 1)}
+    />
+  );
 }
 
 /** The framed picture: a theme's preview sits inset in its card with its own rounded
