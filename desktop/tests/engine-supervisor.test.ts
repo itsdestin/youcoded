@@ -15,6 +15,7 @@ import {
   type ProcFs,
 } from '../src/main/engine/engine-supervisor';
 import { scanGgufCacheAsync } from '../src/main/engine/cache-scan';
+import { REAL_MODELS_RESPONSE } from './helpers/engine-models-response';
 
 const mockSpawn = vi.fn();
 vi.mock('child_process', async (orig) => ({
@@ -296,47 +297,18 @@ describe('EngineSupervisor', () => {
     }
   });
 
-  it('listModels: GET /models when running; cache scan shape when stopped', async () => {
-    mockSpawn.mockReturnValue(makeFakeChild());
-    const fetchImpl = vi.fn(async (url: string) => {
-      if (String(url).endsWith('/health')) return { ok: true, status: 200 } as any;
-      if (String(url).endsWith('/models')) {
-        // Real b9992 shape: status is an OBJECT {value}, not a bare string.
-        // Pinned by probe-models.mjs + docs/engine-dependencies.md.
-        return { ok: true, status: 200, json: async () => ({ data: [{ id: 'foo-Q4_K_M', status: { value: 'loaded' } }], object: 'list' }) } as any;
-      }
-      return { ok: false, status: 404 } as any;
-    });
-    sup = makeSupervisor(fetchImpl);
-    await sup.ensureRunning();
-    const models = await sup.listModels();
-    expect(models).toEqual([{ id: 'foo-Q4_K_M', sizeBytes: null, loaded: true, state: 'loaded' }]);
+  // Real b9992 shape: status is an OBJECT {value}, not a bare string (pinned by probe-models.mjs + docs/engine-dependencies.md).
+  it('listModels: GET /models when running', async () => {
+    sup = await supervisorServing({ data: [{ id: 'foo-Q4_K_M', status: { value: 'loaded' } }], object: 'list' });
+    expect(await sup.listModels()).toEqual([{ id: 'foo-Q4_K_M', sizeBytes: null, loaded: true, state: 'loaded' }]);
   });
 
+  // --models-dir lists one row per FILE, so a four-part download arrives as four rows; parts 2..4 have no architecture
+  // header and selecting one 500'd (Qwen3.8-Flash-Next). Only part 00001 is a real model.
   it('listModels drops split-GGUF follower parts — one four-part set is ONE row', async () => {
-    // --models-dir lists one row per FILE, so a four-part download arrives as
-    // four rows. Parts 2..4 have no architecture header; selecting one 500'd
-    // (2026-08-27, Qwen3.8-Flash-Next). Only part 00001 is a real model.
-    mockSpawn.mockReturnValue(makeFakeChild());
-    const fetchImpl = vi.fn(async (url: string) => {
-      if (String(url).endsWith('/health')) return { ok: true, status: 200 } as any;
-      if (String(url).endsWith('/models')) {
-        return { ok: true, status: 200, json: async () => ({ data: [
-          { id: 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004', status: { value: 'unloaded' } },
-          { id: 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004', status: { value: 'unloaded' } },
-          { id: 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00003-of-00004', status: { value: 'unloaded' } },
-          { id: 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004', status: { value: 'unloaded' } },
-          { id: 'single-file-Q8_0', status: { value: 'unloaded' } },
-        ] }) } as any;
-      }
-      return { ok: false, status: 404 } as any;
-    });
-    sup = makeSupervisor(fetchImpl);
-    await sup.ensureRunning();
-    expect((await sup.listModels()).map((m) => m.id)).toEqual([
-      'Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004',
-      'single-file-Q8_0',
-    ]);
+    const part = (n: number) => ({ id: `Qwen3.8-Flash-Next-UD-Q4_K_XL-0000${n}-of-00004`, status: { value: 'unloaded' } });
+    sup = await supervisorServing({ data: [part(1), part(2), part(3), part(4), { id: 'single-file-Q8_0', status: { value: 'unloaded' } }] });
+    expect((await sup.listModels()).map((m) => m.id)).toEqual(['Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004', 'single-file-Q8_0']);
   });
 
   it('listModels UNIONS the disk scan into GET /models — a GGUF downloaded after boot is listed without a restart (Amendment K2)', async () => {
@@ -372,68 +344,16 @@ describe('EngineSupervisor', () => {
   });
 
   it('listModels maps /models status.value → EngineModelState (unknown → unloaded)', async () => {
-    mockSpawn.mockReturnValue(makeFakeChild());
-    const fetchImpl = vi.fn(async (url: string) => {
-      if (String(url).endsWith('/health')) return { ok: true, status: 200 } as any;
-      if (String(url).endsWith('/models')) {
-        return { ok: true, status: 200, json: async () => ({ data: [
-          { id: 'a', status: { value: 'loaded' } },
-          { id: 'b', status: { value: 'sleeping' } },
-          { id: 'c', status: { value: 'loading' } },
-          { id: 'd', status: { value: 'unloaded' } },
-          { id: 'e', status: { value: 'some-future-state' } },
-        ] }) } as any;
-      }
-      return { ok: false, status: 404 } as any;
-    });
-    sup = makeSupervisor(fetchImpl);
-    await sup.ensureRunning();
+    sup = await supervisorServing({ data: ['loaded', 'sleeping', 'loading', 'unloaded', 'some-future-state']
+      .map((value, i) => ({ id: 'abcde'[i], status: { value } })) });
     const byId = Object.fromEntries((await sup.listModels()).map((m) => [m.id, m.state]));
     expect(byId).toEqual({ a: 'loaded', b: 'sleeping', c: 'loading', d: 'unloaded', e: 'unloaded' });
   });
 
   // ---- input_modalities: how a local model says it can look at a picture ----
-  //
-  // Design §E5. The two rows below are a REAL `GET /models` response, captured
-  // 2026-09-05 from the PINNED binary (b10665, the vulkan build under
-  // ~/.config/youcoded-dev) spawned with --models-dir over a directory holding
-  // SmolVLM-256M twice: once in a folder beside its mmproj-*.gguf, and once as
-  // a lone flat .gguf. Verbatim except for the absolute cache path inside
-  // `status.args` / `status.preset`, shortened to keep the fixture readable —
-  // nothing this code reads. If this shape ever drifts, probe-vision.mjs is the
-  // live check and docs/engine-dependencies.md is where the schema is pinned.
-  const REAL_MODELS_RESPONSE = {
-    data: [
-      {
-        id: 'SmolVLM-256M-Instruct-Q8_0',
-        aliases: [], tags: [], object: 'model', owned_by: 'llamacpp', created: 1788656122,
-        status: {
-          value: 'unloaded',
-          args: ['/engine/llama-server', '--host', '127.0.0.1', '--jinja', '--port', '0', '--no-webui',
-            '--alias', 'SmolVLM-256M-Instruct-Q8_0', '--ctx-size', '4096',
-            '--model', '/cache/SmolVLM-256M-Instruct-Q8_0/SmolVLM-256M-Instruct-Q8_0.gguf',
-            '--mmproj', '/cache/SmolVLM-256M-Instruct-Q8_0/mmproj-SmolVLM-256M-Instruct-f16.gguf'],
-          preset: '[SmolVLM-256M-Instruct-Q8_0]\njinja = 1\nwebui = 0\nctx-size = 4096\n',
-        },
-        architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] },
-        source: 'models_dir', can_remove: false,
-      },
-      {
-        id: 'SmolVLM-256M-TextOnly-Q8_0',
-        aliases: [], tags: [], object: 'model', owned_by: 'llamacpp', created: 1788656122,
-        status: {
-          value: 'unloaded',
-          args: ['/engine/llama-server', '--host', '127.0.0.1', '--jinja', '--port', '0', '--no-webui',
-            '--alias', 'SmolVLM-256M-TextOnly-Q8_0', '--ctx-size', '4096',
-            '--model', '/cache/SmolVLM-256M-TextOnly-Q8_0.gguf'],
-          preset: '[SmolVLM-256M-TextOnly-Q8_0]\njinja = 1\nwebui = 0\nctx-size = 4096\n',
-        },
-        architecture: { input_modalities: ['text'], output_modalities: ['text'] },
-        source: 'models_dir', can_remove: false,
-      },
-    ],
-    object: 'list',
-  };
+  // Two rows of a REAL `GET /models` response captured from the PINNED binary (b10665) over a directory holding SmolVLM-256M
+  // twice (beside its mmproj-*.gguf, and as a lone flat .gguf); the cache path in status.args/preset is shortened. If the shape
+  // drifts, probe-vision.mjs is the live check and docs/engine-dependencies.md pins the schema.
 
   /** Boots a supervisor whose router answers `GET /models` with `payload`.
    *  The URL test is `includes('/models')`, NOT `endsWith` — refreshModels asks
@@ -488,14 +408,11 @@ describe('EngineSupervisor', () => {
 
   it('emits models-changed after boot with the live model set (drives the per-session banner)', async () => {
     mockSpawn.mockReturnValue(makeFakeChild());
-    const fetchImpl = vi.fn(async (url: string) => {
+    sup = makeSupervisor(vi.fn(async (url: string) => {
       if (String(url).endsWith('/health')) return { ok: true, status: 200 } as any;
-      if (String(url).endsWith('/models')) {
-        return { ok: true, status: 200, json: async () => ({ data: [{ id: 'a', status: { value: 'loaded' } }] }) } as any;
-      }
+      if (String(url).endsWith('/models')) return { ok: true, status: 200, json: async () => ({ data: [{ id: 'a', status: { value: 'loaded' } }] }) } as any;
       return { ok: false, status: 404 } as any;
-    });
-    sup = makeSupervisor(fetchImpl);
+    }));
     const changed: any[] = [];
     sup.on('models-changed', (m) => changed.push(m));
     await sup.ensureRunning();
@@ -1228,51 +1145,36 @@ describe('EngineSupervisor — per-model activity', () => {
 
 // ---- pure parsers for the preset failure path and the per-model count ----
 describe('preset failure parsers', () => {
-  it('rejectedPresetModel names the section the engine refused', () => {
-    expect(rejectedPresetModel(
-      "E srv llama_server: option 'not-a-real-flag' not recognized in preset 'gemma-4-E2B-it-Q8_0'"
-    )).toBe('gemma-4-E2B-it-Q8_0');
+  it.each([
+    ["E srv llama_server: option 'not-a-real-flag' not recognized in preset 'gemma-4-E2B-it-Q8_0'", 'gemma-4-E2B-it-Q8_0'], // names the refused section
+    ["option 'x' not recognized in preset 'it's-a-model-Q4_K_M'", "it's-a-model-Q4_K_M"], // ids are FILENAMES, so a quote survives
+    ["option 'x' not recognized in preset '*'", null], // the global section: no model to drop
+    ['ggml_vulkan: Device memory allocation failed', null], // says nothing about a preset
+  ])('rejectedPresetModel(%j) is %j', (text, expected) => {
+    expect(rejectedPresetModel(text)).toBe(expected);
   });
 
-  it('rejectedPresetModel keeps a model id that contains a quote (ids are FILENAMES)', () => {
-    expect(rejectedPresetModel(
-      "option 'x' not recognized in preset 'it's-a-model-Q4_K_M'"
-    )).toBe("it's-a-model-Q4_K_M");
+  it.each([
+    ["option 'x' not recognized in preset 'y'", true],
+    ['failed to parse server config file: /x/models.ini', true],
+    ['preset file does not exist: /x/models.ini', true],
+    ['ggml_vulkan: Device memory allocation failed', false],
+    ['error: invalid argument: --models-dir', false],
+  ])('isPresetStartupFailure(%j) is %s (the three sentences that mean the preset, and nothing else)', (text, expected) => {
+    expect(isPresetStartupFailure(text)).toBe(expected);
   });
 
-  it('rejectedPresetModel returns null for the global section — there is no model to drop', () => {
-    expect(rejectedPresetModel("option 'x' not recognized in preset '*'")).toBeNull();
+  it("presetErrorLine strips only llama-server's log prefix", () => {
+    expect(presetErrorLine("0.00.050.247 E srv    llama_server: option 'q' not recognized in preset 'm-Q4_K_M'"))
+      .toBe("option 'q' not recognized in preset 'm-Q4_K_M'");
   });
 
-  it('rejectedPresetModel returns null when the output says nothing about a preset', () => {
-    expect(rejectedPresetModel('ggml_vulkan: Device memory allocation failed')).toBeNull();
-  });
-
-  it('isPresetStartupFailure recognises the three sentences that mean the preset, and nothing else', () => {
-    expect(isPresetStartupFailure("option 'x' not recognized in preset 'y'")).toBe(true);
-    expect(isPresetStartupFailure('failed to parse server config file: /x/models.ini')).toBe(true);
-    expect(isPresetStartupFailure('preset file does not exist: /x/models.ini')).toBe(true);
-    expect(isPresetStartupFailure('ggml_vulkan: Device memory allocation failed')).toBe(false);
-    expect(isPresetStartupFailure("error: invalid argument: --models-dir")).toBe(false);
-  });
-
-  it('presetErrorLine strips only llama-server\'s log prefix', () => {
-    expect(presetErrorLine(
-      "0.00.050.247 E srv    llama_server: option 'q' not recognized in preset 'm-Q4_K_M'"
-    )).toBe("option 'q' not recognized in preset 'm-Q4_K_M'");
-  });
-
-  it('requestModelId reads the model out of an OpenAI-compatible body', () => {
+  it('requestModelId reads the model out of an OpenAI-compatible body, and returns null rather than guessing', () => {
     expect(requestModelId({ body: JSON.stringify({ model: 'a-Q4_K_M', messages: [] }) })).toBe('a-Q4_K_M');
-  });
-
-  it('requestModelId returns null rather than guessing when there is no model to read', () => {
-    expect(requestModelId({ body: JSON.stringify({ messages: [] }) })).toBeNull();
-    expect(requestModelId({ body: 'not json' })).toBeNull();
-    expect(requestModelId({ body: '{ broken' })).toBeNull();
-    expect(requestModelId({})).toBeNull();
-    expect(requestModelId(undefined)).toBeNull();
-    expect(requestModelId({ body: JSON.stringify({ model: 42 }) })).toBeNull();
+    for (const req of [{ body: JSON.stringify({ messages: [] }) }, { body: 'not json' }, { body: '{ broken' }, {}, undefined,
+      { body: JSON.stringify({ model: 42 }) }]) {
+      expect(requestModelId(req as never)).toBeNull();
+    }
   });
 });
 

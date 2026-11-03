@@ -1,82 +1,50 @@
 import { describe, test, it, expect } from 'vitest';
-import fs from 'fs';
 import path from 'path';
-// WHY: readSourceFile aliases guard-scope's readSource (CRLF-normalising) — the
-// local `readSource` name below is this file's own long-standing wrapper.
+// readSourceFile is guard-scope's CRLF-normalising reader (Windows checkouts match the same regexes).
 import { readSource as readSourceFile } from './helpers/guard-scope';
 import { PAGE_SOCKET_CHANNELS, PAGE_VIDEO_CHANNELS } from '../src/shared/pages-types';
 
-// This test verifies that IPC channel constants in preload.ts match shared/backend-contract.ts.
-// Preload can't import from shared/types due to Electron sandbox restrictions,
-// so channel names are duplicated. This test catches drift.
+// preload.ts cannot import shared/backend-contract.ts (Electron sandbox), so the channel map is written out
+// twice and this file keeps the copies identical. It then pins, per channel family, that every surface
+// (preload, remote-shim, the channel table in main/ipc/*.ts, remote-server) carries the same strings.
+// WHY it fails instead of warning: a channel added to one map and forgotten in the other must be red.
+const read = (...parts: string[]) => readSourceFile(path.join(__dirname, '..', ...parts));
+const readSource = read;
 
-// The two IPC constant maps and how they are compared.
-//
-// preload.ts cannot import shared/backend-contract.ts (Electron's sandbox), so the channel
-// map is written out TWICE and the two copies are kept identical by this file.
-//
-// Fixed 2026-09-04 (linux-buddy-helper design §11): this test used to
-// console.warn when a constant was in one map and not the other, which means it
-// could not catch the mistake it exists to catch — a channel added to one copy
-// and forgotten in the other. It now FAILS, against a recorded baseline of the
-// drift that already existed on the day the check was tightened. Adding to that
-// baseline is not the way to make a new failure go away: add the constant to the
-// other map.
-const readSource = (...parts: string[]) => readSourceFile(path.join(__dirname, '..', ...parts));
-
-/**
- * NAME → channel string for one map.
- *
- * Anchored to the start of a line and to a CONSTANT-shaped name, because the old
- * `(\w+)\s*:` pattern also matched ordinary words inside the maps' comments
- * ("Task 1:", "push:"), which put ~30 non-existent constants into the comparison
- * and is part of why it could never have been made to fail.
- */
 function ipcConstants(source: string, decl: RegExp): Map<string, string> {
-  // Anchored to the block's `} as const;` terminator at line start: a `[^}]+`
-  // body stops at the FIRST `}`, which occurs inside a mid-block comment
-  // ("Caller passes a {x,y} offset") and silently truncated the map to a third
-  // of its keys.
+  // Anchored to the `} as const;` terminator: a `[^}]+` body stopped at a `}` inside a comment and
+  // silently truncated the map to a third of its keys.
   const block = source.match(decl);
   const out = new Map<string, string>();
   if (!block) return out;
-  const entry = /^\s*([A-Z][A-Z0-9_]*)\s*:\s*'([^']+)'/gm;
+  const entry = /^\s*([A-Z][A-Z0-9_]*)\s*:\s*'([^']+)'/gm; // CONSTANT-shaped names only: comment words ("Task 1:") once polluted this
   let m: RegExpExecArray | null;
   while ((m = entry.exec(block[1])) !== null) out.set(m[1], m[2]);
   return out;
 }
 
-// WHY (2026-09-29 one-core R2): this file used to carry two baselines of measured drift
-// (52 names only preload had, 15 only the shared list had). preload's list is now GENERATED from
-// shared/backend-contract.ts (scripts/generate-preload-channels.mjs), so both maps are equal by
-// construction and the baselines are gone — any difference at all is a failure.
-// WHY (2026-09-30 one-core R3-6): provider, chatgpt, openrouter, claude-code, search, engine and models
-// channels are ONE channel-table entry each (main/ipc/<file>.ts), served to windows and phones by one body.
-// Pinned for each: the entry exists, no hand-written ipcMain.handle is left in ipc-handlers.ts, and no
-// leftover `case` is left in remote-server.ts (the table answers first, so a leftover would be dead code).
+// A channel-table entry is the only place a channel is served: the entry exists, ipc-handlers.ts keeps no
+// hand-written ipcMain.handle for it, and remote-server.ts keeps no leftover `case` (the table answers first,
+// so a leftover would be dead code).
 function expectTableEntry(file: string, konst: string, channel: string): void {
-  const entries = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc', `${file}.ts`));
-  expect(entries, `${channel}: no entry in ipc/${file}.ts`).toContain(`name: IPC.${konst},`);
-  expect(readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts')), `${channel}: still hand-registered in ipc-handlers.ts`)
-    .not.toContain(`ipcMain.handle(IPC.${konst}`);
-  expect(readSourceFile(path.join(__dirname, '..', 'src', 'main', 'remote-server.ts')), `${channel}: leftover case in remote-server.ts`)
-    .not.toContain(`case '${channel}'`);
+  expect(read('src', 'main', 'ipc', `${file}.ts`), `${channel}: no entry in ipc/${file}.ts`).toContain(`name: IPC.${konst},`);
+  expect(read('src', 'main', 'ipc-handlers.ts'), `${channel}: still hand-registered in ipc-handlers.ts`).not.toContain(`ipcMain.handle(IPC.${konst}`);
+  expect(read('src', 'main', 'remote-server.ts'), `${channel}: leftover case in remote-server.ts`).not.toContain(`case '${channel}'`);
 }
+const konstOf = (channel: string) => channel.toUpperCase().replace(/[:-]/g, '_');
 
-// Android clean rebuild (2026-10-14): the phone runs the desktop backend, so the SessionService.kt (Kotlin)
-// parity checks that used to sit beside these are gone. Comments below that still name SessionService.kt or
-// Android stubs describe that retired app.
+const CONTRACT_RE = /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/;
+const contractIpc = ipcConstants(read('src', 'shared', 'backend-contract.ts'), CONTRACT_RE);
+
 describe('IPC channel consistency', () => {
-  const preloadSource = readSource('src', 'main', 'preload.ts');
-  const typesSource = readSource('src', 'shared', 'backend-contract.ts');
+  const preloadSource = read('src', 'main', 'preload.ts');
   const preloadIpc = ipcConstants(preloadSource, /const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
-  const typesIpc = ipcConstants(typesSource, /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
+  const typesIpc = contractIpc;
 
   test('handoff channels are served by both desktop transports through the table', () => {
-    const host = readSource('src', 'main', 'remote-server.ts');
-    // WHY (2026-09-30 one-core R3-5): both desktop doors now serve handoff:* from ONE table entry each.
-    const entries = readSource('src', 'main', 'ipc', 'handoff.ts');
-    const shim = readSource('src', 'renderer', 'remote-shim.ts');
+    const host = read('src', 'main', 'remote-server.ts');
+    const entries = read('src', 'main', 'ipc', 'handoff.ts');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
     for (const [name, action] of Object.entries({ HANDOFF_BEGIN: 'begin', HANDOFF_STATUS: 'status',
       HANDOFF_WAIT: 'wait', HANDOFF_RETRY: 'retry', HANDOFF_SAVED_COPY: 'saved-copy', HANDOFF_FORCE: 'force',
       HANDOFF_CANCEL: 'cancel', HANDOFF_CREATE_PARAMS: 'create-params' })) {
@@ -89,8 +57,7 @@ describe('IPC channel consistency', () => {
     }
   });
 
-  // Without this, every assertion below passes vacuously the moment one of the
-  // two extractions stops matching — which has happened here before.
+  // Without this every comparison below passes vacuously when an extraction stops matching.
   test('both IPC maps were actually parsed', () => {
     expect(preloadIpc.size).toBeGreaterThan(250);
     expect(typesIpc.size).toBeGreaterThan(250);
@@ -108,16 +75,11 @@ describe('IPC channel consistency', () => {
   test('no constant is added to one map and forgotten in the other', () => {
     const preloadOnly = [...preloadIpc.keys()].filter((n) => !typesIpc.has(n)).sort();
     const typesOnly = [...typesIpc.keys()].filter((n) => !preloadIpc.has(n)).sort();
-    // Compared as ARRAYS so a failure names the exact constant that drifted.
     expect(preloadOnly, 'preload-only constant(s): add them to shared/backend-contract.ts and regenerate').toEqual([]);
     expect(typesOnly, 'contract-only constant(s): run node scripts/generate-preload-channels.mjs').toEqual([]);
   });
 
-  // Channel strings preload passes to ipcRenderer directly, without going
-  // through its map at all. Measured 2026-09-04: 59 of these exist and are
-  // legitimate (artifacts:*, git:*, project:*, sync:* are reached this way), so
-  // this stays a report rather than an assertion — the constant-map checks
-  // above are the ones that had to become real.
+  // Report only: 59 legitimate inline channel strings exist (artifacts:*, git:*, project:*, sync:*).
   test('inline ipcRenderer channel strings are reported, not asserted', () => {
     const inline = new Set<string>();
     const pattern = /ipcRenderer\.\w+\('([^']+)'/g;
@@ -125,982 +87,304 @@ describe('IPC channel consistency', () => {
     while ((m = pattern.exec(preloadSource)) !== null) inline.add(m[1]);
     const known = new Set([...typesIpc.values(), ...preloadIpc.values()]);
     const unlisted = [...inline].filter((ch) => !known.has(ch) && !ch.includes(':output:'));
-    if (unlisted.length > 0) {
-      console.warn('preload.ts calls these channels without a map entry:', unlisted);
-    }
+    if (unlisted.length > 0) console.warn('preload.ts calls these channels without a map entry:', unlisted);
     expect(inline.size).toBeGreaterThan(0);
   });
 });
 
-// Regression net for the dev:* IPC channels introduced by the
-// Settings → Development feature. All three platforms must carry identical
-// type strings.
-describe('dev:* channel parity', () => {
-  // WHY derived, not hand-listed (2026-09-10): this was a fixed array, so the two
-  // channels added for managed workspace setup escaped every assertion below
-  // silently — the suite stayed green while the new channels were on no platform
-  // but desktop. The list now comes from shared/backend-contract.ts, so a dev:* channel
-  // cannot be added without this test having an opinion about it.
-  const ALL_DEV_TYPES = [...ipcConstants(
-    readSource('src', 'shared', 'backend-contract.ts'),
-    /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/,
-  ).values()].filter(v => v.startsWith('dev:'));
+// ── Channel families ─────────────────────────────────────────────────────────
+// Every row: each `req` and `push` string is in preload.ts and remote-shim.ts; `contract` also demands
+// shared/backend-contract.ts; `table` names the main/ipc/<file>.ts that serves each `req` (strict: exact
+// `name: IPC.X,` entry, no hand-registered copy, no leftover remote-server case). `konst` maps a channel to
+// its constant when it is not konstOf(channel). A phone-only/desktop-only difference is a separate test below.
+type Family = { req: string[]; push?: string[]; contract?: boolean; table?: string; konst?: (ch: string) => string };
 
-  // Desktop-only by decision, not by omission: setting up a development workspace
-  // needs git and a shell on the machine the app runs on. Remote already answers
-  // "Developer tools isn't available via remote access yet"
-  // (renderer/remote-unsupported.ts maps the whole 'dev:' namespace), and Android
-  // has no shell to clone into. Adding one here is a deliberate act.
-  const DESKTOP_ONLY = new Set(['dev:setup-workspace', 'dev:setup-status', 'dev:setup-clear']);
-  const NEW_TYPES = ALL_DEV_TYPES.filter(t => !DESKTOP_ONLY.has(t));
+const artifactChannels = [...new Set([...read('src', 'main', 'artifacts', 'ipc-channels.ts').matchAll(/'([^']+)'/g)].map((m) => m[1]))];
+const DESKTOP_ONLY_DEV = new Set(['dev:setup-workspace', 'dev:setup-status', 'dev:setup-clear']);
+const OFFICE = ['office:status', 'office:create', 'office:pick', 'office:open', 'office:invoke', 'office:close', 'office:versions', 'office:restore', 'office:save-copy'];
+const NATIVE_CHANNELS = [
+  'native:send', 'native:queue-remove', 'native:interrupt', 'native:compact', 'native:clear', 'native:invoke-skill',
+  'native:set-binding', 'native:switch-model', 'native:set-permission-mode', 'native:get-permission-mode',
+  'native:sessions-list', 'native:kill-shell', 'native:submit-admin-password', 'native:session-context-text',
+];
+const DOC_COMMENTS = ['list', 'add', 'reply', 'resolve', 'reopen', 'move', 'edit', 'edit-reply', 'delete', 'delete-reply', 'watch', 'unwatch'].map((a) => `docComments:${a}`);
 
-  // WHY the previous version of this test was deleted (code review C9): it asserted
-  // `NEW_TYPES.includes(t) || DESKTOP_ONLY.has(t)`, and NEW_TYPES is DEFINED as
-  // ALL_DEV_TYPES minus DESKTOP_ONLY — so it was true for every possible input,
-  // including the undecided channel its own comment claimed to catch. Worse, when it
-  // was "proven" by adding a dummy channel, four tests went red and none of them was
-  // this one; the pre-existing parity tests did all the work.
-  //
-  // What actually needs asserting is the thing C6 got wrong in the shipped code:
-  // desktop-only must be a REFUSAL, not an omission. The renderer's `dev` namespace
-  // in remote-shim.ts is HAND-BUILT, so a channel merely left out of it is
-  // `undefined`, and calling it throws "…is not a function" — which a phone user then
-  // reads as the explanation for why setup failed.
-  it('a desktop-only dev channel is refused on remote, never merely missing', () => {
-    const preload = readSource('src', 'main', 'preload.ts');
-    const shim = readSource('src', 'renderer', 'remote-shim.ts');
-    const unsupported = readSource('src', 'renderer', 'remote-unsupported.ts');
-    for (const t of DESKTOP_ONLY) {
-      expect(preload, `${t} must exist on desktop`).toContain(`'${t}'`);
-      // Present in the shim = it reaches invoke(), so the server answers
-      // `unsupported` and the shim rejects with a message plainMessage can read.
-      expect(shim, `${t} must route through the shim so remote REFUSES it`).toContain(`'${t}'`);
+const FAMILIES: Record<string, Family> = {
+  // WHY derived: a hand-listed array let two new dev:* channels escape every check once.
+  'dev:*': { req: [...contractIpc.values()].filter((v) => v.startsWith('dev:') && !DESKTOP_ONLY_DEV.has(v)) },
+  'account:*': { req: ['account:start', 'account:poll', 'account:signed-in', 'account:user', 'account:refresh', 'account:sign-out',
+    'account:update-profile', 'account:set-handle', 'account:delete', 'account:export'] },
+  'social:*': { req: ['social:lookup-handle', 'social:send-request', 'social:list-requests', 'social:accept-request', 'social:decline-request',
+    'social:cancel-request', 'social:list-friends', 'social:unfriend', 'social:block', 'social:unblock', 'social:list-blocks',
+    'social:presence-connect', 'social:presence-disconnect', 'social:presence-send'], push: ['social:presence-event'], table: 'social' },
+  'terminal:get-screen-text': { req: ['terminal:get-screen-text'], table: 'ui' },
+  'native:retry': { req: ['native:retry'], contract: true, table: 'native' },
+  'native:continue-turn': { req: ['native:continue-turn'], contract: true, table: 'native' },
+  'pty:raw-bytes': { req: ['pty:raw-bytes'] },
+  'update:changelog': { req: ['update:changelog'] },
+  'analytics:*': { req: ['analytics:get-opt-in', 'analytics:set-opt-in'] },
+  'performance:* and app:restart': { req: ['performance:get-config', 'performance:set-config', 'app:restart'] },
+  'artifacts:*': { req: artifactChannels.filter((c) => c !== 'artifacts:changed'), push: ['artifacts:changed'], table: 'artifacts' },
+  'project:*': { req: ['project:list-conversations', 'project:repo-info', 'project:list-context', 'project:read-context-file', 'project:write-context-file'], table: 'project' },
+  'chatsearch:*': { req: ['chatsearch:resolve', 'chatsearch:read'], table: 'chatsearch' },
+  'syncspaces:*': { req: ['status', 'enable', 'sync-now', 'create-project', 'import-project', 'rename-project', 'set-project-description',
+    'stop-project', 'remove-project', 'lease-query', 'lease-takeover', 'lease-force', 'list-devices', 'rename-device', 'remove-device'].map((a) => `syncspaces:${a}`),
+    push: ['syncspaces:event', 'session:moved'], table: 'sync-spaces', konst: (ch) => `SYNC_SPACES_${ch.slice(11).toUpperCase().replace(/-/g, '_')}` },
+  'folders:set-description': { req: ['folders:set-description'], table: 'folders' },
+  'github:*': { req: ['github:status', 'github:connect-start', 'github:connect-cancel', 'github:install-gh', 'github:disconnect'], push: ['github:connect-done'], table: 'github' },
+  'search:*': { req: ['search:list', 'search:set-key', 'search:remove-key', 'search:test'], table: 'search' },
+  'tags and notes': { req: ['session:set-tag', 'session:set-note', 'session:get-meta', 'tags:list', 'tags:create', 'tags:update', 'tags:delete'] },
+  'engine:*': { req: ['engine:status', 'engine:install', 'engine:restart'], push: ['engine:install-progress', 'engine:status-changed'], table: 'engine' },
+  'git:*': { req: ['git:file-status', 'git:file-review', 'git:commit-file-diff', 'git:stage', 'git:unstage', 'git:commit', 'git:discard', 'git:watch', 'git:unwatch'], push: ['git:changed'], table: 'git' },
+  'office:*': { req: OFFICE, push: ['office:changed'] },
+  'docComments:*': { req: DOC_COMMENTS, push: ['docComments:changed'] },
+  'native:*': { req: NATIVE_CHANNELS },
+  'permissions:*': { req: ['permissions:list', 'permissions:remove', 'permissions:remove-project'], table: 'permissions' },
+  'specialists:*': { req: ['specialists:list', 'specialists:delegated-get', 'specialists:delegated-set', 'specialists:steer', 'specialists:interrupt'], push: ['specialists:event'], table: 'specialists' },
+  'fs:read-head': { req: ['fs:read-head'], table: 'files' },
+  'marketplace feedback': { req: ['marketplace:thumb', 'marketplace:thumb:get', 'marketplace:comment'], table: 'marketplace' },
+  'arcade:*': { req: ['arcade:status', 'arcade:leaderboard', 'arcade:submit-score', 'arcade:records'], table: 'game' },
+  'buddy helper': { req: ['buddy:helper-status', 'buddy:install-helper', 'buddy:remove-helper'], contract: true },
+  'pages phase 2': { req: ['pages:approve', 'pages:remove-connection', 'pages:refresh', 'pages:saved-keys', 'pages:delete-saved-key', 'pages:fetch'], contract: true, table: 'pages' },
+};
+
+describe('channel families are carried by every surface', () => {
+  it.each(Object.entries(FAMILIES))('%s', (name, fam) => {
+    expect(fam.req.length, `${name}: no channels found (vacuous)`).toBeGreaterThan(0);
+    const preload = read('src', 'main', 'preload.ts');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    const contract = read('src', 'shared', 'backend-contract.ts');
+    for (const ch of [...fam.req, ...(fam.push ?? [])]) {
+      expect(preload, `${ch} missing from preload.ts`).toContain(`'${ch}'`);
+      // buddy answers locally in the shim (no channel name there); its methods are pinned in the buddy test.
+      if (name !== 'buddy helper' && name !== 'pages phase 2') expect(shim, `${ch} missing from remote-shim.ts`).toContain(`'${ch}'`);
+      if (fam.contract) expect(contract, `${ch} missing from backend-contract.ts`).toContain(`'${ch}'`);
     }
-    // …and the namespace has a plain-language name, or the refusal is a channel id.
-    expect(unsupported).toContain("'dev:'");
-  });
-
-  it('all dev:* types are declared in preload.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-
-  it('all dev:* types are referenced in remote-shim.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-
-});
-
-// Regression net for the account:* IPC channels introduced by the
-// Accounts Phase 1 (client account surface) plan. All four surfaces must
-// carry identical type strings — drift would silently break sign-in / profile
-// on one platform. Also guards against any leftover marketplace:auth:* strings
-// (the pre-rename prefix) in the three desktop TS sources.
-// shell:open-external now has to work on THREE surfaces, not two. Desktop has
-// always had it; Android grew a handler when link deliverables (SendUserLink /
-// mcp__youcoded__SendUserLink) started drawing clickable tiles in the chat —
-// React runs under file:// there, so the shim's window.open fallback silently
-// does nothing and the tile would be a dead button.
-describe('shell:open-external channel parity', () => {
-  const readFrom = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  it('is declared in preload.ts and invoked by remote-shim.ts', () => {
-    expect(readFrom('src', 'main', 'preload.ts')).toContain("'shell:open-external'");
-    expect(readFrom('src', 'renderer', 'remote-shim.ts')).toContain("invoke('shell:open-external'");
-  });
-
-  it('every surface gates on the SCHEME, http/https only', () => {
-    // The scheme check is the actual security boundary for a URL the model
-    // chose — the tile is only ever opened by a user click, but file:,
-    // intent: and javascript: must never reach an opener on any platform.
-    // WHY ipc/shell.ts (one-core R3-8): shell:open-external is a channel-table entry now.
-    expect(readFrom('src', 'main', 'ipc', 'shell.ts')).toMatch(/\^https\?:\\\/\\\//);
+    if (fam.table) for (const ch of fam.req) expectTableEntry(fam.table, (fam.konst ?? konstOf)(ch), ch);
   });
 });
 
-describe('account:* channel parity', () => {
-  const NEW_TYPES = [
-    'account:start', 'account:poll', 'account:signed-in', 'account:user',
-    'account:refresh', 'account:sign-out', 'account:update-profile', 'account:set-handle', 'account:delete',
-    // Accounts Phase 2 — data export lives in the account group across all four surfaces.
-    'account:export',
-  ];
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+describe('dev:* and shell:open-external', () => {
+  // Desktop-only must be a REFUSAL, not an omission: the shim's `dev` namespace is hand-built, so a channel
+  // left out is `undefined` and a phone user reads "…is not a function" as why setup failed.
+  it('a desktop-only dev channel is refused on remote, never merely missing', () => {
+    for (const t of DESKTOP_ONLY_DEV) {
+      expect(read('src', 'main', 'preload.ts'), `${t} must exist on desktop`).toContain(`'${t}'`);
+      expect(read('src', 'renderer', 'remote-shim.ts'), `${t} must route through the shim so remote REFUSES it`).toContain(`'${t}'`);
+    }
+    expect(read('src', 'renderer', 'remote-unsupported.ts')).toContain("'dev:'");
+  });
 
-  it('all account:* types are declared in preload.ts', () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
+  it('shell:open-external is invoked by the shim and every surface gates on the SCHEME (http/https only)', () => {
+    expect(read('src', 'renderer', 'remote-shim.ts')).toContain("invoke('shell:open-external'");
+    // The scheme check is the security boundary: file:, intent: and javascript: must never reach an opener.
+    expect(read('src', 'main', 'ipc', 'shell.ts')).toMatch(/\^https\?:\\\/\\\//);
   });
-  it('all account:* types are referenced in remote-shim.ts', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-  it('all account:* types are served by the channel table (main/ipc/account.ts)', () => {
-    // WHY (2026-09-30 one-core R3-2): the handlers moved out of marketplace-api-handlers.ts.
+});
+
+describe('account and social: no hand-written copy left', () => {
+  it('account:* are served by main/ipc/account.ts and no marketplace:auth:* string remains', () => {
     const src = read('src', 'main', 'ipc', 'account.ts');
-    for (const t of NEW_TYPES) expect(src).toContain(`IPC.${t.toUpperCase().replace(/[:-]/g, '_')}`);
+    for (const t of FAMILIES['account:*'].req) expect(src).toContain(`IPC.${konstOf(t)}`);
     expect(read('src', 'main', 'marketplace-api-handlers.ts')).not.toMatch(/ipcMain\.handle\(\s*"account:/);
-  });
-  it('no marketplace:auth:* strings remain anywhere', () => {
-    for (const p of [['src','main','preload.ts'],['src','renderer','remote-shim.ts'],['src','main','marketplace-api-handlers.ts']] as const) {
+    for (const p of [['src', 'main', 'preload.ts'], ['src', 'renderer', 'remote-shim.ts'], ['src', 'main', 'marketplace-api-handlers.ts']] as const) {
       expect(read(...p)).not.toContain('marketplace:auth:');
     }
   });
+
+  it('social:* and arcade:* are not registered by hand in their handler files', () => {
+    for (const t of FAMILIES['social:*'].req) expect(read('src', 'main', 'social-handlers.ts'), t).not.toContain(`ipcMain.handle("${t}"`);
+    for (const t of FAMILIES['arcade:*'].req) expect(read('src', 'main', 'arcade-handlers.ts'), t).not.toContain(`"${t}"`);
+  });
 });
 
-// Regression net for the social:* IPC channels introduced by the Accounts
-// Phase 2 (client social graph) plan — friends, requests, blocks. All four
-// surfaces must carry identical type strings; drift would silently break the
-// friends UI on one platform. The channel strings are asserted in preload.ts +
-// remote-shim.ts (single-quoted) and social-handlers.ts + SessionService.kt
-// (double-quoted). account:export is NOT here — it rides the account:* describe.
-// The Browser (2026-10-13): every browser:* request channel is one table entry
-// (main/ipc/browser.ts) marked desktopOnly — the browser runs on the computer and
-// its picture and controls are not sent to phones — and is present in preload and
-// remote-shim (which rejects through the host's refusal). No SessionService.kt
-// branches on purpose: Android has no Browser, and its final `else` answers
-// { unsupported:true }, which the shim rejects (android-honest-build.test.ts).
 describe('browser:* channel parity', () => {
-  const contract = readSource('src', 'shared', 'backend-contract.ts');
-  const REQUESTS = [...contract.matchAll(/^\s*(BROWSER_[A-Z_]+):\s*'(browser:[^']+)'/gm)]
+  const REQUESTS = [...read('src', 'shared', 'backend-contract.ts').matchAll(/^\s*(BROWSER_[A-Z_]+):\s*'(browser:[^']+)'/gm)]
     .filter(([, k]) => !['BROWSER_STATE_CHANGED', 'BROWSER_FRAME', 'BROWSER_INFO_CHANGED'].includes(k));
   it('names twenty request channels (non-vacuity)', () => {
     expect(REQUESTS.length).toBe(20);
   });
   it('each is a desktopOnly table entry, in preload and remote-shim', () => {
-    const table = readSource('src', 'main', 'ipc', 'browser.ts');
-    const preload = readSource('src', 'main', 'preload.ts');
-    const shim = readSource('src', 'renderer', 'remote-shim.ts');
+    const table = read('src', 'main', 'ipc', 'browser.ts');
+    const preload = read('src', 'main', 'preload.ts');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
     for (const [, konst, channel] of REQUESTS) {
       expect(table, `${channel}: no desktopOnly entry`).toMatch(new RegExp(`name: IPC\\.${konst}, kind: '(handle|on)', desktopOnly: true`));
       expect(preload, `${channel}: not in preload`).toContain(`IPC.${konst}`);
-      // Fire-and-forget sends (picture acks, the person's clicks, the panel's
-      // size) are no-ops on a phone: nothing of the browser's page reaches it.
+      // Fire-and-forget sends (picture acks, clicks, panel size) are no-ops on a phone.
       if (!['BROWSER_FRAME_ACK', 'BROWSER_INPUT', 'BROWSER_VIEW_SIZE'].includes(konst)) expect(shim, `${channel}: not in remote-shim`).toContain(`'${channel}'`);
     }
   });
 });
 
-describe('social:* channel parity', () => {
-  const NEW_TYPES = [
-    'social:lookup-handle', 'social:send-request', 'social:list-requests',
-    'social:accept-request', 'social:decline-request', 'social:cancel-request',
-    'social:list-friends', 'social:unfriend', 'social:block', 'social:unblock',
-    'social:list-blocks',
-    // Presence socket (Task 6). The three invoke channels + the one push channel.
-    // social:presence-event's desktop-main surface is social-handlers.ts (the
-    // broadcaster), so the standard four-file assertion holds for all four.
-    'social:presence-connect', 'social:presence-disconnect', 'social:presence-send',
-    'social:presence-event',
-  ];
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+describe('forwarded arguments and push wiring', () => {
+  // Audit W24: a bridge that drops tailRows silently reverts to the handler's default tail.
+  it('terminal:get-screen-text forwards tailRows in preload and in the shim', () => {
+    expect(read('src', 'main', 'preload.ts')).toMatch(/ipcRenderer\.invoke\('terminal:get-screen-text',\s*\{\s*sessionId,\s*tailRows\s*\}\)/);
+    expect(read('src', 'renderer', 'remote-shim.ts')).toMatch(/invoke\('terminal:get-screen-text',\s*\{\s*sessionId,\s*tailRows\s*\}\)/);
+  });
 
-  it('all social:* types are declared in preload.ts', () => {
+  // A dropped SECOND argument is invisible elsewhere: main gets an empty patch and the dialog shows a save that
+  // did not happen. preload can't be imported (contextBridge at load), so the call shape is pinned as text.
+  it('preload forwards every argument of the two-argument models channels', () => {
     const src = read('src', 'main', 'preload.ts');
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-  it('all social:* types are referenced in remote-shim.ts', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-  it('all social:* request types are served by one channel-table entry each, with no hand-written copy left', () => {
-    // WHY (2026-10-01 one-core R3-8): main/ipc/social.ts holds the entries; social-handlers.ts builds the operations behind them.
-    // social:presence-event is the push to windows, not a request.
-    for (const t of NEW_TYPES.filter((n) => n !== 'social:presence-event')) {
-      expectTableEntry('social', konstOf(t), t);
-      expect(read('src', 'main', 'social-handlers.ts'), `${t} is still registered by hand in social-handlers.ts`).not.toContain(`ipcMain.handle("${t}"`);
-    }
-  });
-});
-
-// Regression net for terminal:get-screen-text, introduced by the
-// android-terminal-data-parity plan (Task 7/9/10). All four surfaces
-// (preload.ts, remote-shim.ts, ipc-handlers.ts, SessionService.kt) must
-// carry identical type strings — drift would silently break the PTY
-// buffer classifier on one platform.
-describe('terminal:get-screen-text channel parity', () => {
-  const CHANNEL = 'terminal:get-screen-text';
-
-  it('terminal:get-screen-text is declared in preload.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
-    expect(src).toContain(`'${CHANNEL}'`);
-  });
-
-  it('terminal:get-screen-text is referenced in remote-shim.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
-    expect(src).toContain(`'${CHANNEL}'`);
-  });
-
-  // Audit W24: the classifier asks for a 40-row tail through the second
-  // argument. A bridge that drops it silently reverts to the handler's default
-  // tail (desktop) or the whole screen (Android) with nothing failing.
-  // WHY readSourceFile (Plan B merge, 2026-09-17): master added these two parity
-  // cases with a raw readFileSync; this file routes every read through the
-  // CRLF-normalising reader so a Windows checkout matches the same regex.
-  it('preload.ts forwards the tailRows argument', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
-    expect(src).toMatch(/ipcRenderer\.invoke\('terminal:get-screen-text',\s*\{\s*sessionId,\s*tailRows\s*\}\)/);
-  });
-
-  it('remote-shim.ts forwards the tailRows argument', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
-    expect(src).toMatch(/invoke\('terminal:get-screen-text',\s*\{\s*sessionId,\s*tailRows\s*\}\)/);
-  });
-
-  it('terminal:get-screen-text is served by one channel-table entry (main/ipc/ui.ts)', () => {
-    expectTableEntry('ui', 'TERMINAL_GET_SCREEN_TEXT', CHANNEL);
-  });
-
-});
-
-// Regression net for native:retry (stalled-turn design, 2026-08-16). Five
-// surfaces must carry identical type strings — drift would leave the stalled
-// card's Retry button dead on one platform, and a dead Retry on a red card is
-// worse than no card at all.
-describe('native:retry channel parity', () => {
-  const CHANNEL = 'native:retry';
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  it('is declared in shared/backend-contract.ts', () => {
-    expect(read('src', 'shared', 'backend-contract.ts')).toContain(`'${CHANNEL}'`);
-  });
-  it('is declared in preload.ts', () => {
-    expect(read('src', 'main', 'preload.ts')).toContain(`'${CHANNEL}'`);
-  });
-  // WHY (2026-09-30 one-core R3-5): one table entry serves both the computer's windows and a phone.
-  it('is served by one channel-table entry (main/ipc/native.ts)', () => {
-    expect(read('src', 'main', 'ipc', 'native.ts')).toContain('IPC.NATIVE_RETRY');
-  });
-  it('is referenced in remote-shim.ts', () => {
-    expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`'${CHANNEL}'`);
-  });
-  it('has no leftover case in remote-server.ts (the table answers first)', () => {
-    expect(read('src', 'main', 'remote-server.ts')).not.toContain(`case '${CHANNEL}'`);
-  });
-});
-
-// native:continue-turn (2026-10-21) — the error card's Try again and the step
-// limit's Keep going. Same five surfaces as native:retry: drift would leave the
-// button dead on one platform.
-describe('native:continue-turn channel parity', () => {
-  const CHANNEL = 'native:continue-turn';
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-  it('is declared in shared/backend-contract.ts and preload.ts', () => {
-    expect(read('src', 'shared', 'backend-contract.ts')).toContain(`'${CHANNEL}'`);
-    expect(read('src', 'main', 'preload.ts')).toContain(`'${CHANNEL}'`);
-  });
-  it('is served by one channel-table entry (main/ipc/native.ts) and referenced in remote-shim.ts', () => {
-    expect(read('src', 'main', 'ipc', 'native.ts')).toContain('IPC.NATIVE_CONTINUE_TURN');
-    expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`'${CHANNEL}'`);
-    expect(read('src', 'main', 'remote-server.ts')).not.toContain(`case '${CHANNEL}'`);
-  });
-});
-
-// session:menu-lock — the one-device-at-a-time lease for answering a Claude Code
-// menu by verified navigation (main/menu-answer-lock.ts). WHY every surface is
-// pinned here (2026-09-24): the constant check above only compares preload with
-// shared/backend-contract.ts. If remote-server or Kotlin dropped the case, a phone's lock ask
-// would get `unsupported` — and a desktop window and a phone could then both type
-// arrows and Enter into one startup dialog, combining into an answer neither
-// person chose (e.g. trusting a folder). The desktop IPC handler and the remote
-// host must also share the ONE host instance, or each would grant its own lease.
-describe('session:menu-lock channel parity', () => {
-  const CHANNEL = 'session:menu-lock';
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  it('is declared in shared/backend-contract.ts and preload.ts under the same constant', () => {
-    expect(read('src', 'shared', 'backend-contract.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
-    expect(read('src', 'main', 'preload.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
-  });
-  it('is invoked by preload.ts', () => {
-    expect(read('src', 'main', 'preload.ts')).toMatch(/ipcRenderer\.invoke\(IPC\.SESSION_MENU_LOCK\b/);
-  });
-  // WHY (2026-09-30 one-core R3-4): one table entry serves both doors, so the ONE shared host lock is
-  // asserted once, where the entry is (main/ipc/session.ts).
-  it('is served by one channel-table entry over the shared host lock', () => {
-    expect(read('src', 'main', 'ipc', 'session.ts')).toMatch(/IPC\.SESSION_MENU_LOCK,[^\n]*menuAnswerLock\.handle\(/);
-    expect(read('src', 'main', 'remote-server.ts')).not.toContain("case 'session:menu-lock'");
-  });
-  it('is invoked by remote-shim.ts', () => {
-    expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`invoke('${CHANNEL}'`);
-  });
-});
-
-// Regression net for pty:raw-bytes. Tier 1 introduced the Android broadcaster;
-// Tier 2 (xterm-in-WebView) added the desktop-side consumer surfaces. Three
-// surfaces must carry identical type strings — drift would silently break the
-// xterm-on-Android renderer. ipc-handlers.ts is intentionally NOT in this list:
-// pty:raw-bytes is a push event from Android via WebSocket, not a request-
-// response handler, and there is no desktop sender (Electron PTY emits
-// pty:output strings instead).
-describe('pty:raw-bytes channel parity', () => {
-  const CHANNEL = 'pty:raw-bytes';
-
-  it('pty:raw-bytes is declared in preload.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
-    expect(src).toContain(`'${CHANNEL}'`);
-  });
-
-  it('pty:raw-bytes is referenced in remote-shim.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
-    expect(src).toContain(`'${CHANNEL}'`);
-  });
-
-});
-
-// Regression net for the update:changelog IPC channel introduced by the
-// UpdatePanel popup feature. All three platforms must carry identical
-// type strings — drift would silently break changelog fetch on one side.
-describe('update:changelog channel parity', () => {
-  const NEW_TYPES = [
-    'update:changelog',
-  ];
-
-  it('update:changelog type is declared in preload.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-
-  it('update:changelog type is referenced in remote-shim.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-
-});
-
-// Regression net for the analytics:* IPC channels introduced by the
-// privacy-analytics plan (anonymous install + DAU/MAU telemetry opt-out).
-// All three platforms must carry identical type strings. The Android
-// assertion is intentionally expected to fail until Phase 7 (SessionService.kt
-// analytics:* handlers) lands. Not a regression — the desktop IPC landing
-// ahead of Android is the planned integration order.
-describe('analytics:* channel parity', () => {
-  const NEW_TYPES = [
-    'analytics:get-opt-in',
-    'analytics:set-opt-in',
-  ];
-
-  it('both analytics:* types are declared in preload.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-
-  it('both analytics:* types are referenced in remote-shim.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-
-  // WHY: This assertion is intentionally failing until Phase 7 adds the
-  // SessionService.kt analytics:* handlers. It acts as the regression net —
-  // when Phase 7 lands, this turns green and confirms Android parity is
-  // complete.
-});
-
-// Regression net for system:back and system:notify-stack-state introduced by the
-// android-back-button implementation. system:notify-stack-state flows React → Android
-// (handled by HostJsBridge). system:back flows Android → React
-// (pushed by HostJsBridge, subscribed in remote-shim). Both channel names must
-// appear literally in their respective files — drift would silently break back-button
-// support on one platform.
-describe('system:back and system:notify-stack-state parity', () => {
-  // Android clean rebuild (2026-10-14): the Kotlin side is now HostJsBridge.kt (the stack state arrives as a
-  // host message; back is pushed to the page).
-  const sites = {
-    'preload.ts': readSourceFile(path.join(__dirname, '../src/main/preload.ts')),
-    'types.ts': readSourceFile(path.join(__dirname, '../src/shared/backend-contract.ts')),
-    'remote-shim.ts': readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts')),
-    'HostJsBridge.kt': readSourceFile(path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/bridge/HostJsBridge.kt')),
-  };
-  test.each(['system:notify-stack-state', 'system:back'])('%s appears in every file that carries it', (channel) => {
-    for (const [siteName, source] of Object.entries(sites)) {
-      expect(source, `expected '${channel}' to appear in ${siteName}`).toContain(channel);
-    }
-  });
-});
-
-describe('performance:* and app:restart parity', () => {
-  const channels = ['performance:get-config', 'performance:set-config', 'app:restart'];
-
-  it('all three types are declared in preload.ts', () => {
-    const preload = readSourceFile(
-      path.join(__dirname, '../src/main/preload.ts'));
-    for (const ch of channels) {
-      expect(preload, `${ch} missing from preload.ts`).toContain(`'${ch}'`);
-    }
-  });
-
-  it('all three types are referenced in remote-shim.ts', () => {
-    const shim = readSourceFile(
-      path.join(__dirname, '../src/renderer/remote-shim.ts'));
-    for (const ch of channels) {
-      expect(shim, `${ch} missing from remote-shim.ts`).toContain(`'${ch}'`);
-    }
-  });
-
-});
-
-// Regression net for artifact:* IPC channels introduced by the artifact-viewer
-// subsystem (Phase 2). All four surfaces (preload.ts, remote-shim.ts,
-// ipc-handlers.ts, SessionService.kt) must carry identical type strings for
-// request-response channels. The push event 'artifacts:changed' does NOT need
-// an ipcMain.handle — it broadcasts from main to renderer only. Phase 8 will
-// add SessionService.kt handlers; until then, those assertions are expected to
-// fail as a tracker for when Android parity lands.
-// WHY (2026-09-30 one-core R3-7): the contract constant for a channel name (artifacts:list-session -> ARTIFACTS_LIST_SESSION).
-const konstOf = (channel: string) => channel.toUpperCase().replace(/[:-]/g, '_');
-
-describe('artifact IPC parity', () => {
-  // Dynamically read the ipc-channels.ts file and extract the channel values
-  const ipcChannelsSource = readSourceFile(
-    path.join(__dirname, '../src/main/artifacts/ipc-channels.ts'));
-  // Extract all string values from ARTIFACT_IPC object (pattern: : 'channel-name')
-  const channelMatches = [...ipcChannelsSource.matchAll(/'([^']+)'/g)];
-  const channels = channelMatches
-    .map(m => m[1])
-    .filter((v, i, a) => a.indexOf(v) === i); // deduplicate
-
-  // Resolve paths relative to the desktop directory (where vitest is invoked from)
-  const preload = readSourceFile('src/main/preload.ts');
-  const shim = readSourceFile('src/renderer/remote-shim.ts');
-
-  for (const channel of channels) {
-    it(`channel ${channel} is referenced in preload.ts`, () => {
-      expect(preload, `${channel} missing from preload.ts`).toContain(channel);
-    });
-
-    it(`channel ${channel} is referenced in remote-shim.ts`, () => {
-      expect(shim, `${channel} missing from remote-shim.ts`).toContain(channel);
-    });
-
-    if (channel !== 'artifacts:changed') {
-      // Push events don't need an ipcMain.handle — only request/response channels do
-      // WHY (2026-09-30 one-core R3-7): one channel-table entry each (main/ipc/artifacts.ts), with no hand-written
-      // copy left in ipc-handlers.ts or remote-server.ts.
-      it(`channel ${channel} is served by one channel-table entry`, () => {
-        expectTableEntry('artifacts', konstOf(channel), channel);
-      });
-    }
-
-    // Phase 8: Expected to fail until Android handlers land; left in place as a tracker
-  }
-});
-
-// Regression net for the project:* IPC channels (Project View redesign).
-// Desktop is authoritative in v1; SessionService.kt carries stub cases so the
-// type strings stay in parity (handlers return not-implemented-on-mobile).
-describe('project:* channel parity', () => {
-  const NEW_TYPES = ['project:list-conversations', 'project:repo-info', 'project:list-context', 'project:read-context-file', 'project:write-context-file'];
-
-  it('declared in preload.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-  it('referenced in remote-shim.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-  // WHY (2026-09-30 one-core R3-7): one table entry each (main/ipc/project.ts).
-  it('served by one channel-table entry each, with no hand-written copy left', () => {
-    for (const t of NEW_TYPES) expectTableEntry('project', konstOf(t), t);
-  });
-});
-
-// Session references (spec 2026-08-10). FIVE surfaces, like project:* — the two
-// channels are NOT gated on native.supported, because a phone must still be
-// able to ask and get the clean not-implemented answer that makes the shared UI
-// fall back to plain shell output.
-describe('chatsearch:* channel parity', () => {
-  const NEW_TYPES = ['chatsearch:resolve', 'chatsearch:read'];
-
-  it('declared in preload.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-  it('referenced in remote-shim.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
-    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
-  });
-  // WHY (2026-09-30 one-core R3-7): one table entry each (main/ipc/chatsearch.ts), served to windows and phones.
-  it('served by one channel-table entry each, with no hand-written copy left', () => {
-    for (const t of NEW_TYPES) expectTableEntry('chatsearch', konstOf(t), t);
-  });
-});
-
-// Cross-device sync spaces (spec 2026-07-03). Desktop-only in Phase 1a — no
-// Android surface yet — so parity is asserted across the four DESKTOP surfaces:
-// preload.ts, remote-shim.ts, ipc-handlers.ts, and remote-server.ts. preload
-// (inlined IPC object), remote-shim (invoke literal), and remote-server (switch
-// case) carry the literal string; ipc-handlers registers via the IPC.* constant
-// (matching the existing sync:* handlers), so its check maps to the constant
-// name — same "accepts the constant form" pattern as the artifact parity test.
-describe('syncspaces:* channel parity (desktop surfaces)', () => {
-  const channels: Array<[string, string]> = [
-    ['syncspaces:status', 'IPC.SYNC_SPACES_STATUS'],
-    ['syncspaces:enable', 'IPC.SYNC_SPACES_ENABLE'],
-    ['syncspaces:sync-now', 'IPC.SYNC_SPACES_SYNC_NOW'],
-    ['syncspaces:create-project', 'IPC.SYNC_SPACES_CREATE_PROJECT'],
-    ['syncspaces:import-project', 'IPC.SYNC_SPACES_IMPORT_PROJECT'],
-    ['syncspaces:rename-project', 'IPC.SYNC_SPACES_RENAME_PROJECT'],
-    ['syncspaces:set-project-description', 'IPC.SYNC_SPACES_SET_PROJECT_DESCRIPTION'],
-    ['syncspaces:stop-project', 'IPC.SYNC_SPACES_STOP_PROJECT'],
-    ['syncspaces:remove-project', 'IPC.SYNC_SPACES_REMOVE_PROJECT'],
-    // Plan 2b Task 11 — conversation leases + device registry. Full four-surface
-    // desktop parity (preload / remote-shim / ipc-handlers constant / remote-server).
-    ['syncspaces:lease-query', 'IPC.SYNC_SPACES_LEASE_QUERY'],
-    ['syncspaces:lease-takeover', 'IPC.SYNC_SPACES_LEASE_TAKEOVER'],
-    ['syncspaces:lease-force', 'IPC.SYNC_SPACES_LEASE_FORCE'],
-    ['syncspaces:list-devices', 'IPC.SYNC_SPACES_LIST_DEVICES'],
-    ['syncspaces:rename-device', 'IPC.SYNC_SPACES_RENAME_DEVICE'],
-    ['syncspaces:remove-device', 'IPC.SYNC_SPACES_REMOVE_DEVICE'],
-  ];
-  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
-  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-  // WHY (2026-09-30 one-core R3-4): the desktop and phone halves are ONE table entry now
-  // (main/ipc/sync-spaces.ts), so the two host-side surfaces collapse to one check; that both doors
-  // serve it from the table is channel-table-families.test.ts.
-  const table = readSourceFile(path.join(__dirname, '../src/main/ipc/sync-spaces.ts'));
-  for (const [ch, constant] of channels) {
-    it(`${ch} present in preload, remote-shim and the channel table`, () => {
-      expect(preload).toContain(ch);
-      expect(shim).toContain(ch);
-      expect(table).toContain(constant);
-    });
-  }
-  it('syncspaces:event push channel present in preload + remote-shim', () => {
-    expect(preload).toContain('syncspaces:event');
-    expect(shim).toContain('syncspaces:event');
-  });
-
-  // session:moved is a PUSH event (Task 8 broadcasts it), NOT a request — so it
-  // has no ipc-handlers/Kotlin request handler. Assert only the two surfaces that
-  // CONSUME it: preload (ipcRenderer.on) + remote-shim (addListener push routing).
-  it('session:moved push channel present in preload + remote-shim', () => {
-    expect(preload).toContain('session:moved');
-    expect(shim).toContain('session:moved');
-  });
-});
-
-// Local-folder description (project-description spec, Task 4). Saved folders are
-// local-only — no sync surface — so parity is desktop-only, same four surfaces and
-// same "ipc-handlers carries the constant, everyone else carries the literal"
-// pattern as the syncspaces:* block above. NOTE: there was no pre-existing
-// folders:* parity block to add a row to (unlike syncspaces:*) — folders:list/
-// add/remove/rename were never covered here, so this new describe block is
-// scoped to the one channel this task adds rather than backfilling the rest.
-describe('folders:set-description channel parity (desktop surfaces)', () => {
-  const channels: Array<[string, string]> = [
-    ['folders:set-description', 'IPC.FOLDERS_SET_DESCRIPTION'],
-  ];
-  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
-  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-  // WHY (2026-09-30 one-core R3-1): the desktop and phone halves are ONE table entry now
-  // (main/ipc/folders.ts), so the two host-side surfaces collapse to one check; that both doors
-  // serve it from the table is channel-table-families.test.ts.
-  const table = readSourceFile(path.join(__dirname, '../src/main/ipc/folders.ts'));
-  for (const [ch, constant] of channels) {
-    it(`${ch} present in preload, remote-shim and the channel table`, () => {
-      expect(preload).toContain(ch);
-      expect(shim).toContain(ch);
-      expect(table).toContain(constant);
-    });
-  }
-
-});
-
-// Connect-GitHub modal (device-flow auth, 2026-07-14). The four REQUEST channels
-// have full four-surface desktop parity (preload inlined literal / remote-shim
-// invoke literal / ipc-handlers IPC.* constant / remote-server switch case) plus
-// an Android not-implemented-on-mobile stub so a mobile invoke rejects fast. The
-// github:connect-done PUSH event is asserted only where it's CONSUMED (preload +
-// remote-shim) — same treatment as session:moved.
-describe('github:* channel parity (desktop surfaces)', () => {
-  const channels: Array<[string, string]> = [
-    ['github:status', 'IPC.GITHUB_STATUS'],
-    ['github:connect-start', 'IPC.GITHUB_CONNECT_START'],
-    ['github:connect-cancel', 'IPC.GITHUB_CONNECT_CANCEL'],
-    ['github:install-gh', 'IPC.GITHUB_INSTALL_GH'],
-    // Connected accounts (Phase 3, 2026-07-22): deletes the app's stored token.
-    ['github:disconnect', 'IPC.GITHUB_DISCONNECT'],
-  ];
-  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
-  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-  // WHY (2026-09-30 one-core R3-4): one table entry serves both doors (main/ipc/github.ts).
-  const table = readSourceFile(path.join(__dirname, '../src/main/ipc/github.ts'));
-  for (const [ch, constant] of channels) {
-    it(`${ch} present in preload, remote-shim and the channel table`, () => {
-      expect(preload).toContain(ch);
-      expect(shim).toContain(ch);
-      expect(table).toContain(constant);
-    });
-  }
-
-  // github:connect-done is a PUSH event (main broadcasts it when the flow settles),
-  // NOT a request — no Kotlin/ipc-handlers request handler. Assert only the two
-  // surfaces that CONSUME it: preload (ipcRenderer.on) + remote-shim (dispatch).
-  it('github:connect-done push channel present in preload + remote-shim', () => {
-    expect(preload).toContain('github:connect-done');
-    expect(shim).toContain('github:connect-done');
-  });
-});
-
-// Native runtime capability flag (platform roadmap Phase 0 seam).
-// preload and remote-shim must both expose window.claude.native.supported —
-// the renderer gates the runtime selector on it without platform branching.
-// It is a plain boolean (no IPC round-trip), so there is no ipc-handlers or
-// SessionService.kt row — this describe pins shape parity only.
-describe('native runtime capability parity', () => {
-  it('preload.ts exposes native.supported', () => {
-    const src = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
-    expect(src).toMatch(/native:\s*\{/);
-    expect(src).toMatch(/supported:/);
-  });
-  it('remote-shim.ts exposes native.supported: false', () => {
-    const src = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-    expect(src).toMatch(/native:\s*\{/);
-    expect(src).toMatch(/supported:\s*false/);
-  });
-});
-
-describe('native:*/provider:* channel parity', () => {
-  const NEW_TYPES = [
-    'native:send', 'native:interrupt', 'native:set-binding', 'native:switch-model', 'native:set-permission-mode',
-    // Task 14 — read-side mode fetch that seeds the chip on create/resume.
-    'native:get-permission-mode', 'native:get-step-guard', 'native:set-step-guard', 'native:sessions-list',
-    'native:get-context-preferences', 'native:set-context-preferences',
-    // Task 11 — cancel/edit a queued-but-not-yet-sent message.
-    'native:queue-remove',
-    // M3 item 2 — user-initiated /compact for a native session.
-    'native:compact', 'native:clear',
-    'provider:list', 'provider:upsert', 'provider:remove', 'provider:test', 'provider:set-key', 'provider:catalog', 'provider:services', 'provider:refresh-catalog',
-  ];
-  const CHANNEL_TO_CONST: Record<string, string> = {
-    'native:send': 'IPC.NATIVE_SEND', 'native:interrupt': 'IPC.NATIVE_INTERRUPT',
-    'native:set-binding': 'IPC.NATIVE_SET_BINDING', 'native:set-permission-mode': 'IPC.NATIVE_SET_PERMISSION_MODE',
-    'native:switch-model': 'IPC.NATIVE_SWITCH_MODEL',
-    'native:get-permission-mode': 'IPC.NATIVE_GET_PERMISSION_MODE',
-    'native:get-context-preferences': 'IPC.NATIVE_GET_CONTEXT_PREFERENCES',
-    'native:set-context-preferences': 'IPC.NATIVE_SET_CONTEXT_PREFERENCES',
-    'native:get-step-guard': 'IPC.NATIVE_GET_STEP_GUARD',
-    'native:set-step-guard': 'IPC.NATIVE_SET_STEP_GUARD',
-    'native:sessions-list': 'IPC.NATIVE_SESSIONS_LIST',
-    'native:queue-remove': 'IPC.NATIVE_QUEUE_REMOVE',
-    'native:queue-send-now': 'IPC.NATIVE_QUEUE_SEND_NOW',
-    'native:compact': 'IPC.NATIVE_COMPACT',
-    'native:clear': 'IPC.NATIVE_CLEAR',
-    'provider:list': 'IPC.PROVIDER_LIST', 'provider:upsert': 'IPC.PROVIDER_UPSERT',
-    'provider:remove': 'IPC.PROVIDER_REMOVE', 'provider:test': 'IPC.PROVIDER_TEST',
-    'provider:set-key': 'IPC.PROVIDER_SET_KEY', 'provider:catalog': 'IPC.PROVIDER_CATALOG',
-    'provider:services': 'IPC.PROVIDER_SERVICES', 'provider:refresh-catalog': 'IPC.PROVIDER_REFRESH_CATALOG',
-  };
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-  it('exposed in preload.ts', () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const t of NEW_TYPES) expect(src.includes(`'${t}'`) || src.includes(CHANNEL_TO_CONST[t]), `${t} missing from preload.ts`).toBe(true);
-  });
-  it('exposed in remote-shim.ts', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
-  });
-  // WHY (2026-09-30 one-core R3-5): native:* are channel-table entries (main/ipc/native.ts), served to windows
-  // AND phones by one body; provider:* are still hand-registered in ipc-handlers.ts.
-  it('served by the native / provider table entries', () => {
-    const src = read('src', 'main', 'ipc', 'native.ts') + read('src', 'main', 'ipc', 'provider.ts');
-    for (const t of NEW_TYPES) expect(src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc/native.ts / ipc/provider.ts`).toBe(true);
-    for (const t of NEW_TYPES.filter((c) => c.startsWith('provider:'))) expectTableEntry('provider', CHANNEL_TO_CONST[t].slice(4), t);
-  });
-  // WHY (2026-09-30 one-core R3-5): the request/response native channels are ONE table entry each, so a
-  // phone is answered by the same body as a window and there is no second `case` to forget. Pinned: each
-  // entry exists, and remote-server has no leftover case for it.
-  it.each(['native:get-permission-mode', 'native:get-step-guard', 'native:set-step-guard', 'native:send', 'native:queue-remove', 'native:queue-send-now', 'native:sessions-list'])(
-    '%s is a table entry with no leftover case in remote-server.ts', (channel) => {
-      const constant = 'IPC.' + channel.toUpperCase().replace(/[:-]/g, '_');
-      expect(read('src', 'main', 'ipc', 'native.ts')).toMatch(new RegExp(`name: ${constant.replace('.', '\\.')}, kind: 'handle'`));
-      expect(read('src', 'main', 'remote-server.ts')).not.toContain(`case '${channel}'`);
-    });
-  // chip in every window and on every phone depends on receiving it.
-  it('native:permission-mode push is sent by main and consumed by preload + remote-shim', () => {
-    expect(read('src', 'main', 'preload.ts')).toContain(`NATIVE_PERMISSION_MODE: 'native:permission-mode'`);
-    expect(read('src', 'main', 'preload.ts')).toContain('onPermissionMode:');
-    const shim = read('src', 'renderer', 'remote-shim.ts');
-    expect(shim).toContain(`case 'native:permission-mode':`);
-    expect(shim).toContain('onPermissionMode:');
-    const main = read('src', 'main', 'ipc-handlers.ts');
-    // One call reaches the windows and every phone (publish.ts); tests/session-publish-equivalence.test.ts pins the delivery.
-    expect(main).toContain('publish(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e)');
-  });
-});
-
-// Regression net for the search:* IPC channels (Phase 2 Plan B — keyed Tavily/
-// Exa WebSearch upgrades). Full four-surface parity: preload.ts (inlined
-// literal) / remote-shim.ts (invoke literal) / ipc-handlers.ts (IPC.* constant) /
-// SessionService.kt (not-implemented-on-mobile stub). Drift would silently break
-// the Search provider settings on one platform.
-describe('search:* channel parity', () => {
-  const NEW_TYPES = [
-    'search:list', 'search:set-key', 'search:remove-key', 'search:test',
-  ];
-  const CHANNEL_TO_CONST: Record<string, string> = {
-    'search:list': 'IPC.SEARCH_LIST',
-    'search:set-key': 'IPC.SEARCH_SET_KEY',
-    'search:remove-key': 'IPC.SEARCH_REMOVE_KEY',
-    'search:test': 'IPC.SEARCH_TEST',
-  };
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-  it('exposed in preload.ts', () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
-  });
-  it('exposed in remote-shim.ts', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
-  });
-  // WHY (2026-09-30 one-core R3-6): one table entry each (main/ipc/search.ts).
-  it('served by one channel-table entry each, with no hand-written copy left', () => {
-    for (const t of NEW_TYPES) expectTableEntry('search', CHANNEL_TO_CONST[t].slice(4), t);
-  });
-});
-
-// Custom tags + per-session notes (session-tags feature).
-// The channels must exist across all three parity surfaces so the shared
-// React UI works identically on desktop (preload/Electron IPC), remote
-// browsers (remote-shim/WebSocket); the phone runs the desktop backend.
-describe('custom tags + notes channel parity', () => {
-  const read = (rel: string) => readSourceFile(path.join(__dirname, rel));
-  const preload = read('../src/main/preload.ts');
-  const remoteShim = read('../src/renderer/remote-shim.ts');
-  const channels = [
-    'session:set-tag', 'session:set-note', 'session:get-meta',
-    'tags:list', 'tags:create', 'tags:update', 'tags:delete',
-  ];
-  for (const ch of channels) {
-    test(`${ch} present in preload and remote-shim`, () => {
-      expect(preload).toContain(ch);
-      expect(remoteShim).toContain(ch);
-    });
-  }
-});
-
-// Welcome back (design 2026-09-24 §3, plan T2): the per-install "sessions open
-// at last shutdown" list. HAND-WRITTEN parity block (design §6) — the
-// automatic check only diffs preload.ts against shared/backend-contract.ts (review 2 D7),
-// so it can't see remote-shim.ts, remote-server.ts or SessionService.kt drift.
-// Desktop-only (S-phone): remote-server.ts and SessionService.kt must always
-// answer as if nothing is offered, never carry the real store.
-describe('session:reopen-list / session:forget-reopen channel parity (Welcome back)', () => {
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-  const preload = read('src', 'main', 'preload.ts');
-  const remoteShim = read('src', 'renderer', 'remote-shim.ts');
-  const remoteServer = read('src', 'main', 'remote-server.ts');
-  const ipcHandlers = read('src', 'main', 'ipc-handlers.ts');
-
-  it('preload.ts declares both channel strings and exposes both methods', () => {
-    expect(preload).toContain("'session:reopen-list'");
-    expect(preload).toContain("'session:forget-reopen'");
-    expect(preload).toMatch(/reopenList:.*ipcRenderer\.invoke\(IPC\.SESSION_REOPEN_LIST\)/s);
-    expect(preload).toMatch(/forgetReopen:.*ipcRenderer\.invoke\(IPC\.SESSION_FORGET_REOPEN/s);
-  });
-
-  it('remote-shim.ts invokes both channels', () => {
-    expect(remoteShim).toContain("invoke('session:reopen-list')");
-    expect(remoteShim).toContain("invoke('session:forget-reopen'");
-  });
-
-  // WHY (2026-09-30 one-core R3-4): both are table entries (main/ipc/session.ts). desktopOnly, with the
-  // "nothing to offer" answer declared as the entry's refusal, so a phone gets it byte-for-byte without
-  // the handler (and the real store) ever running.
-  it('the channel table awaits the store\'s ready promise for both handlers', () => {
-    const table = read('src', 'main', 'ipc', 'session.ts');
-    expect(table).toMatch(/IPC\.SESSION_REOPEN_LIST, kind: 'handle', desktopOnly: true, refusal: \{ kind: 'reply', payload: \[\] \}/);
-    expect(table).toMatch(/IPC\.SESSION_FORGET_REOPEN, kind: 'handle', desktopOnly: true, refusal: \{ kind: 'reply', payload: \{ ok: true \} \}/);
-    expect(table).toContain('await store.ready');
-    expect(ipcHandlers).not.toMatch(/ipcMain\.handle\(IPC\.SESSION_(REOPEN_LIST|FORGET_REOPEN)/);
-  });
-
-  it('a phone is told there is nothing to offer, and remote-server.ts keeps no case for either', () => {
-    expect(remoteServer).not.toContain("case 'session:reopen-list'");
-    expect(remoteServer).not.toContain("case 'session:forget-reopen'");
-  });
-
-});
-
-// Welcome back (design 2026-09-24 §4, plan T3): the in-app quit warning.
-// HAND-WRITTEN parity block (design §6, same reason as the reopen-list block
-// above) — the automatic check only diffs preload.ts against shared/backend-contract.ts.
-// Electron-only (design §3: "window.claude.window is the documented
-// Electron-only namespace... so the close pair lives there and needs no
-// shim/Android twin") — unlike session:reopen-list, this trio must be ABSENT
-// from remote-shim.ts and SessionService.kt, not answered there.
-describe('window:close-request / window:answer-close / window:close-request-cancelled parity (Welcome back)', () => {
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-  const preload = read('src', 'main', 'preload.ts');
-  const sharedTypes = read('src', 'shared', 'backend-contract.ts');
-  const remoteShim = read('src', 'renderer', 'remote-shim.ts');
-  const ipcHandlers = read('src', 'main', 'ipc-handlers.ts');
-  const main = read('src', 'main', 'main.ts');
-
-  it('preload.ts and shared/backend-contract.ts carry byte-identical channel strings', () => {
-    for (const [name, channel] of [
-      ['WINDOW_CLOSE_REQUEST', 'window:close-request'],
-      ['WINDOW_ANSWER_CLOSE', 'window:answer-close'],
-      ['WINDOW_CLOSE_REQUEST_CANCELLED', 'window:close-request-cancelled'],
-    ] as const) {
-      expect(preload).toContain(`${name}: '${channel}'`);
-      expect(sharedTypes).toContain(`${name}: '${channel}'`);
-    }
-  });
-
-  it('preload.ts exposes the pair on window.claude.window, not a shared namespace', () => {
-    expect(preload).toMatch(/onCloseRequest:.*ipcRenderer\.on\(IPC\.WINDOW_CLOSE_REQUEST/s);
-    expect(preload).toMatch(/answerClose:.*ipcRenderer\.invoke\(IPC\.WINDOW_ANSWER_CLOSE/s);
-    expect(preload).toMatch(/onCloseRequestCancelled:.*ipcRenderer\.on\(IPC\.WINDOW_CLOSE_REQUEST_CANCELLED/s);
-  });
-
-  it('main.ts pushes the request/cancelled pair and handles the answer', () => {
-    expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST');
-    expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST_CANCELLED');
-    // WHY (2026-10-01 one-core R3-8): the answer is a channel-table entry (main/ipc/window.ts), like every other window:* control; it
-    // reaches the module-scope closeRequests manager through the answerClose hand-over main.ts makes.
-    expectTableEntry('window', 'WINDOW_ANSWER_CLOSE', 'window:answer-close');
-    expect(main).toMatch(/answerClose:[^\n]*closeRequests\.answer\(/);
-    expect(ipcHandlers).not.toContain('WINDOW_ANSWER_CLOSE');
-  });
-
-});
-
-// Local llama.cpp engine (Plan B, Task 9). The engine:* IPC surface must carry
-// identical channel strings across all four parity files. ipc-handlers.ts
-// references the IPC.ENGINE_* CONSTANTS (not literal strings), so its assertion
-// checks the constant identifiers. The two push channels are broadcast-only —
-// no Kotlin handler, so SessionService.kt only stubs the request-response ones.
-describe('engine:* channel parity (Plan B)', () => {
-  const channels = ['engine:status', 'engine:install', 'engine:restart'];
-  const pushChannels = ['engine:install-progress', 'engine:status-changed'];
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  it('preload exposes every engine channel (request + push)', () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const ch of [...channels, ...pushChannels]) expect(src).toContain(`'${ch}'`);
-  });
-  it('remote-shim exposes every engine channel (request + push)', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const ch of [...channels, ...pushChannels]) expect(src).toContain(`'${ch}'`);
-  });
-  it('every request-response engine channel is a table entry (main/ipc/engine.ts)', () => {
-    for (const c of ['ENGINE_STATUS', 'ENGINE_INSTALL', 'ENGINE_RESTART']) expectTableEntry('engine', c, `engine:${c.slice(7).toLowerCase()}`);
-  });
-  // The pushes stay in ipc-handlers.ts and reach every window AND every phone.
-  it('the engine pushes still go to every window and every phone', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const ch of ['engine:install-progress', 'engine:status-changed']) {
-      expect(src).toContain(`remoteServer?.broadcast({ type: '${ch}'`);
-    }
-    expect(src).toContain('send(IPC.ENGINE_INSTALL_PROGRESS, p)');
-    expect(src).toContain('send(IPC.ENGINE_STATUS_CHANGED, s)');
-  });
-});
-
-// Self-contained like the engine:* describe (Amendment 2026-07-14 I): each test
-// reads its own source. ipc-handlers uses the IPC.* CONSTANTS, so its check
-// asserts the constant identifier — NOT the literal 'models:*' string, which
-// never appears there and would always fail. Task 9 EXTENDS this `channels`
-// array with ['engine:set-context','ENGINE_SET_CONTEXT'] when it wires the knob.
-describe('models:* + engine:set-* channel parity (Plan C)', () => {
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-  const channels: Array<[string, string]> = [
-    ['engine:set-backend', 'ENGINE_SET_BACKEND'],
-    ['engine:set-context', 'ENGINE_SET_CONTEXT'],
-    // One write for every engine-wide setting (2026-09-05 local-engine upgrades §B).
-    // set-context above stays as its alias, so BOTH must be on every surface: a
-    // caller wired to the old channel keeps working, new UI uses the new one.
-    ['engine:set-config', 'ENGINE_SET_CONFIG'],
-    // Faster-engine prerequisites (2026-09-05 local-engine upgrades §A5).
-    ['engine:prereqs', 'ENGINE_PREREQS'],
-    // "Run in terminal" (2026-09-05 §A5/§F): opens a plain-shell session and
-    // types the set-up command onto its prompt. The remote client rides it too
-    // — the shell runs on the HOST — so it is on every surface, Android's stub
-    // included.
-    ['engine:run-in-terminal', 'ENGINE_RUN_IN_TERMINAL'],
-    ['models:curated', 'MODELS_CURATED'],
-    ['models:search', 'MODELS_SEARCH'],
-    ['models:quants', 'MODELS_QUANTS'],
-    ['models:download', 'MODELS_DOWNLOAD'],
-    ['models:download-cancel', 'MODELS_DOWNLOAD_CANCEL'],
-    ['models:delete', 'MODELS_DELETE'],
-    ['models:installed', 'MODELS_INSTALLED'],
-    // Resume an interrupted download from its manifest (2026-08-26). Replaced
-    // models:orphaned-partials, whose listing folded into models:installed —
-    // two lists over one directory could disagree, which was the bug.
-    ['models:resume', 'MODELS_RESUME'],
-    // Per-model settings + vision (2026-09-05 local-engine upgrades §C/§E4).
-    // These read and write the HOST's engine config and model folder, so a
-    // remote browser gets the real answer and a phone gets a fast "desktop
-    // only" instead of a 30-second wait.
-    ['models:settings', 'MODELS_SETTINGS'],
-    ['models:set-settings', 'MODELS_SET_SETTINGS'],
-    ['models:add-vision', 'MODELS_ADD_VISION'],
-    ['endpoints:detect', 'ENDPOINTS_DETECT'],
-  ];
-  const pushChannels = ['models:download-progress'];
-
-  // Both halves, deliberately: the channel NAME has to be declared, and the
-  // constant has to be USED. Checking the name alone passes on a constant
-  // nobody wired to a method, which is a channel the renderer cannot call —
-  // exactly the drift this file exists to catch.
-  it('preload declares AND wires every request-response channel', () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const [ch, konst] of channels) {
-      expect(src).toContain(`'${ch}'`);
-      expect(src).toContain(`IPC.${konst}`);
-    }
-    for (const ch of pushChannels) expect(src).toContain(`'${ch}'`);
-  });
-  // `invoke('name'`, not the bare name: every one of these is a request the
-  // remote client makes, and the bare name also matches a mention in a list
-  // (REJECT_ON_NOT_OK names three of them), which would keep this green with the
-  // method itself deleted.
-  it('remote-shim invokes every request-response channel', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const [ch] of channels) expect(src).toContain(`invoke('${ch}'`);
-    for (const ch of pushChannels) expect(src).toContain(`'${ch}'`);
-  });
-  // `ipcMain.handle(IPC.X`, not the bare constant: this is the surface where
-  // "registered" decides whether the feature works at all, and the bare name
-  // also matches a COMMENT. Proven, not assumed — replacing the whole
-  // add-vision handler with `// FIXME reinstate the IPC.MODELS_ADD_VISION
-  // handler` kept this test green until the call shape was required.
-  // WHY (2026-09-30 one-core R3-6): "registered" now means a table entry (main/ipc/engine.ts, models.ts or
-  // provider.ts) with its `name: IPC.X,` line (a comment naming the constant does not count), no leftover
-  // ipcMain.handle and no leftover remote-server case.
-  it('every request-response channel is a table entry with no hand-written copy left', () => {
-    for (const [ch, konst] of channels) {
-      expectTableEntry(ch.startsWith('engine:') ? 'engine' : ch.startsWith('endpoints:') ? 'provider' : 'models', konst, ch);
-    }
-  });
-  it('the download progress push still goes to every window and every phone', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    expect(src).toContain('send(IPC.MODELS_DOWNLOAD_PROGRESS, p)');
-    expect(src).toContain("remoteServer?.broadcast({ type: 'models:download-progress'");
-  });
-  // A dropped SECOND argument is invisible everywhere else: main receives an
-  // empty patch, changes nothing, returns the settings unchanged, and the dialog
-  // renders that as a save that worked — the user toggles "Keep loaded" on,
-  // reopens, and it is off again with no error. preload cannot be imported (it
-  // calls contextBridge at load), so the call shape is pinned as text.
-  it('preload forwards every argument of the two-argument channels', () => {
-    const src = read('src', 'main', 'preload.ts');
-    // One object per call since one-core R2 (same keys the phone shim sends).
     expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, { modelId, patch })');
     expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_DOWNLOAD, { repo, quant })');
   });
 
-  // The FIFTH surface. remote-server.ts is where a remote browser's request
-  // actually lands, and it is the one surface the original four-surface check
-  // never looked at — a channel missing here answers nothing at all over the
-  // remote link, and nothing else in the suite would notice. Every channel in
-  // the list above is served here today, so there are no exemptions.
-  // WHY (2026-09-30 one-core R3-6): the fifth surface is the channel table now: a phone is answered by the
-  // table entry (never refused: no desktopOnly, no remoteAllowed:false) unless it is listed here on purpose.
+  it('pushes still reach every window and every phone', () => {
+    const src = read('src', 'main', 'ipc-handlers.ts');
+    for (const ch of ['engine:install-progress', 'engine:status-changed']) expect(src).toContain(`remoteServer?.broadcast({ type: '${ch}'`);
+    expect(src).toContain('send(IPC.ENGINE_INSTALL_PROGRESS, p)');
+    expect(src).toContain('send(IPC.ENGINE_STATUS_CHANGED, s)');
+    expect(src).toContain('send(IPC.MODELS_DOWNLOAD_PROGRESS, p)');
+    expect(src).toContain("remoteServer?.broadcast({ type: 'models:download-progress'");
+    // One publish reaches the windows and every phone (publish.ts); session-publish-equivalence.test.ts pins what each receives.
+    expect(src).toContain('publish(sessionId, IPC.NATIVE_MODEL_STATE, full)');
+    expect(src).toContain('publish(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e)');
+    expect(src).toContain('wireDocCommentsPush(');
+  });
+
+  it('native:permission-mode push is consumed by preload and the shim (the chip in every window and phone depends on it)', () => {
+    const preload = read('src', 'main', 'preload.ts');
+    expect(preload).toContain(`NATIVE_PERMISSION_MODE: 'native:permission-mode'`);
+    expect(preload).toContain('onPermissionMode:');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    expect(shim).toContain(`case 'native:permission-mode':`);
+    expect(shim).toContain('onPermissionMode:');
+  });
+
+  it('native:supported is a plain flag on both surfaces: preload exposes it, the shim says false', () => {
+    const preload = read('src', 'main', 'preload.ts');
+    expect(preload).toMatch(/native:\s*\{/);
+    expect(preload).toMatch(/supported:/);
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    expect(shim).toMatch(/native:\s*\{/);
+    expect(shim).toMatch(/supported:\s*false/);
+  });
+});
+
+describe('session:menu-lock channel parity', () => {
+  // One lease so a desktop window and a phone can never both type arrows into one startup dialog (e.g. trusting a folder).
+  it('is declared under one constant, invoked by preload and the shim, and served by one entry over the shared host lock', () => {
+    const preload = read('src', 'main', 'preload.ts');
+    expect(read('src', 'shared', 'backend-contract.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
+    expect(preload).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
+    expect(preload).toMatch(/ipcRenderer\.invoke\(IPC\.SESSION_MENU_LOCK\b/);
+    expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`invoke('session:menu-lock'`);
+    expect(read('src', 'main', 'ipc', 'session.ts')).toMatch(/IPC\.SESSION_MENU_LOCK,[^\n]*menuAnswerLock\.handle\(/);
+    expect(read('src', 'main', 'remote-server.ts')).not.toContain("case 'session:menu-lock'");
+  });
+});
+
+describe('system:back and system:notify-stack-state parity', () => {
+  const sites = {
+    'preload.ts': read('src', 'main', 'preload.ts'),
+    'types.ts': read('src', 'shared', 'backend-contract.ts'),
+    'remote-shim.ts': read('src', 'renderer', 'remote-shim.ts'),
+    'HostJsBridge.kt': readSourceFile(path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/bridge/HostJsBridge.kt')),
+  };
+  test.each(['system:notify-stack-state', 'system:back'])('%s appears in every file that carries it', (channel) => {
+    for (const [siteName, source] of Object.entries(sites)) expect(source, `expected '${channel}' in ${siteName}`).toContain(channel);
+  });
+});
+
+describe('native:* and provider:* channel table', () => {
+  const PROVIDER = ['list', 'upsert', 'remove', 'test', 'set-key', 'catalog', 'services', 'refresh-catalog'].map((a) => `provider:${a}`);
+  const NATIVE_TABLE = ['native:send', 'native:interrupt', 'native:set-binding', 'native:switch-model', 'native:set-permission-mode',
+    'native:get-permission-mode', 'native:get-step-guard', 'native:set-step-guard', 'native:sessions-list', 'native:get-context-preferences',
+    'native:set-context-preferences', 'native:queue-remove', 'native:compact', 'native:clear'];
+
+  // preload may reach a channel through its constant instead of the literal, so either counts.
+  it('preload exposes, the shim names, and the table serves every one (provider also has no hand-written copy)', () => {
+    const preload = read('src', 'main', 'preload.ts');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    const tables = read('src', 'main', 'ipc', 'native.ts') + read('src', 'main', 'ipc', 'provider.ts');
+    for (const t of [...NATIVE_TABLE, ...PROVIDER]) {
+      expect(preload.includes(`'${t}'`) || preload.includes(`IPC.${konstOf(t)}`), `${t} missing from preload.ts`).toBe(true);
+      expect(shim, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
+      expect(tables, `${t} missing from ipc/native.ts / ipc/provider.ts`).toContain(`IPC.${konstOf(t)}`);
+    }
+    for (const t of PROVIDER) expectTableEntry('provider', konstOf(t), t);
+  });
+
+  // One table entry each, so a phone is answered by the same body as a window and no second `case` can be forgotten.
+  it.each(['native:get-permission-mode', 'native:get-step-guard', 'native:set-step-guard', 'native:send', 'native:queue-remove', 'native:queue-send-now', 'native:sessions-list'])(
+    '%s is a table entry with no leftover case in remote-server.ts', (channel) => {
+      expect(read('src', 'main', 'ipc', 'native.ts')).toMatch(new RegExp(`name: IPC\\.${konstOf(channel)}, kind: 'handle'`));
+      expect(read('src', 'main', 'remote-server.ts')).not.toContain(`case '${channel}'`);
+    });
+});
+
+// Welcome back: the sessions open at last shutdown. Desktop-only; a phone is told there is nothing to offer.
+describe('session:reopen-list / session:forget-reopen / window close prompt parity', () => {
+  it('reopen: preload and shim carry both, the table awaits the store, and a phone gets the empty answer from the entry', () => {
+    const preload = read('src', 'main', 'preload.ts');
+    expect(preload).toContain("'session:reopen-list'");
+    expect(preload).toContain("'session:forget-reopen'");
+    expect(preload).toMatch(/reopenList:.*ipcRenderer\.invoke\(IPC\.SESSION_REOPEN_LIST\)/s);
+    expect(preload).toMatch(/forgetReopen:.*ipcRenderer\.invoke\(IPC\.SESSION_FORGET_REOPEN/s);
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    expect(shim).toContain("invoke('session:reopen-list')");
+    expect(shim).toContain("invoke('session:forget-reopen'");
+    // desktopOnly with the "nothing to offer" answer declared as the refusal: the real store never runs for a phone.
+    const table = read('src', 'main', 'ipc', 'session.ts');
+    expect(table).toMatch(/IPC\.SESSION_REOPEN_LIST, kind: 'handle', desktopOnly: true, refusal: \{ kind: 'reply', payload: \[\] \}/);
+    expect(table).toMatch(/IPC\.SESSION_FORGET_REOPEN, kind: 'handle', desktopOnly: true, refusal: \{ kind: 'reply', payload: \{ ok: true \} \}/);
+    expect(table).toContain('await store.ready');
+    expect(read('src', 'main', 'ipc-handlers.ts')).not.toMatch(/ipcMain\.handle\(IPC\.SESSION_(REOPEN_LIST|FORGET_REOPEN)/);
+    expect(read('src', 'main', 'remote-server.ts')).not.toMatch(/case 'session:(reopen-list|forget-reopen)'/);
+  });
+
+  // Electron-only (window.claude.window): the trio must be ABSENT from the shim, not answered there.
+  it('close prompt: identical strings in preload and contract, exposed on window.claude.window, pushed and answered by main', () => {
+    const preload = read('src', 'main', 'preload.ts');
+    for (const [name, channel] of [['WINDOW_CLOSE_REQUEST', 'window:close-request'], ['WINDOW_ANSWER_CLOSE', 'window:answer-close'],
+      ['WINDOW_CLOSE_REQUEST_CANCELLED', 'window:close-request-cancelled']] as const) {
+      expect(preload).toContain(`${name}: '${channel}'`);
+      expect(read('src', 'shared', 'backend-contract.ts')).toContain(`${name}: '${channel}'`);
+    }
+    expect(preload).toMatch(/onCloseRequest:.*ipcRenderer\.on\(IPC\.WINDOW_CLOSE_REQUEST/s);
+    expect(preload).toMatch(/answerClose:.*ipcRenderer\.invoke\(IPC\.WINDOW_ANSWER_CLOSE/s);
+    expect(preload).toMatch(/onCloseRequestCancelled:.*ipcRenderer\.on\(IPC\.WINDOW_CLOSE_REQUEST_CANCELLED/s);
+    const main = read('src', 'main', 'main.ts');
+    expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST');
+    expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST_CANCELLED');
+    expectTableEntry('window', 'WINDOW_ANSWER_CLOSE', 'window:answer-close');
+    expect(main).toMatch(/answerClose:[^\n]*closeRequests\.answer\(/);
+    expect(read('src', 'main', 'ipc-handlers.ts')).not.toContain('WINDOW_ANSWER_CLOSE');
+  });
+});
+
+describe('models:* and engine:set-* channel parity', () => {
+  // [channel, constant] — both halves checked: the NAME declared AND the constant USED (a name alone passes on a
+  // constant nobody wired to a method, which the renderer cannot call).
+  const channels: Array<[string, string]> = [
+    'engine:set-backend', 'engine:set-context', 'engine:set-config', 'engine:prereqs', 'engine:run-in-terminal',
+    'models:curated', 'models:search', 'models:quants', 'models:download', 'models:download-cancel', 'models:delete',
+    'models:installed', 'models:resume', 'models:settings', 'models:set-settings', 'models:add-vision', 'endpoints:detect',
+    // model memory lifecycle
+    'engine:models', 'models:memory-check', 'models:load',
+  ].map((c) => [c, konstOf(c)]);
+  const pushChannels = ['models:download-progress', 'engine:models-changed', 'native:model-state'];
+  const tableFile = (ch: string) => (ch.startsWith('engine:') ? 'engine' : ch.startsWith('endpoints:') ? 'provider' : 'models');
+
+  it('preload declares AND wires, the shim invokes (not merely names), and the table serves each', () => {
+    const preload = read('src', 'main', 'preload.ts');
+    // `invoke('name'`, not the bare name: REJECT_ON_NOT_OK also lists some, which would stay green with the method deleted.
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    for (const [ch, konst] of channels) {
+      expect(preload).toContain(`'${ch}'`);
+      expect(preload).toContain(`IPC.${konst}`);
+      expect(shim).toContain(`invoke('${ch}'`);
+      expectTableEntry(tableFile(ch), konst, ch);
+    }
+    for (const ch of pushChannels) {
+      expect(preload).toContain(`'${ch}'`);
+      expect(shim).toContain(`'${ch}'`);
+    }
+  });
+
   it('a phone is served every request-response channel by the table', async () => {
     const { findChannel } = await import('../src/main/ipc/channel-table');
     const notServed = channels.map(([ch]) => ch).filter((ch) => {
@@ -1111,383 +395,54 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
   });
 });
 
-// (The native:usage-report channel + its four-surface parity net were removed in
-// the Phase 2 Plan C whole-branch review: the renderer→main usage cache
-// (nativeUsageMap) was dead — nothing read it. Native StatusBar chips are sourced
-// from the reducer's turn-complete usage via selectNativeStatusChips instead.)
+describe('office, docComments: per-feature wiring', () => {
+  const preload = read('src', 'main', 'preload.ts');
+  const shim = read('src', 'renderer', 'remote-shim.ts');
 
-// Model memory lifecycle (2026-07-14): per-model residency push + memory guard
-// + [Reload Model]. Same self-contained parity shape as the Plan B/C describes.
-describe('model memory lifecycle channel parity', () => {
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-  const invokeChannels: Array<[string, string]> = [
-    ['engine:models', 'ENGINE_MODELS'],
-    ['models:memory-check', 'MODELS_MEMORY_CHECK'],
-    ['models:load', 'MODELS_LOAD'],
-  ];
-  const pushChannels = ['engine:models-changed', 'native:model-state'];
-
-  it('preload exposes every channel (request + push)', () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const [ch] of invokeChannels) expect(src).toContain(`'${ch}'`);
-    for (const ch of pushChannels) expect(src).toContain(`'${ch}'`);
+  it('office channels are answered by the main-process handlers and a refused call is named Office', () => {
+    const handlers = read('src', 'main', 'office', 'office-ipc.ts');
+    for (const ch of [...OFFICE, 'office:changed']) expect(handlers, ch).toContain(`'${ch}'`);
+    expect(read('src', 'renderer', 'remote-unsupported.ts')).toContain(`'office:'`);
   });
-  it('remote-shim exposes every channel (request + push)', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const [ch] of invokeChannels) expect(src).toContain(`'${ch}'`);
-    for (const ch of pushChannels) expect(src).toContain(`'${ch}'`);
-  });
-  it('every request-response channel is a table entry (main/ipc/engine.ts, models.ts)', () => {
-    for (const [ch, konst] of invokeChannels) expectTableEntry(ch.startsWith('engine:') ? 'engine' : 'models', konst, ch);
-  });
-  it('the models-changed push still reaches every window and every phone', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    // One publish reaches the windows and every phone (publish.ts); the equivalence test pins what each receives.
-    expect(src).toContain('publish(sessionId, IPC.NATIVE_MODEL_STATE, full)');
-  });
-});
 
-describe('git:* IPC parity (git surface)', () => {
-  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
-  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-
-  const channels = ['git:file-status', 'git:file-review', 'git:commit-file-diff', 'git:stage', 'git:unstage', 'git:commit', 'git:discard', 'git:watch', 'git:unwatch'];
-
-  for (const ch of channels) {
-    // WHY (2026-09-30 one-core R3-7): one table entry each (main/ipc/git.ts), refused to a phone.
-    it(`${ch} present in preload + remote-shim, and served by one channel-table entry`, () => {
+  // Desktop-only handshakes: carried by preload and main, and by no other host.
+  it.each([
+    ['the unsaved-files quit prompt', 'unsaved-quit.ts', ['office:unsaved-prompt', 'office:proceed', 'office:other-unsaved', 'office:dismiss']],
+    ['the journal-before-close handshake', 'office/office-journal-sync.ts', ['office:journal-request', 'office:journal-done']],
+    ['the live-comments handshake', 'office/office-comments.ts', ['office:comments-request', 'office:comments-answer', 'office:comments-changed']],
+  ] as const)('%s is carried by preload and main only', (_n, file, chans) => {
+    const main = read('src', 'main', ...file.split('/'));
+    for (const ch of chans) {
       expect(preload).toContain(`'${ch}'`);
-      expect(shim).toContain(`'${ch}'`);
-      expectTableEntry('git', konstOf(ch), ch);
-    });
-  }
-
-  it('git:changed push channel present in preload + remote-shim', () => {
-    expect(preload).toContain(`'git:changed'`);
-    expect(shim).toContain(`'git:changed'`);
-  });
-});
-
-// Office (build plan Task 5): real on desktop, refused on the remote client and the phone.
-// Each surface must carry every channel — preload so the desktop can call it, remote-shim so
-// a remote call is refused rather than being "not a function", office-ipc so main answers,
-// and SessionService.kt so the phone answers unsupported at once instead of hanging.
-describe('office:* channel parity', () => {
-  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
-  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-  const handlers = readSourceFile(path.join(__dirname, '../src/main/office/office-ipc.ts'));
-  const unsupported = readSourceFile(path.join(__dirname, '../src/renderer/remote-unsupported.ts'));
-
-  const channels = [
-    'office:status', 'office:create', 'office:pick', 'office:open',
-    'office:invoke', 'office:close', 'office:versions', 'office:restore', 'office:save-copy',
-    // main → renderer push after a restore (desktop sends it; the other hosts never do).
-    'office:changed',
-  ];
-
-  for (const ch of channels) {
-    it(`${ch} is carried by preload, remote-shim and the main-process handlers`, () => {
-      expect(preload).toContain(`'${ch}'`);
-      expect(shim).toContain(`'${ch}'`);
-      expect(handlers).toContain(`'${ch}'`);
-    });
-  }
-
-  it('a refused office call is named Office, not by its channel id', () => {
-    expect(unsupported).toContain(`'office:'`);
-  });
-
-  // The quit prompt for unsaved files (main/unsaved-quit.ts): a main→renderer push and its
-  // replies, desktop only. The remote client and the phone have no quit of their own to hold.
-  it('the unsaved-files quit prompt is carried by preload and main, and by no other host', () => {
-    const gate = readSourceFile(path.join(__dirname, '../src/main/unsaved-quit.ts'));
-    for (const ch of ['office:unsaved-prompt', 'office:proceed', 'office:other-unsaved', 'office:dismiss']) {
-      expect(preload).toContain(`'${ch}'`);
-      expect(gate).toContain(`'${ch}'`);
+      expect(main).toContain(`'${ch}'`);
       expect(shim).not.toContain(`'${ch}'`);
     }
   });
 
-  // A closing window asks its editors to journal their newest edits (and start saving any unsaved
-  // ones) before it goes: main asks, the window answers. Desktop only, like the quit prompt.
-  it('the journal-before-close handshake is carried by preload and main, and by no other host', () => {
-    const sync = readSourceFile(path.join(__dirname, '../src/main/office/office-journal-sync.ts'));
-    for (const ch of ['office:journal-request', 'office:journal-done']) {
-      expect(preload).toContain(`'${ch}'`);
-      expect(sync).toContain(`'${ch}'`);
-      expect(shim).not.toContain(`'${ch}'`);
-    }
-  });
-
-  // Comments on an open document go through its editor: main asks the window, the window answers
-  // and says when a comment changed. Like the quit prompt, desktop only — the remote
-  // client and the phone have no Office editors to ask.
-  it('the live-comments handshake is carried by preload and main, and by no other host', () => {
-    const comments = readSourceFile(path.join(__dirname, '../src/main/office/office-comments.ts'));
-    for (const ch of ['office:comments-request', 'office:comments-answer', 'office:comments-changed']) {
-      expect(preload).toContain(`'${ch}'`);
-      expect(comments).toContain(`'${ch}'`);
-      expect(shim).not.toContain(`'${ch}'`);
-    }
-  });
-
-});
-
-// docComments:* IPC parity — T3/T4 of the doc-comments build (design
-// docs/active/specs/2026-09-26-doc-comments-build-design.md §1.6). T4 adds
-describe('docComments:* IPC parity', () => {
-  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
-  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
-  const server = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
-
-  const channels: Array<[string, string]> = [
-    ['docComments:list', 'DOC_COMMENTS_IPC.LIST'],
-    ['docComments:add', 'DOC_COMMENTS_IPC.ADD'],
-    ['docComments:reply', 'DOC_COMMENTS_IPC.REPLY'],
-    ['docComments:resolve', 'DOC_COMMENTS_IPC.RESOLVE'],
-    ['docComments:reopen', 'DOC_COMMENTS_IPC.REOPEN'],
-    ['docComments:move', 'DOC_COMMENTS_IPC.MOVE'],
-    // Edit/delete build (2026-09-28, design doc §"Edit and delete").
-    ['docComments:edit', 'DOC_COMMENTS_IPC.EDIT'],
-    ['docComments:edit-reply', 'DOC_COMMENTS_IPC.EDIT_REPLY'],
-    ['docComments:delete', 'DOC_COMMENTS_IPC.DELETE'],
-    ['docComments:delete-reply', 'DOC_COMMENTS_IPC.DELETE_REPLY'],
-    ['docComments:watch', 'DOC_COMMENTS_IPC.WATCH'],
-    ['docComments:unwatch', 'DOC_COMMENTS_IPC.UNWATCH'],
-  ];
-
-  for (const [ch, constant] of channels) {
-    it(`${ch} present in preload + remote-shim`, () => {
-      expect(preload).toContain(`'${ch}'`);
-      expect(shim).toContain(`'${ch}'`);
-    });
-    it(`${ch} is served by one channel-table entry, with no hand-written copy left`, () => {
-      // WHY (2026-10-01 one-core R3-8): main/ipc/doc-comments.ts holds one entry per channel, served to windows and phones by one body;
-      // doc-comments/ipc-handlers.ts keeps only the change push and remote-server.ts has no case for it.
-      const entries = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc', 'doc-comments.ts'));
-      expect(entries, `${ch}: no entry in ipc/doc-comments.ts`).toContain(`name: ${constant}`);
-      expect(readSourceFile(path.join(__dirname, '..', 'src', 'main', 'doc-comments', 'ipc-handlers.ts'))).not.toContain('ipcMain');
+  it('docComments: one table entry each, no ipcMain left, and watch/unwatch reject on a failed reply in the shim', () => {
+    const entries = read('src', 'main', 'ipc', 'doc-comments.ts');
+    const server = read('src', 'main', 'remote-server.ts');
+    expect(read('src', 'main', 'doc-comments', 'ipc-handlers.ts')).not.toContain('ipcMain');
+    for (const ch of DOC_COMMENTS) {
+      expect(entries, `${ch}: no entry`).toContain(`name: DOC_COMMENTS_IPC.${ch.slice(12).toUpperCase().replace(/-/g, '_')}`);
       expect(server).not.toContain(`case '${ch}':`);
-    });
-  }
-
-  it('docComments:changed push channel present in preload + remote-shim', () => {
-    expect(preload).toContain(`'docComments:changed'`);
-    expect(shim).toContain(`'docComments:changed'`);
-  });
-
-  it('docComments:watch/:unwatch are registered in remote-shim.ts REJECT_ON_NOT_OK (review 1, F10)', () => {
-    // A failed watch must reject to the caller's catch, never resolve as an
-    // ordinary value a comments pane could misread as "subscribed, no
-    // changes yet" — pinned in full (exact list + behaviour) by
-    // remote-shim-refusals.test.ts; this is the narrower presence check that
-    // belongs with this feature's own IPC parity block.
+    }
+    // A failed watch must reject, never resolve as "subscribed, no changes yet" (full behaviour: remote-shim-refusals.test.ts).
     const block = shim.match(/REJECT_ON_NOT_OK[\s\S]*?\]\);/);
     expect(block, 'REJECT_ON_NOT_OK block not found').toBeTruthy();
     expect(block![0]).toContain(`'docComments:watch'`);
     expect(block![0]).toContain(`'docComments:unwatch'`);
   });
-
-  it('the document-comment change push is wired into registerIpcHandlers', () => {
-    expect(handlers).toContain('wireDocCommentsPush(');
-  });
-
 });
 
-// Four-surface parity for the native:* channels.
-//
-// GAP THIS CLOSES (found 2026-07-28): shim/Android coverage in this file is
-// per-PREFIX — dev:* and account:* each got their own block, and native:* never
-// did. So "four-surface parity, pinned by ipc-channels.test.ts" (workspace
-// CLAUDE.md, M3 handoff §2.7) was only two-thirds true for the native runtime:
-// preload↔types drift was caught, but a channel missing from remote-shim.ts or
-// SessionService.kt passed silently. Verified by deleting the native:invoke-skill
-// line from remote-shim.ts — the whole file still went green.
-//
-// The consequence that matters: a native command that works on desktop and dies
-// on the remote web client is exactly what program §9 exit criterion (c) forbids,
-// and nothing would have told us.
-describe('native:* channel parity', () => {
-  const NATIVE_CHANNELS = [
-    'native:send',
-    'native:queue-remove',
-    'native:interrupt',
-    'native:compact',
-    'native:clear',
-    'native:invoke-skill',
-    'native:set-binding',
-    'native:switch-model',
-    'native:set-permission-mode',
-    'native:get-permission-mode',
-    'native:sessions-list',
-    'native:kill-shell',
-    // admin-password design §2.5: the password card's Confirm button.
-    'native:submit-admin-password',
-    // "What the assistant was given" — the on-demand read of one file's text.
-    // The session-context PUSH is pinned separately below: a push has no
-    // ipc-handlers request arm and no Kotlin case, so it does not belong in a
-    // list whose three tests all assert one.
-    'native:session-context-text',
-  ];
-
-  it('every native:* channel is declared in preload.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
-    for (const t of NATIVE_CHANNELS) expect(src, t).toContain(`'${t}'`);
-  });
-
-  it('every native:* channel is referenced in remote-shim.ts', () => {
-    // The remote web client is in scope for every milestone (program §9 (c)).
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
-    for (const t of NATIVE_CHANNELS) expect(src, t).toContain(`'${t}'`);
-  });
-
-});
-
-// Five-surface parity for the permissions management UI (M5 2a). A channel
-// missing from remote-shim.ts or SessionService.kt would silently break the
-// screen on remote or Android — the exact gap native:* had until 2026-07-28.
-describe('permissions:* channel parity', () => {
-  const NEW_TYPES = ['permissions:list', 'permissions:remove', 'permissions:remove-project'];
-  const CHANNEL_TO_CONST: Record<string, string> = {
-    'permissions:list': 'IPC.PERMISSIONS_LIST',
-    'permissions:remove': 'IPC.PERMISSIONS_REMOVE',
-    'permissions:remove-project': 'IPC.PERMISSIONS_REMOVE_PROJECT',
-  };
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-  it('exposed in preload.ts', () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
-  });
-  it('exposed in remote-shim.ts', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
-  });
-  // WHY (2026-09-30 one-core R3-5): served by ONE channel-table entry each (main/ipc/permissions.ts).
-  it('served by one channel-table entry each, with no leftover case in remote-server.ts', () => {
-    const table = read('src', 'main', 'ipc', 'permissions.ts');
-    const host = read('src', 'main', 'remote-server.ts');
-    for (const t of NEW_TYPES) {
-      expect(table, `${t} missing from ipc/permissions.ts`).toContain(CHANNEL_TO_CONST[t]);
-      expect(host, `${t} still has a case in remote-server.ts`).not.toContain(`case '${t}'`);
-    }
-  });
-});
-
-// Five-surface parity for the specialists roster/tier/card-action UI (Task 8,
-// plan 1c). Cloned from the permissions:* block above — same gap it closes:
-// a channel missing from remote-shim.ts or SessionService.kt would silently
-// break the roster/tier pickers or a card's steer/stop button on remote or
-// Android, the exact failure mode native:* had until 2026-07-28.
-describe('specialists:* channel parity', () => {
-  const NEW_TYPES = [
-    'specialists:list',
-    'specialists:delegated-get',
-    'specialists:delegated-set',
-    'specialists:steer',
-    'specialists:interrupt',
-  ];
-  const CHANNEL_TO_CONST: Record<string, string> = {
-    'specialists:list': 'IPC.SPECIALISTS_LIST',
-    'specialists:delegated-get': 'IPC.SPECIALISTS_DELEGATED_GET',
-    'specialists:delegated-set': 'IPC.SPECIALISTS_DELEGATED_SET',
-    'specialists:steer': 'IPC.SPECIALISTS_STEER',
-    'specialists:interrupt': 'IPC.SPECIALISTS_INTERRUPT',
-  };
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-  it('exposed in preload.ts', () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
-  });
-  it('exposed in remote-shim.ts', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
-  });
-  // WHY (2026-09-30 one-core R3-5): served by ONE channel-table entry each (main/ipc/specialists.ts).
-  it('served by one channel-table entry each, with no leftover case in remote-server.ts', () => {
-    const table = read('src', 'main', 'ipc', 'specialists.ts');
-    const host = read('src', 'main', 'remote-server.ts');
-    for (const t of NEW_TYPES) {
-      expect(table, `${t} missing from ipc/specialists.ts`).toContain(CHANNEL_TO_CONST[t]);
-      expect(host, `${t} still has a case in remote-server.ts`).not.toContain(`case '${t}'`);
-    }
-  });
-  // specialists:event is a PUSH, not a request — it is exempt from the
-  // ipc-handlers.ts (no `ipcMain.handle`, only a `.on()` forwarder) and
-  // Kotlin/remote-server "request" surfaces the same way native:model-state
-  // is (see the native:* describe block above). It still needs to exist on
-  // BOTH client surfaces (preload + remote-shim) so a subscriber compiles and
-  // actually receives it on either platform.
-  it('specialists:event push channel present in preload + remote-shim only', () => {
-    const preload = read('src', 'main', 'preload.ts');
-    const shim = read('src', 'renderer', 'remote-shim.ts');
-    expect(preload).toContain(`'specialists:event'`);
-    expect(shim).toContain(`'specialists:event'`);
-    // Never a request stub: unlike the five channels above, this is push-only
-  });
-});
-
-// Five-surface parity for fs:read-head — the composer attachment card's head
-// read (rendered markdown / mono text preview). Cloned from the permissions:*
-// block: a channel missing from remote-shim.ts or SessionService.kt would
-// silently turn every preview into the glyph on remote or Android.
-describe('fs:* channel parity', () => {
-  const NEW_TYPES = ['fs:read-head'];
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-  it('exposed in preload.ts', () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
-  });
-  it('exposed in remote-shim.ts', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
-  });
-  // WHY (2026-09-30 one-core R3-7): one table entry (main/ipc/files.ts), served to windows and phones.
-  it('served by one channel-table entry, with no hand-written copy left', () => {
-    for (const t of NEW_TYPES) expectTableEntry('files', konstOf(t), t);
-  });
-});
-
-// Four-surface parity for the marketplace feedback channels (overhaul Plan 1,
-// Task 8). FOUR, not five: marketplace write channels have no remote-server.ts
-// WS case — `marketplace:rate` has none either, so the remote browser cannot
-// rate today and cannot vote either. This block pins the status quo; it does
-// not fix it (ROADMAP).
-describe('marketplace feedback channel parity', () => {
-  // Three channels, not two: reading your OWN vote is an authed GET, so it
-  // cannot be a direct renderer fetch the way the public comment list is —
-  // the sign-in token lives in the main process.
-  const NEW_TYPES = ['marketplace:thumb', 'marketplace:thumb:get', 'marketplace:comment'];
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  it('exposed in preload.ts', () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
-  });
-  it('exposed in remote-shim.ts', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
-  });
-  // WHY retargeted (2026-09-30 one-core R3-3): these eight handlers are channel-table entries now
-  // (main/ipc/marketplace.ts); marketplace-api-handlers.ts only builds the client they use.
-  it('a channel-table entry in main/ipc/marketplace.ts', () => {
-    const src = read('src', 'main', 'ipc', 'marketplace.ts');
-    const consts: Record<string, string> = { 'marketplace:thumb': 'IPC.MARKETPLACE_THUMB,', 'marketplace:thumb:get': 'IPC.MARKETPLACE_THUMB_GET,', 'marketplace:comment': 'IPC.MARKETPLACE_COMMENT,' };
-    for (const t of NEW_TYPES) expect(src, `${t} has no channel-table entry`).toContain(`name: ${consts[t]}`);
-  });
+describe('marketplace feedback and shim payload shapes', () => {
   it('the thumb handlers forward the TOTALS, not just the vote', () => {
-    // Both thumbs routes return { vote, thumbs_up, thumbs_down }. A handler that
-    // rebuilds the object and forgets the totals type-checks, passes every
-    // component test (they mock the channel), and ships the bug it was written
-    // to fix: a lit thumb beside "No votes yet" on reopen, because the count
-    // falls back to the /stats snapshot taken at app start. Caught in a dev
-    // build after a silent no-op edit, never by the suite — hence this guard.
+    // A handler that rebuilds { vote } and forgets thumbs_up/down passes every component test (they mock the
+    // channel) and ships a lit thumb beside "No votes yet" on reopen.
     const src = read('src', 'main', 'ipc', 'marketplace.ts');
-    // The one helper both handlers answer through must carry both totals...
     const helper = src.slice(src.indexOf('const thumbs ='), src.indexOf('export const marketplaceChannels'));
     expect(helper, 'the thumbs helper must forward thumbs_up').toContain('thumbs_up');
     expect(helper, 'the thumbs helper must forward thumbs_down').toContain('thumbs_down');
-    // ...and each handler must answer THROUGH it.
     for (const ch of ['IPC.MARKETPLACE_THUMB,', 'IPC.MARKETPLACE_THUMB_GET,']) {
       const start = src.indexOf(`name: ${ch}`);
       expect(start, `${ch} handler not found`).toBeGreaterThan(-1);
@@ -1495,194 +450,60 @@ describe('marketplace feedback channel parity', () => {
     }
   });
 
-  it('the shim sends an OBJECT payload for every one, never a bare id', () => {
-    // Android reads `msg.payload.optString("plugin_id")`. A bare string payload
-    // is not a JSON object there, so the id arrives empty and the call silently
-    // does nothing on a phone — no error on either side. The two legal shapes are
-    // an object literal (`{ plugin_id: pluginId }`) or the conventional `input`
-    // variable, which is always an object type; anything else — `pluginId`,
-    // `themeId`, `slug` — is the bug.
+  // Android reads msg.payload.optString("plugin_id"): a bare string payload arrives empty and the call silently
+  // does nothing on a phone. Legal shapes: an object literal, `input` (an object type), or (arcade/chatgpt) nothing.
+  it.each([
+    ['marketplace', FAMILIES['marketplace feedback'].req, false],
+    ['arcade', FAMILIES['arcade:*'].req, true],
+    ['chatgpt', ['chatgpt:status', 'chatgpt:sign-in', 'chatgpt:cancel-sign-in', 'chatgpt:sign-out'], true],
+  ] as const)('the shim sends an OBJECT payload for every %s channel, never a bare id or positional args', (_n, types, allowNothing) => {
     const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of NEW_TYPES) {
-      const call = src.match(new RegExp(`invoke\\('${t}',\\s*([^)]*)\\)`));
-      expect(call, `no invoke('${t}', ...) found in remote-shim.ts`).toBeTruthy();
-      const arg = call![1]!.trim();
-      expect(
-        arg.startsWith('{') || arg === 'input',
-        `invoke('${t}') must pass an object literal or \`input\`, got: ${arg}`,
-      ).toBe(true);
-    }
-  });
-});
-
-// Five-surface parity for the games arcade's scores (spec §6.1). Android runs
-// the SAME React UI, so a channel missing there does not fail loudly — the
-// leaderboard silently degrades to "no board", which looks identical to having
-// no friends. That is exactly the kind of drift a parity test exists to catch.
-//
-// The main-process surface is `arcade-handlers.ts`, not `ipc-handlers.ts`, the
-// same way `social:*` lives in `social-handlers.ts`: every call needs the
-// account bearer token, so it sits beside the other token-bound namespaces.
-describe('arcade:* channel parity', () => {
-  const TYPES = ['arcade:status', 'arcade:leaderboard', 'arcade:submit-score', 'arcade:records'];
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  it('exposed in preload.ts', () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const t of TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
-  });
-
-  it('exposed in remote-shim.ts', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
-  });
-
-  it('served by one channel-table entry each (main/ipc/game.ts), with no hand-written copy left', () => {
-    // WHY (2026-10-01 one-core R3-8): both doors run the entries; arcade-handlers.ts only builds the operations behind them.
-    for (const t of TYPES) {
-      expectTableEntry('game', konstOf(t), t);
-      expect(read('src', 'main', 'arcade-handlers.ts'), `${t} is still registered by hand in arcade-handlers.ts`).not.toContain(`"${t}"`);
-    }
-  });
-
-  it('the shim sends an OBJECT payload, never bare positional args', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of TYPES) {
+    for (const t of types) {
       const call = src.match(new RegExp(`invoke\\('${t}'(,\\s*([^)]*))?\\)`));
       expect(call, `no invoke('${t}', ...) found in remote-shim.ts`).toBeTruthy();
       const arg = (call![2] ?? '').trim();
-      expect(arg === '' || arg.startsWith('{'),
-        `invoke('${t}') must pass an object literal or nothing, got: ${arg}`).toBe(true);
+      const ok = arg.startsWith('{') || (allowNothing && arg === '') || (!allowNothing && arg === 'input');
+      expect(ok, `invoke('${t}') must pass an object literal${allowNothing ? ' or nothing' : ' or input'}, got: ${arg}`).toBe(true);
     }
   });
 });
 
-// Regression net for the three Linux/KDE buddy helper channels
-// (docs/active/design/2026-09-04-linux-buddy-helper/, §4). Hand-written, like
-// every block above — this file does NOT pick a new channel up for free.
-//
-// THREE surfaces, not five, and that is deliberate. The blocks above assert
-// four or five because those features exist on Android and in the remote
-// browser too. The buddy does not: it is desktop-Electron only, SessionService.kt
-// contains no `buddy` string at all today (`buddy:show` / `buddy:hide` are not
-// stubbed there either), and remote-server.ts has no buddy entry. Adding either
-// would turn a three-channel feature into a platform-parity sweep, so the gap is
-// left exactly as wide as it already was — recorded here so a later reader sees
-// a decision rather than an oversight.
 describe('buddy:* helper channel parity', () => {
-  const TYPES = ['buddy:helper-status', 'buddy:install-helper', 'buddy:remove-helper'];
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  it('declared in the shared/backend-contract.ts channel map', () => {
-    const src = read('src', 'shared', 'backend-contract.ts');
-    for (const t of TYPES) expect(src, `${t} missing from shared/backend-contract.ts`).toContain(`'${t}'`);
-  });
-
-  it("declared in preload.ts's duplicate of that map", () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const t of TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
-  });
-
-  it('served by one channel-table entry each (main/ipc/buddy.ts)', () => {
-    // Asserted through the constant, not the string: the entries import the map
-    // rather than writing channel names out, so a literal search would fail on
-    // correct code. WHY buddy.ts (2026-10-01 one-core R3-8): they were ipcMain handlers in ipc-handlers.ts.
-    for (const [name, channel] of [['BUDDY_HELPER_STATUS', 'buddy:helper-status'], ['BUDDY_INSTALL_HELPER', 'buddy:install-helper'], ['BUDDY_REMOVE_HELPER', 'buddy:remove-helper']]) {
-      expectTableEntry('buddy', name, channel);
-    }
-  });
-
-  it('exposed on the buddy API preload hands the renderer', () => {
-    const src = read('src', 'main', 'preload.ts');
+  // Desktop-Electron only by decision: no remote-server arm, so the gap stays a recorded decision, not an oversight.
+  const TYPES = FAMILIES['buddy helper'].req;
+  it('is served by table entries through the constants, exposed on the preload and shim buddy APIs, and has NO remote-server arm', () => {
+    for (const t of TYPES) expectTableEntry('buddy', konstOf(t), t);
+    const preload = read('src', 'main', 'preload.ts');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
     for (const m of ['helperStatus', 'installHelper', 'removeHelper']) {
-      expect(src, `buddy.${m} is not exposed by preload.ts`).toContain(`${m}: (`);
+      expect(preload, `buddy.${m} is not exposed by preload.ts`).toContain(`${m}: (`);
+      // The shim answers locally and never names the channel, so the methods are what must exist.
+      expect(shim, `buddy.${m} is missing from remote-shim.ts`).toContain(`${m}: `);
     }
-  });
-
-  it('answered by remote-shim.ts, so a remote browser cannot fall through', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    // The shim answers these locally instead of sending them over the wire, so
-    // it never names the channel — the methods are what must exist.
-    for (const m of ['helperStatus', 'installHelper', 'removeHelper']) {
-      expect(src, `buddy.${m} is missing from remote-shim.ts`).toContain(`${m}: `);
-    }
-  });
-
-  it('has NO remote-server arm, deliberately', () => {
-    // Pinned so the omission stays a decision. If the buddy ever grows an
-    // and changing it is the prompt to add all three channels there properly.
-    const remoteServer = read('src', 'main', 'remote-server.ts');
-    for (const t of TYPES) {
-      expect(remoteServer, `${t} appeared in remote-server.ts — update this block`).not.toContain(`'${t}'`);
-    }
-    // premise of the paragraph above. `buddy:show` predates this feature.
+    for (const t of TYPES) expect(read('src', 'main', 'remote-server.ts'), `${t} appeared in remote-server.ts`).not.toContain(`'${t}'`);
   });
 });
 
-// ── Voice prompting ──────────────────────────────────────────────────────────
-// Talking instead of typing (design 2026-09-05). This is the one feature whose
-// `window.claude` shape is deliberately NOT the same everywhere, so the parity
-// check here has to say WHICH surface gets which channel rather than demanding
-// all of them everywhere:
-//
-//   preload.ts          the desktop app       — every channel
-//   voice/voice-handlers.ts  the desktop's main process — every channel
-//   remote-shim.ts      the phone's window.claude — the five, minus the two
-//                                               desktop-only ones
-//
-// A remote BROWSER tab gets no voice at all; that is a runtime decision (the
-// namespace is deleted at install time) and is pinned by
-// remote-shim-voice-gate.test.ts, not by a string search.
 describe('voice:* channel parity', () => {
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+  // Surface-specific: preload and main carry every channel; the phone's shim the five shared ones plus the push.
   const preload = read('src', 'main', 'preload.ts');
   const shim = read('src', 'renderer', 'remote-shim.ts');
-  const handlers = read('src', 'main', 'voice', 'voice-handlers.ts');
-
-  /** The five calls every surface that has a microphone can answer. */
   const SHARED = ['voice:status', 'voice:download', 'voice:start', 'voice:stop', 'voice:cancel'];
-  /** Desktop-only: the phone's own recogniser owns the microphone (voice:audio)
-   *  and the Activity's permission launcher owns the permission question
-   *  (voice:mic-access). */
-  const DESKTOP_ONLY = ['voice:audio', 'voice:mic-access'];
+  const DESKTOP_ONLY = ['voice:audio', 'voice:mic-access']; // the phone's recogniser owns the mic / the Activity owns the permission
   const PUSH = 'voice:event';
 
-  it('preload.ts declares every voice channel', () => {
-    for (const t of [...SHARED, ...DESKTOP_ONLY, PUSH]) {
-      expect(preload, `${t} missing from preload.ts`).toContain(`'${t}'`);
-    }
-  });
-
-  it('every voice channel is a channel-table entry (main/ipc/voice.ts), and the handlers file only sends the push', () => {
-    // WHY (2026-10-01 one-core R3-8): the arms were ipcMain registrations in voice-handlers.ts. Match the entry itself, so the test
-    // fails when the arm goes away rather than when a string does. The permission question is a `handle`; the audio stream is a
-    // fire-and-forget `on` ten times a second, so it is an `on` entry on purpose.
+  it('preload declares every channel, the table serves them, and the handlers file only sends the push', () => {
+    for (const t of [...SHARED, ...DESKTOP_ONLY, PUSH]) expect(preload, t).toContain(`'${t}'`);
     for (const t of [...SHARED, 'voice:mic-access']) expectTableEntry('voice', konstOf(t), t);
-    const entries = read('src', 'main', 'ipc', 'voice.ts');
-    expect(entries).toMatch(/name: IPC\.VOICE_AUDIO, kind: 'on'/);
+    // voice:audio streams ten times a second, so it is a fire-and-forget `on` entry on purpose.
+    expect(read('src', 'main', 'ipc', 'voice.ts')).toMatch(/name: IPC\.VOICE_AUDIO, kind: 'on'/);
+    const handlers = read('src', 'main', 'voice', 'voice-handlers.ts');
     expect(handlers).not.toContain('ipcMain');
-    // The push has no handler at all — it is sent TO the window.
     expect(handlers).toMatch(/const EVENT_CHANNEL = 'voice:event'/);
     expect(handlers).toMatch(/send\(EVENT_CHANNEL/);
   });
 
-  it('remote-shim.ts carries the five shared channels and the push event', () => {
-    for (const t of [...SHARED, PUSH]) {
-      expect(shim, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
-    }
-  });
-
-  // ── The two named exceptions to the parity rule ────────────────────────────
-  // .claude/rules/ipc-bridge.md keeps a CLOSED list of members that exist on one
-  // surface and not the other. These are two of them, asserted by name so that
-  // "adding them to the shim for symmetry" fails here with the reason attached
-  // rather than shipping a phone that fights its own recogniser for the mic.
-  //
-  // Scoped to the shim's `voice` block (indent 4, members at indent 6) rather
-  // than searched file-wide: a bare absence check would also pass if the whole
-  // namespace disappeared. Same brace scan the workbench contract test uses —
-  // which is also why the namespace must stay a plain `voice: {`, never a
-  // conditional spread.
+  // Scoped to the shim's `voice` block (a bare absence check also passes if the namespace vanishes).
   const shimVoiceBlock = (() => {
     const start = shim.search(/^ {4}voice: \{/m);
     if (start < 0) return null;
@@ -1690,378 +511,144 @@ describe('voice:* channel parity', () => {
     return end < 0 ? shim.slice(start) : shim.slice(start, end);
   })();
 
-  it("remote-shim's voice namespace is findable at the indentation the scans assume", () => {
+  it("the shim carries the five shared channels and the push, in a findable `voice` block", () => {
+    for (const t of [...SHARED, PUSH]) expect(shim, t).toContain(`'${t}'`);
     expect(shimVoiceBlock).not.toBeNull();
     for (const m of ['status', 'download', 'start', 'stop', 'cancel', 'onEvent']) {
-      expect(shimVoiceBlock!, `voice.${m} missing from remote-shim.ts`)
-        .toMatch(new RegExp(`^ {6}${m}\\s*[:(]`, 'm'));
+      expect(shimVoiceBlock!, `voice.${m} missing from remote-shim.ts`).toMatch(new RegExp(`^ {6}${m}\\s*[:(]`, 'm'));
     }
   });
 
-  it('EXCEPTION: sendAudio is desktop-only — the phone\'s recogniser owns the microphone', () => {
-    expect(preload, 'sendAudio must exist on the desktop').toContain('sendAudio');
-    expect(shimVoiceBlock!, 'sendAudio must NOT be on the Android shim').not.toContain('sendAudio');
-    expect(shim, 'voice:audio must never be sent over the bridge').not.toContain("'voice:audio'");
-  });
-
-  it("EXCEPTION: micAccess is desktop-only — the Activity's launcher owns that question", () => {
-    expect(preload, 'micAccess must exist on the desktop').toContain('micAccess');
-    expect(shimVoiceBlock!, 'micAccess must NOT be on the Android shim').not.toContain('micAccess');
-    expect(shim, 'voice:mic-access must never be sent over the bridge').not.toContain("'voice:mic-access'");
-  });
+  it.each([['sendAudio', 'voice:audio'], ['micAccess', 'voice:mic-access']])(
+    'EXCEPTION: %s is desktop-only and never sent over the bridge', (method, channel) => {
+      expect(preload, `${method} must exist on the desktop`).toContain(method);
+      expect(shimVoiceBlock!, `${method} must NOT be on the Android shim`).not.toContain(method);
+      expect(shim).not.toContain(`'${channel}'`);
+    });
 });
 
-// Five-surface parity for Sign in with ChatGPT (backend design 2026-09-05 §5,
-// §8). Shaped like the arcade block above, with one deliberate difference: the
-// Android assertion is "listed in the not-implemented fall-through", the
-// permissions:* / specialists:* precedent — the account, its encrypted tokens
-// and the 127.0.0.1:1455 sign-in listener all live in the DESKTOP main process,
-// and Android has no native runtime to hold any of that until M8. A REAL arm
-// there would be wrong, and a missing entry would make a phone's invoke hang
-// ~30 s instead of rejecting fast.
-// Sign in with OpenRouter (2026-09-18) — the same five-surface contract as
-// chatgpt:* below, including the invoke-through-the-constant check (review T4 F2).
-describe('openrouter:* sign-in channel parity', () => {
-  const CONSTS: Record<string, string> = {
-    'openrouter:sign-in-status': 'OPENROUTER_SIGN_IN_STATUS',
-    'openrouter:sign-in': 'OPENROUTER_SIGN_IN',
-    'openrouter:cancel-sign-in': 'OPENROUTER_CANCEL_SIGN_IN',
-  };
-  const TYPES = Object.keys(CONSTS);
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  it('exposed in preload.ts and actually invoked there', () => {
-    const src = read('src', 'main', 'preload.ts');
-    for (const t of TYPES) {
-      expect(src, t + ' missing from preload.ts').toContain("'" + t + "'");
-      expect(src, t + ' is only in the constants table').toContain('ipcRenderer.invoke(IPC.' + CONSTS[t] + ')');
-    }
-  });
-
-  it('registered in ipc-handlers.ts through the shared constants', () => {
-    const types = read('src', 'shared', 'backend-contract.ts');
-    const handlers = read('src', 'main', 'ipc-handlers.ts');
-    for (const t of TYPES) {
-      expect(types).toContain(`${CONSTS[t]}: '${t}'`);
-      expect(handlers).not.toContain(`ipcMain.handle(IPC.${CONSTS[t]}`);
-      expectTableEntry('openrouter', CONSTS[t], t);
-    }
-  });
-
-  // WHY (2026-09-30 one-core R3-6): a phone is answered by the table entry; sign-in is its policy refusal (`false`).
-  it('exposed in remote-shim.ts and answered by the table (sign-in refused to a phone with false)', () => {
-    const shim = read('src', 'renderer', 'remote-shim.ts');
-    const entries = read('src', 'main', 'ipc', 'openrouter.ts');
-    for (const t of TYPES) expect(shim, `${t} missing from remote-shim.ts`).toContain(`invoke('${t}')`);
-    expect(entries).toMatch(/name: IPC\.OPENROUTER_SIGN_IN, kind: 'handle', remoteAllowed: false, refusal: \{ kind: 'reply', payload: false \}/);
-  });
-
-  it('supported is set on every surface: on in preload and the workbench, off over remote', () => {
-    expect(read('src', 'main', 'preload.ts')).toMatch(/openrouter:\s*\{\s*supported: process\.env\.YOUCODED_NATIVE !== '0'/);
-    expect(read('src', 'renderer', 'dev', 'workbench', 'mock-shim.ts')).toMatch(/const openrouter = \{[\s\S]*?supported: true,/);
-    expect(read('src', 'renderer', 'remote-shim.ts')).toMatch(/openrouter:\s*\{\s*supported: false,/);
-  });
-});
-
-describe('chatgpt:* channel parity', () => {
-  const TYPES = ['chatgpt:status', 'chatgpt:sign-in', 'chatgpt:cancel-sign-in', 'chatgpt:sign-out'];
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  // Review T4 F2: a bare `toContain("'chatgpt:status'")` was satisfied by the
-  // IPC constants table alone, because this namespace invokes through IPC.*
-  // rather than a literal. Deleting all four methods from the exposed
-  // `chatgpt: { ... }` object shipped GREEN -- and every desktop user would then
-  // get "window.claude.chatgpt.status is not a function" the moment they opened
-  // the Settings card. Assert the actual invoke through the constant instead.
-  it('exposed in preload.ts', () => {
-    const src = read('src', 'main', 'preload.ts');
-    const CONSTS: Record<string, string> = {
-      'chatgpt:status': 'CHATGPT_STATUS',
-      'chatgpt:sign-in': 'CHATGPT_SIGN_IN',
-      'chatgpt:cancel-sign-in': 'CHATGPT_CANCEL_SIGN_IN',
-      'chatgpt:sign-out': 'CHATGPT_SIGN_OUT',
-    };
-    for (const t of TYPES) {
-      expect(src, t + ' missing from preload.ts').toContain("'" + t + "'");
-      expect(src, t + ' is only in the constants table -- preload never invokes it')
-        .toContain('ipcRenderer.invoke(IPC.' + CONSTS[t] + ')');
-    }
-  });
-
-  it('exposed in remote-shim.ts', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
-  });
-
-  it('registered in ipc-handlers.ts (through the IPC constants)', () => {
-    // The handlers use IPC.CHATGPT_* rather than string literals, so assert
-    // the constant exists in shared/backend-contract.ts AND the handler references it.
-    const types = read('src', 'shared', 'backend-contract.ts');
-    const handlers = read('src', 'main', 'ipc-handlers.ts');
-    const constants: Record<string, string> = {
-      'chatgpt:status': 'CHATGPT_STATUS',
-      'chatgpt:sign-in': 'CHATGPT_SIGN_IN',
-      'chatgpt:cancel-sign-in': 'CHATGPT_CANCEL_SIGN_IN',
-      'chatgpt:sign-out': 'CHATGPT_SIGN_OUT',
-    };
-    for (const t of TYPES) {
-      expect(types, `${t} missing from shared/backend-contract.ts IPC`).toContain(`${constants[t]}: '${t}'`);
-      expect(handlers, `IPC.${constants[t]} is still hand-registered in ipc-handlers.ts`).not.toContain(`ipcMain.handle(IPC.${constants[t]}`);
-      expectTableEntry('chatgpt', constants[t], t);
-    }
-  });
-
-  // WHY (2026-09-30 one-core R3-6): the phone's sign-in is the entry's policy refusal (`false`): the browser tab and
-  // the 127.0.0.1:1455 listener it needs live on the computer.
-  it('a phone is refused sign-in with false, by the entry', () => {
-    expect(read('src', 'main', 'ipc', 'chatgpt.ts')).toMatch(/name: IPC\.CHATGPT_SIGN_IN, kind: 'handle', remoteAllowed: false, refusal: \{ kind: 'reply', payload: false \}/);
-  });
-
-  it('the preload flag and the mock/remote flags exist, so the renderer gate (=== true) is honest everywhere', () => {
-    // Review R1-9: a `supported` the renderer reads as `=== true` must be SET
-    // on every surface — undefined hides the card in the workbench and on the
-    // acceptance deck for a tooling reason.
-    expect(read('src', 'main', 'preload.ts')).toMatch(/chatgpt:\s*\{\s*supported: process\.env\.YOUCODED_CHATGPT !== '0'/);
-    expect(read('src', 'renderer', 'dev', 'workbench', 'mock-shim.ts')).toMatch(/const chatgpt = \{[\s\S]*?supported: true,/);
-    // WHY: visibility follows the host's account capability now; local Android
-    // sign-in and remote read-only visibility are exercised in remote-shim-connection.
-    expect(read('src', 'renderer', 'remote-shim.ts')).toMatch(/chatgpt:\s*\{\s*get supported\(\): boolean \{ return .*capabilities\?\.chatgptAccount === true;/);
-  });
-
-  it('the shim sends an OBJECT payload or nothing, never bare positional args', () => {
-    const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const t of TYPES) {
-      const call = src.match(new RegExp(`invoke\\('${t}'(,\\s*([^)]*))?\\)`));
-      expect(call, `no invoke('${t}', ...) found in remote-shim.ts`).toBeTruthy();
-      const arg = (call![2] ?? '').trim();
-      expect(arg === '' || arg.startsWith('{'),
-        `invoke('${t}') must pass an object literal or nothing, got: ${arg}`).toBe(true);
-    }
-  });
-});
-
-// Five-surface parity for Claude Code's LIVE sign-in (2026-09-09). Shaped like
-// the chatgpt block above with ONE deliberate difference: Android gets a REAL
-// arm, not a not-implemented stub, because Bootstrap installs Claude Code into
-// the Termux prefix — the phone has its own login to report, and a stub would
-// leave a signed-in phone showing the same wrong "Sign in to use" this whole
-// channel was added to remove.
-describe('claude-code:status channel parity', () => {
-  const T = 'claude-code:status';
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  it('exposed in preload.ts, through the constant (not just the constants table)', () => {
-    const src = read('src', 'main', 'preload.ts');
-    expect(src, `${T} missing from preload.ts`).toContain(`'${T}'`);
-    expect(src, 'preload never invokes CLAUDE_CODE_STATUS — the namespace would be a dead object')
-      .toContain('ipcRenderer.invoke(IPC.CLAUDE_CODE_STATUS');
-  });
-
-  it('exposed in remote-shim.ts', () => {
-    expect(read('src', 'renderer', 'remote-shim.ts'), `${T} missing from remote-shim.ts`).toContain(`'${T}'`);
-  });
-
-  it('registered in ipc-handlers.ts (through the IPC constant)', () => {
-    expect(read('src', 'shared', 'backend-contract.ts')).toContain(`CLAUDE_CODE_STATUS: '${T}'`);
-    expectTableEntry('claude-code', 'CLAUDE_CODE_STATUS', T);
-  });
-
-  it('the workbench mock answers it, so no review shot greys out its own models', () => {
-    expect(read('src', 'renderer', 'dev', 'workbench', 'mock-shim.ts'))
-      .toMatch(/const claudeCode = \{ status:/);
-  });
-
-  it('neither the model menu nor the Claude Code card reads the setup wizard again', () => {
-    // The original bug: both asked `firstRun.getState()` — a record of what
-    // happened during SETUP — and main answers that with a bare
-    // `{currentStep:'COMPLETE'}` on every launch after the first, carrying no
-    // auth fields at all. That bare answer is correct FOR THE WIZARD (it means
-    // "do not show me"), so main.ts is deliberately left alone; what must not
-    // come back is a sign-in reader pointed at it.
-    for (const f of [
-      ['src', 'renderer', 'components', 'model', 'availability.ts'],
-      ['src', 'renderer', 'components', 'ModelProvidersPopup.tsx'],
-    ]) {
-      // The bridge ACCESS, not the word — both files name the old signal in
-      // their comments so the next reader knows why it went.
-      expect(read(...f), `${f.join('/')} reaches window.claude.firstRun for a sign-in answer again`)
-        .not.toMatch(/\.firstRun[?.[]/);
-      expect(read(...f), `${f.join('/')} reads authComplete again`)
-        .not.toMatch(/authComplete\s*[=?.]/);
-    }
-  });
-
-  it('every surface that cannot answer degrades to "unknown", never to signed-out', () => {
-    // This is the invariant the whole change turns on. A surface answering
-    // {ok:false}, undefined, or a shape from a future version must NOT be read
-    // as "not signed in" — that greys out every Claude model on a working
-    // install, which is the bug being fixed.
-    const avail = read('src', 'renderer', 'components', 'model', 'availability.ts');
-    expect(avail, 'availability.ts must normalize an unrecognized status to unknown')
-      .toMatch(/return \{ state: 'unknown' \};/);
-    const entry = read('src', 'main', 'ipc', 'claude-code.ts');
-    expect(entry, 'the entry must answer unknown when the runtime is not wired')
-      .toMatch(/CLAUDE_CODE_STATUS[\s\S]{0,500}state: 'unknown'/);
-  });
-});
-
-// First-run local models (2026-09-14): Install Claude Code on demand. A desktop
-// action a phone must REFUSE (not resolve), and a remote desktop must run.
-describe('claude-code:install channel parity', () => {
-  const T = 'claude-code:install';
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  it('exposed in preload.ts through the constant, and in remote-shim.ts', () => {
-    expect(read('src', 'main', 'preload.ts')).toContain('ipcRenderer.invoke(IPC.CLAUDE_CODE_INSTALL');
-    expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`invoke('${T}')`);
-  });
-
-  it('registered in ipc-handlers.ts and remote-server.ts', () => {
-    expect(read('src', 'shared', 'backend-contract.ts')).toContain(`CLAUDE_CODE_INSTALL: '${T}'`);
-    expectTableEntry('claude-code', 'CLAUDE_CODE_INSTALL', T);
-  });
-
-});
-
-describe('first-run local channels', () => {
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  it('every one is invoked by preload and answered by the remote shim', () => {
+describe('sign-in channel parity (openrouter, chatgpt, claude-code)', () => {
+  // A bare toContain("'chatgpt:status'") is satisfied by the IPC constants table alone; deleting every method from
+  // the exposed object once shipped green, so each is checked as an actual invoke through the constant.
+  it.each([
+    ['openrouter', { 'openrouter:sign-in-status': 'OPENROUTER_SIGN_IN_STATUS', 'openrouter:sign-in': 'OPENROUTER_SIGN_IN', 'openrouter:cancel-sign-in': 'OPENROUTER_CANCEL_SIGN_IN' }],
+    ['chatgpt', { 'chatgpt:status': 'CHATGPT_STATUS', 'chatgpt:sign-in': 'CHATGPT_SIGN_IN', 'chatgpt:cancel-sign-in': 'CHATGPT_CANCEL_SIGN_IN', 'chatgpt:sign-out': 'CHATGPT_SIGN_OUT' }],
+  ] as const)('%s: invoked by preload through the constant, in the shim, served by table entries', (ns, consts) => {
     const preload = read('src', 'main', 'preload.ts');
     const shim = read('src', 'renderer', 'remote-shim.ts');
-    for (const [constName, method] of [
-      ['FIRST_RUN_LOCAL_SETUP', 'localSetup'],
-      ['FIRST_RUN_CONNECT_LOCAL_APP', 'connectLocalApp'],
-      ['FIRST_RUN_LOCAL_DOWNLOAD', 'localDownload'],
-      ['FIRST_RUN_RESUME_LOCAL_DOWNLOAD', 'resumeLocalDownload'],
-    ]) {
+    for (const [t, c] of Object.entries(consts)) {
+      expect(preload, `${t} missing from preload.ts`).toContain(`'${t}'`);
+      expect(preload, `${t} is only in the constants table`).toMatch(new RegExp(`ipcRenderer\\.invoke\\(IPC\\.${c}\\b`));
+      expect(shim, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
+      expect(read('src', 'shared', 'backend-contract.ts')).toContain(`${c}: '${t}'`);
+      expectTableEntry(ns, c, t);
+    }
+    // A phone's sign-in is the entry's policy refusal (`false`): the browser tab and 127.0.0.1:1455 listener live on the computer.
+    expect(read('src', 'main', 'ipc', `${ns}.ts`)).toMatch(new RegExp(`name: IPC\\.${ns.toUpperCase()}_SIGN_IN, kind: 'handle', remoteAllowed: false, refusal: \\{ kind: 'reply', payload: false \\}`));
+  });
+
+  // `supported` is read as `=== true`: undefined on any surface hides the card in the workbench/acceptance deck.
+  it('the supported flag is set on every surface', () => {
+    const mock = read('src', 'renderer', 'dev', 'workbench', 'mock-shim.ts');
+    const preload = read('src', 'main', 'preload.ts');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    expect(preload).toMatch(/openrouter:\s*\{\s*supported: process\.env\.YOUCODED_NATIVE !== '0'/);
+    expect(mock).toMatch(/const openrouter = \{[\s\S]*?supported: true,/);
+    expect(shim).toMatch(/openrouter:\s*\{\s*supported: false,/);
+    expect(preload).toMatch(/chatgpt:\s*\{\s*supported: process\.env\.YOUCODED_CHATGPT !== '0'/);
+    expect(mock).toMatch(/const chatgpt = \{[\s\S]*?supported: true,/);
+    expect(shim).toMatch(/chatgpt:\s*\{\s*get supported\(\): boolean \{ return .*capabilities\?\.chatgptAccount === true;/);
+  });
+
+  it('claude-code:status and :install go through the constant, the table and the shim; the workbench mock answers status', () => {
+    const preload = read('src', 'main', 'preload.ts');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    expect(preload).toContain(`'claude-code:status'`);
+    expect(preload, 'preload never invokes CLAUDE_CODE_STATUS').toContain('ipcRenderer.invoke(IPC.CLAUDE_CODE_STATUS');
+    expect(preload).toContain('ipcRenderer.invoke(IPC.CLAUDE_CODE_INSTALL');
+    expect(shim).toContain(`'claude-code:status'`);
+    expect(shim).toContain(`invoke('claude-code:install')`);
+    for (const [c, t] of [['CLAUDE_CODE_STATUS', 'claude-code:status'], ['CLAUDE_CODE_INSTALL', 'claude-code:install']]) {
+      expect(read('src', 'shared', 'backend-contract.ts')).toContain(`${c}: '${t}'`);
+      expectTableEntry('claude-code', c, t);
+    }
+    expect(read('src', 'renderer', 'dev', 'workbench', 'mock-shim.ts')).toMatch(/const claudeCode = \{ status:/);
+  });
+
+  // The original bug: both read firstRun.getState() (a SETUP record that is bare {currentStep:'COMPLETE'} on every
+  // later launch) as the sign-in answer, greying out every Claude model on a working install.
+  it('neither the model menu nor the Claude Code card reads the setup wizard again, and an unreadable status degrades to "unknown"', () => {
+    for (const f of [['src', 'renderer', 'components', 'model', 'availability.ts'], ['src', 'renderer', 'components', 'ModelProvidersPopup.tsx']]) {
+      expect(read(...f), `${f.join('/')} reaches window.claude.firstRun for a sign-in answer again`).not.toMatch(/\.firstRun[?.[]/);
+      expect(read(...f), `${f.join('/')} reads authComplete again`).not.toMatch(/authComplete\s*[=?.]/);
+    }
+    expect(read('src', 'renderer', 'components', 'model', 'availability.ts')).toMatch(/return \{ state: 'unknown' \};/);
+    expect(read('src', 'main', 'ipc', 'claude-code.ts')).toMatch(/CLAUDE_CODE_STATUS[\s\S]{0,500}state: 'unknown'/);
+  });
+});
+
+describe('first-run local channels and the ChatGPT wiring that has no other guard', () => {
+  it('every first-run local channel is invoked by preload and answered by the shim', () => {
+    const preload = read('src', 'main', 'preload.ts');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    for (const [constName, method] of [['FIRST_RUN_LOCAL_SETUP', 'localSetup'], ['FIRST_RUN_CONNECT_LOCAL_APP', 'connectLocalApp'],
+      ['FIRST_RUN_LOCAL_DOWNLOAD', 'localDownload'], ['FIRST_RUN_RESUME_LOCAL_DOWNLOAD', 'resumeLocalDownload']]) {
       expect(preload, `${constName} never invoked by preload`).toContain(`ipcRenderer.invoke(IPC.${constName}`);
       expect(shim, `${method} missing from remote-shim firstRun`).toMatch(new RegExp(`\\b${method}:`));
     }
   });
 
-  it('the band channels are registered for every launch, not only during setup', () => {
-    // The band above the message box is read AFTER setup finished, when main.ts wires no wizard at
-    // all. WHY (2026-09-30 one-core R3-3): both are table entries now, and registerIpcHandlers (which
-    // runs on every launch) binds what they read.
+  // The band above the message box is read AFTER setup, when main.ts wires no wizard: registerIpcHandlers (every launch) must bind them.
+  it('the band channels are registered every launch and both first-run paths wire the setup channels', () => {
     const entries = read('src', 'main', 'ipc', 'first-run.ts');
-    expect(entries, 'no table entry').toContain('name: IPC.FIRST_RUN_LOCAL_DOWNLOAD,');
-    expect(entries, 'no table entry').toContain('name: IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD,');
+    expect(entries).toContain('name: IPC.FIRST_RUN_LOCAL_DOWNLOAD,');
+    expect(entries).toContain('name: IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD,');
     expect(read('src', 'main', 'ipc-handlers.ts')).toContain('bindFirstRunNative(');
-  });
-
-  it('both first-run registrations wire the setup channels', () => {
     const main = read('src', 'main', 'main.ts');
-    // WHY (2026-09-30 one-core R3-3): the channels are table entries (main/ipc/first-run.ts); each path
-    // hands them its manager (bindFirstRunManager) and wires the download hand-off. Two paths, two of each.
     expect(main.match(/bindFirstRunManager\(\{/g)?.length ?? 0).toBe(2);
     expect(main.match(/wireSetupDownloadHandoff\(\(\) =>/g)?.length ?? 0).toBe(2);
   });
-});
 
-// The kill switch and the lock-out guard are wiring, not channels: nothing else
-// in the suite reads main.ts, and both are one line whose deletion is silent.
-// Reviews T4 F1/F3 and T5 F1/F2 measured that each could be dropped with the
-// whole suite still green.
-describe('Sign in with ChatGPT - the wiring that has no other guard', () => {
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
-
-  it('the kill switch reaches the handlers, the background poll and the first-run arm', () => {
-    // The switch is applied where the runtime is built (create-runtime.ts, since the 2026-09-29
-    // one-core R1 hoist moved it out of ipc-handlers.ts); both doors read the switched value.
-    const handlers = read('src', 'main', 'create-runtime.ts');
-    const main = read('src', 'main', 'main.ts');
-    // 1. The handlers, the provider row and the catalog.
-    expect(handlers, 'the kill switch no longer gates the user-facing handle')
+  // Nothing else reads main.ts and each is one line whose deletion is silent.
+  it('the ChatGPT kill switch reaches the handlers, the background poll and the first-run arm', () => {
+    expect(read('src', 'main', 'create-runtime.ts'), 'the kill switch no longer gates the user-facing handle')
       .toMatch(/chatgptForUi[^\n]*process\.env\.YOUCODED_CHATGPT !== '0'/);
-    // 2. The background usage poll. WHY this one matters most: the poll
-    //    refreshes the token, and a rejected refresh deletes the saved sign-in -
-    //    so an ungated poll turns "turn the feature off" into "sign the user
-    //    out", the opposite of what the switch promises.
-    expect(main, 'ChatGptAuth is constructed without the pollUsage gate')
-      .toMatch(/pollUsage:\s*chatgptEnabled/);
-    expect(main, 'the kill switch is not read into chatgptEnabled')
-      .toMatch(/const chatgptEnabled = process\.env\.YOUCODED_CHATGPT !== '0'/);
-    // 3. The first-run arm, which would otherwise still open a browser tab and
-    //    bind port 1455 with the feature turned off.
-    //    WHY retargeted (2026-09-30 one-core R3-3): the arm is a table entry now; the late sign-in path
-    //    hands it a null ChatGPT account when the switch is off, and the arm only runs for a non-null one.
-    expect(main, "the late sign-in path hands the wizard's ChatGPT arm an account despite the kill switch")
-      .toMatch(/chatgptAuth: chatgptEnabled \? chatgptAuth : null/);
-    expect(read('src', 'main', 'ipc', 'first-run.ts'), "the wizard's ChatGPT arm ignores a null (switched-off) account")
-      .toMatch(/mode === 'chatgpt' && wizard\?\.chatgptAuth/);
+    const main = read('src', 'main', 'main.ts');
+    // The poll refreshes the token and a rejected refresh deletes the saved sign-in: an ungated poll turns "off" into "sign out".
+    expect(main, 'ChatGptAuth is constructed without the pollUsage gate').toMatch(/pollUsage:\s*chatgptEnabled/);
+    expect(main, 'the kill switch is not read into chatgptEnabled').toMatch(/const chatgptEnabled = process\.env\.YOUCODED_CHATGPT !== '0'/);
+    // Otherwise the first-run arm would open a browser tab and bind port 1455 with the feature off.
+    expect(main).toMatch(/chatgptAuth: chatgptEnabled \? chatgptAuth : null/);
+    expect(read('src', 'main', 'ipc', 'first-run.ts')).toMatch(/mode === 'chatgpt' && wizard\?\.chatgptAuth/);
   });
 
   it('re-showing the setup wizard marks setup complete first, so it cannot strand an established install', () => {
     const main = read('src', 'main', 'main.ts');
     const i = main.indexOf("forceStep('AUTHENTICATE')");
     expect(i, 'main.ts no longer re-shows the wizard - update this guard').toBeGreaterThan(0);
-    // The 400 characters before it must contain the completion mark. WHY:
-    // forceStep() writes 'AUTHENTICATE' to the state file and isFirstRun() reads
-    // exactly that - so without the mark, closing the window without signing in
-    // makes the NEXT launch take the early first-run branch, skip the
-    // provider-aware check entirely, and re-run the Node/Git/Claude installers
-    // against a working install. This branch removed the Skip link, so a failing
-    // installer there leaves the user with no way forward at all.
-    expect(main.slice(Math.max(0, i - 400), i), 'markSetupCompleted() must run before forceStep(AUTHENTICATE)')
-      .toContain('markSetupCompleted()');
+    // forceStep writes AUTHENTICATE and isFirstRun reads it: without the mark the next launch re-runs the installers against a working install.
+    expect(main.slice(Math.max(0, i - 400), i), 'markSetupCompleted() must run before forceStep(AUTHENTICATE)').toContain('markSetupCompleted()');
   });
 });
 
-// YouCoded Pages Phase 2 — connections, keys and `pages:fetch`.
-//
-// A channel has FIVE surfaces (.claude/rules/ipc-bridge.md), and remote-server.ts
-// is the one that gets forgotten because everything else is exercised by simply
-// running the desktop app. A page's approval screen is reachable from a phone,
-// so a missing case there would leave Allow doing nothing at all over remote.
-describe('pages:* Phase 2 channel parity', () => {
-  const PHASE_2 = [
-    'pages:approve', 'pages:remove-connection', 'pages:refresh',
-    'pages:saved-keys', 'pages:delete-saved-key', 'pages:fetch',
-  ];
-  // The live socket (spec 2026-10-04). Its handlers moved with the rest of the
-  // pages:* ones into pages/pages-ipc.ts and pages/pages-remote.ts (ipc-handlers.ts
-  // and remote-server.ts are at their line budgets). Channel strings are inlined in
-  // preload and handed to main through shared/pages-types.ts PAGE_SOCKET_CHANNELS.
+describe('pages:* live socket, video and ownership', () => {
   const SOCKET = ['pages:socket-open', 'pages:socket-send', 'pages:socket-close', 'pages:socket-ping'];
   const SOCKET_EVENT = 'pages:socket-event';
-  // Camera video (step 3): its three calls are listed beside the socket's everywhere; its events ride SOCKET_EVENT.
   const VIDEO = ['pages:video-start', 'pages:video-stop', 'pages:video-ping'];
-  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
-  it('every type is declared in shared/backend-contract.ts and preload.ts, which cannot import it', () => {
-    const shared = read('src', 'shared', 'backend-contract.ts');
-    const preload = read('src', 'main', 'preload.ts');
-    for (const t of PHASE_2) {
-      expect(shared, t).toContain(`'${t}'`);
-      expect(preload, t).toContain(`'${t}'`);
-    }
-  });
-
-  // WHY (2026-09-30 one-core R3-7): one table entry each (main/ipc/pages.ts) for the computer's windows and for a phone.
-  it('every type is served by one channel-table entry, with no hand-written copy left', () => {
-    for (const t of PHASE_2) expectTableEntry('pages', konstOf(t), t);
-  });
-
-  it('every type is invoked by the remote shim', () => {
-    // The pages bridge left remote-shim.ts for remote-pages-bridge.ts when the live socket arrived (the shim is at its line budget).
+  // The pages bridge lives in remote-pages-bridge.ts (the shim is at its line budget).
+  it('every phase 2 type is invoked by the pages bridge', () => {
     const shim = read('src', 'renderer', 'remote-pages-bridge.ts');
-    for (const t of PHASE_2) expect(shim, t).toContain(`invoke('${t}'`);
+    for (const t of FAMILIES['pages phase 2'].req) expect(shim, t).toContain(`invoke('${t}'`);
   });
 
   it('main, not the renderer, is where a pasted key from a phone is refused', () => {
-    // "No keys on the phone" was a renderer rule until design review 1 finding
-    // 13. The remote host must mark its caller remote, and the desktop handler
-    // must not — otherwise either every phone can paste a key, or no desktop can.
-    // The door that took the call says who is asking (never the payload): the entry passes `remote` from ctx.door.
+    // The door that took the call says who is asking (ctx.door), never the payload.
     expect(read('src', 'main', 'ipc', 'pages.ts')).toMatch(/\.approve\([\s\S]{0,200}?remote: ctx\.door === 'remote'/);
     expect(read('src', 'main', 'ipc-handlers.ts')).not.toMatch(/pagesService\.approve\(/);
   });
 
-  // WHY (2026-10-05, HA-pages merge into one-core): the live socket and camera video are table entries too (main/ipc/pages.ts),
-  // so these guards ask the table and the surfaces, not hand-written handlers. A socket's owner is the calling window or
-  // phone (pages/page-owner.ts); behaviour is pinned in pages-ipc.test.ts and pages-remote.test.ts.
-  it('every live socket and camera video call is ONE table entry, declared in the contract, preload and the phone shim', () => {
+  it('every live socket and camera video call is ONE table entry, declared in pages-types, the contract, preload and the bridge', () => {
     const types = read('src', 'shared', 'pages-types.ts');
     const preload = read('src', 'main', 'preload.ts');
     const contract = read('src', 'shared', 'backend-contract.ts');
@@ -2073,7 +660,6 @@ describe('pages:* Phase 2 channel parity', () => {
       expect(shim, t).toContain(`invoke('${t}'`);
       expectTableEntry('pages', konstOf(t), t);
     }
-    // The strings pages-types hands main equal the contract's.
     expect(PAGE_SOCKET_CHANNELS).toEqual({ open: 'pages:socket-open', send: 'pages:socket-send', close: 'pages:socket-close', ping: 'pages:socket-ping', event: SOCKET_EVENT });
     expect(PAGE_VIDEO_CHANNELS).toEqual({ start: 'pages:video-start', stop: 'pages:video-stop', ping: 'pages:video-ping' });
   });
@@ -2084,45 +670,38 @@ describe('pages:* Phase 2 channel parity', () => {
     expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`case '${SOCKET_EVENT}':`);
     const owner = read('src', 'main', 'pages', 'page-owner.ts');
     expect(owner).toContain('PAGE_SOCKET_CHANNELS.event');
-    // A phone's events never go through broadcast or the restore queue.
-    expect(owner).not.toMatch(/\.broadcast\(|enqueueForRestoring/);
-    // The owner comes from the DOOR (the calling window or this phone), never from the request.
-    expect(read('src', 'main', 'ipc', 'pages.ts')).toMatch(/ctx\.clientId[\s\S]{0,200}?clientOwnerKey/);
+    expect(owner).not.toMatch(/\.broadcast\(|enqueueForRestoring/); // a phone's events never go through broadcast or the restore queue
+    expect(read('src', 'main', 'ipc', 'pages.ts')).toMatch(/ctx\.clientId[\s\S]{0,200}?clientOwnerKey/); // owner comes from the door, never the request
   });
 
-  it('a window or phone going away stops its sockets and videos (one closeOwner call covers both)', () => {
+  it('a window or phone going away stops its sockets and videos (behaviour: remote-server-connections.test.ts)', () => {
     expect(read('src', 'main', 'pages', 'page-owner.ts')).toContain('svc.closeOwner(key)');
-    // That a dropped client's sockets close is a behaviour test: remote-server-connections.test.ts (the real removeClient path).
     expect(read('src', 'main', 'remote-server.ts')).toContain('closeOwner(clientOwnerKey(client.id))');
     expect(read('src', 'shared', 'pages-types.ts')).toContain('PAGE_VIDEO_CHANNELS');
   });
 });
 
-// Terminal flow control's acknowledgement channel (2026-10-04). It is DESKTOP-WINDOW-ONLY by design: only a
-// desktop window's own terminal may release the brake on a flooding program, so a slow phone can never stall
-// the desktop. Each surface therefore handles it differently — pinned here so a future "parity fix" does not
-// quietly give phones the brake. (Merged onto one-core: the two channels are table entries in main/ipc/session.ts
-// that the phone door refuses silently, so there is no hand-written case in remote-server.ts any more.)
+// Terminal flow control's ack is DESKTOP-WINDOW-ONLY: a slow phone must never stall the desktop, so each surface
+// handles it differently — pinned so a future "parity fix" does not give phones the brake.
 describe('session:terminal-ack (terminal flow control)', () => {
-  const preload = readSource('src', 'main', 'preload.ts');
-  const contract = readSource('src', 'shared', 'backend-contract.ts');
-  const sessionTable = readSource('src', 'main', 'ipc', 'session.ts');
-  const handlers = readSource('src', 'main', 'ipc-handlers.ts');
-  const shim = readSource('src', 'renderer', 'remote-shim.ts');
+  const preload = read('src', 'main', 'preload.ts');
+  const contract = read('src', 'shared', 'backend-contract.ts');
+  const sessionTable = read('src', 'main', 'ipc', 'session.ts');
+  const shim = read('src', 'renderer', 'remote-shim.ts');
 
-  it('desktop: the same channel string in preload and the contract, sent by ackOutput, handled in main through the table', () => {
+  it('desktop: same string in preload and contract, sent by ackOutput, handled in main through the table', () => {
     expect(preload).toContain("TERMINAL_ACK: 'session:terminal-ack'");
     expect(contract).toContain("TERMINAL_ACK: 'session:terminal-ack'");
     expect(preload).toMatch(/ackOutput:[^\n]*\n[^\n]*ipcRenderer\.send\(IPC\.TERMINAL_ACK/);
     expect(sessionTable).toMatch(/name: IPC\.TERMINAL_ACK, kind: 'on', desktopOnly: true, refusal: \{ kind: 'silent' \}/);
-    expect(handlers).toContain('terminalOutput.ack(');
-    expect(readSource('src', 'main', 'terminal-output-router.ts')).toContain('const ack = (');
+    expect(read('src', 'main', 'ipc-handlers.ts')).toContain('terminalOutput.ack(');
+    expect(read('src', 'main', 'terminal-output-router.ts')).toContain('const ack = (');
   });
 
-  it('remote clients: the shim sends nothing, and the host refuses a stray one silently so it never reaches the PTY worker', () => {
+  it('remote clients: the shim sends nothing and the host refuses a stray ack silently (never reaches the PTY worker)', () => {
     expect(shim).toMatch(/ackOutput: \(_sessionId: string, _chars: number\) => \{\}/);
     expect(shim).not.toMatch(/fire\('session:terminal-ack'/);
-    expect(readSource('src', 'main', 'remote-server.ts')).not.toMatch(/ackOutput|bounceSize/);
+    expect(read('src', 'main', 'remote-server.ts')).not.toMatch(/ackOutput|bounceSize/);
   });
 
   it('the repaint request is desktop-window-only the same way: shim no-op, silent refusal for a phone', () => {
@@ -2131,5 +710,4 @@ describe('session:terminal-ack (terminal flow control)', () => {
     expect(sessionTable).toMatch(/name: IPC\.TERMINAL_REPAINT, kind: 'on', desktopOnly: true, refusal: \{ kind: 'silent' \}/);
     expect(shim).toMatch(/requestRepaint: \(_sessionId: string\) => \{\}/);
   });
-
 });

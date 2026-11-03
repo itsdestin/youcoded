@@ -47,103 +47,42 @@ vi.mock('../src/main/models/manifest-backfill', async (importActual) => ({
   }),
 }));
 
-describe('clampContextWindow', () => {
-  it('uses the min of loaded and trained max', () => {
-    expect(clampContextWindow(32_768, 131_072)).toBe(32_768);
-    expect(clampContextWindow(131_072, 32_768)).toBe(32_768);
-  });
-  it('falls back to loaded when trained is unknown, and to a conservative default when both unknown', () => {
-    expect(clampContextWindow(16_384, null)).toBe(16_384);
-    expect(clampContextWindow(null, null)).toBe(32_768);
-  });
-});
-
-// REGRESSION: the real context window silently halved in llama-server ROUTER mode.
-//
-// Found dogfooding. Plan C's headline claim is that a local model's
-// window is READ and enforced, never guessed — but in `--models-dir` router mode
-// (the default) /props answers `{model_path: "none", n_ctx: 0}` whenever no model
-// is currently resident. clampContextWindow drops any value <= 0, so it fell
-// through to a hardcoded 32_768 while the server was actually serving -c 64000.
-//
-// Consequences were worse than "conservative": a ROADMAP.md read that fits
-// comfortably in 64k overflowed the phantom 32k budget, the context trimmer
-// emptied the window, and the turn died with "messages must not be empty".
-describe('clampContextWindow', () => {
-  it('ignores a zero/absent live reading rather than treating it as a real window', () => {
-    // This is what router-mode /props reports with nothing loaded.
-    expect(clampContextWindow(0, null)).toBe(32_768);
-    expect(clampContextWindow(null, null)).toBe(32_768);
+// REGRESSION: in llama-server ROUTER mode (the default) /props answers `{model_path:"none", n_ctx:0}` while no model is
+// resident, and clampContextWindow drops values <= 0, so the window silently fell to a phantom 32_768 while the server
+// served -c 64000: a ROADMAP-sized read fit in 64k, overflowed the phantom budget, the trimmer emptied the window and the
+// turn died with "messages must not be empty". resolveEffectiveContext is the seam that must fall back on a literal 0
+// (an earlier `loaded ?? configured` did not, and these tests passed because they fed clampContextWindow the values
+// the fix ASSUMED reached it).
+describe('clampContextWindow and resolveEffectiveContext', () => {
+  // [loaded, trained, expected]
+  it.each([
+    [32_768, 131_072, 32_768], [131_072, 32_768, 32_768], // the min of loaded and trained max
+    [16_384, null, 16_384], [null, null, 32_768],         // trained unknown; both unknown -> conservative default
+    [0, null, 32_768],                                    // a zero live reading is not a window
+    [64_000, null, 64_000],                               // the configured -c passed in place of a dead reading
+    [8_192, 64_000, 8_192],                               // a live reading still WINS over a larger value
+    [262_144, 32_768, 32_768],
+  ])('clampContextWindow(%s, %s) is %s', (loaded, trained, expected) => {
+    expect(clampContextWindow(loaded, trained)).toBe(expected);
   });
 
-  it('takes the configured -c when it is passed in place of a dead live reading', () => {
-    // effectiveContextWindow now feeds `loaded ?? configured`, so a router-mode
-    // zero resolves to the number this app actually spawned the server with.
-    expect(clampContextWindow(64_000, null)).toBe(64_000);
+  // [live /props n_ctx, configured -c, trained, expected]
+  it.each([
+    [0, 128_000, null, 128_000],            // the exact router-mode reading
+    [null, 128_000, null, 128_000], [undefined, 128_000, null, 128_000],
+    [-1, 64_000, null, 64_000], ['64000', 64_000, null, 64_000], [NaN, 64_000, null, 64_000], // unknown, not a window
+    [8_192, 128_000, null, 8_192],          // the server clamped our -c for VRAM: believe the server
+    [128_000, 128_000, 32_768, 32_768],     // still clamps to the trained maximum
+    [0, null, null, 32_768],                // nothing known at all
+  ])('resolveEffectiveContext(%s, %s, %s) is %s', (live, configured, trained, expected) => {
+    expect(resolveEffectiveContext(live as never, configured, trained)).toBe(expected);
   });
 
-  it('a live reading still WINS over a larger configured value', () => {
-    // The server can clamp our -c down to what the model or VRAM allowed; the
-    // observed number must beat the requested one, never the other way around.
-    expect(clampContextWindow(8_192, 64_000)).toBe(8_192);
-  });
-
-  it('clamps to the trained maximum when that is the smaller of the two', () => {
-    expect(clampContextWindow(262_144, 32_768)).toBe(32_768);
-  });
-});
-
-describe('the failure this unblocks', () => {
   it('64k is enough for the ROADMAP-sized read that died at a phantom 32k', () => {
-    // 100_000 chars of tool output ~= 25_000 tokens, plus a ~6_000-token system
-    // prompt. Comfortable inside 64k; over budget against 32_768 once the
-    // reserved output allowance is subtracted.
-    const toolTokens = Math.ceil(100_000 / 4);
-    const systemTokens = 6_000;
-    const budget = (ctx: number) => ctx - 4_096 - 1_024;   // fitToContext's reservation
-
-    expect(toolTokens + systemTokens).toBeGreaterThan(budget(32_768));   // what happened
-    expect(toolTokens + systemTokens).toBeLessThan(budget(64_000));      // what should have
-  });
-});
-
-// ---------------------------------------------------------------------------
-// THE SEAM. The first version of this fix used `loaded ?? configured`, which
-// does NOT fall back on 0 — and router-mode /props reports a literal
-// `"n_ctx": 0`. So the fallback was inert in exactly the case it was written
-// for, while the tests above passed, because they exercised clampContextWindow
-// with the values I ASSUMED reached it rather than the expression that computed
-// them. Caught only by checking the live engine against a 128k session
-// (Destin, 2026-07-26).
-// ---------------------------------------------------------------------------
-describe('resolveEffectiveContext — what /props actually sends', () => {
-  it('falls back on a literal 0 — the exact router-mode reading', () => {
-    // {"model_path":"none","n_ctx":0} with -c 128000 configured.
-    expect(resolveEffectiveContext(0, 128_000, null)).toBe(128_000);
-  });
-
-  it('falls back on null/undefined too', () => {
-    expect(resolveEffectiveContext(null, 128_000, null)).toBe(128_000);
-    expect(resolveEffectiveContext(undefined, 128_000, null)).toBe(128_000);
-  });
-
-  it('treats a negative or non-numeric reading as unknown, not as a window', () => {
-    expect(resolveEffectiveContext(-1, 64_000, null)).toBe(64_000);
-    expect(resolveEffectiveContext('64000', 64_000, null)).toBe(64_000);
-    expect(resolveEffectiveContext(NaN, 64_000, null)).toBe(64_000);
-  });
-
-  it('a REAL live reading still wins over the configured value', () => {
-    // The server clamped our -c down for VRAM: believe the server.
-    expect(resolveEffectiveContext(8_192, 128_000, null)).toBe(8_192);
-  });
-
-  it('still clamps to the trained maximum when that is smallest', () => {
-    expect(resolveEffectiveContext(128_000, 128_000, 32_768)).toBe(32_768);
-  });
-
-  it('with nothing known at all, the conservative default stands', () => {
-    expect(resolveEffectiveContext(0, null, null)).toBe(32_768);
+    const need = Math.ceil(100_000 / 4) + 6_000; // ~25k tokens of tool output plus a ~6k system prompt
+    const budget = (ctx: number) => ctx - 4_096 - 1_024; // fitToContext's reservation
+    expect(need).toBeGreaterThan(budget(32_768));
+    expect(need).toBeLessThan(budget(64_000));
   });
 });
 
@@ -161,22 +100,20 @@ describe('EngineManager — on a temp home', () => {
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  /** Plant a fake usable install so status()/hook tests need no download. */
-  function plantInstall(backend = 'cpu') {
+  /** Plant a fake usable install so status()/hook tests need no download; `devices` is the list the marker carries. */
+  function plantInstall(backend = 'cpu', devices?: unknown) {
     const dir = path.join(userData, 'engine', `${ENGINE_VERSION}-${backend}`);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'llama-server.exe'), 'fake');
     fs.writeFileSync(path.join(dir, '.complete'),
-      JSON.stringify({ version: ENGINE_VERSION, backend, binaryRelPath: 'llama-server.exe' }));
+      JSON.stringify({ version: ENGINE_VERSION, backend, binaryRelPath: 'llama-server.exe', devices }));
   }
 
   describe.skipIf(process.platform === 'win32')('EngineManager — the device-list backfill reaches the UI', () => {
+    // status() is pull-only; an engine installed before the device list existed is filled in by a background probe, so
+    // without this push the "runs on" line stays wrong until some unrelated event refetches. Guards the third
+    // EngineAcquisition constructor argument, which knip cannot see is unwired.
     it('emits status-changed once acquisition fills in a pre-feature marker', async () => {
-      // status() is pull-only. An engine installed before the device list existed
-      // gets it filled in by a background probe, so without this push the user
-      // keeps seeing the wrong "runs on" line until some unrelated engine event
-      // happens to refetch. Guards the third EngineAcquisition constructor
-      // argument, which knip cannot see is unwired.
       const dir = path.join(userData, 'engine', `${ENGINE_VERSION}-cpu`);
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, 'llama-server'),
@@ -184,54 +121,39 @@ describe('EngineManager — on a temp home', () => {
         { mode: 0o755 });
       fs.writeFileSync(path.join(dir, '.complete'),
         JSON.stringify({ version: ENGINE_VERSION, backend: 'cpu', binaryRelPath: 'llama-server' }));
-
-      const mgr = new EngineManager(home, userData, 9999, {
-        // The graphics-chip probe pushes 'status-changed' on its own tick as
-        // well, and a test that cannot tell the two pushes apart certifies
-        // nothing: MEASURED 2026-09-05, this assertion stayed green with the
-        // marker push deleted from BOTH ends (acquisition's onMarkerUpdated call
-        // and the manager's wiring of it). Parking the chip probe on a promise
-        // that never settles leaves the device-list backfill as the only thing
-        // in the process that can emit — so a push here IS the backfill's.
-        probeChip: () => new Promise(() => { /* never settles */ }),
-      });
+      // The chip probe also pushes 'status-changed'; parking it on a never-settling promise leaves the backfill as the
+      // only emitter (this assertion once stayed green with the marker push deleted from BOTH ends).
+      const mgr = new EngineManager(home, userData, 9999, { probeChip: () => new Promise(() => {}) });
       let changed = 0;
       mgr.on('status-changed', () => { changed++; });
-      expect(mgr.status().installed).toBe(true);   // starts the backfill
+      expect(mgr.status().installed).toBe(true); // starts the backfill
       await vi.waitFor(() => { expect(changed).toBeGreaterThan(0); });
       expect(JSON.parse(fs.readFileSync(path.join(dir, '.complete'), 'utf8')).devices[0].totalMiB).toBe(86016);
     });
   });
 
-  describe('selectInstallAsset (Fix: platforms without the preferred backend)', () => {
-    it('falls back to CPU when the preferred backend has no asset for this platform/arch (win arm64)', () => {
-      const sel = selectInstallAsset('win32', 'arm64', 'vulkan'); // no win-arm64 vulkan asset ships
-      expect(sel?.backend).toBe('cpu');
-      expect(sel?.asset.backend).toBe('cpu');
-    });
-    it('uses the preferred backend when it ships an asset', () => {
-      expect(selectInstallAsset('win32', 'x64', 'vulkan')?.backend).toBe('vulkan');
+  describe('selectInstallAsset (platforms without the preferred backend)', () => {
+    it.each([
+      ['win32', 'arm64', 'vulkan', 'cpu'], // no win-arm64 vulkan asset ships: falls back to CPU
+      ['win32', 'x64', 'vulkan', 'vulkan'], // the preferred backend when it ships an asset
+    ])('%s/%s preferring %s selects %s', (platform, arch, preferred, expected) => {
+      const sel = selectInstallAsset(platform as never, arch as never, preferred as never);
+      expect(sel?.backend).toBe(expected);
+      expect(sel?.asset.backend).toBe(expected);
     });
     it('returns null when neither the preferred backend nor CPU ships an asset', () => {
       expect(selectInstallAsset('sunos', 'mips', 'vulkan')).toBeNull();
     });
   });
 
-  // The graphics-chip probe runs OFF the first status() call, so `backendOptions`
-  // arrives on a 'status-changed' push rather than in the answer that triggered
-  // it. That push is the only delivery there is — if it can be missed, the card
-  // waits forever for a second status that never comes. Everything that CAN
-  // change during a run is recomputed on every status() instead of cached.
-  // (2026-09-05 local-engine upgrades §A3.)
+  // The chip probe runs OFF the first status() call, so `backendOptions` arrives on a 'status-changed' push (the only
+  // delivery: if it can be missed the card waits forever); everything that CAN change during a run is recomputed on every
+  // status() instead of cached.
   describe('EngineManager — the deferred chip probe and the live device line', () => {
     const settled = () => new Promise((r) => setTimeout(r, 0));
     const AMD_CHIP = { vendor: 'amd' as const, gfxTarget: 'gfx1151' };
-    // WHY: these cases assert an AMD machine is OFFERED ROCm, but EngineManager
-    // reads process.platform/arch straight from the runner (currentBackendOptions
-    // → backendOptions), and backendOptions correctly offers Apple nothing. Left
-    // to the real machine the expectations only hold on linux/win32 x64, so the
-    // macOS leg went red the moment this landed. Same pin, and the same reason,
-    // as the 'faster engine row' block below.
+    // Pinned to linux/x64: EngineManager reads process.platform/arch from the runner and backendOptions offers Apple
+    // nothing, so these "an AMD machine is OFFERED ROCm" cases went red on the macOS leg.
     const realPlatform = process.platform;
     const realArch = process.arch;
     beforeEach(() => {
@@ -242,151 +164,109 @@ describe('EngineManager — on a temp home', () => {
       Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
       Object.defineProperty(process, 'arch', { value: realArch, configurable: true });
     });
-    // The real two-device reading from this machine (engine-acquisition.test.ts):
-    // the software renderer reports 124406 MiB of system RAM and is not a GPU.
+    // The real two-device reading (engine-acquisition.test.ts): the software renderer reports system RAM and is not a GPU.
     const REAL_DEVICES = [
       { backend: 'Vulkan0', name: 'AMD Radeon 8060S Graphics (RADV STRIX_HALO)', totalMiB: 86016, freeMiB: 83633, isGpu: true },
       { backend: 'Vulkan1', name: 'llvmpipe (LLVM 22.1.6, 256 bits)', totalMiB: 124406, freeMiB: 80073, isGpu: false },
     ];
-
-    /** Plant an install whose marker carries a device list, the way T2 writes it. */
-    function plantInstallWithDevices(backend: string, devices: unknown) {
-      const dir = path.join(userData, 'engine', `${ENGINE_VERSION}-${backend}`);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'llama-server.exe'), 'fake');
-      fs.writeFileSync(path.join(dir, '.complete'),
-        JSON.stringify({ version: ENGINE_VERSION, backend, binaryRelPath: 'llama-server.exe', devices }));
+    /** A manager over the planted home that counts its 'status-changed' pushes. */
+    function counted(probeChip: () => Promise<{ vendor: 'amd' | 'intel' | null; gfxTarget: string | null }>) {
+      const m = new EngineManager(home, userData, 9999, { probeChip });
+      const c = { pushes: 0 };
+      m.on('status-changed', () => { c.pushes += 1; });
+      return { m, c };
     }
 
+    // Devices are already in the marker in the first two cases so the lazy backfill emits no second push: they count the chip probe's.
     it('status() answers immediately without backendOptions, then pushes them', async () => {
-      // A marker that ALREADY carries devices, so T2's lazy backfill does not run
-      // and emit a second 'status-changed' — this test counts the chip probe's push.
-      plantInstallWithDevices('vulkan', REAL_DEVICES);
-      const mgr = new EngineManager(home, userData, 9999, { probeChip: async () => AMD_CHIP });
-      let pushes = 0;
-      mgr.on('status-changed', () => { pushes += 1; });
-
-      // The first answer must not block on the probe, so it cannot carry it.
-      expect(mgr.status().backendOptions).toBeUndefined();
-
+      plantInstall('vulkan', REAL_DEVICES);
+      const { m, c } = counted(async () => AMD_CHIP);
+      expect(m.status().backendOptions).toBeUndefined(); // the first answer must not block on the probe
       await settled();
-      expect(pushes).toBe(1);
-      expect(mgr.status().backendOptions?.map((o) => o.backend)).toEqual(['rocm']);
+      expect(c.pushes).toBe(1);
+      expect(m.status().backendOptions?.map((o) => o.backend)).toEqual(['rocm']);
     });
 
     it('a probe that THROWS still pushes, and settles on "nothing to offer"', async () => {
-      // Devices already in the marker, for the same reason as above.
-      plantInstallWithDevices('vulkan', REAL_DEVICES);
-      const mgr = new EngineManager(home, userData, 9999, {
-        probeChip: async () => { throw new Error('nvidia-smi wedged'); },
-      });
-      let pushes = 0;
-      mgr.on('status-changed', () => { pushes += 1; });
-
-      mgr.status();
+      plantInstall('vulkan', REAL_DEVICES);
+      const { m, c } = counted(async () => { throw new Error('nvidia-smi wedged'); });
+      m.status();
       await settled();
-      // The push fired on the failure path — this is what keeps the card from
-      // hanging when a graphics driver misbehaves.
-      expect(pushes).toBe(1);
-      expect(mgr.status().backendOptions).toEqual([]);
+      expect(c.pushes).toBe(1); // the failure path pushes: this keeps the card from hanging when a driver misbehaves
+      expect(m.status().backendOptions).toEqual([]);
     });
 
-    // Both halves of this feature push independently: the chip probe (T3) and the
-    // lazy device backfill (T2), which fills in a marker written before devices
-    // were recorded. A user upgrading from an older install gets BOTH, and the
-    // card must end up with the chip AND the device name. This is the case the
-    // two tests above deliberately exclude so their counts stay meaningful.
+    // A user upgrading from an older install gets BOTH pushes (chip probe + backfill) and must end with chip AND device.
     it('an older install with no device list gets both pushes, and ends up complete', async () => {
-      plantInstall('vulkan'); // no `devices` key — every install made before T2
-      const mgr = new EngineManager(home, userData, 9999, { probeChip: async () => AMD_CHIP });
-      let pushes = 0;
-      mgr.on('status-changed', () => { pushes += 1; });
-
-      mgr.status();
+      plantInstall('vulkan'); // no `devices` key — every install made before the device list existed
+      const { m, c } = counted(async () => AMD_CHIP);
+      m.status();
       await settled();
-      expect(pushes).toBeGreaterThanOrEqual(1);
-      expect(mgr.status().backendOptions?.map((o) => o.backend)).toEqual(['rocm']);
+      expect(c.pushes).toBeGreaterThanOrEqual(1);
+      expect(m.status().backendOptions?.map((o) => o.backend)).toEqual(['rocm']);
     });
 
     it('asks the machine ONCE, however many times status() is called', async () => {
       plantInstall();
       let calls = 0;
-      const mgr = new EngineManager(home, userData, 9999, {
-        probeChip: async () => { calls += 1; return { vendor: null, gfxTarget: null }; },
-      });
-      mgr.status(); mgr.status(); mgr.status();
+      const { m } = counted(async () => { calls += 1; return { vendor: null, gfxTarget: null }; });
+      m.status(); m.status(); m.status();
       await settled();
-      mgr.status();
+      m.status();
       await settled();
       expect(calls).toBe(1);
     });
 
-    // The path every new user walks: the Local Models panel is where the Install
-    // button lives, so the panel — and the first status() — happens BEFORE there
-    // is any engine. An answer computed then and cached would say "Processor
-    // only" forever on a machine that is using its graphics chip.
+    // The Local Models panel (where Install lives) calls status() BEFORE any engine exists; a cached answer would say
+    // "Processor only" forever on a machine that is using its graphics chip.
     it('the device name appears on the FIRST status after an install, not the next app run', async () => {
-      const mgr = new EngineManager(home, userData, 9999, { probeChip: async () => AMD_CHIP });
-      // Nothing installed yet: not known, which is NOT the same as "no GPU".
-      expect(mgr.status().deviceName).toBeUndefined();
+      const { m } = counted(async () => AMD_CHIP);
+      expect(m.status().deviceName).toBeUndefined(); // nothing installed: not known, which is NOT "no GPU"
       await settled();
-      expect(mgr.status().deviceName).toBeUndefined();
-
-      plantInstallWithDevices('vulkan', REAL_DEVICES);
-      expect(mgr.status().deviceName).toBe('AMD Radeon 8060S Graphics');
+      expect(m.status().deviceName).toBeUndefined();
+      plantInstall('vulkan', REAL_DEVICES);
+      expect(m.status().deviceName).toBe('AMD Radeon 8060S Graphics');
     });
 
-    it('a switch to another backend shows THAT build\'s device, not the old one\'s', async () => {
-      plantInstallWithDevices('vulkan', REAL_DEVICES);
-      const mgr = new EngineManager(home, userData, 9999, { probeChip: async () => AMD_CHIP });
-      mgr.status();          // kicks the probe
+    it("a switch to another backend shows THAT build's device, not the old one's", async () => {
+      plantInstall('vulkan', REAL_DEVICES);
+      const { m } = counted(async () => AMD_CHIP);
+      m.status(); // kicks the probe
       await settled();
-      expect(mgr.status().deviceName).toBe('AMD Radeon 8060S Graphics');
-      // A ROCm install names its device differently, and the config now prefers it.
-      plantInstallWithDevices('rocm', [{ backend: 'ROCm0', name: 'AMD Radeon Graphics (gfx1151)', totalMiB: 65536, freeMiB: 60000, isGpu: true }]);
+      expect(m.status().deviceName).toBe('AMD Radeon 8060S Graphics');
+      plantInstall('rocm', [{ backend: 'ROCm0', name: 'AMD Radeon Graphics (gfx1151)', totalMiB: 65536, freeMiB: 60000, isGpu: true }]);
       await updateEngineConfig(home, { backend: 'rocm' });
-      const s = mgr.status();
+      const s = m.status();
       expect(s.backend).toBe('rocm');
       expect(s.deviceName).toBe('AMD Radeon Graphics');
-      // …and the switch it is already on is no longer offered.
-      expect(s.backendOptions).toEqual([]);
+      expect(s.backendOptions).toEqual([]); // the switch it is already on is no longer offered
     });
 
     it('an engine that reports only a software renderer says "no GPU", not "not known"', () => {
-      plantInstallWithDevices('vulkan', [REAL_DEVICES[1]]);
-      const mgr = new EngineManager(home, userData, 9999, { probeChip: async () => AMD_CHIP });
-      expect(mgr.status().deviceName).toBeNull();
+      plantInstall('vulkan', [REAL_DEVICES[1]]);
+      expect(counted(async () => AMD_CHIP).m.status().deviceName).toBeNull();
     });
 
     it('a marker with no device list at all is "not known", never "no GPU"', () => {
-      // Every install made before the device list existed. T2 backfills these
-      // lazily; until it does, the card must not claim the processor is the answer.
       plantInstall('vulkan');
-      const mgr = new EngineManager(home, userData, 9999, { probeChip: async () => AMD_CHIP });
-      expect(mgr.status().deviceName).toBeUndefined();
+      expect(counted(async () => AMD_CHIP).m.status().deviceName).toBeUndefined();
     });
 
     it('a corrupt marker degrades to "not known" rather than throwing', () => {
-      const dir = path.join(userData, 'engine', `${ENGINE_VERSION}-vulkan`);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'llama-server.exe'), 'fake');
-      fs.writeFileSync(path.join(dir, '.complete'),
-        JSON.stringify({ version: ENGINE_VERSION, backend: 'vulkan', binaryRelPath: 'llama-server.exe' }));
-      const mgr = new EngineManager(home, userData, 9999, { probeChip: async () => AMD_CHIP });
-      // Corrupt it AFTER the install is discovered, so we exercise the read path.
-      fs.writeFileSync(path.join(dir, '.complete'), '{not json');
-      expect(() => mgr.status()).not.toThrow();
-      expect(mgr.status().deviceName).toBeUndefined();
+      plantInstall('vulkan');
+      const { m } = counted(async () => AMD_CHIP);
+      // Corrupt it AFTER the install is discovered, so the read path is exercised.
+      fs.writeFileSync(path.join(userData, 'engine', `${ENGINE_VERSION}-vulkan`, '.complete'), '{not json');
+      expect(() => m.status()).not.toThrow();
+      expect(m.status().deviceName).toBeUndefined();
     });
 
     it('a machine with no AMD or NVIDIA chip is offered nothing', async () => {
       plantInstall('vulkan');
-      const mgr = new EngineManager(home, userData, 9999, {
-        probeChip: async () => ({ vendor: 'intel' as const, gfxTarget: null }),
-      });
-      mgr.status();          // kicks the probe — nothing asks the machine unprompted
+      const { m } = counted(async () => ({ vendor: 'intel' as const, gfxTarget: null }));
+      m.status(); // kicks the probe — nothing asks the machine unprompted
       await settled();
-      expect(mgr.status().backendOptions).toEqual([]);
+      expect(m.status().backendOptions).toEqual([]);
     });
   });
 
@@ -861,6 +741,15 @@ describe('EngineManager — on a temp home', () => {
       vi.spyOn(mgr as unknown as { verifyBoot: () => Promise<void> }, 'verifyBoot').mockResolvedValue(undefined);
     }
 
+    /** A vulkan-installed manager whose ROCm "download" yields `marker` and whose build boots. */
+    function armed(marker: { devices?: unknown; devicesError?: string }, opts: Record<string, unknown> = {}) {
+      plantInstall('vulkan');
+      const mgr = new EngineManager(home, userData, 9999, opts);
+      stubDownload(mgr, marker);
+      stubBoots(mgr);
+      return mgr;
+    }
+
     /** The exact message of a rejected switch. `rejects.toThrow` matches on a
      *  SUBSTRING, which is worthless here — the three refusals share most of
      *  their text and differ exactly where the bug would be. */
@@ -890,10 +779,7 @@ describe('EngineManager — on a temp home', () => {
     }
 
     it('a build that lists no matching device is thrown away, and the sentence names what it DID report', async () => {
-      plantInstall('vulkan');
-      const mgr = new EngineManager(home, userData, 9999);
-      stubDownload(mgr, { devices: SOFTWARE_ONLY });
-      stubBoots(mgr);
+      const mgr = armed({ devices: SOFTWARE_ONLY });
 
       expect(await refusalOf(mgr.setBackend('rocm'))).toBe(
         'Kept the current engine: the ROCm build found no graphics chip it can use — '
@@ -906,10 +792,7 @@ describe('EngineManager — on a temp home', () => {
     });
 
     it('a build that reports nothing at all says so, rather than naming a device it never mentioned', async () => {
-      plantInstall('vulkan');
-      const mgr = new EngineManager(home, userData, 9999);
-      stubDownload(mgr, { devices: [] });
-      stubBoots(mgr);
+      const mgr = armed({ devices: [] });
       expect(await refusalOf(mgr.setBackend('rocm'))).toBe(
         'Kept the current engine: the ROCm build found no graphics chip it can use — '
         + 'it reported no devices at all. Nothing was changed.'
@@ -1001,10 +884,7 @@ describe('EngineManager — on a temp home', () => {
       // binary open — the Windows case right after verifyBoot ran that very exe.
       // Its return value is not actionable, so the config pin is what has to
       // survive it.
-      plantInstall('vulkan');
-      const mgr = new EngineManager(home, userData, 9999);
-      stubDownload(mgr, { devices: SOFTWARE_ONLY });
-      stubBoots(mgr);
+      const mgr = armed({ devices: SOFTWARE_ONLY });
       vi.spyOn((mgr as any).acquisition, 'discard').mockReturnValue(false);
 
       await refusalOf(mgr.setBackend('rocm'));
@@ -1272,43 +1152,26 @@ describe('EngineManager — on a temp home', () => {
       );
     });
 
-    it('separates a build that cannot run on this chip from a model that cannot be read', () => {
-      for (const deviceClass of [
-        'HIP error: no kernel image is available for execution on the device',
-        'CUDA error: invalid device function',
-        'hipErrorNoBinaryForGpu',
-        'ggml_cuda_compute_forward: ROCm error: invalid configuration argument',
-      ]) expect(isDeviceClassLoadError(deviceClass)).toBe(true);
-
-      for (const modelClass of [
-        "failed to load model: unknown model architecture 'qwen4exp'",
-        'llama_model_load: error loading model: invalid split file',
-        'failed to allocate buffer of size 12884901888',
-      ]) expect(isDeviceClassLoadError(modelClass)).toBe(false);
-    });
-
-    it("catches every vendor's spelling of a device error, not just CUDA's", () => {
-      // ggml stamps each checked GPU failure with its backend's name, and that
-      // name is not always 'CUDA' — T2's own device ids are the in-repo proof
-      // (`ROCm0`, not `CUDA0`; the same upstream rename). Listing only CUDA's
-      // spelling would let a real ROCm failure through as a model problem, keep
-      // the switch, and blame the user's file — on this machine's backend.
-      expect(isDeviceClassLoadError('ROCm error: hipErrorNoDevice')).toBe(true);
-      expect(isDeviceClassLoadError('HIP error: hipErrorInvalidDevice')).toBe(true);
-      expect(isDeviceClassLoadError('CUDA error: an illegal memory access was encountered')).toBe(true);
-    });
-
-    it('never blames the hardware for running out of memory, whatever prefix it wears', () => {
-      // ggml_cuda_error() prints `CUDA error: <msg>` for EVERY checked failure,
-      // out of memory included. Treating that as "found no graphics chip it can
-      // use" deletes a perfectly good build and states a cause we never
-      // established — which the error-message standard forbids outright.
-      for (const oom of [
-        'CUDA error: out of memory',
-        'ROCm error: out of memory',
-        'HIP error: failed to allocate 12 GiB on device 0',
-        'cudaMalloc failed: out of memory',
-      ]) expect(isDeviceClassLoadError(oom)).toBe(false);
+    // ggml stamps each checked GPU failure with its backend's name (ROCm/HIP/CUDA, not always 'CUDA'), so every vendor's
+    // spelling must read as a device problem, while OOM — which `CUDA error:` also prefixes — must NEVER blame the
+    // hardware (deleting a good build over a cause we never established) and model-file errors stay model problems.
+    it.each([
+      ['HIP error: no kernel image is available for execution on the device', true],
+      ['CUDA error: invalid device function', true],
+      ['hipErrorNoBinaryForGpu', true],
+      ['ggml_cuda_compute_forward: ROCm error: invalid configuration argument', true],
+      ['ROCm error: hipErrorNoDevice', true],
+      ['HIP error: hipErrorInvalidDevice', true],
+      ['CUDA error: an illegal memory access was encountered', true],
+      ["failed to load model: unknown model architecture 'qwen4exp'", false],
+      ['llama_model_load: error loading model: invalid split file', false],
+      ['failed to allocate buffer of size 12884901888', false],
+      ['CUDA error: out of memory', false],
+      ['ROCm error: out of memory', false],
+      ['HIP error: failed to allocate 12 GiB on device 0', false],
+      ['cudaMalloc failed: out of memory', false],
+    ])('isDeviceClassLoadError(%j) is %s', (text, expected) => {
+      expect(isDeviceClassLoadError(text)).toBe(expected);
     });
 
     it('proves the switch with the SMALLEST complete model — a 1-token load reads the whole file', () => {

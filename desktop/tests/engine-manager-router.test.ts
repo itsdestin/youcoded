@@ -11,6 +11,7 @@ import * as path from 'path';
 import { NativeHome } from '../src/main/native-home';
 import { EngineManager, resolveSlotCount } from '../src/main/engine/engine-manager';
 import { ENGINE_VERSION } from '../src/main/engine/engine-pin';
+import { REAL_MODELS_RESPONSE } from './helpers/engine-models-response';
 
 // Same fake-spawn harness engine-supervisor.test.ts uses — EngineManager's
 // ensureRunning() (reached from effectiveContextWindow, set-config, catalog)
@@ -21,83 +22,98 @@ vi.mock('child_process', async (orig) => ({
   spawn: (...args: any[]) => mockSpawn(...args),
 }));
 
-// The review found that DiscoveredModel.totalSlots (the
-// field capability-profile.ts's local concurrency cap reads) was written by
-// NO production code: native-session-host.ts's resolveContextAndProfile never
-// threaded a live engine reading through it, so every local session silently
-// fell back to the conservative floor of 1 concurrent specialist — a
-// regression from the earlier flat cap of 4.
-//
-// This section proves the piece that closes that gap: EngineManager actually
-// reads llama-server's slot count off the SAME /props response that already
-// supplies the context window (no second HTTP round trip), with the same
-// defensive "absent/zero/non-numeric = unknown" posture n_ctx already gets
-// (see engine-manager.test.ts's clampContextWindow sections for the identical n_ctx bug —
-// this mirrors that fix rather than reinventing the parsing strategy).
-//
-// Correction (measured live against the pinned b10665 in router
-// mode): the field is `total_slots`, NOT `n_slots`, and it only appears when
-// the request names a model — `GET /props` with no `?model=` answers
-// `{model_path:"none", default_generation_settings.n_ctx: 0}` and NO slot
-// field at all, while `GET /props?model=<id>` answers `total_slots: 4` plus
-// the n_ctx the engine holds for THAT model. What that n_ctx is depends on the
-// spawn shape: under the app's real args (no `--parallel`) b10665 turns on a
-// unified KV cache and reports the FULL `-c` (all slots share one pool); only
-// with an explicit `--parallel N` does it become `-c` / N. The earlier version
-// of this section pinned the wrong field name and the model-less URL, which is
-// exactly why the bug shipped with every test green: totalSlots was ALWAYS
-// null in production, so every local model was capped at ONE helper while
-// the engine had four slots.
-//
-// Review fix: naming a model in `/props?model=` is NOT a
-// status read on b10665 — the router AUTOLOADS the named model and blocks,
-// with no timeout, until gigabytes are in memory (and, at --models-max 2, can
-// evict the model a live conversation is using). effectiveContextWindow runs
-// on every session create/resume/model swap, before the user has sent a word,
-// so it must ask `GET /models` for the model's status FIRST and name the model
-// only when it is already `loaded`. Every other status (unloaded, sleeping —
-// a sleeping model would be woken by the same autoload — or a model the
-// router has never heard of) takes the model-less `/props` master always
-// used: instant, n_ctx 0 → the configured -c, no slot field → totalSlots
-// null → the conservative one-helper cap until the first real send loads it.
+// Shared fake-llama-server fixtures for every section below (each section used to carry its own copy).
+const children: any[] = [];
+function makeFakeChild(): ChildProcess {
+  const ee = new EventEmitter() as any;
+  ee.stdout = new EventEmitter();
+  ee.stderr = new EventEmitter();
+  ee.kill = vi.fn(() => { setImmediate(() => ee.emit('exit', 0)); return true; });
+  ee.pid = 4242;
+  children.push(ee);
+  return ee;
+}
+const PORT = 9999;
+let root: string;
+let userData: string;
+let cacheDir: string;
+let home: NativeHome;
+let mgr: EngineManager = undefined as never; // assigned by each test; reset after
+
+beforeEach(() => {
+  mockSpawn.mockReset();
+  children.length = 0;
+  mockSpawn.mockImplementation(() => makeFakeChild());
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'engine-mgr-router-'));
+  userData = path.join(root, 'userData');
+  cacheDir = path.join(root, 'cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  home = new NativeHome(root);
+});
+afterEach(async () => {
+  await mgr?.stopAll();
+  // No retries on purpose: stopAll() abandons every pending apply, so nothing writes here after it. If ENOTEMPTY
+  // ever returns, the cancellation regressed — fix that, do not add retries.
+  fs.rmSync(root, { recursive: true, force: true });
+  mgr = undefined as never;
+});
+
+/** A usable install, so the manager doesn't bail out on "not installed" before reaching the router. */
+function plantInstall(backend = 'cpu') {
+  const dir = path.join(userData, 'engine', `${ENGINE_VERSION}-${backend}`);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'llama-server.exe'), 'fake');
+  fs.writeFileSync(path.join(dir, '.complete'),
+    JSON.stringify({ version: ENGINE_VERSION, backend, binaryRelPath: 'llama-server.exe' }));
+}
+
+/** Boot the engine and start a tracked streaming chat request that stays open until finish(). `modelId` is named in the
+ *  body (where trackedFetch reads the model); null sends no body at all. Returns what the caller actually received, so a
+ *  test proves the reply survived rather than that nothing crashed. */
+async function startStreamingReply(m: EngineManager, fetchImpl: any, modelId: string | null = null) {
+  const encoder = new TextEncoder();
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const source = new ReadableStream<Uint8Array>({ start(c) { controller = c; } });
+  const prior = fetchImpl.streamFor;
+  fetchImpl.streamFor = (url: string, init: any) => (url.includes('/chat/completions')
+    && String(init?.body ?? '').includes(modelId === null ? '' : `"model":"${modelId}"`)
+    ? new Response(source, { status: 200 })
+    : prior?.(url, init));
+
+  const hook = m.registryHook();
+  await hook.ensureRunning();
+  const res = await hook.fetchImpl()(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
+    method: 'POST',
+    ...(modelId === null ? {} : { body: JSON.stringify({ model: modelId, messages: [] }) }),
+  } as any);
+  const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+  let text = '';
+  const decoder = new TextDecoder();
+  const drain = (async () => {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      text += decoder.decode(value);
+    }
+  })();
+  controller.enqueue(encoder.encode('the first half '));
+  await vi.waitFor(() => { expect(text).toBe('the first half '); });
+  return {
+    received: () => text,
+    finish: async () => {
+      controller.enqueue(encoder.encode('and the second.'));
+      controller.close();
+      await drain;
+    },
+  };
+}
+
+// WHY this section exists: DiscoveredModel.totalSlots (capability-profile.ts's local concurrency cap) was once written by NO
+// production code, so every local session fell back to ONE helper. The slot count rides the SAME /props response as the
+// context window, and ONLY when the request names a model (`total_slots`, not `n_slots`; a bare /props answers a dummy
+// n_ctx 0 with no slot field). Naming a model autoloads it, so effectiveContextWindow checks GET /models first and
+// names the model only when it is already `loaded`.
 describe('the slot count', () => {
-  function makeFakeChild(): ChildProcess {
-    const ee = new EventEmitter() as any;
-    ee.stdout = new EventEmitter();
-    ee.stderr = new EventEmitter();
-    ee.kill = vi.fn(() => { setImmediate(() => ee.emit('exit', 0)); return true; });
-    ee.pid = 4242;
-    return ee;
-  }
-
-  let root: string;
-  let userData: string;
-  let home: NativeHome;
-  let mgr: EngineManager | undefined;
-
-  beforeEach(() => {
-    mockSpawn.mockReset();
-    mockSpawn.mockReturnValue(makeFakeChild());
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'engine-mgr-slots-'));
-    userData = path.join(root, 'userData');
-    home = new NativeHome(root);
-  });
-  afterEach(async () => {
-    await mgr?.stopAll();
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  /** Plant a fake usable install so effectiveContextWindow doesn't bail out on
-   *  "not installed" before ever reaching /props — mirrors engine-manager.test.ts's
-   *  own plantInstall() helper. */
-  function plantInstall(backend = 'cpu') {
-    const dir = path.join(userData, 'engine', `${ENGINE_VERSION}-${backend}`);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'llama-server.exe'), 'fake');
-    fs.writeFileSync(path.join(dir, '.complete'),
-      JSON.stringify({ version: ENGINE_VERSION, backend, binaryRelPath: 'llama-server.exe' }));
-  }
-
   /** The exact body b10665's router answers to a MODEL-LESS `GET /props`
    *  (measured 2026-09-04): nothing described, n_ctx 0, no slot field. The stub
    *  below always answers this for the bare URL, so a test that expects the
@@ -175,168 +191,82 @@ describe('the slot count', () => {
   });
 
   describe('EngineManager.effectiveContextWindow — never loads a model to read a number', () => {
-    it('a LOADED model: asks /props?model=<id> once and both numbers come through (the app\'s real spawn shape: full -c, 4 slots)', async () => {
-      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
+    const BODY = { default_generation_settings: { n_ctx: 16_384 }, total_slots: 4 };
+    /** Boot against a router whose /models lists `models` and whose named /props answers `body`. */
+    async function ask(id: string, body: unknown, models: unknown[], contextSize = 16_384) {
       const urls: string[] = [];
-      // Measured 2026-09-04 on b10665 with the supervisor's EXACT args (`-c 16384`,
-      // no `--parallel`): kv_unified is on, so n_ctx is the full -c and the four
-      // auto slots share that one pool — total_slots: 4, n_ctx: 16384.
-      const fetchImpl = fetchWithProps({ default_generation_settings: { n_ctx: 16_384 }, total_slots: 4 },
-        { models: [routerRow('Qwen3.5-2B-Q8_0', 'loaded')], urls });
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 16_384 } }));
+      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize } }));
       plantInstall();
-      mgr = plantedManager(fetchImpl, cacheDir);
+      mgr = plantedManager(fetchWithProps(body, { models, urls }), cacheDir);
+      return { result: await mgr.effectiveContextWindow(id), urls };
+    }
 
-      const result = await mgr.effectiveContextWindow('Qwen3.5-2B-Q8_0');
-      expect(result).toEqual({ contextLength: 16_384, totalSlots: 4 });
-      // ONE /props read produced BOTH fields — the "no second HTTP round trip"
-      // property — and it named the model, because a model-less /props carries
-      // no slot field on this build at all. The status check rode /models, which
-      // the supervisor was already fetching; it is not a second /props.
+    // The app's real spawn shape has no --parallel, so b10665 keeps a unified KV cache: n_ctx is the FULL -c and the four
+    // slots share it. With an explicit --parallel 4 the engine reports -c/4 per slot; that number is passed through, not
+    // second-guessed. ONE named /props read yields both fields (no second round trip).
+    it.each([
+      ['the full -c under the real spawn shape', 16_384],
+      ['whatever the engine reports under --parallel 4 (-c/4)', 4096],
+    ])('a LOADED model: asks /props?model=<id> once; n_ctx is %s, 4 slots', async (_n, nCtx) => {
+      const { result, urls } = await ask('Qwen3.5-2B-Q8_0', { default_generation_settings: { n_ctx: nCtx }, total_slots: 4 },
+        [routerRow('Qwen3.5-2B-Q8_0', 'loaded')]);
+      expect(result).toEqual({ contextLength: nCtx, totalSlots: 4 });
       expect(propsUrls(urls)).toEqual([namedProps('Qwen3.5-2B-Q8_0')]);
     });
 
-    it('a LOADED model under an explicit --parallel 4 (kv_unified off): n_ctx is whatever the engine reports — -c/4 here — and is passed through, not second-guessed', async () => {
-      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
-      const urls: string[] = [];
-      // Measured 2026-09-04 on b10665 with the app's args PLUS `--parallel 4`:
-      // kv_unified turns off, each slot gets its own 16384/4 window, and the
-      // router reports that per-slot number. The supervisor does NOT pass
-      // --parallel today; this pins that if someone adds it, the app follows the
-      // engine's number rather than the -c it asked for.
-      const fetchImpl = fetchWithProps({ default_generation_settings: { n_ctx: 4096 }, total_slots: 4 },
-        { models: [routerRow('Qwen3.5-2B-Q8_0', 'loaded')], urls });
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 16_384 } }));
-      plantInstall();
-      mgr = plantedManager(fetchImpl, cacheDir);
-
-      const result = await mgr.effectiveContextWindow('Qwen3.5-2B-Q8_0');
-      expect(result).toEqual({ contextLength: 4096, totalSlots: 4 });
-      expect(propsUrls(urls)).toEqual([namedProps('Qwen3.5-2B-Q8_0')]);
-    });
-
-    it('an UNLOADED model: the model-param URL is NEVER fetched; the model-less /props is; result is the configured -c with unknown slots', async () => {
-      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
-      const urls: string[] = [];
-      // If the code wrongly named the model, the stub would hand back this
-      // loaded body and BOTH assertions below would fail — the numbers prove
-      // the path, not only the URL spy.
-      const fetchImpl = fetchWithProps({ default_generation_settings: { n_ctx: 16_384 }, total_slots: 4 },
-        { models: [routerRow('Qwen3.5-2B-Q8_0', 'unloaded')], urls });
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 128_000 } }));
-      plantInstall();
-      mgr = plantedManager(fetchImpl, cacheDir);
-
-      const result = await mgr.effectiveContextWindow('Qwen3.5-2B-Q8_0');
+    // Naming a model in /props AUTOLOADS it on b10665 (gigabytes into memory, and at --models-max 2 it can evict the
+    // model a live conversation uses). So only a `loaded` model is named; unloaded, SLEEPING (naming would wake it) and
+    // never-listed models take the model-less /props: the configured -c, unknown slots. The numbers prove the path too:
+    // had the model been named, the stub would have answered the loaded body.
+    it.each([
+      ['an UNLOADED model', [routerRow('Qwen3.5-2B-Q8_0', 'unloaded')], 'Qwen3.5-2B-Q8_0'],
+      ['a SLEEPING model', [routerRow('Qwen3.5-2B-Q8_0', 'sleeping')], 'Qwen3.5-2B-Q8_0'],
+      ['a model the router never listed', [routerRow('some-other-model', 'loaded')], 'never-scanned'],
+    ])('%s: the model-param URL is NEVER fetched, the model-less /props is', async (_n, models, id) => {
+      const { result, urls } = await ask(id, BODY, models, 128_000);
       expect(result).toEqual({ contextLength: 128_000, totalSlots: null });
       expect(propsUrls(urls)).toEqual([BARE_PROPS]);
-      expect(urls).not.toContain(namedProps('Qwen3.5-2B-Q8_0'));
-    });
-
-    it('a SLEEPING model is treated exactly like an unloaded one (naming it would wake it) — F4', async () => {
-      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
-      const urls: string[] = [];
-      const fetchImpl = fetchWithProps({ default_generation_settings: { n_ctx: 16_384 }, total_slots: 4 },
-        { models: [routerRow('Qwen3.5-2B-Q8_0', 'sleeping')], urls });
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 128_000 } }));
-      plantInstall();
-      mgr = plantedManager(fetchImpl, cacheDir);
-
-      const result = await mgr.effectiveContextWindow('Qwen3.5-2B-Q8_0');
-      expect(result).toEqual({ contextLength: 128_000, totalSlots: null });
-      expect(propsUrls(urls)).toEqual([BARE_PROPS]);
-      expect(urls).not.toContain(namedProps('Qwen3.5-2B-Q8_0'));
-    });
-
-    it('a model the router has never listed (absent from /models) also takes the model-less path', async () => {
-      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
-      const urls: string[] = [];
-      const fetchImpl = fetchWithProps({ default_generation_settings: { n_ctx: 16_384 }, total_slots: 4 },
-        { models: [routerRow('some-other-model', 'loaded')], urls });
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 128_000 } }));
-      plantInstall();
-      mgr = plantedManager(fetchImpl, cacheDir);
-
-      const result = await mgr.effectiveContextWindow('never-scanned');
-      expect(result).toEqual({ contextLength: 128_000, totalSlots: null });
-      expect(propsUrls(urls)).toEqual([BARE_PROPS]);
+      expect(urls).not.toContain(namedProps(id));
     });
 
     it('never polls with ?reload=1 on either path (the engine rule forbids it — it forces a disk rescan)', async () => {
-      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
-      const urls: string[] = [];
-      const fetchImpl = fetchWithProps({ default_generation_settings: { n_ctx: 16_384 }, total_slots: 4 },
-        { models: [routerRow('a', 'loaded'), routerRow('b', 'unloaded')], urls });
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 16_384 } }));
-      plantInstall();
-      mgr = plantedManager(fetchImpl, cacheDir);
-
-      await mgr.effectiveContextWindow('a');
-      await mgr.effectiveContextWindow('b');
+      const { urls } = await ask('a', BODY, [routerRow('a', 'loaded'), routerRow('b', 'unloaded')]);
+      await mgr!.effectiveContextWindow('b');
       expect(urls.filter((u) => new URL(u).searchParams.has('reload'))).toEqual([]);
     });
 
     it('URL-encodes the model id in the query (router ids can carry characters a query string cannot)', async () => {
-      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
-      const urls: string[] = [];
-      const fetchImpl = fetchWithProps({ default_generation_settings: { n_ctx: 16_384 }, total_slots: 4 },
-        { models: [routerRow('odd model&id', 'loaded')], urls });
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 16_384 } }));
-      plantInstall();
-      mgr = plantedManager(fetchImpl, cacheDir);
-
-      await mgr.effectiveContextWindow('odd model&id');
-      expect(propsUrls(urls)).toEqual([`http://127.0.0.1:9999/props?model=${encodeURIComponent('odd model&id')}`]);
+      const { urls } = await ask('odd model&id', BODY, [routerRow('odd model&id', 'loaded')]);
+      expect(propsUrls(urls)).toEqual([namedProps('odd model&id')]);
     });
 
-    it('an OLDER build that still answers n_slots (no total_slots) is read through the fallback name', async () => {
-      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
-      const fetchImpl = fetchWithProps({ default_generation_settings: { n_ctx: 32_768 }, n_slots: 2 },
-        { models: [routerRow('some-model', 'loaded')] });
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
-      plantInstall();
-      mgr = plantedManager(fetchImpl, cacheDir);
-
-      const result = await mgr.effectiveContextWindow('some-model');
-      expect(result).toEqual({ contextLength: 32_768, totalSlots: 2 });
+    // Slot field: `total_slots` (n_slots on older builds, total_slots wins when both); absent, 0, or a non-number is
+    // unknown (null), never a guess — mirroring n_ctx's own 0-means-unknown handling.
+    it.each([
+      ['an OLDER build answering n_slots', { default_generation_settings: { n_ctx: 32_768 }, n_slots: 2 }, 32_768, 2, 32_768],
+      ['total_slots winning over a stray n_slots', { default_generation_settings: { n_ctx: 16_384 }, total_slots: 4, n_slots: 1 }, 16_384, 4, 16_384],
+      ['no slot field at all', { default_generation_settings: { n_ctx: 64_000 } }, 64_000, null, 64_000],
+      ['a literal total_slots: 0', { model_path: 'none', n_ctx: 0, total_slots: 0 }, 128_000, null, 128_000],
+    ])('slot count from %s', async (_n, body, contextSize, slots, ctx) => {
+      const { result } = await ask('some-model', body, [routerRow('some-model', 'loaded')], contextSize);
+      expect(result.totalSlots).toBe(slots);
+      expect(result.contextLength).toBe(ctx);
     });
 
-    it('total_slots wins over a stray n_slots when a body somehow carries both', async () => {
-      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
-      const fetchImpl = fetchWithProps({ default_generation_settings: { n_ctx: 16_384 }, total_slots: 4, n_slots: 1 },
-        { models: [routerRow('some-model', 'loaded')] });
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 16_384 } }));
+    // An unloaded/unlisted model is sized by ITS OWN configured length, else the engine-wide one (sizing a model the user
+    // set to 128k as if on the default is the under-count that empties the window); a live reading wins over both (the
+    // server clamped the request to what the VRAM allowed). The router reports residency in `status` — a string on some
+    // builds, an object on others — so the live row uses the string form.
+    it.each([
+      ['an unloaded model uses its own configured length', 'big-context-model', 32_768, { 'big-context-model': { contextLength: 131_072 } }, [], 131_072],
+      ['a model with no setting of its own uses the engine-wide length', 'plain-model', 64_000, { 'some-other-model': { contextLength: 131_072 } }, [], 64_000],
+      ['a live reading from the model wins over what was configured', 'clamped-model', 32_768, { 'clamped-model': { contextLength: 131_072 } },
+        [{ id: 'clamped-model', status: 'loaded' }], 8_192],
+    ])('%s', async (_n, id, contextSize, models, rows, expected) => {
+      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize, models } }));
       plantInstall();
-      mgr = plantedManager(fetchImpl, cacheDir);
-
-      const result = await mgr.effectiveContextWindow('some-model');
-      expect(result.totalSlots).toBe(4);
-    });
-
-    it('a loaded model whose body has no slot field at all resolves to unknown (null), not a guessed count, while context still resolves normally', async () => {
-      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
-      const fetchImpl = fetchWithProps({ default_generation_settings: { n_ctx: 64_000 } }, // neither total_slots nor n_slots
-        { models: [routerRow('some-model', 'loaded')] });
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 64_000 } }));
-      plantInstall();
-      mgr = plantedManager(fetchImpl, cacheDir);
-
-      const result = await mgr.effectiveContextWindow('some-model');
-      expect(result.contextLength).toBe(64_000);
-      expect(result.totalSlots).toBeNull();
-    });
-
-    it('a literal total_slots: 0 resolves to unknown, mirroring n_ctx\'s own 0-means-unknown handling', async () => {
-      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
-      const fetchImpl = fetchWithProps({ model_path: 'none', n_ctx: 0, total_slots: 0 },
-        { models: [routerRow('some-model', 'loaded')] });
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 128_000 } }));
-      plantInstall();
-      mgr = plantedManager(fetchImpl, cacheDir);
-
-      const result = await mgr.effectiveContextWindow('some-model');
-      expect(result.contextLength).toBe(128_000);
-      expect(result.totalSlots).toBeNull();
+      mgr = plantedManager(fetchWithProps({ default_generation_settings: { n_ctx: 8_192 } }, { models: rows }), cacheDir);
+      expect((await mgr.effectiveContextWindow(id)).contextLength).toBe(expected);
     });
 
     it('no engine installed yet: both fields are the conservative "unknown" default', async () => {
@@ -348,70 +278,17 @@ describe('the slot count', () => {
   });
 });
 
-// Per-model engine settings: saving them, and landing them without disturbing
-// a reply (design §C1 / §C2, contract R26).
-//
-// THE FAILURE THESE GUARD AGAINST: `~/.youcoded/engine/models.ini` is ONE file
-// shared by every local model, and `GET /models?reload=1` makes the router diff
-// it and unload every model whose section changed. Downloads, deletes and
-// refreshes all send that reload. So writing a model's new settings at save
-// time — or applying them on somebody else's reload — drops the model in the
-// middle of the answer the user is reading, which is the one thing contract R26
-// promises will not happen.
-//
-// The other half is WHICH count says "this model is quiet". The engine-wide
-// `inFlight` says the ENGINE is busy (a reply to a different model would hold
-// this one's settings hostage), and the session ref-count never drops while a
-// chat tab is open on the model. Only the per-model count `trackedFetch` keeps,
-// read out of the request body's `model`, answers the question that is asked.
+// Per-model engine settings: saving them, and landing them without disturbing a reply (contract R26).
+// models.ini is ONE file shared by every local model and `GET /models?reload=1` unloads every model whose section changed,
+// so writing settings at save time (or applying them on somebody else's reload) drops a model mid-answer. "This model is
+// quiet" is read from the per-model count trackedFetch keeps (the engine-wide inFlight and the session ref-count are the
+// wrong question).
 describe('per-model settings', () => {
-  const children: any[] = [];
-  function makeFakeChild(): ChildProcess {
-    const ee = new EventEmitter() as any;
-    ee.stdout = new EventEmitter();
-    ee.stderr = new EventEmitter();
-    ee.kill = vi.fn(() => { setImmediate(() => ee.emit('exit', 0)); return true; });
-    ee.pid = 4242;
-    children.push(ee);
-    return ee;
-  }
-
-  const PORT = 9998;
-  let root: string;
-  let userData: string;
-  let cacheDir: string;
-  let home: NativeHome;
-  let mgr: EngineManager | undefined;
-
   beforeEach(() => {
-    mockSpawn.mockReset();
-    children.length = 0;
-    mockSpawn.mockImplementation(() => makeFakeChild());
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'engine-model-settings-'));
-    userData = path.join(root, 'userData');
-    cacheDir = path.join(root, 'cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    // Two models on disk. Both are needed for the question this file exists to
-    // answer: "does an apply wait for THIS model, or for the engine?"
+    // Two models on disk: the question here is "does an apply wait for THIS model, or for the engine?"
     fs.writeFileSync(path.join(cacheDir, 'alpha.gguf'), 'x');
     fs.writeFileSync(path.join(cacheDir, 'beta.gguf'), 'x');
-    home = new NativeHome(root);
   });
-  afterEach(async () => {
-    await mgr?.stopAll();
-    // No retries on purpose: stopAll() now abandons every pending apply, so nothing
-    // writes here after it (CI follow-ups Plan A, Task 3). If ENOTEMPTY ever returns,
-    // the cancellation regressed — fix that, do not put the retries back.
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  function plantInstall(backend = 'cpu') {
-    const dir = path.join(userData, 'engine', `${ENGINE_VERSION}-${backend}`);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'llama-server.exe'), 'fake');
-    fs.writeFileSync(path.join(dir, '.complete'),
-      JSON.stringify({ version: ENGINE_VERSION, backend, binaryRelPath: 'llama-server.exe' }));
-  }
 
   /** Every URL fetched, in order, and the model id of every /models/unload. */
   let urls: string[];
@@ -485,51 +362,13 @@ describe('per-model settings', () => {
     }));
   }
 
-  // ---------------------------------------------------------------------------
-  // A reply that is streaming right now, for a NAMED model, held open by the test.
-  // ---------------------------------------------------------------------------
-  /** Start a tracked streaming request that names `modelId` in its body — which is
-   *  where `trackedFetch` reads the model from — and stays open until `finish()`.
-   *  Pass `modelId: null` for a request that names no model at all. */
-  async function startStreamingReply(m: EngineManager, fetchImpl: any, modelId: string | null) {
-    const encoder = new TextEncoder();
-    let controller!: ReadableStreamDefaultController<Uint8Array>;
-    const source = new ReadableStream<Uint8Array>({ start(c) { controller = c; } });
-    const prior = fetchImpl.streamFor;
-    fetchImpl.streamFor = (url: string, init: any) => (url.includes('/chat/completions')
-      && String(init?.body ?? '').includes(modelId === null ? '' : `"model":"${modelId}"`)
-      ? new Response(source, { status: 200 })
-      : prior?.(url, init));
-
-    const hook = m.registryHook();
-    await hook.ensureRunning();
-    const tracked = hook.fetchImpl();
-    const res = await tracked(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
-      method: 'POST',
-      // No body at all when the caller asked for an anonymous request: that is the
-      // shape `requestModelId` cannot read a model out of.
-      ...(modelId === null ? {} : { body: JSON.stringify({ model: modelId, messages: [] }) }),
-    } as any);
-    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
-    let text = '';
-    const decoder = new TextDecoder();
-    const drain = (async () => {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) return;
-        text += decoder.decode(value);
-      }
-    })();
-    controller.enqueue(encoder.encode('the first half '));
-    await vi.waitFor(() => { expect(text).toBe('the first half '); });
-    return {
-      received: () => text,
-      finish: async () => {
-        controller.enqueue(encoder.encode('and the second.'));
-        controller.close();
-        await drain;
-      },
-    };
+  /** Plant an install + config (optionally with per-model entries) and build the manager; returns the fetch stub. */
+  async function bootPM(models: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
+    plantInstall();
+    await plantConfig(models);
+    const fetchImpl = makeFetch();
+    mgr = makeManager(fetchImpl, extra);
+    return fetchImpl;
   }
 
   /** Boot with both models on disk and a reply streaming for `modelId`. */
@@ -588,9 +427,7 @@ describe('per-model settings', () => {
     });
 
     it('saving one model never touches another model\'s settings', async () => {
-      plantInstall();
-      await plantConfig();
-      mgr = makeManager(makeFetch());
+      await bootPM();
 
       await mgr.setModelSettings('alpha', { contextLength: 4_096 });
       await mgr.setModelSettings('beta', { keepLoaded: true });
@@ -604,9 +441,7 @@ describe('per-model settings', () => {
     });
 
     it('a dismissed memory warning records the RESOLVED context length, which main computes', async () => {
-      plantInstall();
-      await plantConfig();
-      mgr = makeManager(makeFetch());
+      await bootPM();
 
       // No per-model length yet: the effective length is the engine-wide one.
       await mgr.setModelSettings('beta', { dismissMemoryWarning: true });
@@ -626,9 +461,7 @@ describe('per-model settings', () => {
     });
 
     it('refuses a context length under the engine\'s floor and a bad extra flag, in the words the dialog shows', async () => {
-      plantInstall();
-      await plantConfig();
-      mgr = makeManager(makeFetch());
+      await bootPM();
 
       await expect(mgr.setModelSettings('alpha', { contextLength: 512 }))
         .rejects.toThrow('Context length must be at least 1024 tokens.');
@@ -654,9 +487,7 @@ describe('per-model settings', () => {
     });
 
     it('ignores the two fields the app owns, even when a caller sends them', async () => {
-      plantInstall();
-      await plantConfig();
-      mgr = makeManager(makeFetch());
+      await bootPM();
 
       // WHY this is a test and not left to TypeScript: TypeScript stops at the
       // process boundary. A remote client is a browser on the network, and
@@ -855,10 +686,7 @@ describe('per-model settings', () => {
 
     /** Both models wedged: two streams that are never finished. */
     async function twoWedgedReplies() {
-      plantInstall();
-      await plantConfig();
-      const fetchImpl = makeFetch();
-      mgr = makeManager(fetchImpl, { configApplyMaxWaitMs: BOUND_MS });
+      const fetchImpl = await bootPM({}, { configApplyMaxWaitMs: BOUND_MS });
       await startStreamingReply(mgr, fetchImpl, 'alpha');
       await startStreamingReply(mgr, fetchImpl, 'beta');
       return fetchImpl;
@@ -990,9 +818,7 @@ describe('per-model settings', () => {
     });
 
     it('T23: a normal boot reports them in force, and a stopped engine reports NOTHING', async () => {
-      plantInstall();
-      await plantConfig();
-      mgr = makeManager(makeFetch());
+      await bootPM();
       // Not `false`. Nobody has asked the engine anything yet, and `false` here
       // would tell every user with a stopped engine that their settings are being
       // ignored — a claim about a run that has not happened.
@@ -1015,12 +841,9 @@ describe('per-model settings', () => {
     });
 
     it('stopAll() abandons pending applies: nothing is written, reloaded or spawned after it returns', async () => {
-      plantInstall();
-      await plantConfig();
-      const fetchImpl = makeFetch();
       // A short bound, so an abandoned waiter's deadline passes INSIDE this test
       // and would land its write if stopAll had not cancelled it.
-      mgr = makeManager(fetchImpl, { configApplyMaxWaitMs: 150 });
+      const fetchImpl = await bootPM({}, { configApplyMaxWaitMs: 150 });
       await startStreamingReply(mgr, fetchImpl, 'alpha');      // alpha is busy: both saves wait
       // WHY the clock is frozen (Date only — timers stay real, so the waiters'
       // polls keep running): both deadlines are read off Date.now(). On the real
@@ -1065,12 +888,9 @@ describe('per-model settings', () => {
 
   describe('refreshModels() merges pending changes only for IDLE models', () => {
     it('lands the quiet model\'s change and leaves the busy model\'s alone', async () => {
-      plantInstall();
-      await plantConfig();
-      const fetchImpl = makeFetch();
       // The waiter is asleep for the whole test, so what lands is what
       // refreshModels() itself merged — not a poll tick that raced it.
-      mgr = makeManager(fetchImpl, { configApplyPollMs: 60_000, configApplyMaxWaitMs: 60_000 });
+      const fetchImpl = await bootPM({}, { configApplyPollMs: 60_000, configApplyMaxWaitMs: 60_000 });
 
       const alphaReply = await startStreamingReply(mgr, fetchImpl, 'alpha');
       const betaReply = await startStreamingReply(mgr, fetchImpl, 'beta');
@@ -1127,12 +947,9 @@ describe('per-model settings', () => {
     });
 
     it('deleting a model with a change still queued does not write the entry back', async () => {
-      plantInstall();
-      await plantConfig();
-      const fetchImpl = makeFetch();
       // The waiter sleeps for the whole test, so the queued change is still queued
       // when the delete arrives — which is the state this probe is about.
-      mgr = makeManager(fetchImpl, { configApplyPollMs: 60_000, configApplyMaxWaitMs: 60_000 });
+      const fetchImpl = await bootPM({}, { configApplyPollMs: 60_000, configApplyMaxWaitMs: 60_000 });
 
       const reply = await startStreamingReply(mgr, fetchImpl, 'alpha');
       await mgr.setModelSettings('alpha', { contextLength: 4_096 });
@@ -1273,62 +1090,19 @@ describe('per-model settings', () => {
 // dies halfway through a sentence. The signed contract (R19) promises the
 // opposite: "a model in use reloads on its next message".
 describe('engine:set-config', () => {
-  const children: any[] = [];
-  function makeFakeChild(): ChildProcess {
-    const ee = new EventEmitter() as any;
-    ee.stdout = new EventEmitter();
-    ee.stderr = new EventEmitter();
-    ee.kill = vi.fn(() => { setImmediate(() => ee.emit('exit', 0)); return true; });
-    ee.pid = 4242;
-    children.push(ee);
-    return ee;
-  }
-
-  const PORT = 9999;
-  let root: string;
-  let userData: string;
-  let cacheDir: string;
-  let home: NativeHome;
-  let mgr: EngineManager | undefined;
-
-  beforeEach(() => {
-    mockSpawn.mockReset();
-    children.length = 0;
-    mockSpawn.mockImplementation(() => makeFakeChild());
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'engine-set-config-'));
-    userData = path.join(root, 'userData');
-    cacheDir = path.join(root, 'cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    home = new NativeHome(root);
-  });
-  afterEach(async () => {
-    await mgr?.stopAll();
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  function plantInstall(backend = 'cpu') {
-    const dir = path.join(userData, 'engine', `${ENGINE_VERSION}-${backend}`);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'llama-server.exe'), 'fake');
-    fs.writeFileSync(path.join(dir, '.complete'),
-      JSON.stringify({ version: ENGINE_VERSION, backend, binaryRelPath: 'llama-server.exe' }));
-  }
-
   /** Every URL the manager or the supervisor fetched, in order. */
   let urls: string[];
 
-  /** /health answers ok; everything else answers an empty JSON body. A caller can
-   *  hand back its own Response for one URL prefix (the streaming reply below). */
-  function makeFetch(special?: (url: string) => Response | undefined) {
+  /** /health answers ok; everything else an empty JSON body. `streamFor` (set by startStreamingReply) can hand back its own
+   *  Response for one URL; `reloadFails` makes the reload fail the way the engine really does (500, still serving OLD presets). */
+  function makeFetch() {
     urls = [];
-    const f: any = vi.fn(async (input: any, _init?: any) => {
+    const f: any = vi.fn(async (input: any, init?: any) => {
       const url = String(input);
       urls.push(url);
-      const own = special?.(url);
+      const own = f.streamFor?.(url, init);
       if (own) return own as any;
       if (url.endsWith('/health')) return { ok: true, status: 200, json: async () => ({ status: 'ok' }) } as any;
-      // A test can make the reload fail the way the engine really fails it: the
-      // router answers 500 and goes on serving the OLD presets.
       if (url.includes('reload=1') && f.reloadFails) return f.reloadFails as any;
       return { ok: true, status: 200, json: async () => ({ data: [] }) } as any;
     });
@@ -1338,221 +1112,130 @@ describe('engine:set-config', () => {
   function makeManager(fetchImpl: any, extra: Record<string, unknown> = {}) {
     return new EngineManager(home, userData, PORT, {
       fetchImpl,
-      // A chip probe that answers instantly: status() warms it, and the real one
-      // shells out to nvidia-smi / ldconfig.
-      probeChip: async () => ({ vendor: null, gfxTarget: null }),
+      probeChip: async () => ({ vendor: null, gfxTarget: null }), // the real one shells out to nvidia-smi / ldconfig
       supervisorOpts: { pidOnPort: () => 4242, readyDeadlineMs: 2_000, readyPollMs: 5 },
-      // A suite cannot spend the real ten minutes proving the bound exists.
       configApplyPollMs: 2,
-      configApplyMaxWaitMs: 5_000,
+      configApplyMaxWaitMs: 5_000, // a suite cannot spend the real ten minutes proving the bound exists
       ...extra,
     });
   }
 
-  // Spelled out rather than imported from model-presets: this test is asserting
-  // WHERE the engine's preset file lands, and reusing the function under test to
-  // say where to look would make that assertion vacuous.
+  /** Plant an install and the config, then build the manager. */
+  async function boot(extra: Record<string, unknown> = {}, config: Record<string, unknown> = {}) {
+    plantInstall();
+    await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768, ...config } }));
+    const fetchImpl = makeFetch();
+    mgr = makeManager(fetchImpl, extra);
+    return fetchImpl;
+  }
+  const bootRunning = async () => { const f = await boot(); await mgr!.registryHook().ensureRunning(); return f; };
+  const bootWithStream = async (extra: Record<string, unknown> = {}) => {
+    const f = await boot(extra);
+    return { fetchImpl: f, reply: await startStreamingReply(mgr!, f) };
+  };
+  const applied = () => vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
+
+  // Spelled out rather than imported from model-presets: reusing the function under test to say where to look would
+  // make the assertion vacuous.
   const presetPath = () => path.join(root, '.youcoded', 'engine', 'models.ini');
+  const readPreset = () => fs.readFileSync(presetPath(), 'utf8');
   const engineSection = () => ((home.readJson('config.json') as any)?.engine ?? {});
   const settled = () => new Promise((r) => setTimeout(r, 40));
-
-  // ---------------------------------------------------------------------------
-  // A reply that is streaming right now, held open by the test.
-  // ---------------------------------------------------------------------------
-  /** Boot the engine and start a tracked streaming request that stays open until
-   *  `finish()` is called. Returns the text the caller actually received, so the
-   *  test can prove the reply survived rather than merely that nothing crashed. */
-  async function startStreamingReply(m: EngineManager, fetchImpl: any) {
-    const encoder = new TextEncoder();
-    let controller!: ReadableStreamDefaultController<Uint8Array>;
-    const source = new ReadableStream<Uint8Array>({ start(c) { controller = c; } });
-    // The chat request answers with that stream; everything else keeps the
-    // default behaviour above.
-    (fetchImpl as any).streamFor = (url: string) => (url.includes('/chat/completions')
-      ? new Response(source, { status: 200 })
-      : undefined);
-
-    const hook = m.registryHook();
-    await hook.ensureRunning();
-    const tracked = hook.fetchImpl();
-    const res = await tracked(`http://127.0.0.1:${PORT}/v1/chat/completions`, { method: 'POST' } as any);
-    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
-    let text = '';
-    const decoder = new TextDecoder();
-    const drain = (async () => {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) return;
-        text += decoder.decode(value);
-      }
-    })();
-    controller.enqueue(encoder.encode('the first half '));
-    await vi.waitFor(() => { expect(text).toBe('the first half '); });
-    return {
-      received: () => text,
-      finish: async () => {
-        controller.enqueue(encoder.encode('and the second.'));
-        controller.close();
-        await drain;
-      },
-    };
-  }
+  const preset = (ctx: number) => `[*]\nctx-size = ${ctx}\nsleep-idle-seconds = 900\n`;
+  const RELOAD = `http://127.0.0.1:${PORT}/models?reload=1`; // `/models` without the query does NOT re-read the preset
 
   describe('engine:set-config — a speed switch waits for the reply to finish', () => {
     it('does not kill a streaming reply, and restarts the moment it ends', async () => {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
-      let stream: ((url: string) => Response | undefined) | undefined;
-      const fetchImpl: any = makeFetch((url) => stream?.(url));
-      stream = (url) => (fetchImpl.streamFor ? fetchImpl.streamFor(url) : undefined);
-      mgr = makeManager(fetchImpl);
-
-      const reply = await startStreamingReply(mgr, fetchImpl);
+      const { reply } = await bootWithStream();
       expect(children).toHaveLength(1);
       const firstChild = children[0];
 
-      await mgr.setConfig({ speed: { speculative: false } });
-
-      // The VALUE is saved immediately — waiting to apply it is not waiting to
-      // save it, or a crash in between would lose the user's answer.
+      await mgr!.setConfig({ speed: { speculative: false } });
+      // The VALUE is saved immediately — waiting to apply it is not waiting to save it, or a crash would lose the answer.
       expect(engineSection().speed).toEqual({ speculative: false, compressCache: true });
-      expect(mgr.status().configApplyPending).toBe(true);
-      expect(mgr.status().speed).toEqual({ speculative: false, compressCache: true });
+      expect(mgr!.status().configApplyPending).toBe(true);
+      expect(mgr!.status().speed).toEqual({ speculative: false, compressCache: true });
 
-      // Long enough for ~20 poll intervals to have passed.
       await settled();
       expect(firstChild.kill).not.toHaveBeenCalled();
-      expect(mgr.status().configApplyPending).toBe(true);
+      expect(mgr!.status().configApplyPending).toBe(true);
 
-      // The reply arrives whole — this is the thing the restart would have cut.
       await reply.finish();
-      expect(reply.received()).toBe('the first half and the second.');
+      expect(reply.received()).toBe('the first half and the second.'); // the thing the restart would have cut
 
-      await vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
+      await applied();
       expect(firstChild.kill).toHaveBeenCalled();
-      // It was RUNNING, so it comes back — the user's next message must not pay
-      // for a boot they did not ask for.
+      // It was RUNNING, so it comes back: the user's next message must not pay for a boot they did not ask for.
       expect(mockSpawn).toHaveBeenCalledTimes(2);
-      expect(mgr.status().state).toBe('running');
-      expect(mgr.status().configApplyError).toBeNull();
+      expect(mgr!.status().state).toBe('running');
+      expect(mgr!.status().configApplyError).toBeNull();
     });
 
     it('applies anyway once the wait runs out — a stream that never ends cannot park a setting forever', async () => {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
-      let stream: ((url: string) => Response | undefined) | undefined;
-      const fetchImpl: any = makeFetch((url) => stream?.(url));
-      stream = (url) => (fetchImpl.streamFor ? fetchImpl.streamFor(url) : undefined);
-      // 30 ms stands in for the shipped ten minutes (design §C2's bound).
-      mgr = makeManager(fetchImpl, { configApplyMaxWaitMs: 30 });
-
-      await startStreamingReply(mgr, fetchImpl);   // deliberately never finished
+      await bootWithStream({ configApplyMaxWaitMs: 30 }); // 30 ms stands in for the shipped ten minutes; never finished
       const firstChild = children[0];
-
-      await mgr.setConfig({ speed: { compressCache: false } });
-      await vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
+      await mgr!.setConfig({ speed: { compressCache: false } });
+      await applied();
       expect(firstChild.kill).toHaveBeenCalled();
     });
 
     it('an engine that was NOT running is left stopped — a setting does not boot one', async () => {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
-      mgr = makeManager(makeFetch());
-
-      await mgr.setConfig({ speed: { speculative: false } });
-      await vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
-
+      await boot();
+      await mgr!.setConfig({ speed: { speculative: false } });
+      await applied();
       expect(mockSpawn).not.toHaveBeenCalled();
       expect(engineSection().speed).toEqual({ speculative: false, compressCache: true });
     });
   });
 
   describe('engine:set-config — a context change reloads, it does not restart', () => {
-    it('rewrites the preset\'s [*] section and asks the router to re-read it, with no new process', async () => {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
-      const fetchImpl = makeFetch();
-      mgr = makeManager(fetchImpl);
-
-      const hook = mgr.registryHook();
-      await hook.ensureRunning();
+    it("rewrites the preset's [*] section and asks the router to re-read it, with no new process", async () => {
+      await bootRunning();
       expect(mockSpawn).toHaveBeenCalledTimes(1);
       const firstChild = children[0];
       urls.length = 0;
 
-      await mgr.setConfig({ contextSize: 8_192 });
-      await vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
+      await mgr!.setConfig({ contextSize: 8_192 });
+      await applied();
 
       expect(engineSection().contextSize).toBe(8_192);
-      // The whole file, not a substring: a `[*]` section that also carried a
-      // leftover key, or a ctx-size written into the wrong section, would both
-      // pass a "contains 8192" check while meaning something different.
-      expect(fs.readFileSync(presetPath(), 'utf8')).toBe('[*]\nctx-size = 8192\nsleep-idle-seconds = 900\n');
-      // Exactly the reload URL — `/models` without the query does NOT re-read the
-      // preset, and that is the whole difference between the change landing and
-      // the change being invisible until the next launch.
-      expect(urls).toContain(`http://127.0.0.1:${PORT}/models?reload=1`);
-      // NO restart: the process that was serving is the process still serving.
-      expect(firstChild.kill).not.toHaveBeenCalled();
+      expect(readPreset()).toBe(preset(8_192)); // the whole file: a leftover key or the wrong section would pass "contains 8192"
+      expect(urls).toContain(RELOAD);
+      expect(firstChild.kill).not.toHaveBeenCalled(); // NO restart: the serving process is still serving
       expect(mockSpawn).toHaveBeenCalledTimes(1);
     });
 
     it('writes a section for a model that has its own settings, and none for a model that does not', async () => {
-      plantInstall();
       fs.writeFileSync(path.join(cacheDir, 'tuned-model.gguf'), 'x');
       fs.writeFileSync(path.join(cacheDir, 'untouched-model.gguf'), 'x');
-      await home.mutateJson('config.json', () => ({
-        v: 1,
-        engine: {
-          cacheDir,
-          contextSize: 32_768,
-          models: {
-            'tuned-model': { contextLength: 16_384, keepLoaded: true, gpuLayers: 24, extraFlags: '' },
-            // A model with settings but NOT on disk: a section for it would
-            // resurrect a deleted model as a row that can never load (probed).
-            'deleted-model': { contextLength: 4_096 },
-          },
-        },
-      }));
-      mgr = makeManager(makeFetch());
-
-      await mgr.setConfig({ contextSize: 65_536 });
-      await vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
-
-      expect(fs.readFileSync(presetPath(), 'utf8')).toBe(
-        '[*]\nctx-size = 65536\nsleep-idle-seconds = 900\n\n'
-        + '[tuned-model]\nctx-size = 16384\nn-gpu-layers = 24\nsleep-idle-seconds = -1\n',
-      );
+      await boot({}, { models: {
+        'tuned-model': { contextLength: 16_384, keepLoaded: true, gpuLayers: 24, extraFlags: '' },
+        // settings but NOT on disk: a section would resurrect a deleted model as a row that can never load
+        'deleted-model': { contextLength: 4_096 },
+      } });
+      await mgr!.setConfig({ contextSize: 65_536 });
+      await applied();
+      expect(readPreset()).toBe(`${preset(65_536)}\n[tuned-model]\nctx-size = 16384\nn-gpu-layers = 24\nsleep-idle-seconds = -1\n`);
     });
 
-    it('refuses a context length below the engine\'s floor, in the words the card shows', async () => {
+    it("refuses a context length below the engine's floor, in the words the card shows", async () => {
       plantInstall();
       mgr = makeManager(makeFetch());
       await expect(mgr.setConfig({ contextSize: 512 })).rejects.toThrow('Context length must be at least 1024 tokens.');
-      expect(engineSection().contextSize).toBeUndefined();   // nothing was written
+      expect(engineSection().contextSize).toBeUndefined(); // nothing was written
     });
   });
 
   describe('engine:set-context — the alias every existing caller still goes through', () => {
     it('does exactly what set-config({contextSize}) does', async () => {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
-      const fetchImpl = makeFetch();
-      mgr = makeManager(fetchImpl);
-
-      const hook = mgr.registryHook();
-      await hook.ensureRunning();
+      await bootRunning();
       urls.length = 0;
-
-      // The engine card, the remote browser shim and the WS handler all call this
-      // one method with a bare number.
-      await mgr.setContext(65_536);
-      await vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
-
+      await mgr!.setContext(65_536); // the card, the remote shim and the WS handler all call this with a bare number
+      await applied();
       expect(engineSection().contextSize).toBe(65_536);
-      expect(mgr.status().contextSize).toBe(65_536);
-      expect(fs.readFileSync(presetPath(), 'utf8')).toBe('[*]\nctx-size = 65536\nsleep-idle-seconds = 900\n');
-      expect(urls).toContain(`http://127.0.0.1:${PORT}/models?reload=1`);
+      expect(mgr!.status().contextSize).toBe(65_536);
+      expect(readPreset()).toBe(preset(65_536));
+      expect(urls).toContain(RELOAD);
       expect(children[0].kill).not.toHaveBeenCalled();
     });
 
@@ -1564,37 +1247,19 @@ describe('engine:set-config', () => {
   });
 
   describe('engine:set-config — one action per wait, however many changes', () => {
-    /** Boot, hold a reply open, and hand back the fixtures the probes need. */
-    async function bootWithStream() {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
-      let stream: ((url: string) => Response | undefined) | undefined;
-      const fetchImpl: any = makeFetch((url) => stream?.(url));
-      stream = (url) => (fetchImpl.streamFor ? fetchImpl.streamFor(url) : undefined);
-      mgr = makeManager(fetchImpl);
-      const reply = await startStreamingReply(mgr, fetchImpl);
-      return { fetchImpl, reply };
-    }
-
     it('a switch toggled off and back on during one reply costs ONE restart, not two', async () => {
       const { reply } = await bootWithStream();
-      expect(mockSpawn).toHaveBeenCalledTimes(1);   // the boot
+      expect(mockSpawn).toHaveBeenCalledTimes(1); // the boot
 
       await mgr!.setConfig({ speed: { speculative: false } });
       await mgr!.setConfig({ speed: { speculative: true } });
       await settled();
-      expect(mockSpawn).toHaveBeenCalledTimes(1);   // still nothing, the reply is streaming
+      expect(mockSpawn).toHaveBeenCalledTimes(1); // still nothing, the reply is streaming
 
       await reply.finish();
-      await vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
-      // …and then keep watching. `configApplyPending` false is not on its own
-      // proof that the work is over: a SECOND waiter would clear the flag the
-      // first one set, and its restart would land just after this assertion.
-      await settled();
-
-      // Two clicks, one teardown-and-respawn — every restart is a full model
-      // reload the user waits through.
-      expect(mockSpawn).toHaveBeenCalledTimes(2);
+      await applied();
+      await settled(); // a SECOND waiter would clear the flag the first set and its restart would land just after
+      expect(mockSpawn).toHaveBeenCalledTimes(2); // two clicks, one teardown-and-respawn
       expect(children[0].kill).toHaveBeenCalledTimes(1);
       expect(engineSection().speed).toEqual({ speculative: true, compressCache: true });
     });
@@ -1602,197 +1267,66 @@ describe('engine:set-config', () => {
     it('a context length and a switch in ONE patch cost one restart and NO reload', async () => {
       const { reply } = await bootWithStream();
       urls.length = 0;
-
       await mgr!.setConfig({ contextSize: 8_192, speed: { compressCache: false } });
       await reply.finish();
-      await vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
-      await settled();      // same reason as the probe above
-
-      // The preset carries the new context length…
-      expect(fs.readFileSync(presetPath(), 'utf8')).toBe('[*]\nctx-size = 8192\nsleep-idle-seconds = 900\n');
-      // …and the fresh process reads it on the way up, so asking the router that
-      // is about to be torn down to re-read it would be work for nothing.
+      await applied();
+      await settled();
+      expect(readPreset()).toBe(preset(8_192));
+      // the fresh process reads the preset on the way up, so asking the doomed router to re-read it is work for nothing
       expect(urls.filter((u) => u.includes('reload=1'))).toEqual([]);
       expect(mockSpawn).toHaveBeenCalledTimes(2);
       expect(engineSection()).toMatchObject({ contextSize: 8_192, speed: { compressCache: false, speculative: true } });
     });
 
+    // One waiter, one deadline (the oldest change's). The per-call-job version timed each from its own start, so the
+    // second change behind a never-ending stream waited 2x the bound. Pins that a second change JOINS the wait.
     it('changes made while the wait is still running join it, so the bound is not paid twice', async () => {
-      // With ONE waiter there is one deadline — the oldest pending change's. The
-      // job-per-call version this replaced timed each job from its own start, so
-      // the second change behind a stream that never ends waited 2x the bound.
-      plantInstall();
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
-      let stream: ((url: string) => Response | undefined) | undefined;
-      const fetchImpl: any = makeFetch((url) => stream?.(url));
-      stream = (url) => (fetchImpl.streamFor ? fetchImpl.streamFor(url) : undefined);
-      // WHY 1 s and not 60 ms: the 20 ms pause below has to land INSIDE the first
-      // change's wait for the second change to join it. Under a full parallel run
-      // a 20 ms sleep can take longer than 60 ms, the first wait expires alone,
-      // the second gets its own — three spawns, and this failed on Windows CI
-      // (2026-09-16). The stream never finishes, so the test pays the whole
-      // bound either way; 1 s buys a 50× margin for one second of runtime.
-      mgr = makeManager(fetchImpl, { configApplyMaxWaitMs: 1_000 });
-      await startStreamingReply(mgr, fetchImpl);    // never finished
-
-      await mgr.setConfig({ speed: { speculative: false } });
+      // WHY 1 s, not 60 ms: the 20 ms pause must land INSIDE the first change's wait; under load a 20 ms sleep can take
+      // longer than 60 ms, the first wait expires alone and the second gets its own (three spawns; failed on Windows CI).
+      await bootWithStream({ configApplyMaxWaitMs: 1_000 }); // never finished
+      await mgr!.setConfig({ speed: { speculative: false } });
       await new Promise((r) => setTimeout(r, 20));
-      await mgr.setConfig({ contextSize: 8_192 });   // joins the SAME wait
-
-      await vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
+      await mgr!.setConfig({ contextSize: 8_192 }); // joins the SAME wait
+      await applied();
       await settled();
-      // Both landed together, in the one pass the first change's deadline bought.
-      // NOTE what this does and does not pin, measured rather than assumed: it
-      // pins that a second change JOINS the wait. That is what makes a doubled
-      // bound impossible — one waiter, one deadline — but it is not a direct test
-      // of the deadline's assignment site, and it is not the test that fails if
-      // per-call jobs come back (the toggle probe above is). Moving the deadline
-      // into the waiter leaves every test in this file green while coalescing
-      // holds, because with one pass the two placements are the same thing.
-      expect(mockSpawn).toHaveBeenCalledTimes(2);
-      expect(fs.readFileSync(presetPath(), 'utf8')).toBe('[*]\nctx-size = 8192\nsleep-idle-seconds = 900\n');
+      expect(mockSpawn).toHaveBeenCalledTimes(2); // both landed together, in the one pass
+      expect(readPreset()).toBe(preset(8_192));
     });
   });
 
-  describe('engine:set-config — a refused reload is REPORTED (should-fix 1)', () => {
-    it('surfaces the engine\'s own status, because nothing else would look wrong', async () => {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
-      const fetchImpl: any = makeFetch();
-      mgr = makeManager(fetchImpl);
-      await mgr.registryHook().ensureRunning();
-      // What the router really does when it cannot apply a preset: 500, and it
-      // goes on serving with the OLD settings (model-presets.ts's header).
+  describe('engine:set-config — a refused reload is REPORTED', () => {
+    it("surfaces the engine's own status, because nothing else would look wrong", async () => {
+      const fetchImpl = await bootRunning();
+      // what the router does when it cannot apply a preset: 500, and it goes on serving the OLD settings
       fetchImpl.reloadFails = { ok: false, status: 500, statusText: 'Internal Server Error', json: async () => ({}) };
-
-      await mgr.setConfig({ contextSize: 8_192 });
-      await vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
-
-      // The exact sentence, not a substring: the whole value of this message is
-      // that it says what the engine said and what state the user is left in.
-      expect(mgr.status().configApplyError).toBe(
-        'The engine would not re-read its settings (HTTP 500 Internal Server Error). It is still running with the previous ones.',
-      );
+      await mgr!.setConfig({ contextSize: 8_192 });
+      await applied();
+      expect(mgr!.status().configApplyError).toBe(
+        'The engine would not re-read its settings (HTTP 500 Internal Server Error). It is still running with the previous ones.');
     });
 
     it('a reload that a network error kills reports THAT, not a guess', async () => {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
-      const fetchImpl: any = makeFetch();
-      mgr = makeManager(fetchImpl);
-      await mgr.registryHook().ensureRunning();
-      const boom = new Error('connect ECONNREFUSED 127.0.0.1:9999');
-      fetchImpl.reloadFails = undefined;
+      const fetchImpl = await bootRunning();
       const inner = fetchImpl.getMockImplementation();
       fetchImpl.mockImplementation(async (input: any, init?: any) => {
-        if (String(input).includes('reload=1')) throw boom;
+        if (String(input).includes('reload=1')) throw new Error('connect ECONNREFUSED 127.0.0.1:9999');
         return inner(input, init);
       });
-
-      await mgr.setConfig({ contextSize: 8_192 });
-      await vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
-      expect(mgr.status().configApplyError).toBe('connect ECONNREFUSED 127.0.0.1:9999');
+      await mgr!.setConfig({ contextSize: 8_192 });
+      await applied();
+      expect(mgr!.status().configApplyError).toBe('connect ECONNREFUSED 127.0.0.1:9999');
     });
 
     it('a change made after a failure clears the old message', async () => {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
-      const fetchImpl: any = makeFetch();
-      mgr = makeManager(fetchImpl);
-      await mgr.registryHook().ensureRunning();
+      const fetchImpl = await bootRunning();
       fetchImpl.reloadFails = { ok: false, status: 503, statusText: '', json: async () => ({}) };
-
-      await mgr.setConfig({ contextSize: 8_192 });
+      await mgr!.setConfig({ contextSize: 8_192 });
       await vi.waitFor(() => { expect(mgr!.status().configApplyError).toBe(
-        'The engine would not re-read its settings (HTTP 503). It is still running with the previous ones.') });
-
+        'The engine would not re-read its settings (HTTP 503). It is still running with the previous ones.'); });
       fetchImpl.reloadFails = undefined;
-      await mgr.setConfig({ contextSize: 16_384 });
-      await vi.waitFor(() => { expect(mgr!.status().configApplyPending).toBe(false); });
-      expect(mgr.status().configApplyError).toBeNull();
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // §C3 — which /props answers the question
-  // ---------------------------------------------------------------------------
-  describe('effectiveContextWindow asks the MODEL, not the router', () => {
-    /** /props answers `body` only when asked about a named model; the bare /props
-     *  answers what the router really answers — a dummy with n_ctx 0. */
-    //  `loadedId` matters: the manager only NAMES a model in /props when GET /models
-    //  already reports it `loaded`, because on this build naming an unloaded model
-    //  autoloads it — a status read that pulls gigabytes into memory and, at
-    //  --models-max 2, can evict the model a live conversation is using. A stub that
-    //  reports nothing loaded therefore exercises the model-LESS path, which is what
-    //  the fallback cases below want and what the named cases must opt out of.
-    function fetchProps(body: unknown, loadedId?: string) {
-      urls = [];
-      return vi.fn(async (input: any) => {
-        const url = String(input);
-        urls.push(url);
-        if (url.endsWith('/health')) return { ok: true, status: 200, json: async () => ({ status: 'ok' }) } as any;
-        if (url.includes('/props')) {
-          const named = url.includes('?model=');
-          return { ok: true, status: 200, json: async () => (named ? body : { model_path: 'none', n_ctx: 0 }) } as any;
-        }
-        // The router reports residency in `status` (a string on b10665, an object on
-        //  b9992) — NOT `state`, which is the manager's own mapped field. A stub using
-        //  `state` reports nothing loaded and silently exercises the model-less path.
-        const data = loadedId ? [{ id: loadedId, status: 'loaded' }] : [];
-        return { ok: true, status: 200, json: async () => ({ data }) } as any;
-      });
-    }
-
-    it('names the model in the query, url-encoded', async () => {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
-      mgr = makeManager(fetchProps({ default_generation_settings: { n_ctx: 16_384 }, n_slots: 4 }, 'gemma 4/E2B-it-Q8_0'));
-
-      const result = await mgr.effectiveContextWindow('gemma 4/E2B-it-Q8_0');
-      // The exact URL: a bare /props answers `n_ctx: 0` even with a model loaded
-      // (probed 2026-09-05), so the query string is the whole point — and a model
-      // id is a filename, which can hold characters a URL cannot.
-      expect(urls).toContain(`http://127.0.0.1:${PORT}/props?model=gemma%204%2FE2B-it-Q8_0`);
-      expect(result.contextLength).toBe(16_384);
-      expect(result.totalSlots).toBe(4);
-    });
-
-    it('an unloaded model falls back to ITS OWN configured length, not the engine-wide one', async () => {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({
-        v: 1,
-        engine: { cacheDir, contextSize: 32_768, models: { 'big-context-model': { contextLength: 131_072 } } },
-      }));
-      // No child for an unloaded model, so even the named /props answers the
-      // router's dummy zero.
-      mgr = makeManager(fetchProps({ model_path: 'none', n_ctx: 0 }));
-
-      // 131072, NOT 32768: sizing a model the user set to 128k as if it were on
-      // the engine's default is the under-count that empties the window.
-      expect((await mgr.effectiveContextWindow('big-context-model')).contextLength).toBe(131_072);
-    });
-
-    it('a model with no setting of its own still falls back to the engine-wide length', async () => {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({
-        v: 1,
-        engine: { cacheDir, contextSize: 64_000, models: { 'some-other-model': { contextLength: 131_072 } } },
-      }));
-      mgr = makeManager(fetchProps({ model_path: 'none', n_ctx: 0 }));
-
-      expect((await mgr.effectiveContextWindow('plain-model')).contextLength).toBe(64_000);
-    });
-
-    it('a live reading from the model still wins over what was configured', async () => {
-      plantInstall();
-      await home.mutateJson('config.json', () => ({
-        v: 1,
-        engine: { cacheDir, contextSize: 32_768, models: { 'clamped-model': { contextLength: 131_072 } } },
-      }));
-      // The server clamped the request down to what the VRAM allowed: believe it.
-      mgr = makeManager(fetchProps({ default_generation_settings: { n_ctx: 8_192 } }, 'clamped-model'));
-
-      expect((await mgr.effectiveContextWindow('clamped-model')).contextLength).toBe(8_192);
+      await mgr!.setConfig({ contextSize: 16_384 });
+      await applied();
+      expect(mgr!.status().configApplyError).toBeNull();
     });
   });
 });
@@ -1810,15 +1344,6 @@ describe('engine:set-config', () => {
 // CatalogModel.supportsVision, which is the exact field the session's vision
 // resolver already reads for an OpenRouter model.
 describe('the vision catalog', () => {
-  function makeFakeChild(): ChildProcess {
-    const ee = new EventEmitter() as any;
-    ee.stdout = new EventEmitter();
-    ee.stderr = new EventEmitter();
-    ee.kill = vi.fn(() => { setImmediate(() => ee.emit('exit', 0)); return true; });
-    ee.pid = 4242;
-    return ee;
-  }
-
   // A REAL `GET /models` response, captured 2026-09-05 from the PINNED binary
   // (b10665) spawned with --models-dir over a directory holding SmolVLM-256M
   // twice: once in a folder beside its mmproj-*.gguf (the vision layout design
@@ -1827,68 +1352,10 @@ describe('the vision catalog', () => {
   // readability — nothing this code reads. The live check is
   // test-engine/probe-vision.mjs; the schema is pinned in
   // docs/engine-dependencies.md.
-  const REAL_MODELS_RESPONSE = {
-    data: [
-      {
-        id: 'SmolVLM-256M-Instruct-Q8_0',
-        aliases: [], tags: [], object: 'model', owned_by: 'llamacpp', created: 1788656122,
-        status: {
-          value: 'unloaded',
-          args: ['/engine/llama-server', '--host', '127.0.0.1', '--jinja', '--port', '0', '--no-webui',
-            '--alias', 'SmolVLM-256M-Instruct-Q8_0', '--ctx-size', '4096',
-            '--model', '/cache/SmolVLM-256M-Instruct-Q8_0/SmolVLM-256M-Instruct-Q8_0.gguf',
-            '--mmproj', '/cache/SmolVLM-256M-Instruct-Q8_0/mmproj-SmolVLM-256M-Instruct-f16.gguf'],
-          preset: '[SmolVLM-256M-Instruct-Q8_0]\njinja = 1\nwebui = 0\nctx-size = 4096\n',
-        },
-        architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] },
-        source: 'models_dir', can_remove: false,
-      },
-      {
-        id: 'SmolVLM-256M-TextOnly-Q8_0',
-        aliases: [], tags: [], object: 'model', owned_by: 'llamacpp', created: 1788656122,
-        status: {
-          value: 'unloaded',
-          args: ['/engine/llama-server', '--host', '127.0.0.1', '--jinja', '--port', '0', '--no-webui',
-            '--alias', 'SmolVLM-256M-TextOnly-Q8_0', '--ctx-size', '4096',
-            '--model', '/cache/SmolVLM-256M-TextOnly-Q8_0.gguf'],
-          preset: '[SmolVLM-256M-TextOnly-Q8_0]\njinja = 1\nwebui = 0\nctx-size = 4096\n',
-        },
-        architecture: { input_modalities: ['text'], output_modalities: ['text'] },
-        source: 'models_dir', can_remove: false,
-      },
-    ],
-    object: 'list',
-  };
-
-  let root: string;
-  let userData: string;
-  let cacheDir: string;
-  let home: NativeHome;
-  let mgr: EngineManager | undefined;
 
   beforeEach(async () => {
-    mockSpawn.mockReset();
-    mockSpawn.mockReturnValue(makeFakeChild());
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'engine-vision-'));
-    userData = path.join(root, 'userData');
-    cacheDir = path.join(root, 'cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    home = new NativeHome(root);
     await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 8192 } }));
   });
-  afterEach(async () => {
-    await mgr?.stopAll();
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  /** A usable install so catalogModels() doesn't bail out on "not installed". */
-  function plantInstall(backend = 'cpu') {
-    const dir = path.join(userData, 'engine', `${ENGINE_VERSION}-${backend}`);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'llama-server.exe'), 'fake');
-    fs.writeFileSync(path.join(dir, '.complete'),
-      JSON.stringify({ version: ENGINE_VERSION, backend, binaryRelPath: 'llama-server.exe' }));
-  }
 
   /** Boots a manager whose router answers GET /models with `payload`, and leaves
    *  the engine RUNNING — catalogModels() only reaches the router when it is
