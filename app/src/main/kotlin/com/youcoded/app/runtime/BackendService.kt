@@ -60,6 +60,8 @@ class BackendService : Service() {
     private lateinit var installer: RuntimeInstaller
     private lateinit var statusNotifier: StatusNotifier
     private var lastVisible: Boolean? = null
+    /** Android refused this service the foreground (a restart from the background, see onCreate). */
+    private var refusedForeground = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -70,15 +72,31 @@ class BackendService : Service() {
         statusNotifier = StatusNotifier(applicationContext) { buildNotification(it) }
         watchForeground()
         val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        // WHY (2026-11-02 phone test, crash log): Android killed the app in the background and then restarted this
+        // service by itself (START_STICKY). Since Android 12 a service started from the background may not go to the
+        // foreground, so startForeground threw ForegroundServiceStartNotAllowedException, the app crashed, was
+        // restarted, crashed again, and showed the crash dialog. Refused, the service now stops quietly instead; the
+        // app starts it the normal way the next time it is opened (MainActivity → start()).
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is android.app.ForegroundServiceStartNotAllowedException) {
+                Log.w(TAG, "not allowed to run in the foreground from the background; stopping until the app is opened", e)
+                refusedForeground = true
+                stopSelf()
+                return
+            }
+            throw e
         }
         watchNetwork()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (refusedForeground) return START_NOT_STICKY // onCreate was refused the foreground and is stopping
         if (intent?.action == ACTION_RESTART || runJob?.isActive != true) {
             // WHY a generation and an IO hop (independent review, 2026-10-15): a Retry used to cancel the loop while it
             // was still blocked reading the old process's output; when that read ended, the old loop cleared the NEW
