@@ -121,16 +121,18 @@ export function VoiceMeter({ level, seconds }: { level: number; seconds: number 
  *  WHY the amber state (Destin, 2026-11-03): a muted microphone still opens, and this
  *  band said a green "Listening" over a mic that could hear nothing. After three
  *  seconds of pure silence (useVoiceInput `micSilent`) it says so while he can still
- *  fix it, and goes back to green the moment any sound arrives. */
+ *  fix it, and goes back to green the moment any sound arrives.
+ *  One line, no second line of advice (review N-1: "just a single line with 'No
+ *  sound detected - device may be muted' is fine") — the card after Stop carries
+ *  the fuller advice. */
 export function VoiceListeningStrip({ level, seconds, micSilent, onStop }: { level: number; seconds: number; micSilent: boolean; onStop: () => void }) {
   return (
     <StatusStrip
       tone={micSilent ? 'warn' : 'ok'}
-      detail={micSilent ? "Check that it isn't muted, and that the right microphone is chosen in your computer's sound settings." : undefined}
       action={<Button variant="secondary" size="sm" onClick={onStop}>Stop</Button>}
     >
       <span className="inline-flex items-center gap-3">
-        {micSilent ? 'No sound from your microphone' : 'Listening'} <VoiceMeter level={level} seconds={seconds} />
+        {micSilent ? 'No sound detected — device may be muted' : 'Listening'} <VoiceMeter level={level} seconds={seconds} />
       </span>
     </StatusStrip>
   );
