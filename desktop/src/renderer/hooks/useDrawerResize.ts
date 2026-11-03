@@ -18,7 +18,7 @@ export function useDrawerResize(open: boolean, onClose: () => void) {
   // null = the default height; a number = pixels the user dragged or clicked to.
   const [heightPx, setHeightPx] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
-  const drag = useRef<{ startY: number; startH: number; moved: boolean } | null>(null);
+  const drag = useRef<{ startY: number; startH: number; moved: boolean; h: number } | null>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
 
   // Reset on every open AND close: the drawer never remembers where it was left. WHY on close too
@@ -35,7 +35,7 @@ export function useDrawerResize(open: boolean, onClose: () => void) {
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     const h = drawerRef.current?.getBoundingClientRect().height ?? defaultPx();
-    drag.current = { startY: e.clientY, startH: h, moved: false };
+    drag.current = { startY: e.clientY, startH: h, moved: false, h };
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
@@ -43,10 +43,29 @@ export function useDrawerResize(open: boolean, onClose: () => void) {
     if (!d) return;
     const dy = d.startY - e.clientY;
     if (!d.moved && Math.abs(dy) < CLICK_SLOP_PX) return;
-    if (!d.moved) { d.moved = true; setDragging(true); }
+    const el = drawerRef.current;
+    // WHY the drawer SLIDES while dragged, and takes its new height only when let go (Destin, 2026-11-02: "resizing
+    // the command drawer causes cards to flicker and its VERY laggy"): setting the height on every finger movement
+    // re-rendered every card and redrew the whole drawer each time — the phone speed lab measured ~1 s of graphics
+    // work, 25 slow frames and 66 missed ones per drag on a Z Flip7. Now the drawer is made full height once, when
+    // the drag starts, and moved down by transform so its top follows the finger: no re-render, no redraw.
+    if (!d.moved) {
+      d.moved = true;
+      setDragging(true);
+      if (el) { el.style.transitionDuration = '0s'; el.style.height = `${maxPx()}px`; }
+    }
     // Below MIN_PX it keeps following the finger (so closing feels like a pull), but
     // never past the top gap.
-    setHeightPx(Math.max(40, Math.min(maxPx(), d.startH + dy)));
+    d.h = Math.max(40, Math.min(maxPx(), d.startH + dy));
+    if (el) el.style.transform = `translateY(${maxPx() - d.h}px)`;
+  };
+  /** Ends the slide: the drawer takes `h` as its real height in the same frame the transform goes. */
+  const endSlide = (h: number | null) => {
+    const el = drawerRef.current;
+    if (!el) return;
+    el.style.transform = '';
+    el.style.transitionDuration = '';
+    if (h !== null) el.style.height = `${Math.min(h, maxPx())}px`;
   };
   const onPointerUp = (e: PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
@@ -56,7 +75,9 @@ export function useDrawerResize(open: boolean, onClose: () => void) {
     if (!d) return;
     if (!d.moved) { toggleMax(); return; }
     const h = d.startH + (d.startY - e.clientY);
-    if (h < MIN_PX) onClose();
+    if (h < MIN_PX) { endSlide(null); onClose(); return; }
+    endSlide(d.h);
+    setHeightPx(d.h);
   };
   // WHY its own handler (final review F43): cancel used to run the DROP, so on Android a touch the
   // system took away mid-drag (a scroll, a gesture) could close the drawer or toggle full height.
@@ -66,7 +87,7 @@ export function useDrawerResize(open: boolean, onClose: () => void) {
     drag.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     setDragging(false);
-    if (d?.moved) setHeightPx(h => (h !== null && h < MIN_PX ? MIN_PX : h));
+    if (d?.moved) { const h = Math.max(MIN_PX, d.h); endSlide(h); setHeightPx(h); }
   };
   // Keyboard: Enter/Space = the click; arrows nudge by a tenth of the window.
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {

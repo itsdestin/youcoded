@@ -50,8 +50,14 @@ describe('useDrawerResize', () => {
     const { drawer, handle, onClose } = setup();
     fireEvent.pointerDown(handle, { clientY: 300, pointerId: 1 });
     fireEvent.pointerMove(handle, { clientY: 400, pointerId: 1 });
-    expect(drawer.style.height).toBe('600px');
+    // While dragged it slides (full height, moved down by transform) instead of re-rendering per movement; the
+    // visible part is the dragged height (useDrawerResize.ts — why).
+    const full = parseFloat(drawer.style.height);
+    const shift = Number(/translateY\((-?[\d.]+)px\)/.exec(drawer.style.transform)?.[1]);
+    expect(full - shift).toBe(600);
     fireEvent.pointerUp(handle, { clientY: 400, pointerId: 1 });
+    expect(drawer.style.height).toBe('600px');
+    expect(drawer.style.transform).toBe('');
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.pointerDown(handle, { clientY: 400, pointerId: 1 });
     fireEvent.pointerMove(handle, { clientY: 900, pointerId: 1 });
