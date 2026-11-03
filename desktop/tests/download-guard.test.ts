@@ -1,5 +1,6 @@
 // Same-website guard for link-following downloads (review deck round 3, Q-7). Fake website = injected fetch; no internet.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { z } from 'zod';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const execFileP = promisify(execFile);
@@ -7,7 +8,11 @@ import http from 'node:http';
 import { guardDownload, MAX_HOPS } from '../src/main/harness/download-guard';
 import { sameSiteDownloadCommand } from '../src/shared/download-host';
 import { decidePermission, decideChainParts } from '../src/main/harness/permission-engine';
-import { DESTRUCTIVE_DENY_LIST, rulesForMode, type PermissionRule } from '../src/shared/permission-types';
+import { DESTRUCTIVE_DENY_LIST, rulesForMode, type NativePermissionMode, type PermissionRule } from '../src/shared/permission-types';
+import { HarnessSession } from '../src/main/harness/harness-session';
+import { textChunks, toolCallChunk, finishChunk, stream, scriptedModel } from './helpers/scripted-model';
+import { makeOpts, fakeTool } from './helpers/harness-fakes';
+import type { AskDecision } from '../src/main/harness/permission-broker';
 
 type Hop = { status: number; location?: string };
 // A fake website: url -> answer. Records every address asked, so "never fetched the other site" can be proven.
@@ -140,5 +145,89 @@ describe('only a download-host rule asks for the guard', () => {
   it('a joined-up line is never allowed through the rule (the guard cannot wrap one part)', () => {
     expect(decideChainParts([{ text: 'curl -sSL https://github.com/a', context: {} }], layers([rule]))).toBeNull();
     expect(decideChainParts([{ text: 'curl -sS https://github.com/a', context: {} }], layers([rule]))).toMatchObject({ action: 'allow' });
+  });
+});
+
+// The guard wired into the REAL session loop: a link-following download allowed by a "downloads from <site> only"
+// rule (saved earlier, or by this very answer) is walked first and runs rewritten; every other approval runs as typed.
+const GITHUB_RULE: PermissionRule = { tool: 'Bash', pattern: 'curl github.com', action: 'allow', match: 'download-host' };
+
+/** A fake website: each address answers with a redirect to the next one, or 200. Records what was requested. */
+function fakeWeb(redirects: Record<string, string>) {
+  const requested: string[] = [];
+  const fetchImpl = vi.fn(async (url: string) => {
+    requested.push(url);
+    const to = redirects[url];
+    return { status: to ? 302 : 200, headers: { get: (h: string) => (h.toLowerCase() === 'location' ? to ?? null : null) }, body: null };
+  });
+  vi.stubGlobal('fetch', fetchImpl);
+  return { requested };
+}
+
+
+async function runInSession(command: string, opts: { mode?: NativePermissionMode; remembered?: PermissionRule[]; answer?: AskDecision } = {}) {
+  const bash = fakeTool('Bash', { schema: z.object({ command: z.string() }), permissionSubject: (a: any) => a.command });
+  const rules = [...(opts.remembered ?? [])];
+  const decide = async (name: string, subject: string | undefined) => decidePermission(name, subject, {
+    presetRules: [], modeRules: rulesForMode(opts.mode ?? 'ask'), denyList: DESTRUCTIVE_DENY_LIST, rememberedRules: rules,
+  });
+  const askUser = vi.fn(async (): Promise<AskDecision> => opts.answer ?? { behavior: 'allow' });
+  const model = scriptedModel([
+    stream(toolCallChunk('c0', 'Bash', { command }), finishChunk('tool-calls')),
+    stream(...textChunks('b', 'ok'), finishChunk('stop')),
+  ]);
+  const session = new HarnessSession(makeOpts({ tools: [bash], decide, askUser }), async () => model as any);
+  const saved: PermissionRule[] = [];
+  session.on('remember-rule', (r: PermissionRule) => { saved.push(r); rules.push(r); });
+  await session.send('go');
+  return { ran: (bash as any).calls.map((a: any) => a.command) as string[], asked: askUser.mock.calls.length, saved };
+}
+
+describe('the session runs remembered one-website downloads through the same-website guard', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  it('a saved rule + same-website links: walked first, then run with link-following off at the final address', async () => {
+    const web = fakeWeb({ 'https://github.com/a/b/x.zip': 'https://github.com/a/b/final.zip' });
+    const r = await runInSession('curl -sL -o x.zip https://github.com/a/b/x.zip', { remembered: [GITHUB_RULE] });
+    expect(r.asked).toBe(0);
+    expect(web.requested).toEqual(['https://github.com/a/b/x.zip', 'https://github.com/a/b/final.zip']);
+    expect(r.ran).toEqual(["curl -s -o x.zip 'https://github.com/a/b/final.zip'"]);
+  });
+
+  it('a link to another website stops the download: the command never runs and the other site is never asked', async () => {
+    const web = fakeWeb({ 'https://github.com/a/b/x.zip': 'https://objects.githubusercontent.com/blob' });
+    const r = await runInSession('curl -sL -o x.zip https://github.com/a/b/x.zip', { remembered: [GITHUB_RULE] });
+    expect(r.ran).toEqual([]);
+    expect(web.requested).toEqual(['https://github.com/a/b/x.zip']);
+  });
+
+  it('choosing "this website only" on the card guards the very first run too', async () => {
+    const web = fakeWeb({ 'https://github.com/x': 'https://evil.example.org/x' });
+    const r = await runInSession('curl -L -o x https://github.com/x', { answer: { behavior: 'allow', always: true, grantScope: 'wide' } as AskDecision });
+    expect(r.saved).toEqual([GITHUB_RULE]);
+    expect(web.requested).toEqual(['https://github.com/x']);
+    expect(r.ran).toEqual([]);
+  });
+
+  it('a plain Yes runs the command exactly as typed, with no walk', async () => {
+    const web = fakeWeb({});
+    const r = await runInSession('curl -L -o x https://github.com/x');
+    expect(r.asked).toBe(1);
+    expect(web.requested).toEqual([]);
+    expect(r.ran).toEqual(['curl -L -o x https://github.com/x']);
+  });
+
+  it('a download that does not follow links runs as typed under the rule, with no walk', async () => {
+    const web = fakeWeb({});
+    const r = await runInSession('curl -o x https://github.com/x', { remembered: [GITHUB_RULE] });
+    expect(r.asked).toBe(0);
+    expect(web.requested).toEqual([]);
+    expect(r.ran).toEqual(['curl -o x https://github.com/x']);
+  });
+
+  it('Full auto runs a link-following download as typed (the guard belongs to the one-website rule only)', async () => {
+    const web = fakeWeb({});
+    const r = await runInSession('curl -L -o x https://github.com/x', { mode: 'full-auto' });
+    expect(web.requested).toEqual([]);
+    expect(r.ran).toEqual(['curl -L -o x https://github.com/x']);
   });
 });
