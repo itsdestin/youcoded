@@ -63,7 +63,9 @@ export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
   }, [sessionId]);
 
   return (
-    <div className="absolute bottom-2 right-2 flex flex-col gap-1.5 z-10 pointer-events-auto">
+    // WHY above --terminal-bottom-inset: on a touch screen the input bar floats OVER the terminal (globals.css,
+    // "Touch terminal view"), so the arrows sit just above it — and above the keyboard while it is up.
+    <div className="absolute right-2 flex flex-col gap-1.5 z-10 pointer-events-auto" style={{ bottom: 'calc(var(--terminal-bottom-inset, 0px) + 0.5rem)' }}>
       <ScrollButton label="↑" name="Scroll up" onClick={() => send('\x1b[A')} />
       <ScrollButton label="↓" name="Scroll down" onClick={() => send('\x1b[B')} />
     </div>

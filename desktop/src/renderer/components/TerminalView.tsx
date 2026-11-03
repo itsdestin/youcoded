@@ -796,6 +796,25 @@ function TerminalView({ sessionId, visible }: Props) {
           }}
         />
       )}
+      {/* The same strip at the BOTTOM, under the input bar and the keyboard (Destin, 2026-11-03: "theres a hard edge
+          at the bottom now tho where the terminal meets the input bar"): on a touch screen the bar floats over the
+          terminal and the grid stops above it (--terminal-bottom-inset, globals.css), so the gap below the grid
+          repeats the sheet too. On desktop it is the 10px under the frame's bottom edge. */}
+      {seeThrough && (!terminalBg || fillContainer) && (
+        <div
+          aria-hidden
+          data-terminal-gap="bottom"
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: 'var(--terminal-bottom-inset, 0px)',
+            backgroundColor: backingColor,
+            opacity: backingStyle ? backingStyle.xtermOpacity : 'var(--terminal-xterm-opacity, 0.6)',
+          }}
+        />
+      )}
       <div
         ref={thumbRef}
         className="terminal-scrollbar-thumb"

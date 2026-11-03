@@ -65,3 +65,12 @@
     display: none;
   }
 }
+
+/* WHY nearer the edge without a frame (Destin, 2026-11-03: "in floating themes the terminal should go to the left/right
+   edge of the phone because there is no frame"): the 12px left space (globals.css, "2026-11-01 phone test") only clears the frame's outline. Floating styles have
+   none, so the text starts where the chat's messages do. */
+@media (max-width: 639.98px) {
+  body:is([data-chrome-style="floating"], [data-chrome-style="float"], [data-input-style="floating"]) .terminal-overlay-scroll .xterm {
+    padding-left: 6px;
+  }
+}
