@@ -1,15 +1,9 @@
 // @vitest-environment jsdom
-// ui-primitives.test.tsx — pinning tests for components/ui.
-//
-// These lock the recipes approved 2026-07-16 (see
-// docs/active/specs/2026-07-16-ui-consistency-design-spec.md). They are
-// deliberately assertions about CLASS OUTPUT and ARIA, not snapshots: the point
-// is that a specific rejected idiom can never quietly come back. Each test that
-// guards a rejected alternative says which one and why.
+// Pinning tests for components/ui: class output and ARIA (not snapshots), so a rejected idiom cannot quietly come back.
 
 import React from 'react';
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
 import { Button, buttonClasses } from '../src/renderer/components/ui/Button';
@@ -27,9 +21,7 @@ import { LoadingState, EmptyState, ErrorState, FieldError } from '../src/rendere
 import { FIELD, FIELD_SURFACE } from '../src/renderer/components/ui/field';
 import { InputGroup } from '../src/renderer/components/ui/InputGroup';
 
-// jsdom does not implement scrollIntoView. Select uses it to bring the current
-// value into view when a long catalog opens; every real browser and the Android
-// WebView have it, so this is a test-environment gap, not a product guard.
+// jsdom lacks scrollIntoView, which Select uses when a long catalog opens.
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
@@ -37,84 +29,56 @@ beforeAll(() => {
 afterEach(cleanup);
 
 describe('Button', () => {
-  it('primary uses the accent fill with a background-fade hover', () => {
+  const VARIANTS = ['primary', 'secondary', 'ghost', 'danger', 'danger-outline'] as const;
+
+  it('primary uses the accent fill with a background-fade hover; danger takes its label from the derived token', () => {
     const cls = buttonClasses('primary');
     expect(cls).toContain('bg-accent');
     expect(cls).toContain('text-on-accent');
     expect(cls).toContain('hover:bg-accent/90');
+    // WHY: --destructive is pack-overridable with no contrast guard, so hardcoded text-white can render white-on-pale.
+    const danger = buttonClasses('danger');
+    expect(danger).toContain('bg-destructive');
+    expect(danger).toContain('text-on-destructive');
+    expect(danger).not.toContain('text-white');
   });
 
-  it('never uses the rejected hover idioms', () => {
-    // brightness-110 is imperceptible on Light/Creme's near-black accent;
-    // opacity-90 fades the LABEL too, and on glow themes (Halftone) the fill
-    // fades out from under the theme's own box-shadow. Both were rendered and
-    // rejected — this stops either coming back as a "polish" tweak.
-    for (const v of ['primary', 'secondary', 'ghost', 'danger', 'danger-outline'] as const) {
-      expect(buttonClasses(v)).not.toContain('brightness');
-      expect(buttonClasses(v)).not.toMatch(/(^|\s|:)opacity-90/);
-    }
+  // WHY: brightness-110 is imperceptible on Light/Creme's near-black accent; opacity-90 fades the label and the glow themes' fill.
+  it.each(VARIANTS)('%s never uses the rejected hover idioms and carries the focus ring', (v) => {
+    expect(buttonClasses(v)).not.toContain('brightness');
+    expect(buttonClasses(v)).not.toMatch(/(^|\s|:)opacity-90/);
+    expect(buttonClasses(v)).toContain('focus-visible:ring-2');
+    expect(buttonClasses(v)).toContain('focus-visible:ring-accent');
   });
 
-  it('danger takes its label from the derived token, never hardcoded white', () => {
-    // --destructive is pack-overridable with NO contrast guard, so text-white
-    // can render white-on-pale. Rule 15: every color is settable or derived.
-    const cls = buttonClasses('danger');
-    expect(cls).toContain('bg-destructive');
-    expect(cls).toContain('text-on-destructive');
-    expect(cls).not.toContain('text-white');
-  });
-
-  it('every variant carries the focus ring', () => {
-    // ~80% of buttons had no focus-visible style before this existed (rule 4).
-    for (const v of ['primary', 'secondary', 'ghost', 'danger', 'danger-outline'] as const) {
-      expect(buttonClasses(v)).toContain('focus-visible:ring-2');
-      expect(buttonClasses(v)).toContain('focus-visible:ring-accent');
-    }
-  });
-
-  it('uses one control radius', () => {
-    // Rule 2. Pills survive only as a documented className override.
-    // The theme's control corner (decisions "Control shape follows the theme").
-    expect(buttonClasses('primary')).toContain('rounded-control');
-    expect(buttonClasses('primary')).not.toContain('rounded-sm');
-    expect(buttonClasses('primary')).not.toContain('rounded-full');
-  });
-
-  it('maps each size to its approved scale', () => {
+  it('uses the theme control radius, a disabled affordance, and the approved size scale', () => {
+    const base = buttonClasses('primary');
+    expect(base).toContain('rounded-control');
+    expect(base).not.toContain('rounded-sm');
+    expect(base).not.toContain('rounded-full');
+    expect(base).toContain('disabled:opacity-50');
+    expect(base).toContain('disabled:cursor-not-allowed');
     expect(buttonClasses('primary', 'sm')).toContain('text-2xs');
     expect(buttonClasses('primary', 'md')).toContain('text-xs');
     expect(buttonClasses('primary', 'lg')).toContain('text-sm');
     expect(buttonClasses('primary', 'icon')).toContain('w-7 h-7');
   });
 
-  it('expands the tap target only for the sizes below the touch guideline', () => {
-    // This renderer is also the Android UI. sm is ~22px tall, icon is 28px.
-    expect(buttonClasses('primary', 'sm')).toContain('coarse-hit');
-    expect(buttonClasses('primary', 'icon')).toContain('coarse-hit');
-    expect(buttonClasses('primary', 'md')).not.toContain('coarse-hit');
-    expect(buttonClasses('primary', 'lg')).not.toContain('coarse-hit');
-  });
+  // The renderer is also the Android UI: sm is ~22px tall, icon 28px.
+  it.each([['sm', true], ['icon', true], ['md', false], ['lg', false]] as const)(
+    'size %s expands the tap target: %s', (size, expands) => {
+      expect(buttonClasses('primary', size).includes('coarse-hit')).toBe(expands);
+    });
 
-  it('defaults to type=button so it cannot submit a surrounding form', () => {
+  it('defaults to type=button so it cannot submit a surrounding form, but allows an explicit submit', () => {
     const onSubmit = vi.fn((e: React.FormEvent) => e.preventDefault());
-    render(
-      <form onSubmit={onSubmit}>
-        <Button>Save</Button>
-      </form>,
-    );
+    render(<form onSubmit={onSubmit}><Button>Save</Button></form>);
     expect(screen.getByRole('button')).toHaveAttribute('type', 'button');
     fireEvent.click(screen.getByRole('button'));
     expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('still allows an explicit submit button', () => {
+    cleanup();
     render(<Button type="submit">Go</Button>);
     expect(screen.getByRole('button')).toHaveAttribute('type', 'submit');
-  });
-
-  it('carries the disabled affordance', () => {
-    expect(buttonClasses('primary')).toContain('disabled:opacity-50');
-    expect(buttonClasses('primary')).toContain('disabled:cursor-not-allowed');
   });
 
   it('forwards className so documented exceptions (first-run pills) can override', () => {
@@ -122,47 +86,23 @@ describe('Button', () => {
     expect(screen.getByRole('button')).toHaveClass('rounded-full', 'px-8');
   });
 
-  // A className override has to REPLACE the base class, not sit beside it.
-  // Tailwind resolves competing utilities by CSS source order, not by attribute
-  // order — and measured in our bundle, .rounded-full (26057) is emitted BEFORE
-  // .rounded-lg (26104), so both-present means rounded-lg wins and the pill
-  // silently isn't a pill. Same for .text-base (51062) vs .text-sm (51252).
+  // WHY: an override has to REPLACE the base class — Tailwind resolves competing utilities by CSS source order, and
+  // in our bundle .rounded-full is emitted BEFORE .rounded-lg, so both-present would silently lose the pill.
   describe('className override actually overrides', () => {
-    it('drops the base radius when the caller supplies one (change 7 pills)', () => {
-      const cls = buttonClasses('primary', 'lg', 'rounded-full');
-      expect(cls).toContain('rounded-full');
-      expect(cls).not.toContain('rounded-lg');
+    it.each([
+      ['radius', ['primary', 'lg', 'rounded-full'], ['rounded-full'], ['rounded-lg']],
+      ['font size', ['primary', 'lg', 'text-base'], ['text-base'], ['text-sm']],
+      ['padding', ['primary', 'lg', 'px-6 py-3'], ['px-6', 'py-3'], ['px-4', 'py-2']],
+      ['icon size', ['ghost', 'icon', 'w-10 h-10'], ['w-10', 'h-10'], ['w-7', 'h-7']],
+    ] as const)('drops the base %s when the caller supplies one', (_n, args, kept, dropped) => {
+      const tokens = (buttonClasses as (...a: readonly string[]) => string)(...args).split(/\s+/);
+      for (const k of kept) expect(tokens).toContain(k);
+      for (const d of dropped) expect(tokens).not.toContain(d);
     });
 
-    it('drops the base font size when the caller supplies one', () => {
-      const cls = buttonClasses('primary', 'lg', 'text-base');
-      expect(cls).toContain('text-base');
-      expect(cls.split(/\s+/)).not.toContain('text-sm');
-    });
-
-    it('drops the base padding when the caller supplies its own', () => {
-      const cls = buttonClasses('primary', 'lg', 'px-6 py-3');
-      expect(cls).toContain('px-6');
-      expect(cls).toContain('py-3');
-      expect(cls.split(/\s+/)).not.toContain('px-4');
-      expect(cls.split(/\s+/)).not.toContain('py-2');
-    });
-
-    it('lets the terminal scroll buttons keep w-10 h-10 over icon size (change 41)', () => {
-      const cls = buttonClasses('ghost', 'icon', 'w-10 h-10');
-      expect(cls).toContain('w-10');
-      expect(cls).toContain('h-10');
-      expect(cls.split(/\s+/)).not.toContain('w-7');
-      expect(cls.split(/\s+/)).not.toContain('h-7');
-    });
-
-    it('never mistakes a text COLOR for a text size', () => {
-      // text-on-accent / text-fg-2 must survive a text-base override.
+    it('never mistakes a text COLOR for a text size, and keeps variant-prefixed classes', () => {
       expect(buttonClasses('primary', 'md', 'text-base')).toContain('text-on-accent');
       expect(buttonClasses('secondary', 'md', 'text-base')).toContain('text-fg-2');
-    });
-
-    it('keeps variant-prefixed classes, which never conflict', () => {
       const cls = buttonClasses('primary', 'md', 'rounded-full');
       expect(cls).toContain('hover:bg-accent/90');
       expect(cls).toContain('disabled:opacity-50');
@@ -170,7 +110,6 @@ describe('Button', () => {
     });
 
     it('leaves the base untouched when nothing is overridden', () => {
-      // The theme's control corner (decisions "Control shape follows the theme").
       expect(buttonClasses('primary', 'lg')).toContain('rounded-control');
       expect(buttonClasses('primary', 'lg')).toContain('text-sm');
     });
@@ -191,55 +130,38 @@ describe('CloseButton', () => {
 });
 
 describe('Toggle', () => {
-  it('is a switch with state, which only 2 of ~14 toggles used to be', () => {
-    render(<Toggle checked={false} onChange={() => {}} />);
-    const sw = screen.getByRole('switch');
-    expect(sw).toHaveAttribute('aria-checked', 'false');
+  const sw = () => screen.getByRole('switch');
+  const noop = () => {};
+
+  it('is a switch with state, using accent for on (not green) and the destructive token for danger', () => {
+    render(<Toggle checked={false} onChange={noop} />);
+    expect(sw()).toHaveAttribute('aria-checked', 'false');
+    cleanup();
+    render(<Toggle checked onChange={noop} />);
+    expect(sw().className).toContain('bg-accent');
+    expect(sw().className).not.toContain('green');
+    cleanup();
+    render(<Toggle checked tone="danger" onChange={noop} />);
+    expect(sw().className).toContain('bg-destructive');
+    expect(sw().className).not.toContain('#DD4444');
   });
 
-  it('uses accent for the on-state, not green', () => {
-    // Settings/sync toggles were green-600 (change 16).
-    render(<Toggle checked onChange={() => {}} />);
-    expect(screen.getByRole('switch').className).toContain('bg-accent');
-    expect(screen.getByRole('switch').className).not.toContain('green');
-  });
-
-  it('uses the destructive token for danger toggles, not a raw hex', () => {
-    // Skip permissions / approve-all were a literal bg-[#DD4444] (change 17).
-    render(<Toggle checked tone="danger" onChange={() => {}} />);
-    const cls = screen.getByRole('switch').className;
-    expect(cls).toContain('bg-destructive');
-    expect(cls).not.toContain('#DD4444');
-  });
-
-  it('keeps the border in BOTH states so the knob cannot shift', () => {
-    // Risk 3: absolutely-positioned children resolve against the PADDING box, so
-    // a border that exists in only one state moves the knob 1px on flip. The
-    // on-state border is transparent, not absent.
-    const { rerender } = render(<Toggle checked={false} onChange={() => {}} />);
-    expect(screen.getByRole('switch').className).toContain('border-edge-dim');
-    rerender(<Toggle checked onChange={() => {}} />);
-    expect(screen.getByRole('switch').className).toContain('border-transparent');
-  });
-
-  it('travels the knob 16px between symmetric ends', () => {
-    const { rerender } = render(<Toggle checked={false} onChange={() => {}} />);
-    const knob = () => screen.getByRole('switch').querySelector('span')!;
+  // WHY: absolutely-positioned children resolve against the PADDING box, so a border present in only one state shifts the knob 1px.
+  it('keeps the border in BOTH states, travels the knob 16px, and rings it so it shows on light tracks', () => {
+    const { rerender } = render(<Toggle checked={false} onChange={noop} />);
+    const knob = () => sw().querySelector('span')!;
+    expect(sw().className).toContain('border-edge-dim');
     expect(knob()).toHaveStyle({ left: '1px' });
-    rerender(<Toggle checked onChange={() => {}} />);
+    expect(knob().className).toContain('border-edge-dim');
+    rerender(<Toggle checked onChange={noop} />);
+    expect(sw().className).toContain('border-transparent');
     expect(knob()).toHaveStyle({ left: '17px' });
-  });
-
-  it('rings the knob so it stays visible on light tracks', () => {
-    // Bare bg-white is ~1.2:1 against Creme's off-state track (--inset #DDD1BE).
-    render(<Toggle checked={false} onChange={() => {}} />);
-    expect(screen.getByRole('switch').querySelector('span')!.className).toContain('border-edge-dim');
   });
 
   it('reports the flipped value', () => {
     const onChange = vi.fn();
     render(<Toggle checked={false} onChange={onChange} />);
-    fireEvent.click(screen.getByRole('switch'));
+    fireEvent.click(sw());
     expect(onChange).toHaveBeenCalledWith(true);
   });
 });
@@ -313,126 +235,68 @@ describe('Radio / RadioGroup', () => {
 });
 
 describe('field surface', () => {
-  it('focuses by border color, not a ring or a gray', () => {
-    // Retires focus:border-fg-muted (gray focus) and focus:ring-* focus.
+  it('focuses by border color on inset, with a disabled affordance', () => {
     expect(FIELD).toContain('focus:border-accent');
     expect(FIELD).not.toContain('focus:ring');
     expect(FIELD).not.toContain('focus:border-fg-muted');
-  });
-
-  it('sits on inset, never canvas or well', () => {
     expect(FIELD).toContain('bg-inset');
     expect(FIELD).not.toContain('bg-canvas');
     expect(FIELD).not.toContain('bg-well');
-  });
-
-  it('keeps a disabled affordance', () => {
-    // Disabled fields already exist (EngineCard, InputBar, ReportReviewButton).
     expect(FIELD).toContain('disabled:opacity-50');
   });
 
   it('applies to non-text inputs too, keeping their native type', () => {
-    // Password/search/number all route through FIELD (change 20 + §9.I).
     const { container } = render(<TextInput type="password" defaultValue="k" />);
     const input = container.querySelector('input')!;
     expect(input).toHaveAttribute('type', 'password');
     expect(input.className).toContain('bg-inset');
   });
 
-  it('Textarea defaults to non-resizable', () => {
-    const { container } = render(<Textarea />);
-    expect(container.querySelector('textarea')!.className).toContain('resize-none');
-  });
-
-  it('Textarea can opt back into resizing', () => {
-    const { container } = render(<Textarea resizable />);
-    expect(container.querySelector('textarea')!.className).not.toContain('resize-none');
+  it.each([[false, false], [true, true]])('Textarea resizable=%s', (resizable, resizes) => {
+    const { container } = render(<Textarea resizable={resizable} />);
+    expect(container.querySelector('textarea')!.className.includes('resize-none')).toBe(!resizes);
   });
 });
 
-describe('InputGroup (change 77 — the action goes inside the field)', () => {
-  it('moves the focus state to the wrapper', () => {
-    // The whole reason this is a primitive and not a className: the input inside
-    // is borderless, so `focus:border-accent` on it would paint nothing. If this
-    // assertion ever fails, focusing one of these fields shows NO focus state.
-    const { container } = render(
-      <InputGroup>
-        <InputGroup.Field />
-      </InputGroup>,
-    );
-    const wrapper = container.firstElementChild!;
+describe('InputGroup (the action goes inside the field)', () => {
+  const group = (props: Omit<React.ComponentProps<typeof InputGroup>, 'children'> = {}, field: React.ComponentProps<typeof InputGroup.Field> = {}) => {
+    const { container } = render(<InputGroup {...props}><InputGroup.Field {...field} /></InputGroup>);
+    return { wrapper: container.firstElementChild!, input: container.querySelector('input')! };
+  };
+
+  // WHY: the inner input is borderless, so focus:border-accent on it would paint nothing — the wrapper must carry the focus state.
+  it('puts the focus state and surface on the wrapper and leaves the input bare', () => {
+    const { wrapper, input } = group();
     expect(wrapper.className).toContain('focus-within:border-accent');
     expect(wrapper.className).toContain('border-edge-card');
-  });
-
-  it('gives the wrapper the surface and the input none of it', () => {
-    const { container } = render(
-      <InputGroup>
-        <InputGroup.Field />
-      </InputGroup>,
-    );
-    const wrapper = container.firstElementChild!;
-    const input = container.querySelector('input')!;
-
     expect(wrapper.className).toContain('bg-inset');
-    // The input must stay bare or you get a border inside a border.
     expect(input.className).toContain('bg-transparent');
     expect(input.className).toContain('border-0');
     expect(input.className).not.toContain('bg-inset');
   });
 
-  it('passes its size down to the field without prop drilling', () => {
-    const { container } = render(
-      <InputGroup size="sm">
-        <InputGroup.Field />
-      </InputGroup>,
-    );
-    // sm padding, from FIELD_SIZE — same scale as every other field.
-    expect(container.querySelector('input')!.className).toContain('px-2.5');
-  });
-
-  it('lets a field override the inherited size', () => {
-    const { container } = render(
-      <InputGroup size="sm">
-        <InputGroup.Field size="md" />
-      </InputGroup>,
-    );
-    expect(container.querySelector('input')!.className).toContain('px-3');
+  it('passes its size down to the field, which can override it', () => {
+    expect(group({ size: 'sm' }).input.className).toContain('px-2.5');
+    expect(group({ size: 'sm' }, { size: 'md' }).input.className).toContain('px-3');
   });
 
   it('keeps the native input type', () => {
-    const { container } = render(
-      <InputGroup>
-        <InputGroup.Field type="password" />
-      </InputGroup>,
-    );
-    expect(container.querySelector('input')!).toHaveAttribute('type', 'password');
+    expect(group({}, { type: 'password' }).input).toHaveAttribute('type', 'password');
   });
 
-  it('lets a caller override a field size deterministically', () => {
-    // fieldClasses goes through mergeClasses for the same reason buttonClasses
-    // does — Tailwind resolves competing utilities by CSS source order, so plain
-    // concatenation left the winner up to emission order. If this regresses, a
-    // caller passing text-sm/px-4 gets a coin flip, not an override.
+  // WHY: fieldClasses goes through mergeClasses — concatenation left the winner of competing utilities to CSS emission order.
+  it('lets a caller override a field size deterministically, keeping non-conflicting base classes', () => {
     const { container } = render(<TextInput size="md" className="text-sm px-4" />);
     const cls = container.querySelector('input')!.className;
     expect(cls).toContain('text-sm');
     expect(cls).toContain('px-4');
     expect(cls).not.toContain('text-xs');
     expect(cls).not.toContain('px-3');
-  });
-
-  it('keeps non-conflicting base classes when overriding', () => {
-    const { container } = render(<TextInput className="text-sm" />);
-    const cls = container.querySelector('input')!.className;
-    // Colors and the focus rule are a different group — they must survive.
     expect(cls).toContain('bg-inset');
     expect(cls).toContain('focus:border-accent');
   });
 
   it('shares one surface definition with the plain field', () => {
-    // FIELD_SURFACE is split out of FIELD precisely so a bordered field and a
-    // grouped one can't drift apart. Pin that they still agree.
     expect(FIELD).toContain(FIELD_SURFACE);
   });
 });
@@ -443,72 +307,45 @@ describe('Select', () => {
     { value: 'b', label: 'Beta' },
     { value: 'c', label: 'Gamma' },
   ];
+  const open = (props: Partial<React.ComponentProps<typeof Select>> = {}) =>
+    render(<Select options={OPTS} value="a" onChange={() => {}} aria-label="Pick" {...props} />);
 
-  it('renders NO native select — that is the entire point', () => {
-    // A styled trigger alone leaves the OS-rendered option list (the blue
-    // highlight menu) dropping out of a themed app.
-    const { container } = render(<Select options={OPTS} value="a" onChange={() => {}} aria-label="Pick" />);
+  it('renders NO native select (the OS option list would break theming) and opens a listbox', () => {
+    const { container } = open();
     expect(container.querySelector('select')).toBeNull();
     expect(screen.getByRole('button')).toHaveAttribute('aria-haspopup', 'listbox');
-  });
-
-  it('opens a listbox of options', () => {
-    render(<Select options={OPTS} value="a" onChange={() => {}} aria-label="Pick" />);
     fireEvent.click(screen.getByRole('button'));
     expect(screen.getByRole('listbox')).toBeInTheDocument();
     expect(screen.getAllByRole('option')).toHaveLength(3);
   });
 
   it('marks the selected option', () => {
-    render(<Select options={OPTS} value="b" onChange={() => {}} aria-label="Pick" />);
+    open({ value: 'b' });
     fireEvent.click(screen.getByRole('button'));
     expect(screen.getByRole('option', { name: 'Beta' })).toHaveAttribute('aria-selected', 'true');
   });
 
+  // WHY: the scroll MUST be on an inner element; .layer-surface's unlayered `overflow: hidden` would beat an overflow-y-auto utility.
   it('scrolls rather than clips a long catalog', () => {
-    // RuntimeBinding's model select renders a provider's whole catalog; the
-    // scroll MUST be on an inner element, because .layer-surface's
-    // `overflow: hidden` is unlayered and would beat an overflow-y-auto utility.
-    render(<Select options={OPTS} value="a" onChange={() => {}} aria-label="Pick" />);
+    open();
     fireEvent.click(screen.getByRole('button'));
     const list = screen.getByRole('listbox');
     expect(list.className).toContain('overflow-y-auto');
     expect(list.className).toContain('max-h-64');
   });
 
-  it('selects with the keyboard', () => {
+  it.each([
+    ['arrow keys then Enter', ['ArrowDown', 'ArrowDown', 'Enter'], false, 'b'],
+    ['first character then Enter', ['g', 'Enter'], true, 'c'],
+    ['arrow keys, skipping a disabled option', ['ArrowDown', 'ArrowDown', 'Enter'], false, 'c'],
+  ])('selects with %s', (title, keys, clickOpen, expected) => {
     const onChange = vi.fn();
-    render(<Select options={OPTS} value="a" onChange={onChange} aria-label="Pick" />);
+    const options = title.includes('disabled') ? [OPTS[0], { ...OPTS[1], disabled: true }, OPTS[2]] : OPTS;
+    open({ onChange, options });
     const trigger = screen.getByRole('button');
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' }); // opens
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' }); // a -> b
-    fireEvent.keyDown(trigger, { key: 'Enter' });
-    expect(onChange).toHaveBeenCalledWith('b');
-  });
-
-  it('jumps by first character', () => {
-    const onChange = vi.fn();
-    render(<Select options={OPTS} value="a" onChange={onChange} aria-label="Pick" />);
-    const trigger = screen.getByRole('button');
-    fireEvent.click(trigger);
-    fireEvent.keyDown(trigger, { key: 'g' });
-    fireEvent.keyDown(trigger, { key: 'Enter' });
-    expect(onChange).toHaveBeenCalledWith('c');
-  });
-
-  it('skips disabled options when navigating', () => {
-    const onChange = vi.fn();
-    const opts = [
-      { value: 'a', label: 'Alpha' },
-      { value: 'b', label: 'Beta', disabled: true },
-      { value: 'c', label: 'Gamma' },
-    ];
-    render(<Select options={opts} value="a" onChange={onChange} aria-label="Pick" />);
-    const trigger = screen.getByRole('button');
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-    fireEvent.keyDown(trigger, { key: 'Enter' });
-    expect(onChange).toHaveBeenCalledWith('c');
+    if (clickOpen) fireEvent.click(trigger);
+    for (const key of keys) fireEvent.keyDown(trigger, { key });
+    expect(onChange).toHaveBeenCalledWith(expected);
   });
 });
 
@@ -573,6 +410,8 @@ describe('ProgressBar', () => {
 });
 
 describe('Toast', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
   it('announces politely without stealing focus', () => {
     render(<Toast message="Copied" onDismiss={() => {}} />);
     const toast = screen.getByRole('status');
@@ -580,24 +419,21 @@ describe('Toast', () => {
     expect(toast).toHaveTextContent('Copied');
   });
 
-  it('owns its dismiss timer so call sites stop re-implementing it', () => {
+  it('owns its dismiss timer', () => {
     vi.useFakeTimers();
     const onDismiss = vi.fn();
     render(<Toast message="Saved" onDismiss={onDismiss} durationMs={3000} />);
     expect(onDismiss).not.toHaveBeenCalled();
     vi.advanceTimersByTime(3000);
     expect(onDismiss).toHaveBeenCalledTimes(1);
-    vi.useRealTimers();
   });
 
   it('does not fire its timer after unmount', () => {
     vi.useFakeTimers();
     const onDismiss = vi.fn();
-    const { unmount } = render(<Toast message="Saved" onDismiss={onDismiss} />);
-    unmount();
+    render(<Toast message="Saved" onDismiss={onDismiss} />).unmount();
     vi.advanceTimersByTime(5000);
     expect(onDismiss).not.toHaveBeenCalled();
-    vi.useRealTimers();
   });
 
   it('can require an explicit dismiss', () => {
@@ -606,14 +442,17 @@ describe('Toast', () => {
     render(<Toast message="Stay" onDismiss={onDismiss} durationMs={null} />);
     vi.advanceTimersByTime(60_000);
     expect(onDismiss).not.toHaveBeenCalled();
-    vi.useRealTimers();
   });
 });
 
 describe('state family', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
   it('loading always names what is loading', () => {
-    // "Loading sessions…", never a bare "Loading…".
+    // The spinner's shared 40ms driver must tick without disturbing the label (fake timers make the tick deterministic, not a race on render speed).
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
     render(<LoadingState what="sessions" />);
+    act(() => { vi.advanceTimersByTime(200); });
     expect(screen.getByText(/Loading sessions/)).toBeInTheDocument();
   });
 
@@ -624,49 +463,29 @@ describe('state family', () => {
     expect(onClick).toHaveBeenCalled();
   });
 
-  it('errors are the red-tinted notice box, with no separate mark', () => {
-    // error-notices-1 (2026-10-12) reversed Option C (a neutral grey box with a red
-    // dot): the guide's notice box carries the colour in its tint and border, and
-    // nothing else is red. Full guard: tests/error-state.test.tsx.
+  it('errors are the red-tinted notice box with a filled primary Try again and no separate red mark', () => {
+    // Full guard: tests/error-state.test.tsx.
     const { container } = render(<ErrorState message="Fetch failed" onRetry={() => {}} />);
     const card = container.firstElementChild as HTMLElement;
     expect(card.className).toContain('bg-destructive/10');
     expect(card.className).toContain('border-destructive/50');
     expect(card.className).not.toContain('bg-inset/50');
-    expect(card.querySelector('.bg-destructive')).toBeNull(); // the old dot is gone
-  });
-
-  it('Retry is a FILLED primary', () => {
-    // Explicit review correction from secondary — secondary reads as a dim
-    // outline on dark themes.
-    render(<ErrorState message="Fetch failed" onRetry={() => {}} />);
+    expect(card.querySelector('.bg-destructive')).toBeNull();
+    // Secondary reads as a dim outline on dark themes.
     expect(screen.getByRole('button', { name: 'Try again' }).className).toContain('bg-accent');
   });
 
   it('general errors ship the two documented actions', () => {
-    // This IS the reusable two-action component docs/error-message-standards.md
-    // schedules for v1.3.1.
     const onReportBug = vi.fn();
     const onDiagnose = vi.fn();
-    render(
-      <ErrorState
-        mode="general"
-        title="Unable to run local models"
-        explainer="Something went wrong."
-        onReportBug={onReportBug}
-        onDiagnose={onDiagnose}
-      />,
-    );
+    render(<ErrorState mode="general" title="Unable to run local models" explainer="Something went wrong." onReportBug={onReportBug} onDiagnose={onDiagnose} />);
     fireEvent.click(screen.getByRole('button', { name: 'Report bug' }));
     fireEvent.click(screen.getByRole('button', { name: 'Diagnose with the assistant' }));
     expect(onReportBug).toHaveBeenCalled();
     expect(onDiagnose).toHaveBeenCalled();
   });
 
-  it('field errors are the danger notice box in miniature, at the named size', () => {
-    // fix-batch3#FB-1 (2026-09-29): the red now lives in the box (the danger
-    // Callout's tint + border), the words stay grey — never red body text.
-    // Rule 14 (§9.H fixed the spec's own text-[10px] here) still holds.
+  it('field errors are the danger notice box in miniature, words grey, at the named size', () => {
     render(<FieldError>Required</FieldError>);
     const el = screen.getByText('Required');
     expect(el.className).toContain('bg-destructive/10');
@@ -678,11 +497,8 @@ describe('state family', () => {
     expect(el.tagName).toBe('SPAN');
   });
 
-  // The adoption sweep found the app split between two type steps and a mix of
-  // block/inline hosts, so the primitive takes both as PROPS. Neither could be a
-  // className pass-through: this component concatenates className onto its base,
-  // and Tailwind resolves competing utilities by CSS source order, so a caller's
-  // `text-2xs` would silently keep rendering at 3xs.
+  // WHY: size/as are PROPS, not className pass-through — Tailwind resolves competing utilities by CSS source order,
+  // so a caller's `text-2xs` would keep rendering at 3xs.
   it('size="2xs" replaces the base step rather than piling on next to it', () => {
     render(<FieldError size="2xs">Too short</FieldError>);
     const el = screen.getByText('Too short');
@@ -691,8 +507,6 @@ describe('state family', () => {
   });
 
   it('as="p" renders a block host so vertical margin still lays out', () => {
-    // `mt-1` on an inline element does nothing; 21 of the swapped sites were
-    // <p> carrying exactly that kind of spacing class.
     render(<FieldError as="p" className="mt-1">Nope</FieldError>);
     const el = screen.getByText('Nope');
     expect(el.tagName).toBe('P');

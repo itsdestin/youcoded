@@ -1,6 +1,4 @@
-// Tests for the PURE Conversation Store record logic (Phase 2a design §1).
-// Plain vitest, no mocks — store-core.ts is a pure module (no fs/path/os), so
-// every behavior is exercised directly on plain objects/strings.
+// PURE Conversation Store record logic (store-core.ts has no fs/path/os), exercised directly on plain objects/strings.
 import { describe, it, expect } from 'vitest';
 import {
   RECORD_SCHEMA_VERSION,
@@ -13,8 +11,7 @@ import {
   type FlagState,
 } from '../src/main/conversations/store-core';
 
-// Small factory so each test states only the fields it cares about — the rest
-// default to a valid baseline record.
+// Each test states only the fields it cares about; the rest default to a valid baseline record.
 function rec(over: Partial<ConversationRecord> = {}): ConversationRecord {
   return {
     schema: RECORD_SCHEMA_VERSION,
@@ -39,46 +36,29 @@ function flag(value: boolean, updatedAt: string): FlagState {
 }
 
 describe('parseRecord', () => {
-  // Contract 1: a well-formed schema:1 record with all required fields round-trips.
   it('parses valid JSON with schema:1 and all required fields', () => {
     const source = rec();
-    const parsed = parseRecord(JSON.stringify(source));
-    expect(parsed).not.toBeNull();
-    expect(parsed).toEqual(source);
+    expect(parseRecord(JSON.stringify(source))).toEqual(source);
   });
 
-  // Contract 2 (three ways to be invalid → null, never throw):
-  it('returns null on malformed JSON', () => {
-    expect(parseRecord('{ not json')).toBeNull();
-    expect(parseRecord('')).toBeNull();
-    expect(parseRecord('null')).toBeNull();
-    expect(parseRecord('42')).toBeNull();
+  // Invalid input is null, never a throw.
+  it.each(['{ not json', '', 'null', '42', '  ', '[1,2,3'])('returns null on malformed JSON %j', (text) => {
+    expect(parseRecord(text)).toBeNull();
   });
 
-  it('returns null on wrong schema version', () => {
-    const wrong = JSON.stringify({ ...rec(), schema: 2 });
-    expect(parseRecord(wrong)).toBeNull();
+  it.each([
+    ['wrong schema version', { schema: 2 }],
+    ['missing id', { id: undefined }],
+    ['empty id', { id: '' }],
+    ['missing provider', { provider: undefined }],
+    ['empty provider', { provider: '' }],
+    ['missing lastActive', { lastActive: undefined }],
+    ['unparseable lastActive', { lastActive: 'not-a-date' }],
+  ])('returns null on %s', (_n, over) => {
+    expect(parseRecord(JSON.stringify({ ...rec(), ...over }))).toBeNull();
   });
 
-  it('returns null when id/provider/lastActive is missing or invalid', () => {
-    // Missing id
-    expect(parseRecord(JSON.stringify({ ...rec(), id: undefined }))).toBeNull();
-    expect(parseRecord(JSON.stringify({ ...rec(), id: '' }))).toBeNull();
-    // Missing provider
-    expect(parseRecord(JSON.stringify({ ...rec(), provider: undefined }))).toBeNull();
-    expect(parseRecord(JSON.stringify({ ...rec(), provider: '' }))).toBeNull();
-    // Missing / unparseable lastActive
-    expect(parseRecord(JSON.stringify({ ...rec(), lastActive: undefined }))).toBeNull();
-    expect(parseRecord(JSON.stringify({ ...rec(), lastActive: 'not-a-date' }))).toBeNull();
-  });
-
-  it('never throws on arbitrary garbage input', () => {
-    expect(() => parseRecord('  ')).not.toThrow();
-    expect(() => parseRecord('[1,2,3')).not.toThrow();
-  });
-
-  // Flags must round-trip LOSSLESSLY or not at all — a malformed FlagState
-  // reaching mergeRecords would corrupt the per-flag updatedAt comparison.
+  // WHY: flags must round-trip LOSSLESSLY or not at all; a malformed FlagState reaching mergeRecords would corrupt the per-flag updatedAt comparison.
   it('drops malformed flag entries but keeps well-formed ones', () => {
     const parsed = parseRecord(JSON.stringify({
       ...rec(),
@@ -90,31 +70,16 @@ describe('parseRecord', () => {
         badUpdatedAt: { value: true, updatedAt: 42 },                      // non-string
       },
     }));
-    expect(parsed).not.toBeNull();
-    expect(parsed!.flags).toEqual({
-      good: { value: true, updatedAt: '2026-07-01T00:00:00.000Z' },
-    });
+    expect(parsed!.flags).toEqual({ good: { value: true, updatedAt: '2026-07-01T00:00:00.000Z' } });
   });
 
-  it('normalizes a non-record flags shape (array) to {}', () => {
-    // Arrays are typeof 'object' — a naive object check would let one through.
-    const parsed = parseRecord(JSON.stringify({ ...rec(), flags: [1, 2, 3] }));
-    expect(parsed).not.toBeNull();
-    expect(parsed!.flags).toEqual({});
+  it('normalizes a non-record flags shape (array, which is typeof object) to {}', () => {
+    expect(parseRecord(JSON.stringify({ ...rec(), flags: [1, 2, 3] }))!.flags).toEqual({});
   });
 
-  // createdAt hygiene: garbage would parse to epoch 0 and then win every
-  // "earliest claim" comparison in mergeRecords — so it must never survive parse.
-  it('falls back to lastActive when createdAt is corrupt', () => {
-    const parsed = parseRecord(JSON.stringify({ ...rec(), createdAt: 'not-a-date' }));
-    expect(parsed).not.toBeNull();
-    expect(parsed!.createdAt).toBe(rec().lastActive);
-  });
-
-  it('defaults createdAt to lastActive when absent', () => {
-    const parsed = parseRecord(JSON.stringify({ ...rec(), createdAt: undefined }));
-    expect(parsed).not.toBeNull();
-    expect(parsed!.createdAt).toBe(rec().lastActive);
+  // WHY: a garbage createdAt would parse to epoch 0 and win every "earliest claim" comparison in mergeRecords.
+  it.each([['corrupt', 'not-a-date'], ['absent', undefined]])('falls back to lastActive when createdAt is %s', (_n, createdAt) => {
+    expect(parseRecord(JSON.stringify({ ...rec(), createdAt }))!.createdAt).toBe(rec().lastActive);
   });
 });
 
@@ -179,39 +144,22 @@ describe('mergeRecords', () => {
     expect(merged.flags.b).toEqual(flag(true, '2026-07-02T00:00:00.000Z'));
   });
 
-  // Contract 5: title precedence — non-empty always beats empty/'Untitled'
-  // regardless of age; two non-empty → newest lastActive side wins.
-  it('lets a real title beat an empty title even when the empty side is newer', () => {
-    const base = rec({ lastActive: '2026-07-01T00:00:00.000Z', title: 'Real title' });
-    const incoming = rec({ lastActive: '2026-07-09T00:00:00.000Z', title: '' });
-    // incoming is newer but has no title — the real title must survive.
-    expect(mergeRecords(base, incoming).title).toBe('Real title');
-    // Order-independent.
-    expect(mergeRecords(incoming, base).title).toBe('Real title');
-  });
-
-  // Contract 5 (continued): the literal 'Untitled' is a legacy placeholder
-  // (PITFALLS → Resume Browser: older clients wrote it into topic files) — it
-  // must never shadow a real title, in either direction, regardless of age.
-  it("lets a real title beat a literal 'Untitled' even when the placeholder side is newer", () => {
-    const older = rec({ lastActive: '2026-07-01T00:00:00.000Z', title: 'Real title' });
-    const newer = rec({ lastActive: '2026-07-09T00:00:00.000Z', title: 'Untitled' });
-    // (a) older side's real title beats newer side's 'Untitled'.
-    expect(mergeRecords(older, newer).title).toBe('Real title');
-    expect(mergeRecords(newer, older).title).toBe('Real title');
-  });
-
-  it("lets a newer real title beat an older 'Untitled'", () => {
-    const older = rec({ lastActive: '2026-07-01T00:00:00.000Z', title: 'Untitled' });
-    const newer = rec({ lastActive: '2026-07-09T00:00:00.000Z', title: 'Real title' });
-    // (b) newer real title beats older 'Untitled'.
-    expect(mergeRecords(older, newer).title).toBe('Real title');
-    expect(mergeRecords(newer, older).title).toBe('Real title');
+  // Title precedence: a non-empty title beats empty/'Untitled' regardless of age ('Untitled' is a legacy placeholder older clients wrote into
+  // topic files); two non-empty titles go to the newest lastActive side. Both argument orders must agree.
+  it.each([
+    ['a real title beats an empty title even when the empty side is newer', 'Real title', '', 'Real title'],
+    ["a real title beats a literal 'Untitled' even when the placeholder side is newer", 'Real title', 'Untitled', 'Real title'],
+    ["a newer real title beats an older 'Untitled'", 'Untitled', 'Real title', 'Real title'],
+    ['the newest side wins when both titles are non-empty', 'Older title', 'Newer title', 'Newer title'],
+  ])('title: %s', (_n, olderTitle, newerTitle, expected) => {
+    const older = rec({ lastActive: '2026-07-01T00:00:00.000Z', title: olderTitle });
+    const newer = rec({ lastActive: '2026-07-09T00:00:00.000Z', title: newerTitle });
+    expect(mergeRecords(older, newer).title).toBe(expected);
+    expect(mergeRecords(newer, older).title).toBe(expected);
   });
 
   it('degrades gracefully when both sides are placeholders', () => {
-    // (c) both placeholder/empty → no crash; result is one of the placeholders
-    // (the renderer treats '' and 'Untitled' alike as untitled, so either is fine).
+    // The renderer treats '' and 'Untitled' alike as untitled, so either result is fine.
     const a = rec({ lastActive: '2026-07-01T00:00:00.000Z', title: 'Untitled' });
     const b = rec({ lastActive: '2026-07-09T00:00:00.000Z', title: '' });
     expect(['', 'Untitled']).toContain(mergeRecords(a, b).title);
@@ -220,19 +168,7 @@ describe('mergeRecords', () => {
     expect(['', 'Untitled']).toContain(mergeRecords(c, c).title);
   });
 
-  it('picks the newest side when both titles are non-empty', () => {
-    const older = rec({ lastActive: '2026-07-01T00:00:00.000Z', title: 'Older title' });
-    const newer = rec({ lastActive: '2026-07-09T00:00:00.000Z', title: 'Newer title' });
-    expect(mergeRecords(older, newer).title).toBe('Newer title');
-    expect(mergeRecords(newer, older).title).toBe('Newer title');
-  });
-
-  // LOAD-BEARING convergence test: two devices merging the same pair must get
-  // the SAME result even on an exact lastActive tie. Positional tie-breaking
-  // ("second argument wins") makes merge(a,b) !== merge(b,a), and the healer
-  // fold becomes directory-enumeration-order dependent — devices ping-pong
-  // instead of converging. Ties must break on CONTENT (total order), never on
-  // argument position.
+  // LOAD-BEARING: two devices merging the same pair must agree even on an exact lastActive tie. Positional tie-breaking makes the healer fold enumeration-order dependent (devices ping-pong), so ties break on CONTENT (total order), never argument position.
   it('is commutative on an exact lastActive tie (content tiebreak)', () => {
     const same = '2026-07-05T12:00:00.000Z';
     const x = rec({
@@ -249,10 +185,7 @@ describe('mergeRecords', () => {
     });
     const xy = mergeRecords(x, y);
     expect(xy).toEqual(mergeRecords(y, x));
-    // Pin the CONCRETE winner, not just symmetry: the two records' JSON text
-    // first differs at `title` ('Title from laptop' vs 'Title from desktop',
-    // 'l' > 'd'), so x sorts higher and wins the tiebreak. If a future
-    // comparator change silently flips historical tie resolutions, this catches it.
+    // Pin the CONCRETE winner, not just symmetry (JSON first differs at `title`, 'l' > 'd'), so a comparator change flipping historical tie resolutions is caught.
     expect(xy.device).toBe('Laptop');
     expect(xy.title).toBe('Title from laptop');
     // Flag tie: '{"value":true,...}' sorts above '{"value":false,...}' ('t' > 'f').
@@ -266,14 +199,11 @@ describe('mergeRecords', () => {
     const ab = mergeRecords(a, b).flags.starred;
     const ba = mergeRecords(b, a).flags.starred;
     expect(ab).toEqual(ba);
-    // Concrete winner: '{"value":true,...}' sorts above '{"value":false,...}'
-    // ('t' > 'f'), so the true-valued FlagState deterministically wins this tie.
+    // '{"value":true,...}' sorts above '{"value":false,...}', so the true-valued FlagState wins.
     expect(ab).toEqual(flag(true, same));
   });
 
-  // Task 3 (M2 plan): lastUsedModel is portable and merges like a normal
-  // activity-coupled field — a real value never loses to an absent one, but
-  // between two real values the side with the later turn wins.
+  // lastUsedModel merges like an activity-coupled field: a real value never loses to an absent one; between two real values the later turn wins.
   it('lastUsedModel survives parse and travels with the newer side on merge', () => {
     const older = rec({ lastActive: '2026-07-01T00:00:00Z', lastUsedModel: { modelId: 'a', providerType: 'openrouter', providerLabel: 'OpenRouter' } });
     const newer = rec({ lastActive: '2026-07-02T00:00:00Z' });          // no model → keeps older's
@@ -297,11 +227,7 @@ describe('mergeRecords', () => {
   });
 
   it('parseRecord drops a lastUsedModel poisoned with CC\'s <synthetic> placeholder', () => {
-    // Heals records written before the writer was guarded. This matters because
-    // session-browser's store overlay OVERWRITES its transcript scan with the
-    // record's value, so a poisoned record silently defeated the transcript-side
-    // fix — 3 of 1,855 real records were in that state, and they sync to peers.
-    // Filtering on parse means the first load of each one cleans it.
+    // WHY: session-browser's store overlay OVERWRITES its transcript scan with the record's value, so a poisoned record (3 of 1,855 real ones, synced to peers) defeated the transcript-side fix; filtering on parse heals each on first load.
     const poisoned = rec({ lastUsedModel: { modelId: '<synthetic>', providerType: 'claude-code', providerLabel: 'Claude Code' } });
     const parsed = parseRecord(JSON.stringify(poisoned));
     expect(parsed).not.toBeNull();
@@ -321,41 +247,25 @@ describe('mergeRecords', () => {
 });
 
 describe('isConflictCopyName / extractConflictBase', () => {
-  // Contract 6: real conflict-copy filenames are detected and the base recovered.
-  // The REAL format (git-transport.ts conflictCopyName) uses an ISO date.
-  it('detects a real conflict-copy name and extracts its canonical base', () => {
-    const real = 'abc123 (from Laptop, 2026-07-03).json';
-    expect(isConflictCopyName(real)).toBe(true);
-    expect(extractConflictBase(real)).toBe('abc123.json');
-  });
-
-  it('also matches the task example date shape', () => {
-    const name = 'abc123 (from Laptop, Jul 3).json';
+  // The REAL format (git-transport.ts conflictCopyName) uses an ISO date; the 'Jul 3' shape is the task example. The producer (guards.ts)
+  // permits ')' inside device names, so the matcher runs greedily to the LAST ')' before '.json'.
+  it.each([
+    'abc123 (from Laptop, 2026-07-03).json',
+    'abc123 (from Laptop, Jul 3).json',
+    'abc123 (from foo)bar, 2026-07-03).json',
+  ])('detects the conflict-copy name %j and extracts its canonical base', (name) => {
     expect(isConflictCopyName(name)).toBe(true);
     expect(extractConflictBase(name)).toBe('abc123.json');
   });
 
-  // Contract 7: a plain canonical name is NOT a conflict copy.
   it('rejects a plain canonical filename', () => {
     expect(isConflictCopyName('abc123.json')).toBe(false);
     expect(extractConflictBase('abc123.json')).toBeNull();
   });
-
-  // The producer (guards.ts) permits ')' inside device names, so the matcher
-  // must run greedily to the LAST ')' before '.json' — a first-')' stop would
-  // truncate on such names and miss the copy entirely.
-  it("matches device names containing ')'", () => {
-    const tricky = 'abc123 (from foo)bar, 2026-07-03).json';
-    expect(isConflictCopyName(tricky)).toBe(true);
-    expect(extractConflictBase(tricky)).toBe('abc123.json');
-  });
 });
 
 describe('foldConflictCopies', () => {
-  // Contract 8: folding is order-independent. lastActive/device/flags/createdAt
-  // converge via the pairwise merge's total-order picks (timestamp primary,
-  // JSON-content tiebreak); title converges via the fold's SET-BASED pick over
-  // the original inputs (the pairwise title heuristic is not associative).
+  // Folding is order-independent: lastActive/device/flags/createdAt converge via the pairwise total-order picks; title via the fold's SET-BASED pick over the inputs (the pairwise title heuristic is not associative).
   it('folds copies into the canonical record, order-independently', () => {
     const canonical = rec({
       id: 'sess-1',
@@ -398,13 +308,7 @@ describe('foldConflictCopies', () => {
     expect(foldConflictCopies(canonical, [])).toEqual(canonical);
   });
 
-  // The reviewer's counterexample — NO tie needed: once the accumulator adopts
-  // a title from its first merge partner, that title rides the accumulator's
-  // newest lastActive and beats a NEWER real title arriving in a later fold
-  // step. Pairwise: fold [B,C] healed to 'M-title' while fold [C,B] healed to
-  // 'Q-title' — two devices enumerating the same copies in different directory
-  // orders would heal to different titles and re-conflict forever. The fix is
-  // the fold's set-based title pick: newest REAL title among the inputs wins.
+  // WHY (no tie needed): an accumulator that adopts a title from its first partner keeps it via its newest lastActive and beats a NEWER real title later, so fold [B,C] healed to 'M-title' but [C,B] to 'Q-title' and devices re-conflicted forever; the fix is the set-based pick (newest REAL title wins).
   it('heals to the newest real title regardless of copy enumeration order', () => {
     const canon = rec({ lastActive: '2026-07-05T00:00:00.000Z', title: '' });
     const b = rec({ lastActive: '2026-07-01T00:00:00.000Z', title: 'M-title' });
@@ -412,16 +316,12 @@ describe('foldConflictCopies', () => {
     const bc = foldConflictCopies(canon, [b, c]);
     const cb = foldConflictCopies(canon, [c, b]);
     expect(bc).toEqual(cb);
-    // Specifically: the newest REAL title (C at 07-03 beats B at 07-01; the
-    // canonical's newer-but-empty title doesn't count).
+    // The newest REAL title (the canonical's newer-but-empty title doesn't count).
     expect(bc.title).toBe('Q-title');
     expect(cb.title).toBe('Q-title');
   });
 
-  // Convergence under ties: when canonical and every copy share ONE lastActive
-  // (a real shape — two devices ran the same last turn's clock second), the
-  // fold must still be enumeration-order independent, which requires the
-  // content-based total-order tiebreak inside mergeRecords.
+  // Convergence under ties: canonical and every copy share ONE lastActive (two devices ran the same clock second) and the fold must still be order-independent.
   it('is order-independent even when all records tie on lastActive', () => {
     const same = '2026-07-05T12:00:00.000Z';
     const canon = rec({ lastActive: same, device: 'Laptop', title: 'Canon' });
@@ -430,12 +330,7 @@ describe('foldConflictCopies', () => {
     expect(foldConflictCopies(canon, [x, y])).toEqual(foldConflictCopies(canon, [y, x]));
   });
 
-  // Residual-corner probe: 3-way exact tie + 'Untitled' placeholder canonical +
-  // real-titled copies straddling it in JSON order. When the record-level pick
-  // ran over the MUTATED reduce accumulator, the fold's title override shrank
-  // the accumulator's JSON and flipped a later tie comparison — device healed
-  // differently per enumeration order. The fix picks the spread-source record
-  // over the ORIGINAL inputs, same as the title pick.
+  // WHY: with a 3-way exact tie, an 'Untitled' canonical and real-titled copies straddling it in JSON order, picking over the MUTATED accumulator shrank its JSON and flipped a later tie (device healed per enumeration order); the pick is over the ORIGINAL inputs.
   it('picks activity fields over the original inputs, not the mutated accumulator', () => {
     const same = '2026-07-05T12:00:00.000Z';
     const canon = rec({ lastActive: same, title: 'Untitled', device: 'C-dev' });
@@ -444,32 +339,20 @@ describe('foldConflictCopies', () => {
     const fwd = foldConflictCopies(canon, [alpha, delta]);
     const rev = foldConflictCopies(canon, [delta, alpha]);
     expect(fwd).toEqual(rev);
-    // Concrete winners under the total order (records' JSON first differs at
-    // `title`): 'Untitled' > 'Delta' > 'Alpha', so the canonical is the
-    // spread-source max → device 'C-dev'; the title pick considers only the
-    // REAL-titled inputs, where 'Delta' beats 'Alpha' on the same tiebreak.
+    // Concrete winners ('Untitled' > 'Delta' > 'Alpha' in JSON order): the canonical is the spread-source max, so device 'C-dev'; the title pick considers only REAL titles, where 'Delta' beats 'Alpha'.
     expect(fwd.device).toBe('C-dev');
     expect(fwd.title).toBe('Delta');
   });
 });
 
 describe('note field', () => {
-  const base = (over: any = {}) => ({
-    schema: 1, id: 'x', provider: 'claude', projectName: '', originalPath: '',
-    title: '', lastActive: '2026-07-13T00:00:00.000Z', device: '', flags: {},
-    transcriptRef: '', createdAt: '2026-07-13T00:00:00.000Z',
-    note: '', noteUpdatedAt: '2026-07-13T00:00:00.000Z', ...over,
-  });
   it('parses default note when absent', () => {
-    const r = parseRecord(JSON.stringify({ ...base(), note: undefined, noteUpdatedAt: undefined }));
-    expect(r?.note).toBe('');
+    expect(parseRecord(JSON.stringify({ ...rec(), note: undefined, noteUpdatedAt: undefined }))?.note).toBe('');
   });
   it('merges the note with the newest noteUpdatedAt, independent of activity', () => {
     // a has the newer TURN but the OLDER note; b's newer note must still win.
-    const a = base({ lastActive: '2026-07-13T09:00:00.000Z',
-                     note: 'old', noteUpdatedAt: '2026-07-13T01:00:00.000Z' });
-    const b = base({ lastActive: '2026-07-13T02:00:00.000Z',
-                     note: 'new', noteUpdatedAt: '2026-07-13T05:00:00.000Z' });
+    const a = rec({ lastActive: '2026-07-13T09:00:00.000Z', note: 'old', noteUpdatedAt: '2026-07-13T01:00:00.000Z' });
+    const b = rec({ lastActive: '2026-07-13T02:00:00.000Z', note: 'new', noteUpdatedAt: '2026-07-13T05:00:00.000Z' });
     expect(mergeRecords(a, b).note).toBe('new');
   });
 });

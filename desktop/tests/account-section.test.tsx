@@ -1,12 +1,6 @@
 // @vitest-environment jsdom
-// account-section.test.tsx
-// Render tests for the Settings → Account section (AccountSection.tsx).
-// Follows the same provider/mock conventions as account-context.test.tsx:
-// AccountSection reads state via useAccount(), so we wrap it in a real
-// AccountProvider and drive state through a mocked window.claude.account.
-//
-// The signed-in popup is a view/edit split (2026-07-08 UX rework): read-only
-// summary by default, "Edit account" toggles the editors + danger zone in.
+// Settings -> Account (AccountSection.tsx), wrapped in a real AccountProvider and driven through a mocked window.claude.account.
+// The signed-in popup is a view/edit split: read-only summary by default, "Edit account" toggles the editors + danger zone in.
 
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -18,8 +12,7 @@ import AccountSection from "../src/renderer/components/AccountSection";
 const ok = <T,>(value: T) => ({ ok: true as const, value });
 const apiErr = (status: number, message = "nope") => ({ ok: false as const, status, message });
 
-// Flush the provider's mount refresh() — it awaits signedIn() then user()
-// (two sequential microtask hops), so we drain the microtask queue a few times.
+// Flush the provider's mount refresh() (signedIn() then user(): two microtask hops).
 async function flush() {
   await act(async () => {
     await Promise.resolve();
@@ -44,10 +37,7 @@ function signedOutMock() {
   };
 }
 
-// Signed-in account mock. handle is parameterized so tests can cover both the
-// "has a handle already" (change → confirm) and "first handle" (no confirm) paths.
-// `over` lets a test replace the account.exportData or social.* stubs used by the
-// blocked-users + data-export surfaces (Task 9).
+// Signed-in account mock; `handle` covers both "has a handle" (change -> confirm) and "first handle" paths, `over` replaces exportData / social.* stubs.
 function signedInMock(
   handle: string | null = "octo",
   over: { account?: Record<string, any>; social?: Record<string, any> } = {},
@@ -68,12 +58,10 @@ function signedInMock(
       updateProfile: vi.fn().mockResolvedValue({ ok: true }),
       setHandle: vi.fn().mockResolvedValue({ ok: true }),
       deleteAccount: vi.fn().mockResolvedValue({ ok: true }),
-      // Default: user cancels the save dialog (no-op).
       exportData: vi.fn().mockResolvedValue({ canceled: true }),
       ...over.account,
     },
-    // SignedInBody fetches listBlocks() on mount — an empty list by default so
-    // the blocked-users section renders nothing.
+    // SignedInBody fetches listBlocks() on mount; empty by default so the blocked-users section renders nothing.
     social: {
       listBlocks: vi.fn().mockResolvedValue(ok([])),
       unblock: vi.fn().mockResolvedValue(ok(undefined)),
@@ -107,6 +95,15 @@ async function openPopup(utils: ReturnType<typeof renderSection>, edit = false) 
   }
 }
 
+/** Install the mock, render, flush the mount refresh and open the popup (optionally into edit mode). */
+async function setup(mock: object, opts: { popup?: boolean; edit?: boolean } = {}) {
+  (globalThis as any).window.claude = mock;
+  const utils = renderSection();
+  await flush();
+  if (opts.popup !== false) await openPopup(utils, opts.edit);
+  return utils;
+}
+
 describe("AccountSection", () => {
   beforeEach(() => {
     (globalThis as any).window = (globalThis as any).window ?? {};
@@ -118,35 +115,19 @@ describe("AccountSection", () => {
   });
 
   it("signed out: shows a Sign in to YouCoded row", async () => {
-    (globalThis as any).window.claude = signedOutMock();
-    const utils = renderSection();
-    await flush();
-
-    // Open the Account popup from the settings row.
-    fireEvent.click(utils.getByRole("button", { name: /Account/i }));
-
-    // Signed-out popup surfaces the GitHub sign-in button.
-    // "Sign in to YouCoded", never "with GitHub" — the mechanism small print
-    // owns the GitHub mention (2026-07-22 two-GitHubs fix). PINNED copy.
+    const utils = await setup(signedOutMock());
     expect(utils.getByText("Sign in to YouCoded")).toBeTruthy();
   });
 
   it("signed in: view mode is read-only — avatar, name, handle, provider row, sign out, Edit account", async () => {
-    (globalThis as any).window.claude = signedInMock();
-    const utils = renderSection();
-    await flush();
-    await openPopup(utils);
+    const utils = await setup(signedInMock());
 
-    // Avatar image rendered from user.avatar_url
     expect(utils.container.querySelector('img[src="http://avatar"]')).toBeTruthy();
 
-    // Read-only identity: display name + @handle as text, not inputs
+    // Read-only identity: name + @handle as text, not inputs.
     expect(utils.getByText("Octo Cat")).toBeTruthy();
     expect(utils.getByText("@octo")).toBeTruthy();
 
-    // Connected-provider row shows the GitHub login
-    // "Signs in with", NOT "Connected:" — that word belongs to the
-    // Connected-accounts (repo access) page. PINNED copy.
     expect(utils.getByText(/Signs in with GitHub \(@octocat\)/)).toBeTruthy();
 
     // Sign out + the single edit affordance are present
@@ -159,10 +140,7 @@ describe("AccountSection", () => {
     expect(utils.queryByRole("button", { name: "Delete account" })).toBeNull();
   });
 
-  // The Account row must NEVER paint the browser's broken-image glyph. Before the
-  // fix the <img> had no onError, so an unreachable avatar CDN left a broken-image
-  // placeholder sitting in Settings. Both slots (the row icon and the popup's
-  // identity summary) must swap to our own person glyph instead.
+  // WHY: the Account row must NEVER paint the browser's broken-image glyph; both slots (row icon and popup summary) swap to our person glyph.
   it("avatar that fails to load is replaced by the person glyph, in the row and the popup", async () => {
     (globalThis as any).window.claude = signedInMock();
     const utils = renderSection();
@@ -187,10 +165,7 @@ describe("AccountSection", () => {
     expect(document.body.querySelector('img[src="http://avatar"]')).toBeNull();
   });
 
-  // The row's <img> is created at app start and a browser never re-requests a src
-  // it already failed on, so a launch-time network race would strand the glyph for
-  // the whole session with no user action to trigger a retry. Two timed retries
-  // cover that; the third failure stops, so an offline machine isn't looping.
+  // WHY: a browser never re-requests a src it already failed on, so a launch-time network race would strand the glyph all session; two timed retries cover that and the third failure stops (no loop offline).
   it("a failed avatar retries on a timer twice, then stops", async () => {
     vi.useFakeTimers();
     try {
@@ -232,9 +207,7 @@ describe("AccountSection", () => {
     }
   });
 
-  // A photo that failed during an outage must come back on its own — Settings
-  // stays mounted while closed, so without the retry the glyph would outlive the
-  // outage until the app restarted.
+  // WHY: Settings stays mounted while closed, so without a focus retry the glyph would outlive an outage until restart.
   it("a failed avatar is retried when the window regains focus", async () => {
     (globalThis as any).window.claude = signedInMock();
     const utils = renderSection();
@@ -253,10 +226,7 @@ describe("AccountSection", () => {
   });
 
   it("Edit account reveals the editors + danger zone; Done returns to view mode", async () => {
-    (globalThis as any).window.claude = signedInMock();
-    const utils = renderSection();
-    await flush();
-    await openPopup(utils, true);
+    const utils = await setup(signedInMock(), { edit: true });
 
     // Editors seeded from the profile
     expect((utils.getByLabelText("Display name") as HTMLInputElement).value).toBe("Octo Cat");
@@ -273,10 +243,7 @@ describe("AccountSection", () => {
 
   it("changing an existing handle requires the inline confirm step before setHandle is called", async () => {
     const mock = signedInMock("octo");
-    (globalThis as any).window.claude = mock;
-    const utils = renderSection();
-    await flush();
-    await openPopup(utils, true);
+    const utils = await setup(mock, { edit: true });
 
     fireEvent.change(utils.getByLabelText("Handle"), { target: { value: "newname" } });
     fireEvent.click(utils.getByRole("button", { name: "Save handle" }));
@@ -293,10 +260,7 @@ describe("AccountSection", () => {
 
   it("cancelling the handle confirm step does not call setHandle", async () => {
     const mock = signedInMock("octo");
-    (globalThis as any).window.claude = mock;
-    const utils = renderSection();
-    await flush();
-    await openPopup(utils, true);
+    const utils = await setup(mock, { edit: true });
 
     fireEvent.change(utils.getByLabelText("Handle"), { target: { value: "newname" } });
     fireEvent.click(utils.getByRole("button", { name: "Save handle" }));
@@ -324,10 +288,7 @@ describe("AccountSection", () => {
   });
 
   it("delete requires typing the confirmation word before the button enables", async () => {
-    (globalThis as any).window.claude = signedInMock();
-    const utils = renderSection();
-    await flush();
-    await openPopup(utils, true);
+    const utils = await setup(signedInMock(), { edit: true });
 
     // Expand the danger zone (step 1 of 2).
     fireEvent.click(utils.getByRole("button", { name: "Delete account" }));
@@ -347,17 +308,9 @@ describe("AccountSection", () => {
   // ── Blocked users (view mode) ──────────────────────────────────────────────
 
   it("blocked users: renders a row per block with @handle when the list is non-empty", async () => {
-    (globalThis as any).window.claude = signedInMock("octo", {
-      social: {
-        listBlocks: vi
-          .fn()
-          .mockResolvedValue(ok([block({ id: "github:9", display_name: "Blocky", handle: "blocky" })])),
-        unblock: vi.fn().mockResolvedValue(ok(undefined)),
-      },
-    });
-    const utils = renderSection();
-    await flush();
-    await openPopup(utils);
+    const utils = await setup(signedInMock("octo", {
+      social: { listBlocks: vi.fn().mockResolvedValue(ok([block()])) },
+    }));
 
     // Wait for the mount-time listBlocks() to populate the section.
     await waitFor(() => expect(utils.getByText("Blocked users")).toBeTruthy());
@@ -368,10 +321,7 @@ describe("AccountSection", () => {
 
   it("blocked users: renders nothing when the block list is empty", async () => {
     // signedInMock defaults listBlocks → ok([]).
-    (globalThis as any).window.claude = signedInMock();
-    const utils = renderSection();
-    await flush();
-    await openPopup(utils);
+    const utils = await setup(signedInMock());
     await flush();
 
     expect(utils.queryByText("Blocked users")).toBeNull();
@@ -385,11 +335,7 @@ describe("AccountSection", () => {
       .mockResolvedValueOnce(ok([block({ id: "github:9", display_name: "Blocky", handle: "blocky" })]))
       .mockResolvedValueOnce(ok([]));
     const unblock = vi.fn().mockResolvedValue(ok(undefined));
-    (globalThis as any).window.claude = signedInMock("octo", { social: { listBlocks, unblock } });
-
-    const utils = renderSection();
-    await flush();
-    await openPopup(utils);
+    const utils = await setup(signedInMock("octo", { social: { listBlocks, unblock } }));
 
     const unblockBtn = await waitFor(() => utils.getByRole("button", { name: "Unblock" }));
     fireEvent.click(unblockBtn);
@@ -405,11 +351,7 @@ describe("AccountSection", () => {
       .fn()
       .mockResolvedValue(ok([block({ id: "github:9", display_name: "Blocky", handle: "blocky" })]));
     const unblock = vi.fn().mockResolvedValue(apiErr(500, "server exploded"));
-    (globalThis as any).window.claude = signedInMock("octo", { social: { listBlocks, unblock } });
-
-    const utils = renderSection();
-    await flush();
-    await openPopup(utils);
+    const utils = await setup(signedInMock("octo", { social: { listBlocks, unblock } }));
 
     const unblockBtn = await waitFor(() => utils.getByRole("button", { name: "Unblock" }));
     fireEvent.click(unblockBtn);
@@ -423,11 +365,7 @@ describe("AccountSection", () => {
 
   it("Download my data: shows the saved path on success", async () => {
     const exportData = vi.fn().mockResolvedValue({ path: "C:/Users/me/youcoded-export.json" });
-    (globalThis as any).window.claude = signedInMock("octo", { account: { exportData } });
-
-    const utils = renderSection();
-    await flush();
-    await openPopup(utils);
+    const utils = await setup(signedInMock("octo", { account: { exportData } }));
 
     fireEvent.click(utils.getByRole("button", { name: "Download my data" }));
     await waitFor(() =>
@@ -440,11 +378,7 @@ describe("AccountSection", () => {
     const exportData = vi
       .fn()
       .mockResolvedValue({ ok: false, status: 400, error: "export requires Android 10+" });
-    (globalThis as any).window.claude = signedInMock("octo", { account: { exportData } });
-
-    const utils = renderSection();
-    await flush();
-    await openPopup(utils);
+    const utils = await setup(signedInMock("octo", { account: { exportData } }));
 
     fireEvent.click(utils.getByRole("button", { name: "Download my data" }));
     await waitFor(() => expect(utils.getByText("export requires Android 10+")).toBeTruthy());
@@ -452,11 +386,7 @@ describe("AccountSection", () => {
 
   it("Download my data: a canceled export shows neither a saved path nor an error", async () => {
     const exportData = vi.fn().mockResolvedValue({ canceled: true });
-    (globalThis as any).window.claude = signedInMock("octo", { account: { exportData } });
-
-    const utils = renderSection();
-    await flush();
-    await openPopup(utils);
+    const utils = await setup(signedInMock("octo", { account: { exportData } }));
 
     fireEvent.click(utils.getByRole("button", { name: "Download my data" }));
     await flush();

@@ -1,9 +1,4 @@
-// Approving a page's connections, and where "Updated 2m" comes from.
-//
-// The store and the door have their own files (page-connections-store,
-// page-fetch); this pins the part that joins them — what Allow writes, what it
-// refuses to write, and the rule that only a request that actually worked may
-// move the time on the band.
+// Approving a page's connections and where "Updated 2m" comes from. The store and the door have their own files; this pins the join: what Allow writes, what it refuses to write, and that only a request that worked may move the band's time.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs, mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,6 +29,20 @@ async function writePage(slug: string, connections: unknown[]) {
   await fs.writeFile(path.join(dir, 'page.json'), JSON.stringify({ name: slug, description: 'd', icon: 'page', connections }));
   await fs.writeFile(path.join(dir, 'page.html'), '<!doctype html><html><body>hi</body></html>');
 }
+
+/** Rewrite a page's html with a distinct mtime, so the store's per-mtime hash cache cannot hide the change. */
+async function rewrite(slug: string, body: string) {
+  const file = path.join(personal, 'Pages', slug, 'page.html');
+  await fs.writeFile(file, `<!doctype html><html><body>${body}</body></html>`);
+  const later = new Date(Date.now() + 60_000);
+  await fs.utimes(file, later, later);
+}
+/** Write a page and allow it as the owner's computer. */
+async function allowed(slug: string, connections: unknown[], keys: Record<string, string> = {}) {
+  await writePage(slug, connections);
+  return service.approve(`personal:${slug}`, keys, { remote: false });
+}
+const WEATHER_URL = { url: 'https://api.openweathermap.org/data' };
 
 function start(extra: Partial<Parameters<typeof initPagesService>[0]> = {}) {
   fetchMock = vi.fn().mockResolvedValue(new Response('{"temp":7}', { status: 200 }));
@@ -96,8 +105,7 @@ describe('a page that wants something', () => {
   });
 
   it('lets a phone reuse a key the computer already holds', async () => {
-    await writePage('weather', [WEATHER]);
-    await service.approve('personal:weather', { weather: KEY }, { remote: false });
+    await allowed('weather', [WEATHER], { weather: KEY });
     await service.removeConnection('personal:weather', 'weather');
     const again = await service.approve('personal:weather', { weather: 'saved' }, { remote: true });
     expect(again.ok).toBe(true);
@@ -110,23 +118,21 @@ describe('a page that wants something', () => {
   });
 
   it('never writes the key itself into the approvals file', async () => {
-    await writePage('weather', [WEATHER]);
-    await service.approve('personal:weather', { weather: KEY }, { remote: false });
+    await allowed('weather', [WEATHER], { weather: KEY });
     expect(readFileSync(path.join(userData, CONNECTIONS_FILE), 'utf8')).not.toContain(KEY);
   });
 });
 
 describe('the time on the band', () => {
   it('moves only on a request that actually worked', async () => {
-    await writePage('weather', [WEATHER]);
-    await service.approve('personal:weather', { weather: KEY }, { remote: false });
+    await allowed('weather', [WEATHER], { weather: KEY });
 
     fetchMock.mockResolvedValue(new Response('nope', { status: 500 }));
-    await service.fetch('personal:weather', { url: 'https://api.openweathermap.org/data' });
+    await service.fetch('personal:weather', WEATHER_URL);
     expect((await service.listAndWatch())[0].refresh).toEqual({ at: null, failed: true });
 
     fetchMock.mockResolvedValue(new Response('{"temp":7}', { status: 200 }));
-    await service.fetch('personal:weather', { url: 'https://api.openweathermap.org/data' });
+    await service.fetch('personal:weather', WEATHER_URL);
     const fresh = (await service.listAndWatch())[0].refresh!;
     expect(fresh.failed).toBe(false);
     expect(fresh.at).toBeTruthy();
@@ -134,14 +140,13 @@ describe('the time on the band', () => {
     // A later refusal keeps the last true time and marks the failure; it does
     // not pretend the page was updated just now.
     fetchMock.mockResolvedValue(new Response('nope', { status: 403 }));
-    await service.fetch('personal:weather', { url: 'https://api.openweathermap.org/data' });
+    await service.fetch('personal:weather', WEATHER_URL);
     expect((await service.listAndWatch())[0].refresh).toEqual({ at: fresh.at, failed: true });
   });
 
   it('is not written to disk, because a fetch may happen sixty times a minute', async () => {
-    await writePage('weather', [WEATHER]);
-    await service.approve('personal:weather', { weather: KEY }, { remote: false });
-    await service.fetch('personal:weather', { url: 'https://api.openweathermap.org/data' });
+    await allowed('weather', [WEATHER], { weather: KEY });
+    await service.fetch('personal:weather', WEATHER_URL);
     const saved = JSON.parse(readFileSync(path.join(userData, CONNECTIONS_FILE), 'utf8'));
     expect(JSON.stringify(saved)).not.toContain('failed');
     expect(Object.keys(saved)).toEqual(['version', 'pages', 'keys']);
@@ -150,12 +155,11 @@ describe('the time on the band', () => {
 
 describe('a connections file this build cannot read', () => {
   it('pauses every page rather than guessing at a grant', async () => {
-    await writePage('weather', [WEATHER]);
-    await service.approve('personal:weather', { weather: KEY }, { remote: false });
+    await allowed('weather', [WEATHER], { weather: KEY });
     await fs.writeFile(path.join(userData, CONNECTIONS_FILE), JSON.stringify({ version: 99, pages: {}, keys: {} }));
 
     expect((await service.listAndWatch())[0].connections).toMatchObject([{ approved: false }]);
-    const blocked = await service.fetch('personal:weather', { url: 'https://api.openweathermap.org/data' });
+    const blocked = await service.fetch('personal:weather', WEATHER_URL);
     expect(blocked).toMatchObject({ ok: false, reason: 'not-approved' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -174,8 +178,7 @@ describe('managing saved keys', () => {
   });
 
   it('deleting one cuts off every page that stood on it', async () => {
-    await writePage('weather', [WEATHER]);
-    await service.approve('personal:weather', { weather: KEY }, { remote: false });
+    await allowed('weather', [WEATHER], { weather: KEY });
     expect(await service.deleteSavedKey('OpenWeather', 'api.openweathermap.org')).toEqual([]);
     const after = (await service.listAndWatch())[0];
     expect(after.connections).toMatchObject([{ approved: false, savedKey: false }]);
@@ -185,13 +188,6 @@ describe('managing saved keys', () => {
 
 describe('a page whose code changed after it was allowed', () => {
   const PUBLIC = { id: 'feed', kind: 'public', address: 'hnrss.org' };
-  async function rewrite(slug: string, body: string) {
-    const file = path.join(personal, 'Pages', slug, 'page.html');
-    await fs.writeFile(file, `<!doctype html><html><body>${body}</body></html>`);
-    // A distinct mtime, so the store's per-mtime hash cache cannot hide it.
-    const later = new Date(Date.now() + 60_000);
-    await fs.utimes(file, later, later);
-  }
 
   it('says so, keeps its connections allowed, and clears when dismissed', async () => {
     await writePage('feed', [PUBLIC]);
@@ -222,19 +218,10 @@ describe('a page whose code changed after it was allowed', () => {
   });
 });
 
-// Page start session (spec 2026-10-14, §3): the approval to open a new
-// conversation is keyed to the manifest line, never the page's code — Frontier
-// Lab bakes its data into page.html every week, and that must not re-ask or
-// show the "code changed" note. A page with another approval still gets it.
+// WHY: the approval to open a new conversation is keyed to the manifest line, never the page's code (Frontier Lab bakes data into page.html weekly; that must not re-ask or show "code changed"). A page with another approval still gets the note.
 describe('a page that may open a new conversation', () => {
   const SESSION = { id: 'start-session', kind: 'session' };
   const PUBLIC = { id: 'feed', kind: 'public', address: 'hnrss.org' };
-  async function rewrite(slug: string, body: string) {
-    const file = path.join(personal, 'Pages', slug, 'page.html');
-    await fs.writeFile(file, `<!doctype html><html><body>${body}</body></html>`);
-    const later = new Date(Date.now() + 60_000);
-    await fs.utimes(file, later, later);
-  }
 
   it('asks once, then never again and never notes a code change when only the page changes', async () => {
     await writePage('lab', [SESSION]);
@@ -259,9 +246,7 @@ describe('a page that may open a new conversation', () => {
     expect(page.refresh).toEqual({ at: null, failed: false });
   });
 
-  // Review F7: dismissing "code changed" on a mixed page restamps the address
-  // line only; a session line that gained a hash would show the note again
-  // after the next weekly rebuild once the address line is gone.
+  // WHY: dismissing "code changed" on a mixed page restamps the address line only; a session line that gained a hash would show the note again after the next weekly rebuild.
   it('leaves the session line without a code hash when the note is dismissed', async () => {
     await writePage('mixed', [SESSION, PUBLIC]);
     await service.approve('personal:mixed', {}, { remote: false });
@@ -276,10 +261,7 @@ describe('a page that may open a new conversation', () => {
   });
 });
 
-
-// Programs a page runs (spec 2026-10-16). What is pinned: the approval follows the program FILE (an edited
-// file asks again, an edited page does not), and a program runs only for an approved line whose file is
-// exactly the one that was approved — checked again at the moment of the run, not only in the listing.
+// Programs a page runs: the approval follows the program FILE (an edited file asks again, an edited page does not), and a program runs only for an approved line whose file is exactly the approved one, re-checked at the moment of the run.
 describe('a page that runs a program', () => {
   const PROGRAM = { id: 'work', kind: 'program', file: 'work-items.mjs' };
   const ECHO = 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write("echo:"+s));';

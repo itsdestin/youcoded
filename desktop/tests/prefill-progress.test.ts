@@ -1,11 +1,5 @@
-// Live prefill progress from llama.cpp (Destin, 2026-07-26).
-//
-// The payloads below are REAL — captured from llama.cpp b9992 on
-// /v1/chat/completions with `return_progress: true`, a 5,519-token prompt on a
-// 2B model. Six updates, roughly one per 2,048-token batch. Using the genuine
-// shape (rather than one invented to match the parser) is the point: this is the
-// contract with an external server, and a fixture that only agrees with our own
-// assumptions would prove nothing.
+// Live prefill progress from llama.cpp. The payloads are REAL captures (b9992 and b10665), not shapes invented to match the parser:
+// this is the contract with an external server.
 import { describe, it, expect, vi } from 'vitest';
 import {
   parseProgressChunk,
@@ -123,7 +117,7 @@ describe('withPrefillProgress — the tee must not disturb the SDK', () => {
 
     const wrapped = withPrefillProgress(base as any, (p) => seen.push(p.processed));
     const res = await wrapped('http://x' as any);
-    await res.text();                       // drain the SDK branch
+    await res.text();
 
     await vi.waitFor(() => expect(seen).toEqual([0, 2048, 4096, 5003, 5515, 5519]));
   });
@@ -159,11 +153,7 @@ describe('toReport — the projection', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Request-body contract. The hook must appear ONLY when something needs it —
-// provider-registry.test.ts pins that an unconstrained local model keeps the
-// SDK's default body byte-for-byte, and adding progress must not break that.
-// ---------------------------------------------------------------------------
+// WHY: the hook must appear ONLY when something needs it; provider-registry.test.ts pins that an unconstrained local model keeps the SDK's default body.
 describe('return_progress request flag', () => {
   /** Mirrors the spread logic in provider-registry.ts's local-engine branch. */
   const buildHook = (opts: { serialToolCalls?: boolean; onPrefillProgress?: unknown }) =>
@@ -195,11 +185,7 @@ describe('return_progress request flag', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Progress is PROOF OF LIFE. Before this, a slow-but-healthy prefill outran the
-// stall watchdog, got killed and retried from scratch — which is what made the
-// percentage appear to reset itself mid-read (Destin, 2026-07-26).
-// ---------------------------------------------------------------------------
+// WHY: progress is PROOF OF LIFE — a slow-but-healthy prefill once outran the stall watchdog, was killed and retried, so the percentage reset mid-read.
 import { HarnessSession } from '../src/main/harness/harness-session';
 import { ASSISTANT_PRESET } from '../src/shared/harness-manifest';
 import { MockLanguageModelV4 } from 'ai/test';
@@ -207,122 +193,70 @@ import type { TranscriptEvent } from '../src/shared/types';
 import { resolveProfile } from '../src/main/harness/capability-profile';
 
 describe('prefill progress re-arms the stall watchdog', () => {
-  it('a stream that reports progress does NOT trip a short stall budget', async () => {
-    // First token arrives well past prefillWarningMs, but progress lands
-    // steadily throughout. Without the re-arm this turn dies and retries.
-    const model = new MockLanguageModelV4({
-      doStream: async () => ({
-        stream: new ReadableStream({
-          async start(c) {
-            // First token far past the stall budget — only steady progress saves it.
-            await new Promise((r) => setTimeout(r, 1_800));
-            c.enqueue({ type: 'stream-start', warnings: [] });
-            c.enqueue({ type: 'text-start', id: 'p1' });
-            c.enqueue({ type: 'text-delta', id: 'p1', delta: 'ok' });
-            c.enqueue({ type: 'text-end', id: 'p1' });
-            c.enqueue({ type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } });
-            c.close();
-          },
-        }) as any,
-      }),
-    });
-
+  /** A model whose first token arrives after `delayMs`, then finishes with "ok". */
+  const slowModel = (delayMs: number) => new MockLanguageModelV4({
+    doStream: async () => ({
+      stream: new ReadableStream({
+        async start(c) {
+          await new Promise((r) => setTimeout(r, delayMs));
+          c.enqueue({ type: 'stream-start', warnings: [] });
+          c.enqueue({ type: 'text-start', id: 'p1' });
+          c.enqueue({ type: 'text-delta', id: 'p1', delta: 'ok' });
+          c.enqueue({ type: 'text-end', id: 'p1' });
+          c.enqueue({ type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } });
+          c.close();
+        },
+      }) as any,
+    }),
+  });
+  const sendHi = async (config: object, makeModel: (opts: any) => unknown) => {
     const session = new HarnessSession(
-      { skillCatalog: EMPTY_SKILL_CATALOG,
-        sessionId: 's-1', cwd: '/tmp/x', harness: ASSISTANT_PRESET,
-        binding: { providerId: 'local', modelId: 'Qwen3.5-122B' },
-        // Deliberately shorter than the total first-token wait above (1,800ms),
-        // so the watchdog WOULD fire without progress — that is what the test
-        // asserts. But the ratio that decides whether this test is stable is the
-        // OTHER one: budget vs. the progress cadence below. It was 120ms against
-        // a 60ms tick — a 2x margin, so one scheduler hiccup past 120ms tripped
-        // the watchdog and the test failed as though progress did not re-arm it
-        // (six concurrent full suites, 2026-08-28). 600ms against a 40ms tick is
-        // a 15x margin, while 1,800ms vs 600ms keeps "would have expired without
-        // progress" true three times over.
-        prefillWarningMs: 600, stallCountdownMs: 600, retryDelays: [],
-      } as any,
-      async (_b, opts: any) => {
-        // Drive progress on the same cadence the stream is waiting.
-        let processed = 0;
-        const timer = setInterval(() => {
-          processed += 200;
-          opts?.onPrefillProgress?.({ total: 6000, cache: 0, processed, timeMs: processed });
-        }, 40);
-        setTimeout(() => clearInterval(timer), 2_000);
-        return model as any;
-      },
+      { skillCatalog: EMPTY_SKILL_CATALOG, sessionId: 's-1', cwd: '/tmp/x', harness: ASSISTANT_PRESET,
+        binding: { providerId: 'local', modelId: 'Qwen3.5-122B' }, retryDelays: [], ...config } as any,
+      async (_b, opts: any) => makeModel(opts) as any,
     );
     const events: TranscriptEvent[] = [];
     session.on('transcript-event', (e: TranscriptEvent) => events.push(e));
-
     await session.send('hi');
+    return events;
+  };
 
+  it('a stream that reports progress does NOT trip a short stall budget', async () => {
+    // First token (1,800ms) lands far past the stall budget; only steady progress saves it.
+    // WHY 600ms budget vs a 40ms tick: a 15x margin (120ms vs 60ms flaked under six concurrent suites), while 1,800 vs 600 keeps "would expire without progress" true.
+    const model = slowModel(1_800);
+    const events = await sendHi({ prefillWarningMs: 600, stallCountdownMs: 600 }, (opts) => {
+      let processed = 0;
+      const timer = setInterval(() => {
+        processed += 200;
+        opts?.onPrefillProgress?.({ total: 6000, cache: 0, processed, timeMs: processed });
+      }, 40);
+      setTimeout(() => clearInterval(timer), 2_000);
+      return model;
+    });
     expect(events.some((e) => e.type === 'session-error')).toBe(false);
     expect(events.some((e) => e.type === 'turn-complete')).toBe(true);
   });
 
-  // The re-arm above must keep working with NO profile (the CLOUD default),
-  // because proof-of-life is not a UI concern — see harness-session.ts's
-  // emitPrefillProgress, where the announcePrefill gate sits deliberately BELOW
-  // the re-arm. This case pins the other half: a LOCAL session still puts the
-  // reading on screen. Nothing else covers the live-progress emit end to end, so
-  // without it the local-only gate could silently kill the feature it protects.
+  // WHY: proof-of-life re-arm works with NO profile (cloud default); this pins the other half: a LOCAL session still puts the reading on screen.
   it('a LOCAL session forwards the live reading to the UI', async () => {
-    const model = new MockLanguageModelV4({
-      doStream: async () => ({
-        stream: new ReadableStream({
-          async start(c) {
-            await new Promise((r) => setTimeout(r, 300));
-            c.enqueue({ type: 'stream-start', warnings: [] });
-            c.enqueue({ type: 'text-start', id: 'p1' });
-            c.enqueue({ type: 'text-delta', id: 'p1', delta: 'ok' });
-            c.enqueue({ type: 'text-end', id: 'p1' });
-            c.enqueue({ type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } });
-            c.close();
-          },
-        }) as any,
-      }),
+    const model = slowModel(300);
+    const events = await sendHi({
+      profile: resolveProfile({ providerType: 'local-engine', modelId: 'Qwen3.5-122B', contextLength: 131_072 }),
+      prefillWarningMs: 5_000, stallCountdownMs: 5_000,
+    }, (opts) => {
+      // One FINAL reading: the throttle always lets it through, so the test doesn't race the 400ms window.
+      opts?.onPrefillProgress?.({ total: 6000, cache: 0, processed: 6000, timeMs: 3000 });
+      return model;
     });
-
-    const session = new HarnessSession(
-      { skillCatalog: EMPTY_SKILL_CATALOG,
-        sessionId: 's-1', cwd: '/tmp/x', harness: ASSISTANT_PRESET,
-        binding: { providerId: 'local', modelId: 'Qwen3.5-122B' },
-        profile: resolveProfile({ providerType: 'local-engine', modelId: 'Qwen3.5-122B', contextLength: 131_072 }),
-        prefillWarningMs: 5_000, stallCountdownMs: 5_000, retryDelays: [],
-      } as any,
-      async (_b, opts: any) => {
-        // One FINAL reading: the throttle always lets that one through, so the
-        // test doesn't race the 400ms window.
-        opts?.onPrefillProgress?.({ total: 6000, cache: 0, processed: 6000, timeMs: 3000 });
-        return model as any;
-      },
-    );
-    const events: TranscriptEvent[] = [];
-    session.on('transcript-event', (e: TranscriptEvent) => events.push(e));
-
-    await session.send('hi');
-
     const reading = events.find((e) => (e.data as any)?.promptProcessing?.processed != null);
     expect(reading).toBeTruthy();
     expect((reading!.data as any).promptProcessing.processed).toBe(6000);
   });
 });
 
-// ---------------------------------------------------------------------------
-// Progress is about THIS STEP'S work, not the whole prompt.
-//
-// Destin, 2026-07-28: "it seems to use the cumulative total for the entire
-// session, where it should only show the percent processed of the total count
-// being additionally processed in that turn."
-//
-// llama.cpp's `total` is the WHOLE prompt and `cache` is the prefix it reused
-// for free. On turn 2+ the cache is most of the prompt, so a percentage against
-// `total` reads as "almost done" before any real work has happened — and the
-// denominator also jumps the moment the first live report replaces our own
-// new-tokens estimate, which is what made the number fall.
-// ---------------------------------------------------------------------------
+// WHY: progress measures THIS STEP's work, not the whole prompt. llama.cpp's `total` is the whole prompt and `cache` the free reused
+// prefix; on turn 2+ a percentage against `total` reads "almost done" before any real work, and the denominator jumped on the first live report.
 describe('toReport — measures the work actually being done', () => {
   it('a cold prompt is unchanged: no cache, so new work IS the whole prompt', () => {
     const r = toReport({ total: 5519, cache: 0, processed: 2048, timeMs: 5838 });
@@ -340,9 +274,7 @@ describe('toReport — measures the work actually being done', () => {
   });
 
   it('handles `processed` counting from ZERO rather than from the cache', () => {
-    // We have never captured a WARM reading, so which origin llama.cpp counts
-    // from is unverified. Under this reading, processed(500) < cache(9000) means
-    // it is already relative to the new work.
+    // WHY: no WARM reading was ever captured, so the origin is unverified; processed(500) < cache(9000) means already relative to new work.
     const r = toReport({ total: 10_000, cache: 9_000, processed: 500, timeMs: 1_000 });
     expect(r.newTotal).toBe(1_000);
     expect(r.newProcessed).toBe(500);
@@ -361,21 +293,14 @@ describe('toReport — measures the work actually being done', () => {
   });
 
   it('the ETA projects the remaining NEW work at the rate that work was done', () => {
-    // Rating cached tokens as "processed" would inflate the rate and promise an
-    // impossible finish: 9,000 free tokens in 1s is not 9,000 tokens/sec of work.
+    // WHY: counting cached tokens as processed would inflate the rate and promise an impossible finish.
     const r = toReport({ total: 10_000, cache: 9_000, processed: 9_500, timeMs: 1_000 });
     // 500 new tokens in 1000ms = 0.5/ms; 500 remaining → ~1000ms.
     expect(r.etaMs).toBe(1_000);
   });
 });
 
-// ---------------------------------------------------------------------------
-// 100% means DONE. Found by the 2026-07-28 audit using this file's own captured
-// llama.cpp trace: REAL_SEQUENCE contains a NON-final reading of 5,515/5,519 —
-// 99.93%, which Math.round turns into 100%. The label therefore read "100% of
-// 5,519 tokens" while prefill was still running, and the monotonic clamp in the
-// indicator then pinned it there until the real final reading arrived.
-// ---------------------------------------------------------------------------
+// WHY: 100% means DONE. The captured REAL_SEQUENCE has a NON-final 5,515/5,519 (99.93%) that Math.round turned into "100%" while prefill still ran.
 import { prefillLabel } from '../src/renderer/components/ThinkingIndicator';
 import { EMPTY_SKILL_CATALOG } from './helpers/harness-fakes';
 
@@ -403,20 +328,8 @@ describe('prefillLabel — 100% is reserved for actually finished', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// T19 — the reply-speed reading behind the engine card's fact line.
-//
-// The two payloads below are REAL, captured 2026-09-05 from the PINNED b10665
-// build (`llama-server --models-dir … -c 4096 -ngl 0`, Qwen3.5-2B-Q8_0, one
-// streamed /v1/chat/completions). They are pasted verbatim, not reconstructed:
-// the `timings` block is a contract with an external server, and a fixture
-// invented to agree with the parser would prove nothing about b10665.
-//
-// Both request shapes were captured because the block MOVES between them:
-//   - with `stream_options: {include_usage: true}` (what provider-registry
-//     always sends) it rides a separate `"choices":[]` usage frame;
-//   - without it, it rides the last content frame, the one with finish_reason.
-// ---------------------------------------------------------------------------
+// The reply-speed reading behind the engine card's fact line. The two payloads are REAL b10665 captures; the `timings` block rides a
+// separate usage frame WITH `stream_options.include_usage` (what provider-registry sends) and the last content frame without it.
 
 /** Verbatim final frame, b10665, WITH include_usage (our production shape). */
 const REAL_FINAL_FRAME_WITH_USAGE = {
@@ -471,10 +384,7 @@ const REAL_CONTENT_FRAME = {
 
 describe('parseTimingsChunk — reads b10665\'s real final frame', () => {
   it('reads the exact rates off the include_usage frame', () => {
-    // EXACT values, not a range and not a substring: the two fields sit next to
-    // three other per-second-ish numbers (prompt_per_token_ms, predicted_ms,
-    // predicted_per_token_ms), and reading the wrong one is the mistake this
-    // pins. 84.057… is prompt_per_second; 37.821… is predicted_per_second.
+    // EXACT values: the fields sit beside other per-second-ish numbers, and reading the wrong one is the mistake this pins.
     expect(parseTimingsChunk(REAL_FINAL_FRAME_WITH_USAGE)).toEqual({
       promptPerSecond: 84.05715886803026,
       generatePerSecond: 37.821109441135555,
@@ -494,24 +404,17 @@ describe('parseTimingsChunk — reads b10665\'s real final frame', () => {
   });
 
   it('KEEPS the rate it has when the other one is missing or degenerate', () => {
-    // A prompt served entirely from the prefix cache has no reading work to
-    // time, so the engine can report a zero prompt rate for a reply whose write
-    // rate is perfectly good. Dropping the pair would blank the card's speed
-    // line for a reply that really did run — keep the half we measured.
+    // WHY: a fully prefix-cached prompt reports a zero prompt rate beside a good write rate; keep the half we measured.
     const { prompt_per_second, ...noPrompt } = REAL_FINAL_FRAME_WITH_USAGE.timings;
     expect(parseTimingsChunk({ timings: noPrompt })).toEqual({ generatePerSecond: 37.821109441135555 });
     const { predicted_per_second, ...noPredicted } = REAL_FINAL_FRAME_WITH_USAGE.timings;
     expect(parseTimingsChunk({ timings: noPredicted })).toEqual({ promptPerSecond: 84.05715886803026 });
-    // Zero is the value b10665's own arithmetic (prompt_n/prompt_ms*1000) yields
-    // for a fully-cached prompt — the realistic case for this rule.
     expect(parseTimingsChunk({ timings: { ...REAL_FINAL_FRAME_WITH_USAGE.timings, prompt_per_second: 0 } }))
       .toEqual({ generatePerSecond: 37.821109441135555 });
   });
 
   it('never reports a zero or a divide-by-zero AS a speed', () => {
-    // "0 read per second" is a false claim about the machine; Infinity (which
-    // needs prompt_ms === 0) renders as the word "Infinity". Each bad value must
-    // drop its OWN number and leave the other standing.
+    // WHY: "0 read per second" is a false claim and Infinity renders as a word; each bad value drops its OWN number.
     for (const bad of [0, -1, Infinity, NaN, null, 'fast']) {
       expect(parseTimingsChunk({ timings: { ...REAL_FINAL_FRAME_WITH_USAGE.timings, prompt_per_second: bad } }))
         .toEqual({ generatePerSecond: 37.821109441135555 });
@@ -547,27 +450,15 @@ describe('scanPrefillProgress — the reply reading, once per completion', () =>
   });
 
   it('says NOTHING about a body that was never a completion stream', async () => {
-    // A /models GET (or any non-completion response) goes through the same
-    // fetch. Reporting null for it would blank a perfectly good reading.
+    // WHY: a /models GET goes through the same fetch; reporting null for it would blank a good reading.
     const seen: unknown[] = [];
     await scanPrefillProgress(sseBody([{ data: [{ id: 'a', status: { value: 'loaded' } }] }]), undefined, (t) => seen.push(t));
     expect(seen).toEqual([]);
   });
 
   it('says nothing when the stream ABORTS mid-reply', async () => {
-    // The user pressed stop. An interrupted reply has no honest speed, and the
-    // last one we did measure beats blanking the line.
-    //
-    // THE FIXTURE HAS TO LET THE FRAME THROUGH FIRST. The obvious version of
-    // this test — enqueue then `c.error()` synchronously inside start() — is
-    // VACUOUS: per the streams spec `error()` RESETS the queue, so the frame is
-    // thrown away, the first read() rejects, and the scan never even learns
-    // this was a completion stream. It then passes whether or not the code
-    // under test reports on the abort path, which is the one thing it exists to
-    // check. Yielding a real tick between the enqueue and the error is what
-    // makes the assertion reach the branch it is about. ("The assertion is
-    // right" and "the assertion runs" are different claims — this was the ninth
-    // hollow guard found in this feature.)
+    // The user pressed stop: an interrupted reply has no honest speed, and the last measured one beats blanking the line.
+    // WHY the tick: enqueue-then-c.error() synchronously is VACUOUS (error() RESETS the queue, so the scan never learns this was a completion stream).
     const enc = new TextEncoder();
     let ctrl!: ReadableStreamDefaultController<Uint8Array>;
     const body = new ReadableStream<Uint8Array>({
@@ -607,8 +498,7 @@ describe('withPrefillProgress — the reply tap rides the same tee', () => {
   });
 
   it('does not tee at all when nobody is listening', async () => {
-    // Both taps absent → the wrapper must hand back the original fetch, not a
-    // wrapper that copies every byte of every response for an audience of none.
+    // WHY: with no listeners the original fetch is returned, not a wrapper copying every byte for nobody.
     const base = (async () => new Response('x', { status: 200 })) as any;
     expect(withPrefillProgress(base)).toBe(base);
   });

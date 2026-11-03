@@ -411,24 +411,17 @@ describe('voice-service: exactly one ending per start', () => {
     expect(h.endings()).toHaveLength(1);
   });
 
-  it('7b. an engine that never finishes loading is ended too', async () => {
+  it.each([
+    ['never finishes loading', 'did not finish loading', async (h: Harness) => {}],
+    ['never returns its words after Stop', 'did not return your words', async (h: Harness) => { h.worker.say({ type: 'ready' }); h.service.stop(); }],
+  ])('an engine that %s is ended with one error', async (_n, expected, setup) => {
     const h = harness();
     await h.service.start(1);
+    await setup(h);
     vi.advanceTimersByTime(60_000);
     const ends = h.endings();
     expect(ends).toHaveLength(1);
-    expect((ends[0] as { message: string }).message).toContain('did not finish loading');
-  });
-
-  it('7c. Stop that never comes back is ended too', async () => {
-    const h = harness();
-    await h.service.start(1);
-    h.worker.say({ type: 'ready' });
-    h.service.stop();
-    vi.advanceTimersByTime(20_000);
-    const ends = h.endings();
-    expect(ends).toHaveLength(1);
-    expect((ends[0] as { message: string }).message).toContain('did not return your words');
+    expect((ends[0] as { message: string }).message).toContain(expected);
   });
 
   it('8. a second window is refused, with a reason a person can act on', async () => {
@@ -477,19 +470,16 @@ describe('voice-service: exactly one ending per start', () => {
     expect((h.endings()[0] as { message: string }).message).toContain('did not return your words');
   });
 
-  // WHY (2026-09-30 review): a cancel during the load cleared the load clock and
-  // nothing re-armed it, so tap → cancel → tap → stop on a load that hung waited
-  // on "Finishing…" forever, with no clock left to end it.
-  it('7e. a second tap during the same load gets the load clock back', async () => {
+  // WHY: a cancel during the load cleared the load clock and nothing re-armed it, so tap → cancel → tap → stop on a hung load waited forever.
+  it('a second tap during the same load gets the load clock back', async () => {
     const h = harness();
     await h.service.start(1);
     h.service.cancel();
     await h.service.start(1);
     h.service.stop();
-    vi.advanceTimersByTime(60_000);          // the load never finishes
-    const ends = h.endings();
-    expect(ends).toHaveLength(1);
-    expect((ends[0] as { message: string }).message).toContain('did not finish loading');
+    vi.advanceTimersByTime(60_000);
+    expect(h.endings()).toHaveLength(1);
+    expect((h.endings()[0] as { message: string }).message).toContain('did not finish loading');
   });
 
   it('the heartbeat runs only while a pass is running', async () => {
@@ -590,132 +580,68 @@ describe('a dead worker cannot end a live session', () => {
   });
 });
 
-// The silence stop: two quiet seconds AFTER you have spoken close the mic. A session that has heard nothing is never closed by silence
-// (tap, then think for three seconds must not shut in your face). Loudness arrives as sendAudio(chunk, rms); this drives it in 100 ms slices.
+// The silence stop: two quiet seconds AFTER you have spoken close the mic; a session that has heard nothing is never closed by silence.
 describe('the silence stop, driven by 100 ms loudness slices', () => {
-  const INSTALLED = {
-    voiceRoot: '/fake/voice',
-    addonPath: '/fake/voice/runtime/package/sherpa-onnx.node',
-    wrapperEntryPath: '/fake/voice/runtime/package/sherpa-onnx.js',
-    modelDir: '/fake/voice/model/parakeet',
-  };
-
-  /** Loud enough to count as talking, and quiet enough to count as the room. */
   const TALKING = SPEECH_RMS_FLOOR * 5;
   const ROOM = SPEECH_RMS_FLOOR / 10;
-  /** One 100 ms slice of 16 kHz mono Int16 audio = 1,600 samples = 3,200 bytes. */
-  const SLICE = 3_200;
+  const SLICE = 3_200; // 100 ms of 16 kHz mono Int16
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
 
-  class FakeWorker implements VoiceWorkerHandle {
-    sent: VoiceServiceToWorker[] = [];
-    private msgCb: ((m: VoiceWorkerToService) => void) | null = null;
-    send(msg: VoiceServiceToWorker): void { this.sent.push(msg); }
-    kill(): void {}
-    onMessage(cb: (m: VoiceWorkerToService) => void): void { this.msgCb = cb; }
-    onExit(): void {}
-    onStderr(): void {}
-    say(m: VoiceWorkerToService): void { this.msgCb?.(m); }
-    stopped(): boolean { return this.sent.some((m) => m.type === 'stop'); }
-  }
-
-  function harness() {
-    const worker = new FakeWorker();
-    const service = new VoiceService({
-      assets: { installed: () => INSTALLED, install: async () => INSTALLED },
-      spawnWorker: () => worker,
-      deliver: () => {},
-      isWindowAlive: () => true,
-      onWindowGone: () => () => {},
-      platform: 'linux',
-      arch: 'x64',
-    });
-    /** Feed `ms` worth of 100 ms slices at one loudness, moving the clock with
-     *  them exactly as real audio would. */
+  /** A ready session plus a feeder that moves the clock with each 100 ms slice, as real audio would. */
+  async function ready() {
+    const h = harness();
+    await h.service.start(1);
+    h.worker.say({ type: 'ready' });
     const feed = (rms: number, ms: number) => {
       for (let elapsed = 0; elapsed < ms; elapsed += 100) {
-        service.pushAudio(1, new ArrayBuffer(SLICE), rms);
+        h.service.pushAudio(1, new ArrayBuffer(SLICE), rms);
         vi.advanceTimersByTime(100);
       }
     };
-    return { service, worker, feed };
+    const stopped = () => h.worker.types().includes('stop');
+    return { h, feed, stopped };
   }
 
-  describe('voice-service: the silence stop', () => {
-    beforeEach(() => { vi.useFakeTimers(); });
-    afterEach(() => { vi.useRealTimers(); });
-
-    it('never closes the mic before you have said anything', async () => {
-      const h = harness();
-      await h.service.start(1);
-      h.worker.say({ type: 'ready' });
-
-      // Ten seconds of an empty room — five times the silence window.
-      h.feed(ROOM, 10_000);
-
-      expect(h.worker.stopped()).toBe(false);
-    });
-
-    it('closes the mic two seconds after you stop talking, and not before', async () => {
-      const h = harness();
-      await h.service.start(1);
-      h.worker.say({ type: 'ready' });
-
-      h.feed(TALKING, 1_000);
-      // Just short of the window: still listening, because a person pausing for a
-      // word and a person who has finished look identical until this much time
-      // has passed.
-      h.feed(ROOM, SILENCE_STOP_MS - 200);
-      expect(h.worker.stopped()).toBe(false);
-
-      h.feed(ROOM, 300);
-      expect(h.worker.stopped()).toBe(true);
-    });
-
-    it('a loud burst resets the clock — a pause mid-sentence does not end it', async () => {
-      const h = harness();
-      await h.service.start(1);
-      h.worker.say({ type: 'ready' });
-
-      h.feed(TALKING, 500);
-      h.feed(ROOM, 1_500);            // a long "...er..." pause
-      expect(h.worker.stopped()).toBe(false);
-
-      h.feed(TALKING, 200);           // you carry on: the clock goes back to zero
-      h.feed(ROOM, 1_500);            // 1.5 s is no longer enough
-      expect(h.worker.stopped()).toBe(false);
-
-      h.feed(ROOM, 700);              // now it is
-      expect(h.worker.stopped()).toBe(true);
-    });
-
-    it('sends only one stop, however much silence follows', async () => {
-      const h = harness();
-      await h.service.start(1);
-      h.worker.say({ type: 'ready' });
-
-      h.feed(TALKING, 500);
-      h.feed(ROOM, 5_000);
-
-      expect(h.worker.sent.filter((m) => m.type === 'stop')).toHaveLength(1);
-      // ...and the mic really is shut: no audio is forwarded after the stop.
-      const stopAt = h.worker.sent.findIndex((m) => m.type === 'stop');
-      expect(h.worker.sent.slice(stopAt).some((m) => m.type === 'audio')).toBe(false);
-    });
+  it('never closes the mic before you have said anything', async () => {
+    const { feed, stopped } = await ready();
+    feed(ROOM, 10_000);
+    expect(stopped()).toBe(false);
   });
 
-  describe('the numbers the contract promises', () => {
-    // Guard for whole-branch review F11. Every test here was written AGAINST the
-    // constants, so changing "two quiet seconds" to ten kept them all green and
-    // nothing but a human on a review deck would ever have noticed. A promise made
-    // to Destin as a number gets a test that names the number.
-    it('closes the mic after two quiet seconds (R3)', () => {
-      expect(SILENCE_STOP_MS).toBe(2_000);
-    });
+  it('closes the mic two seconds after you stop talking, and not before', async () => {
+    const { feed, stopped } = await ready();
+    feed(TALKING, 1_000);
+    feed(ROOM, SILENCE_STOP_MS - 200);
+    expect(stopped()).toBe(false);
+    feed(ROOM, 300);
+    expect(stopped()).toBe(true);
+  });
 
-    it('treats sound below 0.02 as room noise rather than speech', () => {
-      // Raise this and quiet speakers stop being heard at all; lower it and a fan
-      // keeps the microphone open until the user notices.
-      expect(SPEECH_RMS_FLOOR).toBe(0.02);
-    });
+  it('a loud burst resets the clock — a pause mid-sentence does not end it', async () => {
+    const { feed, stopped } = await ready();
+    feed(TALKING, 500);
+    feed(ROOM, 1_500);
+    expect(stopped()).toBe(false);
+    feed(TALKING, 200);
+    feed(ROOM, 1_500);
+    expect(stopped()).toBe(false);
+    feed(ROOM, 700);
+    expect(stopped()).toBe(true);
+  });
+
+  it('sends only one stop, and forwards no audio after it', async () => {
+    const { h, feed } = await ready();
+    feed(TALKING, 500);
+    feed(ROOM, 5_000);
+    const sent = h.worker.sent;
+    expect(sent.filter((m) => m.type === 'stop')).toHaveLength(1);
+    expect(sent.slice(sent.findIndex((m) => m.type === 'stop')).some((m) => m.type === 'audio')).toBe(false);
+  });
+
+  // Every test above was written AGAINST these constants, so changing "two quiet seconds" to ten kept them green.
+  it('pins the promised numbers: two quiet seconds, 0.02 room-noise floor', () => {
+    expect(SILENCE_STOP_MS).toBe(2_000);
+    expect(SPEECH_RMS_FLOOR).toBe(0.02);
   });
 });

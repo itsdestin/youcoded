@@ -17,19 +17,22 @@ const MODELSDEV_PAYLOAD = { anthropic: { models: {
     cost: { input: 3, output: 15 } },
 } } };
 
+// One temp dir per test for every describe below.
+let dir: string;
+beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-')); });
+afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
+
 const OR_PROVIDER = { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true };
 
 describe('ModelCatalog', () => {
-  let dir: string; let fetchMock: any; let cat: ModelCatalog;
+  let fetchMock: any; let cat: ModelCatalog;
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-'));
     fetchMock = vi.fn(async (url: string) => ({
       ok: true,
       json: async () => url.includes('openrouter') ? OPENROUTER_PAYLOAD : MODELSDEV_PAYLOAD,
     }));
     cat = new ModelCatalog(dir, fetchMock);
   });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   it('merges OpenRouter + models.dev into CatalogModel rows scoped to enabled providers', async () => {
     const models = await cat.get([
@@ -346,70 +349,40 @@ describe('ModelCatalog', () => {
 
 // Cache rates are carried so the session-cost chip does not over-report.
 describe('catalog pricing', () => {
-  it('maps OpenRouter per-token strings to per-1M, cache rates included', () => {
-    const rows = (ModelCatalog as any).prototype.openrouterModels.call({}, {
-      data: [{
-        id: 'vendor/model',
-        pricing: {
-          prompt: '0.000003', completion: '0.000015',
-          input_cache_read: '0.0000003', input_cache_write: '0.00000375',
-        },
-      }],
-    }, 'openrouter');
-    expect(rows[0].pricing).toEqual({ in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 });
-  });
+  const or = (pricing: object) => (ModelCatalog as any).prototype.openrouterModels.call({}, { data: [{ id: 'vendor/model', pricing }] }, 'openrouter');
+  const md = (models: any) => (ModelCatalog as any).prototype.modelsdevModels.call({}, { anthropic: { models } }, 'anthropic', 'anthropic');
+  const BASE = { prompt: '0.000003', completion: '0.000015' };
 
-  it('omits cache rates that are absent or malformed rather than guessing zero', () => {
-    const rows = (ModelCatalog as any).prototype.openrouterModels.call({}, {
-      data: [{ id: 'vendor/model', pricing: { prompt: '0.000003', completion: '0.000015', input_cache_read: '' } }],
-    }, 'openrouter');
-    expect(rows[0].pricing).toEqual({ in: 3, out: 15 });
-  });
-
-  it('maps models.dev cost fields, which are already per-1M', () => {
-    const rows = (ModelCatalog as any).prototype.modelsdevModels.call({}, {
-      anthropic: { models: { 'x': { id: 'x', cost: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 } } } },
-    }, 'anthropic', 'anthropic');
-    expect(rows[0].pricing).toEqual({ in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+  it('maps OpenRouter per-token strings to per-1M, cache rates included; models.dev costs are already per-1M', () => {
+    expect(or({ ...BASE, input_cache_read: '0.0000003', input_cache_write: '0.00000375' })[0].pricing)
+      .toEqual({ in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+    expect(md({ x: { id: 'x', cost: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 } } })[0].pricing)
+      .toEqual({ in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 });
   });
 
   // WHY: Number('  ') is 0, so an untrimmed whitespace field would become a REAL rate of zero (billed $0).
-  it('treats a whitespace-only cache rate as "not published", never as free', () => {
-    const rows = (ModelCatalog as any).prototype.openrouterModels.call({}, {
-      data: [{
-        id: 'vendor/model',
-        pricing: {
-          prompt: '0.000003', completion: '0.000015',
-          input_cache_read: '  ', input_cache_write: '\t',
-        },
-      }],
-    }, 'openrouter');
-    expect(rows[0].pricing).toEqual({ in: 3, out: 15 });
+  it.each([
+    ['empty', { input_cache_read: '' }],
+    ['whitespace-only', { input_cache_read: '  ', input_cache_write: '\t' }],
+  ])('treats an %s OpenRouter cache rate as "not published", never as free', (_n, extra) => {
+    expect(or({ ...BASE, ...extra })[0].pricing).toEqual({ in: 3, out: 15 });
   });
 
   it('treats a whitespace-only base rate as "not published", never as free', () => {
-    const rows = (ModelCatalog as any).prototype.openrouterModels.call({}, {
-      data: [{ id: 'vendor/model', pricing: { prompt: '  ', completion: '  ' } }],
-    }, 'openrouter');
-    expect(rows[0].pricing).toBeUndefined();
+    expect(or({ prompt: '  ', completion: '  ' })[0].pricing).toBeUndefined();
   });
 
   // cache_read/cache_write must be NUMBERS; otherwise the chip falls back to the input rate, not $0.
-  it('omits models.dev cache rates that are absent, null, or non-numeric', () => {
-    const call = (models: any) => (ModelCatalog as any).prototype.modelsdevModels.call(
-      {}, { anthropic: { models } }, 'anthropic', 'anthropic');
-
-    expect(call({ absent: { cost: { input: 3, output: 15 } } })[0].pricing)
-      .toEqual({ in: 3, out: 15 });
-    expect(call({ nulled: { cost: { input: 3, output: 15, cache_read: null, cache_write: null } } })[0].pricing)
-      .toEqual({ in: 3, out: 15 });
-    expect(call({ stringy: { cost: { input: 3, output: 15, cache_read: '0.3', cache_write: '3.75' } } })[0].pricing)
-      .toEqual({ in: 3, out: 15 });
+  it.each([
+    ['absent', {}],
+    ['null', { cache_read: null, cache_write: null }],
+    ['non-numeric', { cache_read: '0.3', cache_write: '3.75' }],
+  ])('omits models.dev cache rates that are %s', (_n, extra) => {
+    expect(md({ m: { cost: { input: 3, output: 15, ...extra } } })[0].pricing).toEqual({ in: 3, out: 15 });
   });
 });
 
 describe('custom endpoints matched to models.dev by address', () => {
-  let dir: string;
   const MD = {
     inception: { npm: '@ai-sdk/openai-compatible', api: 'https://api.inceptionlabs.ai/v1/', models: {
       'mercury-3': { name: 'Mercury 3', limit: { context: 1000000 }, tool_call: true, cost: { input: 0.1, output: 0.35, cache_read: 0.01 } },
@@ -422,8 +395,6 @@ describe('custom endpoints matched to models.dev by address', () => {
   };
   const custom = (baseUrl: string) => ({ id: 'c1', type: 'openai-compatible', label: 'Mine', baseUrl, enabled: true, builtIn: false, hasKey: true, ready: true });
   const make = () => new ModelCatalog(dir, vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter') ? { data: [] } : MD })) as any);
-  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-addr-')); });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
 
   it('a custom endpoint whose address matches gets that service’s models, prices and context', async () => {
     const rows = await make().get([custom('https://API.inceptionlabs.ai')] as any);
@@ -443,10 +414,7 @@ describe('custom endpoints matched to models.dev by address', () => {
 });
 
 describe("an unmatched custom endpoint is asked for its own /models", () => {
-  let dir: string;
   const custom = (baseUrl: string, id = 'c1') => ({ id, type: 'openai-compatible', label: 'Mine', baseUrl, enabled: true, builtIn: false, hasKey: true, ready: true });
-  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-ep-')); });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
 
   function rig(endpointBody: unknown, opts: { ok?: boolean; key?: string } = {}) {
     const calls: { url: string; auth?: string }[] = [];
@@ -527,9 +495,6 @@ describe("an unmatched custom endpoint is asked for its own /models", () => {
 });
 
 describe('services() — the providers Add provider can search', () => {
-  let dir: string;
-  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-svc-')); });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
   const MD = {
     zeta: { name: 'Zeta', npm: '@ai-sdk/openai-compatible', api: 'https://zeta.example.com/v1/', models: {
       small: { name: 'Small', limit: { context: 8000 } }, big: { name: 'Big', limit: { context: 1000000 }, tool_call: false, cost: { input: 1, output: 2 } } } },
@@ -560,9 +525,6 @@ describe('services() — the providers Add provider can search', () => {
 });
 
 describe('refresh() — "Check for new models"', () => {
-  let dir: string;
-  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-refresh-')); });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
   const OR = OR_PROVIDER;
 
   it('skips the 24-hour cache and reports what is new', async () => {
@@ -626,9 +588,6 @@ describe('refresh() — "Check for new models"', () => {
 });
 
 describe('cachedCounts never fetches or reads the disk', () => {
-  let dir: string;
-  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-counts-')); });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
   it('counts from what is already cached, and fetches nothing', async () => {
     const f = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter')
       ? { data: [{ id: 'x' }, { id: 'y' }] } : { anthropic: { models: { c: { name: 'C' } } } } }));

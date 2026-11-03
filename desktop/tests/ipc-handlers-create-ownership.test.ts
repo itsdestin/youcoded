@@ -2,58 +2,28 @@ import {
   describe, it, expect, vi,
 } from 'vitest';
 
-// ---------------------------------------------------------------------------
-// INVARIANT UNDER TEST
-//
-// `session:create` must call `windowRegistry.assignSession(...)` BEFORE the
-// SESSION_CREATED event is forwarded to a renderer.
-//
-// Why it matters: `sendForSession` (ipc-handlers.ts) routes a session-scoped
-// event to the window that OWNS the session. If no owner is registered yet it
-// takes its ownerless fallback and sends to the primary `mainWindow` — window
-// 1. So if SESSION_CREATED goes out before `assignSession`, a session created
-// (or resumed) from a SECOND main window is delivered to window 1: the user
-// clicks "new chat" / "resume" in window 2 and the conversation pops open in
-// window 1 instead.
-//
-// The forward is already deferred via `process.nextTick` for exactly this
-// reason — the comment above the `sessionManager.on('session-created', ...)`
-// listener says so. But `nextTick` only buys ordering against work that runs
-// to completion synchronously. On the `provider: 'native'` path the handler
-// hits several `await`s (notably `nativeHost.resume(...)`) before it reaches
-// `assignSession` at the very end of the handler. The moment the handler
-// suspends at its first `await`, Node drains the nextTick queue — and nextTick
-// outranks the promise microtask queue — so the forward wins the race and the
-// ownerless fallback fires.
-//
-// Claude Code sessions are unaffected: that branch runs straight through to
-// `assignSession` with no intervening await.
-//
-// This test records the real relative order of the two observable effects and
-// asserts assign-then-send. It reproduces the bug on today's code.
-// ---------------------------------------------------------------------------
+// INVARIANT: `session:create` must call `windowRegistry.assignSession(...)` BEFORE SESSION_CREATED is forwarded to a renderer.
+// WHY: sendForSession routes to the window that OWNS the session and falls back to window 1 when none is registered, so a session created or
+// resumed from a SECOND window would pop open in window 1. The forward is deferred with process.nextTick, but on the `native` path the handler
+// hits several awaits (nativeHost.resume) before assignSession, and nextTick outranks the promise microtask queue, so the forward wins the race.
+// Claude Code sessions run straight through with no await. This records the real relative order of the two effects.
 
-// Shared recording buffers. Declared through vi.hoisted so the hoisted
-// vi.mock('electron') factory below can close over them.
+// Shared recording buffers (vi.hoisted so the electron mock factory can close over them).
 const rec = vi.hoisted(() => ({
-  // Ordered log of the two events we care about, in the order they really ran.
+  // Ordered log of assignSession / SESSION_CREATED send, as they really ran.
   order: [] as string[],
-  // Every send that reached a renderer: which window, which channel, and what
-  // rode with it (the payload matters for the session-context block below).
+  // Every send that reached a renderer: window, channel, payload.
   sends: [] as Array<{ window: string; channel: string; payload?: any }>,
 }));
 
-// Mock electron before importing ipc-handlers, which transitively imports
-// main.ts (for setPermissionOverrides). main.ts uses protocol.registerSchemesAsPrivileged
-// and Menu.setApplicationMenu at module scope, both of which crash without this mock.
+// Mock electron before importing ipc-handlers (which imports main.ts, whose module-scope protocol/Menu calls crash without it).
 vi.mock('electron', () => {
   const BrowserWindowMock: any = vi.fn(() => ({ loadURL: vi.fn(), on: vi.fn(), webContents: { send: vi.fn() } }));
   BrowserWindowMock.getAllWindows = vi.fn(() => []);
   // A reused writer's focus request focuses its window (ipc-handlers createSession).
   BrowserWindowMock.fromWebContents = vi.fn(() => ({ focus: vi.fn() }));
   return {
-    // whenReady must never resolve — otherwise main.ts runs its entire init chain
-    // (createWindow, RemoteServer, SyncService, etc.) which hits unmocked APIs.
+    // whenReady must never resolve, or main.ts runs its whole init chain against unmocked APIs.
     app: { isPackaged: false, getPath: vi.fn(() => '/tmp'), getVersion: vi.fn(() => '0.0.0-test'), whenReady: vi.fn(() => new Promise(() => {})), on: vi.fn(), quit: vi.fn(), setAppUserModelId: vi.fn(), commandLine: { appendSwitch: vi.fn() }, getGPUInfo: vi.fn(() => new Promise(() => {})) },
     ipcMain: { handle: vi.fn(), on: vi.fn() },
     BrowserWindow: BrowserWindowMock,
@@ -64,8 +34,7 @@ vi.mock('electron', () => {
     nativeImage: {},
     shell: { openExternal: vi.fn() },
     powerSaveBlocker: { start: vi.fn(() => 0), stop: vi.fn() },
-    // sendForSession resolves an owner's webContents.id through webContents.fromId.
-    // Hand back a stub that records what it was sent, tagged with the window id.
+    // sendForSession resolves an owner through webContents.fromId; the stub records what it was sent, tagged with the window id.
     webContents: {
       fromId: vi.fn((id: number) => ({
         isDestroyed: () => false,
@@ -78,12 +47,7 @@ vi.mock('electron', () => {
   };
 });
 
-// WHY: this fixture stubs the native host and tests event ownership, not provider
-// storage. createRuntime otherwise starts an unawaited init on EVERY registration,
-// allowing real providers.json writes in the shared HOME to outlive the test
-// (Linux CI reported an unhandled temp-rename ENOENT from this fixture). Keep that
-// unrelated startup I/O out of the fixture; provider-registry.test.ts tests the real
-// initializer, including write failures, without changing production error handling.
+// WHY: createRuntime starts an unawaited init on EVERY registration, so real providers.json writes could outlive the test (Linux CI hit an unhandled temp-rename ENOENT); provider-registry.test.ts tests the real initializer.
 vi.mock('../src/main/providers/provider-registry', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/main/providers/provider-registry')>();
   return {
@@ -94,75 +58,42 @@ vi.mock('../src/main/providers/provider-registry', async (importOriginal) => {
   };
 });
 
-// Worker lifecycle is covered by session-discovery.test.ts and the built-worker
-// smoke. This ownership fixture exercises the real context builder behind an
-// async boundary, without asking Node to load an uncompiled TS worker entry.
+// Worker lifecycle is covered by session-discovery.test.ts; this fixture runs the real context builder behind an async boundary.
 vi.mock('../src/main/session-discovery', async () => {
   const { buildClaudeCodeContext } = await import('../src/main/claude-code-context');
   return { sessionDiscovery: { claudeContext: vi.fn(async (cwd: string, model: string | null) => buildClaudeCodeContext(cwd, model)) } };
 });
 
-// NativeSessionHost is constructed inside registerIpcHandlers. Stub it so the
-// native branch is deterministic — and crucially so `resume()` is a REAL async
-// suspension point (`async () => true`), which is what lets the nextTick queue
-// drain mid-handler. A stub that never suspends would not reproduce the bug.
+// NativeSessionHost is constructed inside registerIpcHandlers. Stubbed so the native branch is deterministic, and so `resume()` is a REAL async
+// suspension point (a stub that never suspends would not reproduce the bug).
 vi.mock('../src/main/harness/native-session-host', () => {
+  // Inert stubs for everything registerIpcHandlers touches at registration time; only resume() matters here.
   class NativeSessionHostStub {
-    constructor(..._args: any[]) { void _args; /* ctor deps unused by this test */ }
-
     async resume(_id: string, _cwd: string, _binding?: any) { return true; }
-
     async create(_opts: any) { /* no-op */ }
-
     getHarnessId(_id: string) { return undefined; }
-
     getBinding(_id: string) { return undefined; }
-
     modelForSession(_id: string) { return undefined; }
-
     async destroy(_id: string) { /* no-op */ }
-
-    // Remaining surface registerIpcHandlers touches at registration time (or
-    // could touch from a sibling handler) — inert stubs, none of them run on
-    // the code path this test exercises.
     setModelReleasedHandler(_fn: any) { /* no-op */ }
-
     async destroyAll() { /* no-op */ }
-
     async clear(_id: string) { /* no-op */ }
-
     async compact(_id: string) { /* no-op */ }
-
     async quiesce(_id: string) { /* no-op */ }
-
     async interrupt(_id: string) { /* no-op */ }
-
     async send(_id: string, _text: string) { /* no-op */ }
-
     async invokeSkill() { /* no-op */ }
-
     getHistory(_id: string) { return []; }
-
     getPermissionMode(_id: string) { return 'normal'; }
-
     setPermissionMode() { /* no-op */ }
-
     respondPermission() { /* no-op */ }
-
     removeQueued() { /* no-op */ }
-
     setBinding() { /* no-op */ }
-
     sessionsForModel(_modelId: string) { return [] as string[]; }
-
     isNativeSessionId(_id: string) { return true; }
-
     list() { return [] as any[]; }
-
     on() { return this; }
-
     off() { return this; }
-
     removeAllListeners() { return this; }
   }
   return { NativeSessionHost: NativeSessionHostStub };
@@ -174,32 +105,21 @@ import { registerWithRuntime } from './helpers/register-ipc';
 import { IPC } from '../src/shared/types';
 import { NativeHome } from '../src/main/native-home';
 
-/**
- * Build the mock world and run one `session:create` call.
- *
- * `senderWindowId` is deliberately NOT 1 — the primary mainWindow stands in for
- * window 1, so a send that lands there is exactly the misrouting this test is
- * about.
- */
+/** Build the mock world and run one `session:create`. `senderWindowId` is deliberately NOT 1: window 1 is the primary mainWindow, where a misrouted send lands. */
 async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any[] = [], managerExtras: Record<string, unknown> = {}) {
   rec.order.length = 0;
   rec.sends.length = 0;
 
   const mockIpcMain = { handle: vi.fn(), on: vi.fn() };
 
-  // Real ownership map so `getOwner` only answers once assignSession has run —
-  // faking a permanently-known owner would hide the very race under test.
+  // Real ownership map: `getOwner` answers only once assignSession has run (a permanently-known owner would hide the race).
   const owners = new Map<string, number>();
 
   const sessionInfo = {
     id: 'native-session-under-test',
     name: 'Resuming…',
     cwd: '/tmp',
-    // Mirror the caller's provider so the control case really walks the
-    // claude-code branch rather than the native one.
-    // 'claude' is the real SessionProvider member — NOT 'claude-code', which is
-    // what this line said until 2026-09-10. Nothing read it, so the typo was
-    // harmless until a test needed the Claude Code branch to actually run.
+    // Mirror the caller's provider so the control case walks the claude-code branch; 'claude' is the real SessionProvider member.
     provider: (opts?.provider ?? 'native') as 'native' | 'claude',
     status: 'active' as const,
     createdAt: Date.now(),
@@ -207,9 +127,7 @@ async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any
     skipPermissions: false,
   };
 
-  // A real EventEmitter whose createSession emits 'session-created'
-  // SYNCHRONOUSLY, exactly as session-manager.ts does (native: line ~106).
-  // That synchronous emit is the crux of the bug — never fake it with a timer.
+  // createSession emits 'session-created' SYNCHRONOUSLY, as session-manager.ts does; that is the crux of the bug (never fake it with a timer).
   const mockSessionManager: any = new EventEmitter();
   mockSessionManager.createSession = vi.fn(() => {
     mockSessionManager.emit('session-created', sessionInfo);
@@ -284,21 +202,9 @@ async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any
     (c: any) => c[0] === IPC.SESSION_CREATE,
   )[1];
 
-  // Dispatch the handler from a MACROTASK, not with a bare `await`.
-  //
-  // This is load-bearing, not ceremony. Electron invokes an `ipcMain.handle`
-  // callback from the native event loop, so when the handler suspends at its
-  // first `await` the JS stack unwinds all the way out and Node drains the
-  // process.nextTick queue before the promise microtask queue — which is
-  // exactly the window the bug lives in.
-  //
-  // Calling `await handler(...)` directly from an async test does NOT model
-  // that: the test function is itself running as a microtask continuation, so
-  // the microtask queue keeps draining (resuming the handler) before nextTick
-  // ever gets a turn. Under that calling convention the bug is invisible and
-  // the assertion below passes for the wrong reason. Verified empirically:
-  // the same handler shape logs [assign, tick] under a direct await and
-  // [tick, assign] under setImmediate dispatch.
+  // Dispatch the handler from a MACROTASK, not a bare `await`: Electron invokes ipcMain.handle from the native event loop, so when the handler
+  // suspends the stack unwinds fully and nextTick drains BEFORE the microtask queue (the bug's window). Awaiting directly from an async test
+  // keeps draining microtasks first and hides the bug (verified: [assign, tick] direct vs [tick, assign] under setImmediate).
   let result: any;
   await new Promise<void>((resolve, reject) => {
     setImmediate(() => {
@@ -306,8 +212,7 @@ async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any
     });
   });
 
-  // Drain the nextTick queue and any trailing microtasks/macrotasks so a send
-  // that merely ran LATE isn't mistaken for a send that never happened.
+  // Drain nextTick and trailing tasks so a LATE send isn't mistaken for no send.
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
 
@@ -320,23 +225,13 @@ async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any
 function assertAssignBeforeCreated(order: string[], sends: Array<{ window: string; channel: string }>, label: string) {
   const assignAt = order.indexOf('assignSession');
   const createdAt = order.indexOf('SESSION_CREATED send');
-
-  // Sanity: both effects must actually have happened, or the ordering claim
-  // below would pass vacuously.
+  // Non-vacuity: both effects must have happened.
   expect(assignAt, `${label}: assignSession was never called — observed order: ${JSON.stringify(order)}`).toBeGreaterThanOrEqual(0);
   expect(createdAt, `${label}: SESSION_CREATED was never sent — observed order: ${JSON.stringify(order)}`).toBeGreaterThanOrEqual(0);
-
   const createdSend = sends.find((s) => s.channel === IPC.SESSION_CREATED);
-  const detail = [
-    `${label}:`,
-    `SESSION_CREATED was sent BEFORE assignSession — ownership was not set yet, so`,
-    `sendForSession took its ownerless fallback and delivered the session to`,
-    `${createdSend?.window ?? '<unknown window>'} instead of the window that created it.`,
-    `observed order: ${JSON.stringify(order)}`,
-    `(expected: assignSession, then SESSION_CREATED send)`,
-  ].join('\n  ');
-
-  expect(assignAt < createdAt, detail).toBe(true);
+  expect(assignAt < createdAt,
+    `${label}: SESSION_CREATED was sent BEFORE assignSession, so sendForSession took its ownerless fallback and delivered to ${createdSend?.window ?? '<unknown window>'}. observed order: ${JSON.stringify(order)}`,
+  ).toBe(true);
 }
 
 describe('session:create — assignSession must precede the SESSION_CREATED forward', () => {
@@ -348,55 +243,18 @@ describe('session:create — assignSession must precede the SESSION_CREATED forw
     } finally { writes.mockRestore(); }
   });
 
-  it('native create: assigns ownership before forwarding SESSION_CREATED', async () => {
-    const { order, sends, assignSession } = await runSessionCreate({
-      provider: 'native',
-      cwd: '/tmp',
-      name: 'New chat',
-      skipPermissions: false,
-      binding: { providerId: 'test-provider', modelId: 'test-model' },
-    });
-
-    // Guard: the bug only manifests if the handler actually suspended on the
-    // native path. If assignSession never ran the sanity check below catches it.
-    expect(assignSession).toHaveBeenCalled();
-    assertAssignBeforeCreated(order, sends, 'native create');
-  });
-
-  it('native resume: assigns ownership before forwarding SESSION_CREATED', async () => {
-    const { order, sends } = await runSessionCreate({
-      provider: 'native',
-      resumeSessionId: 'native-session-under-test',
-      cwd: '/tmp',
-      name: 'Resuming…',
-      skipPermissions: false,
-    });
-
-    assertAssignBeforeCreated(order, sends, 'native resume');
-  });
-
-  it('claude-code create: assigns ownership before forwarding SESSION_CREATED (control — this path has no intervening await)', async () => {
-    const { order, sends } = await runSessionCreate({
-      provider: 'claude-code',
-      cwd: '/tmp',
-      name: 'New chat',
-      skipPermissions: false,
-    });
-
-    assertAssignBeforeCreated(order, sends, 'claude-code create');
+  it.each([
+    ['native create', { provider: 'native', cwd: '/tmp', name: 'New chat', skipPermissions: false, binding: { providerId: 'test-provider', modelId: 'test-model' } }],
+    ['native resume', { provider: 'native', resumeSessionId: 'native-session-under-test', cwd: '/tmp', name: 'Resuming…', skipPermissions: false }],
+    // Control: the claude-code path has no intervening await.
+    ['claude-code create', { provider: 'claude-code', cwd: '/tmp', name: 'New chat', skipPermissions: false }],
+  ])('%s: assigns ownership before forwarding SESSION_CREATED', async (label, opts) => {
+    const { order, sends } = await runSessionCreate(opts);
+    assertAssignBeforeCreated(order, sends, label);
   });
 });
 
-// ---------------------------------------------------------------------------
-// A CLAUDE CODE chat still gets its "what the assistant was given" record.
-//
-// Contract R23 says EVERY chat carries the line above the conversation. The
-// native runtime pushes its own record from the harness host; a Claude Code
-// chat has no host here, so this branch of session:create is the only thing
-// that sends one. Nothing else in the suite walks it, and its absence is
-// SILENT — the strip simply never appears, which is indistinguishable from
-// "this chat was given nothing".
-// ---------------------------------------------------------------------------
+// WHY: contract R23 says EVERY chat carries the "what the assistant was given" line; a Claude Code chat has no host, so this branch of session:create is the only sender, and its absence is SILENT.
 describe('session:create — a Claude Code chat is described too', () => {
   it('announces ownership before a delayed context discovery finishes', async () => {
     const { sessionDiscovery } = await import('../src/main/session-discovery');
@@ -419,8 +277,7 @@ describe('session:create — a Claude Code chat is described too', () => {
   });
 
   it('claims no tool list, rather than an empty one', async () => {
-    // null reads as "Claude Code chooses its own"; [] reads as "this assistant
-    // has no tools", which is false in the more alarming direction.
+    // WHY: null reads as "Claude Code chooses its own"; [] would falsely read as "no tools".
     const { sends } = await runSessionCreate({ provider: 'claude', cwd: '/tmp' });
     const ctx = sends.find((s) => s.channel === 'native:session-context')!.payload.context;
     expect(ctx.tools).toBeNull();
@@ -429,18 +286,13 @@ describe('session:create — a Claude Code chat is described too', () => {
   });
 
   it('does NOT send one for a native chat — the harness host owns that', async () => {
-    // Two records for one chat would race, and the host's is the one that knows
-    // the budget things were sized against.
+    // WHY: two records for one chat would race, and the host's knows the budget.
     const { sends } = await runSessionCreate({ provider: 'native', cwd: '/tmp', binding: { providerId: 'p', modelId: 'm' } });
     expect(sends.find((s) => s.channel === 'native:session-context')).toBeUndefined();
   });
 });
 
-// ---------------------------------------------------------------------------
-// Resuming a conversation that is already open does not open it twice.
-// ---------------------------------------------------------------------------
-// Combined branch: main now answers through master's resume admission
-// (`reused: true`) instead of chatfiles' `alreadyOpen`; same guarantee.
+// Resuming a conversation that is already open does not open it twice (answered through resume admission, `reused: true`).
 describe('session:create — a conversation already open is not resumed a second time', () => {
   it('answers with the open session instead of creating a second one', async () => {
     const open = {
@@ -452,15 +304,13 @@ describe('session:create — a conversation already open is not resumed a second
     }, 2, [open]);
     expect(createSession).not.toHaveBeenCalled();
     expect(result).toMatchObject({ id: 'native-open', reused: true });
-    // An already-open session nobody owns (as here) is still brought forward:
-    // the focus request goes to the leader window (combined-branch fix).
+    // An already-open session nobody owns is still brought forward: the focus request goes to the leader window.
     expect(sends.some((x) => x.channel === 'session:focus-request' && x.payload === 'native-open')).toBe(true);
     expect(sends.find((s) => s.channel === IPC.SESSION_CREATED)).toBeUndefined();
   });
 
   it('catches a second resume before Claude Code has reported the first one in', async () => {
-    // The desktop→Claude id map fills in only at the first hook; until then the
-    // session manager is the only one who knows which conversation it holds.
+    // WHY: the desktop->Claude id map fills in only at the first hook; until then the session manager alone knows which conversation it holds.
     const pending = {
       id: 'desk-9', name: 'Resuming…', cwd: '/tmp', provider: 'claude', status: 'active',
       createdAt: 1, permissionMode: 'normal', skipPermissions: false,

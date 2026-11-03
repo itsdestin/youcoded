@@ -8,6 +8,11 @@ import { EventEmitter } from 'events';
 
 const GH = 'https://github.com/itsdestin/youcoded/releases/download';
 
+// WHY retries: a failed download's write stream can still be closing at teardown and drop one last file mid-delete (ENOTEMPTY under load).
+let tmpDir: string;
+beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-test-')); });
+afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
+
 describe('validateDownloadUrl', () => {
   // WHY: release-assets.githubusercontent.com was once rejected, so every download failed url-rejected.
   it.each([
@@ -88,25 +93,13 @@ function makeFakeHttpsGet(scripts: Map<string, Buffer | Error>) {
 }
 
 describe('createUpdateInstaller download engine', () => {
-  let tmpDir: string;
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-test-'));
-  });
-  afterEach(() => {
-    // WHY retries: a failed download's write stream can still be closing when this runs and
-    // drop one last file into the folder mid-delete (ENOTEMPTY under a loaded full run).
-    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-  });
+  const installerFor = (scripts: Map<string, Buffer | Error>, onProgress: (ev: any) => void = () => {}) =>
+    createUpdateInstaller({ cacheDir: tmpDir, httpsGet: makeFakeHttpsGet(scripts), platform: 'win32', onProgress });
 
   it('downloads a file to update-cache, renaming .partial on completion', async () => {
     const url = 'https://github.com/itsdestin/youcoded/releases/download/v1/YouCoded.exe';
     const payload = Buffer.from('fake installer content '.repeat(100));
-    const installer = createUpdateInstaller({
-      cacheDir: tmpDir,
-      httpsGet: makeFakeHttpsGet(new Map([[url, payload]])),
-      platform: 'win32',
-      onProgress: () => {},
-    });
+    const installer = installerFor(new Map([[url, payload]]));
 
     const result = await installer.startDownload(url);
     expect(result.bytesTotal).toBe(payload.length);
@@ -120,12 +113,7 @@ describe('createUpdateInstaller download engine', () => {
     const url = 'https://github.com/itsdestin/youcoded/releases/download/v1/YouCoded.exe';
     const payload = Buffer.alloc(100 * 1024); // 100 KB
     const progressEvents: { bytesReceived: number; percent: number }[] = [];
-    const installer = createUpdateInstaller({
-      cacheDir: tmpDir,
-      httpsGet: makeFakeHttpsGet(new Map([[url, payload]])),
-      platform: 'win32',
-      onProgress: (ev) => progressEvents.push({ bytesReceived: ev.bytesReceived, percent: ev.percent }),
-    });
+    const installer = installerFor(new Map([[url, payload]]), (ev) => progressEvents.push({ bytesReceived: ev.bytesReceived, percent: ev.percent }));
 
     await installer.startDownload(url);
 
@@ -139,12 +127,7 @@ describe('createUpdateInstaller download engine', () => {
   it('returns the existing jobId when a second startDownload is issued while one is in flight', async () => {
     const url = 'https://github.com/itsdestin/youcoded/releases/download/v1/YouCoded.exe';
     const payload = Buffer.alloc(50 * 1024);
-    const installer = createUpdateInstaller({
-      cacheDir: tmpDir,
-      httpsGet: makeFakeHttpsGet(new Map([[url, payload]])),
-      platform: 'win32',
-      onProgress: () => {},
-    });
+    const installer = installerFor(new Map([[url, payload]]));
 
     const p1 = installer.startDownload(url);
     const p2 = installer.startDownload(url);
@@ -190,22 +173,12 @@ describe('createUpdateInstaller download engine', () => {
 
   it('surfaces network errors as network-failed', async () => {
     const url = 'https://github.com/itsdestin/youcoded/releases/download/v1/YouCoded.exe';
-    const installer = createUpdateInstaller({
-      cacheDir: tmpDir,
-      httpsGet: makeFakeHttpsGet(new Map([[url, new Error('ENETUNREACH')]])),
-      platform: 'win32',
-      onProgress: () => {},
-    });
+    const installer = installerFor(new Map([[url, new Error('ENETUNREACH')]]));
     await expect(installer.startDownload(url)).rejects.toThrow(/network-failed/);
   });
 
   it('rejects url-rejected URLs before opening any file', async () => {
-    const installer = createUpdateInstaller({
-      cacheDir: tmpDir,
-      httpsGet: makeFakeHttpsGet(new Map()),
-      platform: 'win32',
-      onProgress: () => {},
-    });
+    const installer = installerFor(new Map());
     await expect(installer.startDownload('http://github.com/foo.exe')).rejects.toThrow(/url-rejected/);
     expect(fs.readdirSync(tmpDir).length).toBe(0);
   });
@@ -288,6 +261,10 @@ describe('launchInstaller', () => {
   beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-launch-test-')); });
   afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
 
+  const launcher = (over: Record<string, any> = {}) => makeLaunchInstaller({
+    spawn: () => fakeChild(), shellOpenExternal: async () => {}, appRelaunch: () => {}, fallbackDownloadUrl: () => '', ...over,
+  } as any);
+
   function fakeChild(overrides: Partial<{ exitCode: number | null; exitDelay: number; errorOnSpawn: boolean }> = {}) {
     const emitter: any = new EventEmitter();
     emitter.unref = () => {};
@@ -344,25 +321,13 @@ describe('launchInstaller', () => {
   it('macOS: if `open -W` exits non-zero within 2s, returns dmg-corrupt error', async () => {
     const filePath = path.join(tmpDir, 'YouCoded.dmg');
     fs.writeFileSync(filePath, 'x');
-    const launch = makeLaunchInstaller({
-      platform: 'darwin',
-      spawn: () => fakeChild({ exitCode: 1, exitDelay: 10 }),
-      shellOpenExternal: async () => {},
-      appRelaunch: () => {},
-      fallbackDownloadUrl: () => '',
-    });
+    const launch = launcher({ platform: 'darwin', spawn: () => fakeChild({ exitCode: 1, exitDelay: 10 }) });
     const r = await launch({ jobId: 'j', filePath });
     expect(r).toEqual({ success: false, error: 'dmg-corrupt' });
   });
 
   it('returns file-missing if the downloaded file is gone', async () => {
-    const launch = makeLaunchInstaller({
-      platform: 'win32',
-      spawn: () => fakeChild(),
-      shellOpenExternal: async () => {},
-      appRelaunch: () => {},
-      fallbackDownloadUrl: () => '',
-    });
+    const launch = launcher({ platform: 'win32', spawn: () => fakeChild() });
     const r = await launch({ jobId: 'j', filePath: path.join(tmpDir, 'missing.exe') });
     expect(r).toEqual({ success: false, error: 'file-missing' });
   });
@@ -370,13 +335,7 @@ describe('launchInstaller', () => {
   it('returns spawn-failed on spawn error', async () => {
     const filePath = path.join(tmpDir, 'YouCoded.exe');
     fs.writeFileSync(filePath, 'x');
-    const launch = makeLaunchInstaller({
-      platform: 'win32',
-      spawn: () => fakeChild({ errorOnSpawn: true }),
-      shellOpenExternal: async () => {},
-      appRelaunch: () => {},
-      fallbackDownloadUrl: () => '',
-    });
+    const launch = launcher({ platform: 'win32', spawn: () => fakeChild({ errorOnSpawn: true }) });
     const r = await launch({ jobId: 'j', filePath });
     expect(r).toEqual({ success: false, error: 'spawn-failed' });
   });
@@ -424,9 +383,7 @@ describe('launchInstaller', () => {
     expect(opened).toEqual(['https://github.com/itsdestin/youcoded/releases/download/v1/YouCoded.AppImage']);
   });
 
-  // A system package (pacman/deb/rpm) is installed over the running app through
-  // pkexec — the desktop's own password dialog. Before 2026-09-20 a .deb only
-  // opened a web page, and .pacman/.rpm were never even downloaded.
+  // A system package (pacman/deb/rpm) is installed over the running app through pkexec (the desktop's own password dialog).
   describe('Linux system packages', () => {
     const PACKAGES: Array<{ file: string; argv: string[]; manual: RegExp }> = [
       { file: 'youcoded-1.3.0.pacman', argv: ['pacman', '-U', '--noconfirm'], manual: /^sudo pacman -U / },
@@ -466,8 +423,7 @@ describe('launchInstaller', () => {
     }
 
     it('never downloads to the AppImage self-replace path', async () => {
-      // The 2026-09-20 report: a pacman install took the AppImage branch, found
-      // no running AppImage, and opened a web page after a 180 MB download.
+      // WHY: a pacman install once took the AppImage branch and opened a web page after a 180 MB download.
       const filePath = path.join(tmpDir, 'youcoded-1.3.0.pacman');
       fs.writeFileSync(filePath, 'x');
       const opened: string[] = [];
@@ -480,16 +436,7 @@ describe('launchInstaller', () => {
     it('with no pkexec, hands back the one command to run, and keeps the download', async () => {
       const realPath = path.join(tmpDir, 'youcoded-1.3.0.pacman');
       fs.writeFileSync(realPath, 'x');
-      // WHY forward slashes: this block simulates Linux (platform: 'linux' below), where a
-      // path can never contain a backslash. On the Windows CI runner, `tmpDir` is a REAL
-      // Windows path (e.g. "C:\Users\...") because it comes from the actual os.tmpdir(),
-      // and shellQuote() in update-installer.ts correctly single-quotes any path holding a
-      // backslash (it's a POSIX shell escape character) — so this test's unquoted
-      // expectation was only ever true on Linux/macOS runners. Normalizing to forward
-      // slashes makes the fixture match what a real Linux path looks like on every OS the
-      // suite runs on; Windows' fs APIs accept forward slashes too, so `filePath` below
-      // still resolves to the real file written above. Root-caused 2026-09-23: 6/6 Windows
-      // CI failures on this exact assertion.
+      // WHY forward slashes: this block simulates Linux, and shellQuote() single-quotes any path holding a backslash (a real Windows tmpdir) — 6/6 Windows CI failures, 2026-09-23.
       const filePath = realPath.split(path.sep).join('/');
       const spawned: string[] = [];
       const launch = linuxLaunch({

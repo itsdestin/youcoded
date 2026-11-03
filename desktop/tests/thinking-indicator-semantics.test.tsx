@@ -1,15 +1,6 @@
 // @vitest-environment jsdom
-// The thinking indicator answers exactly one question: "is it alive?" — and it
-// should appear ONLY when the user has no other evidence of progress.
-//
-// Destin, 2026-07-26: "during live token output/generation, there really
-// shouldn't be any spinner or thinking indicator at all (for either local or
-// cloud models). The thinking indicator/spinner only exists to show that the
-// model isn't stalled when no output is actively being produced."
-//
-// ChatView already suppresses it for running tools and pending approvals; the
-// streaming case had no signal at all until `lastOutputAt` was added, so a
-// spinner sat under a bubble that was actively filling.
+// The thinking indicator answers one question, "is it alive?", and appears ONLY when the user has no other evidence of progress (no spinner
+// during live token output; ChatView already suppresses it for running tools and pending approvals, `lastOutputAt` covers streaming).
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, act } from '@testing-library/react';
 import React from 'react';
@@ -29,14 +20,12 @@ describe('ThinkingIndicator — when it may appear at all', () => {
   });
 
   it('renders when no output has ever arrived — the first-token wait', () => {
-    // This is the case the indicator exists for: nothing on screen yet.
     const { container } = render(<ThinkingIndicator lastOutputAt={null} />);
     expect(container.innerHTML).not.toBe('');
   });
 
   it('a stall warning OUTRANKS streaming — if something may be wrong, say so', () => {
-    // Suppressing a genuine "this may be broken" warning because a token landed
-    // a moment ago would hide the one message the user most needs.
+    // WHY: suppressing a genuine "this may be broken" warning because a token landed a moment ago would hide the message the user most needs.
     render(
       <ThinkingIndicator
         lastOutputAt={Date.now()}
@@ -54,8 +43,7 @@ describe('ThinkingIndicator — what it says while waiting', () => {
   });
 
   it('names TOOL OUTPUT after a tool call — "your prompt" is wrong there', () => {
-    // The exact confusion Destin flagged: this text appeared after a Read, where
-    // the new context is the file, not anything the user typed.
+    // WHY: this text once appeared after a Read, where the new context is the file, not anything the user typed.
     render(<ThinkingIndicator promptProcessing={{ promptTokens: 98_000, budgetMs: 600_000, source: 'tool-output' }} />);
     expect(screen.getByText(/Reading tool output — 98,000 tokens/)).toBeTruthy();
     expect(screen.queryByText(/your prompt/i)).toBeNull();
@@ -78,29 +66,19 @@ describe('ThinkingIndicator — what it says while waiting', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Live prefill progress: the label upgrades in place as llama.cpp reports in.
-// ---------------------------------------------------------------------------
-import { formatEta, prefillLabel } from '../src/renderer/components/ThinkingIndicator';
+import { formatEta, prefillLabel, interpolateProcessed, monotonic } from '../src/renderer/components/ThinkingIndicator';
+import { OnScreenContext } from '../src/renderer/state/on-screen-context';
+import BrailleSpinner from '../src/renderer/components/BrailleSpinner';
 
+// The label upgrades in place as llama.cpp reports progress.
 describe('formatEta — deliberately coarse', () => {
-  it('says nothing when the wait is nearly over', () => {
-    // A number here would just flicker on its way to zero.
-    expect(formatEta(1_500)).toBeNull();
-  });
-
-  it('rounds seconds to 5s buckets — the projection is not precise enough for more', () => {
-    expect(formatEta(9_894)).toBe('about 10s left');
-    expect(formatEta(23_100)).toBe('about 25s left');
-  });
-
-  it('switches to minutes for long waits, pluralized', () => {
-    expect(formatEta(61_000)).toBe('about 1 min left');
-    expect(formatEta(200_000)).toBe('about 3 mins left');
-  });
-
-  it('returns null for missing or nonsense input rather than rendering NaN', () => {
-    for (const v of [null, undefined, NaN, -5]) expect(formatEta(v as any)).toBeNull();
+  // Nearly over says nothing (a number would flicker toward zero); seconds round to 5s buckets (the projection is not precise enough for more);
+  // long waits use pluralized minutes; missing or nonsense input is null rather than NaN.
+  it.each([
+    [1_500, null], [9_894, 'about 10s left'], [23_100, 'about 25s left'], [61_000, 'about 1 min left'], [200_000, 'about 3 mins left'],
+    [null, null], [undefined, null], [NaN, null], [-5, null],
+  ])('formatEta(%s) -> %s', (ms, expected) => {
+    expect(formatEta(ms as any)).toBe(expected);
   });
 });
 
@@ -132,15 +110,8 @@ describe('prefillLabel', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Smoothing. llama.cpp reports once per 2,048-token batch, so a 7,149-token
-// prompt yields ~4 readings — 0%, 29%, 57%, 100% — which reads as broken:
-// "starts at 0%, sits there for a long time, jumps to 29, sits there, jumps to
-// 57, jumps to 100" (Destin, 2026-07-26). We extrapolate between reports from
-// the rate the server itself measured.
-// ---------------------------------------------------------------------------
-import { interpolateProcessed } from '../src/renderer/components/ThinkingIndicator';
-
+// Smoothing: llama.cpp reports once per 2,048-token batch (a 7,149-token prompt yields ~4 readings: 0, 29, 57, 100%), which reads as broken,
+// so we extrapolate between reports from the rate the server itself measured.
 describe('interpolateProcessed', () => {
   const READING = { processed: 2048, promptTokens: 7149, timeMs: 20_000 };  // ~102 tok/s
 
@@ -172,15 +143,9 @@ describe('interpolateProcessed', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Rules of hooks. The suppression branch once sat ABOVE the prefill hooks, so a
-// render that returned early ran fewer hooks than the previous one — React threw
-// "Rendered fewer hooks than expected" and the ErrorBoundary took the whole chat
-// view down (Destin, 2026-07-26). These drive the exact transitions that crashed.
-// ---------------------------------------------------------------------------
+// WHY (rules of hooks): the suppression branch once sat ABOVE the prefill hooks, so an early-returning render ran fewer hooks than the last and React threw "Rendered fewer hooks than expected", taking down the chat view. These drive the exact transitions.
 describe('ThinkingIndicator — hook order survives every transition', () => {
   it('survives toggling from suppressed to shown and back', () => {
-    // suppressed (early return) -> shown -> suppressed, on ONE mounted instance.
     const { rerender, container } = render(<ThinkingIndicator lastOutputAt={Date.now()} />);
     expect(container.innerHTML).toBe('');
 
@@ -192,7 +157,6 @@ describe('ThinkingIndicator — hook order survives every transition', () => {
   });
 
   it('survives gaining and losing a prefill reading while suppressed', () => {
-    // The crash needed the prefill hooks to be skipped on the suppressed render.
     const { rerender } = render(<ThinkingIndicator lastOutputAt={Date.now()} />);
     expect(() => {
       rerender(<ThinkingIndicator lastOutputAt={Date.now()} promptProcessing={{ promptTokens: 5000, budgetMs: 0, processed: 100, timeMs: 500 }} />);
@@ -202,7 +166,6 @@ describe('ThinkingIndicator — hook order survives every transition', () => {
   });
 
   it('survives a stall warning appearing during suppression', () => {
-    // stallWarning flips the early return off — another hook-count transition.
     const { rerender, container } = render(<ThinkingIndicator lastOutputAt={Date.now()} />);
     expect(() => rerender(
       <ThinkingIndicator lastOutputAt={Date.now()} stallWarning={{ retryInMs: 15_000, willRetry: true }} />,
@@ -211,43 +174,22 @@ describe('ThinkingIndicator — hook order survives every transition', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Monotonic display. Destin, 2026-07-28: "the percentage constantly jumps up and
-// then back down, which doesn't make any sense (it should only be able to count
-// upward)."
-//
-// Two things could move it backwards, and the fix has to survive BOTH because
-// neither is fully eliminable:
-//   - interpolateProcessed extrapolates between the server's sparse per-batch
-//     reports; when the next real report lands lower than the projection, the
-//     raw value drops.
-//   - toReport's warm-cache origin is unverified, so a reading can legitimately
-//     come in below the previous one.
-// Prefill only ever moves forward, so the DISPLAY refuses to go backwards.
-// ---------------------------------------------------------------------------
-import { monotonic } from '../src/renderer/components/ThinkingIndicator';
-
+// WHY (monotonic display): prefill only moves forward, but interpolateProcessed can overshoot a sparse next report and toReport's warm-cache origin is unverified, so the DISPLAY refuses to count backwards.
 describe('monotonic', () => {
   it('passes an increasing sequence through untouched', () => {
     const m = monotonic();
     expect([10, 20, 55, 100].map((v) => m(v))).toEqual([10, 20, 55, 100]);
   });
 
-  it('holds at the high-water mark instead of going backwards', () => {
+  it('holds at the high-water mark instead of going backwards, then resumes climbing past it', () => {
     const m = monotonic();
     m(60);
     expect(m(45)).toBe(60);
-  });
-
-  it('resumes climbing once the real value passes the mark again', () => {
-    const m = monotonic();
-    m(60); m(45);
     expect(m(70)).toBe(70);
   });
 
   it('a fresh instance starts over — a new turn is not the old turn', () => {
-    const m1 = monotonic();
-    m1(90);
+    monotonic()(90);
     expect(monotonic()(5)).toBe(5);
   });
 
@@ -259,11 +201,7 @@ describe('monotonic', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The clamp has to be WIRED, not merely exported. `monotonic` had five green
-// tests while nothing in the component called it — coverage that proved nothing
-// about the pixels (caught in the 2026-07-28 review).
-// ---------------------------------------------------------------------------
+// WHY: the clamp has to be WIRED, not merely exported (monotonic had five green tests while nothing in the component called it).
 describe('ThinkingIndicator — the displayed percentage never counts down', () => {
   const reading = (processed: number) => ({
     promptTokens: 1000, budgetMs: 0, source: 'prompt' as const,
@@ -274,8 +212,6 @@ describe('ThinkingIndicator — the displayed percentage never counts down', () 
     const { rerender } = render(<ThinkingIndicator promptProcessing={reading(600)} />);
     expect(screen.getByText(/60% of 1,000 tokens/)).toBeTruthy();
 
-    // A lower reading — exactly what an overshooting extrapolation or the
-    // unverified warm-cache origin can produce.
     rerender(<ThinkingIndicator promptProcessing={reading(450)} />);
     expect(screen.getByText(/60% of 1,000 tokens/)).toBeTruthy();
     expect(screen.queryByText(/45% of/)).toBeNull();
@@ -298,17 +234,8 @@ describe('ThinkingIndicator — the displayed percentage never counts down', () 
   });
 });
 
-// ---------------------------------------------------------------------------
-// The stale-stamp bug. `prefillSeenAt` has always stored `{ key, at }` — but the
-// elapsed-time calculation never compared the key, so the render that RECEIVES a
-// new report measured elapsed time from the PREVIOUS report's stamp (effects run
-// after render, so the new stamp isn't written yet).
-//
-// That made every new reading project a full batch ahead on arrival. Latent and
-// self-correcting until the monotonic clamp latched the overshoot — which is
-// what turned smooth counting into "27 -> 52 -> 70 -> 85 -> 100"
-// (Destin, 2026-07-28).
-// ---------------------------------------------------------------------------
+// WHY (stale stamp): `prefillSeenAt` stores `{ key, at }` but elapsed time never compared the key, so the render RECEIVING a new report measured
+// from the PREVIOUS report's stamp and projected a full batch ahead; the monotonic clamp then latched the overshoot ("27 -> 52 -> 70 -> 85 -> 100").
 describe('ThinkingIndicator — a new reading is not projected forward on arrival', () => {
   const reading = (processed: number, timeMs: number) => ({
     promptTokens: 10_000, budgetMs: 0, source: 'prompt' as const, processed, timeMs, etaMs: null,
@@ -318,9 +245,8 @@ describe('ThinkingIndicator — a new reading is not projected forward on arriva
     vi.useFakeTimers();
     try {
       const { rerender } = render(<ThinkingIndicator promptProcessing={reading(2_000, 4_000)} />);
-      // Long enough for the extrapolation to saturate its one-batch ceiling.
+      // Long enough to saturate the one-batch ceiling.
       act(() => { vi.advanceTimersByTime(6_000); });
-      // A new report lands. Elapsed time for THIS reading is zero.
       rerender(<ThinkingIndicator promptProcessing={reading(4_000, 8_000)} />);
       expect(screen.getByText(/40% of 10,000 tokens/)).toBeTruthy();
     } finally {
@@ -329,7 +255,7 @@ describe('ThinkingIndicator — a new reading is not projected forward on arriva
   });
 
   it('still extrapolates forward once time passes on the CURRENT reading', () => {
-    // The fix must not disable smoothing — only stop it double-counting.
+    // The fix must not disable smoothing, only stop the double-count.
     vi.useFakeTimers();
     try {
       render(<ThinkingIndicator promptProcessing={reading(2_000, 4_000)} />);
@@ -342,15 +268,8 @@ describe('ThinkingIndicator — a new reading is not projected forward on arriva
   });
 });
 
-// ---------------------------------------------------------------------------
-// A chat that is not on screen. Every open session keeps its chat mounted, so a
-// thinking line in a background tab used to run its word rotation, countdown
-// and prefill ticks for nobody. They stand still while hidden; each number is
-// worked out from timestamps, so the first frame back is already right.
-// ---------------------------------------------------------------------------
-import { OnScreenContext } from '../src/renderer/state/on-screen-context';
-import BrailleSpinner from '../src/renderer/components/BrailleSpinner';
-
+// A chat that is not on screen: every open session keeps its chat mounted, so a thinking line in a background tab used to run its word rotation,
+// countdown and prefill ticks for nobody. They stand still while hidden; each number comes from timestamps, so the first frame back is right.
 describe('BrailleSpinner visibility and shared animation', () => {
   it('keeps hidden subscribers idle while visible spinners share one timer and resume immediately', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
@@ -399,8 +318,7 @@ describe('BrailleSpinner visibility and shared animation', () => {
 });
 
 describe('ThinkingIndicator in a hidden chat', () => {
-  // Visible indicators share the glyph driver; hidden indicators must own no
-  // timers at all, including that shared animation subscription.
+  // Visible indicators share the glyph driver; hidden ones must own no timers at all, including that subscription.
   const spinnerTimers = () => {
     const r = render(<BrailleSpinner size="base" />);
     const n = vi.getTimerCount();

@@ -26,6 +26,12 @@ function waitFor(cond: () => boolean, ms = 5_000): Promise<void> {
     tick();
   });
 }
+/** Start a command and narrow the result to the success shape, failing loudly otherwise. */
+function startOk(reg: ShellRegistry, spec: ReturnType<typeof startSpec> & { description?: string }) {
+  const r = reg.start(spec);
+  if (!r.ok) throw new Error('start failed');
+  return r;
+}
 function alive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch { return false; } }
 
 describe('formatElapsed / stateText / formatFinishedNotice', () => {
@@ -58,8 +64,7 @@ describe('formatElapsed / stateText / formatFinishedNotice', () => {
     expect(stripSentinelLines('plain')).toBe('plain');
   });
   it('normalizeNewlines turns a redrawing progress bar into lines, and leaves CRLF alone', () => {
-    // A \r-redrawn progress bar is ONE endless line otherwise — the ring never
-    // trims it and `partial` grows without bound (review 2026-08-28).
+    // WHY: a \r-redrawn progress bar is ONE endless line otherwise; the ring never trims it.
     expect(normalizeNewlines('10%\r50%\r100%\n')).toBe('10%\n50%\n100%\n');
     expect(normalizeNewlines('a\r\nb\r\n')).toBe('a\nb\n');
   });
@@ -106,8 +111,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
   it('a registered log stream error leaves the in-memory tail available and settles once', async () => {
     const exits: any[] = [];
     reg.on('exit', (r) => exits.push(r));
-    const result = reg.start(startSpec('echo retained', dir));
-    if (!result.ok) throw new Error('start failed');
+    const result = startOk(reg, startSpec('echo retained', dir));
     result.run.logStream.emit('error', new Error('log stream unavailable'));
     await result.run.exited;
     expect(reg.tailText(result.run, 10)).toContain('retained');
@@ -115,8 +119,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
   });
 
   it('read: returns only what arrived since the last read', async () => {
-    const r = reg.start(startSpec('echo one; sleep 0.5; echo two', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('echo one; sleep 0.5; echo two', dir));
     await waitFor(() => reg.tailText(r.run, 5).includes('one'));
     const first = await reg.read(r.run.shellId);
     expect(first!.text).toBe('one\n');
@@ -128,11 +131,8 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
   });
 
   it('read: two reads of one shell at once never hand out the same output twice (B8)', async () => {
-    // WHY: read() is async since 2026-09-24 (blocking-calls B8). A parallel
-    // tool batch can issue two BashOutput calls for one shell; unserialized,
-    // both would read from the same cursor and the model would see it twice.
-    const r = reg.start(startSpec('echo alpha; echo beta', dir));
-    if (!r.ok) throw new Error('start failed');
+    // WHY: a parallel tool batch can issue two BashOutput calls for one shell; unserialized, both read from the same cursor.
+    const r = startOk(reg, startSpec('echo alpha; echo beta', dir));
     await r.run.exited;
     const [a, b] = await Promise.all([reg.read(r.run.shellId), reg.read(r.run.shellId)]);
     expect(a!.text).toBe('alpha\nbeta\n');
@@ -142,8 +142,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
   it('cap: the 6th explicit start is refused naming the running ids; adopt still succeeds', async () => {
     const ids: string[] = [];
     for (let i = 0; i < MAX_EXPLICIT_RUNNING; i++) {
-      const r = reg.start(startSpec('sleep 5', dir, `tu-${i}`));
-      if (!r.ok) throw new Error('start failed');
+      const r = startOk(reg, startSpec('sleep 5', dir, `tu-${i}`));
       ids.push(r.run.shellId);
     }
     const sixth = reg.start(startSpec('sleep 5', dir));
@@ -157,8 +156,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
   });
 
   it('kill reaches the grandchild (sleep 30 & wait) and records the reason', async () => {
-    const r = reg.start(startSpec('sleep 30 & echo "PID=$!"; wait', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('sleep 30 & echo "PID=$!"; wait', dir));
     await waitFor(() => /PID=\d+/.test(reg.tailText(r.run, 5)));
     const pid = Number(/PID=(\d+)/.exec(reg.tailText(r.run, 5))![1]);
     expect(alive(pid)).toBe(true);
@@ -185,8 +183,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
   it('ring keeps 200 lines, the wire view carries 40, change events are debounced', async () => {
     const views: any[] = [];
     reg.on('change', (v) => views.push(v));
-    const r = reg.start(startSpec('seq 1 300', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('seq 1 300', dir));
     await r.run.exited;
     await vi.waitFor(() => expect(r.run.tail).toHaveLength(RING_LINES));
     expect(r.run.tail[0]).toBe('101');
@@ -216,10 +213,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
   });
 
   it("an adopted run's seeded head is ANSI-stripped like everything that follows it", async () => {
-    // bash.ts keeps headBuf RAW and strips only at write time (bash.ts's own
-    // spill does `stripAnsi(headBuf)`), so the registry must strip it too —
-    // otherwise the first half of a handed-off log is colour codes and the
-    // second half is clean, and BashOutput hands the model `\x1b[1m\x1b[30m RUN`.
+    // WHY: bash.ts keeps headBuf RAW, so the registry must strip it too or BashOutput hands the model colour codes.
     const child = spawnDetached('/bin/bash', ['-c', 'echo tail-part'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
     const run = reg.adopt({ toolUseId: 'tu-a', command: 'x', cwd: dir, child, startedAt: Date.now(), seedLog: '\x1b[1mBOLD\x1b[0m head\n', recent: '', logPath: null, logStream: null, captureEnv: false });
     await run.exited;
@@ -229,8 +223,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
   });
 
   it('a redrawing progress bar cannot grow the partial line without bound', async () => {
-    const r = reg.start(startSpec(`printf 'p 1\\rp 2\\rp 3\\n'`, dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec(`printf 'p 1\\rp 2\\rp 3\\n'`, dir));
     await r.run.exited;
     expect(r.run.tail).toEqual(['p 1', 'p 2', 'p 3']);
     expect(r.run.partial).toBe('');
@@ -241,8 +234,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
     // last stdout chunk. One run passes most of the time; twenty make the old
     // exit-based settle fail reliably on a 2-core runner, and cost under a second.
     for (let i = 0; i < 20; i++) {
-      const r = reg.start(startSpec(`printf 'p 1\\rp 2\\rp 3\\n'`, dir, `tu-drain-${i}`));
-      if (!r.ok) throw new Error('start failed');
+      const r = startOk(reg, startSpec(`printf 'p 1\\rp 2\\rp 3\\n'`, dir, `tu-drain-${i}`));
       await r.run.exited;
       expect(r.run.tail).toEqual(['p 1', 'p 2', 'p 3']);
       expect(r.run.partial).toBe('');
@@ -274,12 +266,8 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
   });
 
   it('a grandchild holding stdout open cannot hold the run open past the grace', async () => {
-    // `sleep 30 &` inherits the pipe; with a pure `close` settle the run would
-    // wait the full 30 s for it. WHY no clock assertion (test-suite-hygiene: never
-    // wall clock): the proof is that the run settled while the grandchild that
-    // holds the pipe is STILL alive — only the EXIT_DRAIN_GRACE_MS timer can do that.
-    const r = reg.start(startSpec('sleep 30 & echo $!; echo done', dir, 'tu-grace'));
-    if (!r.ok) throw new Error('start failed');
+    // WHY no clock assertion: the proof is that the run settled while the grandchild holding the pipe is STILL alive — only the EXIT_DRAIN_GRACE_MS timer can do that.
+    const r = startOk(reg, startSpec('sleep 30 & echo $!; echo done', dir, 'tu-grace'));
     await r.run.exited;
     const pid = Number(r.run.tail[0]);
     try {
@@ -292,8 +280,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
 
   it('read() is bounded: a huge log returns only the last READ_MAX_BYTES, and says nothing false about it', async () => {
     // 7 MB of output must not become a 7 MB string in the main process.
-    const r = reg.start(startSpec(`for i in $(seq 1 200000); do echo "line-$i-padding-padding-padding"; done`, dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec(`for i in $(seq 1 200000); do echo "line-$i-padding-padding-padding"; done`, dir));
     await r.run.exited;
     const read = await reg.read(r.run.shellId);
     expect(read!.text.length).toBeLessThanOrEqual(READ_MAX_BYTES);
@@ -305,8 +292,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
   }, 60_000);
 
   it('toView is the ShellRunView shape the card renders', async () => {
-    const r = reg.start(startSpec('echo v', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('echo v', dir));
     await r.run.exited;
     const v = reg.toView(r.run);
     expect(Object.keys(v).sort()).toEqual(['admin', 'command', 'description', 'detached', 'endedAt', 'exitCode', 'logPath', 'shellId', 'signal', 'startedAt', 'status', 'stopReason', 'tail', 'toolUseId']);
@@ -314,11 +300,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
   });
 });
 
-// admin-password design §2.3/§5/§6/§7, §11 task 5. `runningCalls` here is a
-// REAL RunningCalls instance (register()/onExit() call concrete methods on
-// it), but `recordSudoPath` is never called — so `forgetOnCallExit`'s own
-// `-K` branch always early-returns and no real `sudo` is ever invoked by
-// this suite (CI runs it on Windows/macOS too).
+// `runningCalls` is real, but `recordSudoPath` is never called, so no real `sudo` is ever invoked (CI runs this on Windows/macOS too).
 describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
   let dir: string;
   let rc: RunningCalls;
@@ -334,8 +316,7 @@ describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
 
   it('registers the spawned root pid into RunningCalls on start()', async () => {
     reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
-    const r = reg.start(startSpec('sleep 5', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('sleep 5', dir));
     await waitFor(() => rc.lookup(r.run.child.pid!) !== undefined);
     expect(rc.lookup(r.run.child.pid!)?.toolCallId).toBe('tu-1');
     await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
@@ -344,23 +325,18 @@ describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
   it('unregisters the root pid, and calls the wipeUpfront callback, when the run exits', async () => {
     const wipeUpfront = vi.fn();
     reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc, wipeUpfront });
-    const r = reg.start(startSpec('echo done', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('echo done', dir));
     const pid = r.run.child.pid!;
     await r.run.exited;
     expect(rc.lookup(pid)).toBeUndefined();
     expect(wipeUpfront).toHaveBeenCalledWith('tu-1');
   });
 
-  // Review fix T5-4: admin must come ONLY from acceptance (markAdmin), never
-  // from a bare delivery — a delivered-but-wrong password is still "granted"
-  // in RunningCalls' own bookkeeping, and seeding from that would show
-  // "Running as admin" before sudo ever actually took the password.
+  // WHY: admin must come ONLY from acceptance (markAdmin), never a bare delivery — a wrong password is still "granted" in RunningCalls.
   it('seeds admin: true at registration when the password was already ACCEPTED (the up-front-then-background race)', async () => {
     reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
     reg.markAdmin('tu-1'); // acceptance arrives BEFORE the run is registered
-    const r = reg.start(startSpec('sleep 5', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('sleep 5', dir));
     expect(reg.toView(r.run).admin).toBe(true);
     await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
   });
@@ -368,26 +344,19 @@ describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
   it('does NOT seed admin: true from a bare RunningCalls delivery that was never accepted', async () => {
     reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
     rc.markGranted('tu-1'); // delivered — but never accepted (could still be wrong)
-    const r = reg.start(startSpec('sleep 5', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('sleep 5', dir));
     expect(reg.toView(r.run).admin).toBe(false);
     await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
   });
 
-  // F2 (code review): the common case (a plain foreground admin command)
-  // never registers a ShellRun at all, so onExit's own clear never runs for
-  // it — clearAccepted() is the ONLY thing that removes that entry, and
-  // tools/bash.ts calls it directly on its own foreground exit path.
+  // WHY: a plain foreground admin command never registers a ShellRun, so clearAccepted() is the ONLY thing that removes its entry.
   it('clearAccepted() removes an acceptance directly, for a call that never reaches ShellRegistry at all', async () => {
     reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
     reg.markAdmin('tu-1'); // simulates the "accepted" signal for a plain foreground call
     reg.clearAccepted('tu-1'); // simulates bash.ts's own foreground exit handler
 
-    // A LATER, unrelated call somehow reusing the same toolUseId string
-    // must NOT come up admin: true — proving the earlier mark was actually
-    // cleared, not just shadowed.
-    const r = reg.start(startSpec('sleep 5', dir));
-    if (!r.ok) throw new Error('start failed');
+    // A later call reusing the toolUseId must not come up admin: the mark was cleared, not shadowed.
+    const r = startOk(reg, startSpec('sleep 5', dir));
     expect(reg.toView(r.run).admin).toBe(false);
     await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
   });
@@ -401,8 +370,7 @@ describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
     reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
     const changes: any[] = [];
     reg.on('change', (v) => changes.push(v));
-    const r = reg.start(startSpec('sleep 5', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('sleep 5', dir));
     expect(reg.toView(r.run).admin).toBe(false);
 
     reg.markAdmin('tu-1');
@@ -414,8 +382,7 @@ describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
 
   it('markAdmin() for an unknown toolUseId is a no-op', async () => {
     reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
-    const r = reg.start(startSpec('sleep 5', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('sleep 5', dir));
     expect(() => reg.markAdmin('no-such-tool-use-id')).not.toThrow();
     expect(reg.toView(r.run).admin).toBe(false);
     await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
@@ -424,8 +391,7 @@ describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
   it('the admin flag is cleared when the run exits', async () => {
     reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
     reg.markAdmin('tu-1');
-    const r = reg.start(startSpec('echo done', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('echo done', dir));
     expect(reg.toView(r.run).admin).toBe(true);
     await r.run.exited;
     expect(reg.toView(r.run).admin).toBe(false);
@@ -434,12 +400,10 @@ describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
   it('a SECOND run for the same toolCallId does not inherit acceptedToolCallIds after the first exited and cleared it', async () => {
     reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
     reg.markAdmin('tu-1');
-    const first = reg.start(startSpec('echo done', dir));
-    if (!first.ok) throw new Error('start failed');
+    const first = startOk(reg, startSpec('echo done', dir));
     await first.run.exited; // clears acceptedToolCallIds for 'tu-1'
 
-    const second = reg.start(startSpec('echo done again', dir, 'tu-1'));
-    if (!second.ok) throw new Error('start failed');
+    const second = startOk(reg, startSpec('echo done again', dir, 'tu-1'));
     expect(reg.toView(second.run).admin).toBe(false);
   });
 });
@@ -461,16 +425,9 @@ describe('spill retention sweep (moved out of bash.ts so background logs are swe
   });
 });
 
-// 2026-09-16 (docs/roadmap/native-harness.md → tools): the proactive half of
-// the anti-poll rule. A run still going at the 5- and 15-minute marks is
-// announced once per mark; the host turns the event into an idle-boundary
-// notice. Marks are a test seam here so the suite does not wait five minutes.
+// A run still going at the 5- and 15-minute marks is announced once per mark (the anti-poll rule); marks are a test seam here.
 describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
-  // WHY a tolerance: a mark fires from a timer armed at `startedAt`, and the elapsed
-  // it reports is a second Date.now() read. libuv rounds timers to its own tick, so a
-  // 60 ms mark can report 59 (Ubuntu CI, 2026-09-16, run 35089626563). What the
-  // assertions pin is that each mark measures from the run's OWN start, not the
-  // adopt time — a few milliseconds of clock jitter does not touch that.
+  // WHY a tolerance: libuv rounds timers to its own tick, so a 60 ms mark can report 59; the pin is that marks measure from the run's OWN start.
   const JITTER_MS = 5;
   let dir: string;
   let reg: ShellRegistry;
@@ -493,8 +450,7 @@ describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
   it.skipIf(!posix)('a run still going at each mark emits long-running once per mark, elapsed measured from its own start', async () => {
     const marks: Array<{ shellId: string; ms: number }> = [];
     reg.on('long-running', (run, ms) => marks.push({ shellId: run.shellId, ms }));
-    const r = reg.start(startSpec('sleep 5', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('sleep 5', dir));
     await waitFor(() => marks.length === 2);
     expect(marks.map((m) => m.shellId)).toEqual([r.run.shellId, r.run.shellId]);
     expect(marks[0].ms).toBeGreaterThanOrEqual(60 - JITTER_MS);
@@ -506,18 +462,14 @@ describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
     const marks: number[] = [];
     reg.on('long-running', (_run, ms) => marks.push(ms));
     const started = Date.now();
-    const r = reg.start(startSpec('echo hi', dir));
-    if (!r.ok) throw new Error('start failed');
+    const r = startOk(reg, startSpec('echo hi', dir));
     expect(r.run.longRunTimers).toHaveLength(2);
     await r.run.exited;
     const ranMs = Date.now() - started;
     // The exit path clears the timers — the structural guard that nothing can
     // fire later for a run that is no longer running.
     expect(r.run.longRunTimers).toHaveLength(0);
-    // WHY measured, not assumed (2026-10-09): at load average ~45 even `echo` outlived the 60 ms
-    // mark, so a mark fired WHILE it ran — correct behaviour — and "no marks" failed a full run.
-    // The promise under test is "nothing fires after exit": wait past the last mark and check
-    // no mark arrived late. When the run did finish before the first mark, none fired at all.
+    // WHY measured: under heavy load even `echo` outlives the 60 ms mark; the promise is only that nothing fires AFTER exit.
     const atExit = marks.length;
     // settle (negative assertion): no mark may fire after exit.
     await new Promise((res) => setTimeout(res, 200));
@@ -538,7 +490,7 @@ describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
   });
 });
 
-// ---- Audit 2026-10-22 D2-D5: what a card can say after the app restarted -----
+// What a card can say after the app restarted.
 import { NativeHome } from '../src/main/native-home';
 import { ShellSidecar, readPersistedShells, type PersistedShellRun } from '../src/main/harness/shell-sidecar';
 
@@ -559,8 +511,7 @@ describe.skipIf(!posix)('ShellRegistry record fidelity and restart recovery', ()
 
   it('the run view names the command and its description (D5)', async () => {
     const { r } = mk();
-    const res = r.start({ ...startSpec('echo hi', dir), description: 'say hi' });
-    if (!res.ok) throw new Error('start failed');
+    const res = startOk(r, { ...startSpec('echo hi', dir), description: 'say hi' });
     const v = r.toView(res.run);
     expect(v.command).toBe('echo hi');
     expect(v.description).toBe('say hi');
@@ -569,8 +520,7 @@ describe.skipIf(!posix)('ShellRegistry record fidelity and restart recovery', ()
 
   it('a command killed by a signal nobody sent reports the signal, not "Exit ?" (D5)', async () => {
     const { r } = mk();
-    const res = r.start(startSpec('kill -9 $$', dir));
-    if (!res.ok) throw new Error('start failed');
+    const res = startOk(r, startSpec('kill -9 $$', dir));
     await res.run.exited;
     const v = r.toView(res.run);
     expect(v.status).toBe('exited');
@@ -580,8 +530,7 @@ describe.skipIf(!posix)('ShellRegistry record fidelity and restart recovery', ()
 
   it('writes the real outcome to disk so a restart can show it (D2)', async () => {
     const { r, sidecar } = mk();
-    const res = r.start(startSpec('echo done; exit 3', dir, 'tu-9'));
-    if (!res.ok) throw new Error('start failed');
+    const res = startOk(r, startSpec('echo done; exit 3', dir, 'tu-9'));
     await res.run.exited; await sidecar.flush();
     const saved = await readPersistedShells(home, CWD, SID);
     expect(saved).toHaveLength(1);
@@ -605,8 +554,7 @@ describe.skipIf(!posix)('ShellRegistry record fidelity and restart recovery', ()
   it('a command still running after a crash is reported running and Stop works (D3)', async () => {
     if (process.platform !== 'linux') return; // identity check is Linux-only; other systems say "may still be running"
     const { r, sidecar } = mk();
-    const res = r.start(startSpec('sleep 60', dir, 'tu-live'));
-    if (!res.ok) throw new Error('start failed');
+    const res = startOk(r, startSpec('sleep 60', dir, 'tu-live'));
     await vi.waitFor(async () => expect((await readPersistedShells(home, CWD, SID))[0]?.procStart).toBeTruthy());
     await sidecar.flush();
     const pid = res.run.child.pid!;

@@ -1,7 +1,4 @@
-// State-machine tests for the platform-owned presence socket (Task 6).
-// Uses the injectable WebSocketCtor + vitest fake timers — NO network, no real
-// 'ws' sockets. The fake models exactly the event-emitter surface the manager
-// consumes (on/send/close/readyState).
+// State machine of the platform-owned presence socket, via an injected WebSocketCtor + fake timers (no network).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createPresenceSocket, probeHiddenPresence, wakeEvidence, SUSPEND_GRACE_MS, HUMAN_INPUT_TYPES, type PresenceWebSocketLike } from '../src/main/presence-socket';
 
@@ -39,17 +36,21 @@ function makeSocket(getToken: () => string | null) {
   return { sock, events };
 }
 
+beforeEach(() => { FakeSocket.instances = []; vi.useFakeTimers(); });
+afterEach(() => { vi.useRealTimers(); });
+
+/** A socket whose first connection is open: the starting point of most tests. */
+function openSocket(getToken: () => string | null = () => 'tok') {
+  const made = makeSocket(getToken);
+  made.sock.setDesired(true);
+  const inst = FakeSocket.instances[0];
+  inst.emit('open');
+  return { ...made, inst };
+}
+
 const types = (events: Array<Record<string, unknown>>) => events.map((e) => e.type);
 
 describe('presence-socket state machine', () => {
-  beforeEach(() => {
-    FakeSocket.instances = [];
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it('connects, emits connected, starts the JSON ping loop, reports isConnected', () => {
     const { sock, events } = makeSocket(() => 'tok');
     sock.setDesired(true);
@@ -73,8 +74,7 @@ describe('presence-socket state machine', () => {
     sock.setDesired(true);
     const inst = FakeSocket.instances[0];
 
-    // Disconnect BEFORE the handshake completes (Task 7 toggles on
-    // signedIn/incognito/leader changes, so this window is reachable).
+    // Disconnect BEFORE the handshake completes (signedIn/incognito/leader changes make this window reachable).
     sock.setDesired(false);
     expect(events).toEqual([{ type: 'disconnected', code: 1000, reason: 'local' }]);
     expect(inst.closeCalls).toHaveLength(1);
@@ -111,9 +111,7 @@ describe('presence-socket state machine', () => {
   });
 
   it('retries on capped backoff and resets attempts on a successful open', () => {
-    const { sock, events } = makeSocket(() => 'tok');
-    sock.setDesired(true);
-    FakeSocket.instances[0].emit('open');
+    const { sock, events } = openSocket();
     FakeSocket.instances[0].emit('close', 1006, 'blip');
     expect(types(events)).toEqual(['connected', 'disconnected']);
 
@@ -152,17 +150,12 @@ describe('presence-socket state machine', () => {
   });
 
   it('renderer-reload replay: setDesired(true) on an already-open socket re-emits connected + the cached presence frame', () => {
-    const { sock, events } = makeSocket(() => 'tok');
-    sock.setDesired(true);
-    const inst = FakeSocket.instances[0];
-    inst.emit('open');
+    const { sock, events, inst } = openSocket();
     const presenceFrame = { type: 'presence', users: [{ id: 'github:2', display_name: 'Bob', handle: 'bob', status: 'idle' }] };
     inst.emit('message', JSON.stringify(presenceFrame));
     expect(types(events)).toEqual(['connected', 'presence']);
 
-    // A reloaded renderer (dev HMR / Ctrl+R) re-invokes presence-connect while
-    // main still holds the open socket — without the replay it would stick on
-    // "Connecting…" forever because only 'connected' flips the reducer flag.
+    // WHY: a reloaded renderer re-invokes presence-connect while main holds the open socket; only 'connected' flips the reducer flag, so without the replay it sticks on "Connecting...".
     sock.setDesired(true);
     expect(types(events)).toEqual(['connected', 'presence', 'connected', 'presence']);
     expect(events[3]).toEqual(presenceFrame); // the CACHED snapshot, replayed verbatim
@@ -171,10 +164,7 @@ describe('presence-socket state machine', () => {
   });
 
   it('renderer-reload replay folds deltas into the cached snapshot — departed friends are not resurrected', () => {
-    const { sock, events } = makeSocket(() => 'tok');
-    sock.setDesired(true);
-    const inst = FakeSocket.instances[0];
-    inst.emit('open');
+    const { sock, events, inst } = openSocket();
     const bob = { id: 'github:2', display_name: 'Bob', handle: 'bob', status: 'idle' };
     inst.emit('message', JSON.stringify({ type: 'presence', users: [bob] }));
 
@@ -184,9 +174,7 @@ describe('presence-socket state machine', () => {
     inst.emit('message', JSON.stringify({ type: 'user-status', id: 'github:3', status: 'in-game' }));
     inst.emit('message', JSON.stringify({ type: 'user-left', id: 'github:2' }));
 
-    // A renderer reload must see the CURRENT roster, not the connect-time one —
-    // replaying stale users is the client-side twin of the server ghost bug
-    // (a departed friend pinned "Online" until the next full snapshot).
+    // WHY: replaying the connect-time roster would pin a departed friend "Online" until the next full snapshot.
     const before = events.length;
     sock.setDesired(true);
     const replayed = events.slice(before);
@@ -206,28 +194,20 @@ describe('presence-socket state machine', () => {
   });
 
   it('system suspend closes the socket cleanly and resume reconnects (renderer intent preserved)', () => {
-    const { sock, events } = makeSocket(() => 'tok');
-    sock.setDesired(true);
-    const inst = FakeSocket.instances[0];
-    inst.emit('open');
+    const { sock, events, inst } = openSocket();
     expect(sock.isConnected()).toBe(true);
 
-    // Lid close / OS sleep → powerMonitor 'suspend'. The close frame must go
-    // out NOW (while the network is still up) so friends see "Last seen just
-    // now" immediately instead of waiting out the server's staleness timeout.
+    // powerMonitor 'suspend': the close frame goes out NOW (network still up) so friends see "Last seen just now".
     sock.setSuspended(true);
     expect(inst.closeCalls).toHaveLength(1);
     expect(events.at(-1)).toMatchObject({ type: 'disconnected', reason: 'local' });
     expect(sock.isConnected()).toBe(false);
 
-    // macOS dark wake: the process may briefly run while still "asleep" —
-    // no reconnect and no pings may fire ('resume' never fired).
+    // macOS dark wake: no reconnect and no pings while still "asleep".
     vi.advanceTimersByTime(300_000);
     expect(FakeSocket.instances).toHaveLength(1);
     expect(inst.sent).toEqual([]);
 
-    // Real wake → powerMonitor 'resume': reconnect because the renderer still
-    // wants presence on.
     sock.setSuspended(false);
     expect(FakeSocket.instances).toHaveLength(2);
     sock.destroy();
@@ -235,22 +215,19 @@ describe('presence-socket state machine', () => {
 
   it('suspend respects renderer intent: off stays off across resume, and intent changes made while asleep win', () => {
     const { sock } = makeSocket(() => 'tok');
-    // Renderer never asked for presence (signed out / incognito): suspend and
-    // resume must not conjure a connection.
+    // Presence never asked for: suspend/resume must not conjure a connection.
     sock.setSuspended(true);
     sock.setSuspended(false);
     expect(FakeSocket.instances).toHaveLength(0);
 
-    // Renderer turns presence ON while suspended (e.g. sign-in completes just
-    // as the lid closes): remembered, but no socket until resume.
+    // Turned ON while suspended: remembered, no socket until resume.
     sock.setSuspended(true);
     sock.setDesired(true);
     expect(FakeSocket.instances).toHaveLength(0);
     sock.setSuspended(false);
     expect(FakeSocket.instances).toHaveLength(1);
 
-    // Renderer turns presence OFF while suspended (incognito toggle mid-sleep):
-    // resume must NOT reconnect.
+    // Turned OFF while suspended: resume must NOT reconnect.
     sock.setSuspended(true);
     sock.setDesired(false);
     sock.setSuspended(false);
@@ -259,14 +236,9 @@ describe('presence-socket state machine', () => {
   });
 
   it('user-idle gate: extended idleness closes the socket, activity reconnects, renderer intent preserved', () => {
-    const { sock, events } = makeSocket(() => 'tok');
-    sock.setDesired(true);
-    const inst = FakeSocket.instances[0];
-    inst.emit('open');
+    const { sock, events, inst } = openSocket();
 
-    // 10+ min with no input anywhere (system or remote): presence must drop so
-    // "Online" means a HUMAN is around — an app left running on an awake
-    // machine (e.g. remote-access keep-awake) must not read online forever.
+    // WHY: "Online" must mean a HUMAN is around; an app left running on an awake machine must not read online forever.
     sock.setIdle(true);
     expect(inst.closeCalls).toHaveLength(1);
     expect(events.at(-1)).toMatchObject({ type: 'disconnected', reason: 'local' });
@@ -286,17 +258,14 @@ describe('presence-socket state machine', () => {
   });
 
   it('idle and suspend gates are independent: both must clear before reconnecting', () => {
-    const { sock } = makeSocket(() => 'tok');
-    sock.setDesired(true);
-    FakeSocket.instances[0].emit('open');
+    const { sock } = openSocket();
 
     // Machine goes idle, THEN sleeps (the normal order at a desk).
     sock.setIdle(true);
     sock.setSuspended(true);
     expect(FakeSocket.instances).toHaveLength(1);
 
-    // Wake without input (dark wake / lid opened by a bump): still idle — the
-    // resume alone must NOT reconnect and flash a false "Online" at friends.
+    // Wake without input: still idle, so resume alone must NOT flash a false "Online" at friends.
     sock.setSuspended(false);
     expect(FakeSocket.instances).toHaveLength(1);
 
@@ -308,8 +277,6 @@ describe('presence-socket state machine', () => {
 
   it('send is a silent no-op when disconnected; isConnected gates the honest handler receipt', () => {
     const { sock } = makeSocket(() => 'tok');
-    // The manager itself no-ops; the HANDLER (social-handlers.ts) consults
-    // isConnected() to return {ok:false, status:0, message:'not connected'}.
     expect(sock.isConnected()).toBe(false);
     sock.send({ type: 'status', status: 'idle' }); // must not throw
 
@@ -323,23 +290,14 @@ describe('presence-socket state machine', () => {
   });
 });
 
-// Roadmap (other-features, 2026-08-11): a friend read "Last seen 7/26/2026"
-// while using the app; presence never came back short of a relaunch. The
-// suspend latch had exactly one clearing edge (powerMonitor 'resume'), and the
-// 'wait' no-token policy could wedge the engine with no retry scheduled.
-// Spec: docs/active/specs/2026-08-11-presence-self-healing-design.md.
+// WHY: a friend read "Last seen 7/26" while using the app, because the suspend latch had one clearing edge ('resume') and the no-token 'wait' policy could wedge with no retry.
 describe('presence self-healing', () => {
-  beforeEach(() => { FakeSocket.instances = []; vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
-
   describe('wakeEvidence', () => {
     const t0 = 1_000_000_000;
     it('THE WEDGE: suspend, no resume ever, then a click in a YouCoded window → the latch clears', () => {
       expect(wakeEvidence({ now: t0 + 120_000, suspendedAt: t0, lastAppInputAt: t0 + 110_000 })).toBe('app-input');
     });
-    // Review F1: macOS / Windows Modern Standby may pause or RESET the system
-    // idle clock across sleep. A lid-shut maintenance wake then reports
-    // idleSeconds 0 and a huge wall-clock gap — neither may release the latch.
+    // WHY: macOS / Modern Standby may RESET the idle clock across sleep, so idleSeconds 0 plus a huge clock gap must not release the latch.
     it('an idle clock that reset across sleep, plus a clock gap, does NOT clear it', () => {
       expect(wakeEvidence({
         now: t0 + 3_600_000, suspendedAt: t0, lastAppInputAt: null, idleSeconds: 0, sinceLastTickMs: 3_600_000,
@@ -363,9 +321,7 @@ describe('presence self-healing', () => {
   });
 
   it('clearing suspended while still idle does not connect (a dark wake cannot flash Online)', () => {
-    const { sock } = makeSocket(() => 'tok');
-    sock.setDesired(true);
-    FakeSocket.instances[0].emit('open');
+    const { sock } = openSocket();
     sock.setSuspended(true);
     sock.setIdle(true);
     sock.setSuspended(false); // e.g. an unlock while the idle gate still holds
@@ -388,9 +344,7 @@ describe('presence self-healing', () => {
       sock.destroy();
     });
     it('never touches a healthy socket (no replay spam)', () => {
-      const { sock, events } = makeSocket(() => 'tok');
-      sock.setDesired(true);
-      FakeSocket.instances[0].emit('open');
+      const { sock, events } = openSocket();
       const before = events.length;
       expect(sock.repairIfStalled()).toBe(false);
       expect(events.length).toBe(before);
@@ -437,13 +391,8 @@ describe('presence self-healing', () => {
   });
 });
 
-// Incognito = a HIDDEN connection (presence-socket.ts HIDDEN MODE): this device receives friends'
-// presence and is never shown to them. An older server would ignore the flag and show the user,
-// so the client keeps the connection only when the server's FIRST frame confirms hidden mode.
+// Incognito = a HIDDEN connection: receives friends' presence, never shown. An older server would ignore the flag and show the user, so the client keeps it only when the server's FIRST frame confirms hidden mode.
 describe('presence-socket hidden mode (incognito)', () => {
-  beforeEach(() => { FakeSocket.instances = []; vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
-
   it('asks for hidden mode in the address and is connected only after the hello confirms it', () => {
     const { sock, events } = makeSocket(() => 'tok');
     sock.setHidden(true);
@@ -492,7 +441,7 @@ describe('presence-socket hidden mode (incognito)', () => {
     sock.destroy();
   });
 
-  // Final review F2: switching to hidden used to open the `?hidden=1` socket at once — before the
+  // WHY: switching to hidden used to open the `?hidden=1` socket at once — before the
   // server had been asked whether it can hide this device, so an older server announced the user.
   it('switching to hidden closes the visible connection and opens NOTHING until told to connect', () => {
     const { sock } = makeSocket(() => 'tok');
@@ -512,7 +461,7 @@ describe('presence-socket hidden mode (incognito)', () => {
     sock.destroy();
   });
 
-  // Final review F25: a late frame from the socket just replaced must not judge the new one.
+  // WHY: a late frame from the socket just replaced must not judge the new one.
   it('a late frame from the replaced visible socket does not tear down the new hidden one', () => {
     const { sock, events } = makeSocket(() => 'tok');
     sock.setDesired(true);
@@ -530,7 +479,7 @@ describe('presence-socket hidden mode (incognito)', () => {
     sock.destroy();
   });
 
-  // Final review F30: a frame dropped because this device is hidden is reported as not sent.
+  // WHY: a frame dropped because this device is hidden is reported as not sent.
   it('send() reports whether the frame left the device', () => {
     const { sock } = makeSocket(() => 'tok');
     sock.setHidden(true);
@@ -550,7 +499,7 @@ describe('presence-socket hidden mode (incognito)', () => {
     expect(await probeHiddenPresence(answer(200, { hidden: true }))).toBe('yes');
     expect(await probeHiddenPresence(answer(404, { error: 'not found' }))).toBe('no'); // older server
     expect(await probeHiddenPresence(answer(200, { hidden: false }))).toBe('no');
-    // Final review F4: a check that could not be made is not a "no" — it is retried.
+    // A check that could not be made is not a "no" — it is retried.
     const offline = vi.fn(async () => { throw new Error('offline'); }) as unknown as typeof fetch;
     expect(await probeHiddenPresence(offline)).toBe('unknown');
     expect(await probeHiddenPresence(answer(503, { error: 'down' }))).toBe('unknown');

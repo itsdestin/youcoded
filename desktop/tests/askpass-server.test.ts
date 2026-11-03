@@ -18,14 +18,7 @@ import { RunningCalls } from '../src/main/harness/askpass/running-calls';
 import type { ProcReader, ProcStat, PidHandle } from '../src/main/harness/askpass/proc-info';
 import type { VerifyResult } from '../src/main/harness/askpass/verify';
 
-/** Only the three methods AskpassServer's own post-harden re-check calls
- *  directly (startTime, tracerPid, environ) matter here — `verify()` itself
- *  is injected per test, so this reader never feeds the identity chain.
- *  Every connection in this file is this SAME test process talking to
- *  itself, so there's only ever one real pid in play; the fake ignores
- *  which pid it's asked about and answers "still the same untraced,
- *  now-hardened process" unconditionally, which is exactly the state a
- *  real hardened helper would be in when everything is healthy. */
+/** Answers "still the same untraced, now-hardened process" for any pid: every connection here is this test process talking to itself. */
 function makeHealthyReader(): ProcReader {
   const FIXED_START_TIME = 4242;
   return {
@@ -47,11 +40,7 @@ interface TrackedPin {
   closed: boolean;
 }
 
-/** Wraps a reader so every `pidfdOpen` call returns a real, trackable
- *  handle instead of null — the fake readers elsewhere in this file never
- *  return one, which means the server's own pin-holding logic (kept open
- *  through the harden round-trip, closed only by deliver/refuse/withdraw)
- *  is otherwise completely untested from this side. */
+/** Makes every pidfdOpen return a trackable handle, so the server's pin-holding logic is observable. */
 function withTrackablePins(base: ProcReader): { reader: ProcReader; pins: TrackedPin[] } {
   const pins: TrackedPin[] = [];
   const reader: ProcReader = {
@@ -121,9 +110,7 @@ async function startTestServer(options?: TestServerOptions): Promise<TestServer>
   };
 }
 
-/** Drives the client half of the real protocol: connect, send the v:2
- *  handshake, read lines back with a small helper. Used by every test
- *  below instead of duplicating socket plumbing per test. */
+/** The client half of the real protocol: connect, send the v:2 handshake, read lines back. */
 class TestClient {
   readonly socket: net.Socket;
   private buffer = Buffer.alloc(0);
@@ -196,10 +183,7 @@ function waitForAsk(server: AskpassServer): Promise<AskpassAskEvent> {
   return new Promise((resolve) => server.once('ask', resolve));
 }
 
-/** Runs steps 1–4 of the real protocol (handshake, verify, harden
- *  round-trip) and returns once the server has emitted 'ask' — i.e. right
- *  where a test wants to take over and call deliver()/refuse(), or close
- *  the client to exercise withdrawal. */
+/** Runs handshake, verify and the harden round-trip; returns once the server has emitted 'ask'. */
 async function driveToAsk(server: AskpassServer, socketPath: string): Promise<{ client: TestClient; ask: AskpassAskEvent }> {
   const client = new TestClient(socketPath);
   await client.connect();
@@ -222,36 +206,36 @@ const OK_VERIFY_RESULT = (overrides?: Partial<Extract<VerifyResult, { ok: true }
   ...overrides,
 });
 
-// WHY these platform skips: the admin-password feature only ever starts on
-// Linux (admin-password-startup.ts — macOS stays off, Windows has no sudo).
-// The suites below drive a REAL Unix-socket server, the real /bin/sh wrapper
-// or POSIX exec bits; on Windows the socket listen is refused (EACCES) and the
-// helper waits out the 30 s timeout, and on macOS the kernel peer-pid self-test
-// and the OS-injected __CF_USER_TEXT_ENCODING variable make them fail for
-// reasons no user can reach. Suites that hold on every platform still run.
+// WHY these platform skips: the admin-password feature only ever starts on Linux; on Windows the socket listen is refused (EACCES)
+// and on macOS the kernel peer-pid self-test and the OS-injected __CF_USER_TEXT_ENCODING make these fail for reasons no user can reach.
 const NOT_LINUX = process.platform !== 'linux';
+
+/** A started server with call root 222 registered and a healthy verify result — the setup most tests share. */
+async function askSetup(opts: TestServerOptions & { verify?: Partial<Extract<VerifyResult, { ok: true }>>; specialist?: string } = {}) {
+  const t = await startTestServer(opts);
+  t.runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1', ...(opts.specialist ? { specialist: opts.specialist } : {}) });
+  t.setVerifyResult(OK_VERIFY_RESULT(opts.verify));
+  return t;
+}
+
+/** Connects, sends the handshake and returns the first reply line (no harden step). */
+async function handshake(server: AskpassServer): Promise<{ client: TestClient; reply: unknown }> {
+  const client = new TestClient(server.socketPath!);
+  await client.connect();
+  client.send({ v: 2 });
+  return { client, reply: JSON.parse(await client.nextLine()) };
+}
 
 describe.skipIf(NOT_LINUX)('AskpassServer: happy path', () => {
   it('delivers a password: writes {"ok":true,"password":…} exactly once and zeroes the caller Buffer', async () => {
-    const { server, runningCalls, setVerifyResult } = await startTestServer();
-    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
-    setVerifyResult(OK_VERIFY_RESULT());
-
+    const { server } = await askSetup();
     const { client, ask } = await driveToAsk(server, server.socketPath!);
-    expect(ask.sudoPid).toBe(111);
-    expect(ask.callRoot).toBe(222);
-    expect(ask.sessionId).toBe('sess-1');
-    expect(ask.toolCallId).toBe('tool-1');
-    expect(ask.attempt).toBe(0);
+    expect(ask).toMatchObject({ sudoPid: 111, callRoot: 222, sessionId: 'sess-1', toolCallId: 'tool-1', attempt: 0 });
 
     const password = Buffer.from('sentinel-pw-deliver', 'utf8');
-    const delivered = server.deliver(ask.askId, password);
-    expect(delivered).toBe(true);
-    expect(password.every((b) => b === 0)).toBe(true); // zeroed immediately after write
-
-    const reply = await client.nextLine();
-    expect(JSON.parse(reply)).toEqual({ ok: true, password: 'sentinel-pw-deliver' });
-
+    expect(server.deliver(ask.askId, password)).toBe(true);
+    expect(password.every((b) => b === 0)).toBe(true);
+    expect(JSON.parse(await client.nextLine())).toEqual({ ok: true, password: 'sentinel-pw-deliver' });
     // A second deliver for the same (already-resolved) askId is a no-op.
     expect(server.deliver(ask.askId, Buffer.from('x'))).toBe(false);
 
@@ -260,14 +244,10 @@ describe.skipIf(NOT_LINUX)('AskpassServer: happy path', () => {
   });
 
   it('refuses: writes {"ok":false} and the askId cannot be reused', async () => {
-    const { server, runningCalls, setVerifyResult } = await startTestServer();
-    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
-    setVerifyResult(OK_VERIFY_RESULT());
-
+    const { server } = await askSetup();
     const { client, ask } = await driveToAsk(server, server.socketPath!);
     expect(server.refuse(ask.askId)).toBe(true);
-    const reply = await client.nextLine();
-    expect(JSON.parse(reply)).toEqual({ ok: false });
+    expect(JSON.parse(await client.nextLine())).toEqual({ ok: false });
     expect(server.refuse(ask.askId)).toBe(false);
 
     client.destroy();
@@ -281,32 +261,21 @@ describe.skipIf(NOT_LINUX)('AskpassServer: happy path', () => {
     await server.stop();
   });
 
-  it('emits "withdrawn" when the client closes before deliver/refuse', async () => {
-    const { server, runningCalls, setVerifyResult } = await startTestServer();
-    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
-    setVerifyResult(OK_VERIFY_RESULT());
-
+  it('emits "withdrawn" when the client closes before deliver/refuse, and the ask is gone', async () => {
+    const { server } = await askSetup();
     const { client, ask } = await driveToAsk(server, server.socketPath!);
-    const withdrawnPromise = new Promise<string>((resolve) => server.once('withdrawn', resolve));
+    const withdrawn = new Promise<string>((resolve) => server.once('withdrawn', resolve));
     client.destroy();
-    const withdrawnAskId = await withdrawnPromise;
-    expect(withdrawnAskId).toBe(ask.askId);
-
-    // The withdrawn ask is gone from the pending set — refuse/deliver on it
-    // now both report "expired".
+    expect(await withdrawn).toBe(ask.askId);
     expect(server.refuse(ask.askId)).toBe(false);
-
     await server.stop();
   });
 
   it('counts attempts per sudo pid: 0 on the first ask, 1 on a retry from the same sudo pid', async () => {
-    const { server, runningCalls, setVerifyResult } = await startTestServer();
-    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
-    setVerifyResult(OK_VERIFY_RESULT({ sudoPid: 777 }));
-
+    const { server } = await askSetup({ verify: { sudoPid: 777 } });
     const first = await driveToAsk(server, server.socketPath!);
     expect(first.ask.attempt).toBe(0);
-    server.refuse(first.ask.askId); // wrong password — sudo will retry under the SAME sudo pid
+    server.refuse(first.ask.askId); // wrong password — sudo retries under the SAME sudo pid
     first.client.destroy();
 
     const second = await driveToAsk(server, server.socketPath!);
@@ -319,10 +288,7 @@ describe.skipIf(NOT_LINUX)('AskpassServer: happy path', () => {
   });
 
   it('resolves "via" straight through from verify() onto the ask event', async () => {
-    const { server, runningCalls, setVerifyResult } = await startTestServer();
-    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1', specialist: 'reviewer' });
-    setVerifyResult(OK_VERIFY_RESULT({ via: 'install.sh' }));
-
+    const { server } = await askSetup({ verify: { via: 'install.sh' }, specialist: 'reviewer' });
     const { client, ask } = await driveToAsk(server, server.socketPath!);
     expect(ask.via).toBe('install.sh');
     expect(ask.specialist).toBe('reviewer');
@@ -337,16 +303,10 @@ describe.skipIf(NOT_LINUX)('AskpassServer: refusals before an ask is ever raised
   it('refuses when verify() itself fails — no ask is emitted', async () => {
     const { server, setVerifyResult } = await startTestServer();
     setVerifyResult({ ok: false, reason: 'wrong-exe' });
-
-    const client = new TestClient(server.socketPath!);
-    await client.connect();
     let askFired = false;
-    server.once('ask', () => {
-      askFired = true;
-    });
-    client.send({ v: 2 });
-    const reply = await client.nextLine();
-    expect(JSON.parse(reply)).toEqual({ ok: false });
+    server.once('ask', () => { askFired = true; });
+    const { client, reply } = await handshake(server);
+    expect(reply).toEqual({ ok: false });
     expect(askFired).toBe(false);
 
     client.destroy();
@@ -356,16 +316,13 @@ describe.skipIf(NOT_LINUX)('AskpassServer: refusals before an ask is ever raised
   it('after a refusal, names the Bash call it belonged to so the command can explain it', async () => {
     const { server, runningCalls, setVerifyResult } = await startTestServer();
     setVerifyResult({ ok: false, reason: 'parent-not-setuid' });
-    // The kernel peer is this test process; register it as a call root with the
-    // start time the healthy reader reports, as bash.ts would for a real call.
+    // The kernel peer is this test process; register it as a call root with the healthy reader's start time.
     runningCalls.register(process.pid, 4242, { sessionId: 'sess-9', toolCallId: 'tool-9' });
     const refused: unknown[] = [];
     server.on('refused', (e) => refused.push(e));
 
-    const client = new TestClient(server.socketPath!);
-    await client.connect();
-    client.send({ v: 2 });
-    expect(JSON.parse(await client.nextLine())).toEqual({ ok: false });
+    const { client, reply } = await handshake(server);
+    expect(reply).toEqual({ ok: false });
     await vi.waitFor(() => expect(refused).toEqual([{ toolCallId: 'tool-9', sessionId: 'sess-9', reason: 'parent-not-setuid' }]));
 
     client.destroy();
@@ -378,11 +335,9 @@ describe.skipIf(NOT_LINUX)('AskpassServer: refusals before an ask is ever raised
     const refused: unknown[] = [];
     server.on('refused', (e) => refused.push(e));
 
-    const client = new TestClient(server.socketPath!);
-    await client.connect();
-    client.send({ v: 2 });
-    expect(JSON.parse(await client.nextLine())).toEqual({ ok: false });
-    await new Promise((r) => setImmediate(r));
+    const { client, reply } = await handshake(server);
+    expect(reply).toEqual({ ok: false });
+    await new Promise((r) => setImmediate(r)); // settle
     expect(refused).toEqual([]);
 
     client.destroy();
@@ -399,15 +354,10 @@ describe.skipIf(NOT_LINUX)('AskpassServer: refusals before an ask is ever raised
   });
 
   it('refuses when the call root is not (or no longer) registered', async () => {
-    const { server, setVerifyResult } = await startTestServer();
-    // No runningCalls.register() call at all — callRoot 222 is unknown.
+    const { server, setVerifyResult } = await startTestServer(); // nothing registered: callRoot 222 is unknown
     setVerifyResult(OK_VERIFY_RESULT());
-
-    const client = new TestClient(server.socketPath!);
-    await client.connect();
-    client.send({ v: 2 });
-    const reply = await client.nextLine();
-    expect(JSON.parse(reply)).toEqual({ ok: false });
+    const { client, reply } = await handshake(server);
+    expect(reply).toEqual({ ok: false });
 
     client.destroy();
     await server.stop();
@@ -415,34 +365,17 @@ describe.skipIf(NOT_LINUX)('AskpassServer: refusals before an ask is ever raised
 });
 
 describe.skipIf(NOT_LINUX)('AskpassServer: the helper pin stays open through the harden round-trip', () => {
-  it('is still open right when the ask is raised, and closes on deliver', async () => {
+  // WHY: if the pin only covered verify()'s own chain, it would already be closed when 'ask' fires.
+  it.each([
+    ['deliver', (s: AskpassServer, id: string) => s.deliver(id, Buffer.from('pw'))],
+    ['refuse', (s: AskpassServer, id: string) => s.refuse(id)],
+  ])('is still open when the ask is raised, and closes on %s', async (_n, finish) => {
     const { reader, pins } = withTrackablePins(makeHealthyReader());
-    const { server, runningCalls, setVerifyResult } = await startTestServer({ reader });
-    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
-    setVerifyResult(OK_VERIFY_RESULT());
-
+    const { server } = await askSetup({ reader });
     const { client, ask } = await driveToAsk(server, server.socketPath!);
-    // By the time 'ask' fires, verify() AND the whole harden round-trip
-    // (steps 3-5) are already done — if the pin only covered verify()'s own
-    // chain (T3-1's original gap), it would already be closed here.
     expect(pins.length).toBe(1);
     expect(pins[0].closed).toBe(false);
-
-    server.deliver(ask.askId, Buffer.from('pw'));
-    expect(pins[0].closed).toBe(true);
-
-    client.destroy();
-    await server.stop();
-  });
-
-  it('closes on refuse', async () => {
-    const { reader, pins } = withTrackablePins(makeHealthyReader());
-    const { server, runningCalls, setVerifyResult } = await startTestServer({ reader });
-    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
-    setVerifyResult(OK_VERIFY_RESULT());
-
-    const { client, ask } = await driveToAsk(server, server.socketPath!);
-    server.refuse(ask.askId);
+    finish(server, ask.askId);
     expect(pins[0].closed).toBe(true);
 
     client.destroy();
@@ -451,14 +384,11 @@ describe.skipIf(NOT_LINUX)('AskpassServer: the helper pin stays open through the
 
   it('closes when the client withdraws before deliver/refuse', async () => {
     const { reader, pins } = withTrackablePins(makeHealthyReader());
-    const { server, runningCalls, setVerifyResult } = await startTestServer({ reader });
-    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
-    setVerifyResult(OK_VERIFY_RESULT());
-
-    const { client, ask } = await driveToAsk(server, server.socketPath!);
-    const withdrawnPromise = new Promise<string>((resolve) => server.once('withdrawn', resolve));
+    const { server } = await askSetup({ reader });
+    const { client } = await driveToAsk(server, server.socketPath!);
+    const withdrawn = new Promise<string>((resolve) => server.once('withdrawn', resolve));
     client.destroy();
-    await withdrawnPromise;
+    await withdrawn;
     expect(pins[0].closed).toBe(true);
 
     await server.stop();
@@ -468,11 +398,7 @@ describe.skipIf(NOT_LINUX)('AskpassServer: the helper pin stays open through the
     const { reader, pins } = withTrackablePins(makeHealthyReader());
     const { server, setVerifyResult } = await startTestServer({ reader });
     setVerifyResult({ ok: false, reason: 'wrong-exe' });
-
-    const client = new TestClient(server.socketPath!);
-    await client.connect();
-    client.send({ v: 2 });
-    await client.nextLine();
+    const { client } = await handshake(server);
     expect(pins.length).toBe(1);
     expect(pins[0].closed).toBe(true);
 
@@ -483,9 +409,7 @@ describe.skipIf(NOT_LINUX)('AskpassServer: the helper pin stays open through the
 
 describe.skipIf(NOT_LINUX)('AskpassServer: attempt counting checks the sudo pid actually IS the same process', () => {
   it('treats a reused sudo pid number under a different, still-alive call root as a brand-new attempt', async () => {
-    // sudo pid 555 shows up twice with two DIFFERENT recorded start times —
-    // the second occurrence is a genuinely different process that happens
-    // to share the pid number, not a retry of the first.
+    // sudo pid 555 shows up twice with two DIFFERENT start times: a different process sharing the pid number, not a retry.
     const startTimesForSudoPid555 = [100, 200];
     let sudoReadCount = 0;
     const reader: ProcReader = {
@@ -508,7 +432,7 @@ describe.skipIf(NOT_LINUX)('AskpassServer: attempt counting checks the sudo pid 
 
     setVerifyResult(OK_VERIFY_RESULT({ sudoPid: 555, callRoot: 333 }));
     const second = await driveToAsk(server, server.socketPath!);
-    expect(second.ask.attempt).toBe(0); // NOT 1 — this is not a continuation of call 222's tries
+    expect(second.ask.attempt).toBe(0); // NOT 1 — not a continuation of call 222's tries
     expect(second.ask.callRoot).toBe(333);
 
     server.deliver(second.ask.askId, Buffer.from('pw-b'));
@@ -522,23 +446,15 @@ describe.skipIf(NOT_LINUX)('AskpassServer: protocol timeouts and the line-length
     const { server } = await startTestServer({ handshakeTimeoutMs: 30 });
     const client = new TestClient(server.socketPath!);
     await client.connect();
-    // Sends nothing at all.
     await expect(client.nextLine(2000)).rejects.toThrow();
     await server.stop();
   });
 
   it('destroys the connection when the harden confirmation never arrives', async () => {
-    const { server, runningCalls, setVerifyResult } = await startTestServer({ hardenTimeoutMs: 30 });
-    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
-    setVerifyResult(OK_VERIFY_RESULT());
-
-    const client = new TestClient(server.socketPath!);
-    await client.connect();
-    client.send({ v: 2 });
-    const hardenLine = await client.nextLine();
-    expect(JSON.parse(hardenLine)).toEqual({ harden: true });
-    // Never replies with {"hardened":true}.
-    await expect(client.nextLine(2000)).rejects.toThrow();
+    const { server } = await askSetup({ hardenTimeoutMs: 30 });
+    const { client, reply } = await handshake(server);
+    expect(reply).toEqual({ harden: true });
+    await expect(client.nextLine(2000)).rejects.toThrow(); // never replies {"hardened":true}
 
     client.destroy();
     await server.stop();
@@ -556,16 +472,12 @@ describe.skipIf(NOT_LINUX)('AskpassServer: protocol timeouts and the line-length
       verifyTimeoutMs: 30,
       verify: (_pid: number, signal?: AbortSignal) => {
         capturedSignal = signal;
-        return new Promise<VerifyResult>(() => {}); // simulates a hung ancestor walk — never settles
+        return new Promise<VerifyResult>(() => {}); // a hung ancestor walk — never settles
       },
     });
     await server.start();
-
-    const client = new TestClient(server.socketPath!);
-    await client.connect();
-    client.send({ v: 2 });
-    const reply = await client.nextLine(2000);
-    expect(JSON.parse(reply)).toEqual({ ok: false });
+    const { client, reply } = await handshake(server);
+    expect(reply).toEqual({ ok: false });
     expect(capturedSignal?.aborted).toBe(true);
 
     client.destroy();
@@ -582,66 +494,37 @@ describe.skipIf(NOT_LINUX)('AskpassServer: protocol timeouts and the line-length
   });
 });
 
-describe('AskpassServer: startup self-test (real, on Linux)', () => {
-  it.skipIf(process.platform !== 'linux')('start() succeeds and available becomes true via a REAL peer-cred self-test', async () => {
+describe.skipIf(NOT_LINUX)('AskpassServer: startup self-test (real, on Linux)', () => {
+  it('start() makes the server available, and peer-cred.selfTest() independently agrees', async () => {
     const { server } = await startTestServer();
     expect(server.available).toBe(true);
-    await server.stop();
-  });
-
-  it.skipIf(process.platform !== 'linux')('peer-cred.selfTest() independently reports true for the server\'s own socket', async () => {
-    const { server } = await startTestServer();
-    const ok = await peerCredSelfTest(server.socketPath!);
-    expect(ok).toBe(true);
+    expect(await peerCredSelfTest(server.socketPath!)).toBe(true);
     await server.stop();
   });
 });
 
-// Coordinator, 2026-09-26: a crashed app, or a test that started a real
-// AskpassServer and never stopped it, left askpass-<pid>.sock files behind
-// with no owning process — 11 of them were found in Destin's real
-// $XDG_RUNTIME_DIR/youcoded/. start() now sweeps its own directory for
-// exactly that shape on every startup. This test runs the sweep ONLY
-// against `makeTempDir()`'s own temp dir (never the real default socket
-// dir), which is also what keeps it from ever touching a live dev
-// instance's real socket file.
+// WHY: a crashed app, or a test that never stopped a real AskpassServer, left askpass-<pid>.sock files behind (11 found in the real
+// $XDG_RUNTIME_DIR). start() sweeps its own directory; this runs ONLY against a temp dir, never the real socket dir.
 describe.skipIf(NOT_LINUX)('AskpassServer: start() sweeps dead askpass-<pid>.sock files from its own directory', () => {
   it('removes a dead pid\'s socket file, keeps a live pid\'s and an unrelated file untouched', async () => {
     const dir = makeTempDir();
-
-    // A genuinely dead pid: spawn a trivial child and wait for it to exit —
-    // its pid number is then guaranteed to belong to no running process
-    // (modulo the same pid-reuse race every other pid check in this feature
-    // accepts as a residual risk, documented at the top of askpass-server.ts).
-    const deadChild = spawn(process.execPath, ['-e', '']);
-    const deadPid: number = await new Promise((resolve, reject) => {
-      deadChild.once('spawn', () => {
-        const pid = deadChild.pid;
+    // A genuinely dead pid (a child that has exited) and a live one that is NOT this process: the sweep must check the pid in the FILENAME.
+    const pidOf = (child: ReturnType<typeof spawn>, wait: 'close' | 'spawn'): Promise<number> => new Promise((resolve, reject) => {
+      child.once('spawn', () => {
+        const pid = child.pid;
         if (pid === undefined) { reject(new Error('child never got a pid')); return; }
-        deadChild.once('close', () => resolve(pid));
+        if (wait === 'spawn') resolve(pid); else child.once('close', () => resolve(pid));
       });
-      deadChild.once('error', reject);
+      child.once('error', reject);
     });
-
-    // A genuinely live pid, deliberately NOT this test process's own pid —
-    // proves the sweep checks the pid encoded in the FILENAME, not "am I
-    // the one about to claim this directory".
+    const deadPid = await pidOf(spawn(process.execPath, ['-e', '']), 'close');
     const liveChild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)']);
-    const livePid: number = await new Promise((resolve, reject) => {
-      liveChild.once('spawn', () => {
-        const pid = liveChild.pid;
-        if (pid === undefined) reject(new Error('child never got a pid'));
-        else resolve(pid);
-      });
-      liveChild.once('error', reject);
-    });
+    const livePid = await pidOf(liveChild, 'spawn');
 
     const deadSocketPath = path.join(dir, `askpass-${deadPid}.sock`);
     const liveSocketPath = path.join(dir, `askpass-${livePid}.sock`);
     const unrelatedPath = path.join(dir, 'not-a-socket.txt');
-    fs.writeFileSync(deadSocketPath, '');
-    fs.writeFileSync(liveSocketPath, '');
-    fs.writeFileSync(unrelatedPath, 'never touched — does not match the naming scheme');
+    for (const f of [deadSocketPath, liveSocketPath, unrelatedPath]) fs.writeFileSync(f, '');
 
     const server = new AskpassServer({
       execPath: '/fake/execPath',
@@ -651,14 +534,12 @@ describe.skipIf(NOT_LINUX)('AskpassServer: start() sweeps dead askpass-<pid>.soc
       platform: 'linux',
       socketDirOverride: dir,
     });
-
     try {
       await server.start();
       expect(server.available).toBe(true);
-
-      expect(fs.existsSync(deadSocketPath)).toBe(false); // swept — dead pid
-      expect(fs.existsSync(liveSocketPath)).toBe(true); // kept — still alive
-      expect(fs.existsSync(unrelatedPath)).toBe(true); // never inspected
+      expect(fs.existsSync(deadSocketPath)).toBe(false);
+      expect(fs.existsSync(liveSocketPath)).toBe(true);
+      expect(fs.existsSync(unrelatedPath)).toBe(true);
     } finally {
       await server.stop();
       liveChild.kill();
@@ -666,15 +547,8 @@ describe.skipIf(NOT_LINUX)('AskpassServer: start() sweeps dead askpass-<pid>.soc
   });
 });
 
-// Guard, coordinator 2026-09-26: the source of the 11 leaked sockets was
-// test code constructing a real AskpassServer against the real default
-// dir. sweepDeadSockets() above is the last line of defense; this is the
-// first — a cross-file discipline check no type or runtime assertion can
-// express, since it has to look at every OTHER test file's source text.
-// Isolation is either direct (`socketDirOverride`) or, for a test that
-// triggers the real production wiring indirectly (no handle to the
-// internally-constructed server to pass an option to), redirecting
-// `XDG_RUNTIME_DIR` before the call.
+// Cross-file discipline: the 11 leaked sockets came from test code building a real AskpassServer against the real default dir.
+// Isolation is `socketDirOverride`, or an `XDG_RUNTIME_DIR` redirect for tests that trigger the production wiring indirectly.
 describe('AskpassServer: no test file constructs one without isolating its socket dir', () => {
   it('every "new AskpassServer(" in tests/ shares its file with socketDirOverride or an XDG_RUNTIME_DIR override', () => {
     const testsDir = path.resolve(__dirname);
@@ -682,16 +556,11 @@ describe('AskpassServer: no test file constructs one without isolating its socke
     const walk = (dir: string): void => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          walk(full);
-          continue;
-        }
+        if (entry.isDirectory()) { walk(full); continue; }
         if (!entry.name.endsWith('.test.ts') && !entry.name.endsWith('.test.tsx')) continue;
         const contents = fs.readFileSync(full, 'utf8');
         if (!contents.includes('new AskpassServer(')) continue;
-        if (!contents.includes('socketDirOverride') && !contents.includes('XDG_RUNTIME_DIR')) {
-          offenders.push(path.relative(testsDir, full));
-        }
+        if (!contents.includes('socketDirOverride') && !contents.includes('XDG_RUNTIME_DIR')) offenders.push(path.relative(testsDir, full));
       }
     };
     walk(testsDir);
@@ -699,8 +568,7 @@ describe('AskpassServer: no test file constructs one without isolating its socke
   });
 });
 
-// 2026-10-22: every native session's Bash env carries one askpass socket path for
-// the whole run; a deleted file is re-created as sessions start (socket-repair.ts).
+// WHY: every native session's Bash env carries one askpass socket path for the whole run; a deleted file is re-created (socket-repair.ts).
 describe.skipIf(NOT_LINUX)('AskpassServer.ensureListening', () => {
   it('re-creates a deleted socket file that clients can reach again', async () => {
     const { server } = await startTestServer();

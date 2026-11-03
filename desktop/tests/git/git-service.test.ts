@@ -28,27 +28,36 @@ function sh(cwd: string, args: string[]): string {
   });
 }
 
+const RM = { recursive: true, force: true, maxRetries: 10, retryDelay: 25 } as const;
+/** Run `fn` with a fresh canonical (realpath'd) temp dir, always removed afterwards. */
+async function withTmp<T>(prefix: string, fn: (dir: string) => Promise<T>): Promise<T> {
+  const dir = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), prefix)));
+  try { return await fn(dir); } finally { await fs.promises.rm(dir, RM); }
+}
+/** A fresh repo with NO commits and one staged file f.txt (unborn HEAD). */
+const withUnborn = <T,>(fn: (dir: string) => Promise<T>) => withTmp('ycd-unborn-', async (dir) => {
+  sh(dir, ['init']);
+  sh(dir, ['config', 'core.autocrlf', 'false']);
+  await fs.promises.writeFile(path.join(dir, 'f.txt'), 'hello\n');
+  sh(dir, ['add', 'f.txt']);
+  return fn(dir);
+});
+
 describe.skipIf(!hasGit())('git-service (integration, real git)', () => {
   let root: string;
   beforeEach(async () => {
-    // WHY realpath: on macOS os.tmpdir() is a /var -> /private/var symlink
-    // alias; git's own toplevel answer is always canonical. Tests below
-    // compare absolute paths (e.g. shell.trashItem args) against `root` —
-    // without this, those assertions would fail on macOS CI even with the
-    // production fix applied, since `root` itself would be the alias form.
+    // WHY realpath: macOS os.tmpdir() is a /var -> /private/var alias while git's toplevel is canonical; absolute-path assertions (shell.trashItem) need `root` canonical.
     root = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-git-svc-')));
     invalidateRepoRootCache();
     sh(root, ['init', '-b', 'main']);
-    // WHY: GitHub Windows runners default core.autocrlf=true globally, so
-    // `git checkout HEAD` writes back CRLF and breaks byte-exact fixture
-    // assertions (and can produce phantom eol-only diffs). Pin it off per-repo.
+    // WHY: Windows runners default core.autocrlf=true, which writes CRLF back and breaks byte-exact assertions; pin it off per-repo.
     sh(root, ['config', 'core.autocrlf', 'false']);
     await fs.promises.writeFile(path.join(root, 'a.txt'), 'one\ntwo\n');
     sh(root, ['add', '.']);
     sh(root, ['commit', '-m', 'initial']);
   });
   afterEach(async () => {
-    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+    await fs.promises.rm(root, RM);
   });
 
   it('fileStatus: clean tracked file -> no counts, hasHistory true', async () => {
@@ -63,32 +72,20 @@ describe.skipIf(!hasGit())('git-service (integration, real git)', () => {
   });
 
   it('fileStatus: non-repo dir -> isRepo false, ok true', async () => {
-    const bare = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-norepo-')));
-    try {
-      const r = await gitFileStatus(bare, 'x.txt');
-      expect(r).toMatchObject({ ok: true, isRepo: false, counts: null, hasHistory: false });
-    } finally { await fs.promises.rm(bare, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); }
+    await withTmp('ycd-norepo-', async (bare) => {
+      expect(await gitFileStatus(bare, 'x.txt')).toMatchObject({ ok: true, isRepo: false, counts: null, hasHistory: false });
+    });
   });
 
-  it('fileStatus: escaping relPath is refused', async () => {
-    const r = await gitFileStatus(root, '../outside.txt');
-    expect(r.ok).toBe(false);
-    expect(r.error).toBe('path-outside-project');
+  it('an escaping relPath is refused by both status and mutation ops', async () => {
+    expect(await gitFileStatus(root, '../outside.txt')).toMatchObject({ ok: false, error: 'path-outside-project' });
+    expect(await gitStage(root, '../outside.txt')).toMatchObject({ ok: false, error: 'path-outside-project' });
   });
 
   it('mutation op in a non-repo dir reports not-a-git-repository, not path-outside-project', async () => {
-    const bare = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-norepo-')));
-    try {
-      const r = await gitStage(bare, 'x.txt');
-      expect(r.ok).toBe(false);
-      expect(r.error).toBe('not-a-git-repository');
-    } finally { await fs.promises.rm(bare, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); }
-  });
-
-  it('mutation op with an escaping relPath still reports path-outside-project', async () => {
-    const r = await gitStage(root, '../outside.txt');
-    expect(r.ok).toBe(false);
-    expect(r.error).toBe('path-outside-project');
+    await withTmp('ycd-norepo-', async (bare) => {
+      expect(await gitStage(bare, 'x.txt')).toMatchObject({ ok: false, error: 'not-a-git-repository' });
+    });
   });
 
   it('fileReview: modified file -> uncommitted hunks + log + stagedCount', async () => {
@@ -117,36 +114,29 @@ describe.skipIf(!hasGit())('git-service (integration, real git)', () => {
   });
 
   it('fileReview: untracked symlink outside the repo renders as binary stub, never follows the link', async () => {
-    // A malicious/careless untracked symlink pointing outside the repo root
-    // (e.g. at /etc/passwd) must never have its TARGET content read into
-    // hunks — that would leak arbitrary filesystem content through the git
-    // review surface. lstat (not stat) is what prevents the follow.
-    const outside = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-symlink-target-')));
-    try {
+    // WHY: an untracked symlink pointing outside the repo (e.g. /etc/passwd) must never have its TARGET read into hunks (lstat, not stat, prevents the follow).
+    await withTmp('ycd-symlink-target-', async (outside) => {
       const secretPath = path.join(outside, 'secret.txt');
       await fs.promises.writeFile(secretPath, 'TOP SECRET CONTENT\n');
-      const linkPath = path.join(root, 'link.txt');
-      await fs.promises.symlink(secretPath, linkPath);
+      await fs.promises.symlink(secretPath, path.join(root, 'link.txt'));
 
       const r = await gitFileReview(root, 'link.txt');
       expect(r.ok).toBe(true);
       expect(r.uncommitted).toMatchObject({ untracked: true, binary: true, hunks: [] });
       expect(JSON.stringify(r)).not.toContain('TOP SECRET');
-    } finally { await fs.promises.rm(outside, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); }
+    });
   });
 
   it('fileStatus: untracked symlink outside the repo counts as 0/0, never follows the link', async () => {
-    const outside = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-symlink-target-')));
-    try {
+    await withTmp('ycd-symlink-target-', async (outside) => {
       const secretPath = path.join(outside, 'secret.txt');
       await fs.promises.writeFile(secretPath, 'TOP SECRET CONTENT\n');
-      const linkPath = path.join(root, 'link2.txt');
-      await fs.promises.symlink(secretPath, linkPath);
+      await fs.promises.symlink(secretPath, path.join(root, 'link2.txt'));
 
       const r = await gitFileStatus(root, 'link2.txt');
       expect(r.ok).toBe(true);
       expect(r.counts).toEqual({ added: 0, removed: 0 });
-    } finally { await fs.promises.rm(outside, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); }
+    });
   });
 
   it('fileReview: oversize untracked file renders as a binary stub, not synthesized hunks', async () => {
@@ -226,54 +216,33 @@ describe.skipIf(!hasGit())('git-service (integration, real git)', () => {
   });
 
   it('fileReview works in a repo with no commits yet (unborn HEAD)', async () => {
-    const fresh = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-unborn-')));
-    try {
-      sh(fresh, ['init']);
-      sh(fresh, ['config', 'core.autocrlf', 'false']);
-      await fs.promises.writeFile(path.join(fresh, 'f.txt'), 'hello\n');
-      sh(fresh, ['add', 'f.txt']);
+    await withUnborn(async (fresh) => {
       const r = await gitFileReview(fresh, 'f.txt');
       expect(r.ok).toBe(true);
       expect(r.uncommitted?.inHead).toBe(false);
       expect(r.uncommitted?.hunks[0].lines).toEqual(['+hello']);
       expect(r.log).toEqual([]);
-    } finally { await fs.promises.rm(fresh, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); }
+    });
   });
 
+  // The mocked trash leaves the file on disk, so git then sees it as plain untracked — proving rm --cached ran against the unresolvable HEAD.
   it('discard on unborn HEAD unstages (rm --cached) then trashes, leaving the file untracked', async () => {
-    const fresh = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-unborn-')));
-    try {
-      sh(fresh, ['init']);
-      sh(fresh, ['config', 'core.autocrlf', 'false']);
-      await fs.promises.writeFile(path.join(fresh, 'f.txt'), 'hello\n');
-      sh(fresh, ['add', 'f.txt']);
-      const r = await gitDiscard(fresh, 'f.txt');
-      expect(r.ok).toBe(true);
+    await withUnborn(async (fresh) => {
+      expect((await gitDiscard(fresh, 'f.txt')).ok).toBe(true);
       expect(shell.trashItem).toHaveBeenCalledWith(path.join(fresh, 'f.txt'));
-      // The mocked trash leaves the file on disk, so git now sees it as plain
-      // untracked — proving rm --cached ran against the unresolvable HEAD.
       expect(sh(fresh, ['status', '--porcelain']).trim()).toBe('?? f.txt');
-    } finally { await fs.promises.rm(fresh, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); }
+    });
   });
 
   it('unstage on unborn HEAD falls back to rm --cached, leaving the file untracked', async () => {
-    const fresh = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-unborn-')));
-    try {
-      sh(fresh, ['init']);
-      sh(fresh, ['config', 'core.autocrlf', 'false']);
-      await fs.promises.writeFile(path.join(fresh, 'f.txt'), 'hello\n');
-      sh(fresh, ['add', 'f.txt']);
-      const r = await gitUnstage(fresh, 'f.txt');
-      expect(r.ok).toBe(true);
+    await withUnborn(async (fresh) => {
+      expect((await gitUnstage(fresh, 'f.txt')).ok).toBe(true);
       expect(sh(fresh, ['status', '--porcelain']).trim()).toBe('?? f.txt');
-    } finally { await fs.promises.rm(fresh, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); }
+    });
   });
 
-  it('handles non-ASCII filenames despite core.quotepath default (fix: -c core.quotepath=false)', async () => {
-    // With the default core.quotepath=true, git C-quotes "café.md" as
-    // "caf\303\251.md" in porcelain/numstat output, which never matches the
-    // plain `rel` string this service compares against — undercounting
-    // stagedCount and dropping the file's review card entirely.
+  it('handles non-ASCII filenames despite core.quotepath default ', async () => {
+    // WHY: default core.quotepath=true C-quotes "café.md" in porcelain output, which never matches the plain `rel` string (undercounted stagedCount, dropped review card).
     const name = 'café.md';
     await fs.promises.writeFile(path.join(root, name), 'one\n');
     sh(root, ['add', '.']);
@@ -305,21 +274,12 @@ describe.skipIf(!hasGit())('git-service (integration, real git)', () => {
     expect(r.hasMore).toBe(true);
     const page2 = await gitFileReview(root, 'a.txt', { logSkip: LOG_PAGE });
     expect(page2.log.length).toBeGreaterThan(0);
-    // WHY 60000: this fixture spawns 2 git processes per commit (LOG_PAGE + 2
-    // commits) — Windows process-spawn latency blows past vitest's 5000ms default.
+    // WHY 60000: 2 git processes per commit blows past the default timeout on Windows.
   }, 60000);
 
-  // Rename-tracking regression: `git log --follow` lists a file's commits
-  // across a rename, but per-commit diffs must ask `git show` with the
-  // HISTORICAL path (the name the file had AT that commit), not its current
-  // path — otherwise every pre-rename commit's diff comes back empty even
-  // though the timeline lists it as touching the file.
+  // WHY: `git log --follow` lists commits across a rename, but per-commit diffs must use the HISTORICAL path or every pre-rename diff comes back empty.
   it('gitFileReview + gitCommitFileDiff follow a rename: historical paths, empty rename-only diff', async () => {
-    // WHY this exact content: --follow's rename detection is CONTENT-based
-    // (-M), not name-based — if old.md's content ever became byte-identical
-    // to a.txt's ('one\ntwo\n', committed in beforeEach), git would spuriously
-    // attach a.txt's unrelated "initial" commit to this file's history too.
-    // Keep old.md's content disjoint from a.txt's at every step.
+    // WHY this content: --follow rename detection is CONTENT-based; keep old.md disjoint from a.txt's ('one\ntwo\n') or git attaches a.txt's "initial" commit.
     await fs.promises.writeFile(path.join(root, 'old.md'), 'alpha\n');
     sh(root, ['add', '.']); sh(root, ['commit', '-m', 'add old.md']);
     await fs.promises.writeFile(path.join(root, 'old.md'), 'alpha\nbeta\n');
@@ -332,51 +292,33 @@ describe.skipIf(!hasGit())('git-service (integration, real git)', () => {
 
     const r = await gitFileReview(root, 'docs/new.md');
     expect(r.ok).toBe(true);
-    // 4 of ours + the fixture's own "initial" commit for a.txt is NOT in this
-    // file's history (--follow is pathspec-scoped) — exactly our 4 commits.
     expect(r.log).toHaveLength(4);
     const [editNew, moveCommit, editOld, addOld] = r.log;
     expect(editNew).toMatchObject({ subject: 'edit docs/new.md', pathAtCommit: 'docs/new.md', renamedFrom: undefined });
     expect(moveCommit).toMatchObject({ subject: 'move to docs/new.md', pathAtCommit: 'docs/new.md', renamedFrom: 'old.md' });
     expect(editOld).toMatchObject({ subject: 'edit old.md', pathAtCommit: 'old.md', renamedFrom: undefined });
     expect(addOld).toMatchObject({ subject: 'add old.md', pathAtCommit: 'old.md', renamedFrom: undefined });
-    // Per-commit counts (--numstat, replacing --name-status): the pre-move
-    // edit added one real line ('beta'); the pure-move commit changed no
-    // content, so numstat reports 0/0 for it despite the rename.
+    // Per-commit --numstat counts: the pure move changed no content (0/0).
     expect(editOld.counts).toEqual({ added: 1, removed: 0 });
     expect(moveCommit.counts).toEqual({ added: 0, removed: 0 });
 
-    // THE BUG, pinned: asking for the pre-move edit commit's diff with the
-    // CURRENT path returns nothing — this is what shipped and read as "No
-    // direct changes to this file in this commit." despite the timeline
-    // listing the commit.
+    // THE BUG: the CURRENT path for a pre-move commit returns nothing (shipped as "No direct changes" despite the timeline listing it).
     const buggy = await gitCommitFileDiff(root, editOld.sha, 'docs/new.md');
     expect(buggy.ok).toBe(true);
     expect(buggy.hunks).toEqual([]);
 
-    // THE FIX: asking with the HISTORICAL path (what the timeline now hands
-    // back as pathAtCommit) returns the real content diff.
+    // THE FIX: the HISTORICAL path (pathAtCommit) returns the real diff.
     const fixed = await gitCommitFileDiff(root, editOld.sha, editOld.pathAtCommit!);
     expect(fixed.ok).toBe(true);
     expect(fixed.hunks[0].lines).toContain('+beta');
 
-    // The move commit itself, paired with prevPath (-M), is rename-only —
-    // empty hunks, not a full-file `+` wall.
+    // The move commit with prevPath (-M) is rename-only: empty hunks, not a full-file `+` wall.
     const moveDiff = await gitCommitFileDiff(root, moveCommit.sha, moveCommit.pathAtCommit!, moveCommit.renamedFrom);
     expect(moveDiff.ok).toBe(true);
     expect(moveDiff.hunks).toEqual([]);
   });
 
-  // Regression for the macOS/Windows CI failure: locate() computed
-  // `path.relative(repoRoot, abs)` from the CALLER's projectRoot while
-  // repoRoot came from `git rev-parse --show-toplevel`, which git resolves to
-  // the CANONICAL physical path. Any non-canonical alias for the same
-  // directory (macOS `/var` -> `/private/var` symlink, Windows short 8.3
-  // names, or — as reproduced here — a plain symlink into the repo) makes
-  // `rel` a garbage `../../...` string and every git call fails as
-  // "outside repository". This test builds that exact symlink-alias
-  // situation on Linux (where it wouldn't otherwise occur, since /tmp isn't
-  // a symlink) so the bug is caught here without needing macOS/Windows CI.
+  // WHY: locate() computed the relative path from the CALLER's projectRoot while git's toplevel is canonical, so any alias (macOS /var, Windows 8.3 names, a symlink) made every call fail "outside repository". Built here with a plain symlink.
   it('resolves paths through a symlinked projectRoot alias (macOS /var + Windows short-path regression)', async () => {
     const parent = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-symlink-alias-'));
     try {
@@ -404,13 +346,7 @@ describe.skipIf(!hasGit())('git-service (integration, real git)', () => {
     } finally { await fs.promises.rm(parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); }
   });
 
-  // Reproduces the youcoded-dev workspace shape: `worktrees/<name>` is
-  // gitignored by the outer project repo and holds a LINKED WORKTREE of a
-  // completely different repo (per CLAUDE.md's "use worktrees for non-trivial
-  // work" convention). locate() used to resolve the repo root from the fixed
-  // projectRoot, so `git status`/`git rev-list` always ran against the OUTER
-  // repo — which can never see a path it gitignores — silently hiding real
-  // changes (and the Review changes button) for every file under a worktree.
+  // WHY: `worktrees/<name>` is gitignored by the outer repo and holds a linked worktree of ANOTHER repo; locate() used to resolve against the outer repo, hiding real changes.
   it('fileStatus: a file inside a gitignored linked worktree resolves against the WORKTREE\'s own repo, not the outer project repo', async () => {
     await fs.promises.writeFile(path.join(root, '.gitignore'), 'worktrees/\n');
     sh(root, ['add', '.gitignore']);
@@ -443,9 +379,7 @@ describe.skipIf(!hasGit())('git-service (integration, real git)', () => {
     }
   });
 
-  // Fix (2026-07-22 bug): the porcelain parser skipped `u` (unmerged) lines,
-  // so a repo mid-merge reported its conflicted files as CLEAN — no counts,
-  // no review card. The mirror must never lie about a conflict.
+  // WHY: the porcelain parser skipped `u` (unmerged) lines, so a mid-merge repo reported conflicted files as CLEAN.
   it('fileStatus + fileReview: a mid-merge conflicted file reports conflicted, never clean', async () => {
     sh(root, ['checkout', '-b', 'side']);
     await fs.promises.writeFile(path.join(root, 'a.txt'), 'side\ntwo\n');
@@ -504,7 +438,7 @@ describe('file names Git has to quote', () => {
     write('seed.txt', 'seed\n'); commit('seed');
   });
   afterEach(async () => {
-    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+    await fs.promises.rm(root, RM);
   });
 
   describe.each(names)('literal Git path %j', (name) => {

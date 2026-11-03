@@ -40,18 +40,41 @@ function manager(opts: { freeDiskBytes?: number } = {}): ModelManager {
   });
 }
 
+/** Resolves with the first 'error' progress event (the fake fetch 500s, so the guard/route taken is what is under test). */
+function nextError(mm: ModelManager): Promise<DownloadProgress> {
+  return new Promise((resolve) => {
+    mm.on('download-progress', (p: DownloadProgress) => { if (p.state === 'error') resolve(p); });
+  });
+}
+/** A sparse file: statSync reports `bytes`, the disk holds nothing. */
+function sparse(file: string, bytes: number | Buffer, size?: number) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, typeof bytes === 'number' ? '' : bytes);
+  fs.truncateSync(file, size ?? (typeof bytes === 'number' ? bytes : bytes.length));
+}
+/** Write `<file>.download.json` with the common manifest fields plus `over`. */
+function writeManifest(file: string, over: Record<string, unknown>) {
+  fs.writeFileSync(`${file}.download.json`, JSON.stringify({ v: 1, sha256ByFile: {}, startedAt: 1, ...over }));
+}
+/** A manager over a fake installed engine, for the memory checks. */
+function memManager(mem: { totalMemBytes: number; availableMemBytes: number }, liveModels?: Array<{ id: string; sizeBytes: number; loaded: boolean }>): ModelManager {
+  const userData = path.join(root, 'userData');
+  plantEngine(userData);
+  const engine = new EngineManager(home, userData, 9999);
+  if (liveModels) engine.liveModels = async () => liveModels.map((m) => ({ ...m, state: m.loaded ? 'loaded' as const : 'unloaded' as const }));
+  return new ModelManager(home, engine, userData, { fetchImpl: recordingFetch, totalVramBytes: null, ...mem });
+}
+
 describe('ModelManager.resume', () => {
   it("starts a download of the manifest's repo and file set — with NO Hugging Face listing call", async () => {
     fs.writeFileSync(path.join(cacheDir, 'Half-UD-Q4_K_XL-00001-of-00002.gguf'), Buffer.alloc(10));
-    fs.writeFileSync(path.join(cacheDir, 'Half-UD-Q4_K_XL-00001-of-00002.gguf.download.json'), JSON.stringify({
-      v: 1, repo: 'unsloth/Half-GGUF', quant: 'UD-Q4_K_XL',
+    writeManifest(path.join(cacheDir, 'Half-UD-Q4_K_XL-00001-of-00002.gguf'), {
+      repo: 'unsloth/Half-GGUF', quant: 'UD-Q4_K_XL',
       files: ['a/Half-UD-Q4_K_XL-00001-of-00002.gguf', 'a/Half-UD-Q4_K_XL-00002-of-00002.gguf'],
-      totalSizeBytes: 100, sha256ByFile: {}, startedAt: 1,
-    }));
-    const mm = manager();
-    const settled = new Promise<DownloadProgress>((resolve) => {
-      mm.on('download-progress', (p: DownloadProgress) => { if (p.state === 'error') resolve(p); });
+      totalSizeBytes: 100,
     });
+    const mm = manager();
+    const settled = nextError(mm);
     const { downloadId } = await mm.resume('Half-UD-Q4_K_XL-00001-of-00002');
     expect(downloadId).toBeTruthy();
     await settled;
@@ -69,32 +92,22 @@ describe('ModelManager.resume', () => {
 
   it('refuses a manifest whose repo was never found — repo: null is untraceable', async () => {
     fs.writeFileSync(path.join(cacheDir, 'Mystery-Q4_K_M.gguf.partial'), Buffer.alloc(10));
-    fs.writeFileSync(path.join(cacheDir, 'Mystery-Q4_K_M.gguf.download.json'), JSON.stringify({
-      v: 1, repo: null, quant: 'Q4_K_M', files: ['Mystery-Q4_K_M.gguf'],
-      totalSizeBytes: 50, sha256ByFile: {}, startedAt: 1,
-    }));
+    writeManifest(path.join(cacheDir, 'Mystery-Q4_K_M.gguf'), { repo: null, quant: 'Q4_K_M', files: ['Mystery-Q4_K_M.gguf'], totalSizeBytes: 50 });
     await expect(manager().resume('Mystery-Q4_K_M')).rejects.toThrow(/where it came from/i);
     expect(urls).toEqual([]);
   });
 
   it('refuses a FINISHED download — a surviving manifest is not something to resume', async () => {
-    // The manifest outlives the download now, so its presence alone must not be
-    // read as "there is more to fetch". completedAt is the test.
+    // WHY: the manifest outlives the download, so its presence alone is not "more to fetch"; completedAt is the test.
     fs.writeFileSync(path.join(cacheDir, 'Done-Q4_K_M.gguf'), Buffer.alloc(50));
-    fs.writeFileSync(path.join(cacheDir, 'Done-Q4_K_M.gguf.download.json'), JSON.stringify({
-      v: 1, repo: 'unsloth/Done-GGUF', quant: 'Q4_K_M', files: ['a/Done-Q4_K_M.gguf'],
-      totalSizeBytes: 50, sha256ByFile: {}, startedAt: 1, completedAt: 2,
-    }));
+    writeManifest(path.join(cacheDir, 'Done-Q4_K_M.gguf'), { repo: 'unsloth/Done-GGUF', quant: 'Q4_K_M', files: ['a/Done-Q4_K_M.gguf'], totalSizeBytes: 50, completedAt: 2 });
     await expect(manager().resume('Done-Q4_K_M')).rejects.toThrow(/already finished/i);
     expect(urls).toEqual([]);   // no bytes asked for, no Hugging Face call
   });
 });
 
-// ── The vision folder reaches ModelManager too (design §E2) ─────────────────
-
 const GB = 1024 ** 3;
-/** A vision quant whose weights and projector are deliberately different
- *  sizes, so a guard that counts only one of them cannot accidentally pass. */
+/** A vision quant with deliberately different weight and projector sizes, so a guard counting only one cannot pass. */
 const visionQuant = {
   quant: 'Q4_K_M', description: '',
   files: ['V-Q4_K_M.gguf'],
@@ -106,10 +119,7 @@ const visionQuant = {
 
 describe('ModelManager.download — the disk guard reserves the projector', () => {
   it('refuses when weights + projector do not fit, though the weights alone would', async () => {
-    // 3.5 GB free against a 3 GB model: the old guard, which reserved
-    // `totalSizeBytes` alone, let this through and the download then ran the
-    // disk out partway through the projector (T15 handoff 2). The refusal has
-    // to quote 4.0 GB — the whole job — not 3.0.
+    // WHY: the old guard reserved `totalSizeBytes` alone and ran the disk out partway through the projector; the refusal must quote 4.0 GB, the whole job.
     await expect(manager({ freeDiskBytes: 3.5 * GB }).download('unsloth/V-GGUF', visionQuant as any)).rejects.toThrow(
       'Not enough free space: this download needs about 4.0 GB but only 3.5 GB is free.');
     expect(urls).toEqual([]);          // nothing was fetched
@@ -118,44 +128,20 @@ describe('ModelManager.download — the disk guard reserves the projector', () =
 
   it('allows it when both really do fit', async () => {
     const mm = manager({ freeDiskBytes: 9 * GB });
-    const settled = new Promise<DownloadProgress>((resolve) => {
-      mm.on('download-progress', (p: DownloadProgress) => { if (p.state === 'error') resolve(p); });
-    });
+    const settled = nextError(mm);
     const { downloadId } = await mm.download('unsloth/V-GGUF', visionQuant as any);
     expect(downloadId).toBeTruthy();
     await settled;                     // the fake fetch 500s; the guard is what was tested
   });
 
-  it('credits the PROJECTOR already on disk, not only the weights', async () => {
-    // The projector is the half that was missing from bytesOnDiskFor's path
-    // list: with only it on disk, the guard has to see 3 GB left of a 4 GB job.
-    // Charging the whole 4 GB here would refuse a download that fits, and the
-    // obvious reaction — delete the .partial — destroys what made it fit.
-    fs.mkdirSync(path.join(cacheDir, 'V-Q4_K_M'), { recursive: true });
-    fs.writeFileSync(path.join(cacheDir, 'V-Q4_K_M', 'mmproj-F16.gguf'), '');
-    fs.truncateSync(path.join(cacheDir, 'V-Q4_K_M', 'mmproj-F16.gguf'), GB);
-    // 3.4 GB free: clears the 3 GB that is left (plus the guard's 5% margin),
-    // and does not clear the whole 4 GB job.
-    const mm = manager({ freeDiskBytes: 3.4 * GB });
-    const settled = new Promise<DownloadProgress>((resolve) => {
-      mm.on('download-progress', (p: DownloadProgress) => { if (p.state === 'error') resolve(p); });
-    });
-    await expect(mm.download('unsloth/V-GGUF', visionQuant as any)).resolves.toBeTruthy();
-    await settled;
-  });
-
-  it('credits a half-fetched model file in the folder, so a resume is judged on what is LEFT', async () => {
-    // The 2026-08-26 trap: charging a resume the full size tells the user to
-    // delete the very .partial that made it fit.
-    fs.mkdirSync(path.join(cacheDir, 'V-Q4_K_M'), { recursive: true });
-    // Sparse — statSync reports 3 GB, the disk holds nothing.
-    fs.writeFileSync(path.join(cacheDir, 'V-Q4_K_M', 'V-Q4_K_M.gguf'), '');
-    fs.truncateSync(path.join(cacheDir, 'V-Q4_K_M', 'V-Q4_K_M.gguf'), 3 * GB);
-    const mm = manager({ freeDiskBytes: 1.2 * GB });
-    const settled = new Promise<DownloadProgress>((resolve) => {
-      mm.on('download-progress', (p: DownloadProgress) => { if (p.state === 'error') resolve(p); });
-    });
-    // 4 GB job, 3 GB of it already on disk in the FOLDER: 1 GB left, 1.2 free.
+  // WHY: charging the whole job for what is already on disk tells the user to delete the very .partial that made it fit.
+  it.each([
+    ['the PROJECTOR already on disk (3 GB left of 4 GB; 3.4 GB free clears it with the 5% margin)', 'mmproj-F16.gguf', GB, 3.4 * GB],
+    ['a half-fetched model file in the folder (1 GB left of 4 GB; 1.2 GB free)', 'V-Q4_K_M.gguf', 3 * GB, 1.2 * GB],
+  ])('credits %s', async (_n, file, bytes, free) => {
+    sparse(path.join(cacheDir, 'V-Q4_K_M', file), bytes);
+    const mm = manager({ freeDiskBytes: free });
+    const settled = nextError(mm);
     await expect(mm.download('unsloth/V-GGUF', visionQuant as any)).resolves.toBeTruthy();
     await settled;
   });
@@ -166,19 +152,15 @@ describe('ModelManager.resume — a vision download resumes into its folder', ()
     const folder = path.join(cacheDir, 'V-Q4_K_M');
     fs.mkdirSync(folder, { recursive: true });
     fs.writeFileSync(path.join(folder, 'V-Q4_K_M.gguf.partial'), Buffer.alloc(10));
-    fs.writeFileSync(path.join(folder, 'V-Q4_K_M.gguf.download.json'), JSON.stringify({
-      v: 1, repo: 'unsloth/V-GGUF', quant: 'Q4_K_M', files: ['V-Q4_K_M.gguf'],
-      totalSizeBytes: 50, sha256ByFile: {}, startedAt: 1,
+    writeManifest(path.join(folder, 'V-Q4_K_M.gguf'), {
+      repo: 'unsloth/V-GGUF', quant: 'Q4_K_M', files: ['V-Q4_K_M.gguf'], totalSizeBytes: 50,
       visionFile: { path: 'mmproj-F16.gguf', size: 900, sha256: null },
-    }));
-    const mm = manager();
-    const settled = new Promise<DownloadProgress>((resolve) => {
-      mm.on('download-progress', (p: DownloadProgress) => { if (p.state === 'error') resolve(p); });
     });
+    const mm = manager();
+    const settled = nextError(mm);
     await mm.resume('V-Q4_K_M');
     const err = await settled;
-    // Dropping visionFile here would send the remaining bytes FLAT, beside the
-    // folder that holds the rest of them — where the engine serves neither.
+    // WHY: dropping visionFile would send the remaining bytes FLAT, beside the folder holding the rest, where the engine serves neither.
     expect(err.totalBytes).toBe(950);
     expect(err.parts).toBe(2);
     expect(fs.existsSync(path.join(cacheDir, 'V-Q4_K_M.gguf.partial'))).toBe(false);
@@ -190,11 +172,8 @@ describe('ModelManager.resume — a vision download resumes into its folder', ()
  *  both sparse so the sizes are real and the disk holds nothing. */
 function plantVisionFolder(id: string, weightBytes: number, projectorBytes: number) {
   const folder = path.join(cacheDir, id);
-  fs.mkdirSync(folder, { recursive: true });
-  for (const [name, bytes] of [[`${id}.gguf`, weightBytes], ['mmproj-F16.gguf', projectorBytes]] as const) {
-    fs.writeFileSync(path.join(folder, name), '');
-    fs.truncateSync(path.join(folder, name), bytes);
-  }
+  sparse(path.join(folder, `${id}.gguf`), weightBytes);
+  sparse(path.join(folder, 'mmproj-F16.gguf'), projectorBytes);
   return folder;
 }
 
@@ -210,41 +189,15 @@ function plantEngine(userData: string) {
 
 describe('ModelManager.memoryCheck — the projector is memory too', () => {
   it("counts an installed model's projector, and names it in the numbers line", async () => {
-    // A projector is loaded WITH its model (--mmproj) and reaches 2.6 GB on
-    // Qwen2.5-Omni — five times the working-memory cushion — so leaving it out
-    // could tell a user a model fits when it does not.
-    const folder = path.join(cacheDir, 'V-Q4_K_M');
-    fs.mkdirSync(folder, { recursive: true });
-    fs.writeFileSync(path.join(folder, 'V-Q4_K_M.gguf'), '');
-    fs.truncateSync(path.join(folder, 'V-Q4_K_M.gguf'), 4 * GB);
-    fs.writeFileSync(path.join(folder, 'mmproj-F16.gguf'), '');
-    fs.truncateSync(path.join(folder, 'mmproj-F16.gguf'), 2 * GB);
-
-    const userData = path.join(root, 'userData');
-    // memoryCheck reads the model list, which is empty until an engine is
-    // installed — plant a fake one so the ENGINE-OFF cache scan is used.
-    const engineDir = path.join(userData, 'engine', `${ENGINE_VERSION}-cpu`);
-    fs.mkdirSync(engineDir, { recursive: true });
-    fs.writeFileSync(path.join(engineDir, 'llama-server'), 'fake');
-    fs.writeFileSync(path.join(engineDir, '.complete'),
-      JSON.stringify({ version: ENGINE_VERSION, backend: 'cpu', binaryRelPath: 'llama-server' }));
-    const engine = new EngineManager(home, userData, 9999);
-    const mm = new ModelManager(home, engine, userData, {
-      fetchImpl: recordingFetch, totalVramBytes: null,
-      totalMemBytes: 16 * GB, availableMemBytes: 5 * GB,
-    });
-    const verdict = await mm.memoryCheck('V-Q4_K_M');
-    // Exact string: the headline is the ONLY thing the warning row draws, and a
-    // substring match on "vision" would stay green if the size were wrong.
+    // WHY: a projector loads WITH its model and reaches 2.6 GB (five times the working cushion); leaving it out could say a model fits when it does not.
+    plantVisionFolder('V-Q4_K_M', 4 * GB, 2 * GB);
+    const verdict = await memManager({ totalMemBytes: 16 * GB, availableMemBytes: 5 * GB }).memoryCheck('V-Q4_K_M');
+    // Exact string: a substring match on "vision" would stay green if the size were wrong.
     expect(verdict.headline).toContain('4.0 GB model + 2.0 GB vision file');
   });
 });
 
-// ── The two numbers that only a FOLDERED model can get wrong ────────────────
-
-/** A minimal real GGUF v3 header (scalars only, no tokenizer tail) — enough for
- *  the reader to answer EXACTLY rather than with a ceiling. That difference is
- *  the only observable proof that the header was read from the right path. */
+/** A minimal real GGUF v3 header: enough for the reader to answer EXACTLY rather than with a ceiling, the only observable proof the header was read from the right path. */
 function miniGguf(): Buffer {
   const u32 = (n: number) => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b; };
   const u64 = (n: number) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b; };
@@ -265,106 +218,47 @@ function miniGguf(): Buffer {
 
 describe('a foldered model is found by the header reader and by the loaded-memory sum', () => {
   it("reads the model's HEADER from its folder — a wrong path degrades every estimate to 'up to'", async () => {
-    // localHeader used to build `<cacheDir>/<id>.gguf`, which for a vision model
-    // is not where the file is. The failure is silent: the read throws, the
-    // catch turns it into "header unknown", and the KV estimate quietly becomes
-    // a ceiling — the model card then reads "up to 8.0 GB for 32k context" for
-    // a file the app could have measured exactly.
+    // WHY: localHeader once built `<cacheDir>/<id>.gguf`, wrong for a vision model; the read throws silently and the KV estimate becomes a ceiling.
     const folder = path.join(cacheDir, 'V-Q4_K_M');
-    fs.mkdirSync(folder, { recursive: true });
-    fs.writeFileSync(path.join(folder, 'V-Q4_K_M.gguf'), miniGguf());
-    fs.truncateSync(path.join(folder, 'V-Q4_K_M.gguf'), 4 * GB);   // real header, real size, sparse
-    fs.writeFileSync(path.join(folder, 'mmproj-F16.gguf'), '');
-    fs.truncateSync(path.join(folder, 'mmproj-F16.gguf'), GB);
-
-    const userData = path.join(root, 'userData');
-    plantEngine(userData);
-    const mm = new ModelManager(home, new EngineManager(home, userData, 9999), userData, {
-      fetchImpl: recordingFetch, totalVramBytes: null,
-      totalMemBytes: 16 * GB, availableMemBytes: 4 * GB,
-    });
-    const headline = (await mm.memoryCheck('V-Q4_K_M')).headline;
-    // "up to" is the reader saying it could not understand the file. Reading the
-    // right path removes it; reading the flat path puts it back.
+    sparse(path.join(folder, 'V-Q4_K_M.gguf'), miniGguf(), 4 * GB);   // real header, real size, sparse
+    sparse(path.join(folder, 'mmproj-F16.gguf'), GB);
+    const headline = (await memManager({ totalMemBytes: 16 * GB, availableMemBytes: 4 * GB }).memoryCheck('V-Q4_K_M')).headline;
     expect(headline).not.toContain('up to');
     expect(headline).toContain('4.0 GB model + 1.0 GB vision file');
   });
 
   it("counts a RESIDENT model's projector in what is already loaded", async () => {
-    // loadedBytes sums the models holding memory right now. `sizeBytes` is the
-    // weights alone, so without the projector term a resident vision model is
-    // under-counted by up to 2.6 GB — and the number it feeds is the one that
-    // decides whether the NEXT model is refused.
+    // WHY: `sizeBytes` is the weights alone, so without the projector term a resident vision model is under-counted by up to 2.6 GB, and that number decides whether the NEXT model is refused.
     plantVisionFolder('R-Q4_K_M', 3 * GB, GB);           // the resident one
     plantVisionFolder('V-Q4_K_M', 4 * GB, 2 * GB);       // the one being checked
-    const userData = path.join(root, 'userData');
-    plantEngine(userData);
-    const engine = new EngineManager(home, userData, 9999);
-    // No engine is really running here, so state the residency directly — this
-    // is the only way to exercise the `loaded` branch of loadedBytes.
-    engine.liveModels = async () => ([
-      { id: 'R-Q4_K_M', sizeBytes: 3 * GB, loaded: true, state: 'loaded' as const },
-      { id: 'V-Q4_K_M', sizeBytes: 4 * GB, loaded: false, state: 'unloaded' as const },
+    // No engine really runs here, so state the residency directly to exercise the `loaded` branch of loadedBytes.
+    const mm = memManager({ totalMemBytes: 64 * GB, availableMemBytes: 4 * GB }, [
+      { id: 'R-Q4_K_M', sizeBytes: 3 * GB, loaded: true },
+      { id: 'V-Q4_K_M', sizeBytes: 4 * GB, loaded: false },
     ]);
-    const mm = new ModelManager(home, engine, userData, {
-      fetchImpl: recordingFetch, totalVramBytes: null,
-      totalMemBytes: 64 * GB, availableMemBytes: 4 * GB,
-    });
     const loadedGb = (h: string) => Number(/([\d.]+) GB already loaded/.exec(h)![1]);
     const withProjector = loadedGb((await mm.memoryCheck('V-Q4_K_M')).headline);
 
-    // Take the resident model's projector away and re-ask. Everything else is
-    // identical, so the whole difference is that one file — asserted as an exact
-    // delta, because the absolute figure also carries an estimated KV cache.
+    // Remove the resident projector and re-ask: an exact delta, because the absolute figure also carries an estimated KV cache.
     fs.rmSync(path.join(cacheDir, 'R-Q4_K_M', 'mmproj-F16.gguf'));
     const withoutProjector = loadedGb((await mm.memoryCheck('V-Q4_K_M')).headline);
     expect(withProjector - withoutProjector).toBeCloseTo(1.0, 5);
   });
 });
 
-// ── The remembered memory warning (design §D4) ──────────────────────────────
-//
-// The rule these pin, end to end through config.json: "don't warn me about this
-// model again" is a promise made AT ONE CONTEXT LENGTH. The same model at four
-// times the context needs about four times the memory, so the promise cannot
-// outlive a change to that length — the model's own setting or the engine-wide
-// default it inherits. fit-estimator.test.ts pins the same rule on the pure
-// function, which takes the context length as an argument; only these can reach
-// the half the design note is actually about, where nothing about the MODEL
-// changed and the engine-wide number moved underneath it.
+// "Don't warn me about this model again" is a promise made AT ONE CONTEXT LENGTH (the same model at 4x context needs ~4x memory), so it cannot
+// outlive a change to the model's own setting or the engine-wide default it inherits. fit-estimator.test.ts pins the pure function; only these
+// reach the engine-wide half, end to end through config.json.
 
-/** A model on disk with a real GGUF header, so its context memory is measured
- *  rather than guessed — the whole rule turns on a context length, so the number
- *  it turns on has to be a real reading of this file.
- *
- *  WHY the file is only the header, not padded to the model's size: every §D4
- *  test scores the model at the size `liveModels` reports (warnMachine's
- *  `sizeBytes`, or the too-large test's own stub), never at the file's length,
- *  and the header parse finishes inside the first read. Padding it with
- *  `truncateSync(file, 8 GB)` was free only on Linux and macOS (sparse files): on
- *  Windows it is not, and Windows CI measured that one call at
- *  226 ms to 3,133 ms (run 35328039563). The test that plants a model and then
- *  checks it six times timed out at 30 s on Windows (run 35325056026) while
- *  every other step in it took single-digit milliseconds. */
+/** A model on disk with a real GGUF header so its context memory is measured. WHY header only (no sparse padding to the model's size): padding
+ *  is free on Linux/macOS but Windows CI measured one truncate at 226-3,133 ms, timing out the six-check test at 30 s. */
 function plantModel(id: string): void {
   fs.writeFileSync(path.join(cacheDir, `${id}.gguf`), miniGguf());
 }
 
-/** A manager for a machine with plenty of memory in total but little free right
- *  now — the `tight` tier, which is the ONLY verdict §D4 lets anyone dismiss.
- *  Rebuilt per call because the settings are read from config.json at each
- *  check, and a stale instance would answer from the file as it was. */
+/** A machine with plenty of memory in total but little free (the `tight` tier, the ONLY dismissable verdict). Rebuilt per call: settings are read from config.json at each check. */
 function warnMachine(ids: string[], sizeBytes = 8 * GB): ModelManager {
-  const userData = path.join(root, 'userData');
-  plantEngine(userData);
-  const engine = new EngineManager(home, userData, 9999);
-  engine.liveModels = async () => ids.map((id) => ({
-    id, sizeBytes, loaded: false, state: 'unloaded' as const,
-  }));
-  return new ModelManager(home, engine, userData, {
-    fetchImpl: recordingFetch, totalVramBytes: null,
-    totalMemBytes: 64 * GB, availableMemBytes: 4 * GB,
-  });
+  return memManager({ totalMemBytes: 64 * GB, availableMemBytes: 4 * GB }, ids.map((id) => ({ id, sizeBytes, loaded: false })));
 }
 
 /** Write one model's `engine.models` entry, as the settings save will. */
@@ -377,22 +271,17 @@ const dismissedAt = (contextLength: number) => ({ at: 1_757_000_000_000, context
 describe('ModelManager.memoryCheck — the remembered warning', () => {
   it('a dismissal made at 32k silences the warning at 32k', async () => {
     plantModel('M-Q4_K_M');
-    // Before: this machine really does warn about this model. Without this
-    // line the test below would pass on a fixture that never warned at all.
+    // Non-vacuity: this machine really does warn about this model.
     expect((await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M')).verdict).toBe('tight');
 
     await writeModelSettings('M-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
     const after = await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M');
     expect(after.verdict).toBe('ok');
-    // A silenced warning draws nothing — the row is hidden, not emptied of text.
     expect(after.headline).toBe('');
   });
 
   it("raising the ENGINE-WIDE context asks again, though this model's own setting never moved", async () => {
-    // The case the whole design note is about (R3-4/R3-23). This model is on the
-    // engine-wide default, so its own `contextLength` stays null throughout —
-    // storing THAT number, or a bare timestamp, would keep the dismissal alive
-    // for exactly the model that now needs four times the memory.
+    // WHY: this model is on the engine-wide default, so its own `contextLength` stays null; storing THAT number or a bare timestamp would keep the dismissal alive for a model needing 4x memory.
     plantModel('M-Q4_K_M');
     await writeModelSettings('M-Q4_K_M', {
       contextLength: null, memoryWarningDismissed: dismissedAt(32768),
@@ -402,9 +291,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
     await updateEngineConfig(home, { contextSize: 131072 });
     const after = await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M');
     expect(after.verdict).toBe('tight');
-    // Still the same tier, scored at the NEW length: had the raise pushed it to
-    // a hard block instead, this test would pass for a reason that has nothing
-    // to do with the dismissal.
+    // Still the same tier at the NEW length (a hard block would pass for an unrelated reason).
     expect(after.headline).toContain('for 128k context');
   });
 
@@ -433,30 +320,15 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
   });
 
   it('a too-large model is never silenced — it is a hard block, not a warning', async () => {
-    // 8 GB of weights on an 8 GB machine: too large before a single byte of
-    // context cache is counted, so the "KV may reach tight, never too-large"
-    // clamp does not rescue it either. RuntimeBinding refuses to create the
-    // session on this verdict, so a dismissal must not be able to reach it.
+    // 8 GB of weights on an 8 GB machine is too large before any context cache, so the KV clamp does not rescue it; RuntimeBinding refuses the session on this verdict.
     plantModel('H-Q4_K_M');
     await writeModelSettings('H-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
-    const userData = path.join(root, 'userData');
-    plantEngine(userData);
-    const engine = new EngineManager(home, userData, 9999);
-    engine.liveModels = async () => ([
-      { id: 'H-Q4_K_M', sizeBytes: 8 * GB, loaded: false, state: 'unloaded' as const },
-    ]);
-    const mm = new ModelManager(home, engine, userData, {
-      fetchImpl: recordingFetch, totalVramBytes: null,
-      totalMemBytes: 8 * GB, availableMemBytes: 1 * GB,
-    });
+    const mm = memManager({ totalMemBytes: 8 * GB, availableMemBytes: 1 * GB }, [{ id: 'H-Q4_K_M', sizeBytes: 8 * GB, loaded: false }]);
     expect((await mm.memoryCheck('H-Q4_K_M')).verdict).toBe('too-large');
   });
 
   it('a stored dismissal missing EITHER half is no dismissal', async () => {
-    // config.json is a plain file a person can edit and an older build can have
-    // written. A record without the length it was made at cannot answer "is this
-    // the same length?", and one without a time is not a record of an answer —
-    // both mean "ask again", never "assume yes".
+    // WHY: config.json is hand-editable and older builds wrote it; a record missing its length or time means "ask again", never "assume yes".
     plantModel('M-Q4_K_M');
     const broken = [
       { contextLength: 32768 },                    // no `at`
@@ -469,9 +341,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
       await writeModelSettings('M-Q4_K_M', { memoryWarningDismissed: record });
       expect((await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M')).verdict).toBe('tight');
     }
-    // The positive control: the SAME fixture with a well-formed record does go
-    // quiet. Without it, every line above would pass on a dismissal path that
-    // was wired to nothing at all.
+    // Positive control: a well-formed record does go quiet.
     await writeModelSettings('M-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
     expect((await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M')).verdict).toBe('ok');
   });
@@ -480,9 +350,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
 describe('ModelManager.addVision — the projector arrives on the ordinary download stream', () => {
   const PROJECTOR = Buffer.from('an-eye-for-this-model');
 
-  /** Serves the mmproj by trailing filename; anything else is a 404, so a fetch
-   *  of the WEIGHTS (which are already on disk and must not be re-downloaded)
-   *  would fail the download loudly rather than pass unnoticed. */
+  /** Serves only the mmproj; anything else is a 404, so re-fetching the already-published WEIGHTS fails loudly. */
   const servingProjector = (async (url: any) => {
     urls.push(String(url));
     if (!String(url).endsWith('mmproj-F16.gguf')) return new Response(null, { status: 404 });
@@ -493,11 +361,10 @@ describe('ModelManager.addVision — the projector arrives on the ordinary downl
 
   it('moves the model into its folder, fetches the projector beside it, and the row becomes vision-ready', async () => {
     fs.writeFileSync(path.join(cacheDir, 'Eye-Q4_K_M.gguf'), Buffer.alloc(64));
-    fs.writeFileSync(path.join(cacheDir, 'Eye-Q4_K_M.gguf.download.json'), JSON.stringify({
-      v: 1, repo: 'unsloth/Eye-GGUF', quant: 'Q4_K_M', files: ['Eye-Q4_K_M.gguf'],
-      totalSizeBytes: 64, sha256ByFile: {}, startedAt: 1, completedAt: 2,
+    writeManifest(path.join(cacheDir, 'Eye-Q4_K_M.gguf'), {
+      repo: 'unsloth/Eye-GGUF', quant: 'Q4_K_M', files: ['Eye-Q4_K_M.gguf'], totalSizeBytes: 64, completedAt: 2,
       visionFile: { path: 'mmproj-F16.gguf', size: PROJECTOR.length, sha256: null },
-    }));
+    });
     const userData = path.join(root, 'userData');
     const engine = new EngineManager(home, userData, 9999);
     const mm = new ModelManager(home, engine, userData, {
@@ -505,9 +372,7 @@ describe('ModelManager.addVision — the projector arrives on the ordinary downl
     });
     const events: DownloadProgress[] = [];
     mm.on('download-progress', (p: DownloadProgress) => events.push(p));
-    // The event, not a timer: the download is started by addVision and finishes
-    // later, and asserting against the fixture before it settles is how a test
-    // reads green while the work it is checking never happened.
+    // The event, not a timer: asserting before the download settles reads green while the work never happened.
     const settled = new Promise<DownloadProgress>((resolve) => {
       mm.on('download-progress', (p: DownloadProgress) => {
         if (p.state === 'done' || p.state === 'error') resolve(p);
@@ -519,18 +384,14 @@ describe('ModelManager.addVision — the projector arrives on the ordinary downl
 
     expect(last.state).toBe('done');
     expect(last.downloadId).toBe(downloadId);
-    // The SAME stream every other download uses, carrying the repo + quant the
-    // Local Models row matches a live download on.
     expect(events.every((e) => e.repo === 'unsloth/Eye-GGUF' && e.quant === 'Q4_K_M')).toBe(true);
     expect(events.some((e) => e.state === 'downloading')).toBe(true);
     // Only the projector is fetched: the weights were already published.
     expect(urls).toEqual(['https://huggingface.co/unsloth/Eye-GGUF/resolve/main/mmproj-F16.gguf']);
-    // On disk: the folder holds both files and the flat copy is gone, so there
-    // is no pair for the engine to pick between.
+    // The folder holds both files and the flat copy is gone, so the engine has no pair to pick between.
     expect(fs.existsSync(path.join(cacheDir, 'Eye-Q4_K_M.gguf'))).toBe(false);
     expect(fs.readFileSync(path.join(cacheDir, 'Eye-Q4_K_M', 'mmproj-F16.gguf'))).toEqual(PROJECTOR);
     expect(fs.existsSync(path.join(cacheDir, 'Eye-Q4_K_M', 'Eye-Q4_K_M.gguf'))).toBe(true);
-    // And the app now reports the state the eye is drawn from.
     const rows = await engine.installedModels();
     expect(rows.map((r) => [r.id, r.status, r.vision]))
       .toEqual([['Eye-Q4_K_M', 'complete', 'ready']]);

@@ -13,27 +13,26 @@ const cpuMs = (): number => {
   return (user + system) / 1000;
 };
 
-
 const ctx = () => ({ sessionId: 's', cwd: 'C:\\proj', signal: new AbortController().signal, readRegistry: new Map(), todos: [] as any[] });
 const publicLookup = async () => [{ address: '93.184.216.34', family: 4 }];
 const html = (body: string) => new Response(body, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
 
-// Real-page fixtures (task 12): vitest-config.html is the false-negative page —
-// its documented content arrives via client-side JS, so a reviewing model asking
-// about `include` gets a confident-but-wrong "not documented" answer. asyncio.html
-// is a server-rendered page of near-identical extraction ratio, pinned so a
-// threshold tweak that "fixes" one can't silently break the other.
+// Real pages: vitest-config.html is the false-negative page (its docs arrive via client-side JS); asyncio.html is server-rendered at a near-identical ratio, so a threshold tweak can't fix one and break the other.
 const fixture = (n: string) => fs.readFileSync(path.join(__dirname, 'fixtures', 'web', n), 'utf8');
 
-// Shared stub-and-execute helper (task 11 brief: reuse the existing test-hooks
-// pattern under one name instead of repeating the two-line stub at every call site).
+// Stub the page and execute.
 const fetchWith = async (body: string, url = 'https://example.com/deep') => {
   __setWebFetchTestHooks({ lookup: publicLookup, fetchImpl: async () => html(body) });
   return WebFetchTool.execute({ url } as any, ctx());
 };
 
-// Reset the injected hooks after every test so lookup/fetch state can't leak
-// between cases (a stubbed fetch bleeding into the next test would be a silent lie).
+// Same, for a prepared Response (a Response body is single-use, so one is served once).
+const fetchResponse = async (res: Response, url: string) => {
+  __setWebFetchTestHooks({ lookup: publicLookup, fetchImpl: async () => res });
+  return WebFetchTool.execute({ url } as any, ctx());
+};
+
+// Reset hooks so a stubbed fetch can't bleed into the next test.
 afterEach(() => __setWebFetchTestHooks({}));
 
 describe('WebFetch', () => {
@@ -82,19 +81,16 @@ describe('WebFetch', () => {
     expect(r.text).toContain('Source: https://example.com/docs'); // D-6: the header is the source URL only
   });
   it('passes plain text / json through', async () => {
-    __setWebFetchTestHooks({ lookup: publicLookup, fetchImpl: async () => new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } }) });
-    const r = await WebFetchTool.execute({ url: 'https://example.com/api' } as any, ctx());
+    const r = await fetchResponse(new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } }), 'https://example.com/api');
     expect(r.text).toContain('"ok":true');
   });
   it('refuses binaries honestly', async () => {
-    __setWebFetchTestHooks({ lookup: publicLookup, fetchImpl: async () => new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]), { status: 200, headers: { 'content-type': 'application/pdf' } }) });
-    const r = await WebFetchTool.execute({ url: 'https://example.com/f.pdf' } as any, ctx());
+    const r = await fetchResponse(new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]), { status: 200, headers: { 'content-type': 'application/pdf' } }), 'https://example.com/f.pdf');
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/application\/pdf/);
   });
   it('surfaces HTTP errors with the status', async () => {
-    __setWebFetchTestHooks({ lookup: publicLookup, fetchImpl: async () => new Response('nope', { status: 404 }) });
-    const r = await WebFetchTool.execute({ url: 'https://example.com/missing' } as any, ctx());
+    const r = await fetchResponse(new Response('nope', { status: 404 }), 'https://example.com/missing');
     expect(r.isError).toBe(true);
     expect(r.text).toContain('404');
   });
@@ -216,8 +212,7 @@ describe('WebFetch', () => {
     const bareBody = new TextEncoder().encode(
       '<!doctype html><html><head><title>Bare</title></head><body><article><h1>Bare Server</h1><p>' + 'Real content. '.repeat(40) + '</p></article></body></html>',
     );
-    __setWebFetchTestHooks({ lookup: publicLookup, fetchImpl: async () => new Response(bareBody, { status: 200 }) });
-    const r = await WebFetchTool.execute({ url: 'https://example.com/bare' } as any, ctx());
+    const r = await fetchResponse(new Response(bareBody, { status: 200 }), 'https://example.com/bare');
     expect(r.isError).toBeUndefined();
     expect(r.text).toContain('Bare Server');
   });
@@ -235,16 +230,8 @@ describe('WebFetch', () => {
     expect(r.text).not.toContain(leaked); // script source must not leak into the article
   });
 
-  it('discloses the fallback char cap when the too-complex page exceeds it (fix: WebFetch declares its body caps)', async () => {
-    // The adversarial body above (200,012 chars) is just past FALLBACK_CHAR_CAP
-    // (200,000), so the guard-path fallback must say it only scanned a prefix —
-    // the fallback exists to give the model something useful, not to silently
-    // render an entire multi-megabyte document as plain text.
-    //
-    // WHY this now asserts on `bounds` (not a regex over hand-written prose):
-    // the 200KB scan cap has a genuinely KNOWN total — raw.length, the HTML
-    // actually received and scanned — so `bounds.total` must be that real
-    // number, not `null` and not a fabricated one.
+  it('discloses the fallback char cap when the too-complex page exceeds it', async () => {
+    // WHY: the 200KB scan cap has a KNOWN total (the HTML received), so bounds.total must be that number, not null or fabricated.
     const adversarial = '<html><body>' + '<'.repeat(200_000);
     const r = await fetchWith(adversarial, 'https://example.com/adversarial-cap');
     expect(r.isError).toBeFalsy();
@@ -259,29 +246,11 @@ describe('WebFetch', () => {
     expect(r.text).not.toContain('[output truncated: showing'); // the bare no-advice fallback
   });
 
-  it('reports the 5MB network cap as separate prose when it fires alongside the 200KB fallback cap (fix: WebFetch declares its body caps)', async () => {
-    // Important finding (2026-08-06 review): every OTHER return path appends
-    // "[body truncated at 5MB]" when readBodyCapped cut the body short; the
-    // too-complex fallback used to skip it, so a 7MB tag-heavy page silently
-    // returned a prefix with no sign 2MB+ were discarded — inside the exact
-    // code path whose purpose is eliminating silent truncation.
-    //
-    // WHY this now expects `bounds` to report the 200KB fallback cap, NOT the
-    // 5MB network cap, plus a plain-prose disclosure of the 5MB fact: only one
-    // `bounds` can ride a result, and the 200KB cap is the one that actually
-    // bounds what the model reads here (it's always the tighter of the two —
-    // see the WHY comment on `bounds` in web-fetch.ts). The 5MB fact must still
-    // be disclosed somewhere, so it stays in `text` as a plain fact rather than
-    // advice.
-    // Body shaped to (a) exceed 5MB so readBodyCapped truncates it, and (b)
-    // still trip the tag-count guard after truncation (repeating tags keep
-    // tagCount high throughout).
+  it('reports the 5MB network cap as separate prose when it fires alongside the 200KB fallback cap', async () => {
+    // WHY: the too-complex fallback once skipped the "[body truncated at 5MB]" disclosure; only one `bounds` can ride a result, and the tighter 200KB cap wins, so the 5MB fact stays plain prose.
+    // Body: over 5MB (so the network cap cuts it) and still tripping the tag-count guard after truncation.
     const oversized = '<html><body>' + '<div>x</div>'.repeat(500_000); // ~6MB
-    __setWebFetchTestHooks({
-      lookup: publicLookup,
-      fetchImpl: async () => html(oversized),
-    });
-    const r = await WebFetchTool.execute({ url: 'https://example.com/huge' } as any, ctx());
+    const r = await fetchWith(oversized, 'https://example.com/huge');
     expect(r.isError).toBeFalsy();
     expect(r.text).toContain('simplified extraction');
     // sanity: readBodyCapped really did cut it down from the ~6MB source
@@ -292,18 +261,11 @@ describe('WebFetch', () => {
     expect(r.text).not.toContain('[output truncated: showing'); // the bare no-advice fallback
   });
 
-  it('declares the 5MB body cap via bounds with an unknown total (fix: WebFetch declares its body caps)', async () => {
-    // WHY total: null (not raw.length or any other measured number): the
-    // server never said how much more, so total is null (inventing a number is what `bounds` prevents).
-    // WHY whole-line assertion with unit 'chars': for ASCII the byte and char counts coincide, but once the 30,000-char pipeline cap
-    // also fires, composeNotice folds both bounds on one line and a unit mislabel read "30007 of N chars, and 5242880 BYTES".
+  it('declares the 5MB body cap via bounds with an unknown total', async () => {
+    // WHY total: null — the server never said how much more. WHY unit 'chars': once the 30,000-char cap also fires, composeNotice folds both bounds on one line and a mislabel read "30007 of N chars, and 5242880 BYTES".
     // The notice is derived via the same truncateOutput/composeNotice calls so no number is hardcoded.
     const oversized = 'a'.repeat(6 * 1024 * 1024); // > MAX_BODY_BYTES (5MB)
-    __setWebFetchTestHooks({
-      lookup: publicLookup,
-      fetchImpl: async () => new Response(oversized, { status: 200, headers: { 'content-type': 'text/plain' } }),
-    });
-    const r = await WebFetchTool.execute({ url: 'https://example.com/huge.txt' } as any, ctx());
+    const r = await fetchResponse(new Response(oversized, { status: 200, headers: { 'content-type': 'text/plain' } }), 'https://example.com/huge.txt');
     expect(r.isError).toBeFalsy();
     const moreHint = 'fetch a more specific URL, or a narrower section of the page';
     expect(r.bounds).toEqual({ shown: 5 * 1024 * 1024, total: null, unit: 'chars', moreHint });
@@ -321,17 +283,13 @@ describe('WebFetch', () => {
     expect(r.text).not.toContain('[output truncated: showing'); // the bare no-advice fallback
   });
 
-  it('does not claim two different units for the same text on a large non-HTML body (BLOCKER, round 7, CJK unit-mismatch regression)', async () => {
+  it('does not claim two different units for the same text on a large non-HTML body (CJK unit mismatch)', async () => {
     // WHY: for ASCII the byte cap and raw.length coincide. 2,000,000 x '你' (3 bytes) is 6,000,000 bytes, so the 5MB cut lands
     // mid-character and decodes to 1,747,627 UTF-16 units; the old notice claimed 5242880 BYTES beside 30,007 CHARS of the same text.
     const CJK = '你'; // 3 bytes in UTF-8 ('你')
     const oversized = CJK.repeat(2_000_000); // exactly 6,000,000 bytes
     expect(Buffer.byteLength(oversized, 'utf8')).toBe(6_000_000); // sanity: the premise this test rests on
-    __setWebFetchTestHooks({
-      lookup: publicLookup,
-      fetchImpl: async () => new Response(oversized, { status: 200, headers: { 'content-type': 'text/plain' } }),
-    });
-    const r = await WebFetchTool.execute({ url: 'https://example.com/huge-cjk.txt' } as any, ctx());
+    const r = await fetchResponse(new Response(oversized, { status: 200, headers: { 'content-type': 'text/plain' } }), 'https://example.com/huge-cjk.txt');
     expect(r.isError).toBeFalsy();
     // Computed independently of web-fetch.ts (plain Buffer slice+decode) so this does not just echo the source.
     const decodedRaw = Buffer.from(oversized, 'utf8').subarray(0, 5 * 1024 * 1024).toString('utf8');
@@ -350,16 +308,12 @@ describe('WebFetch', () => {
     expect(r.text).not.toMatch(/5242880 bytes/); // the retired, overstated, wrong-unit claim
   });
 
-  it('does not overstate what was shown when a >5MB HTML body extracts to a short article (fix: BLOCKER B1)', async () => {
+  it('does not overstate what was shown when a >5MB HTML body extracts to a short article ', async () => {
     // WHY: a 6MB page whose real article is one short paragraph (padding inside an HTML comment, inert to the guard and Readability).
     // `bounds` once claimed shown = the 5MB cap, telling the model it had seen everything.
     const filler = 'x'.repeat(6_000_000);
     const page = `<html><head><title>Padded</title></head><body><article><h1>Article</h1><p>Short real article.</p></article><!--${filler}--></body></html>`;
-    __setWebFetchTestHooks({
-      lookup: publicLookup,
-      fetchImpl: async () => new Response(page, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }),
-    });
-    const r = await WebFetchTool.execute({ url: 'https://example.com/padded-article' } as any, ctx());
+    const r = await fetchWith(page, 'https://example.com/padded-article');
     expect(r.isError).toBeFalsy();
     expect(r.text).toContain('Short real article.');
     expect(r.bounds).toBeTruthy();
