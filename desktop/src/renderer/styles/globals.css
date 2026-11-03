@@ -2320,7 +2320,11 @@ pre.yc-code code {
    bottom matches the sides, and inset the terminal content by the same amount
    so xterm's last row isn't painted over. Floating-chrome themes have no frame
    chrome (chrome-glass is display:none), so they opt out of the bottom strip. */
-html[data-platform="electron"] {
+/* WHY the TOP inset is on every platform, not only Electron (Destin, 2026-11-03: "the top of the terminal in a new
+   session on the phone seems to sink under the header a bit in a way i think we've resolved on pc"): the phone and a
+   remote browser overlay the same header, and measured on a Z Flip7 the terminal started at y=0 under a 40px header.
+   Only the BOTTOM collapse below is Electron-only; the top inset never depended on it. */
+html {
   --terminal-top-inset: var(--top-chrome-bottom, 3rem);
 }
 /* SIDE inset: framed themes paint --frame-edge-wide chrome strips down the left
