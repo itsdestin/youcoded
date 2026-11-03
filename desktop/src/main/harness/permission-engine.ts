@@ -10,6 +10,7 @@
 // allow" flow persists only allow rules); a future feature persisting remembered
 // ask/deny rules must revisit this consequence-warning logic.
 import { ruleMatches, type MatchContext } from '../../shared/subject-glob';
+import { downloadHostVerdict } from '../../shared/download-host';
 import type { PermissionDecision, PermissionRule } from '../../shared/permission-types';
 
 export interface PermissionLayers {
@@ -45,6 +46,12 @@ export function decidePermission(
     winner = entry; // last match wins
   }
   if (!winner) return { action: 'ask', denyListed: false }; // safe default — never silent-allow
+  // A link-following download allowed BY a download-host rule must run guarded (same website at every hop). Only the
+  // WINNING rule counts: a mode or exact grant that wins the decision approved the command as typed.
+  if (winner.r.match === 'download-host' && winner.r.action === 'allow' && tool === 'Bash') {
+    const v = downloadHostVerdict(subject ?? '');
+    if (v && v.ok && v.followsRedirects) return { action: 'allow', denyListed: winner.deny, downloadGuard: { host: v.host } };
+  }
   return { action: winner.r.action, denyListed: winner.deny };
 }
 
@@ -65,7 +72,7 @@ export function decideChainParts(
   for (const part of parts) {
     if (part.free) continue;
     judged++;
-    if (decidePermission('Bash', part.text, layers, part.context).action !== 'allow') return null;
+    if (decidePermission('Bash', part.text, layers, { ...part.context, chainPart: true }).action !== 'allow') return null;
   }
   // A chain made only of free steps (`cd a && cd b`) is not worth a verdict of its own: it grants nothing to remember.
   return judged > 0 ? { action: 'allow', denyListed: false } : null;

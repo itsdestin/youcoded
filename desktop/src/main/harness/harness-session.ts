@@ -11,6 +11,7 @@
 // surface is FROZEN — this driver emits ONLY the pre-existing TranscriptEventType
 // values; max_steps and doom_loop surface as PERMISSION ASKS (askUser), never as
 // new event types.
+import { guardDownload } from './download-guard';
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow } from '../providers/context-overflow';
@@ -4197,6 +4198,8 @@ export class HarnessSession extends EventEmitter {
     // deny-list stop and every forced ask (outside the project, secrets floor, saved-permissions floor) still happen.
     const editsPreApproved = decision.action === 'ask' && !decision.denyListed && !forcedAsk && this.editsAllowedForChat
       && !this.opts.isSpecialistChild && (call.toolName === 'Write' || call.toolName === 'Edit');
+    // Set below when the person's Always allow saves a one-website download rule (see 4b).
+    let ask_savedDownloadHost: string | undefined;
     if (decision.action === 'ask' && !editsPreApproved) {
       // An ABSENT handler is a WIRING gap, not a user cancel — surface it as a
       // decline RESULT (the model can't proceed) instead of the 'interrupted'
@@ -4241,7 +4244,11 @@ export class HarnessSession extends EventEmitter {
         // The card sent a width, not a pattern — rememberedRuleFor derives the
         // rule here, in main. null means this command may not be remembered at
         // any width, so nothing is emitted.
-        for (const rule of rememberedRulesFor(call.toolName, subject, d.grantScope, this.opts.cwd, { chains: getShell().label !== 'PowerShell' })) this.emit('remember-rule', rule);
+        for (const rule of rememberedRulesFor(call.toolName, subject, d.grantScope, this.opts.cwd, { chains: getShell().label !== 'PowerShell' })) {
+          this.emit('remember-rule', rule);
+          // WHY: they chose "this website only", so this first run is guarded too. (guardDownload re-checks the command's own website.)
+          if (rule.match === 'download-host') ask_savedDownloadHost = rule.pattern?.split(' ')[1];
+        }
       }
     }
 
@@ -4261,9 +4268,19 @@ export class HarnessSession extends EventEmitter {
       }
     }
 
+    // 4b. Same-website guard (review deck round 3, Q-7): only a link-following download allowed by a saved one-website rule
+    //     (or just saved with Always allow) is walked and rewritten; a plain Yes, exact grant or mode runs as typed.
+    let execArgs = args;
+    const guardHost = decision.action === 'allow' ? decision.downloadGuard?.host : ask_savedDownloadHost;
+    if (guardHost !== undefined && isBash && typeof subject === 'string') {
+      const g = await guardDownload(subject, guardHost, { signal: this.abort!.signal });
+      if (g.kind === 'stopped') return { text: g.message, isError: true };
+      execArgs = { ...(args as object), command: g.command } as typeof args;
+    }
+
     // 5. Execute (defineTool owns truncation + the actionable-error catch).
     this.toolCallCount += 1;
-    return tool.execute(args, {
+    return tool.execute(execArgs, {
       sessionId: this.opts.sessionId,
       cwd: this.opts.cwd,
       signal: this.abort!.signal,

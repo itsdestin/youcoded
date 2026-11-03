@@ -335,11 +335,12 @@ const covers = (pattern: string, cmd: string) => ruleMatches(grant(pattern), cmd
 
 describe('curl and wget: downloading is not uploading', () => {
   it('offers a download-worded wide choice for a plain download', () => {
-    // Q-6: a plain download is remembered for ONE website. (-L follows redirects, so it gets only the exact choice.)
+    // Q-6: a plain download is remembered for ONE website. (-L is covered too: the session guards it to the same website.)
     const w = wideOf('curl -sS https://example.com/a.zip -o a.zip')!;
     expect(w.label).toBe('Always allow downloads from example.com only');
     expect(w.rule).toMatchObject({ pattern: 'curl example.com', match: 'download-host' });
-    expect(wideOf('curl -sSL https://example.com/a.zip -o a.zip')).toBeUndefined();
+    expect(wideOf('curl -sSL https://example.com/a.zip -o a.zip')!.label).toBe('Always allow downloads from example.com only');
+    expect(wideOf('curl --location-trusted https://example.com/a.zip')).toBeUndefined();
     expect(wideOf('wget --max-redirect=0 https://example.com/a.zip')!.label).toBe('Always allow downloads from example.com only');
   });
 

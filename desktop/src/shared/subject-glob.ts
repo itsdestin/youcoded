@@ -68,6 +68,9 @@ export interface MatchContext {
   cwd?: string;
   /** The Bash tool is running PowerShell, not bash. */
   powershell?: boolean;
+  /** The command is one part of a joined-up line. A download-host rule then does NOT cover a download that follows
+   *  links: the same-website guard wraps a whole command, and a part inside a chain cannot be wrapped. */
+  chainPart?: boolean;
   /** The two checks the built-in read-only list cannot do from text alone (computed in main by
    *  tools/readonly-guard.ts before deciding). Absent = NOT done = the list does not apply: fail closed. */
   readOnlyChecks?: {
@@ -104,7 +107,7 @@ export function ruleMatches(rule: PermissionRule, subject: string, context: Matc
   // a chained command is never covered here (the engine judges each part of a chain on its own).
   if (rule.match === 'download-host') {
     if (rule.tool !== 'Bash' || rule.action !== 'allow' || context.powershell) return false;
-    return downloadHostRuleCovers(rule.pattern, subject);
+    return downloadHostRuleCovers(rule.pattern, subject, { allowFollowing: !context.chainPart });
   }
   // Q-3: "files in this folder". Secret files, files outside the project and linked-out files never reach a rule
   // (tool-layer path guard runs first), so this only answers "is the file directly in the saved folder".

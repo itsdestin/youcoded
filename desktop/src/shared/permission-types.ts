@@ -133,6 +133,10 @@ export interface PermissionDecision {
   /** True when the winning rule came from the destructive deny-list — drives
    *  the consequence-gated "Always allow" warning (spec §2.4 precedence ruling). */
   denyListed: boolean;
+  /** Set ONLY when a saved "downloads from <website> only" rule allowed a download that follows links. The session must
+   *  run that command guarded (main/harness/download-guard.ts): every link hop stays on `host`, or the download stops.
+   *  Never set for a Yes from the person, an exact grant or a mode — those approved the command as typed. */
+  downloadGuard?: { host: string };
   /** Optional model-facing refusal detail. When absent, harness-session renders
    *  its generic "blocked by a permission rule" copy — which is what every
    *  existing caller (decidePermission) still gets. Added for specialists

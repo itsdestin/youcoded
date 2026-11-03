@@ -15,15 +15,21 @@
 //  * the address must match a strict spelling (letters, digits, dots, hyphens; no user:password@,
 //    no port, no backslash, no [] {} (curl expands those into many addresses), no IP numbers,
 //    no home-network names such as .local);
-//  * following redirects (curl -L, wget's default) is NOT allowed — a redirect leaves the website
-//    the person approved;
+//  * following redirects (curl -L, wget's default) is allowed ONLY because the engine runs such a command
+//    guarded (2026-11-02, review deck round 3 Q-7 "same-site"): every link hop must stay on the exact same
+//    website, and a hop to another website stops the download. The verdict marks these `followsRedirects`;
+//    the guard itself lives in main/harness/download-guard.ts. `--location-trusted` (sends passwords on to
+//    the other website) and an explicit --max-redirect=N stay refused;
 //  * anything else returns { ok: false } and the caller offers only the word-for-word choice.
 // Sending data out, config files, cookies from files, writing outside the project and variables
 // are already refused by riskyVariant (bash-risky-variants.ts) and are re-checked here.
 import { riskyVariant } from './bash-risky-variants';
 
 export type DownloadHostVerdict =
-  | { ok: true; program: 'curl' | 'wget'; host: string }
+  // url = the one address as typed; followsRedirects = the command would follow links (so it must run guarded).
+  | { ok: true; program: 'curl' | 'wget'; host: string; url: string; followsRedirects: boolean }
+  // 'redirects' now means only: follows links in a way the guard cannot limit (--location-trusted, --max-redirect=N,
+  // or an output spelling the guard could not re-quote safely).
   | { ok: false; reason: 'redirects' | 'unclear' };
 
 const UNCLEAR: DownloadHostVerdict = { ok: false, reason: 'unclear' };
@@ -85,6 +91,7 @@ export function downloadHostVerdict(command: string): DownloadHostVerdict | null
 
   let address: string | null = null;
   let maxRedirectZero = false;
+  let curlFollows = false;
   for (let i = 1; i < list.length; i++) {
     const t = list[i];
     if (!t.startsWith('-')) {
@@ -93,7 +100,15 @@ export function downloadHostVerdict(command: string): DownloadHostVerdict | null
       continue;
     }
     if (program === 'curl') {
-      if (t === '--location' || t === '--location-trusted' || (/^-[A-Za-z]+$/.test(t) && t.slice(1).includes('L'))) return REDIRECTS;
+      // --location-trusted sends the person's password on to the other website: never covered.
+      if (t === '--location-trusted') return REDIRECTS;
+      if (t === '--location') { curlFollows = true; continue; }
+      // A short cluster such as -sSL: L means follow links; the other letters must still be plain download letters.
+      if (/^-[A-Za-z]+$/.test(t) && t.slice(1).includes('L')) {
+        if (![...t.slice(1)].every((ch) => ch === 'L' || CURL_FLAG_LETTERS.includes(ch))) return UNCLEAR;
+        curlFollows = true;
+        continue;
+      }
       if (t.startsWith('--')) {
         const eq = t.indexOf('=');
         const name = eq === -1 ? t : t.slice(0, eq);
@@ -136,9 +151,41 @@ export function downloadHostVerdict(command: string): DownloadHostVerdict | null
   if (address === null) return UNCLEAR;
   const host = strictHostOf(address);
   if (host === null) return UNCLEAR;
-  // wget follows redirects unless told not to; a redirect leaves the approved website.
-  if (program === 'wget' && !maxRedirectZero) return REDIRECTS;
-  return { ok: true, program, host };
+  // wget follows redirects unless told not to; curl only with -L / --location.
+  const followsRedirects = program === 'wget' ? !maxRedirectZero : curlFollows;
+  // A following command is re-issued by the guard with every word re-quoted, so each word must be plain enough that
+  // quoting cannot change what it means (no ~ or * expansion, no spaces). Anything else stays word-for-word only.
+  if (followsRedirects && !list.every((w) => w === address || SAFE_WORD.test(w))) return REDIRECTS;
+  return { ok: true, program, host, url: address, followsRedirects };
+}
+
+const SAFE_WORD = /^[A-Za-z0-9._\/=,+:-]+$/;
+const shq = (w: string) => `'${w.replace(/'/g, `'\\''`)}'`;
+
+/** The same download, rewritten so it can NOT follow a link: curl loses -L / --location, wget gains --max-redirect=0,
+ *  and the address becomes `finalUrl` (where the guard already walked the same-website links to). Null = not a
+ *  command the guard can re-issue. WHY the guard rewrites instead of watching: this way even if the website answers
+ *  differently the second time, the command that actually runs has no way to reach another website. */
+export function sameSiteDownloadCommand(command: string, finalUrl: string): string | null {
+  const v = downloadHostVerdict(command);
+  if (!v || !v.ok || !v.followsRedirects || strictHostOf(finalUrl) !== v.host) return null;
+  const list = words(command);
+  const out: string[] = [];
+  for (const w of list) {
+    if (w === v.url) { out.push(shq(finalUrl)); continue; }
+    if (v.program === 'curl') {
+      if (w === '--location') continue;
+      if (/^-[A-Za-z]+$/.test(w) && w.includes('L')) {
+        const rest = w.replace(/L/g, '');
+        if (rest !== '-') out.push(rest);
+        continue;
+      }
+    }
+    // Every other word already passed SAFE_WORD, so it needs no quoting (and quoting could only change its meaning).
+    out.push(w);
+    if (v.program === 'wget' && w === list[0]) out.push('--max-redirect=0');
+  }
+  return out.join(' ');
 }
 
 /** The saved rule's pattern: `curl github.com`. */
@@ -147,8 +194,10 @@ export function downloadHostPattern(program: 'curl' | 'wget', host: string): str
 }
 
 /** Does a saved `download-host` rule cover this command? The engine's one question. */
-export function downloadHostRuleCovers(pattern: string | undefined, subject: string): boolean {
+export function downloadHostRuleCovers(pattern: string | undefined, subject: string, opts: { allowFollowing?: boolean } = {}): boolean {
   if (pattern === undefined) return false;
   const v = downloadHostVerdict(subject);
-  return v !== null && v.ok && downloadHostPattern(v.program, v.host) === pattern;
+  if (v === null || !v.ok || downloadHostPattern(v.program, v.host) !== pattern) return false;
+  // WHY: a link-following download is covered only where the engine can run it guarded (default: yes, a whole command).
+  return v.followsRedirects ? opts.allowFollowing !== false : true;
 }

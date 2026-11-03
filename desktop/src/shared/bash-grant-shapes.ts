@@ -295,7 +295,7 @@ function deriveWide(command: string, tokens: string[]): GrantOption | null {
 
   const family = safeFamilyOf(command);
   // Q-6: a plain download is remembered for ONE website, read from a parsed address (shared/download-host.ts). Anything
-  // that parser will not vouch for (variables, two addresses, redirect-following, odd spellings) is exact-only: returning
+  // that parser will not vouch for (variables, two addresses, --location-trusted, odd spellings) is exact-only: returning
   // null here — never the old "any download" rung — keeps the exact choice as the only one.
   if (family?.family === 'download') {
     const v = downloadHostVerdict(command);
@@ -304,7 +304,11 @@ function deriveWide(command: string, tokens: string[]): GrantOption | null {
       scope: 'wide',
       rule: { tool: 'Bash', pattern: downloadHostPattern(v.program, v.host), action: 'allow', match: 'download-host' },
       label: `Always allow downloads from ${v.host} only`,
-      limits: "Doesn't cover other websites, following redirects, sending data or files out, or this command chained onto another one.",
+      // WHY: a link-following download is covered only because the session guards it (main/harness/download-guard.ts):
+      // every hop must stay on this website, and a hop elsewhere stops the download.
+      limits: v.followsRedirects
+        ? `Following links stays on ${v.host}; a link to another website stops the download. Doesn't cover sending data or files out, or this command chained onto another one.`
+        : "Doesn't cover other websites, following redirects, sending data or files out, or this command chained onto another one.",
     };
   }
   if (family) {
@@ -482,7 +486,7 @@ function downloadExactReason(command: string): string | null {
   const v = downloadHostVerdict(command);
   if (!v || v.ok) return null;
   return v.reason === 'redirects'
-    ? 'Only this exact command is remembered, because it follows links on to other websites.'
+    ? 'Only this exact command is remembered, because its links to other websites could not be limited.'
     : 'Only this exact command is remembered, because the website could not be read plainly from it.';
 }
 

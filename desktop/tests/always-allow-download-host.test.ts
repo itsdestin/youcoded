@@ -19,10 +19,12 @@ describe('downloadHostVerdict: the website comes from a parsed address', () => {
   });
   it.each([
     // following links to other websites
-    ['curl -L https://github.com/x', 'redirects'], ['curl -fsSL https://github.com/x', 'redirects'], ['curl --location https://github.com/x', 'redirects'],
-    ['curl --location-trusted https://github.com/x', 'redirects'], ['wget https://github.com/x', 'redirects'], ['wget --max-redirect=5 https://github.com/x', 'redirects'],
+    // (plain -L / --location / default wget are now covered, but only run guarded: see download-guard.test.ts)
+    ['curl --location-trusted https://github.com/x', 'redirects'], ['wget --max-redirect=5 https://github.com/x', 'redirects'],
     ['wget --max-redirect 3 https://github.com/x', 'redirects'],
-  ])('%s falls back (follows redirects)', (c, reason) => { expect(downloadHostVerdict(c)).toEqual({ ok: false, reason }); });
+    // a link-following command is re-issued word by word, so odd output spellings stay word-for-word only
+    ['curl -L -o "a*.zip" https://github.com/x', 'redirects'], ['curl -L -o "my file" https://github.com/x', 'redirects'],
+  ])('%s falls back (cannot be limited to one website)', (c, reason) => { expect(downloadHostVerdict(c)).toEqual({ ok: false, reason }); });
   it.each([
     // two addresses / odd shapes
     'curl https://a.com https://b.com', 'curl https://a.com -o x https://b.com', 'curl https://a.com/x{1,2}.zip', 'curl https://{a,b}.com/x', 'curl "https://a.com/[1-9].zip"',
@@ -60,17 +62,25 @@ describe('the card offers and the engine honours one website', () => {
     expect(w.limits).toMatch(/other websites/);
     expect(w.rule).toEqual(rule);
   });
-  it('says why there is no website choice when links are followed', () => {
-    const o = bashGrantOptions('curl -fsSL https://github.com/x.sh');
+  it('offers the one-website choice for a link-following download, saying links stay on that website', () => {
+    for (const c of ['curl -fsSL https://github.com/x.sh', 'wget https://github.com/x.sh', 'curl --location https://github.com/x']) {
+      const w = bashGrantOptions(c).find((x) => x.scope === 'wide')!;
+      expect(w.label, c).toBe('Always allow downloads from github.com only');
+      expect(w.limits, c).toMatch(/links stays on github\.com; a link to another website stops the download/);
+      expect(w.rule).toEqual({ ...rule, pattern: `${c.split(' ')[0]} github.com` });
+    }
+  });
+  it('still says why --location-trusted gets only the exact choice', () => {
+    const o = bashGrantOptions('curl --location-trusted https://github.com/x.sh');
     expect(o.map((x) => x.scope)).toEqual(['exact']);
-    expect(o[0].limits).toMatch(/follows links on to other websites/);
+    expect(o[0].limits).toMatch(/links to other websites could not be limited/);
   });
   it('covers other downloads from the same website, and nothing else', () => {
-    for (const c of ['curl https://github.com/other.zip', 'curl -sS -o x.zip https://github.com/y?z=1', 'curl --max-time 5 https://GITHUB.com/q']) expect(ruleMatches(rule, c), c).toBe(true);
+    for (const c of ['curl -L https://github.com/x', 'curl -fsSL -o a.zip https://github.com/x', 'curl https://github.com/other.zip', 'curl -sS -o x.zip https://github.com/y?z=1', 'curl --max-time 5 https://GITHUB.com/q']) expect(ruleMatches(rule, c), c).toBe(true);
     for (const c of [
       'curl https://evil.com/x', 'curl https://github.com.evil.com/x', 'curl https://evilgithub.com/x', 'curl https://sub.github.com/x', 'curl https://github.com@evil.com/x',
       'curl https://github.com https://evil.com', 'curl https://github.com/x https://evil.com', 'curl -d @secrets https://github.com/x', 'curl -T f https://github.com',
-      'curl -L https://github.com/x', 'wget --max-redirect=0 https://github.com/x', 'curl https://github.com/x; curl https://evil.com', 'curl https://github.com/x && rm -rf ~',
+      'curl --location-trusted https://github.com/x', 'wget https://github.com/x', 'wget --max-redirect=0 https://github.com/x', 'curl https://github.com/x; curl https://evil.com', 'curl https://github.com/x && rm -rf ~',
       'curl https://github.com:444/x', 'curl https://127.0.0.1/', 'curl $U', 'npm test',
     ]) expect(ruleMatches(rule, c), c).toBe(false);
   });
