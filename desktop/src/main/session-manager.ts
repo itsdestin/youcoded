@@ -473,6 +473,7 @@ export class SessionManager extends EventEmitter {
     // otherwise a 100-column ConPTY screen is decoded as 80 columns until resize.
     const spawnSize = { cols: opts.cols || 80, rows: opts.rows || 24 };
     this.ptySizes.set(id, spawnSize);
+    log('INFO', 'SessionManager', 'pty spawn size', { id: id.slice(-6), ...spawnSize });
     this.emit('session-created', info);
 
     // Handle spawn failure (e.g., node not on PATH) — without this,
@@ -554,6 +555,10 @@ export class SessionManager extends EventEmitter {
           // The worker changed the PTY size (a real resize or the repaint nudge) — in stream order with the data around it.
           // Keep our record of it and tell the computer's screen copy, so output made at that size is laid out at that size.
           this.ptySizes.set(id, { cols: msg.cols, rows: msg.rows });
+          // WHY logged (Destin, 2026-11-03: Claude Code's screen printed twice in a phone's terminal): every size change
+          // makes Claude Code redraw, and which one fired — a screen's request or the repaint nudge — was invisible.
+          // One line per change; changes are rare (a window drag is debounced to one).
+          log('INFO', 'SessionManager', 'pty size', { id: id.slice(-6), cols: msg.cols, rows: msg.rows });
           this.emit('pty-size', id, msg.cols, msg.rows);
           break;
         case 'data':
@@ -755,6 +760,7 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(id);
     if (!session || !session.worker) return false;
     if (session.ptyReady === false) { session.pendingResize = { cols, rows }; return false; } // native sessions have no PTY
+    log('INFO', 'SessionManager', 'pty resize requested', { id: id.slice(-6), cols, rows });
     try { session.worker.send({ type: 'resize', cols, rows }); } catch { return false; }
     // WHY no ptySizes.set here: the worker reports every size change in stream order ('size' below) and is the ONE authority. Setting it at
     // request time ran before the PTY had resized and before old-size output had drained, and made the screen copy wobble when a request
@@ -785,6 +791,7 @@ export class SessionManager extends EventEmitter {
   bounceSize(id: string): boolean {
     const session = this.sessions.get(id);
     if (!session || !session.worker) return false;
+    log('INFO', 'SessionManager', 'pty repaint nudge requested', { id: id.slice(-6) });
     try { session.worker.send({ type: 'bounce' }); } catch { return false; }
     return true;
   }
