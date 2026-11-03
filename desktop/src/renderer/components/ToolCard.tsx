@@ -590,7 +590,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
    *  `input.command` — the same string harness-session.ts:562 persists. */
   command?: string;
   /** Q-2/Q-3: the file a Write/Edit ask is about, as the assistant wrote it. Gives the edit card its extra choices
-   *  ("For this conversation", and "Only this file" vs "Files in <folder>" under Always allow). */
+   *  ("Allow for this chat", and "Only this file" vs "Files in <folder>" under Always allow). */
   filePath?: string;
   /** Q-1: set by the native host when this session's shell reads a joined-up command the way the engine does. Without it the
    *  card does not offer "Each part on its own" (rules that never fire would be a silent no-op). */
@@ -693,7 +693,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     () => (isNative && typeof command === 'string' ? bashNoGrantNote(command) : null),
     [isNative, command],
   );
-  // Q-2/Q-3: an ordinary file-edit ask (not outside the project, not a helper's, no floor) gets a "For this conversation"
+  // Q-2/Q-3: an ordinary file-edit ask (not outside the project, not a helper's, no floor) gets an "Allow for this chat"
   // button, and its Always allow asks "this file or this folder?". Same list the shared module gave main, so the
   // sentence and the stored rule cannot disagree.
   const editAsk = isNative && !specialistName && isFileEditTool(toolName) && typeof filePath === 'string' && !external && !floorStop;
@@ -981,7 +981,9 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
         the card's header line. */}
     {siteAsk && <p className="text-xs font-medium text-fg-2 break-all">Visit {site}?</p>}
     {custom && <p className="text-xs font-medium text-fg-2 break-words">{custom.question}</p>}
-    <div className="flex items-center gap-2">
+    {/* WHY flex-wrap: an edit ask has four buttons; at phone width a whole button dropping to the next row reads
+        cleaner than a label split in two (same as OutsideCommentsAsk). */}
+    <div className="flex flex-wrap items-center gap-2">
       <button
         ref={el => { buttonsRef.current[0] = el; }}
         disabled={responding}
@@ -990,15 +992,18 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       >
         Yes
       </button>
-      {/* Q-2: edits only. Allows edits until this conversation ends; nothing is saved to Settings. */}
+      {/* Q-2: edits only. Allows edits until this chat ends; nothing is saved to Settings.
+          WHY this label and colour (round-3 deck E-1, "not how we've styled this anywhere else"): it copies the one
+          existing chat-long button, OutsideCommentsAsk's "Allow for this chat" — same words, same blue — instead of
+          the pale one-off green it had. */}
       {editAsk ? (
         <button
           ref={el => { buttonsRef.current[chatIdx] = el; }}
           disabled={responding}
           onClick={() => handleRespond({ decision: { behavior: 'allow' }, allowEditsForChat: true })}
-          className={`px-3 ${pad} text-xs font-medium rounded-lg bg-green-400/40 hover:bg-green-400/60 text-green-100 transition-colors disabled:opacity-50 ${focusIdx === chatIdx ? ring : ''}`}
+          className={`px-3 ${pad} text-xs font-medium rounded-lg whitespace-nowrap ${BROAD_ALLOW_COLORS} transition-colors disabled:opacity-50 ${focusIdx === chatIdx ? ring : ''}`}
         >
-          For this conversation
+          Allow for this chat
         </button>
       ) : null}
       {canAlwaysAllow ? (
@@ -1046,7 +1051,8 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
           rendered — the failure the noGrantNote above exists to avoid. */}
       {editAsk && (
         <p className="text-3xs text-fg-muted leading-relaxed">
-          For this conversation allows file changes in this project until the conversation ends. Nothing is saved.
+          {/* WHY shorter (round-3 E-1): one clause, in the same words as the button, like OutsideCommentsAsk's note. */}
+          Allow for this chat covers edits in this project until the chat ends.
         </p>
       )}
       {canAlwaysAllow && alwaysAllowNote && (

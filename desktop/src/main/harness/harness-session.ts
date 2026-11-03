@@ -882,7 +882,7 @@ export class HarnessSession extends EventEmitter {
   private shellEnv: Record<string, string> | null = null;
   /** Ephemeral, root-only approval across all outside folders; never serialized. */
   private externalEditsAllowed = false;
-  /** Q-2: "For this conversation" on an edit card — edits and new files INSIDE the project are allowed until this
+  /** Q-2: "Allow for this chat" on an edit card — edits and new files INSIDE the project are allowed until this
    *  conversation ends. Memory-only, root-only (a helper never holds a chat-wide grant), reset on resume; never
    *  written to permissions.json. Path guards (secrets, outside the project) and the saved-permissions floor still
    *  ask first: it only quiets the ordinary "may I change this file?" card. */

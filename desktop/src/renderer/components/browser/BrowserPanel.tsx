@@ -29,15 +29,15 @@ import BrowserAskCard from './BrowserAskCard';
 let sandboxNoticeDismissedThisLaunch = false;
 
 /** The "extra protection is off" notice: the app's one notice box (Callout, warning tone) with its words folded
- *  under "Details" and a "Got it" to hide it - the same shape as every other notice that has a cause behind it
- *  (an install that failed, a download that stopped) and the same "Got it" this panel's own explainer uses.
+ *  under "Details" and an ✕ at the top right to hide it - the same shape as every other notice that has a cause
+ *  behind it (an install that failed, a download that stopped).
  *  WHY (Destin, 2026-11-02, rejecting a custom amber chip: "look for similar examples of errors with details and
- *  follow the examples"): an invented chip matched nothing. Nothing new is drawn here. */
+ *  follow the examples"): an invented chip matched nothing. Nothing new is drawn here.
+ *  WHY the ✕ (round-3 deck S-1, "replace got it with an x in the top right"): the box's own dismiss, Callout's onDismiss. */
 function SandboxNotice({ onDismiss }: { onDismiss: () => void }) {
   return (
-    <Callout tone="warning" compact className="mx-3 my-2"
-      details={'This computer doesn\'t allow the browser\'s built-in protection against harmful websites. Pages still load, but be careful which sites the assistant visits. To turn it back on, allow "unprivileged user namespaces" in your system settings.'}
-      actions={<Button variant="secondary" size="sm" onClick={onDismiss}>Got it</Button>}>
+    <Callout tone="warning" compact className="mx-3 my-2" onDismiss={onDismiss}
+      details={'This computer doesn\'t allow the browser\'s built-in protection against harmful websites. Pages still load, but be careful which sites the assistant visits. To turn it back on, allow "unprivileged user namespaces" in your system settings.'}>
       Extra browser protection is off.
     </Callout>
   );

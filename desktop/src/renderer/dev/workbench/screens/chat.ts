@@ -134,7 +134,7 @@ export const CHAT: readonly ScreenEntry[] = [
   ...['curl-download', 'curl-upload', 'npm-install'].map((g) => ({ ...chat(`chat#grant-${g}`, 'view', 'approval'), session: 'wb-2', params: { seed: `bubbles-grant-${g}`, latency: '150' }, open: ['Always allow'] })),
   // WHY (Always-allow review 2026-11-01): the new Always-allow states — a download limited to one website (and the redirect
   // case, which keeps only the word-for-word choice), a joined-up command remembered part by part, and the file-edit card
-  // with "For this conversation" plus the this-file / this-folder choice.
+  // with "Allow for this chat" plus the this-file / this-folder choice.
   { ...chat('chat#grant-curl-redirect', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-grant-curl-redirect', latency: '150' }, open: ['Always allow'] },
   ...['chain', 'chain-risky'].map((g) => ({ ...chat(`chat#grant-${g}`, 'view', 'approval'), session: 'wb-2', params: { seed: `bubbles-grant-${g}`, latency: '150' }, open: ['Always allow', 'Each part on its own'] })),
   { ...chat('chat#edit-ask', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-edit-ask', latency: '150' } },

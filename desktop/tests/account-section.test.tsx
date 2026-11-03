@@ -357,14 +357,17 @@ describe("AccountSection", () => {
     await openPopup(utils, true);
 
     // Nothing happens, and the facts are not shown, until the button is pressed.
-    expect(utils.queryByText(/on every device, this one too/)).toBeNull();
+    expect(utils.queryByText(/every device, this one too/)).toBeNull();
     fireEvent.click(utils.getByRole("button", { name: "Sign out everywhere" }));
-    expect(utils.getByText(/Ends your YouCoded sign-in on every device, this one too\. Phones paired for remote access stay paired\./)).toBeTruthy();
+    expect(utils.getByText("Signs out every device, this one too.")).toBeTruthy();
+    // Only the confirm that is open shows: Delete account is hidden until Cancel.
+    expect(utils.queryByRole("button", { name: "Delete account" })).toBeNull();
     expect(signOutAll).not.toHaveBeenCalled();
 
     // Cancel puts the single button back.
     fireEvent.click(utils.getByRole("button", { name: "Cancel" }));
-    expect(utils.queryByText(/on every device, this one too/)).toBeNull();
+    expect(utils.queryByText(/every device, this one too/)).toBeNull();
+    expect(utils.getByRole("button", { name: "Delete account" })).toBeTruthy();
 
     // Confirming ends every sign-in, then this window's own.
     fireEvent.click(utils.getByRole("button", { name: "Sign out everywhere" }));

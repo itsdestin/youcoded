@@ -780,15 +780,17 @@ function EditAccountBody({
             level down, on Edit account, in the Danger zone, as a red outlined button that opens a red notice and
             then Cancel / the action. The facts (every device, this one too, paired phones stay paired) show only
             after pressing. No typed word: unlike deleting the account, signing in again undoes it. */}
-        {!signOutAllArmed ? (
+        {/* WHY each confirm hides the other button (round-3 deck A-1b, "too busy and cluttered"): an open confirm
+            with a second red button under it read as three red things at once; now only the one you pressed shows. */}
+        {deleteExpanded ? null : !signOutAllArmed ? (
           <Button variant="danger-outline" onClick={() => { setSignOutAllError(null); setSignOutAllArmed(true); }} className="w-full">
             Sign out everywhere
           </Button>
         ) : (
           <div className="space-y-2">
-            <Callout tone="danger">
-              Ends your YouCoded sign-in on every device, this one too. Phones paired for remote access stay paired.
-            </Callout>
+            {/* WHY one short line (A-1b): the paired-phones sentence was a second fact on a step that only has to
+                say what pressing does. Phones paired for remote access still stay paired. */}
+            <Callout tone="danger">Signs out every device, this one too.</Callout>
             <div className="flex gap-2">
               <Button variant="secondary" onClick={() => setSignOutAllArmed(false)} disabled={signingOutAll} className="flex-1">
                 Cancel
@@ -822,7 +824,7 @@ function EditAccountBody({
           </div>
         )}
         {signOutAllError && <FieldError as="p">{signOutAllError}</FieldError>}
-        {!deleteExpanded ? (
+        {signOutAllArmed ? null : !deleteExpanded ? (
           // Arming step -> danger-outline. red-500 becomes the --destructive
           // token so packs can restyle it (#C62828 today — no longer identical
           // to the fixed status red #DD4444, which stayed put).

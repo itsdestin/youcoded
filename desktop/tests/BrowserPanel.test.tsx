@@ -17,7 +17,7 @@ import { browserInfo, browserState, installBrowserBridge } from './helpers/brows
 afterEach(() => cleanup());
 
 describe('Browser panel', () => {
-  it('says so in the shared notice box: one line, the explanation under Details, Got it hides it', () => {
+  it('says so in the shared notice box: one line, the explanation under Details, the ✕ hides it', () => {
     installBrowserBridge();
     setBrowserState(browserState({ sandboxOff: true }));
     render(<BrowserPanel sessionId="s1" />);
@@ -29,8 +29,9 @@ describe('Browser panel', () => {
     expect(screen.queryByText(/built-in protection against harmful websites/)).toBeNull();
     fireEvent.click(within(box as HTMLElement).getByRole('button', { name: /Details/ }));
     expect(within(box as HTMLElement).getByText(/built-in protection against harmful websites/)).toBeInTheDocument();
-    // "Got it" is the same dismiss word the panel's own explainer uses.
-    fireEvent.click(screen.getByRole('button', { name: 'Got it' }));
+    // Round-3 S-1: the box's own ✕ at the top right, not a "Got it" button.
+    expect(within(box as HTMLElement).queryByRole('button', { name: 'Got it' })).toBeNull();
+    fireEvent.click(within(box as HTMLElement).getByRole('button', { name: 'Dismiss' }));
     expect(screen.queryByText('Extra browser protection is off.')).toBeNull();
     cleanup();
     setBrowserState(browserState());
