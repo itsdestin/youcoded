@@ -1,6 +1,4 @@
-// askpass-verify.test.ts — design §3, §9: every refusal reason
-// verifyAskpassPeer can return, driven by a fake ProcReader (no real /proc,
-// no real sudo), plus the accept path with and without `via`.
+// verifyAskpassPeer: every refusal reason, driven by a fake ProcReader (no real /proc, no real sudo), plus the accept path with and without `via`.
 import { describe, it, expect } from 'vitest';
 import { verifyAskpassPeer, type VerifyDeps } from '../src/main/harness/askpass/verify';
 import { RunningCalls } from '../src/main/harness/askpass/running-calls';
@@ -8,9 +6,7 @@ import type { ProcReader, ProcStat, PidHandle } from '../src/main/harness/askpas
 
 const EXEC_PATH = '/opt/YouCoded/youcoded';
 const HELPER_SCRIPT = '/opt/YouCoded/resources/app.asar.unpacked/scripts/askpass/askpass.cjs';
-// The invoking user's own uid in every fixture below — matched against
-// `makeDeps`'s `ourUid` so the redesigned item 2 (real-uid-must-match-ours)
-// passes for a genuinely-ours sudo/call-root/helper by default.
+// The invoking user's own uid in every fixture; matches makeDeps's `ourUid`.
 const OUR_UID = 1000;
 
 interface FakeProc {
@@ -84,6 +80,12 @@ class FakeProcReader implements ProcReader {
     return this.procs.get(pid)?.comm ?? null;
   }
 }
+
+/** An intermediate wrapper-script process (bash running `script`). */
+const scriptProc = (ppid: number, script: string | null, startTime: number): FakeProc => ({
+  ppid, exePath: '/bin/bash', cmdline: script === null ? null : ['bash', script], environ: null, startTime, tracerPid: 0,
+  uids: { real: OUR_UID, effective: OUR_UID }, comm: 'bash',
+});
 
 const ROOT_DIR_STAT: ProcStat = { uid: 0, mode: 0o755, isFile: false, isDirectory: true };
 const SUDO_EXE_STAT_OK: ProcStat = { uid: 0, mode: 0o4755, isFile: true, isDirectory: false };
@@ -207,16 +209,7 @@ describe('verifyAskpassPeer: accept path', () => {
     // Insert a script process (350) between sudo(400) and the call root
     // (300): sudo's parent is now 350 ("bash install.sh"), not the root.
     procs.get(400)!.ppid = 350;
-    procs.set(350, {
-      ppid: 300,
-      exePath: '/bin/bash',
-      cmdline: ['bash', 'install.sh'],
-      environ: null,
-      startTime: 350_00,
-      tracerPid: 0,
-      uids: { real: OUR_UID, effective: OUR_UID },
-      comm: 'bash',
-    });
+    procs.set(350, scriptProc(300, 'install.sh', 350_00));
     const deps = makeDeps(procs, baseFilesystem());
     const result = await verifyAskpassPeer(500, deps);
     expect(result.ok).toBe(true);
@@ -233,26 +226,8 @@ describe('verifyAskpassPeer: accept path', () => {
     // card should still name install.sh, the thing the user actually
     // approved, not the implementation detail install.sh happens to run.
     procs.get(400)!.ppid = 350;
-    procs.set(350, {
-      ppid: 360,
-      exePath: '/bin/bash',
-      cmdline: ['bash', 'helper.sh'],
-      environ: null,
-      startTime: 350_00,
-      tracerPid: 0,
-      uids: { real: OUR_UID, effective: OUR_UID },
-      comm: 'bash',
-    });
-    procs.set(360, {
-      ppid: 300,
-      exePath: '/bin/bash',
-      cmdline: ['bash', 'install.sh'],
-      environ: null,
-      startTime: 360_00,
-      tracerPid: 0,
-      uids: { real: OUR_UID, effective: OUR_UID },
-      comm: 'bash',
-    });
+    procs.set(350, scriptProc(360, 'helper.sh', 350_00));
+    procs.set(360, scriptProc(300, 'install.sh', 360_00));
     const deps = makeDeps(procs, baseFilesystem());
     const result = await verifyAskpassPeer(500, deps);
     expect(result.ok).toBe(true);
@@ -264,16 +239,7 @@ describe('verifyAskpassPeer: accept path', () => {
   it('refuses rather than silently reporting "direct" when an intermediate script hop is unreadable', async () => {
     const procs = goodProcs();
     procs.get(400)!.ppid = 350;
-    procs.set(350, {
-      ppid: 300,
-      exePath: '/bin/bash',
-      cmdline: null, // simulates a transient /proc/<pid>/cmdline read failure
-      environ: null,
-      startTime: 350_00,
-      tracerPid: 0,
-      uids: { real: OUR_UID, effective: OUR_UID },
-      comm: 'bash',
-    });
+    procs.set(350, scriptProc(300, null, 350_00)); // a transient /proc/<pid>/cmdline read failure
     const deps = makeDeps(procs, baseFilesystem());
     const result = await verifyAskpassPeer(500, deps);
     expect(result).toEqual({ ok: false, reason: 'via-chain-unreadable' });
@@ -290,86 +256,42 @@ describe('verifyAskpassPeer: cancellation', () => {
   });
 });
 
+type Setup = (procs: Map<number, FakeProc>, fsMap: Map<string, ProcStat>, opts: NonNullable<Parameters<typeof makeDeps>[2]>) => void;
+const SUDO = '/usr/bin/sudo';
 describe('verifyAskpassPeer: refusals', () => {
-  it('refuses a helper whose real exe is not process.execPath', async () => {
-    const procs = goodProcs();
-    procs.get(500)!.exePath = '/tmp/evil-node';
-    const result = await verifyAskpassPeer(500, makeDeps(procs, baseFilesystem()));
-    expect(result).toEqual({ ok: false, reason: 'wrong-exe' });
-  });
-
-  it('refuses extra argv (e.g. --require)', async () => {
-    const procs = goodProcs();
-    procs.get(500)!.cmdline = [EXEC_PATH, '--require=/tmp/evil.js', HELPER_SCRIPT];
-    const result = await verifyAskpassPeer(500, makeDeps(procs, baseFilesystem()));
-    expect(result).toEqual({ ok: false, reason: 'wrong-argv' });
-  });
-
-  it('refuses a helper argv pointing at the wrong script', async () => {
-    const procs = goodProcs();
-    procs.get(500)!.cmdline = [EXEC_PATH, '/tmp/not-the-real-askpass.cjs'];
-    const result = await verifyAskpassPeer(500, makeDeps(procs, baseFilesystem()));
-    expect(result).toEqual({ ok: false, reason: 'wrong-argv' });
-  });
-
-  it('refuses an extra environment variable (NODE_OPTIONS hijack)', async () => {
-    const procs = goodProcs();
-    const environ = new Map(GOOD_ENVIRON);
-    environ.set('NODE_OPTIONS', '--require=/tmp/evil.js');
-    procs.get(500)!.environ = environ;
-    const result = await verifyAskpassPeer(500, makeDeps(procs, baseFilesystem()));
-    expect(result).toEqual({ ok: false, reason: 'wrong-env-keys' });
-  });
-
-  it('refuses a missing environment variable', async () => {
-    const procs = goodProcs();
-    const environ = new Map(GOOD_ENVIRON);
-    environ.delete('YOUCODED_ASKPASS_SOCKET');
-    procs.get(500)!.environ = environ;
-    const result = await verifyAskpassPeer(500, makeDeps(procs, baseFilesystem()));
-    expect(result).toEqual({ ok: false, reason: 'wrong-env-keys' });
-  });
-
-  it('refuses a traced helper (TracerPid != 0)', async () => {
-    const procs = goodProcs();
-    procs.get(500)!.tracerPid = 12345;
-    const result = await verifyAskpassPeer(500, makeDeps(procs, baseFilesystem()));
-    expect(result).toEqual({ ok: false, reason: 'traced' });
-  });
-
-  it('refuses a fake sudo with the wrong basename', async () => {
-    const procs = goodProcs();
-    // comm — set by the KERNEL from the executed file's own basename,
-    // never from argv[0] — is what item 2 now checks; argv[0] itself
-    // could say anything and would never trip this check alone.
-    procs.get(400)!.comm = 'notsudo';
-    const result = await verifyAskpassPeer(500, makeDeps(procs, baseFilesystem()));
-    expect(result).toEqual({ ok: false, reason: 'parent-not-sudo-basename' });
-  });
-
-  // Coordinator, 2026-09-26: the real bug. sudo's own /proc/<pid>/exe and
-  // /environ are EACCES to us in reality (dumpable cleared on any
-  // privilege-elevating exec) — goodProcs() already fakes exactly that
-  // (both null for pid 400) and the WHOLE accept-path suite above already
-  // exercises this; these two are the negative side of the same redesign.
-  it('refuses when the parent never actually reached effective uid 0', async () => {
-    const procs = goodProcs();
-    procs.get(400)!.uids = { real: OUR_UID, effective: OUR_UID }; // never elevated — not a genuine setuid exec
-    const result = await verifyAskpassPeer(500, makeDeps(procs, baseFilesystem()));
-    expect(result).toEqual({ ok: false, reason: 'parent-euid-not-root' });
-  });
-
-  it('refuses when the euid-0 parent belongs to a different user, not us', async () => {
-    const procs = goodProcs();
-    procs.get(400)!.uids = { real: OUR_UID + 1, effective: 0 }; // someone else's sudo
-    const result = await verifyAskpassPeer(500, makeDeps(procs, baseFilesystem()));
-    expect(result).toEqual({ ok: false, reason: 'parent-real-uid-mismatch' });
-  });
-
-  it('refuses a bare "sudo" argv[0] when none of the fixed known install locations exist here', async () => {
-    const procs = goodProcs(); // cmdline is the bare ['sudo', ...] — never a PATH lookup performed by us
-    const result = await verifyAskpassPeer(500, makeDeps(procs, new Map())); // no /usr/bin/sudo, /usr/local/bin/sudo, or /bin/sudo stat entry at all
-    expect(result).toEqual({ ok: false, reason: 'no-verified-sudo-candidate' });
+  it.each<[string, Setup, string]>([
+    ['a helper whose real exe is not process.execPath', (p) => { p.get(500)!.exePath = '/tmp/evil-node'; }, 'wrong-exe'],
+    ['extra argv (e.g. --require)', (p) => { p.get(500)!.cmdline = [EXEC_PATH, '--require=/tmp/evil.js', HELPER_SCRIPT]; }, 'wrong-argv'],
+    ['a helper argv pointing at the wrong script', (p) => { p.get(500)!.cmdline = [EXEC_PATH, '/tmp/not-the-real-askpass.cjs']; }, 'wrong-argv'],
+    ['an extra environment variable (NODE_OPTIONS hijack)', (p) => { p.get(500)!.environ = new Map([...GOOD_ENVIRON, ['NODE_OPTIONS', '--require=/tmp/evil.js']]); }, 'wrong-env-keys'],
+    ['a missing environment variable', (p) => { const e = new Map(GOOD_ENVIRON); e.delete('YOUCODED_ASKPASS_SOCKET'); p.get(500)!.environ = e; }, 'wrong-env-keys'],
+    ['a traced helper (TracerPid != 0)', (p) => { p.get(500)!.tracerPid = 12345; }, 'traced'],
+    // comm is set by the KERNEL from the executed file's basename; argv[0] could say anything.
+    ['a fake sudo with the wrong basename', (p) => { p.get(400)!.comm = 'notsudo'; }, 'parent-not-sudo-basename'],
+    // WHY: a real setuid sudo's /proc exe and environ are EACCES to us, so goodProcs() fakes both null; uids are what item 2 reads.
+    ['a parent that never reached effective uid 0', (p) => { p.get(400)!.uids = { real: OUR_UID, effective: OUR_UID }; }, 'parent-euid-not-root'],
+    ['a euid-0 parent that belongs to a different user', (p) => { p.get(400)!.uids = { real: OUR_UID + 1, effective: 0 }; }, 'parent-real-uid-mismatch'],
+    ['a bare "sudo" argv[0] when no fixed install location exists here', (_p, f) => f.clear(), 'no-verified-sudo-candidate'],
+    ['an absolute argv[0] failing the ownership chain, without falling back to a fixed location', (p, f) => {
+      p.get(400)!.cmdline = ['/opt/vendor/sudo', 'apt', 'update'];
+      f.set('/opt/vendor', ROOT_DIR_STAT); f.set('/opt', ROOT_DIR_STAT);
+      f.set('/opt/vendor/sudo', { uid: 1000, mode: 0o4755, isFile: true, isDirectory: false }); // /usr/bin/sudo stays valid but is never consulted
+    }, 'parent-not-root-owned'],
+    ['a fake sudo that is not setuid', (_p, f) => { f.set(SUDO, { uid: 0, mode: 0o755, isFile: true, isDirectory: false }); }, 'parent-not-setuid'],
+    ['a fake sudo not owned by root', (_p, f) => { f.set(SUDO, { uid: 1000, mode: 0o4755, isFile: true, isDirectory: false }); }, 'parent-not-root-owned'],
+    ['a sudo that is group/other-writable', (_p, f) => { f.set(SUDO, { uid: 0, mode: 0o4757, isFile: true, isDirectory: false }); }, 'parent-writable-by-group-or-other'],
+    ['a directory up the chain to / that is user-writable', (_p, f) => { f.set('/usr/bin', { uid: 0, mode: 0o777, isFile: false, isDirectory: true }); }, 'ancestor-dir-writable-by-group-or-other'],
+    ['a directory up the chain that is not root-owned', (_p, f) => { f.set('/usr', { uid: 1000, mode: 0o755, isFile: false, isDirectory: true }); }, 'ancestor-dir-not-root-owned'],
+    ['no ancestor being a registered call root', (_p, _f, o) => { o.registerRoot = { pid: 999, startTime: 1 }; }, 'no-registered-ancestor'],
+    // 300 was reused for a new, unrelated process since the registering call exited.
+    ['a recycled call-root pid (starttime disagrees with the registry)', (_p, _f, o) => { o.registerRoot = { pid: 300, startTime: 999999 }; }, 'call-root-starttime-mismatch'],
+    ['the helper pid recycled mid-check', (_p, _f, o) => { o.mutateAfterFirstRead = new Set([500]); }, 'starttime-changed-mid-check'],
+    ['the sudo pid recycled mid-check', (_p, _f, o) => { o.mutateAfterFirstRead = new Set([400]); }, 'starttime-changed-mid-check'],
+    ['the call-root pid recycled mid-check', (_p, _f, o) => { o.mutateAfterFirstRead = new Set([300]); }, 'starttime-changed-mid-check'],
+  ])('refuses %s', async (_n, setup, reason) => {
+    const procs = goodProcs(); const fsMap = baseFilesystem(); const opts: Parameters<typeof makeDeps>[2] = {};
+    setup(procs, fsMap, opts);
+    expect(await verifyAskpassPeer(500, makeDeps(procs, fsMap, opts))).toEqual({ ok: false, reason });
   });
 
   it('accepts an ABSOLUTE argv[0] and validates that exact path (never a fixed-location fallback)', async () => {
@@ -385,65 +307,7 @@ describe('verifyAskpassPeer: refusals', () => {
     if (result.ok) expect(result.sudoExePath).toBe('/opt/vendor/sudo');
   });
 
-  it('refuses an absolute argv[0] that fails the ownership chain, without falling back to a fixed location', async () => {
-    const procs = goodProcs();
-    procs.get(400)!.cmdline = ['/opt/vendor/sudo', 'apt', 'update'];
-    const statByPath = baseFilesystem(); // /usr/bin/sudo stays genuinely valid here…
-    statByPath.set('/opt/vendor', ROOT_DIR_STAT);
-    statByPath.set('/opt', ROOT_DIR_STAT);
-    statByPath.set('/opt/vendor/sudo', { uid: 1000, mode: 0o4755, isFile: true, isDirectory: false }); // …but argv[0] points at THIS one, which isn't root-owned
-    const result = await verifyAskpassPeer(500, makeDeps(procs, statByPath));
-    expect(result).toEqual({ ok: false, reason: 'parent-not-root-owned' });
-  });
-
-  it('refuses a fake sudo that is not setuid', async () => {
-    const statByPath = baseFilesystem();
-    statByPath.set('/usr/bin/sudo', { uid: 0, mode: 0o755, isFile: true, isDirectory: false });
-    const result = await verifyAskpassPeer(500, makeDeps(goodProcs(), statByPath));
-    expect(result).toEqual({ ok: false, reason: 'parent-not-setuid' });
-  });
-
-  it('refuses a fake sudo not owned by root', async () => {
-    const statByPath = baseFilesystem();
-    statByPath.set('/usr/bin/sudo', { uid: 1000, mode: 0o4755, isFile: true, isDirectory: false });
-    const result = await verifyAskpassPeer(500, makeDeps(goodProcs(), statByPath));
-    expect(result).toEqual({ ok: false, reason: 'parent-not-root-owned' });
-  });
-
-  it('refuses when sudo itself is group/other-writable', async () => {
-    const statByPath = baseFilesystem();
-    statByPath.set('/usr/bin/sudo', { uid: 0, mode: 0o4757, isFile: true, isDirectory: false });
-    const result = await verifyAskpassPeer(500, makeDeps(goodProcs(), statByPath));
-    expect(result).toEqual({ ok: false, reason: 'parent-writable-by-group-or-other' });
-  });
-
-  it('refuses when a directory anywhere up the chain to / is user-writable', async () => {
-    const statByPath = baseFilesystem();
-    statByPath.set('/usr/bin', { uid: 0, mode: 0o777, isFile: false, isDirectory: true });
-    const result = await verifyAskpassPeer(500, makeDeps(goodProcs(), statByPath));
-    expect(result).toEqual({ ok: false, reason: 'ancestor-dir-writable-by-group-or-other' });
-  });
-
-  it('refuses when a directory anywhere up the chain is not root-owned', async () => {
-    const statByPath = baseFilesystem();
-    statByPath.set('/usr', { uid: 1000, mode: 0o755, isFile: false, isDirectory: true });
-    const result = await verifyAskpassPeer(500, makeDeps(goodProcs(), statByPath));
-    expect(result).toEqual({ ok: false, reason: 'ancestor-dir-not-root-owned' });
-  });
-
-  it('refuses when no ancestor is a registered call root', async () => {
-    const procs = goodProcs();
-    // Registered root (300) is never reached because the call root the test
-    // registers below doesn't match anything in this process tree.
-    const deps = makeDeps(procs, baseFilesystem(), { registerRoot: { pid: 999, startTime: 1 } });
-    const result = await verifyAskpassPeer(500, deps);
-    expect(result).toEqual({ ok: false, reason: 'no-registered-ancestor' });
-  });
-
-  // Review fix T5-6: bash.ts's foreground registerPid() is fire-and-forget
-  // async (a /proc/<pid>/stat start-time read) — a command whose very first
-  // statement is `sudo -A …` can reach verification before that read
-  // resolves. The chain must retry, not refuse a legitimate sudo outright.
+  // WHY: bash.ts's foreground registerPid() is fire-and-forget async, so a command whose first statement is `sudo -A` can reach verification before it resolves; the chain must retry.
   it('accepts when the call root registers a little AFTER the ancestor walk starts, within the retry window', async () => {
     const procs = goodProcs();
     const deps = makeDeps(procs, baseFilesystem(), {

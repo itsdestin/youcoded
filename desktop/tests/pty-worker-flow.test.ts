@@ -8,7 +8,7 @@
 // and resumes below a low mark. Part 1 drives the real file against a fake PTY with fake timers (exact,
 // fast). Part 2 forks the real worker over a REAL node-pty and a real producer (Linux/macOS), to prove the
 // kernel actually blocks the program and that the final bytes survive.
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { fork, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
@@ -19,17 +19,16 @@ const dataSent = (w: ReturnType<typeof loadWorker>) =>
   w.fakeProcess.send.mock.calls.filter((c: any[]) => c[0]?.type === 'data').map((c: any[]) => c[0].data as string);
 
 describe('pty-worker output batching', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('sends the first chunk after a quiet moment immediately (a keystroke echo pays nothing)', () => {
-    vi.useFakeTimers();
     const w = loadWorker();
     w.emitData('echo');
     expect(dataSent(w)).toEqual(['echo']);
   });
 
   it('merges chunks that follow within a few milliseconds, in order, and sends the batch on the timer', () => {
-    vi.useFakeTimers();
     const w = loadWorker();
     w.emitData('a');
     w.emitData('b'); w.emitData('c'); w.emitData('d');
@@ -39,7 +38,6 @@ describe('pty-worker output batching', () => {
   });
 
   it('flushes at once when a batch reaches its size cap (no waiting on the timer)', () => {
-    vi.useFakeTimers();
     const w = loadWorker();
     w.emitData('x');
     w.emitData('y'.repeat(150 * 1024));
@@ -50,7 +48,6 @@ describe('pty-worker output batching', () => {
   });
 
   it('never splits or drops a character: what was sent is exactly what was read', () => {
-    vi.useFakeTimers();
     const w = loadWorker();
     const parts = ['😀', 'é', '\x1b[31m', 'red', '\x1b[0m', '字'.repeat(1000), 'tail'];
     for (const p of parts) { w.emitData(p); vi.advanceTimersByTime(1); }
@@ -62,9 +59,9 @@ describe('pty-worker output batching', () => {
 // WHY 'linux' on every worker below: the nudge is never made on Windows (the last test says so), and
 // these tests defaulted to the machine's own platform — so on Windows CI all of them failed.
 describe('pty-worker repaint nudge (after output was cut from a backlog)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
   it('shrinks the PTY by one column and puts the real size back', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     expect(w.fakePty.resize).toHaveBeenLastCalledWith(79, 24);
@@ -74,7 +71,6 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
   it('reports each size change to main IN STREAM ORDER: output made at the old size goes ahead of the size message', () => {
     // WHY: main's headless copy of the terminal (session-screens.ts) lays text out at the size it is told; the nudge must not leave it at the
     // wrong width while the program redraws (the send gate reads that copy).
-    vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'linux');
     w.emitData('x'); vi.advanceTimersByTime(10);
     w.emitData('old-size-text');                              // held in the 4 ms batch when the request lands
@@ -85,7 +81,6 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     expect(seq).toEqual(['data x', 'data old-size-text', 'size 79x24', 'size 80x24']);
   });
   it('a real resize is reported too, and a superseded restore reports nothing', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     w.deliver({ type: 'resize', cols: 100, rows: 30 });
@@ -94,7 +89,6 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     expect(sizes).toEqual(['79x24', '100x30']);
   });
   it('does not fight a real resize that lands in between', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     w.deliver({ type: 'resize', cols: 100, rows: 30 });
@@ -103,7 +97,6 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     expect(w.fakePty.resize).not.toHaveBeenCalledWith(80, 24);
   });
   it('overlapping requests narrow only once and the restore goes back to the ORIGINAL size (never stuck one column narrow)', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     vi.advanceTimersByTime(50);
@@ -116,7 +109,6 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     expect(w.fakePty.cols).toBe(80);
   });
   it('a viewer on another device resizing between the two halves keeps its size (the nudge never overrides it)', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     w.deliver({ type: 'resize', cols: 50, rows: 20 });        // what a phone's session:resize becomes in the worker
@@ -125,7 +117,6 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     expect(w.fakePty.rows).toBe(20);
   });
   it('even a real resize to the nudged width itself wins (flagged, not guessed from the size)', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     w.deliver({ type: 'resize', cols: 79, rows: 24 });
@@ -133,7 +124,6 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     expect(w.fakePty.cols).toBe(79);
   });
   it('the child exiting inside the nudge window: no restore is attempted, nothing throws', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     w.fakePty.resize.mockImplementation(() => { throw new Error('ioctl(2) failed, EBADF'); });   // the fd is closed now
@@ -142,7 +132,6 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     expect(w.fakePty.resize).toHaveBeenCalledTimes(1);        // only the narrowing; the restore never ran
   });
   it('a first half that throws leaves the nudge usable afterwards (state is set only after it succeeds)', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'linux');
     w.fakePty.resize.mockImplementationOnce(() => { throw new Error('EBADF'); });
     expect(() => w.deliver({ type: 'bounce' })).not.toThrow();
@@ -151,14 +140,12 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     expect(w.fakePty.cols).toBe(80);
   });
   it('a failing restore is swallowed (no worker crash)', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     w.fakePty.resize.mockImplementation(() => { throw new Error('EBADF'); });
     expect(() => vi.advanceTimersByTime(200)).not.toThrow();
   });
   it('no nudge during a hand-off stop or after the PTY exited; and a plain resize after exit does not throw', () => {
-    vi.useFakeTimers();
     const h = loadWorker(undefined, {}, 'linux');
     h.deliver({ type: 'stop-for-handoff' });
     h.deliver({ type: 'bounce' });
@@ -171,7 +158,6 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     expect(e.fakePty.resize).not.toHaveBeenCalled();
   });
   it('never on Windows (ConPTY re-emits its buffer on every resize)', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'win32');
     w.deliver({ type: 'bounce' });
     vi.advanceTimersByTime(130);
@@ -180,10 +166,10 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
 });
 
 describe('pty-worker flow control', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('pauses the PTY above the high mark and resumes only below the low mark', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, SMALL);
     w.emitData('a'.repeat(600)); vi.advanceTimersByTime(10);
     expect(w.fakePty.pause).not.toHaveBeenCalled();
@@ -196,7 +182,6 @@ describe('pty-worker flow control', () => {
   });
 
   it('does not pause again while already paused, and an over-acknowledgement never goes negative', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, SMALL);
     w.emitData('a'.repeat(1200)); vi.advanceTimersByTime(10);
     w.emitData('b'.repeat(500)); vi.advanceTimersByTime(10);       // a read already in flight after the pause
@@ -208,7 +193,6 @@ describe('pty-worker flow control', () => {
   });
 
   it('a lost acknowledgement cannot freeze the session: after the stall time it lets more through and re-arms', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, SMALL);
     w.emitData('a'.repeat(1200)); vi.advanceTimersByTime(10);
     expect(w.fakePty.pause).toHaveBeenCalledTimes(1);
@@ -221,7 +205,6 @@ describe('pty-worker flow control', () => {
   });
 
   it('an acknowledgement keeps the stall clock from running out (a slow but alive terminal is not "stalled")', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, SMALL);
     w.emitData('a'.repeat(2000)); vi.advanceTimersByTime(10);
     for (let i = 0; i < 4; i++) { vi.advanceTimersByTime(4000); w.deliver({ type: 'ack', n: 10 }); }
@@ -229,7 +212,6 @@ describe('pty-worker flow control', () => {
   });
 
   it('keystrokes and Ctrl+C reach the PTY while output is braked (input never waits behind output)', async () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, SMALL);
     w.emitData('a'.repeat(5000)); vi.advanceTimersByTime(10);
     expect(w.fakePty.pause).toHaveBeenCalledTimes(1);
@@ -239,7 +221,6 @@ describe('pty-worker flow control', () => {
   });
 
   it('on exit the waiting batch is sent BEFORE the exit message and a paused PTY is let go', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, SMALL);
     w.emitData('a'.repeat(1200)); vi.advanceTimersByTime(10);      // paused
     w.emitData('LAST LINES');                                      // sits in the batch
@@ -253,7 +234,6 @@ describe('pty-worker flow control', () => {
   });
 
   it('notices the child exiting while paused and lets the rest out (node-pty drops unread bytes 200 ms after exit)', () => {
-    vi.useFakeTimers();
     const w = loadWorker(undefined, SMALL);
     w.emitData('a'.repeat(1200)); vi.advanceTimersByTime(10);
     expect(w.fakePty.resume).not.toHaveBeenCalled();
@@ -263,7 +243,6 @@ describe('pty-worker flow control', () => {
   });
 
   it('installs exit drain before node-pty creates its exit flag and holds socket destruction only once', () => {
-    vi.useFakeTimers();
     // WHY: UnixTerminal creates _boundClose ONLY in its exit callback, not at spawn.
     // Model that exact shape so the guard cannot silently opt out before a loaded exit.
     const socket = Object.assign(new EventEmitter(), { destroyed: false, destroy: vi.fn() });
@@ -284,7 +263,6 @@ describe('pty-worker flow control', () => {
   });
 
   it('kill and handoff release a paused PTY so the exit is not held open', () => {
-    vi.useFakeTimers();
     const k = loadWorker(undefined, SMALL);
     k.emitData('a'.repeat(1200)); vi.advanceTimersByTime(10);
     k.deliver({ type: 'kill' });

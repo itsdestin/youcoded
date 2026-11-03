@@ -1,7 +1,4 @@
-// Tests for DelegationLedger — the durable, per-parent record of every
-// specialist delegation (plan 1b Task 2). Real filesystem (temp dir per
-// test), same fixture style as permission-store.test.ts: NativeHome(dir)
-// against a fresh temp root, no fs mocking.
+// DelegationLedger — the durable, per-parent record of every specialist delegation. Real filesystem (temp dir per test).
 import { deadPid } from './helpers/dead-pid';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path';
@@ -15,6 +12,7 @@ const DEAD_PID = deadPid();
 
 let home: NativeHome; let ledger: DelegationLedger; let dir: string;
 const CWD = '/some/project';
+const recOf = (id: string, l: DelegationLedger = ledger) => l.listFor(CWD, 'p1').find((r) => r.childId === id);
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'delegation-ledger-'));
@@ -22,9 +20,7 @@ beforeEach(() => {
   ledger = new DelegationLedger(home);
 });
 
-// Minimal valid record, override per test. `owner: OWNER` matches what the
-// real host always stamps (this very process); tests that need a DEAD owner
-// override it explicitly.
+// Minimal valid record. owner is this process; tests needing a DEAD owner override it.
 function makeRecord(overrides: Partial<DelegationRecord> & { childId: string }): DelegationRecord {
   return {
     parentToolCallId: 'tc-1',
@@ -32,13 +28,7 @@ function makeRecord(overrides: Partial<DelegationRecord> & { childId: string }):
     title: 'Fig the Explorer',
     workDir: CWD,
     description: 'Explores the codebase',
-    // WHY true: claimUndelivered (fix, external review 2026-08-13) only ever
-    // leases BACKGROUND records — a foreground delegation's outcome is
-    // already delivered inline as the Task tool's own result, so claiming it
-    // here would re-deliver it. Every test below is exercising the
-    // claim/lease/release mechanism itself, which is now inherently a
-    // background-lane concept; the one test that needs a foreground record
-    // (proving it's NEVER eligible) overrides this explicitly.
+    // WHY true: claimUndelivered only leases BACKGROUND records (a foreground outcome is already delivered inline as the Task result).
     background: true,
     status: 'running',
     startedAt: Date.now(),
@@ -119,15 +109,12 @@ describe('DelegationLedger', () => {
     expect(await ledger.cancelUnstartedInjection(CWD, 'p1', 'delivered')).toBe(false);
     expect(ledger.listFor(CWD, 'p1').every(record => record.injectionAttempted)).toBe(true);
   });
-  it('recordStart + listFor round-trips a record', async () => {
+  it('recordStart + listFor round-trips a record; an unknown parent lists []', async () => {
     await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1' }));
     const rows = ledger.listFor(CWD, 'p1');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ childId: 'c1', agentType: 'explorer', status: 'running' });
-  });
-
-  it('listFor returns [] when no file exists yet', () => {
-    expect(ledger.listFor(CWD, 'never-delegated')).toEqual([]);
+    expect(ledger.listFor(CWD, 'never-delegated')).toEqual([]); // no file yet
   });
 
   it('update patches one record by childId and leaves siblings alone', async () => {
@@ -147,7 +134,7 @@ describe('DelegationLedger', () => {
     await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1' }));
     const huge = 'x'.repeat(RAW_REPORT_CAP_CHARS + 5_000);
     await ledger.update(CWD, 'p1', 'c1', { rawReport: huge });
-    const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+    const rec = recOf('c1');
     expect(rec?.rawReport?.length).toBe(RAW_REPORT_CAP_CHARS);
   });
 
@@ -158,7 +145,7 @@ describe('DelegationLedger', () => {
 
     const first = await ledger.claimUndelivered(CWD, 'p1');
     expect(first?.childId).toBe('old');
-    const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'old');
+    const rec = recOf('old');
     expect(rec?.delivered).toBe(false);
     expect(rec?.claimedBy).toEqual(OWNER);
     expect(typeof rec?.claimedAt).toBe('number');
@@ -169,14 +156,7 @@ describe('DelegationLedger', () => {
     expect(await ledger.claimUndelivered(CWD, 'p1')).toBeNull();
   });
 
-  // Fix (external review 2026-08-13, the foreground re-delivery finding): a
-  // FOREGROUND delegation's outcome — success or failure — is already
-  // delivered the instant the Task tool call returns; nothing ever calls
-  // confirmDelivered on a foreground FAILURE (only the success branch does),
-  // so its row can sit 'completed'/'failed' + delivered:false forever. Before
-  // this fix that made it indistinguishable on disk from a genuinely
-  // undelivered background report — claimUndelivered would hand it out and
-  // the caller would inject it a SECOND time, mislabeled "background".
+  // WHY: a foreground FAILURE is never confirmDelivered, so it sits delivered:false forever and would be re-injected as "background".
   it('claimUndelivered never leases a FOREGROUND record, no matter how undelivered it looks', async () => {
     await ledger.recordStart(CWD, 'p1', makeRecord({
       childId: 'fg-failed', background: false, status: 'failed', startedAt: 100,
@@ -191,7 +171,7 @@ describe('DelegationLedger', () => {
     expect(claimed?.childId).toBe('c1');
 
     await ledger.confirmDelivered(CWD, 'p1', 'c1');
-    const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+    const rec = recOf('c1');
     expect(rec?.delivered).toBe(true);
 
     // Nothing left to claim — the only record is now delivered.
@@ -204,7 +184,7 @@ describe('DelegationLedger', () => {
     expect(claimed?.childId).toBe('c1');
 
     await ledger.releaseClaim(CWD, 'p1', 'c1');
-    const released = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+    const released = recOf('c1');
     expect(released?.claimedBy).toBeUndefined();
     expect(released?.delivered).toBe(false); // release never delivers — only confirmDelivered may
 
@@ -228,18 +208,8 @@ describe('DelegationLedger', () => {
     expect(rec?.claimedBy).toEqual(OWNER);
   });
 
-  // Fix pass 4, Finding 3: claimUndelivered's own write (inside mutateJson)
-  // can commit to disk and THEN have the surrounding call still throw — e.g.
-  // mutateFileUnderLock's lock-release (fs.rm on the .lock dir) fails in its
-  // `finally`, AFTER atomicWrite already landed the claimedBy stamp. The
-  // caller (native-session-host.ts's delivery loop) sees only the throw and
-  // never learns which childId got claimed, so it can't release it either —
-  // the record is left with a lease stamped by THIS process, which
-  // isOwnerAlive always reports as alive. Without this branch, nothing would
-  // ever reclaim it short of a restart, stranding the report forever in a
-  // live, running session. This test seeds that exact stuck state directly
-  // (no need to reproduce the lock-release race itself) and asserts the next
-  // claimUndelivered call reclaims it anyway.
+  // WHY: claimUndelivered's write can commit and THEN throw (lock-release failure), leaving a lease this process can't see;
+  // the next claim must reclaim it or the report is stranded until restart.
   it('a record leased by OUR OWN process instance is reclaimable — only one delivery pass per parent runs at a time, so seeing our own stale lease means our earlier attempt never finished', async () => {
     await ledger.recordStart(CWD, 'p1', makeRecord({
       childId: 'self-claimed-stale',
@@ -274,18 +244,12 @@ describe('DelegationLedger', () => {
     expect(isOwnerAlive({ pid: DEAD_PID, instanceId: 'nonexistent-owner' })).toBe(false);
   });
 
-  // ---- Review round 2, Finding 4: "interrupted" always wins a teardown/
-  // failure race. When a parent is torn down while a child is still running,
-  // two writers can race the SAME record: destroyChildrenOf's unconditional
-  // `update(..., { status: 'interrupted' })` and spawnSpecialist's catch-
-  // driven `updateIfRunning(..., { status: 'failed' })`. Both orderings must
-  // land on 'interrupted' — a parent teardown is the true cause, the child's
-  // abort error is only its symptom.
+  // WHY: a teardown (update -> interrupted) and a catch-driven updateIfRunning -> failed race; both orders must land on 'interrupted'.
   describe('updateIfRunning — the conditional write behind the "interrupted wins" rule', () => {
     it('applies the patch when the record is still running (the normal case)', async () => {
       await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', status: 'running' }));
       await ledger.updateIfRunning(CWD, 'p1', 'c1', { status: 'failed', endedAt: 1, failureText: 'boom' });
-      const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+      const rec = recOf('c1');
       expect(rec).toMatchObject({ status: 'failed', endedAt: 1, failureText: 'boom' });
     });
 
@@ -293,7 +257,7 @@ describe('DelegationLedger', () => {
       await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', status: 'running' }));
       await ledger.update(CWD, 'p1', 'c1', { status: 'interrupted', endedAt: 1 }); // teardown lands first
       await ledger.updateIfRunning(CWD, 'p1', 'c1', { status: 'failed', endedAt: 2, failureText: 'aborted' }); // catch's write arrives after — must no-op
-      const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+      const rec = recOf('c1');
       expect(rec?.status).toBe('interrupted');
       expect(rec?.failureText).toBeUndefined(); // the no-op write never touched the record
     });
@@ -302,32 +266,17 @@ describe('DelegationLedger', () => {
       await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', status: 'running' }));
       await ledger.updateIfRunning(CWD, 'p1', 'c1', { status: 'failed', endedAt: 1, failureText: 'aborted' }); // catch's write lands first
       await ledger.update(CWD, 'p1', 'c1', { status: 'interrupted', endedAt: 2 }); // teardown's unconditional write always applies, even over a terminal status
-      const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+      const rec = recOf('c1');
       expect(rec?.status).toBe('interrupted');
     });
   });
 
-  // ---- Fix (Critical 3, final review): a teardown's `{status:'interrupted'}`
-  // write is fire-and-forget and can land AFTER runDelegation's own
-  // 'completed' write (that write happens first, then the child is
-  // de-registered a few microtasks later — a parent destroy()/quiesce() firing
-  // its own teardown write can slip in between). Unlike a 'failed' status
-  // (which is honestly just a SYMPTOM of the same interrupt, per the
-  // "interrupted wins" rule above — update() itself must keep clobbering it,
-  // pinned by the describe block above), a 'completed' record is a REAL,
-  // already-reported outcome: its report is sitting in rawReport/reportPath
-  // waiting to be delivered, and only claimUndelivered ever looks at
-  // 'completed'/'failed', never 'interrupted' — so overwriting it silently
-  // strands that report forever, including across a restart. This is a NEW,
-  // narrower primitive for the two call sites that fire a teardown-driven
-  // interrupted write (destroyChildrenOf, interruptSpecialist) — update()
-  // itself is untouched and stays unconditional, exactly as the tests above
-  // pin.
+  // WHY: a late teardown write must not clobber an already-completed record (its report would be stranded: claimUndelivered ignores 'interrupted').
   describe('updateUnlessCompleted — teardown must never clobber an already-completed record', () => {
     it('applies the patch when the record is still running (the normal teardown case)', async () => {
       await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', status: 'running' }));
       await ledger.updateUnlessCompleted(CWD, 'p1', 'c1', { status: 'interrupted', endedAt: 1 });
-      const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+      const rec = recOf('c1');
       expect(rec?.status).toBe('interrupted');
     });
 
@@ -336,7 +285,7 @@ describe('DelegationLedger', () => {
         childId: 'c1', status: 'completed', startedAt: 100, endedAt: 200, rawReport: 'the real report',
       }));
       await ledger.updateUnlessCompleted(CWD, 'p1', 'c1', { status: 'interrupted', endedAt: 9999 });
-      const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+      const rec = recOf('c1');
       expect(rec?.status).toBe('completed');       // NOT clobbered
       expect(rec?.endedAt).toBe(200);               // the real completion time, not the late teardown's
       expect(rec?.rawReport).toBe('the real report');
@@ -349,7 +298,7 @@ describe('DelegationLedger', () => {
     it('still applies over a failed record — only "completed" is protected, "interrupted wins" over "failed" is preserved', async () => {
       await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', status: 'failed', startedAt: 100, endedAt: 150, failureText: 'aborted' }));
       await ledger.updateUnlessCompleted(CWD, 'p1', 'c1', { status: 'interrupted', endedAt: 200 });
-      const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+      const rec = recOf('c1');
       expect(rec?.status).toBe('interrupted');
     });
   });
@@ -402,20 +351,12 @@ describe('DelegationLedger', () => {
     });
   });
 
-  // ---- Fix pass 5 — distinguishing "claimed, never injected" from
-  // "injected, never confirmed". Two on-disk states look identical
-  // (claimedBy = some owner, delivered = false) but mean opposite things:
-  // (a) the claim landed but runNotice() was never called — safe to retry;
-  // (b) runNotice() already ran (the report reached the parent's
-  // conversation) and only the follow-up confirmDelivered write failed —
-  // retrying means showing the same report twice. injectionAttempted, set by
-  // markInjectionAttempted() strictly BEFORE runNotice() is ever called, is
-  // what tells them apart on disk.
+  // WHY: claimedBy+delivered:false is ambiguous; injectionAttempted (stamped BEFORE runNotice) separates 'safe to retry' from 'would show the report twice'.
   describe('injectionAttempted', () => {
     it('markInjectionAttempted durably stamps the marker', async () => {
       await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', status: 'completed', startedAt: 100 }));
       await ledger.markInjectionAttempted(CWD, 'p1', 'c1');
-      const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+      const rec = recOf('c1');
       expect(rec?.injectionAttempted).toBe(true);
     });
 
@@ -451,13 +392,7 @@ describe('DelegationLedger', () => {
     });
   });
 
-  // ---- Plan 1c Task 1: every write funnels through one private mutate()
-  // chokepoint so a single onChange listener sees every touched record —
-  // Task 5 wires this into the live `specialists:run-changed` push. These
-  // tests exercise the listener contract itself; the workspace ast-grep rule
-  // ledger-single-mutatejson-call (Plan B, 2026-09-16 — it replaced a
-  // source-text guard here) enforces the mechanism (one mutateJson call site)
-  // that makes it true by construction rather than by convention.
+  // Every write funnels through one mutate() chokepoint (ast-grep rule ledger-single-mutatejson-call); these pin the listener contract.
   describe('change listener', () => {
     it('recordStart fires with the new record', async () => {
       const onChange = vi.fn();
@@ -484,8 +419,7 @@ describe('DelegationLedger', () => {
       ['releaseClaim', (l) => l.releaseClaim(CWD, 'p1', 'c1')],
       ['appendNote', (l) => l.appendNote(CWD, 'p1', 'c1', { text: 'hi', from: 'user', at: 1 })],
     ])('%s fires the listener with only the touched record', async (_name, run) => {
-      // Seeded through a listener-less ledger sharing the same home/file, so
-      // the setup writes themselves never reach the onChange under test.
+      // seeded via the listener-less ledger so setup writes never reach onChange
       await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1' }));
       await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c2' }));
       const onChange = vi.fn();
@@ -537,7 +471,7 @@ describe('DelegationLedger', () => {
     const note2: SpecialistNote = { text: 'second', from: 'assistant', at: 2 };
     await ledger.appendNote(CWD, 'p1', 'c1', note1);
     await ledger.appendNote(CWD, 'p1', 'c1', note2);
-    const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+    const rec = recOf('c1');
     expect(rec?.notes).toEqual([note1, note2]);
   });
 
@@ -551,15 +485,13 @@ describe('DelegationLedger', () => {
     await l.appendMissedSteers(CWD, 'p1', 'c1', ['parked steer'], note);
 
     expect(onChange).toHaveBeenCalledTimes(1); // one write, not two
-    const rec = l.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+    const rec = recOf('c1', l);
     expect(rec?.missedSteers).toEqual(['parked steer']);
     expect(rec?.notes).toEqual([note]);
   });
 
-  // ROADMAP L264: missedSteers was the last unbounded field in a file that is
-  // read-modify-written in full on every status-block read. Both bounds are
-  // applied INSIDE the mutate callback, so all three append paths get them.
-  describe('missedSteers is bounded (ROADMAP L264)', () => {
+  // WHY: missedSteers was the last unbounded field in a file rewritten in full on every read; both bounds apply inside mutate.
+  describe('missedSteers is bounded', () => {
     it('clamps each parked steer to the note cap, on every append path', async () => {
       const long = 'x'.repeat(SPECIALIST_NOTE_MAX_CHARS + 500);
       await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1' }));
@@ -568,7 +500,7 @@ describe('DelegationLedger', () => {
       await ledger.update(CWD, 'p1', 'c1', {}, [long]);
       await ledger.updateIfRunning(CWD, 'p1', 'c1', {}, [long]);
 
-      const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+      const rec = recOf('c1');
       expect(rec?.missedSteers).toHaveLength(3);
       for (const s of rec!.missedSteers) expect(s).toHaveLength(SPECIALIST_NOTE_MAX_CHARS);
     });
@@ -581,7 +513,7 @@ describe('DelegationLedger', () => {
       for (let i = 0; i < MISSED_STEERS_MAX_ENTRIES + 5; i++) {
         await ledger.appendMissedSteers(CWD, 'p1', 'c1', [`steer-${i}`]);
       }
-      const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+      const rec = recOf('c1');
       expect(rec?.missedSteers).toHaveLength(MISSED_STEERS_MAX_ENTRIES);
       expect(rec?.missedSteers[0]).toBe('steer-5');
       expect(rec?.missedSteers.at(-1)).toBe(`steer-${MISSED_STEERS_MAX_ENTRIES + 4}`);
@@ -597,7 +529,7 @@ describe('DelegationLedger', () => {
       expect(ledger.listFor(CWD, 'p1')[0].missedSteers).toHaveLength(60);
 
       await ledger.appendMissedSteers(CWD, 'p1', 'c1', ['new']);
-      const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
+      const rec = recOf('c1');
       expect(rec?.missedSteers).toHaveLength(MISSED_STEERS_MAX_ENTRIES);
       expect(rec?.missedSteers.at(-1)).toBe('new');
     });
@@ -626,9 +558,7 @@ describe('DelegationLedger', () => {
 
     const view = toRunView(rec);
 
-    // ROADMAP L259: `seq` is an ORDERING stamp, not part of the record — it is
-    // minted fresh on every projection, so this comparison asserts the field
-    // set minus that one, then checks the stamp separately below.
+    // `seq` is an ordering stamp minted fresh per projection: compare the rest, check it separately.
     const { seq, ...projected } = view;
     expect(projected).toEqual({
       childId: 'c1',
@@ -644,7 +574,6 @@ describe('DelegationLedger', () => {
       stale: true,
       model: { label: 'Sonnet 5', via: 'named', fallback: false },
       notes: [note],
-      // Audit 2026-10-22: resume + report-freshness facts (a never-resumed run is run 1 on its own card).
       runNumber: 1,
       activeToolCallId: 'tc-1',
       reportStale: false,
@@ -652,18 +581,12 @@ describe('DelegationLedger', () => {
       resumedAt: undefined,
       reportPending: undefined,
     });
-    // Monotonic, and it advances on every projection — that is what lets the
-    // reducer tell a straggler from a real update.
+    // monotonic: lets the reducer tell a straggler from a real update
     expect(seq).toBeGreaterThan(0);
     expect(toRunView(rec).seq!).toBeGreaterThan(seq!);
     // Delivery bookkeeping must not leak into the renderer's view.
-    expect((view as unknown as Record<string, unknown>).delivered).toBeUndefined();
-    expect((view as unknown as Record<string, unknown>).injectionAttempted).toBeUndefined();
-    expect((view as unknown as Record<string, unknown>).claimedBy).toBeUndefined();
-    expect((view as unknown as Record<string, unknown>).claimedAt).toBeUndefined();
-    expect((view as unknown as Record<string, unknown>).owner).toBeUndefined();
-    expect((view as unknown as Record<string, unknown>).missedSteers).toBeUndefined();
-    expect((view as unknown as Record<string, unknown>).rawReport).toBeUndefined();
-    expect((view as unknown as Record<string, unknown>).reportPath).toBeUndefined();
+    for (const k of ['delivered', 'injectionAttempted', 'claimedBy', 'claimedAt', 'owner', 'missedSteers', 'rawReport', 'reportPath']) {
+      expect((view as unknown as Record<string, unknown>)[k], k).toBeUndefined();
+    }
   });
 });

@@ -1,28 +1,7 @@
-// openFilepath is the ONE resolve-and-open path shared by FilepathToken clicks
-// and the deliverable auto-open (src/renderer/hooks/useOpenFilepath.ts). This
-// pins two live-tested fixes:
-//
-// 1. `drawerOpensImmediately` (default true = today's exact click behaviour):
-//    a click gets DRAWER_OPENED dispatched up front for instant feedback even
-//    while the lookup is still in flight. An auto-open nobody clicked gets no
-//    such benefit — opening early there just shows an empty/list-only panel
-//    for however long the lookup takes. Passing `{ drawerOpensImmediately:
-//    false }` defers DRAWER_OPENED until a match is actually found (dispatched
-//    right before the ACTIVE_ARTIFACT_SET for that match), and dispatches
-//    NOTHING on a miss — the user didn't ask for this, so a silent no-op beats
-//    a panel popping open onto an error about a file they never clicked.
-// 2. Step 2 (whole-project resolve) now awaits the cheap tracked-list lookup
-//    FIRST and only pays for the full-disk scan (listAllFiles) on a miss —
-//    see the WHY comment at the call site for the measured 4s cost of doing
-//    both in parallel on a large workspace.
-//
-// And, since 2026-09-11, the host lookup (artifacts:resolve-path) that
-// replaced step 2 wherever the bridge has it — see the last describe blocks.
-// A test that installs NO `resolvePath` stub is a bridge without the channel
-// (an older host), so it exercises the older list-based lookup, unchanged.
-// A click now also dispatches PILL_RESOLVE_STARTED after PILL_ERROR_CLEARED
-// (the drawer's "Opening …" note), which is the only change to the expected
-// action lists of the tests above that block.
+// openFilepath is the ONE resolve-and-open path shared by FilepathToken clicks and the deliverable auto-open.
+// Click mode opens the drawer up front; `drawerOpensImmediately: false` (auto-open) defers it until a match and
+// dispatches NOTHING on a miss. Step 2 asks the cheap tracked list before the full-disk scan. A test that installs NO
+// `resolvePath` stub is a bridge without artifacts:resolve-path (older host) and exercises the list-based lookup.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { openFilepath } from '../src/renderer/hooks/useOpenFilepath';
 import { isRemoteMode, setConnectionMode } from '../src/renderer/platform';
@@ -88,6 +67,10 @@ function installClaudeArtifacts(stubs: {
 
 afterEach(() => { setConnectionMode('local'); });
 
+const types = (d: ArtifactAction[]) => d.map((a) => a.type);
+const selectedIds = (d: ArtifactAction[]) => d.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId);
+const last = (d: ArtifactAction[]) => d[d.length - 1] as any;
+
 describe('openFilepath — default mode (click behaviour) is unchanged', () => {
   it('dispatches DRAWER_OPENED before the lookup resolves', async () => {
     let resolveProject!: (v: any) => void;
@@ -100,7 +83,7 @@ describe('openFilepath — default mode (click behaviour) is unchanged', () => {
 
     const p = openFilepath(ctx, 's1', '/proj/a.md');
     // Drawer + error-clear + the pending note must be synchronous, well before any await settles.
-    expect(dispatched.map((a) => a.type)).toEqual(['DRAWER_OPENED', 'PILL_ERROR_CLEARED', 'PILL_RESOLVE_STARTED']);
+    expect(types(dispatched)).toEqual(['DRAWER_OPENED', 'PILL_ERROR_CLEARED', 'PILL_RESOLVE_STARTED']);
 
     resolveProject({ ok: true, artifacts: [] });
     await p;
@@ -114,13 +97,9 @@ describe('openFilepath — default mode (click behaviour) is unchanged', () => {
     const state = makeState({ sessionCwd: { s1: '/proj' } });
     const { ctx, dispatched } = makeCtx(state);
 
-    // buildArtifactifyArgs (filepath-match.ts:80) returns null for ANY path
-    // starting with '~', unconditionally — no cwd or session-list matching
-    // ambiguity involved. So this fixture always takes the early-return branch
-    // at useOpenFilepath.ts's `if (!args) { failed(); return; }`, never the
-    // "artifactify ran but the refreshed list has no match" branch below it.
+    // '~' paths always make buildArtifactifyArgs return null: the early-return failure branch.
     await openFilepath(ctx, 's1', '~/no-such-file.md');
-    expect(dispatched.map((a) => a.type)).toEqual([
+    expect(types(dispatched)).toEqual([
       'DRAWER_OPENED',
       'PILL_ERROR_CLEARED',
       'PILL_RESOLVE_STARTED',
@@ -132,18 +111,14 @@ describe('openFilepath — default mode (click behaviour) is unchanged', () => {
     installClaudeArtifacts({
       listProject: async () => ({ ok: true, artifacts: [] }),
       listAllFiles: async () => ({ ok: true, files: [] }),
-      // appendVersion succeeds (default stub), but listSession comes back with
-      // nothing findBestMatch can match against the clicked path — the miss
-      // branch at useOpenFilepath.ts's `if (added) {...} else if
-      // (drawerOpensImmediately) { dispatch(SESSION_ARTIFACTS_LOADED) }`,
-      // followed by `if (!selected) failed();`.
+      // artifactify succeeds but the refreshed list has nothing matching the clicked path
       listSession: async () => ({ ok: true, artifacts: [] }),
     });
     const state = makeState({ sessionCwd: { s1: '/proj' } });
     const { ctx, dispatched } = makeCtx(state);
 
     await openFilepath(ctx, 's1', '/proj/orphan.md');
-    expect(dispatched.map((a) => a.type)).toEqual([
+    expect(types(dispatched)).toEqual([
       'DRAWER_OPENED',
       'PILL_ERROR_CLEARED',
       'PILL_RESOLVE_STARTED',
@@ -156,17 +131,14 @@ describe('openFilepath — default mode (click behaviour) is unchanged', () => {
     installClaudeArtifacts({
       listProject: async () => ({ ok: true, artifacts: [] }),
       listAllFiles: async () => ({ ok: true, files: [] }),
-      // listSession's refreshed list now contains the just-artifactified file
-      // (stored relative as 'new-doc.md', clicked as the absolute
-      // '/proj/new-doc.md' — with the folder known, findBestMatch compares the
-      // full absolute forms, '/proj' + '/new-doc.md').
+      // refreshed list holds the just-artifactified file (stored relative, clicked absolute)
       listSession: async () => ({ ok: true, artifacts: [record('art-5', 'new-doc.md')] }),
     });
     const state = makeState({ sessionCwd: { s1: '/proj' } });
     const { ctx, dispatched } = makeCtx(state);
 
     await openFilepath(ctx, 's1', '/proj/new-doc.md');
-    expect(dispatched.map((a) => a.type)).toEqual([
+    expect(types(dispatched)).toEqual([
       'DRAWER_OPENED',
       'PILL_ERROR_CLEARED',
       'PILL_RESOLVE_STARTED',
@@ -188,7 +160,7 @@ describe('openFilepath — deferred mode (drawerOpensImmediately: false)', () =>
 
     expect(dispatched.length).toBe(0); // nothing before the call
     await openFilepath(ctx, 's1', 'a.md', { drawerOpensImmediately: false });
-    expect(dispatched.map((a) => a.type)).toEqual(['DRAWER_OPENED', 'ACTIVE_ARTIFACT_SET']);
+    expect(types(dispatched)).toEqual(['DRAWER_OPENED', 'ACTIVE_ARTIFACT_SET']);
     expect((dispatched[1] as any).artifactId).toBe('art-1');
   });
 
@@ -201,7 +173,7 @@ describe('openFilepath — deferred mode (drawerOpensImmediately: false)', () =>
     const { ctx, dispatched } = makeCtx(state);
 
     await openFilepath(ctx, 's1', 'b.md', { drawerOpensImmediately: false });
-    expect(dispatched.map((a) => a.type)).toEqual([
+    expect(types(dispatched)).toEqual([
       'DRAWER_OPENED',
       'SESSION_ARTIFACT_UPSERTED',
       'ACTIVE_ARTIFACT_SET',
@@ -231,11 +203,7 @@ describe('openFilepath — deferred mode (drawerOpensImmediately: false)', () =>
 
   it('tracked miss: never selects an ephemeral discovered record — listAllFiles is not consulted and the eventual selection is the persisted sidecar id, not the relative-path discovered id', async () => {
     const state = makeState({ sessionCwd: { s1: '/proj' } });
-    // listAllFiles is wired to return a DISCOVERED record whose id is the raw
-    // relative path (project-file-discovery.ts shape) — exactly the ephemeral
-    // record a concurrent tracker refresh would wipe out from under
-    // ACTIVE_ARTIFACT_SET. If deferred mode ever falls back to listAllFiles
-    // like click mode does, this stub is what it would (wrongly) select.
+    // WHY: a DISCOVERED record's id is the ephemeral relative path a tracker refresh would wipe from under ACTIVE_ARTIFACT_SET.
     const { listAllFiles, listProject, appendVersion } = installClaudeArtifacts({
       listProject: async () => ({ ok: true, artifacts: [] }), // tracked miss
       listAllFiles: async () => ({ ok: true, files: [record('e.md', 'e.md')] }),
@@ -247,13 +215,9 @@ describe('openFilepath — deferred mode (drawerOpensImmediately: false)', () =>
     await openFilepath(ctx, 's1', '/proj/e.md', { drawerOpensImmediately: false });
 
     expect(listProject).toHaveBeenCalledTimes(1);
-    // The direct pin on the fix: deferred mode must not even ask the disk-scan
-    // question on a tracked miss, since asking it is what produces the
-    // ephemeral id in the first place.
+    // deferred mode must not ask the disk-scan question on a tracked miss
     expect(listAllFiles).not.toHaveBeenCalled();
     expect(appendVersion).toHaveBeenCalledTimes(1);
-    // The behavioral outcome that matters to the user: whatever got selected
-    // is the persisted sidecar id, never the discovered relative-path id.
     const selected = dispatched.find((a) => a.type === 'ACTIVE_ARTIFACT_SET') as any;
     expect(selected?.artifactId).toBe('art-9');
     expect(selected?.artifactId).not.toBe('e.md');
@@ -270,12 +234,7 @@ describe('openFilepath — deferred mode (drawerOpensImmediately: false)', () =>
 
     expect(dispatched.length).toBe(0); // nothing before the call
     await openFilepath(ctx, 's1', '/proj/new-doc.md', { drawerOpensImmediately: false });
-    // Deferred mode skips the top-of-function PILL_ERROR_CLEARED entirely (it's
-    // inside `if (drawerOpensImmediately)`), and DRAWER_OPENED is dispatched
-    // only once the artifactify match is found (useOpenFilepath.ts:
-    // `if (!drawerOpensImmediately) dispatch({ type: 'DRAWER_OPENED', ... })`
-    // right before SESSION_ARTIFACTS_LOADED/ACTIVE_ARTIFACT_SET in the added-match branch).
-    expect(dispatched.map((a) => a.type)).toEqual([
+    expect(types(dispatched)).toEqual([
       'DRAWER_OPENED',
       'SESSION_ARTIFACTS_LOADED',
       'ACTIVE_ARTIFACT_SET',
@@ -284,42 +243,24 @@ describe('openFilepath — deferred mode (drawerOpensImmediately: false)', () =>
   });
 });
 
-describe('openFilepath — step 2 asks the cheap question first (Fix 2)', () => {
-  it('tracked hit: listAllFiles is NEVER called', async () => {
-    const state = makeState({ sessionCwd: { s1: '/proj' } });
+describe('openFilepath — step 2 asks the cheap question first', () => {
+  it.each([
+    ['tracked hit', [record('art-3', 'c.md')], [], 'art-3', 0],
+    ['tracked miss (full-disk scan runs and its match is used)', [], [record('art-4', 'c.md')], 'art-4', 1],
+  ])('%s', async (_n, tracked, scanned, id, scans) => {
     const { listAllFiles, listProject } = installClaudeArtifacts({
-      listProject: async () => ({ ok: true, artifacts: [record('art-3', 'c.md')] }),
-      listAllFiles: async () => ({ ok: true, files: [] }),
+      listProject: async () => ({ ok: true, artifacts: tracked }),
+      listAllFiles: async () => ({ ok: true, files: scanned }),
     });
-    const { ctx, dispatched } = makeCtx(state);
-
+    const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
     await openFilepath(ctx, 's1', 'c.md');
     expect(listProject).toHaveBeenCalledTimes(1);
-    expect(listAllFiles).not.toHaveBeenCalled();
-    expect(dispatched.some((a) => a.type === 'ACTIVE_ARTIFACT_SET' && (a as any).artifactId === 'art-3')).toBe(true);
-  });
-
-  it('tracked miss: listAllFiles IS called and its match is used', async () => {
-    const state = makeState({ sessionCwd: { s1: '/proj' } });
-    const { listAllFiles, listProject } = installClaudeArtifacts({
-      listProject: async () => ({ ok: true, artifacts: [] }),
-      listAllFiles: async () => ({ ok: true, files: [record('art-4', 'd.md')] }),
-    });
-    const { ctx, dispatched } = makeCtx(state);
-
-    await openFilepath(ctx, 's1', 'd.md');
-    expect(listProject).toHaveBeenCalledTimes(1);
-    expect(listAllFiles).toHaveBeenCalledTimes(1);
-    expect(dispatched.some((a) => a.type === 'ACTIVE_ARTIFACT_SET' && (a as any).artifactId === 'art-4')).toBe(true);
+    expect(listAllFiles).toHaveBeenCalledTimes(scans);
+    expect(selectedIds(dispatched)).toContain(id);
   });
 });
 
-// ── The host lookup (artifacts:resolve-path, 2026-09-11) ─────────────────────
-//
-// Found on the owner's phone: a tap on wecoded-themes/CLAUDE.md downloaded the
-// whole project list (3,090 records, ~1 MB) to find one file, then — the file
-// being inside a nested git repo discovery skips — fell through to a WRITE the
-// phone may not make and said "not found". One host question replaces all of it.
+// WHY: a phone tap once downloaded the whole project list (~1 MB) and then attempted a write it may not make; one host question replaces it.
 describe('openFilepath — one host lookup replaces listing the project', () => {
   const WS = '/home/destin/youcoded-dev';
   const TAPPED = `${WS}/wecoded-themes/CLAUDE.md`;
@@ -334,7 +275,7 @@ describe('openFilepath — one host lookup replaces listing the project', () => 
 
     // A tap names its chat, so the host can look beside that chat's files for a short path.
     expect(stubs.resolvePath).toHaveBeenCalledWith(WS, TAPPED, 's1');
-    expect(dispatched.map((a) => a.type)).toEqual([
+    expect(types(dispatched)).toEqual([
       'DRAWER_OPENED', 'PILL_ERROR_CLEARED', 'PILL_RESOLVE_STARTED', 'SESSION_ARTIFACT_UPSERTED', 'ACTIVE_ARTIFACT_SET',
     ]);
     expect(dispatched[2]).toMatchObject({ type: 'PILL_RESOLVE_STARTED', sessionId: 's1', name: 'CLAUDE.md' });
@@ -350,9 +291,7 @@ describe('openFilepath — one host lookup replaces listing the project', () => 
       ['local', 'not-found', /no file exists at that path/],
       ['local', 'not-a-file', /isn’t a file/],
       ['local', 'protected-path', /protected location/],
-      // Two different gates, two different truths (review 2026-09-11, finding 4):
-      // a folder the computer does not share at all, vs a chat-only folder that
-      // shares only its recorded files.
+      // two gates, two truths: a folder not shared at all vs a chat-only folder sharing only its recorded files
       ['remote', 'not-allowed', /isn’t available to remote devices/],
       ['remote', 'not-tracked', /already worked with/],
       ['remote', 'outside-project', /outside this chat’s project folder/],
@@ -364,10 +303,10 @@ describe('openFilepath — one host lookup replaces listing the project', () => 
       const stubs = installClaudeArtifacts({ resolvePath: async () => ({ ok: false, error }) });
       const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: WS } }));
       await openFilepath(ctx, 's1', TAPPED);
-      const last = dispatched[dispatched.length - 1] as any;
-      expect(last.type, error).toBe('PILL_RESOLVE_FAILED');
-      expect(last.message, error).toMatch(words);
-      expect(last.message, error).toContain('CLAUDE.md');
+      const msg = last(dispatched);
+      expect(msg.type, error).toBe('PILL_RESOLVE_FAILED');
+      expect(msg.message, error).toMatch(words);
+      expect(msg.message, error).toContain('CLAUDE.md');
       expect(stubs.appendVersion, error).not.toHaveBeenCalled();
       expect(stubs.listProject, error).not.toHaveBeenCalled();
     }
@@ -385,7 +324,7 @@ describe('openFilepath — one host lookup replaces listing the project', () => 
     await openFilepath(ctx, 's1', '/tmp/out/report.xlsx');
     expect(stubs.appendVersion).toHaveBeenCalledWith('/proj', 's1', expect.objectContaining({ kind: 'external', absolutePath: '/tmp/out/report.xlsx' }));
     expect(stubs.listProject).not.toHaveBeenCalled();
-    expect((dispatched[dispatched.length - 1] as any)).toMatchObject({ type: 'ACTIVE_ARTIFACT_SET', artifactId: 'art-x' });
+    expect(last(dispatched)).toMatchObject({ type: 'ACTIVE_ARTIFACT_SET', artifactId: 'art-x' });
   });
 
   it('over remote access, a file outside the folder gets a note — no write is attempted', async () => {
@@ -394,7 +333,7 @@ describe('openFilepath — one host lookup replaces listing the project', () => 
     const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
     await openFilepath(ctx, 's1', '/tmp/out/report.xlsx');
     expect(stubs.appendVersion).not.toHaveBeenCalled();
-    expect(dispatched[dispatched.length - 1]).toMatchObject({ type: 'PILL_RESOLVE_FAILED' });
+    expect(last(dispatched)).toMatchObject({ type: 'PILL_RESOLVE_FAILED' });
   });
 
   it('a bridge that REJECTS the lookup (older host, timeout) falls back to the list-based lookup', async () => {
@@ -407,7 +346,7 @@ describe('openFilepath — one host lookup replaces listing the project', () => 
     await openFilepath(ctx, 's1', '/proj/d.md');
     expect(stubs.listProject).toHaveBeenCalledTimes(1);
     expect(stubs.listAllFiles).toHaveBeenCalledTimes(1);
-    expect(dispatched[dispatched.length - 1]).toMatchObject({ type: 'ACTIVE_ARTIFACT_SET', artifactId: 'd.md' });
+    expect(last(dispatched)).toMatchObject({ type: 'ACTIVE_ARTIFACT_SET', artifactId: 'd.md' });
   });
 
   it("the Android app's answer (not-implemented-on-mobile, which the bridge RESOLVES as data) falls back too", async () => {
@@ -419,7 +358,7 @@ describe('openFilepath — one host lookup replaces listing the project', () => 
     await openFilepath(ctx, 's1', '/proj/b.md');
     expect(stubs.listProject).toHaveBeenCalledTimes(1);
     expect(dispatched.some((a) => a.type === 'PILL_RESOLVE_FAILED')).toBe(false);
-    expect(dispatched[dispatched.length - 1]).toMatchObject({ type: 'ACTIVE_ARTIFACT_SET', artifactId: 'art-2' });
+    expect(last(dispatched)).toMatchObject({ type: 'ACTIVE_ARTIFACT_SET', artifactId: 'art-2' });
   });
 });
 
@@ -440,7 +379,7 @@ describe('openFilepath — a slow tap never lands after a newer one', () => {
     await tapA;
 
     expect(dispatched.length).toBe(afterB);
-    expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['b.md']);
+    expect(selectedIds(dispatched)).toEqual(['b.md']);
   });
 
   it("a stale tap's failure neither shows a note nor records anything", async () => {
@@ -487,7 +426,7 @@ describe('openFilepath — deferred mode with the host lookup', () => {
     const stubs = installClaudeArtifacts({ resolvePath: async () => ({ ok: true, artifact: tracked }) });
     const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
     await openFilepath(ctx, 's1', '/proj/notes.md', { drawerOpensImmediately: false });
-    expect(dispatched.map((a) => a.type)).toEqual(['DRAWER_OPENED', 'SESSION_ARTIFACT_UPSERTED', 'ACTIVE_ARTIFACT_SET']);
+    expect(types(dispatched)).toEqual(['DRAWER_OPENED', 'SESSION_ARTIFACT_UPSERTED', 'ACTIVE_ARTIFACT_SET']);
     expect(stubs.appendVersion).not.toHaveBeenCalled();
   });
 
@@ -499,7 +438,7 @@ describe('openFilepath — deferred mode with the host lookup', () => {
     const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
     await openFilepath(ctx, 's1', '/proj/e.md', { drawerOpensImmediately: false });
     expect(stubs.appendVersion).toHaveBeenCalledTimes(1);
-    const selected = dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId);
+    const selected = selectedIds(dispatched);
     expect(selected).toEqual(['art-9']);
   });
 
@@ -540,7 +479,7 @@ describe('openFilepath — a tap and an auto-open in the same chat', () => {
     gate.release['/proj/tapped.md']({ ok: true, artifact: discoveredRecord('tapped.md') });
     await tap;
 
-    expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['tapped.md']);
+    expect(selectedIds(dispatched)).toEqual(['tapped.md']);
   });
 
   it('a tap during an auto-open wins; the auto-open answering late changes nothing', async () => {
@@ -557,7 +496,7 @@ describe('openFilepath — a tap and an auto-open in the same chat', () => {
     await auto;
 
     expect(dispatched.length).toBe(afterTap);
-    expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['tapped.md']);
+    expect(selectedIds(dispatched)).toEqual(['tapped.md']);
   });
 });
 
@@ -569,10 +508,10 @@ describe('openFilepath — a failed lookup is not a missing file', () => {
     });
     const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
     await openFilepath(ctx, 's1', '/proj/a.md');
-    const last = dispatched[dispatched.length - 1] as any;
-    expect(last.type).toBe('PILL_RESOLVE_FAILED');
-    expect(last.message).toContain('timed out');
-    expect(last.message).not.toMatch(/wasn’t found/);
+    const msg = last(dispatched);
+    expect(msg.type).toBe('PILL_RESOLVE_FAILED');
+    expect(msg.message).toContain('timed out');
+    expect(msg.message).not.toMatch(/wasn’t found/);
     expect(stubs.listProject).not.toHaveBeenCalled();
     expect(stubs.listAllFiles).not.toHaveBeenCalled();
   });
@@ -581,9 +520,9 @@ describe('openFilepath — a failed lookup is not a missing file', () => {
     const stubs = installClaudeArtifacts({ resolvePath: async () => ({ ok: false, error: 'outside-project' }) });
     const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
     await openFilepath(ctx, 's1', '~/Downloads/report.md');
-    const last = dispatched[dispatched.length - 1] as any;
-    expect(last.type).toBe('PILL_RESOLVE_FAILED');
-    expect(last.message).toMatch(/outside this chat’s project folder/);
+    const msg = last(dispatched);
+    expect(msg.type).toBe('PILL_RESOLVE_FAILED');
+    expect(msg.message).toMatch(/outside this chat’s project folder/);
     expect(stubs.appendVersion).not.toHaveBeenCalled();
   });
 });
@@ -610,7 +549,7 @@ describe('openFilepath — a short path found beside this chat\'s other files', 
     expect(stubs.resolvePath).toHaveBeenNthCalledWith(1, '/home/u/youcoded-dev', 'icon6/s-bands.png', 's1');
     expect(stubs.appendVersion).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(stubs.appendVersion.mock.calls[0][2])).toContain(FOUND);
-    expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['rec-found']);
+    expect(selectedIds(dispatched)).toEqual(['rec-found']);
     expect(dispatched.some((a) => a.type === 'PILL_RESOLVE_FAILED')).toBe(false);
   });
 
@@ -624,7 +563,7 @@ describe('openFilepath — a short path found beside this chat\'s other files', 
     const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
     await openFilepath(ctx, 's1', 'icon6/s.png');
     expect(stubs.appendVersion).not.toHaveBeenCalled();
-    expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['sub/icon6/s.png']);
+    expect(selectedIds(dispatched)).toEqual(['sub/icon6/s.png']);
   });
 
   it('two matches open nothing and list both locations', async () => {
@@ -636,19 +575,19 @@ describe('openFilepath — a short path found beside this chat\'s other files', 
     expect(stubs.resolvePath).toHaveBeenCalledTimes(1);
     expect(stubs.appendVersion).not.toHaveBeenCalled();
     expect(dispatched.some((a) => a.type === 'ACTIVE_ARTIFACT_SET')).toBe(false);
-    const last = dispatched[dispatched.length - 1] as any;
-    expect(last.type).toBe('PILL_RESOLVE_FAILED');
-    expect(last.message).toContain('/a/x/out.png');
-    expect(last.message).toContain('/b/x/out.png');
+    const msg = last(dispatched);
+    expect(msg.type).toBe('PILL_RESOLVE_FAILED');
+    expect(msg.message).toContain('/a/x/out.png');
+    expect(msg.message).toContain('/b/x/out.png');
   });
 
   it('no match says where it looked', async () => {
     installClaudeArtifacts({ resolvePath: async () => ({ ok: false, error: 'not-found', searchedNearby: true }) });
     const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
     await openFilepath(ctx, 's1', 'x/out.png');
-    const last = dispatched[dispatched.length - 1] as any;
-    expect(last.type).toBe('PILL_RESOLVE_FAILED');
-    expect(last.message).toMatch(/isn’t in this chat’s folder \(\/proj\) or next to the other files/);
+    const msg = last(dispatched);
+    expect(msg.type).toBe('PILL_RESOLVE_FAILED');
+    expect(msg.message).toMatch(/isn’t in this chat’s folder \(\/proj\) or next to the other files/);
   });
 
   it('an auto-open never asks for the nearby search and never opens by it', async () => {
@@ -677,6 +616,6 @@ describe('openFilepath — a short path found beside this chat\'s other files', 
     await openFilepath(ctx, 's1', '/proj/other.md');
     releaseSecond({ ok: false, error: 'outside-project' });
     await first;
-    expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['other.md']);
+    expect(selectedIds(dispatched)).toEqual(['other.md']);
   });
 });

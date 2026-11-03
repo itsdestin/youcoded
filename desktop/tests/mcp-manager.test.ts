@@ -2,21 +2,17 @@ import { describe, it, expect, vi } from 'vitest';
 import { McpManager, redactSecrets } from '../src/main/harness/mcp/mcp-manager';
 import type { ResolvedMcpServer } from '../src/main/harness/mcp/types';
 
+const server = (over: Partial<ResolvedMcpServer> = {}): ResolvedMcpServer => ({ id: 'demo', label: 'Demo', enabled: true,
+  origin: { kind: 'user' }, missingSecrets: [], transport: { type: 'stdio', command: 'node' }, ...over });
+// WHY descriptors, not spread: callers pass a `state` getter that must stay live.
+const conn = (over: Record<string, unknown> = {}): any => Object.defineProperties({ state: 'ready', lastError: null, connect: async () => {},
+  listTools: () => [{ name: 'search', inputSchema: { type: 'object' } }],
+  callTool: async () => ({ text: 'ok', isError: false }), close: async () => {} }, Object.getOwnPropertyDescriptors(over));
+const mgrOf = (servers: ResolvedMcpServer[], connectionFactory: (s: ResolvedMcpServer) => unknown) =>
+  new McpManager({ registry: { resolveAllEnabled: async () => servers }, connectionFactory: connectionFactory as any });
 function deps(connectSpy = vi.fn(), closeSpy = vi.fn()) {
-  const registry = {
-    resolveAllEnabled: async () => ([
-      { id: 'demo', label: 'Demo', enabled: true, transport: { type: 'stdio', command: 'node' },
-        origin: { kind: 'user' }, missingSecrets: [] },
-    ] as any),
-  };
-  const connectionFactory = () => ({
-    state: 'ready' as const, lastError: null,
-    connect: async () => { connectSpy(); },
-    listTools: () => [{ name: 'search', description: 'd', inputSchema: { type: 'object' } }],
-    callTool: async () => ({ text: 'ok', isError: false }),
-    close: async () => { closeSpy(); },
-  });
-  return { registry: registry as any, connectionFactory: connectionFactory as any };
+  return { registry: { resolveAllEnabled: async () => [server()] } as any,
+    connectionFactory: (() => conn({ connect: async () => { connectSpy(); }, close: async () => { closeSpy(); } })) as any };
 }
 
 describe('McpManager', () => {
@@ -409,315 +405,122 @@ describe('McpManager', () => {
     await fresh.release();
   });
 
-  it('connects a server once for two sessions', async () => {
-    const connect = vi.fn();
-    const mgr = new McpManager(deps(connect));
-    await mgr.acquire('s1');
-    await mgr.acquire('s2');
+  it('pools one connection across sessions, refcounts holders (release is idempotent), and destroyAll closes regardless of refcount', async () => {
+    const connect = vi.fn(), close = vi.fn();
+    const mgr = new McpManager(deps(connect, close));
+    const l1 = await mgr.acquire('s1');
+    const l2 = await mgr.acquire('s2');
     expect(connect).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps the connection while another session still holds it', async () => {
-    const close = vi.fn();
-    const mgr = new McpManager(deps(vi.fn(), close));
-    const l1 = await mgr.acquire('s1');
-    const l2 = await mgr.acquire('s2');
-    await l1.release();
+    // WHY: a session torn down on two routes must not double-decrement and close a server another session still uses.
+    await l1.release(); await l1.release(); await l1.release();
     expect(close).not.toHaveBeenCalled();
     await l2.release();
     expect(close).toHaveBeenCalledTimes(1);
+
+    const close2 = vi.fn();
+    const mgr2 = new McpManager(deps(vi.fn(), close2));
+    await mgr2.acquire('s1'); await mgr2.acquire('s2');
+    await mgr2.destroyAll();
+    expect(close2).toHaveBeenCalledTimes(1);
   });
 
-  // Releasing twice must not double-decrement. A session torn down on two
-  // routes (an error path AND the normal destroy()) would otherwise drop the
-  // refcount below what it actually holds and close a server ANOTHER session
-  // is still using. Fails if release() ever stops being idempotent.
-  it('releasing the same lease twice is a no-op, not a double decrement', async () => {
-    const close = vi.fn();
-    const mgr = new McpManager(deps(vi.fn(), close));
-    const l1 = await mgr.acquire('s1');
-    const l2 = await mgr.acquire('s2');
-    await l1.release();
-    await l1.release();
-    await l1.release();
-    // s2 still holds it — three release() calls on s1's lease must not have
-    // taken the count past zero.
-    expect(close).not.toHaveBeenCalled();
-    await l2.release();
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('destroyAll closes everything regardless of refcount', async () => {
-    const close = vi.fn();
-    const mgr = new McpManager(deps(vi.fn(), close));
-    await mgr.acquire('s1'); await mgr.acquire('s2');
-    await mgr.destroyAll();
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  // THE regression test for the resumed-session bug (ROADMAP, 2026-07-31),
-  // the reason acquire() returns a lease at all.
-  //
-  // A resumed session reuses its session id. Under the old
-  // `release(sessionId)` API both generations wrote to ONE holder-set entry
-  // keyed by that id, so the outgoing generation's release emptied the set and
-  // closed the connection the INCOMING generation had just been handed — every
-  // subsequent tool call in the resumed session returned "<server> is not
-  // connected."
-  //
-  // This test fails on the old code: two acquire('s1') calls put a single
-  // 's1' in `holders` (Set.add of a present member is a no-op), so the first
-  // release closes it. It passes now because each acquire() mints its own
-  // lease id, so the two generations are two distinct holders.
-  //
-  // The fake's `state` deliberately TRANSITIONS rather than being hardcoded
-  // 'ready' — a premature close() has to be observable as more than a spy
-  // count for this to be worth anything.
+  // WHY: a resumed session reuses its id; under the old release(sessionId) API the outgoing generation's
+  // release closed the connection the incoming generation had just been handed. Each acquire mints its own
+  // lease id. `state` transitions so a premature close is observable as more than a spy count.
   it('the outgoing generation of a resumed session cannot close the incoming one\'s connection', async () => {
     let state: 'idle' | 'ready' = 'idle';
     const close = vi.fn();
-    const registry = {
-      resolveAllEnabled: async () => ([
-        { id: 'demo', label: 'Demo', enabled: true, transport: { type: 'stdio', command: 'node' },
-          origin: { kind: 'user' }, missingSecrets: [] },
-      ] as any),
-    };
-    const connectionFactory = () => ({
-      get state() { return state; },
-      lastError: null as string | null,
-      connect: async () => { state = 'ready'; },
+    const mgr = mgrOf([server()], () => conn({
+      get state() { return state; }, connect: async () => { state = 'ready'; },
       listTools: () => [{ name: 'search', inputSchema: { type: 'object' } }],
-      callTool: async () => ({ text: 'ok', isError: false }),
       close: async () => { state = 'idle'; close(); },
-    });
-    const mgr = new McpManager({ registry: registry as any, connectionFactory: connectionFactory as any });
-
-    // Generation 1 of session 's1'.
+    }));
     const outgoing = await mgr.acquire('s1');
-    expect(outgoing.servers).toHaveLength(1);
-
-    // Generation 2 — a RESUME, so the very same session id.
     const incoming = await mgr.acquire('s1');
     expect(incoming.servers).toHaveLength(1);
-
-    // The outgoing generation tears down. This is the exact call that used to
-    // kill the incoming session's tools.
     await outgoing.release();
-
     expect(close).not.toHaveBeenCalled();
-    // Not just "not closed" — still actually usable, which is what the user
-    // experiences as the bug.
-    await expect(
-      incoming.servers[0].call('search', {}, new AbortController().signal),
-    ).resolves.toEqual({ text: 'ok', isError: false });
-
-    // And still not a leak: the last holder closes it.
+    await expect(incoming.servers[0].call('search', {}, new AbortController().signal))
+      .resolves.toEqual({ text: 'ok', isError: false });
     await incoming.release();
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  // The same scenario with the two generations genuinely OVERLAPPING, which is
-  // how it actually arises (NativeSessionHost.destroy() releasing while
-  // resume() acquires under the same id).
-  //
-  // NOTE WHAT THIS DOES AND DOES NOT ASSERT. When the release lands before the
-  // re-acquire has registered, the refcount legitimately hits zero, the old
-  // connection closes, and the re-acquire spawns a FRESH one. That is correct —
-  // one wasted respawn, no stolen connection. So this does not assert
-  // "close was never called"; it asserts the thing the user actually
-  // experiences: the incoming generation ends up holding a WORKING server, and
-  // nothing is left pooled once it releases. An earlier draft of this test
-  // asserted the stricter no-close and failed — the assertion was wrong, not
-  // the code.
+  // Overlap (NativeSessionHost.destroy() releasing while resume() acquires): the old connection may legitimately
+  // close and respawn once; what matters is the incoming lease ends with exactly one WORKING connection.
   it('an overlapping release and re-acquire of one session id leave a working connection', async () => {
-    const close = vi.fn();
     let live = 0;
-    const registry = {
-      resolveAllEnabled: async () => ([
-        { id: 'demo', label: 'Demo', enabled: true, transport: { type: 'stdio', command: 'node' },
-          origin: { kind: 'user' }, missingSecrets: [] },
-      ] as any),
-    };
-    // Each call builds its OWN connection object with its own state, so a
-    // respawn is distinguishable from reuse of a closed one.
-    const connectionFactory = () => {
+    const mgr = mgrOf([server()], () => {
       let state: 'idle' | 'ready' = 'idle';
-      return {
-        get state() { return state; },
-        lastError: null as string | null,
-        connect: async () => { state = 'ready'; live++; },
-        listTools: () => [{ name: 'search', inputSchema: { type: 'object' } }],
-        callTool: async () => ({ text: 'ok', isError: false }),
-        close: async () => { state = 'idle'; live--; close(); },
-      };
-    };
-    const mgr = new McpManager({ registry: registry as any, connectionFactory: connectionFactory as any });
-
+      return conn({ get state() { return state; }, connect: async () => { state = 'ready'; live++; },
+        close: async () => { state = 'idle'; live--; } });
+    });
     const gen1 = await mgr.acquire('s1');
-
-    // Start the resume's acquire and the outgoing destroy's release together,
-    // then let both settle in whatever order the microtask queue picks.
     const acquiring = mgr.acquire('s1');
     const releasing = gen1.release();
     const [gen2] = await Promise.all([acquiring, releasing]);
-
-    // The incoming generation holds a usable server either way.
     expect(gen2.servers).toHaveLength(1);
-    await expect(
-      gen2.servers[0].call('search', {}, new AbortController().signal),
-    ).resolves.toEqual({ text: 'ok', isError: false });
-    expect(live).toBe(1); // exactly one connection open, not zero and not two
-
-    // And it all unwinds cleanly — no entry left holding a spawned process.
+    await expect(gen2.servers[0].call('search', {}, new AbortController().signal))
+      .resolves.toEqual({ text: 'ok', isError: false });
+    expect(live).toBe(1);
     await gen2.release();
     expect(live).toBe(0);
     expect(mgr.status()).toEqual([]);
   });
 
-  // The brief's other tests are all sequential awaits, which would not catch
-  // a manager that calls connect() twice when two sessions start at nearly
-  // the same moment. Real sessions DO start concurrently (Task 6 calls
-  // acquire() per session), so this race is genuinely reachable, not
-  // speculative — hence a real test, not just analysis in a report.
   it('connects once when two acquire()s race before connect() resolves', async () => {
     const connect = vi.fn();
     let resolveConnect: () => void = () => {};
-    const registry = {
-      resolveAllEnabled: async () => ([
-        { id: 'demo', label: 'Demo', enabled: true, transport: { type: 'stdio', command: 'node' },
-          origin: { kind: 'user' }, missingSecrets: [] },
-      ] as any),
-    };
-    const connectionFactory = () => ({
-      state: 'ready' as const, lastError: null,
+    const mgr = mgrOf([server()], () => conn({
       connect: () => { connect(); return new Promise<void>((r) => { resolveConnect = r; }); },
-      listTools: () => [],
-      callTool: async () => ({ text: 'ok', isError: false }),
-      close: async () => {},
-    });
-    const mgr = new McpManager({ registry: registry as any, connectionFactory: connectionFactory as any });
+    }));
     const p1 = mgr.acquire('s1');
     const p2 = mgr.acquire('s2');
-    // Let both calls run past their `await resolveAllEnabled()` and into the
-    // connect() call before we resolve it — setImmediate yields a full
-    // macrotask, well past any number of microtask hops either call needs.
-    await new Promise<void>((r) => setImmediate(r));
+    await new Promise<void>((r) => setImmediate(r)); // settle: both calls are past registry resolution
     resolveConnect();
     await Promise.all([p1, p2]);
     expect(connect).toHaveBeenCalledTimes(1);
   });
 
-  // Every leak window this file used to pin (a release() landing before
-  // resolveAllEnabled() resolved; between two servers' connects; during
-  // pass 2) had one shape: release() running before acquire() had finished
-  // registering its holders. Those tests are gone because the scenario is no
-  // longer constructible — release() lives on the object acquire() returns, so
-  // a caller cannot invoke it early. What survives is the ONE path where
-  // holders can still be registered without a lease ever reaching a caller:
-  // acquire() throwing partway through. That must clean up after itself, or
-  // the pooled subprocess is stranded for the life of the app with nothing
-  // left that could ever release it.
+  // WHY: the only path where holders register without a lease reaching a caller is acquire() throwing midway;
+  // it must clean up or the pooled subprocess is stranded for the life of the app.
   it('an acquire() that throws mid-flight releases the holders it already registered', async () => {
     const close = vi.fn();
-    const registry = {
-      resolveAllEnabled: async () => ([
-        { id: 'demo', label: 'Demo', enabled: true, transport: { type: 'stdio', command: 'node' },
-          origin: { kind: 'user' }, missingSecrets: [] },
-      ] as any),
-    };
-    const connectionFactory = () => ({
-      state: 'ready' as const, lastError: null,
-      // Pass 1 has already registered the holder by the time this rejects.
-      connect: async () => { throw new Error('spawn node ENOENT'); },
-      listTools: () => [],
-      callTool: async () => ({ text: 'ok', isError: false }),
-      close: async () => { close(); },
-    });
-    const mgr = new McpManager({ registry: registry as any, connectionFactory: connectionFactory as any });
-
-    // The ORIGINAL error must survive — never replaced with a guessed cause.
-    await expect(mgr.acquire('s1')).rejects.toThrow('spawn node ENOENT');
-    // Holder cleaned up, connection closed, pool empty: a later acquire()
-    // starts from scratch rather than inheriting a dead entry nobody holds.
+    const mgr = mgrOf([server()], () => conn({
+      connect: async () => { throw new Error('spawn node ENOENT'); }, close: async () => { close(); },
+    }));
+    await expect(mgr.acquire('s1')).rejects.toThrow('spawn node ENOENT'); // original error survives
     expect(close).toHaveBeenCalledTimes(1);
     expect(mgr.status()).toEqual([]);
   });
 
-  // Regression test for Finding 6: mcp-reconciler.ts's projectToClaudeJson
-  // already skips a server with missingSecrets (a synced entry whose secret
-  // ciphertext isn't on THIS device) so Claude Code never sees it — but
-  // McpManager.acquire() connected it anyway with a partial env/headers
-  // object, handing a real subprocess a missing token and surfacing whatever
-  // opaque auth error IT emits instead of a message naming the actual
-  // missing secret. Fails on the pre-fix code (connect IS called); passes
-  // once ensureConnected treats missingSecrets as needs-setup without ever
-  // touching connectionFactory.
+  // WHY: mcp-reconciler skips servers with missingSecrets, but acquire() used to connect them with a partial
+  // env, surfacing an opaque auth error instead of naming the missing secret.
   it('a server with missingSecrets is never connected and reports needs-setup naming the key', async () => {
     const connect = vi.fn();
-    const registry = {
-      resolveAllEnabled: async () => ([
-        {
-          id: 'gmail', label: 'Gmail', enabled: true,
-          transport: { type: 'stdio', command: 'npx', args: ['gmail-mcp'] },
-          origin: { kind: 'user' }, missingSecrets: ['GMAIL_TOKEN'],
-        },
-      ] as any),
-    };
-    // A connectionFactory that WOULD prove the bug if ever invoked — asserted
-    // never-called below rather than merely unused, so a regression that
-    // calls it is caught even if its behavior happens to look harmless.
-    const connectionFactory = () => ({
-      state: 'ready' as const, lastError: null,
-      connect: async () => { connect(); },
-      listTools: () => [{ name: 'search', inputSchema: { type: 'object' } }],
-      callTool: async () => ({ text: 'ok', isError: false }),
-      close: async () => {},
-    });
-    const mgr = new McpManager({ registry: registry as any, connectionFactory: connectionFactory as any });
-
+    const mgr = mgrOf([server({ id: 'gmail', missingSecrets: ['GMAIL_TOKEN'] })], () => conn({ connect: async () => { connect(); } }));
     const lease = await mgr.acquire('s1');
-
     expect(connect).not.toHaveBeenCalled();
-    expect(lease.servers).toEqual([]); // excluded, same as any other not-ready server
+    expect(lease.servers).toEqual([]);
     const status = mgr.status().find((s) => s.id === 'gmail');
     expect(status?.state).toBe('needs-setup');
     expect(status?.error).toContain('GMAIL_TOKEN');
   });
 
-  // Regression test for Minor 9: `await entry.conn.close()` in the release
-  // loop was unguarded — a close() that rejects (the real McpConnection's
-  // never does, but the injected McpConnectionLike type permits it) would
-  // throw OUT of the loop, stranding every remaining holder the same call had
-  // not yet reached. Fails on the pre-fix code (the release rejects, and the
-  // second server's close() is never even attempted); passes once the close()
-  // call is wrapped in its own try/catch.
+  // WHY: an unguarded `await conn.close()` in the release loop let one rejecting close strand later servers.
   it('a close() that rejects for one server does not strand the others in the same release', async () => {
     const closeGood = vi.fn();
-    const registry = {
-      resolveAllEnabled: async () => ([
-        { id: 'bad', label: 'Bad', enabled: true, transport: { type: 'stdio', command: 'x' }, origin: { kind: 'user' }, missingSecrets: [] },
-        { id: 'good', label: 'Good', enabled: true, transport: { type: 'stdio', command: 'y' }, origin: { kind: 'user' }, missingSecrets: [] },
-      ] as any),
-    };
-    const connectionFactory = (s: any) => s.id === 'bad'
-      ? { state: 'ready' as const, lastError: null, connect: async () => {}, listTools: () => [], callTool: async () => ({ text: '', isError: false }), close: async () => { throw new Error('close failed'); } }
-      : { state: 'ready' as const, lastError: null, connect: async () => {}, listTools: () => [], callTool: async () => ({ text: '', isError: false }), close: async () => { closeGood(); } };
-    const mgr = new McpManager({ registry: registry as any, connectionFactory: connectionFactory as any });
-
+    const mgr = mgrOf([server({ id: 'bad' }), server({ id: 'good' })], (s: ResolvedMcpServer) => conn({
+      close: async () => { if (s.id === 'bad') throw new Error('close failed'); closeGood(); },
+    }));
     const lease = await mgr.acquire('s1');
     await expect(lease.release()).resolves.toBeUndefined();
     expect(closeGood).toHaveBeenCalledTimes(1);
   });
 
   it('a failing server does not prevent healthy ones from being returned', async () => {
-    const registry = { resolveAllEnabled: async () => ([
-      { id: 'bad', label: 'Bad', enabled: true, transport: { type: 'stdio', command: 'x' }, origin: { kind: 'user' }, missingSecrets: [] },
-      { id: 'good', label: 'Good', enabled: true, transport: { type: 'stdio', command: 'y' }, origin: { kind: 'user' }, missingSecrets: [] },
-    ] as any) };
-    const connectionFactory = (s: any) => s.id === 'bad'
-      ? { state: 'error', lastError: 'spawn x ENOENT', connect: async () => {}, listTools: () => [], callTool: async () => ({ text: '', isError: true }), close: async () => {} }
-      : { state: 'ready', lastError: null, connect: async () => {}, listTools: () => [{ name: 't', inputSchema: { type: 'object' } }], callTool: async () => ({ text: 'ok', isError: false }), close: async () => {} };
-    const mgr = new McpManager({ registry: registry as any, connectionFactory: connectionFactory as any });
+    const mgr = mgrOf([server({ id: 'bad' }), server({ id: 'good' })], (s: ResolvedMcpServer) =>
+      s.id === 'bad' ? conn({ state: 'error', lastError: 'spawn x ENOENT' }) : conn());
     const lease = await mgr.acquire('s1');
     expect(lease.servers.map(r => r.id)).toEqual(['good']);
     expect(mgr.status().find(s => s.id === 'bad')?.error).toContain('ENOENT');

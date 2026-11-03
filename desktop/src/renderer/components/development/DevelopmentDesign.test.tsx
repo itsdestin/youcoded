@@ -10,6 +10,10 @@ beforeEach(() => window.history.replaceState({}, '', '/?mode=workbench'));
 afterEach(() => { cleanup(); window.history.replaceState({}, '', '/'); });
 // Every Contribute render now reads setup status on mount (R6-24: "you can close
 // this and setup keeps going" is only true if the screen can ask where it got to).
+const fillTicket = (title: string, description: string) => {
+  fireEvent.change(screen.getByLabelText('Title'), { target: { value: title } });
+  fireEvent.change(screen.getByLabelText('Description'), { target: { value: description } });
+};
 const idle = () => Promise.resolve({ state: 'idle' as const });
 
 describe('development design safety', () => {
@@ -42,19 +46,11 @@ describe('development design safety', () => {
     expect(screen.getByText('Choose whether to propose it')).toBeTruthy();
   });
   it('reviews editable evidence without calling a provider and keeps the draft through review', async () => {
-    // Rewritten after code review C15. Two of its assertions proved nothing:
-    //   - `logTail` was never called by ANY path, so "not called" was true for ever
-    //     rather than "not called until you ask". It now ticks the box and asserts
-    //     the read happens THEN, which is the actual promise.
-    //   - the draft check rerendered with open={false}, which does not unmount, so it
-    //     held for any component keeping state in hooks — including one with no draft
-    //     handling at all. It now goes to review and back, which is the journey a user
-    //     actually makes and the one that could lose their words.
+    // WHY: logTail must be read only WHEN the box is ticked (not 'never called'), and the draft must survive review and back (a closed-but-mounted rerender proves nothing).
     const dev = { summarizeIssue: vi.fn(), diagnostics: vi.fn(), logTail: vi.fn().mockResolvedValue('line one'), installWorkspace: vi.fn() };
     Object.assign(window, { claude: { dev } });
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fillTicket('The menu closes', 'Opening the menu closes the window.');
     expect(dev.logTail).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('switch', { name: 'Include recent logs' }));
     await vi.waitFor(() => expect(dev.logTail).toHaveBeenCalledTimes(1));
@@ -68,12 +64,7 @@ describe('development design safety', () => {
   });
 
   it('shows the approved ticket screen to a user with no workbench flag', () => {
-    // WHY this exists (code review C15, then the grader): every other test in this
-    // file runs inside `?mode=workbench`, so for a while the whole suite was green on
-    // a screen no user could open — `main.ts` never puts a mode on a packaged window.
-    // Thirteen signed contract rows were unmet for that one reason. This pins which
-    // screen a real user gets, so the answer can never again be "not the one we
-    // tested".
+    // WHY: every other test runs inside ?mode=workbench, so the suite was once green on a screen no user could open (main.ts never sets a mode on a packaged window).
     window.history.replaceState({}, '', '/');
     Object.assign(window, { claude: { dev: { logTail: vi.fn(), diagnostics: vi.fn(), summarizeIssue: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} />);
@@ -83,8 +74,7 @@ describe('development design safety', () => {
   it('reviews selected logs before AI and keeps fields through back without demo controls', () => {
     render(<BugReportPopup open onClose={() => {}} />);
     expect(screen.queryByText('Optional AI help')).toBeNull();
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'A retained title' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'A retained description' } });
+    fillTicket('A retained title', 'A retained description');
     expect(screen.getByRole('switch', { name: 'Include recent logs' }).getAttribute('aria-checked')).toBe('false');
     fireEvent.click(screen.getByRole('switch', { name: 'Include recent logs' }));
     expect(screen.queryByLabelText('Logs to review')).toBeNull();
@@ -108,19 +98,14 @@ describe('development design safety', () => {
   // different actions. Pin the single noun so a future copy edit cannot reintroduce the split.
   it('calls the ticket a ticket at every step', () => {
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'A title' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'A description' } });
+    fillTicket('A title', 'A description');
     fireEvent.click(screen.getByText('Review ticket'));
     expect(screen.getByText('Your ticket')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Submit public ticket' })).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/bug report|feature request|public issue/i);
   });
 
-  // WHY: Destin, 2026-09-09 — "the workbench shouldn't have code that makes it look different
-  // from the real app, that defeats the whole point." No prototype captions on any design screen.
-  // Widened after code review C5: the live screen carried "Sample text only — no logs
-// collected", a mockup caption these tests were supposed to forbid, and the regex
-// walked straight past it.
+  // WHY: no prototype/mockup captions on any design screen (Destin, 2026-09-09: the workbench must not look different from the real app).
 const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailable in this|sample text only|no logs collected/i;
 
   it('never captions the contribution screen as a preview or prototype', () => {
@@ -133,8 +118,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
   it('never captions the ticket screens as a preview or prototype', () => {
     render(<BugReportPopup open onClose={() => {}} />);
     expect(document.body.textContent).not.toMatch(CAPTION);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'A title' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'A description' } });
+    fillTicket('A title', 'A description');
     fireEvent.click(screen.getByRole('switch', { name: 'Include recent logs' }));
     fireEvent.click(screen.getByText('Review ticket'));
     expect(document.body.textContent).not.toMatch(CAPTION);
@@ -152,10 +136,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const setupWorkspace = vi.fn().mockResolvedValue({ ok: true, path: '/home/you/YouCoded/Projects/w' });
     Object.assign(window, { claude: { dev: { installWorkspace, setupWorkspace, setupStatus: idle } } });
     render(<ContributePopup open onClose={() => {}} />);
-    // WHY: the guard is that the legacy installer is never reached — not that the button looks
-    // dead. Destin rejected the disabled/greyed treatment: the workbench must look like the app.
-    // It now also asserts the NEW path IS taken: "installWorkspace was not called" alone stays
-    // true if the button does nothing at all, which is how a dead button passes a safety test.
+    // WHY: the legacy installer is never reached AND the new path is taken ("not called" alone passes on a dead button).
     fireEvent.click(screen.getByRole('button', { name: 'Download YouCoded’s code' }));
     expect(setupWorkspace).toHaveBeenCalledTimes(1);
     expect(installWorkspace).not.toHaveBeenCalled();
@@ -163,10 +144,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
   });
 
   it('finds setup still running when you close and come back', async () => {
-    // WHY: the setting-up screen tells you "you can close this — setup keeps going,
-    // and you'll find it here when you come back" (Destin, R6-24). A sentence like
-    // that is a promise; this is what makes it one. Reopening asks the main process
-    // where setup got to instead of showing the start button over a running setup.
+    // WHY: "you can close this, setup keeps going" is a promise; reopening must ask main where setup got to, not show Start over a running setup.
     const setupStatus = vi.fn().mockResolvedValue({ state: 'running' });
     Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn() } } });
     render(<ContributePopup open onClose={() => {}} />);
@@ -175,10 +153,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
   });
 
   it('notices setup finishing while the screen is open', async () => {
-    // WHY (code review C7/C15): the "still running" test never advanced the status,
-    // so it was green with no polling at all — and without polling a reopened dialog
-    // sat on the spinner for ever while setup finished perfectly well behind it.
-    // This one CHANGES the answer and requires the screen to notice.
+    // WHY: the answer CHANGES; without polling a reopened dialog sat on the spinner for ever while setup finished behind it.
     const setupStatus = vi.fn()
       .mockResolvedValueOnce({ state: 'running' })
       .mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Development/w' });
@@ -237,8 +212,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const submitIssue = vi.fn().mockResolvedValue({ ok: false, error: 'GitHub rejected the request.' });
     Object.assign(window, { claude: { dev: { submitIssue } } });
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fillTicket('The menu closes', 'Opening the menu closes the window.');
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
     await screen.findByText(/GitHub rejected the request\./);
@@ -264,8 +238,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const openExternal = vi.fn();
     Object.assign(window, { claude: { dev: { submitIssue }, shell: { openExternal } } });
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fillTicket('The menu closes', 'Opening the menu closes the window.');
     fireEvent.click(screen.getByRole('switch', { name: 'Finish with attachments in GitHub' }));
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue in GitHub' }));
@@ -284,8 +257,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     });
     Object.assign(window, { claude: { dev: { submitIssue }, shell: { openExternal: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fillTicket('The menu closes', 'Opening the menu closes the window.');
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
     await screen.findByText(/part of the details was left out/);
@@ -298,8 +270,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     });
     Object.assign(window, { claude: { dev: { submitIssue }, shell: { openExternal: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fillTicket('The menu closes', 'Opening the menu closes the window.');
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
     await screen.findByText(/open in your browser with everything you wrote/);
@@ -314,8 +285,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     // Offered as its own choice, saying where it came from — never typed into the
     // description for you (submit-ticket-1#ST-13).
     expect(screen.getByText(/Adds where it happened \(Settings → Permissions\)/)).toBeTruthy();
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Permissions will not load' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'It will not load.' } });
+    fillTicket('Permissions will not load', 'It will not load.');
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     // Shown for review BEFORE anything is sent — never attached unseen (R11).
     fireEvent.click(screen.getByRole('button', { name: /^The error you saw/ }));
@@ -344,8 +314,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const openExternal = vi.fn().mockRejectedValue(new Error('No browser is available.'));
     Object.assign(window, { claude: { dev: { submitIssue }, shell: { openExternal } } });
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fillTicket('The menu closes', 'Opening the menu closes the window.');
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
     await screen.findByText(/No browser is available\./);
@@ -364,8 +333,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const openSessionIn = vi.fn().mockResolvedValue({ id: 's1' });
     Object.assign(window, { claude: { dev: { submitIssue, setupWorkspace, setupStatus, openSessionIn, clearSetupStatus: vi.fn().mockResolvedValue(undefined) } } });
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fillTicket('The menu closes', 'Opening the menu closes the window.');
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Let your assistant try to fix it' }));
@@ -384,8 +352,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const setupStatus = vi.fn().mockResolvedValue({ state: 'idle' });
     Object.assign(window, { claude: { dev: { submitIssue: vi.fn(), setupWorkspace: vi.fn(), setupStatus, openSessionIn: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fillTicket('The menu closes', 'Opening the menu closes the window.');
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Let your assistant try to fix it' }));
@@ -405,8 +372,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     });
     Object.assign(window, { claude: { dev: { summarizeIssue, submitIssue: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'menu bad' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'it closes' } });
+    fillTicket('menu bad', 'it closes');
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Improve wording with the assistant' }));
@@ -424,8 +390,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     });
     Object.assign(window, { claude: { dev: { summarizeIssue, submitIssue: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'menu bad' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'it closes' } });
+    fillTicket('menu bad', 'it closes');
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Improve wording with the assistant' }));
@@ -441,8 +406,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const submitIssue = vi.fn().mockRejectedValue(new Error('remote-unsupported: dev:submit-issue'));
     Object.assign(window, { claude: { dev: { submitIssue } } });
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fillTicket('The menu closes', 'Opening the menu closes the window.');
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
     await screen.findByText(/Developer tools isn.t available via remote access yet/);
@@ -458,8 +422,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const submitIssue = vi.fn().mockResolvedValue({ ok: true, url: 'https://github.com/itsdestin/youcoded/issues/471' });
     Object.assign(window, { claude: { dev: { submitIssue, summarizeIssue } } });
     render(<BugReportPopup open onClose={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fillTicket('The menu closes', 'Opening the menu closes the window.');
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
     await screen.findByText(/Submitted to GitHub/);

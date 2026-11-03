@@ -1,14 +1,5 @@
-// Injecting path-triggered content into a turn.
-//
-// TWO invariants this pins, both of which the rest of the branch depends on:
-//
-// 1. It arrives as a MESSAGE. The system prompt is byte-stable by construction
-//    (prompt-assembly.ts's header comment is a standing instruction), and a
-//    mid-session edit discards the KV cache prefix every local model reuses —
-//    turning a cheap turn into a full re-prefill of the whole conversation.
-//
-// 2. Once per trigger per SESSION. A rule re-sent after every Read of a matching
-//    file would dominate the conversation and blow the window it was sized against.
+// Injecting path-triggered content into a turn. Two invariants: (1) it arrives as a MESSAGE (the system prompt is byte-stable;
+// editing it discards the KV-cache prefix every local model reuses); (2) once per trigger per SESSION (re-sending after every matching Read would blow the window).
 import { describe, it, expect } from 'vitest';
 import { HarnessSession } from '../src/main/harness/harness-session';
 import type { TranscriptEvent } from '../src/shared/types';
@@ -25,8 +16,7 @@ import * as path from 'node:path';
 
 const ALLOW: PermissionDecision = { action: 'allow', denyListed: false };
 
-/** A fake index that fires for every path — the point is what the DRIVER does
- *  with a hit, which path-triggers.test.ts already covers on its own. */
+/** A fake index firing for every path: the point is what the DRIVER does with a hit (path-triggers.test.ts covers matching). */
 function always(...triggers: PathTrigger[]): TriggerIndex {
   return { match: () => triggers };
 }
@@ -330,23 +320,13 @@ describe('path-triggered injection', () => {
       await fs.rm(root, { recursive: true, force: true, maxRetries: 10 });
     }
   });
-  it('a matched trigger reaches the model as a MESSAGE', async () => {
+  it('a matched trigger reaches the model as a source-labelled MESSAGE and leaves the system prompt byte-identical', async () => {
     const { session, seen } = run(always({ id: 'r1', source: '.claude/rules/api.md', body: 'Always validate input.' }), TWO_STEP);
-    await session.send('go');
-    expect(JSON.stringify(seen)).toContain('Always validate input');
-  });
-
-  it('the system prompt is NOT touched — byte-stability is the whole constraint', async () => {
-    const { session } = run(always({ id: 'r1', source: 'r', body: 'RULE' }), TWO_STEP);
     const before = (session as any).systemText;
     await session.send('go');
-    expect((session as any).systemText).toBe(before);
-  });
-
-  it('names its source so the model knows where the text came from', async () => {
-    const { session, seen } = run(always({ id: 'r1', source: '.claude/rules/api.md', body: 'RULE' }), TWO_STEP);
-    await session.send('go');
+    expect(JSON.stringify(seen)).toContain('Always validate input');
     expect(JSON.stringify(seen)).toContain('.claude/rules/api.md');
+    expect((session as any).systemText).toBe(before);
   });
 
   it('the same trigger is injected only ONCE per session', async () => {
@@ -357,9 +337,7 @@ describe('path-triggered injection', () => {
     ];
     const { session, seen } = run(always({ id: 'r1', source: 'r', body: 'RULE-TEXT-MARKER' }), threeStep);
     await session.send('go');
-    // Count in the FINAL prompt, not across all of them: once appended to
-    // history the message correctly appears in every later step's prompt, so
-    // summing across steps measures step count, not injection count.
+    // count in the FINAL prompt only: the message legitimately appears in every later step's prompt
     const lastPrompt = JSON.stringify(seen[seen.length - 1]);
     expect(lastPrompt.split('RULE-TEXT-MARKER').length - 1).toBe(1);
   });
@@ -454,26 +432,15 @@ describe('path-triggered injection', () => {
     expect((session as any).history.filter((m: any) => typeof m.content === 'string' && m.content.startsWith('<project-rule source='))).toHaveLength(1);
   });
 
-  it('a prune that drops the rule rearms its path on the next touch', async () => {
-    const rule = { id: 'rule:/project/r.md', source: 'rules/r.md', body: 'DROPPED-RULE-MARKER' };
-    const { markAppGenerated } = await import('../src/main/harness/compaction');
-    const { session, seen } = run(always(rule), TWO_STEP);
-    session.seedHistory([{ role: 'user', content: 'earlier' },
-      markAppGenerated({ role: 'user', content: `<project-rule source="${rule.source}">\n${rule.body}\n</project-rule>` } as any)] as any);
-    (session as any).commitPrune([(session as any).history[0]]);
-    await session.send('touch');
-    expect(JSON.stringify(seen.at(-1)).split(rule.body).length - 1).toBe(1);
-  });
-
-  it('a prune that retains the rule does not rearm it', async () => {
+  it.each([['drops', 0], ['retains', 1]])('a prune that %s the rule leaves exactly one copy after the next touch (%s retained)', async (_n, keep) => {
     const rule = { id: 'rule:/project/r.md', source: 'rules/r.md', body: 'PRUNE-RULE-MARKER' };
     const { markAppGenerated } = await import('../src/main/harness/compaction');
     const { session, seen } = run(always(rule), TWO_STEP);
     session.seedHistory([{ role: 'user', content: 'earlier' },
       markAppGenerated({ role: 'user', content: `<project-rule source="${rule.source}">\n${rule.body}\n</project-rule>` } as any)] as any);
-    (session as any).commitPrune([...(session as any).history]);
+    (session as any).commitPrune(keep ? [...(session as any).history] : [(session as any).history[0]]);
     await session.send('touch');
-    expect(JSON.stringify(seen.at(-1)).split(rule.body).length - 1).toBe(1);
+    expect(JSON.stringify(seen.at(-1)).split(rule.body).length - 1).toBe(1); // dropped -> rearmed; retained -> not re-sent
   });
 
   it('no trigger, no injection — an ordinary turn is untouched', async () => {
@@ -515,40 +482,19 @@ describe('path-triggered injection', () => {
 // 'a matched trigger reaches the model as a MESSAGE' at the top of this file,
 // which uses Read. That pairing is what keeps this exclusion narrow.
 describe('non-path tool subjects are not treated as paths', () => {
-  it('a Skill call does not trigger path-scoped rules', async () => {
+  // WHY: Skill's subject is a skill id; when added it silently inherited file-tool treatment (canonicalized against cwd, denylist, rule globs).
+  // The positive case (a FILE tool does trigger rules) is 'a matched trigger reaches the model as a MESSAGE', which keeps this exclusion narrow.
+  it.each([['Skill', 'skill', { skill: 'theme-builder' }], ['Bash', 'command', { command: 'ls src/api' }]])('a %s call does not trigger path-scoped rules', async (name, key, input) => {
     const seen: any[] = [];
-    // A trigger index that fires for ANY input — if Skill's subject reached it,
-    // the rule would be injected.
     const firesForAnything: TriggerIndex = { match: () => [{ id: 'r', source: 'r', body: 'RULE-MARKER' }] };
-    const skill = fakeTool('Skill', {
-      schema: (await import('zod')).z.object({ skill: (await import('zod')).z.string() }),
-      permissionSubject: (a: any) => a.skill,
-    });
+    const { z } = await import('zod');
+    const tool = fakeTool(name, { schema: z.object({ [key]: z.string() }), permissionSubject: (a: any) => a[key] });
     const model = scriptedModel([
-      stream(toolCallChunk('c1', 'Skill', { skill: 'theme-builder' }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c1', name, input), finishChunk('tool-calls')),
       stream(...textChunks('b', 'done'), finishChunk('stop')),
     ], seen);
     const session = new HarnessSession(
-      makeOpts({ tools: [skill], decide: async () => ALLOW, triggers: firesForAnything, profile: CLOUD_DEFAULT }),
-      async () => model as any,
-    );
-    await session.send('go');
-    expect(JSON.stringify(seen)).not.toContain('RULE-MARKER');
-  });
-
-  it('a Bash call does not either', async () => {
-    const seen: any[] = [];
-    const firesForAnything: TriggerIndex = { match: () => [{ id: 'r', source: 'r', body: 'RULE-MARKER' }] };
-    const bash = fakeTool('Bash', {
-      schema: (await import('zod')).z.object({ command: (await import('zod')).z.string() }),
-      permissionSubject: (a: any) => a.command,
-    });
-    const model = scriptedModel([
-      stream(toolCallChunk('c1', 'Bash', { command: 'ls src/api' }), finishChunk('tool-calls')),
-      stream(...textChunks('b', 'done'), finishChunk('stop')),
-    ], seen);
-    const session = new HarnessSession(
-      makeOpts({ tools: [bash], decide: async () => ALLOW, triggers: firesForAnything, profile: CLOUD_DEFAULT }),
+      makeOpts({ tools: [tool], decide: async () => ALLOW, triggers: firesForAnything, profile: CLOUD_DEFAULT }),
       async () => model as any,
     );
     await session.send('go');

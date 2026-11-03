@@ -132,9 +132,13 @@ beforeEach(() => {
   answers.push((p) => (p.kind === 'local' ? 'allow_chat' : null));
 });
 
+const allowSite = () => answers.unshift((p) => (p.kind === 'site' ? 'allow_chat' : null));
+/** The ref of the first outline line matching `re` (its capture group 1 is the ref). */
+const refIn = async (c: ReturnType<typeof ctx>, re: RegExp) => re.exec((await runBrowserTool(env, 'BrowserSnapshot', {}, c)).text)?.[1];
 const live = () => (FOUND.length ? it : it.skip);
 
-describe('Browser, live', () => {
+// Real-browser tests: one generous budget for launch + page loads.
+describe('Browser, live', { timeout: 60_000 }, () => {
   live()('waits for any visible duplicate and for all visible duplicates to disappear', async () => {
     const c = ctx('s-duplicates');
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/duplicates` }, c);
@@ -148,7 +152,7 @@ describe('Browser, live', () => {
     expect(gone.isError).toBeFalsy(); expect(gone.text).toContain('has no visible matches');
     const absent = await runBrowserTool(env, 'BrowserWait', { text: 'Shared ready' }, { ...c, deadline: Date.now() + 15_100 });
     expect(absent.isError).toBe(true); expect(absent.text).toContain('no visible match appeared');
-  }, 60_000);
+  });
 
   live()('continues historical cached text and invalidates on reload, tab switches and assistant mutation', async () => {
     const c = ctx('s-continuation');
@@ -170,12 +174,12 @@ describe('Browser, live', () => {
     expect((await runBrowserTool(env, 'BrowserSnapshot', { from: 1 }, c)).text).toContain('No cached snapshot');
     await other.close();
     await runBrowserTool(env, 'BrowserSnapshot', {}, c);
-    answers.unshift((p) => p.kind === 'site' ? 'allow_chat' : null);
+    allowSite();
     await runBrowserTool(env, 'BrowserAct', { action: 'press_key', element: 'Current page', key: 'Escape' }, c);
     // An action supplies its own NEW outline; its prior continuation cannot survive.
     const after = await runBrowserTool(env, 'BrowserSnapshot', { from: 24_000 }, c);
     expect(after.isError).toBe(true); expect(after.text).toContain('out of range');
-  }, 60_000);
+  });
 
   live()('keeps observation and close escape paths available during a pending handoff', async () => {
     const c = ctx('s-handoff-close');
@@ -191,7 +195,7 @@ describe('Browser, live', () => {
     expect((await runBrowserTool(env, 'BrowserTabs', { action: 'close', index: 0 }, c)).isError).toBeFalsy();
     expect(service.openPrompt(c.sessionId)).toBeNull();
     expect((await runBrowserTool(env, 'BrowserTabs', { action: 'close_all' }, c)).isError).toBeFalsy();
-  }, 60_000);
+  });
 
   for (const answer of ['done', 'cant'] as const) live()(`consumes a late handoff ${answer} answer without recreating its card`, async () => {
     const c = ctx(`s-late-${answer}`);
@@ -220,10 +224,10 @@ describe('Browser, live', () => {
     const consumed = await runBrowserTool(env, 'BrowserAskUser', { message }, c);
     expect(consumed.text).toContain(answer === 'done' ? 'user says they\'re done' : 'user says they can\'t');
     expect(seenPrompts.filter((p) => p.kind === 'handoff')).toHaveLength(2);
-  }, 60_000);
+  });
 
   live()('selects dropdown options by value or label and preserves the empty wait default', async () => {
-    answers.unshift((p) => p.kind === 'site' ? 'allow_chat' : null);
+    allowSite();
     const c = ctx('s-select');
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/select` }, c);
     const page = service.pages(c.sessionId)[0];
@@ -238,7 +242,7 @@ describe('Browser, live', () => {
     // WHY: checking the receipt pins the current default without wall-clock assertions.
     expect((await runBrowserTool(env, 'BrowserWait', {}, c)).text).toContain('Waited 2 seconds.');
     expect((await runBrowserTool(env, 'BrowserWait', { seconds: 0 }, c)).text).toContain('Waited 0 seconds.');
-  }, 60_000);
+  });
 
   live()('opens a page and returns an outline with refs, inside the untrusted frame', async () => {
     const r = await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, ctx());
@@ -250,13 +254,12 @@ describe('Browser, live', () => {
     // Approved for this chat: a second visit doesn't ask again.
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/form` }, ctx());
     expect(seenPrompts.length).toBe(1);
-  }, 60_000);
+  });
 
   live()('asks once per site to click/type, then not again in the same chat', async () => {
-    answers.unshift((p) => (p.kind === 'site' ? 'allow_chat' : null));
+    allowSite();
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/form` }, ctx('s-site'));
-    const snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-site'))).text;
-    const ref = /searchbox "Search" \[ref=(e\d+)\]/.exec(snap)?.[1];
+    const ref = await refIn(ctx('s-site'), /searchbox "Search" \[ref=(e\d+)\]/);
     expect(ref).toBeTruthy();
     const typed = await runBrowserTool(env, 'BrowserAct', { action: 'type', ref, element: 'Search box', text: 'cats', submit: true }, ctx('s-site'));
     expect(typed.isError).toBeFalsy();
@@ -264,14 +267,13 @@ describe('Browser, live', () => {
     expect(seenPrompts.filter((p) => p.kind === 'site')).toHaveLength(1);
     // A search form submitted with Enter is NOT a final step.
     expect(seenPrompts.some((p) => p.kind === 'final')).toBe(false);
-  }, 60_000);
+  });
 
   live()('a final step asks every time, and a decline is reported and not retried', async () => {
-    answers.unshift((p) => (p.kind === 'site' ? 'allow_chat' : null));
+    allowSite();
     answers.unshift((p) => (p.kind === 'final' ? 'no' : null));
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/form` }, ctx('s-final'));
-    const snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-final'))).text;
-    const ref = /button "Place order" \[ref=(e\d+)\]/.exec(snap)?.[1];
+    const ref = await refIn(ctx('s-final'), /button "Place order" \[ref=(e\d+)\]/);
     expect(ref).toBeTruthy();
     const r = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref, element: 'Place order' }, ctx('s-final'));
     expect(r.isError).toBe(true);
@@ -282,31 +284,27 @@ describe('Browser, live', () => {
     const again = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref, element: 'Place order' }, ctx('s-final'));
     expect(again.text).toMatch(/already declined/);
     expect(seenPrompts.length).toBe(before);
-  }, 60_000);
+  });
 
   live()('an approved final step runs', async () => {
     answers.unshift((p) => (p.kind === 'final' ? 'once' : null));
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/form` }, ctx('s-final2'));
-    const snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-final2'))).text;
-    const ref = /button "Place order" \[ref=(e\d+)\]/.exec(snap)?.[1];
+    const ref = await refIn(ctx('s-final2'), /button "Place order" \[ref=(e\d+)\]/);
     const r = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref, element: 'Place order' }, ctx('s-final2'));
     expect(r.isError).toBeFalsy();
     expect(r.text).toContain('Order placed');
-  }, 60_000);
+  });
 
   live()('dialogs are answered safely and reported; downloads land in the private folder', async () => {
-    answers.unshift((p) => (p.kind === 'site' ? 'allow_chat' : null));
+    allowSite();
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/form` }, ctx('s-dlg'));
-    let snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-dlg'))).text;
-    const hello = /button "Say hello" \[ref=(e\d+)\]/.exec(snap)?.[1];
+    const hello = await refIn(ctx('s-dlg'), /button "Say hello" \[ref=(e\d+)\]/);
     let r = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref: hello, element: 'Say hello' }, ctx('s-dlg'));
     expect(r.text).toContain('The page showed a message: "hello there"');
-    snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-dlg'))).text;
-    const ask = /button "Ask a question" \[ref=(e\d+)\]/.exec(snap)?.[1];
+    const ask = await refIn(ctx('s-dlg'), /button "Ask a question" \[ref=(e\d+)\]/);
     r = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref: ask, element: 'Ask a question' }, ctx('s-dlg'));
     expect(r.text).toContain('answered No');
-    snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-dlg'))).text;
-    const file = /link "Get file" \[ref=(e\d+)\]/.exec(snap)?.[1];
+    const file = await refIn(ctx('s-dlg'), /link "Get file" \[ref=(e\d+)\]/);
     // The note can land in the click's own result or a later one; collect both
     // and wait on the note itself.
     let all = (await runBrowserTool(env, 'BrowserAct', { action: 'click', ref: file, element: 'Get file' }, ctx('s-dlg'))).text;
@@ -318,40 +316,38 @@ describe('Browser, live', () => {
     expect(m).toBeTruthy();
     expect(m![1].startsWith(path.join(root, 'downloads'))).toBe(true);
     expect(fs.readFileSync(m![1], 'utf8')).toBe('downloaded content');
-  }, 60_000);
+  });
 
   live()('a page cannot close the untrusted frame early', async () => {
     const r = await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/inject` }, ctx('s-inj'));
     // Exactly one real closing tag: the frame's own, at the very end.
     expect(r.text.match(/<\/untrusted-content>/g)).toHaveLength(1);
     expect(r.text.trimEnd().endsWith('</untrusted-content>')).toBe(true);
-  }, 60_000);
+  });
 
   live()('metadata addresses never open, by the tool or by a link', async () => {
     const r = await runBrowserTool(env, 'BrowserNavigate', { url: 'http://169.254.169.254/latest/meta-data/' }, ctx('s-meta'));
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/never opens/);
-    answers.unshift((p) => (p.kind === 'site' ? 'allow_chat' : null));
+    allowSite();
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, ctx('s-meta'));
-    const snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-meta'))).text;
-    const ref = /link "metadata" \[ref=(e\d+)\]/.exec(snap)?.[1];
+    const ref = await refIn(ctx('s-meta'), /link "metadata" \[ref=(e\d+)\]/);
     const clicked = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref, element: 'metadata link' }, ctx('s-meta'));
     expect(clicked.text).toMatch(/stopped the page \(or a part of it\) from loading 169\.254\.169\.254/);
     expect(clicked.text).not.toContain('meta-data/ ·');
-  }, 60_000);
+  });
 
   live()('popups join their opener\'s conversation; other conversations never see them', async () => {
-    answers.unshift((p) => (p.kind === 'site' ? 'allow_chat' : null));
+    allowSite();
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/popup` }, ctx('s-pop'));
-    const snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-pop'))).text;
-    const ref = /link "Open in new tab" \[ref=(e\d+)\]/.exec(snap)?.[1];
+    const ref = await refIn(ctx('s-pop'), /link "Open in new tab" \[ref=(e\d+)\]/);
     const r = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref, element: 'Open in new tab' }, ctx('s-pop'));
     expect(r.text).toContain('A new tab opened');
     const list = await runBrowserTool(env, 'BrowserTabs', { action: 'list' }, ctx('s-pop'));
     expect(list.text).toMatch(/1 \(current\)/);
     const other = await runBrowserTool(env, 'BrowserTabs', { action: 'list' }, ctx('s-nobody'));
     expect(other.text).toContain('no browser tabs open');
-  }, 60_000);
+  });
 
   live()('wait, screenshot, and the stale-ref message', async () => {
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/slow` }, ctx('s-misc'));
@@ -364,11 +360,11 @@ describe('Browser, live', () => {
     const noVision = await runBrowserTool(env, 'BrowserScreenshot', {}, { ...ctx('s-misc'), vision: false });
     expect(noVision.imagePath).toBeUndefined();
     expect(noVision.text).toContain('can\'t view pictures');
-    answers.unshift((p) => (p.kind === 'site' ? 'allow_chat' : null));
+    allowSite();
     const stale = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref: 'e999', element: 'nothing' }, ctx('s-misc'));
     expect(stale.isError).toBe(true);
     expect(stale.text).toMatch(/isn't on the page anymore/);
-  }, 60_000);
+  });
 
   live()('a hand-off waits for "I\'m done"', async () => {
     answers.unshift((p) => (p.kind === 'handoff' ? 'done' : null));
@@ -376,7 +372,7 @@ describe('Browser, live', () => {
     const r = await runBrowserTool(env, 'BrowserAskUser', { message: 'Please sign in, then press I\'m done.' }, ctx('s-hand'));
     expect(r.isError).toBeFalsy();
     expect(r.text).toContain('The user says they\'re done');
-  }, 60_000);
+  });
 
   live()('embedded pages are checked too: a metadata iframe never loads, a home-address iframe needs its own approval', async () => {
     const r = await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/framed` }, ctx('s-frame'));
@@ -385,13 +381,12 @@ describe('Browser, live', () => {
     // localhost:<port> is a different host:port from the approved 127.0.0.1:<port>.
     expect(r.text).toMatch(/from loading localhost:\d+/);
     expect(r.text).not.toContain('Place order');
-  }, 60_000);
+  });
 
   live()('an unanswered ask is reported as not done, and the same step is then refused without a new card', async () => {
     // Nobody answers the site card: it is withdrawn when the call's budget runs low.
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/form` }, ctx('s-quiet'));
-    const snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-quiet'))).text;
-    const ref = /button "Say hello" \[ref=(e\d+)\]/.exec(snap)?.[1];
+    const ref = await refIn(ctx('s-quiet'), /button "Say hello" \[ref=(e\d+)\]/);
     const quick = { ...ctx('s-quiet'), deadline: Date.now() + 6000 };
     const r = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref, element: 'Say hello' }, quick);
     expect(r.isError).toBe(true);
@@ -400,7 +395,7 @@ describe('Browser, live', () => {
     const again = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref, element: 'Say hello' }, ctx('s-quiet'));
     expect(again.text).toMatch(/already declined or didn't answer/);
     expect(seenPrompts.length).toBe(cards);
-  }, 60_000);
+  });
 
   live()('a wait never runs past the call budget, even with only seconds left', async () => {
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, ctx('s-budget'));
@@ -408,7 +403,7 @@ describe('Browser, live', () => {
     // WHY: assert the capped outcome, not scheduler-dependent wall-clock timing.
     expect(r.isError).toBe(true);
     expect(r.text).toContain('Condition timeout within 0.001 seconds');
-  }, 60_000);
+  });
 
   live()('a conversation\'s tabs close after it stops using the browser, and its next call says so', async () => {
     // WHY: only this test needs rapid idle expiry. Sharing that 1.5s expiry with
@@ -430,7 +425,7 @@ describe('Browser, live', () => {
       expect(r.isError).toBe(true);
       expect(r.text).toMatch(/No tab is open/);
     } finally { await idle.dispose(); }
-  }, 60_000);
+  });
 
   live()('invalid input is a clear error, never a crash', async () => {
     const r = await runBrowserTool(env, 'BrowserAct', { action: 'explode', element: 'x' }, ctx());
@@ -454,7 +449,7 @@ describe('Browser, live', () => {
     // At 100% the page is the panel's own width again.
     service.setZoom('s-fit', 1);
     await vi.waitFor(async () => expect(await width()).toBe(420));
-  }, 60_000);
+  });
 
   live()('the assistant can set the page zoom, and the panel shows the same zoom', async () => {
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, ctx('s-zoom'));
@@ -475,7 +470,7 @@ describe('Browser, live', () => {
     expect(service.state('s-zoom').zoom).toEqual({ percent: 25, auto: false });
     expect((await runBrowserTool(env, 'BrowserHistory', { direction: 'back' }, ctx('s-zoom'))).text).toContain('Fixture home');
     expect((await runBrowserTool(env, 'BrowserNavigate', { go: 'forward' }, ctx('s-zoom'))).text).toContain('Place order');
-  }, 60_000);
+  });
 
   // Destin, 2026-10-14: an expanded panel showed the page with empty bands either
   // side (pages stopped at 1280 wide), and the picture was soft on a dense screen
@@ -513,7 +508,7 @@ describe('Browser, live', () => {
       service.off('frame', onFrame);
       service.unwatch('s-wide');
     }
-  }, 60_000);
+  });
 
   live()('the person can open an address, click and type in the page themselves', async () => {
     const r = await openForPerson(env, 's-person', `${base}/person`);
@@ -553,7 +548,7 @@ describe('Browser, live', () => {
     expect(service.takeNotes('s-person').join(' ')).toContain('The person opened');
     // A never-openable address is refused, even for the person.
     expect((await openForPerson(env, 's-person', '169.254.169.254')).ok).toBe(false);
-  }, 60_000);
+  });
 
   live()('the person\'s tabs: new, switch, close; Back knows when it can go; a "noopener" link\'s tab joins the chat', async () => {
     expect((await openForPerson(env, 's-tabs', `${base}/tabs`)).ok).toBe(true);
@@ -577,7 +572,7 @@ describe('Browser, live', () => {
     await service.personTab('s-tabs', 'close', 2);
     await vi.waitFor(() => expect(tabs()).toHaveLength(2));
     expect(service.takeNotes('s-tabs').join(' ')).toContain('The person closed tab 2');
-  }, 60_000);
+  });
 
   live()('closing the shown window hides the browser and reopens its pages', async () => {
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/form` }, ctx('s-win'));
@@ -597,7 +592,7 @@ describe('Browser, live', () => {
     } finally {
       opts.onWindowClosedByPerson = undefined;
     }
-  }, 60_000);
+  });
 
   live()('closing a conversation closes only its tabs', async () => {
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, ctx('s-close-a'));
@@ -605,5 +600,5 @@ describe('Browser, live', () => {
     await service.closeSession('s-close-a');
     expect(service.state('s-close-a').tabs).toHaveLength(0);
     expect(service.state('s-close-b').tabs).toHaveLength(1);
-  }, 60_000);
+  });
 });

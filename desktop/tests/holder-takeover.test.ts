@@ -1,10 +1,7 @@
-// Plan 2b Task 8 — pins the holder-side takeover sequence (createHolderTakeover).
-// When another device requests a session THIS device holds, the holder must:
-//   interrupt (ESC to PTY) -> flush local->space -> pushMoved -> destroy -> release
-// The ORDER is load-bearing: MIRROR-BEFORE-RELEASE (the requester pulls on seeing
-// the release, so the final turn must already be in the space) and
-// STOP-BEFORE-RELEASE (no writer survives handoff). All
-// collaborators are injected fakes — this tests ONLY the sequence, not the IO.
+// createHolderTakeover: when another device requests a session THIS device holds, the holder must
+// interrupt (ESC to PTY, or quiesce a native session) -> flush local->space -> pushMoved -> destroy -> release.
+// ORDER is load-bearing: MIRROR-BEFORE-RELEASE (the requester pulls on seeing the release) and STOP-BEFORE-RELEASE.
+// All collaborators are injected fakes; only the sequence is tested.
 import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
 import { createHolderTakeover } from '../src/main/conversations/takeover';
@@ -13,9 +10,7 @@ import { SessionStore } from '../src/main/harness/session-store';
 import { NativeSessionHost } from '../src/main/harness/native-session-host';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 
-// A slow trickling stream so a native turn is genuinely mid-flight when the
-// takeover lands — the exact window quiesce() has to close (mirrors the
-// delayedFactory in native-session-host.test.ts).
+// A slow trickling stream so a native turn is mid-flight when the takeover lands (the window quiesce() must close).
 const CHUNKS = [
   { type: 'stream-start', warnings: [] },
   { type: 'text-start', id: 'p1' },
@@ -35,8 +30,7 @@ function delayedStream(chunks: any[], delayMs: number): ReadableStream {
 }
 const delayedFactory = async () => new MockLanguageModelV4({ doStream: async () => ({ stream: delayedStream(CHUNKS, 15) }) }) as any;
 
-// Build a deps bundle whose every fake pushes a label into a shared order log, so
-// tests can assert both WHICH steps ran and in WHAT order.
+// Every fake pushes a label into `order`, so tests assert WHICH steps ran and in WHAT order.
 function makeDeps(opts?: { liveDesktopIds?: string[]; flushRejects?: boolean; providers?: Record<string, string> }) {
   const order: string[] = [];
   const live = new Set(opts?.liveDesktopIds ?? []);
@@ -45,22 +39,12 @@ function makeDeps(opts?: { liveDesktopIds?: string[]; flushRejects?: boolean; pr
   const deps = {
     order,
     sessionIdMap,
-    // Provider lookup wired in production to sessionManager.getSession(id)?.provider.
-    // Drives step 3's branch: native holders quiesce the HarnessSession, CC holders
-    // get the ESC byte. Undefined (unmapped) reads as a CC/PTY holder — the default.
     getProvider: (id: string) => providers.get(id),
-    // Native quiesce (nativeHost.quiesce) — clears the queue, aborts, and waits the
-    // in-flight turn out, so no append lands past the flush. In the fake bundle so
-    // its absence can't go green on a native holder that was never quiesced (#177).
+    // WHY in the bundle: an absent dep throws into a best-effort catch and the suite goes green on a teardown that never ran (#177).
     quiesceNative: vi.fn(async (id: string) => { order.push(`quiesce:${id}`); }),
     sessionManager: {
-      // A desktop id is "live" only if it's in the live set.
       getSession: (id: string) => (live.has(id) ? { id } : undefined),
-      // Provider-aware, mirroring production: a native session has NO PTY, so an ESC
-      // byte write is a no-op there (returns false, records nothing). This is what
-      // forces step 3 to BRANCH — the old unconditional ESC path certified a no-op
-      // for native holders (2026-07-18 #177 trap). CC/undefined holders record the
-      // ESC interrupt as before.
+      // WHY provider-aware: a native session has no PTY, so ESC is a no-op there; forces step 3 to BRANCH (#177 trap).
       sendInput: vi.fn((id: string, text: string) => {
         if (providers.get(id) === 'native') return false;
         order.push(`interrupt:${id}:${JSON.stringify(text)}`);
@@ -76,23 +60,23 @@ function makeDeps(opts?: { liveDesktopIds?: string[]; flushRejects?: boolean; pr
       if (opts?.flushRejects) throw new Error('flush blew up');
     }),
     pushMoved: vi.fn((did: string, device?: string) => { order.push(`push:${did}:${device ?? ''}`); }),
-    // Native teardown. In production this is nativeHost.destroy — idempotent and a
-    // no-op for non-native ids. It MUST be in the fake bundle: every step in the
-    // handler is individually try/caught, so an absent dep throws into a
-    // best-effort catch and the suite goes green on a teardown that never ran
-    // (the same "the suite certifies the bug" trap that hid the missing native
-    // interrupt — 2026-07-18 review).
+    // WHY in the bundle: see quiesceNative.
     destroyNative: vi.fn(async (did: string) => { order.push(`destroyNative:${did}`); }),
-    // Welcome back (design 2026-09-24 §2): a takeover means the conversation
-    // moved to another device, so it must stop being "open here" — every test
-    // that destroys a live holder below checks this ran; the review 1 D1
-    // pairing test ("leaves open while a crash-exit id stays") is completed by
-    // ipc-handlers.test.ts, which pins the OTHER half (an ordinary
-    // destroySession call, outside a takeover, must NOT untrack).
+    // A takeover means the conversation moved, so it must stop being "open here" (ordinary destroys must NOT untrack: ipc-handlers.test.ts).
     untrackWelcomeBack: vi.fn((did: string) => { order.push(`untrackWelcomeBack:${did}`); }),
   };
   return deps;
 }
+
+const REQ = { deviceId: 'requester', device: 'Other' };
+const SNAP = '88e7c065-15db-43d5-8576-00d13b145c8a';
+type D = ReturnType<typeof makeDeps>;
+/** Pinned-snapshot (verified receipt) deps; `writer` overrides the captured writer. */
+const pinned = (d: D, extra: Record<string, unknown> = {}, writer: Record<string, unknown> = {}) => ({
+  ...d, senderDeviceId: 'sender', pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
+  captureWriter: () => ({ provider: 'claude', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp', persisted: () => true, current: () => true, ...writer }),
+  ...extra,
+}) as any;
 
 describe('createHolderTakeover', () => {
   it('holds a source pin until proven PTY exit and publishes only matching nonce-bound evidence', async () => {
@@ -162,12 +146,8 @@ describe('createHolderTakeover', () => {
   it('keeps unsafe authority and emits no receipt for unknown PTY exit', async () => {
     const d = makeDeps({ liveDesktopIds: ['cc'] }); d.sessionIdMap.set('cc', 'c1');
     const protect = vi.fn(); const publish = vi.fn();
-    await createHolderTakeover({ ...d, senderDeviceId: 'sender', protectUnsafe: protect,
-      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
-      captureWriter: () => ({ provider: 'claude', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', persisted: () => false, current: () => true }),
-      publishSnapshot: publish,
-      sessionManager: { ...d.sessionManager, stopSessionForHandoff: async () => ({ status: 'unknown' as const }) },
-    } as any)('c1', { deviceId: 'requester', device: 'Other' }, '88e7c065-15db-43d5-8576-00d13b145c8a');
+    await createHolderTakeover(pinned(d, { protectUnsafe: protect, publishSnapshot: publish,
+      sessionManager: { ...d.sessionManager, stopSessionForHandoff: async () => ({ status: 'unknown' as const }) } }, { persisted: () => false }))('c1', REQ, SNAP);
     expect(protect).toHaveBeenCalledWith('c1'); expect(publish).not.toHaveBeenCalled();
     expect(d.leaseClient.release).not.toHaveBeenCalled();
   });
@@ -196,9 +176,6 @@ describe('createHolderTakeover', () => {
     expect(deps.pushMoved).toHaveBeenCalledWith('desktop-1', 'Laptop-B');
   });
 
-  // Design 2026-09-24 §2 (review 1 D1): a takeover-destroyed id must leave
-  // `open` — this pins that half; ipc-handlers.test.ts pins the other half (an
-  // ordinary destroySession/session-exit, with NO takeover, must NOT untrack).
   it('does not touch Welcome back when there is no live holder to take over', async () => {
     const deps = makeDeps({ liveDesktopIds: [] });
     const handler = createHolderTakeover(deps as any);
@@ -206,11 +183,7 @@ describe('createHolderTakeover', () => {
     expect(deps.untrackWelcomeBack).not.toHaveBeenCalled();
   });
 
-  // Task 9: a NATIVE holder has no PTY, so the ESC byte is a no-op. Step 3 must
-  // BRANCH — quiesce the HarnessSession instead. Without the branch, the old code
-  // called sendInput('\x1b') (which the provider-aware fake refuses for native,
-  // recording nothing), so nothing quiesced the turn before the flush — the exact
-  // #177 no-op the fake now exposes. This test FAILS against the pre-branch code.
+  // A NATIVE holder has no PTY, so ESC is a no-op: step 3 must quiesce the HarnessSession instead (fails on the pre-branch code).
   it('quiesces a NATIVE holder (no ESC byte) before the flush, then moves + tears it down', async () => {
     const deps = makeDeps({ liveDesktopIds: ['native-1'], providers: { 'native-1': 'native' } });
     deps.sessionIdMap.set('native-1', 'claude-nat');
@@ -233,9 +206,6 @@ describe('createHolderTakeover', () => {
   });
 
   it('branches per holder: quiesces the native one, ESCs the CC one, ALL before the single flush', async () => {
-    // A native + a CC holder both mapped to one claude id (a create+resume pair
-    // across runtimes). Each must be quiesced/interrupted by its OWN mechanism,
-    // and every one before the claude-id-keyed flush.
     const deps = makeDeps({ liveDesktopIds: ['nat', 'cc'], providers: { nat: 'native' } });
     deps.sessionIdMap.set('nat', 'c1');
     deps.sessionIdMap.set('cc', 'c1');
@@ -330,10 +300,7 @@ describe('createHolderTakeover', () => {
     expect(deps.order).toEqual(['interrupt:d1:"\\u001b"', 'flush:c1', 'push:d1', 'destroyNative:d1', 'destroy:d1', 'untrackWelcomeBack:d1', 'release:c1']);
   });
 
-  // 2026-07-18 (investigation Break 4). destroySession alone tears down the PTY
-  // half only. For a NATIVE session that left the in-process HarnessSession alive
-  // with its transcript-event listener still attached — an un-aborted stream, a
-  // leaked model ref-count, and a second writer on the transcript JSONL.
+  // WHY: destroySession alone tears down only the PTY half; a native HarnessSession would keep a listener, an un-aborted stream and a second transcript writer.
   it('awaits the native teardown before destroySession, for every live holder', async () => {
     const deps = makeDeps({ liveDesktopIds: ['d1', 'd2'] });
     // A create+resume pair maps TWO desktop ids to one claude id — both must be
@@ -382,10 +349,7 @@ describe('createHolderTakeover', () => {
   });
 
   it('interrupts + destroys EVERY live holder when two desktop ids map to one claude id', async () => {
-    // A create+resume pair can leave TWO live desktop ids on one claude id. The old
-    // pick-first behavior interrupted only the first and left the other running as a
-    // silent second writer. Now both must be interrupted, moved, and destroyed; the
-    // claude-id-keyed flush + release run once.
+    // WHY: a create+resume pair leaves TWO live desktop ids on one claude id; pick-first left a silent second writer.
     const deps = makeDeps({ liveDesktopIds: ['d1', 'd2'] });
     deps.sessionIdMap.set('d1', 'c1');
     deps.sessionIdMap.set('d2', 'c1');
@@ -408,11 +372,7 @@ describe('createHolderTakeover', () => {
     expect(deps.order.indexOf('interrupt:d2:"\\u001b"')).toBeLessThan(iFlush);
   });
 
-  // Task 9 — the REAL native holder path end-to-end: a live NativeSessionHost over
-  // a real on-disk store, a genuinely mid-stream turn with a SECOND message queued
-  // behind it, and quiesceNative wired to host.quiesce. Pins the invariant the fake
-  // tests can only approximate: appends STOP before the flush is invoked, the
-  // queued message NEVER runs, and nothing appends after the handoff.
+  // Real NativeSessionHost over an on-disk store, mid-stream turn with a second message queued: appends STOP before the flush, the queue never runs, nothing appends after.
   it('real native holder: appends stop before flush, the queued turn never runs, nothing appends after', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-holder-'));
     const store = new SessionStore(new NativeHome(root));
@@ -470,9 +430,7 @@ describe('createHolderTakeover', () => {
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
   });
 
-  // Review F3: quiesce() used to lift its send refusal when it returned, but the
-  // handoff still has the flush and the lease release to go — a message sent
-  // then ran a whole turn on this device. The refusal now lasts until destroy.
+  // WHY: quiesce() used to lift its send refusal on return, so a message sent during flush/release ran a whole turn here; the refusal now lasts until destroy.
   it('real native holder: a send during the flush is refused and runs no turn', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-holder-'));
     const store = new SessionStore(new NativeHome(root));
@@ -499,12 +457,7 @@ describe('createHolderTakeover', () => {
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
   });
 
-  // Review N12: once the lease is released another device holds the
-  // conversation, so no refusal may be lifted after a release.
-  // WHY rewritten (combined branch): master's handoff now destroys BEFORE it
-  // releases and keeps the lease when a destroy fails, so the N12 case (destroy
-  // fails after the release) can no longer arise. A failed destroy leaves the
-  // session this device's: the lease is kept and its sends come back.
+  // WHY: a failed destroy leaves the session this device's: the lease is kept and its sends come back (never lift a refusal after a release).
   it('a quiesced holder that fails to destroy keeps the lease and gets its sends back', async () => {
     const deps = makeDeps({ liveDesktopIds: ['nat-stuck'], providers: { 'nat-stuck': 'native' } });
     deps.sessionIdMap.set('nat-stuck', 'claude-stuck');
@@ -547,86 +500,39 @@ describe('createHolderTakeover', () => {
     expect((deps as any).endQuiesceNative).toHaveBeenCalledWith('nat-early');
   });
 
-  // WHY (combined branch): bugfix-native's refusal lift was written for the old
-  // flow; master's pinned-snapshot handoff path quiesces too and retains the
-  // lease when a native destroy fails. That session is still this device's, so
-  // it must get its sends back there as well — and a completed handoff lifts none.
+  // WHY: the pinned-snapshot handoff quiesces too and keeps the lease when a native destroy fails; that session is still
+  // this device's, so it gets its sends back there as well, and a completed handoff lifts none.
   it('pinned-snapshot path: a native writer the handoff could not destroy gets its sends back, lease kept', async () => {
     const d = makeDeps({ liveDesktopIds: ['nat'], providers: { nat: 'native' } }); d.sessionIdMap.set('nat', 'c1');
-    const endQuiesceNative = vi.fn();
-    const protectUnsafe = vi.fn();
-    await createHolderTakeover({ ...d, senderDeviceId: 'sender', endQuiesceNative, protectUnsafe,
-      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
-      captureWriter: () => ({ provider: 'native', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp',
-        persisted: () => false, current: () => true }),
-      destroyNative: async () => { throw new Error('destroy failed'); },
-    } as any)('c1', { deviceId: 'requester', device: 'Other' });
+    const endQuiesceNative = vi.fn(); const protectUnsafe = vi.fn();
+    await createHolderTakeover(pinned(d, { endQuiesceNative, protectUnsafe, destroyNative: async () => { throw new Error('destroy failed'); } },
+      { provider: 'native', persisted: () => false }))('c1', REQ);
     expect(d.quiesceNative).toHaveBeenCalledWith('nat');
     expect(protectUnsafe).toHaveBeenCalledWith('c1');
     expect(d.leaseClient.release).not.toHaveBeenCalled();
     expect(endQuiesceNative).toHaveBeenCalledWith('nat');
   });
 
-  it('pinned-snapshot path: a completed handoff lifts no refusal', async () => {
+  it('pinned-snapshot path: a completed native handoff lifts no refusal and untracks Welcome back', async () => {
     const d = makeDeps({ liveDesktopIds: ['nat'], providers: { nat: 'native' } }); d.sessionIdMap.set('nat', 'c1');
     const endQuiesceNative = vi.fn();
     let stopped = false;
-    await createHolderTakeover({ ...d, senderDeviceId: 'sender', endQuiesceNative,
-      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
-      captureWriter: () => ({ provider: 'native', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp',
-        persisted: () => stopped, current: () => true }),
-      destroyNative: async () => { stopped = true; },
-      sessionManager: { ...d.sessionManager, getSession: () => stopped ? undefined : { id: 'nat' } },
-    } as any)('c1', { deviceId: 'requester', device: 'Other' });
+    await createHolderTakeover(pinned(d, { endQuiesceNative, destroyNative: async () => { stopped = true; },
+      sessionManager: { ...d.sessionManager, getSession: () => stopped ? undefined : { id: 'nat' } } },
+      { provider: 'native', persisted: () => stopped }))('c1', REQ);
     expect(d.leaseClient.release).toHaveBeenCalledWith('c1');
     expect(endQuiesceNative).not.toHaveBeenCalled();
-  });
-
-  // Design 2026-09-24 §2 — the OTHER destroySession call site (captureWriter's
-  // pinned-snapshot path, distinct from the plain quiesce/interrupt path tested
-  // above) must also untrack, not just the more common branch.
-  it('pinned-snapshot path: untracks Welcome back once the native writer is torn down', async () => {
-    const d = makeDeps({ liveDesktopIds: ['nat'], providers: { nat: 'native' } }); d.sessionIdMap.set('nat', 'c1');
-    await createHolderTakeover({ ...d, senderDeviceId: 'sender',
-      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
-      captureWriter: () => ({ provider: 'native', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp',
-        persisted: () => true, current: () => true }),
-    } as any)('c1', { deviceId: 'requester', device: 'Other' });
     expect(d.untrackWelcomeBack).toHaveBeenCalledWith('nat');
   });
 
-  // F1 (code review 2026-09-24): the pinned-snapshot path's 'claude' branch
-  // (stopSessionForHandoff, the `else` beside the native destroy above) fell
-  // through with NO untrackWelcomeBack call at all — only the native sibling
-  // had one. A Claude Code session handed off through this verified-receipt
-  // path stayed marked "open" on this device forever and got wrongly
-  // re-offered by the next Welcome back screen. Proven stopped AND merely
-  // attempted-but-unproven ('unknown') both must untrack: like the native
-  // branch's destroySession() call above, calling stopSessionForHandoff is
-  // this device's own act of giving up the writer — independent of whether
-  // the stop is later provable (which only gates `proven`/publish, not
-  // whether this device still holds the conversation).
-  it("pinned-snapshot path: untracks Welcome back for a Claude Code writer once stop is proven", async () => {
-    const d = makeDeps({ liveDesktopIds: ['cc'], providers: { cc: 'claude' } }); d.sessionIdMap.set('cc', 'c1');
-    await createHolderTakeover({ ...d, senderDeviceId: 'sender',
-      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
-      captureWriter: () => ({ provider: 'claude', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp',
-        persisted: () => true, current: () => true }),
-      sessionManager: { ...d.sessionManager, stopSessionForHandoff: vi.fn(async () => ({ status: 'stopped' as const })) },
-    } as any)('c1', { deviceId: 'requester', device: 'Other' });
-    expect(d.untrackWelcomeBack).toHaveBeenCalledWith('cc');
-  });
-
-  it("pinned-snapshot path: untracks Welcome back for a Claude Code writer even when the stop is unproven", async () => {
+  // WHY: the 'claude' branch (stopSessionForHandoff) once never untracked, so a handed-off CC session stayed "open" here and
+  // was re-offered by Welcome back. Calling the stop is this device giving up the writer, proven or not.
+  it.each(['stopped', 'unknown'] as const)('pinned-snapshot path: untracks Welcome back for a Claude Code writer (stop %s)', async (status) => {
     const d = makeDeps({ liveDesktopIds: ['cc'], providers: { cc: 'claude' } }); d.sessionIdMap.set('cc', 'c1');
     const protectUnsafe = vi.fn();
-    await createHolderTakeover({ ...d, senderDeviceId: 'sender', protectUnsafe,
-      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
-      captureWriter: () => ({ provider: 'claude', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp',
-        persisted: () => true, current: () => true }),
-      sessionManager: { ...d.sessionManager, stopSessionForHandoff: vi.fn(async () => ({ status: 'unknown' as const })) },
-    } as any)('c1', { deviceId: 'requester', device: 'Other' });
-    expect(protectUnsafe).toHaveBeenCalledWith('c1'); // unproven still refuses the handoff...
-    expect(d.untrackWelcomeBack).toHaveBeenCalledWith('cc'); // ...but this device already gave up the writer
+    await createHolderTakeover(pinned(d, { protectUnsafe,
+      sessionManager: { ...d.sessionManager, stopSessionForHandoff: vi.fn(async () => ({ status })) } }))('c1', REQ);
+    if (status === 'unknown') expect(protectUnsafe).toHaveBeenCalledWith('c1'); // unproven still refuses the handoff
+    expect(d.untrackWelcomeBack).toHaveBeenCalledWith('cc');
   });
 });

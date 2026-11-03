@@ -10,59 +10,32 @@ import {
 import type { KdeScreen, KdeSession, KdeCallResult } from '../src/main/kde-dbus';
 import type { Rect } from '../src/shared/buddy-geometry';
 
-/**
- * WHAT THESE TESTS PROVE, AND WHAT THEY DO NOT (design §9).
- *
- * Every multi-screen case below is SYNTHETIC: this file authors both the
- * Electron display inventory and the KDE screen inventory, so it has made the
- * two number sources agree by construction. That is exactly the thing that is
- * in doubt on real hardware. What is proven here is that the mapping, the
- * intersection and the containment check behave correctly GIVEN agreement —
- * plus the parse and failure semantics, which are pure and have no hardware in
- * them at all.
- *
- * Not proven, and only a real two-screen run can settle it (Destin deferred it,
- * 2026-09-04): whether Electron and KWin round a non-primary screen's ORIGIN
- * identically; what coordinate space availableScreenRect answers in on a
- * second screen; what an unknown screen name returns on a multi-screen system.
- * The containment check exists precisely so those unknowns degrade to "the
- * buddy sits 52 px low on the right monitor" instead of "the buddy is pinned to
- * the wrong monitor and cannot be dragged back".
- */
+// WHY synthetic: every multi-screen case authors BOTH the Electron and KDE inventories, so the two number sources agree by construction.
+// What is proven is the mapping, intersection, containment, parse and failure semantics GIVEN agreement. Only a real two-screen run
+// can settle whether Electron and KWin round a non-primary origin identically (deferred by Destin, 2026-09-04); containedIn makes
+// those unknowns degrade to "buddy sits 52 px low" instead of "pinned to the wrong monitor".
 
 const LITERAL_OK = '[Argument: (iiii) 0, 0, 1707, 1015]\n';
 // Measured verbatim, 2026-09-04: this arrives on STDOUT at exit 0.
 const STDOUT_ERROR = "qdbus: I don't know how to display an argument of type '(iiii)', run with --literal.\n";
 
 describe('parseAvailableScreenRect', () => {
-  it('parses the --literal success line', () => {
+  it('parses the --literal success line, including a negative origin (a screen left of the primary)', () => {
     expect(parseAvailableScreenRect(LITERAL_OK)).toEqual({ x: 0, y: 0, width: 1707, height: 1015 });
+    expect(parseAvailableScreenRect('[Argument: (iiii) -1920, -100, 1920, 1040]')).toEqual({ x: -1920, y: -100, width: 1920, height: 1040 });
   });
 
-  it('parses a negative origin (a screen placed left of the primary)', () => {
-    expect(parseAvailableScreenRect('[Argument: (iiii) -1920, -100, 1920, 1040]')).toEqual({
-      x: -1920, y: -100, width: 1920, height: 1040,
-    });
-  });
-
-  it('rejects the "I don\'t know how to display" line that arrives on stdout at exit 0', () => {
-    expect(parseAvailableScreenRect(STDOUT_ERROR)).toBeNull();
-  });
-
-  it('rejects empty stdout', () => {
-    expect(parseAvailableScreenRect('')).toBeNull();
-    expect(parseAvailableScreenRect('   \n')).toBeNull();
-  });
-
-  it('rejects a malformed or truncated struct rather than producing a partial rect', () => {
-    expect(parseAvailableScreenRect('[Argument: (iiii) 0, 0, 1707]')).toBeNull();
-    expect(parseAvailableScreenRect('0, 0, 1707, 1015')).toBeNull();
-    expect(parseAvailableScreenRect('[Argument: (iiii) a, b, c, d]')).toBeNull();
-  });
-
-  it('rejects a zero-area rect — a malformed answer, not an answer', () => {
-    expect(parseAvailableScreenRect('[Argument: (iiii) 0, 0, 0, 0]')).toBeNull();
-    expect(parseAvailableScreenRect('[Argument: (iiii) 0, 0, 1707, 0]')).toBeNull();
+  it.each([
+    ['the "I don\'t know how to display" line that arrives on stdout at exit 0', STDOUT_ERROR],
+    ['empty stdout', ''],
+    ['whitespace only', '   \n'],
+    ['a truncated struct', '[Argument: (iiii) 0, 0, 1707]'],
+    ['no Argument wrapper', '0, 0, 1707, 1015'],
+    ['non-numeric fields', '[Argument: (iiii) a, b, c, d]'],
+    ['a zero-area rect (a malformed answer, not an answer)', '[Argument: (iiii) 0, 0, 0, 0]'],
+    ['a zero-height rect', '[Argument: (iiii) 0, 0, 1707, 0]'],
+  ])('rejects %s', (_n, stdout) => {
+    expect(parseAvailableScreenRect(stdout)).toBeNull();
   });
 });
 
@@ -207,36 +180,14 @@ describe('WorkAreaResolver', () => {
     expect(callScreenRect).toHaveBeenCalledWith('eDP-1');
   });
 
-  it('falls back unresolved when the call exits non-zero', async () => {
-    const resolver = makeResolver({
-      callScreenRect: async () => ({ ok: false, reason: 'qdbus: Cannot find \'/StrutManager\'' }),
-    });
-    await resolver.refresh();
-    expect(resolver.areaFor(display(1, LAPTOP))).toEqual({ rect: LAPTOP, resolved: false });
-  });
-
-  it('falls back unresolved when the call exits 0 but writes its error to stdout', async () => {
-    // The trap this whole module exists for: exit 0, stdout is a sentence.
-    const resolver = makeResolver({
-      callScreenRect: async () => ({ ok: true, stdout: STDOUT_ERROR }),
-    });
-    await resolver.refresh();
-    const area = resolver.areaFor(display(1, LAPTOP));
-    expect(area.resolved).toBe(false);
-    expect(area.rect).toEqual(LAPTOP);
-    // Never a zero rect — that would clamp the buddy to a single point.
-    expect(area.rect.width).toBeGreaterThan(0);
-    expect(area.rect.height).toBeGreaterThan(0);
-  });
-
-  it('falls back unresolved on empty stdout', async () => {
-    const resolver = makeResolver({ callScreenRect: async () => ({ ok: true, stdout: '' }) });
-    await resolver.refresh();
-    expect(resolver.areaFor(display(1, LAPTOP)).resolved).toBe(false);
-  });
-
-  it('falls back unresolved when KWin itself does not answer', async () => {
-    const resolver = makeResolver({ readSession: async () => null });
+  // The stdout case is the trap this module exists for: exit 0, stdout is a sentence. Never a zero rect (it would clamp the buddy to a point).
+  it.each<[string, Partial<WorkAreaDeps>]>([
+    ['the call exits non-zero', { callScreenRect: async () => ({ ok: false, reason: 'qdbus: Cannot find \'/StrutManager\'' }) }],
+    ['the call exits 0 but writes its error to stdout', { callScreenRect: async () => ({ ok: true, stdout: STDOUT_ERROR }) }],
+    ['stdout is empty', { callScreenRect: async () => ({ ok: true, stdout: '' }) }],
+    ['KWin itself does not answer', { readSession: async () => null }],
+  ])('falls back unresolved when %s', async (_n, deps) => {
+    const resolver = makeResolver(deps);
     await resolver.refresh();
     expect(resolver.areaFor(display(1, LAPTOP))).toEqual({ rect: LAPTOP, resolved: false });
   });
@@ -302,24 +253,12 @@ describe('WorkAreaResolver', () => {
     expect(waits).toEqual([150, 450]);
   });
 
-  // THE MESSAGE qdbus6 ACTUALLY EMITS when a bus name is unclaimed. Measured
-  // 2026-09-04 against a deliberately absent service: stderr, exit 2.
-  //
-  //   $ qdbus6 org.kde.definitelynotarealservice /Foo org.foo.Bar
-  //   Service 'org.kde.definitelynotarealservice' does not exist.
-  //
-  // This constant exists because the first version of this suite asserted
-  // against 'Error: org.freedesktop.DBus.Error.ServiceUnknown' — written from
-  // the DBus spec, emitted by qdbus6 never. The test passed, the branch was
-  // dead, and on a real plasmashell-less desktop the resolver would have paid
-  // 600 ms of backoff at the start of every drag. Do not replace this with a
-  // prettier string; it is a transcript.
+  // WHY a transcript: the real qdbus6 message for an unclaimed bus name (measured 2026-09-04, stderr, exit 2). A suite asserting the DBus-spec
+  // wording instead passed while the branch was dead, costing 600 ms of backoff at the start of every drag. Do not prettify it.
   const QDBUS_SERVICE_MISSING = "Service 'org.kde.plasmashell' does not exist.";
 
   it('stops retrying once plasmashell has been shown to be absent from this session', async () => {
-    // org.kde.plasmashell has no DBus activation file (it is a systemd user
-    // unit), so a KWin-only desktop will never answer — paying 600 ms of
-    // backoff at the start of every drag would be a felt cost for nothing.
+    // plasmashell is a systemd user unit (no DBus activation file), so a KWin-only desktop never answers; retrying would be a felt cost for nothing.
     const wait = vi.fn(async () => {});
     const callScreenRect = vi.fn(async () =>
       ({ ok: false, reason: QDBUS_SERVICE_MISSING }) as KdeCallResult);
@@ -344,10 +283,7 @@ describe('WorkAreaResolver', () => {
   });
 
   it('does not latch "no plasmashell" when the only failure never reached a DBus call', async () => {
-    // A display KDE reports nothing for is a MATCH failure, not a call failure.
-    // Counting it would let one unmatched screen close the latch on a session
-    // that does have plasmashell — and then a real answer would never be sought
-    // with retries again.
+    // An unmatched display is a MATCH failure, not a call failure; counting it would close the latch on a session that does have plasmashell.
     const wait = vi.fn(async () => {});
     const resolver = makeResolver({
       // KDE knows only the laptop; Electron reports a second display too.
@@ -356,15 +292,11 @@ describe('WorkAreaResolver', () => {
       wait,
     });
     await resolver.refresh();
-    // One display failed at the call, one never got there — so "every failure
-    // was a missing service" is false and the latch stays open.
     expect(wait).toHaveBeenCalled();
   });
 
   it('settles even when a dependency throws, rather than wedging ready=false forever', async () => {
-    // screen.getAllDisplays() throws before app-ready, and §0.6 asks for this to
-    // be awaited at the earliest startup step. If a throw left the resolver
-    // un-ready, the buddy would never be constructed and nothing would say why.
+    // WHY: getAllDisplays() throws before app-ready; an un-ready resolver would mean the buddy is never constructed and nothing says why.
     const resolver = makeResolver({
       listDisplays: async () => {
         throw new Error('screen module not ready');
@@ -376,9 +308,7 @@ describe('WorkAreaResolver', () => {
   });
 
   it('re-runs once when a display change lands during an in-flight pass', async () => {
-    // Coalescing alone would answer the second request from the first pass's
-    // snapshot, so a monitor plugged in mid-resolve would stay unresolved until
-    // some later gesture.
+    // coalescing alone would answer a mid-resolve monitor change from the first pass's snapshot
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => (release = r));
     let calls = 0;
@@ -460,11 +390,7 @@ describe('WorkAreaResolver', () => {
     const callScreenRect = vi.fn(async () => ({ ok: true, stdout: LITERAL_OK }) as KdeCallResult);
     const resolver = makeResolver({ callScreenRect });
     await Promise.all([resolver.refresh(), resolver.refresh(), resolver.refresh()]);
-    // Two, not one, and not three: requests arriving during a pass are answered
-    // from that pass's display snapshot, so one trailing re-run is scheduled no
-    // matter how many arrive. Without it, a monitor plugged in mid-resolve would
-    // stay unresolved until some later gesture; with a re-run per request, KWin's
-    // measured three-events-in-200 ms burst would cost three passes.
+    // two, not one or three: arrivals during a pass share that pass's snapshot, so ONE trailing re-run is scheduled (KWin's three-events-in-200ms burst)
     expect(callScreenRect).toHaveBeenCalledTimes(2);
   });
 

@@ -6,6 +6,19 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 
+/** Connect to the relay and send a PermissionRequest; resolves with the socket, the emitted event and what the relay writes back. */
+async function connectAsk(r: HookRelay, sessionId: string, extra: object = {}) {
+  const client = net.createConnection((r as any).pipeName);
+  await new Promise<void>((res, rej) => { client.on('connect', res); client.on('error', rej); });
+  const evt = new Promise<any>((resolve) => r.once('hook-event', resolve));
+  const received = new Promise<string>((resolve) => {
+    let buf = '';
+    client.on('data', (c) => { buf += c; if (buf.includes('\n')) resolve(buf); });
+  });
+  client.write(JSON.stringify({ hook_event_name: 'PermissionRequest', _desktop_session_id: sessionId, ...extra }) + '\n');
+  return { client, event: await evt, received };
+}
+
 describe('HookRelay', () => {
   let relay: HookRelay;
 
@@ -54,34 +67,13 @@ describe('HookRelay', () => {
 
     it('tracks a held PermissionRequest socket by session and clears on close', async () => {
       await relay.start();
-
-      const eventPromise = new Promise<any>((resolve) => {
-        relay.once('hook-event', resolve);
-      });
-
-      const net = await import('net');
-      const client = net.createConnection((relay as any).pipeName);
-      await new Promise<void>((resolve, reject) => {
-        client.on('connect', resolve);
-        client.on('error', reject);
-      });
-      client.write(
-        JSON.stringify({
-          hook_event_name: 'PermissionRequest',
-          _desktop_session_id: 'sess-1',
-          tool_name: 'Bash',
-        }) + '\n',
-      );
-
-      const event = await eventPromise;
+      const { client, event } = await connectAsk(relay, 'sess-1', { tool_name: 'Bash' });
       expect(event.type).toBe('PermissionRequest');
       expect(relay.hasPendingPermission('sess-1')).toBe(true);
       expect(relay.hasPendingPermission('other-session')).toBe(false);
 
       // Socket close (relay timeout / TUI-side answer) must clear the flag.
-      const expired = new Promise<void>((resolve) => {
-        relay.once('permission-expired', () => resolve());
-      });
+      const expired = new Promise<void>((resolve) => { relay.once('permission-expired', () => resolve()); });
       client.destroy();
       await expired;
       expect(relay.hasPendingPermission('sess-1')).toBe(false);
@@ -89,27 +81,8 @@ describe('HookRelay', () => {
 
     it('clears when the request is answered via respond()', async () => {
       await relay.start();
-
-      const eventPromise = new Promise<any>((resolve) => {
-        relay.once('hook-event', resolve);
-      });
-
-      const net = await import('net');
-      const client = net.createConnection((relay as any).pipeName);
-      await new Promise<void>((resolve, reject) => {
-        client.on('connect', resolve);
-        client.on('error', reject);
-      });
-      client.write(
-        JSON.stringify({
-          hook_event_name: 'PermissionRequest',
-          _desktop_session_id: 'sess-2',
-        }) + '\n',
-      );
-
-      const event = await eventPromise;
+      const { client, event } = await connectAsk(relay, 'sess-2');
       expect(relay.hasPendingPermission('sess-2')).toBe(true);
-
       relay.respond(event.payload._requestId, { decision: { behavior: 'deny' } });
       expect(relay.hasPendingPermission('sess-2')).toBe(false);
       client.destroy();
@@ -118,19 +91,6 @@ describe('HookRelay', () => {
   // The app-owned hold: the app, not Claude Code, ends an unanswered ask — with
   // a labelled deny and a reason the card can use. (Ported from PR #278.)
   describe('app-owned hold', () => {
-    async function connectAsk(r: HookRelay, sessionId: string) {
-      const net = await import('net');
-      const client = net.createConnection((r as any).pipeName);
-      await new Promise<void>((res, rej) => { client.on('connect', res); client.on('error', rej); });
-      const evt = new Promise<any>((resolve) => r.once('hook-event', resolve));
-      const received = new Promise<string>((resolve) => {
-        let buf = '';
-        client.on('data', (c) => { buf += c; if (buf.includes('\n')) resolve(buf); });
-      });
-      client.write(JSON.stringify({ hook_event_name: 'PermissionRequest', _desktop_session_id: sessionId }) + '\n');
-      return { client, event: await evt, received };
-    }
-
     it('auto-denies in the nested shape the relay reads, with reason app-timeout', async () => {
       const short = new HookRelay((relay as any).pipeName + '-hold', 60);
       await short.start();
@@ -259,11 +219,7 @@ describe('HookRelay', () => {
   });
 });
 
-// Roadmap (claude-code-integration, security, 2026-07-26): the session id the
-// app hands Claude Code leaks into every process that session starts, so a
-// `claude` run from inside it reported its hooks under the parent's id. The
-// relay now forwards Claude Code's own CLAUDE_PID; only the first process
-// heard from owns the session.
+// WHY: the session id the app hands Claude Code leaks into every process it starts, so a nested `claude` reported its hooks under the parent's id; only the first pid heard from owns the session.
 describe('HookOwnerGate', () => {
   it('the first SessionStart owns the session; another pid is refused', async () => {
     const { HookOwnerGate } = await import('../src/main/hook-relay');
@@ -272,25 +228,17 @@ describe('HookOwnerGate', () => {
     expect(g.accept('desk-1', '1000', false)).toBe(true);
     expect(g.accept('desk-1', '2000', false)).toBe(false);
     expect(g.accept('desk-1', '2000', true)).toBe(false); // a nested SessionStart cannot take over
+    expect(g.accept('desk-1', '1000', false)).toBe(true); // ...and the real pid is still heard
     expect(g.accept('desk-2', '2000', true)).toBe(true);
   });
-  // Review C2: the real SessionStart can be lost (relay.js tries once). Its
-  // tool hooks then arrive first; a nested SessionStart must not claim.
-  it('order A — real tool hooks, SessionStart lost, then a nested SessionStart: the real pid is claimed', async () => {
+  // WHY: the real SessionStart can be lost (relay.js tries once); its tool hooks then arrive first and a nested SessionStart must not claim.
+  it('real tool hooks, SessionStart lost, then a nested SessionStart: the real pid is claimed', async () => {
     const { HookOwnerGate } = await import('../src/main/hook-relay');
     const g = new HookOwnerGate();
     expect(g.accept('desk-1', '1000', false)).toBe(true);   // real, SessionStart was lost
     expect(g.accept('desk-1', '2000', true)).toBe(false);   // nested SessionStart refused
     expect(g.accept('desk-1', '1000', false)).toBe(true);
     expect(g.accept('desk-1', '2000', false)).toBe(false);
-  });
-  it('order B — real SessionStart first, then a nested one: the real pid is claimed', async () => {
-    const { HookOwnerGate } = await import('../src/main/hook-relay');
-    const g = new HookOwnerGate();
-    expect(g.accept('desk-1', '1000', true)).toBe(true);
-    expect(g.accept('desk-1', '1000', false)).toBe(true);
-    expect(g.accept('desk-1', '2000', true)).toBe(false);
-    expect(g.accept('desk-1', '1000', false)).toBe(true);
   });
   it('/clear (a second SessionStart from the owner) keeps the owner', async () => {
     const { HookOwnerGate } = await import('../src/main/hook-relay');
@@ -340,7 +288,7 @@ describe('HookRelay — hooks from a nested claude', () => {
     expect(events.map((e) => e.payload.session_id)).toEqual(['a', 'b']);
   });
 
-  it('C2 end to end: the real SessionStart was lost, a nested SessionStart is dropped', async () => {
+  it('end to end: the real SessionStart was lost, a nested SessionStart is dropped', async () => {
     await relay.start();
     const events: any[] = [];
     relay.on('hook-event', (e) => events.push(e));

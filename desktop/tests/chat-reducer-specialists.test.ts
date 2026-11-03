@@ -3,12 +3,8 @@ import { chatReducer } from '../src/renderer/state/chat-reducer';
 import { ChatState, ChatAction } from '../src/renderer/state/chat-types';
 import type { SpecialistRunView, SubagentSegment } from '../src/shared/types';
 
-// Task 11: the reducer half of "specialists". A Task card's status IS its
-// ledger record — SPECIALIST_RUN_CHANGED folds a run view onto the launching
-// card and rebuilds its Activity-trail note rows from run.notes. This file is
-// the branch's FIRST renderer specialist reducer test — several cases below
-// pin behavior that already shipped (the ask nesting/reclaim plumbing); the
-// note-rebuild and short-circuit cases are what actually drive new code.
+// The reducer half of specialists: a Task card's status IS its ledger record; SPECIALIST_RUN_CHANGED folds a run view onto
+// the launching card and rebuilds its Activity-trail note rows from run.notes.
 
 const SESSION = 'test-session';
 const TASK_ID = 'task-1';
@@ -23,10 +19,7 @@ function dispatch(state: ChatState, action: ChatAction): ChatState {
   return chatReducer(state, action);
 }
 
-/** Seeds a session with one Task card (the way a real Task tool-use event
- *  creates it) so SPECIALIST_RUN_CHANGED / PERMISSION_REQUEST
- *  have a card to fold onto — mirrors the real event that always precedes a
- *  ledger write (chat-reducer.ts's SPECIALIST_RUN_CHANGED comment). */
+/** Seeds one Task card, as the real Task tool-use event that always precedes a ledger write does. */
 function seedTaskCard(state: ChatState, toolUseId = TASK_ID): ChatState {
   return dispatch(state, {
     type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
@@ -37,6 +30,8 @@ function seedTaskCard(state: ChatState, toolUseId = TASK_ID): ChatState {
     toolInput: { description: 'hire a specialist' },
   });
 }
+
+const runChanged = (state: ChatState, run: SpecialistRunView) => dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run });
 
 function note(text: string, at: number, from: 'user' | 'assistant' = 'user') {
   return { text, from, at };
@@ -76,31 +71,17 @@ describe('SPECIALIST_RUN_CHANGED — note rows from run.notes', () => {
     expect(notes).toHaveLength(2);
     expect(notes.map((n) => (n as any).content)).toEqual(['first', 'second']);
 
-    // Re-processing the identical run (a deep-equal but distinct object —
-    // exercises the short-circuit below, not object identity) must not grow
-    // the row count.
+    // a deep-equal but distinct object exercises the short-circuit, not identity
     const stateAfterFirst = state;
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED',
-      sessionId: SESSION,
-      run: JSON.parse(JSON.stringify(run)),
-    });
+    state = runChanged(state, JSON.parse(JSON.stringify(run)));
     expect(state).toBe(stateAfterFirst); // short-circuit: same object, not just same content
     notes = noteSegments(state);
     expect(notes).toHaveLength(2);
   });
 
   it('a run with a third note yields three rows in timestamp order', () => {
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED',
-      sessionId: SESSION,
-      run: baseRun({ steps: 1, notes: [note('first', 100), note('second', 200)] }),
-    });
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED',
-      sessionId: SESSION,
-      run: baseRun({ steps: 2, notes: [note('first', 100), note('second', 200), note('third', 300)] }),
-    });
+    state = runChanged(state, baseRun({ steps: 1, notes: [note('first', 100), note('second', 200)] }));
+    state = runChanged(state, baseRun({ steps: 2, notes: [note('first', 100), note('second', 200), note('third', 300)] }));
 
     const notes = noteSegments(state);
     expect(notes).toHaveLength(3);
@@ -109,10 +90,7 @@ describe('SPECIALIST_RUN_CHANGED — note rows from run.notes', () => {
   });
 
   it('two notes with the same timestamp and text are TWO rows', () => {
-    // Ambiguity resolved for the implementer: note segment ids are
-    // index-based (sa-note-<childId>-<i>), not timestamp-based, precisely so
-    // two notes landing in the same millisecond don't collide on id and get
-    // deduped down to one row.
+    // note segment ids are index-based so two notes in the same millisecond don't dedupe to one row
     const run = baseRun({ notes: [note('same', 500), note('same', 500)] });
     state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run });
 
@@ -146,56 +124,38 @@ describe('SPECIALIST_RUN_CHANGED — note rows from run.notes', () => {
 
   it('only the newest parked record per helper is kept', () => {
     let s = initState();
-    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ seq: 5, status: 'completed' }) });
-    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ seq: 3, status: 'running' }) });
+    s = runChanged(s, baseRun({ seq: 5, status: 'completed' }));
+    s = runChanged(s, baseRun({ seq: 3, status: 'running' }));
     s = seedTaskCard(s);
     expect(s.get(SESSION)!.toolCalls.get(TASK_ID)!.specialistRun!.status).toBe('completed');
   });
 
   it('a run view identical to the card’s current one returns the SAME state object (no churn)', () => {
-    // Models the delivery-bookkeeping cycle (claim / mark-attempted / confirm
-    // / release): the projection reaching the renderer is byte-identical
-    // across up to four ledger writes, and the reducer — not the emit path —
-    // must absorb them.
+    // the delivery cycle (claim / mark-attempted / confirm / release) projects byte-identical views; the reducer must absorb them
     const run = baseRun({ notes: [note('only', 1)] });
     state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run });
     const settled = state;
 
     for (let i = 0; i < 4; i++) {
-      state = dispatch(state, {
-        type: 'SPECIALIST_RUN_CHANGED',
-        sessionId: SESSION,
-        run: JSON.parse(JSON.stringify(run)),
-      });
+      state = runChanged(state, JSON.parse(JSON.stringify(run)));
       expect(state).toBe(settled);
     }
   });
 
   it('replay then live: a newer live run view lands after a replayed one and wins; the replayed one re-sent afterwards does not regress or duplicate note rows', () => {
-    // The main-process replay loop is synchronous — a live event cannot land
-    // INSIDE it. This models the window right after replay completes: the
-    // replayed (older, fewer notes) run lands first, a live (newer, more
-    // notes) run lands right after and wins, and then — the case this test
-    // actually exists to pin — the stale replayed run is re-sent.
+    // After replay completes: replayed (older) lands, live (newer) wins, then the stale replayed run is re-sent.
     const replayedRun = baseRun({ steps: 1, notes: [note('first', 100)] });
     const liveRun = baseRun({ steps: 3, notes: [note('first', 100), note('second', 200)] });
 
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: replayedRun });
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: liveRun });
+    state = runChanged(state, replayedRun);
+    state = runChanged(state, liveRun);
 
     let card = state.get(SESSION)!.toolCalls.get(TASK_ID)!;
     expect(card.specialistRun).toEqual(liveRun);
     expect(noteSegments(state)).toHaveLength(2);
 
-    // The stale replayed run is re-sent. It is NOT deep-equal to the card's
-    // current (live) run, so the short-circuit does not apply — per the
-    // reducer's stated contract that only fires on an exact match, this run
-    // event still applies normally (SPECIALIST_RUN_CHANGED has no notion of
-    // "older"; there is no sequence/version field on SpecialistRunView to
-    // detect staleness). What must NOT happen is losing the note row the live
-    // run already added: notes are merged by id (never replaced wholesale),
-    // so a resend that carries fewer notes cannot delete one already shown.
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: replayedRun });
+    // not deep-equal to the live run so the short-circuit doesn't apply; notes merge by id so fewer notes can't delete a shown row
+    state = runChanged(state, replayedRun);
 
     card = state.get(SESSION)!.toolCalls.get(TASK_ID)!;
     const notes = noteSegments(state);
@@ -214,10 +174,7 @@ describe('tool-group status — stopped specialist', () => {
       toolUseId: TASK_ID, result: 'The specialist is working in the background.',
       isError: false,
     });
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
-      run: baseRun({ status: 'interrupted', endedAt: 2000 }),
-    });
+    state = runChanged(state, baseRun({ status: 'interrupted', endedAt: 2000 }));
 
     const card = state.get(SESSION)!.toolCalls.get(TASK_ID)!;
     // The Task result acknowledges its launch; only a live run can keep the
@@ -227,7 +184,7 @@ describe('tool-group status — stopped specialist', () => {
   });
 });
 
-describe('SPECIALIST_RUN_CHANGED — stale pushes cannot rewind a card (ROADMAP L259)', () => {
+describe('SPECIALIST_RUN_CHANGED — stale pushes cannot rewind a card', () => {
   let state: ChatState;
 
   beforeEach(() => {
@@ -239,85 +196,45 @@ describe('SPECIALIST_RUN_CHANGED — stale pushes cannot rewind a card (ROADMAP 
   }
 
   it('a straggler with a lower seq is dropped, not applied', () => {
-    // The bug: every push overwrote the WHOLE run record and the reducer
-    // applied whichever arrived LAST, so a replay-then-live race could revert
-    // a finished card to "running" with nothing later to correct it.
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
-      run: baseRun({ seq: 5, status: 'completed', endedAt: 2000, steps: 9 }),
-    });
+    // WHY: every push once overwrote the whole record, so a replay-then-live race could revert a finished card to "running".
+    state = runChanged(state, baseRun({ seq: 5, status: 'completed', endedAt: 2000, steps: 9 }));
     expect(runOf(state).status).toBe('completed');
 
     const settled = state;
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
-      run: baseRun({ seq: 4, status: 'running', steps: 3 }),
-    });
+    state = runChanged(state, baseRun({ seq: 4, status: 'running', steps: 3 }));
     expect(state).toBe(settled);
     expect(runOf(state).status).toBe('completed');
   });
 
   it('a re-send of the SAME seq is dropped too', () => {
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
-      run: baseRun({ seq: 5, status: 'completed', endedAt: 2000 }),
-    });
+    state = runChanged(state, baseRun({ seq: 5, status: 'completed', endedAt: 2000 }));
     const settled = state;
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
-      run: baseRun({ seq: 5, status: 'running' }),
-    });
+    state = runChanged(state, baseRun({ seq: 5, status: 'running' }));
     expect(state).toBe(settled);
   });
 
   it('a genuinely newer push still applies', () => {
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
-      run: baseRun({ seq: 1, status: 'running' }),
-    });
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
-      run: baseRun({ seq: 2, status: 'completed', endedAt: 2000 }),
-    });
+    state = runChanged(state, baseRun({ seq: 1, status: 'running' }));
+    state = runChanged(state, baseRun({ seq: 2, status: 'completed', endedAt: 2000 }));
     expect(runOf(state).status).toBe('completed');
   });
 
   it('an unstamped push still applies — a card replayed from an older build must not freeze', () => {
-    // `seq` is optional on purpose. If either side has none the two cannot be
-    // ordered, and refusing the update would leave the card stuck forever.
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
-      run: baseRun({ status: 'running' }),
-    });
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
-      run: baseRun({ seq: 3, status: 'completed', endedAt: 2000 }),
-    });
+    // seq is optional on purpose: unorderable pushes must apply or the card freezes.
+    state = runChanged(state, baseRun({ status: 'running' }));
+    state = runChanged(state, baseRun({ seq: 3, status: 'completed', endedAt: 2000 }));
     expect(runOf(state).status).toBe('completed');
 
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
-      run: baseRun({ status: 'failed', endedAt: 3000 }),
-    });
+    state = runChanged(state, baseRun({ status: 'failed', endedAt: 3000 }));
     expect(runOf(state).status).toBe('failed');
   });
 
   it('the delivery-cycle short-circuit still absorbs identical pushes that differ ONLY by seq', () => {
-    // One delivery cycle (claim / mark-attempted / confirm / release) rewrites
-    // the ledger four times and projects four views. They are byte-identical
-    // apart from the stamp, so the structural comparison must ignore it — or
-    // Task 11's short-circuit would never fire again and every cycle would
-    // push four new state objects through the tree.
-    state = dispatch(state, {
-      type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
-      run: baseRun({ seq: 1, status: 'completed', endedAt: 2000 }),
-    });
+    // identical-but-for-seq pushes must hit the short-circuit, or every delivery cycle pushes four new state objects
+    state = runChanged(state, baseRun({ seq: 1, status: 'completed', endedAt: 2000 }));
     const settled = state;
     for (const seq of [2, 3, 4]) {
-      state = dispatch(state, {
-        type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
-        run: baseRun({ seq, status: 'completed', endedAt: 2000 }),
-      });
+      state = runChanged(state, baseRun({ seq, status: 'completed', endedAt: 2000 }));
     }
     expect(state).toBe(settled);
   });
@@ -396,13 +313,7 @@ describe('PERMISSION_REQUEST — a helper ask with no Task card', () => {
 });
 
 describe('SPECIALIST_RUN_CHANGED — a note lands WHERE it happened in the Activity trail, not at the bottom', () => {
-  // Investigation 2026-09-01 (specialist-notes-not-interleaved): the ledger
-  // always resends the FULL notes array, and reconcileNoteSegments used to
-  // APPEND every unseen note to the tail of the segment list. Live that is
-  // usually right (nothing later has arrived yet), but on a card replay —
-  // reattach, restart, a late run push — every tool row is already on the
-  // card, so a note sent mid-run showed up AFTER tool calls that happened
-  // after it. The trail is an audit log; the order has to be true.
+  // WHY: the ledger resends the FULL notes array and notes used to append at the tail, so on replay a note showed up AFTER tool calls that happened after it.
   let state: ChatState;
 
   /** A child tool-use event the way the harness stamps it — parented to the
@@ -433,20 +344,20 @@ describe('SPECIALIST_RUN_CHANGED — a note lands WHERE it happened in the Activ
   it('a note timestamped between two tool calls is placed between them', () => {
     state = dispatch(state, childTool('t1', 100));
     state = dispatch(state, childTool('t2', 300));
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ notes: [note('mid', 200)] }) });
+    state = runChanged(state, baseRun({ notes: [note('mid', 200)] }));
     expect(trail(state)).toEqual(['tool:t1', 'note:mid', 'tool:t2']);
   });
 
   it('a note later than every segment still appends (the live case)', () => {
     state = dispatch(state, childTool('t1', 100));
     state = dispatch(state, childTool('t2', 300));
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ notes: [note('late', 400)] }) });
+    state = runChanged(state, baseRun({ notes: [note('late', 400)] }));
     expect(trail(state)).toEqual(['tool:t1', 'tool:t2', 'note:late']);
   });
 
   it('a note earlier than every segment goes first', () => {
     state = dispatch(state, childTool('t1', 100));
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ notes: [note('early', 50)] }) });
+    state = runChanged(state, baseRun({ notes: [note('early', 50)] }));
     expect(trail(state)).toEqual(['note:early', 'tool:t1']);
   });
 
@@ -457,7 +368,7 @@ describe('SPECIALIST_RUN_CHANGED — a note lands WHERE it happened in the Activ
     state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run });
     // A later push with MORE notes (steps moved so the short-circuit does not
     // absorb it) must keep 'mid' where it is and place the new note by time.
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ steps: 2, notes: [note('mid', 200), note('after', 350)] }) });
+    state = runChanged(state, baseRun({ steps: 2, notes: [note('mid', 200), note('after', 350)] }));
     expect(trail(state)).toEqual(['tool:t1', 'note:mid', 'tool:t2', 'note:after']);
     // Order stays true even when a tool row arrives AFTER the note that
     // precedes it (a replay that splices child events late).
@@ -468,26 +379,21 @@ describe('SPECIALIST_RUN_CHANGED — a note lands WHERE it happened in the Activ
   it('a tool row with no timestamp (an older event shape) never blocks placement — the note appends after it', () => {
     state = dispatch(state, { ...(childTool('t1', 100) as any), timestamp: undefined });
     state = dispatch(state, childTool('t2', 300));
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ notes: [note('mid', 200)] }) });
+    state = runChanged(state, baseRun({ notes: [note('mid', 200)] }));
     // t1 carries no time, so it cannot be ordered against the note; t2 (300)
     // can, and the note belongs before it.
     expect(trail(state)).toEqual(['tool:t1', 'note:mid', 'tool:t2']);
   });
 
-  // Review of fix/specialists-ledger-bugs (2026-09-04, F2/F6): placement used
-  // to be one-directional — a note was slotted by time among rows already on
-  // the card, but a ROW arriving after a later-stamped note was still appended
-  // below it. Reachable live: transcript events are rAF-batched (one frame),
-  // `specialists:event` is dispatched synchronously, so a child tool-use
-  // stamped in the frame before the user's note lands after it.
+  // WHY: placement was one-directional; a ROW arriving after a later-stamped note (rAF-batched transcript vs synchronous specialists:event) was appended below it.
   it('a tool row stamped EARLIER than a note already on the card is inserted before that note, not appended', () => {
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ notes: [note('mid', 200)] }) });
+    state = runChanged(state, baseRun({ notes: [note('mid', 200)] }));
     state = dispatch(state, childTool('t1', 100));
     expect(trail(state)).toEqual(['tool:t1', 'note:mid']);
   });
 
   it('a child text or thinking segment stamped earlier than a note goes before it too', () => {
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ notes: [note('mid', 200)] }) });
+    state = runChanged(state, baseRun({ notes: [note('mid', 200)] }));
     state = dispatch(state, {
       type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'u-txt', text: 'looking',
       timestamp: 100, parentAgentToolUseId: TASK_ID, agentId: CHILD_ID,
@@ -501,7 +407,7 @@ describe('SPECIALIST_RUN_CHANGED — a note lands WHERE it happened in the Activ
   });
 
   it('a later delta of the same partId still merges into its text segment after a note was slotted behind it', () => {
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ notes: [note('mid', 200)] }) });
+    state = runChanged(state, baseRun({ notes: [note('mid', 200)] }));
     const delta = (uuid: string, text: string) => ({
       type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid, text, partId: 'p1',
       timestamp: 100, parentAgentToolUseId: TASK_ID, agentId: CHILD_ID,
@@ -514,16 +420,16 @@ describe('SPECIALIST_RUN_CHANGED — a note lands WHERE it happened in the Activ
     expect((segs[0] as any).content).toBe('looking');
   });
 
-  it('F6: once an early row has been slotted before a note, a second note is still placed by time (no compounding misorder)', () => {
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ notes: [note('mid', 200)] }) });
+  it('once an early row has been slotted before a note, a second note is still placed by time (no compounding misorder)', () => {
+    state = runChanged(state, baseRun({ notes: [note('mid', 200)] }));
     state = dispatch(state, childTool('t1', 100));
     state = dispatch(state, childTool('t2', 300));
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ steps: 2, notes: [note('mid', 200), note('later', 250)] }) });
+    state = runChanged(state, baseRun({ steps: 2, notes: [note('mid', 200), note('later', 250)] }));
     expect(trail(state)).toEqual(['tool:t1', 'note:mid', 'note:later', 'tool:t2']);
   });
 
   it('a row with no timestamp is never reordered — it appends even behind a later-stamped note', () => {
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ notes: [note('mid', 200)] }) });
+    state = runChanged(state, baseRun({ notes: [note('mid', 200)] }));
     state = dispatch(state, { ...(childTool('t1', 100) as any), timestamp: undefined });
     expect(trail(state)).toEqual(['note:mid', 'tool:t1']);
   });
@@ -531,23 +437,18 @@ describe('SPECIALIST_RUN_CHANGED — a note lands WHERE it happened in the Activ
   it('two rows stamped the same millisecond keep arrival order', () => {
     state = dispatch(state, childTool('t1', 100));
     state = dispatch(state, childTool('t2', 100));
-    state = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ notes: [note('mid', 100)] }) });
+    state = runChanged(state, baseRun({ notes: [note('mid', 100)] }));
     expect(trail(state)).toEqual(['tool:t1', 'tool:t2', 'note:mid']);
   });
 });
 
-// ── 2026-10-22 audit B2 / B3: a RESUMED child ────────────────────────────────
-// Resuming a finished helper (Task with task_id) restarts the SAME ledger row: status running,
-// startedAt reset, endedAt cleared. The run still belongs to the ORIGINAL card, but the child's
-// live events and asks are stamped with the NEW resume-call card. Main-side assumption (see the
-// native-engine work): the run record keeps arriving with the original child id, and a resumed
-// run is recognisable by status 'running' / a later startedAt than the one the card holds.
+// Resuming a finished helper restarts the SAME ledger row but stamps its events/asks with the NEW resume-call card; the run stays on the original card.
 describe('a resumed child', () => {
   const RESUME_CALL = 'task-resume-call';
   const base = (): ChatState => {
     let s = seedTaskCard(initState());
     s = seedTaskCard(s, RESUME_CALL);   // the later Task call that resumed the child (no run record of its own)
-    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'failed', endedAt: 2000, seq: 5 }) });
+    s = runChanged(s, baseRun({ status: 'failed', endedAt: 2000, seq: 5 }));
     // The first run's report was delivered and folded onto the card.
     return dispatch(s, {
       type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'rep1', text: 'It broke', timestamp: 2100,
@@ -557,28 +458,28 @@ describe('a resumed child', () => {
   };
   const card = (s: ChatState, id = TASK_ID) => s.get(SESSION)!.toolCalls.get(id)!;
 
-  it('B2: the old report goes when the same child starts a newer run (it would read Failed with the old text)', () => {
+  it('the old report goes when the same child starts a newer run (it would read Failed with the old text)', () => {
     let s = base();
     expect(card(s).specialistReport?.status).toBe('failed');
-    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'running', startedAt: 3000, seq: 6 }) });
+    s = runChanged(s, baseRun({ status: 'running', startedAt: 3000, seq: 6 }));
     expect(card(s).specialistRun?.status).toBe('running');
     expect(card(s).specialistReport).toBeUndefined();
   });
-  it('B2: a newer run is accepted even if the host restarted and its stamp counter began again', () => {
+  it('a newer run is accepted even if the host restarted and its stamp counter began again', () => {
     let s = base();
-    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'running', startedAt: 3000, seq: 1 }) });
+    s = runChanged(s, baseRun({ status: 'running', startedAt: 3000, seq: 1 }));
     expect(card(s).specialistRun?.status).toBe('running');
   });
-  it('B2: an old straggler for the FIRST run still cannot revive it', () => {
+  it('an old straggler for the FIRST run still cannot revive it', () => {
     let s = base();
-    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'running', startedAt: 1000, seq: 2 }) });
+    s = runChanged(s, baseRun({ status: 'running', startedAt: 1000, seq: 2 }));
     expect(card(s).specialistRun?.status).toBe('failed');
     expect(card(s).specialistReport?.status).toBe('failed');
   });
-  it('B2: the resumed run’s own report replaces the old one', () => {
+  it('the resumed run’s own report replaces the old one', () => {
     let s = base();
-    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'running', startedAt: 3000, seq: 6 }) });
-    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'completed', startedAt: 3000, endedAt: 4000, seq: 7 }) });
+    s = runChanged(s, baseRun({ status: 'running', startedAt: 3000, seq: 6 }));
+    s = runChanged(s, baseRun({ status: 'completed', startedAt: 3000, endedAt: 4000, seq: 7 }));
     s = dispatch(s, {
       type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'rep2', text: 'Fixed it', timestamp: 4100,
       injected: 'specialist-report',
@@ -588,9 +489,9 @@ describe('a resumed child', () => {
     expect(card(s).specialistReport).toMatchObject({ status: 'completed', text: 'Fixed it' });
     expect(card(s, RESUME_CALL).specialistReport).toBeUndefined();
   });
-  it('B3: an ask from the resumed child lands on the card that carries its run', () => {
+  it('an ask from the resumed child lands on the card that carries its run', () => {
     let s = base();
-    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'running', startedAt: 3000, seq: 6 }) });
+    s = runChanged(s, baseRun({ status: 'running', startedAt: 3000, seq: 6 }));
     s = dispatch(s, {
       type: 'PERMISSION_REQUEST', sessionId: SESSION, toolName: 'Bash', input: { command: 'ls' }, requestId: 'req-r',
       specialist: { childId: CHILD_ID, agentType: 'explorer', title: 'Nadia', parentToolCallId: RESUME_CALL },
@@ -598,9 +499,9 @@ describe('a resumed child', () => {
     expect(card(s).subagentSegments?.some(g => g.type === 'tool' && g.requestId === 'req-r')).toBe(true);
     expect(card(s, RESUME_CALL).subagentSegments?.length ?? 0).toBe(0);
   });
-  it('B3: the resumed child’s live activity lands there too', () => {
+  it('the resumed child’s live activity lands there too', () => {
     let s = base();
-    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'running', startedAt: 3000, seq: 6 }) });
+    s = runChanged(s, baseRun({ status: 'running', startedAt: 3000, seq: 6 }));
     s = dispatch(s, {
       type: 'TRANSCRIPT_TOOL_USE', timestamp: 3500, sessionId: SESSION, uuid: 'cu', toolUseId: 'child-tool', toolName: 'Read', toolInput: { file_path: '/x' },
       parentAgentToolUseId: RESUME_CALL, agentId: CHILD_ID,

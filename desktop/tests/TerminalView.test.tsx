@@ -154,6 +154,25 @@ if (typeof (globalThis as any).ResizeObserver === 'undefined') {
   };
 }
 
+// A minimal valid theme. Tokens are only needed so applyThemeToDom can write
+// them; the values are irrelevant to what is asserted here.
+function makeTheme(background: ThemeDefinition['background']): ThemeDefinition {
+  return {
+    name: 'T', slug: 't', dark: true,
+    tokens: {
+      canvas: '#0D0F1A', panel: '#141726', inset: '#1F2440', well: '#0D0F1A',
+      accent: '#7C6AF7', 'on-accent': '#FFFFFF',
+      fg: '#C4BFFF', 'fg-2': '#9090C0', 'fg-dim': '#6060A0',
+      'fg-muted': '#404070', 'fg-faint': '#282848',
+      edge: '#2A2F55', 'edge-dim': '#2A2F5580',
+      'scrollbar-thumb': '#2A2F55', 'scrollbar-hover': '#3A3F70',
+    },
+    background,
+  };
+}
+
+const WALLPAPER = { type: 'image' as const, value: 'theme-asset://meadow/wallpaper.jpg' };
+
 // WHY: each section below was its own file, so the shared fakes started at
 // these values in each. Reset them before every case so no section inherits
 // another's grid, theme or touch setting.
@@ -164,19 +183,8 @@ beforeEach(() => {
   vi.mocked(platform.isTouchDevice).mockReturnValue(false);
 });
 
-// Pins the WebGL glyph-atlas heal in TerminalView.
-//
-// The webgl addon shares one rasterized atlas across all terminals but uploads
-// it into each WebGL context's own GPU texture. When a single context's texture
-// goes bad, that session renders every glyph as a solid black box and xterm
-// fires NO context-loss event — so the onContextLoss recovery never runs and
-// the corruption persists for the terminal's whole lifetime. The only remedy is
-// calling clearTextureAtlas(), and nothing else in the app calls it.
-//
-// That makes this an invisible coupling: TerminalView heals because `visible`
-// happens to transition, not because anything declares it must. Without these
-// tests a refactor of the toggle or the resize debounce would silently remove
-// the healing and nobody would notice until glyphs started rotting again.
+// WHY: one WebGL context's texture can go bad (solid black glyphs) with NO context-loss event; the only remedy is
+// clearTextureAtlas(), which TerminalView calls only because `visible` transitions / the debounced resize fires.
 describe('glyph-atlas heal', () => {
   // jsdom reports clientWidth/clientHeight as 0 for every element, and
   // fitAndSync early-returns on a 0x0 container (the hidden-terminal guard). The
@@ -233,17 +241,10 @@ describe('glyph-atlas heal', () => {
       expect(clearTextureAtlasSpy).not.toHaveBeenCalled();
     });
 
-    // A newly-opened session joins the atlas shared with every already-open
-    // terminal, and clearing bumps each page's version — so healing on mount
-    // would force every other terminal to re-rasterize. A fresh terminal has
-    // nothing to heal, so the heal is gated on a real hidden → shown transition.
-    it('does not clear the texture atlas on mount when already visible', () => {
-      render(<TerminalView sessionId="s1" visible={true} />);
-      expect(clearTextureAtlasSpy).not.toHaveBeenCalled();
-    });
-
-    it('does not clear the texture atlas on mount when hidden', () => {
-      render(<TerminalView sessionId="s1" visible={false} />);
+    // WHY: a new session joins the atlas shared with every open terminal and clearing bumps each page's version,
+    // so the heal is gated on a real hidden -> shown transition, never on mount.
+    it.each([true, false])('does not clear the texture atlas on mount (visible=%s)', (visible) => {
+      render(<TerminalView sessionId="s1" visible={visible} />);
       expect(clearTextureAtlasSpy).not.toHaveBeenCalled();
     });
 
@@ -384,13 +385,9 @@ describe('mount logic', () => {
       vi.mocked(platform.isTouchDevice).mockReturnValue(true);
     });
 
-    it('passes disableStdin: true to the Terminal constructor', () => {
+    it('disables stdin and registers no onData listener', () => {
       render(<TerminalView sessionId="s1" visible={true} />);
       expect(terminalCtorArgs[0]).toMatchObject({ disableStdin: true });
-    });
-
-    it('does not register a terminal.onData listener', () => {
-      render(<TerminalView sessionId="s1" visible={true} />);
       expect(onDataSpy).not.toHaveBeenCalled();
     });
 
@@ -439,19 +436,10 @@ describe('mount logic', () => {
       vi.mocked(platform.isTouchDevice).mockReturnValue(false);
     });
 
-    it('does not pass disableStdin (or passes false)', () => {
+    it('keeps stdin enabled, registers onData, and feeds the text stream to usePtyOutput', () => {
       render(<TerminalView sessionId="s1" visible={true} />);
-      const opts = terminalCtorArgs[0];
-      expect(opts.disableStdin === undefined || opts.disableStdin === false).toBe(true);
-    });
-
-    it('registers a terminal.onData listener', () => {
-      render(<TerminalView sessionId="s1" visible={true} />);
+      expect(terminalCtorArgs[0].disableStdin === undefined || terminalCtorArgs[0].disableStdin === false).toBe(true);
       expect(onDataSpy).toHaveBeenCalled();
-    });
-
-    it('passes sessionId to usePtyOutput and null to usePtyRawBytes', () => {
-      render(<TerminalView sessionId="s1" visible={true} />);
       expect(usePtyOutput).toHaveBeenCalledWith('s1', expect.any(Function));
       expect(usePtyRawBytes).toHaveBeenCalledWith(null, expect.any(Function));
     });
@@ -469,23 +457,6 @@ describe('workbench screen and terminal surface', () => {
     proposedDims = { cols: 100, rows: 30 };
   });
 
-  // A minimal valid theme. Tokens are only needed so applyThemeToDom can write
-  // them; the values are irrelevant to what is asserted here.
-  function makeTheme(background: ThemeDefinition['background']): ThemeDefinition {
-    return {
-      name: 'T', slug: 't', dark: true,
-      tokens: {
-        canvas: '#0D0F1A', panel: '#141726', inset: '#1F2440', well: '#0D0F1A',
-        accent: '#7C6AF7', 'on-accent': '#FFFFFF',
-        fg: '#C4BFFF', 'fg-2': '#9090C0', 'fg-dim': '#6060A0',
-        'fg-muted': '#404070', 'fg-faint': '#282848',
-        edge: '#2A2F55', 'edge-dim': '#2A2F5580',
-        'scrollbar-thumb': '#2A2F55', 'scrollbar-hover': '#3A3F70',
-      },
-      background,
-    };
-  }
-  const WALLPAPER = { type: 'image' as const, value: 'theme-asset://meadow/wallpaper.jpg' };
 
   // The detection reads `location.search` at mount, exactly as index.tsx and
   // WorkbenchFrame do — so the tests drive it through the real URL rather than a
@@ -660,23 +631,8 @@ describe('hidden terminals and theme switches', () => {
   });
 
   describe('TerminalView backing change (E5)', () => {
-    function theme(background: any): ThemeDefinition {
-      return {
-        name: 'T', slug: 't', dark: true,
-        tokens: {
-          canvas: '#0D0F1A', panel: '#141726', inset: '#1F2440', well: '#0D0F1A',
-          accent: '#7C6AF7', 'on-accent': '#FFFFFF',
-          fg: '#C4BFFF', 'fg-2': '#9090C0', 'fg-dim': '#6060A0',
-          'fg-muted': '#404070', 'fg-faint': '#282848',
-          edge: '#2A2F55', 'edge-dim': '#2A2F5580',
-          'scrollbar-thumb': '#2A2F55', 'scrollbar-hover': '#3A3F70',
-        },
-        background,
-      };
-    }
-
     it('flat -> wallpaper theme recolours the open terminal in place: no dispose, no second terminal', async () => {
-      const flat = theme(undefined);
+      const flat = makeTheme(undefined);
       applyThemeToDom(flat);
       mockActiveTheme = flat;
       const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
@@ -684,7 +640,7 @@ describe('hidden terminals and theme switches', () => {
       const term = terminalInstances[0];
       expect(terminalCtorArgs[0].theme.background).toBe('#0D0F1A'); // --canvas
 
-      const wallpaper = theme({ type: 'image', value: 'theme-asset://meadow/wallpaper.jpg' });
+      const wallpaper = makeTheme(WALLPAPER);
       applyThemeToDom(wallpaper);
       mockActiveTheme = wallpaper;
       rerender(<TerminalView sessionId="s1" visible={true} />);

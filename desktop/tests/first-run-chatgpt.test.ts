@@ -181,6 +181,7 @@ describe('FirstRunManager.handleOpenRouterLogin', () => {
     expect(authPrereq(m).status).not.toBe('failed');
   });
 
+
   it("a sign-in that can't start shows its own sentence", async () => {
     const m = managerAtAuth();
     await m.handleOpenRouterLogin(auth('cancelled', "YouCoded couldn't open your browser for the sign-in."));
@@ -243,32 +244,18 @@ describe('setupIsUsable', () => {
     };
   }
 
-  it('a ChatGPT-only install is usable — even with the Claude CLI not logged in, and without spawning it', async () => {
-    const deps = io({ signedIn: true });
-    expect(await setupIsUsable(deps)).toBe(true);
-    // `claude auth status` is the expensive subprocess; a signed-in ChatGPT account must never pay for it on launch.
-    expect(deps.hasUsableProvider).not.toHaveBeenCalled();
-    expect(deps.detectAuth).not.toHaveBeenCalled();
-  });
-
-  it('an install running on another provider (an OpenRouter key, a local model) is usable', async () => {
-    const deps = io({ ready: true });
-    expect(await setupIsUsable(deps)).toBe(true);
-    expect(deps.detectAuth).not.toHaveBeenCalled();
-  });
-
-  it('a Claude install with no ChatGPT and no other provider is usable', async () => {
-    const deps = io({ claude: true });
-    expect(await setupIsUsable(deps)).toBe(true);
-    expect(deps.detectAuth).toHaveBeenCalledTimes(1);
-  });
-
-  it('nothing signed in anywhere → not usable, which is what sends the user to the sign-in screen', async () => {
-    const deps = io();
-    expect(await setupIsUsable(deps)).toBe(false);
+  // [inputs, usable, subprocess spend]: a signed-in ChatGPT account must never pay for `claude auth status` on launch.
+  it.each([
+    ['a ChatGPT-only install (Claude CLI not logged in)', { signedIn: true }, true, { hasUsableProvider: 0, detectAuth: 0 }],
+    ['an install on another provider (OpenRouter key, local model)', { ready: true }, true, { hasUsableProvider: 1, detectAuth: 0 }],
+    ['a Claude install with no ChatGPT and no other provider', { claude: true }, true, { hasUsableProvider: 1, detectAuth: 1 }],
+    ['nothing signed in anywhere (sends the user to sign-in)', {}, false, { hasUsableProvider: 1, detectAuth: 1 }],
+  ])('%s', async (_n, over, usable, calls) => {
+    const deps = io(over);
+    expect(await setupIsUsable(deps)).toBe(usable);
     expect(deps.isSignedIn).toHaveBeenCalledTimes(1);
-    expect(deps.hasUsableProvider).toHaveBeenCalledTimes(1);
-    expect(deps.detectAuth).toHaveBeenCalledTimes(1);
+    expect(deps.hasUsableProvider).toHaveBeenCalledTimes(calls.hasUsableProvider);
+    expect(deps.detectAuth).toHaveBeenCalledTimes(calls.detectAuth);
   });
 });
 
@@ -703,19 +690,11 @@ describe('FirstRunManager.handleNativeApiKey — OpenRouter', () => {
     expect(m.getState().currentStep).not.toBe('COMPLETE');
   });
 
-  it('a verified key is saved and setup finishes', async () => {
+  it.each([['verified', 'sk-or-v1-good'], ['unchecked', 'sk-or-v1-maybe']] as const)('a %s key is saved and setup finishes (offline first run is not stranded)', async (verdict, key) => {
     const m = managerAtAuth();
-    const { d, setKey } = deps('verified');
-    await m.handleNativeApiKey('sk-or-v1-good', 'openrouter', d);
-    expect(setKey).toHaveBeenCalledWith('openrouter', 'sk-or-v1-good');
-    expect(m.getState().currentStep).toBe('COMPLETE');
-  });
-
-  it('offline (unchecked) still saves the key and finishes — an offline first run is not stranded', async () => {
-    const m = managerAtAuth();
-    const { d, setKey } = deps('unchecked');
-    await m.handleNativeApiKey('sk-or-v1-maybe', 'openrouter', d);
-    expect(setKey).toHaveBeenCalled();
+    const { d, setKey } = deps(verdict);
+    await m.handleNativeApiKey(key, 'openrouter', d);
+    expect(setKey).toHaveBeenCalledWith('openrouter', key);
     expect(m.getState().currentStep).toBe('COMPLETE');
   });
 });
