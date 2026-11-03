@@ -22,6 +22,7 @@ import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
 import { messageTimeMarks } from '../state/message-time-marks';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
 import { KEYBOARD_OFFSET_EVENT } from '../hooks/useVisualViewport';
+import { keyboardContentLift } from '../state/keyboard-lift';
 import { SessionContextBanner } from './SessionContextBanner';
 import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
@@ -801,15 +802,20 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // as the re-pin at the end will really scroll. WHY (Destin, 2026-11-02: "the 'started with' banner at the top is
     // jumping around strangely"): a short conversation does not scroll at all, so moving it by the keyboard's full
     // height lifted it, then dropped it back when the glide settled.
-    let start: { h: number; c: number; top: number } | null = null;
+    let start: { contentHeight: number; visibleHeight: number; scrollTop: number } | null = null;
     const onKeyboard = (e: Event) => {
       const content = contentRef.current;
       const scroller = scrollContainerRef.current;
       const lift = (e as CustomEvent<{ lift?: number }>).detail?.lift ?? 0;
       if (lift !== 0) {
         if (!content || !scroller || !stickRef.current) return;
-        start ??= { h: scroller.scrollHeight, c: scroller.clientHeight, top: scroller.scrollTop };
-        const willScroll = Math.max(0, start.h + lift - start.c) - start.top;
+        // The real height of everything in the scroller (state/keyboard-lift.ts says why not scrollHeight).
+        if (!start) {
+          const cs = getComputedStyle(scroller);
+          const contentHeight = content.offsetHeight + parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+          start = { contentHeight, visibleHeight: scroller.clientHeight, scrollTop: scroller.scrollTop };
+        }
+        const willScroll = keyboardContentLift(start, lift);
         content.style.transform = willScroll ? `translateY(${-willScroll}px)` : '';
         return;
       }
