@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef } from 'react';
+import { hiddenTerminalSize, savedTerminalBottomInset, saveTerminalBottomInset } from './terminal-hidden-size';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { applyClaudeCodeWidths } from '../../shared/terminal-widths';
@@ -384,16 +385,34 @@ function TerminalView({ sessionId, visible }: Props) {
       }
       hasFlushedResize = true;
     };
-    const fitAndSync = () => {
-      try {
-        const el = containerRef.current;
-        if (!el || el.clientWidth === 0 || el.clientHeight === 0) return;
-        fitAddon.fit();
-        writeWorkbenchScreenOnce();
-        // Container height changed → thumb proportions need to recompute.
-        updateThumb();
-        const dims = fitAddon.proposeDimensions();
-        if (!dims || !dims.cols || !dims.rows) return;
+    // WHY a hidden terminal still tells the program its size (Destin, 2026-11-03, a phone screenshot: Claude Code's
+    // banner and first reply printed twice). A terminal not on screen is collapsed to 0×0 (globals.css
+    // .terminal-hidden), so it never fitted: a new session's program ran at the spawn default (80×24 — the phone's
+    // log: "pty spawn size 80 24", then "resize 48 42" only when terminal view was first opened, 31 s later), drew
+    // its screen at 80 columns, and drew it all again at 48 when the terminal finally fitted. Now the size it will
+    // have is worked out from the box it will fill (terminal-hidden-size.ts, FitAddon's own arithmetic) and sent at
+    // once, so showing it later changes nothing. The terminal view's own bottom inset is remembered from the last time
+    // it was on screen: on a phone its input bar is not chat view's.
+    const proposeHidden = (el: HTMLElement) => {
+      const host = el.parentElement?.parentElement;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FitAddon reads the same private field
+      const cell = (terminal as any)._core?._renderService?.dimensions?.css?.cell;
+      if (!host || !terminal.element || !cell) return;
+      const cs = getComputedStyle(el);
+      const xs = getComputedStyle(terminal.element);
+      const px = (v: string) => parseFloat(v) || 0;
+      const size = hiddenTerminalSize({
+        hostWidth: host.clientWidth, hostHeight: host.clientHeight,
+        top: px(cs.top), bottom: savedTerminalBottomInset() ?? px(cs.bottom), left: px(cs.left), right: px(cs.right),
+        padTop: px(xs.paddingTop), padBottom: px(xs.paddingBottom), padLeft: px(xs.paddingLeft), padRight: px(xs.paddingRight),
+        scrollbarWidth: terminal.options.scrollback === 0 ? 0 : (terminal.options.overviewRuler?.width || 14),
+        cellWidth: cell.width, cellHeight: cell.height,
+      });
+      if (!size) return;
+      if (terminal.cols !== size.cols || terminal.rows !== size.rows) terminal.resize(size.cols, size.rows);
+      queueSize(size.cols, size.rows);
+    };
+    const queueSize = (cols: number, rows: number) => {
         // Dedup target: if a resize is already queued, compare against the
         // queued value (so re-proposing the same queued size is a no-op).
         // Otherwise compare against the last value actually sent to the PTY.
@@ -401,11 +420,25 @@ function TerminalView({ sessionId, visible }: Props) {
         // would skip the A update and let the stale B get flushed.
         const targetCols = debounceTimer !== null ? pendingCols : lastCols;
         const targetRows = debounceTimer !== null ? pendingRows : lastRows;
-        if (dims.cols === targetCols && dims.rows === targetRows) return;
-        pendingCols = dims.cols;
-        pendingRows = dims.rows;
+        if (cols === targetCols && rows === targetRows) return;
+        pendingCols = cols;
+        pendingRows = rows;
         if (debounceTimer !== null) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(flushResize, 120);
+    };
+    const fitAndSync = () => {
+      try {
+        const el = containerRef.current;
+        if (!el) return;
+        if (el.clientWidth === 0 || el.clientHeight === 0) { proposeHidden(el); return; }
+        fitAddon.fit();
+        writeWorkbenchScreenOnce();
+        // Container height changed → thumb proportions need to recompute.
+        updateThumb();
+        const dims = fitAddon.proposeDimensions();
+        if (!dims || !dims.cols || !dims.rows) return;
+        if (visibleRef.current) saveTerminalBottomInset(parseFloat(getComputedStyle(el).bottom) || 0);
+        queueSize(dims.cols, dims.rows);
       } catch {
         // Ignore fit errors during teardown
       }
