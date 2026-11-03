@@ -11,6 +11,7 @@
 // Usage: node walkthrough.mjs <app executable> <output folder>
 // Env:   WALKTHROUGH_KEY — the capped test key, typed into setup like a user pasting theirs.
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -371,6 +372,22 @@ try {
     await page.getByText('walkthrough-attach.txt').first().waitFor({ timeout: 15_000 });
     // The answer is only in the attached file, never in the question.
     return await askAndExpect('What is the secret fruit in the attached file? Answer with one word.', /kumquat/i);
+  }, { critical: false });
+
+  await step('run-command', 'The assistant runs a command on the computer and reports its real output', async () => {
+    // WHY a fingerprint (sha256) of a word made up this run: no model can work one out in its head, so the right
+    // characters in the reply mean a command really ran. The test computes the expected answer itself.
+    const word = `walk${Math.floor(10000 + Math.random() * 90000)}`;
+    const expected = crypto.createHash('sha256').update(word).digest('hex').slice(0, 12);
+    const box = page.getByPlaceholder(WORDS.messageBox);
+    await box.fill(`Run a command on this computer to get the sha256 hash of the text ${word} (no newline after it), and tell me the first 12 characters of the hash.`);
+    await box.press('Enter');
+    for (const t = Date.now(); Date.now() - t < 180_000; await sleep(2000)) {
+      if ((await page.locator('body').innerText().catch(() => '')).includes(expected)) return 'the right hash came back';
+      const yes = page.getByRole('button', { name: WORDS.approve }).first();
+      if (await yes.isVisible().catch(() => false)) await yes.click().catch(() => {});
+    }
+    throw new Error('the right hash never appeared in the chat within 3 minutes');
   }, { critical: false });
 
   await step('browser', "The assistant opens a web page in its own browser and reports what's on it", async () => {
