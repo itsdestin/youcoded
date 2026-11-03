@@ -24,7 +24,7 @@ export function ChipRow({ children }: { children: React.ReactNode }) {
     // overflow-y to auto alongside overflow-x), exactly at its content edge — and at a
     // fractional screen scale (1.5×) the chips' 1px bottom border rounded just outside it.
     // The padding gives the borders room inside the clip; the negative margin keeps the
-    // card's spacing unchanged. Pinned in tests/marketplace-detail-shell.test.ts.
+    // card's spacing unchanged.
     // WHY [&>*]:shrink-0: in a row that scrolls, a chip never squeezes (the author chip
     // shrank to "@de…" on the item cards) — what doesn't fit scrolls under the fade.
     <div data-detail-chips

@@ -14,8 +14,7 @@
 // every single time the toggle flips.
 //
 // It lives outside components/ui/ on purpose. It is one app-specific sentence,
-// not a reusable primitive, and primitive-adoption.test.ts rightly polices what
-// goes in that folder.
+// not a reusable primitive, and components/ui/ holds only shared building blocks.
 // WHY plain text, not text-destructive-fg (guide: no red/coloured body text
 // for messages) — the "not FieldError" reasoning above is unchanged; only the
 // colour goes, matching FieldError-adopted callers elsewhere in this pass.

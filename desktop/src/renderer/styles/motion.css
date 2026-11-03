@@ -35,7 +35,7 @@
    Inside no-preference so the OS setting still wins: these selectors out-rank
    (on specificity) globals.css's plain `.switch-arrival { animation: none }`. Reduce Visual
    Effects needs no rule — it removes the glass, and with it this attribute.
-   Guard: tests/switch-arrival-glass.test.tsx. */
+   Looks are checked on the before/after screenshot review (its style-pinning test was dropped 2026-11-02). */
 @keyframes switch-arrival-rise { from { transform: translateY(14px); } to { transform: none; } }
 @keyframes switch-arrival-fade { from { opacity: 0; } to { opacity: 1; } }
 
@@ -76,7 +76,7 @@
    prefers-reduced-motion leave them alone (same call as the wide-view toggle
    in globals.css). One-off controls fade smoothly; only dense rows a pointer
    SWEEPS across need steps() — see tests/animation-css-budget.test.ts.
-   Guard: tests/hover-press-ladder.test.ts. */
+   Looks are checked on the before/after screenshot review (its style-pinning test was dropped 2026-11-02). */
 :root {
   /* Derived, so it follows every theme and no pack can forget to define it. */
   --press-on-inset: color-mix(in srgb, var(--edge) 78%, var(--fg));

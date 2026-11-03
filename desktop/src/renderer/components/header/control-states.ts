@@ -7,7 +7,7 @@
 // and each had separately fallen back to a ~10-grey-level glyph nudge. None of
 // the eleven showed a keyboard focus ring. The ladder itself — what fills with
 // what — is styles/motion.css → "Hover and press: one ladder".
-// Guard: tests/hover-press-ladder.test.ts.
+// Looks are checked on the before/after screenshot review (its style-pinning test was dropped 2026-11-02).
 import { FOCUS_RING } from '../ui/Button';
 
 /** The UNSELECTED state of a control inside a `bg-inset` pill: caption buttons,

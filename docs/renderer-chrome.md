@@ -78,7 +78,7 @@ The terse layer is the workspace rule `.claude/rules/renderer-lists.md`. The sta
 
 ## Control primitives (`components/ui/`) — migrated 2026-08-12 from the path-scoped rule
 
-- **Every control goes through its primitive** — never hand-roll `bg-accent text-on-accent`. A caller's `className` REPLACES base tokens by conflict group via `mergeClasses` (a hand-rolled tailwind-merge stand-in); it does not pile on. Guard `primitive-adoption.test.ts` also fails on a primitive with NO call site — an unused one becomes a shadow copy.
+- **Every control goes through its primitive** — never hand-roll `bg-accent text-on-accent`. A caller's `className` REPLACES base tokens by conflict group via `mergeClasses` (a hand-rolled tailwind-merge stand-in); it does not pile on.
 - **Padding groups are per-axis:** `px-`/`py-`/`p{trbl}-` are independent; `p-N` belongs to ALL padding groups. An `px-`-only override must NOT drop the size's `py-` (2026-07-20: the old single `/^p[xytrbl]?-/` group collapsed welcome CTAs + SyncPanel Save to text height). Guard: `Button.test.tsx` — keep per-axis independence if you touch `CONFLICT_GROUPS`.
 
 ## Overlays

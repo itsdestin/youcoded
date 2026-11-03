@@ -1708,7 +1708,7 @@ pre.yc-code code {
    travel together — the header is the only thing holding this clearance, so
    deleting it without relocating this rule puts the first row under the native
    window buttons on macOS, which no Linux or Windows session would ever notice.
-   tests/primitive-adoption.test.ts pins the pair. */
+   tests/settings-drawer-mac-clearance.test.ts pins the pair. */
 .mac-titlebar-inset .settings-drawer-header {
   padding-top: 28px;
 }

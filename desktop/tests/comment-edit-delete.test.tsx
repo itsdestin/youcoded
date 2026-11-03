@@ -357,8 +357,7 @@ describe('HighlightHoverCard — Edit/Delete icons (E-1, "code/xlsx surfaces reu
 // the card background's `cursor-pointer`. The tiny gap-0.5 slivers between
 // the tightly-packed icons stayed on the inherited pointer, and every button/
 // gap crossing flipped the OS cursor glyph. jsdom applies neither Tailwind's
-// stylesheet nor the browser's UA defaults (see unselectable-chrome.test.ts's
-// own WHY), so this pins the CLASS NAME half of the fix — every button and
+// stylesheet nor the browser's UA defaults, so this pins the CLASS NAME half of the fix — every button and
 // every gap-only <div> in the row carries an explicit `cursor-pointer`, which
 // cannot disagree with anything else regardless of what an ancestor does.
 describe('Resolve/Edit/Delete row — one cursor, no dead gaps (hover flicker fix)', () => {
