@@ -173,8 +173,11 @@ describe('quick chips — editing an existing chip', () => {
     fireEvent.change(screen.getByLabelText('Chip message'), { target: { value: '   ' } });
     expect(screen.getByText('Save')).toBeEnabled();
     fireEvent.click(screen.getByText('Save'));
-    expect(screen.getByText('Write what the chip sends first.')).toBeInTheDocument();
-    expect(screen.queryByText('Give the chip a name first.')).toBeNull();
+    // Exactly one error shows, and it is the message one (key word, not the sentence). Counting
+    // alerts also proves the name-box error is NOT showing without matching its wording.
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].textContent).toMatch(/sends/i);
     expect(screen.getByLabelText('Chip message')).toBeInTheDocument(); // still on the page
     expect(setChips).not.toHaveBeenCalled();
   });

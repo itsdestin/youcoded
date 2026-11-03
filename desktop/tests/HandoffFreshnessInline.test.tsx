@@ -13,7 +13,8 @@ describe('HandoffFreshnessInline', () => {
     const actions = callbacks();
     render(<><div>Saved conversation message</div><HandoffFreshnessInline phase="waiting" {...actions} /><textarea aria-label="Message your assistant" /></>);
     expect(screen.getByText('Saved conversation message')).toBeTruthy();
-    expect(screen.getByRole('status').textContent).toContain('Still syncing recent messages, this may take a moment.');
+    // The waiting notice is the status region; its wording is free to change.
+    expect(screen.getByRole('status').textContent).toMatch(/sync/i);
     expect(screen.queryByRole('button')).toBeNull();
     expect(screen.queryByLabelText('Conversation preview')).toBeNull();
     expect(screen.getByRole('status').compareDocumentPosition(screen.getByRole('textbox')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -23,8 +24,9 @@ describe('HandoffFreshnessInline', () => {
     const actions = callbacks();
     render(<HandoffFreshnessInline phase="incomplete" {...actions} />);
     const alert = screen.getByRole('alert');
-    expect(alert.textContent).toContain('This conversation may have newer messages on your other computer.');
-    const textRow = screen.getByText('This conversation may have newer messages on your other computer.').parentElement!;
+    expect(alert.textContent).toMatch(/newer messages/i);
+    // The alert element is itself the row holding the text and both buttons.
+    const textRow = alert;
     const continueButton = screen.getByRole('button', { name: 'Continue with these messages' });
     const retryButton = screen.getByRole('button', { name: 'Try again' });
     expect(textRow.contains(continueButton)).toBe(true);

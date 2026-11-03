@@ -393,7 +393,7 @@ describe('useDocComments — mutations, id minting, refusal + inline error (F4/F
     expect(result.current.comments).toHaveLength(1);
     expect(result.current.comments[0].id).toBe(id);
     expect(result.current.comments[0].text).toBe('hello');
-    expect(result.current.comments[0].error?.message).toBe('Another change is being saved to this file right now.');
+    expect(result.current.comments[0].error?.message).toMatch(/being saved/i);
 
     ipc.add.mockResolvedValueOnce({ ok: true, id });
     // Fake timers are active, so `waitFor`'s own real-timer polling can't

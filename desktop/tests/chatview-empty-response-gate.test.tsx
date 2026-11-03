@@ -91,18 +91,20 @@ function renderWithTurn(stopReason: string | null) {
 describe('ChatView timeline gate — segment-less turns (empty-step recovery)', () => {
   it('renders the empty_response footer for a segment-less turn (end-to-end through the gate)', () => {
     const { container } = renderWithTurn('empty_response');
-    expect(container.textContent).toContain('The model returned an empty response twice. Trying again may help.');
+    // WHY: the footer is the one role="status" element; assert it renders (and names the cause), not its sentence.
+    expect(container.querySelector('[role="status"]')).not.toBeNull();
+    expect(container.querySelector('[role="status"]')!.textContent).toMatch(/empty/i);
   });
 
   it('still drops a segment-less turn that completed normally', () => {
     cleanup();
     const { container } = renderWithTurn('end_turn');
-    expect(container.textContent).not.toContain('empty response');
+    expect(container.querySelector('[role="status"]')).toBeNull();
   });
 
   it('still drops a segment-less turn with no stopReason at all', () => {
     cleanup();
     const { container } = renderWithTurn(null);
-    expect(container.textContent).not.toContain('Response ended');
+    expect(container.querySelector('[role="status"]')).toBeNull();
   });
 });

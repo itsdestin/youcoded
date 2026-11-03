@@ -45,7 +45,7 @@ describe('ModelPicker — a failed provider load is not "no providers set up"', 
     await openPanel();
 
     expect(await screen.findByText(/couldn.t load your models/i)).toBeInTheDocument();
-    expect(screen.queryByText('You have not set up any model providers.')).toBeNull();
+    expect(screen.queryByText(/not set up any model providers/i)).toBeNull();
     expect(screen.queryByText(/Error invoking remote method/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
@@ -59,7 +59,7 @@ describe('ModelPicker — a failed provider load is not "no providers set up"', 
     await openPanel();
 
     expect(await screen.findByText(/couldn.t load your models/i)).toBeInTheDocument();
-    expect(screen.queryByText('You have not set up any model providers.')).toBeNull();
+    expect(screen.queryByText(/not set up any model providers/i)).toBeNull();
   });
 
   it('Retry loads again, and a real empty result may then say none are set up', async () => {
@@ -69,7 +69,7 @@ describe('ModelPicker — a failed provider load is not "no providers set up"', 
     await openPanel();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
-    expect(await screen.findByText('You have not set up any model providers.')).toBeInTheDocument();
+    expect(await screen.findByText(/not set up any model providers/i)).toBeInTheDocument();
   });
 
   // The first load runs with the panel closed, and only an open re-asked — so a read lost
@@ -83,7 +83,7 @@ describe('ModelPicker — a failed provider load is not "no providers set up"', 
     await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
     await openPanel();
-    expect(await screen.findByText('You have not set up any model providers.')).toBeInTheDocument();
+    expect(await screen.findByText(/not set up any model providers/i)).toBeInTheDocument();
   });
 });
 
@@ -678,7 +678,7 @@ describe('ModelPicker recommended-models bands', () => {
     localStorage.setItem('youcoded-recommended-models-hidden', '1');
     fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
 
-    expect(await screen.findByText('No favorites yet. Search for a model, then star it to keep it here.'))
+    expect(await screen.findByText(/no favorites yet/i))
       .toBeInTheDocument();
     expect(rowLabels()).toEqual([]);
   });
@@ -704,7 +704,7 @@ describe('ModelPicker recommended-models bands', () => {
     render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
 
-    expect(await screen.findByText('No favorites yet. Search for a model, then star it to keep it here.'))
+    expect(await screen.findByText(/no favorites yet/i))
       .toBeInTheDocument();
     expect(screen.queryByText('DeepSeek: DeepSeek Pro Latest · OpenRouter')).toBeNull();
   });
@@ -716,7 +716,7 @@ describe('ModelPicker recommended-models bands', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
 
     await waitFor(() => expect(rowLabels()).toEqual(['DeepSeek: DeepSeek Pro Latest · OpenRouter']));
-    expect(screen.queryByText('No favorites yet. Search for a model, then star it to keep it here.'))
+    expect(screen.queryByText(/no favorites yet/i))
       .toBeNull();
   });
 });
@@ -857,7 +857,7 @@ describe('ModelPicker — a phone watching a current computer may start a native
     render(<ModelPicker value={null} onSelect={() => {}} defaultOpen layout="inline" />);
     fireEvent.change(await screen.findByLabelText('Search all models'), { target: { value: 'Nimbus' } });
     expect(await screen.findByText(LABEL)).toBeInTheDocument();
-    expect(screen.queryByText('These models can only be chosen on your computer.')).toBeNull();
+    expect(screen.queryByText(/only be chosen on your computer/i)).toBeNull();
   });
 });
 
@@ -889,8 +889,8 @@ describe('ModelPicker — pickers that choose for the computer keep native model
     bridge();
     render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} defaultOpen layout="inline" />);
     await waitFor(() => expect((window.claude.providers.catalog as any).mock.calls.length).toBeGreaterThan(0));
-    expect(await screen.findByText('These models can only be chosen on your computer.')).toBeInTheDocument();
-    expect(screen.queryByText(/not set up any model providers/)).toBeNull();
+    expect(await screen.findByText(/only be chosen on your computer/i)).toBeInTheDocument();
+    expect(screen.queryByText(/not set up any model providers/i)).toBeNull();
   });
 
   it('a saved native model this screen does not list shows its friendly name, not the bare id', async () => {

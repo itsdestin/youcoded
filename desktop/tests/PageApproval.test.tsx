@@ -40,12 +40,11 @@ describe('the approval screen', () => {
     const base = { id: 'ha', kind: 'device' as const, service: 'Home Assistant', address: '192.168.4.54:8123', access: 'full' as const, needsKey: true, approved: false };
     const vp = { targetPrefix: 'camera.', send: '{"offer":{{offer}}}', answer: 'a', candidate: 'c', failed: 'f' };
     const { unmount } = render(<PageApproval page={page([{ ...base, socketHello: '{"type":"auth","access_token":"{{key}}"}', socketReady: 'auth_ok', videoProfile: vp }])} onNotNow={() => {}} />);
-    expect(screen.getByText('Keeps a live connection open for instant updates.')).toBeInTheDocument();
-    expect(screen.getByText('Can play camera video through the app.')).toBeInTheDocument();
+    // WHY: each extra capability is its own marked line; count them instead of pinning wording.
+    expect(document.querySelectorAll('[data-device-extra]')).toHaveLength(2);
     unmount();
     render(<PageApproval page={page([{ ...base, socketHello: '{"type":"auth","access_token":"{{key}}"}' }])} onNotNow={() => {}} />);
-    expect(screen.getByText('Keeps a live connection open for instant updates.')).toBeInTheDocument();
-    expect(screen.queryByText(/camera video/)).toBeNull();
+    expect(document.querySelectorAll('[data-device-extra]')).toHaveLength(1);
     cleanup();
     render(<PageApproval page={page([{ ...base }])} onNotNow={() => {}} />);
     expect(document.querySelector('[data-device-extra]')).toBeNull();
@@ -61,17 +60,17 @@ describe('the approval screen', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     fireEvent.change(document.querySelector('[data-device-address-field] input') as HTMLInputElement, { target: { value: 'localhost:8123' } });
     const alert = screen.getByRole('alert');
-    expect(alert).toHaveTextContent('That address is this computer, not a device in your home.');
+    expect(alert).toHaveTextContent(/this computer/i);
     expect(alert.className).toBe(shared);
   });
 
   it('says so when allowing failed, and does not pretend the page opened', async () => {
-    const approve = vi.fn(async () => ({ ok: false, message: 'This computer has no keychain, so the key could not be stored.' }) as PageApproveResult);
+    const approve = vi.fn(async () => ({ ok: false, message: 'KEYCHAIN-FIXTURE-MESSAGE' }) as PageApproveResult);
     withBridge(approve);
     render(<PageApproval page={page([{ id: 'y', kind: 'youcoded', approved: false }])} onNotNow={() => {}} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Allow and open' }));
-    await waitFor(() => expect(screen.getByText('This computer has no keychain, so the key could not be stored.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('KEYCHAIN-FIXTURE-MESSAGE')).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Allow and open' })).toBeEnabled();
 
     // Retry is a real second attempt, not a dismissal.

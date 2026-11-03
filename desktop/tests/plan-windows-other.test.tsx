@@ -198,7 +198,7 @@ describe('a free plan — one 30-day window', () => {
   it('UsageCard shows the 30-day row and the plan scope line', () => {
     rtlRender(<UsageCard snapshot={{ ...snapshotBase, otherWindows: free.other }} />);
     expect(screen.getByRole('progressbar', { name: '30-day limit' })).toBeInTheDocument();
-    expect(screen.getByText('Measured across your whole ChatGPT plan, not just this conversation.')).toBeInTheDocument();
+    expect(screen.getByText(/ChatGPT plan/i)).toBeInTheDocument();
   });
 });
 
@@ -267,7 +267,7 @@ describe('Assistant settings — the ChatGPT card and chatgpt.supported', () => 
     stub({ supported: true, status: async () => ({ state: 'signed-out', reauth }), signIn });
     (window as any).claude.capabilities = REMOTE_SCREEN_CAPABILITIES;
     open();
-    expect(await screen.findByText('To connect ChatGPT, sign in on the host device.')).toBeInTheDocument();
+    expect(await screen.findByText(/host device/i)).toBeInTheDocument();
     expect(screen.getByText('ChatGPT')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sign in with ChatGPT' })).toBeNull();
     expect(signIn).not.toHaveBeenCalled();
@@ -281,7 +281,7 @@ describe('Assistant settings — the ChatGPT card and chatgpt.supported', () => 
     expect(await screen.findByText('Signed in as host@example.com')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
-    expect(screen.queryByText('To connect ChatGPT, sign in on the host device.')).toBeNull();
+    expect(screen.queryByText(/host device/i)).toBeNull();
   });
 
   it('hides the card when supported is false', async () => {

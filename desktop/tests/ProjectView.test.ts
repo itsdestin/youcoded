@@ -185,7 +185,7 @@ describe('runProjectRemove', () => {
 
   it('a plain folder that could not be removed keeps the confirm open with a sentence, never an empty line', async () => {
     const out = await runProjectRemove(steps({ removeFolder: async () => { throw new Error('ipc'); } }));
-    expect(out.error).toBe("This project couldn't be removed.");
+    expect(out.error).toMatch(/removed/i);
   });
 
   it("a synced remove that fails shows the service's own words and changes nothing else", async () => {

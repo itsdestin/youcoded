@@ -28,5 +28,6 @@ it('keeps the global-file metadata and warning untouched', () => {
   render(<ContextEditorOverlay project={{ path: '/tmp' }} file={{ ...file, id: 'global:/tmp/CLAUDE.md', scope: 'global', blastRadius: 'global' }} onClose={() => {}} />);
   const dialog = screen.getByRole('dialog');
   expect(dialog.textContent).toContain('4.1 KB');
-  expect(dialog.textContent).toContain('Global file — affects every project.');
+  expect(dialog.textContent).toMatch(/global file/i);
+  expect(dialog.textContent).toMatch(/every project/i);
 });

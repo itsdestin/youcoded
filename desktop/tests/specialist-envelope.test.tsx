@@ -355,13 +355,18 @@ describe('the hire consent card, per origin', () => {
       allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
       source: 'builtin', grantScope: 'builtin',
     });
-    expect(text()).toContain('The Explorer is built into YouCoded and is being hired with read-only access to proj/.');
-    expect(text()).toContain('Cannot edit files or run commands. It reads and searches using Read, Glob, Grep, WebFetch, WebSearch.');
+    expect(text()).toMatch(/Explorer/);
+    expect(text()).toMatch(/built into YouCoded/i);
+    expect(text()).toMatch(/read-only/i);
+    expect(text()).toMatch(/proj\//);
+    expect(text()).toMatch(/Cannot edit/i);
+    expect(text()).toContain('Read, Glob, Grep, WebFetch, WebSearch');
     // A built-in's instructions ARE YouCoded's, so there is nothing to distrust.
-    expect(screen.queryByText(/Its instructions come from a file/)).toBeNull();
+    expect(screen.queryByText(/instructions/i)).toBeNull();
     // Read-only footer: a helper that cannot write cannot delete either, so
     // promising a deletion check here would describe a check that never fires.
-    expect(text()).toContain('Secrets and anything outside proj/ still come to you.');
+    expect(text()).toMatch(/Secrets/i);
+    expect(text()).toMatch(/outside proj\//);
     expect(text()).not.toContain('Deleting things');
   });
 
@@ -370,9 +375,15 @@ describe('the hire consent card, per origin', () => {
       ...base, id: 'worker', displayName: 'Worker', charter: 'read-write',
       allowedTools: ['Read', 'Write', 'Edit', 'Bash'], source: 'builtin', grantScope: 'builtin',
     });
-    expect(text()).toContain('The Worker is built into YouCoded and is being hired to edit files and run commands in proj/.');
-    expect(text()).toContain('Can edit files and run commands without asking again, using Read, Write, Edit, Bash.');
-    expect(text()).toContain('Deleting things, secrets, and anything outside proj/ still come to you.');
+    expect(text()).toMatch(/Worker/);
+    expect(text()).toMatch(/built into YouCoded/i);
+    expect(text()).toMatch(/edit files and run commands/i);
+    expect(text()).toMatch(/proj\//);
+    expect(text()).toMatch(/edit files and run commands/i);
+    expect(text()).toContain('Read, Write, Edit, Bash');
+    expect(text()).toMatch(/Deleting/i);
+    expect(text()).toMatch(/secrets/i);
+    expect(text()).toMatch(/outside proj\//);
   });
 
   it("project file: names .claude/agents and warns that the instructions came with the project", () => {
@@ -381,8 +392,10 @@ describe('the hire consent card, per origin', () => {
       allowedTools: ['Read', 'Write', 'Edit', 'Bash'], source: 'claude-code', grantScope: 'project',
       path: '/work/proj/.claude/agents/code-reviewer.md',
     });
-    expect(text()).toContain("code-reviewer comes from this project's .claude/agents/code-reviewer.md and is being hired to edit files and run commands in proj/.");
-    expect(screen.getByText(/Only approve it if you trust where this project came from/)).toBeTruthy();
+    expect(text()).toContain('.claude/agents/code-reviewer.md');
+    expect(text()).toMatch(/edit files and run commands/i);
+    expect(text()).toMatch(/proj\//);
+    expect(screen.getByText(/trust/i)).toBeTruthy();
   });
 
   it('personal folder: names the file, and a helper with no Bash never claims it can run commands', () => {
@@ -391,10 +404,14 @@ describe('the hire consent card, per origin', () => {
       allowedTools: ['Read', 'Write', 'Edit'], source: 'personal', grantScope: 'user',
       path: '/home/d/.youcoded/specialists/docs-writer.md',
     });
-    expect(text()).toContain('docs-writer comes from your specialists folder (docs-writer.md) and is being hired to edit files in proj/.');
+    expect(text()).toMatch(/specialists folder/i);
+    expect(text()).toContain('docs-writer.md');
+    expect(text()).toMatch(/edit files/i);
+    expect(text()).toMatch(/proj\//);
     expect(text()).not.toContain('run commands in proj/');
-    expect(text()).toContain('Can edit files without asking again, using Read, Write, Edit. Cannot run commands.');
-    expect(screen.getByText(/Open the file if you're not sure what it does/)).toBeTruthy();
+    expect(text()).toContain('Read, Write, Edit');
+    expect(text()).toMatch(/Cannot run commands/i);
+    expect(screen.getByText(/open the file/i)).toBeTruthy();
   });
 
   it('~/.claude/agents: names that folder rather than the project one', () => {
@@ -403,14 +420,17 @@ describe('the hire consent card, per origin', () => {
       allowedTools: ['Read'], source: 'claude-code', grantScope: 'user',
       path: '/home/d/.claude/agents/foo.md',
     });
-    expect(text()).toContain('foo comes from your ~/.claude/agents/foo.md and is being hired with read-only access to proj/.');
+    expect(text()).toContain('~/.claude/agents/foo.md');
+    expect(text()).toMatch(/read-only/i);
+    expect(text()).toMatch(/proj\//);
     expect(text()).not.toContain('.claude/agents/foo.md and is being hired to edit');
-    expect(screen.getByText(/Open the file if you're not sure what it does/)).toBeTruthy();
+    expect(screen.getByText(/open the file/i)).toBeTruthy();
   });
 
   it('unknown definition: promises nothing, and invents no trust verdict either', () => {
     renderEnvelope(undefined);
-    expect(text()).toContain('whoever could not be looked up, so its tools and limits are unknown. Approve only if you know this specialist.');
-    expect(screen.queryByText(/Its instructions come from a file/)).toBeNull();
+    expect(text()).toMatch(/unknown/i);
+    expect(text()).toMatch(/approve only/i);
+    expect(screen.queryByText(/instructions/i)).toBeNull();
   });
 });

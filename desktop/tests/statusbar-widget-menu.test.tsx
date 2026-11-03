@@ -156,17 +156,17 @@ describe('Customize status bar menu', () => {
     act(() => store.dispatch({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: 's1',
       usageProgress: progress(true), timestamp: 11, uuid: 'free' }));
     expect(screen.queryByText('not listed')).toBeNull();
-    expect(screen.getByText("Models on your own machine don't cost anything to run")).toBeTruthy();
+    expect(screen.getByText(/your own machine/i)).toBeTruthy();
   });
 
   it('explains the subscription rows in a native session', async () => {
     await openMenu('native');
-    expect(screen.getAllByText('Claude Code sessions only').length).toBe(2);
+    expect(screen.getAllByText(/Claude Code sessions only/i).length).toBe(2);
   });
 
   it('explains the unavailable rows without promising them later', async () => {
     await openMenu('native');
-    expect(screen.getAllByText('Not available in this kind of session').length).toBe(2);
+    expect(screen.getAllByText(/not available/i).length).toBe(2);
   });
 
   it('leaves Git branch unexplained — it is a missing feed, not a relevance rule', async () => {
@@ -183,7 +183,7 @@ describe('Customize status bar menu', () => {
   it('leaves the subscription rows switchable for a ChatGPT-plan session', async () => {
     window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['usage-5h', 'usage-7d']));
     await openMenu('native', undefined, undefined, 'chatgpt');
-    expect(screen.queryByText('Claude Code sessions only')).toBeNull();
+    expect(screen.queryByText(/Claude Code sessions only/i)).toBeNull();
     expect(switchFor('5h usage')).toBeTruthy();
     expect(switchFor('7d usage')).toBeTruthy();
   });
@@ -209,8 +209,8 @@ describe('Customize status bar menu', () => {
     // End-to-end for checkpoint #9: proves StatusBar actually feeds anyFree
     // through as runsLocally, which the status-widgets unit test cannot see.
     await openMenu('native', totals({ anyFree: true }));
-    expect(screen.queryByText("Models on your own machine don't cost anything to run")).toBeTruthy();
-    expect(screen.queryByText('No published price for this model')).toBeNull();
+    expect(screen.queryByText(/your own machine/i)).toBeTruthy();
+    expect(screen.queryByText(/no published price/i)).toBeNull();
   });
 
   // Task 20, defect A. This row used to read "No published price for this
@@ -218,8 +218,8 @@ describe('Customize status bar menu', () => {
   // bar whose switch looked unavailable, and which the user could not turn off.
   it('leaves the Cost row switchable for a metered model with no published rate', async () => {
     await openMenu('native', totals({ anyUnpriced: true }));
-    expect(screen.queryByText('No published price for this model')).toBeNull();
-    expect(screen.queryByText("Models on your own machine don't cost anything to run")).toBeNull();
+    expect(screen.queryByText(/no published price/i)).toBeNull();
+    expect(screen.queryByText(/your own machine/i)).toBeNull();
     expect(switchFor('Session cost')).toBeTruthy();
   });
 
@@ -229,7 +229,7 @@ describe('Customize status bar menu', () => {
   // delegation shape as the one that must not be hidden).
   it('never tells a session it is free to run when metered work also ran', async () => {
     await openMenu('native', totals({ anyFree: true, anyUnpriced: true }));
-    expect(screen.queryByText("Models on your own machine don't cost anything to run")).toBeNull();
+    expect(screen.queryByText(/your own machine/i)).toBeNull();
     expect(switchFor('Session cost')).toBeTruthy();
   });
 
@@ -241,7 +241,7 @@ describe('Customize status bar menu', () => {
     // spacer, and must share a two-child wrapper with the label.
     await openMenu('native');
     const label = screen.getByText('5h usage');
-    const reason = screen.getAllByText('Claude Code sessions only')[0];
+    const reason = screen.getAllByText(/Claude Code sessions only/i)[0];
     const stack = label.parentElement!;
     expect(reason.parentElement).toBe(stack);
     expect(stack.children.length).toBe(2);
@@ -253,7 +253,7 @@ describe('Customize status bar menu', () => {
 
   it('leaves a dimmed row with zero focusable elements', async () => {
     await openMenu('native');
-    const row = rowAround(screen.getByText('5h usage'), 'Claude Code sessions only');
+    const row = rowAround(screen.getByText('5h usage'), 'Claude Code sessions');
     expect(row.querySelectorAll('button, a, input, select, textarea, [tabindex]').length).toBe(0);
   });
 

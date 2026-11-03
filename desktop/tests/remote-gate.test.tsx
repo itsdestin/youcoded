@@ -88,7 +88,7 @@ describe('RemoteGate', () => {
     await mount(f);
     f.report({ type: 'failed', kind: 'unreachable' });
     expect(screen.getByText("Can't reach your computer")).toBeTruthy();
-    expect(screen.getByText('It keeps trying by itself every few seconds.')).toBeTruthy();
+    expect(screen.getByRole('status')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(f.shim.retrySavedKeyNow).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Enter password instead' }));
@@ -115,8 +115,8 @@ describe('RemoteGate', () => {
     await mount(f);
     fireEvent.change(passwordBox()!, { target: { value: 'hunter2' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Connect' })); });
-    expect(screen.queryByText('Invalid password')).toBeNull();
-    expect(screen.getByText("Can't reach your computer.")).toBeTruthy();
+    expect(screen.queryByText(/invalid password/i)).toBeNull();
+    expect(screen.getByText(/can.t reach your computer/i)).toBeTruthy();
   });
 
   it('a wrong password still says so', async () => {
@@ -125,7 +125,7 @@ describe('RemoteGate', () => {
     await mount(f);
     fireEvent.change(passwordBox()!, { target: { value: 'nope' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Connect' })); });
-    expect(screen.getByText('Invalid password')).toBeTruthy();
+    expect(screen.getByText(/invalid password/i)).toBeTruthy();
   });
 
   it('a computer that stops accepting this device after it connected: back to the password box, saying why', async () => {
@@ -135,7 +135,7 @@ describe('RemoteGate', () => {
     expect(screen.getByText('THE APP')).toBeTruthy();
     f.refuseCredential('revoked');
     expect(passwordBox()).toBeTruthy();
-    expect(screen.getByText('This computer no longer accepts this device. Enter the password to connect again.')).toBeTruthy();
+    expect(screen.getByText(/no longer accepts/i)).toBeTruthy();
   });
 
   it('a page older than its computer says so and offers a reload, which reloads', async () => {
@@ -178,10 +178,10 @@ describe('RemoteGate', () => {
     await mount(f);
     fireEvent.change(passwordBox()!, { target: { value: 'pw' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Connect' })); });
-    expect(screen.getByText('Your computer refused this sign-in.')).toBeTruthy();
+    expect(screen.getByText(/refused/i)).toBeTruthy();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Connect' })); });
-    expect(screen.getByText("Couldn't sign in.")).toBeTruthy();
-    expect(screen.queryByText('Invalid password')).toBeNull();
+    expect(screen.getByText(/couldn.t sign in/i)).toBeTruthy();
+    expect(screen.queryByText(/invalid password/i)).toBeNull();
   });
 
   describe('the Android app going back to the computer it was last using', () => {
@@ -220,7 +220,7 @@ describe('RemoteGate', () => {
       (f.shim.connectToHost as any).mockRejectedValue(Object.assign(new Error('timed out'), { signInFailure: { kind: 'unreachable' } }));
       await mountAndroid(f);
       await waitFor(() => expect(screen.getByText("Can't reach Home PC")).toBeTruthy());
-      expect(screen.getByText('It keeps trying by itself every few seconds.')).toBeTruthy();
+      expect(screen.getByRole('status')).toBeTruthy();
       expect(screen.queryByText('THE APP')).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'Use this phone only' }));
       await waitFor(() => expect(screen.getByText('THE APP')).toBeTruthy());

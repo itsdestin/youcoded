@@ -50,7 +50,7 @@ describe('CloseSessionPrompt', () => {
   it('opens on the Session details cards — name, note, tags in place, no second editor', async () => {
     mockWindowClaude({ tags: [], note: '', supported: true, flags: {} });
     mount();
-    expect(await screen.findByText('No tags on this session yet')).toBeInTheDocument();
+    expect(await screen.findByText(/no tags/i)).toBeInTheDocument();
     expect(screen.getByText('fix chat scroll stick')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Add a note/ })).toBeInTheDocument();
     // The tag search is right there — no "Edit tags and note" step in front of it.
@@ -150,7 +150,7 @@ describe('CloseSessionPrompt', () => {
     Object.defineProperty(globalThis, 'localStorage', { value: stub, configurable: true, writable: true });
     (window as any).localStorage = stub;
     const onConfirm = mount();
-    await screen.findByText('No tags on this session yet');
+    await screen.findByText(/no tags/i);
     expect(screen.getByRole('heading', { name: 'Close session' })).toBeInTheDocument();
     expect(screen.getByText('fix chat scroll stick')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close Close session' })).toBeInTheDocument();

@@ -255,7 +255,9 @@ describe('the conversation with the device', () => {
     const r2 = rig();
     const b = await playing(r2);
     b.ws.say({ id: 1, type: 'result', success: false, error: { code: 'unknown_command', message: 'whatever' } });
-    expect(stopped(r2)?.why).toBe('The device did not start the video.');
+    expect(stopped(r2)?.why).toMatch(/video/i);
+    // Plain words, not the raw device message.
+    expect(stopped(r2)?.why).not.toMatch(/whatever|unknown_command/);
   });
 
   it('redacts a failure text that contains the key, before it reaches anyone', async () => {

@@ -122,7 +122,9 @@ describe('BUDDY_SHOW consent gate — when the buddy is refused', () => {
     // No reason from the support check → a plain statement of the fact, and
     // nothing more (docs/error-message-standards.md).
     const refusal = gate.buddyShowRefusal({ needed: true, supported: true, installed: false });
-    expect(refusal).toBe('The buddy needs its KDE helper on this desktop, and the helper is not running.');
+    expect(refusal).toMatch(/KDE helper/);
+    // Only the fact: no cause is made up.
+    expect(refusal).not.toMatch(/because|due to|timed out|permission/i);
   });
 });
 

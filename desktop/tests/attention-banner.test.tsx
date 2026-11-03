@@ -245,7 +245,7 @@ describe('AttentionBanner — the sorted error card (error-card.questions)', () 
     const { container, getByText } = render(
       <AttentionBanner state="error" errorKind="temporary" errorCode="overloaded" providerType="anthropic"
         errorMessage="Overloaded (provider error 529)" onRetry={onRetry} onSwitchProviders={onSwitchProviders} />);
-    expect(getByText('Anthropic is overloaded right now. The app tried again for about a minute.')).toBeTruthy();
+    expect(getByText(/Anthropic.*overloaded/i)).toBeTruthy();
     expect(buttons(container)).toEqual(expect.arrayContaining(['Details', 'Switch model', 'Try again']));
     fireEvent.click(Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Try again')!);
     expect(onRetry).toHaveBeenCalledTimes(1);

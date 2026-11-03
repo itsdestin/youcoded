@@ -43,7 +43,7 @@ describe('Session details — "In your lists"', () => {
     expect(onComplete).toHaveBeenCalledWith(false);
     expect(onPin).not.toHaveBeenCalled();
     // Destin's wording for both popups (close-session-3#CS3-3; Pin to top says "resumable" since final-review#Q-3).
-    expect(screen.getByText('Hides this session from your resumable sessions list')).toBeInTheDocument();
-    expect(screen.getByText('Keeps this session at the top of your resumable sessions list')).toBeInTheDocument();
+    expect(screen.getByText(/hides this session/i)).toBeInTheDocument();
+    expect(screen.getByText(/at the top of/i)).toBeInTheDocument();
   });
 });

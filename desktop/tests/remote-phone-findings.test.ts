@@ -105,7 +105,7 @@ describe('a computer with no password says so before asking for one', () => {
   it('the sign-in screen asks first, and offers no box when there is nothing to type', () => {
     expect(index).toContain("fetch('/remote-state'");
     expect(index).toContain('if (needsSetup) {');
-    expect(index).toContain('This computer has no remote access password yet.');
+    expect(index).toMatch(/no remote access password/i);
     // An older host has no such endpoint; the screen must keep working as it did.
     expect(index).toMatch(/\.catch\(\(\) => \{\}\)/);
   });

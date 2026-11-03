@@ -53,7 +53,8 @@ describe('Browser ask card', () => {
 
   it('needs you: I\'m done, Can\'t do this, open a window to sign in, show the browser', async () => {
     const b = show({ kind: 'handoff', id: 'p3', message: 'Please sign in to your library account.' });
-    expect(screen.getByText('The assistant needs you in the browser')).toBeInTheDocument();
+    // WHY: the title is app wording; assert the handoff message the code passes through plus the two handoff buttons.
+    expect(screen.getByText('Please sign in to your library account.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show window' }));
     expect(b.bridge.openWindowForHandoff).toHaveBeenCalledWith('s1');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Show the browser' })).toBeEnabled());

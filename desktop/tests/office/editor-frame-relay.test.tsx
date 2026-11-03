@@ -572,7 +572,8 @@ describe('EditorFrame and Print', () => {
     await settle();
     expect(bridge.invoke).toHaveBeenCalledWith('t1', 'print_document', {});
     expect(posted).toHaveBeenCalledWith({ yc: 'rpc-result', id: 4, result: 'ok' }, ORIGIN);
-    expect(saveStateFor(FILE.path).note).toBe('Saved a copy as memo.pdf in out.');
+    expect(saveStateFor(FILE.path).note).toMatch(/memo\.pdf/);
+    expect(saveStateFor(FILE.path).note).toMatch(/\bout\b/);
     expect(saveStateFor(FILE.path).phase).toBe('saved');
   });
 
@@ -608,7 +609,8 @@ describe('EditorFrame and Save As', () => {
     await settle();
     expect(bridge.invoke).toHaveBeenCalledWith('t1', 'save_file_as', { path: 'yc-save/abc/Report.pdf' });
     expect(posted).toHaveBeenCalledWith({ yc: 'rpc-result', id: 9, result: 'ok' }, ORIGIN);
-    expect(saveStateFor(FILE.path).note).toBe('Saved a copy as Report.pdf in out.');
+    expect(saveStateFor(FILE.path).note).toMatch(/Report\.pdf/);
+    expect(saveStateFor(FILE.path).note).toMatch(/\bout\b/);
     // The document itself was not saved by it: its own save state is untouched.
     expect(saveStateFor(FILE.path).phase).toBe('saved');
   });

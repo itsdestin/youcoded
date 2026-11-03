@@ -38,8 +38,8 @@ function Host() {
 
 async function openTheWarning() {
   render(<Host />);
-  await waitFor(() => expect(screen.getByText('This model may not fit in available memory')).toBeTruthy());
-  await act(async () => { fireEvent.click(screen.getByText('This model may not fit in available memory')); });
+  await waitFor(() => expect(screen.getByText(/may not fit/i)).toBeTruthy());
+  await act(async () => { fireEvent.click(screen.getByText(/may not fit/i)); });
   await waitFor(() => expect(screen.getByLabelText('Warn me about this model')).toBeTruthy());
 }
 
@@ -90,8 +90,8 @@ describe('the warning is a status pill, not coloured words (SF2-10)', () => {
     const setSettings = vi.fn().mockResolvedValue({});
     bridge(setSettings);
     render(<Host />);
-    await waitFor(() => expect(screen.getByText('This model may not fit in available memory')).toBeTruthy());
-    const line = screen.getByText('This model may not fit in available memory');
+    await waitFor(() => expect(screen.getByText(/may not fit/i)).toBeTruthy());
+    const line = screen.getByText(/may not fit/i);
     expect(line.className, 'words in the normal text colour').toContain('text-fg-2');
     expect(line.className, 'no status colour on the words').not.toMatch(/text-(warning|destructive|amber)/);
     expect(line.className, 'the amber is the tint').toMatch(/bg-amber-500\/15/);

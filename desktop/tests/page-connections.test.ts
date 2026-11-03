@@ -23,8 +23,8 @@ describe('page connection wording', () => {
   it('says a look-up connection cannot send changes, and a full one does not', () => {
     for (const c of ALL) {
       const lookup = c.kind === 'youcoded' || ((c.kind === 'key' || c.kind === 'github') && c.access === 'lookup');
-      if (lookup) expect(sentence(c)).toContain('Cannot change anything there. The page decides what it sends to this address.');
-      else expect(sentence(c)).not.toContain('Cannot change anything there.');
+      if (lookup) expect(sentence(c)).toMatch(/cannot change/i);
+      else expect(sentence(c)).not.toMatch(/cannot change/i);
     }
   });
 
@@ -34,7 +34,8 @@ describe('page connection wording', () => {
   });
 
   it('is blunt about the whole internet', () => {
-    expect(sentence(ALL[6])).toBe('Reach any website. Anything shown in this page, or typed into it, could be sent anywhere.');
+    expect(sentence(ALL[6])).toMatch(/any website/i);
+    expect(sentence(ALL[6])).toMatch(/anywhere/i);
   });
 });
 
@@ -60,7 +61,8 @@ describe('reading an address', () => {
 describe('a YouCoded connection that may change things', () => {
   it('names each place and says the rest of the account is out of reach', () => {
     const w = describeConnection({ id: 'y', kind: 'youcoded', writePaths: ['/admin/analytics/website-campaigns'] });
-    expect(`${w.what} ${w.limit}`).toBe("Look things up on YouCoded's own service using your YouCoded sign-in, and make changes at /admin/analytics/website-campaigns. Nothing else on your account can be changed.");
+    // WHY: assert the computed fact (the one writable path), not the sentence around it.
+    expect(`${w.what} ${w.limit}`).toContain('/admin/analytics/website-campaigns');
   });
 });
 

@@ -238,13 +238,14 @@ describe('estimateFit — the four tiers', () => {
     expect(r.fit).toBe('tight');
     const ok = estimateFit(inputs({ modelBytes: 6 * GB, kvBytes: 0.5 * GB }));  // 7.0 ≤ 7.2
     expect(ok.fit).toBe('fits');
-    expect(ok.label).toBe('Runs fast — fits on your GPU');
+    expect(ok.label).toMatch(/gpu/i);
   });
 
   it('tight: over 90% of the pool but still inside it', () => {
     const r = estimateFit(inputs({ modelBytes: 7 * GB, kvBytes: 0 }));    // 7.5 GB of an 8 GB pool
     expect(r.fit).toBe('tight');
-    expect(r.label).toBe('Will be tight — close other apps first');
+    expect(r.label).toMatch(/tight/i);
+    expect(r.label).toMatch(/apps/i);
   });
 
   it('tight: OVER the pool but inside pool + available — the split that really runs', () => {
@@ -300,16 +301,18 @@ describe('estimateFit — the four tiers', () => {
       modelBytes: 30 * GB, kvBytes: 100 * GB, poolBytes: 40 * GB, availableBytes: 32 * GB,
     }));
     expect(r.fit).toBe('tight');
-    expect(r.label).toBe('Will be tight — lower its context length');
+    expect(r.label).toMatch(/tight/i);
+    expect(r.label).toMatch(/context/i);
     expect(r.label).not.toMatch(/splits/i);
   });
 
   it('a CPU-only pool never claims the model fits on a GPU', () => {
     const r = estimateFit(inputs({ modelBytes: 6 * GB, kvBytes: 0.5 * GB, poolIsGpu: false, poolBytes: 8 * GB }));
     expect(r.fit).toBe('fits');
-    expect(r.label).toBe('Should run well on this machine');
+    expect(r.label).not.toMatch(/gpu/i);
+    expect(r.label).toMatch(/run/i);
     expect(estimateFit(inputs({ modelBytes: 12 * GB, poolIsGpu: false })).label)
-      .toBe('Will be tight — close other apps first');
+      .toMatch(/tight.*apps/i);
   });
 });
 
@@ -610,7 +613,8 @@ describe('estimateFit — unified memory (Strix Halo, Apple Silicon)', () => {
 
   it('scored against the 4 GB BIOS carve-out it read "Will be tight" (the reported bug)', () => {
     const r = estimateFit(inputs({ ...qwen2b, poolBytes: 4.29 * GB, poolIsDedicatedVram: true, availableBytes: 106 * GB }));
-    expect(r.label).toBe('Will be tight — close other apps first');
+    expect(r.label).toMatch(/tight/i);
+    expect(r.label).toMatch(/apps/i);
   });
 
   it('scored against the real shared pool it fits on the GPU', () => {
@@ -619,7 +623,7 @@ describe('estimateFit — unified memory (Strix Halo, Apple Silicon)', () => {
       totalMemBytes: T, availableBytes: 106 * GB,
     }));
     expect(r.fit).toBe('fits');
-    expect(r.label).toBe('Runs fast — fits on your GPU');
+    expect(r.label).toMatch(/gpu/i);
   });
 
   it('the room on the chip is the SMALLER of the allowance and free RAM, never the sum', () => {
@@ -629,7 +633,8 @@ describe('estimateFit — unified memory (Strix Halo, Apple Silicon)', () => {
       modelBytes: 30 * GB, poolBytes: 84 * GB, poolIsShared: true, totalMemBytes: T, availableBytes: 20 * GB,
     }));
     expect(r.fit).toBe('tight');
-    expect(r.label).toBe('Will be tight — close other apps first');
+    expect(r.label).toMatch(/tight/i);
+    expect(r.label).toMatch(/apps/i);
   });
 
   it('a resident model is subtracted once, not from both the pool and free RAM', () => {

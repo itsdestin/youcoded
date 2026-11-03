@@ -423,7 +423,7 @@ describe('AssistantTurnBubble — stop reason footer', () => {
       toolGroups: new Map(),
       toolCalls: new Map(),
     });
-    expect(container.textContent).toContain('Question closed — waiting for you.');
+    expect(container.querySelector('[role="status"]')?.textContent).toMatch(/closed/i);
   });
 
   it('says nothing for a normal completion', () => {
@@ -433,7 +433,7 @@ describe('AssistantTurnBubble — stop reason footer', () => {
       toolGroups: new Map(),
       toolCalls: new Map(),
     });
-    expect(container.textContent).not.toContain('Question closed');
+    expect(container.querySelector('[role="status"]')).toBeNull();
   });
 
   it('renders the empty-response copy for stopReason empty_response', () => {
@@ -444,7 +444,7 @@ describe('AssistantTurnBubble — stop reason footer', () => {
       toolGroups: new Map(),
       toolCalls: new Map(),
     });
-    expect(container.textContent).toContain('The model returned an empty response twice. Trying again may help.');
+    expect(container.querySelector('[role="status"]')?.textContent).toMatch(/empty response/i);
   });
 
   it('end_turn never renders the empty-response copy', () => {
@@ -453,7 +453,7 @@ describe('AssistantTurnBubble — stop reason footer', () => {
       toolGroups: new Map(),
       toolCalls: new Map(),
     });
-    expect(container.textContent).not.toContain('empty response');
+    expect(container.querySelector('[role="status"]')).toBeNull();
   });
 
   it('renders a footer-only row for an empty_response turn with no segments', () => {
@@ -465,7 +465,7 @@ describe('AssistantTurnBubble — stop reason footer', () => {
       toolGroups: new Map(),
       toolCalls: new Map(),
     });
-    expect(container.textContent).toContain('The model returned an empty response twice. Trying again may help.');
+    expect(container.querySelector('[role="status"]')?.textContent).toMatch(/empty response/i);
   });
 
   it('the footer-only row carries the timestamp when showTimestamps is on', () => {

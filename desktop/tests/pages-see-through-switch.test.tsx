@@ -44,14 +44,14 @@ describe('the switch when it cannot apply', () => {
     theme.pagesSeeThrough = true; theme.setPagesSeeThrough.mockClear();
     glassRow(framedWallpaper);
     expect(sw()).not.toBeChecked(); expect(sw()).toBeDisabled();
-    expect(screen.getByText('Works with the Floating bars or Minimalist layout')).toBeInTheDocument();
+    expect(screen.getByText(/Floating bars.*Minimalist/)).toBeInTheDocument();
     expect(theme.setPagesSeeThrough).not.toHaveBeenCalled();
   });
   it('no wallpaper: reads OFF and disabled with the reason', () => {
     theme.pagesSeeThrough = true;
     glassRow(plain);
     expect(sw()).not.toBeChecked(); expect(sw()).toBeDisabled();
-    expect(screen.getAllByText('This theme has no wallpaper').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/no wallpaper/i).length).toBeGreaterThan(0);
   });
 });
 

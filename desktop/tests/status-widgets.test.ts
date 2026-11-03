@@ -53,8 +53,12 @@ describe('widgetUnavailableReason', () => {
   });
 
   it('explains the unavailable chips without promising them later', () => {
-    expect(widgetUnavailableReason('session-time', native)).toBe('Not available in this kind of session');
-    expect(widgetUnavailableReason('active-ratio', native)).toBe('Not available in this kind of session');
+    // A reason is given (not null), says it is unavailable, and never promises it later.
+    for (const id of ['session-time', 'active-ratio'] as const) {
+      const reason = widgetUnavailableReason(id, native);
+      expect(reason).toMatch(/not available/i);
+      expect(reason).not.toMatch(/yet|soon|later|coming/i);
+    }
   });
 
   // Task 20, defect A. The bar draws `Cost: not listed` for this shape, so the

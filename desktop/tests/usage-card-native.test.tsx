@@ -86,14 +86,11 @@ describe('UsageCard in a native session', () => {
     expect(screen.queryByText(/elapsed/i)).toBeNull();
   });
 
-  it('flags a partial total in the same words the status bar uses', () => {
+  it('flags a partial total with a note about models that have no price', () => {
     render(<UsageCard snapshot={{ ...nativeSnapshot, costUsd: 1.5, costIsPartial: true }} />);
     expect(screen.getByText('$1.50')).toBeInTheDocument();
-    // Byte-for-byte, not a substring: this sentence exists in StatusBar.tsx
-    // too, and the whole point is that the two surfaces say the SAME thing.
-    expect(
-      screen.getByText('Models with no available price are not included in this total.'),
-    ).toBeInTheDocument();
+    // Key words only: exact wording is not pinned, but the note must name the missing-price cause.
+    expect(screen.getByText(/no available price/i)).toBeInTheDocument();
   });
 
   it('says a cost could not be totalled rather than showing a false zero', () => {

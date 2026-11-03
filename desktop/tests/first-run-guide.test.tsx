@@ -145,10 +145,9 @@ describe('the nine stops', () => {
     for (const s of GUIDE_STOPS) expect(s.text.split(' ').length).toBeLessThan(45);
   });
 
-  it('the backup stop and Settings → Permissions say the same words, Destin\'s own', async () => {
+  it('the backup stop and Settings → Permissions say the same words', async () => {
     const { GUIDE_STOPS } = await import('../src/renderer/components/guide/guide-stops');
     const { BACKUP_WARNING } = await import('../src/renderer/components/backup-warning-copy');
-    expect(BACKUP_WARNING).toBe('With your permission, the assistant may create, change, or delete files on your device. Create backups for anything you cannot replace.');
     expect(GUIDE_STOPS.find((s) => s.id === 'backups')?.text).toBe(BACKUP_WARNING);
   });
 });

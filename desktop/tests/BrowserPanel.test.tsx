@@ -88,9 +88,9 @@ describe('Browser panel', () => {
 
   it('a start failure shows its real reason with Retry', async () => {
     const b = installBrowserBridge();
-    setBrowserState(browserState({ run: 'error', tabs: [], error: 'No browser was found on this computer for the assistant to use.' }));
+    setBrowserState(browserState({ run: 'error', tabs: [], error: 'FAKE-START-FAILURE-REASON' }));
     render(<BrowserPanel sessionId="s1" />);
-    expect(screen.getByText('No browser was found on this computer for the assistant to use.')).toBeInTheDocument();
+    expect(screen.getByText('FAKE-START-FAILURE-REASON')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Try again' })); // every retry reads "Try again" (error-notices-1#EN-Q1)
     expect(b.bridge.stop).toHaveBeenCalled();
   });
@@ -200,7 +200,7 @@ describe('Browser panel', () => {
     render(<BrowserPanel sessionId="s1" />);
     expect(screen.getByRole('tab', { name: 'New tab' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Address or search' })).toHaveValue('');
-    expect(screen.getByText('Type an address or a search above.')).toBeInTheDocument();
+    expect(screen.getByText(/type an address/i)).toBeInTheDocument();
   });
 
   it('a mouse drag highlights on the page, and copy puts the highlight on the clipboard', async () => {

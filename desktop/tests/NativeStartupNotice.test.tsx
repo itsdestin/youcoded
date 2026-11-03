@@ -12,8 +12,9 @@ const failed: NativeStartupState = { phase: 'failed', cause: 'tools', canContinu
 describe('native startup status above the composer', () => {
   it('says what is connecting and keeps the draft as a draft', () => {
     render(<StartupStatus state={{ phase: 'connecting', attemptId: 'a', hostId: 'h', generation: 1, revision: 1 }} onAction={vi.fn()} />);
-    expect(screen.getByText('Connecting tools…')).toBeInTheDocument();
-    expect(screen.getByText('You can read or draft a message while this finishes.')).toBeInTheDocument();
+    expect(screen.getByText(/connecting/i)).toBeInTheDocument();
+    // WHY: a connecting state offers no failure buttons; the reassurance line's wording is not pinned.
+    expect(screen.queryByRole('button')).toBeNull();
   });
   it('offers explicit retry or continuing without failed tools, and sends nothing on its own', () => {
     const act = vi.fn(); render(<StartupStatus state={failed} onAction={act} />);

@@ -217,8 +217,10 @@ describe('PermissionsSection — the modes block is reference content', () => {
     render(<PermissionsSection />);
     const block = modesBlock();
     const text = block.textContent ?? '';
-    expect(text).toContain('Create backups for anything you cannot replace.');
-    expect(text.indexOf('Create backups')).toBeLessThan(text.indexOf('Ask first'));
+    // WHY: the warning is found by its key word (not its sentence) and must sit before the first mode.
+    const warningAt = text.search(/backup/i);
+    expect(warningAt).toBeGreaterThanOrEqual(0);
+    expect(warningAt).toBeLessThan(text.indexOf('Ask first'));
   });
 
   it('contains no interactive element at all', async () => {

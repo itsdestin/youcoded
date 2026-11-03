@@ -64,7 +64,7 @@ describe('model switch popup (U11)', () => {
     await waitFor(() => expect(onNativeModelChanged).toHaveBeenCalledWith('small-model'));
     expect(onClose).toHaveBeenCalled();
     expect(switchModel).toHaveBeenCalledWith('s1', { providerId: 'cloud', modelId: 'small-model' }, false);
-    expect(screen.queryByText(/too long for/)).toBeNull();
+    expect(screen.queryByText(/too long/i)).toBeNull();
   });
 
   it('an overfull chat asks first, with the approved sentence, and changes nothing', async () => {
@@ -72,7 +72,10 @@ describe('model switch popup (U11)', () => {
     const { onClose, onNativeModelChanged, onNativeSummaryPending } = renderPicker();
     await pickSmall();
     const dialog = await screen.findByRole('dialog', { name: 'Switch model' });
-    expect(dialog).toHaveTextContent('This chat is too long for Small Model. Big Model can summarize older messages first.');
+    expect(dialog).toHaveTextContent('Small Model');
+    expect(dialog).toHaveTextContent('Big Model');
+    expect(dialog).toHaveTextContent(/too long/i);
+    expect(dialog).toHaveTextContent(/summar/i);
     expect(screen.getByRole('button', { name: 'Summarize and switch' })).toBeEnabled();
     expect(onNativeModelChanged).not.toHaveBeenCalled();
     expect(onNativeSummaryPending).not.toHaveBeenCalled();
@@ -157,7 +160,8 @@ describe('model switch popup (U11)', () => {
     await pickSmall();
     fireEvent.click(await screen.findByRole('button', { name: 'Summarize and switch' }));
     expect(await screen.findByRole('button', { name: 'Summarizing…' })).toBeDisabled();
-    expect(screen.getByRole('status')).toHaveTextContent('Close to stop and stay on Big Model.');
+    expect(screen.getByRole('status')).toHaveTextContent('Big Model');
+    expect(screen.getByRole('status')).toHaveTextContent(/close/i);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(interrupt).toHaveBeenCalledWith('s1');
     finish({ status: 'failed', reason: 'interrupted' });

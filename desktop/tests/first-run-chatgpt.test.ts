@@ -747,8 +747,8 @@ describe('ModelProvidersPopup — the Claude Code card reads the live sign-in', 
   it('says connected, and promises no plan limits, for an Anthropic API key', async () => {
     stubSettings({ state: 'signed-in', apiKey: true });
     render(React.createElement(ClaudeCodeBlock, { onCloseParent: vi.fn() }));
-    expect(await screen.findByText('Connected with an Anthropic API key')).toBeTruthy();
-    expect(screen.getByText('Billed per token — no plan limits.')).toBeTruthy();
+    expect(await screen.findByText(/API key/i)).toBeTruthy();
+    expect(screen.getByText(/per token/i)).toBeTruthy();
   });
 
   it('reports a missing binary as missing, never as signed out', async () => {

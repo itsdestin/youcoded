@@ -256,8 +256,8 @@ describe('folder browsing at any size', () => {
     const { findByText, queryByText, getByRole } = renderTab('list');
     expect(await findByText(/permission denied/)).toBeTruthy();
     expect(getByRole('button', { name: /try again/i })).toBeTruthy();
-    expect(queryByText('No files found in this project folder.')).toBeNull();
-    expect(queryByText('This folder is empty.')).toBeNull();
+    // WHY: both empty-folder notices must be absent; match on the shared key word so a reworded notice can't slip through.
+    expect(queryByText(/no files found|folder is empty/i)).toBeNull();
   });
 
   it('says why a huge folder stopped when a later page fails, and Retry carries on', async () => {

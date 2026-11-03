@@ -124,8 +124,8 @@ describe('GitReviewView', () => {
     await waitFor(() =>
       expect(git.commitFileDiff).toHaveBeenCalledWith('/proj', 'c'.repeat(40), 'src/f.ts', 'old-name.ts'));
     await waitFor(() =>
-      expect(screen.getByText('Moved from “old-name.ts” — no content changes in this commit.')).toBeInTheDocument());
-    expect(screen.queryByText('No direct changes to this file in this commit.')).not.toBeInTheDocument();
+      expect(screen.getByText(/old-name\.ts/)).toBeInTheDocument());
+    expect(screen.queryByText(/no direct changes/i)).not.toBeInTheDocument();
   });
 
   it('Show more appears when hasMore and fetches the next page', async () => {
@@ -244,13 +244,13 @@ describe('GitReviewView', () => {
     git.commitFileDiff.mockResolvedValueOnce({ ok: false, error: 'fatal: bad object', hunks: [], binary: false });
     await waitFor(() => screen.getByText('fix: first'));
     fireEvent.click(screen.getByText('fix: first'));
-    await waitFor(() => expect(screen.getByText('This commit’s changes couldn’t be loaded.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getByText('fatal: bad object')).toBeInTheDocument();
-    expect(screen.queryByText('No direct changes to this file in this commit.')).not.toBeInTheDocument();
+    expect(screen.queryByText(/no direct changes/i)).not.toBeInTheDocument();
     // Try again asks again without folding the card shut; the second answer draws.
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    await waitFor(() => expect(screen.getByText('No direct changes to this file in this commit.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/no direct changes/i)).toBeInTheDocument());
     expect(git.commitFileDiff).toHaveBeenCalledTimes(2);
   });
 

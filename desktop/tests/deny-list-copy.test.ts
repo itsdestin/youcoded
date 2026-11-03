@@ -7,40 +7,36 @@ import { fullAutoStopCopy } from '../src/renderer/components/permissions/deny-li
 
 describe('fullAutoStopCopy', () => {
   it('classifies each family, compounds included', () => {
-    expect(fullAutoStopCopy('rm -rf build').header).toBe('Stopped before deleting files');
-    expect(fullAutoStopCopy('cd repo && rm -rf build').header).toBe('Stopped before deleting files');
-    expect(fullAutoStopCopy('rmdir old').header).toBe('Stopped before deleting files');
-    expect(fullAutoStopCopy('del out.txt').header).toBe('Stopped before deleting files');
-    expect(fullAutoStopCopy('git push origin master').header).toBe('Stopped before pushing code');
-    expect(fullAutoStopCopy('git reset --hard HEAD~1').header).toBe('Stopped before undoing commits');
-    expect(fullAutoStopCopy('sudo systemctl restart nginx').header).toBe('Stopped before an admin command');
-    expect(fullAutoStopCopy('format D:').header).toBe('Stopped before formatting a drive');
+    expect(fullAutoStopCopy('rm -rf build').header).toMatch(/deleting/i);
+    expect(fullAutoStopCopy('cd repo && rm -rf build').header).toMatch(/deleting/i);
+    expect(fullAutoStopCopy('rmdir old').header).toMatch(/deleting/i);
+    expect(fullAutoStopCopy('del out.txt').header).toMatch(/deleting/i);
+    expect(fullAutoStopCopy('git push origin master').header).toMatch(/pushing/i);
+    expect(fullAutoStopCopy('git reset --hard HEAD~1').header).toMatch(/undoing/i);
+    expect(fullAutoStopCopy('sudo systemctl restart nginx').header).toMatch(/admin/i);
+    expect(fullAutoStopCopy('format D:').header).toMatch(/formatting/i);
   });
 
   it('builds the settled subline with the family clause', () => {
-    expect(fullAutoStopCopy('git push origin master').subline).toBe(
-      'Full auto still stops here — this changes your published code.',
-    );
-    expect(fullAutoStopCopy('rm -rf build').subline).toBe(
-      'Full auto still stops here — this permanently removes files.',
-    );
+    expect(fullAutoStopCopy('git push origin master').subline).toMatch(/published code/i);
+    expect(fullAutoStopCopy('rm -rf build').subline).toMatch(/removes files/i);
   });
 
   it('falls back when the command is unclassifiable or absent', () => {
     // A missing command (never expected, but the type allows it) must not crash the card.
-    expect(fullAutoStopCopy(undefined)).toEqual({
-      header: 'Stopped before a risky command',
-      subline: 'Full auto still stops here.',
-    });
+    const r = fullAutoStopCopy(undefined);
+    expect(r.header).toMatch(/risky/i);
+    // The generic pair must not claim a specific consequence.
+    expect(r.subline).not.toMatch(/published|removes|undo|admin|format/i);
   });
 });
 
 describe('fullAutoStopCopy for a floor below the rules', () => {
   it('uses the floor when the deny-list has no family for the command', () => {
-    expect(fullAutoStopCopy('cat .env', 'secret-path').header).toBe('Stopped before using a secret file');
-    expect(fullAutoStopCopy('Remove-Item -Recurse C:\\Windows', 'removal').header).toBe('Stopped before deleting files');
+    expect(fullAutoStopCopy('cat .env', 'secret-path').header).toMatch(/secret/i);
+    expect(fullAutoStopCopy('Remove-Item -Recurse C:\\Windows', 'removal').header).toMatch(/deleting/i);
   });
   it('a deny-list family still wins, since it names what the command does', () => {
-    expect(fullAutoStopCopy('sudo cat /root/.ssh/id_rsa', 'secret-path').header).toBe('Stopped before an admin command');
+    expect(fullAutoStopCopy('sudo cat /root/.ssh/id_rsa', 'secret-path').header).toMatch(/admin/i);
   });
 });

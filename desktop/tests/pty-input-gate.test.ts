@@ -189,9 +189,10 @@ describe('pendingInteractionKind and its refusal copy', () => {
   });
 
   it('every reason reads the same one sentence (the button says where to look)', () => {
-    for (const kind of ['approval', 'prompt', 'screen', null] as const) {
-      expect(pendingInteractionRefusalCopy(kind)).toBe('Claude Code is waiting on something — answer it first.');
-    }
+    // WHY: the rule is "one message for every kind", so compare the kinds to each other instead of pinning the sentence.
+    const copies = (['approval', 'prompt', 'screen', null] as const).map((kind) => pendingInteractionRefusalCopy(kind));
+    expect(new Set(copies).size).toBe(1);
+    expect(copies[0]).toMatch(/answer/i);
   });
 });
 

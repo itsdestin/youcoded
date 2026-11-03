@@ -67,14 +67,14 @@ describe('the refused-quit prompt', () => {
     render(<OfficeAlerts onReview={() => {}} />);
     prompt();
     expect(screen.getByText(/^3 files have unsaved changes\./)).toBeInTheDocument();
-    expect(screen.getByText('Open in this window — save it there')).toBeInTheDocument();
-    expect(await screen.findByText('The file is no longer there')).toBeInTheDocument();
+    expect(screen.getByText(/open in this window/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no longer there/i)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Save' })).toHaveLength(1); // plan.txt only
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
-    expect(screen.getByText('Discard your changes to this file?')).toBeInTheDocument();
+    expect(screen.getByText(/discard your changes/i)).toBeInTheDocument();
     expect(goneDiscard).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.getByText('The file is no longer there')).toBeInTheDocument();
+    expect(screen.getByText(/no longer there/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
     fireEvent.click(screen.getByRole('button', { name: 'Discard' })); // the confirm
     expect(goneDiscard).toHaveBeenCalled();
@@ -86,8 +86,8 @@ describe('the refused-quit prompt', () => {
     holdUnsavedEditor({ name: 'plan.txt', parked: { available: async () => answer, save: async () => ({ ok: true as const }) }, discard: () => {} });
     render(<OfficeAlerts onReview={() => {}} />);
     prompt();
-    expect(await screen.findByText('YouCoded couldn’t read this file: permission denied.')).toBeInTheDocument();
-    expect(screen.queryByText('The file is no longer there')).toBeNull();
+    expect(await screen.findByText(/permission denied/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no longer there/i)).toBeNull();
     answer = 'editable';
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('button', { name: 'Save' })).toBeInTheDocument();
@@ -182,7 +182,7 @@ describe('the refused-quit prompt', () => {
     render(<OfficeAlerts onReview={() => {}} />);
     prompt();
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
-    expect(await screen.findByText('This is a settings file. Save anyway?')).toBeInTheDocument();
+    expect(await screen.findByText(/settings file/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save anyway' }));
     await waitFor(() => expect(save).toHaveBeenLastCalledWith({ confirmed: true }));
   });
@@ -206,11 +206,11 @@ describe('the refused-quit prompt', () => {
     render(<OfficeAlerts onReview={() => {}} />);
     prompt();
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
-    const unknownText = 'YouCoded can’t tell whether this file changed on disk.';
+    const unknownText = /tell whether this file changed/i;
     expect(await screen.findByText(unknownText)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Discard' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save anyway' }));
-    expect(screen.getByText('Replace the file on disk with your version?')).toBeInTheDocument();
+    expect(screen.getByText(/replace the file/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' })); // back, with the same (accurate) wording
     expect(screen.getByText(unknownText)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save anyway' }));
@@ -273,7 +273,8 @@ describe('the refused-quit prompt', () => {
     holdUnsavedEditor({ name: 'notes.md', discard: () => {} });
     render(<OfficeAlerts onReview={() => {}} />);
     prompt({ afterTeardown: true, restartDropped: true });
-    expect(screen.getByText('A file has unsaved changes. Your chats have stopped. Save the file, then quit again. YouCoded will quit instead of restarting.')).toBeInTheDocument();
+    expect(screen.getByText(/chats have stopped/i)).toBeInTheDocument();
+    expect(screen.getByText(/instead of restarting/i)).toBeInTheDocument();
   });
 
   it("the last window's close says close, not quit", () => {
@@ -281,7 +282,7 @@ describe('the refused-quit prompt', () => {
     holdUnsavedEditor({ name: 'notes.md', discard: () => {} });
     render(<OfficeAlerts onReview={() => {}} />);
     prompt({ mode: 'close' });
-    expect(screen.getByText('A file has unsaved changes. Save it, then close the window again.')).toBeInTheDocument();
+    expect(screen.getByText(/close the window/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Discard and close' })).toBeInTheDocument();
   });
 

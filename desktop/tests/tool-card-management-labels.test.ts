@@ -74,7 +74,10 @@ describe('the collapsed group sentence agrees', () => {
       card('Task', { list: true }),
       card('Task', { task_id: 'c1', prompt: 'p' }, { response: 'Steer delivered to Wren.' }),
     ]);
-    expect(headline).toBe('Checked on its specialists and sent a note to a specialist');
+    // WHY facts not sentence: both actions named, each about specialists, neither as a hire.
+    expect(headline).toMatch(/checked on/i);
+    expect(headline).toMatch(/sent a note/i);
+    expect(headline).toMatch(/specialist/i);
     expect(headline).not.toContain('brought in');
   });
 
@@ -85,7 +88,10 @@ describe('the collapsed group sentence agrees', () => {
   });
 
   it('background checks and stops are not "used a tool"', () => {
-    expect(buildToolGroupHeadline([card('TaskOutput', { task_id: 'b' }), card('TaskStop', { task_id: 'b' })]))
-      .toBe('Checked on a background task and stopped a background task');
+    const headline = buildToolGroupHeadline([card('TaskOutput', { task_id: 'b' }), card('TaskStop', { task_id: 'b' })]);
+    expect(headline).toMatch(/checked on/i);
+    expect(headline).toMatch(/stopped/i);
+    expect(headline).toMatch(/background task/i);
+    expect(headline).not.toMatch(/used a tool/i);
   });
 });

@@ -92,9 +92,9 @@ describe('Pages first-run placement', () => {
     snapshot.current.pages = [];
     onCreatePage.mockClear();
     mount();
-    expect(await screen.findByText('Pages are little apps you describe')).toBeInTheDocument();
-    expect(screen.queryByText('No page selected')).not.toBeInTheDocument();
-    expect(screen.queryByText('No pages yet. Create one below.')).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /little apps/i })).toBeInTheDocument();
+    expect(screen.queryByText(/no page selected/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no pages yet/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Make a page' }));
     expect(onCreatePage).toHaveBeenCalledOnce();
   });
@@ -102,7 +102,7 @@ describe('Pages first-run placement', () => {
   it('hides the empty sidebar and offers only Make a page', async () => {
     snapshot.current.pages = [];
     mount();
-    await screen.findByText('Pages are little apps you describe');
+    await screen.findByRole('heading', { name: /little apps/i });
     expect(document.querySelector('.screen-pane--panel')).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Make a page' })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Manage pages' })).not.toBeInTheDocument();
@@ -111,17 +111,17 @@ describe('Pages first-run placement', () => {
   it('keeps the selected-page prompt when pages exist', async () => {
     snapshot.current.pages = [{ id: 'personal:test', name: 'Test', description: '', icon: 'sparkles', home: { kind: 'personal' }, updatedAt: new Date().toISOString(), pinned: false }];
     mount();
-    expect(await screen.findByText('No page selected')).toBeInTheDocument();
+    expect(await screen.findByText(/no page selected/i)).toBeInTheDocument();
     expect(document.querySelector('.screen-pane--panel')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Manage pages' })).toBeInTheDocument();
-    expect(screen.queryByText('Pages are little apps you describe')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /little apps/i })).not.toBeInTheDocument();
   });
 
   it('does not put a second first-run card behind Manage pages', async () => {
     snapshot.current.pages = [];
     mount(true);
     const manager = screen.getByRole('heading', { name: 'Manage pages' }).closest('.fixed')!;
-    expect(manager).not.toHaveTextContent('Pages are little apps you describe');
+    expect(manager).not.toHaveTextContent(/little apps/i);
     expect(manager).toHaveTextContent('Make a page');
   });
 });

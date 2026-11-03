@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import React from 'react';
 import ToolCard from '../src/renderer/components/ToolCard';
+import { fullAutoStopCopy } from '../src/renderer/components/permissions/deny-list-copy';
 import { bashNoGrantNote } from '../src/shared/bash-grant-shapes';
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import type { ToolCallState } from '../src/shared/types';
@@ -71,7 +72,7 @@ describe('passwordless admin approval choices', () => {
 describe('full-auto safety stop', () => {
   it('explains an outside-folder edit and asks before granting all outside folders for this session', async () => {
     renderCard(stopTool({ toolName: 'Edit', input: { file_path: '/tmp/other/code.ts' }, denyListed: false, external: true }));
-    expect(screen.getByText('Stopped before editing outside this project')).toBeTruthy();
+    expect(screen.getByText(/outside this project/i)).toBeTruthy();
     expect(screen.getByText(/Full auto still stops here/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy();
@@ -124,10 +125,10 @@ describe('full-auto safety stop', () => {
     expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Always allow' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^yes$/i })).toBeNull();
-    expect(screen.getByText('Stopped before pushing code')).toBeTruthy();
-    expect(
-      screen.getByText('Full auto still stops here — this changes your published code.'),
-    ).toBeTruthy();
+    expect(screen.getByText(fullAutoStopCopy('git push origin master').header)).toBeTruthy();
+    // WHY: read the sentence from the same copy function the card uses, so rewording it doesn't break this test.
+    const copy = fullAutoStopCopy('git push origin master');
+    expect(screen.getByText(copy.subline)).toBeTruthy();
   });
 
   it('keeps the generic row for ask-mode + denyListed', () => {
@@ -202,8 +203,9 @@ describe('full-auto stop for a removal the floor always asks about', () => {
 describe('full-auto stop for a command that names a secret file', () => {
   it('names the secret-file floor and offers no Always allow', () => {
     renderCard(stopTool({ input: { command: 'cat ~/.ssh/id_rsa' }, floorStop: 'secret-path' }));
-    expect(screen.getByText('Stopped before using a secret file')).toBeTruthy();
-    expect(screen.getByText('Full auto still stops here — this uses a file that holds passwords or keys.')).toBeTruthy();
+    const copy = fullAutoStopCopy('cat .env', 'secret-path');
+    expect(screen.getByText(copy.header)).toBeTruthy();
+    expect(screen.getByText(copy.subline)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Run it' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Always allow' })).toBeNull();
   });
@@ -249,7 +251,10 @@ describe('Ask-mode card forced by a floor', () => {
 
   it('Full auto names a "could" floor as a possibility', () => {
     renderCard(stopTool({ input: { command: 'cat .env*' }, floorStop: 'secret-maybe' }));
-    expect(screen.getByText('Stopped at a possible secret file')).toBeTruthy();
-    expect(screen.getByText('Full auto still stops here — this could read a file that holds passwords or keys.')).toBeTruthy();
+    const copy = fullAutoStopCopy('cat .env*', 'secret-maybe');
+    expect(screen.getByText(copy.header)).toBeTruthy();
+    expect(screen.getByText(copy.subline)).toBeTruthy();
+    // A "maybe" floor must read as a possibility, not the definite secret-file stop.
+    expect(copy.header).not.toBe(fullAutoStopCopy('cat .env', 'secret-path').header);
   });
 });

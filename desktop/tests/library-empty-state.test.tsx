@@ -98,8 +98,8 @@ describe('LibraryScreen empty state', () => {
     const onOpenMarketplace = vi.fn();
     await renderLibrary({ onOpenMarketplace });
 
-    expect(screen.getByText('Nothing installed yet.')).toBeInTheDocument();
-    expect(screen.getByText('Star an installed plugin and it appears here.')).toBeInTheDocument();
+    expect(screen.getByText(/nothing installed/i)).toBeInTheDocument();
+    expect(screen.getByText(/star an installed plugin/i)).toBeInTheDocument();
 
     const browse = screen.getByRole('button', { name: 'Browse the Marketplace' });
     expect(browse).toBeInTheDocument();
@@ -109,7 +109,7 @@ describe('LibraryScreen empty state', () => {
 
   it('omits the Browse button when no marketplace destination was provided', async () => {
     await renderLibrary();
-    expect(screen.getByText('Nothing installed yet.')).toBeInTheDocument();
+    expect(screen.getByText(/nothing installed/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Browse the Marketplace' })).toBeNull();
   });
 
@@ -117,8 +117,8 @@ describe('LibraryScreen empty state', () => {
   // with nothing downloaded it lists exactly the six built-ins (none favorited here).
   it('lists the built-in themes on the Themes tab when nothing is downloaded', async () => {
     await renderLibrary({ onOpenMarketplace: () => {}, initialTab: 'themes' });
-    expect(screen.queryByText('No themes installed yet.')).not.toBeInTheDocument();
-    expect(screen.getByText('Star an installed theme and it appears here.')).toBeInTheDocument();
+    expect(screen.queryByText(/no themes installed/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/star an installed theme/i)).toBeInTheDocument();
     for (const name of ['YouCoded', 'YouCoded Night', 'Light', 'Dark', 'Midnight', 'Crème']) {
       // getAll: a built-in's author chip also reads "YouCoded".
       expect(screen.getAllByText(name).length).toBeGreaterThan(0);

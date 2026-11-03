@@ -27,7 +27,7 @@ describe('MCP keychain recovery', () => {
     const servers = await h.registry.resolveAllEnabled();
     expect(servers).toHaveLength(2);
     expect(servers[0].missingSecrets).toEqual([]);
-    expect(servers[0].credentialError).toContain('Secure key storage is currently unavailable');
+    expect(servers[0].credentialError).toMatch(/key storage/i);
     expect(servers[0].env).toBeUndefined();
     expect(servers[1].credentialError).toBeUndefined();
     h.unlock();

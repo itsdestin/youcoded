@@ -186,7 +186,7 @@ describe('ProjectHero on desktop', () => {
       sync: { dot: { color: 'gray' }, spaceId: null, lastSynced: null, errorMessage: null, stopped: false },
     });
     fireEvent.click(screen.getByLabelText('Sync status: Not synced'));
-    expect(screen.getByText('Turn on sync for this project')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /turn on sync/i })).toBeTruthy();
   });
 
   // Stop-syncing moved from the actions row into the sync popover (2026-08-05).

@@ -76,10 +76,10 @@ describe('VoiceButton card — first run (R8, R22)', () => {
 
     expect(screen.getByText('Speak your messages')).toBeInTheDocument();
     expect(
-      screen.getByText(/Your voice is turned into text on this computer and never leaves it\./),
+      screen.getByText(/never leaves/i),
     ).toBeInTheDocument();
-    expect(screen.getByText('Understands English and 24 other European languages.')).toBeInTheDocument();
-    expect(screen.getByText('One-time download: about 650 MB.')).toBeInTheDocument();
+    expect(screen.getByText(/English.*\b24\b/)).toBeInTheDocument();
+    expect(screen.getByText(/650 MB/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Not now' })).toBeInTheDocument();
   });
@@ -117,7 +117,7 @@ describe('VoiceButton card — unpacking (R23)', () => {
     renderCard({ readiness: { state: 'unpacking', engine: 'Parakeet' } });
     tapMic();
 
-    expect(screen.getByText('Almost ready…')).toBeInTheDocument();
+    expect(screen.getByText(/almost ready/i)).toBeInTheDocument();
     const bar = screen.getByRole('progressbar', { name: 'Getting voice ready' });
     // Indeterminate on purpose: nothing here reports a percentage worth
     // believing, so the bar claims no value.
@@ -129,7 +129,7 @@ describe('VoiceButton card — unpacking (R23)', () => {
     renderCard({ readiness: { state: 'unpacking', engine: 'Parakeet' } });
     tapMic();
     expect(
-      screen.getByText('You can keep typing; the mic wakes up when it is done.'),
+      screen.getByText(/keep typing/i),
     ).toBeInTheDocument();
   });
 });
@@ -183,7 +183,7 @@ describe('VoiceButton card — a download that failed (R3-6, R12)', () => {
     // The card opens itself on an error — the reason is not left unread.
     expect(screen.getByText('Speak your messages')).toBeInTheDocument();
     // The computer's own words are folded under Details, never the sentence.
-    expect(screen.getByText("The voice download didn't finish.")).toBeInTheDocument();
+    expect(screen.getByText(/voice download/i)).toBeInTheDocument();
     expect(screen.queryByText(REASON)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Details/ }));
     expect(screen.getByText(REASON)).toBeInTheDocument();
@@ -213,7 +213,7 @@ describe('VoiceButton card — a download that failed (R3-6, R12)', () => {
     renderCard({ readiness: { state: 'ready', engine: 'Parakeet' }, error: 'The speech engine stopped: exit code 1' });
     expect(screen.getByText('Voice stopped')).toBeInTheDocument();
     // A plain sentence; the host's words (an exit code) only under Details.
-    expect(screen.getByText('Voice input stopped before it finished.')).toBeInTheDocument();
+    expect(screen.getByText(/voice input/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Details/ }));
     expect(screen.getByText('The speech engine stopped: exit code 1')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();

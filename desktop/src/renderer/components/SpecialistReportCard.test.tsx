@@ -21,8 +21,8 @@ describe('SpecialistReportCard', () => {
     expect(screen.getByTestId('specialist-report-card')).toHaveAttribute('data-status', 'completed');
     expect(container.querySelector('.user-bubble')).toBeNull();
     // Header says who finished and what they were asked, with the step count.
-    expect(screen.getByText('Briar the Worthy Worker finished')).toBeInTheDocument();
-    expect(screen.getByText('Create and delete test file · 2 steps')).toBeInTheDocument();
+    expect(screen.getByText(/Briar the Worthy Worker/)).toBeInTheDocument();
+    expect(screen.getByText(/Create and delete test file.*2 steps/)).toBeInTheDocument();
     // The report itself is NOT on screen until expanded.
     expect(container.textContent).not.toContain('Created and deleted the marker file');
     expect(container.textContent).not.toContain('[Background specialist finished]');

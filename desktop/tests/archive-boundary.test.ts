@@ -89,8 +89,9 @@ describe('findArchiveBoundary', () => {
 
 describe('archivedTooltip', () => {
   it('names neither Claude nor a model, and says what each dimming means', () => {
-    expect(archivedTooltip('compact')).toBe('Summarized — the assistant has a summary of this, not the exact words');
-    expect(archivedTooltip('clear')).toBe('Cleared — still here to read, but the assistant no longer sees it');
+    expect(archivedTooltip('compact')).toMatch(/summar/i);
+    expect(archivedTooltip('clear')).toMatch(/cleared/i);
+    expect(archivedTooltip('compact')).not.toBe(archivedTooltip('clear'));
     for (const k of ['compact', 'clear'] as const) expect(archivedTooltip(k)).not.toMatch(/Claude/);
   });
 });

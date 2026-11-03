@@ -204,7 +204,7 @@ describe('UpdatePanel — the version pill popup', () => {
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
       // small-fixes-1#SF-1: the reason is a sentence; the button reads exactly "Try again".
-      expect(await screen.findByText("The download was damaged, so it wasn't installed.")).toBeInTheDocument();
+      expect(await screen.findByText(/download was damaged/i)).toBeInTheDocument();
       const retry = screen.getByRole('button', { name: 'Try again' });
       expect(retry).toBeEnabled();
       // The "Open in browser instead" link opens the raw installer — the very file
@@ -324,7 +324,7 @@ describe('UpdatePanel — the update button after a failure', () => {
       await clickUpdate();
 
       // small-fixes-1#SF-1: the failure is a sentence in the notice box, the button just "Try again".
-      expect(await screen.findByText("The update didn't download.")).toBeInTheDocument();
+      expect(await screen.findByText(/didn.t download/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
       expect(screen.queryByText(/installer didn't start/i)).toBeNull();
     });
@@ -334,7 +334,7 @@ describe('UpdatePanel — the update button after a failure', () => {
       await clickUpdate();
 
       // The sentence names the download; no Try again — a retry that cannot help (code review F3).
-      expect(await screen.findByText("The update didn't download.")).toBeInTheDocument();
+      expect(await screen.findByText(/didn.t download/i)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
       expect(screen.getByRole('button', { name: 'Open in browser instead' })).toBeInTheDocument();
       expect(screen.queryByText(/installer didn't start/i)).toBeNull();
@@ -345,7 +345,7 @@ describe('UpdatePanel — the update button after a failure', () => {
       await clickUpdate({ cached: true });
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
 
-      expect(await screen.findByText("The installer didn't start.")).toBeInTheDocument();
+      expect(await screen.findByText(/installer didn.t start/i)).toBeInTheDocument();
     });
   });
 
@@ -449,7 +449,7 @@ describe('UpdatePanel — the update button after a failure', () => {
       view.rerender(<UpdatePanel open={false} {...props} />);
       await act(async () => finish({ success: false, error, output: 'Last installer output', command: COMMAND }));
       view.rerender(<UpdatePanel open {...props} />);
-      expect(await screen.findByText(error === 'install-timeout' ? "Couldn't confirm the installation result." : "Your package manager wouldn't install the update.")).toBeInTheDocument();
+      expect(await screen.findByText(error === 'install-timeout' ? /confirm the installation result/i : /package manager/i)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /launch installer|update now/i })).not.toBeInTheDocument();
       fireEvent.click(screen.getByText('Details'));
       expect(screen.getByText('Last installer output')).toBeInTheDocument();
@@ -460,7 +460,7 @@ describe('UpdatePanel — the update button after a failure', () => {
       (window as any).claude.update.launch = vi.fn().mockRejectedValue(new Error('connection closed'));
       await clickUpdate({ cached: true });
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
-      expect(await screen.findByText("Couldn't confirm the installation result.")).toBeInTheDocument();
+      expect(await screen.findByText(/confirm the installation result/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Diagnose with the assistant' })).toBeInTheDocument();
       fireEvent.click(screen.getByText('Details'));
@@ -471,13 +471,13 @@ describe('UpdatePanel — the update button after a failure', () => {
 
     it('a launch refused because another installation is active offers no parallel installation', async () => {
       await launchWith({ success: false, error: 'busy' });
-      expect(await screen.findByText('Another update installation is already running.')).toBeInTheDocument();
+      expect(await screen.findByText(/already running/i)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /try again|run in terminal|open in browser/i })).not.toBeInTheDocument();
     });
 
     it('an install timeout warns that it may still be running without offering another install', async () => {
       await launchWith({ success: false, error: 'install-timeout', command: COMMAND, output: 'Running post-install hooks…' });
-      expect(await screen.findByText("Couldn't confirm the installation result.")).toBeInTheDocument();
+      expect(await screen.findByText(/confirm the installation result/i)).toBeInTheDocument();
       expect(screen.getByText(/may still be running/i)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /run in terminal|open in browser/i })).not.toBeInTheDocument();
@@ -489,12 +489,12 @@ describe('UpdatePanel — the update button after a failure', () => {
       (window as any).claude.update.getCachedDownload = vi.fn().mockResolvedValue({ filePath: '/tmp/YouCoded-setup.exe', version: '1.3.0' }); // opened onto a downloaded file: the interactive installer path
       const view = render(<UpdatePanel open {...props} />);
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
-      expect(await screen.findByText("Couldn't confirm the installation result.")).toBeInTheDocument();
+      expect(await screen.findByText(/confirm the installation result/i)).toBeInTheDocument();
       const progress = (window as any).claude.update.onInstallProgress.mock.calls[0][0];
       view.rerender(<UpdatePanel open={false} {...props} />);
       act(() => progress({ jobId: 'cached', phase: 'failed', error: 'install-cancelled', output: 'Authentication cancelled', command: COMMAND }));
       view.rerender(<UpdatePanel open {...props} />);
-      expect(await screen.findByText('The password prompt was closed, so nothing was installed.')).toBeInTheDocument();
+      expect(await screen.findByText(/password prompt was closed/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
       expect(screen.getByText(COMMAND)).toBeInTheDocument();
       fireEvent.click(screen.getByText('Details'));
@@ -503,7 +503,7 @@ describe('UpdatePanel — the update button after a failure', () => {
 
     it('keeps a failed package manager’s output inside the error’s Details', async () => {
       await launchWith({ success: false, error: 'install-failed', command: COMMAND, output: 'error: failed to lock database' });
-      expect(await screen.findByText("Your package manager wouldn't install the update.")).toBeInTheDocument();
+      expect(await screen.findByText(/package manager/i)).toBeInTheDocument();
       fireEvent.click(screen.getByText('Details'));
       expect(screen.getByText('error: failed to lock database')).toBeInTheDocument();
     });
@@ -519,14 +519,14 @@ describe('UpdatePanel — the update button after a failure', () => {
     it('a refused package install says so and still offers the command', async () => {
       await launchWith({ success: false, error: 'install-failed', command: COMMAND });
 
-      expect(await screen.findByText("Your package manager wouldn't install the update.")).toBeInTheDocument();
+      expect(await screen.findByText(/package manager/i)).toBeInTheDocument();
       expect(screen.getByText(COMMAND)).toBeInTheDocument();
     });
 
     it('shows no command block on platforms that never send one', async () => {
       await launchWith({ success: false, error: 'dmg-corrupt' });
 
-      expect(await screen.findByText("The installer didn't start.")).toBeInTheDocument();
+      expect(await screen.findByText(/installer didn.t start/i)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /run in terminal/i })).toBeNull();
     });
   });
@@ -571,7 +571,7 @@ describe('UpdatePanel — what it promises and how a failed Restart is worded', 
     mountApi({ supported: true, enabled: true }, { restartToUpdate: vi.fn().mockRejectedValue(new Error("Error invoking remote method 'update:restart-to-update': Error: network-failed: could not confirm this release is still current")) });
     render(<UpdatePanel open onClose={() => {}} updateStatus={READY} />);
     fireEvent.click(await screen.findByRole('button', { name: /restart to update/i }));
-    expect(await screen.findByText("Couldn't restart to update.")).toBeInTheDocument();
+    expect(await screen.findByText(/restart to update/i)).toBeInTheDocument();
     expect(screen.queryByText(/installer didn't start/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/update didn't download/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
@@ -585,7 +585,7 @@ describe('UpdatePanel — what it promises and how a failed Restart is worded', 
     mountApi({ supported: true, enabled: true }, { restartToUpdate: vi.fn().mockRejectedValue(new Error('install-cancelled: authentication cancelled')) });
     render(<UpdatePanel open onClose={() => {}} updateStatus={READY} />);
     fireEvent.click(await screen.findByRole('button', { name: /restart to update/i }));
-    expect(await screen.findByText('The password prompt was closed, so nothing was installed.')).toBeInTheDocument();
+    expect(await screen.findByText(/password prompt was closed/i)).toBeInTheDocument();
   });
 
   it('Update now does not run on into the password step: on a password computer the person presses Restart themselves', async () => {

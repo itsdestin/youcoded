@@ -1009,16 +1009,16 @@ describe('ResumeBrowser — a slow load says so', () => {
     };
     render(<ResumeBrowser open={true} onClose={() => {}} onResume={() => {}} defaultModel="sonnet" />);
     await act(async () => { await vi.advanceTimersByTimeAsync(5900); });
-    expect(screen.queryByText(/Still loading/)).toBeNull();
+    expect(screen.queryByText(/still loading/i)).toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
-    expect(screen.getByText('Still loading — this is taking longer than usual.')).toBeInTheDocument();
+    expect(screen.getByText(/still loading/i)).toBeInTheDocument();
 
     const callsBefore = browse.mock.calls.length;
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(browse.mock.calls.length).toBe(callsBefore + 1);
     // The wait starts over: the line goes away until another 6 s pass.
     await act(async () => { await vi.advanceTimersByTimeAsync(100); });
-    expect(screen.queryByText(/Still loading/)).toBeNull();
+    expect(screen.queryByText(/still loading/i)).toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
     expect(screen.getByText(/Still loading/)).toBeInTheDocument();
   });

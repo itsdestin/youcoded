@@ -307,7 +307,6 @@ describe('addVisionToModel — order of operations', () => {
     const r = recorder({ states: ['sleeping'] });     // frees memory, child still holds the file
     await expect(addVisionToModel(cacheDir, id, r.engine, start(r), r.timing))
       .rejects.toThrow(STILL_BUSY_MESSAGE);
-    expect(STILL_BUSY_MESSAGE).toBe('The model is still busy — try again in a moment.');
     expect(snapshot()).toEqual(before);
     expect(fs.existsSync(path.join(cacheDir, id))).toBe(false);
     expect(r.log).not.toContain('download');

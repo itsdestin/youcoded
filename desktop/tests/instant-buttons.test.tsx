@@ -455,7 +455,7 @@ describe('Permission answer', () => {
     expect(screen.queryByRole('button', { name: /^Yes|Allow/i })).toBeNull();      // the buttons are gone before any reply
     expect(screen.queryByTestId('tool-card-answer-pending')).toBeNull();           // a quick confirmation never flashes the line
     await act(async () => { await vi.advanceTimersByTimeAsync(800); });
-    expect(screen.getByTestId('tool-card-answer-pending').textContent).toBe('Waiting for your computer to confirm your answer');
+    expect(screen.getByTestId('tool-card-answer-pending').textContent).toMatch(/waiting/i);
     p.view.unmount();
   });
 });

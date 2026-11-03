@@ -551,7 +551,8 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
       expect(document.querySelector('[data-chat-session-id]:not([aria-hidden="true"])')).toBeNull();
       await screen.findByText('device-wb-past-1');
       fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
-      expect(await screen.findByText('Finish the current conversation transfer, then try reopening this one again.')).toBeInTheDocument();
+      // The refusal shows as a toast (role=status); match one key word, not the sentence.
+      await waitFor(() => expect(screen.getAllByRole('status').some((el) => /transfer/i.test(el.textContent ?? ''))).toBe(true));
       expect(begin).toHaveBeenCalledOnce();
     } finally {
       while (screen.queryByRole('button', { name: 'Never mind' })) {

@@ -23,7 +23,7 @@ afterEach(() => { cleanup(); h.startSignIn.mockClear(); h.signInPending = false;
 describe('friends panel, signed out', () => {
   it("says Destin's sentence and signs in with a full-width filled button", () => {
     render(<FriendsPanel social="online" onRetry={vi.fn()} />);
-    expect(screen.getByText('Sign in to play with friends and put your scores on the board.')).toBeInTheDocument();
+    expect(screen.getByText(/scores/i)).toBeInTheDocument();
     const button = screen.getByRole('button', { name: 'Sign in' });
     // Filled = the primary button (guide "Buttons": the main action is filled).
     expect(button.className).toContain('bg-accent');

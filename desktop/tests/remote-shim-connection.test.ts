@@ -1189,11 +1189,14 @@ describe('remote-shim — overlapping connections', () => {
       await setup();
       const ws = await signedIn();
       let outcome = 'pending';
-      claude().skills.list().then(() => { outcome = 'resolved'; }, (e: Error) => { outcome = e.message; });
+      let unknown: unknown;
+      claude().skills.list().then(() => { outcome = 'resolved'; }, (e: Error) => { outcome = e.message; unknown = (e as any).outcomeUnknown; });
       const req = ws.sentOf('skills:list')[0];
       ws.fireClose(1006);
       await settle();
-      expect(outcome).toBe('Lost the connection before the computer answered.');
+      // WHY flag + one keyword: the flag is what callers act on ("may have run"); the sentence is only for people.
+      expect(unknown).toBe(true);
+      expect(outcome).toMatch(/connection/i);
       await vi.advanceTimersByTimeAsync(1000);
       const back = latest();
       back.open();

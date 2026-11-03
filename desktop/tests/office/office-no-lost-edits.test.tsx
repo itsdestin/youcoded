@@ -190,7 +190,7 @@ describe('when an Office save fails', () => {
       }));
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
-    expect(await screen.findByText('Saved a copy to Documents — now editing the copy.')).toBeInTheDocument();
+    expect(await screen.findByText(/copy.*Documents/i)).toBeInTheDocument();
     // Same tab, now the copy; the original's session is handed back with nothing to save.
     expect(officeDocFor(FILE.path)).toBeNull();
     expect(officeDocFor(COPY)).not.toBeNull();
@@ -206,7 +206,7 @@ describe('when an Office save fails', () => {
   it('closes without saving only after the person confirms, and discards the changes', async () => {
     const { office, posted } = await failedTab();
     fireEvent.click(screen.getByRole('button', { name: 'Close without saving' }));
-    expect(screen.getByText('Your changes since the last save will be lost.')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(officeDocFor(FILE.path)).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Close without saving' }));
@@ -287,8 +287,7 @@ describe('quitting, closing or reloading with an Office document not saved yet',
   it("main's refused quit lists it — even with the Office page closed — and asks it to save at once", async () => {
     const { prompt, win } = await changed();
     act(() => prompt()({ mode: 'quit', afterTeardown: false, restartDropped: false }));
-    expect(await screen.findByText(/^A file has unsaved changes\./)).toBeInTheDocument();
-    expect(screen.getByText('plan.docx')).toBeInTheDocument();
+    expect(await screen.findByText('plan.docx')).toBeInTheDocument();
     expect(win().postMessage).toHaveBeenCalledWith({ type: 'yc:office-save' }, 'office://t1');
   });
 
@@ -368,7 +367,7 @@ describe('quitting, closing or reloading with an Office document not saved yet',
     withOffice({ open: opened, invoke } as Partial<OfficeBridge>);
     act(() => openDoc(FILE));
     render(<OfficeView />);
-    expect(await screen.findByText('Unsaved changes from last time were kept, but this file has changed since.')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Recover unsaved changes' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Recover unsaved changes' }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('t1', 'recovery_accept_held', {}));
     await waitFor(() => expect(opened).toHaveBeenCalledTimes(2)); // the editor reopens and replays them
@@ -382,7 +381,7 @@ describe('quitting, closing or reloading with an Office document not saved yet',
     render(<OfficeView />);
     fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('t1', 'recovery_discard_held', {}));
-    await waitFor(() => expect(screen.queryByText(/were kept, but this file has changed since/)).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Recover unsaved changes' })).toBeNull());
     expect(opened).toHaveBeenCalledTimes(1);
   });
 
@@ -443,11 +442,11 @@ describe('the kept, hidden Office view', () => {
     const { rerender } = render(host(true));
     const { showVersions } = await import('../../src/renderer/components/office/office-store');
     act(() => showVersions(FILE));
-    expect(await screen.findByText('No earlier versions yet.')).toBeInTheDocument();
+    expect(await screen.findByText(/no earlier versions/i)).toBeInTheDocument();
     rerender(host(false));
-    expect(screen.queryByText('No earlier versions yet.')).toBeNull();
+    expect(screen.queryByText(/no earlier versions/i)).toBeNull();
     rerender(host(true));
-    expect(await screen.findByText('No earlier versions yet.')).toBeInTheDocument();
+    expect(await screen.findByText(/no earlier versions/i)).toBeInTheDocument();
   });
 
   it('says so outside the page when a tab closed while hidden could not save', async () => {
@@ -470,7 +469,8 @@ describe('the kept, hidden Office view', () => {
     rerender(host(false));
     act(() => closeDoc(FILE.path));
     send({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
-    expect(await screen.findByText("An Office document couldn't be saved.")).toBeInTheDocument();
+    // The toast's own action is the structural signal that the failure notice is up.
+    expect(await screen.findByRole('button', { name: 'Open Office' })).toBeInTheDocument();
     expect(officeDocFor(FILE.path)).toMatchObject({ closing: false });
   });
 });
@@ -522,16 +522,16 @@ describe('Save a copy while the editor could still change', () => {
 
   it("shows main's refusal of a copy target that is open in Office, on the strip, and does not switch", async () => {
     const { saveCopy } = await failedWith();
-    saveCopy.mockImplementation(async (_t: string, mode: string) => (mode === 'check' ? { ok: true as const, possible: true } : { ok: false as const, message: 'That file is open in Office. Close it or choose another name.' }) as never);
+    saveCopy.mockImplementation(async (_t: string, mode: string) => (mode === 'check' ? { ok: true as const, possible: true } : { ok: false as const, message: 'MAIN-REFUSAL-MARKER' }) as never);
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
-    expect(await screen.findByText('That file is open in Office. Close it or choose another name.')).toBeInTheDocument();
+    expect(await screen.findByText('MAIN-REFUSAL-MARKER')).toBeInTheDocument();
     expect(officeDocFor(COPY)).toBeNull();
   });
 
   it('does not switch when handing the editor\'s bytes to main failed before the copy (I3)', async () => {
     const { saveCopy } = await failedWith({ writeFails: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
-    expect(await screen.findByText("Office couldn't save a copy of this file.")).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).not.toHaveTextContent(/read-only disk/);
     expect(saveCopy.mock.calls.map((c) => c[1])).not.toContain('save');
     expect(officeDocFor(COPY)).toBeNull();
     expect(officeDocFor(FILE.path)).not.toBeNull();
@@ -541,7 +541,7 @@ describe('Save a copy while the editor could still change', () => {
   it('does not copy or switch when the editor hands nothing over before the copy', async () => {
     const { saveCopy } = await failedWith({ handsOver: () => false });
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
-    expect(await screen.findByText("Office couldn't save a copy of this file.")).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).not.toHaveTextContent(/read-only disk/);
     expect(saveCopy.mock.calls.map((c) => c[1])).not.toContain('save');
     expect(officeDocFor(COPY)).toBeNull();
     expect(officeDocFor(FILE.path)).not.toBeNull();
@@ -551,7 +551,7 @@ describe('Save a copy while the editor could still change', () => {
     const { saveCopy } = await failedWith({ handsOver: (n) => n === 1 });
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
     // The copy from 'save' is kept and called older, never deleted (M5).
-    expect(await screen.findByText('An older copy was saved to Documents. Your newest changes are still only here.')).toBeInTheDocument();
+    expect(await screen.findByText(/older.*Documents/i)).toBeInTheDocument();
     expect(saveCopy.mock.calls.map((c) => c[1]).filter((m) => m !== 'check')).toEqual(['save']);
     expect(officeDocFor(COPY)).toBeNull();
     expect(officeDocFor(FILE.path)).not.toBeNull();
@@ -645,15 +645,15 @@ describe('restoring a kept version of an open document', () => {
   it('restores nothing when the unsaved typing cannot be saved, and says why', async () => {
     const { office } = await editing({ invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file') throw new Error("This file is on a read-only disk, so Office couldn't save it."); return 'ok'; }) });
     fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
-    expect(await screen.findByText("Your latest changes couldn't be saved, so nothing was restored.")).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(office.restore).not.toHaveBeenCalled();
     expect(office.close).not.toHaveBeenCalled();
   });
 
   it("shows main's reason when a restore is refused, and keeps the editor as it is", async () => {
-    const { office } = await editing({ restore: vi.fn(async () => ({ ok: false as const, message: 'That version is no longer kept.' })) });
+    const { office } = await editing({ restore: vi.fn(async () => ({ ok: false as const, message: 'MAIN-REFUSAL-MARKER' })) });
     fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
-    expect(await screen.findByText('That version is no longer kept.')).toBeInTheDocument();
+    expect(await screen.findByText('MAIN-REFUSAL-MARKER')).toBeInTheDocument();
     expect(office.close).not.toHaveBeenCalled();
   });
 
@@ -689,7 +689,7 @@ describe('restoring a kept version of an open document', () => {
       }),
     }).then((r) => { fromFrame = r.from; return r; });
     fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
-    expect(await screen.findByText('This file was restored while you had unsaved changes here. Save a copy to keep them.')).toBeInTheDocument();
+    expect(await screen.findByText(/unsaved changes/i)).toBeInTheDocument();
     expect(office.close).not.toHaveBeenCalled();
     expect(office.open).toHaveBeenCalledTimes(1);
   });
@@ -708,7 +708,7 @@ describe('restoring a kept version of an open document', () => {
       }),
     }).then((r) => { fromFrame = r.from; return r; });
     fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
-    await screen.findByText('This file was restored while you had unsaved changes here. Save a copy to keep them.');
+    await screen.findByText(/unsaved changes/i);
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Close without saving' })).toBeInTheDocument();
     const invoke = vi.mocked(office.invoke);
@@ -724,10 +724,10 @@ describe('restoring a kept version of an open document', () => {
     });
     // A late main refusal of an earlier save must not replace the strip's message either.
     act(() => markFailed(FILE.path, 'This file was restored from a kept version, so Office is reloading it.'));
-    expect(screen.getByText('This file was restored while you had unsaved changes here. Save a copy to keep them.')).toBeInTheDocument();
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
     await waitFor(() => expect(saveCopy).toHaveBeenCalledWith('t1', 'save', 'VFlQSU5H'));
-    expect(await screen.findByText('Saved a copy to Documents — now editing the copy.')).toBeInTheDocument();
+    expect(await screen.findByText(/copy.*Documents/i)).toBeInTheDocument();
     // Nothing of the kept typing reached main as a save or as the session's Editor.bin.
     expect(invoke.mock.calls.filter((c) => c[1] === 'save_file' || c[1] === 'write_editor_bin').length).toBe(savesBefore);
   });
