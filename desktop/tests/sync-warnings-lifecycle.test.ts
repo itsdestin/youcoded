@@ -31,17 +31,9 @@ import {
 } from '../src/main/sync-state';
 import type { SyncWarning } from '../src/main/sync-state';
 
-// A throwaway home for this suite. The old header claimed HOME was redirected
-// "before the module is imported" — it never was: nothing assigned HOME, and a
-// static import is hoisted above any assignment anyway. So every assertion here
-// ran against the developer's REAL ~/.claude/.sync-warnings.json, which
-// writeWarnings([]) deletes.
-//
-// That is what made 'clearWarningsByCode removes only matching code' flaky
-// (ROADMAP :130): SyncService.runHealthCheck() writes an OFFLINE warning to
-// that exact file when a YouCoded instance launches, and this suite asserts no
-// OFFLINE warning survives. It was never module-load ORDER — no other suite
-// writes warnings — it was a second process sharing one real file.
+// WHY a private home: this suite once ran against the developer's REAL ~/.claude/.sync-warnings.json
+// (nothing redirected HOME), where SyncService.runHealthCheck() of a live app wrote an OFFLINE warning
+// that made 'clearWarningsByCode removes only matching code' flaky.
 const tmpHome = path.join(os.tmpdir(), `sync-warnings-test-${Date.now()}`);
 const claudeDir = path.join(tmpHome, '.claude');
 const warningsPath = path.join(claudeDir, '.sync-warnings.json');
@@ -73,12 +65,7 @@ function mkWarning(overrides: Partial<SyncWarning> = {}): SyncWarning {
 }
 
 describe('sync warning store', () => {
-  // These run against the throwaway home wired up at the top of the file, so
-  // no other process can write the file underneath them.
-
   it('readWarnings returns [] when file missing', async () => {
-    // Now assertable exactly: with a private home there is no leftover state
-    // from a previous run or from a live app.
     expect(await readWarnings()).toEqual([]);
   });
 
@@ -87,7 +74,6 @@ describe('sync warning store', () => {
     await writeWarnings(w);
     const out = await readWarnings();
     expect(out).toEqual(w);
-    await writeWarnings([]);
   });
 
   it('writeWarnings([]) removes the file', async () => {
@@ -98,43 +84,35 @@ describe('sync warning store', () => {
   });
 
   it('addOrReplaceWarning de-dupes by (code, backendId)', async () => {
-    await writeWarnings([]);
     await addOrReplaceWarning(mkWarning({ code: 'CONFIG_MISSING', backendId: 'drive-1', createdEpoch: 1 }));
     await addOrReplaceWarning(mkWarning({ code: 'CONFIG_MISSING', backendId: 'drive-1', createdEpoch: 2 }));
     const out = await readWarnings();
     expect(out).toHaveLength(1);
     expect(out[0].createdEpoch).toBe(2);
-    await writeWarnings([]);
   });
 
   it('addOrReplaceWarning keeps different backendIds separate', async () => {
-    await writeWarnings([]);
     await addOrReplaceWarning(mkWarning({ code: 'CONFIG_MISSING', backendId: 'drive-1' }));
     await addOrReplaceWarning(mkWarning({ code: 'CONFIG_MISSING', backendId: 'drive-2' }));
     const out = await readWarnings();
     expect(out).toHaveLength(2);
-    await writeWarnings([]);
   });
 
   it('clearWarningsByBackend removes only matching backendId', async () => {
-    await writeWarnings([]);
     await addOrReplaceWarning(mkWarning({ code: 'CONFIG_MISSING', backendId: 'drive-1' }));
     await addOrReplaceWarning(mkWarning({ code: 'AUTH_EXPIRED', backendId: 'drive-2' }));
     await clearWarningsByBackend('drive-1');
     const out = await readWarnings();
     expect(out).toHaveLength(1);
     expect(out[0].backendId).toBe('drive-2');
-    await writeWarnings([]);
   });
 
   it('clearWarningsByCode removes only matching code', async () => {
-    await writeWarnings([]);
     await addOrReplaceWarning(mkWarning({ code: 'OFFLINE' }));
     await addOrReplaceWarning(mkWarning({ code: 'PERSONAL_STALE' }));
     await clearWarningsByCode('OFFLINE');
     const out = await readWarnings();
     expect(out.every((w) => w.code !== 'OFFLINE')).toBe(true);
-    await writeWarnings([]);
   });
 });
 
@@ -151,7 +129,6 @@ describe('dismissWarning', () => {
     await dismissWarning('CONFIG_MISSING');
     const out = await readWarnings();
     expect(out.find((w) => w.code === 'CONFIG_MISSING')).toBeDefined();
-    await writeWarnings([]);
   });
 });
 

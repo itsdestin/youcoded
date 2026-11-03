@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import SyncSection from '../src/renderer/components/SyncPanel';
+import SyncSetupWizard from '../src/renderer/components/SyncSetupWizard';
 
 // Every section renders the real Backup & sync panel (SyncPanel's default export,
 // SyncSection) against a hand-built `window.claude`; each section keeps its own fake
@@ -535,5 +536,34 @@ describe('GitHub backups on a computer', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Add a backup/ }));
     expect(await screen.findByRole('button', { name: /Google Drive/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /GitHub Stores your data/ })).toBeNull();
+  });
+});
+
+// WHY: when the GitHub repo was created but saving the backup then failed, Try again made the same repo
+// again — GitHub refuses an existing name and the raw error showed for a repo that was already the person's.
+describe('Setup wizard — Try again after the GitHub repo was made', () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
+
+  it('saves again with the repo already made, and never asks GitHub to make it twice', async () => {
+    const createRepo = vi.fn(async (name: string) => ({ success: true, repoUrl: `https://github.com/me/${name}` }));
+    (window as any).claude = { sync: { setup: {
+      checkPrereqs: vi.fn(async () => ({ ghInstalled: true, ghAuthenticated: true, ghUsername: 'me' })),
+      createRepo,
+    } } };
+    const onComplete = vi.fn()
+      .mockRejectedValueOnce(new Error('disk full'))
+      .mockResolvedValueOnce(undefined);
+    const onClose = vi.fn();
+    render(<SyncSetupWizard initialType="github" existingBackends={[]} onComplete={onComplete} onClose={onClose} />);
+
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'My GitHub' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start backup' }));
+    await screen.findByText(/disk full/);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+
+    expect(createRepo).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledTimes(2);
+    expect(onComplete.mock.calls[1][0].config.PERSONAL_SYNC_REPO).toBe(onComplete.mock.calls[0][0].config.PERSONAL_SYNC_REPO);
   });
 });
