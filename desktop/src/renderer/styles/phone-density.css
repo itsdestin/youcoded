@@ -52,3 +52,13 @@
     display: none;
   }
 }
+
+/* 7. The chat always keeps its 4px scrollbar lane on a phone (Destin, 2026-11-02: "i dont like how the scrollbar popping
+   in/out of the chat window when it shrinks makes all of the text and such on screen shift"): the keyboard shortens the
+   chat, a conversation that just fitted starts to overflow, the scrollbar appears, and every line re-wraps 4px
+   narrower. A reserved lane means the text is the same width with or without it. */
+@media (max-width: 639.98px) {
+  html:not([data-mode^="buddy"]) .chat-scroll {
+    scrollbar-gutter: stable;
+  }
+}
