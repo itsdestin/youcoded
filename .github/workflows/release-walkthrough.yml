@@ -1,6 +1,6 @@
 # Release walk-through (plan: youcoded-dev docs/active/plans/2026-11-01-real-app-testing.md, Phase 3).
 # Uses test builds only, on throwaway GitHub machines: it never tags, publishes or updates anything.
-# Linux first; Windows, Mac and the phone engine follow once the Linux steps are solid.
+# Linux tests the nightly build; Windows and Mac install the real installers silently and walk the same steps.
 name: Release walk-through
 on:
   push:
@@ -10,6 +10,9 @@ on:
     inputs:
       run:
         description: 'Desktop CI run whose builds to test (blank = latest scheduled nightly)'
+        required: false
+      installers:
+        description: 'Desktop Test Build run whose Windows/Mac installers to test (blank = the latest published release)'
         required: false
 
 permissions:
@@ -55,3 +58,67 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: linux-walkthrough, path: look/, retention-days: 7 }
+
+  windows:
+    name: Windows — install, then walk-through
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: .github/real-app }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: Get the real installer and install it silently, as a user's double-click would
+        shell: pwsh
+        env: { GH_TOKEN: '${{ github.token }}', RUN: '${{ inputs.installers }}' }
+        run: |
+          if ($env:RUN) { gh run download $env:RUN -R $env:GITHUB_REPOSITORY -n youcoded-desktop-windows -D inst; "Installer from Desktop Test Build run $env:RUN" >> $env:GITHUB_STEP_SUMMARY }
+          else { gh release download -R $env:GITHUB_REPOSITORY -p 'YouCoded-Installer-*.exe' -D inst; "Installer from the latest published release" >> $env:GITHUB_STEP_SUMMARY }
+          $exe = (Get-ChildItem inst\*.exe)[0].FullName; "installer: $exe"
+          Start-Process $exe -ArgumentList '/S' -Wait
+          $app = Get-ChildItem "$env:LOCALAPPDATA\Programs","$env:ProgramFiles" -Recurse -Filter 'YouCoded.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $app) { Write-Error 'installed YouCoded.exe not found'; exit 1 }
+          "APP=$($app.FullName)" | Out-File -Append $env:GITHUB_ENV
+      - name: Install the walk-through's browser driver
+        shell: bash
+        run: cd .github/real-app/walkthrough && npm i --no-save --silent playwright-core@1.64.0
+      - name: Use the app as a brand-new user
+        shell: bash
+        env: { WALKTHROUGH_KEY: '${{ secrets.YOUCODED_TEST_ANTHROPIC_KEY }}' }
+        run: node .github/real-app/walkthrough/walkthrough.mjs "$APP" "$PWD/look"
+      - name: Hide anything key-shaped before saving the recording
+        if: always()
+        shell: bash
+        run: find look -type f \( -name '*.log' -o -name '*.json' \) -exec sed -i -E 's/sk-ant-[A-Za-z0-9_.-]+/sk-ant-[hidden]/g' {} +
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: windows-walkthrough, path: look/, retention-days: 7 }
+
+  mac:
+    name: Mac — install, then walk-through
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: .github/real-app }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: Get the real installer and drag the app into Applications, as a user would
+        env: { GH_TOKEN: '${{ github.token }}', RUN: '${{ inputs.installers }}' }
+        run: |
+          if [ -n "$RUN" ]; then gh run download "$RUN" -R "$GITHUB_REPOSITORY" -n youcoded-desktop-macos -D inst; echo "Installer from Desktop Test Build run $RUN" >> "$GITHUB_STEP_SUMMARY"
+          else gh release download -R "$GITHUB_REPOSITORY" -p 'YouCoded-Installer-*-arm64.dmg' -D inst; echo "Installer from the latest published release" >> "$GITHUB_STEP_SUMMARY"; fi
+          dmg=$(ls inst/*arm64*.dmg 2>/dev/null | head -1); [ -n "$dmg" ] || dmg=$(ls inst/*.dmg | head -1); echo "installer: $dmg"
+          hdiutil attach "$dmg" -nobrowse -mountpoint /Volumes/yc > /dev/null
+          app=$(find /Volumes/yc -maxdepth 1 -name '*.app' | head -1); cp -R "$app" /Applications/
+          bin=$(find "/Applications/$(basename "$app")/Contents/MacOS" -type f -perm +111 | head -1)
+          echo "APP=$bin" >> "$GITHUB_ENV"
+      - name: Install the walk-through's browser driver
+        run: cd .github/real-app/walkthrough && npm i --no-save --silent playwright-core@1.64.0
+      - name: Use the app as a brand-new user
+        env: { WALKTHROUGH_KEY: '${{ secrets.YOUCODED_TEST_ANTHROPIC_KEY }}' }
+        run: node .github/real-app/walkthrough/walkthrough.mjs "$APP" "$PWD/look"
+      - name: Hide anything key-shaped before saving the recording
+        if: always()
+        run: find look -type f \( -name '*.log' -o -name '*.json' \) -exec sed -i '' -E 's/sk-ant-[A-Za-z0-9_.-]+/sk-ant-[hidden]/g' {} +
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: mac-walkthrough, path: look/, retention-days: 7 }

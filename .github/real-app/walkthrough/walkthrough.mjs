@@ -10,12 +10,13 @@
 //
 // Usage: node walkthrough.mjs <app executable> <output folder>
 // Env:   WALKTHROUGH_KEY — the capped test key, typed into setup like a user pasting theirs.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
 const WORDS = {
@@ -64,11 +65,14 @@ const KEY = process.env.WALKTHROUGH_KEY;
 fs.mkdirSync(out, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PORT = 9333;
-const FIXTURES = path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures');
+const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');   // WHY: .pathname breaks on Windows
 
 // A brand-new user: an empty home folder, so nothing carries over from any earlier run.
-const home = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-newuser-'));
-const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'),
+// WHY the machine's own home on Windows and Mac: each GitHub machine is brand-new anyway, and a made-up home
+// folder would cut the app off from the Mac keychain (found through the user's real Library folder).
+const realHome = process.platform !== 'linux';
+const home = realHome ? os.homedir() : fs.mkdtempSync(path.join(os.tmpdir(), 'yc-newuser-'));
+const env = realHome ? { ...process.env } : { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'),
   XDG_DATA_HOME: path.join(home, '.local/share'), XDG_CACHE_HOME: path.join(home, '.cache') };
 delete env.WALKTHROUGH_KEY; delete env.ANTHROPIC_API_KEY;   // the app must get the key only by the user typing it
 // WHY: Electron picks its secure key storage from the desktop's name. A bare test machine has none, so the app
@@ -161,9 +165,13 @@ async function connect() {
 // Quit the app the way a user would (closing it), then open it again as the same user.
 async function restart() {
   await browser?.close().catch(() => {});
-  app.kill('SIGTERM');
+  // WHY taskkill on Windows: it asks the app's whole process tree to close, as Windows does when a user quits.
+  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(app.pid), '/T']); else app.kill('SIGTERM');
   for (let i = 0; i < 30 && exited === null; i++) await sleep(500);
-  if (exited === null) { app.kill('SIGKILL'); await sleep(1000); }
+  if (exited === null) {
+    if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(app.pid), '/T', '/F']); else app.kill('SIGKILL');
+    await sleep(1000);
+  }
   launch();
   await connect();
   await page.waitForSelector('h1, h2, button', { timeout: 60_000 });
