@@ -37,6 +37,7 @@ import { BuddyStyleRow, readBuddyStyle, saveBuddyStyle, trayPlaceName } from './
 import { Button, CARD_LEVEL_1, CloseButton, Slider, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
 import { plainMessage } from '../utils/ipc-error';
 import { useGuideReset } from './guide/guide-events';
+import { remoteIndicator, type RemoteStatus } from './remote/remote-indicator';
 
 // Both are Vite `define` substitutions, so they're constants at module scope.
 // The typeof guard covers paths where the define isn't applied (unit tests).
@@ -139,13 +140,6 @@ export interface SetupCheck {
  * an address and how long ago it connected — so a device that closed its browser vanished
  * and could never be unpaired.
  */
-/** What the listener is actually doing, straight from the server. */
-interface RemoteStatus {
-  state: 'listening' | 'stopped' | 'failed';
-  reason?: string;
-  port: number;
-}
-
 interface RemoteDeviceRow {
   id: string;
   name: string;
@@ -1687,26 +1681,19 @@ function RemoteButton(props: RemoteButtonProps) {
     else onUnpairDevice(deviceId);
   };
   const hasClients = deviceRows.length > 0;
-  // WHY this reads `status` and not `config.enabled`: the indicator used to go green
-  // because the switch was on, so a server whose port never bound still reported Connected
-  // and the reason was only in a log nobody sees.
-  const listening = status?.state === 'listening';
+  // WHY: the light and its words come from the server's own state — see remoteIndicator().
+  const indicator = remoteIndicator(loading, status, config?.enabled, tailscale);
   const isFullyConnected = previewView
     ? previewView.stage === 'ready' || (previewView.stage === 'checked' && !!previewView.check?.listening)
-    : listening && tailscale?.installed && tailscale?.connected;
-  const statusText = loading
-    ? 'Loading...'
-    : status?.state === 'failed'
-      ? 'Not running'
-      : !config?.enabled || status?.state === 'stopped'
-        ? 'Disabled'
-        : isFullyConnected
-          ? hasClients
-            ? `Connected · ${deviceRows.filter(d => d.online).length} online`
-            : 'Connected'
-          : tailscale?.installed
-            ? 'Tailscale not connected'
-            : 'Enabled · No Tailscale';
+    : indicator.connected;
+  const statusText = {
+    loading: 'Loading...',
+    failed: 'Not running',
+    off: 'Disabled',
+    connected: hasClients ? `Connected · ${deviceRows.filter(d => d.online).length} online` : 'Connected',
+    'tailscale-signed-out': 'Tailscale not connected',
+    'no-tailscale': 'Enabled · No Tailscale',
+  }[indicator.kind];
 
   // Tailscale is the transport under a fully-connected session — the old UI
   // showed a separate "Tailscale" tag next to the title whenever installed;

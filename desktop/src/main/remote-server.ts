@@ -490,6 +490,9 @@ export class RemoteServer {
       },
     });
     this.wss.on('connection', (ws, req) => this.handleConnection(ws, req));
+    // WHY: `ws` re-emits the http server's 'error' here BEFORE listen()'s onError runs; unheard, it threw (uncaught), so a
+    // taken port hung start() and the light gave no reason (2026-11-03, remote-server-bind "port is taken"). onError reports it.
+    this.wss.on('error', () => { /* reported by listen()'s onError */ });
 
     // Dev mode: proxy WebSocket upgrades (non-/ws) to Vite for HMR. Never in local mode, where every path is ours.
     if (!hasStaticBuild && !this.local) proxyUpgradesToVite(this.httpServer, viteDevUrl);
@@ -505,12 +508,8 @@ export class RemoteServer {
 
     // Topic names are tracked by ipc-handlers.ts and forwarded via setLastTopic() + broadcast()
 
-    // listen() errors (EADDRINUSE, EACCES) used to have no handler at all: the
-    // promise simply never settled and the 'error' event went unhandled. That
-    // was survivable when start() ran once during boot inside a try/catch that
-    // only logged, but the Settings toggle now awaits this — an unsettled
-    // promise would hang the toggle forever with no feedback. Reject with the
-    // real OS error so the caller can surface it verbatim rather than guess.
+    // listen() errors (EADDRINUSE, EACCES) once had no handler: the promise never settled, and the Settings toggle awaits
+    // it, so it hung with no feedback. Reject with the real OS error so the caller can surface it verbatim, not guess.
     return new Promise<void>((resolve, reject) => {
       const server = this.httpServer!;
       let settled = false;

@@ -180,3 +180,40 @@ describe('the listener is private by construction', () => {
     );
   });
 });
+
+// WHY (replaces the remote-status-channel source pin, 2026-11-03): the Settings light follows
+// getStatus(), so getStatus() must report what the listener really did — never the switch.
+describe('the status the Settings light reads', () => {
+  it('reports listening once the port is bound, and tells subscribers', async () => {
+    const { mockSessionManager, mockHookRelay, config } = makeServer();
+    const { RemoteServer } = await import('../src/main/remote-server');
+    server = new RemoteServer(mockSessionManager, mockHookRelay, config);
+    const seen: string[] = [];
+    server.onStatusChange((s) => seen.push(s.state));
+    expect(server.getStatus().state).toBe('stopped');
+    await server.start();
+    expect(server.getStatus().state).toBe('listening');
+    expect(seen).toContain('listening');
+  });
+
+  it('reports failed with the system\'s own reason when the port is taken, though the switch is on', async () => {
+    const http = await import('node:http');
+    const blocker = http.createServer();
+    await new Promise<void>((resolve) => blocker.listen(0, '127.0.0.1', () => resolve()));
+    try {
+      const { mockSessionManager, mockHookRelay, config } = makeServer();
+      config.port = (blocker.address() as import('node:net').AddressInfo).port;
+      const { RemoteServer } = await import('../src/main/remote-server');
+      server = new RemoteServer(mockSessionManager, mockHookRelay, config);
+      const seen: string[] = [];
+      server.onStatusChange((s) => seen.push(s.state));
+      await expect(server.start()).rejects.toThrow();
+      const status = server.getStatus();
+      expect(status.state).toBe('failed');
+      expect(status.reason).toMatch(/EADDRINUSE/);
+      expect(seen).toContain('failed');
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+  });
+});

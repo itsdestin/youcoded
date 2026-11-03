@@ -13,6 +13,7 @@ import {
   type SetupCheck,
   type TailscaleInfo,
 } from '../src/renderer/components/SettingsPanel';
+import { remoteIndicator } from '../src/renderer/components/remote/remote-indicator';
 
 describe('SettingsPanel — remote access panel', () => {
   afterEach(cleanup);
@@ -120,6 +121,31 @@ describe('SettingsPanel — remote access panel', () => {
     mount('error');
     expect(screen.getByRole('button', { name: 'Report bug' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Diagnose with the assistant' })).toBeTruthy();
+  });
+});
+
+describe('SettingsPanel — the remote-access light', () => {
+  // The defect this guards: the light went green because the switch was on, so a server whose
+  // port never bound still said Connected. It must follow what the server reports.
+  const ts = { installed: true, connected: true };
+  const port = 9900;
+
+  it('is green only when the server is actually listening', () => {
+    expect(remoteIndicator(false, { state: 'listening', port }, true, ts)).toEqual({ connected: true, kind: 'connected' });
+  });
+
+  it('stays off when the switch is on but the server failed to start', () => {
+    expect(remoteIndicator(false, { state: 'failed', reason: 'listen EADDRINUSE', port }, true, ts)).toEqual({ connected: false, kind: 'failed' });
+  });
+
+  it('stays off when the switch is on but the server stopped, or has not answered yet', () => {
+    expect(remoteIndicator(false, { state: 'stopped', port }, true, ts).connected).toBe(false);
+    expect(remoteIndicator(false, null, true, ts).connected).toBe(false);
+  });
+
+  it('is not green without a signed-in Tailscale, even when listening', () => {
+    expect(remoteIndicator(false, { state: 'listening', port }, true, { installed: true, connected: false })).toEqual({ connected: false, kind: 'tailscale-signed-out' });
+    expect(remoteIndicator(false, { state: 'listening', port }, true, { installed: false })).toEqual({ connected: false, kind: 'no-tailscale' });
   });
 });
 

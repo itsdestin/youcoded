@@ -1,0 +1,25 @@
+{
+  "start": {
+    "scenario": "default",
+    "screen": null,
+    "width": 412,
+    "height": 860,
+    "theme": "dark",
+    "latency": 0,
+    "params": "platform=android"
+  },
+  "steps": [
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Switch to terminal",
+        "nth": 1
+      }
+    },
+    {
+      "do": "check",
+      "file": "touch-terminal-keys.check.js"
+    }
+  ]
+}
