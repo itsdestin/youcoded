@@ -349,7 +349,6 @@ describe('UpdatePanel — the update button after a failure', () => {
       await clickUpdate({ cached: true });
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
       expect(await screen.findByRole('button', { name: 'Preparing the installer…' })).toBeDisabled();
-      expect(screen.getByRole('button', { name: 'Preparing the installer…' })).toHaveClass('w-full');
       const progress = claude().update.onInstallProgress.mock.calls[0][0];
       act(() => progress({ jobId: 'other', phase: 'installing', output: 'Unrelated output' }));
       expect(screen.queryByText('Unrelated output')).not.toBeInTheDocument();

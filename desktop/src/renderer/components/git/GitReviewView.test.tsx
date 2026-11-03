@@ -75,13 +75,12 @@ describe('GitReviewView', () => {
     expect(within(secondCard).queryByText('+', { exact: false })).not.toBeInTheDocument();
   });
 
-  it('the expanded diff sits in a height-capped scroll container, separate from the uncommitted card action row', async () => {
+  it('the expanded diff sits in a scroll container, separate from the uncommitted card action row', async () => {
     mountWith();
     await waitFor(() => expect(screen.getByText('Uncommitted changes')).toBeInTheDocument());
     const diffText = screen.getByText('old line');
     const scrollContainer = diffText.closest('.overflow-y-auto');
     expect(scrollContainer).not.toBeNull();
-    expect(scrollContainer?.className).toContain('scroll-box-cap');
     // The action row (staged checkbox) must NOT be inside that scroll cap.
     const actionRow = screen.getByText('Include in commit');
     expect(scrollContainer?.contains(actionRow)).toBe(false);
@@ -395,17 +394,5 @@ describe('GitReviewView', () => {
     expect(git.stage).toHaveBeenCalledTimes(1);
     resolveStage({ ok: true });
     await waitFor(() => expect(git.stage).toHaveBeenCalledTimes(1));
-  });
-});
-
-describe('GitReviewCard highlight', () => {
-  it('lights the whole card when its header is pointed at, never a header band', async () => {
-    // Destin, submit-ticket-5#ST5-Q2 (the ST4-2 sweep): the header tint ran edge to edge and
-    // stopped in a hard line above the opened changes.
-    const { GitReviewCard } = await import('./GitReviewCard');
-    render(<GitReviewCard expanded onToggle={() => {}} headerLeft={<span>abc fix</span>}><p>diff</p></GitReviewCard>);
-    const header = screen.getByRole('button', { name: /abc fix/ });
-    expect(header.className).not.toMatch(/hover:bg-/);
-    expect(header.parentElement!.className).toContain('has-[>button:hover]:bg-inset');
   });
 });

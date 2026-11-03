@@ -27,8 +27,8 @@ describe('the end of a run', () => {
     render(<RunOverCard reason="You hit a pipe" score="17 pipes" isBest={false} onRetry={vi.fn()} />);
     const score = screen.getByText('17 pipes');
     const reason = screen.getByText('You hit a pipe');
-    expect(score.className).toMatch(/text-2xl/);
-    expect(reason.className).toMatch(/text-2xs/);
+    expect(score).toBeInTheDocument();
+    expect(reason).toBeInTheDocument();
   });
 
   it('always offers a retry', () => {

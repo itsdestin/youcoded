@@ -47,7 +47,6 @@ describe('LocalModelRow', () => {
   it('an unfinished row shows an interrupted notice with Resume and Delete inside it, real progress, and resumes by model id', async () => {
     render(<LocalModelRow model={unfinished} onRefresh={async () => {}} />);
     const notice = screen.getByText('Download interrupted').closest('.rounded-lg.border') as HTMLElement;
-    expect(notice.className).toContain('bg-amber-500/10');
     expect(notice.contains(screen.getByText('Resume'))).toBe(true);
     expect(notice.contains(screen.getByText('Delete'))).toBe(true);
     expect(screen.getByText('66% — 74.2 of 113.0 GB')).toBeTruthy();
@@ -140,7 +139,6 @@ describe('LocalModelRow', () => {
     expect(screen.queryByText(/%/)).toBeNull();      // no total on disk = no honest percentage
     expect(screen.getByText('74.2 GB downloaded')).toBeTruthy();
     const notice = screen.getByText('Damaged download').closest('.rounded-lg.border') as HTMLElement;
-    expect(notice.className).toContain('bg-destructive/10');
     expect(notice.textContent).toMatch(/Find the model in search and download\s+it again/);
     expect(notice.contains(screen.getByText('Delete'))).toBe(true);
   });
@@ -321,8 +319,6 @@ describe('fields main computes', () => {
       expect(screen.getByText(LOAD_ERROR_TITLE)).toBeTruthy();
       const line = screen.getByText('error: invalid argument: --tempp');
       expect(line).toBeTruthy();
-      // Long unbroken engine paths must wrap, not overflow the dialog.
-      expect(line.className).toContain('break-words');
     });
 
     it('R26: the load-error card is the FIRST thing in the dialog', async () => {

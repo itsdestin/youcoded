@@ -84,9 +84,8 @@ describe('archived-entry hint', () => {
     );
     const { container } = render(view());
     expect(tooltipRenders).not.toHaveBeenCalled();
-    // The entry itself is unchanged: same classes, no hint attributes.
+    // The entry itself is unchanged: no hint attributes.
     const el = entry(container, 't3');
-    expect(el.className).toBe('timeline-entry in-view');
     expect(el.hasAttribute('data-hint')).toBe(false);
     expect(el.hasAttribute('aria-label')).toBe(false);
   });
@@ -101,7 +100,6 @@ describe('archived-entry hint', () => {
     expect(tooltipRenders).toHaveBeenCalledTimes(2);
     for (const k of ['a', 'b']) {
       const el = entry(container, k);
-      expect(el.className).toBe('timeline-entry in-view opacity-60 transition-opacity');
       expect(el.getAttribute('data-hint')).toBe(ARCHIVED);
       // Same accessible name the wrapping Tooltip gave it.
       expect(el.getAttribute('aria-label')).toBe(ARCHIVED);

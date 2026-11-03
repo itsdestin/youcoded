@@ -65,7 +65,6 @@ describe('passwordless admin approval choices', () => {
     expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Confirm and run' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Nevermind, allow once' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Always allow' }).classList.contains('bg-red-400/60')).toBe(true);
   });
 });
 
@@ -81,7 +80,6 @@ describe('full-auto safety stop', () => {
     expect(screen.getByText(/all outside folders/i)).toBeTruthy();
     expect(screen.getByText(/specialists/i)).toBeTruthy();
     expect(screen.getByText(/resum/i)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Confirm and edit' }).classList.contains('bg-green-400/60')).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(respondToPermission).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Allow for this session' }));

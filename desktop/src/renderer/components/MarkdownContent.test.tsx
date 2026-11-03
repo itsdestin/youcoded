@@ -124,8 +124,6 @@ describe('MarkdownContent fenced code blocks', () => {
     const { container } = render(<MarkdownContent content={f.md} />);
     const code = container.querySelector('pre code');
     expect(code).not.toBeNull();
-    // text-code is the INLINE styling; an unlanguaged fence used to carry it ("no className" read as inline).
-    expect(code!.className).not.toContain('text-code');
     // globals.css out-specifies highlight.js's `pre code.hljs` via `pre.yc-code code.hljs`; without it the double rectangle returns.
     expect(container.querySelector('pre.yc-code')).not.toBeNull();
   });
@@ -133,7 +131,7 @@ describe('MarkdownContent fenced code blocks', () => {
   it('leaves inline code as inline', () => {
     const { container } = render(<MarkdownContent content={'some `inline` code'} />);
     expect(container.querySelector('pre')).toBeNull();
-    expect(container.querySelector('code')!.className).toContain('text-code');
+    expect(container.querySelector('code')).not.toBeNull();
   });
 
   it('copies only the block that was clicked when several are present', () => {

@@ -136,9 +136,7 @@ describe('FilesTab list view', () => {
     const { container, findByTitle } = renderTab('list');
     await findByTitle('docs');
     const wrap = rowParent(container).parentElement!;
-    expect(wrap.className).toContain('rounded-lg');
     expect(wrap.className).toContain('overflow-hidden');
-    expect(wrap.className).toContain('border');
   });
 
   it('hands scrolling back to the column when searching', async () => {

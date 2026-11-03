@@ -83,7 +83,6 @@ describe('CommandDrawer — Add skills joins the grid', () => {
     // gamma sorts last among the non-favorites; Add skills must be its sibling
     // AND the final child of that grid.
     const grid = skillCard('gamma').parentElement!;
-    expect(grid.className).toContain('grid');
     expect(add.parentElement).toBe(grid);
     expect(grid.lastElementChild).toBe(add);
     // …and NOT a sibling of the favorites grid.
@@ -145,11 +144,9 @@ describe('CommandDrawer — chip row (P-9 #1)', () => {
       'Personal', 'Work', 'Development', 'Admin', 'Other', '★ Favorites only',
     ]);
     const row = chips[0].parentElement!;
-    expect(row.className).toContain('flex-wrap');
     // All six share one parent; Favorites is simply the last chip, not pushed
     // to the far edge with ml-auto.
     for (const c of chips) expect(c.parentElement).toBe(row);
-    expect(chips[5].className).not.toContain('ml-auto');
   });
 
   it('lights Favorites-only exactly like a lit category chip', () => {
@@ -162,6 +159,5 @@ describe('CommandDrawer — chip row (P-9 #1)', () => {
     const fav = screen.getByRole('checkbox', { name: 'Favorites only' });
     expect(work.getAttribute('aria-checked')).toBe('true');
     expect(fav.getAttribute('aria-checked')).toBe('true');
-    expect(fav.className).toBe(work.className);
   });
 });

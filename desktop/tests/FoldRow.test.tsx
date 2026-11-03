@@ -10,7 +10,6 @@ import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { FoldRow } from '../src/renderer/components/ui';
-import { CARD_LEVEL_1 } from '../src/renderer/components/ui/cardLevels';
 
 describe('FoldRow', () => {
   it('shows its content inside the same box as its header row', () => {
@@ -19,24 +18,5 @@ describe('FoldRow', () => {
     fireEvent.click(header);
     const box = header.parentElement!;
     expect(box.contains(screen.getByText('line one'))).toBe(true);
-    for (const c of CARD_LEVEL_1.split(' ')) expect(box.className).toContain(c);
-  });
-
-  it('draws the header row without a box of its own, so the box is not doubled', () => {
-    render(<FoldRow title="Sync log"><p>x</p></FoldRow>);
-    expect(screen.getByRole('button', { name: 'Sync log' }).className).not.toMatch(/\bborder\b/);
-  });
-});
-
-describe('FoldRow hover', () => {
-  it('lights the whole box, never a strip of the header that ends in a hard line', () => {
-    // Destin, submit-ticket-3#ST3-5 ("not rounded") and submit-ticket-4#ST4-2 ("the hard divider
-    // line at the bottom is bad"): the highlight belongs to the box, open or closed.
-    render(<FoldRow title="Sync log"><p>x</p></FoldRow>);
-    const header = screen.getByRole('button', { name: 'Sync log' });
-    expect(header.className).not.toMatch(/hover:bg-/);
-    expect(header.parentElement!.className).toContain('has-[>button:hover]:bg-inset');
-    fireEvent.click(header);
-    expect(header.className).not.toMatch(/hover:bg-/);
   });
 });

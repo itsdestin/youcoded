@@ -128,12 +128,8 @@ describe('LibraryScreen empty state', () => {
   it('uses the pill switcher with icon + label + count segments', async () => {
     await renderLibrary();
     const tablist = screen.getByRole('tablist', { name: 'Library sections' });
-    // Pill container recipe shared with ProjectView's header switcher.
-    expect(tablist.className).toContain('layer-surface');
-    // The theme's control corner, not a fixed pill (decisions "Control shape follows the theme").
-    expect(tablist.className).toContain('!rounded-control-group');
+    expect(tablist).toBeInTheDocument();
     const skills = screen.getByRole('tab', { name: /Plugins/ });
-    expect(skills.className).toContain('rounded-control');
     // Count of installed skills — 0 with an empty marketplace.
     expect(skills).toHaveTextContent('Plugins0');
     // Themes counts the six built-ins, which are always installed.

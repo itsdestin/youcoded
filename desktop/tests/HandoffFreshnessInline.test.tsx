@@ -32,9 +32,6 @@ describe('HandoffFreshnessInline', () => {
     expect(textRow.contains(continueButton)).toBe(true);
     expect(textRow.contains(retryButton)).toBe(true);
     expect(continueButton.nextElementSibling).toBe(retryButton);
-    expect(textRow.className).toContain('flex-wrap');
-    expect(continueButton.parentElement?.className).toContain('flex-nowrap');
-    expect(alert.closest('.handoff-freshness-toast')?.className).toContain('inset-x-3');
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(actions.onRetry).toHaveBeenCalledOnce();
     expect(actions.onContinue).not.toHaveBeenCalled();

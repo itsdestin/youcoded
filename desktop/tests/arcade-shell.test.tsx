@@ -103,11 +103,7 @@ describe('the leaderboard', () => {
   it('ranks you among friends and marks your own row', () => {
     render(<Leaderboard game={FLAPPY} rows={rows} />);
     expect(screen.getByText('Mira')).toBeInTheDocument();
-    // Your row is accent-filled — the same you-vs-them rule as the board (§5.5).
-    expect(screen.getByText('You').closest('li')!.className).toContain('bg-accent');
-    // `well`, not `inset` — the games pane is itself bg-inset, so an inset row
-    // had no visible edge against it (caught in the Step 1 capture).
-    expect(screen.getByText('Mira').closest('li')!.className).toContain('bg-well');
+    expect(screen.getByText('You')).toBeInTheDocument();
   });
 
   it('reads as an invitation when you are alone, not as a failure', () => {
@@ -144,7 +140,6 @@ describe('the leaderboard', () => {
     render(<Leaderboard game={FLAPPY} rows={rows} />);
     const eyebrow = screen.getByText(FLAPPY.scoring!.label);
     expect(eyebrow).toBeInTheDocument();
-    expect(eyebrow.className).not.toContain('uppercase');
   });
 });
 

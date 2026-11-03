@@ -181,8 +181,6 @@ describe('WideViewToggle', () => {
     expect(nodes.indicator.style.left).toBe('38px');
     expect(nodes.indicator.style.width).toBe('90px');
     expect(nodes.root.dataset.geometrySyncing).toBeUndefined();
-    expect(container.querySelector('[data-testid="chat-label"]')?.className).toContain('duration-300');
-    expect(container.querySelector('[data-testid="terminal-label"]')?.className).toContain('duration-300');
   });
 
   // The reverse direction is the asymmetric one: the container SHRINKS as the

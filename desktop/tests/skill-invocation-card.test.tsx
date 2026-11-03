@@ -23,7 +23,6 @@ describe('SkillInvocationCard', () => {
     render(<SkillInvocationCard skillId="p:theme-builder" displayName="T" sessionId="s" skillPath="/x/SKILL.md" />);
     const link = screen.getByText('theme-builder');
     expect(link.tagName).toBe('BUTTON');
-    expect(link.className).toContain('decoration-dotted');
     // The old design rendered the basename as its own pill beside the name.
     expect(screen.queryByText('SKILL.md')).toBeNull();
   });

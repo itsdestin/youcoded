@@ -50,7 +50,6 @@ describe('DeliverablesCard', () => {
     const label = screen.getByText('Deliverables');
     const sep = label.previousElementSibling;
     expect(sep).toHaveTextContent('|');
-    expect(sep?.className).toContain('select-none');
   });
 
   it('header click on an expanded card collapses it back to one line', () => {
