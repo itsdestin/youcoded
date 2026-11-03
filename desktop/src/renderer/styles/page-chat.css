@@ -1,49 +1,93 @@
-/* The page's assistant pane beside an open page (PageChatPane.tsx, pages-finish step 3 design).
-   The main window's chat drawn narrow, as the buddy draws it (buddy.css): the same SPACE-only
-   shrinking, never the text, scoped to .page-chat-pane so the main chat behind the page is untouched.
-   The pane carries its own --top/--bottom-chrome-height (set on the element), which these and the
-   main .chat-scroll rules read before <html>'s. */
+/* The page's assistant, floating over an open page (PageChatPane.tsx, pages-finish step 3 design).
+   WHY a copy of the buddy's small chat (buddy.css → "The small main chat"), scoped to .page-chat-pane:
+   round 3 (Destin: the chat "still looks like an entirely unique window/element that matches nothing
+   else used in the app"). The buddy is the app's other small floating chat, so this one is drawn the
+   same way: the main window's session pill in a frosted bar, the frosted message box, 13px text, tight
+   gutters, times shown only on the newest message. The main window's chat behind the page is untouched.
+   The pane carries its own --top/--bottom-chrome-height (set on the element). */
 .page-chat-pane {
   background: var(--canvas);
 }
-/* Solid, so text never scrolls behind the title; no rule under it (the guide: no full-width lines). */
-.page-chat-header {
-  background-color: var(--canvas);
+
+/* The header: clear, with only the frosted bar drawn, so messages slide up behind it (the buddy's). */
+.page-chat-pane .page-chat-header {
+  background: transparent;
+  padding: 6px 6px 0;
 }
-.page-chat-bottom {
-  padding: 0 8px 8px;
+.page-chat-pane .page-chat-bar.header-bar {
+  /* The main window's .header-bar is absolutely placed over its chrome; here it flows. `.header-bar` in the
+     selector so the bar keeps its fill in floating-chrome themes, which clear the main window's (the buddy's
+     own rule outranks that one the same way). */
+  position: relative !important;
+  inset: auto !important;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 4px 0 8px;
+  border-radius: var(--radius-lg, 12px);
+  background-color: color-mix(in srgb, var(--panel) 94%, transparent) !important;
 }
+/* WHY nearly solid, not the buddy's frost: inside the floating card (itself a .layer-surface, already
+   blurred over the page) the bar's own blur came out as none in the built app (measured 2026-11-03),
+   so at 62% the message under it showed through crisp. Nearly solid is what the buddy itself draws
+   with Reduced effects on, and it costs no second blur. */
+.page-chat-pane .page-chat-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0 6px 6px;
+  background: transparent !important;
+  z-index: 20;
+}
+
+/* Messages fade over the last few pixels before the card's top and bottom edges (the buddy's mask). */
 .page-chat-pane .chat-scroll {
-  padding-top: calc(var(--top-chrome-height, 40px) + 4px) !important;
-  padding-bottom: calc(var(--bottom-chrome-height, 56px) + var(--queued-strip-height, 0px) + 8px) !important;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 18px, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 18px, #000 calc(100% - 18px), transparent);
+  padding-top: calc(var(--top-chrome-height, 40px) + 2px) !important;
+  padding-bottom: calc(var(--bottom-chrome-height, 56px) + var(--queued-strip-height, 0px) + 6px) !important;
 }
-/* Gutters 16px → 8px and bubbles nearly full width, as in the buddy: at ~400px the main window's
-   gutters and 80% caps leave a dead column. */
 .page-chat-pane .timeline-entry > .px-4,
 .page-chat-pane .chat-scroll .in-view.px-4 {
-  padding-left: 8px !important;
-  padding-right: 8px !important;
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+}
+.page-chat-pane .timeline-entry > .py-2 {
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
 }
 .page-chat-pane .assistant-bubble { max-width: 96% !important; }
 .page-chat-pane .user-bubble { max-width: 88% !important; }
-
-/* Round 3 (Destin, C-phone: "much more compact text"; C-left: "i still dont like how the chat window is styled"):
-   unlike the buddy, this chat shrinks its TEXT too: it is a side tool for one page, not the main conversation,
-   so it reads one size down (13px, the app's xs-to-sm step) with tighter bubbles. Sizes only; every colour and
-   shape still comes from the theme. */
-.page-chat-pane .assistant-bubble,
-.page-chat-pane .user-bubble {
+/* 13px text with 8px 13px bubbles, the buddy's sizes (Destin, round 2 C-phone: "much more compact text"). */
+.page-chat-pane .user-bubble,
+.page-chat-pane .assistant-bubble {
   font-size: 0.8125rem !important;
+  padding: 8px 13px !important;
   line-height: 1.45;
-  padding: 8px 12px !important;
-  border-radius: 14px;
 }
-.page-chat-pane .assistant-bubble { border-bottom-left-radius: 4px; }
-.page-chat-pane .user-bubble { border-bottom-right-radius: 4px; }
-.page-chat-pane .assistant-bubble p,
-.page-chat-pane .assistant-bubble li { margin-top: 0.15em; margin-bottom: 0.15em; }
-.page-chat-pane .assistant-bubble ul,
-.page-chat-pane .assistant-bubble ol { margin-top: 0.25em; margin-bottom: 0.25em; padding-left: 1.1em; }
-.page-chat-pane .timeline-entry { margin-bottom: 0; }
+
+/* Only the newest message keeps its time; the others show it after the pointer rests 0.6 s (the buddy's). */
+.page-chat-pane .timeline-entry .bubble-timestamp {
+  max-height: 0;
+  margin-top: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: opacity 120ms ease, max-height 0ms linear 120ms, margin-top 0ms linear 120ms;
+}
+.page-chat-pane .timeline-entry:hover .bubble-timestamp {
+  max-height: 1em;
+  margin-top: 4px;
+  opacity: 1;
+  transition: opacity 120ms ease 600ms, max-height 0ms linear 600ms, margin-top 0ms linear 600ms;
+}
+.page-chat-pane .timeline-entry:nth-last-child(1 of .timeline-entry) .bubble-timestamp {
+  max-height: 1em;
+  margin-top: 4px;
+  opacity: 1;
+  transition: none;
+}
+
 /* The floating button over a page lifts off it the way floating cards do. */
 .page-chat-fab { box-shadow: var(--shadow-card); }

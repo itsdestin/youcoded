@@ -147,28 +147,13 @@ export function workbenchScreenFrame(): ScreenFrame {
   return (SCREEN_FRAMES as readonly string[]).includes(raw) ? (raw as ScreenFrame) : 'cards';
 }
 
-/** Where an open page's assistant sits, for the step 3 layout round (pages-finish, 2026-11-02:
- *  Destin's "a narrow chat session on one side and the live-updating page on the other"):
- *
- *  - `left`   the chat takes the page list's place, the page beside it; the list hides behind the
- *             usual expand icon at the top of the chat (round 3: "i dont want to see all of the icons")
- *  - `float`  the page keeps the whole width; the chat is a compact card over its bottom right, hidden
- *             behind a round chat button there. A phone always uses this (round 3, C-phone: "floating…
- *             hidden behind a floating chat button in the bottom right of each page").
- *
- *  (`right`, the phone sheet and the phone full screen were turned down in rounds 1 and 2.)
- *  `?pageChat=<layout>` picks the layout and opens the chat on load, so a picture can show it;
- *  `&pageChatClosed=1` keeps it closed (the floating button alone). Outside the workbench: `left`, closed. */
-export type PageChatLayout = 'left' | 'float';
-
-const PAGE_CHAT_LAYOUTS: ReadonlyArray<PageChatLayout> = ['left', 'float'];
-
-export function workbenchPageChat(): { layout: PageChatLayout; openOnLoad: boolean } {
-  if (!isWorkbenchMode()) return { layout: 'left', openOnLoad: false };
-  const q = new URLSearchParams(location.search);
-  const raw = q.get('pageChat');
-  if (!(PAGE_CHAT_LAYOUTS as readonly string[]).includes(raw ?? '')) return { layout: 'left', openOnLoad: false };
-  return { layout: raw as PageChatLayout, openOnLoad: q.get('pageChatClosed') !== '1' };
+/** Whether an open page's assistant starts open, for pictures (pages-finish step 3). It floats over the
+ *  page's bottom right on every screen (round 3: Destin picked floating on a computer, and asked for it on
+ *  a phone), hidden behind a round chat button there. `?pageChat=open` opens it on load; without it, or
+ *  outside the workbench, it starts closed (the button alone). */
+export function workbenchPageChat(): { openOnLoad: boolean } {
+  if (!isWorkbenchMode()) return { openOnLoad: false };
+  return { openOnLoad: new URLSearchParams(location.search).get('pageChat') === 'open' };
 }
 
 /** Chrome-style override for reviewing a chrome layout on ANY theme, without

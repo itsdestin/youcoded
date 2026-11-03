@@ -151,9 +151,9 @@ type Load =
   | { state: 'ready'; page: PageDocument; doc: string }
   | { state: 'failed'; failure: PageLoadFailure };
 
-/** The page's assistant pane beside a page, and floating over one (step 3 design). Round 3 made its text
- *  compact (page-chat.css), so both are narrower than the buddy's larger chat (440px). */
-const PAGE_CHAT_WIDTH = 360;
+/** The page's assistant, floating over a page's bottom right (step 3 design, round 3: Destin picked
+ *  floating on a computer too). Its text is compact (page-chat.css), so it is narrower than the buddy's
+ *  larger chat (440px). */
 const PAGE_CHAT_FLOAT_WIDTH = 340;
 
 /** How long a page's further "Open this website?" asks are ignored after a Cancel. */
@@ -302,13 +302,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // WHY (Destin, 2026-10-20 draft): the page list can fold down to a slim rail of glyphs so a
   // page gets the width. Session-local for the draft; persistence waits on his sign-off.
   const [railCollapsed, setRailCollapsed] = useState(false);
-  // The page's assistant (pages-finish step 3 design): which side it sits on is the layout round's
-  // question (workbenchPageChat); in the app it is closed until the band's chat button opens it.
-  const [pageChat] = useState(workbenchPageChat);
-  const [chatOpen, setChatOpen] = useState(pageChat.openOnLoad);
-  // Round 3 (C-left): while the chat holds the left side the page list is hidden, and comes back beside the
-  // chat only when asked for through the usual expand icon (now at the chat's top left).
-  const [listBesideChat, setListBesideChat] = useState(false);
+  // The page's assistant (pages-finish step 3 design): closed until its round button opens it; the
+  // workbench can open it on load for a picture (workbenchPageChat).
+  const [chatOpen, setChatOpen] = useState(() => workbenchPageChat().openOnLoad);
   // Only the confirmed first-run state replaces the rail, not loading, errors, or an open page.
   // The first-run card is about the person's OWN pages — Office alone does not count.
   const emptyPages = pageId === null && load.state === 'idle' && loaded && !failed && ownPages.length === 0;
@@ -715,26 +711,6 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // (no room beside it); on a computer, wherever the layout round puts it.
   const chatAvailable = open && !!chatSessionId && !!summary && summary.home.kind !== 'builtin' && load.state === 'ready' && !awaitingApproval;
   const showChat = chatAvailable && chatOpen;
-  // A phone always floats (round 3, C-phone): there is no room beside the page.
-  const chatPlace: 'left' | 'float' = narrow ? 'float' : pageChat.layout;
-  // WHY the list hides rather than folding to icons (round 3, C-left: "i dont want to see all of the icons when a chat
-  // is open… other pages should be hidden behind the normal expand icon"): the chat takes the list's place, and the
-  // list's own expand icon moves to the chat's top left, so another page is still two clicks away.
-  const chatHoldsList = showChat && chatPlace === 'left';
-  const listHidden = chatHoldsList && !listBesideChat;
-  const listFolded = railCollapsed && !chatHoldsList;
-  const showListButton = chatHoldsList && !listBesideChat && !pageFocus ? (
-    <Tooltip text="Show the page list" placement="bottom">
-      <Button size="icon-sm" variant="ghost" aria-label="Show the page list" aria-expanded={false} className="w-7 h-7" onClick={() => setListBesideChat(true)}>
-        <RailToggleGlyph collapsed />
-      </Button>
-    </Tooltip>
-  ) : undefined;
-  const chatPane = (className: string, style?: React.CSSProperties) => showChat && summary && chatSessionId ? (
-    <PageChatPane page={summary} sessionId={chatSessionId} sessionName={chatSessionName} cwd={projectRoot ?? undefined} onHide={() => setChatOpen(false)}
-      onNewChat={() => { /* design stage: the build starts a fresh chat in the page's project */ }} leading={showListButton}
-      className={className} {...(style ? { style } : {})} />
-  ) : null;
 
   return (
     // z-40, the same layer as Project View (they replace each other, never
@@ -780,16 +756,6 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               </Button>
             </Tooltip>
           )}
-          {/* The page's assistant (step 3 design), beside the gear: every page gets it (R-which). */}
-          {/* Only where the chat sits on the left: a floating chat has its own round button on the page (round 3). */}
-          {chatAvailable && chatPlace === 'left' && (
-            <Tooltip text={chatOpen ? 'Close the chat' : 'Chat about this page'} placement="bottom">
-              <Button size="icon-sm" variant="ghost" aria-label={chatOpen ? 'Close the chat' : `Chat about ${summary.name}`} aria-pressed={chatOpen}
-                className={`w-6 h-6 shrink-0 ${chatOpen ? 'bg-inset' : ''}`} onClick={() => setChatOpen((v) => !v)} style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-                <span className="text-fg-muted"><ChatIcon className="w-3.5 h-3.5" /></span>
-              </Button>
-            </Tooltip>
-          )}
         </>}
       />}
 
@@ -801,21 +767,19 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
             stays beside the first-run card instead of hiding. WHY panel-glass while see-through (ux review 2, U5): the list sat over
             the wallpaper unframed and names ran into tree edges; it gets the same one theme-engine glass as the page pane, and Reduced
             effects removes it the same way. */}
-        {/* WHY the list steps aside: in the left layout the chat takes the list's place, so the page keeps its width. */}
-        {open && !pageFocus && !listHidden && (!emptyPages || builtin.length > 0) && (
-        <aside className={`screen-pane screen-pane--panel ${listFolded ? 'w-12' : 'w-60'} shrink-0 relative flex flex-col select-none rounded-xl bg-canvas overflow-hidden${seeThrough ? ' panel-glass' : ''}`}>
+        {open && !pageFocus && (!emptyPages || builtin.length > 0) && (
+        <aside className={`screen-pane screen-pane--panel ${railCollapsed ? 'w-12' : 'w-60'} shrink-0 relative flex flex-col select-none rounded-xl bg-canvas overflow-hidden${seeThrough ? ' panel-glass' : ''}`}>
           {/* WHY absolute when unfolded (Destin, 2026-10-20: "eliminate this empty space above Built in"):
               the toggle sits in the first group label's row instead of costing the list a row of its own. */}
-          {/* Beside the chat, folding the list hides it again behind the chat's expand icon. */}
-          <div className={listFolded ? 'flex items-center justify-center px-2 pt-2' : 'absolute top-3 right-3 z-10'}>
-            <Tooltip text={listFolded ? 'Show the page list' : 'Hide the page list'} placement="bottom">
-              <Button size="icon-sm" variant="ghost" aria-label={listFolded ? 'Show the page list' : 'Hide the page list'}
-                aria-expanded={!listFolded} onClick={() => chatHoldsList ? setListBesideChat(false) : setRailCollapsed((c) => !c)} className="w-7 h-7">
-                <RailToggleGlyph collapsed={listFolded} />
+          <div className={railCollapsed ? 'flex items-center justify-center px-2 pt-2' : 'absolute top-3 right-3 z-10'}>
+            <Tooltip text={railCollapsed ? 'Show the page list' : 'Hide the page list'} placement="bottom">
+              <Button size="icon-sm" variant="ghost" aria-label={railCollapsed ? 'Show the page list' : 'Hide the page list'}
+                aria-expanded={!railCollapsed} onClick={() => setRailCollapsed((c) => !c)} className="w-7 h-7">
+                <RailToggleGlyph collapsed={railCollapsed} />
               </Button>
             </Tooltip>
           </div>
-          {listFolded ? (
+          {railCollapsed ? (
             <div className="scroll-mask flex-1 overflow-y-auto flex flex-col items-center gap-1 py-1">
               {[...builtin, ...personal, ...[...byProject.values()].flat()].map((p) => (
                 <Tooltip key={p.id} text={p.name} placement="bottom">
@@ -867,7 +831,6 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           </>)}
         </aside>
         )}
-        {chatPlace === 'left' && chatPane(`screen-pane screen-pane--panel relative shrink-0 rounded-xl${seeThrough ? ' panel-glass' : ''}`, { width: PAGE_CHAT_WIDTH })}
         {/* WHY panel-glass while see-through (owner, 2026-10-05: "a glass effect kinda like marketplace or terminal"): it is the
             app's own opt-in for theme-engine's ONE glass rule (blur at the theme's --panels-blur, written only while a wallpaper is
             on and Reduced effects is off), so the page pane frosts exactly like Marketplace's surfaces and "Reduced effects" removes
@@ -925,9 +888,12 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           )}
           {/* The floating chat (round 3): a compact card over the page's bottom right, and while it is hidden a round
               chat button in the same corner. On a phone it spans the width less a margin, so the page stays visible above. */}
-          {chatPlace === 'float' && chatPane('layer-surface absolute right-3 bottom-3 z-10 rounded-2xl',
-            narrow ? { left: 12, height: '62%' } : { width: PAGE_CHAT_FLOAT_WIDTH, height: 'min(75%, 560px)' })}
-          {chatPlace === 'float' && chatAvailable && !chatOpen && summary && (
+          {showChat && summary && chatSessionId && (
+            <PageChatPane page={summary} sessionId={chatSessionId} sessionName={chatSessionName} cwd={projectRoot ?? undefined}
+              onHide={() => setChatOpen(false)} className="layer-surface absolute right-3 bottom-3 z-10 rounded-2xl"
+              style={narrow ? { left: 12, height: '62%' } : { width: PAGE_CHAT_FLOAT_WIDTH, height: 'min(75%, 560px)' }} />
+          )}
+          {chatAvailable && !chatOpen && summary && (
             <Tooltip text="Chat about this page" placement="top">
               <Button variant="primary" aria-label={`Chat about ${summary.name}`} onClick={() => setChatOpen(true)}
                 className="page-chat-fab absolute right-4 bottom-4 z-10 w-12 h-12 p-0 rounded-full justify-center">

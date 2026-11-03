@@ -98,20 +98,27 @@ describe('PermissionsSection — the overview', () => {
   // A folder name is user data: the family renders data in rows and reserves
   // labels for authored strings.
   it('renders folder names as rows, never as section labels', async () => {
-    list.mockResolvedValue([
+    const rows = [
       { slug: '-home-d-MyNotes', cwd: '/home/d/MyNotes', rules: commands(3) },
       { slug: '-home-destin-notes', rules: commands(3) },
-    ]);
+    ];
+    // A late answer on purpose, as a loaded machine gives: the test must hold up to it.
+    list.mockImplementation(() => new Promise((r) => setTimeout(() => r(rows), 30)));
     render(<PermissionsSection />);
 
+    // WHY wait for the row first (flaked under load, 2026-11-03): both headings are drawn before the
+    // list arrives, so awaiting a heading did not wait for the list, and a slow answer left the rows
+    // missing (seen red with the answer delayed 30ms). The heading checks below only mean anything
+    // once the rows are on screen.
+    const title = await screen.findByText('MyNotes');
+
     // The labels on this screen are the two authored ones.
-    expect(await screen.findByRole('heading', { name: 'Always allowed' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Always allowed' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Permission modes' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: /MyNotes/i })).toBeNull();
     expect(screen.queryByRole('heading', { name: /-home-destin-notes/ })).toBeNull();
 
     // The name is a row title in its true casing; the path is its description.
-    const title = screen.getByText('MyNotes');
     expect(title.className).not.toContain('uppercase');
     expect(title.className).toContain('text-xs');
     const header = screen.getByRole('button', { name: /MyNotes/ });

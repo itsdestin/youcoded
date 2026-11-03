@@ -32,13 +32,12 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/focus/page-kit-pieces#phone-layout', 'view', 'kit', 'narrow'), params: { pagesKit: 'layout' }, viewport: PHONE },
   // Finance dashboard mockup (design stage, 2026-10-05).
   pg('pages/page/page-money', 'view', 'money'),
-  // The page's assistant beside Money, one per layout of the step 3 round (pages-finish, 2026-11-02),
-  // holding a conversation about the page (fixtures/bubbles/page-money-cc.jsonl).
-  { ...pg('pages/page/page-money#chat-left', 'view', 'money', 'page-chat'), params: { pageChat: 'left', seed: 'bubbles-page-money-cc' } },
-  { ...pg('pages/page/page-money#chat-float', 'view', 'money', 'page-chat'), params: { pageChat: 'float', seed: 'bubbles-page-money-cc' } },
-  { ...pg('pages/page/page-money#chat-float-closed', 'view', 'money', 'page-chat'), params: { pageChat: 'float', pageChatClosed: '1', seed: 'bubbles-page-money-cc' } },
-  { ...pg('pages/focus/page-money#chat-phone', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'float', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
-  { ...pg('pages/focus/page-money#chat-phone-closed', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'float', pageChatClosed: '1', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
+  // The page's assistant beside Money, floating over the page, open and hidden (pages-finish step 3, round 3),
+  // holding a conversation about the page (fixtures/bubbles/page-money-cc.jsonl). Hidden, on a computer, is
+  // pages/page/page-money itself: every page now shows the round chat button.
+  { ...pg('pages/page/page-money#chat-float', 'view', 'money', 'page-chat'), params: { pageChat: 'open', seed: 'bubbles-page-money-cc' } },
+  { ...pg('pages/focus/page-money#chat-phone', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'open', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
+  { ...pg('pages/focus/page-money#chat-phone-closed', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'closed', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
   // WHY: public-demo screenshots must use the site's fictional data and pinned-page
   // focused host, not the internal practice library's personal-shaped fixtures.
   { ...pg('pages/focus/page-home#site', 'view', 'site'), scenario: 'site' },
