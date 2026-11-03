@@ -141,7 +141,9 @@ function CatalogSectionView({ section, entries }: { section: CatalogSection; ent
   );
 }
 
-export function ToolGallery() {
+// WHY `only`: the photo-only build (`shoot dev/tools#<n>`, ToolsPractice.tsx) shows one section
+// per picture so each stays readable; the dev gallery URL passes nothing and shows all of them.
+export function ToolGallery({ only }: { only?: number } = {}) {
   const entries = new Map<string, FixtureEntry>(Object.entries(fixtures).map(([path, raw]) => {
     const name = path.split('/').pop()!.replace(/\.jsonl$/, '');
     return [name, { name, result: loadFixture(name, raw) }];
@@ -161,7 +163,7 @@ export function ToolGallery() {
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-8">
           <div className="mx-auto max-w-7xl space-y-7">
-            {CATALOG.map((section) => <CatalogSectionView key={section.title} section={section} entries={entries} />)}
+            {CATALOG.filter((_, i) => only === undefined || i === only).map((section) => <CatalogSectionView key={section.title} section={section} entries={entries} />)}
           </div>
         </div>
       </main>

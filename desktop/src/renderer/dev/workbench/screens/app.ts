@@ -36,4 +36,11 @@ export const APP: readonly ScreenEntry[] = [
   ...(['lost', 'password'] as const).map((t) => ({
     name: `dev/toast#${t}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: t }, newIn: 'after' as const,
   })),
+  // The workbench tool-card gallery, one section per picture (dev/workbench/ToolsPractice.tsx): every tool
+  // card from its recorded fixtures — common calls, agents, failures and approvals, admin password,
+  // chatsearch, delivered files, skills, grouped cards. Tall window so a section needs no scrolling.
+  ...['Individual tool cards', 'Agents & specialists', 'Failures & status variants', 'Admin password', 'Chatsearch cards', 'Deliverable cards', 'Skill cards', 'Grouped tool cards'].map((t, i) => ({
+    name: i === 0 ? 'dev/tools' : `dev/tools#${t.toLowerCase().replace(/[^a-z]+/g, '-').replace(/-$/, '')}`,
+    tags: ['dev'], viewport: { width: 1440, height: i === 0 ? 1500 : 1100 }, params: { section: String(i) },
+  })),
 ];

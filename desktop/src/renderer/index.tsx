@@ -281,7 +281,7 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
       // directly. `__SHOOT__` is false in every other build, so this import and the
       // screen list never ship in the app or the landing page's demo.
       if (typeof __SHOOT__ !== 'undefined' && __SHOOT__) {
-        const [{ installScreenDriver }, { SCREENS }, { default: IconSheet }, { default: PillSheet }, { default: OpenTasksPractice }, { default: GatePractice }, { default: ToastPractice }] = await Promise.all([
+        const [{ installScreenDriver }, { SCREENS }, { default: IconSheet }, { default: PillSheet }, { default: OpenTasksPractice }, { default: GatePractice }, { default: ToastPractice }, { default: ToolsPractice }] = await Promise.all([
           import('./shoot-mode'),
           import('./dev/workbench/screens'),
           // The icon sheet (`dev/icons`) sits beside the app only in the photo-only build.
@@ -293,9 +293,11 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
           // And the phone's start-up screens and two new notices (`dev/gate`, `dev/toast`; phone-reliability deck).
           import('./dev/workbench/GatePractice'),
           import('./dev/workbench/ToastPractice'),
+          // And the tool-card gallery, one section per screen (`dev/tools#…`).
+          import('./dev/workbench/ToolsPractice'),
         ]);
         installScreenDriver(SCREENS);
-        __mount.render(<><App /><IconSheet /><PillSheet /><OpenTasksPractice /><GatePractice /><ToastPractice /></>);
+        __mount.render(<><App /><IconSheet /><PillSheet /><OpenTasksPractice /><GatePractice /><ToastPractice /><ToolsPractice /></>);
         return;
       }
       // App is already statically imported above (Root renders it).

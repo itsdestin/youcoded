@@ -24,6 +24,7 @@ import { PROJECTS } from './projects';
 import { PAGES } from './pages';
 import { APP } from './app';
 import { TOUR } from './tour';
+import { FLOATING } from './floating';
 
 export type { ScreenEntry } from './types';
 
@@ -35,4 +36,5 @@ export const SCREENS: readonly ScreenEntry[] = [
   ...PAGES,
   ...APP,
   ...TOUR,
+  ...FLOATING,
 ];
