@@ -298,9 +298,10 @@ describe('request outcomes', () => {
 
   it('garbage JSON in .pending/ is ignored, and a real request afterward still works', async () => {
     const realRoot = await project('sess-garbage');
-    await fs.promises.writeFile(path.join(pendingDirOf(realRoot), `${randomUUID()}.json`), 'not json at all');
-    // settle: give the watcher time to see and drop it.
-    await new Promise((r) => setTimeout(r, 400));
+    const garbage = path.join(pendingDirOf(realRoot), `${randomUUID()}.json`);
+    await fs.promises.writeFile(garbage, 'not json at all');
+    // Wait for the watcher to claim and drop it (the signal), then prove it still serves a real request.
+    await vi.waitFor(() => expect(fs.existsSync(garbage)).toBe(false));
     expect((await listDocx(realRoot)).ok).toBe(true);
   });
 
