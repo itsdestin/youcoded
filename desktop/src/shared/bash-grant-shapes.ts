@@ -307,7 +307,8 @@ function deriveWide(command: string, tokens: string[]): GrantOption | null {
       // WHY: a link-following download is covered only because the session guards it (main/harness/download-guard.ts):
       // every hop must stay on this website, and a hop elsewhere stops the download.
       limits: v.followsRedirects
-        ? `Following links stays on ${v.host}; a link to another website stops the download. Doesn't cover sending data or files out, or this command chained onto another one.`
+        // WHY shorter (round-4 deck prep): the long version ran off the card; the stop itself explains a cross-site link.
+        ? `Links it follows must stay on ${v.host}. Doesn't cover sending files out, or joined-up commands.`
         : "Doesn't cover other websites, following redirects, sending data or files out, or this command chained onto another one.",
     };
   }

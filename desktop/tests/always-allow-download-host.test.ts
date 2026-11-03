@@ -66,7 +66,7 @@ describe('the card offers and the engine honours one website', () => {
     for (const c of ['curl -fsSL https://github.com/x.sh', 'wget https://github.com/x.sh', 'curl --location https://github.com/x']) {
       const w = bashGrantOptions(c).find((x) => x.scope === 'wide')!;
       expect(w.label, c).toBe('Always allow downloads from github.com only');
-      expect(w.limits, c).toMatch(/links stays on github\.com; a link to another website stops the download/);
+      expect(w.limits, c).toMatch(/Links it follows must stay on github\.com\./);
       expect(w.rule).toEqual({ ...rule, pattern: `${c.split(' ')[0]} github.com` });
     }
   });

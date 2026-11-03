@@ -136,6 +136,8 @@ export const CHAT: readonly ScreenEntry[] = [
   // case, which keeps only the word-for-word choice), a joined-up command remembered part by part, and the file-edit card
   // with "Allow for this chat" plus the this-file / this-folder choice.
   { ...chat('chat#grant-curl-redirect', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-grant-curl-redirect', latency: '150' }, open: ['Always allow'] },
+  // Round-3 Q-7: a download that follows links can now take the one-website choice; this shows it picked, with its small print.
+  { ...chat('chat#grant-curl-redirect-site', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-grant-curl-redirect', latency: '150' }, open: ['Always allow', 'Always allow downloads from example.com only'] },
   ...['chain', 'chain-risky'].map((g) => ({ ...chat(`chat#grant-${g}`, 'view', 'approval'), session: 'wb-2', params: { seed: `bubbles-grant-${g}`, latency: '150' }, open: ['Always allow', 'Each part on its own'] })),
   { ...chat('chat#edit-ask', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-edit-ask', latency: '150' } },
   { ...chat('chat#edit-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-edit-ask', latency: '150' }, open: ['Always allow', 'Files in src/components'] },
