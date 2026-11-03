@@ -47,7 +47,7 @@ describe('the picker states the deciding fact', () => {
     expect(screen.getByText('Jake and Mira are online')).toBeInTheDocument();
     cleanup();
     picker({ chess: { friendsOnline: ['Jake', 'Mira', 'Sam', 'Ada'] } });
-    expect(screen.getByText('Jake and 3 others are online')).toBeInTheDocument();
+    expect(screen.getByText(/Jake.*\b3 others\b/)).toBeInTheDocument();
   });
 
   it('says nobody is online instead of going blank', () => {

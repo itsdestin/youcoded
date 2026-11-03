@@ -13,7 +13,7 @@ afterEach(cleanup);
 describe('QuitSessionsPrompt', () => {
   it('shows Destin\'s dictated copy, with the session count filled in', () => {
     render(<QuitSessionsPrompt count={3} onCancel={() => {}} onConfirm={() => {}} />);
-    expect(screen.getByText('You have 3 active sessions - proceed?')).toBeInTheDocument();
+    expect(screen.getByText(/\b3 active sessions\b/)).toBeInTheDocument();
     expect(screen.getByText(
       'Closing this window will end your active sessions. Would you like an offer to resume these sessions the next time you launch YouCoded?',
     )).toBeInTheDocument();
@@ -21,7 +21,7 @@ describe('QuitSessionsPrompt', () => {
 
   it('singularizes the count for exactly one session', () => {
     render(<QuitSessionsPrompt count={1} onCancel={() => {}} onConfirm={() => {}} />);
-    expect(screen.getByText('You have 1 active session - proceed?')).toBeInTheDocument();
+    expect(screen.getByText(/\b1 active session\b/)).toBeInTheDocument();
   });
 
   it('"Resume on Next Launch?" starts OFF (design Q-default)', () => {

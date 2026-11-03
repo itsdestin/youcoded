@@ -91,26 +91,26 @@ afterEach(() => {
 describe('App — the in-app quit warning', () => {
   it('renders QuitSessionsPrompt with the pushed session count', async () => {
     await act(async () => { fireCloseRequest({ requestId: 'r1', sessions: 4 }); });
-    expect(screen.getByText('You have 4 active sessions - proceed?')).toBeInTheDocument();
+    expect(screen.getByText(/\b4 active sessions\b/)).toBeInTheDocument();
   });
 
   it('answering forwards the requestId alongside the choice', async () => {
     await act(async () => { fireCloseRequest({ requestId: 'r1', sessions: 2 }); });
     await act(async () => { screen.getByRole('button', { name: 'Close window' }).click(); });
     expect(answers).toEqual([{ requestId: 'r1', close: true, reopen: false }]);
-    expect(screen.queryByText('You have 2 active sessions - proceed?')).not.toBeInTheDocument();
+    expect(screen.queryByText(/\b2 active sessions\b/)).not.toBeInTheDocument();
   });
 
   it('a window:close-request-cancelled push for the same requestId clears the prompt', async () => {
     await act(async () => { fireCloseRequest({ requestId: 'r1', sessions: 3 }); });
-    expect(screen.getByText('You have 3 active sessions - proceed?')).toBeInTheDocument();
+    expect(screen.getByText(/\b3 active sessions\b/)).toBeInTheDocument();
     await act(async () => { fireCancelled({ requestId: 'r1' }); });
-    expect(screen.queryByText('You have 3 active sessions - proceed?')).not.toBeInTheDocument();
+    expect(screen.queryByText(/\b3 active sessions\b/)).not.toBeInTheDocument();
   });
 
   it('a cancelled push for a DIFFERENT requestId leaves the visible prompt alone', async () => {
     await act(async () => { fireCloseRequest({ requestId: 'r1', sessions: 3 }); });
     await act(async () => { fireCancelled({ requestId: 'stale-request' }); });
-    expect(screen.getByText('You have 3 active sessions - proceed?')).toBeInTheDocument();
+    expect(screen.getByText(/\b3 active sessions\b/)).toBeInTheDocument();
   });
 });

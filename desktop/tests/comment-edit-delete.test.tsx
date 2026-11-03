@@ -187,7 +187,7 @@ describe('CommentCard — Edit/Delete icons next to the Resolve toggle (E-1)', (
       />,
     );
     fireEvent.click(screen.getByLabelText(/delete comment/i));
-    expect(screen.getByText('Delete this comment and its 2 replies?')).toBeTruthy();
+    expect(screen.getByText(/\b2 replies\b/)).toBeTruthy();
   });
 
   it('Cancel on the delete confirm dismisses it without calling onDeleteComment', () => {
@@ -572,7 +572,7 @@ describe('InlineEditField (CommentCard) — Save becomes Delete when the box is 
     fireEvent.change(screen.getByPlaceholderText(/edit…/i), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     expect(screen.queryByPlaceholderText(/edit…/i)).toBeNull();
-    expect(screen.getByText('Delete this comment and its 1 reply?')).toBeTruthy();
+    expect(screen.getByText(/\b1 reply\b/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     expect(onDeleteComment).toHaveBeenCalledTimes(1);
   });

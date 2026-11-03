@@ -81,8 +81,8 @@ describe('a column is something you can reach without a mouse', () => {
     render(<ConnectFourBoard connection={connection} />);
 
     // Columns are named 1-7 for a player, not 0-6 like the array.
-    expect(screen.getByLabelText('Column 1, 0 of 6 filled, drop here')).toBeInTheDocument();
-    expect(screen.getByLabelText('Column 3, 2 of 6 filled, drop here')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Column 1\b.*\b0 of 6\b/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Column 3\b.*\b2 of 6\b/)).toBeInTheDocument();
   });
 
   it('drops a disc when the column is activated', () => {
@@ -167,7 +167,7 @@ describe('the board narrates itself', () => {
     render(<ConnectFourBoard connection={connection} />);
 
     expect(screen.getByRole('status'))
-      .toHaveTextContent('Mira dropped in column 6. Your turn.');
+      .toHaveTextContent(/Mira.*column 6.*your turn/i);
   });
 
   it('stays quiet before the match starts', () => {

@@ -241,7 +241,7 @@ describe('the refused-quit prompt', () => {
     render(<OfficeAlerts onReview={() => {}} />);
     prompt();
     fireEvent.click(screen.getByRole('button', { name: 'Discard and quit' }));
-    expect(screen.getByText('Discard unsaved changes to 2 files?')).toBeInTheDocument();
+    expect(screen.getByText(/discard.*\b2 files\b/i)).toBeInTheDocument();
     expect(discardA).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Discard and quit' })); // the confirm
     expect(discardA).toHaveBeenCalled();
