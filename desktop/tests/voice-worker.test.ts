@@ -1,28 +1,9 @@
-// The re-hear loop — what the speech worker does while somebody is talking.
-//
-// What this file defends, in plain words:
-//   1. THE GREY TEXT RULE HAS ONE IMPLEMENTATION. The worker imports it from the
-//      shared file; it does not keep a second copy that could drift. (WHY not a
-//      case here: that is a fact about the worker's source, held by the
-//      workspace ast-grep rule voice-worker-uses-shared-sentence-split — Plan B,
-//      2026-09-16. The cases below exercise the shared helper's behaviour.)
-//   2. A stretch of speech is only closed off after a real pause, and only once
-//      it is long enough to be worth closing.
-//   3. When somebody talks on and on without pausing, the worker breaks the
-//      stretch at the quietest moment it can find — between words — instead of
-//      at a fixed stopwatch time that would land mid-word.
-//   4. Solid text accumulates. Finished sentences are never dropped and never
-//      repeated as the next sentence is being heard.
-//   5. Only ONE pass ever runs at a time, and the next one is chained to the last
-//      one FINISHING — never fired by a repeating clock, which on a slow machine
-//      would pile passes on top of each other until the worker drowned.
-//   6. Stopping says the whole utterance exactly once. Cancelling says nothing.
-//
-// And the case none of the above could catch on its own: ONE test is driven by
-// REAL RECORDED ENGINE OUTPUT (tests/fixtures/parakeet-rehear-ladder.json). A
-// hand-written fake recogniser always improves tidily — each answer extends the
-// last — so it can never reproduce the thing this whole rule exists to contain:
-// the real engine going back and rewriting words it has already said.
+// The re-hear loop: what the speech worker does while somebody is talking. Pins: a stretch closes only after a real pause and once long
+// enough; a long monologue breaks at the quietest moment, not a stopwatch time; finished sentences accumulate and are never dropped
+// or repeated; ONE pass runs at a time, chained to the last finishing (never a repeating clock); stop answers exactly once, cancel
+// says nothing. The shared grey-text rule is held by ast-grep rule voice-worker-uses-shared-sentence-split. One test replays REAL
+// recorded engine output (tests/fixtures/parakeet-rehear-ladder.json), because a hand-written fake always improves tidily and can
+// never reproduce the real engine rewriting words it already said.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as moduleApi from 'module';
 vi.mock('module', async (importOriginal) => {
@@ -232,11 +213,8 @@ describe('sound that arrives before the engine has finished loading', () => {
 });
 
 describe('changing your mind while the engine is still loading', () => {
-  // Guards whole-branch review F7. Loading the speech model takes about a minute
-  // the first time. Tapping the mic and immediately tapping it off used to throw
-  // that whole minute away — and, worse, left the NEXT tap waiting on a load that
-  // nothing would ever finish, so it sat there until the sixty-second give-up
-  // clock. From the user's side: dictation simply did not start the second time.
+  // WHY: loading takes about a minute the first time; tapping the mic on then off used to discard that load and leave the NEXT tap
+  // waiting on one nothing would finish (dictation did not start the second time).
   it('keeps the loaded engine and lets the next tap use it', async () => {
     const sent: VoiceWorkerOutbound[] = [];
     const decodeLengths: number[] = [];
@@ -423,13 +401,8 @@ describe('solid text accumulates across sentences', () => {
   });
 
   it('keeps EVERY finished sentence, not just the most recent one', async () => {
-    // Two sentences have to be finished before this can fail — with only one, a
-    // worker that threw the old sentence away would look identical. (It did look
-    // identical: the first version of the test above passed against exactly that
-    // bug, which is why this one exists.)
-    // The fourth answer is the last pass after `stop`, which re-hears the open
-    // stretch one final time — and, as the real engine does, finishes the
-    // sentence off with a full stop it had not written yet.
+    // Two sentences must be finished: with only one, a worker that threw the old sentence away would look identical.
+    // The fourth answer is the post-`stop` pass, which finishes the open sentence with a full stop as the real engine does.
     const said = ['First.', 'Second.', 'third bit', 'third bit, finished.'];
     const h = makeHarness((seconds, call) => said[call] ?? '');
     await ready(h);
@@ -608,11 +581,7 @@ describe('when the engine itself fails', () => {
     });
     core.start();
     await flush();
-    expect(sent).toEqual([{
-      type: 'error',
-      stage: 'load',
-      message: '/home/x/voice/runtime/package/sherpa-onnx.node: file too short',
-    }]);
+    expect(sent).toEqual([{ type: 'error', stage: 'load', message: '/home/x/voice/runtime/package/sherpa-onnx.node: file too short' }]);
   });
 });
 
@@ -639,11 +608,8 @@ describe('a REAL recorded Parakeet ladder', () => {
   });
 
   it('splits every recorded pass exactly as the composer will render it', () => {
-    // This is the pin. Each row is what the user would actually see at that
-    // second: the solid half, then the grey half. Read it and you have read the
-    // feature. Note seconds 4 and 10: the solid text SHRINKS, because the engine
-    // took back a full stop. That is measured behaviour, not a bug in the split —
-    // see voice-types.ts, which refuses to promise otherwise.
+    // Each row is what the user sees at that second: solid half, then grey half. At seconds 4 and 10 the solid text SHRINKS because
+    // the engine took back a full stop (measured behaviour; see voice-types.ts).
     const expected: Array<[number, string, string]> = [
       [1, '', 'And so'],
       [2, '', 'And so my fellow American'],
@@ -704,25 +670,9 @@ describe('joining finished sentences', () => {
   });
 });
 
-// Loading the downloaded speech engine — and, when it will not load, saying why.
-//
-// The speech engine is not part of this app's install. It is fetched at first use
-// into the user's own data folder, so the app has to reach for a compiled library
-// sitting at a plain absolute path, with no `node_modules` anywhere in sight.
-// That is unusual enough to be worth pinning, and it has one failure mode that
-// really matters to a user:
-//
-//   sherpa-onnx's own loader catches a library that will not open, throws the
-//   operating system's actual explanation away, and prints advice about setting
-//   LD_LIBRARY_PATH — advice that is simply wrong for how we install it. A user
-//   whose download was cut short, or whose Linux is a little too old, would be
-//   sent to fix an environment variable that has nothing to do with it.
-//
-// So voice-worker.ts opens the compiled library ITSELF, first, and passes whatever
-// the operating system said straight through. These tests build a FAKE engine —
-// a file that is not a real library, and a JavaScript half whose neighbour is
-// missing — in a throwaway folder, and check that the real words come out. sherpa
-// is never downloaded, installed, or imported here.
+// WHY: the speech engine is fetched at first use into the user's data folder, so the app loads a compiled library at a plain absolute
+// path. sherpa-onnx's own loader throws the OS's real explanation away and prints wrong LD_LIBRARY_PATH advice, so voice-worker.ts
+// opens the library ITSELF and passes the OS's words through. These tests use a FAKE engine in a throwaway folder; sherpa is never imported.
 describe('recognizer vocabulary configuration', () => {
   const vocab = path.resolve(__dirname, '../resources/voice/parakeet-tdt-v3.vocab');
   function fakeSherpa() {

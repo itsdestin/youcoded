@@ -9,17 +9,8 @@ import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
 import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
 
 // ── A failed provider load ───────────────────────────────────────────────────
-/**
- * "You have not set up any model providers" means none are set up — not that the list
- * could not be read.
- *
- * Error inventory 2026-09-10, false message 9. ModelPicker loads providers and the model
- * catalog with `.catch(() => [])` on each call, so a failed load produced no rows,
- * `anyPickable` went false, and a native-only picker (a native session's model dialog,
- * Resume options) told someone with providers configured that they had none — and
- * offered "Add provider" for things they already had. A remote timeout reaches this too.
- * Pickers that include Claude were spared only because Claude rows survive a failed load.
- */
+// WHY: ModelPicker loads providers/catalog with `.catch(() => [])`, so a failed load once read as "no providers set up"
+// (and offered "Add provider" to someone who had them). A failed load must say it could not load, with Retry.
 describe('ModelPicker — a failed provider load is not "no providers set up"', () => {
   function bridge(list: ReturnType<typeof vi.fn>, catalog: ReturnType<typeof vi.fn>) {
     (globalThis as any).window.claude = {
@@ -36,11 +27,11 @@ describe('ModelPicker — a failed provider load is not "no providers set up"', 
   beforeEach(() => { (globalThis as any).window = (globalThis as any).window ?? {}; });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
 
-  it('a provider list that failed says it could not load, with Retry', async () => {
-    bridge(
-      vi.fn().mockRejectedValue(new Error("Error invoking remote method 'providers:list': Error: config unreadable")),
-      vi.fn().mockResolvedValue([]),
-    );
+  it.each([
+    ['provider list', () => bridge(vi.fn().mockRejectedValue(new Error("Error invoking remote method 'providers:list': Error: config unreadable")), vi.fn().mockResolvedValue([]))],
+    ['catalog', () => bridge(vi.fn().mockResolvedValue([{ id: 'openrouter', type: 'openrouter', label: 'OpenRouter', ready: true }]), vi.fn().mockRejectedValue(new Error('Request providers:catalog timed out')))],
+  ])('a %s that failed says it could not load, with Retry, and no transport wrapper', async (_t, setup) => {
+    setup();
     render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
     await openPanel();
 
@@ -48,18 +39,6 @@ describe('ModelPicker — a failed provider load is not "no providers set up"', 
     expect(screen.queryByText(/not set up any model providers/i)).toBeNull();
     expect(screen.queryByText(/Error invoking remote method/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
-  });
-
-  it('a catalog that failed says so too', async () => {
-    bridge(
-      vi.fn().mockResolvedValue([{ id: 'openrouter', type: 'openrouter', label: 'OpenRouter', ready: true }]),
-      vi.fn().mockRejectedValue(new Error('Request providers:catalog timed out')),
-    );
-    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
-    await openPanel();
-
-    expect(await screen.findByText(/couldn.t load your models/i)).toBeInTheDocument();
-    expect(screen.queryByText(/not set up any model providers/i)).toBeNull();
   });
 
   it('Retry loads again, and a real empty result may then say none are set up', async () => {
@@ -87,23 +66,8 @@ describe('ModelPicker — a failed provider load is not "no providers set up"', 
   });
 });
 
-// ── The list catches up after a download ─────────────────────────────────────
-// WHAT DESTIN DID (2026-09-06): opened the new-session menu, went off and set up
-// a local model, came back to the STILL-OPEN menu and searched for it. Nothing.
-// "the model list doesn't refresh unless i close that new session menu and
-// re-open it." The fetch ran once when the picker mounted and never again, so
-// the list was a snapshot of whatever existed when the screen was built.
-//
-// NOT `engine.onModelsChanged`. That channel is declared in the preload and in
-// shared/types.ts, the renderer can subscribe to it, and NOTHING in the main
-// process ever sends it:
-//   $ rg -n "ENGINE_MODELS_CHANGED" src/
-//   src/shared/types.ts:1833  src/main/preload.ts:385  src/main/preload.ts:1395-1396
-// (a declaration and a listener, no sender). Even wired up it only fires while
-// the engine PROCESS is running, and the engine is not running while you are
-// downloading a model — it starts on your first message. The download-progress
-// push, which the Local Models screen already uses, is the signal that actually
-// fires at the moment the list changes.
+// WHY: the fetch ran once at mount, so a model downloaded while the new-session menu was open never appeared until reopen.
+// The signal is the download-progress push (engine.onModelsChanged has no sender in main, and the engine is not running mid-download).
 describe('list refresh after a download', () => {
   const BEFORE = [{ id: 'gpt-5', providerId: 'openrouter', label: 'GPT-5' }];
   const AFTER = [...BEFORE, { id: 'Qwen3.5-9B-UD-Q4_K_XL', providerId: 'local', label: 'Qwen3.5 9B' }];
@@ -200,14 +164,8 @@ describe('list refresh after a download', () => {
     });
   });
 
-  // ── The in-session picker, same fix ──────────────────────────────────────────
-  // ModelPickerPopup is the one you get from a session's header. Worth knowing
-  // before reading these: its model LIST is the shared <ModelPicker> above, so the
-  // fix arrives there. What the popup fetches for itself is only used to work out
-  // which row is the session's current model, and it had the same one-shot
-  // problem — after downloading a model and switching to it, the popup could not
-  // name its provider until it was reopened. Two subscriptions per render is
-  // therefore correct: the popup's own, and the nested picker's.
+  // ModelPickerPopup's list is the shared picker; what it fetches itself finds the session's current model and had the same one-shot
+  // problem. Two subscriptions per render (popup's own + nested picker's) is correct.
   describe('ModelPickerPopup keeps its list current', () => {
     const props = {
       open: true, onClose: () => {}, sessionId: 's1', currentModel: null,
@@ -223,9 +181,7 @@ describe('list refresh after a download', () => {
       nativeBridge();
       const { default: ModelPickerPopup } = await import('../src/renderer/components/ModelPickerPopup');
       render(<ModelPickerPopup {...props} />);
-      // No click needed: the popup's picker now opens straight to the
-      // search+list view (status-bar chip default-expand change), so a click on
-      // the "Model" trigger here would TOGGLE it closed instead of opening it.
+      // No click: the popup's picker opens straight to search+list; clicking "Model" would toggle it closed.
       fireEvent.change(await screen.findByPlaceholderText(/Search/i), { target: { value: 'Qwen' } });
       await waitFor(() => expect(screen.queryByText(/Qwen3.5 9B/)).toBeNull());
 
@@ -241,9 +197,7 @@ describe('list refresh after a download', () => {
       render(<ModelPickerPopup {...props} />);
       await waitFor(() => expect((window.claude.providers.catalog as any).mock.calls.length).toBe(2));
       subscribers.forEach((cb) => cb({ downloadId: 'd1', state: 'done' }));
-      // 4, not 3: the popup re-reads, and so does the picker inside it — its
-      // panel now opens by default (status-bar chip default-expand change), so
-      // it has a visible list to correct rather than a shut one to leave alone.
+      // 4, not 3: the popup re-reads and so does the picker inside it (its panel opens by default).
       await waitFor(() => expect((window.claude.providers.catalog as any).mock.calls.length).toBe(4));
     });
 
@@ -259,57 +213,46 @@ describe('list refresh after a download', () => {
   });
 });
 
-// ── Selectable models sort first ─────────────────────────────────────────────
-describe('ModelPicker selectable-first ordering', () => {
-  let providers: any[];
-  let catalog: any[];
-  let storedFavorites: string | null = null;
-
-  const favoriteStorage = {
-    getItem: (key: string) => key === 'youcoded-model-favorites' ? storedFavorites : null,
-    setItem: (key: string, value: string) => { if (key === 'youcoded-model-favorites') storedFavorites = value; },
-    removeItem: (key: string) => { if (key === 'youcoded-model-favorites') storedFavorites = null; },
-    clear: () => { storedFavorites = null; },
+// ── Shared rig for the ordering and recommended-band sections: fake providers/catalog and a fake favourites store ──
+let providers: any[];
+let catalog: any[];
+let store: Record<string, string>;
+const favoriteStorage = {
+  getItem: (key: string) => store[key] ?? null,
+  setItem: (key: string, value: string) => { store[key] = value; },
+  removeItem: (key: string) => { delete store[key]; },
+  clear: () => { store = {}; },
+};
+function rigBridge() {
+  (globalThis as any).window.claude = {
+    capabilities: DESKTOP_WINDOW_CAPABILITIES,
+    providers: { list: vi.fn(async () => providers), catalog: vi.fn(async () => catalog) },
+    models: { onDownloadProgress: () => () => {} },
   };
-
-  function bridge() {
-    (globalThis as any).window.claude = {
-      capabilities: DESKTOP_WINDOW_CAPABILITIES,
-      providers: {
-        list: vi.fn(async () => providers),
-        catalog: vi.fn(async () => catalog),
-      },
-      models: {
-        onDownloadProgress: () => () => {},
-      },
-    };
-  }
-
-  function modelRows(): HTMLButtonElement[] {
-    const panel = document.querySelector('[data-model-picker-portal]') ?? document.body;
-    return [...panel.querySelectorAll('button')]
-      .filter((button) => button.textContent?.includes(' · ')) as HTMLButtonElement[];
-  }
-
-  function rowLabels(): string[] {
-    return modelRows().map((button) => button.textContent?.replace(/\s+/g, ' ').trim() ?? '');
-  }
-
-  const chatgptChoice: ModelChoice = { runtime: 'native', providerId: 'chatgpt', modelId: 'astra-chatgpt' };
-
+}
+function modelRows(): HTMLButtonElement[] {
+  const panel = document.querySelector('[data-model-picker-portal]') ?? document.body;
+  return [...panel.querySelectorAll('button')].filter((button) => button.textContent?.includes(' · ')) as HTMLButtonElement[];
+}
+function rowLabels(): string[] {
+  return modelRows().map((button) => button.textContent?.replace(/\s+/g, ' ').trim() ?? '');
+}
+function useRig() {
   beforeEach(() => {
     (globalThis as any).window = (globalThis as any).window ?? {};
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: favoriteStorage });
-    favoriteStorage.clear();
+    store = {};
     providers = [];
     catalog = [];
-    bridge();
+    rigBridge();
   });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+}
 
-  afterEach(() => {
-    cleanup();
-    vi.restoreAllMocks();
-  });
+describe('ModelPicker selectable-first ordering', () => {
+  useRig();
+
+  const chatgptChoice: ModelChoice = { runtime: 'native', providerId: 'chatgpt', modelId: 'astra-chatgpt' };
 
   it('puts a searched selectable Astra result above an unavailable OpenRouter result without changing selected or disabled behavior', async () => {
     providers = [
@@ -422,65 +365,14 @@ describe('ModelPicker selectable-first ordering', () => {
   });
 });
 
-// ── Recommended-models bands ─────────────────────────────────────────────────
-// 2026-09-20: the default view used to be favourites-only, which opened EMPTY
-// on a fresh install. It now leads with favourites and carries three closed-set
-// bands below them — Claude Code's aliases, the ChatGPT plan's named families,
-// and a curated OpenRouter list — sorted to the bottom (Destin's words).
-//
-// The rules under test, from his answers that day:
-//   · a connected first-party plan REPLACES the plan-shaped recommendations it
-//     duplicates, family by family — never the other providers' rows;
-//   · every picker host gets the bands; a power user can hide them in
-//     Assistant settings → General ("Show recommended models");
-//   · search still reaches the whole catalogue either way — bands are
-//     default-view furniture, not a filter.
+// Recommended bands: favourites lead, then Claude Code aliases, ChatGPT plan families and a curated OpenRouter list. A connected
+// first-party plan REPLACES the plan-shaped recommendations it duplicates (never other providers' rows); every host gets the bands
+// unless hidden in settings; search still reaches the whole catalogue.
 describe('ModelPicker recommended-models bands', () => {
-  let providers: any[];
-  let catalog: any[];
-  let store: Record<string, string>;
-
-  const favoriteStorage = {
-    getItem: (key: string) => store[key] ?? null,
-    setItem: (key: string, value: string) => { store[key] = value; },
-    removeItem: (key: string) => { delete store[key]; },
-    clear: () => { store = {}; },
-  };
-
-  function bridge() {
-    (globalThis as any).window.claude = {
-      capabilities: DESKTOP_WINDOW_CAPABILITIES,
-      providers: {
-        list: vi.fn(async () => providers),
-        catalog: vi.fn(async () => catalog),
-      },
-      models: { onDownloadProgress: () => () => {} },
-    };
-  }
-
-  function modelRows(): HTMLButtonElement[] {
-    const panel = document.querySelector('[data-model-picker-portal]') ?? document.body;
-    return [...panel.querySelectorAll('button')]
-      .filter((button) => button.textContent?.includes(' · ')) as HTMLButtonElement[];
-  }
-
-  function rowLabels(): string[] {
-    return modelRows().map((button) => button.textContent?.replace(/\s+/g, ' ').trim() ?? '');
-  }
+  useRig();
 
   const OR = { id: 'or', type: 'openrouter', label: 'OpenRouter', ready: true };
   const GPT_PLAN = { id: 'chatgpt', type: 'chatgpt', label: 'ChatGPT Plan', ready: true };
-
-  beforeEach(() => {
-    (globalThis as any).window = (globalThis as any).window ?? {};
-    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: favoriteStorage });
-    store = {};
-    providers = [];
-    catalog = [];
-    bridge();
-  });
-
-  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('bands plan models then recommendations below no favourites, in band order', async () => {
     providers = [OR, GPT_PLAN];

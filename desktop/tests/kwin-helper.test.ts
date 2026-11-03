@@ -346,8 +346,7 @@ describe('the per-install token', () => {
   });
 
   it('keeps the token it already stored, even if the profile path changed', () => {
-    // A derived-only token would change with the path and this install would
-    // instantly become the orphan of its own package.
+    // WHY: a path-derived token would orphan this install's own package.
     const r = rig();
     fs.writeFileSync(path.join(r.userDataDir, 'kwin-helper.json'), JSON.stringify({ token: 'deadbeef' }));
     expect(r.helper.pluginId()).toBe('youcodedbuddyhelper-deadbeef');
@@ -371,22 +370,13 @@ describe('helperStatus', () => {
     expect(r.calls).toHaveLength(0);
   });
 
-  it('needs no helper on Linux under XWayland', async () => {
-    // Probe Round 7: the same binary forced to --ozone-platform=x11 can move
-    // its own windows. Every environment variable, and KWin's own Operation
-    // Mode, are byte-identical to the native run — only this flips.
-    const r = rig({ ozonePlatform: 'x11' });
-    expect((await r.helper.status()).needed).toBe(false);
+  // XWayland (Probe Round 7: the same binary forced to x11 can move its own windows) and an unreadable ozone platform both need no helper.
+  it.each(['x11', ''])('needs no helper when the ozone platform is %j', async (ozonePlatform) => {
+    expect((await rig({ ozonePlatform }).helper.status()).needed).toBe(false);
   });
 
+  // R10: a helper installed on Wayland stays installed and loaded after an X11 login; claiming installed:false would hide Remove helper.
   it('still reports installed truthfully on Linux when no helper is needed', async () => {
-    // §4's second row, and it exists because of an R10 violation. Install on
-    // Wayland, then log into X11 (or get an XWayland build after an update):
-    // the script is STILL installed and STILL loaded in KWin, but `needed` is
-    // now false. If status claimed installed:false there, the Remove helper
-    // action would vanish and R10's "you can remove it again any time, from the
-    // buddy's own settings" would be unkeepable — hand-editing kwinrc is the
-    // only way out, and this user cannot do that.
     const r = rig({ ozonePlatform: 'x11' });
     expect(await r.helper.status()).toEqual({ needed: false, supported: true, installed: true });
   });
@@ -395,11 +385,6 @@ describe('helperStatus', () => {
     const r = rig({ ozonePlatform: 'x11' });
     fs.mkdirSync(path.join(r.scriptsDir, r.helper.pluginId()), { recursive: true });
     expect((await r.helper.remove()).ok).toBe(true);
-  });
-
-  it('fails safe when the ozone platform cannot be read', async () => {
-    const r = rig({ ozonePlatform: '' });
-    expect((await r.helper.status()).needed).toBe(false);
   });
 
   it('is unsupported, with a reason, on Plasma 5', async () => {
@@ -419,11 +404,7 @@ describe('helperStatus', () => {
   });
 
   it('still reports an installed helper on a real KDE X11 session', async () => {
-    // R10, and the case §4's second row was actually written for. KWin answers
-    // on X11 and says Operation Mode: X11, so `supported` is false — but the
-    // script the user installed on Wayland is STILL in ~/.local/share/kwin and
-    // still enabled. Forcing installed:false here made the Remove helper action
-    // unreachable, leaving hand-editing kwinrc as the only way out.
+    // R10: KWin on X11 says unsupported, but a helper installed on Wayland is still there; installed:false would hide Remove.
     const r = rig({
       ozonePlatform: 'x11',
       readKdeSession: () => Promise.resolve({ kwinMajor: 6, wayland: false, screens: [] }),
@@ -432,6 +413,7 @@ describe('helperStatus', () => {
     expect(status).toMatchObject({ needed: false, supported: false, installed: true });
   });
 
+  // Two calls on purpose: the real (non-injected) qdbus lookup runs once to find the binary and once from its cache.
   it('does not claim a helper is installed when KDE never answered', async () => {
     const r = rig({ readKdeSession: () => Promise.resolve(null) });
     expect((await r.helper.status()).installed).toBe(false);
@@ -477,10 +459,7 @@ describe('install', () => {
   });
 
   it('emits unloadScript BEFORE reconfigure', async () => {
-    // Probe Round 4 U1: overwriting a loaded script's files and calling
-    // reconfigure does NOT reload it — KWin keeps running the copy it parsed.
-    // Get this order wrong and "updates replace the helper quietly" silently
-    // becomes "at your next login".
+    // WHY: reconfigure alone does not reload a loaded script; KWin keeps the copy it parsed.
     const r = rig();
     await r.helper.install();
     const trace = r.trace();
@@ -496,13 +475,8 @@ describe('install', () => {
     expect(r.settings().helperLoadedVersion).toBe(r.helper.bundledVersion());
   });
 
-  // ── the load wait ───────────────────────────────────────────────────────
-  // MEASURED on KWin 6.7.3, 2026-09-04: `reconfigure` returns void immediately
-  // and isScriptLoaded stays false for ~200ms (199/199/205 over three runs).
-  // Without a wait, install reported success while the script was not running,
-  // so the settings screen turned the buddy on and the app refused it in the
-  // same breath — "goes back to disabled and says the helper isn't active"
-  // (Destin, 2026-09-04), working only on a second try.
+  // WHY (measured on KWin 6.7.3): reconfigure returns at once but isScriptLoaded stays false ~200ms; without a wait,
+  // install reported success while the script was not running and the buddy toggle bounced back off.
 
   it('waits for KWin to actually start the script before reporting success', async () => {
     const r = rig();
@@ -531,9 +505,7 @@ describe('install', () => {
   });
 
   it('gives up on the clock, not on a count of tries', async () => {
-    // Every try is a DBus call with its own 4s timeout. Budgeting by number of
-    // tries would let a compositor that answers slowly hold the launch path for
-    // a hundred times the intended wait — 400 seconds, not 5.
+    // WHY: each try is a DBus call with a 4s timeout; counting tries would let a slow compositor hold launch for minutes.
     const r = rig();
     r.replies.isScriptLoaded = 'false';
     r.cost.dbusMs = 4000;   // a compositor answering at its timeout
@@ -542,9 +514,7 @@ describe('install', () => {
   });
 
   it('leaves the package in place when only the load wait timed out', async () => {
-    // The files are written and the config key is set — this is a KWin that has
-    // not got to it yet, not a failed install. Deleting the package here would
-    // throw away a helper that is about to start.
+    // WHY: a KWin that has not got to it yet is not a failed install; deleting would throw away a helper about to start.
     const r = rig();
     r.replies.isScriptLoaded = 'false';
     await r.helper.install();
@@ -568,29 +538,22 @@ describe('install', () => {
 });
 
 describe('half-install rollback', () => {
-  it('removes the files it wrote when kwriteconfig6 fails, and reports the real error', async () => {
+  // Never leave files on disk with installed:false: that re-copies forever.
+  it.each([
+    ['kwriteconfig6 fails', { kwriteconfigError: 'kwriteconfig6: command not found' }, 'kwriteconfig6: command not found'],
+    ['reconfigure fails on a FRESH install', { reconfigure: { ok: false, error: 'Error: org.freedesktop.DBus.Error.ServiceUnknown' } }, 'ServiceUnknown'],
+  ])('removes the files it wrote when %s, and reports the real error', async (_t, replies, expected) => {
     const r = rig();
-    r.replies.kwriteconfigError = 'kwriteconfig6: command not found';
+    Object.assign(r.replies, replies);
     const res = await r.helper.install();
     expect(res.ok).toBe(false);
-    expect(res.error).toContain('kwriteconfig6: command not found');
-    // Never leave files on disk with installed:false — that re-copies forever.
-    expect(fs.readdirSync(r.scriptsDir)).toEqual([]);
-    expect(r.settings().helperLoadedVersion).toBeUndefined();
-  });
-
-  it('removes the files it wrote when reconfigure fails on a FRESH install', async () => {
-    const r = rig();
-    r.replies.reconfigure = { ok: false, error: 'Error: org.freedesktop.DBus.Error.ServiceUnknown' };
-    const res = await r.helper.install();
-    expect(res.ok).toBe(false);
-    expect(res.error).toContain('ServiceUnknown');
+    expect(res.error).toContain(expected);
     expect(fs.readdirSync(r.scriptsDir)).toEqual([]);
     expect(r.settings().helperLoadedVersion).toBeUndefined();
   });
 });
 
-describe('R4-F6 — the version marker and its two crash windows', () => {
+describe('the version marker and its two crash windows', () => {
   /** An install that already succeeded once, then a build carrying a newer helper. */
   async function installedThenUpdated() {
     const r = rig();
@@ -622,34 +585,21 @@ describe('R4-F6 — the version marker and its two crash windows', () => {
     expect(r.trace().filter((t) => t.includes('reconfigure'))).toEqual([]);
   });
 
-  it('crash window 1 — unloadScript fails: no version is recorded and the next launch re-runs', async () => {
+  // The stale marker must survive so the next launch retries; files are NOT rolled back (on an update there is nothing to roll back to).
+  it.each([
+    ['unloadScript', { unloadScript: { ok: false, reason: 'Error: org.freedesktop.DBus.Error.NoReply' } }, { unloadScript: { ok: true, stdout: 'true\n' } }],
+    ['reconfigure', { reconfigure: { ok: false, error: 'Error: org.freedesktop.DBus.Error.NoReply' } }, { reconfigure: { ok: true } }],
+  ])('crash window - %s fails: no version is recorded and the next launch re-runs', async (_t, failing, healed) => {
     const r = await installedThenUpdated();
-    r.replies.unloadScript = { ok: false, reason: 'Error: org.freedesktop.DBus.Error.NoReply' };
+    Object.assign(r.replies, failing);
     await r.helper.syncOnLaunch();
-    // The stale marker survives, which is exactly what makes the next launch
-    // try again instead of believing the user is up to date.
     expect(r.settings().helperLoadedVersion).toBe('0.9');
-    // and the files are NOT rolled back — on an update there is nothing to roll
-    // back to, and the retry needs the package directory to still be there.
     expect(fs.existsSync(path.join(r.scriptsDir, r.helper.pluginId()))).toBe(true);
 
-    r.replies.unloadScript = { ok: true, stdout: 'true\n' };
+    Object.assign(r.replies, healed);
     r.calls.length = 0;
     await r.helper.syncOnLaunch();
     expect(r.trace().some((t) => t.includes('reconfigure'))).toBe(true);
-    expect(r.settings().helperLoadedVersion).toBe(r.helper.bundledVersion());
-  });
-
-  it('crash window 2 — reconfigure fails: no version is recorded and the next launch re-runs', async () => {
-    const r = await installedThenUpdated();
-    r.replies.reconfigure = { ok: false, error: 'Error: org.freedesktop.DBus.Error.NoReply' };
-    await r.helper.syncOnLaunch();
-    expect(r.settings().helperLoadedVersion).toBe('0.9');
-    expect(fs.existsSync(path.join(r.scriptsDir, r.helper.pluginId()))).toBe(true);
-
-    r.replies.reconfigure = { ok: true };
-    r.calls.length = 0;
-    await r.helper.syncOnLaunch();
     expect(r.settings().helperLoadedVersion).toBe(r.helper.bundledVersion());
   });
 
@@ -661,7 +611,7 @@ describe('R4-F6 — the version marker and its two crash windows', () => {
   });
 });
 
-describe('R4-F7 — orphan cleanup', () => {
+describe('orphan cleanup', () => {
   function plantOrphans(r: ReturnType<typeof rig>, ids: string[]) {
     for (const id of ids) {
       fs.mkdirSync(path.join(r.scriptsDir, id, 'contents', 'code'), { recursive: true });
@@ -670,9 +620,7 @@ describe('R4-F7 — orphan cleanup', () => {
   }
 
   it('unloads each orphan BEFORE deleting its directory', async () => {
-    // Round 4 U1: deleting a script's files does not stop KWin executing the
-    // copy it already parsed. An orphan is not inert — it still matches our
-    // WM_CLASS and caption grammar, so it keeps writing geometry every frame.
+    // WHY: deleting files does not stop KWin running the parsed copy, which keeps writing geometry.
     const r = rig();
     plantOrphans(r, ['youcodedbuddyhelper-aaaa1111', 'youcodedbuddyhelper-bbbb2222']);
     await r.helper.cleanOrphans();
@@ -726,8 +674,7 @@ describe('R4-F7 — orphan cleanup', () => {
   });
 
   it('runs at launch even on a session that needs no helper', async () => {
-    // An orphan left by another profile keeps running inside the compositor
-    // whether or not THIS session's windows need one.
+    // WHY: an orphan from another profile keeps running in the compositor regardless.
     const r = rig({ ozonePlatform: 'x11' });
     plantOrphans(r, ['youcodedbuddyhelper-aaaa1111']);
     await r.helper.syncOnLaunch();
@@ -763,9 +710,7 @@ describe('remove', () => {
   });
 
   it('changes nothing when the script cannot be unloaded', async () => {
-    // Deleting the files anyway would report success while KWin kept running
-    // the script and the buddy kept moving — the one outcome the order exists
-    // to prevent.
+    // WHY: deleting anyway would report success while KWin kept running the script.
     const r = rig();
     await r.helper.install();
     r.replies.unloadScript = { ok: false, reason: 'Error: org.freedesktop.DBus.Error.NoReply' };
@@ -804,12 +749,7 @@ describe('the bundled package itself', () => {
 
 describe('the shipped KWin script stays inside the engine subset KWin accepts', () => {
   it('parses as ES5', async () => {
-    // WHY this is a test and not a style note: KWin's script engine does not
-    // warn about syntax it dislikes — the whole script silently never loads,
-    // the buddy stops moving, `installed` reads false, and pressing Add helper
-    // changes nothing. No error reaches any surface. The unit tests above load
-    // this file into Node, which accepts arrow functions, template literals,
-    // Map/Set, spread and optional chaining, so they cannot catch it.
+    // WHY: KWin silently never loads a script with syntax it dislikes; the Node-based tests above accept ES2015+ and cannot catch it.
     const { parse } = await import('acorn');
     const src = fs.readFileSync(HELPER_MAIN, 'utf8');
     expect(() => parse(src, { ecmaVersion: 5 })).not.toThrow();
@@ -829,13 +769,8 @@ describe('orphan sweep', () => {
   }
 
   it('never touches a package whose owning profile still exists', async () => {
-    // THE LIVE-APP FAILURE THIS PREVENTS. A dev instance gets its own userData
-    // directory (main.ts:286, from YOUCODED_PROFILE, which run-dev.sh always
-    // exports), so its plugin id differs from production's — and without this
-    // check production's helper looks exactly like an orphan. Launching a dev
-    // instance would unload it from KWin and delete its files, the real app's
-    // buddy would stop moving mid-session with no message, and it would never
-    // repair itself (syncOnLaunch bails when its own package is missing).
+    // WHY: a dev instance has its own profile and plugin id, so production's helper looks like an orphan;
+    // sweeping it would silently stop the real app's buddy mid-session.
     const r = rig();
     const liveProfile = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-live-profile-'));
     plant(r.scriptsDir, LIVE, liveProfile);
@@ -845,20 +780,14 @@ describe('orphan sweep', () => {
     fs.rmSync(liveProfile, { recursive: true, force: true });
   });
 
-  it('still sweeps a package whose owning profile is gone', async () => {
-    const r = rig();
-    plant(r.scriptsDir, DEAD, path.join(os.tmpdir(), 'yc-profile-that-was-deleted'));
-    await r.helper.cleanOrphans();
-    expect(fs.existsSync(path.join(r.scriptsDir, DEAD))).toBe(false);
-  });
-
-  it('still sweeps a package with no recorded profile at all', async () => {
-    // A pre-fix install, or the probe's old package. Nothing is running it.
-    const r = rig();
-    plant(r.scriptsDir, DEAD, null);
-    await r.helper.cleanOrphans();
-    expect(fs.existsSync(path.join(r.scriptsDir, DEAD))).toBe(false);
-  });
+  // A pre-fix install (no recorded profile) is swept too: nothing is running it.
+  it.each([['gone', path.join(os.tmpdir(), 'yc-profile-that-was-deleted')], ['not recorded', null]])(
+    'still sweeps a package whose owning profile is %s', async (_t, owner) => {
+      const r = rig();
+      plant(r.scriptsDir, DEAD, owner);
+      await r.helper.cleanOrphans();
+      expect(fs.existsSync(path.join(r.scriptsDir, DEAD))).toBe(false);
+    });
 
   it('stamps the owning profile into the package it installs', async () => {
     const r = rig();

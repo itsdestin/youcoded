@@ -1,15 +1,9 @@
 // @vitest-environment jsdom
-// Instant buttons on a phone (one-core R6-2): Stop, a permission answer, Close, Send and the permission-mode chip draw their change on the phone's
-// own screen AT ONCE, marked as waiting, and then one of four things happens:
-//   instant   - the change is on screen before the computer has said anything;
-//   confirm   - the computer says yes (a reply, or the record's own published state): the waiting mark goes and the change stays;
-//   refused   - the computer says no or errors: the change is undone and the person is told, in the computer's words (never a guessed cause);
-//   dropped   - the connection drops while it is waiting: the screen WAITS, and after the reconnect's fill it keeps whatever the record shows.
-// Plus: nothing is drawn twice (a stop echoed by the record, a card answered and then re-announced), nothing is ever resent, and the
-// computer's own window is exactly as before.
-//
-// The screen half is real: the chat store and reducer, the helper, the action functions, the send path. The computer is a stand-in whose
-// replies the test releases by hand, so "before the computer answered" is something a test can look at.
+// Instant buttons on a phone (one-core R6-2): Stop, a permission answer, Close, Send and the permission-mode chip draw their change at
+// once, marked waiting, then: confirm (the computer says yes, or the record shows it: the mark goes, the change stays); refused (says no
+// or errors: undone, and the person is told in the computer's own words); dropped (the connection drops: the screen WAITS, and after the
+// reconnect's fill keeps whatever the record shows). Also: nothing drawn twice, nothing resent, the computer's own window unchanged.
+// The screen half is real (store, reducer, actions, send path); the computer is a stand-in whose replies the test releases by hand.
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';

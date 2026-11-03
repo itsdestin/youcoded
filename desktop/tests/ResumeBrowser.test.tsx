@@ -47,27 +47,39 @@ afterEach(cleanup);
 // section starts from the same place its own file did.
 const restoreViewport = () => { delete (window as any).matchMedia; };
 
-// An expanded Claude Code row's model dropdown used to open on `defaultModel`
-// — the app-wide Settings default — regardless of what that conversation had
-// actually run on. Resuming an Opus conversation silently offered whatever the
-// global default was, while the card's own model chip showed Opus two lines
-// above. These tests pin the per-row prefill and, just as importantly, the
-// cases that must still fall back rather than guess.
-describe('model prefill for Claude Code rows', () => {
-  // These pin the SINGLE-COLUMN browser — the layout a phone, a narrow window or
-  // Android gets, where clicking a card still expands the resume controls inside
-  // it. On a wide desktop the same click fills the preview panel instead and the
-  // controls live in the card at its foot (the 2026-09-10 design rounds), so
-  // without this stub jsdom (which has no matchMedia, hence "wide") would run
-  // these against a layout whose cards deliberately never expand.
-  beforeAll(() => {
-    (window as any).matchMedia = (q: string) => ({
-      matches: q === '(max-width: 639.98px)',
-      media: q,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    });
+// WHY: jsdom has no matchMedia (the hook reads that as "wide"). Sections that need the single-column layout (phone, narrow window,
+// Android: clicking a card expands the resume controls inside it) stub it; on wide desktop the click fills the preview panel instead.
+const setViewport = (narrow: boolean) => {
+  (window as any).matchMedia = (q: string) => ({
+    matches: narrow && q === '(max-width: 639.98px)', media: q, addEventListener: () => {}, removeEventListener: () => {},
   });
+};
+
+/** One window.claude for every section; a section passes only what it is about. */
+function installBridge(sessions: any[], o: { providers?: any[]; catalog?: any[]; tags?: any[]; chatsearch?: object } = {}) {
+  const resolved = (v: unknown) => vi.fn().mockResolvedValue(v);
+  (window as any).claude = {
+    capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
+    session: {
+      browse: resolved(sessions), setFlag: resolved({ ok: true }), setTag: resolved({ ok: true }), setNote: resolved({ ok: true }),
+      getMeta: resolved({ tags: [], note: '' }),
+    },
+    tags: { list: resolved(o.tags ?? []), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
+    providers: { catalog: resolved(o.catalog ?? []), list: resolved(o.providers ?? []) },
+    ...(o.chatsearch ? { chatsearch: o.chatsearch } : {}),
+    on: {},
+  };
+}
+
+/** A Claude Code conversation row; `provider: 'native'` rows pass their own fields. */
+const sessionRow = (o: Record<string, unknown> = {}) => ({
+  sessionId: 'cc-1', name: 'CC Chat', projectSlug: 'proj', projectPath: '/tmp/proj', lastModified: Date.now(), size: 200, provider: 'claude', ...o,
+});
+
+// WHY: an expanded Claude Code row's model dropdown used to open on the app-wide default regardless of what that conversation
+// ran on; these pin the per-row prefill and the cases that must still fall back rather than guess.
+describe('model prefill for Claude Code rows', () => {
+  beforeAll(() => setViewport(true));
   afterAll(restoreViewport);
 
   // One ready native provider so the picker's catalog fetch resolves normally;
@@ -77,36 +89,8 @@ describe('model prefill for Claude Code rows', () => {
   ];
   const CATALOG = [{ id: 'anthropic/claude-sonnet-4.5', providerId: 'ulid-openrouter', label: 'Claude Sonnet 4.5' }];
 
-  function ccRow(overrides: Record<string, unknown> = {}) {
-    return {
-      sessionId: 'cc-1',
-      name: 'CC Chat',
-      projectSlug: 'proj',
-      projectPath: '/tmp/proj',
-      lastModified: Date.now(),
-      size: 200,
-      provider: 'claude',
-      ...overrides,
-    };
-  }
-
-  function mockWindowClaude(sessions: any[]) {
-    (window as any).claude = {
-      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
-      session: {
-        browse: vi.fn().mockResolvedValue(sessions),
-        setFlag: vi.fn().mockResolvedValue({ ok: true }),
-        setTag: vi.fn().mockResolvedValue({ ok: true }),
-        setNote: vi.fn().mockResolvedValue({ ok: true }),
-      },
-      tags: { list: vi.fn().mockResolvedValue([]) },
-      providers: {
-        catalog: vi.fn().mockResolvedValue(CATALOG),
-        list: vi.fn().mockResolvedValue(PROVIDERS),
-      },
-      on: {},
-    };
-  }
+  const ccRow = sessionRow;
+  const mockWindowClaude = (sessions: any[]) => installBridge(sessions, { providers: PROVIDERS, catalog: CATALOG });
 
   const expandRow = async (name: string) => fireEvent.click(await screen.findByText(name));
 
@@ -119,39 +103,17 @@ describe('model prefill for Claude Code rows', () => {
     return forwardedAlias(onResume);
   }
 
-  describe('claudeAliasForModelId', () => {
-    it('maps every family, dated or not, to the alias the picker offers', () => {
-      expect(claudeAliasForModelId('claude-opus-5')).toBe('opus[1m]');
-      expect(claudeAliasForModelId('claude-opus-4-5-20251101')).toBe('opus[1m]');
-      expect(claudeAliasForModelId('claude-sonnet-4-6')).toBe('sonnet');
-      expect(claudeAliasForModelId('claude-haiku-4-5-20251001')).toBe('haiku');
-      expect(claudeAliasForModelId('claude-fable-5')).toBe('fable');
-      // A transcript sometimes records the bare alias the user typed.
-      expect(claudeAliasForModelId('sonnet')).toBe('sonnet');
-      expect(claudeAliasForModelId('OPUS')).toBe('opus[1m]');
-    });
+  // A transcript sometimes records the bare alias the user typed; `<synthetic>` must never invent a pick.
+  it.each([
+    ['claude-opus-5', 'opus[1m]'], ['claude-opus-4-5-20251101', 'opus[1m]'], ['claude-sonnet-4-6', 'sonnet'],
+    ['claude-haiku-4-5-20251001', 'haiku'], ['claude-fable-5', 'fable'], ['sonnet', 'sonnet'], ['OPUS', 'opus[1m]'],
+    ['<synthetic>', null], ['gpt-5.6-sol', null], ['', null], ['   ', null],
+  ])('claudeAliasForModelId(%j) is %j', (id, alias) => { expect(claudeAliasForModelId(id)).toBe(alias); });
 
-    it('returns null for anything outside the four families', () => {
-      // `<synthetic>` should never reach here (every caller drops it first), but
-      // the mapping must not invent a pick if one ever does.
-      expect(claudeAliasForModelId('<synthetic>')).toBeNull();
-      expect(claudeAliasForModelId('gpt-5.6-sol')).toBeNull();
-      expect(claudeAliasForModelId('')).toBeNull();
-      expect(claudeAliasForModelId('   ')).toBeNull();
-    });
-  });
-
-  describe('isPlaceholderModelId', () => {
-    it('matches CC placeholders, padded or not, and nothing else', () => {
-      expect(isPlaceholderModelId('<synthetic>')).toBe(true);
-      expect(isPlaceholderModelId('  <synthetic>  ')).toBe(true);
-      expect(isPlaceholderModelId('<>')).toBe(true);
-      expect(isPlaceholderModelId('claude-opus-5')).toBe(false);
-      expect(isPlaceholderModelId('')).toBe(false);
-      // Not a placeholder just because it CONTAINS brackets.
-      expect(isPlaceholderModelId('claude-opus-5<beta')).toBe(false);
-    });
-  });
+  it.each([
+    ['<synthetic>', true], ['  <synthetic>  ', true], ['<>', true],
+    ['claude-opus-5', false], ['', false], ['claude-opus-5<beta', false], // brackets alone do not make a placeholder
+  ])('isPlaceholderModelId(%j) is %s', (id, expected) => { expect(isPlaceholderModelId(id)).toBe(expected); });
 
   describe('ResumeBrowser — Claude Code model prefill', () => {
     beforeEach(() => { vi.clearAllMocks(); });
@@ -169,27 +131,19 @@ describe('model prefill for Claude Code rows', () => {
       expect(await resumeAndReadAlias(onResume)).toBe('opus[1m]');
     });
 
-    it('falls back to the app-wide default when the row records no model', async () => {
+    it.each([
+      ['records no model', undefined, 'haiku'],
+      ['has an unrecognised model id', { modelId: '<synthetic>', providerType: 'claude-code', providerLabel: 'Claude Code' }, 'sonnet'],
+    ])('falls back to the app-wide default when the row %s', async (_t, lastUsedModel, defaultModel) => {
       const onResume = vi.fn();
-      mockWindowClaude([ccRow()]);
-      render(<ResumeBrowser open={true} onClose={() => {}} onResume={onResume} defaultModel="haiku" />);
+      mockWindowClaude([ccRow(lastUsedModel ? { lastUsedModel } : {})]);
+      render(<ResumeBrowser open={true} onClose={() => {}} onResume={onResume} defaultModel={defaultModel} />);
       await expandRow('CC Chat');
-      expect(await resumeAndReadAlias(onResume)).toBe('haiku');
-    });
-
-    it('falls back to the app-wide default for an unrecognised model id', async () => {
-      const onResume = vi.fn();
-      mockWindowClaude([ccRow({
-        lastUsedModel: { modelId: '<synthetic>', providerType: 'claude-code', providerLabel: 'Claude Code' },
-      })]);
-      render(<ResumeBrowser open={true} onClose={() => {}} onResume={onResume} defaultModel="sonnet" />);
-      await expandRow('CC Chat');
-      expect(await resumeAndReadAlias(onResume)).toBe('sonnet');
+      expect(await resumeAndReadAlias(onResume)).toBe(defaultModel);
     });
 
     it('re-derives per row: collapsing an Opus row and expanding a Sonnet row does not carry Opus over', async () => {
-      // The prefill lives in ONE piece of state shared by every card, so a stale
-      // value leaking between rows is the obvious way this breaks.
+      // WHY: the prefill is ONE piece of state shared by every card, so a stale value could leak between rows.
       const onResume = vi.fn();
       mockWindowClaude([
         ccRow({ sessionId: 'cc-opus', name: 'Opus Chat', lastUsedModel: { modelId: 'claude-opus-5', providerType: 'claude-code', providerLabel: 'Claude Code' } }),
@@ -220,9 +174,7 @@ describe('model prefill for Claude Code rows', () => {
     });
 
     it('a native row whose recorded id merely CONTAINS a family word does not set the CC alias', async () => {
-      // `anthropic/claude-sonnet-4.5` on OpenRouter would map to 'sonnet' if the
-      // gate on provider were dropped. A native row must forward the app default
-      // in the CC-alias slot — the real pick rides the 8th arg as a binding.
+      // WHY: `anthropic/claude-sonnet-4.5` would map to 'sonnet' if the provider gate were dropped; the real pick rides the 8th arg.
       const onResume = vi.fn();
       mockWindowClaude([{
         sessionId: 'native-1', name: 'Native Chat', projectSlug: 'p', projectPath: '/tmp/p',
@@ -242,14 +194,10 @@ describe('model prefill for Claude Code rows', () => {
   });
 });
 
-// The Resume browser's speed, pinned as behaviour (2026-09-11). A click used to
-// re-render every card in the list several times, and read and format its
-// conversation from scratch — even one just looked at. Each test below is one
-// of those costs that must not come back.
+// WHY: a click once re-rendered every card several times and re-read its conversation from scratch; each test is a cost that must not return.
 describe('speed', () => {
   beforeAll(() => {
-    // Wide viewport, declared (narrow-viewport rule): the panel only exists there.
-    (window as any).matchMedia = (q: string) => ({ matches: false, media: q, addEventListener: () => {}, removeEventListener: () => {} });
+    setViewport(false); // the panel only exists on a wide viewport
     Element.prototype.scrollIntoView = vi.fn();
     window.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   });
@@ -270,20 +218,7 @@ describe('speed', () => {
 
   function mockClaude(sessions: any[]) {
     const read = vi.fn(async (req: { id: string }) => previewPage(req.id, [`text of ${req.id}`]));
-    (window as any).claude = {
-      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
-      session: {
-        browse: vi.fn().mockResolvedValue(sessions),
-        setFlag: vi.fn().mockResolvedValue({ ok: true }),
-        setTag: vi.fn().mockResolvedValue({ ok: true }),
-        setNote: vi.fn().mockResolvedValue({ ok: true }),
-        getMeta: vi.fn().mockResolvedValue({ tags: [], note: '' }),
-      },
-      tags: { list: vi.fn().mockResolvedValue([]) },
-      providers: { catalog: vi.fn().mockResolvedValue([]), list: vi.fn().mockResolvedValue([]) },
-      chatsearch: { read },
-      on: {},
-    };
+    installBridge(sessions, { chatsearch: { read } });
     return read;
   }
 
@@ -422,47 +357,15 @@ describe('native resume', () => {
     };
   }
 
-  function ccRow(overrides: Record<string, unknown> = {}) {
-    return {
-      sessionId: 'cc-1',
-      name: 'CC Chat',
-      projectSlug: 'proj2',
-      projectPath: '/tmp/proj2',
-      lastModified: Date.now(),
-      size: 200,
-      provider: 'claude',
-      ...overrides,
-    };
-  }
-
-  function mockWindowClaude(sessions: any[]) {
-    (window as any).claude = {
-      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
-      session: {
-        browse: vi.fn().mockResolvedValue(sessions),
-        setFlag: vi.fn().mockResolvedValue({ ok: true }),
-        setTag: vi.fn().mockResolvedValue({ ok: true }),
-        setNote: vi.fn().mockResolvedValue({ ok: true }),
-      },
-      tags: { list: vi.fn().mockResolvedValue([]) },
-      providers: {
-        catalog: vi.fn().mockResolvedValue(CATALOG),
-        list: vi.fn().mockResolvedValue(PROVIDERS),
-      },
-      on: {},
-    };
-  }
+  const ccRow = (o: Record<string, unknown> = {}) => sessionRow({ projectSlug: 'proj2', projectPath: '/tmp/proj2', ...o });
+  const mockWindowClaude = (sessions: any[]) => installBridge(sessions, { providers: PROVIDERS, catalog: CATALOG });
 
   // Expands a row by clicking its name text (handleSelectSession).
   async function expandRow(name: string) {
     fireEvent.click(await screen.findByText(name));
   }
 
-  /** The model list moved behind a dropdown (2026-07-30, unified ModelPicker), so
-   *  reaching a model row now takes a click on the trigger first. Every
-   *  BEHAVIOURAL assertion below is unchanged — what moved is the DOM path to it.
-   *  In particular "prefill enables Resume without any click" still asserts
-   *  exactly that: it checks the button BEFORE opening the dropdown. */
+  /** The model list sits behind a dropdown, so reaching a model row takes a click on the trigger first. */
   async function openModelPicker() {
     fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
     return screen.findByPlaceholderText('Search all models…');
@@ -604,56 +507,13 @@ describe('native resume', () => {
 //      Inert rows never expand, and the sheet opens independently of expansion,
 //      which is the only reason those rows are reachable at all.
 describe('organizing', () => {
-  // These pin the SINGLE-COLUMN browser — the layout a phone, a narrow window or
-  // Android gets, where clicking a card still expands the resume controls inside
-  // it. On a wide desktop the same click fills the preview panel instead and the
-  // controls live in the card at its foot (the 2026-09-10 design rounds), so
-  // without this stub jsdom (which has no matchMedia, hence "wide") would run
-  // these against a layout whose cards deliberately never expand.
-  beforeAll(() => {
-    (window as any).matchMedia = (q: string) => ({
-      matches: q === '(max-width: 639.98px)',
-      media: q,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    });
-  });
+  beforeAll(() => setViewport(true));
   afterAll(restoreViewport);
 
   const TAGS = [{ id: 'tag_a', label: 'Research', color: 'tag-blue', archived: false, createdAt: '' }];
 
-  function row(overrides: Record<string, unknown> = {}) {
-    return {
-      sessionId: 'cc-1',
-      name: 'CC Chat',
-      projectSlug: 'proj',
-      projectPath: '/tmp/proj',
-      lastModified: Date.now(),
-      size: 200,
-      provider: 'claude',
-      ...overrides,
-    };
-  }
-
-  function mockWindowClaude(sessions: any[] = [row()]) {
-    (window as any).claude = {
-      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
-      session: {
-        browse: vi.fn().mockResolvedValue(sessions),
-        setFlag: vi.fn().mockResolvedValue({ ok: true }),
-        setTag: vi.fn().mockResolvedValue({ ok: true }),
-        setNote: vi.fn().mockResolvedValue({ ok: true }),
-      },
-      tags: {
-        list: vi.fn().mockResolvedValue(TAGS),
-        create: vi.fn(),
-        update: vi.fn(),
-        delete: vi.fn(),
-      },
-      providers: { catalog: vi.fn().mockResolvedValue([]), list: vi.fn().mockResolvedValue([]) },
-      on: {},
-    };
-  }
+  const row = sessionRow;
+  const mockWindowClaude = (sessions: any[] = [row()]) => installBridge(sessions, { tags: TAGS });
 
   const mount = () => render(<ResumeBrowser open={true} onClose={() => {}} onResume={() => {}} />);
 
@@ -780,18 +640,6 @@ describe('organizing', () => {
 // panel instead — the behaviour those two would otherwise have silently
 // stopped covering when the panel shipped.
 describe('preview panel', () => {
-  // Wide: jsdom has no matchMedia, and the hook already treats its absence as
-  // wide — stubbed anyway so the intent is on the page rather than inherited
-  // from a gap in the environment.
-  const setViewport = (narrow: boolean) => {
-    (window as any).matchMedia = (q: string) => ({
-      matches: narrow && q === '(max-width: 639.98px)',
-      media: q,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    });
-  };
-
   beforeAll(() => {
     // jsdom implements neither; the chat components the preview renders may
     // call scrollIntoView, and the sheet measures itself with ResizeObserver.
@@ -818,24 +666,9 @@ describe('preview panel', () => {
     ...o,
   });
 
-  function mockClaude(sessions: any[]) {
-    (window as any).claude = {
-      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
-      session: {
-        browse: vi.fn().mockResolvedValue(sessions),
-        setFlag: vi.fn().mockResolvedValue({ ok: true }),
-        setTag: vi.fn().mockResolvedValue({ ok: true }),
-        setNote: vi.fn().mockResolvedValue({ ok: true }),
-        getMeta: vi.fn().mockResolvedValue({ tags: [], note: '' }),
-      },
-      tags: { list: vi.fn().mockResolvedValue([]) },
-      providers: { catalog: vi.fn().mockResolvedValue([]), list: vi.fn().mockResolvedValue([]) },
-      chatsearch: {
-        read: vi.fn(async (req: { id: string }) => previewPage(req.id, ['why did the ask time out'])),
-      },
-      on: {},
-    };
-  }
+  const mockClaude = (sessions: any[]) => installBridge(sessions, {
+    chatsearch: { read: vi.fn(async (req: { id: string }) => previewPage(req.id, ['why did the ask time out'])) },
+  });
 
   const open = () => render(<ResumeBrowser open={true} onClose={() => {}} onResume={() => {}} defaultModel="sonnet" />);
 

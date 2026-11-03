@@ -6,84 +6,44 @@ import os from 'os';
 import path from 'path';
 import { EventEmitter } from 'events';
 
+const GH = 'https://github.com/itsdestin/youcoded/releases/download';
+
 describe('validateDownloadUrl', () => {
-  it('accepts github.com release URLs', () => {
-    expect(() => validateDownloadUrl('https://github.com/itsdestin/youcoded/releases/download/v1.2.3/YouCoded-Setup-1.2.3.exe')).not.toThrow();
-  });
+  // WHY: release-assets.githubusercontent.com was once rejected, so every download failed url-rejected.
+  it.each([
+    `${GH}/v1.2.3/YouCoded-Setup-1.2.3.exe`,
+    'https://objects.githubusercontent.com/github-production-release-asset-xyz/YouCoded-1.2.3.dmg',
+    'https://release-assets.githubusercontent.com/github-production-release-asset-xyz/YouCoded-Setup-1.3.0.exe',
+  ])('accepts %s', (url) => { expect(() => validateDownloadUrl(url)).not.toThrow(); });
 
-  it('accepts objects.githubusercontent.com URLs', () => {
-    expect(() => validateDownloadUrl('https://objects.githubusercontent.com/github-production-release-asset-xyz/YouCoded-1.2.3.dmg')).not.toThrow();
-  });
-
-  it('accepts release-assets.githubusercontent.com URLs (GitHub\'s current download host)', () => {
-    // The regression that broke the Update button for everyone: this host was
-    // rejected, so every download failed url-rejected.
-    expect(() => validateDownloadUrl('https://release-assets.githubusercontent.com/github-production-release-asset-xyz/YouCoded-Setup-1.3.0.exe')).not.toThrow();
-  });
-
-  it('rejects http:// URLs with url-rejected', () => {
-    expect(() => validateDownloadUrl('http://github.com/itsdestin/youcoded/releases/download/v1/YouCoded.exe'))
-      .toThrow(/url-rejected/);
-  });
-
-  it('rejects non-GitHub domains with url-rejected', () => {
-    expect(() => validateDownloadUrl('https://evil.example.com/YouCoded.exe'))
-      .toThrow(/url-rejected/);
-  });
-
-  it('rejects malformed URLs with url-rejected', () => {
-    expect(() => validateDownloadUrl('not a url')).toThrow(/url-rejected/);
-  });
+  it.each(['http://github.com/itsdestin/youcoded/releases/download/v1/YouCoded.exe', 'https://evil.example.com/YouCoded.exe', 'not a url'])(
+    'rejects %s with url-rejected', (url) => { expect(() => validateDownloadUrl(url)).toThrow(/url-rejected/); });
 });
 
 describe('isAllowedUpdateHost (manifest/signature fetch trust boundary)', () => {
-  it('accepts the three GitHub release hosts over https', () => {
-    expect(isAllowedUpdateHost('https://github.com/a/b/releases/download/v1/youcoded-release.json')).toBe(true);
-    expect(isAllowedUpdateHost('https://objects.githubusercontent.com/x/youcoded-release.json.sig')).toBe(true);
-    expect(isAllowedUpdateHost('https://release-assets.githubusercontent.com/x/youcoded-release.json')).toBe(true);
-  });
-  it('rejects other hosts, http, and junk', () => {
-    expect(isAllowedUpdateHost('https://evil.example.com/youcoded-release.json')).toBe(false);
-    expect(isAllowedUpdateHost('http://github.com/x/youcoded-release.json')).toBe(false);
-    expect(isAllowedUpdateHost('not a url')).toBe(false);
-  });
+  it.each([
+    ['https://github.com/a/b/releases/download/v1/youcoded-release.json', true],
+    ['https://objects.githubusercontent.com/x/youcoded-release.json.sig', true],
+    ['https://release-assets.githubusercontent.com/x/youcoded-release.json', true],
+    ['https://evil.example.com/youcoded-release.json', false],
+    ['http://github.com/x/youcoded-release.json', false],
+    ['not a url', false],
+  ])('%s -> %s', (url, ok) => { expect(isAllowedUpdateHost(url)).toBe(ok); });
 });
 
 describe('deriveDownloadFilename', () => {
-  it('derives .exe for Windows URL', () => {
-    const f = deriveDownloadFilename('https://github.com/itsdestin/youcoded/releases/download/v1.2.3/YouCoded-Setup-1.2.3.exe', 'win32');
-    expect(f).toBe('YouCoded-Setup-1.2.3.exe');
-  });
+  it.each([
+    [`${GH}/v1.2.3/YouCoded-Setup-1.2.3.exe`, 'win32', 'YouCoded-Setup-1.2.3.exe'],
+    [`${GH}/v1.2.3/YouCoded-1.2.3-arm64.dmg`, 'darwin', 'YouCoded-1.2.3-arm64.dmg'],
+    [`${GH}/v1.2.3/YouCoded-1.2.3.AppImage`, 'linux', 'YouCoded-1.2.3.AppImage'],
+    [`${GH}/v1.2.3/youcoded_1.2.3_amd64.deb`, 'linux', 'youcoded_1.2.3_amd64.deb'],
+    ['https://objects.githubusercontent.com/YouCoded-1.2.3.exe?token=abc', 'win32', 'YouCoded-1.2.3.exe'], // querystring stripped
+  ] as const)('%s on %s -> %s', (url, platform, name) => { expect(deriveDownloadFilename(url, platform)).toBe(name); });
 
-  it('derives .dmg for macOS URL', () => {
-    const f = deriveDownloadFilename('https://github.com/itsdestin/youcoded/releases/download/v1.2.3/YouCoded-1.2.3-arm64.dmg', 'darwin');
-    expect(f).toBe('YouCoded-1.2.3-arm64.dmg');
-  });
-
-  it('derives .AppImage for Linux AppImage URL', () => {
-    const f = deriveDownloadFilename('https://github.com/itsdestin/youcoded/releases/download/v1.2.3/YouCoded-1.2.3.AppImage', 'linux');
-    expect(f).toBe('YouCoded-1.2.3.AppImage');
-  });
-
-  it('derives .deb for Linux deb URL', () => {
-    const f = deriveDownloadFilename('https://github.com/itsdestin/youcoded/releases/download/v1.2.3/youcoded_1.2.3_amd64.deb', 'linux');
-    expect(f).toBe('youcoded_1.2.3_amd64.deb');
-  });
-
-  it('rejects path traversal with url-rejected', () => {
-    expect(() => deriveDownloadFilename('https://github.com/foo/../../etc/passwd', 'linux'))
-      .toThrow(/url-rejected/);
-  });
-
-  it('rejects unknown extensions with url-rejected', () => {
-    expect(() => deriveDownloadFilename('https://github.com/itsdestin/youcoded/releases/download/v1/foo.zip', 'win32'))
-      .toThrow(/url-rejected/);
-  });
-
-  it('strips querystrings before extension check', () => {
-    const f = deriveDownloadFilename('https://objects.githubusercontent.com/YouCoded-1.2.3.exe?token=abc', 'win32');
-    expect(f).toBe('YouCoded-1.2.3.exe');
-  });
+  it.each([['https://github.com/foo/../../etc/passwd', 'linux'], [`${GH}/v1/foo.zip`, 'win32']] as const)(
+    'rejects %s (traversal / unknown extension) with url-rejected', (url, platform) => {
+      expect(() => deriveDownloadFilename(url, platform)).toThrow(/url-rejected/);
+    });
 });
 
 // We can't easily stand up a real HTTPS server in tests (needs certs).
@@ -253,12 +213,15 @@ describe('createUpdateInstaller download engine', () => {
 
 describe('cleanupStaleDownloads', () => {
   let tmpDir: string;
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-cleanup-'));
-  });
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-  });
+  beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-cleanup-')); });
+  afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
+  const write = (name: string, ageHours = 0) => {
+    const f = path.join(tmpDir, name);
+    fs.writeFileSync(f, 'x');
+    const t = Date.now() / 1000 - ageHours * 3600;
+    fs.utimesSync(f, t, t);
+    return f;
+  };
 
   it('treats a missing cache folder as nothing to sweep', async () => {
     const dir = path.join(tmpDir, 'does-not-exist');
@@ -266,122 +229,57 @@ describe('cleanupStaleDownloads', () => {
     expect(fs.existsSync(dir)).toBe(false);
   });
 
-  it('deletes .partial files unconditionally', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'YouCoded.exe.partial'), 'x');
+  it.each([
+    ['a .partial file, however new', 'YouCoded.exe.partial', 0, false],
+    ['a file older than 24h', 'YouCoded.exe', 25, false],
+    ['a file newer than 24h', 'YouCoded.exe', 0, true],
+  ])('%s: kept=%s', async (_t, name, age, kept) => {
+    const f = write(name, age);
     await cleanupStaleDownloads(tmpDir);
-    expect(fs.existsSync(path.join(tmpDir, 'YouCoded.exe.partial'))).toBe(false);
-  });
-
-  it('deletes non-.partial files older than 24h', async () => {
-    const old = path.join(tmpDir, 'YouCoded.exe');
-    fs.writeFileSync(old, 'x');
-    const twentyFiveHoursAgo = Date.now() / 1000 - (25 * 3600);
-    fs.utimesSync(old, twentyFiveHoursAgo, twentyFiveHoursAgo);
-    await cleanupStaleDownloads(tmpDir);
-    expect(fs.existsSync(old)).toBe(false);
+    expect(fs.existsSync(f)).toBe(kept);
   });
 
   it('never deletes a kept name or the update bookkeeping files, however old', async () => {
-    const old = Date.now() / 1000 - (72 * 3600);
-    for (const name of ['YouCoded-Installer-2.0.0.exe', 'pending.json', 'attempt.json', 'YouCoded-Installer-0.9.0.exe']) {
-      fs.writeFileSync(path.join(tmpDir, name), 'x');
-      fs.utimesSync(path.join(tmpDir, name), old, old);
-    }
+    const names = ['YouCoded-Installer-2.0.0.exe', 'pending.json', 'attempt.json', 'YouCoded-Installer-0.9.0.exe'];
+    for (const n of names) write(n, 72);
     await cleanupStaleDownloads(tmpDir, new Set(['YouCoded-Installer-2.0.0.exe']));
-    expect(fs.existsSync(path.join(tmpDir, 'YouCoded-Installer-2.0.0.exe'))).toBe(true);
-    expect(fs.existsSync(path.join(tmpDir, 'pending.json'))).toBe(true);
-    expect(fs.existsSync(path.join(tmpDir, 'attempt.json'))).toBe(true);
-    expect(fs.existsSync(path.join(tmpDir, 'YouCoded-Installer-0.9.0.exe'))).toBe(false);
-  });
-
-  it('keeps non-.partial files newer than 24h', async () => {
-    const fresh = path.join(tmpDir, 'YouCoded.exe');
-    fs.writeFileSync(fresh, 'x');
-    await cleanupStaleDownloads(tmpDir);
-    expect(fs.existsSync(fresh)).toBe(true);
+    expect(names.map((n) => fs.existsSync(path.join(tmpDir, n)))).toEqual([true, true, true, false]);
   });
 });
 
 describe('findCachedDownload', () => {
   let tmpDir: string;
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-cache-'));
-  });
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-  });
+  beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-cache-')); });
+  afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
 
-  it('returns null when no file matches the version', async () => {
-    expect(await findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
-  });
-
-  it('returns null when cacheDir does not exist', async () => {
+  it('returns null when the cache folder does not exist', async () => {
     expect(await findCachedDownload(path.join(tmpDir, 'missing'), '1.2.3', 'win32')).toBeNull();
   });
 
-  it('finds a matching .exe by version substring on Windows', async () => {
-    const filePath = path.join(tmpDir, 'YouCoded-Setup-1.2.3.exe');
+  // Includes the names releases actually publish, and the old dotted Windows name that never matched (why the rename puts a dash there).
+  it.each([
+    ['YouCoded-Setup-1.2.3.exe', '1.2.3', 'win32'],
+    ['YouCoded-Installer-1.3.0-beta.77.exe', '1.3.0-beta.77', 'win32'],
+    ['YouCoded-1.2.3-arm64.dmg', '1.2.3', 'darwin'],
+    ['YouCoded-Installer-1.2.3-arm64.dmg', '1.2.3', 'darwin'],
+    ['YouCoded-Installer-1.2.3-x64.dmg', '1.2.3', 'darwin'],
+    ['youcoded_1.2.3_amd64.deb', '1.2.3', 'linux'],
+  ] as const)('finds %s for %s on %s', async (name, version, platform) => {
+    const filePath = path.join(tmpDir, name);
     fs.writeFileSync(filePath, 'x');
-    const hit = await findCachedDownload(tmpDir, '1.2.3', 'win32');
-    expect(hit).toEqual({ filePath, version: '1.2.3' });
+    expect(await findCachedDownload(tmpDir, version, platform)).toEqual({ filePath, version });
   });
 
-  // WHY: the two tests above use invented names. These use the names releases
-  // actually publish, which is how the dotted-name miss below went unnoticed.
-  it('finds the renamed Windows installer, beta version included', async () => {
-    const filePath = path.join(tmpDir, 'YouCoded-Installer-1.3.0-beta.77.exe');
-    fs.writeFileSync(filePath, 'x');
-    const hit = await findCachedDownload(tmpDir, '1.3.0-beta.77', 'win32');
-    expect(hit).toEqual({ filePath, version: '1.3.0-beta.77' });
-  });
-
-  it('finds the renamed macOS installer for both chips', async () => {
-    const arm = path.join(tmpDir, 'YouCoded-Installer-1.2.3-arm64.dmg');
-    fs.writeFileSync(arm, 'x');
-    expect(await findCachedDownload(tmpDir, '1.2.3', 'darwin')).toEqual({ filePath: arm, version: '1.2.3' });
-    fs.rmSync(arm);
-    const intel = path.join(tmpDir, 'YouCoded-Installer-1.2.3-x64.dmg');
-    fs.writeFileSync(intel, 'x');
-    expect(await findCachedDownload(tmpDir, '1.2.3', 'darwin')).toEqual({ filePath: intel, version: '1.2.3' });
-  });
-
-  it('never matched the old dotted Windows name GitHub published (why the rename puts a dash there)', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'YouCoded.Setup.1.2.3.exe'), 'x');
-    expect(await findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
-  });
-
-  it('finds a matching .dmg by version substring on macOS', async () => {
-    const filePath = path.join(tmpDir, 'YouCoded-1.2.3-arm64.dmg');
-    fs.writeFileSync(filePath, 'x');
-    const hit = await findCachedDownload(tmpDir, '1.2.3', 'darwin');
-    expect(hit).toEqual({ filePath, version: '1.2.3' });
-  });
-
-  it('ignores .partial files', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'YouCoded-Setup-1.2.3.exe.partial'), 'x');
-    expect(await findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
-  });
-
-  it('ignores files for a different version', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'YouCoded-Setup-1.2.2.exe'), 'x');
-    expect(await findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
-  });
-
-  it('does NOT match "1.2.3" against YouCoded-Setup-1.2.30.exe (version substring false-positive guard)', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'YouCoded-Setup-1.2.30.exe'), 'x');
-    expect(await findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
-  });
-
-  it('does NOT match "2.0" against YouCoded-Setup-1.2.0.exe (version embedded in another)', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'YouCoded-Setup-1.2.0.exe'), 'x');
-    expect(await findCachedDownload(tmpDir, '2.0', 'win32')).toBeNull();
-  });
-
-  it('finds underscore-delimited .deb by version', async () => {
-    const filePath = path.join(tmpDir, 'youcoded_1.2.3_amd64.deb');
-    fs.writeFileSync(filePath, 'x');
-    const hit = await findCachedDownload(tmpDir, '1.2.3', 'linux');
-    expect(hit).toEqual({ filePath, version: '1.2.3' });
+  it.each([
+    ['no files at all', null, '1.2.3'],
+    ['.partial files', 'YouCoded-Setup-1.2.3.exe.partial', '1.2.3'],
+    ['another version', 'YouCoded-Setup-1.2.2.exe', '1.2.3'],
+    ['1.2.3 inside 1.2.30', 'YouCoded-Setup-1.2.30.exe', '1.2.3'],
+    ['2.0 inside 1.2.0', 'YouCoded-Setup-1.2.0.exe', '2.0'],
+    ['the old dotted Windows name', 'YouCoded.Setup.1.2.3.exe', '1.2.3'],
+  ])('ignores %s', async (_t, name, version) => {
+    if (name) fs.writeFileSync(path.join(tmpDir, name), 'x');
+    expect(await findCachedDownload(tmpDir, version, 'win32')).toBeNull();
   });
 });
 

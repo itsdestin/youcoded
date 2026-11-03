@@ -31,14 +31,8 @@ afterEach(() => {
   __resetStatsCacheForTests();
 });
 
-// Bug: MarketplaceCard asked `installingIds` for a BARE marketplace id while
-// marketplace-context records progress under `skill:<id>`. The two strings can
-// never be equal, so a plugin install showed no "Installing…" state at all.
-// Themes hid the bug because both sides already agreed on `theme:<slug>`.
-//
-// These tests pin the two halves together: the writer (the context) and every
-// reader (the card, the detail overlay, the footer strip) must derive the key
-// from the same helper — `installTrackingKey` in marketplace-context.
+// Regression: the card asked installingIds for a BARE id while the context records `skill:<id>`, so a plugin install showed no
+// "Installing…". Writer and every reader must derive the key from `installTrackingKey`.
 describe('install progress key parity', () => {
   // Held open so the install stays "in flight" while we assert on the card.
   let releaseInstall: (() => void) | undefined;
@@ -187,276 +181,99 @@ describe('install progress key parity', () => {
   });
 });
 
-// Verifies that installSkill() and installTheme() fire POST /installs telemetry
-// after a successful local install and that telemetry failures never surface to
-// the caller. Themes report under a `theme:<slug>` plugin id; without
-// this call the installs table holds zero theme rows and a theme's download
-// count would read 0 forever.
+// WHY: themes report under a `theme:<slug>` plugin id; without the telemetry call the installs table holds no theme rows and a
+// theme's download count reads 0 forever. Telemetry failures must never surface to the caller.
 describe('install telemetry', () => {
-  // ── Probe ──────────────────────────────────────────────────────────────────────
-
-  function Probe({
-    onInstall,
-    onInstallTheme,
-  }: {
-    onInstall?: (fn: (id: string) => Promise<void>) => void;
-    onInstallTheme?: (fn: (slug: string) => Promise<void>) => void;
-  }) {
-    const { installSkill, installTheme } = useMarketplace();
-    React.useEffect(() => {
-      onInstall?.(installSkill);
-      onInstallTheme?.(installTheme);
-    }, []);
-    return null;
-  }
-
-  // ── window.claude mock ─────────────────────────────────────────────────────────
-
-  function makeMock({
-    installResolves = true,
-    signedIn = true,
-    telemetryReject = false,
-    themeInstallFails = false,
-  }: {
-    installResolves?: boolean;
-    signedIn?: boolean;
-    telemetryReject?: boolean;
-    themeInstallFails?: boolean;
-  } = {}) {
-    const skills = {
-      install: installResolves
-        ? vi.fn().mockResolvedValue({ status: "installed", type: "plugin" })
-        : vi.fn().mockRejectedValue(new Error("install failed")),
-      uninstall: vi.fn().mockResolvedValue({ type: "plugin" }),
-      list: vi.fn().mockResolvedValue([]),
-      listMarketplace: vi.fn().mockResolvedValue([]),
-      getFavorites: vi.fn().mockResolvedValue([]),
-      // Added when MarketplaceProvider began calling useSkills() — SkillProvider
-      // mount fetches getChips and getCuratedDefaults too.
-      getChips: vi.fn().mockResolvedValue([]),
-      getCuratedDefaults: vi.fn().mockResolvedValue([]),
-      update: vi.fn().mockResolvedValue({ ok: true }),
-      setFavorite: vi.fn().mockResolvedValue(undefined),
-      publish: vi.fn().mockResolvedValue({ prUrl: "http://example.com/pr/1" }),
-    };
-
-    const marketplace = {
-      getPackages: vi.fn().mockResolvedValue({}),
-    };
-
-    const account = {
-      signedIn: vi.fn().mockResolvedValue(signedIn),
-    };
-
-    const marketplaceApi = {
-      install: telemetryReject
-        ? vi.fn().mockRejectedValue(new Error("Worker down"))
-        : vi.fn().mockResolvedValue({ ok: true }),
-    };
-
-    const theme = {
-      marketplace: {
-        list: vi.fn().mockResolvedValue([]),
-        // theme-marketplace:install resolves { status } — it does not throw on
-        // failure, which is why the telemetry call has to read the status.
-        install: themeInstallFails
-          ? vi.fn().mockResolvedValue({ status: "failed", error: "Theme not found in registry" })
-          : vi.fn().mockResolvedValue({ status: "installed" }),
-        uninstall: vi.fn().mockResolvedValue(undefined),
-        update: vi.fn().mockResolvedValue({ ok: true }),
+  function makeMock({ signedIn = true, telemetryReject = false, themeInstallFails = false } = {}) {
+    const resolved = (v: unknown) => vi.fn().mockResolvedValue(v);
+    return {
+      skills: {
+        install: resolved({ status: 'installed', type: 'plugin' }), uninstall: resolved({ type: 'plugin' }), list: resolved([]),
+        listMarketplace: resolved([]), getFavorites: resolved([]), getChips: resolved([]), getCuratedDefaults: resolved([]),
+        update: resolved({ ok: true }), setFavorite: resolved(undefined), publish: resolved({ prUrl: 'http://example.com/pr/1' }),
       },
+      marketplace: { getPackages: resolved({}) },
+      account: { signedIn: resolved(signedIn) },
+      marketplaceApi: { install: telemetryReject ? vi.fn().mockRejectedValue(new Error('Worker down')) : resolved({ ok: true }) },
+      theme: {
+        marketplace: {
+          list: resolved([]),
+          // theme-marketplace:install resolves { status } rather than throwing, so telemetry has to read the status.
+          install: resolved(themeInstallFails ? { status: 'failed', error: 'Theme not found in registry' } : { status: 'installed' }),
+          uninstall: resolved(undefined), update: resolved({ ok: true }),
+        },
+      },
+      appearance: { getFavoriteThemes: resolved([]), favoriteTheme: resolved(undefined) },
     };
-
-    const appearance = {
-      getFavoriteThemes: vi.fn().mockResolvedValue([]),
-      favoriteTheme: vi.fn().mockResolvedValue(undefined),
-    };
-
-    return { skills, marketplace, account, marketplaceApi, theme, appearance };
   }
 
-  // ── Tests ──────────────────────────────────────────────────────────────────────
+  /** Mounts the real providers and hands back the two install functions. */
+  async function mount(mock: ReturnType<typeof makeMock>) {
+    (globalThis as any).window = (globalThis as any).window ?? {};
+    (globalThis as any).window.claude = mock;
+    let fns!: { installSkill: (id: string) => Promise<void>; installTheme: (slug: string) => Promise<void> };
+    function Probe() { fns = useMarketplace(); return null; }
+    render(<SkillProvider><MarketplaceProvider><Probe /></MarketplaceProvider></SkillProvider>);
+    await act(async () => {});
+    return fns;
+  }
 
-  describe("installSkill telemetry", () => {
-    beforeEach(() => {
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-      (globalThis as any).window = (globalThis as any).window ?? {};
-    });
+  beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-    afterEach(() => {
-      cleanup();
-      vi.restoreAllMocks();
-    });
-
-    it("fires marketplaceApi.install() after successful local install when signed in", async () => {
-      const mock = makeMock({ signedIn: true });
-      (globalThis as any).window.claude = mock;
-
-      let capturedInstall: ((id: string) => Promise<void>) | undefined;
-
-      render(
-        <SkillProvider>
-          <MarketplaceProvider>
-            <Probe onInstall={(fn) => { capturedInstall = fn; }} />
-          </MarketplaceProvider>
-        </SkillProvider>
-      );
-
-      // Let fetchAll on mount settle
-      await act(async () => {});
-
-      await act(async () => {
-        await capturedInstall!("my-plugin");
-      });
-
-      expect(mock.skills.install).toHaveBeenCalledWith("my-plugin");
-      expect(mock.account.signedIn).toHaveBeenCalled();
-      expect(mock.marketplaceApi.install).toHaveBeenCalledWith("my-plugin");
-    });
-
-    it("skips telemetry when signed out", async () => {
-      const mock = makeMock({ signedIn: false });
-      (globalThis as any).window.claude = mock;
-
-      let capturedInstall: ((id: string) => Promise<void>) | undefined;
-
-      render(
-        <SkillProvider>
-          <MarketplaceProvider>
-            <Probe onInstall={(fn) => { capturedInstall = fn; }} />
-          </MarketplaceProvider>
-        </SkillProvider>
-      );
-      await act(async () => {});
-
-      await act(async () => {
-        await capturedInstall!("my-plugin");
-      });
-
-      expect(mock.skills.install).toHaveBeenCalledWith("my-plugin");
-      // When signed out, telemetry call should NOT fire
-      expect(mock.marketplaceApi.install).not.toHaveBeenCalled();
-    });
-
-    it("resolves successfully even when telemetry rejects (non-fatal)", async () => {
-      const mock = makeMock({ signedIn: true, telemetryReject: true });
-      (globalThis as any).window.claude = mock;
-
-      let capturedInstall: ((id: string) => Promise<void>) | undefined;
-
-      render(
-        <SkillProvider>
-          <MarketplaceProvider>
-            <Probe onInstall={(fn) => { capturedInstall = fn; }} />
-          </MarketplaceProvider>
-        </SkillProvider>
-      );
-      await act(async () => {});
-
-      // Must NOT throw — telemetry failure is non-fatal
-      await act(async () => {
-        await expect(capturedInstall!("my-plugin")).resolves.toBeUndefined();
-      });
-
-      // Local install still happened
-      expect(mock.skills.install).toHaveBeenCalledWith("my-plugin");
-      // Telemetry was attempted
-      expect(mock.marketplaceApi.install).toHaveBeenCalled();
-      // Failure was logged as a warning
-      expect(console.warn).toHaveBeenCalledWith(
-        expect.stringContaining("[marketplace] install telemetry threw"),
-        expect.any(Error),
-      );
-    });
+  it('fires marketplaceApi.install() after a successful local install when signed in', async () => {
+    const mock = makeMock();
+    const { installSkill } = await mount(mock);
+    await act(async () => { await installSkill('my-plugin'); });
+    expect(mock.skills.install).toHaveBeenCalledWith('my-plugin');
+    expect(mock.account.signedIn).toHaveBeenCalled();
+    expect(mock.marketplaceApi.install).toHaveBeenCalledWith('my-plugin');
   });
 
-  // ── Theme installs ───────────────────────────────────────────────────
-  // Themes are recorded under a `theme:<slug>` plugin id so the Worker can count
-  // them separately from plugins. Before this, installTheme() never told the
-  // Worker anything, so the installs table had no theme rows at all.
+  it('skips telemetry when signed out, for plugins and themes', async () => {
+    const mock = makeMock({ signedIn: false });
+    const { installSkill, installTheme } = await mount(mock);
+    await act(async () => { await installSkill('my-plugin'); await installTheme('ocean-depths'); });
+    expect(mock.skills.install).toHaveBeenCalledWith('my-plugin');
+    expect(mock.theme.marketplace.install).toHaveBeenCalledWith('ocean-depths');
+    expect(mock.marketplaceApi.install).not.toHaveBeenCalled();
+  });
 
-  describe("installTheme telemetry", () => {
-    beforeEach(() => {
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-      (globalThis as any).window = (globalThis as any).window ?? {};
-    });
+  it('resolves successfully even when telemetry rejects (non-fatal), and logs a warning for plugins', async () => {
+    const mock = makeMock({ telemetryReject: true });
+    const { installSkill } = await mount(mock);
+    await act(async () => { await expect(installSkill('my-plugin')).resolves.toBeUndefined(); });
+    expect(mock.skills.install).toHaveBeenCalledWith('my-plugin');
+    expect(mock.marketplaceApi.install).toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('[marketplace] install telemetry threw'), expect.any(Error));
+  });
 
-    afterEach(() => {
-      cleanup();
-      vi.restoreAllMocks();
-    });
+  it("fires marketplaceApi.install('theme:<slug>') after a successful theme install", async () => {
+    const mock = makeMock();
+    const { installTheme } = await mount(mock);
+    await act(async () => { await installTheme('ocean-depths'); });
+    expect(mock.theme.marketplace.install).toHaveBeenCalledWith('ocean-depths');
+    expect(mock.marketplaceApi.install).toHaveBeenCalledWith('theme:ocean-depths');
+  });
 
-    async function mount(mock: ReturnType<typeof makeMock>) {
-      (globalThis as any).window.claude = mock;
-      let captured: ((slug: string) => Promise<void>) | undefined;
-      render(
-        <SkillProvider>
-          <MarketplaceProvider>
-            <Probe onInstallTheme={(fn) => { captured = fn; }} />
-          </MarketplaceProvider>
-        </SkillProvider>
-      );
-      await act(async () => {});
-      return captured!;
-    }
+  it('records nothing when the theme did not actually install, and reports the failure', async () => {
+    const mock = makeMock({ themeInstallFails: true });
+    const { installTheme } = await mount(mock);
+    // WHY: the provider once resolved quietly on { status: 'failed' }, so a theme that never landed looked like nothing happened.
+    await act(async () => { await expect(installTheme('ocean-depths')).rejects.toThrow('Theme not found in registry'); });
+    expect(mock.marketplaceApi.install).not.toHaveBeenCalled();
+    expect(mock.appearance.favoriteTheme).not.toHaveBeenCalled(); // not starred either
+  });
 
-    it("fires marketplaceApi.install('theme:<slug>') after a successful theme install", async () => {
-      const mock = makeMock({ signedIn: true });
-      const installTheme = await mount(mock);
-
-      await act(async () => { await installTheme("ocean-depths"); });
-
-      expect(mock.theme.marketplace.install).toHaveBeenCalledWith("ocean-depths");
-      expect(mock.marketplaceApi.install).toHaveBeenCalledWith("theme:ocean-depths");
-    });
-
-    it("skips theme telemetry when signed out", async () => {
-      const mock = makeMock({ signedIn: false });
-      const installTheme = await mount(mock);
-
-      await act(async () => { await installTheme("ocean-depths"); });
-
-      expect(mock.theme.marketplace.install).toHaveBeenCalledWith("ocean-depths");
-      expect(mock.marketplaceApi.install).not.toHaveBeenCalled();
-    });
-
-    it("records nothing when the theme did not actually install — and reports the failure", async () => {
-      const mock = makeMock({ signedIn: true, themeInstallFails: true });
-      const installTheme = await mount(mock);
-
-      // The failure is REPORTED now (error inventory 2026-09-10, false message 14): the
-      // provider used to resolve quietly on { status: 'failed' }, so a theme that never
-      // landed on disk looked like nothing at all to the person who asked for it.
-      await act(async () => {
-        await expect(installTheme("ocean-depths")).rejects.toThrow("Theme not found in registry");
-      });
-
-      expect(mock.marketplaceApi.install).not.toHaveBeenCalled();
-      // A theme that did not install is not starred as a favorite either.
-      expect(mock.appearance.favoriteTheme).not.toHaveBeenCalled();
-    });
-
-    it("still resolves when theme telemetry rejects (non-fatal)", async () => {
-      const mock = makeMock({ signedIn: true, telemetryReject: true });
-      const installTheme = await mount(mock);
-
-      await act(async () => {
-        await expect(installTheme("ocean-depths")).resolves.toBeUndefined();
-      });
-
-      expect(mock.theme.marketplace.install).toHaveBeenCalledWith("ocean-depths");
-      expect(mock.marketplaceApi.install).toHaveBeenCalledWith("theme:ocean-depths");
-    });
+  it('still resolves when theme telemetry rejects (non-fatal)', async () => {
+    const mock = makeMock({ telemetryReject: true });
+    const { installTheme } = await mount(mock);
+    await act(async () => { await expect(installTheme('ocean-depths')).resolves.toBeUndefined(); });
+    expect(mock.marketplaceApi.install).toHaveBeenCalledWith('theme:ocean-depths');
   });
 });
 
-// Verifies that MarketplaceContext mutations (install/uninstall) trigger a
-// SkillContext.refreshInstalled() so the CommandDrawer doesn't go stale.
-//
-// Without the wiring this test exercises, plugins installed from the
-// marketplace would not appear in the drawer until app restart — latent on
-// desktop but newly visible on Android once the cold-start race fix exposes
-// installed plugins in the first place.
+// WHY: without the SkillContext.refreshInstalled() wiring, marketplace installs would not appear in the drawer until restart.
 describe('MarketplaceContext refreshes SkillContext after install/uninstall', () => {
   let listCalls = 0;
   let installCalls = 0;
@@ -501,62 +318,21 @@ describe('MarketplaceContext refreshes SkillContext after install/uninstall', ()
     vi.restoreAllMocks();
   });
 
-  it('calls skills.list a second time after installSkill', async () => {
-    let installFn: ((id: string) => Promise<void>) | null = null;
-    function Probe() {
-      const mp = useMarketplace();
-      installFn = mp.installSkill;
-      return null;
-    }
-    render(
-      <SkillProvider>
-        <MarketplaceProvider>
-          <Probe />
-        </MarketplaceProvider>
-      </SkillProvider>,
-    );
-    // Wait for initial mount fetches (SkillProvider + MarketplaceProvider each fetch)
+  // After a mutation exactly ONE skills.list runs: SkillContext.refreshInstalled() (the marketplace keeps no copy of the installed list).
+  it.each([['installSkill', 'installCalls'], ['uninstallSkill', null]] as const)('calls skills.list once more after %s', async (fn, counter) => {
+    let run: ((id: string) => Promise<void>) | null = null;
+    function Probe() { run = useMarketplace()[fn]; return null; }
+    render(<SkillProvider><MarketplaceProvider><Probe /></MarketplaceProvider></SkillProvider>);
     await act(async () => { await new Promise(r => setTimeout(r, 0)); });
     const baseline = listCalls;
-    await act(async () => { await installFn!('foo'); });
-    // After install exactly ONE skills.list: SkillContext.refreshInstalled().
-    // The marketplace no longer keeps its own copy of the installed list
-    // (2026-09-16 audit W17), so its fetchAll() makes no second call.
+    await act(async () => { await run!('foo'); });
     expect(listCalls).toBe(baseline + 1);
-    expect(installCalls).toBe(1);
-  });
-
-  it('calls skills.list a second time after uninstallSkill', async () => {
-    let uninstallFn: ((id: string) => Promise<void>) | null = null;
-    function Probe() {
-      const mp = useMarketplace();
-      uninstallFn = mp.uninstallSkill;
-      return null;
-    }
-    render(
-      <SkillProvider>
-        <MarketplaceProvider>
-          <Probe />
-        </MarketplaceProvider>
-      </SkillProvider>,
-    );
-    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
-    const baseline = listCalls;
-    await act(async () => { await uninstallFn!('foo'); });
-    expect(listCalls).toBe(baseline + 1);
+    if (counter) expect(installCalls).toBe(1);
   });
 });
 
-// Pins how the marketplace decides an item has an update.
-//
-// WHY this test exists: the only signal used to be the version number, which is
-// whatever the author last typed into plugin.json. Half the catalog mirrors
-// repos whose authors never bump it, so real changes went unannounced. The app now
-// records the exact commit each install landed on, and the catalog publishes the
-// commit it currently lists — so "the code moved" is now visible even when the
-// version did not. The two checks stay SEPARATE and are OR'd: a deliberate
-// version bump and a silent repo change are different facts, and either one
-// means there is something new to fetch.
+// WHY: version numbers alone miss repos whose authors never bump them, so the app also compares the installed commit with the
+// catalog's; the two checks stay separate and are OR'd.
 describe('updateAvailable: version OR commit', () => {
   const row = (over: Record<string, unknown> = {}) => ({
     id: 'x', displayName: 'Example', description: 'd', tagline: 'd', author: 'T',
@@ -605,55 +381,25 @@ describe('updateAvailable: version OR commit', () => {
   beforeEach(() => { setupWindowClaude(); vi.spyOn(console, 'warn').mockImplementation(() => {}); });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-  it('flags a newer version, as it always did', async () => {
-    entries = [row({ version: '2.0.0' })];
-    packages = { x: { version: '1.0.0', source: 'marketplace' } };
-    expect((await readUpdateAvailable()).x).toBe(true);
-  });
+  const catalogCommit = (sourceCommit: string) => ({ catalog: { itemType: 'plugin', origin: { tier: 'community' }, scan: { status: 'unchecked' }, capabilities: [], sourceCommit } });
 
-  it('flags a moved commit even when the version never changed', async () => {
-    entries = [row({ catalog: { itemType: 'plugin', origin: { tier: 'community' }, scan: { status: 'unchecked' }, capabilities: [], sourceCommit: NEW } })];
-    packages = { x: { version: '1.0.0', source: 'marketplace', commit: OLD } };
-    expect((await readUpdateAvailable()).x).toBe(true);
-  });
-
-  it('says nothing when both the version and the commit match', async () => {
-    entries = [row({ catalog: { itemType: 'plugin', origin: { tier: 'community' }, scan: { status: 'unchecked' }, capabilities: [], sourceCommit: OLD } })];
-    packages = { x: { version: '1.0.0', source: 'marketplace', commit: OLD } };
-    expect((await readUpdateAvailable()).x).toBeUndefined();
-  });
-
-  it('an install made before commits were recorded never grows a badge from the commit check', async () => {
-    // Every package installed before Task 17 has no `commit`. Treating "missing"
-    // as "different" would light an Update badge on the user's whole library at
-    // once, for nothing.
-    entries = [row({ catalog: { itemType: 'plugin', origin: { tier: 'community' }, scan: { status: 'unchecked' }, capabilities: [], sourceCommit: NEW } })];
-    packages = { x: { version: '1.0.0', source: 'marketplace' } };
-    expect((await readUpdateAvailable()).x).toBeUndefined();
-  });
-
-  it('says nothing when the catalog lists no commit for an install that has one', async () => {
-    // The reverse gap: a row that lost its catalog block (Worker outage → the
-    // index.json fallback) must not read as "downgraded".
-    entries = [row()];
-    packages = { x: { version: '1.0.0', source: 'marketplace', commit: OLD } };
-    expect((await readUpdateAvailable()).x).toBeUndefined();
+  // Packages installed before commits were recorded have no `commit`: treating "missing" as "different" would badge the whole library.
+  // A row that lost its catalog block (Worker outage -> index.json fallback) must not read as "downgraded".
+  it.each([
+    ['flags a newer version, as it always did', { version: '2.0.0' }, { version: '1.0.0' }, true],
+    ['flags a moved commit even when the version never changed', catalogCommit(NEW), { version: '1.0.0', commit: OLD }, true],
+    ['says nothing when both the version and the commit match', catalogCommit(OLD), { version: '1.0.0', commit: OLD }, false],
+    ['never badges an install made before commits were recorded', catalogCommit(NEW), { version: '1.0.0' }, false],
+    ['says nothing when the catalog lists no commit for an install that has one', {}, { version: '1.0.0', commit: OLD }, false],
+  ])('%s', async (_t, rowOver, pkg, flagged) => {
+    entries = [row(rowOver)];
+    packages = { x: { source: 'marketplace', ...pkg } };
+    expect((await readUpdateAvailable()).x).toBe(flagged ? true : undefined);
   });
 });
 
-/**
- * The marketplace footer names the operation that actually ran — and a failure that
- * came back as an ANSWER counts as a failure.
- *
- * marketplace-context recorded uninstall
- * and update exceptions in the same map, under the same key shape, as installs, and
- * InstallingFooterStrip printed every entry as "Failed to install {label}". Its in-flight
- * line said "Installing" for all three operations too. The refreshes that run AFTER a
- * mutation succeeded sat inside the same try, so a failed drawer refresh reported a
- * working install as failed. And install/update/uninstall mostly RESOLVE their failures
- * (`{ status: 'failed', error }`, `{ ok: false, error }`) — the context never read them,
- * so a failed install looked like nothing at all and still posted install telemetry.
- */
+// WHY: the footer once printed every failure as "Failed to install", counted a failed post-install refresh as a failed install,
+// and ignored failures that come back as an ANSWER ({ status: 'failed' } / { ok: false }), still posting install telemetry.
 describe('InstallingFooterStrip — the words match the operation and its result', () => {
   let lastAction: Promise<unknown> = Promise.resolve();
   let listFails = false;

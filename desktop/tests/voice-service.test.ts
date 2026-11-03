@@ -1,20 +1,8 @@
-// The one promise voice-service.ts makes: EXACTLY ONE ENDING PER START.
-//
-// In plain words — every tap of the microphone finishes in precisely one of two
-// ways: your words arrive (`final`), or a sentence explaining what went wrong
-// arrives (`error`). Zero endings leaves the composer listening forever with a
-// dead send button; two endings pastes your sentence in twice. Cancel is the
-// deliberate exception: it ends the session and says nothing at all, because
-// cancelling means the words are thrown away.
-//
-// There are seven ways a session can end and this file walks all seven, plus the
-// refusal when a second window tries to open the same microphone. The seventh —
-// an engine that neither crashes nor answers — is the one that was lost twice in
-// design review, and it is the reason the engine has to tell us how much audio
-// each pass is chewing on: without that number there is nothing to hold it to.
-//
-// Nothing here loads a speech engine. The worker is a fake, which is the only
-// way to stage "it wedged" without shipping something that wedges.
+// The one promise voice-service.ts makes: EXACTLY ONE ENDING PER START. Every mic tap ends as `final` (words arrive) or `error`
+// (a sentence saying what went wrong); zero endings leaves the composer listening forever, two paste the sentence twice. Cancel is
+// the deliberate exception: it ends the session and says nothing. This walks all seven ways a session can end, plus the refusal when a
+// second window opens the same microphone. The seventh, an engine that neither crashes nor answers, needs the engine to report how
+// much audio each pass is chewing on. The worker is a fake: the only way to stage "it wedged".
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -545,14 +533,8 @@ describe('voice-service: exactly one ending per start', () => {
   });
 });
 
-// ── The wiring, which no other test can see ──────────────────────────────────
-// Everything above proves the state machine behaves. None of it would run in
-// the real app if main.ts never called the register function: the six channels
-// would exist in preload.ts with nobody answering them, so tapping the
-// microphone would hang forever and every test here would still be green. That
-// is the "feature ships dead" failure, and this is the only thing that catches
-// it. Source text rather than behaviour, because main.ts cannot be imported in
-// a test (it builds windows at module load).
+// ── The wiring: source text, since main.ts builds windows at import. If main never called the register function, the six preload
+// channels would have no answerer, the mic would hang, and every behaviour test would stay green ("feature ships dead").
 describe('voice: the wiring from main.ts', () => {
   const read = (rel: string) =>
     fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
@@ -578,13 +560,8 @@ describe('voice: the wiring from main.ts', () => {
   });
 });
 
-// WHY this exists: a killed engine's `exit` can arrive after the user has tapped
-// the mic again — and a wedged native decode loop is exactly the process that does
-// not die promptly. Without an "is this still our worker?" check on the callbacks,
-// the dead one ended the NEW session with "the speech engine closed unexpectedly"
-// (an invented cause for a process we killed on purpose) AND set worker to null
-// while the new engine was alive, orphaning it: stop and cancel then reached
-// nothing and the next tap spawned a third 1.14 GB engine. Found reviewing T5,
+// WHY: a killed engine's `exit` can arrive after the user tapped the mic again; without an "is this still our worker?" check the dead one
+// ended the NEW session with an invented "closed unexpectedly" and nulled the live worker, orphaning a 1.14 GB engine.
 // 2026-09-05.
 describe('a dead worker cannot end a live session', () => {
   it('ignores the exit, the words and the error output of a worker we already replaced', async () => {
@@ -613,19 +590,8 @@ describe('a dead worker cannot end a live session', () => {
   });
 });
 
-// The silence stop: two quiet seconds AFTER you have spoken close the mic.
-//
-// Why the "after you have spoken" half matters more than it looks. If quiet
-// alone closed the microphone, tapping the mic and then thinking for three
-// seconds before starting would shut it in your face — and the deck answer
-// (Q-3) is that the mic stays open until you stop TALKING, not until the room
-// goes quiet. So a session that has heard nothing yet is never closed by
-// silence, however long it lasts.
-//
-// The loudness is measured once, in the audio worklet in the browser layer, and
-// travels to the main process as the second argument of `sendAudio(chunk, rms)`.
-// This section drives that same path: 100 ms slices, ten a second, exactly as the
-// worklet produces them.
+// The silence stop: two quiet seconds AFTER you have spoken close the mic. A session that has heard nothing is never closed by silence
+// (tap, then think for three seconds must not shut in your face). Loudness arrives as sendAudio(chunk, rms); this drives it in 100 ms slices.
 describe('the silence stop, driven by 100 ms loudness slices', () => {
   const INSTALLED = {
     voiceRoot: '/fake/voice',

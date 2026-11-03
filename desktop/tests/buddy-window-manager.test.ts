@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BuddyWindowManager, clampToWorkArea, type BuddyWindowManagerDeps, type BuddyWorkAreaSource } from '../src/main/buddy-window-manager';
 import { buildCaption, parseCaption, type BuddyRole } from '../src/shared/buddy-caption';
 import { MASCOT_SIZE, CHAT_SIZE, CHAT_SIZE_LARGE, BAR_SIZE } from '../src/main/buddy-bar-geometry';
@@ -26,29 +26,13 @@ vi.mock('electron', () => ({
   BrowserWindow: class {},
 }));
 
-const SIZE: Record<BuddyRole, { width: number; height: number }> = {
-  mascot: MASCOT_SIZE,
-  chat: CHAT_SIZE,
-  bar: BAR_SIZE,
-};
+const SIZE: Record<BuddyRole, { width: number; height: number }> = { mascot: MASCOT_SIZE, chat: CHAT_SIZE, bar: BAR_SIZE };
 
 // ─── The caption channel ─────────────────────────────────────────────────────
 
-/**
- * The caption channel — how the buddy moves on native-Wayland Linux.
- *
- * WHAT IS BEING PROTECTED, in plain terms: on a Wayland Linux desktop an app is
- * not allowed to move its own windows, and the request fails silently. So the
- * app renames the window instead ("YC:mascot@480,900") and a helper running
- * inside the desktop reads the name and moves it. This suite pins two things:
- *
- *  1. Every single way the buddy can be moved goes through the ONE method that
- *     makes that choice — proved mechanically, by reading the source, because a
- *     behaviour test can only cover the paths it thinks to drive.
- *  2. That method chooses correctly: rename on Wayland-with-helper, and the
- *     ordinary move everywhere else, so Windows, macOS and Linux/X11 behave
- *     exactly as they do today.
- */
+// The caption channel: on native-Wayland Linux an app cannot move its own windows, so it renames them ("YC:mascot@480,900") and a
+// helper inside the desktop moves them. Every move goes through ONE method (proved by reading the source); it renames on
+// Wayland-with-helper and moves the ordinary way everywhere else.
 
 type FakeWin = ReturnType<typeof fakeWin>;
 
@@ -137,6 +121,10 @@ interface Harness {
   captionsFor: (role: BuddyRole) => string[];
 }
 
+// WHY: tests fake the clock and leave a manager showing; always hide it and restore real timers, even when an assertion throws.
+const liveManagers: BuddyWindowManager[] = [];
+afterEach(() => { for (const m of liveManagers.splice(0)) m.hide(); vi.useRealTimers(); });
+
 function harness(opts: {
   caption?: boolean;
   workArea?: BuddyWorkAreaSource;
@@ -175,8 +163,10 @@ function harness(opts: {
   };
 
   const all = () => Object.values(wins) as FakeWin[];
+  const manager = new BuddyWindowManager(deps);
+  liveManagers.push(manager);
   return {
-    manager: new BuddyWindowManager(deps),
+    manager,
     created,
     wins,
     saved,
@@ -186,59 +176,34 @@ function harness(opts: {
   };
 }
 
-/**
- * Drive the buddy through every way he can be moved. Deliberately one long
- * sequence rather than nine isolated cases: the manager is a state machine, and
- * several of these moves only happen from a state the previous one leaves it in
- * (the button bar cannot be repositioned before it has been created, the
- * shove-to-put-away only fires while the chat is open, and so on).
- */
+// One long sequence on purpose: the manager is a state machine and several moves only happen from the state the previous one leaves.
 function exerciseEveryMove(h: Harness): void {
   vi.useFakeTimers();
-  try {
-    h.manager.show();                    // creates the mascot; docked restore places him
-    h.manager.toggleChat();              // creates the chat AND the button bar; glides the group
-    vi.advanceTimersByTime(300);         // run the glide animation to its end
-    h.manager.moveMascot(700, 500);      // ordinary drag: mascot + chat + bar all move
-    h.manager.moveMascot(2, 500);        // shove to the left edge with the chat open: put away
-    h.manager.moveMascot(600, 400);      // free drag with the chat closed
-    h.manager.moveMascot(1, 400);        // drag against the edge: peek
-    h.manager.dragEnded();               // release: snap + settle glide
-    vi.advanceTimersByTime(300);
-    h.manager.toggleChat();              // re-open: re-anchors the chat, repositions the bar
-    vi.advanceTimersByTime(300);
-  } finally {
-    vi.useRealTimers();
-  }
+  h.manager.show();                    // creates the mascot; docked restore places him
+  h.manager.toggleChat();              // creates the chat AND the button bar; glides the group
+  vi.advanceTimersByTime(300);         // run the glide animation to its end
+  h.manager.moveMascot(700, 500);      // ordinary drag: mascot + chat + bar all move
+  h.manager.moveMascot(2, 500);        // shove to the left edge with the chat open: put away
+  h.manager.moveMascot(600, 400);      // free drag with the chat closed
+  h.manager.moveMascot(1, 400);        // drag against the edge: peek
+  h.manager.dragEnded();               // release: snap + settle glide
+  vi.advanceTimersByTime(300);
+  h.manager.toggleChat();              // re-open: re-anchors the chat, repositions the bar
+  vi.advanceTimersByTime(300);
 }
 
 describe('the caption channel', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   describe('every write and every window creation goes through one place', () => {
-    // THE mechanical guarantee. A behaviour test can only cover the paths it
-    // thought to drive; this covers the file. If a future change adds a tenth
-    // way to move the buddy and calls setPosition directly, the Wayland buddy
-    // silently stops moving on that path — and this fails instead.
-    //
-    // Plan B (2026-09-16): the two "no window-moving API is called outside
-    // place()" / "setTitle is called in exactly one place" cases moved to
-    // ast-grep rule buddy-window-move-only-in-place. The two below stay as
-    // text reads — an ast-grep rule reports violations, not a required COUNT
-    // of legitimate calls, so "a write path silently deleted" (their failure
-    // mode) isn't expressible that way.
+    // WHY text reads: ast-grep rule buddy-window-move-only-in-place proves nothing moves the buddy outside place(), but a rule
+    // cannot assert a required COUNT, so a silently deleted write path is only caught by counting here.
     const SRC = readSource(join(__dirname, '../src/main/buddy-window-manager.ts'));
     const lines = SRC.split('\n');
 
     it('every one of the thirteen write sites and three creation sites is still there', () => {
-      // The ast-grep rule buddy-window-move-only-in-place proves nothing moves
-      // the buddy EXCEPT through place(). It cannot notice a write path being DELETED — and a deleted one is
-      // invisible to the behaviour tests too, because other paths keep the same
-      // totals non-zero (the bar, for instance, is also renamed by glideGroup
-      // and by showBar's else-branch). Counting the call sites makes a deletion
-      // loud. Design §3 fixes these numbers: nine setPosition writes, three
-      // constructor placements. The tenth write is applyChatSize's (the chat's two sizes, buddy rebuild);
-      // the last three are screenChanged's regroup after the screen turns.
+      // A deleted write path is invisible to behaviour tests (other paths keep totals non-zero), so count the call sites:
+      // nine setPosition writes, three constructor placements, applyChatSize's write, and screenChanged's regroup.
       const calls = (re: RegExp): number =>
         lines.filter((l) => re.test(l) && !l.trimStart().startsWith('//')).length;
       expect(calls(/this\.place\(/)).toBe(13);
@@ -262,60 +227,45 @@ describe('the caption channel', () => {
     it('keeps the chat and bar at their fixed sizes through repeated open-close cycles', () => {
       vi.useFakeTimers();
       const h = harness({ nativeSizeDrift: true });
-      try {
-        h.manager.show();
+      h.manager.show();
+      h.manager.toggleChat();
+      for (let cycle = 0; cycle < 20; cycle++) {
         h.manager.toggleChat();
-        for (let cycle = 0; cycle < 20; cycle++) {
-          h.manager.toggleChat();
-          vi.advanceTimersByTime(200);
-          h.manager.toggleChat();
-          vi.advanceTimersByTime(400);
-          expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
-          expect(h.wins.bar!.getBounds()).toMatchObject(BAR_SIZE);
-          expect(h.wins.mascot!.getBounds()).toMatchObject(MASCOT_SIZE);
-        }
-      } finally {
-        h.manager.hide();
-        vi.useRealTimers();
+        vi.advanceTimersByTime(200);
+        h.manager.toggleChat();
+        vi.advanceTimersByTime(400);
+        expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
+        expect(h.wins.bar!.getBounds()).toMatchObject(BAR_SIZE);
+        expect(h.wins.mascot!.getBounds()).toMatchObject(MASCOT_SIZE);
       }
     });
 
     it('reopens during the close fade without a stale hide closing it later', () => {
       vi.useFakeTimers();
       const h = harness();
-      try {
-        h.manager.show();
-        h.manager.toggleChat();
-        h.manager.toggleChat();
-        vi.advanceTimersByTime(70);
-        h.manager.toggleChat();
-        expect(h.wins.chat!.webContents.send).toHaveBeenLastCalledWith('buddy:chat-state', expect.objectContaining({ visible: true }));
-        vi.advanceTimersByTime(200);
-        expect(h.wins.chat!.isVisible()).toBe(true);
-      } finally {
-        h.manager.hide();
-        vi.useRealTimers();
-      }
+      h.manager.show();
+      h.manager.toggleChat();
+      h.manager.toggleChat();
+      vi.advanceTimersByTime(70);
+      h.manager.toggleChat();
+      expect(h.wins.chat!.webContents.send).toHaveBeenLastCalledWith('buddy:chat-state', expect.objectContaining({ visible: true }));
+      vi.advanceTimersByTime(200);
+      expect(h.wins.chat!.isVisible()).toBe(true);
     });
 
     it('lets the newest close finish its own fade after a rapid reopen', () => {
       vi.useFakeTimers();
       const h = harness();
-      try {
-        h.manager.show();
-        h.manager.toggleChat();
-        h.manager.toggleChat();
-        vi.advanceTimersByTime(70);
-        h.manager.toggleChat();
-        h.manager.toggleChat();
-        vi.advanceTimersByTime(71);
-        expect(h.wins.chat!.isVisible()).toBe(true);
-        vi.advanceTimersByTime(69);
-        expect(h.wins.chat!.isVisible()).toBe(false);
-      } finally {
-        h.manager.hide();
-        vi.useRealTimers();
-      }
+      h.manager.show();
+      h.manager.toggleChat();
+      h.manager.toggleChat();
+      vi.advanceTimersByTime(70);
+      h.manager.toggleChat();
+      h.manager.toggleChat();
+      vi.advanceTimersByTime(71);
+      expect(h.wins.chat!.isVisible()).toBe(true);
+      vi.advanceTimersByTime(69);
+      expect(h.wins.chat!.isVisible()).toBe(false);
     });
 
     it('moves windows the ordinary way and never renames one', () => {
@@ -400,15 +350,11 @@ describe('the caption channel', () => {
       // Today this is silently broken on Linux: the "window moved" event never
       // fires for a move the desktop made, so the position was never saved.
       vi.useFakeTimers();
-      try {
-        const h = harness({ caption: true });
-        h.manager.show();
-        h.manager.moveMascot(300, 200);
-        vi.advanceTimersByTime(400);
-        expect(h.saved.mascot).toEqual({ x: 300, y: 200 });
-      } finally {
-        vi.useRealTimers();
-      }
+      const h = harness({ caption: true });
+      h.manager.show();
+      h.manager.moveMascot(300, 200);
+      vi.advanceTimersByTime(400);
+      expect(h.saved.mascot).toEqual({ x: 300, y: 200 });
     });
   });
 
@@ -491,11 +437,8 @@ describe('the caption channel', () => {
 
 describe('a bad coordinate cannot park the buddy in the corner', () => {
   it('place() refuses a non-finite coordinate instead of writing 0,0', () => {
-    // main.ts forwards the renderer's drag payload unvalidated, and
-    // clampToWorkArea propagates NaN through Math.min/max rather than absorbing
-    // it. 0 is the CORNER of the screen, not a neutral value — and place()
-    // writes this.pos, so substituting one would corrupt the app's own idea of
-    // where the buddy is, permanently, with no error anywhere.
+    // WHY: main forwards the drag payload unvalidated and NaN survives clamping; 0 is the screen CORNER, and place() writes this.pos,
+    // so substituting one would corrupt the remembered position permanently.
     const h = harness({ caption: true });
     h.manager.show();
     h.manager.moveMascot(700, 500);
@@ -504,21 +447,13 @@ describe('a bad coordinate cannot park the buddy in the corner', () => {
     h.manager.moveMascot(Number.NaN, Number.NaN);
     const captions = h.captionsFor('mascot');
     expect(captions.length).toBeGreaterThan(0);
-    // Every caption the buddy was ever given is a legal one, and none of them
-    // is the substituted corner. If place() had written 0,0 instead of
-    // refusing, this.pos would be corrupt from here on and rectOf would report
-    // the corner for the rest of the session.
     for (const c of captions) expect(parseCaption(c), c).not.toBeNull();
     expect(captions.some((c) => /NaN|Infinity/.test(c))).toBe(false);
     expect(captions.filter((c) => c === 'YC:mascot@0,0')).toHaveLength(0);
   });
 
   it('the writer can never emit a caption either reader would refuse', () => {
-    // The helper's own comment claims the six-digit bound is enforced by the
-    // writer. Until it was, buildCaption could emit YC:mascot@1234567,0 — which
-    // BOTH readers reject, and a rejected caption is indistinguishable from no
-    // caption, so the buddy freezes at his last good position with nothing
-    // logged. Clamping makes the divergence impossible by construction.
+    // WHY: buildCaption once emitted YC:mascot@1234567,0, which both readers reject, freezing the buddy with nothing logged.
     const extremes = [0, -1, 999999, -999999, 1000000, -1000000, 1234567, 1e21, -1e21, 0.4, -0.6];
     for (const role of ['mascot', 'chat', 'bar'] as const) {
       for (const x of extremes) {
@@ -542,18 +477,14 @@ describe('persistence on the platforms where the move event still fires', () => 
     // an X11 user's Meta-drag stop being remembered — on a platform where the
     // buddy works today.
     vi.useFakeTimers();
-    try {
-      const h = harness({ caption: false });
-      h.manager.show();
-      const win = h.wins.mascot;
-      expect(win).toBeDefined();
-      win!.moveTo(321, 654);
-      win!.emit('move');
-      vi.advanceTimersByTime(500);   // persistence is debounced
-      expect(h.saved.mascot).toEqual({ x: 321, y: 654 });
-    } finally {
-      vi.useRealTimers();
-    }
+    const h = harness({ caption: false });
+    h.manager.show();
+    const win = h.wins.mascot;
+    expect(win).toBeDefined();
+    win!.moveTo(321, 654);
+    win!.emit('move');
+    vi.advanceTimersByTime(500);   // persistence is debounced
+    expect(h.saved.mascot).toEqual({ x: 321, y: 654 });
   });
 
   it('does not register the move listener on the caption path, where it never fires', () => {
@@ -566,24 +497,8 @@ describe('persistence on the platforms where the move event still fires', () => 
 
 // ─── Dragging, in window-local coordinates ───────────────────────────────────
 
-/**
- * Dragging the buddy, in the coordinates the renderer can actually see.
- *
- * WHAT IS BEING PROTECTED, in plain terms. To drag the buddy the app has to
- * know where the user's finger is. A web page can ask for that two ways:
- * where the finger is INSIDE this window, or where it is ON THE SCREEN. The
- * second one is a lie on a Wayland Linux desktop — the page is told its window
- * sits at 0,0 forever, no matter where the desktop has actually put it (probe
- * Round 8: three real moves to 500,300 / 900,600 / 200,150, and the page read
- * 0 every time).
- *
- * So the app used to be told the finger had moved backwards by exactly the
- * distance the window had just travelled forwards. Every frame undid the one
- * before it and the buddy bounced between two points as fast as the pointer
- * fired — "the buddy flickers all over the screen when dragging" (Destin,
- * 2026-09-04). This suite drives a real drag through a model of the desktop
- * and pins that it tracks the finger instead.
- */
+// WHY: on Wayland a page asked for the finger's SCREEN position is told its window is at 0,0 forever, so the buddy once
+// bounced between two points every frame ("flickers all over the screen when dragging"). This drives a real drag through a model of the desktop.
 describe('dragging in window-local coordinates', () => {
   /**
    * A buddy window plus the piece of desktop that moves it.
@@ -657,10 +572,7 @@ describe('dragging in window-local coordinates', () => {
   const START = { x: 400, y: 300 };
   const GRAB = { x: 40, y: 40 };
   // 20 frames of a slow, straight drag down and to the right.
-  const PATH = Array.from({ length: 20 }, (_, i) => ({
-    x: START.x + GRAB.x + i * 7,
-    y: START.y + GRAB.y + i * 5,
-  }));
+  const PATH = Array.from({ length: 20 }, (_, i) => ({ x: START.x + GRAB.x + i * 7, y: START.y + GRAB.y + i * 5 }));
 
   describe.each([
     ['Wayland, moved by the helper', true],
@@ -708,58 +620,21 @@ describe('dragging in window-local coordinates', () => {
 describe('clampToWorkArea', () => {
   const wa = { x: 0, y: 0, width: 1920, height: 1080 };
 
-  it('returns input position when fully inside', () => {
-    expect(clampToWorkArea({ x: 100, y: 100 }, { width: 80, height: 80 }, wa))
-      .toEqual({ x: 100, y: 100 });
-  });
-
-  it('clamps right edge when x + width > workArea right', () => {
-    expect(clampToWorkArea({ x: 1900, y: 100 }, { width: 80, height: 80 }, wa))
-      .toEqual({ x: 1840, y: 100 });
-  });
-
-  it('clamps bottom edge when y + height > workArea bottom', () => {
-    expect(clampToWorkArea({ x: 100, y: 1060 }, { width: 80, height: 80 }, wa))
-      .toEqual({ x: 100, y: 1000 });
-  });
-
-  it('clamps negative x/y to work area origin', () => {
-    expect(clampToWorkArea({ x: -50, y: -50 }, { width: 80, height: 80 }, wa))
-      .toEqual({ x: 0, y: 0 });
-  });
-
-  it('handles non-zero workArea origin (secondary monitor)', () => {
-    const wa2 = { x: 1920, y: 0, width: 1920, height: 1080 };
-    expect(clampToWorkArea({ x: 1900, y: 100 }, { width: 80, height: 80 }, wa2))
-      .toEqual({ x: 1920, y: 100 });
-  });
+  const size = { width: 80, height: 80 };
+  it.each([
+    ['returns the input when fully inside', { x: 100, y: 100 }, wa, { x: 100, y: 100 }],
+    ['clamps the right edge', { x: 1900, y: 100 }, wa, { x: 1840, y: 100 }],
+    ['clamps the bottom edge', { x: 100, y: 1060 }, wa, { x: 100, y: 1000 }],
+    ['clamps negative x/y to the origin', { x: -50, y: -50 }, wa, { x: 0, y: 0 }],
+    ['respects a non-zero origin (secondary monitor)', { x: 1900, y: 100 }, { x: 1920, y: 0, width: 1920, height: 1080 }, { x: 1920, y: 100 }],
+  ])('%s', (_t, pos, area, expected) => { expect(clampToWorkArea(pos, size, area)).toEqual(expected); });
 });
 
 // ─── Where the buddy's position comes from ────────────────────────────────────
 
-/**
- * Where the buddy's numbers come from.
- *
- * TWO THINGS CAN GO WRONG HERE, and both are invisible on the machine that
- * writes the code, because both only misbehave on a Wayland Linux desktop:
- *
- *  1. ASKING THE WINDOW WHERE IT IS. On Wayland the window answers with the
- *     position it was BORN at, forever, however many times it has really moved.
- *     Code that asks would animate a snap from the wrong corner, open the chat
- *     where the buddy used to be, and save the wrong position on exit. The app
- *     has to remember instead, which is what rectOf() does.
- *
- *  2. ASKING ELECTRON HOW MUCH OF THE SCREEN IS USABLE. On Wayland Electron
- *     hands back the WHOLE screen, taskbar included — measured 2026-09-04, it
- *     said 1707x1067 while the desktop had reserved 52px at the bottom. Code
- *     that trusts it puts the buddy on top of the taskbar, covering the clock,
- *     with nothing in the app able to notice.
- *
- * These are source-text checks rather than behaviour checks on purpose: the
- * failure being guarded against is a future change quietly adding a tenth read
- * on a path no test drives. A behaviour test only covers what it thought to try;
- * reading the file covers the file.
- */
+// WHY (both invisible off Wayland): a window answers "where am I" with its BIRTH position forever, and Electron reports the whole
+// screen as usable (taskbar included, measured 1707x1067 with 52px reserved). These are source-text checks on purpose: a behaviour
+// test only covers the paths it drives, while reading the file catches a future read added on a path no test drives.
 
 describe('where the buddy’s position comes from', () => {
   const MANAGER = 'src/main/buddy-window-manager.ts';
@@ -897,108 +772,85 @@ describe("the chat's two sizes (the bar's size button)", () => {
   it('switches an open chat to the large size and back, remembers it, and tells the chat and the bar', () => {
     vi.useFakeTimers();
     const h = harness();
-    try {
-      h.manager.show();
-      h.manager.toggleChat();
-      h.manager.toggleChat(); // close, so the bar exists and is re-created on the next open
-      vi.advanceTimersByTime(200);
-      h.manager.toggleChat();
-      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
-      h.manager.toggleChatSize();
-      // First the panel fades out, and the window has not changed yet...
-      expect(sentTo(h.wins.chat, 'buddy:chat-state').at(-1)).toEqual({ visible: true, resize: 'out' });
-      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
-      // ...then, while it is invisible, the window changes and the panel is told to grow back in.
-      vi.advanceTimersByTime(100);
-      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE_LARGE);
-      expect(sentTo(h.wins.chat, 'buddy:chat-state').at(-1)).toMatchObject({ visible: true, resize: 'in' });
-      expect(h.saved.chatSize).toBe('large');
-      expect(sentTo(h.wins.chat, 'buddy:chat-size').at(-1)).toBe('large');
-      expect(sentTo(h.wins.bar, 'buddy:chat-size').at(-1)).toBe('large');
-      h.manager.toggleChatSize();
-      vi.advanceTimersByTime(100);
-      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
-      expect(h.saved.chatSize).toBe('small');
-      // The way back to small also lowers the window's size limits — without it Linux refused to shrink it.
-      expect(h.wins.chat!.setMinimumSize).toHaveBeenLastCalledWith(CHAT_SIZE.width, CHAT_SIZE.height);
-      expect(h.wins.chat!.setMaximumSize).toHaveBeenLastCalledWith(CHAT_SIZE.width, CHAT_SIZE.height);
-    } finally {
-      h.manager.hide();
-      vi.useRealTimers();
-    }
+    h.manager.show();
+    h.manager.toggleChat();
+    h.manager.toggleChat(); // close, so the bar exists and is re-created on the next open
+    vi.advanceTimersByTime(200);
+    h.manager.toggleChat();
+    expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
+    h.manager.toggleChatSize();
+    // First the panel fades out, and the window has not changed yet...
+    expect(sentTo(h.wins.chat, 'buddy:chat-state').at(-1)).toEqual({ visible: true, resize: 'out' });
+    expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
+    // ...then, while it is invisible, the window changes and the panel is told to grow back in.
+    vi.advanceTimersByTime(100);
+    expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE_LARGE);
+    expect(sentTo(h.wins.chat, 'buddy:chat-state').at(-1)).toMatchObject({ visible: true, resize: 'in' });
+    expect(h.saved.chatSize).toBe('large');
+    expect(sentTo(h.wins.chat, 'buddy:chat-size').at(-1)).toBe('large');
+    expect(sentTo(h.wins.bar, 'buddy:chat-size').at(-1)).toBe('large');
+    h.manager.toggleChatSize();
+    vi.advanceTimersByTime(100);
+    expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
+    expect(h.saved.chatSize).toBe('small');
+    // The way back to small also lowers the window's size limits — without it Linux refused to shrink it.
+    expect(h.wins.chat!.setMinimumSize).toHaveBeenLastCalledWith(CHAT_SIZE.width, CHAT_SIZE.height);
+    expect(h.wins.chat!.setMaximumSize).toHaveBeenLastCalledWith(CHAT_SIZE.width, CHAT_SIZE.height);
   });
 
   it('opens at the remembered large size', () => {
     const h = harness({ chatSize: 'large' });
-    try {
-      h.manager.show();
-      h.manager.toggleChat();
-      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE_LARGE);
-    } finally {
-      h.manager.hide();
-    }
+    h.manager.show();
+    h.manager.toggleChat();
+    expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE_LARGE);
   });
 
   it('on the rename channel the chat resizes itself, since it cannot be moved by the app', () => {
     vi.useFakeTimers();
     const h = harness({ caption: true });
-    try {
-      h.manager.show();
-      h.manager.toggleChat();
-      h.manager.toggleChatSize();
-      vi.advanceTimersByTime(100);
-      expect(h.wins.chat!.setSize).toHaveBeenLastCalledWith(CHAT_SIZE_LARGE.width, CHAT_SIZE_LARGE.height);
-    } finally {
-      h.manager.hide();
-      vi.useRealTimers();
-    }
+    h.manager.show();
+    h.manager.toggleChat();
+    h.manager.toggleChatSize();
+    vi.advanceTimersByTime(100);
+    expect(h.wins.chat!.setSize).toHaveBeenLastCalledWith(CHAT_SIZE_LARGE.width, CHAT_SIZE_LARGE.height);
   });
 
   it("tells the chat which side of it the buddy is on, so it grows out of him", () => {
     vi.useFakeTimers();
     const h = harness();
-    try {
-      h.manager.show();
-      h.manager.toggleChat();
-      h.manager.toggleChat();
-      vi.advanceTimersByTime(200);
-      h.manager.toggleChat();
-      const cue = sentTo(h.wins.chat, 'buddy:chat-state').at(-1) as { visible: boolean; mascot: string };
-      expect(cue.visible).toBe(true);
-      expect(['above', 'below']).toContain(cue.mascot);
-    } finally {
-      h.manager.hide();
-      vi.useRealTimers();
-    }
+    h.manager.show();
+    h.manager.toggleChat();
+    h.manager.toggleChat();
+    vi.advanceTimersByTime(200);
+    h.manager.toggleChat();
+    const cue = sentTo(h.wins.chat, 'buddy:chat-state').at(-1) as { visible: boolean; mascot: string };
+    expect(cue.visible).toBe(true);
+    expect(['above', 'below']).toContain(cue.mascot);
   });
 });
 
 describe('the session the buddy chat is showing', () => {
   it('is the viewed session only while the chat is open, and each open or switch is announced', () => {
     vi.useFakeTimers();
-    try {
-      const announced = vi.fn();
-      const h = harness({ onWatchedSessionChanged: announced });
-      h.manager.show();
-      h.manager.setViewedSession('s1');
-      // Chosen but not on screen: a reply finishing now has not been seen.
-      expect(h.manager.watchedSession()).toBeNull();
-      h.manager.toggleChat();
-      expect(h.manager.watchedSession()).toBe('s1');
-      announced.mockClear();
-      h.manager.setViewedSession('s2');
-      expect(h.manager.watchedSession()).toBe('s2');
-      expect(announced).toHaveBeenCalledTimes(1);
-      h.manager.toggleChat(); // close
-      expect(h.manager.watchedSession()).toBeNull();
-      announced.mockClear();
-      h.manager.toggleChat(); // re-open: the owner window hears again
-      vi.advanceTimersByTime(300);
-      expect(h.manager.watchedSession()).toBe('s2');
-      expect(announced).toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    const announced = vi.fn();
+    const h = harness({ onWatchedSessionChanged: announced });
+    h.manager.show();
+    h.manager.setViewedSession('s1');
+    // Chosen but not on screen: a reply finishing now has not been seen.
+    expect(h.manager.watchedSession()).toBeNull();
+    h.manager.toggleChat();
+    expect(h.manager.watchedSession()).toBe('s1');
+    announced.mockClear();
+    h.manager.setViewedSession('s2');
+    expect(h.manager.watchedSession()).toBe('s2');
+    expect(announced).toHaveBeenCalledTimes(1);
+    h.manager.toggleChat(); // close
+    expect(h.manager.watchedSession()).toBeNull();
+    announced.mockClear();
+    h.manager.toggleChat(); // re-open: the owner window hears again
+    vi.advanceTimersByTime(300);
+    expect(h.manager.watchedSession()).toBe('s2');
+    expect(announced).toHaveBeenCalled();
   });
 });
 
@@ -1023,45 +875,37 @@ describe('the screen turning', () => {
 
   it('lays the mascot, chat and strip out together on the new screen', () => {
     vi.useFakeTimers();
-    try {
-      const h = harness({ caption: true, workArea: area, savedPos: { x: 1700, y: 900 } });
-      h.manager.show();
-      h.manager.toggleChat();
-      vi.advanceTimersByTime(300);
-      turn();
-      h.manager.screenChanged();
-      const m = last(h, 'mascot'), c = last(h, 'chat'), b = last(h, 'bar');
-      // All on the narrower screen…
-      expect(m.x + MASCOT_SIZE.width).toBeLessThanOrEqual(1080);
-      expect(c.x + CHAT_SIZE.width).toBeLessThanOrEqual(1080);
-      expect(b.x + BAR_SIZE.width).toBeLessThanOrEqual(1080);
-      // …and exactly where closing and reopening the chat there would put them.
-      h.manager.toggleChat();
-      vi.advanceTimersByTime(300);
-      h.manager.toggleChat();
-      vi.advanceTimersByTime(300);
-      expect([last(h, 'mascot'), last(h, 'chat'), last(h, 'bar')]).toEqual([m, c, b]);
-    } finally {
-      vi.useRealTimers();
-    }
+    const h = harness({ caption: true, workArea: area, savedPos: { x: 1700, y: 900 } });
+    h.manager.show();
+    h.manager.toggleChat();
+    vi.advanceTimersByTime(300);
+    turn();
+    h.manager.screenChanged();
+    const m = last(h, 'mascot'), c = last(h, 'chat'), b = last(h, 'bar');
+    // All on the narrower screen…
+    expect(m.x + MASCOT_SIZE.width).toBeLessThanOrEqual(1080);
+    expect(c.x + CHAT_SIZE.width).toBeLessThanOrEqual(1080);
+    expect(b.x + BAR_SIZE.width).toBeLessThanOrEqual(1080);
+    // …and exactly where closing and reopening the chat there would put them.
+    h.manager.toggleChat();
+    vi.advanceTimersByTime(300);
+    h.manager.toggleChat();
+    vi.advanceTimersByTime(300);
+    expect([last(h, 'mascot'), last(h, 'chat'), last(h, 'bar')]).toEqual([m, c, b]);
   });
 
   it('moves every window even when its spot is unchanged, because the desktop already moved it', () => {
     vi.useFakeTimers();
-    try {
-      const h = harness({ caption: true, workArea: area, savedPos: { x: 200, y: 200 } });
-      h.manager.show();
-      vi.advanceTimersByTime(300);
-      const at = last(h, 'mascot');
-      turn();
-      h.manager.screenChanged();
-      // A title the helper has not seen, then the real one: two changes, so it moves.
-      const caps = h.captionsFor('mascot');
-      expect(caps.at(-2)).toBe(buildCaption('mascot', at.x, at.y + 1));
-      expect(caps.at(-1)).toBe(buildCaption('mascot', at.x, at.y));
-    } finally {
-      vi.useRealTimers();
-    }
+    const h = harness({ caption: true, workArea: area, savedPos: { x: 200, y: 200 } });
+    h.manager.show();
+    vi.advanceTimersByTime(300);
+    const at = last(h, 'mascot');
+    turn();
+    h.manager.screenChanged();
+    // A title the helper has not seen, then the real one: two changes, so it moves.
+    const caps = h.captionsFor('mascot');
+    expect(caps.at(-2)).toBe(buildCaption('mascot', at.x, at.y + 1));
+    expect(caps.at(-1)).toBe(buildCaption('mascot', at.x, at.y));
   });
 
   it('does nothing when the screen did not really change', () => {

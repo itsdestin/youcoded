@@ -25,13 +25,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
 
   // --- Test 1: TRANSCRIPT_USER_MESSAGE adds a user bubble and sets isThinking ---
   it('TRANSCRIPT_USER_MESSAGE adds a user bubble and sets isThinking', () => {
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_USER_MESSAGE',
-      sessionId: SESSION,
-      uuid: 'uuid-1',
-      text: 'Hello Claude',
-      timestamp: 1000,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Hello Claude', timestamp: 1000 });
 
     const session = state.get(SESSION)!;
     expect(session.timeline).toHaveLength(1);
@@ -47,21 +41,9 @@ describe('TRANSCRIPT_* reducer actions', () => {
   // --- Test 2: TRANSCRIPT_ASSISTANT_TEXT adds an assistant bubble (isThinking stays true) ---
   it('TRANSCRIPT_ASSISTANT_TEXT adds an assistant bubble (isThinking stays true)', () => {
     // Send user message first to set isThinking
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_USER_MESSAGE',
-      sessionId: SESSION,
-      uuid: 'uuid-1',
-      text: 'Hello',
-      timestamp: 1000,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Hello', timestamp: 1000 });
 
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_ASSISTANT_TEXT',
-      sessionId: SESSION,
-      uuid: 'uuid-2',
-      text: 'Hi there!',
-      timestamp: 1001,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-2', text: 'Hi there!', timestamp: 1001 });
 
     const session = state.get(SESSION)!;
     expect(session.timeline).toHaveLength(2);
@@ -81,13 +63,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
 
   // --- Test 3: TRANSCRIPT_TOOL_USE creates a tool group within an assistant turn ---
   it('TRANSCRIPT_TOOL_USE creates a tool group with a running tool', () => {
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_USER_MESSAGE',
-      sessionId: SESSION,
-      uuid: 'uuid-1',
-      text: 'Read a file',
-      timestamp: 1000,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Read a file', timestamp: 1000 });
 
     state = dispatch(state, {
       type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
@@ -126,13 +102,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
 
   // --- Test 4: TRANSCRIPT_TOOL_RESULT completes a tool ---
   it('TRANSCRIPT_TOOL_RESULT completes a tool (status -> complete, stores response)', () => {
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_USER_MESSAGE',
-      sessionId: SESSION,
-      uuid: 'uuid-1',
-      text: 'Read a file',
-      timestamp: 1000,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Read a file', timestamp: 1000 });
 
     state = dispatch(state, {
       type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
@@ -143,14 +113,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
       toolInput: { file_path: '/tmp/test.ts' },
     });
 
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_RESULT',
-      sessionId: SESSION,
-      uuid: 'uuid-3',
-      toolUseId: 'tool-1',
-      result: 'File contents here',
-      isError: false,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-3', toolUseId: 'tool-1', result: 'File contents here', isError: false });
 
     const session = state.get(SESSION)!;
     const tool = session.toolCalls.get('tool-1');
@@ -161,13 +124,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
 
   // --- Test 5: TRANSCRIPT_TOOL_RESULT with isError marks tool as failed ---
   it('TRANSCRIPT_TOOL_RESULT with isError: true marks tool as failed', () => {
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_USER_MESSAGE',
-      sessionId: SESSION,
-      uuid: 'uuid-1',
-      text: 'Read a file',
-      timestamp: 1000,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Read a file', timestamp: 1000 });
 
     state = dispatch(state, {
       type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
@@ -178,14 +135,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
       toolInput: { file_path: '/tmp/nope.ts' },
     });
 
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_RESULT',
-      sessionId: SESSION,
-      uuid: 'uuid-3',
-      toolUseId: 'tool-1',
-      result: 'File not found',
-      isError: true,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-3', toolUseId: 'tool-1', result: 'File not found', isError: true });
 
     const session = state.get(SESSION)!;
     const tool = session.toolCalls.get('tool-1');
@@ -196,13 +146,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
 
   // --- Test 6: TRANSCRIPT_TURN_COMPLETE clears isThinking ---
   it('TRANSCRIPT_TURN_COMPLETE clears isThinking', () => {
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_USER_MESSAGE',
-      sessionId: SESSION,
-      uuid: 'uuid-1',
-      text: 'Hello',
-      timestamp: 1000,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Hello', timestamp: 1000 });
 
     expect(state.get(SESSION)!.isThinking).toBe(true);
 
@@ -225,13 +169,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
   // --- Test 7: TRANSCRIPT_ASSISTANT_TEXT after a completed tool group resets currentGroupId ---
   it('TRANSCRIPT_ASSISTANT_TEXT after completed tool group resets currentGroupId so next tool starts new group', () => {
     // User message
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_USER_MESSAGE',
-      sessionId: SESSION,
-      uuid: 'uuid-1',
-      text: 'Do two things',
-      timestamp: 1000,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Do two things', timestamp: 1000 });
 
     // First tool use — creates group 1
     state = dispatch(state, {
@@ -247,23 +185,10 @@ describe('TRANSCRIPT_* reducer actions', () => {
     expect(groupId1).not.toBeNull();
 
     // Complete the tool
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_RESULT',
-      sessionId: SESSION,
-      uuid: 'uuid-3',
-      toolUseId: 'tool-1',
-      result: 'ok',
-      isError: false,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-3', toolUseId: 'tool-1', result: 'ok', isError: false });
 
     // Assistant text between tool groups — this should reset currentGroupId
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_ASSISTANT_TEXT',
-      sessionId: SESSION,
-      uuid: 'uuid-4',
-      text: 'Now let me do the second thing.',
-      timestamp: 1002,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-4', text: 'Now let me do the second thing.', timestamp: 1002 });
 
     expect(state.get(SESSION)!.currentGroupId).toBeNull();
 
@@ -303,24 +228,13 @@ describe('TRANSCRIPT_* reducer actions', () => {
   // --- Test 9: TRANSCRIPT_USER_MESSAGE deduplicates against optimistic USER_PROMPT ---
   it('TRANSCRIPT_USER_MESSAGE deduplicates against optimistic USER_PROMPT from InputBar', () => {
     // Simulate InputBar sending USER_PROMPT first (optimistic)
-    state = dispatch(state, {
-      type: 'USER_PROMPT',
-      sessionId: SESSION,
-      content: 'Hello Claude',
-      timestamp: 1000,
-    });
+    state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'Hello Claude', timestamp: 1000 });
 
     expect(state.get(SESSION)!.timeline).toHaveLength(1);
     expect(state.get(SESSION)!.isThinking).toBe(true);
 
     // Now transcript watcher fires TRANSCRIPT_USER_MESSAGE with same content
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_USER_MESSAGE',
-      sessionId: SESSION,
-      uuid: 'uuid-1',
-      text: 'Hello Claude',
-      timestamp: 1001,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'Hello Claude', timestamp: 1001 });
 
     const session = state.get(SESSION)!;
     // Should NOT add a second user message — the optimistic one is already there
@@ -335,18 +249,8 @@ describe('TRANSCRIPT_* reducer actions', () => {
   // New behavior: USER_PROMPT always appends. Dedup is by pending/confirmed,
   // not by content-match.
   it('USER_PROMPT dispatched twice with same content creates TWO distinct timeline entries', () => {
-    state = dispatch(state, {
-      type: 'USER_PROMPT',
-      sessionId: SESSION,
-      content: 'yes',
-      timestamp: 1000,
-    });
-    state = dispatch(state, {
-      type: 'USER_PROMPT',
-      sessionId: SESSION,
-      content: 'yes',
-      timestamp: 1100,
-    });
+    state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'yes', timestamp: 1000 });
+    state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'yes', timestamp: 1100 });
 
     const session = state.get(SESSION)!;
     const userEntries = session.timeline.filter((e) => e.kind === 'user');
@@ -358,33 +262,11 @@ describe('TRANSCRIPT_* reducer actions', () => {
   // matching pending entry. Two rapid sends + two transcript events = two
   // confirmed bubbles, no duplicates.
   it('TRANSCRIPT_USER_MESSAGE confirms pending entries one-by-one without adding duplicates', () => {
-    state = dispatch(state, {
-      type: 'USER_PROMPT',
-      sessionId: SESSION,
-      content: 'yes',
-      timestamp: 1000,
-    });
-    state = dispatch(state, {
-      type: 'USER_PROMPT',
-      sessionId: SESSION,
-      content: 'yes',
-      timestamp: 1100,
-    });
+    state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'yes', timestamp: 1000 });
+    state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'yes', timestamp: 1100 });
 
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_USER_MESSAGE',
-      sessionId: SESSION,
-      uuid: 'uuid-1',
-      text: 'yes',
-      timestamp: 1050,
-    });
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_USER_MESSAGE',
-      sessionId: SESSION,
-      uuid: 'uuid-2',
-      text: 'yes',
-      timestamp: 1150,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-1', text: 'yes', timestamp: 1050 });
+    state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-2', text: 'yes', timestamp: 1150 });
 
     const session = state.get(SESSION)!;
     const userEntries = session.timeline.filter((e) => e.kind === 'user');
@@ -396,13 +278,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
   // USER_PROMPT (e.g. viewer-only client, or user typed straight in terminal).
   // Should add a new timeline entry, not silently drop it.
   it('TRANSCRIPT_USER_MESSAGE appends a new entry when no matching pending entry exists', () => {
-    state = dispatch(state, {
-      type: 'TRANSCRIPT_USER_MESSAGE',
-      sessionId: SESSION,
-      uuid: 'uuid-remote',
-      text: 'hello from remote',
-      timestamp: 1000,
-    });
+    state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-remote', text: 'hello from remote', timestamp: 1000 });
 
     const session = state.get(SESSION)!;
     const userEntries = session.timeline.filter((e) => e.kind === 'user');
@@ -725,13 +601,7 @@ describe('Subagent threading', () => {
   // drift-reconciliation effect persisting it via setPreference).
   it('subagent TRANSCRIPT_TURN_COMPLETE does not pollute parent turn.model or call endTurn', () => {
     // User sent a prompt — isThinking flips to true.
-    state = chatReducer(state, {
-      type: 'TRANSCRIPT_USER_MESSAGE',
-      sessionId: SESSION,
-      uuid: 'uuid-user',
-      text: 'Run an agent for me',
-      timestamp: 999,
-    });
+    state = chatReducer(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'uuid-user', text: 'Run an agent for me', timestamp: 999 });
     // Parent emits assistant text on its own turn so turn.model is set to the
     // parent's model (opus), then dispatches the Agent tool_use.
     state = chatReducer(state, {

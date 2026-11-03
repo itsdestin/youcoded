@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   release: null as null | Record<string, unknown>,
   kind: 'deb' as string, reads: 0, cleanupGate: null as Promise<void> | null, cleanupCalls: 0, stageAppImage: vi.fn(), stageMacApp: vi.fn(), spawn: vi.fn(), httpHang: false,
 }));
+/** An UpdateInstallError from the same module instance the service under test loads (modules are reset between tests). */
+const installError = async (code: string, message: string) => new ((await import('../src/main/update-installer')).UpdateInstallError)(code as never, message);
 const DEFAULT_RELEASE = { manifest_url: 'https://github.com/manifest', signature_url: 'https://github.com/signature', tag: 'v2.0.0' };
 vi.mock('electron', () => ({
   app: { get isPackaged() { return mocks.packaged; }, getVersion: () => '1.0.0', getPath: () => mocks.userData, getAppPath: () => '/unused', quit: mocks.quit, relaunch: mocks.relaunch },
@@ -312,8 +314,7 @@ describe('update service downloads', () => {
   });
 
   it('deletes a download whose check against the signed file fails, and keeps no pending record', async () => {
-    const { UpdateInstallError } = await import('../src/main/update-installer');
-    mocks.verify.mockRejectedValue(new UpdateInstallError('verify-failed', 'sha256 mismatch'));
+    mocks.verify.mockRejectedValue(await installError('verify-failed', 'sha256 mismatch'));
     const s = await load();
     await s.fetchLatestRelease();
     await expect(s.download()).rejects.toMatchObject({ code: 'verify-failed' });
@@ -338,8 +339,7 @@ describe('update service downloads', () => {
     mocks.release = release('2.1.0');
     mocks.httpStatus = 200;
     // The newer one fails its check: the older stays, still pending.
-    const { UpdateInstallError } = await import('../src/main/update-installer');
-    mocks.verify.mockRejectedValueOnce(new UpdateInstallError('verify-failed', 'bad'));
+    mocks.verify.mockRejectedValueOnce(await installError('verify-failed', 'bad'));
     await s.fetchLatestRelease();
     await s.afterCheckDone();
     await expect(s.download()).rejects.toMatchObject({ code: 'verify-failed' });
@@ -545,8 +545,7 @@ describe('update service downloads', () => {
   });
 
   it('does not retry a release whose signed file failed until the next check', async () => {
-    const { UpdateInstallError } = await import('../src/main/update-installer');
-    mocks.verify.mockRejectedValue(new UpdateInstallError('signature-invalid', 'forged'));
+    mocks.verify.mockRejectedValue(await installError('signature-invalid', 'forged'));
     const s = await load();
     await armed(s);
     await check(s);
@@ -581,7 +580,6 @@ describe('update service downloads', () => {
   });
 
   it('adopts and stages nothing when a file already on disk fails its check', async () => {
-    const { UpdateInstallError } = await import('../src/main/update-installer');
     mocks.kind = 'appimage';
     process.env.APPIMAGE = path.join(userData, 'YouCoded.AppImage');
     fs.writeFileSync(process.env.APPIMAGE, 'running');
@@ -589,7 +587,7 @@ describe('update service downloads', () => {
     mocks.release = { ...release('2.0.0'), download_url: `https://github.com/itsdestin/youcoded/releases/download/v2.0.0/${name}` };
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, name), 'tampered');
-    mocks.verify.mockRejectedValue(new UpdateInstallError('verify-failed', 'sha256 mismatch'));
+    mocks.verify.mockRejectedValue(await installError('verify-failed', 'sha256 mismatch'));
     const s = await load();
     await s.fetchLatestRelease();
     try {
@@ -613,8 +611,7 @@ describe('update service downloads', () => {
   });
 
   it('does not start the same failing download again at every check (review F8): it backs off 1 h, then 2 h, and the person is never held back', async () => {
-    const { UpdateInstallError } = await import('../src/main/update-installer');
-    started.mockRejectedValue(new UpdateInstallError('disk-full', 'no space'));
+    started.mockRejectedValue(await installError('disk-full', 'no space'));
     const s = await load(); await armed(s); await check(s);
     await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1));
     const base = Date.now(); const now = vi.spyOn(Date, 'now');
@@ -659,11 +656,10 @@ describe('update service downloads', () => {
   });
 
   it('removes a loaded pending download that fails its re-check', async () => {
-    const { UpdateInstallError } = await import('../src/main/update-installer');
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, asset('2.0.0')), 'x');
     writePendingJson();
-    mocks.verify.mockRejectedValue(new UpdateInstallError('verify-failed', 'sha256 mismatch'));
+    mocks.verify.mockRejectedValue(await installError('verify-failed', 'sha256 mismatch'));
     mocks.savedAutoInstall = false;          // so only the re-check, not a fresh download, touches it
     const s = await load();
     await s.fetchLatestRelease();
@@ -729,15 +725,16 @@ describe('update service installing', () => {
     await s.fetchLatestRelease(); await s.afterCheckDone();
     await vi.waitFor(() => expect(s.getUpdateStatus().downloaded).toBe(true));
   }
+  const readyService = async (platform: Parameters<typeof setup>[0]) => { setup(platform); const s = await load(); await ready(s); return s; };
   const installerPath = () => path.join(cacheDir, asset);
 
   describe('who may install on a quit', () => {
     it('a downloaded, signed, latest release with the switch on', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       expect(s.quitInstallEligible()).toBe(true);
     });
     it('not with the switch off', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       await s.setAutoInstall(false);
       expect(s.quitInstallEligible()).toBe(false);
     });
@@ -748,7 +745,7 @@ describe('update service installing', () => {
       expect(s.quitInstallEligible()).toBe(false);
     });
     it('not when what is downloaded is no longer the latest release', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       let open!: () => void; gate = new Promise<void>((r) => { open = r; }); // hold the newer download
       mocks.release = release('2.1.0');
       await s.fetchLatestRelease();
@@ -765,7 +762,7 @@ describe('update service installing', () => {
       expect(await s.planRestart()).toEqual({ kind: 'exit-install', macPassword: false });
     });
     it('the status says a quit will install only when it really will (the popup promises nothing else)', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       expect(s.getUpdateStatus().installs_on_quit).toBe(true);
       process.env.ProgramFiles = path.dirname(process.execPath); vi.resetModules();
       const perMachine = await load(); await ready(perMachine);
@@ -802,7 +799,7 @@ describe('update service installing', () => {
 
   describe('the brake before an install', () => {
     const prepared = async (status: number, hang = false) => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       mocks.httpStatus = status; mocks.httpHang = hang;
       const done = s.prepareExit('install');
       if (hang) await vi.advanceTimersByTimeAsync(3_000);
@@ -829,20 +826,20 @@ describe('update service installing', () => {
       expect(fs.existsSync(installerPath())).toBe(true);
     });
     it('an answer fetched within the last 10 minutes is reused (no second fetch at the quit)', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       await s.prepareExit('install'); // fetches and caches
       mocks.httpStatus = 500;         // the network is gone now
       await s.prepareExit('install');
       expect(installs(s)).toBe(1);
     });
     it('a Restart on a pulled release installs nothing and the file is deleted', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       mocks.httpStatus = 404;
       expect(await s.planRestart()).toEqual({ kind: 'none' });
       expect(fs.existsSync(installerPath())).toBe(false);
     });
     it('a Restart that cannot confirm the release fails visibly instead of quitting', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       mocks.httpStatus = 500;
       await expect(s.planRestart()).rejects.toMatchObject({ code: 'network-failed' });
     });
@@ -852,7 +849,7 @@ describe('update service installing', () => {
   // (macBundleOf); a Windows host's C:\\ temp folders are not those paths, so those cases are skipped there.
   describe('Restart when the staged copy has gone missing (code review F1)', () => {
     it.skipIf(process.platform === 'win32')('re-stages it before any password is asked for', async () => {
-      setup('darwin'); const s = await load(); await ready(s);
+      const s = await readyService('darwin');
       fs.rmSync(path.join(appsDir, '.YouCoded-update-2.0.0.app'), { recursive: true });
       mocks.stageMacApp.mockClear();
       expect(await s.planRestart()).toEqual({ kind: 'exit-install', macPassword: false });
@@ -860,7 +857,7 @@ describe('update service installing', () => {
       expect(fs.existsSync(path.join(appsDir, '.YouCoded-update-2.0.0.app'))).toBe(true);
     });
     it.skipIf(process.platform === 'win32')('falls back to the disk image (the interactive path) when it cannot be re-staged, instead of asking for a password', async () => {
-      setup('darwin'); const s = await load(); await ready(s);
+      const s = await readyService('darwin');
       fs.rmSync(path.join(appsDir, '.YouCoded-update-2.0.0.app'), { recursive: true });
       mocks.stageMacApp.mockRejectedValue(new Error('disk full'));
       expect(await s.planRestart()).toEqual({ kind: 'interactive' });
@@ -875,7 +872,7 @@ describe('update service installing', () => {
 
   describe('Restart is told now when the install cannot be prepared (code review F6)', () => {
     it('a re-hash done moments ago is remembered, so the quit-time prepare does not hash the file again', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       await s.confirmInstallReady();
       mocks.verify.mockClear();
       await s.prepareExit('install-relaunch');
@@ -884,18 +881,17 @@ describe('update service installing', () => {
       expect(mocks.spawn).toHaveBeenCalledTimes(1);                    // and the plan still came out
     });
     it('confirmInstallReady fails visibly when the release cannot be confirmed', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       mocks.httpStatus = 500;
       await expect(s.confirmInstallReady()).rejects.toMatchObject({ code: 'network-failed' });
     });
     it('confirmInstallReady fails visibly when the file no longer matches its signed hash', async () => {
-      setup('win32'); const s = await load(); await ready(s);
-      const { UpdateInstallError } = await import('../src/main/update-installer');
-      mocks.verify.mockRejectedValue(new UpdateInstallError('verify-failed', 'sha256 mismatch'));
+      const s = await readyService('win32');
+      mocks.verify.mockRejectedValue(await installError('verify-failed', 'sha256 mismatch'));
       await expect(s.confirmInstallReady()).rejects.toBeTruthy();
     });
     it('the quit-time prepare gives up by itself after 5 s instead of racing the teardown', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       mocks.verify.mockImplementation(() => new Promise(() => {})); // a hash that never finishes
       const done = s.prepareExit('install-relaunch');
       await vi.advanceTimersByTimeAsync(5_000);
@@ -916,7 +912,7 @@ describe('update service installing', () => {
 
   describe('guards inside prepare', () => {
     it('a brake that cannot be answered in time blocks the install even though an older answer is still cached', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       await s.prepareExit('install'); s.runExitInstall(false, vi.fn()); // fetches and caches an ok answer; spent
       mocks.spawn.mockClear();
       const realNow = Date.now(); const spy = vi.spyOn(Date, 'now').mockReturnValue(realNow + 11 * 60_000); // the cache is now stale
@@ -931,14 +927,14 @@ describe('update service installing', () => {
     });
 
     it('a re-hash without the brake\'s signed file never passes (it does not quietly fetch its own)', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       expect(await s.forTests.rehash(installerPath())).toBe(false); // no brake answer yet
       await s.prepareExit('install');
       expect(await s.forTests.rehash(installerPath())).toBe(true);  // same file, once the brake has fetched
     });
 
     it('a system shutdown vetoes the install, whether it starts before prepare or during teardown, and also Restart', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       await s.prepareExit('install', () => true);
       s.runExitInstall(false, vi.fn());
       expect(mocks.spawn).not.toHaveBeenCalled();
@@ -958,7 +954,7 @@ describe('update service installing', () => {
 
   describe('the step at exit, per platform', () => {
     it('Windows: re-hashes the exact installer, then spawns it detached with /S --updated (--force-run for Restart) and writes the attempt', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       mocks.verify.mockClear();
       await s.prepareExit('install-relaunch');
       expect(mocks.verify).toHaveBeenCalledWith(expect.objectContaining({ filePath: installerPath(), fileName: asset }));
@@ -967,9 +963,8 @@ describe('update service installing', () => {
       expect(JSON.parse(fs.readFileSync(path.join(cacheDir, 'attempt.json'), 'utf8'))).toMatchObject({ version: '2.0.0', failures: 0 });
     });
     it('a file that fails the re-hash is not run, and is deleted', async () => {
-      setup('win32'); const s = await load(); await ready(s);
-      const { UpdateInstallError } = await import('../src/main/update-installer');
-      mocks.verify.mockRejectedValue(new UpdateInstallError('verify-failed', 'sha256 mismatch'));
+      const s = await readyService('win32');
+      mocks.verify.mockRejectedValue(await installError('verify-failed', 'sha256 mismatch'));
       await s.prepareExit('install');
       s.runExitInstall(false, vi.fn());
       expect(mocks.spawn).not.toHaveBeenCalled();
@@ -988,7 +983,7 @@ describe('update service installing', () => {
       expect(relaunch).not.toHaveBeenCalled();
     });
     it.skipIf(process.platform === 'win32')('Mac, bundle writable: the helper is started at prepare time with positional arguments, and the exit writes the go file', async () => {
-      setup('darwin'); const s = await load(); await ready(s);
+      const s = await readyService('darwin');
       await s.prepareExit('install');
       const staged = path.join(appsDir, '.YouCoded-update-2.0.0.app');
       expect(mocks.spawn).toHaveBeenCalledTimes(1);
@@ -1014,7 +1009,7 @@ describe('update service installing', () => {
       } finally { fs.chmodSync(appsDir, 0o755); }
     });
     it('nothing prepared means nothing is run, and a Restart with no plan still reopens the app', async () => {
-      setup('win32'); const s = await load(); await ready(s);
+      const s = await readyService('win32');
       const relaunch = vi.fn();
       s.runExitInstall(true, relaunch); // prepare never ran
       expect(mocks.spawn).not.toHaveBeenCalled();
