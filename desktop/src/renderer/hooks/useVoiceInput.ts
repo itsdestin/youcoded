@@ -23,6 +23,35 @@ import { meterLevel, open as openCapture, probe as probeMic, type CaptureHandle 
 
 export type VoicePhase = 'idle' | 'listening' | 'finishing';
 
+/** Why a dictation ended with no words, judged from what the microphone sent.
+ *
+ *  WHY this exists (Destin, 2026-11-03: "shows listening, but doesn't pick
+ *  anything up, then it just spins and leaves no text"): his computer's
+ *  microphone was muted, and every part of voice worked exactly as built —
+ *  the mic sent pure silence, the engine heard no words, and the box was left
+ *  empty with no word said. A muted mic, a mic turned right down and a mumble
+ *  all looked the same: nothing. Each of these says only what we measured.
+ *    no-sound   — every slice was digital silence (nothing at all arrived)
+ *    too-quiet  — sound arrived, but never loud enough for the engine to treat
+ *                 as speech
+ *    no-words   — loud enough, but no words came out (or, on a phone, the
+ *                 phone's recogniser returned nothing — we cannot see its sound) */
+export type VoiceNotice = 'no-sound' | 'too-quiet' | 'no-words';
+
+// Below this a slice is digital silence: -80 dB. A WORKING microphone in the
+// quietest room still sends hiss well above it (measured on the Z13 with its
+// mic at 15%: room noise ~0.005, 50 times higher), so only a muted, switched-off
+// or disconnected input stays under it. The browser's noise suppression lowers
+// hiss but does not zero it.
+const DEAD_RMS = 0.0001;
+// The speech engine's own "this is speech" line (voice-worker.ts
+// SPEECH_RMS_FLOOR). Sound that never reaches it is never decoded as words.
+const ENGINE_SPEECH_RMS = 0.01;
+// Three seconds of nothing-but-silence (slices arrive ten a second) before the
+// strip warns. Counted in slices, not by a clock, so a busy window cannot raise
+// it early; long enough that a microphone still waking up never trips it.
+const SILENT_WARN_SLICES = 30;
+
 interface Options {
   onPartial: (committed: string, tail: string) => void;
   onFinal: (text: string) => void;
@@ -128,6 +157,17 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
   const [level, setLevel] = useState(0);
   const [seconds, setSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // Why the last dictation came back empty (see VoiceNotice). Null when it had words.
+  const [notice, setNotice] = useState<VoiceNotice | null>(null);
+  // True while listening and the microphone has sent nothing but silence for
+  // three seconds — the strip turns amber and says so, live, so a muted mic is
+  // caught while the person is still talking rather than after.
+  const [micSilent, setMicSilent] = useState(false);
+  const micSilentRef = useRef(false);
+  // The loudest slice of this dictation, and how many silent slices in a row.
+  // Refs, not state: they change ten times a second and nothing draws them.
+  const peakRmsRef = useRef(0);
+  const silentRunRef = useRef(0);
 
   // Callbacks and phase live in refs so the single onEvent subscription below
   // never has to be torn down and re-made as the input bar re-renders.
@@ -239,7 +279,19 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
         closeCapture();
         setPhaseBoth('idle');
         setLevel(0);
+        micSilentRef.current = false;
+        setMicSilent(false);
         cbRef.current.onFinal(e.text);
+        // An empty result used to end in silence: the spinner stopped and the box
+        // stayed empty, with nothing to say why. Now the card says what we measured.
+        // On a phone the recogniser owns the sound, so only "no words" is known.
+        if (!e.text.trim()) {
+          const peak = peakRmsRef.current;
+          setNotice(!canCapture ? 'no-words'
+            : peak < DEAD_RMS ? 'no-sound'
+            : peak < ENGINE_SPEECH_RMS ? 'too-quiet'
+            : 'no-words');
+        }
         break;
       case 'error':
         // WHY: tokenizer/load errors can arrive while capture is still opening.
@@ -251,9 +303,11 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
         setPhaseBoth('idle');
         setLevel(0);
         setError(e.message);
+        micSilentRef.current = false;
+        setMicSilent(false);
         break;
     }
-  }, [armWatchdog, clearWatchdog, closeCapture, setPhaseBoth]);
+  }, [armWatchdog, canCapture, clearWatchdog, closeCapture, setPhaseBoth]);
 
   // Ask this computer whether it can listen at all, and let that answer beat the
   // host's. Desktop only — on a phone `status()` is the whole truth.
@@ -312,6 +366,11 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
       try { await bridge.cancel(); } catch { /* the host is already idle */ }
     };
     setError(null);
+    setNotice(null);
+    peakRmsRef.current = 0;
+    silentRunRef.current = 0;
+    micSilentRef.current = false;
+    setMicSilent(false);
     watchdogFiredRef.current = false;
     try {
       try {
@@ -353,6 +412,21 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
           // send a level back, so the ring answers the user's voice
           // immediately instead of a round trip later.
           handleEvent({ type: 'level', value: meterLevel(rms) });
+          // Is anything arriving at all? A muted microphone still "opens" and
+          // still sends slices — they are just all zero — so the strip used to
+          // say "Listening" over a mic that could not hear. State is only touched
+          // when the answer CHANGES, never per slice.
+          if (rms > peakRmsRef.current) peakRmsRef.current = rms;
+          if (rms >= DEAD_RMS) {
+            silentRunRef.current = 0;
+            if (micSilentRef.current) { micSilentRef.current = false; setMicSilent(false); }
+          } else {
+            silentRunRef.current += 1;
+            if (silentRunRef.current >= SILENT_WARN_SLICES && !micSilentRef.current) {
+              micSilentRef.current = true;
+              setMicSilent(true);
+            }
+          }
         }, () => {
           // The microphone stopped by itself. Only THIS dictation's microphone
           // counts — a late one from a timed-out open is not ours.
@@ -444,6 +518,8 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
     clearWatchdog();
     closeCapture();
     watchdogFiredRef.current = false;
+    micSilentRef.current = false;
+    setMicSilent(false);
     setPhaseBoth('idle'); setLevel(0);
     try { await bridge.cancel(); } catch (err) { setError(describe(err)); }
   }, [bridge, clearWatchdog, closeCapture, setPhaseBoth]);
@@ -465,13 +541,15 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
     } catch (err) { setError(describe(err)); }
   }, [bridge, probeMicBlock]);
 
-  const clearError = useCallback(() => setError(null), []);
+  // Dismissing the card clears whichever it was showing — a stop error or a
+  // "nothing was heard" notice.
+  const clearError = useCallback(() => { setError(null); setNotice(null); }, []);
 
   return {
     supported: !!bridge,
     // The hardware's verdict beats the model folder's: "ready" means nothing on
     // a computer whose microphone is unplugged or switched off.
     readiness: micBlock ?? readiness,
-    phase, level, seconds, error, start, stop, cancel, download, recheck, clearError,
+    phase, level, seconds, error, notice, micSilent, start, stop, cancel, download, recheck, clearError,
   };
 }

@@ -617,3 +617,71 @@ describe('a late unwind never ends a newer dictation', () => {
     expect(b.result.current.phase).toBe('listening');
   });
 });
+
+describe('a microphone that hears nothing says so', () => {
+  // A muted microphone still opens and still sends slices — every one of them
+  // silent. The strip used to say "Listening" over it, and Stop left an empty
+  // box with no word about why.
+  async function listen() {
+    const { emit } = installBridge({ desktop: true });
+    let feed: ((chunk: ArrayBuffer, rms: number) => void) | undefined;
+    cap.open.mockImplementationOnce(async (cb: (c: ArrayBuffer, r: number) => void) => {
+      feed = cb;
+      return { close: () => { cap.closes += 1; }, finish: async () => { cap.closes += 1; } };
+    });
+    const h = mount();
+    await settle();
+    await act(async () => { await h.result.current.start(); });
+    const slices = (n: number, rms: number) => act(() => { for (let i = 0; i < n; i += 1) feed!(new ArrayBuffer(3200), rms); });
+    return { ...h, emit, slices };
+  }
+
+  it('three seconds of pure silence turns the strip to a warning, and sound turns it back', async () => {
+    const h = await listen();
+    h.slices(29, 0);
+    expect(h.result.current.micSilent).toBe(false);
+    h.slices(1, 0);
+    expect(h.result.current.micSilent).toBe(true);
+    h.slices(1, 0.003);
+    expect(h.result.current.micSilent).toBe(false);
+  });
+
+  it('a quiet room is not silence — faint hiss never raises the warning', async () => {
+    const h = await listen();
+    h.slices(60, 0.001);
+    expect(h.result.current.micSilent).toBe(false);
+  });
+
+  it.each([
+    [0, 'no-sound'],
+    [0.004, 'too-quiet'],
+    [0.05, 'no-words'],
+  ] as const)('an empty result after a loudest slice of %s says %s', async (rms, notice) => {
+    const h = await listen();
+    h.slices(10, rms);
+    act(() => { h.emit({ type: 'final', text: '' }); });
+    expect(h.result.current.notice).toBe(notice);
+    expect(h.result.current.phase).toBe('idle');
+  });
+
+  it('words in the result raise no notice, and Dismiss clears one', async () => {
+    const h = await listen();
+    h.slices(10, 0.05);
+    act(() => { h.emit({ type: 'final', text: 'hello there' }); });
+    expect(h.result.current.notice).toBeNull();
+    await act(async () => { await h.result.current.start(); });
+    act(() => { h.emit({ type: 'final', text: ' ' }); });
+    expect(h.result.current.notice).toBe('no-sound');
+    act(() => { h.result.current.clearError(); });
+    expect(h.result.current.notice).toBeNull();
+  });
+
+  it('ANDROID: the phone owns the sound, so an empty result only says no words were heard', async () => {
+    const { emit } = installBridge({ desktop: false });
+    const h = mount();
+    await settle();
+    await act(async () => { await h.result.current.start(); });
+    act(() => { emit({ type: 'final', text: '' }); });
+    expect(h.result.current.notice).toBe('no-words');
+  });
+});
