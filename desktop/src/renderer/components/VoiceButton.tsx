@@ -32,11 +32,30 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { createPortal } from 'react-dom';
 import { Button } from './ui/Button';
 import { ProgressBar } from './ui/ProgressBar';
+import { StatusStrip } from './ui/StatusStrip';
 import { OverlayPanel } from './overlays/Overlay';
 import { useEscClose } from '../hooks/use-esc-close';
 import { MicIcon } from './Icons';
 import type { VoiceReadiness } from '../../shared/voice-types';
-import type { VoicePhase } from '../hooks/useVoiceInput';
+import type { VoiceNotice, VoicePhase } from '../hooks/useVoiceInput';
+
+/** What the card says when a dictation came back empty. Each line states what
+ *  the microphone actually sent (useVoiceInput VoiceNotice) and the one thing
+ *  the person can do about it — never a guessed cause. */
+const NOTICE_COPY: Record<VoiceNotice, { title: string; body: string }> = {
+  'no-sound': {
+    title: 'No sound from your microphone',
+    body: "Your microphone sent only silence, so nothing could be heard. Check that it isn't muted, and that the right microphone is chosen in your computer's sound settings.",
+  },
+  'too-quiet': {
+    title: 'Your microphone was too quiet',
+    body: "Some sound arrived, but too quietly to make out words. Try speaking closer, or turn up your microphone's volume in your computer's sound settings.",
+  },
+  'no-words': {
+    title: 'No words were heard',
+    body: 'Try again, speaking clearly and a little closer to the microphone.',
+  },
+};
 import { ErrorState, FoldRow, Tooltip } from './ui';
 import { getCapabilities } from '../platform';
 import { useScreenOpen } from '../shoot-mode';
@@ -63,6 +82,8 @@ interface Props {
   level: number;
   seconds: number;
   error: string | null;
+  /** Why the last dictation came back empty, if it did. */
+  notice?: VoiceNotice | null;
   disabled?: boolean;
   onStart: () => void;
   onStop: () => void;
@@ -95,6 +116,26 @@ export function VoiceMeter({ level, seconds }: { level: number; seconds: number 
   );
 }
 
+/** The band above the message box while the mic is open: "Listening", the meter, Stop.
+ *
+ *  WHY the amber state (Destin, 2026-11-03): a muted microphone still opens, and this
+ *  band said a green "Listening" over a mic that could hear nothing. After three
+ *  seconds of pure silence (useVoiceInput `micSilent`) it says so while he can still
+ *  fix it, and goes back to green the moment any sound arrives. */
+export function VoiceListeningStrip({ level, seconds, micSilent, onStop }: { level: number; seconds: number; micSilent: boolean; onStop: () => void }) {
+  return (
+    <StatusStrip
+      tone={micSilent ? 'warn' : 'ok'}
+      detail={micSilent ? "Check that it isn't muted, and that the right microphone is chosen in your computer's sound settings." : undefined}
+      action={<Button variant="secondary" size="sm" onClick={onStop}>Stop</Button>}
+    >
+      <span className="inline-flex items-center gap-3">
+        {micSilent ? 'No sound from your microphone' : 'Listening'} <VoiceMeter level={level} seconds={seconds} />
+      </span>
+    </StatusStrip>
+  );
+}
+
 function Spinner() {
   return (
     <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -117,7 +158,7 @@ function ErrorDetails({ text, className = '' }: { text: string; className?: stri
   );
 }
 
-export function VoiceButton({ phase, readiness, level, seconds, error, disabled, onStart, onStop, onDownload, onRecheck, onClearError, onReady }: Props) {
+export function VoiceButton({ phase, readiness, level, seconds, error, notice = null, disabled, onStart, onStop, onDownload, onRecheck, onClearError, onReady }: Props) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -204,9 +245,14 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
 
   // An error while listening opens the card so the message is read, not lost.
   useEffect(() => { if (error) setOpen(true); }, [error]);
+  // Same for an empty result: the card opening IS the answer to "where did my words go".
+  useEffect(() => { if (notice) setOpen(true); }, [notice]);
 
   const handleClick = () => {
     if (error) { setOpen((v) => !v); return; }
+    // With a "nothing was heard" card up, the mic means "try again" — the notice
+    // goes and listening starts, rather than making him dismiss it first.
+    if (notice && state === 'ready' && !listening) { onClearError(); setOpen(false); onStart(); return; }
     if (state === 'ready') {
       if (listening) onStop(); else onStart();
       return;
@@ -224,6 +270,7 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
 
   const label = downloadFailed ? 'Voice download failed — see why'
     : error ? 'Voice stopped — see why'
+    : notice && !listening ? 'Nothing was heard — tap to try again'
     : listening ? 'Stop listening'
     : phase === 'finishing' ? 'Finishing…'
     : state === 'ready' ? 'Speak your message'
@@ -318,6 +365,21 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
               close-session-6#CS6-4): it clears the notice and closes the card — the guide's word
               for that is Dismiss; "OK" could read as agreeing to something. */}
           <Button variant="secondary" size="sm" onClick={() => { onClearError(); setOpen(false); }}>Dismiss</Button>
+        </div>
+      </>
+    );
+  } else if (notice && state === 'ready' && !listening) {
+    // WHY (Destin, 2026-11-03): an empty dictation used to end with the spinner
+    // stopping and nothing else — a muted mic looked exactly like a broken app.
+    // Not ErrorState: nothing failed; the mic worked and heard what it heard.
+    const copy = NOTICE_COPY[notice];
+    card = (
+      <>
+        <p className="text-xs font-semibold text-fg mb-1.5">{copy.title}</p>
+        <p className="text-2xs text-fg-2 leading-snug">{copy.body}</p>
+        <div className="flex justify-end gap-2 mt-3">
+          <Button variant="secondary" size="sm" onClick={() => { onClearError(); setOpen(false); }}>Dismiss</Button>
+          <Button variant="primary" size="sm" onClick={() => { onClearError(); setOpen(false); onStart(); }}>Try again</Button>
         </div>
       </>
     );
