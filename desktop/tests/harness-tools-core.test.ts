@@ -4,11 +4,8 @@ import * as os from 'os';
 import * as path from 'path';
 import * as childProcess from 'child_process';
 
-// Spy on child_process.spawn so the Grep cwd regression test can assert the
-// exact options the tool passes. `importActual` keeps the REAL implementation —
-// the search genuinely runs; we only observe the call. (Mocking process.cwd()
-// does NOT work as a pin: Node's spawn reads the inherited cwd via the native
-// binding, not the JS process.cwd() we could stub — verified 2026-07-17.)
+// Spy on child_process.spawn (real implementation kept) so the Grep cwd regression can assert spawn's options.
+// Stubbing process.cwd() is no pin: spawn reads the inherited cwd natively (verified 2026-07-17).
 const spawnSpy = vi.fn();
 vi.mock('child_process', async (importActual) => {
   const actual = await importActual<typeof import('child_process')>();
@@ -46,16 +43,8 @@ type BashResult = ToolResultPayload & { truncated: boolean };
 let dir: string;
 let ctx: ToolContext;
 
-// PER-PROCESS, not the bare literal 'test'. Bash's spill files land in
-// `os.tmpdir()/youcoded-harness-bash-output/<sessionId>` — a fixed path OUTSIDE
-// the vitest HOME sandbox (spill-paths.ts resolves it from os.tmpdir() directly,
-// which is correct for production). With a shared id, every concurrent vitest
-// run wrote spills into ONE directory and the afterEach below deleted it out
-// from under the others: six concurrent full suites failed
-// `expect(fs.existsSync(r.outputPath)).toBe(true)` on 2026-08-28 — the file had
-// been written, then removed by a different run between the write and the read.
-// Same shape as the shared TEST_HOME fixed in #362, in a path that redirect
-// cannot reach.
+// PER-PROCESS id: Bash spill files land in os.tmpdir()/youcoded-harness-bash-output/<sessionId>, outside the HOME sandbox, so a shared id let
+// concurrent vitest runs delete each other's spills (six suites failed 2026-08-28).
 const TEST_SESSION_ID = `test-${process.pid}`;
 
 function makeCtx(cwd: string, signal?: AbortSignal): ToolContext {
@@ -143,17 +132,8 @@ describe('Read', () => {
     expect(r.text).toContain('offset 99 is past the end of the file (3 lines)');
   });
 
-  // Regression pin (2026-08-10 review, Claim 10): Read's isError messages used
-  // THREE unreconciled shapes -- "Read failed: ..." (thrown exceptions, via
-  // registry.ts's catch-all), "Cannot read ...: ..." (binary/size refusals), and
-  // a bare "Read <path>: offset N is past the end..." (past-EOF, no "failed"/
-  // "Cannot" prefix at all). Opus flagged the last one specifically: the
-  // prefixes are "otherwise a reliable signal for 'did this succeed'". House
-  // pattern (from Edit: "rejected" for a guard declining to act at all, "failed"
-  // for a bad request against an otherwise-permitted action) maps size/binary to
-  // "Read rejected:" (we refuse to read this file, full stop) and past-EOF to
-  // "Read failed:" (the specific offset requested is invalid) -- unifying with
-  // the SAME two prefixes the thrown-exception path (registry.ts) already uses.
+  // Read's isError prefixes must be reconciled (2026-08-10 review): size/binary refusals say "Read rejected:", a bad offset/past-EOF says
+  // "Read failed:" - the same two prefixes the thrown-exception path already uses.
   it('unifies Read refusals into two dialects: "Read rejected:" for a file we refuse to read at all, "Read failed:" for a bad request', async () => {
     fs.writeFileSync(path.join(dir, 'bin'), Buffer.from([0x41, 0x00, 0x42]));
     const binR = await ReadTool.execute({ file_path: 'bin' }, ctx);
@@ -184,47 +164,14 @@ describe('Read', () => {
     expect(r.text).not.toContain('[showing');
   });
 
-  // Fix (two independent 2026-08 harness reviews, Grok 4.5 + Qwen 3.8 Max --
-  // see guards.ts's WHY block above shellCwdMissHint): Read always resolves a
-  // relative path from the workspace root; Bash's cwd persists across calls
-  // and `cd` moves it. Grok's half of the finding: a model that just `cd`-ed
-  // Bash elsewhere can wrongly assume Read followed it.
-  describe('shell-cwd miss hint (Grok 4.5 / Qwen 3.8 Max asymmetry)', () => {
-    it('names the path when it exists relative to the persisted shell cwd', async () => {
-      const shellCwd = path.join(dir, 'sub');
-      fs.mkdirSync(shellCwd);
-      const target = path.join(shellCwd, 'note.txt');
-      fs.writeFileSync(target, 'hello');
-      const c: ToolContext = { ...ctx, shellCwd };
-      const r = await ReadTool.execute({ file_path: 'note.txt' }, c);
-      expect(r.isError).toBe(true);
-      expect(r.text.startsWith('Read failed: ENOENT')).toBe(true);
-      expect(r.text).toContain(target);
-      expect(r.text).toContain(shellCwd);
-    });
-
-    it('adds no hint when the file exists nowhere', async () => {
-      const shellCwd = path.join(dir, 'sub');
-      fs.mkdirSync(shellCwd);
-      const c: ToolContext = { ...ctx, shellCwd };
-      const r = await ReadTool.execute({ file_path: 'ghost.txt' }, c);
-      expect(r.isError).toBe(true);
-      expect(r.text).not.toContain("It exists relative to the shell's current directory");
-    });
-
+  // Read resolves relative paths from the workspace root while Bash's cwd persists across `cd`; a model that just cd-ed must not assume Read followed.
+  describe('shell-cwd miss hint', () => {
     it('adds no hint for an absolute-path miss', async () => {
       const shellCwd = path.join(dir, 'sub');
       fs.mkdirSync(shellCwd);
       const c: ToolContext = { ...ctx, shellCwd };
       const absGhost = path.join(dir, 'ghost-abs.txt');
       const r = await ReadTool.execute({ file_path: absGhost }, c);
-      expect(r.isError).toBe(true);
-      expect(r.text).not.toContain("It exists relative to the shell's current directory");
-    });
-
-    it('adds no hint when the shell cwd equals the workspace root', async () => {
-      const c: ToolContext = { ...ctx, shellCwd: dir };
-      const r = await ReadTool.execute({ file_path: 'ghost.txt' }, c);
       expect(r.isError).toBe(true);
       expect(r.text).not.toContain("It exists relative to the shell's current directory");
     });
@@ -256,11 +203,7 @@ describe('Read: image delivery', () => {
     fs.writeFileSync(p, '<svg/>');
     const r = await ReadTool.execute({ file_path: p }, { ...makeCtx(dir), supportsVision: true });
     expect(r.isError).toBe(true);
-    // Assert the actual refusal WORDING, not just that 'svg' appears somewhere —
-    // the echoed file path (".../vector.svg") alone would satisfy a bare
-    // `toContain('svg')` even with the format-named refusal deleted entirely
-    // (2026-08-11 review, Fix 2: the implementer's own RED evidence showed this
-    // test passing before the refusal branch existed).
+    // Assert the refusal clause itself: the echoed path (.../vector.svg) would satisfy a bare toContain('svg') with the refusal deleted.
     expect(r.text).toMatch(/cannot be delivered/i);
     expect(r.text).toContain('svg');
     expect(r.images).toBeUndefined();
@@ -331,23 +274,14 @@ describe('Read: image delivery', () => {
   });
 
   it('advertises image reading only to vision models', () => {
-    // Assert the LOAD-BEARING phrases, not the bare plural 'images' (2026-08-11
-    // review, Fix 3): the vivid "actual picture" framing and the "screenshot"
-    // example are what actually stop a vision model from never trying an image
-    // read — a substring check on 'images' alone would keep passing even if
-    // that framing were deleted.
+    // Assert the load-bearing phrases, not the bare plural 'images': the "actual picture"/"screenshot" framing is what makes a vision model try an image read.
     expect(ReadTool.descriptionFor!({ supportsVision: true })).toMatch(/actual picture/);
     expect(ReadTool.descriptionFor!({ supportsVision: true })).toMatch(/screenshot/);
     expect(ReadTool.descriptionFor!({ supportsVision: false })).toBeUndefined();
   });
 
   it('advertises image reading in the SHORT description too, for simplified presentation', () => {
-    // Same failure mode as descriptionFor above, but for the small-local-model path
-    // (spec §4.2): a vision model that only ever sees shortDescription must still be
-    // told Read returns images, or the Roo Code #10440 gap reopens for that tier.
-    // Assert the specific clause added (2026-08-11), not the bare word 'images' —
-    // that alone could come from unrelated text and wouldn't catch the wording
-    // being deleted (2026-08-11 review, Fix 3's lesson applied here too).
+    // Same for the small-local-model path (shortDescription): it must still say Read returns images (Roo Code #10440 gap).
     expect(ReadTool.shortDescriptionFor!({ supportsVision: true })).toMatch(/come back as the actual picture/);
     expect(ReadTool.shortDescriptionFor!({ supportsVision: false })).toBeUndefined();
   });
@@ -472,12 +406,7 @@ describe('Edit', () => {
     expect(fs.readFileSync(p, 'utf8')).toBe('a$&b$1c$$d\n');
   });
 
-  // Regression pin (2026-08-10 review, Claim 6): Grok set old_string ===
-  // new_string with replace_all: true and got the generic 'Edited X.' text --
-  // textually identical to a real edit. structuredPatch already carried zero
-  // hunks (the true empty-diff signal), but the model only reads r.text. Surface
-  // the zero-change fact explicitly instead of a success message indistinguishable
-  // from a real edit.
+  // old_string === new_string with replace_all used to answer the generic success text (2026-08-10); the zero-change fact must be surfaced since the model only reads r.text.
   it('reports zero changes explicitly for a no-op edit (old_string === new_string)', async () => {
     const p = path.join(dir, 'a.txt');
     fs.writeFileSync(p, 'shared token\n');
@@ -515,14 +444,8 @@ describe('Write', () => {
     expect(r.structuredPatch!.length).toBeGreaterThan(0);
   });
 
-  // Regression pin (2026-08-10 review, Claim 2 -- THE HEADLINE ITEM): Write's
-  // overwrite guard only checked registry PRESENCE ("was this path ever Read
-  // this session"), never freshness -- unlike Edit. Opus 5's transcript
-  // demonstrated it: a Read at tool-call 11, an unrelated Write at tool-call 38
-  // (27 calls later, file changed on disk in between) still succeeded with "no
-  // complaint". Mirrors Edit's check; since 2026-09-16 both compare CONTENTS
-  // (see tools/file-fingerprint.ts), so the same-mtime edit below is the case
-  // that matters.
+  // Write's overwrite guard used to check registry presence only, never freshness (2026-08-10, Opus 5: a file changed 27 calls after its Read was
+  // overwritten silently). It now mirrors Edit and compares CONTENTS (tools/file-fingerprint.ts), so the same-mtime edit below is the case that matters.
   it('rejects overwriting a file whose contents changed since it was read, even with the same mtime (mirrors Edit)', async () => {
     const p = path.join(dir, 'a.txt');
     fs.writeFileSync(p, 'old\n');
@@ -574,12 +497,8 @@ describe('Write', () => {
   });
 });
 
-// 2026-08-11 review round 8: the read-before-edit gate was correct in every
-// transcript, and four of six models still misdiagnosed it — as broken, as
-// Grep-transparent, as "inconsistent, priority fix". The gate's STATE is
-// invisible: nothing tells a model which paths are registered or with what
-// stamp. These pin the in-band signals that make it predictable. They assert on
-// message CONTENT deliberately — the content IS the fix here, not incidental.
+// The read-before-edit gate's state is invisible, so four of six models misdiagnosed it (2026-08-11). These pin the in-band signals;
+// they assert message CONTENT deliberately because the content is the fix.
 describe('the read gate explains itself', () => {
   it('the refusal names both tools that satisfy the gate, and says a shell view does not', async () => {
     fs.writeFileSync(path.join(dir, 'ungated.txt'), 'hello\n');
@@ -654,28 +573,16 @@ describe('Bash', () => {
       ctx,
     );
     expect(r.bounds?.unit).toBe('chars');
-    // Not an exact 60,000: a multi-byte character CAN straddle a pipe chunk
-    // boundary and decode to a stray replacement char, so pin a tight range
-    // instead of a brittle exact count. The number that matters is that it is
-    // nowhere near the real UTF-8 byte count (180,000) — a wire-byte number
-    // would be a lie under the label 'chars', and a char-count under the
-    // label 'bytes' (the pre-fix bug) is the lie this test guards against.
+    // A multi-byte char can straddle a pipe chunk boundary and decode to a stray replacement char, so pin a tight range, not an exact count.
+    // What matters: nowhere near the real byte count (180,000), since a byte number labelled 'chars' is the pre-fix lie.
     expect(r.bounds?.total).toBeGreaterThan(55_000);
     expect(r.bounds?.total).toBeLessThan(65_000);
     expect(r.text).toContain('chars output');
     expect(r.text).not.toContain('bytes output');
   }, 30_000);
 
-  // Fix (2026-08-06 review): `shown` used to be measured AFTER stripAnsi ran
-  // (on the text the model actually reads) while `total` (totalChars) was
-  // measured BEFORE it, as raw chunks streamed in — two different currencies
-  // in the same "showing N of M" line. A coloured 3,000-line run pinned the
-  // symptom directly: "showing 21491 of 117000 bytes", where 117000 counted
-  // escape sequences 21491 did not. This pins that shown and total are now
-  // measured at the SAME point (before the ANSI strip), by checking that
-  // `shown` is honest about still including the colour-code overhead — i.e.
-  // it is NOT silently equal to the length of the ANSI-free text the model
-  // actually sees, which is what the old post-strip `shown` was.
+  // `shown` was once measured after stripAnsi but `total` before it ("showing 21491 of 117000"). Both must be measured before the strip,
+  // so `shown` still includes the colour-code overhead.
   it('measures shown and total in the same currency for coloured output that crosses the retention window', async () => {
     const r = await BashTool.execute(
       {
@@ -700,17 +607,8 @@ describe('Bash', () => {
     expect(r.bounds).toBeUndefined();
   });
 
-  // Regression pin for the 30k-71.5k "dead zone" (2026-08-06 review): the old
-  // `if (head.length < HEAD_CHARS) head += s` guard checked BEFORE appending, so
-  // a chunk that crossed the boundary was retained whole — a single pipe read
-  // could push retention past 71k before Bash's own `dropped` flag ever tripped,
-  // while defineTool's pipeline cap (30_000) fired regardless. Everything in
-  // between landed in composeNotice's no-bounds fallback: a bare "[output
-  // truncated: showing N of M chars]" with NO moreHint. 50,000 chars sits
-  // squarely inside that old dead zone (above the 30k pipeline cap, below the
-  // ~71.5k the old accumulator actually retained) — this pins that Bash now
-  // declares its own bounds there instead of falling through to the pipeline's
-  // uninformative notice.
+  // The 30k-71.5k dead zone (2026-08-06): the old head guard checked before appending, so a boundary-crossing chunk was kept whole and the output
+  // fell into composeNotice's bare notice with no moreHint. 50,000 chars sits in that zone; Bash must declare its own bounds there.
   it('Bash declares bounds (not the bare pipeline notice) for output in the old 30k-71.5k dead zone', async () => {
     const r = await BashTool.execute(
       { command: `node -e "process.stdout.write('z'.repeat(50000))"` },
@@ -735,11 +633,7 @@ describe('Bash', () => {
     expect(r.text).not.toContain('(exit code 42)');
   });
 
-  // Regression pin: the original "(no output, exit N)" fallback text was lost
-  // when the unconditional metadata line replaced the old block — a command
-  // that produced NO stdout/stderr resolved to a bare leading blank line
-  // followed only by the metadata line, giving no positive signal that the
-  // command ran and simply produced nothing.
+  // A command with NO output used to resolve to a blank line plus metadata; it must still give a positive "ran, produced nothing" signal.
   it('a command that exits non-zero with no output gets a readable "(no output)" body, not a leading blank line', async () => {
     const r = await BashTool.execute({ command: 'exit 3' }, ctx);
     expect(r.text).toContain('(no output)');
@@ -795,12 +689,8 @@ describe('Bash', () => {
   });
 
   it('a spawn-level failure resolves a structured error that names the cwd', async () => {
-    // A bad startCwd makes spawn fail. The PATH differs by platform: on POSIX a
-    // file-cwd throws SYNCHRONOUSLY (before the 'error' handler can attach — the
-    // trap the try/catch guards); on Windows the shell spawn fails ASYNCHRONOUSLY
-    // via 'error' (ENOENT). Either way the result must be a structured error that
-    // NAMES the offending cwd — never a context-free `Bash failed: spawn <CODE>`.
-    // (ctx.cwd = a FILE reaches spawn because bash.ts only guards shellCwd.)
+    // A bad startCwd makes spawn fail: synchronously on POSIX (before the 'error' handler attaches), asynchronously on Windows (ENOENT).
+    // Either way the error must NAME the cwd, never a bare `Bash failed: spawn <CODE>`. (A FILE as ctx.cwd reaches spawn; bash.ts only guards shellCwd.)
     const fileCwd = path.join(dir, 'not-a-dir.txt');
     fs.writeFileSync(fileCwd, 'x');
     const r = await BashTool.execute({ command: 'echo hi' }, makeCtx(fileCwd));
@@ -821,21 +711,11 @@ describe('Bash', () => {
       return c;
     }
 
-    // Must mirror withCwdProbe()'s `pwd -W 2>/dev/null || pwd` — a bare `pwd`
-    // makes these assertions fail on WINDOWS ONLY. Git Bash mounts %TEMP% at
-    // /tmp, so inside a mkdtemp sandbox bare `pwd` prints /tmp/native-tools-xxx;
-    // fs.realpathSync() then resolves that leading slash against the runner's
-    // CURRENT DRIVE (D: on GitHub's windows-latest) -> ENOENT 'D:\tmp'. `pwd -W`
-    // is the MSYS builtin that emits a real Win32 path instead. Broke the
-    // 2026-07-19 beta build; the tool itself was never wrong. (POSIX: -W is
-    // invalid, the `|| pwd` fallback takes over, stderr suppressed.)
+    // Mirror withCwdProbe()'s `pwd -W 2>/dev/null || pwd`: a bare `pwd` prints /tmp/... under Git Bash, which realpathSync resolves against the
+    // runner's current drive (ENOENT 'D:\tmp'; broke the 2026-07-19 beta build). On POSIX `-W` is invalid and `|| pwd` takes over.
     const PWD = 'pwd -W 2>/dev/null || pwd';
 
-    // Same 8.3 trap the tool itself hit: plain fs.realpathSync leaves a SHORT
-    // root (C:\Users\RUNNER~1\...) short while `pwd -W` reports the LONG form
-    // (C:\Users\runneradmin\...) for the very same directory, so comparing the
-    // two never matches on Windows. .native canonicalizes both. Compare paths
-    // through this, never through raw realpathSync.
+    // Compare paths through .native, never raw realpathSync: on Windows an 8.3 SHORT root (RUNNER~1) never matches `pwd -W`'s LONG form.
     const canon = (p: string) => {
       try {
         return fs.realpathSync.native(p);
@@ -844,11 +724,7 @@ describe('Bash', () => {
       }
     };
 
-    // Task 4 appends an unconditional `\n[cwd: ... · exit N]` metadata line after
-    // the command's own output, so a raw `.trim()` on `r.text` is no longer just
-    // the command's stdout — it also swallows the metadata line, which broke
-    // every one of these tests' path comparisons (ENOENT on a two-line string).
-    // Split it back off so these tests keep checking the actual command output.
+    // The tool appends a `\n[cwd: ... · exit N]` metadata line, so split it back off before comparing a command's own output.
     const cmdOutput = (text: string) => text.split('\n[cwd:')[0].trim();
 
     it('a cd carries to the next call and the sentinel never reaches the model', async () => {
@@ -858,11 +734,8 @@ describe('Bash', () => {
       expect(first.text).toContain('moved');
       expect(first.text).not.toContain('__YC_CWD__');
       const second = await BashTool.execute({ command: PWD }, c);
-      // A cd INTO a workspace subdir must never trip the scope guard. Windows-only
-      // regression (2026-07-19): isInside() compared an 8.3 SHORT root against a
-      // LONG candidate, so this fired on every cd and reverted it. The two
-      // assertions below can't catch that alone — they expect the ROOT, which is
-      // also what a fully broken persistence returns, so they passed vacuously.
+      // Windows regression (2026-07-19): isInside() compared an 8.3 SHORT root to a LONG candidate and reverted every cd into a workspace subdir.
+      // The ROOT-expecting assertions below pass vacuously with broken persistence, so the subdir case is asserted explicitly.
       expect(first.text).not.toMatch(/Shell cwd was reset/);
       expect(canon(cmdOutput(second.text))).toBe(canon(path.join(dir, 'sub')));
     });
@@ -950,12 +823,8 @@ describe('Bash', () => {
     });
   });
 
-  // 17/17 harness reviews across four rounds (2026-08-01 through 2026-08-09)
-  // flagged the same thing: cwd persists between calls but env does not, and the
-  // failure is SILENT — the second call just runs without the state and nothing
-  // says why. Two fixes: a warning at the moment of the mistake, and an opt-in
-  // `persistent_env` escape hatch. Default behavior (env stays ephemeral) must
-  // not change — Opus 5 was the one dissenting voice defending that tradeoff.
+  // cwd persists between calls but env does not, silently (17/17 reviews). Fixes: a warning at the moment of the mistake plus opt-in
+  // `persistent_env`. Default behaviour (env stays ephemeral) must not change.
   describe('env-state warning + opt-in persistence (persistent_env)', () => {
     function envTrackingCtx(root: string): ToolContext {
       const c = makeCtx(root);
@@ -1038,16 +907,8 @@ describe('Bash', () => {
     expect(r.isError).toBe(true);
   });
 
-  // Pin for the PowerShell fallback (Windows without Git Bash): probe === false,
-  // so the tool must be stateless — no __YC_CWD__ wrapping — and effectiveCwd
-  // must fall back to startCwd unconditionally, since PowerShell has no cwd
-  // tracking. Same fs/which-mocking technique as
-  // tests/harness-bash-shell-detect.test.ts, but scoped to THIS ONE test via
-  // vi.doMock + vi.resetModules + a dynamic import — a file-level vi.mock('fs')
-  // here would silently break every other test in this file that writes real
-  // fixtures with fs.writeFileSync (Read/Write/Edit/Glob/Grep all do). The
-  // statically-imported `BashTool` used by every other test in this file is
-  // bound at file-load time and is unaffected by resetModules mid-run.
+  // PowerShell fallback (probe === false): stateless, no __YC_CWD__ wrapping, effectiveCwd falls back to startCwd. Mocked via vi.doMock +
+  // resetModules + dynamic import, scoped to this ONE test (a file-level vi.mock('fs') would break every real-fixture test here).
   describe('on Windows without Git Bash (probe === false)', () => {
     const realPlatform = process.platform;
     afterEach(async () => {
@@ -1087,19 +948,11 @@ describe('Bash', () => {
       // whether spawning powershell.exe itself succeeds on this machine.
       expect(r.text).toContain(`[cwd: ${dir} ·`);
     }, 30_000);
-    // ^ WHY the explicit timeout: on a real Windows runner this test genuinely
-    // spawns powershell.exe (spawnSpy is a passthrough), after resetModules +
-    // a cold re-import of the bash module. A cold PowerShell start on a CI box
-    // routinely blows vitest's 5,000ms default — Windows CI failed here as
-    // "Test timed out in 5000ms", never on an assertion. Same precedent as the
-    // wrap-up tests in harness-review-runner.test.ts (16a9adb5).
+    // Explicit timeout: on a Windows runner this really spawns powershell.exe after a cold re-import, which blows vitest's 5s default.
   });
 
-  // 2026-08-10 review: reviewers measured a `seq 1 20000` costing ~7k tokens
-  // of pure noise at the OLD ~28,000-char cap ("more expensive than everything
-  // else combined"). New contract: ~4,000-char head+tail sandwich, line-aware
-  // cut, full output always spilled to disk on overflow, path named in the
-  // notice. See docs/active/investigations/2026-08-10-harness-output-truncation-prior-art.md.
+  // Output cap: a `seq 1 20000` cost ~7k tokens at the old ~28,000-char cap. Contract now: ~4,000-char head+tail sandwich, line-aware cut,
+  // full output spilled to disk, path named in the notice.
   describe('output cap tightening', () => {
     const seqCmd = `node -e "for(let i=1;i<=20000;i++)console.log(i)"`;
     const visibleBody = (text: string) => text.split('\n[cwd:')[0];
@@ -1163,12 +1016,8 @@ describe('Bash', () => {
       expect(r.bounds).toBeUndefined();
     });
 
-    // 2026-08-11 review round 8: truncation trips on chars OR lines, but the
-    // metadata only ever quoted chars — a short, line-capped result announced
-    // "900 chars output, showing 900" and read as complete.
-    // The description is the ONLY place a model learns what "truncated" means
-    // before it sees one. It named the char cap and not the line cap, which is
-    // the one that usually fires first.
+    // Truncation trips on chars OR lines, but metadata only quoted chars (a line-capped result read as complete). The description is the only
+    // place a model learns what "truncated" means, and it named only the char cap.
     it('the description names BOTH truncation triggers', () => {
       const d = BashTool.description;
       expect(d).toContain('4,000 chars');
@@ -1212,11 +1061,7 @@ describe('Bash', () => {
       expect(r.text).toMatch(/lines elided/);
     }, 30_000);
 
-    // vi.spyOn cannot override an ESM named export directly ("Module namespace
-    // is not configurable"), so this uses the same vi.doMock + vi.resetModules +
-    // dynamic-import technique the "on Windows without Git Bash" suite below
-    // already relies on — scoped to THIS ONE test, restored in the finally, so
-    // it can't leak into any other test in this file that writes real fixtures.
+    // vi.spyOn cannot override an ESM named export, so this uses the scoped vi.doMock + resetModules + dynamic import technique, restored in finally.
     it('is honest when the spill write itself fails, instead of claiming a fake path', async () => {
       vi.doMock('fs', async (importActual) => {
         const actual = await importActual<typeof import('fs')>();
@@ -1258,18 +1103,9 @@ describe('Bash', () => {
     });
   });
 
-  // Requirement B (2026-08-10, this fix) -- the harder mirror image of
-  // shellCwdMissHint (guards.ts): Bash resolves a relative path from its OWN
-  // persisted cwd, not the workspace root, so a `cd` several calls back can
-  // make a previously-safe relative path miss with no clue why. Qwen 3.8 Max
-  // hit exactly this: `cd config` several calls earlier, then `grep -n port
-  // config/app.toml` failed because the shell was already IN config/. The
-  // failure happens INSIDE the child process, so the harness only ever sees a
-  // non-zero exit and the child's own stderr -- deliberately narrow, per the
-  // review requirement: fires only on a genuine non-zero close whose own
-  // output names a missing path in the one unambiguous coreutils shape
-  // (`tool: path: No such file or directory`), confirmed to exist under the
-  // workspace root.
+  // Workspace-root miss hint: Bash resolves relative paths from its OWN persisted cwd, so a `cd config` several calls back makes
+  // `grep -n port config/app.toml` miss with no clue why. Deliberately narrow: fires only on a non-zero close whose output names a missing path
+  // in the coreutils shape (`tool: path: No such file or directory`) that exists under the workspace root.
   describe('workspace-root miss hint (Qwen 3.8 Max asymmetry)', () => {
     it("names the workspace-root path when the shell has cd'd elsewhere and a command misses", async () => {
       fs.mkdirSync(path.join(dir, 'config'));
@@ -1306,14 +1142,8 @@ describe('Bash', () => {
   });
 });
 
-// Defect 1 (2026-08-11): `pwd` prints the PHYSICAL path, so on a symlinked
-// workspace root (macOS /var → /private/var; any symlinked project dir) or a
-// Windows 8.3 short root (RUNNER~1 → runneradmin) the shell named the same
-// directory a different way than ctx.cwd did. bash.ts compared the two with
-// path.resolve, which follows neither symlinks nor 8.3 names, so one directory
-// read as a change and the canonical spelling leaked into setShellCwd and the
-// [cwd: …] metadata line — handing the model a workspace root it was never
-// given, which is the exact confusion that line exists to remove.
+// `pwd` prints the PHYSICAL path, so a symlinked root (macOS /var -> /private/var) or Windows 8.3 root made one directory read as a change,
+// leaking the canonical spelling into setShellCwd and the [cwd: ...] line.
 describe('Bash cwd vocabulary', () => {
   let real: string;
   let link: string;
@@ -1348,11 +1178,7 @@ describe('Bash cwd vocabulary', () => {
   });
 
   it('rebaseReportedCwd rejects a sibling directory whose name merely starts with the root name', () => {
-    // Fix: the containment check uses `+ path.sep` to prevent a sibling directory
-    // whose name is the root's real path with one character appended (e.g., real=/a/b,
-    // sibling=/a/bc) from passing the startsWith check and being treated as inside
-    // the workspace. Dropping `+ path.sep` would silently widen the scope guard,
-    // allowing the session to escape into that sibling. This test pins that invariant.
+    // The containment check uses `+ path.sep` so a sibling like /a/bc (real=/a/b) is not treated as inside; dropping it would widen the scope guard.
     const sibling = real + 'c';
     let created = false;
     try {
@@ -1423,12 +1249,8 @@ describe('Glob', () => {
     expect(r.text).toBe('No files matched.');
   });
 
-  // Ledger G-8 (2026-08-26 native-tools investigation, §6/§8): a bare "*.ts"
-  // used to match ONLY files sitting directly in the search root, because the
-  // hand-rolled matcher anchors the pattern to the root-relative path. Every
-  // model expects Claude Code's behaviour ("*.ts" finds nested files too —
-  // Cursor auto-prepends "**/"), and nothing in the description said
-  // otherwise, so a model got "No files matched." for files that existed.
+  // G-8 (2026-08-26): a bare "*.ts" used to match only files directly in the root. Models expect nested matches (Claude Code, Cursor), and
+  // the tool answered "No files matched." for files that existed.
   describe('a pattern with no "/" searches every folder (G-8)', () => {
     it('bare *.ts finds nested files, like **/*.ts', async () => {
       fs.mkdirSync(path.join(dir, 'a/b'), { recursive: true });
@@ -1499,15 +1321,8 @@ describe('Glob', () => {
     });
   });
 
-  // Regression pin (2026-08-10 review, Claim 3): our hand-rolled glob->regex
-  // converter used to ESCAPE '{'/'}' as literal characters, so
-  // '**/*.{ts,kt,toml}' compiled to a regex requiring the literal substring
-  // ".{ts,kt,toml}" in the path -- no real file ever has that -- and the tool
-  // returned "No files matched." even though matching files existed. Two
-  // reviewing models hit this independently (Kimi K3, Grok 4.5); Kimi called
-  // it "the only result in the whole battery I'd call misleading" -- a false
-  // negative indistinguishable from a genuinely empty result. See
-  // docs/active/investigations/2026-08-10-harness-search-tools-prior-art.md item 1.
+  // The glob->regex converter used to escape '{'/'}', so '**/*.{ts,kt,toml}' never matched anything and returned a false-negative "No files matched."
+  // (Kimi K3, Grok 4.5; 2026-08-10).
   it('expands non-nested brace alternation ({a,b,c}), matching ripgrep/Claude Code semantics', async () => {
     fs.writeFileSync(path.join(dir, 'a.ts'), '');
     fs.writeFileSync(path.join(dir, 'b.kt'), '');
@@ -1520,15 +1335,8 @@ describe('Glob', () => {
     expect(r.text).not.toContain('d.json');
   });
 
-  // Regression pin (2026-08-10 review, item 4 -- superseding the prior fix's
-  // fallback): nested braces are NOT expanded, matching ripgrep's own
-  // pre-15.0.0 restriction (the shape our converter follows) -- but a plain
-  // "No files matched." is EXACTLY the defect class the original brace finding
-  // was about: a syntax failure wearing the costume of an empty result. Kimi K3
-  // called that shape "the only result in the whole battery I'd call
-  // misleading." Glob must now detect the nested construct and say so
-  // specifically, rather than silently compiling a can't-ever-match regex and
-  // reporting a plausible-looking empty result.
+  // Nested braces are not expanded (ripgrep pre-15 restriction), but a plain "No files matched." is a syntax failure wearing an empty result's costume;
+  // Glob must detect the nested construct and say so.
   it('rejects a nested brace group with a specific message instead of a misleading "No files matched."', async () => {
     fs.writeFileSync(path.join(dir, 'x.ts'), '');
     const r = await GlobTool.execute({ pattern: '**/*.{a,{b,c}}' }, ctx);
@@ -1548,46 +1356,13 @@ describe('Glob', () => {
     expect(r.text).toContain('a.ts');
   });
 
-  // Fix (two independent 2026-08 harness reviews, Grok 4.5 + Qwen 3.8 Max --
-  // see guards.ts's WHY block above shellCwdMissHint): a missing search root
-  // used to fall silently through walk()'s per-directory catch and come back
-  // as "No files matched." -- indistinguishable from a genuinely empty, valid
-  // directory (the exact defect SHAPE the nested-brace fix above closed for
-  // glob syntax).
-  describe('shell-cwd miss hint (Grok 4.5 / Qwen 3.8 Max asymmetry)', () => {
+  // A missing search root used to fall through walk()'s catch as "No files matched.", indistinguishable from an empty directory.
+  describe('a missing search root', () => {
     it('a missing search root is now a named miss, not "No files matched."', async () => {
       const r = await GlobTool.execute({ pattern: '*.ts', path: 'ghost-dir' }, ctx);
       expect(r.isError).toBe(true);
       expect(r.text).not.toBe('No files matched.');
       expect(r.text).toContain('does not exist');
-    });
-
-    it('names the path when the search root exists relative to the persisted shell cwd', async () => {
-      const shellCwd = path.join(dir, 'sub');
-      fs.mkdirSync(shellCwd);
-      const target = path.join(shellCwd, 'inner');
-      fs.mkdirSync(target);
-      const c: ToolContext = { ...ctx, shellCwd };
-      const r = await GlobTool.execute({ pattern: '*.ts', path: 'inner' }, c);
-      expect(r.isError).toBe(true);
-      expect(r.text).toContain(target);
-      expect(r.text).toContain(shellCwd);
-    });
-
-    it('adds no hint when the directory exists nowhere', async () => {
-      const shellCwd = path.join(dir, 'sub');
-      fs.mkdirSync(shellCwd);
-      const c: ToolContext = { ...ctx, shellCwd };
-      const r = await GlobTool.execute({ pattern: '*.ts', path: 'ghost-dir' }, c);
-      expect(r.isError).toBe(true);
-      expect(r.text).not.toContain("It exists relative to the shell's current directory");
-    });
-
-    it('adds no hint when the shell cwd equals the workspace root', async () => {
-      const c: ToolContext = { ...ctx, shellCwd: dir };
-      const r = await GlobTool.execute({ pattern: '*.ts', path: 'ghost-dir' }, c);
-      expect(r.isError).toBe(true);
-      expect(r.text).not.toContain("It exists relative to the shell's current directory");
     });
 
     it('still reports the friendly "No files matched." for a real, empty directory', async () => {
@@ -1630,11 +1405,7 @@ describe('Grep', () => {
   });
 
   it('spawns rg with an explicit cwd of ctx.cwd (never inherits ambient cwd)', async () => {
-    // Regression pin for the `spawn ENOTDIR` bug: Grep used to omit `cwd` from
-    // spawn(), so rg inherited the Electron main process's ambient cwd — which in
-    // the packaged app was not a usable directory and failed EVERY search. The
-    // fix passes `cwd: ctx.cwd` explicitly (same pattern as BashTool). Assert the
-    // contract directly: the spawn call for THIS search must carry ctx.cwd.
+    // `spawn ENOTDIR` regression: Grep omitted `cwd` so rg inherited the packaged app's unusable ambient cwd. The spawn call must carry ctx.cwd.
     fs.writeFileSync(path.join(dir, 'a.txt'), 'findme here\n');
     spawnSpy.mockClear();
     const r = await GrepTool.execute({ pattern: 'findme', output_mode: 'content' }, ctx);
@@ -1650,14 +1421,8 @@ describe('Grep', () => {
   });
 
   it('resolveRgPath rewrites an inside-asar rgPath to the unpacked binary', () => {
-    // THE actual `spawn ENOTDIR` root cause (2026-07-20): in the packaged app,
-    // @vscode/ripgrep resolves rgPath INSIDE app.asar (a FILE), and spawn() of a
-    // command whose path prefix is a file throws ENOTDIR synchronously. The binary
-    // IS unpacked to app.asar.unpacked/ — the tool just has to point there. Pin
-    // the rewrite against BOTH separators and the no-op cases.
-    //
-    // Build a real on-disk fixture so the existsSync guard passes: mirror the
-    // packaged layout under a tmp dir (.../app.asar.unpacked/.../bin/rg).
+    // Packaged-app ENOTDIR root cause (2026-07-20): @vscode/ripgrep resolves rgPath INSIDE app.asar (a file); the unpacked binary lives in
+    // app.asar.unpacked/. Pin the rewrite for BOTH separators and the no-op cases, using a real on-disk fixture so the existsSync guard passes.
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rgpath-'));
     const asarPath = path.join(root, 'app.asar', 'node_modules', '@vscode', 'ripgrep-linux-x64', 'bin', 'rg');
     const unpackedPath = path.join(root, 'app.asar.unpacked', 'node_modules', '@vscode', 'ripgrep-linux-x64', 'bin', 'rg');
@@ -1697,11 +1462,8 @@ describe('Grep', () => {
   });
 
   it('a synchronous spawn throw resolves an error result (never escapes to defineTool)', async () => {
-    // spawn() throws SYNCHRONOUSLY when the command path or cwd has a non-directory
-    // prefix. cwd = a FILE is the easiest way to force it cross-platform. The
-    // 'error' handler (attached after spawn) cannot catch a sync throw, so without
-    // the try/catch this escaped as a context-free `Grep failed: spawn ENOTDIR`.
-    // Pin: the tool resolves a structured error that NAMES the failing cwd.
+    // spawn() throws synchronously for a non-directory cwd/command prefix (cwd = a FILE forces it cross-platform); the try/catch must turn that
+    // into a structured error naming the cwd, not `Grep failed: spawn ENOTDIR`.
     const fileCwd = path.join(dir, 'not-a-dir.txt');
     fs.writeFileSync(fileCwd, 'x');
     const r = await GrepTool.execute({ pattern: 'findme', output_mode: 'content' }, makeCtx(fileCwd));
@@ -1710,12 +1472,7 @@ describe('Grep', () => {
     expect(r.text).toContain(fileCwd); // the offending path is surfaced, not hidden
   });
 
-  // Regression pin (2026-08-10 review, Claim 4): grep.ts used to pass
-  // `--max-count 500` to ripgrep ITSELF for every output_mode, including
-  // count -- so ripgrep stopped counting at 500 and the true total was never
-  // computed anywhere in the pipeline. 2,400 mirrors fixture-workspace.ts's
-  // BIG_MODULE generator (`Array.from({ length: 2_400 }, ...)`), verified by
-  // reading that file, not assumed.
+  // grep.ts passed `--max-count 500` to ripgrep for count mode too, so the true total was never computed. 2,400 mirrors fixture-workspace.ts's BIG_MODULE.
   it('count mode reports the true exhaustive total, not the 500-per-file cap', async () => {
     const lines = Array.from({ length: 2_400 }, (_, i) => `export const value${i} = ${i};`);
     fs.writeFileSync(path.join(dir, 'big.ts'), lines.join('\n') + '\n');
@@ -1724,11 +1481,8 @@ describe('Grep', () => {
     expect(r.text).not.toContain(':500');
   });
 
-  // Same shape as the filesAtMaxCount unit test in harness-tool-bounds.test.ts,
-  // exercised end-to-end: `path` naming a single FILE (not a directory) means
-  // ripgrep's single-file output format omits the filename column entirely, so
-  // the old parser silently never populated its per-file map and the "hit the
-  // limit" note never rendered -- same wrong number, minus the disclosure.
+  // End-to-end twin of the filesAtMaxCount unit test (harness-tool-bounds.test.ts): a single-FILE `path` makes rg omit the filename column,
+  // so the "hit the limit" note silently never rendered.
   it('the cap-hit disclosure note fires for content mode even when path names a single file', async () => {
     const lines = Array.from({ length: 600 }, (_, i) => `MATCH line ${i}`);
     fs.writeFileSync(path.join(dir, 'single.ts'), lines.join('\n') + '\n');
@@ -1737,11 +1491,7 @@ describe('Grep', () => {
     expect(r.text).toContain('single.ts');
   });
 
-  // Compatibility gap flagged independently by two reviewing models (2026-08-10
-  // review): Claude Code exposes -A/-B/-C verbatim and we had no context
-  // parameter at all, forcing a follow-up Read after every Grep hit. Wired
-  // straight through to ripgrep, matching CC's exact parameter names (not a
-  // synthesized `context` field).
+  // Claude Code exposes -A/-B/-C verbatim and we had no context parameter (2026-08-10); wired straight to ripgrep with CC's exact names.
   it('context lines: -C adds symmetric context around a match', async () => {
     const lines = ['one', 'two', 'MATCH', 'four', 'five'];
     fs.writeFileSync(path.join(dir, 'ctx.txt'), lines.join('\n') + '\n');
@@ -1761,53 +1511,49 @@ describe('Grep', () => {
     expect(r.text).toContain('five');
     expect(r.text).not.toContain('two');
   });
+});
 
-  // Fix (two independent 2026-08 harness reviews, Grok 4.5 + Qwen 3.8 Max --
-  // see guards.ts's WHY block above shellCwdMissHint): grepErrorMessage
-  // already names the workspace root when a search path is missing; this adds
-  // the OTHER root to the same message, but only when the alternative is
-  // confirmed to exist on disk.
-  describe('shell-cwd miss hint (Grok 4.5 / Qwen 3.8 Max asymmetry)', () => {
-    it('names the path when the search target exists relative to the persisted shell cwd', async () => {
-      const shellCwd = path.join(dir, 'sub');
-      fs.mkdirSync(shellCwd);
-      const target = path.join(shellCwd, 'app.toml');
-      fs.writeFileSync(target, 'port = 1\n');
-      const c: ToolContext = { ...ctx, shellCwd };
-      const r = await GrepTool.execute({ pattern: 'port', path: 'app.toml' }, c);
-      expect(r.isError).toBe(true);
-      expect(r.text).toContain(target);
-      expect(r.text).toContain(shellCwd);
-    });
+// A model that just `cd`-ed Bash elsewhere may assume Read/Glob/Grep followed it; they resolve from the workspace root.
+// Grok 4.5 + Qwen 3.8 Max reviews: name the shell-cwd spelling only when it is confirmed to exist.
+describe.each([
+  ['Read', ReadTool, 'note.txt', 'file', (p: string) => ({ file_path: p })],
+  ['Glob', GlobTool, 'inner', 'dir', (p: string) => ({ pattern: '*.ts', path: p })],
+  ['Grep', GrepTool, 'app.toml', 'file', (p: string) => ({ pattern: 'port', path: p })],
+] as const)('%s shell-cwd miss hint', (name, tool, entry, kind, args) => {
+  const HINT = "It exists relative to the shell's current directory";
+  const run = (input: object, c: ToolContext) => (tool as any).execute(input, c) as Promise<ToolResultPayload>;
+  function shellSub() {
+    const shellCwd = path.join(dir, 'sub');
+    fs.mkdirSync(shellCwd);
+    return shellCwd;
+  }
 
-    it('adds no hint when the search target exists nowhere', async () => {
-      const shellCwd = path.join(dir, 'sub');
-      fs.mkdirSync(shellCwd);
-      const c: ToolContext = { ...ctx, shellCwd };
-      const r = await GrepTool.execute({ pattern: 'port', path: 'ghost.toml' }, c);
-      expect(r.isError).toBe(true);
-      expect(r.text).not.toContain("It exists relative to the shell's current directory");
-    });
+  it('names the path when it exists relative to the persisted shell cwd', async () => {
+    const shellCwd = shellSub();
+    const target = path.join(shellCwd, entry);
+    if (kind === 'dir') fs.mkdirSync(target); else fs.writeFileSync(target, 'port = 1\n');
+    const r = await run(args(entry), { ...ctx, shellCwd });
+    expect(r.isError).toBe(true);
+    if (name === 'Read') expect(r.text.startsWith('Read failed: ENOENT')).toBe(true);
+    expect(r.text).toContain(target);
+    expect(r.text).toContain(shellCwd);
+  });
 
-    it('adds no hint when the shell cwd equals the workspace root', async () => {
-      const c: ToolContext = { ...ctx, shellCwd: dir };
-      const r = await GrepTool.execute({ pattern: 'port', path: 'ghost.toml' }, c);
-      expect(r.isError).toBe(true);
-      expect(r.text).not.toContain("It exists relative to the shell's current directory");
-    });
+  it('adds no hint when it exists nowhere', async () => {
+    const r = await run(args('ghost'), { ...ctx, shellCwd: shellSub() });
+    expect(r.isError).toBe(true);
+    expect(r.text).not.toContain(HINT);
+  });
+
+  it('adds no hint when the shell cwd equals the workspace root', async () => {
+    const r = await run(args('ghost'), { ...ctx, shellCwd: dir });
+    expect(r.isError).toBe(true);
+    expect(r.text).not.toContain(HINT);
   });
 });
 
-// Regression pin (2026-08-10 review): DeepSeek reported "`path` for Grep is a
-// directory, but `path` on Glob is a base" -- verification REFUTED this: the
-// parameter means the identical thing (search-root directory) in both tools'
-// code. The confusion came from neither schema having a description at all,
-// letting the model infer a difference that isn't there. Fix the cause
-// (describe both, with the SAME string) rather than the symptom.
-// Ledger G-7 (2026-08-26 native-tools investigation): the four ripgrep flags
-// every other harness exposes. Each test checks BOTH the flag reached rg
-// (spawnSpy) and the observable search result, so a typo in the flag name
-// can't pass on the spy alone.
+// DeepSeek read Grep's `path` as different from Glob's because neither schema had a description; both are described with the SAME string.
+// G-7 (2026-08-26): the four ripgrep flags; each test checks that the flag reached rg (spawnSpy) AND the search result.
 describe('Grep flags (G-7): ignore_case, literal, type, multiline', () => {
   function rgArgsFor(pattern: string): string[] {
     const call = spawnSpy.mock.calls.find((c) => Array.isArray(c[1]) && c[1].includes(pattern));
@@ -1906,12 +1652,7 @@ describe('Grep/Glob schema descriptions', () => {
   });
 });
 
-// Fix (two independent 2026-08 harness reviews, Grok 4.5 + Qwen 3.8 Max):
-// direct unit coverage of the two guards.ts primitives that back the
-// per-tool integration tests above/below (Read/Glob/Grep's shell-cwd hint
-// describes, Bash's workspace-root hint describe). These pin the boundary
-// conditions precisely -- equal roots, absolute path, no persisted shell cwd
-// -- independent of any one tool's wiring.
+// Direct coverage of the two guards.ts primitives behind the per-tool hint tests: equal roots, absolute path, no persisted shell cwd.
 describe('shellCwdMissHint / workspaceRootMissHint (path-resolution asymmetry hint)', () => {
   it('shellCwdMissHint names the path when it is confirmed to exist under the shell cwd', () => {
     const shellCwd = path.join(dir, 'sub');
@@ -1923,30 +1664,17 @@ describe('shellCwdMissHint / workspaceRootMissHint (path-resolution asymmetry hi
     expect(hint).toContain(shellCwd);
   });
 
-  it('shellCwdMissHint returns nothing when the alternative does not exist either', () => {
-    const shellCwd = path.join(dir, 'sub');
-    fs.mkdirSync(shellCwd);
-    expect(shellCwdMissHint('ghost.txt', { cwd: dir, shellCwd }, (p) => fs.existsSync(p))).toBe('');
-  });
-
-  it('shellCwdMissHint returns nothing for an absolute path, even if exists() would say yes', () => {
-    // exists() is a constant `true` here specifically to prove the guard
-    // fires on path.isAbsolute() BEFORE ever asking the disk -- an absolute
-    // path does not depend on either cwd, so there is nothing to explain.
-    const shellCwd = path.join(dir, 'sub');
-    fs.mkdirSync(shellCwd);
-    const absGhost = path.join(dir, 'ghost-abs.txt');
-    expect(shellCwdMissHint(absGhost, { cwd: dir, shellCwd }, () => true)).toBe('');
-  });
-
-  it('shellCwdMissHint returns nothing when the shell cwd IS the workspace root', () => {
-    // exists() always true -- the equal-roots short circuit must fire before
-    // exists() is ever consulted, not because nothing happens to exist.
-    expect(shellCwdMissHint('note.txt', { cwd: dir, shellCwd: dir }, () => true)).toBe('');
-  });
-
-  it('shellCwdMissHint returns nothing when there is no persisted shell cwd', () => {
-    expect(shellCwdMissHint('note.txt', { cwd: dir }, () => true)).toBe('');
+  // `exists` is a constant true where the guard must fire BEFORE the disk is asked (absolute path, equal roots, no shell cwd).
+  it.each([
+    ['the alternative does not exist either', 'ghost.txt', 'sub', (p: string) => fs.existsSync(p)],
+    ['the path is absolute', 'ABS', 'sub', () => true],
+    ['the shell cwd IS the workspace root', 'note.txt', '.', () => true],
+    ['there is no persisted shell cwd', 'note.txt', null, () => true],
+  ] as const)('shellCwdMissHint returns nothing when %s', (_why, file, sub, exists) => {
+    const shellCwd = sub === null ? undefined : path.join(dir, sub);
+    if (shellCwd && sub !== '.') fs.mkdirSync(shellCwd);
+    const target = file === 'ABS' ? path.join(dir, 'ghost-abs.txt') : file;
+    expect(shellCwdMissHint(target, { cwd: dir, shellCwd }, exists)).toBe('');
   });
 
   it('workspaceRootMissHint is the mirror image: names the path when confirmed under the workspace root', () => {

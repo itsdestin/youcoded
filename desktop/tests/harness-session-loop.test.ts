@@ -1,10 +1,6 @@
-// HarnessSession Phase 2 — the multi-step agentic turn driver (Plan A, Task 9).
-// These tests DEFINE the contract for the tool loop: emitted transcript-event
-// ORDER, history grouping, the exact permission sequencing (validate → doom →
-// guards → decide → ask → execute), budgets (max_steps), doom-loop detection,
-// step-level retry, and interrupt semantics. The v0 emit surface is FROZEN —
-// this suite only ever asserts existing TranscriptEventType values; max_steps
-// and doom_loop surface as permission ASKS (askUser), never as new events.
+// HarnessSession's multi-step turn driver. Pins emitted transcript-event ORDER, history grouping, permission sequencing
+// (validate -> doom -> guards -> decide -> ask -> execute), budgets, doom-loop detection, step retry and interrupts. The emit surface is
+// frozen: max_steps and doom_loop surface as permission ASKS, never as new events.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import * as fs from 'fs';
@@ -32,11 +28,7 @@ import { textChunks, toolCallChunk, toolInputChunks, finishChunk, stream, script
 // scripted-model helpers don't support; everything else in this suite goes
 // through scriptedModel/scriptModel.
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
-// Session-construction scaffolding (HARNESS/makeOpts/fakeTool) lives in a shared
-// helper so the profile-driven driver test (Task 5) reuses the exact same setup.
-// makeSession/scriptModel/drainTurn (2026-08-11 review fixes) reused from the
-// compaction suite's own scaffolding rather than hand-rolling a second way to
-// force the summarize branch.
+// Session scaffolding is shared (helpers/harness-fakes) with the profile-driven driver and compaction suites.
 import { HARNESS, makeOpts, fakeTool, makeSession, scriptModel, drainTurn, FAKE_SESSION_CWD } from './helpers/harness-fakes';
 import { CLOUD_DEFAULT, resolveProfile, IMAGE_LIMITS_OPENAI } from '../src/main/harness/capability-profile';
 import { looseData } from '../src/shared/transcript-event-types';
@@ -606,11 +598,8 @@ describe('HarnessSession — multi-step turn driver', () => {
   });
 
   it('parallel calls in ONE step: ALL tool-use events precede ALL tool-result events; history is assistant[text,c1,c2] + tool[r1,r2]', async () => {
-    // Task 10 seam fix: a multi-call step must emit use(c1),use(c2) FIRST, then
-    // result(c1),result(c2) — NOT interleaved use→result→use→result. This is
-    // what lets rebuildHistory (pure event-adjacency) reconstruct the SAME
-    // step-grouped history the driver pushes (one assistant message with both
-    // tool-calls, one tool message with both results).
+    // A multi-call step emits use(c1),use(c2) FIRST, then result(c1),result(c2), so rebuildHistory (pure event adjacency) rebuilds the same
+    // step-grouped history the driver pushes.
     const read = fakeTool('Read');
     const model = scriptedModel([
       stream(
@@ -860,12 +849,8 @@ describe('HarnessSession — multi-step turn driver', () => {
   });
 
   it('unknown parameter → corrective result naming the valid parameters; the corrected call runs; no doom-loop misfire', async () => {
-    // Ledger D-2: a strict schema turns a Claude-Code-shaped `Grep {"-i": true}`
-    // into an error the model can act on. The corrected call has DIFFERENT
-    // arguments, so it must not count toward the doom-loop window — and an
-    // invalid call never enters that window at all (it returns before the
-    // signature is recorded), so even two identical wrong tries + one right
-    // one must never trip the ask.
+    // A strict schema turns a Claude-Code-shaped `Grep {"-i": true}` into an actionable error. An invalid call returns before its signature is
+    // recorded, so two identical wrong tries + one right one must never trip the doom-loop ask.
     const grep = fakeTool('Grep', { schema: z.object({ pattern: z.string(), ignore_case: z.boolean().optional() }).strict() });
     const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
     const wrong = () => stream(toolCallChunk('c', 'Grep', { pattern: 'x', '-i': true }), finishChunk('tool-calls'));
@@ -1147,13 +1132,8 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect((write as any).calls).toHaveLength(1);        // ask allowed → executed
   });
 
-  // 2026-08-16 stuck-session investigation. A local model Globbed "ROADMAP.md"
-  // (Glob returns workspace-RELATIVE paths) and then invented an absolute path
-  // from the project's name — "/youcoded-dev/ROADMAP.md" — which is outside the
-  // workspace and exists nowhere. That forced an external_directory ask about a
-  // fictional location, and the turn hung on it. The model is told the truth
-  // and retries instead; only a path we can CONFIRM inside the workspace
-  // short-circuits the ask.
+  // 2026-08-16 stuck session: a model invented "/youcoded-dev/ROADMAP.md" after a relative Glob result, forcing an external_directory ask about a
+  // fictional place that hung the turn. It is told the truth and retries; only a path CONFIRMED inside the workspace short-circuits the ask.
   describe('an invented outside path that is really a workspace file', () => {
     let root: string;
     beforeEach(() => {
@@ -1360,13 +1340,8 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(askUser).not.toHaveBeenCalled();
   });
 
-  // Task 10 (plan 1b): the parent has to be able to Read the spill file its
-  // own truncated specialist report was written to, without the guard
-  // treating that path like any other file outside the workspace — otherwise
-  // the footer's "Read it if you need the rest" advice hits the exact same
-  // ask/block wall the Bash spill-file fix (guards.ts) already closed for
-  // Bash's own output. internalReadRoots is how NativeSessionHost wires that
-  // exemption in per-session, scoped to this one session's own artifact dir.
+  // The parent must be able to Read the spill file of its own truncated specialist report without the guard treating it as outside the
+  // workspace (as the Bash spill fix did for Bash). internalReadRoots wires that exemption per session, scoped to its own artifact dir.
   it('tool-layer guard: internalReadRoots lets the parent Read its own spill path without an ask', async () => {
     const spillDir = 'C:/spill/session-1';
     const read = fakeTool('Read', { permissionSubject: (a: any) => a.file_path });
@@ -1385,11 +1360,8 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(decide).toHaveBeenCalledWith('Read', `${spillDir}/child-1.report.md`); // reaches decide() normally
   });
 
-  // Driven by EDIT, deliberately. Since 2026-09-05 no read outside the workspace
-  // forces an ask (READ_ONLY_PATH_TOOLS), so a Read here would pass whether the
-  // exemption were correctly scoped or wide open — it would pin nothing. Edit is
-  // the tool for which "is this path inside the exempted root?" still has a
-  // visible consequence, so it is the one that can still catch a widening.
+  // Driven by EDIT on purpose: since 2026-09-05 no read outside the workspace asks (READ_ONLY_PATH_TOOLS), so a Read would pass whether the
+  // exemption were scoped or wide open. Edit still has a visible consequence for a widened root.
   it('tool-layer guard: internalReadRoots does not widen to a sibling directory — a write there still asks', async () => {
     const spillDir = 'C:/spill/session-1';
     const edit = fakeTool('Edit', { permissionSubject: (a: any) => a.file_path });
@@ -1407,32 +1379,10 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(askUser).toHaveBeenCalledTimes(1);   // sibling directory outside the exempted root still forces an ask
   });
 
-  // Task 6 review fix 4: Task's permission subject became a CHARTER-SCOPED
-  // consent key (`${charter}:${work_dir}`, tools/task.ts) rather than a bare
-  // path — so 'Task' had to join NON_PATH_SUBJECT_TOOLS (Bash/Skill's set)
-  // alongside that change, or checkPathGuard would try to canonicalize the
-  // charter prefix AS a path. Pinned indirectly (the set itself isn't
-  // exported): a subject shaped like a charter-scoped key that ALSO happens to
-  // look like a path outside cwd would force the 'external directory' ask
-  // above if Task were still running through the path guard — this proves it
-  // isn't, mirroring the sibling test one case up.
-  // Task 4 (plan 1c): syncTaskTool now rebuilds 'Task' from the roster
-  // UNCONDITIONALLY every turn (no has()-guard), so a fake tool injected
-  // under the name 'Task' via opts.tools no longer survives past the first
-  // buildAiTools() call — the REAL createTaskTool() output takes its place,
-  // same as production. This test now drives THAT real tool (profile.canDelegate
-  // defaults to true — CLOUD_DEFAULT) with an absolute work_dir chosen to
-  // reproduce the exact subject the old fake hardcoded ('read-write:/etc/x' —
-  // 'worker' is read-write). NOTE: this comment used to continue "and '/etc/x'
-  // is already absolute, so resolveP returns it unchanged regardless of cwd",
-  // which is a POSIX-only claim stated as a universal one — on Windows
-  // path.resolve('/etc/x') attaches the current drive and yields 'D:/etc/x', so
-  // the hardcoded expectation below was red on that CI leg. It is now computed
-  // the same way the tool computes it — resolved against FAKE_SESSION_CWD
-  // ('C:/x'), which is the session's cwd and therefore the base resolveP uses.
-  // Resolving against process.cwd() instead was still wrong on Windows: it
-  // picked up the RUNNER's drive ('D:/etc/x') while the session produced
-  // 'C:/etc/x'.
+  // Task's permission subject is a CHARTER-SCOPED consent key (`${charter}:${work_dir}`), so 'Task' must be in NON_PATH_SUBJECT_TOOLS or
+  // checkPathGuard would canonicalize the charter prefix as a path. Pinned indirectly: a key that also looks like an outside path must not force
+  // the external-directory ask. Drives the REAL createTaskTool() (syncTaskTool rebuilds it every turn). The expected subject is resolved
+  // against FAKE_SESSION_CWD, not process.cwd() or a POSIX literal: on Windows both give another drive than the session's.
   it('tool-layer guard: Task is exempt (NON_PATH_SUBJECT_TOOLS) — its subject is a consent key, not a path', async () => {
     const decide = vi.fn(async () => ALLOW);
     const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
@@ -1530,10 +1480,14 @@ describe('HarnessSession — multi-step turn driver', () => {
       return { askUser, remembered, ran: (bash as any).calls.length };
     };
 
-    it('asks before removing the home folder even when a saved grant allows the command', async () => {
-      const { askUser, remembered, ran } = await run('rm -rf ~', async () => ALLOW);
+    // The secret-path floor (tools/bash-secret-paths.ts): the file tools refuse ~/.ssh and .env, so Bash reading them must ask every time.
+    it.each([
+      ['removing the home folder', 'rm -rf ~', 'removal'],
+      ['naming a secret file', 'cat ~/.ssh/id_rsa', 'secret-path'],
+    ])('asks before %s even when a saved grant allows it', async (_what, command, floorStop) => {
+      const { askUser, remembered, ran } = await run(command, async () => ALLOW);
       expect(askUser).toHaveBeenCalledTimes(1);
-      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'removal', external: false });
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop, external: false });
       expect(remembered).toEqual([]); // an answer of "always" stores nothing it could never honour
       expect(ran).toBe(1);            // the person said yes, so it runs
     });
@@ -1549,35 +1503,16 @@ describe('HarnessSession — multi-step turn driver', () => {
       expect(ran).toBe(0);
     });
 
-    it('leaves an ordinary allowed removal alone', async () => {
-      const { askUser, ran } = await run('rm -rf build', async () => ALLOW);
-      expect(askUser).not.toHaveBeenCalled();
-      expect(ran).toBe(1);
-    });
-
-    // The secret-path floor (tools/bash-secret-paths.ts): the file tools refuse
-    // ~/.ssh and .env, so Bash reading them must at least ask — every time.
-    it('asks before a command that names a secret file even when a saved grant allows it', async () => {
-      const { askUser, remembered, ran } = await run('cat ~/.ssh/id_rsa', async () => ALLOW);
-      expect(askUser).toHaveBeenCalledTimes(1);
-      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'secret-path', external: false });
-      expect(remembered).toEqual([]);
-      expect(ran).toBe(1);
-    });
-
-    it('leaves a command that only mentions a similar word alone', async () => {
-      const { askUser, ran } = await run('npm run env:check', async () => ALLOW);
+    it.each(['rm -rf build', 'npm run env:check'])('leaves %s alone (an ordinary command or a lookalike word)', async (command) => {
+      const { askUser, ran } = await run(command, async () => ALLOW);
       expect(askUser).not.toHaveBeenCalled();
       expect(ran).toBe(1);
     });
   });
 
-  // Admin-password design (docs/active/specs/2026-09-26-admin-password-technical-design.md
-  // §4): a Bash command that visibly runs `sudo` always asks — even under a
-  // saved "Always allow" or Full auto — because saying yes opens a password
-  // prompt inside the app. `doas`/`su`/`pkexec`/`run0` are refused outright:
-  // no card at all, because pkexec/run0 would raise the DESKTOP's own polkit
-  // dialog outside the app.
+  // Admin-password design (docs/active/specs/2026-09-26-admin-password-technical-design.md section 4): a visible `sudo` always asks, even under
+  // "Always allow" or Full auto, since yes opens a password prompt in the app. doas/su/pkexec/run0 are refused outright with no card
+  // (pkexec/run0 would raise the desktop's own polkit dialog).
   describe('the admin floor', () => {
     const bashTool = () => fakeTool('Bash', {
       schema: z.object({ command: z.string() }),
@@ -1830,13 +1765,8 @@ describe('HarnessSession — multi-step turn driver', () => {
       expect(ran).toBe(1);
     });
 
-    // Code review F1: where the password card is genuinely unavailable
-    // (macOS, Windows, or a Linux self-test failure) `adminPasswordService`
-    // is never wired at all — `undefined`, not a service that always
-    // refuses. Passwordless (NOPASSWD) sudo must keep working after
-    // approval exactly as it did before this feature existed: the approval
-    // band still fires (floorStop:'admin' is unconditional), the up-front
-    // password step is simply skipped, and the command still spawns.
+    // Where the password card is unavailable (macOS, Windows, Linux self-test failure) adminPasswordService is undefined. NOPASSWD sudo must
+    // keep working: the approval band still fires (floorStop:'admin'), the password step is skipped, the command spawns.
     it('passwordless sudo still runs after approval when adminPasswordService is unset entirely (F1)', async () => {
       const bash = bashTool();
       const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', always: true }));
@@ -1938,19 +1868,9 @@ describe('HarnessSession — multi-step turn driver', () => {
     });
   });
 
-  // Fix (Critical 1, final review): a Task task_id call (steer/resume/interrupt
-  // an EXISTING specialist) omits work_dir entirely, so permissionSubject
-  // returns undefined for it — the SAME shape as a genuinely subject-less tool
-  // (TodoWrite). Before this fix rememberedRuleFor treated undefined subject as
-  // "tool has no meaningful subject, so remember tool-wide" for EVERY tool,
-  // which was safe when Task always had a `${charter}:${work_dir}` subject
-  // (work_dir was required) but became a hole once task_id calls made work_dir
-  // optional: an "Always allow" on a task_id management call would persist a
-  // pattern-less `{tool:'Task', action:'allow'}` rule that then silently
-  // pre-approves EVERY future Task call, including a brand-new read-write spawn
-  // at any directory. Task must never mint a tool-wide rule — mirrors the
-  // existing "no grant possible" precedent for a Bash command with no safe
-  // width (rulesFor('git push', ...) above).
+  // A Task task_id call (steer/resume/interrupt) omits work_dir, so its permission subject is undefined like a subject-less tool. An "Always allow"
+  // on it must never mint a tool-wide `{tool:'Task', action:'allow'}` rule that would pre-approve every future Task spawn at any directory
+  // (same precedent as a Bash command with no safe width).
   it('never remembers a tool-wide rule for a Task call with no subject (task_id management)', async () => {
     const task = fakeTool('Task', { permissionSubject: () => undefined, schema: z.object({ task_id: z.string() }) });
     const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', always: true }));
@@ -2181,12 +2101,8 @@ describe('HarnessSession — multi-step turn driver', () => {
     });
 
     it('POLICY deny (no `dismissed`) → corrective text and the loop CONTINUES', async () => {
-      // The discrimination test for the whole feature. Two askUser
-      // implementations have no human behind them — childAskPolicy() and the
-      // harness evaluator's fixture jail — and for both, deny means "you may not
-      // ask, carry on and finish". The evaluator's wrap-up turn REQUIRES this:
-      // it denies AskUserQuestion so the model answers instead, and ending the
-      // turn there loses the review outright.
+      // The discrimination test: childAskPolicy() and the harness evaluator's fixture jail have no human, and for both deny means "you may not
+      // ask, carry on". The evaluator's wrap-up turn denies AskUserQuestion so the model answers; ending the turn there loses the review.
       const ask = fakeInteractive();
       const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny' }));
       const seen: any[] = [];
@@ -2383,13 +2299,8 @@ describe('HarnessSession — multi-step turn driver', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// tok/s measures GENERATION, not the turn's wall-clock. Found by the 2026-07-28
-// audit: `startedAt` is stamped at the top of the turn and the denominator was
-// (now - startedAt), so prefill, tool execution and permission waits all diluted
-// it. A turn that generated 300 tokens in 10s of decoding but spent 30s in a
-// Bash call reported ~7 tok/s instead of ~30.
-// ---------------------------------------------------------------------------
+// tok/s measures GENERATION, not wall-clock (2026-07-28 audit): prefill, tool execution and permission waits must not dilute it
+// (300 tokens in 10s of decoding plus a 30s Bash call is ~30 tok/s, not ~7).
 describe('turn-complete tokensPerSecond', () => {
   const TOOL_MS = 600;
   it('excludes time spent OUTSIDE the stream (tool execution)', async () => {
@@ -2428,14 +2339,8 @@ describe('turn-complete tokensPerSecond', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Image tool-results (2026-08-11 spec, Task 5): the driver turns a tool's
-// promised image PATHS (ToolResultPayload.images, Task 4) into a canonical
-// content-type tool-result output, charging a per-turn budget and deduping
-// repeat fetches of an unchanged file — every skip gets a NAMED note in the
-// same text the model and transcript both see, so promise and delivery can
-// never disagree.
-// ---------------------------------------------------------------------------
+// Image tool-results: the driver turns a tool's promised image PATHS into a content-type tool-result, charging a per-turn budget and
+// deduping unchanged files; every skip gets a NAMED note so promise and delivery cannot disagree.
 describe('image tool-results', () => {
   // Real files on disk: resolveToolImages calls fs.statSync/readFileSync
   // directly (no injection seam like history-rebuild's fakeReader), so the
@@ -2602,15 +2507,9 @@ describe('image tool-results', () => {
     expect(output.value).toContain('no longer readable');
   });
 
-  // Fix 4 (2026-08-11 review): readImageFromDisk returns null for THREE
-  // distinct reasons (undeliverable format, oversized, or a read that threw)
-  // that the driver previously collapsed into one guessed "vanished or
-  // exceeds the per-image size limit" note — an unverified-cause message this
-  // repo's error standard forbids, and this branch had no test coverage at
-  // all. Each case below calls resolveToolImages directly (same private-method
-  // pattern the byte-budget test already uses) so it can construct the exact
-  // filesystem shape that isolates one cause from the other two.
-  describe('readImageFromDisk-null skip reasons are named, not guessed (Fix 4)', () => {
+  // readImageFromDisk returns null for THREE reasons (undeliverable format, oversized, read threw) that were collapsed into one guessed note.
+  // Each case calls resolveToolImages directly with a filesystem shape isolating one cause.
+  describe('readImageFromDisk-null skip reasons are named, not guessed', () => {
     it('an undeliverable format (e.g. .bmp) is named as unsupported', () => {
       const dir = mkTmpDir();
       // deliverableImageMediaType keys off the extension only — a real .bmp
@@ -2626,11 +2525,7 @@ describe('image tool-results', () => {
     it('a file over MAX_ATTACHMENT_BYTES is named with the size limit', () => {
       const dir = mkTmpDir();
       const imgPath = path.join(dir, 'big.png');
-      // A sparse file: truncateSync reports the target size in stat() without
-      // actually writing MAX_ATTACHMENT_BYTES of real data to disk (avoids the
-      // exact ">20 MB of fixture data" cost the byte-budget test above already
-      // steers around). readImageFromDisk's own stat check rejects it before
-      // ever calling readFileSync, so the hole is never read either.
+      // A sparse file (truncateSync) reports the target size to stat() without writing MAX_ATTACHMENT_BYTES; the stat check rejects it before any read.
       fs.closeSync(fs.openSync(imgPath, 'w'));
       fs.truncateSync(imgPath, MAX_ATTACHMENT_BYTES + 1);
       const session = new HarnessSession(makeOpts({ decide: async () => ALLOW }), async () => ({}) as any);
@@ -2641,11 +2536,7 @@ describe('image tool-results', () => {
 
     it('a read that throws behind a successful stat is named as unreadable, not guessed as vanished', () => {
       const dir = mkTmpDir();
-      // A directory named like an image: fs.statSync succeeds (real mtime,
-      // small reported size) so it clears both of resolveToolImages' own
-      // checks and readImageFromDisk's format/size checks, but
-      // fs.readFileSync(directory) throws EISDIR — the one genuine "could not
-      // be read" case, isolated from the format and size branches above.
+      // A directory named like an image clears the format/size checks, but readFileSync throws EISDIR: the one genuine "could not be read" case.
       const dirLikeImage = path.join(dir, 'x.png');
       fs.mkdirSync(dirLikeImage);
       const session = new HarnessSession(makeOpts({ decide: async () => ALLOW }), async () => ({}) as any);
@@ -2655,13 +2546,8 @@ describe('image tool-results', () => {
     });
   });
 
-  // The count budget (tested above) and the byte budget are two DISTINCT `if`
-  // branches in resolveToolImages — a passing count-budget test gives zero
-  // coverage of the byte one. Driving it through a full turn would mean
-  // writing >20 MB of fixture images to disk per run; instead this calls the
-  // private method directly (same pattern this file already uses for
-  // `(session as any).history`) with the budget pre-loaded to just under the
-  // cap, so one small image is enough to tip it over.
+  // The count budget and byte budget are two separate branches. Calls the private method with the budget pre-loaded to just under the cap,
+  // so one small image tips it, instead of writing >20 MB of fixtures.
   it('the per-turn image byte budget skips with a named note, independent of the count budget', () => {
     const dir = mkTmpDir();
     const imgPath = tmpImage(dir, 'x.png');
@@ -2673,12 +2559,7 @@ describe('image tool-results', () => {
     expect(result.text).toContain('MB-per-turn image budget');
   });
 
-  // Fix 5 (2026-08-11 review): the test above pre-loads budget.bytes and only
-  // ever asserts the GUARD fires — it gives zero coverage of the accumulation
-  // itself (`budget.bytes += img.data.length`). Deleting that line leaves
-  // every other test in this file passing, because the count-budget test only
-  // pins budget.count. Assert the accumulation directly, starting from an
-  // empty budget.
+  // The test above only asserts the GUARD fires; assert the accumulation itself (`budget.bytes += ...`) from an empty budget.
   it('a delivered image adds its real byte length to the shared budget', () => {
     const dir = mkTmpDir();
     const imgPath = tmpImage(dir, 'x.png');
@@ -2692,12 +2573,8 @@ describe('image tool-results', () => {
   });
 });
 
-// Fixes 1 (CRITICAL) and 2 (2026-08-11 review): shownImages must not outlive
-// the history it vouches for. /clear (Fix 1) and compaction's summarize step
-// (Fix 2, both the automatic maybeCompact and the manual compactNow) each
-// discard part or all of model history — an un-cleared cache then answers
-// "already visible earlier in this conversation" for an image that is no
-// longer there, which is both a permanent non-delivery AND a false claim.
+// shownImages must not outlive the history it vouches for: /clear and compaction's summarize step (auto and manual) discard history, and a
+// stale cache would answer "already visible" for an image that is gone (permanent non-delivery AND a false claim).
 describe('shown-image cache resets on history-discarding events', () => {
   function tmpImage(dir: string, name: string): string {
     const p = path.join(dir, name);
@@ -2714,7 +2591,7 @@ describe('shown-image cache resets on history-discarding events', () => {
     for (const d of tmpDirs.splice(0)) fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
   });
 
-  it('Fix 1: /clear resets the dedupe cache — a re-Read of the same unchanged file after /clear delivers again, not "already visible"', async () => {
+  it('/clear resets the dedupe cache — a re-Read of the same unchanged file after /clear delivers again, not "already visible"', async () => {
     const dir = mkTmpDir();
     const imgPath = tmpImage(dir, 'x.png');
     const read = fakeTool('Read', { onExecute: () => ({ text: 'Read image', images: [imgPath] }) });
@@ -2743,7 +2620,7 @@ describe('shown-image cache resets on history-discarding events', () => {
     expect(output.value[1]).toEqual({ type: 'file', mediaType: 'image/png', filename: 'x.png', data: { type: 'data', data: expect.any(Buffer) } });
   });
 
-  it('Fix 2: automatic compaction (maybeCompact) resets the dedupe cache along with the summarized span', async () => {
+  it('automatic compaction (maybeCompact) resets the dedupe cache along with the summarized span', async () => {
     const events: any[] = [];
     const session = makeSession({
       // WHY: a complete summary and its output allowance cannot fit the old
@@ -2761,7 +2638,7 @@ describe('shown-image cache resets on history-discarding events', () => {
     expect((session as any).shownImages.size).toBe(0);
   });
 
-  it('Fix 2: manual compaction (compactNow) resets the dedupe cache along with the discarded span', async () => {
+  it('manual compaction (compactNow) resets the dedupe cache along with the discarded span', async () => {
     const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY: ok' }]) });
     // At least 2 user-delimited turns so summarizeCutIndex() finds a
     // condensable span (compactNow has no MIN_SUMMARIZE_SPAN thrash guard, so
@@ -2861,41 +2738,18 @@ describe('HarnessSession — postSteer', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Task 14 — ModelSearch attaches/detaches under the IDENTICAL gate as Task
-// (syncTaskTool in harness-session.ts runs both add-or-withhold decisions
-// together): profile.canDelegate AND !isSpecialistChild. It never attaches
-// alone — a session that cannot delegate has nothing for it to name a model
-// FOR. Mirrors skill-tool-gating.test.ts's Task ON/OFF pattern.
-// ---------------------------------------------------------------------------
+// ModelSearch attaches under the IDENTICAL gate as Task (profile.canDelegate AND !isSpecialistChild) and never alone.
 describe('ModelSearch attachment mirrors Task\'s gate', () => {
   const toolNames = (s: HarnessSession) => Object.keys((s as any).buildAiTools());
 
-  it('canDelegate: true attaches BOTH Task and ModelSearch', () => {
-    const s = new HarnessSession(
-      makeOpts({ profile: { ...CLOUD_DEFAULT, canDelegate: true } }),
-      async () => ({} as any),
-    );
-    expect(toolNames(s)).toContain('Task');
-    expect(toolNames(s)).toContain('ModelSearch');
-  });
-
-  it('canDelegate: false withholds BOTH', () => {
-    const s = new HarnessSession(
-      makeOpts({ profile: { ...CLOUD_DEFAULT, canDelegate: false } }),
-      async () => ({} as any),
-    );
-    expect(toolNames(s)).not.toContain('Task');
-    expect(toolNames(s)).not.toContain('ModelSearch');
-  });
-
-  it('canDelegate: true but isSpecialistChild: true STILL withholds both (depth-1 guard)', () => {
-    const s = new HarnessSession(
-      makeOpts({ profile: { ...CLOUD_DEFAULT, canDelegate: true }, isSpecialistChild: true }),
-      async () => ({} as any),
-    );
-    expect(toolNames(s)).not.toContain('Task');
-    expect(toolNames(s)).not.toContain('ModelSearch');
+  it.each([
+    ['canDelegate attaches BOTH Task and ModelSearch', { canDelegate: true }, false, true],
+    ['canDelegate false withholds BOTH', { canDelegate: false }, false, false],
+    ['a specialist child withholds both even with canDelegate (depth-1 guard)', { canDelegate: true }, true, false],
+  ])('%s', (_name, profile, isSpecialistChild, attached) => {
+    const s = new HarnessSession(makeOpts({ profile: { ...CLOUD_DEFAULT, ...profile }, isSpecialistChild }), async () => ({} as any));
+    expect(toolNames(s).includes('Task')).toBe(attached);
+    expect(toolNames(s).includes('ModelSearch')).toBe(attached);
   });
 
   it('a model swap records one model-switch line; re-applying the same model records none', () => {
@@ -2921,13 +2775,10 @@ describe('ModelSearch attachment mirrors Task\'s gate', () => {
   });
 });
 
-// Empty-step recovery (spec: docs/archive/specs/2026-08-21-empty-final-step-
-// turn-recovery-design.md, §6). A step with no text and no tool calls that
-// claims an orderly finish gets ONE silent re-run; a second consecutive empty
-// step ends the turn honestly as 'empty_response'. History must never gain an
-// empty assistant message, and usage must bill every attempt.
+// Empty-step recovery (docs/archive/specs/2026-08-21-empty-final-step-turn-recovery-design.md): an orderly-finish step with no text and no
+// tool calls gets ONE silent re-run; a second ends the turn as 'empty_response'. History never gains an empty assistant message; usage bills every attempt.
 describe('HarnessSession — empty final step recovery', () => {
-  it('case 1: empty final step after a tool result → ONE silent re-run → real content → end_turn', async () => {
+  it('empty final step after a tool result → ONE silent re-run → real content → end_turn', async () => {
     const read = fakeTool('Read');
     const seen: any[] = [];
     const model = scriptedModel([
@@ -2973,7 +2824,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(session.acceptedHistory().eventUuids).toContain(events.find(e => e.type === 'user-message' && e.data.text === 'please correct that')!.uuid);
   });
 
-  it('case 2: empty twice consecutively → empty_response; usage sums BOTH attempts; no empty history', async () => {
+  it('empty twice consecutively → empty_response; usage sums BOTH attempts; no empty history', async () => {
     const seen: any[] = [];
     const model = scriptedModel([
       stream(finishChunk('stop', 10, 2)),
@@ -2991,7 +2842,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(((session as any).history as any[]).map((m) => m.role)).toEqual(['user']);
   });
 
-  it('case 3: counter resets on a non-empty step — a later empty step gets its own retry', async () => {
+  it('counter resets on a non-empty step — a later empty step gets its own retry', async () => {
     const read = fakeTool('Read');
     const seen: any[] = [];
     const model = scriptedModel([
@@ -3009,7 +2860,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect((read as any).calls).toHaveLength(1);
   });
 
-  it('case 4: first-step empty (no tools all turn) → same ladder', async () => {
+  it('first-step empty (no tools all turn) → same ladder', async () => {
     const seen: any[] = [];
     const model = scriptedModel([
       stream(finishChunk('stop')),
@@ -3025,7 +2876,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(events.filter((e) => e.type === 'assistant-text').map((e) => e.data.text)).toEqual(['hello']);
   });
 
-  it('case 5: reasoning-only step is classified empty and retried; history untouched', async () => {
+  it('reasoning-only step is classified empty and retried; history untouched', async () => {
     // StepResult has NO reasoning field (spec §3) — a step that thinks and then
     // stops is loop-indistinguishable from total silence, and BY DESIGN gets the
     // same retry: nothing was pushed to history, so the re-run is history-safe.
@@ -3060,7 +2911,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(events.find((e) => e.type === 'turn-complete')!.data.stopReason).toBe('end_turn');
   });
 
-  it('case 6: empty step with finishReason length → NO retry, ends max_tokens', async () => {
+  it('empty step with finishReason length → NO retry, ends max_tokens', async () => {
     // The finishReason gate: 'length' means truncation — a retry would hit the
     // same output limit, so today's mapStopReason path must be kept EXACTLY.
     // NOTE: this test passes BEFORE the production change too — it is the
@@ -3075,7 +2926,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(events.find((e) => e.type === 'turn-complete')!.data.stopReason).toBe('max_tokens');
   });
 
-  it('case 7: interrupt during the retry attempt → user-interrupt wins, no turn-complete', async () => {
+  it('interrupt during the retry attempt → user-interrupt wins, no turn-complete', async () => {
     // Same direct-mock pattern as the postSteer tests above (including the
     // `let session!:` definite-assignment declaration): a per-call side effect
     // fires the interrupt while the RETRY attempt (call 2) is running.
@@ -3097,12 +2948,8 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(types(events)).not.toContain('turn-complete');       // never 'empty_response'
   });
 
-  // Spec case 8 — a specialist child gets the SAME bounded retry. The child
-  // never-park rule (harness-stall-watchdog.test.ts) is about the watchdog
-  // leaving send() unsettled; a synchronous capped re-run settles normally.
-  // `await child.send()` completing IS the settle assertion — a regression to an
-  // unbounded loop trips this file's test timeout instead of hanging a parent.
-  it('case 8a: specialist child — empty then content settles send() with end_turn', async () => {
+  // A specialist child gets the same bounded retry; `await child.send()` completing is the settle assertion (an unbounded loop trips the test timeout).
+  it('specialist child — empty then content settles send() with end_turn', async () => {
     const seen: any[] = [];
     const model = scriptedModel([
       stream(finishChunk('stop')),
@@ -3117,7 +2964,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(events.filter((e) => e.type === 'assistant-text').map((e) => e.data.text)).toEqual(['report']);
   });
 
-  it('case 8b: specialist child — empty twice settles send() with empty_response', async () => {
+  it('specialist child — empty twice settles send() with empty_response', async () => {
     // scriptedModel REPLAYS its last script when calls outrun it, so this one
     // empty script feeds every attempt — the assertion that only TWO calls
     // happened is what pins the bound (an unbounded retry would spin here).
@@ -3132,11 +2979,8 @@ describe('HarnessSession — empty final step recovery', () => {
   });
 
   it('whitespace-only step: classified empty AND kept out of history', async () => {
-    // The history push and the retry gate MUST share one emptiness predicate.
-    // If the push used truthiness ('\n\n' is truthy) while the retry used
-    // trim(), the whitespace step would be pushed to history AND retried — the
-    // re-run's request would end in a dangling whitespace assistant message,
-    // which Anthropic-shaped endpoints reject with a 400.
+    // The history push and the retry gate must share one emptiness predicate: if the push used truthiness ('\n\n') while retry used trim(), the
+    // whitespace step would be pushed AND retried, ending the re-run's request in a whitespace assistant message that Anthropic-shaped endpoints reject (400).
     const seen: any[] = [];
     const model = scriptedModel([
       stream(...textChunks('a', '\n  \n'), finishChunk('stop')),   // whitespace-only step
@@ -3155,16 +2999,8 @@ describe('HarnessSession — empty final step recovery', () => {
   });
 
   it("finishReason 'tool-calls' with ZERO parsed calls: orderly → retried, preparing card withdrawn", async () => {
-    // A stream that announces tool use but whose every call was dropped as
-    // malformed/truncated leaves toolCalls empty with finishReason
-    // 'tool-calls' — the likeliest empty-step shape on small local models.
-    // Excluding it from ORDERLY_EMPTY_FINISHES ended the turn with the raw
-    // passthrough stopReason 'tool-calls' (meaningless to the user) instead of
-    // the retry ladder. And because this shape almost always put a "Preparing…"
-    // card on screen (tool-input-start with no completed tool-call), the retry
-    // must WITHDRAW that card before re-running — the step re-runs inside the
-    // same turn, so endTurn's reaping never fires and the orphan would spin
-    // beside the retry's own cards (same rule as the manual/stall retry paths).
+    // A stream announcing tool use whose every call was dropped as malformed leaves toolCalls empty with finishReason 'tool-calls' (likely on small
+    // local models). It must enter the retry ladder, and the retry must WITHDRAW the orphan "Preparing..." card since endTurn's reaping never fires mid-turn.
     const seen: any[] = [];
     const model = scriptedModel([
       stream(...toolInputChunks('c1', 'Read', '{"file_pa'), finishChunk('tool-calls')),
@@ -3181,13 +3017,8 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(cleared.map((e) => looseData(e).toolPreparing!.toolCallId)).toEqual(['c1']);
   });
 
-  it('ROADMAP L241: an orphan preparing card is withdrawn on a step that ALSO ran a real tool', async () => {
-    // The mixed step: one call the model completed (c1, executes normally) and
-    // one it announced and then dropped (c2, tool-input-start with no
-    // completed tool-call). Before this fix the withdrawal only ran on the
-    // empty-step RETRY path, and endTurn's reaping only fires at turn end — so
-    // c2's "Preparing…" card spun beside c1's real card for the rest of the
-    // turn.
+  it('an orphan preparing card is withdrawn on a step that ALSO ran a real tool', async () => {
+    // Mixed step: c1 completed and executes; c2 was announced then dropped. c2's "Preparing..." card must be withdrawn, not spin beside c1's real card until turn end.
     const read = fakeTool('Read', { schema: z.object({ file_path: z.string() }).strict(), onExecute: () => ({ text: 'contents' }) });
     const model = scriptedModel([
       stream(
@@ -3216,7 +3047,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(events.filter((e) => e.type === 'tool-result')).toHaveLength(1);
   });
 
-  it('G-1: BashOutput is exempt from the doom-loop window — nine identical polls raise no ask, the 9th hits the per-turn cap', async () => {
+  it('BashOutput is exempt from the doom-loop window — nine identical polls raise no ask, the 9th hits the per-turn cap', async () => {
     const poll = fakeTool('BashOutput', { schema: z.object({ shell_id: z.string().optional() }).strict(), onExecute: () => ({ text: 'sh-1 · running · 1s\nline' }) });
     const calls = Array.from({ length: 9 }, (_, i) => stream(toolCallChunk(`c${i}`, 'BashOutput', { shell_id: 'sh-1' }), finishChunk('tool-calls')));
     const model = scriptedModel([...calls, stream(...textChunks('b', 'done'), finishChunk('stop'))]);
@@ -3232,7 +3063,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(results[8].data!.toolResult).toBe('You have read background output 8 times this turn. Do NOT use this tool again without instruction from the user. Do NOT attempt to continuously poll for outputs — the finished notice arrives automatically.');
   });
 
-  it('G-1: the BashOutput cap resets on the next turn', async () => {
+  it('the BashOutput cap resets on the next turn', async () => {
     const poll = fakeTool('BashOutput', { schema: z.object({ shell_id: z.string().optional() }).strict(), onExecute: () => ({ text: 'x' }) });
     const nine = Array.from({ length: 9 }, (_, i) => stream(toolCallChunk(`c${i}`, 'BashOutput', {}), finishChunk('tool-calls')));
     const model = scriptedModel([
@@ -3247,7 +3078,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(results[9].data!.isError).toBe(false);
   });
 
-  it('G-1: opts.shells reaches the tool as ctx.shells (absent when not wired)', async () => {
+  it('opts.shells reaches the tool as ctx.shells (absent when not wired)', async () => {
     let seen: unknown = 'unset';
     const probe = fakeTool('Read', { onExecute: (_a, c) => { seen = c.shells; return { text: 'ok' }; } });
     const model = scriptedModel([
@@ -3273,14 +3104,8 @@ describe('HarnessSession — empty final step recovery', () => {
   });
 });
 
-// The session id must reach the model factory as `cacheKey` on EVERY path that
-// builds a model. It becomes the ChatGPT endpoint's prompt_cache_key: the
-// endpoint remembers the shared opening of a conversation under that key and
-// bills the remembered part at a discount. Drop the key and nothing breaks
-// loudly — every step of every ChatGPT session re-pays for the whole
-// conversation so far against the user's plan allowance, and each turn is
-// slower. Nothing else in the suite passes through these two lines, so before
-// this test they could both be deleted with the suite still green.
+// The session id must reach the model factory as `cacheKey` on EVERY model-building path: it is the ChatGPT prompt_cache_key, and losing it silently
+// re-bills the whole conversation each step. Nothing else in the suite exercised these two lines.
 describe('HarnessSession — the model factory always gets the session id as cacheKey', () => {
   function recordingFactory(sink: Array<{ cacheKey?: string }>, model: any) {
     return async (_binding: any, o?: { cacheKey?: string }) => { sink.push({ ...o }); return model as any; };
