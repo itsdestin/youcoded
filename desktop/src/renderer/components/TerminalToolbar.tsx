@@ -39,12 +39,17 @@ export function consumeCtrlLetter(sessionId: string, prev: string, next: string)
   return true;
 }
 
-/** TEMPORARY, for the review deck's three looks (2026-11-05): the workbench's ?termKeys= switch. Removed with the two
- *  looks Destin does not pick. */
-type Look = 'raised' | 'outlined' | 'strip';
+/** TEMPORARY, for the review deck's looks (2026-11-05): the workbench's ?termKeys= switch. Removed with the looks
+ *  Destin does not pick. Round 2 (his answer: "something between a and c?", raised keys vs one strip): soft = separate
+ *  keys, each a soft tinted tile with no border; tray = the strip's one track, with raised keys sitting inside it. */
+type Look = 'raised' | 'soft' | 'tray' | 'strip';
 function look(): Look {
-  try { const v = new URLSearchParams(location.search).get('termKeys'); return v === 'outlined' || v === 'strip' ? v : 'raised'; } catch { return 'raised'; }
+  try { const v = new URLSearchParams(location.search).get('termKeys'); return v === 'raised' || v === 'tray' || v === 'strip' ? v : 'soft'; } catch { return 'soft'; }
 }
+/** The look's track around the keys (strip and tray only), and each key's button variant and extra classes. */
+const hasTrack = (l: Look) => l === 'strip' || l === 'tray';
+const keyVariant = (l: Look) => (l === 'raised' || l === 'tray' ? 'raised' : 'ghost');
+const keyTint = (l: Look) => (l === 'soft' ? ' bg-inset text-fg-2' : l === 'strip' ? ' text-fg-2' : '');
 
 /**
  * Touch-only row of special keys (Ctrl, Esc, Tab, Enter, Space) for terminal view, in the slot the quick chips use in
@@ -68,7 +73,7 @@ export default function TerminalToolbar({ sessionId }: TerminalToolbarProps) {
 
   return (
     <div className="scroll-mask scroll-mask--chips flex px-3 py-1 overflow-x-auto scrollbar-none">
-      <div className={`flex flex-1 gap-1 items-center${l === 'strip' ? ' bg-inset rounded-control p-1' : ''}`}>
+      <div className={`flex flex-1 gap-1 items-center${hasTrack(l) ? ' bg-inset rounded-control p-1' : ''}`}>
         <Key look={l} label="Ctrl" pressed={ctrl} onClick={() => setCtrlHeld(sessionId, !ctrl)} />
         <Key look={l} label="Esc" onClick={() => send('\x1b')} />
         <Key look={l} label="Tab" onClick={() => send('\t')} />
@@ -86,14 +91,14 @@ export default function TerminalToolbar({ sessionId }: TerminalToolbarProps) {
 function Key({ look: l, label, pressed, onClick }: { look: Look; label: string; pressed?: boolean; onClick: () => void }) {
   return (
     <Button
-      variant={pressed ? 'primary' : l === 'outlined' ? 'secondary' : l === 'strip' ? 'ghost' : 'raised'}
+      variant={pressed ? 'primary' : keyVariant(l)}
       size="sm"
       onClick={onClick}
       aria-pressed={pressed}
       // One height for the whole row (design rule "controls on one line share one height"); h-8 rather than sm's own
       // ~22px because these are typed on, not read — the 44px touch area still comes from the primitive. flex-1: the
       // keys share the row's width; min-w-12 makes the row scroll rather than squeeze when they no longer fit.
-      className={`flex-1 min-w-12 h-8 px-2 select-none${l === 'strip' && !pressed ? ' text-fg-2' : ''}`}
+      className={`flex-1 min-w-12 h-8 px-2 select-none${pressed ? '' : keyTint(l)}`}
     >
       {label}
     </Button>
@@ -117,7 +122,7 @@ export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
   const probe = useRef<HTMLDivElement>(null);
   const right = useMessageBoxRightFor(probe);
   const l = look();
-  const variant = l === 'outlined' ? 'secondary' : l === 'strip' ? 'ghost' : 'raised';
+  const variant = keyVariant(l);
 
   return (
     // WHY above --terminal-bottom-inset: on a touch screen the input bar floats OVER the terminal (globals.css,
@@ -125,15 +130,15 @@ export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
     <div
       ref={probe}
       data-term-lift=""
-      className={`absolute z-10 pointer-events-auto flex flex-col gap-1.5 select-none${l === 'strip' ? ' bg-inset rounded-control p-1' : ''}`}
+      className={`absolute z-10 pointer-events-auto flex flex-col gap-1.5 select-none${hasTrack(l) ? ' bg-inset rounded-control p-1' : ''}`}
       style={{ right: right ?? 8, bottom: 'calc(var(--terminal-bottom-inset, 0px) + 0.5rem)' }}
     >
       {/* Change 41 kept: a 40×40 target each — a primary touch control floating over the terminal. Two keys with a
           gap, never a line between them (Destin, 2026-11-05: "the line between the arrows is grodi"). */}
-      <Button variant={variant} size="icon" aria-label="Scroll up" onClick={() => send('\x1b[A')} className="w-10 h-10 text-fg-2">
+      <Button variant={variant} size="icon" aria-label="Scroll up" onClick={() => send('\x1b[A')} className={`w-10 h-10 text-fg-2${keyTint(l)}`}>
         <ForwardIcon className="w-5 h-5 -rotate-90" />
       </Button>
-      <Button variant={variant} size="icon" aria-label="Scroll down" onClick={() => send('\x1b[B')} className="w-10 h-10 text-fg-2">
+      <Button variant={variant} size="icon" aria-label="Scroll down" onClick={() => send('\x1b[B')} className={`w-10 h-10 text-fg-2${keyTint(l)}`}>
         <ForwardIcon className="w-5 h-5 rotate-90" />
       </Button>
     </div>
