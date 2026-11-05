@@ -49,6 +49,8 @@ const SHOOT_DETAIL_IDS: Record<string, string> = {
   caution: 'browser-use',
   connection: 'mcp-registry/io.github.modelcontextprotocol/filesystem',
   install: 'browser-use',
+  // Plugin off-switch: an installed plugin YouCoded turned off (an installed-list entry only).
+  'turned-off': 'tab-tidy',
 };
 
 interface Props {

@@ -1036,6 +1036,10 @@ export interface SkillEntry {
   // in order to read the frontmatter. Absent for registry-only entries the user
   // has not installed.
   skillDir?: string;
+
+  // Plugin off-switch: on an installed plugin the server listed as unsafe (already turned off).
+  // WHY an object: room for a plain-words reason; the UI shows one fixed sentence today.
+  blocked?: { reason?: string };
 }
 
 export interface SkillDetailView extends SkillEntry {
@@ -1110,6 +1114,8 @@ export interface PackageInfo {
   // alongside the version compare. Absent on every pre-Task-17 install, which is
   // why the compare must treat "no commit recorded" as "nothing to say".
   commit?: string;
+  // Plugin off-switch: turned off as unsafe; folder held aside and settings kept (plugin-blocklist.ts).
+  turnedOff?: boolean;
   // Decomposition v3 §9.8: cross-device sync can surface a package that's
   // present in config but not yet on disk (e.g., Android pulled a desktop
   // config but hasn't installed the package yet). "pending" UIs can show an

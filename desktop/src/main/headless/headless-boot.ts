@@ -27,6 +27,7 @@ import { trackOutsideComments, judgeCommentAsk } from '../cc-outside-comments';
 import { getPermissionOverrides } from '../app-signals';
 import { IPC } from '../../shared/types';
 import { log, rotateLog } from '../logger';
+import { startPluginOffSwitch } from '../plugin-blocklist';
 import { FirstRunManager, markSetupCompleted, setupIsUsable } from '../first-run';
 import { bindFirstRunManager } from '../ipc/first-run';
 import { ChatGptAuth } from '../providers/chatgpt-auth';
@@ -98,6 +99,8 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   const remoteConfig = new RemoteConfig();
   const skillProvider = new LocalSkillProvider();
   skillProvider.ensureMigrated();
+  // Plugin off-switch: same launch-and-hourly check as main.ts (security runbook §5).
+  startPluginOffSwitch(skillProvider, () => sessionManager.broadcastReloadPlugins());
   void (async () => {
     await skillProvider.repairPackageVersions();
     void skillProvider.ensureBundledPluginsInstalled();

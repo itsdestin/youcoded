@@ -36,4 +36,7 @@ export const APP: readonly ScreenEntry[] = [
   ...(['lost', 'password'] as const).map((t) => ({
     name: `dev/toast#${t}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: t }, newIn: 'after' as const,
   })),
+  // Plugin off-switch heads-up: the app's own toast with its "Show" button, at desktop and phone width.
+  { name: 'dev/toast#turned-off', tags: ['dev'], session: 'wb-1', params: { toast: 'turned-off' }, newIn: 'after' as const },
+  { name: 'dev/toast#turned-off-phone', tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: 'turned-off' }, newIn: 'after' as const },
 ];

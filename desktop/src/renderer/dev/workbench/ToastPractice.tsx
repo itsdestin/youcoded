@@ -6,13 +6,15 @@ import { useEffect, useState } from 'react';
 import { announce } from '../../utils/announce';
 import { LOST_SEND_NOTICE } from '../../state/submit-outgoing';
 import { savedPasswordRefusedNotice } from '../../remote-gate';
+import { announcePluginTurnedOff } from '../../utils/plugin-off-notice';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 export default function ToastPractice() {
   const [shown, setShown] = useState(false);
   useScreenOpen('dev/toast', () => {
     const which = new URLSearchParams(location.search).get('toast');
-    announce(which === 'password' ? savedPasswordRefusedNotice('Home PC') : LOST_SEND_NOTICE, 60_000);
+    if (which === 'turned-off') announcePluginTurnedOff(60_000);
+    else announce(which === 'password' ? savedPasswordRefusedNotice('Home PC') : LOST_SEND_NOTICE, 60_000);
     setShown(true);
   });
   // Escape closes the marker like any layer (shoot --check presses it).
