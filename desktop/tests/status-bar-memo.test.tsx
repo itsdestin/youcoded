@@ -22,9 +22,12 @@ vi.mock('../src/renderer/state/theme-context', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/renderer/state/theme-context')>();
   return { ...real, useTheme: () => { renders.status++; return real.useTheme(); } };
 });
-vi.mock('../src/renderer/hooks/use-narrow-viewport', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../src/renderer/hooks/use-narrow-viewport')>();
-  return { ...real, useNarrowViewport: () => { renders.header++; return real.useNarrowViewport(); } };
+// The header's counter is a hook ONLY the header calls. It used to be
+// useNarrowViewport, until the status bar started reading the viewport too
+// (phone pill row, 2026-11-05) and every status-bar render counted as a header one.
+vi.mock('../src/renderer/hooks/use-wallpaper-header-ink', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/renderer/hooks/use-wallpaper-header-ink')>();
+  return { ...real, useWallpaperHeaderInk: (...a: Parameters<typeof real.useWallpaperHeaderInk>) => { renders.header++; return real.useWallpaperHeaderInk(...a); } };
 });
 
 import { makeStoreWrapper } from './helpers/chat-store-harness';

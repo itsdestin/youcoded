@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 
 const BRAILLE_CHARS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 function getThemeColors(): string[] {
@@ -33,6 +33,11 @@ interface Props {
 
 export default function BrailleBurst({ children, onTrigger, disabled, className, title }: Props) {
   const [particles, setParticles] = useState<Particle[]>([]);
+  // WHY: the clean-up timer outlived the button when it unmounted mid-burst
+  // (a tapped menu row closing its menu), and its setState then ran against a
+  // torn-down tree. One timer at a time, cancelled on unmount.
+  const cleanupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (cleanupTimer.current) clearTimeout(cleanupTimer.current); }, []);
 
   const burst = useCallback(() => {
     if (disabled) return;
@@ -51,7 +56,8 @@ export default function BrailleBurst({ children, onTrigger, disabled, className,
     setParticles(batch);
     onTrigger();
     // Clean up after animation completes
-    setTimeout(() => setParticles([]), 500);
+    if (cleanupTimer.current) clearTimeout(cleanupTimer.current);
+    cleanupTimer.current = setTimeout(() => { cleanupTimer.current = null; setParticles([]); }, 500);
   }, [disabled, onTrigger]);
 
   return (

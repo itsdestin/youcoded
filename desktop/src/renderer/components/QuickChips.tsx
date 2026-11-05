@@ -1,12 +1,17 @@
 import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { isAndroid } from '../platform';
+import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { workbenchNarrowChips } from '../workbench-mode';
 import { useSkills } from '../state/skill-context';
 import type { ChipConfig } from '../../shared/types';
 import { Button, CARD_LEVEL_1, Dialog, FieldError, InputGroup, SectionLabel, SettingRow, TextInput, Textarea, Toggle, Tooltip } from './ui';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useScreenOpen } from '../shoot-mode';
+import { ContextMenu } from './context-menu/ContextMenu';
+import type { MenuEntry } from './context-menu/build-menu';
+import BrailleBurst from './BrailleBurst';
 import { EditPencilButton, PencilIcon } from './EditPencilButton';
 
 export interface QuickChip {
@@ -81,6 +86,84 @@ export default function QuickChips({ onChipTap }: Props) {
         onClose={() => setEditorOpen(false)}
       />
     </div>
+  );
+}
+
+/** Line-art "shortcuts" glyph: three chips stacked, the row it stands in for. Same
+ *  stroke and round caps as AttachIcon / CompassIcon so the message box's buttons read
+ *  as one family. Not a bolt: the bolt is Fast mode's mark in the status bar. */
+function ShortcutsIcon({ className = 'w-5 h-5' }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+      <rect x="4" y="4.5" width="11" height="4" rx="2" strokeWidth="1.8" />
+      <rect x="4" y="10" width="16" height="4" rx="2" strokeWidth="1.8" />
+      <rect x="4" y="15.5" width="8" height="4" rx="2" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+/**
+ * The shortcut chips behind ONE button in the message box, for phones and narrow windows
+ * (narrow-screens round, 2026-11-05 — Destin on the questions deck, Q-7: "behind a button
+ * could be good ... it can be similar to mic/paperclip in the input bar"). A workbench
+ * proposal for now: InputBar shows it only under `?narrowChips=button` at narrow width.
+ *
+ * WHY it lives in this file: it must show exactly the chips the row shows (the same
+ * store, the same "set aside" filter) and open the same editor, so nothing the row can
+ * reach is lost. Choosing a chip does what tapping it on the row does — `onChipTap`, the
+ * same handler — and the menu closes.
+ */
+export function QuickChipsMenuButton({ onChipTap, disabled }: Props & { disabled?: boolean }) {
+  const { chips, setChips, installed } = useSkills();
+  // Where the menu opens: the button's top-left corner. ContextMenu flips it UP when it
+  // would run off the bottom of the window, so it always ends just above the button.
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const openMenu = useCallback(() => {
+    const r = wrapRef.current?.getBoundingClientRect();
+    if (r) setAt({ x: r.left, y: r.top - 4 });
+  }, []);
+  // photo-only build: `shoot` opens the menu by name.
+  useScreenOpen('chat/shortcuts-menu', openMenu);
+  const closeMenu = useCallback(() => setAt(null), []);
+  const handleEditorClose = useCallback(() => setEditorOpen(false), []);
+  useEscClose(editorOpen, handleEditorClose);
+
+  // WHY ContextMenu and not the in-place `Menu`: a floating-chrome theme clips the
+  // message box to its rounded edge (globals.css, `[data-chrome-style="floating"]
+  // .input-bar-container { overflow: hidden }`), so a menu drawn inside the box was cut
+  // off on Halftone Dimension. ContextMenu is portalled to the page and flips upward on
+  // its own — the same menu the session pills' long-press opens.
+  const entries: MenuEntry[] = [
+    ...chips.filter(c => !c.hidden).map((c, i): MenuEntry => ({
+      type: 'item', id: `chip-${i}`, label: c.label, icon: 'ask',
+      run: () => onChipTap({ label: c.label, prompt: c.prompt }),
+    })),
+    { type: 'sep' },
+    // The row's pencil, as the menu's last choice: the editor is the same popup.
+    { type: 'item', id: 'edit', label: 'Edit shortcuts', icon: 'rename', run: () => setEditorOpen(true) },
+  ];
+
+  return (
+    <span ref={wrapRef} className="shrink-0 flex">
+      <BrailleBurst
+        onTrigger={() => (at ? closeMenu() : openMenu())}
+        disabled={disabled}
+        className="shrink-0 text-fg-dim hover:text-fg disabled:opacity-30 transition-colors"
+        title="Shortcuts"
+      >
+        <ShortcutsIcon className="w-5 h-5" />
+      </BrailleBurst>
+      {at && <ContextMenu x={at.x} y={at.y} entries={entries} onClose={closeMenu} screen="chat/shortcuts-menu" />}
+      <ChipEditorPopup
+        open={editorOpen}
+        chips={chips}
+        setChips={setChips}
+        installed={installed}
+        onClose={() => setEditorOpen(false)}
+      />
+    </span>
   );
 }
 
@@ -404,4 +487,13 @@ function useChipDrag(chips: ChipConfig[], setChips: (c: ChipConfig[]) => Promise
     setChips(rest);
   };
   return { down, move, up, dragIdx, ghost, overShelf, suppressClick };
+}
+
+/** Phone layout round (Q-7, 2026-11-05): `?narrowChips=button` on a phone puts
+ *  the chips behind a button in the message box instead of the row above it.
+ *  Workbench only; `today` (the row) everywhere else. The switch is a URL
+ *  param, so it cannot change while mounted. */
+export function useChipsBehindButton(): boolean {
+  const narrow = useNarrowViewport();
+  return narrow && workbenchNarrowChips() === 'button';
 }

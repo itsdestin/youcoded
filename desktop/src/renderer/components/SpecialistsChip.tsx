@@ -26,7 +26,10 @@ import { liveReport } from '../state/native-run-facts';
  * stop / show in chat). Finished cards swap the progress strip for a report
  * preview. Grouped Needs you → Working → Finished.
  */
-export default function SpecialistsChip({ sessionId }: { sessionId: string | null | undefined }) {
+// `compact` (narrow-screens round, 2026-11-05 — practice-only `?narrowPills=compact`):
+// the phone status row shows the state icon and the count only ("2"), so the row
+// fits on one line. The tooltip/aria-label still says the whole thing.
+export default function SpecialistsChip({ sessionId, compact = false }: { sessionId: string | null | undefined; compact?: boolean }) {
   const summary = useSpecialistSummary(sessionId ?? undefined);
   const [open, setOpen] = useState(false);
   useScreenOpen('chat/specialists', () => setOpen(true)); // photo-only build: `shoot` opens it by name
@@ -78,7 +81,7 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
           : failed > 0 ? <FailIcon className="w-3 h-3" />
           : stopped > 0 && finished === 0 ? <StoppedIcon className="w-3 h-3" />
           : <CheckIcon className="w-3 h-3" />}
-        <span>{label}</span>
+        <span>{compact && needsYou === 0 && working > 0 ? working : label}</span>
       </button>
       </Tooltip>
       {open && (

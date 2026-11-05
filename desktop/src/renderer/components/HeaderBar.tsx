@@ -8,7 +8,8 @@ import type { SessionProvider } from '../../shared/types';
 import { getCapabilities, isAndroid, isRemoteMode } from '../platform';
 // Artifact drawer trigger — reads session artifact count for the badge.
 import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
-import OverflowMenu from './OverflowMenu';
+import OverflowMenu, { DrawerMenuButton, OverflowRowList } from './OverflowMenu';
+import { workbenchNarrowTop, workbenchNarrowPills } from '../workbench-mode';
 import NarrowViewToggle from './NarrowViewToggle';
 import WideViewToggle from './WideViewToggle';
 import { useArtifactCount } from '../hooks/useArtifactCount';
@@ -400,6 +401,24 @@ export default React.memo(function HeaderBar({
   // these three are app-level destinations, so the decision should follow the
   // device, not how much room the session strip happens to have left.
   const narrow = useNarrowViewport();
+  // PHONE LAYOUT ROUND (2026-11-05, youcoded-dev docs/active/design/
+  // 2026-11-04-narrow-screens/): the three proposed phone top bars, switched in
+  // the workbench only (`today` everywhere else, so the app is unchanged).
+  //   name   — today's buttons; the strip shows the full name + a count
+  //   drawer — ☰ opens a side drawer holding sessions AND the menu's places
+  //   pair   — ☰ and Projects on the left, New session and the view switch
+  //            on the right, the name between them
+  const narrowTop = narrow ? workbenchNarrowTop() : 'today';
+  // Q-3: the REMOTE label moves into the pill row under the message box
+  // (StatusBar draws it there when the compact pills are on).
+  const remoteInPills = narrow && workbenchNarrowPills() === 'compact';
+  const stripApi = useRef<{ openList: () => void; openNewSession: () => void } | null>(null);
+  const overflowProps = {
+    activeSessionId,
+    projectRoot: sessions.find((s) => s.id === activeSessionId)?.cwd,
+    onToggleSettings, settingsBadge, settingsDangerBadge,
+    onToggleGamePanel, gamePanelOpen, gameConnected, challengePending,
+  };
 
   // Native harness sessions have no PTY — the chat/terminal toggle would show
   // an empty terminal pane. Hide it for them. A shell session is the mirror
@@ -536,7 +555,11 @@ export default React.memo(function HeaderBar({
         className={`header-controls-left ${clusterFlexClass}flex items-center gap-1 sm:gap-2`}
         style={clusterStyle}
       >
-        {narrow ? (
+        {narrowTop === 'drawer' ? (
+          /* Side-drawer top bar: ☰ opens the session drawer, which carries
+             the menu's places under the sessions — one panel, not two. */
+          <DrawerMenuButton {...overflowProps} onOpen={() => stripApi.current?.openList()} />
+        ) : narrow ? (
           /* Narrow: cog + projects + gamepad all live behind the ||| menu.
              Rendered as a single shrink-0 child so the cluster-width
              measurement at :368 still reads an intrinsic width. */
@@ -564,9 +587,9 @@ export default React.memo(function HeaderBar({
             Wide layouts only; narrow reaches Pages via ||| . */}
         {!narrow && <PagesButton />}
         {/* Projects button — wide layouts only; narrow reaches it via ||| . */}
-        {!narrow && <ProjectsButton />}
+        {(!narrow || narrowTop === 'pair') && <ProjectsButton />}
         {!narrow && <PinnedPageButtons />}
-        {isRemoteMode() && (
+        {isRemoteMode() && !remoteInPills && (
           <span className="text-3xs font-medium px-1.5 py-0.5 rounded-sm bg-blue-500/15 text-fg-2 border border-blue-500/40 shrink-0" title="Connected to another computer">
             REMOTE
           </span>
@@ -597,6 +620,8 @@ export default React.memo(function HeaderBar({
         defaultProjectFolder={defaultProjectFolder}
         windowDirectory={windowDirectory}
         myWindowId={myWindowId}
+        menuApiRef={stripApi}
+        drawerFooter={narrowTop === 'drawer' ? <OverflowRowList {...overflowProps} reverse /> : undefined}
       />
       </div>
 
@@ -607,6 +632,23 @@ export default React.memo(function HeaderBar({
         className={`header-controls-right ${clusterFlexClass}flex items-center justify-end gap-1 sm:gap-2`}
         style={clusterStyle}
       >
+        {/* "Two buttons each side" top bar: New session joins the view
+            switch on the right; it opens the same form as the list's own
+            New session button. */}
+        {narrowTop === 'pair' && (
+          <Tooltip text="New session" placement="bottom">
+            <button
+              type="button"
+              onClick={() => stripApi.current?.openNewSession()}
+              aria-label="New session"
+              className={`coarse-hit relative p-2 rounded-sm hover:bg-inset hover:text-fg text-fg-muted transition-colors shrink-0 ${FOCUS_RING}`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeWidth={2} d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+          </Tooltip>
+        )}
         {(narrow || !toggleOnLeft) && showToggle && toggleElement}
         {/* Files-drawer trigger — always visible; only the count badge is
             conditional (the original hide-at-zero plan was dropped — see the
