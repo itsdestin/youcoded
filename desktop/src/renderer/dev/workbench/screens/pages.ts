@@ -36,6 +36,8 @@ export const PAGES: readonly ScreenEntry[] = [
   // holding a conversation about the page (fixtures/bubbles/page-money-cc.jsonl). Hidden, on a computer, is
   // pages/page/page-money itself: every page now shows the round chat button.
   { ...pg('pages/page/page-money#chat-float', 'view', 'money', 'page-chat'), params: { pageChat: 'open', seed: 'bubbles-page-money-cc' } },
+  // Round 5: the same Pages panel docked beside the page, the page list's twin (Destin picks float or this).
+  { ...pg('pages/page/page-money#chat-dock', 'view', 'money', 'page-chat'), params: { pageChat: 'open', pageChatLayout: 'dock', seed: 'bubbles-page-money-cc' } },
   { ...pg('pages/focus/page-money#chat-phone', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'open', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
   { ...pg('pages/focus/page-money#chat-phone-closed', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'closed', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
   // WHY: public-demo screenshots must use the site's fictional data and pinned-page

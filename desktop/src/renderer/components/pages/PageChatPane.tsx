@@ -10,16 +10,14 @@
 import React, { useEffect, useRef } from 'react';
 import ChatView from '../ChatView';
 import InputBar from '../InputBar';
-import SessionStrip from '../SessionStrip';
-import { Tooltip } from '../ui';
-import { ON_INSET_CONTROL } from '../header/control-states';
+import { Button, SectionLabel, Tooltip } from '../ui';
 import { CompactSurfaceContext, type CompactSurface } from '../../state/compact-surface-context';
 import type { PageSummary } from '../../../shared/pages-types';
 
 const COMPACT: CompactSurface = { tools: 'summary' };
-// The header row's height, which the chat clears at its top (page-chat.css reads it): the buddy's bar
-// (34px) plus its 6px inset.
-const HEADER_PX = 40;
+// The header row's height, which the chat clears at its top (page-chat.css reads it): the page list's
+// label row with its 28px buttons.
+const HEADER_PX = 44;
 
 interface PageChatPaneProps {
   page: PageSummary;
@@ -29,12 +27,14 @@ interface PageChatPaneProps {
   cwd?: string;
   /** Hides the pane; the chat keeps its place and carries on (Destin: an X "reads as end chat permanently"). */
   onHide: () => void;
+  /** Docked beside the page it folds away like the page list (a panel glyph); floating it drops down (a chevron). */
+  hideGlyph: 'panel' | 'minimize';
   className?: string;
   /** Size and place, from the host. */
   style?: React.CSSProperties;
 }
 
-export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, className = '', style }: PageChatPaneProps) {
+export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, hideGlyph, className = '', style }: PageChatPaneProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -58,36 +58,26 @@ export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, classN
     <CompactSurfaceContext.Provider value={COMPACT}>
       {/* WHY no position class here: the host's layout gives one (relative beside the page, absolute over it);
           two would fight, and `relative` won — the floating card and the phone sheet landed top-left. */}
-      <div ref={paneRef} className={`page-chat-pane overflow-hidden ${className}`}
+      <div ref={paneRef} className={`page-chat-pane overflow-hidden select-none ${className}`}
         style={{ ...style, '--top-chrome-height': `${HEADER_PX}px` } as React.CSSProperties} data-page-chat>
-        {/* WHY the buddy's header, not one of its own (round 3, Destin: "it still looks like an entirely unique
-            window/element that matches nothing else used in the app"): the app's other small floating chat is the
-            buddy, whose title is the main window's own session pill in a frosted bar (BuddyChat.tsx, buddy.css).
-            The same pill here names the conversation, opens the list of this page's chats, and its + starts a new one,
-            so there is no separate title or New chat button. Minimize is the window's own minimize button. */}
-        <div className="page-chat-header absolute top-0 inset-x-0 z-30 select-none" style={{ height: HEADER_PX }}>
-          <div className="header-bar page-chat-bar">
-            <div className="flex-1 min-w-0 flex justify-center">
-              <SessionStrip
-                sessions={[{ id: sessionId, name: sessionName, cwd: cwd ?? '', permissionMode: 'normal' }]}
-                activeSessionId={sessionId}
-                // DESIGN STAGE: the build lists this page's chats here, and + starts one in the page's project.
-                onSelectSession={() => {}}
-                onCreateSession={() => {}}
-                onCloseSession={() => {}}
-                onOpenResumeBrowser={() => {}}
-                viewer
-              />
-            </div>
-            <div className="caption-buttons flex bg-inset rounded-md p-0.5 shrink-0">
-              <Tooltip text="Hide the chat" placement="bottom">
-                <button className={`px-2 py-1 rounded-[var(--radius-toggle)] flex items-center justify-center ${ON_INSET_CONTROL}`}
-                  aria-label={`Hide the chat about ${page.name}`} onClick={onHide}>
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 10 10" aria-hidden><rect fill="currentColor" y="5" width="10" height="1" /></svg>
-                </button>
-              </Tooltip>
-            </div>
-          </div>
+        {/* WHY the page list's own header, not the buddy's (round 4, Destin: "that's almost worse somehow. we need a
+            conversation/chat window that feels native to these screens"): the label is the page list's group label
+            (SectionLabel, as "Built in"), naming the conversation, and the buttons are the page list's quiet icon
+            buttons (its fold button's size and stroke). Earlier chats and a new one get their own buttons again. */}
+        <div className="page-chat-header absolute top-0 inset-x-0 z-30 select-none flex items-center gap-1 pl-4 pr-2" style={{ height: HEADER_PX }}>
+          <SectionLabel className="flex-1 min-w-0 truncate">{sessionName}</SectionLabel>
+          {/* DESIGN STAGE: the build lists this page's chats here, and + starts one in the page's project. */}
+          <Tooltip text="Earlier chats about this page" placement="bottom">
+            <Button size="icon-sm" variant="ghost" aria-label={`Earlier chats about ${page.name}`} className="w-7 h-7"><HistoryGlyph /></Button>
+          </Tooltip>
+          <Tooltip text="New chat" placement="bottom">
+            <Button size="icon-sm" variant="ghost" aria-label={`New chat about ${page.name}`} className="w-7 h-7"><PlusGlyph /></Button>
+          </Tooltip>
+          <Tooltip text="Hide the chat" placement="bottom">
+            <Button size="icon-sm" variant="ghost" aria-label={`Hide the chat about ${page.name}`} onClick={onHide} className="w-7 h-7">
+              {hideGlyph === 'panel' ? <HidePanelGlyph /> : <HideDownGlyph />}
+            </Button>
+          </Tooltip>
         </div>
         <ChatView sessionId={sessionId} visible sessionActive compact cwd={cwd} />
         <div ref={bottomRef} className="chrome-wrapper chrome-wrapper--bottom bottom-float page-chat-bottom">
@@ -96,4 +86,20 @@ export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, classN
       </div>
     </CompactSurfaceContext.Provider>
   );
+}
+
+// The page list's icon language: 24-unit strokes at 1.8, 16px (PageHost's RailToggleGlyph).
+const GLYPH = { className: 'w-4 h-4', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true };
+function HistoryGlyph() {
+  return <svg {...GLYPH}><path d="M4 12a8 8 0 1 0 2.4-5.7" /><path d="M4 4v3.5h3.5" /><path d="M12 8v4l2.5 2" /></svg>;
+}
+function PlusGlyph() {
+  return <svg {...GLYPH}><path d="M12 5v14M5 12h14" /></svg>;
+}
+/** The page list's fold glyph, mirrored: the panel's right column, the chevron pointing the way it goes. */
+function HidePanelGlyph() {
+  return <svg {...GLYPH}><rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M15 4v16" /><path d="M8 10l2 2-2 2" /></svg>;
+}
+function HideDownGlyph() {
+  return <svg {...GLYPH}><path d="M6 9l6 6 6-6" /></svg>;
 }

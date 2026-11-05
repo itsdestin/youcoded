@@ -151,9 +151,13 @@ export function workbenchScreenFrame(): ScreenFrame {
  *  page's bottom right on every screen (round 3: Destin picked floating on a computer, and asked for it on
  *  a phone), hidden behind a round chat button there. `?pageChat=open` opens it on load; without it, or
  *  outside the workbench, it starts closed (the button alone). */
-export function workbenchPageChat(): { openOnLoad: boolean } {
-  if (!isWorkbenchMode()) return { openOnLoad: false };
-  return { openOnLoad: new URLSearchParams(location.search).get('pageChat') === 'open' };
+export function workbenchPageChat(): { openOnLoad: boolean; layout: 'float' | 'dock' } {
+  if (!isWorkbenchMode()) return { openOnLoad: false, layout: 'float' };
+  const q = new URLSearchParams(location.search);
+  // WHY a layout switch again (round 4, Destin: "we need a conversation/chat window that feels native to these
+  // screens"): the chat is redrawn as a Pages panel, and that panel is shown docked beside the page AND floating
+  // over it, so he can pick with both in front of him. `float` is what the app does until he picks.
+  return { openOnLoad: q.get('pageChat') === 'open', layout: q.get('pageChatLayout') === 'dock' ? 'dock' : 'float' };
 }
 
 /** Chrome-style override for reviewing a chrome layout on ANY theme, without

@@ -155,6 +155,8 @@ type Load =
  *  floating on a computer too). Its text is compact (page-chat.css), so it is narrower than the buddy's
  *  larger chat (440px). */
 const PAGE_CHAT_FLOAT_WIDTH = 340;
+/** Docked beside the page (round 5's other picture): a little wider than the page list's 240px, as a chat needs. */
+const PAGE_CHAT_DOCK_WIDTH = 320;
 
 /** How long a page's further "Open this website?" asks are ignored after a Cancel. */
 const OPEN_QUIET_MS = 30_000;
@@ -305,6 +307,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // The page's assistant (pages-finish step 3 design): closed until its round button opens it; the
   // workbench can open it on load for a picture (workbenchPageChat).
   const [chatOpen, setChatOpen] = useState(() => workbenchPageChat().openOnLoad);
+  const [chatLayout] = useState(() => workbenchPageChat().layout);
   // Only the confirmed first-run state replaces the rail, not loading, errors, or an open page.
   // The first-run card is about the person's OWN pages — Office alone does not count.
   const emptyPages = pageId === null && load.state === 'idle' && loaded && !failed && ownPages.length === 0;
@@ -711,6 +714,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // (no room beside it); on a computer, wherever the layout round puts it.
   const chatAvailable = open && !!chatSessionId && !!summary && summary.home.kind !== 'builtin' && load.state === 'ready' && !awaitingApproval;
   const showChat = chatAvailable && chatOpen;
+  // WHY docked only on a computer: a phone has no room beside the page, so it always floats (round 2).
+  const chatDocked = !narrow && chatLayout === 'dock';
 
   return (
     // z-40, the same layer as Project View (they replace each other, never
@@ -888,9 +893,13 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           )}
           {/* The floating chat (round 3): a compact card over the page's bottom right, and while it is hidden a round
               chat button in the same corner. On a phone it spans the width less a margin, so the page stays visible above. */}
-          {showChat && summary && chatSessionId && (
+          {/* WHY the floating chat is a Pages panel (round 4, Destin: "we need a conversation/chat window that feels
+              native to these screens"): the same screen-pane surface as the page list, so every theme frames it the
+              way it frames that list; layer-surface adds only the lift of something floating over the page. */}
+          {showChat && !chatDocked && summary && chatSessionId && (
             <PageChatPane page={summary} sessionId={chatSessionId} sessionName={chatSessionName} cwd={projectRoot ?? undefined}
-              onHide={() => setChatOpen(false)} className="layer-surface absolute right-3 bottom-3 z-10 rounded-2xl"
+              onHide={() => setChatOpen(false)} hideGlyph="minimize"
+              className={`screen-pane screen-pane--panel page-chat-floating absolute right-3 bottom-3 z-10 rounded-xl bg-canvas${seeThrough ? ' panel-glass' : ''}`}
               style={narrow ? { left: 12, height: '62%' } : { width: PAGE_CHAT_FLOAT_WIDTH, height: 'min(75%, 560px)' }} />
           )}
           {chatAvailable && !chatOpen && summary && (
@@ -903,6 +912,13 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           )}
           </>}
         </div>
+        {/* Docked: a third pane, the page list's twin on the page's other side (same classes, same frame). */}
+        {showChat && chatDocked && summary && chatSessionId && (
+          <PageChatPane page={summary} sessionId={chatSessionId} sessionName={chatSessionName} cwd={projectRoot ?? undefined}
+            onHide={() => setChatOpen(false)} hideGlyph="panel"
+            className={`screen-pane screen-pane--panel shrink-0 relative rounded-xl bg-canvas${seeThrough ? ' panel-glass' : ''}`}
+            style={{ width: PAGE_CHAT_DOCK_WIDTH }} />
+        )}
       </div>
     </div>
     <PageSettingsDialog page={pageSettingsOpen ? summary : null} onClose={() => setPageSettingsOpen(false)} onConnect={() => setPageSettingsOpen(false)}
