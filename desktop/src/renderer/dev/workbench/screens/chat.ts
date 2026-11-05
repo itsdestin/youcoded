@@ -95,6 +95,12 @@ export const CHAT: readonly ScreenEntry[] = [
   ...['skip-permissions', 'full-auto', 'small-model'].map((k) => chat(`chat/first-time-warning/${k}`, 'dialog')),
   chat('chat/files', 'pane'),
   chat('chat/terminal', 'view'),
+  // Terminal view on a phone, in each chrome style: the key row above the box and the floating up/down
+  // arrows (TerminalToolbar.tsx) only show on a touch screen, so these are the pictures of them.
+  ...([['phone', undefined], ['phone-floating', 'floating'], ['phone-float', 'float']] as const).map(([state, chrome]) => ({
+    ...chat(`chat/terminal#${state}`, 'view', 'narrow'),
+    params: { platform: 'android', ...(chrome ? { chrome } : {}) }, viewport: { width: 390, height: 844 },
+  })),
   chat('chat/games', 'pane'),
   // The Browser (2026-10-13): the panel (opened by name) and the ask card in the chat, per
   // scene of the workbench's fake browser (?browser=, dev/workbench/browser-mock.ts).
