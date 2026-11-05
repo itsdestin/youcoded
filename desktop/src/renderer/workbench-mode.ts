@@ -208,18 +208,21 @@ export function workbenchNetworkOffline(): boolean {
  *  - `narrowTop`   top bar: `today` · `name` (current session's full name, a
  *                  count on the arrow) · `drawer` (name only; sessions and the
  *                  menu in a panel from the left) · `pair` (two buttons each
- *                  side of the name)
+ *                  side of the name) · round 3 (Destin's L-1/L-2 notes): `plain`
+ *                  (pair's buttons; the name, its status dot and the arrow are
+ *                  ONE plain button) · `lights` (plain + a row of tiny status
+ *                  lights, one per other session, under the name) · `hub`
+ *                  (plain, and ☰ opens one panel holding open AND past
+ *                  sessions, New session and the menu's places)
  *  - `narrowList`  how the session list opens: `today` · `sheet` (slides up
  *                  from the bottom) · `full` (its own screen). Any value but
  *                  `today` also uses the condensed phone rows.
  *  - `narrowPills` the pills under the message box: `today` · `compact` (one
  *                  row you swipe, short/icon pills, the remote chip)
- *  - `narrowChips` the shortcut row: `today` · `button` (behind a button in
- *                  the message box) */
-export type NarrowTop = 'today' | 'name' | 'drawer' | 'pair';
+ *  (The shortcut-row switch was dropped in round 2: Destin kept today's row.) */
+export type NarrowTop = 'today' | 'name' | 'drawer' | 'pair' | 'plain' | 'lights' | 'hub';
 export type NarrowList = 'today' | 'sheet' | 'full' | 'dropdown';
 export type NarrowPills = 'today' | 'compact';
-export type NarrowChips = 'today' | 'button';
 
 function narrowSwitch<T extends string>(key: string, allowed: readonly T[]): T | 'today' {
   if (!isWorkbenchMode()) return 'today';
@@ -227,7 +230,6 @@ function narrowSwitch<T extends string>(key: string, allowed: readonly T[]): T |
   return (allowed as readonly string[]).includes(raw) ? (raw as T) : 'today';
 }
 
-export const workbenchNarrowTop = (): NarrowTop => narrowSwitch<NarrowTop>('narrowTop', ['name', 'drawer', 'pair'] as NarrowTop[]);
+export const workbenchNarrowTop = (): NarrowTop => narrowSwitch<NarrowTop>('narrowTop', ['name', 'drawer', 'pair', 'plain', 'lights', 'hub'] as NarrowTop[]);
 export const workbenchNarrowList = (): NarrowList => narrowSwitch<NarrowList>('narrowList', ['sheet', 'full', 'dropdown'] as NarrowList[]);
 export const workbenchNarrowPills = (): NarrowPills => narrowSwitch<NarrowPills>('narrowPills', ['compact'] as NarrowPills[]);
-export const workbenchNarrowChips = (): NarrowChips => narrowSwitch<NarrowChips>('narrowChips', ['button'] as NarrowChips[]);

@@ -11,6 +11,7 @@ import { fingerSized } from '../device';   // device.ts: touch screen or narrow 
 import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
 import OverflowMenu, { DrawerMenuButton, OverflowRowList } from './OverflowMenu';
 import { workbenchNarrowTop, workbenchNarrowPills } from '../workbench-mode';
+import { SessionLights } from './header/phone-session-menu';
 import NarrowViewToggle from './NarrowViewToggle';
 import WideViewToggle from './WideViewToggle';
 import { useArtifactCount } from '../hooks/useArtifactCount';
@@ -410,6 +411,9 @@ export default React.memo(function HeaderBar({
   //   pair   — ☰ and Projects on the left, New session and the view switch
   //            on the right, the name between them
   const narrowTop = narrow ? workbenchNarrowTop() : 'today';
+  // Round 3 (Destin's L-1 note): `plain`, `lights` and `hub` keep pair's two
+  // buttons each side; only the name button and what ☰ opens differ.
+  const twoEachSide = narrowTop === 'pair' || narrowTop === 'plain' || narrowTop === 'lights' || narrowTop === 'hub';
   // Q-3: the REMOTE label moves into the pill row under the message box
   // (StatusBar draws it there when the compact pills are on).
   const remoteInPills = narrow && workbenchNarrowPills() === 'compact';
@@ -556,7 +560,7 @@ export default React.memo(function HeaderBar({
         className={`header-controls-left ${clusterFlexClass}flex items-center gap-1 sm:gap-2`}
         style={clusterStyle}
       >
-        {narrowTop === 'drawer' ? (
+        {narrowTop === 'drawer' || narrowTop === 'hub' ? (
           /* Side-drawer top bar: ☰ opens the session drawer, which carries
              the menu's places under the sessions — one panel, not two. */
           <DrawerMenuButton {...overflowProps} onOpen={() => stripApi.current?.openList()} />
@@ -588,7 +592,7 @@ export default React.memo(function HeaderBar({
             Wide layouts only; narrow reaches Pages via ||| . */}
         {!narrow && <PagesButton />}
         {/* Projects button — wide layouts only; narrow reaches it via ||| . */}
-        {(!narrow || narrowTop === 'pair') && <ProjectsButton />}
+        {(!narrow || twoEachSide) && <ProjectsButton />}
         {!narrow && <PinnedPageButtons />}
         {isRemoteMode() && !remoteInPills && (
           <span className="text-3xs font-medium px-1.5 py-0.5 rounded-sm bg-blue-500/15 text-fg-2 border border-blue-500/40 shrink-0" title="Connected to another computer">
@@ -605,7 +609,7 @@ export default React.memo(function HeaderBar({
           flex-1 wrapper gives the strip a pre-allocated budget (~1/3 of the
           header) so packSessions reads an available-space value rather than
           its own current content width (chicken-and-egg fix). */}
-      <div className="flex-1 min-w-0 flex justify-center">
+      <div className={`flex-1 min-w-0 flex justify-center ${narrowTop === 'lights' ? 'flex-col items-center' : ''}`}>
       <SessionStrip
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -622,8 +626,9 @@ export default React.memo(function HeaderBar({
         windowDirectory={windowDirectory}
         myWindowId={myWindowId}
         menuApiRef={stripApi}
-        drawerFooter={narrowTop === 'drawer' ? <OverflowRowList {...overflowProps} reverse /> : undefined}
+        drawerFooter={narrowTop === 'drawer' ? <OverflowRowList {...overflowProps} reverse /> : narrowTop === 'hub' ? <OverflowRowList {...overflowProps} reverse tiles /> : undefined}
       />
+      {narrowTop === 'lights' && <SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} />}
       </div>
 
       {/* Right — view toggles. Symmetric reservation with the left cluster
@@ -636,7 +641,7 @@ export default React.memo(function HeaderBar({
         {/* "Two buttons each side" top bar: New session joins the view
             switch on the right; it opens the same form as the list's own
             New session button. */}
-        {narrowTop === 'pair' && (
+        {twoEachSide && (
           <Tooltip text="New session" placement="bottom">
             <button
               type="button"
