@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, useContext } from 'react';
 import { NARROW_VIEWPORT_QUERY } from '../hooks/use-narrow-viewport';
 import { useChatDispatch } from '../state/chat-context';
-import QuickChips, { QuickChip, QuickChipsMenuButton, useChipsBehindButton } from './QuickChips';
+import QuickChips, { QuickChip } from './QuickChips';
 import { createQueueDraft } from '../state/queue-draft';
 import { readQueueTransferDraft, saveQueueTransferDraft, updateQueueTransferDraft } from '../state/queue-transfer-storage';
 import { pendingQueueSend } from '../state/pending-queue-send';
@@ -1012,8 +1012,6 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     }
   };
 
-  const chipsBehindButton = useChipsBehindButton(); // phone round, workbench-only (QuickChips.tsx)
-
   const handleChip = useCallback(
     (chip: QuickChip) => {
       // All chips fill the input bar for the user to review/edit/send — never auto-send.
@@ -1110,8 +1108,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           the same slot QuickChips occupies in chat view, so both modes share
           the same "pill row above input bar" visual inside one container. */}
       {minimal && <TerminalToolbar sessionId={sessionId} />}
-      {/* Phone round (Q-7): chips behind a button in the box instead of this row. */}
-      {!minimal && !compact && !chipsBehindButton && <QuickChips onChipTap={handleChip} />}
+      {!minimal && !compact && <QuickChips onChipTap={handleChip} />}
 
       {attachments.length > 0 && (
         <div className="scroll-mask-x flex gap-2 px-3 py-2 overflow-x-auto">
@@ -1155,7 +1152,6 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             <AttachIcon className="w-5 h-5" />
           </BrailleBurst>
           {extraTool}
-          {chipsBehindButton && !minimal && !compact && <QuickChipsMenuButton onChipTap={handleChip} disabled={disabled} />}
           {/* WHY `onOpenDrawer`: the skills drawer belongs to the main window. The buddy's compact bar has no drawer to
               open, and drew a compass that did nothing when pressed. */}
           {!minimal && (!compact || onOpenDrawer) && (

@@ -772,7 +772,7 @@ function ComputerIcon() {
 function CompactRow({ on, children }: { on: boolean; children: ReactNode }) {
   if (!on) return <>{children}</>;
   return (
-    <div className="scroll-mask-x flex-1 min-w-0 flex flex-nowrap items-center gap-x-1.5 overflow-x-auto overflow-y-hidden scrollbar-none [&>*]:shrink-0 [&_button]:whitespace-nowrap">
+    <div className="status-row-uniform scroll-mask-x flex-1 min-w-0 flex flex-nowrap items-center gap-x-1.5 overflow-x-auto overflow-y-hidden scrollbar-none [&>*]:shrink-0 [&_button]:whitespace-nowrap">
       {children}
     </div>
   );
@@ -1056,8 +1056,10 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           status bar chip"). First and always shown, so you never lose the fact
           that this phone is driving a computer. Not a button — nothing to do. */}
       {compact && isRemoteMode() && (
+        // Round 3: the computer icon alone ("some of these need to be shortened, like remote");
+        // the words are in the hint and read out by screen readers.
         <Tooltip text="This phone is connected to your computer — the assistant runs there">
-          <span><Pill tone="info" className="gap-1"><ComputerIcon />Remote</Pill></span>
+          <span aria-label="Connected to your computer"><Pill tone="info"><ComputerIcon /></Pill></span>
         </Tooltip>
       )}
       {/* Combined model + effort pill — clicking opens the full picker (same as /effort).
@@ -1732,7 +1734,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       <Tooltip text="Customize status bar">
       <button
         onClick={() => setPopupOpen(true)}
-        className={`ml-auto ${compact ? 'shrink-0 ' : ''}flex items-center justify-center w-5 h-5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors`}
+        className={`ml-auto ${compact ? 'shrink-0 status-pencil-uniform ' : ''}flex items-center justify-center w-5 h-5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors`}
       >
         <PencilIcon />
       </button>

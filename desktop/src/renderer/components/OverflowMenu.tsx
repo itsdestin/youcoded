@@ -130,9 +130,37 @@ function RowButtons({ rows }: { rows: Row[] }) {
 /** The ☰ menu's rows drawn in place, for the phone side drawer (2026-11-05
  *  round): the same places, same badges, same actions, under the sessions.
  *  `reverse` puts Settings LAST, where the Claude and ChatGPT apps keep it. */
-export function OverflowRowList(props: Props & { reverse?: boolean }) {
+export function OverflowRowList(props: Props & { reverse?: boolean; tiles?: boolean }) {
   const { rows } = useOverflowRows(props, (fn) => fn);
-  return <RowButtons rows={props.reverse ? [...rows].reverse() : rows} />;
+  const ordered = props.reverse ? [...rows].reverse() : rows;
+  return props.tiles ? <RowTiles rows={ordered} /> : <RowButtons rows={ordered} />;
+}
+
+/** Round 3 hub panel (Destin: "restyled … settings/other buttons"): the same
+ *  places as square icon-over-word tiles in one strip, so they take one row of
+ *  the panel instead of five and leave the room to the sessions. Same rows,
+ *  same badges, same actions as the list form. */
+function RowTiles({ rows }: { rows: Row[] }) {
+  return (
+    <div className="flex px-1">
+      {rows.map(r => (
+        <button
+          key={r.key}
+          type="button"
+          role="menuitem"
+          onClick={r.onClick}
+          className={`relative flex-1 min-w-0 flex flex-col items-center gap-1 py-2 rounded-md text-3xs transition-colors ${
+            r.active ? 'text-accent' : 'text-fg-muted hover:text-fg'
+          } hover:bg-inset`}
+        >
+          <span className="shrink-0">{r.icon}</span>
+          {/* One word per tile; a count or "challenge!" stays on the dot. */}
+          <span className="max-w-full truncate px-0.5">{r.label.split(/ [(—]/)[0].replace('Session files', 'Files')}</span>
+          {r.dot && <span className={`absolute top-1.5 right-[calc(50%-14px)] w-1.5 h-1.5 rounded-full ${r.dot}`} />}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 /** The phone side drawer's ☰ (2026-11-05 round): opens the session drawer, and

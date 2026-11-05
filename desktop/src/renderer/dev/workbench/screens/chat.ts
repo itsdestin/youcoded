@@ -29,6 +29,10 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#top-name', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'name' , platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat#top-drawer', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'drawer' , platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat#top-pair', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'pair' , platform: 'android' }, newIn: 'after' as const },
+  // Round 3 (Destin's notes on round 2): pair's buttons with a plain name button, with status lights, and the ☰ everything-panel.
+  { ...chat('chat#top-plain', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'plain', platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat#top-lights', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'lights', platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat#top-hub', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'hub', platform: 'android' }, newIn: 'after' as const, sameAs: { name: 'chat#top-plain', why: 'the two bars look the same; only what ☰ opens differs (chat/sessions#phone-hub)' } },
   // The other connection bands (connection notices above the message box, 2026-10-22), and one on a computer-width browser.
   { ...chat('chat#phone-catching-up', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'restoring' } },
   { ...chat('chat#phone-out-of-date', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'incomplete' } },
@@ -44,6 +48,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/sessions#phone-sheet', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'name', narrowList: 'sheet' , platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat/sessions#phone-full', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'name', narrowList: 'full' , platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat/sessions#phone-drawer', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'drawer' , platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat/sessions#phone-plain', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'plain', platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat/sessions#phone-hub', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'hub', platform: 'android' }, newIn: 'after' as const },
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
   chat('chat/close-session', 'dialog'),
@@ -87,9 +93,6 @@ export const CHAT: readonly ScreenEntry[] = [
   // A real, unexpired announcement — statusData otherwise always sends `null`.
   { ...chat('chat/announcement', 'dialog'), params: { announcement: '1' } },
   chat('chat/quick-chips', 'dialog'),
-  // Narrow-screens proposal Q-7 (2026-11-05): the shortcut chips behind a button in the message box.
-  { ...chat('chat#narrow-chips-button', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowChips: 'button' } },
-  { ...chat('chat/shortcuts-menu', 'menu', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowChips: 'button' } },
   chat('chat/quick-chips/edit', 'dialog'),
   chat('chat/quick-chips/add', 'dialog'),
   // Remove asks first, in place (as Delete tag does), and Add pressed with both boxes empty says

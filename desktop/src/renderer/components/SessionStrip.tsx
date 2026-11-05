@@ -4,7 +4,7 @@ import { markPointerSwitch } from '../hooks/use-focus-composer-after-switch';
 import { noteSwitchIntent, type SwitchCause } from '../state/switch-marks';
 import { SessionStatusColor, STATUS_LABEL } from './StatusDot';
 import { Button, SectionLabel, Toggle, Tooltip } from './ui';
-import { phoneMenuStyle, usePhoneMenu, PhoneCount, PhoneMenuTop, PhoneMenuScrim, PhoneDrawerFooter } from './header/phone-session-menu';
+import { phoneMenuStyle, usePhoneMenu, PhoneCount, PhoneMenuTop, PhoneMenuScrim, PhoneDrawerFooter, PhoneRecent } from './header/phone-session-menu';
 import { getCapabilities, isAndroid } from '../platform';
 import FolderSwitcher from './FolderSwitcher';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
@@ -418,11 +418,14 @@ export default function SessionStrip({
   const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   // Phone layout round: workbench-only switches, `today` in the app (header/phone-session-menu.tsx).
-  const { narrowTop, menuShape, phoneRows } = usePhoneMenu();
+  const { narrowTop, menuShape: listShape, phoneRows, plainTitle } = usePhoneMenu();
+  // Round 3 `hub` bar: ☰ opens the list as the everything-panel, the name opens it as the plain list.
+  const [hubMode, setHubMode] = useState(false);
+  const menuShape = hubMode ? 'hub' : listShape;
   const [shiftNavIdx, setShiftNavIdx] = useState<number>(-1);
   const shiftNavActive = useRef(false);
   // Photo-only build: `shoot` opens the list, or the Shift-hold switcher (the same list, Shift-navigation armed).
-  useScreenOpen('chat/sessions', () => setMenuOpen(true));
+  useScreenOpen('chat/sessions', () => { setHubMode(narrowTop === 'hub'); setMenuOpen(true); }); // hub bar: the picture is ☰'s panel
   useScreenOpen('chat/switcher', () => { shiftNavActive.current = true; const i = sessions.findIndex((s) => s.id === activeSessionId); setShiftNavIdx(i >= 0 ? i : 0); setMenuOpen(true); });
   useScreenOpen('chat/rename-session', () => setRenameId(activeSessionId));
   const [showNewForm, setShowNewForm] = useState(false);
@@ -486,7 +489,7 @@ export default function SessionStrip({
     // false→true edge — no manual touched reset needed here.
     setShowNewForm(true);
   }, [defaultProjectFolder, defaultSkipPermissions, defaultModel, defaultStartModel, applyModelChoice]);
-  if (menuApiRef) menuApiRef.current = { openList: () => setMenuOpen(true), openNewSession: () => { openNewForm(); setMenuOpen(true); } };
+  if (menuApiRef) menuApiRef.current = { openList: () => { setHubMode(narrowTop === 'hub'); setMenuOpen(true); }, openNewSession: () => { setHubMode(false); openNewForm(); setMenuOpen(true); } };
   // Launch the new session in its own peer window instead of this one.
   // Hidden on platforms without multi-window support (Android / remote-shim).
   const [launchInNewWindow, setLaunchInNewWindow] = useState(false);
@@ -846,6 +849,7 @@ export default function SessionStrip({
   const handleMenuToggle = useCallback(() => {
     setMenuOpen(prev => !prev);
     setShowNewForm(false);
+    setHubMode(false);
   }, []);
   // WHY: Escape left the All Sessions menu open — only the arrow closed it (UX tester, 2026-09-26).
   useEscClose(menuOpen, useCallback(() => { setMenuOpen(false); setShowNewForm(false); }, []));
@@ -2066,7 +2070,7 @@ export default function SessionStrip({
         // window's; inert on every other model, where no browser drag exists.
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className={`session-strip relative flex items-center gap-0.5 ${narrowTop === 'drawer' ? '' : 'bg-inset'} rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink transition-shadow ${incomingDropActive ? 'ring-2 ring-accent/70' : ''}`}
+        className={`session-strip relative flex items-center gap-0.5 ${plainTitle ? 'hover:bg-inset cursor-pointer' : 'bg-inset'} rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink transition-shadow ${incomingDropActive ? 'ring-2 ring-accent/70' : ''}`}
       >
         {/* ── Session pills ──────────────────────────────── */}
         {visibleSessions.map((s, idx) => {
@@ -2088,7 +2092,7 @@ export default function SessionStrip({
           const pillClass = `
                   relative flex items-center gap-1.5 rounded-full pl-1.5 pr-0 py-px
                   border select-none touch-none overflow-hidden
-                  ${narrowTop === 'drawer' /* side-drawer top bar: a plain title */ ? 'border-transparent' : pillSurfaceClass(showName && (isActive || !displayPack.expanded.has(s.id)), dragging)}`;
+                  ${plainTitle /* a plain title, one hover area with the arrow */ ? 'border-transparent' : pillSurfaceClass(showName && (isActive || !displayPack.expanded.has(s.id)), dragging)}`;
           const pillBody = (
             <>
                 <SessionDot color={color} isActive={isActive} />
@@ -2122,7 +2126,8 @@ export default function SessionStrip({
                 onPointerDown={(e) => handlePointerDown(e, s.id, true)}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
-                onClick={(e) => handleClick(s.id, e)}
+                // A plain-title bar's name IS the list button (round 3); the arrow beside it does the same.
+                onClick={(e) => (plainTitle ? handleMenuToggle() : handleClick(s.id, e))}
                 onContextMenu={(e) => handlePillContextMenu(e, s.id)}
                 // 'html-drag' only (Linux/Wayland): the browser starts a native
                 // drag from the press. Everywhere else the pointer path owns
@@ -2283,9 +2288,9 @@ export default function SessionStrip({
             ref={triggerBtnRef}
             onClick={handleMenuToggle}
             aria-label={narrowTop !== 'today' && hiddenCount > 0 ? `All sessions (${hiddenCount} more)` : undefined}
-            className={`flex items-center justify-center gap-0.5 h-5 ml-1 rounded-sm hover:bg-inset transition-colors text-fg-muted hover:text-fg-2 ${narrowTop !== 'today' && hiddenCount > 0 ? 'px-1' : 'w-5'}`}
+            className={`flex items-center justify-center gap-0.5 h-5 ml-1 rounded-sm ${plainTitle ? '' : 'hover:bg-inset'} transition-colors text-fg-muted hover:text-fg-2 ${narrowTop !== 'today' && !plainTitle && hiddenCount > 0 ? 'px-1' : 'w-5'}`}
           >
-            {narrowTop !== 'today' && narrowTop !== 'drawer' && <PhoneCount n={hiddenCount} />}
+            {narrowTop !== 'today' && !plainTitle && <PhoneCount n={hiddenCount} />}
             <svg className={`w-3 h-3 shrink-0 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
             </svg>
@@ -2338,7 +2343,7 @@ export default function SessionStrip({
         >
           <ScreenMark name="chat/sessions" />
           {shiftNavActive.current && <ScreenMark name="chat/switcher" />}
-          <PhoneMenuTop shape={menuShape} onClose={() => setMenuOpen(false)} />
+          <PhoneMenuTop shape={menuShape} onClose={() => setMenuOpen(false)} onNew={openNewForm} />
           {/* Android only ever has one window, so the "in this window" scoping label is meaningless there */}
           {sessions.length > 0 && (!isAndroid() || phoneRows) && menuShape !== 'full' && (
             <>
@@ -2348,7 +2353,7 @@ export default function SessionStrip({
                   margin/layout (design lint no-restyle), and margin keeps
                   this a flat sibling of the list below (SessionStrip.test.tsx
                   finds it via `heading.nextElementSibling`). */}
-              <SectionLabel className="mx-3 mt-1.5">{viewer ? 'All sessions' : phoneRows ? 'Your sessions' : 'Sessions in this window'}</SectionLabel>
+              <SectionLabel className="mx-3 mt-1.5">{viewer ? 'All sessions' : menuShape === 'hub' ? 'Open now' : phoneRows ? 'Your sessions' : 'Sessions in this window'}</SectionLabel>
             </>
           )}
           {/* WHY: This is the menu's flexible middle. With the menu capped to
@@ -2880,6 +2885,9 @@ export default function SessionStrip({
                 {dangerous && runtime !== 'native' ? 'Create (dangerous)' : 'Create session'}
               </Button>
             </div>
+          ) : menuShape === 'hub' ? (
+            /* The hub has New session on top and Earlier + See all for Resume. */
+            <PhoneRecent shape={menuShape} openIds={new Set(sessions.flatMap((x) => [x.id, x.name]))} onSeeAll={() => { setMenuOpen(false); onOpenResumeBrowser(); }} />
           ) : (
             <div className="flex rounded-b-lg overflow-hidden">
               <button
