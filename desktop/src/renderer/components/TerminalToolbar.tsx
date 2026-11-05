@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from './ui';
-import { ForwardIcon } from './Icons';
+import { BackIcon, ForwardIcon } from './Icons';
 
 interface TerminalToolbarProps {
   sessionId: string;
@@ -39,29 +39,29 @@ export function consumeCtrlLetter(sessionId: string, prev: string, next: string)
   return true;
 }
 
-/** TEMPORARY, for the review deck's looks (2026-11-05): the workbench's ?termKeys= switch. Removed with the looks
- *  Destin does not pick. Round 2 (his answer: "something between a and c?", raised keys vs one strip): soft = separate
- *  keys, each a soft tinted tile with no border; tray = the strip's one track, with raised keys sitting inside it. */
-type Look = 'raised' | 'soft' | 'tray' | 'strip';
+/** TEMPORARY, for the review deck's looks (2026-11-05): the workbench's ?termKeys= switch. Removed with the look
+ *  Destin does not pick. Round 3 (he picked the tray, "torn between b/c", and "the size/spacing on both feels a bit
+ *  weird though. should be more similar to the quick chips in chat"): both are now the quick chip's own size: 32px
+ *  tall, small text, the chip's corner. tray = one track of chip height holding raised keys; chips = keys drawn like
+ *  the quick chips themselves, no track. */
+type Look = 'tray' | 'chips';
 function look(): Look {
-  try { const v = new URLSearchParams(location.search).get('termKeys'); return v === 'raised' || v === 'tray' || v === 'strip' ? v : 'soft'; } catch { return 'soft'; }
+  try { return new URLSearchParams(location.search).get('termKeys') === 'chips' ? 'chips' : 'tray'; } catch { return 'tray'; }
 }
-/** The look's track around the keys (strip and tray only), and each key's button variant and extra classes. */
-const hasTrack = (l: Look) => l === 'strip' || l === 'tray';
-const keyVariant = (l: Look) => (l === 'raised' || l === 'tray' ? 'raised' : 'ghost');
-const keyTint = (l: Look) => (l === 'soft' ? ' bg-inset text-fg-2' : l === 'strip' ? ' text-fg-2' : '');
 
 /**
- * Touch-only row of special keys (Ctrl, Esc, Tab, Enter, Space) for terminal view, in the slot the quick chips use in
+ * Touch-only row of special keys (Ctrl, Esc, Tab, Enter, ← →) for terminal view, in the slot the quick chips use in
  * chat view. Sends escape sequences straight to the PTY via sendInput.
  *
  * WHY the shared Button (Destin, 2026-11-04: "the arrows and other terminal-only keys feel like holdovers from an
- * earlier era of the app"): the keys were hand-made pills with a fixed 6px corner and a hand-written accent fill for
- * Ctrl. Each key is now the shared button — the theme's own control corner and colours, its focus ring, press shade
- * and 44px touch area — and a held Ctrl is the filled button marked pressed. WHY no ← → and an even share of the
- * width (Destin, 2026-11-05): they only moved the cursor in Claude Code's own typing line, which a phone never types
- * into, and they left "extra space/gap" at the row's end; the keys now share the row edge to edge, and scroll
- * sideways only if they ever outgrow it. No divider lines: Destin dislikes "horizontal lines that bisect a container".
+ * earlier era of the app"): the keys were hand-made pills with a hand-written accent fill for Ctrl. Each key is now the
+ * shared button — the theme's colours, its focus ring, press shade and 44px touch area — and a held Ctrl is the filled
+ * button marked pressed. The size and corner are the quick chips' (see Key), so the row matches chat view's. WHY an
+ * even share of the width (Destin, 2026-11-05): a row of keys sized to their labels left "extra space/gap" at its end;
+ * the keys now share the row edge to edge, and scroll sideways only if they ever outgrow it. WHY ← → and no Space
+ * (Destin, 2026-11-05: "i think we should just go back to left/right arrows instead of space"): they move between
+ * choices in Claude Code's side-by-side menus and along its typing line. No divider lines: Destin dislikes "horizontal
+ * lines that bisect a container".
  */
 export default function TerminalToolbar({ sessionId }: TerminalToolbarProps) {
   const ctrl = useCtrlHeld(sessionId);
@@ -73,34 +73,36 @@ export default function TerminalToolbar({ sessionId }: TerminalToolbarProps) {
 
   return (
     <div className="scroll-mask scroll-mask--chips flex px-3 py-1 overflow-x-auto scrollbar-none">
-      <div className={`flex flex-1 gap-1 items-center${hasTrack(l) ? ' bg-inset rounded-control p-1' : ''}`}>
+      {/* tray: the track IS the chip row's 32px, so the keys inside are 28px with 2px around them. */}
+      <div className={`flex flex-1 items-center ${l === 'tray' ? 'h-8 gap-0.5 p-0.5 bg-inset rounded-md' : 'gap-1'}`}>
         <Key look={l} label="Ctrl" pressed={ctrl} onClick={() => setCtrlHeld(sessionId, !ctrl)} />
         <Key look={l} label="Esc" onClick={() => send('\x1b')} />
         <Key look={l} label="Tab" onClick={() => send('\t')} />
-        {/* Enter and Space as their own keys (second review F2): answering a
-            menu in terminal view on a phone — above all a startup dialog the chat
-            cannot show — needs Enter to confirm and Space to tick a box in a
-            multi-select (the several-MCP-servers list). */}
+        {/* Enter as its own key (second review F2): answering a menu in terminal view on a phone — above all a
+            startup dialog the chat cannot show — needs Enter to confirm. */}
         <Key look={l} label="Enter" onClick={() => send('\r')} />
-        <Key look={l} label="Space" onClick={() => send(' ')} />
+        <Key look={l} label="Left" icon={<BackIcon className="w-4 h-4" />} onClick={() => send('\x1b[D')} />
+        <Key look={l} label="Right" icon={<ForwardIcon className="w-4 h-4" />} onClick={() => send('\x1b[C')} />
       </div>
     </div>
   );
 }
 
-function Key({ look: l, label, pressed, onClick }: { look: Look; label: string; pressed?: boolean; onClick: () => void }) {
+function Key({ look: l, label, icon, pressed, onClick }: { look: Look; label: string; icon?: React.ReactNode; pressed?: boolean; onClick: () => void }) {
   return (
     <Button
-      variant={pressed ? 'primary' : keyVariant(l)}
+      variant={pressed ? 'primary' : 'raised'}
       size="sm"
       onClick={onClick}
       aria-pressed={pressed}
-      // One height for the whole row (design rule "controls on one line share one height"); h-8 rather than sm's own
-      // ~22px because these are typed on, not read — the 44px touch area still comes from the primitive. flex-1: the
-      // keys share the row's width; min-w-12 makes the row scroll rather than squeeze when they no longer fit.
-      className={`flex-1 min-w-12 h-8 px-2 select-none${pressed ? '' : keyTint(l)}`}
+      aria-label={icon ? label : undefined}
+      // The quick chip's size (QuickChips.tsx on a phone: h-8, px-2.5, text-2xs, rounded-md); inside the tray the key is
+      // the track's height less its 2px edge, with the next-smaller corner so the two corners nest. flex-1: the keys
+      // share the row's width; min-w-11 makes the row scroll rather than squeeze when they no longer fit. The 44px touch
+      // area still comes from the primitive.
+      className={`flex-1 min-w-11 px-2 text-2xs select-none ${l === 'tray' ? 'h-7 rounded' : 'h-8 rounded-md'}`}
     >
-      {label}
+      {icon ?? label}
     </Button>
   );
 }
@@ -122,7 +124,6 @@ export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
   const probe = useRef<HTMLDivElement>(null);
   const right = useMessageBoxRightFor(probe);
   const l = look();
-  const variant = keyVariant(l);
 
   return (
     // WHY above --terminal-bottom-inset: on a touch screen the input bar floats OVER the terminal (globals.css,
@@ -130,15 +131,15 @@ export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
     <div
       ref={probe}
       data-term-lift=""
-      className={`absolute z-10 pointer-events-auto flex flex-col gap-1.5 select-none${hasTrack(l) ? ' bg-inset rounded-control p-1' : ''}`}
+      className={`absolute z-10 pointer-events-auto flex flex-col select-none ${l === 'tray' ? 'gap-0.5 p-0.5 bg-inset rounded-md' : 'gap-1.5'}`}
       style={{ right: right ?? 8, bottom: 'calc(var(--terminal-bottom-inset, 0px) + 0.5rem)' }}
     >
       {/* Change 41 kept: a 40×40 target each — a primary touch control floating over the terminal. Two keys with a
           gap, never a line between them (Destin, 2026-11-05: "the line between the arrows is grodi"). */}
-      <Button variant={variant} size="icon" aria-label="Scroll up" onClick={() => send('\x1b[A')} className={`w-10 h-10 text-fg-2${keyTint(l)}`}>
+      <Button variant="raised" size="icon" aria-label="Scroll up" onClick={() => send('\x1b[A')} className={`w-10 h-10 text-fg-2 ${l === 'tray' ? 'rounded' : 'rounded-md'}`}>
         <ForwardIcon className="w-5 h-5 -rotate-90" />
       </Button>
-      <Button variant={variant} size="icon" aria-label="Scroll down" onClick={() => send('\x1b[B')} className={`w-10 h-10 text-fg-2${keyTint(l)}`}>
+      <Button variant="raised" size="icon" aria-label="Scroll down" onClick={() => send('\x1b[B')} className={`w-10 h-10 text-fg-2 ${l === 'tray' ? 'rounded' : 'rounded-md'}`}>
         <ForwardIcon className="w-5 h-5 rotate-90" />
       </Button>
     </div>

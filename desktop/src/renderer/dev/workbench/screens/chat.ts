@@ -102,10 +102,10 @@ export const CHAT: readonly ScreenEntry[] = [
     params: { platform: 'android', ...(chrome ? { chrome } : {}) }, viewport: { width: 390, height: 844 },
   })),
   // TEMPORARY (the review deck's key looks, 2026-11-05): removed with the looks Destin does not pick.
-  ...(['raised', 'soft', 'tray', 'strip'] as const).map((termKeys) => ({
+  ...(['tray', 'chips'] as const).map((termKeys) => ({
     ...chat(`chat/terminal#keys-${termKeys}`, 'view', 'narrow'),
     params: { platform: 'android', termKeys }, viewport: { width: 390, height: 844 },
-    ...(termKeys === 'soft' ? { sameAs: { name: 'chat/terminal#phone', why: 'soft is the default look while the deck is open' } } : {}),
+    ...(termKeys === 'tray' ? { sameAs: { name: 'chat/terminal#phone', why: 'the tray is the default look while the deck is open' } } : {}),
   })),
   chat('chat/games', 'pane'),
   // The Browser (2026-10-13): the panel (opened by name) and the ask card in the chat, per
