@@ -124,10 +124,13 @@ pacman:
     - libnotify
     - alsa-lib
 npmRebuild: false
+# WHY (2026-11-04): Electron 44's own download marks every file writable by any user (0666/0777); this hook takes the
+# group/other write bit off before fuses and signing. See the script's header. Pinned by tests/after-pack-permissions.test.ts.
+afterPack: scripts/after-pack-permissions.cjs
 # WHY (2026-10-30 security audit F2/F4): Electron ships switches ("fuses") that decide what the packaged program will
 # do when something else asks it to. Left at their defaults, ANY program could start YouCoded's own signed executable as a
 # plain Node.js interpreter with debug flags, and a loose "app" folder dropped beside app.asar would be loaded in place
-# of the real code. electron-builder flips them natively (no @electron/fuses dependency of ours, no afterPack script).
+# of the real code. electron-builder flips them natively (no @electron/fuses dependency of ours).
 # runAsNode stays ON on purpose: the app starts itself as Node for the Browser installer (assistant-browser/browser-installer.ts),
 # Pages programs (pages/page-program.ts) and the admin-password helper (scripts/askpass/youcoded-askpass) - turning it
 # off would break all three until they move to utility processes. grantFileProtocolExtraPrivileges stays ON: the window is a file:// page that fetch()es local
