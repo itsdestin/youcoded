@@ -19,6 +19,7 @@ import { isPlaceholderModelId } from '../../shared/model-ids';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import { toolOutcome } from '../utils/tool-outcome';
+import { PageChangeRow, pageChangeOf } from './pages/PageChangeRow';
 
 interface Props {
   turn: AssistantTurn;
@@ -467,7 +468,9 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
   const { showTurnMetadata } = useTheme();
   // The buddy's small window draws a reply's steps, files and skills smaller, or as one line, or not at all
   // (state/compact-surface-context.ts). null = the full cards, everywhere else.
-  const toolMode = useCompactSurface()?.tools ?? null;
+  const compact = useCompactSurface();
+  const toolMode = compact?.tools ?? null;
+  const pageUndo = compact?.pageUndo ?? false;
   // splitIntoBubbles is pure over the turn's SEGMENTS, so cache it on those.
   // Perf (cycle 1, N3): this used to key on `turn`, but the reducer mints a new
   // turn object for every change to the turn — a streamed delta, but also a
@@ -487,6 +490,14 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
   const turnSkills = React.useMemo(
     () => collectTurnSkills({ segments }, toolGroups, toolCalls),
     [segments, toolGroups, toolCalls],
+  );
+
+  // The page's assistant only: what this reply changed on the page, for the Undo line at its end (PageChangeRow).
+  // WHY across every bubble, not the shown ones: a reply that edits and then talks puts the edit in an earlier
+  // bubble, and the line belongs at the end of the whole reply. Same segments-only key as above.
+  const pageChange = React.useMemo(
+    () => (pageUndo ? pageChangeOf(bubbles.flatMap((b) => bubbleSteps(b.toolGroupIds, toolGroups, toolCalls))) : null),
+    [pageUndo, bubbles, toolGroups, toolCalls],
   );
 
   // Only bubbles that will paint something get a shell (see
@@ -623,6 +634,8 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
                   Gate out `end_turn` (normal completion) — it reaches the reducer but
                   carries no abnormal signal worth surfacing to the user. */}
               {isLastBubble && abnormalStopReason(turn.stopReason) && <StopReasonFooter reason={turn.stopReason!} provider={provider} />}
+              {/* Not while streaming: Undo for a reply still making its change would put back a half-made one. */}
+              {isLastBubble && pageChange && !streaming && <PageChangeRow kind={pageChange} />}
               {showTimestamps && isLastBubble && turn.timestamp && (
                 <div className="bubble-timestamp text-4xs text-fg-muted/60 text-right mt-1 -mb-0.5 select-none leading-none">
                   {formatBubbleTime(turn.timestamp)}

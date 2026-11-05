@@ -12,6 +12,9 @@ export interface CompactSurface {
   /** How much room a reply's tool steps, sent files and skill cards take:
    *  'slim' = each as one borderless line; 'summary' = one line for the whole reply; 'hidden' = none, the text only. */
   tools: 'slim' | 'summary' | 'hidden';
+  /** The page's assistant only (PageChatPane): a reply that changed the page or what it holds ends in a line with
+   *  Undo. Absent everywhere else, so the buddy and the main chat never show it. */
+  pageUndo?: boolean;
 }
 
 export const CompactSurfaceContext = createContext<CompactSurface | null>(null);

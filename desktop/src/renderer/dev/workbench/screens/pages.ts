@@ -37,6 +37,11 @@ export const PAGES: readonly ScreenEntry[] = [
   // pages/page/page-money itself: every page now shows the round chat button.
   { ...pg('pages/page/page-money#chat-float', 'view', 'money', 'page-chat'), params: { pageChat: 'open', seed: 'bubbles-page-money-cc' } },
   { ...pg('pages/focus/page-money#chat-phone', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'open', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
+  // The Undo round (pages-finish step 3): Undo under each reply that changed the page, the same just after pressing
+  // it, and the other way — a Versions list in the chat's header with no line in the replies.
+  { ...pg('pages/page/page-money#chat-undone', 'view', 'money', 'page-chat'), params: { pageChat: 'open', seed: 'bubbles-page-money-cc', pageUndone: '1' } },
+  { ...pg('pages/page/page-money#chat-versions', 'view', 'money', 'page-chat'), params: { pageChat: 'open', seed: 'bubbles-page-money-cc', pageUndo: 'versions', pageVersions: 'open' } },
+  { ...pg('pages/focus/page-money#chat-phone-versions', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'open', seed: 'bubbles-page-money-cc', pageUndo: 'versions', pageVersions: 'open' }, viewport: PHONE },
   { ...pg('pages/focus/page-money#chat-phone-closed', 'view', 'money', 'page-chat', 'narrow'), params: { pageChat: 'closed', seed: 'bubbles-page-money-cc' }, viewport: PHONE },
   // WHY: public-demo screenshots must use the site's fictional data and pinned-page
   // focused host, not the internal practice library's personal-shaped fixtures.
