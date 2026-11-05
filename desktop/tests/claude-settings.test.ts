@@ -235,7 +235,9 @@ describe('settings.json has one reader and one writer', () => {
     expect(files.length).toBeGreaterThan(100);
     const offenders = files
       .filter((f) => PATTERN.test(readStripped(f)))
-      .map((f) => path.relative(MAIN, f))
+      // WHY split('\\').join('/'): ALLOWED keys use forward slashes; on Windows path.relative returns
+      // 'harness\tools\protected-config.ts', so the one allowed file in a subfolder failed on Windows CI only.
+      .map((f) => path.relative(MAIN, f).split(path.sep).join('/'))
       .filter((rel) => !(rel in ALLOWED));
     expect(offenders, 'route settings.json access through claude-settings.ts').toEqual([]);
   });

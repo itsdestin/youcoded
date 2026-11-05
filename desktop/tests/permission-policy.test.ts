@@ -1,12 +1,15 @@
 // Pins audit F4: a page may use the microphone (voice), copy/paste and full-screen — nothing else.
 import { describe, it, expect } from 'vitest';
+import { pathToFileURL } from 'node:url';
 import { isPermissionAllowed, installPermissionPolicy } from '../src/main/permission-policy';
 import { isAppPageUrl } from '../src/main/app-navigation';
 
 const INDEX = '/opt/app/renderer/index.html';
 const DEV = 'http://localhost:5223';
 const ctx = { isAppPage: (u: string) => isAppPageUrl(u, INDEX, DEV) };
-const APP = 'file:///opt/app/renderer/index.html?mode=main';
+// WHY pathToFileURL: on Windows '/opt/app/...' resolves to a drive (file:///D:/opt/app/...), so a hand-written
+// file:///opt/... address is not the app page there and every "allowed" case failed on Windows CI only.
+const APP = `${pathToFileURL(INDEX).href}?mode=main`;
 
 describe('permission policy', () => {
   it('lets the app page use the microphone, and only the microphone', () => {
