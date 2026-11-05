@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import crypto from 'crypto';
 
 // We test the provider's public interface.
 // The provider uses dynamic import for validateCommunityTheme (renderer code),
@@ -128,5 +129,59 @@ describe('ThemeMarketplaceProvider', () => {
       expect(result).toHaveLength(1);
       expect(result[0].slug).toBe('neon-tokyo');
     });
+  });
+});
+
+// Theme files must come from our theme repo and match the registry's fingerprints; a file that
+// fails leaves an already-installed theme exactly as it was (nothing is written until all pass).
+describe('installTheme checks every file before writing any', () => {
+  const ORIGIN = 'https://raw.githubusercontent.com/itsdestin/wecoded-themes/0123456789abcdef0123456789abcdef01234567/themes/check-me';
+  const sha = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
+  const manifest = JSON.stringify({ name: 'Check Me', slug: 'check-me', dark: true, tokens: {} });
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"/>';
+  let dir: string;
+
+  async function setup(served: Record<string, string>, hashes?: Record<string, string>, manifestUrl = `${ORIGIN}/manifest.json`) {
+    vi.resetModules();
+    const { ThemeMarketplaceProvider } = await import('../src/main/theme-marketplace-provider');
+    const { THEMES_DIR: dirNow } = await import('../src/main/theme-watcher');
+    dir = path.join(dirNow, 'check-me');
+    const p = new ThemeMarketplaceProvider();
+    (p as any).fetchRegistry = async () => ({ version: 1, themes: [{
+      slug: 'check-me', name: 'Check Me', author: 'a', dark: true, source: 'community', features: [],
+      manifestUrl, assetUrls: { 'assets/a.svg': `${ORIGIN}/assets/a.svg` }, fileHashes: hashes,
+    }] });
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const body = served[url];
+      return body === undefined ? new Response('', { status: 404 }) : new Response(body, { status: 200 });
+    }));
+    vi.doMock('../src/renderer/themes/theme-validator', () => ({ validateCommunityTheme: (m: any) => m }));
+    return p;
+  }
+  afterEach(() => { vi.unstubAllGlobals(); vi.doUnmock('../src/renderer/themes/theme-validator'); if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it('installs when every file matches its fingerprint', async () => {
+    const p = await setup({ [`${ORIGIN}/manifest.json`]: manifest, [`${ORIGIN}/assets/a.svg`]: svg },
+      { 'manifest.json': sha(manifest), 'assets/a.svg': sha(svg) });
+    expect((await p.installTheme('check-me')).status).toBe('installed');
+    expect(fs.readFileSync(path.join(dir, 'assets', 'a.svg'), 'utf8')).toBe(svg);
+  });
+
+  it('refuses a swapped file and leaves the installed copy untouched', async () => {
+    const p = await setup({ [`${ORIGIN}/manifest.json`]: manifest, [`${ORIGIN}/assets/a.svg`]: '<svg onload="x"/>' },
+      { 'manifest.json': sha(manifest), 'assets/a.svg': sha(svg) });
+    fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'assets', 'a.svg'), 'OLD');
+    fs.writeFileSync(path.join(dir, 'manifest.json'), 'OLD-MANIFEST');
+    const r = await p.installTheme('check-me');
+    expect(r).toMatchObject({ status: 'failed', error: expect.stringContaining('did not match') });
+    expect(fs.readFileSync(path.join(dir, 'assets', 'a.svg'), 'utf8')).toBe('OLD');
+    expect(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')).toBe('OLD-MANIFEST');
+  });
+
+  it('refuses a file hosted anywhere but the theme repo', async () => {
+    const evil = 'https://example.com/manifest.json';
+    const p = await setup({ [evil]: manifest }, undefined, evil);
+    expect(await p.installTheme('check-me')).toMatchObject({ status: 'failed', error: expect.stringContaining('not hosted') });
   });
 });
