@@ -40,7 +40,7 @@ const DEFAULT_INSTRUCTION_BUDGET_TOKENS = 20_000;
 // gitSnapshot: the <env> git line, computed AHEAD by the caller with
 // gitSnapshotAsync (2026-09-16 C3). When absent the sync shell-out below runs,
 // which only the evaluator and tests should reach — see the WHY on gitSnapshotAsync.
-export interface PromptInputs { presetBody: string; cwd: string; appVersion: string; promptVariant?: PromptVariant; hasTools?: boolean; instructionBudgetTokens?: number; supportsParallelToolCalls?: boolean; audience?: 'user' | 'parent'; presetName?: string; gitSnapshot?: string; projectInstructionFiles?: readonly ProjectInstructionFile[] }
+export interface PromptInputs { presetBody: string; cwd: string; appVersion: string; promptVariant?: PromptVariant; hasTools?: boolean; instructionBudgetTokens?: number; supportsParallelToolCalls?: boolean; audience?: 'user' | 'parent'; presetName?: string; gitSnapshot?: string; projectInstructionFiles?: readonly ProjectInstructionFile[]; pageNote?: string }
 
 const GIT_TIMEOUT_MS = 3000;
 
@@ -136,7 +136,7 @@ function projectInstructions(cwd: string, budgetTokens: number, files?: readonly
  *
  *  `id` is stable and machine-readable; the panel keys off it (`project` gets its
  *  own tab and is filtered out of System). */
-export interface PromptPart { id: 'identity' | 'preset' | 'env' | 'project' | 'doctrine' | 'steering'; label: string; text: string }
+export interface PromptPart { id: 'identity' | 'preset' | 'env' | 'project' | 'page' | 'doctrine' | 'steering'; label: string; text: string }
 
 /** The pieces `assembleSystemPrompt` joins, in order.
  *
@@ -165,6 +165,8 @@ export function assembleSystemPromptParts(i: PromptInputs): PromptPart[] {
     },
     { id: 'preset', label: i.presetName ? `Its preset — ${i.presetName}` : 'Its preset', text: i.presetBody },
     partOrNull('project', 'Your project instructions', projectInstructions(i.cwd, i.instructionBudgetTokens ?? DEFAULT_INSTRUCTION_BUDGET_TOKENS, i.projectInstructionFiles)),
+    // A page's assistant (pages-finish step 3): the page it is about. Fixed for the session, like the parts around it.
+    partOrNull('page', 'The page this chat is for', i.pageNote ?? null),
     {
       id: 'doctrine',
       label: 'How it works',

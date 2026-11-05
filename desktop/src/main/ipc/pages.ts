@@ -110,6 +110,23 @@ export const pagesChannels: MainChannelDef[] = [
     name: IPC.PAGES_FORGET_OPEN_SITE, kind: 'handle', remoteOnError: failure,
     handler: async (p) => (await getPagesService()?.forgetOpenSite(str(p?.id), str(p?.site))) ?? [],
   }),
+  // The page's assistant (pages-finish step 3). Both doors: a phone opens the same page's chat and versions.
+  defineChannel({
+    name: IPC.PAGES_ASSISTANT_CHATS, kind: 'handle', remoteOnError: () => [],
+    handler: async (p) => (await getPagesService()?.assistantChatsOf(str(p?.id))) ?? [],
+  }),
+  defineChannel({
+    name: IPC.PAGES_VERSIONS, kind: 'handle', remoteOnError: (e) => ({ ok: false as const, message: msg(e) }),
+    handler: async (p) => (await getPagesService()?.listVersions(str(p?.id))) ?? { ok: false as const, message: NOT_AVAILABLE },
+  }),
+  defineChannel({
+    name: IPC.PAGES_RESTORE_VERSION, kind: 'handle', remoteOnError: (e) => ({ ok: false as const, message: msg(e) }),
+    handler: async (p) => {
+      const at = Number(p?.at);
+      if (!Number.isFinite(at)) return { ok: false as const, message: 'That version is no longer saved.' };
+      return (await getPagesService()?.restoreVersion(str(p?.id), at)) ?? { ok: false as const, message: NOT_AVAILABLE };
+    },
+  }),
   // A page's files (pages-finish step 2). The caller is the DOOR's (window or phone), never the
   // request's, so a handle or an ask belongs to the screen that got it. A phone gets an `ask` for
   // YouCoded's own chooser instead of an Open window, and its listing (pages:list-folder) is

@@ -34,6 +34,8 @@ export interface ArtifactState {
   /** The open page fills the view with the panel hidden — how a pinned button
    *  opens a page (Destin, 2026-09-17). The Pages button brings the panel back. */
   pageFocus: boolean;
+  /** Bumped by PAGE_OPENED with `chat` (Edit in chat): the page host opens the page's assistant when it changes. */
+  pageChatAsk: number;
   // Selected artifact is scoped per session (keyed by sessionId), so each
   // session's drawer remembers which file was open across session switches.
   // ProjectView uses the literal 'project-view' key for its own selection.
@@ -68,6 +70,7 @@ export const initialArtifactState: ArtifactState = {
   pageViewOpen: false,
   openPageId: null,
   pageFocus: false,
+  pageChatAsk: 0,
   activeArtifactBySession: {},
   gitReviewBySession: {},
   activeSessionPreviewBySession: {},
@@ -205,7 +208,8 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
     // Opening a page (from a card, a pinned button or a panel row) opens the
     // page view too, and puts the library away.
     case 'PAGE_OPENED':
-      return { ...s, openPageId: a.pageId, pageViewOpen: true, pagesViewOpen: false, projectViewOpen: false, pageFocus: !!a.focus };
+      return { ...s, openPageId: a.pageId, pageViewOpen: true, pagesViewOpen: false, projectViewOpen: false, pageFocus: !!a.focus,
+        pageChatAsk: a.chat ? s.pageChatAsk + 1 : s.pageChatAsk };
     // The open page is gone (deleted — PageHost notices the list no longer
     // has it). The view stays, on "No page selected"; focus goes too, because
     // a focused view hides the panel, which is now the only way on.

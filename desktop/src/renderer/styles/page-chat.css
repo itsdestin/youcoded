@@ -75,3 +75,8 @@
 
 /* The floating button over a page lifts off it the way floating cards do. */
 .page-chat-fab { box-shadow: var(--shadow-card); }
+
+/* The chat's name in its header row: one line, cut with "…" (SectionLabel owns the type, so the cut lives here). */
+.page-chat-header h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Earlier chats and Earlier versions drop under the header and scroll inside the chat past 70% of its height. */
+[data-page-popover] { max-height: 70%; }

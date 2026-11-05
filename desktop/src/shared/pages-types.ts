@@ -651,6 +651,11 @@ export interface PagesBridge {
   forgetOpenSite?: (id: string, site: string) => Promise<PageSummary[]>;
   /** Fetch fresh information now (the band's refresh button). */
   refresh?: (id: string) => Promise<PageSummary[]>;
+  /** The page's assistant (pages-finish step 3): its chats, the one used last first. */
+  assistantChats?: (id: string) => Promise<PageAssistantChat[]>;
+  /** The page's earlier versions, newest first, and Put back. */
+  versions?: (id: string) => Promise<PageVersionsAnswer>;
+  restoreVersion?: (id: string, at: number) => Promise<PageVersionsAnswer>;
   savedKeys?: () => Promise<SavedPageKey[]>;
   /** Both parts, because a key is identified by service AND address. */
   deleteSavedKey?: (service: string, address: string) => Promise<SavedPageKey[]>;
@@ -683,3 +688,33 @@ export interface PagesBridge {
  *  library. Small on purpose: the left cluster shares its width with the
  *  session strip, and packSessions() already competes for it. */
 export const MAX_PINNED_PAGES = 4;
+
+// ── The page's assistant (pages-finish step 3; build design docs/active/specs/2026-11-05-pages-step3-build.md) ──
+
+/** One chat that belongs to a page, newest first in `pages:assistant-chats`. `conversationId` is the saved
+ *  conversation (what Resume reopens); `live` is true while its program runs, with `sessionId` its id. */
+export interface PageAssistantChat {
+  pageId: string;
+  conversationId?: string;
+  sessionId?: string;
+  live: boolean;
+  provider: 'claude' | 'native';
+  cwd: string;
+  startedAt: number;
+  usedAt: number;
+}
+
+/** What changed between a version and the one after it (or now). */
+export type PageVersionChange = 'page' | 'data' | 'both';
+
+/** The page as it was before one request in its chat (Undo round, deck step3f: Destin picked "versions" and
+ *  "it should just work like any other typical version history menu"). `at` is its id. */
+export interface PageVersion {
+  at: number;
+  /** The request that came next, or "Before putting back …" for one saved by Put back. */
+  label: string;
+  /** What is different in the state after it; null when nothing is (it equals now). */
+  change: PageVersionChange | null;
+}
+
+export type PageVersionsAnswer = { ok: true; versions: PageVersion[] } | { ok: false; message: string };

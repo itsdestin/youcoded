@@ -248,6 +248,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
   // Finishing Pages, step 1 (2026-10-24): "Open this website?" and Page settings' site list.
   'pages.openWebsite', 'pages.forgetOpenSite',
+  // Finishing Pages, step 3 (the page's assistant): real channels; faked with the practice chat's two requests.
+  'pages.assistantChats', 'pages.versions', 'pages.restoreVersion',
   // Finishing Pages, step 2 (files): real channels since 2026-10-24; faked over a practice home.
   'pages.files', 'pages.chooseFolder', 'pages.setFolder', 'pages.forgetFile', 'pages.listFolder',
   // Office — real channels since build plan Task 5 (main/office/office-ipc.ts). Faked so the
@@ -4680,6 +4682,17 @@ function createPagesMock(scenario: string): PagesBridge {
       publish();
       return summaries();
     },
+    // The page's assistant (pages-finish step 3): the practice conversation's two requests as versions, and Put
+    // back saving "now" first, as main does. No real files move here.
+    assistantChats: async () => [],
+    versions: async (id) => ({ ok: true as const, versions: practiceVersions(id) }),
+    restoreVersion: async (id, at) => {
+      const list = practiceVersions(id);
+      if (!list.some((v) => v.at === at)) return { ok: false as const, message: 'That version is no longer saved.' };
+      const saved = { at: Date.now(), label: `Before putting back a version at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`, change: 'both' as const };
+      practiceVersionsByPage.set(id, [saved, ...list]);
+      return { ok: true as const, versions: practiceVersionsByPage.get(id)! };
+    },
     forgetOpenSite: async (id, site) => {
       pages = pages.map((p) => (p.id !== id ? p : { ...p, openSites: (p.openSites ?? []).filter((s) => s !== site) }));
       publish();
@@ -4889,4 +4902,20 @@ export function createVoiceMock(initial: string | null, opts: { loopReset?: bool
     micAccess: async () => 'granted' as const,
     onEvent: (cb) => { subs.add(cb); return () => { subs.delete(cb); }; },
   };
+}
+
+// The page's assistant's practice versions (pages-finish step 3): before each of the practice chat's two requests
+// (fixtures/bubbles/page-money-cc.jsonl), newest first.
+const practiceVersionsByPage = new Map<string, Array<{ at: number; label: string; change: 'page' | 'data' | 'both' | null }>>();
+function practiceVersions(id: string) {
+  let list = practiceVersionsByPage.get(id);
+  if (!list) {
+    const t = new Date(); t.setHours(14, 14, 0, 0);
+    list = [
+      { at: t.getTime(), label: 'let me add a note to each bill', change: 'page' as const },
+      { at: t.getTime() - 4 * 60_000, label: 'move my netflix bill to the 15th', change: 'data' as const },
+    ];
+    practiceVersionsByPage.set(id, list);
+  }
+  return list;
 }

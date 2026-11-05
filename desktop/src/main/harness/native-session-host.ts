@@ -397,6 +397,12 @@ function skillLabel(id: string): string {
 
 export class NativeSessionHost extends EventEmitter {
   private live = new Map<string, LiveEntry>();
+  /** A page's assistant (pages-finish step 3): the page's opening note, set by main before create/resume and read
+   *  when the session's instructions are assembled. Dropped with the session. */
+  private pageNotes = new Map<string, string>();
+  setPageNote(sessionId: string, note: string | null): void {
+    if (note) this.pageNotes.set(sessionId, note); else this.pageNotes.delete(sessionId);
+  }
   private restoredCompactionGeneration = new WeakMap<HarnessSession, number>();
   // Reverse index: modelId → sessionIds currently bound to it. The ONLY
   // session→model usage tracking in the app. Drives "unload a model when no
@@ -2973,7 +2979,7 @@ export class NativeSessionHost extends EventEmitter {
       // timeouts) and could land on a different date or branch than the prompt the
       // model actually got. presetName is label-only and reaches no model.
       ...(() => {
-        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name, gitSnapshot, projectInstructionFiles });
+        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name, gitSnapshot, projectInstructionFiles, pageNote: this.pageNotes.get(sessionId) });
         return { promptParts, systemPrompt: promptParts.map((p) => p.text).join('\n\n') };
       })(),
     };

@@ -33,6 +33,9 @@ export function createRemotePagesBridge(invoke: Invoke, addListener: Listen, rem
     removeConnection: (id: string, connectionId: string) => invoke('pages:remove-connection', { id, connectionId }),
     openWebsite: (id: string, url: string, remember: boolean, open: boolean) => invoke('pages:open-website', { id, url, remember, open }),
     forgetOpenSite: (id: string, site: string) => invoke('pages:forget-open-site', { id, site }),
+    assistantChats: (id: string) => invoke('pages:assistant-chats', { id }),
+    versions: (id: string) => invoke('pages:versions', { id }),
+    restoreVersion: (id: string, at: number) => invoke('pages:restore-version', { id, at }),
     // A page's files: the computer does every read and write; a pick or save comes back as an `ask`
     // for YouCoded's own chooser, whose listing is answered only while that ask waits.
     files: (id: string, request: any) => invoke('pages:files', { id, request }),

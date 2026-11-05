@@ -145,7 +145,7 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/library/settings#files', 'dialog'), params: { pagesSettings: 'page-recipes' }, newIn: 'after' },
   { ...pg('pages/library/settings#phone', 'dialog', 'narrow'), params: { pagesSettings: 'page-family-calendar' }, viewport: PHONE, newIn: 'after' },
   { ...pg('pages/page/open-website#phone', 'dialog', 'narrow'), viewport: PHONE, newIn: 'after' },
-  pg('pages/library/edit', 'dialog'),
+  // (pages/library/edit is gone: Edit in chat opens the page with its own chat now, pictured as #chat-float.)
   pg('pages/create', 'dialog'),
   // At phone size.
   { ...pg('pages#phone', 'view', 'narrow'), viewport: PHONE },

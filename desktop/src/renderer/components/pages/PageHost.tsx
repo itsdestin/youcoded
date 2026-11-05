@@ -47,6 +47,7 @@ import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { isWorkbenchDocument, isWorkbenchMode, workbenchPageChat, workbenchScreenFrame } from '../../workbench-mode';
 import { ChatIcon } from '../Icons';
 import { PageChatPane } from './PageChatPane';
+import { usePageAssistant } from './use-page-assistant';
 import { Button, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageFileEncoding, PageFilesRequest, PageFilesResult, PageHome, PageLoadFailure, PageProgramResult, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
@@ -138,12 +139,13 @@ interface PageHostProps {
   onStartSession?: (req: PageStartSessionRequest) => boolean;
   /** Page settings' Edit in chat, the same as the library's (step 1 review). */
   onEditPage?: (page: PageSummary) => void;
-  /** DESIGN STAGE (pages-finish step 3): the conversation the page's assistant pane shows. The
-   *  workbench passes the current one; the build gives each page its own. Absent = no chat button. */
-  chatSessionId?: string | null;
-  /** That conversation's name, for the pane's title. */
-  chatSessionName?: string;
+  /** The app's open chats (id and name), for the page assistant's title, and to notice its chat was closed. */
+  sessions?: ReadonlyArray<{ id: string; name: string }>;
 }
+
+/** The practice app's seeded conversation (?seed=bubbles-page-money-cc), which the workbench's page chat shows:
+ *  it has no real session to start. False in the app and the landing demo (isWorkbenchMode folds away). */
+const WORKBENCH_PAGE_CHAT = 'wb-2';
 
 type Load =
   | { state: 'idle' }
@@ -159,7 +161,7 @@ const PAGE_CHAT_FLOAT_WIDTH = 340;
 /** How long a page's further "Open this website?" asks are ignored after a Cancel. */
 const OPEN_QUIET_MS = 30_000;
 
-export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage, projectRoot = null, onStartSession, onEditPage, chatSessionId = null, chatSessionName = 'New chat' }: PageHostProps) {
+export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage, projectRoot = null, onStartSession, onEditPage, sessions }: PageHostProps) {
   // Narrow selectors (perf, 2026-09-23): only the page flags this host shows.
   const dispatch = useArtifactDispatch();
   const open = useArtifactSelector((s) => s.pageViewOpen);
@@ -647,6 +649,26 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // arrived" flag (first-run landing, merged from master 2026-09-23).
   const loadedPage = load.state === 'ready' ? load.page : null;
   const awaitingApproval = needsApproval(loadedPage ?? summary);
+
+  // The page's assistant (pages-finish step 3): its own chat, started or reopened when its button is pressed.
+  const assistantPage = open && summary && summary.home.kind !== 'builtin' ? summary : null;
+  const assistant = usePageAssistant(assistantPage);
+  const chatSessionId = isWorkbenchMode() ? WORKBENCH_PAGE_CHAT : assistant.sessionId;
+  const chatSessionName = sessions?.find((s) => s.id === chatSessionId)?.name ?? 'New chat';
+  // Edit in chat (Page settings, the library): the page opens with its assistant open.
+  const pageChatAsk = useArtifactSelector((s) => s.pageChatAsk);
+  useEffect(() => { if (pageChatAsk > 0) setChatOpen(true); }, [pageChatAsk]);
+  const { open: openAssistant, forget: forgetAssistant } = assistant;
+  useEffect(() => { if (chatOpen && assistantPage && !isWorkbenchMode()) void openAssistant(); }, [chatOpen, assistantPage, openAssistant]);
+  // The chat was closed in the main window (its tab) or ended: let it go, so the next open finds the page's
+  // chats again. WHY "seen, then gone": a new chat reaches this list a moment after it starts.
+  const seenChat = useRef<string | null>(null);
+  useEffect(() => {
+    const id = assistant.sessionId;
+    if (!id || !sessions) return;
+    if (sessions.some((s) => s.id === id)) { seenChat.current = id; return; }
+    if (seenChat.current === id) { seenChat.current = null; forgetAssistant(id); setChatOpen(false); }
+  }, [sessions, assistant.sessionId, forgetAssistant]);
   // "Closing the page stops it running" (the approved program card): a page with an approved program line
   // asks the app to stop what it started whenever its frame goes away — closed, switched to another page, or
   // rebuilt after an edit. Nothing is registered for a page without one, so ordinary pages cost nothing here.
@@ -709,7 +731,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
 
   // The assistant shows over a page that is open and approved. On a phone it is a sheet over the page
   // (no room beside it); on a computer, wherever the layout round puts it.
-  const chatAvailable = open && !!chatSessionId && !!summary && summary.home.kind !== 'builtin' && load.state === 'ready' && !awaitingApproval;
+  const chatAvailable = open && !!summary && summary.home.kind !== 'builtin' && load.state === 'ready' && !awaitingApproval;
   const showChat = chatAvailable && chatOpen;
 
   return (
@@ -891,19 +913,25 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           {/* WHY the floating chat is a Pages panel (round 4, Destin: "we need a conversation/chat window that feels
               native to these screens"): the same screen-pane surface as the page list, so every theme frames it the
               way it frames that list. Round 5: floating, not docked beside the page (Destin picked it). */}
-          {showChat && summary && chatSessionId && (
-            <PageChatPane page={summary} sessionId={chatSessionId} sessionName={chatSessionName} cwd={projectRoot ?? undefined}
+          {showChat && summary && (
+            <PageChatPane page={summary} sessionId={chatSessionId} sessionName={chatSessionName}
+              status={isWorkbenchMode() ? 'ready' : assistant.status} error={assistant.error}
+              chats={assistant.chats} onListChats={assistant.refreshChats} onOpenChat={assistant.openChat}
+              onNewChat={assistant.startNew} onRetry={assistant.open}
               onHide={() => setChatOpen(false)}
               className={`screen-pane screen-pane--panel page-chat-floating absolute right-3 bottom-3 z-10 rounded-xl bg-canvas${seeThrough ? ' panel-glass' : ''}`}
               style={narrow ? { left: 12, height: '62%' } : { width: PAGE_CHAT_FLOAT_WIDTH, height: 'min(75%, 560px)' }} />
           )}
           {chatAvailable && !chatOpen && summary && (
-            <Tooltip text="Chat about this page" placement="top">
-              <Button variant="primary" aria-label={`Chat about ${summary.name}`} onClick={() => setChatOpen(true)}
-                className="page-chat-fab absolute right-4 bottom-4 z-10 w-12 h-12 p-0 rounded-full justify-center">
-                <ChatIcon className="w-5 h-5" />
-              </Button>
-            </Tooltip>
+            // WHY the place on a wrapper: the button's own classes are its primitive's (icon-lg); where it sits and
+            // its lift over the page (page-chat.css) are the wrapper's.
+            <div className="page-chat-fab absolute right-4 bottom-4 z-10 rounded-full">
+              <Tooltip text="Chat about this page" placement="top">
+                <Button variant="primary" size="icon-lg" aria-label={`Chat about ${summary.name}`} onClick={() => setChatOpen(true)}>
+                  <ChatIcon className="w-5 h-5" />
+                </Button>
+              </Tooltip>
+            </div>
           )}
           </>}
         </div>

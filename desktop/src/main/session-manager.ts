@@ -39,6 +39,12 @@ export interface CreateSessionOpts {
    *  ipc-handlers threads it into nativeHost.create() and re-stamps the resolved
    *  id back onto the returned SessionInfo. */
   preset?: string;
+  /** The page this chat is the assistant for (pages-finish step 3). Echoed on SessionInfo so a window adds the
+   *  chat without switching to it. */
+  pageId?: string;
+  /** Claude Code only: extra instructions for the model (`--append-system-prompt`), the page's opening note.
+   *  Set by main from `pageId`, never taken from a caller. */
+  appendSystemPrompt?: string;
   /** Optional text to prefill into the input bar after the session is selected.
    *  Forwarded into SessionInfo so the renderer can pick it up on session-created. */
   initialInput?: string;
@@ -327,6 +333,11 @@ export class SessionManager extends EventEmitter {
       }
       if (opts.model) {
         args.push('--model', opts.model);
+      }
+      // The page's opening note (pages-finish step 3): instructions, not a message, so the chat starts empty.
+      // CC-coupled (docs/cc-dependencies.md): `--append-system-prompt <text>`.
+      if (opts.appendSystemPrompt) {
+        args.push('--append-system-prompt', opts.appendSystemPrompt);
       }
       // Attach this session's app-owned MCP servers. Claude Code's
       // `--mcp-config`/`--allowedTools` are both variadic ("Load MCP servers

@@ -55,6 +55,9 @@ export interface SessionCreateRequest {
    *  already carries it (session-manager.ts → SessionInfo.initialInput →
    *  InputBar); this is the typed builder catching up (Pages design review F5). */
   initialInput?: string;
+  /** The page this chat is the assistant for (pages-finish step 3): main gives the chat the page's opening
+   *  note and remembers it as that page's, and windows add it without switching to it. */
+  pageId?: string;
 }
 
 /** The exact object `window.claude.session.create` expects. */
@@ -68,6 +71,8 @@ export interface SessionCreateArgs {
   preset?: string;
   resumeSessionId?: string;
   initialInput?: string;
+  /** The page this chat is the assistant for (pages-finish step 3). */
+  pageId?: string;
 }
 
 export function buildSessionCreateArgs(req: SessionCreateRequest): SessionCreateArgs {
@@ -85,5 +90,6 @@ export function buildSessionCreateArgs(req: SessionCreateRequest): SessionCreate
     preset: native ? req.preset : undefined,
     resumeSessionId: req.resumeSessionId,
     ...(req.initialInput !== undefined ? { initialInput: req.initialInput } : {}),
+    ...(req.pageId ? { pageId: req.pageId } : {}),
   };
 }

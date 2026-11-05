@@ -46,9 +46,8 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   useEffect(() => { if (open) void refreshPages(); }, [open]);
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   // Photo-only build: `shoot` opens a page's settings (`?pagesSettings=<id>` picks
-  // which fixture page), or its editor.
+  // which fixture page).
   useScreenOpen('pages/library/settings', () => setSettingsFor((isWorkbenchMode() && new URLSearchParams(location.search).get('pagesSettings')) || 'page-headlines'));
-  useScreenOpen('pages/library/edit', () => { const p = pages.find((x) => x.id === 'page-paint') ?? pages[0]; if (p) onEditPage(p); });
   if (!open) return null;
 
   const close = () => dispatch({ type: 'PAGES_VIEW_CLOSED' });

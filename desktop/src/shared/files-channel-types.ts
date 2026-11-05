@@ -100,6 +100,9 @@ export interface FilesChannelTypes {
   'pages:remove-connection': { request: { id: string; connectionId: string }; response: PagesAnswer<'removeConnection'> };
   'pages:open-website': { request: { id: string; url: string; remember: boolean; open: boolean }; response: PagesAnswer<'openWebsite'> | { ok: false; message: string; pages: [] } };
   'pages:forget-open-site': { request: { id: string; site: string }; response: PagesAnswer<'forgetOpenSite'> };
+  'pages:assistant-chats': { request: { id: string }; response: PagesAnswer<'assistantChatsOf'> };
+  'pages:versions': { request: { id: string }; response: PagesAnswer<'listVersions'> };
+  'pages:restore-version': { request: { id: string; at: number }; response: PagesAnswer<'restoreVersion'> };
   'pages:files': { request: { id: string; request: PageFilesRequest }; response: PageFilesResult };
   'pages:choose-folder': { request: void; response: { ok: true; token: string; display: string } | { ok: false; message?: string } };
   'pages:set-folder': { request: { id: string; connectionId: string; token: string }; response: PagesAnswer<'setFolder'> };

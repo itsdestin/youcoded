@@ -598,6 +598,10 @@ export const IPC = {
   PAGES_REMOVE_CONNECTION: 'pages:remove-connection',
   PAGES_OPEN_WEBSITE: 'pages:open-website',
   PAGES_FORGET_OPEN_SITE: 'pages:forget-open-site',
+  // The page's assistant (pages-finish step 3): its chats, and its versions with Put back.
+  PAGES_ASSISTANT_CHATS: 'pages:assistant-chats',
+  PAGES_VERSIONS: 'pages:versions',
+  PAGES_RESTORE_VERSION: 'pages:restore-version',
   // ---- A page's files (pages-finish step 2): the door, the Choose folder window, Page settings, the phone's chooser ----
   PAGES_FILES: 'pages:files',
   PAGES_CHOOSE_FOLDER: 'pages:choose-folder',

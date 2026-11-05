@@ -14,7 +14,7 @@ import React from 'react';
  */
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'charge' | 'on-accent' | 'raised' | 'toggle';
-export type ButtonSize = 'sm' | 'md' | 'lg' | 'xl' | 'icon' | 'icon-sm' | 'icon-xs';
+export type ButtonSize = 'sm' | 'md' | 'lg' | 'xl' | 'icon' | 'icon-sm' | 'icon-xs' | 'icon-lg';
 
 /** The one focus ring — every interactive control shares it (design rule 4),
  *  so it lives here and Toggle/Checkbox/Radio/Select/SegmentedTabs import it.
@@ -116,7 +116,10 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
  *      shrinks with it, so the rounded hover fill still reads as a container
  *      around the glyph rather than a tile behind it.
  *  icon-xs — a 16px round glyph button on a thumbnail or chip (attachment ×).
- *      Visually tiny, so it always gets the touch-size hit area below. */
+ *      Visually tiny, so it always gets the touch-size hit area below.
+ *  icon-lg — a 48px round button floating over content: the page's chat button
+ *      (pages-finish step 3, rounds 3-5). Added 2026-11-05; it hand-set these
+ *      classes on an `icon` button before. Already finger-sized, so no hit area. */
 const BUTTON_SIZE: Record<ButtonSize, string> = {
   sm: 'text-2xs px-2.5 py-1',
   md: 'text-xs px-3 py-1.5',
@@ -125,6 +128,7 @@ const BUTTON_SIZE: Record<ButtonSize, string> = {
   icon: 'w-7 h-7 p-0',
   'icon-sm': 'w-5 h-5 p-0',
   'icon-xs': 'w-4 h-4 p-0 rounded-full text-3xs leading-none',
+  'icon-lg': 'w-12 h-12 p-0 rounded-full justify-center',
 };
 
 /** sm (~22px tall) and icon (28px) are under the ~44dp touch guideline, and this
@@ -141,8 +145,8 @@ type CommonProps = NativeButtonProps & {
 /** Icon buttons have no text, so aria-label isn't optional — the type enforces
  *  what a lint rule otherwise would (design rule 16). */
 type SizeProps =
-  | { size?: Exclude<ButtonSize, 'icon' | 'icon-sm' | 'icon-xs'> }
-  | { size: 'icon' | 'icon-sm' | 'icon-xs'; 'aria-label': string };
+  | { size?: Exclude<ButtonSize, 'icon' | 'icon-sm' | 'icon-xs' | 'icon-lg'> }
+  | { size: 'icon' | 'icon-sm' | 'icon-xs' | 'icon-lg'; 'aria-label': string };
 
 export type ButtonProps = CommonProps & SizeProps;
 

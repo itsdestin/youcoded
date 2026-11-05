@@ -79,7 +79,7 @@ export function PageCreateDialog({ request, onCreated, onCancel, onManageProject
     // Layer 3: the library (z-60, layer 2's band) may be under it — Make a
     // page lives there too — and a dialog must sit above what opened it.
     // `screen`: the photo-only name — the title is the one thing that tells Create from Edit.
-    <Dialog screen={request.title.startsWith('Edit ') ? 'pages/library/edit' : 'pages/create'} open onClose={onCancel} layer={3} size="panel" title={request.title} subtitle={request.subtitle ?? 'Pick where the conversation starts and which model builds it.'}>
+    <Dialog screen="pages/create" open onClose={onCancel} layer={3} size="panel" title={request.title} subtitle={request.subtitle ?? 'Pick where the conversation starts and which model builds it.'}>
       {/* WHY a card round the form (final-review#ST-21/#PR-7, the one popup rule): its fields
           and switch sat bare on the popup. One card holding a whole form with its buttons, as the
           quick-chip editor's card does. */}

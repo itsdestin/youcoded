@@ -6,6 +6,8 @@
 // changes a desktop window does.
 //
 // Design: youcoded-dev/docs/active/specs/2026-09-17-youcoded-pages-phase1-technical-design.md §3.
+import { PageChatsStore } from './page-chats-store';
+import { PageVersions } from './page-versions';
 import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { PagesStore, PAGES_DIR, isUnderPagesDir, type PagesStoreDeps } from './pages-store';
@@ -28,6 +30,7 @@ import type { ExternalChangeEvent } from '../artifacts/project-watcher';
 import type {
   PageApproveResult, PageConnection, PageOpenResult, PageFetchRequest, PageFetchResult,
   PageProgramResult, PageRefreshState, PageSummary, PlaidResult, SavedPageKey,
+  PageAssistantChat, PageVersionsAnswer,
 } from '../../shared/pages-types';
 import { MAX_PAGE_PROGRAM_INPUT, PLAID_SERVICE, plaidAddress } from '../../shared/pages-types';
 
@@ -89,6 +92,9 @@ class PagesService {
   readonly programs: PageProgramRunner;
   /** A page's file door (page-files.ts): handles per page and window, dropped with either. */
   readonly files: PageFiles;
+  /** The page's assistant (pages-finish step 3): which chats belong to which page, and the page's versions. */
+  readonly assistantChats: PageChatsStore;
+  readonly versions: PageVersions;
   /** What each page looked like last listing (code stamp + connections), so a
    *  change to either closes that page's live sockets. */
   private readonly seenSignature = new Map<string, string>();
@@ -99,6 +105,9 @@ class PagesService {
   constructor(private readonly deps: PagesServiceDeps) {
     this.programs = new PageProgramRunner(deps.programTimeoutMs);
     this.store = new PagesStore({ ...deps, refreshState: (id) => this.freshness.get(id) });
+    // WHY the app's own folder (userData), like the per-device pins fallback: both are about this computer.
+    this.assistantChats = new PageChatsStore(() => path.join(deps.localFallbackDir(), 'page-assistant-chats.json'));
+    this.versions = new PageVersions({ root: () => deps.localFallbackDir(), pageDir: (id) => this.store.pageDir(id) });
     this.plaidItems = deps.plaidItems ?? (deps.connections ? new PlaidItemsStore(deps.connections.userDataDir, deps.connections.secrets) : undefined);
     this.sockets = new PageLiveSockets({
       access: (pageId, url, signal) => this.socketAccess(pageId, url, signal),
@@ -127,6 +136,21 @@ class PagesService {
       gate: this.gate,
       home: deps.filesHome,
     });
+  }
+
+  // ── The page's assistant (pages-finish step 3) ──
+  async assistantChatsOf(id: string): Promise<PageAssistantChat[]> { return this.assistantChats.list(id); }
+  async listVersions(id: string): Promise<PageVersionsAnswer> {
+    if (!(await this.store.pageDir(id))) return { ok: false, message: 'This page is no longer in your library.' };
+    return { ok: true, versions: await this.versions.list(id) };
+  }
+  /** Put a version back; what was there is saved first, labelled with the time it was replaced. */
+  async restoreVersion(id: string, at: number): Promise<PageVersionsAnswer> {
+    const when = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const r = await this.versions.restore(id, at, `Before putting back a version at ${when}`);
+    if (!r.ok) return r;
+    this.schedule();
+    return { ok: true, versions: await this.versions.list(id) };
   }
 
   /** The approved files lines of a page, with their folders and remembered files; read

@@ -1,7 +1,8 @@
 {
  "_note": "Every channel a PHONE may call, as of one-core R6-3 (2026-10-01). Any change to this list is a decision for Destin: edit it only with his approval. tests/phone-open-set.test.ts compares the live channel table to it.",
  "_added_continue_turn": "2026-10-21: native:continue-turn (the chat error card's Try again and the step limit's Keep going) — Destin signed off this widening on 2026-10-21 (\"yes should work on phone\").",
- "total": 283,
+ "_added_page_assistant": "2026-11-05, pages-finish step 3: the page's assistant on a phone (Destin, step 3 questions U-phone: yes): its chats, its versions and Put back.",
+ "total": 286,
  "open": [
   "account:signed-in",
   "account:user",
@@ -135,6 +136,7 @@
   "openrouter:cancel-sign-in",
   "openrouter:sign-in-status",
   "pages:approve",
+  "pages:assistant-chats",
   "pages:delete-saved-key",
   "pages:fetch",
   "pages:files",
@@ -146,6 +148,7 @@
   "pages:open-website",
   "pages:refresh",
   "pages:remove-connection",
+  "pages:restore-version",
   "pages:saved-keys",
   "pages:set-data",
   "pages:set-pinned",
@@ -153,6 +156,7 @@
   "pages:socket-open",
   "pages:socket-ping",
   "pages:socket-send",
+  "pages:versions",
   "pages:video-ping",
   "pages:video-start",
   "pages:video-stop",

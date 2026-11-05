@@ -55,7 +55,8 @@ export type ArtifactAction =
   // `focus` (Destin, 2026-09-17: a pinned button "should show the page full
   // screen framed with no side bar"): the page opens edge to edge, the panel
   // hidden, and the pinned button reads as the selected one in the band.
-  | { type: 'PAGE_OPENED'; pageId: string; focus?: boolean }
+  // `chat`: open the page with its assistant open (Edit in chat, pages-finish step 3).
+  | { type: 'PAGE_OPENED'; pageId: string; focus?: boolean; chat?: boolean }
   | { type: 'PAGE_CLOSED' }
   // Git review sub-view within the drawer, per session (see DRAWER_* above).
   | { type: 'GIT_REVIEW_OPENED'; sessionId: string }

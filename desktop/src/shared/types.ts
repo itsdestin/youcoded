@@ -159,6 +159,9 @@ export interface SessionInfo {
    *  any native session main has not stamped yet — the renderer then falls back
    *  to the catalog lookup and reports nothing when the id is ambiguous. */
   providerType?: string;
+  /** The page this chat is the assistant for (pages-finish step 3). A window adds such a chat to its list but
+   *  never switches to it: it opened in the page's own chat. */
+  pageId?: string;
   /** Optional text to prefill into the input bar after this session is selected.
    *  Consumed once by InputBar on first render after session switch; cleared via
    *  a consumed-set ref so it never re-fires on re-renders. */

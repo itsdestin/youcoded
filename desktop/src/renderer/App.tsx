@@ -760,13 +760,11 @@ function AppInner() {
   // Pages' "Create a page" / Edit: the new-session dialog waiting for a folder
   // and model (Destin, 2026-09-17). Null while closed.
   const [pageCreate, setPageCreate, offerPageSession] = usePageCreate();
-  // Edit in chat for a page, from Page settings in the library or on an open page.
-  // A project page starts in its project so the creator skill finds the folder.
-  const editPage = useCallback((page: PageSummary) => setPageCreate({
-    title: `Edit ${page.name}`,
-    initialInput: `/page-builder edit "${page.name}" `,
-    cwd: page.home.kind === 'project' ? page.home.path : undefined,
-  }), [setPageCreate]);
+  // Edit in chat for a page, from Page settings in the library or on an open page: the page opens with its own
+  // assistant open (pages-finish step 3 — the page's chat replaces the old "new conversation to edit it" dialog).
+  const editPage = useCallback((page: PageSummary) => {
+    dispatchArtifact({ type: 'PAGE_OPENED', pageId: page.id, chat: true });
+  }, [dispatchArtifact]);
   // Document comments' Ask Your Assistant on the Projects screen (review deck
   // Q-1): the same new-session dialog, started in that file's project with the
   // request waiting in the composer (FilesTab raises the event).
@@ -1259,7 +1257,8 @@ function AppInner() {
         // Only auto-focus genuinely new sessions (not replayed ones) — and on a remote
         // client not before its place is decided: the restore sends every session as
         // session:created ahead of the hydrate.
-        selectCreatedSession(info.id, recovering);
+        // A page's chat (pages-finish step 3) opened in the page's own chat panel: listed, never switched to.
+        if (!info.pageId) selectCreatedSession(info.id, recovering);
         return [...prev, info];
       });
       }
@@ -4132,7 +4131,8 @@ function AppInner() {
         onStartSession={offerPageSession}
         // Page settings' Edit in chat, opened from an open page's top bar.
         onEditPage={editPage}
-        chatSessionId={sessionId} chatSessionName={currentSession?.name} // DESIGN STAGE (pages-finish step 3): the current chat, until the build gives each page its own.
+        // The page's assistant (pages-finish step 3) names its chat from this list and notices when its tab closes.
+        sessions={sessions}
       />
       <PageCreateDialog
         request={pageCreate}

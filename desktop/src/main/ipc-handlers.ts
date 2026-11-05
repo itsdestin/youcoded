@@ -129,6 +129,7 @@ import { startSessionSummaryPush, SESSION_SUMMARY_CHANNEL } from './session-summ
 import { listProjects } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
 import { pageFileDialogs } from './pages/page-file-dialogs';
+import { preparePageChat, pageChatStarted, notePageRequest } from './pages/page-assistant-session';
 import { PageConnectionsStore } from './pages/connections-store';
 import { wireDocCommentsPush } from './doc-comments/ipc-handlers';
 import { createAuthStore } from './marketplace-auth-store';
@@ -632,7 +633,10 @@ export function registerIpcHandlers(
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
       ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
     opts = await withResumeModel(opts, resumeBoundary?.jsonlPath); checkWindow();
+    // The page's assistant (pages-finish step 3): a chat for a page gets its note and folder (page-assistant-session.ts).
+    const prepared = await preparePageChat(opts); opts = prepared.opts; checkWindow();
     const info = sessionManager.createSession(opts);
+    if (prepared.page) pageChatStarted(info, prepared.page, opts.resumeSessionId, (id, note) => nativeHost.setPageNote(id, note));
     if (resumeBoundary) resumePageBoundaries.set(info.id, resumeBoundary);
     // WHY: a holder takeover can arrive during the FIRST native await or before
     // CC emits SessionStart. Register the resumed identity synchronously now.
@@ -1532,6 +1536,7 @@ export function registerIpcHandlers(
     // WHY: certify the operation before the record and screens consume a live
     // CC summary, without mutating the saved transcript line.
     const event = liveFacts.prepareTranscript(sourceEvent);
+    notePageRequest(event); // a page chat's request saves the page first (page-assistant-session.ts)
     publish(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
     liveFacts.noteTranscript(event.sessionId, event); // a refused /model, a card Claude Code has moved past (R5-4a)
     // Conversation Store (Phase 2a): feed live activity into the record store.
@@ -1607,6 +1612,7 @@ export function registerIpcHandlers(
   // consumes an identical event shape regardless of runtime.
   nativeHost.on('transcript-event', (event: TranscriptEvent) => {
     publish(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
+    notePageRequest(event); // a page chat's request saves the page first (page-assistant-session.ts)
     // WHY (sync-fix6): the barrier resets the turn on every screen; the record's own `clear` line follows, numbered after it, so the divider has ONE source.
     if (event.type === 'context-clear') liveFacts.nativeCleared(event.sessionId, event.uuid, event.timestamp);
     // WHY: this is the single line that makes native conversations exist in the store (design §5); Task 3 made it correct rather than mislabeling.
@@ -2067,6 +2073,8 @@ export function registerIpcHandlers(
 
       writerGenerations.set(desktopId, (writerGenerations.get(desktopId) ?? 0) + 1);
       sessionIdMap.set(desktopId, claudeId);
+      // A page's chat (pages-finish step 3) learns which saved conversation it is, so the page can reopen it.
+      void getPagesService()?.assistantChats.conversationKnown(desktopId, claudeId).catch(() => {});
       // Welcome back (design §2): keep a tracked session's remembered
       // conversation id in sync with a rotation (/clear, in-session /resume).
       // A no-op if `desktopId` isn't tracked yet — this fires for every
@@ -2128,6 +2136,8 @@ export function registerIpcHandlers(
   sessionManager.on('session-stopped', transferredExit.onStopped);
   // Stop watching when a session is destroyed
   sessionManager.on('session-exit', (sessionId: string) => {
+    // A page's chat ended: the page reopens it by resuming its saved conversation next time.
+    void getPagesService()?.assistantChats.ended(sessionId).catch(() => {});
     if (nativeStarting.has(sessionId)) nativeExited.add(sessionId);
     teardownSessionWatchers(sessionId);
     // WHY: exit also occurs without SESSION_DESTROY. Coordinate the native

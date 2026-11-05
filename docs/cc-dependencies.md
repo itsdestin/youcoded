@@ -270,6 +270,12 @@ Update this table when you re-run snapshots after a CC version bump. Anything th
 - **Break symptom:** Renaming or removing either flag makes every Claude Code session fail to launch (an unknown CLI option is fatal). A change to the `mcp__server__tool` naming, or a protocol-version negotiation CC will not accept, is silent instead: links keep arriving as plain text in the reply and the Deliverables card simply never appears.
 - **Verified 2026-09-02** against the installed CLI: `claude -p … --mcp-config ./mcp-config.json --allowedTools mcp__youcoded__SendUserLink` called the tool and returned its exact text, with no permission prompt.
 
+### `--append-system-prompt` (the page's assistant, pages-finish step 3, 2026-11-05)
+- **Files:** `desktop/src/main/session-manager.ts` (the flag), `desktop/src/main/ipc-handlers.ts` (`startSession` builds the note from `pageId`), `desktop/src/main/pages/page-assistant-note.ts` (the text)
+- **Depends on:** `claude --append-system-prompt <text>` adding instructions to an INTERACTIVE session (not only `-p`), on a fresh start and on `--resume`, without replacing Claude Code's own system prompt. The note can be long (up to ~21,000 characters with a page's `page.md`), passed as one argument.
+- **Break symptom:** a renamed or removed flag makes every page chat fail to start (an unknown option is fatal) while other chats work; a flag that stops applying in interactive mode is silent: the page's assistant no longer knows which page it is about and asks.
+- **Verified 2026-11-05** only against `claude --help` (the option is listed for every mode). Not yet seen in a running page chat.
+
 ### Page-data tools in CC sessions (`youcoded-pages` MCP server, finance dashboard 2026-10-05)
 - **Files:** `desktop/src/main/claude-code-pages-mcp.ts`, `desktop/src/main/session-manager.ts`
 - **Depends on:** the same three behaviours as SendUserLink above, plus: a tool left OFF `--allowedTools` (`mcp__youcoded-pages__UpdatePageData`) is asked about through Claude Code's normal permission prompt (YouCoded's permission card), while the two read tools are pre-approved. The config's `env` (`YOUCODED_PAGES_ROOTS`) reaching the spawned server. It pushes into the SAME combined `--mcp-config`/`--allowedTools` occurrence (see the next entry).
