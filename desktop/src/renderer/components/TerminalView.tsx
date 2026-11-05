@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef } from 'react';
-import { hiddenTerminalSize, savedTerminalBottomInset, saveTerminalBottomInset } from './terminal-hidden-size';
+import { hiddenTerminalSize, savedTerminalBottomInset, saveTerminalBottomInset, saveProgramSize } from './terminal-hidden-size';
 import { keepProgramSize, gridOverflow, type SizeBasis } from './terminal-size-lock';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -366,6 +366,8 @@ function TerminalView({ sessionId, visible }: Props) {
       lastCols = pendingCols;
       lastRows = pendingRows;
       window.claude.session.resize(sessionId, pendingCols, pendingRows);
+      // Remembered so the NEXT new session starts at this size (terminal-hidden-size.ts — why).
+      saveProgramSize(pendingCols, pendingRows);
       // Fix: make resizing actually clear a corrupt glyph atlas. Resizing is
       // the first thing a user tries when text looks wrong, and until now it
       // did nothing for this failure mode (the repaint re-samples the same

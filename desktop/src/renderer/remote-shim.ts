@@ -27,6 +27,7 @@ import { localBridgeUrl, invokeAndroidHost, hasAndroidHost, setAndroidHostEventS
 import { rememberLastComputer, forgetLastComputer } from './last-computer';
 import type { FirstRunState } from '../shared/first-run-types';
 import { createRemotePagesBridge } from './remote-pages-bridge';
+import { withStartSize } from './components/terminal-hidden-size';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
 interface MarketplaceUser {
@@ -2225,7 +2226,7 @@ export function installShim(): void {
         cancel: (id: string) => invoke('handoff:cancel', { id }),
         setCreateParams: (id: string, create: import('../shared/types').HandoffCreateParams) => invoke('handoff:create-params', { id, create }),
       },
-      create: (opts: any) => invoke('session:create', opts),
+      create: (opts: any) => invoke('session:create', withStartSize(opts)),   // the size it will keep: terminal-hidden-size.ts
       // The ONE way a conversation is filled (one-core R5-2; the host half is main/session-open.ts). Sends where this page got to (`have`,
       // and how far the terminal drew) and answers with a page or just the events it missed; the caller applies the answer and then
       // calls `play` for the pushes in it. The phone's own backend is the same desktop backend, so it fills the same way (2026-10-14).

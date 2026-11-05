@@ -40,3 +40,35 @@ export function savedTerminalBottomInset(): number | null {
 export function saveTerminalBottomInset(px: number): void {
   try { if (px > 0) localStorage.setItem(BOTTOM_KEY, String(Math.round(px))); } catch { /* ignore */ }
 }
+
+/**
+ * The program size this screen last gave a terminal, and the window it was decided for.
+ *
+ * WHY (Destin, 2026-11-04, a brand-new phone session: "still duplication, see claude code version line"): the first
+ * line of Claude Code's welcome banner was printed twice. Every new session's program started at the spawn default
+ * (80×24 — the phone's log: "pty spawn size 80 24", then "resize 47 41" 0.2-0.5 s later, when its hidden terminal
+ * worked out its real size). By then Claude Code had begun drawing at 80 columns, and redrawing at 47 left the first
+ * line behind. Asking for the remembered size when the session is created means the program starts at the size it
+ * keeps, so there is no resize and nothing to redraw. Only offered for the same window size: after a turn or a fold
+ * nothing is offered and the old default applies, exactly as before. Per-viewer convenience: no storage, no guess.
+ */
+const PROGRAM_KEY = 'youcoded:terminal-program-size';
+export function saveProgramSize(cols: number, rows: number): void {
+  try {
+    if (cols > 0 && rows > 0) localStorage.setItem(PROGRAM_KEY, JSON.stringify({ cols, rows, w: window.innerWidth, h: window.innerHeight }));
+  } catch { /* ignore */ }
+}
+function programSizeGuess(): { cols: number; rows: number } | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(PROGRAM_KEY) || 'null');
+    if (!v || v.w !== window.innerWidth || v.h !== window.innerHeight) return null;
+    if (!Number.isInteger(v.cols) || !Number.isInteger(v.rows) || v.cols < 1 || v.rows < 1 || v.cols > 1000 || v.rows > 1000) return null;
+    return { cols: v.cols, rows: v.rows };
+  } catch { return null; }
+}
+/** A new session's start request with the remembered size added — remote-shim's session.create (the phone's). A
+ *  caller's own size wins; no guess, no size (the backend's 80×24 default, as before). */
+export function withStartSize<T extends { cols?: number; rows?: number }>(opts: T): T {
+  const size = opts && opts.cols === undefined && opts.rows === undefined ? programSizeGuess() : null;
+  return size ? { ...opts, ...size } : opts;
+}
