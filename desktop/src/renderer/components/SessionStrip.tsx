@@ -4,6 +4,7 @@ import { markPointerSwitch } from '../hooks/use-focus-composer-after-switch';
 import { noteSwitchIntent, type SwitchCause } from '../state/switch-marks';
 import { SessionStatusColor, STATUS_LABEL } from './StatusDot';
 import { Button, SectionLabel, Toggle, Tooltip } from './ui';
+import { phoneMenuStyle, usePhoneMenu, PhoneCount, PhoneMenuTop, PhoneMenuScrim, PhoneDrawerFooter } from './header/phone-session-menu';
 import { getCapabilities, isAndroid } from '../platform';
 import FolderSwitcher from './FolderSwitcher';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
@@ -178,6 +179,10 @@ interface Props {
    *  can be dragged — a reorder would reorder another window's strip, and a tear-off would pull a session out of the
    *  window that owns it into a new one — the move-to-window menu is off, and the list is titled "All sessions". */
   viewer?: boolean;
+  /** Phone layout round (header/phone-session-menu.tsx): the header's ☰ / + open this list. */
+  menuApiRef?: React.MutableRefObject<{ openList: () => void; openNewSession: () => void } | null>;
+  /** The ☰ menu's places, drawn under the list when it is the side drawer. */
+  drawerFooter?: React.ReactNode;
 }
 
 /* Status dot colors. WHY data-status on the dot: float chrome swaps each colour
@@ -359,7 +364,7 @@ export default function SessionStrip({
   onCreateSession, onCloseSession, sessionStatuses,
   onOpenResumeBrowser, onReorderSessions,
   defaultModel, defaultStartModel, defaultSkipPermissions, defaultProjectFolder,
-  windowDirectory, myWindowId, viewer,
+  windowDirectory, myWindowId, viewer, menuApiRef, drawerFooter,
 }: Props) {
   // SWITCH MARKS (2026-10-05): every user-driven switch from this strip says WHY and WHEN before it selects, so the hitch recorder
   // can start its clock at the input event itself (state/switch-marks.ts). A press on the already-active session is not a switch
@@ -412,6 +417,8 @@ export default function SessionStrip({
   hoveredRef.current = hoveredId;
   const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Phone layout round: workbench-only switches, `today` in the app (header/phone-session-menu.tsx).
+  const { narrowTop, menuShape, phoneRows } = usePhoneMenu();
   const [shiftNavIdx, setShiftNavIdx] = useState<number>(-1);
   const shiftNavActive = useRef(false);
   // Photo-only build: `shoot` opens the list, or the Shift-hold switcher (the same list, Shift-navigation armed).
@@ -467,6 +474,19 @@ export default function SessionStrip({
       setBinding({ providerId: c.providerId, modelId: c.modelId });
     }
   }, []);
+  // The New session button's body, shared with the phone header's + button.
+  const openNewForm = useCallback(() => {
+    setNewCwd(defaultProjectFolder || '');
+    setDangerous(defaultSkipPermissions || false);
+    setNewModel(defaultModel || 'sonnet');
+    // The saved default, whatever provider it names — through the
+    // picker's own setter, which moves the engine with it.
+    if (defaultStartModel) applyModelChoice(defaultStartModel);
+    // usePreset re-arms the heuristic itself on the showNewForm
+    // false→true edge — no manual touched reset needed here.
+    setShowNewForm(true);
+  }, [defaultProjectFolder, defaultSkipPermissions, defaultModel, defaultStartModel, applyModelChoice]);
+  if (menuApiRef) menuApiRef.current = { openList: () => setMenuOpen(true), openNewSession: () => { openNewForm(); setMenuOpen(true); } };
   // Launch the new session in its own peer window instead of this one.
   // Hidden on platforms without multi-window support (Android / remote-shim).
   const [launchInNewWindow, setLaunchInNewWindow] = useState(false);
@@ -1930,7 +1950,9 @@ export default function SessionStrip({
   }, [repack, hasPills]);
 
   // Android always forces single-session mode (no room for siblings on mobile chrome).
-  const forceSingle = isAndroid();
+  // Every proposed phone top bar shows ONLY the current session's name, as Android already does.
+  const forceSingle = isAndroid() || narrowTop !== 'today';
+  const hiddenCount = sessions.length - (forceSingle ? Math.min(1, sessions.length) : 0);
   const visibleSessions = forceSingle
     ? sessions.filter(s => s.id === activeSessionId)
     : sessions.filter(s => displayPack.expanded.has(s.id) || displayPack.collapsed.includes(s.id));
@@ -2045,7 +2067,7 @@ export default function SessionStrip({
         // window's; inert on every other model, where no browser drag exists.
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className={`session-strip relative flex items-center gap-0.5 bg-inset rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink transition-shadow ${incomingDropActive ? 'ring-2 ring-accent/70' : ''}`}
+        className={`session-strip relative flex items-center gap-0.5 ${narrowTop === 'drawer' ? '' : 'bg-inset'} rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink transition-shadow ${incomingDropActive ? 'ring-2 ring-accent/70' : ''}`}
       >
         {/* ── Session pills ──────────────────────────────── */}
         {visibleSessions.map((s, idx) => {
@@ -2067,7 +2089,7 @@ export default function SessionStrip({
           const pillClass = `
                   relative flex items-center gap-1.5 rounded-full pl-1.5 pr-0 py-px
                   border select-none touch-none overflow-hidden
-                  ${pillSurfaceClass(showName && (isActive || !displayPack.expanded.has(s.id)), dragging)}`;
+                  ${narrowTop === 'drawer' /* side-drawer top bar: a plain title */ ? 'border-transparent' : pillSurfaceClass(showName && (isActive || !displayPack.expanded.has(s.id)), dragging)}`;
           const pillBody = (
             <>
                 <SessionDot color={color} isActive={isActive} />
@@ -2243,7 +2265,7 @@ export default function SessionStrip({
         {/* END of the per-pill map — everything below is the strip's tail. */}
         {/* Overflow count: sessions open in this window that the strip couldn't fit.
             Purely an indicator — clicking the trigger (or this badge) opens the full list. */}
-        {sessions.length - visibleSessions.length > 0 && (
+        {sessions.length - visibleSessions.length > 0 && narrowTop === 'today' && (
           <Tooltip text={`${sessions.length - visibleSessions.length} more session${sessions.length - visibleSessions.length === 1 ? '' : 's'}`}>
           <button
             onClick={handleMenuToggle}
@@ -2261,9 +2283,11 @@ export default function SessionStrip({
           <button
             ref={triggerBtnRef}
             onClick={handleMenuToggle}
-            className="flex items-center justify-center w-5 h-5 ml-1 rounded-sm hover:bg-inset transition-colors text-fg-muted hover:text-fg-2"
+            aria-label={narrowTop !== 'today' && hiddenCount > 0 ? `All sessions (${hiddenCount} more)` : undefined}
+            className={`flex items-center justify-center gap-0.5 h-5 ml-1 rounded-sm hover:bg-inset transition-colors text-fg-muted hover:text-fg-2 ${narrowTop !== 'today' && hiddenCount > 0 ? 'px-1' : 'w-5'}`}
           >
-            <svg className={`w-3 h-3 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            {narrowTop !== 'today' && narrowTop !== 'drawer' && <PhoneCount n={hiddenCount} />}
+            <svg className={`w-3 h-3 shrink-0 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
             </svg>
           </button>
@@ -2273,13 +2297,15 @@ export default function SessionStrip({
 
       {/* ── Dropdown menu (portal — escapes overflow-hidden + backdrop-filter) ── */}
       {menuOpen && createPortal(
+        <>
+        <PhoneMenuScrim shape={menuShape} onClose={() => setMenuOpen(false)} />
         <div
           ref={dropdownRef}
           // P-8 (2026-08-28): w-72 was too narrow for a name and its project side by
           // side; 24rem fits both, 88vw keeps it inside a phone. session-menu: class
           // hook only, for the 'float' chrome style's matching surface (float-chrome.css).
           className="session-menu glass-overlay overlay-no-drag fixed flex flex-col w-[min(24rem,88vw)] bg-panel border border-edge rounded-lg shadow-lg z-[9000] overflow-hidden"
-          style={(() => {
+          style={menuShape !== 'today' ? phoneMenuStyle(menuShape, triggerBtnRef.current?.getBoundingClientRect()) : (() => {
             const triggerRect = triggerBtnRef.current?.getBoundingClientRect();
             const pillRect = pillBarRef.current?.getBoundingClientRect();
             const pillCenter = pillRect
@@ -2313,8 +2339,9 @@ export default function SessionStrip({
         >
           <ScreenMark name="chat/sessions" />
           {shiftNavActive.current && <ScreenMark name="chat/switcher" />}
+          <PhoneMenuTop shape={menuShape} onClose={() => setMenuOpen(false)} />
           {/* Android only ever has one window, so the "in this window" scoping label is meaningless there */}
-          {sessions.length > 0 && !isAndroid() && (
+          {sessions.length > 0 && (!isAndroid() || phoneRows) && menuShape !== 'full' && (
             <>
               {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
                   batch, guide: no spaced capitals — decisions H-3/L-1…L-4).
@@ -2322,7 +2349,7 @@ export default function SessionStrip({
                   margin/layout (design lint no-restyle), and margin keeps
                   this a flat sibling of the list below (SessionStrip.test.tsx
                   finds it via `heading.nextElementSibling`). */}
-              <SectionLabel className="mx-3 mt-1.5">{viewer ? 'All sessions' : 'Sessions in this window'}</SectionLabel>
+              <SectionLabel className="mx-3 mt-1.5">{viewer ? 'All sessions' : phoneRows ? 'Your sessions' : 'Sessions in this window'}</SectionLabel>
             </>
           )}
           {/* WHY: This is the menu's flexible middle. With the menu capped to
@@ -2349,7 +2376,8 @@ export default function SessionStrip({
                 // the number of sessions shown by default to like 6.5"): six rows of
                 // ~48px plus half of a seventh, so the cut-off row says "scroll for
                 // more". 55vh still wins on short windows.
-                maxHeight: 'min(316px, 55vh)',
+                // Phone shapes own their height, so the list fills the panel.
+                maxHeight: phoneRows && menuShape !== 'dropdown' ? undefined : 'min(316px, 55vh)',
                 background: peerDropActive ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : undefined,
               }}
               onDragOver={(e) => {
@@ -2543,10 +2571,11 @@ export default function SessionStrip({
                             </span>
                           )}
                           <PinMark sessionId={s.id} />
-                          <StatusPill color={color} isActive={s.id === activeSessionId} />
+                          {/* Phone rows keep the status as a dot, giving the name ~60px back. */}
+                          {phoneRows ? <Tooltip text={STATUS_LABEL[color] ?? ''}><span className="shrink-0 flex items-center"><SessionDot color={color} isActive={s.id === activeSessionId} /></span></Tooltip> : <StatusPill color={color} isActive={s.id === activeSessionId} />}
                         </span>
                         <span className="flex items-center gap-2 min-w-0">
-                          <span className="flex-1 min-w-0 flex items-center gap-1 text-3xs text-fg-muted">
+                          <span className={`flex-1 min-w-0 flex items-center gap-1 text-3xs text-fg-muted ${phoneRows ? 'min-w-[4.5rem]' : ''}`}>
                             <FolderMark className="w-3 h-3 shrink-0 text-fg-faint" />
                             <span className="truncate">{s.cwd.replace(/\\/g, '/').split('/').pop()}</span>
                           </span>
@@ -2573,7 +2602,8 @@ export default function SessionStrip({
                                     <ProviderIcon icon={rt.icon} size={10} />
                                   </span>
                                 )}
-                                <span className="truncate">{rt.text}</span>
+                                {/* Phone rows: the model alone; the brand mark names the assistant. */}
+                                <span className="truncate">{phoneRows ? rt.text.split(' · ').pop() : rt.text}</span>
                               </span>
                               </Tooltip>
                             );
@@ -2865,17 +2895,7 @@ export default function SessionStrip({
               {/* Gradient divider */}
               <div className="w-px my-0.5" style={{ background: 'linear-gradient(to bottom, transparent, var(--fg-faint), transparent)' }} />
               <button
-                onClick={() => {
-                  setNewCwd(defaultProjectFolder || '');
-                  setDangerous(defaultSkipPermissions || false);
-                  setNewModel(defaultModel || 'sonnet');
-                  // The saved default, whatever provider it names — through the
-                  // picker's own setter, which moves the engine with it.
-                  if (defaultStartModel) applyModelChoice(defaultStartModel);
-                  // usePreset re-arms the heuristic itself on the showNewForm
-                  // false→true edge — no manual touched reset needed here.
-                  setShowNewForm(true);
-                }}
+                onClick={openNewForm}
                 className="flex-1 px-3 py-2 text-sm text-fg-dim hover:bg-inset hover:text-fg transition-colors flex items-center justify-center gap-1.5"
               >
                 <span className="text-base leading-none">+</span>
@@ -2883,7 +2903,9 @@ export default function SessionStrip({
               </button>
             </div>
           )}
-        </div>,
+          <PhoneDrawerFooter shape={menuShape} onClose={() => setMenuOpen(false)}>{drawerFooter}</PhoneDrawerFooter>
+        </div>
+        </>,
         document.getElementById('root')! // Portal to #root (not body) so
         // backdrop-filter can sample the compositing tree for live content blur
       )}

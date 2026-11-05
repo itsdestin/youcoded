@@ -19,6 +19,16 @@ export const CHAT: readonly ScreenEntry[] = [
   // before master the same state reads the old words and has no button.
   { ...chat('chat#phone-reconnecting', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', platform: 'android', conversation: 'reconnecting' } },
   { ...chat('chat#phone-slow', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', slow: '1' }, newIn: 'after' as const },
+  // Narrow-screens round (2026-11-05): the phone status row as one swipeable line of short pills,
+  // on a narrow computer window and on a phone browser (where the Remote chip leads the row).
+  { ...chat('chat#narrow-pills-compact', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowPills: 'compact' }, newIn: 'after' as const },
+  { ...chat('chat#phone-pills-compact', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', narrowPills: 'compact' }, newIn: 'after' as const },
+  // Phone layout round (2026-11-05): the three proposed phone top bars, and the
+  // session list in each proposed shape (youcoded-dev docs/active/design/2026-11-04-narrow-screens/).
+  { ...chat('chat#top-today', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat#top-name', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'name' , platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat#top-drawer', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'drawer' , platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat#top-pair', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'pair' , platform: 'android' }, newIn: 'after' as const },
   // The other connection bands (connection notices above the message box, 2026-10-22), and one on a computer-width browser.
   { ...chat('chat#phone-catching-up', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'restoring' } },
   { ...chat('chat#phone-out-of-date', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'incomplete' } },
@@ -34,6 +44,11 @@ export const CHAT: readonly ScreenEntry[] = [
     ...chat(`chat#model-switch-${when}${rt}`, 'view'), session: rt === 'cc' ? 'wb-1' : 'wb-2', params: { seed: `bubbles-model-switch-${when}${rt}` },
   }))),
   chat('chat/sessions', 'menu'),
+  { ...chat('chat/sessions#phone-today', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat/sessions#phone-dropdown', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'name', narrowList: 'dropdown' , platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat/sessions#phone-sheet', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'name', narrowList: 'sheet' , platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat/sessions#phone-full', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'name', narrowList: 'full' , platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat/sessions#phone-drawer', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'drawer' , platform: 'android' }, newIn: 'after' as const },
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
   chat('chat/close-session', 'dialog'),
@@ -77,6 +92,9 @@ export const CHAT: readonly ScreenEntry[] = [
   // A real, unexpired announcement — statusData otherwise always sends `null`.
   { ...chat('chat/announcement', 'dialog'), params: { announcement: '1' } },
   chat('chat/quick-chips', 'dialog'),
+  // Narrow-screens proposal Q-7 (2026-11-05): the shortcut chips behind a button in the message box.
+  { ...chat('chat#narrow-chips-button', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowChips: 'button' } },
+  { ...chat('chat/shortcuts-menu', 'menu', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowChips: 'button' } },
   chat('chat/quick-chips/edit', 'dialog'),
   chat('chat/quick-chips/add', 'dialog'),
   // Remove asks first, in place (as Delete tag does), and Add pressed with both boxes empty says

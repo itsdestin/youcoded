@@ -42,11 +42,113 @@ interface Props {
   challengePending?: boolean;
 }
 
-export default function OverflowMenu({
+export default function OverflowMenu(props: Props) {
+  // Positioning + outside/Escape dismissal live in the shared hook, which the
+  // project-view hero menu also uses.
+  const { open, toggle, anchorRef, menuRef, pos, choose } = useAnchoredMenu<HTMLButtonElement>(MENU_WIDTH);
+  useScreenOpen('chat/overflow', () => { if (!open) toggle(); }); // photo-only build (a phone-width screen)
+  const { rows, badgeColor } = useOverflowRows(props, choose);
+  return (
+    <>
+      <MenuButton open={open} onClick={toggle} badgeColor={badgeColor} anchorRef={anchorRef} />
+
+      {open && pos && createPortal(
+        <div
+          ref={menuRef}
+          role="menu"
+          // overlay-no-drag: the header is WebkitAppRegion:drag, and a portaled
+          // child of <body> still inherits nothing — but the class is what the
+          // rest of the app's overlays use, so keep it consistent.
+          className="glass-overlay overlay-no-drag fixed w-52 bg-panel border border-edge rounded-lg shadow-lg z-[9000] overflow-hidden py-1"
+          style={{ top: pos.top, left: pos.left }}
+        >
+          <ScreenMark name="chat/overflow" />
+          <RowButtons rows={rows} />
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+/** The ☰ button itself. Shared with the phone side-drawer top bar
+ *  (2026-11-05 round), whose ☰ opens the session drawer instead — so the badge
+ *  rule (a collapsed control's badge moves with it) holds in both. */
+function MenuButton({ open, onClick, badgeColor, anchorRef }: {
+  open: boolean; onClick: () => void; badgeColor: string | null;
+  anchorRef?: React.Ref<HTMLButtonElement>;
+}) {
+  return (
+      <Tooltip text="Menu">
+      <button
+        ref={anchorRef}
+        type="button"
+        onClick={onClick}
+        // coarse-hit gives this a 44x44 touch target without changing its
+        // visual box (globals.css). p-2 matches the Android cog sizing.
+        className={`coarse-hit relative p-2 rounded-sm hover:bg-inset hover:text-fg transition-colors shrink-0 ${FOCUS_RING} ${open ? 'text-fg bg-inset' : 'text-fg-muted'}`}
+        aria-label="Open menu"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        {/* Three horizontal bars — the ||| affordance. */}
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+        {badgeColor && !open && (
+          <span className={`absolute top-0.5 right-0.5 w-2 h-2 rounded-full ${badgeColor}`} />
+        )}
+      </button>
+      </Tooltip>
+  );
+}
+
+type Row = ReturnType<typeof useOverflowRows>['rows'][number];
+
+function RowButtons({ rows }: { rows: Row[] }) {
+  return (
+    <>
+      {rows.map(r => (
+        <button
+          key={r.key}
+          type="button"
+          role="menuitem"
+          onClick={r.onClick}
+          className={`coarse-roomy w-full flex items-center gap-3 px-3 py-2.5 text-sm text-left transition-colors ${
+            r.active ? 'text-accent' : 'text-fg-2 hover:text-fg'
+          } hover:bg-inset`}
+        >
+          <span className="shrink-0">{r.icon}</span>
+          <span className="flex-1 min-w-0 truncate">{r.label}</span>
+          {r.dot && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.dot}`} />}
+        </button>
+      ))}
+    </>
+  );
+}
+
+/** The ☰ menu's rows drawn in place, for the phone side drawer (2026-11-05
+ *  round): the same places, same badges, same actions, under the sessions.
+ *  `reverse` puts Settings LAST, where the Claude and ChatGPT apps keep it. */
+export function OverflowRowList(props: Props & { reverse?: boolean }) {
+  const { rows } = useOverflowRows(props, (fn) => fn);
+  return <RowButtons rows={props.reverse ? [...rows].reverse() : rows} />;
+}
+
+/** The phone side drawer's ☰ (2026-11-05 round): opens the session drawer, and
+ *  carries the menu's badge (a collapsed control's badge moves with it). Its
+ *  own component so the header subscribes to the badge's stores only while
+ *  this top bar is the one shown. */
+export function DrawerMenuButton({ onOpen, ...props }: Props & { onOpen: () => void }) {
+  const { badgeColor } = useOverflowRows(props, (fn) => fn);
+  return <MenuButton open={false} onClick={onOpen} badgeColor={badgeColor} />;
+}
+
+function useOverflowRows({
   activeSessionId, projectRoot,
   onToggleSettings, settingsBadge, settingsDangerBadge,
   onToggleGamePanel, gamePanelOpen, gameConnected, challengePending,
-}: Props) {
+}: Props, choose: (fn: () => void) => () => void) {
   const dispatch = useArtifactDispatch();
   // Session files joined this menu on narrow (Destin, 2026-07-20; renamed from
   // "Session artifacts" 2026-07-23) — the header's right cluster is now the
@@ -54,10 +156,6 @@ export default function OverflowMenu({
   // Narrow selector: only the active session's drawer flag redraws this menu.
   const drawerOpen = useArtifactSelector((s) => (activeSessionId ? (s.drawerOpenBySession[activeSessionId] ?? false) : false));
   const artifactCount = useArtifactCount(activeSessionId, projectRoot);
-  // Positioning + outside/Escape dismissal live in the shared hook, which the
-  // project-view hero menu also uses.
-  const { open, toggle, anchorRef, menuRef, pos, choose } = useAnchoredMenu<HTMLButtonElement>(MENU_WIDTH);
-  useScreenOpen('chat/overflow', () => { if (!open) toggle(); }); // photo-only build (a phone-width screen)
 
   // Any badge on a collapsed item has to surface on the ||| button itself,
   // otherwise collapsing the header silently swallows the notification that
@@ -149,59 +247,5 @@ export default function OverflowMenu({
     },
   ];
 
-  return (
-    <>
-      <Tooltip text="Menu">
-      <button
-        ref={anchorRef}
-        type="button"
-        onClick={toggle}
-        // coarse-hit gives this a 44x44 touch target without changing its
-        // visual box (globals.css). p-2 matches the Android cog sizing.
-        className={`coarse-hit relative p-2 rounded-sm hover:bg-inset hover:text-fg transition-colors shrink-0 ${FOCUS_RING} ${open ? 'text-fg bg-inset' : 'text-fg-muted'}`}
-        aria-label="Open menu"
-        aria-haspopup="menu"
-        aria-expanded={open}
-      >
-        {/* Three horizontal bars — the ||| affordance. */}
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-        </svg>
-        {badgeColor && !open && (
-          <span className={`absolute top-0.5 right-0.5 w-2 h-2 rounded-full ${badgeColor}`} />
-        )}
-      </button>
-      </Tooltip>
-
-      {open && pos && createPortal(
-        <div
-          ref={menuRef}
-          role="menu"
-          // overlay-no-drag: the header is WebkitAppRegion:drag, and a portaled
-          // child of <body> still inherits nothing — but the class is what the
-          // rest of the app's overlays use, so keep it consistent.
-          className="glass-overlay overlay-no-drag fixed w-52 bg-panel border border-edge rounded-lg shadow-lg z-[9000] overflow-hidden py-1"
-          style={{ top: pos.top, left: pos.left }}
-        >
-          <ScreenMark name="chat/overflow" />
-          {rows.map(r => (
-            <button
-              key={r.key}
-              type="button"
-              role="menuitem"
-              onClick={r.onClick}
-              className={`coarse-roomy w-full flex items-center gap-3 px-3 py-2.5 text-sm text-left transition-colors ${
-                r.active ? 'text-accent' : 'text-fg-2 hover:text-fg'
-              } hover:bg-inset`}
-            >
-              <span className="shrink-0">{r.icon}</span>
-              <span className="flex-1 min-w-0 truncate">{r.label}</span>
-              {r.dot && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.dot}`} />}
-            </button>
-          ))}
-        </div>,
-        document.body,
-      )}
-    </>
-  );
+  return { rows, badgeColor };
 }

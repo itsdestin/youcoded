@@ -1,6 +1,6 @@
 import { gitChipLabel } from '../state/git-chip-label';
 import { versionPillTooltip } from './version-pill-tooltip';
-import { useState, useCallback, useEffect, useSyncExternalStore, memo } from 'react';
+import { useState, useCallback, useEffect, useSyncExternalStore, memo, type ReactNode } from 'react';
 import { useChatStore } from '../state/chat-context';
 import { useEscClose } from '../hooks/use-esc-close';
 import { createPortal } from 'react-dom';
@@ -15,11 +15,13 @@ import { FastIcon } from './Icons';
 import UpdatePanel from './UpdatePanel';
 import ContextPopup from './ContextPopup';
 import OpenTasksChip from './OpenTasksChip';
-import { isAndroid } from '../platform';
+import { isAndroid, isRemoteMode } from '../platform';
+import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { workbenchNarrowPills } from '../workbench-mode';
 import { SessionTagsChip } from './tags/SessionTagsChip';
 import SpecialistsChip from './SpecialistsChip';
 import BackgroundCommandsChip from './BackgroundCommandsChip';
-import { CARD_LEVEL_1, CARD_LEVEL_2, CheckboxMark, Dialog, FoldRow, RowStatus, SectionLabel, SettingRow, Toggle, Tooltip } from './ui';
+import { CARD_LEVEL_1, CARD_LEVEL_2, CheckboxMark, Dialog, FoldRow, Pill, RowStatus, SectionLabel, SettingRow, Toggle, Tooltip } from './ui';
 import { resolveModelBrand, type ProviderIconKey } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import type { SessionTotals } from '../state/session-totals';
@@ -742,6 +744,45 @@ function PencilIcon() {
   );
 }
 
+// Icons for the phone status row (narrow-screens round, 2026-11-05). WHY local and
+// tiny: they stand in for words only in the practice-only compact row; if Destin
+// adopts it they move to Icons.tsx with the rest.
+function ShieldIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.4 7.5 9.5 4.3-1.1 7.5-4.9 7.5-9.5V6Z" />
+    </svg>
+  );
+}
+function PaletteIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.8 1.7-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H16a5 5 0 0 0 5-5c0-4-4-7.2-9-7.2Z" />
+      <circle cx="7.5" cy="11.5" r="1" fill="currentColor" /><circle cx="10.5" cy="7.5" r="1" fill="currentColor" /><circle cx="15" cy="7.5" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+function ComputerIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" />
+    </svg>
+  );
+}
+
+/** The phone status row's scroller (practice-only `?narrowPills=compact`).
+ *  WHY a component that is a bare fragment when off: today's bar must be the same
+ *  DOM, so the extra wrapper exists only in the compact row. `scroll-mask-x` is the
+ *  app's one sideways fade (styles/scroll-mask.css) — CSS-only, no listeners. */
+function CompactRow({ on, children }: { on: boolean; children: ReactNode }) {
+  if (!on) return <>{children}</>;
+  return (
+    <div className="scroll-mask-x flex-1 min-w-0 flex flex-nowrap items-center gap-x-1.5 overflow-x-auto overflow-y-hidden scrollbar-none [&>*]:shrink-0 [&_button]:whitespace-nowrap">
+      {children}
+    </div>
+  );
+}
+
 /** A widget's hint: the first sentence of its description. */
 const firstSentence = (text: string) => { const m = text.match(/^.*?[.!?](\s|$)/); return (m ? m[0] : text).trim(); };
 
@@ -895,6 +936,11 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   const devLabel = window.claude?.devLabel ?? null;
   const { activeTheme, cycleTheme, contextDisplay } = useTheme();
   const { visible, toggle } = useWidgetVisibility();
+  // Phone status row (narrow-screens round, 2026-11-05; Destin picked "one row,
+  // swipe sideways" with short/icon pills). Practice-only for now: the switch is
+  // `today` everywhere but the workbench, so the app is unchanged until he signs off.
+  const narrow = useNarrowViewport();
+  const compact = narrow && workbenchNarrowPills() === 'compact';
   const [popupOpen, setPopupOpen] = useState(false);
   useScreenOpen('chat/status-bar', () => setPopupOpen(true)); // photo-only build: `shoot` opens it by name
   // Version pill now opens the in-app UpdatePanel (changelog + update action) instead of firing external URLs.
@@ -1004,7 +1050,21 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       // copyable (Destin, 2026-09-10). Its dialogs and hover hints portal out
       // of this subtree, so their text is unaffected.
       className="status-bar flex flex-wrap items-center gap-x-2 gap-y-1 px-2 sm:px-3 py-1 text-3xs text-fg-muted select-none"
+      // Compact phone row (2026-11-05 round): one line, tighter gaps. Inline so
+      // the root keeps its literal class list (ast-grep
+      // chrome-root-select-none-status-bar reads the attribute's text).
+      style={compact ? { flexWrap: 'nowrap', columnGap: '0.375rem', paddingLeft: '0.5rem', paddingRight: '0.5rem' } : undefined}
     >
+      <CompactRow on={compact}>
+      {/* Remote chip (compact row only): replaces the header's REMOTE word on a
+          phone (narrow-screens questions Q-3, Destin: "a better styled always-on
+          status bar chip"). First and always shown, so you never lose the fact
+          that this phone is driving a computer. Not a button — nothing to do. */}
+      {compact && isRemoteMode() && (
+        <Tooltip text="This phone is connected to your computer — the assistant runs there">
+          <span><Pill tone="info" className="gap-1"><ComputerIcon />Remote</Pill></span>
+        </Tooltip>
+      )}
       {/* Combined model + effort pill — clicking opens the full picker (same as /effort).
          Shift+Space still cycles models via the keyboard shortcut in App.tsx.
 
@@ -1021,7 +1081,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
             <Tooltip text={`${model.modelId} — click to change model`}>
             <button
               onClick={onOpenModelPicker} data-model-chip=""
-              className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors max-w-[14rem] truncate"
+              className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors ${compact ? 'max-w-32' : 'max-w-[14rem]'} truncate`}
               style={{ color: nStyle.color, borderColor: nStyle.borderColor }}
             >
               {/* No effort segment: /effort and MAX_EFFORT_MODELS are Claude Code
@@ -1049,7 +1109,8 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
             >
               {display.icon && <ProviderIcon icon={display.icon} className="flex-shrink-0" />}
               <span>{display.label}</span>
-              {model.kind !== 'unknown' && (
+              {/* Compact row: the model name alone; effort is one tap away in the picker. */}
+              {model.kind !== 'unknown' && !compact && (
                 <>
                   <span className="opacity-40">|</span>
                   {/* No CSS `capitalize` (2026-09-29): it title-cases every word; capitalize only the first letter in JS. */}<span>{(effort || 'auto').replace(/^./, (c) => c.toUpperCase())} effort</span>
@@ -1092,8 +1153,15 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
             borderColor: PERMISSION_DISPLAY[permissionMode].border,
           }}
         >
-          <span className="sm:hidden">{PERMISSION_DISPLAY[permissionMode].shortLabel}</span>
-          <span className="hidden sm:inline">{PERMISSION_DISPLAY[permissionMode].label}</span>
+          {compact ? (
+            // Compact row: shield + the short word, so the mode still reads at a glance.
+            <span className="inline-flex items-center gap-1"><ShieldIcon />{PERMISSION_DISPLAY[permissionMode].shortLabel}</span>
+          ) : (
+            <>
+              <span className="sm:hidden">{PERMISSION_DISPLAY[permissionMode].shortLabel}</span>
+              <span className="hidden sm:inline">{PERMISSION_DISPLAY[permissionMode].label}</span>
+            </>
+          )}
         </button>
         </Tooltip>
       )}
@@ -1121,7 +1189,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       )}
 
       {/* Specialists (1c) — hidden when the conversation has no helpers. */}
-      <SpecialistsChip sessionId={sessionId} />
+      <SpecialistsChip sessionId={sessionId} compact={compact} />
 
       {/* Background commands and watchers (2026-10-22) — its own chip beside the helpers',
           hidden when the conversation never left anything running. */}
@@ -1582,9 +1650,11 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         <Tooltip text="Click to cycle theme">
         <button
           onClick={cycleTheme}
-          className="px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"
+          aria-label={compact ? `Theme: ${activeTheme.name}. Click to cycle theme` : undefined}
+          className={`${compact ? 'flex items-center ' : ''}px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors`}
         >
-          {activeTheme.name}
+          {/* Compact row: the palette alone — the theme's name is on screen all around you. */}
+          {compact ? <PaletteIcon /> : activeTheme.name}
         </button>
         </Tooltip>
       )}
@@ -1607,7 +1677,8 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           }}
         >
           <span aria-hidden style={{ color: '#EA580C' }}>★</span>
-          <span className="truncate">{statusData.announcement.message}</span>
+          {/* Compact row: the star alone; tapping still opens the whole message. */}
+          {!compact && <span className="truncate">{statusData.announcement.message}</span>}
         </button>
         </Tooltip>
       )}
@@ -1658,11 +1729,14 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         </Tooltip>
       )}
 
-      {/* Customize widget — pencil icon opens config popup, always last */}
+      </CompactRow>
+
+      {/* Customize widget — pencil icon opens config popup, always last.
+          In the compact row it sits OUTSIDE the scroller, so it never scrolls away. */}
       <Tooltip text="Customize status bar">
       <button
         onClick={() => setPopupOpen(true)}
-        className="ml-auto flex items-center justify-center w-5 h-5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"
+        className={`ml-auto ${compact ? 'shrink-0 ' : ''}flex items-center justify-center w-5 h-5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors`}
       >
         <PencilIcon />
       </button>
