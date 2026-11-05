@@ -70,6 +70,15 @@ describe('parseTranscriptLine — task notifications', () => {
   it('a Monitor event (no status) changes no card', () => {
     expect(parseTranscriptLine(noticeLine(notice('<task-id>bf3</task-id>\n<summary>Monitor event: "x"</summary>\n<event>DONE</event>')), 's')).toEqual([]);
   });
+  it("a Monitor reaching its time limit ends it, in both of Claude Code's wordings", () => {
+    const expired = parseTranscriptLine(noticeLine(notice('<task-id>b447</task-id>\n<summary>Monitor event: "verify"</summary>\n<event>[Monitor expired after 15m with 1 event delivered. Re-arm it if you still need the watch.]</event>')), 's');
+    expect(looseData(expired[0]).backgroundTask).toMatchObject({ taskIds: ['b447'], status: 'completed', summary: 'Monitor expired after 15m with 1 event delivered. Re-arm it if you still need the watch.' });
+    const timedOut = parseTranscriptLine(noticeLine(notice('<task-id>b448</task-id>\n<summary>Monitor event: "x"</summary>\n<event>[Monitor timed out — re-arm if needed.]</event>')), 's');
+    expect(looseData(timedOut[0]).backgroundTask?.status).toBe('completed');
+  });
+  it("a watched program's own output that mentions an expiry is not the watcher ending", () => {
+    expect(parseTranscriptLine(noticeLine(notice('<task-id>bf3</task-id>\n<summary>Monitor event: "x"</summary>\n<event>log: [Monitor expired after 5m]</event>')), 's')).toEqual([]);
+  });
   it('two notices in one line get distinct uuids', () => {
     const two = agentDone + '\n' + notice('<task-id>b9</task-id>\n<tool-use-id>toolu_9</tool-use-id>\n<status>completed</status>');
     expect(parseTranscriptLine(noticeLine(two), 's').map(e => e.uuid)).toEqual(['n1', 'n1:1']);
