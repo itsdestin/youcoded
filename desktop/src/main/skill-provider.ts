@@ -460,10 +460,13 @@ export class LocalSkillProvider {
       // `via` is guaranteed 'YouCoded' here — the 'Claude Code' case returned above.
       let gitUpgradeCommit: string | undefined;
       if (result.status === 'already_installed' && marketplaceEntry.sourceType === 'local') {
-        const upgradeResult = await upgradePluginFromLocal(id, marketplaceEntry.sourceRef || id, marketplaceEntry.sourceMarketplace);
+        // WHY: the catalog's scanned commit; third-party `local` plugins refuse to update without it.
+        const upgradeResult = await upgradePluginFromLocal(id, marketplaceEntry.sourceRef || id, marketplaceEntry.sourceMarketplace, marketplaceEntry.catalog?.sourceCommit);
         if (upgradeResult.status !== 'installed') {
           return { ok: false, error: (upgradeResult as any).error ?? 'Update failed' };
         }
+        // WHY: a pinned third-party update reports the commit it landed on; ours report none.
+        gitUpgradeCommit = upgradeResult.commit;
       } else if (result.status === 'already_installed'
                  && (marketplaceEntry.sourceType === 'url' || marketplaceEntry.sourceType === 'git-subdir')) {
         // WHY: installPlugin returns 'already_installed' before it reaches any clone,
