@@ -143,9 +143,9 @@ interface PageHostProps {
   sessions?: ReadonlyArray<{ id: string; name: string }>;
 }
 
-/** The practice app's seeded conversation (?seed=bubbles-page-money-cc), which the workbench's page chat shows:
+/** The practice app's seeded conversation (?seed=bubbles-page-money-cc; a `-cc` seed fills wb-1), which the workbench's page chat shows:
  *  it has no real session to start. False in the app and the landing demo (isWorkbenchMode folds away). */
-const WORKBENCH_PAGE_CHAT = 'wb-2';
+const WORKBENCH_PAGE_CHAT = 'wb-1';
 
 type Load =
   | { state: 'idle' }

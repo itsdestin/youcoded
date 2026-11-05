@@ -148,6 +148,23 @@ const KIND_TABLE: Record<string, KindPhrasing> = {
   },
 };
 
+// The page tools (claude-code-pages-mcp.ts) say what they did to a page, not "used Youcoded Pages": in a page's
+// own chat (pages-finish step 3, Destin 2026-11-05: no "1 step") that line is the record of the change.
+const PAGE_TOOL_PHRASING: Record<string, KindPhrasing> = {
+  'mcp__youcoded-pages__ReadPageData': {
+    done: (n) => (n === 1 ? "read the page's information" : `read the page's information ${n} times`),
+    active: () => "reading the page's information",
+  },
+  'mcp__youcoded-pages__UpdatePageData': {
+    done: (n) => (n === 1 ? "changed the page's information" : `changed the page's information ${n} times`),
+    active: () => "changing the page's information",
+  },
+  'mcp__youcoded-pages__ListPages': {
+    done: () => 'looked at your pages',
+    active: () => 'looking at your pages',
+  },
+};
+
 function mcpPhrasing(server: string): KindPhrasing {
   const name = FRIENDLY_MCP_SERVER[server] ?? (server ? titleCaseServer(server) : 'a tool');
   return {
@@ -168,6 +185,7 @@ function kindKey(toolName: string): string {
   if (toolName === 'SendMessage') return 'helper-message';
   if (toolName === 'max_steps' || toolName === 'doom_loop') return 'checkin';
   if (browserToolOf(toolName)) return 'browser';
+  if (PAGE_TOOL_PHRASING[toolName]) return toolName;
   if (toolName.startsWith('mcp__')) return `mcp:${toolName.slice(5).split('__')[0] || ''}`;
   return toolName;
 }
@@ -189,6 +207,7 @@ function callKindKey(t: Pick<ToolCallState, 'toolName' | 'input' | 'response' | 
 
 function phrasingFor(toolName: string, key = kindKey(toolName)): KindPhrasing {
   if (browserToolOf(toolName)) return KIND_TABLE.browser;
+  if (PAGE_TOOL_PHRASING[toolName]) return PAGE_TOOL_PHRASING[toolName];
   if (toolName.startsWith('mcp__')) return mcpPhrasing(toolName.slice(5).split('__')[0] || '');
   return (
     KIND_TABLE[key] ??

@@ -15,7 +15,9 @@ import { workbenchPageVersionsOpen } from '../../workbench-mode';
 import { useEscClose } from '../../hooks/use-esc-close';
 import type { PageAssistantStatus } from './use-page-assistant';
 
-const COMPACT: CompactSurface = { tools: 'summary' };
+// WHY 'slim' (Destin, 2026-11-05: "i don't like '1 Step/2 Steps' for the tool cards"): each step as its own one-line
+// card that says what it did ("Read a file and edited a file"), not the buddy's single counted line.
+const COMPACT: CompactSurface = { tools: 'slim' };
 // The header row's height, which the chat clears at its top (page-chat.css reads it): the page list's
 // label row with its 28px buttons.
 const HEADER_PX = 44;
