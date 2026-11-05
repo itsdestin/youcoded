@@ -45,12 +45,19 @@ export function consumeCtrlLetter(sessionId: string, prev: string, next: string)
  *  tall, small text, the chip's corner. tray = one track of chip height holding raised keys; chips = keys drawn like
  *  the quick chips themselves, no track. */
 type Look = 'tray' | 'chips';
+/** The tray's corner: the keys' own corner (the quick chip's, --radius-md, which each theme sets) plus the 4px gap
+ *  around them (p-1), so the two curves run parallel in every theme. WHY (Destin, 2026-11-05, on the first tray: "all
+ *  of the corner roundings are different and the internal chips almost seem to overlap the external container"): the
+ *  track took one theme corner and the keys a fixed small one, with only 2px between them and the edge. Inline because
+ *  the corner is a sum of a theme value and the padding; Tailwind has no token for it. */
+const TRAY = 'p-1 gap-1 bg-inset';
+const TRAY_CORNER = { borderRadius: 'calc(var(--radius-md) + 0.25rem)' };
 function look(): Look {
   try { return new URLSearchParams(location.search).get('termKeys') === 'chips' ? 'chips' : 'tray'; } catch { return 'tray'; }
 }
 
 /**
- * Touch-only row of special keys (Ctrl, Esc, Tab, Enter, ← →) for terminal view, in the slot the quick chips use in
+ * Touch-only row of special keys (Ctrl, Esc, Tab, Enter, Space, ← →) for terminal view, in the slot the quick chips use in
  * chat view. Sends escape sequences straight to the PTY via sendInput.
  *
  * WHY the shared Button (Destin, 2026-11-04: "the arrows and other terminal-only keys feel like holdovers from an
@@ -58,8 +65,8 @@ function look(): Look {
  * shared button — the theme's colours, its focus ring, press shade and 44px touch area — and a held Ctrl is the filled
  * button marked pressed. The size and corner are the quick chips' (see Key), so the row matches chat view's. WHY an
  * even share of the width (Destin, 2026-11-05): a row of keys sized to their labels left "extra space/gap" at its end;
- * the keys now share the row edge to edge, and scroll sideways only if they ever outgrow it. WHY ← → and no Space
- * (Destin, 2026-11-05: "i think we should just go back to left/right arrows instead of space"): they move between
+ * the keys now share the row edge to edge, and scroll sideways only if they ever outgrow it. WHY ← → back
+ * (Destin, 2026-11-05: "i think we should just go back to left/right arrows instead of space", then kept Space too): they move between
  * choices in Claude Code's side-by-side menus and along its typing line. No divider lines: Destin dislikes "horizontal
  * lines that bisect a container".
  */
@@ -73,14 +80,17 @@ export default function TerminalToolbar({ sessionId }: TerminalToolbarProps) {
 
   return (
     <div className="scroll-mask scroll-mask--chips flex px-3 py-1 overflow-x-auto scrollbar-none">
-      {/* tray: the track IS the chip row's 32px, so the keys inside are 28px with 2px around them. */}
-      <div className={`flex flex-1 items-center ${l === 'tray' ? 'h-8 gap-0.5 p-0.5 bg-inset rounded-md' : 'gap-1'}`}>
+      <div className={`flex flex-1 items-center ${l === 'tray' ? TRAY : 'gap-1'}`} style={l === 'tray' ? TRAY_CORNER : undefined}>
         <Key look={l} label="Ctrl" pressed={ctrl} onClick={() => setCtrlHeld(sessionId, !ctrl)} />
         <Key look={l} label="Esc" onClick={() => send('\x1b')} />
         <Key look={l} label="Tab" onClick={() => send('\t')} />
         {/* Enter as its own key (second review F2): answering a menu in terminal view on a phone — above all a
             startup dialog the chat cannot show — needs Enter to confirm. */}
         <Key look={l} label="Enter" onClick={() => send('\r')} />
+        {/* Space kept as a seventh key (Destin, 2026-11-05, picked "keep Space as a seventh key"): it ticks a box in a
+            tick-several menu, above all the startup question about which add-on servers to allow, which only terminal
+            view shows. */}
+        <Key look={l} label="Space" onClick={() => send(' ')} />
         <Key look={l} label="Left" icon={<BackIcon className="w-4 h-4" />} onClick={() => send('\x1b[D')} />
         <Key look={l} label="Right" icon={<ForwardIcon className="w-4 h-4" />} onClick={() => send('\x1b[C')} />
       </div>
@@ -96,11 +106,10 @@ function Key({ look: l, label, icon, pressed, onClick }: { look: Look; label: st
       onClick={onClick}
       aria-pressed={pressed}
       aria-label={icon ? label : undefined}
-      // The quick chip's size (QuickChips.tsx on a phone: h-8, px-2.5, text-2xs, rounded-md); inside the tray the key is
-      // the track's height less its 2px edge, with the next-smaller corner so the two corners nest. flex-1: the keys
-      // share the row's width; min-w-11 makes the row scroll rather than squeeze when they no longer fit. The 44px touch
-      // area still comes from the primitive.
-      className={`flex-1 min-w-11 px-2 text-2xs select-none ${l === 'tray' ? 'h-7 rounded' : 'h-8 rounded-md'}`}
+      // The quick chip's size and corner (QuickChips.tsx on a phone: h-8, text-2xs, rounded-md), in both looks. flex-1:
+      // the keys share the row's width; min-w-10 makes the row scroll rather than squeeze when they no longer fit. The
+      // 44px touch area still comes from the primitive.
+      className="flex-1 min-w-10 h-8 px-1.5 text-2xs rounded-md select-none"
     >
       {icon ?? label}
     </Button>
@@ -131,15 +140,15 @@ export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
     <div
       ref={probe}
       data-term-lift=""
-      className={`absolute z-10 pointer-events-auto flex flex-col select-none ${l === 'tray' ? 'gap-0.5 p-0.5 bg-inset rounded-md' : 'gap-1.5'}`}
-      style={{ right: right ?? 8, bottom: 'calc(var(--terminal-bottom-inset, 0px) + 0.5rem)' }}
+      className={`absolute z-10 pointer-events-auto flex flex-col select-none ${l === 'tray' ? TRAY : 'gap-1.5'}`}
+      style={{ ...(l === 'tray' ? TRAY_CORNER : {}), right: right ?? 8, bottom: 'calc(var(--terminal-bottom-inset, 0px) + 0.5rem)' }}
     >
       {/* Change 41 kept: a 40×40 target each — a primary touch control floating over the terminal. Two keys with a
           gap, never a line between them (Destin, 2026-11-05: "the line between the arrows is grodi"). */}
-      <Button variant="raised" size="icon" aria-label="Scroll up" onClick={() => send('\x1b[A')} className={`w-10 h-10 text-fg-2 ${l === 'tray' ? 'rounded' : 'rounded-md'}`}>
+      <Button variant="raised" size="icon" aria-label="Scroll up" onClick={() => send('\x1b[A')} className="w-10 h-10 text-fg-2 rounded-md">
         <ForwardIcon className="w-5 h-5 -rotate-90" />
       </Button>
-      <Button variant="raised" size="icon" aria-label="Scroll down" onClick={() => send('\x1b[B')} className={`w-10 h-10 text-fg-2 ${l === 'tray' ? 'rounded' : 'rounded-md'}`}>
+      <Button variant="raised" size="icon" aria-label="Scroll down" onClick={() => send('\x1b[B')} className="w-10 h-10 text-fg-2 rounded-md">
         <ForwardIcon className="w-5 h-5 rotate-90" />
       </Button>
     </div>
