@@ -777,7 +777,7 @@ function ComputerIcon() {
 function CompactRow({ on, children }: { on: boolean; children: ReactNode }) {
   if (!on) return <>{children}</>;
   return (
-    <div className="status-row-uniform scroll-mask-x flex-1 min-w-0 flex flex-nowrap items-center gap-x-1.5 overflow-x-auto overflow-y-hidden scrollbar-none [&>*]:shrink-0 [&_button]:whitespace-nowrap">
+    <div className="status-row-uniform scroll-mask-x scroll-mask--chips px-3 flex-1 min-w-0 flex flex-nowrap items-center gap-x-1 overflow-x-auto overflow-y-hidden scrollbar-none [&>*]:shrink-0 [&_button]:whitespace-nowrap">
       {children}
     </div>
   );
@@ -1053,7 +1053,9 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       // Compact phone row (2026-11-05 round): one line, tighter gaps. Inline so
       // the root keeps its literal class list (ast-grep
       // chrome-root-select-none-status-bar reads the attribute's text).
-      style={compact ? { flexWrap: 'nowrap', columnGap: '0.375rem', paddingLeft: '0.5rem', paddingRight: '0.5rem' } : undefined}
+      // Round 4: no left padding here — the scroller carries the chip row's px-3 INSIDE it, so a pill
+      // never sits against the screen edge or under the fade; the right matches it for the pencil.
+      style={compact ? { flexWrap: 'nowrap', columnGap: '0.25rem', paddingLeft: 0, paddingRight: '0.75rem' } : undefined}
     >
       <CompactRow on={compact}>
       {/* Remote chip (compact row only): replaces the header's REMOTE word on a

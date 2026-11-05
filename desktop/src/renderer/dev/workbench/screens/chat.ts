@@ -54,6 +54,7 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/sessions#phone-full', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'name', narrowList: 'full' , platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat/sessions#phone-drawer', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'drawer' , platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat/sessions#phone-plain', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'plain', platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat/sessions#phone-lights', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'lights', platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat/sessions#phone-hub', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'hub', platform: 'android' }, newIn: 'after' as const },
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
