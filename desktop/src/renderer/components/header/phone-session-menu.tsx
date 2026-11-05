@@ -199,7 +199,7 @@ const LIGHT_BG: Record<SessionStatusColor, string> = {
  *  name". One tiny light per OTHER open session, in strip order, coloured by
  *  its status — so "another chat needs you" shows without opening the list.
  *  Grey (idle) sessions are drawn faint so the coloured ones stand out. */
-export function SessionLights({ ids, activeId, statuses, onOpen }: { ids: string[]; activeId: string | null; statuses?: Map<string, SessionStatusColor>; onOpen: () => void }) {
+export function SessionLights({ ids, activeId, statuses }: { ids: string[]; activeId: string | null; statuses?: Map<string, SessionStatusColor> }) {
   const others = ids.filter((id) => id !== activeId);
   if (others.length === 0) return null;
   const counts = new Map<SessionStatusColor, number>();
@@ -207,14 +207,14 @@ export function SessionLights({ ids, activeId, statuses, onOpen }: { ids: string
   const label = [...counts].map(([c, n]) => `${n} ${STATUS_LABEL[c].toLowerCase()}`).join(', ');
   return (
     <Tooltip text={`Other sessions: ${label}`}>
-      {/* A button: tapping the lights opens the list like the name does (one target, round 4).
+      {/* Not its own button: the name stack around it (HeaderBar) takes every click (round 4).
           `session-lights` fades while the list is open — globals.css. */}
-      <button type="button" onClick={onOpen} className="session-lights flex items-center justify-center gap-[3px] h-1.5 transition-opacity" aria-label={`All sessions. Other sessions: ${label}`}>
+      <span className="session-lights flex items-center justify-center gap-[3px] h-1.5 transition-opacity" aria-label={`Other sessions: ${label}`}>
         {others.slice(0, 12).map((id) => {
           const c = statuses?.get(id) ?? 'gray';
           return <span key={id} data-status={c} className={`w-1 h-1 rounded-full ${LIGHT_BG[c]} ${c === 'gray' ? 'opacity-40' : ''}`} />;
         })}
-      </button>
+      </span>
     </Tooltip>
   );
 }

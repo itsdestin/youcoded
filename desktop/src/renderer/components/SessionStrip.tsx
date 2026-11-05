@@ -180,7 +180,7 @@ interface Props {
    *  window that owns it into a new one — the move-to-window menu is off, and the list is titled "All sessions". */
   viewer?: boolean;
   /** Phone layout round (header/phone-session-menu.tsx): the header's ☰ / + open this list. */
-  menuApiRef?: React.MutableRefObject<{ openList: () => void; openNewSession: () => void } | null>;
+  menuApiRef?: React.MutableRefObject<{ openList: () => void; toggleList: () => void; openNewSession: () => void } | null>;
   /** The ☰ menu's places, drawn under the list when it is the side drawer. */
   drawerFooter?: React.ReactNode;
 }
@@ -489,7 +489,7 @@ export default function SessionStrip({
     // false→true edge — no manual touched reset needed here.
     setShowNewForm(true);
   }, [defaultProjectFolder, defaultSkipPermissions, defaultModel, defaultStartModel, applyModelChoice]);
-  if (menuApiRef) menuApiRef.current = { openList: () => { setHubMode(narrowTop === 'hub'); setMenuOpen(true); }, openNewSession: () => { setHubMode(false); openNewForm(); setMenuOpen(true); } };
+  if (menuApiRef) menuApiRef.current = { openList: () => { setHubMode(narrowTop === 'hub'); setMenuOpen(true); }, toggleList: () => handleMenuToggle(), openNewSession: () => { setHubMode(false); openNewForm(); setMenuOpen(true); } };
   // Launch the new session in its own peer window instead of this one.
   // Hidden on platforms without multi-window support (Android / remote-shim).
   const [launchInNewWindow, setLaunchInNewWindow] = useState(false);
@@ -653,7 +653,8 @@ export default function SessionStrip({
     if (!menuOpen) return;
     const handler = (e: MouseEvent) => {
       const target = e.target as Node;
-      const inTrigger = menuRef.current?.contains(target);
+      // Lights bar (round 4): the whole name stack is the list's button, so a press anywhere on it is not "outside".
+      const inTrigger = menuRef.current?.contains(target) || (target instanceof Element && !!target.closest('.session-name-stack'));
       const inDropdown = dropdownRef.current?.contains(target);
       // Fix: the FolderSwitcher's dropdown is PORTALED to document.body (to
       // escape this menu's overflow-hidden), so the contains() checks above
@@ -2128,7 +2129,7 @@ export default function SessionStrip({
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 // A plain-title bar's name IS the list button (round 3); the arrow beside it does the same.
-                onClick={(e) => (plainTitle ? handleMenuToggle() : handleClick(s.id, e))}
+                onClick={(e) => (narrowTop === 'lights' ? undefined /* the name stack owns the click */ : plainTitle ? handleMenuToggle() : handleClick(s.id, e))}
                 onContextMenu={(e) => handlePillContextMenu(e, s.id)}
                 // 'html-drag' only (Linux/Wayland): the browser starts a native
                 // drag from the press. Everywhere else the pointer path owns
@@ -2287,7 +2288,7 @@ export default function SessionStrip({
           <Tooltip text="All sessions">
           <button
             ref={triggerBtnRef}
-            onClick={handleMenuToggle}
+            onClick={narrowTop === 'lights' ? undefined : handleMenuToggle}
             aria-label={narrowTop !== 'today' && hiddenCount > 0 ? `All sessions (${hiddenCount} more)` : undefined}
             className={`flex items-center justify-center gap-0.5 h-5 ${plainTitle ? '-ml-1' : 'ml-1'} rounded-sm ${plainTitle ? '' : 'hover:bg-inset'} transition-colors text-fg-muted hover:text-fg-2 ${narrowTop !== 'today' && !plainTitle && hiddenCount > 0 ? 'px-1' : 'w-5'}`}
           >
