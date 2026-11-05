@@ -222,7 +222,7 @@ describe('shell:open-external channel parity', () => {
 describe('account:* channel parity', () => {
   const NEW_TYPES = [
     'account:start', 'account:poll', 'account:signed-in', 'account:user',
-    'account:refresh', 'account:sign-out', 'account:update-profile', 'account:set-handle', 'account:delete',
+    'account:refresh', 'account:sign-out', 'account:sign-out-all', 'account:update-profile', 'account:set-handle', 'account:delete',
     // Accounts Phase 2 — data export lives in the account group across all four surfaces.
     'account:export',
   ];
@@ -1108,7 +1108,8 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
       return !def || def.desktopOnly || def.remoteAllowed === false;
     });
     expect(notServed).toEqual([]);
-  });
+    // WHY 120 s: the first import of the whole channel table is slow on a loaded machine (timed out at 30 s under load).
+  }, 120_000);
 });
 
 // (The native:usage-report channel + its four-surface parity net were removed in

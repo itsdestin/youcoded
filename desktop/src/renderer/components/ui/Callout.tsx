@@ -1,6 +1,7 @@
 import React from 'react';
 import { ChevronDown } from './ChevronDown';
 import { FoldRow } from './FoldRow';
+import { CloseButton } from './CloseButton';
 
 /**
  * K4 — the callout. THE notice box: one geometry, three tones, used for every
@@ -102,12 +103,16 @@ export type CalloutProps = {
    *  box if it is part of the error): the fold used to sit under the box, reading as a separate
    *  thing. Blank text draws no fold. */
   details?: string;
+  /** Slim (`compact`) notices only: an ✕ at the top right that hides the notice, in place of a "Got it" button.
+   *  WHY (Destin, round-3 deck S-1: "replace got it with an x in the top right"): it is the app's own CloseButton,
+   *  the same ✕ the chat's "not available on this device" notice uses, not a new control. */
+  onDismiss?: () => void;
 };
 
 // WHY `data-parts-agree` on the action rows (2026-10-05): shoot's "parts agree" check reads
 // marked rows and fails when the buttons in one differ in height — a notice's buttons sit
 // side by side, so they must match.
-export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', compact = false, children, role, details }: CalloutProps) {
+export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', compact = false, children, role, details, onDismiss }: CalloutProps) {
   const t = TONE[tone];
   const fold = details?.trim() ? (
     <FoldRow className="mt-2" title="Details">
@@ -164,6 +169,8 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
       <div role={role} className={`rounded-lg px-2.5 py-1.5 border flex flex-wrap items-center gap-x-3 gap-y-1.5 ${t.surface} ${className}`.trim()}>
         <div className="flex-1 min-w-40">{text}</div>
         {actions && <div data-parts-agree="notice buttons" className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
+        {/* On the first line, at the right; the Details fold below takes the full width under it. */}
+        {onDismiss && <CloseButton size="icon-sm" label="Dismiss" onClick={onDismiss} className="ml-auto shrink-0 -mr-1" />}
         {/* The slim one-line box takes Details on its own full-width line at the foot. */}
         {fold && <div className="basis-full">{fold}</div>}
       </div>

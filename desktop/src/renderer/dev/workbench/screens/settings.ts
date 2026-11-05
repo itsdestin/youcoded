@@ -56,6 +56,14 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // WHY (2026-09-29): the signed-in Account view was never photographed, so it
   // missed the card sweep — Destin found it bare in the live app.
   { ...settings('settings/account#signed-in', 'dialog'), params: { signedIn: '1' } },
+  // WHY (2026-11-02 rework 3): Sign out everywhere now sits one level down, in the Danger zone on Edit account, beside Delete
+  // account - the app's own pattern for a destructive action. Three states: the Danger zone, the delete two-step it copies (the
+  // reference), and the sign-out-everywhere confirm.
+  // WHY no newIn on the Danger zone itself (round-4 deck A-1b: "i need to review all of these surfaces"): the Danger zone
+  // exists before this work too (Delete account alone), so a before/after pair must photograph both sides.
+  { ...settings('settings/account#danger-zone', 'dialog'), params: { signedIn: '1' }, open: ['Edit account', { do: 'scroll', dir: 'down', times: 4 }] },
+  { ...settings('settings/account#sign-out-everywhere', 'dialog'), params: { signedIn: '1' }, open: ['Edit account', { do: 'scroll', dir: 'down', times: 4 }, 'Sign out everywhere'], newIn: 'after' },
+  { ...settings('settings/account#delete-account', 'dialog'), params: { signedIn: '1' }, open: ['Edit account', { do: 'scroll', dir: 'down', times: 4 }, 'Delete account'] },
   settings('settings/account/connections', 'dialog'),
   { ...settings('settings/assistant', 'dialog'), sameAs: { name: 'settings/assistant/general', why: 'the panel opens on its General page' } },
   settings('settings/assistant/general', 'dialog'),
@@ -84,13 +92,15 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // A folder opened and pointed at: the card lights as one (the ST4-2 sweep).
   // Scrolls first: the backup warning at the top of the modes card (backup-warning-1) pushed the
   // folder rows below the fold at 1440×900.
-  { ...settings('settings/assistant/permissions#folder-open-hover', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 3 }, 'youcoded /home/destin/youcoded-dev/youcoded 4 ▸', { do: 'hover', target: { role: 'button', label: 'youcoded /home/destin/youcoded-dev/youcoded 4 ▾' } }] },
+  { ...settings('settings/assistant/permissions#folder-open-hover', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 3 }, 'youcoded /home/destin/youcoded-dev/youcoded 7 ▸', { do: 'hover', target: { role: 'button', label: 'youcoded /home/destin/youcoded-dev/youcoded 7 ▾' } }] },
+  // "Commands that never ask": the closed fold opened, to show the plain-words list (2026-10-31).
+  { ...settings('settings/assistant/permissions#never-ask-open', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 2 }, 'Look-only commands Used in Ask first and Auto edit. Checking things ne'] },
   settings('settings/assistant/permissions/skip-confirm', 'dialog'),
   settings('settings/assistant/specialists', 'dialog'),
   // error-notices-1 (2026-10-12): a setting that couldn't load (one line + Retry), and a
   // general error with Report bug / Diagnose (Permissions).
   { ...settings('settings/assistant/specialists#load-failed', 'dialog', 'error-state'), params: { fail: 'specialists.getDelegatedModels' } },
-  { ...settings('settings/assistant/permissions#load-failed', 'dialog', 'error-state'), params: { fail: 'permissions.list' } },
+  { ...settings('settings/assistant/permissions#load-failed', 'dialog', 'error-state'), params: { fail: 'permissions.list' }, open: [{ do: 'scroll', dir: 'down', times: 3 }] },
   { ...settings('settings/assistant/general#step-guard-failed', 'dialog', 'error-state'), params: { fail: 'native.getStepGuard' } },
   settings('settings/appearance', 'dialog'),
   // The two Appearance folds, now the shared FoldRow (submit-ticket-5 proposal 1).
@@ -138,6 +148,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // "Remove backup?" on the default fixture's one backend (drive-1).
   settings('settings/sync/remove-backend', 'dialog'),
   settings('settings/remote', 'dialog'),
+  // Set up, with a paired phone and a paired tablet last used a while ago (the "Last used" line; 90-day sign-out).
+  { ...settings('settings/remote#devices', 'dialog'), params: { remotePreview: 'ready' } },
   settings('settings/help', 'dialog'),
   // Scrolled to its last group, where Get beta builds and (#183) Install updates automatically sit.
   { ...settings('settings/help#updates', 'dialog'), open: [{ do: 'scroll', target: { role: 'button', labelStarts: 'Contribute to YouCoded' }, dir: 'down', times: 3 }] },

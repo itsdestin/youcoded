@@ -334,6 +334,8 @@ export function loadFixture(
           // live PermissionRequest, not silently downgrade it to generic Yes/No.
           external: parsed.external === true,
           permissionMode: parsed.permissionMode,
+          // Q-1: a bash session (not PowerShell) — lets a fixture show the "Each part on its own" choice.
+          ...(parsed.chainsHonoured === true ? { chainsHonoured: true } : {}),
           // Carried so a floor's card (no Always Allow, its own note) — the
           // admin stop included — can be shown from a fixture.
           ...(parsed.floorStop ? { floorStop: parsed.floorStop } : {}),

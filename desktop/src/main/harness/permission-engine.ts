@@ -10,6 +10,7 @@
 // allow" flow persists only allow rules); a future feature persisting remembered
 // ask/deny rules must revisit this consequence-warning logic.
 import { ruleMatches, type MatchContext } from '../../shared/subject-glob';
+import { downloadHostVerdict } from '../../shared/download-host';
 import type { PermissionDecision, PermissionRule } from '../../shared/permission-types';
 
 export interface PermissionLayers {
@@ -45,5 +46,34 @@ export function decidePermission(
     winner = entry; // last match wins
   }
   if (!winner) return { action: 'ask', denyListed: false }; // safe default — never silent-allow
+  // A link-following download allowed BY a download-host rule must run guarded (same website at every hop). Only the
+  // WINNING rule counts: a mode or exact grant that wins the decision approved the command as typed.
+  if (winner.r.match === 'download-host' && winner.r.action === 'allow' && tool === 'Bash') {
+    const v = downloadHostVerdict(subject ?? '');
+    if (v && v.ok && v.followsRedirects) return { action: 'allow', denyListed: winner.deny, downloadGuard: { host: v.host } };
+  }
   return { action: winner.r.action, denyListed: winner.deny };
+}
+
+/** Q-1 (review deck 2026-11-01): a joined-up command (`cd app && npm test`) is allowed when EVERY part is allowed on its
+ *  own — by a saved grant for that part, the built-in look-only list, or the mode. This is the engine half of "Always
+ *  allow remembers each safe part separately"; bash-grant-shapes decides what gets saved per part.
+ *
+ *  WHY it only ever returns allow-or-null: a chain that is not wholly covered keeps the decision the WHOLE line got
+ *  (an ask, with its deny-list flag), so every warning the card shows today is unchanged. And a part judged here goes
+ *  through the same layers as any command, so a part in the destructive deny-list still asks unless the person saved a
+ *  word-for-word grant for exactly that part. `free` marks a plain `cd` into a folder below the project (no grant needed).
+ *  The caller supplies each part's own context because the look-only list's file checks depend on where the part runs. */
+export function decideChainParts(
+  parts: Array<{ text: string; context: MatchContext; free?: boolean }>,
+  layers: PermissionLayers,
+): PermissionDecision | null {
+  let judged = 0;
+  for (const part of parts) {
+    if (part.free) continue;
+    judged++;
+    if (decidePermission('Bash', part.text, layers, { ...part.context, chainPart: true }).action !== 'allow') return null;
+  }
+  // A chain made only of free steps (`cd a && cd b`) is not worth a verdict of its own: it grants nothing to remember.
+  return judged > 0 ? { action: 'allow', denyListed: false } : null;
 }

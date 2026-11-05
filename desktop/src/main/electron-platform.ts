@@ -3,7 +3,8 @@
 // objects to the core. See platform.ts for what the core may ask of the host.
 import fs from 'fs';
 import path from 'path';
-import { app, shell, BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
+import { safeOpenExternal } from './safe-open';
 import { getSecretStorage } from './providers/secret-storage';
 import type { Platform, AskpassPaths } from './platform';
 import type { SecretStorage } from './providers/recoverable-safe-storage';
@@ -60,7 +61,8 @@ export function createElectronPlatform(): Platform {
     decryptString: (value) => getSecretStorage().decryptString(value),
   };
   return {
-    openExternal: (url) => shell.openExternal(url),
+    // WHY (audit F7): sign-in and other flows hand over addresses built from server replies; only web addresses open.
+    openExternal: async (url) => { await safeOpenExternal(url); },
     secretStorage,
     resolveAskpassPaths,
   };

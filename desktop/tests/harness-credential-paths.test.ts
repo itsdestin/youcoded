@@ -48,8 +48,6 @@ describe('isCredentialPath — pure-credential files, home-anchored', () => {
   it.each([
     // Mixed config files carry legitimate "fix my config" requests — NOT denied
     // (they go through the ask-per-website path, a separate decision).
-    '.npmrc',
-    '.pypirc',
     '.bash_history',
     // A project file that merely shares a basename with a browser DB.
     'projects/app/Cookies',
@@ -77,8 +75,11 @@ describe('checkPathGuard blocks the credential files (cannot be overridden)', ()
     expect(v.kind).toBe('deny');
   });
 
-  it('~/.npmrc is NOT a hard deny (it is outside the workspace → external ask)', () => {
-    expect(checkPathGuard(path.join(HOME, '.npmrc'), CWD).kind).toBe('external');
+  // Changed 2026-10-30 (security hardening, deliberate): .npmrc / .pypirc routinely hold registry
+  // tokens, so a prompt-injected assistant must not read them. They join the hard-deny list.
+  it('~/.npmrc and ~/.pypirc are now hard denies', () => {
+    expect(checkPathGuard(path.join(HOME, '.npmrc'), CWD).kind).toBe('deny');
+    expect(checkPathGuard(path.join(HOME, '.pypirc'), CWD).kind).toBe('deny');
   });
 });
 

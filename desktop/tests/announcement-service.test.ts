@@ -71,3 +71,26 @@ describe('parseAnnouncement', () => {
     });
   });
 });
+
+// Security audit SC-8: remote announcement text must never carry terminal escapes.
+import { sanitizeAnnouncementText, MAX_ANNOUNCEMENT_LENGTH } from '../src/shared/announcement';
+
+describe('announcement text is safe to print to a terminal', () => {
+  it('strips ANSI colour, OSC title/link/clipboard sequences and other control characters', () => {
+    const evil = 'Update \u001b[31mnow\u001b[0m \u001b]0;fake title\u0007\u001b]52;c;Zm9v\u0007\u001b]8;;http://e\u001b\\click\u001b]8;;\u001b\\ \u009b31m end\u0000\u0008';
+    const out = sanitizeAnnouncementText(evil);
+    expect(out).toBe('Update now click end');
+    expect(/[\u0000-\u001f\u007f-\u009f]/.test(out)).toBe(false);
+  });
+  it('keeps ordinary text, emoji and non-English words', () => {
+    expect(sanitizeAnnouncementText('Nueva versión 🎉 está lista!')).toBe('Nueva versión 🎉 está lista!');
+  });
+  it('removes text-direction overrides and caps the length', () => {
+    expect(sanitizeAnnouncementText('a‮b')).toBe('a b');
+    expect(sanitizeAnnouncementText('x'.repeat(5000)).length).toBe(MAX_ANNOUNCEMENT_LENGTH);
+  });
+  it('parseAnnouncement sanitizes both dated and undated lines, and drops lines that are only escapes', () => {
+    expect(__test.parseAnnouncement('\u001b]0;t\u0007Hello')).toEqual({ message: 'Hello' });
+    expect(__test.parseAnnouncement('\u001b[31m\u001b[0m')).toBeNull();
+  });
+});

@@ -114,6 +114,7 @@ export class BrowserUnavailableError extends Error {
 /** Which answers each kind of card offers (BrowserAskCard.tsx). */
 const ANSWERS_BY_KIND: Record<BrowserPrompt['kind'], readonly PromptAnswer[]> = {
   site: ['allow_chat', 'allow_always', 'no'],
+  form: ['once', 'allow_always', 'no'], // WHY: "Always allow" here means forms on this site only, never the click/type list
   final: ['once', 'no'],
   local: ['allow_chat', 'no'],
   handoff: ['done', 'cant'],
@@ -168,6 +169,29 @@ interface SessionEntry {
 
 let promptSeq = 0;
 
+/** The text Chromium prints when it cannot build its sandbox on this computer. */
+const SANDBOX_START_FAILURE = /no usable sandbox|sandbox is not supported|failed to move to new namespace|namespace.*(not permitted|operation not permitted)|setuid sandbox|zygote.*sandbox|running as root without --no-sandbox/i;
+
+/** Starts the browser with its sandbox on. Only on Linux, and only when the start fails with a sandbox error, it starts
+ *  again without the sandbox (and says so in the log) rather than leaving the Browser unusable on that computer. Any other
+ *  failure — and every failure on Windows and macOS — is passed on unchanged. */
+export async function launchSandboxed<T>(
+  launch: (chromiumSandbox: boolean) => Promise<T>,
+  platform: NodeJS.Platform,
+  warn: (message: string, details?: Record<string, unknown>) => void,
+  beforeRetry?: () => Promise<void>,
+): Promise<T> {
+  try {
+    return await launch(true);
+  } catch (err) {
+    const text = err instanceof Error ? err.message : String(err);
+    if (platform !== 'linux' || !SANDBOX_START_FAILURE.test(text)) throw err;
+    warn('Browser sandbox unavailable on this computer (user namespaces are off or restricted); starting WITHOUT the browser sandbox', { error: text.split('\n')[0].slice(0, 200) });
+    if (beforeRetry) await beforeRetry().catch(() => undefined);
+    return await launch(false);
+  }
+}
+
 export class BrowserService extends EventEmitter {
   private readonly opts: BrowserServiceOptions;
   private context: BrowserContext | null = null;
@@ -179,6 +203,8 @@ export class BrowserService extends EventEmitter {
   private windowShown = false;
   private myChrome = false;
   private browserLabel: string | null = null;
+  /** Linux only: the browser had to start without its sandbox (shown to the person, not only logged). */
+  private sandboxOff = false;
   private readonly sessions = new Map<string, SessionEntry>();
   private readonly owner = new WeakMap<Page, string>();
   private browserIdleTimer: NodeJS.Timeout | null = null;
@@ -224,6 +250,7 @@ export class BrowserService extends EventEmitter {
       windowShown: this.windowShown,
       myChrome: this.myChrome,
       browserLabel: this.browserLabel,
+      sandboxOff: this.sandboxOff,
       tabs,
       prompt: e?.prompt ?? null,
       error: this.run === 'error' ? this.lastError : null,
@@ -409,7 +436,13 @@ export class BrowserService extends EventEmitter {
       if (v) userAgent = normalUserAgent(v, this.opts.platform);
     }
     const ratio = this.opts.pixelRatio ?? HIDDEN_PIXEL_RATIO;
-    const ctx = await this.opts.chromium.launchPersistentContext(profileDir, {
+    // WHY chromiumSandbox (2026-10-30 audit B1): Playwright adds --no-sandbox unless told not to, and this browser visits
+    // arbitrary websites by design. With the sandbox on, a page that breaks the browser's renderer still cannot reach
+    // the person's files. Windows and macOS always support it. Some Linux computers do not (user namespaces switched
+    // off, as on Ubuntu 24.04 for a browser outside its packaged location): there the first start fails with a sandbox
+    // error, so it is retried once WITHOUT the sandbox, and a WARN line in the log says so (see launchSandboxed).
+    const launch = (chromiumSandbox: boolean) => this.opts.chromium.launchPersistentContext(profileDir, {
+      chromiumSandbox,
       executablePath: browser.executablePath,
       headless,
       // A shown window follows its own size; a hidden one renders a laptop-sized page.
@@ -433,6 +466,13 @@ export class BrowserService extends EventEmitter {
       handleSIGINT: false,
       handleSIGTERM: false,
       handleSIGHUP: false,
+    });
+    this.sandboxOff = false;
+    // WHY also remembered (integration review 2026-11-01): the retry without the sandbox used to leave only a log line, so
+    // the person believed the extra protection was on. The panel now says so.
+    const ctx = await launchSandboxed(launch, this.opts.platform ?? process.platform, (m, d) => { this.sandboxOff = true; this.log('WARN', m, d); }, async () => {
+      // A failed first start can leave the profile marked in-use; clear it exactly as before a normal start.
+      await clearStaleProfileLock(profileDir, this.opts.platform ?? process.platform, (m, d) => this.log('INFO', m, d));
     });
     this.windowShown = !headless;
     this.myChrome = false;

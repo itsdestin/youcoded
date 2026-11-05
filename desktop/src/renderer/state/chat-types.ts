@@ -813,6 +813,8 @@ export type ChatAction =
       // Native broker only: the session's mode at ask time. 'full-auto' +
       // denyListed → ToolCard renders the safety-stop footer (spec 2026-08-12).
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
+      /** See ToolCallState.chainsHonoured. */
+      chainsHonoured?: boolean;
     }
   | {
       type: 'PERMISSION_EXPIRED';

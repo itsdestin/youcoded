@@ -414,6 +414,65 @@ describe('hookPipeName', () => {
   });
 });
 
+// Security hardening 2026-10-30 (local-listeners audit F3/F4): no shared, guessable socket name.
+describe.skipIf(process.platform === 'win32')('hook socket is never in a shared, guessable place', () => {
+  it('without a runtime folder the socket sits in a per-user subfolder of the temp folder, not directly in it', () => {
+    const p = hookPipeName(42, 'linux', {});
+    expect(path.dirname(p)).not.toBe(os.tmpdir());
+    expect(path.basename(path.dirname(p))).toMatch(/^youcoded-/);
+  });
+
+  it('start() refuses a socket folder that is really a link (or otherwise not ours) instead of listening there', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-hookdir-'));
+    try {
+      const real = path.join(base, 'real'); fs.mkdirSync(real);
+      const link = path.join(base, 'youcoded-link'); fs.symlinkSync(real, link, 'dir');
+      const r = new HookRelay(path.join(link, 'hooks.sock'));
+      await expect(r.start()).rejects.toThrow(/not private/);
+      expect(r.isRunning()).toBe(false);
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
+
+  it('start() tightens an own-but-loose youcoded folder to owner-only and listens', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-hookdir-'));
+    try {
+      const dir = path.join(base, 'youcoded-1000'); fs.mkdirSync(dir, { mode: 0o755 }); fs.chmodSync(dir, 0o755);
+      const r = new HookRelay(path.join(dir, 'hooks.sock'));
+      await r.start();
+      expect(fs.statSync(dir).mode & 0o077).toBe(0);
+      r.stop();
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
+
+  it('the hook scripts do NOT fall back to a shared socket name when YouCoded gave them none', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-squat-'));
+    const squatter = path.join(tmp, 'claude-desktop-hooks.sock');
+    let connections = 0;
+    const server = net.createServer((s) => { connections++; s.end(JSON.stringify({ decision: { behavior: 'allow' } })); });
+    await new Promise<void>((res) => server.listen(squatter, res));
+    try {
+      const { spawn } = await import('child_process');
+      for (const script of ['relay.js', 'relay-blocking.js']) {
+        const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: tmp, TEMP: tmp, TMP: tmp };
+        delete env.CLAUDE_DESKTOP_PIPE;
+        const child = spawn(process.execPath, [path.join(__dirname, '..', 'hook-scripts', script)], { env });
+        let out = '';
+        child.stdout.on('data', (c) => { out += c; });
+        const code = await new Promise<number | null>((res) => {
+          child.on('exit', res);
+          child.stdin.end(JSON.stringify({ hook_event_name: 'PermissionRequest', session_id: 's', tool_name: 'Bash' }));
+        });
+        expect(code, script).toBe(0);
+        expect(out, script).toBe('');
+      }
+      expect(connections).toBe(0);
+    } finally {
+      server.close();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 describe.skipIf(process.platform === 'win32')('HookRelay.ensureListening — a deleted socket file', () => {
   let dir: string;
   let relay: HookRelay;

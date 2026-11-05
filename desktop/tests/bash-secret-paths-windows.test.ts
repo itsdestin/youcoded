@@ -8,8 +8,11 @@ vi.mock('os', async () => { const o: any = await vi.importActual('os'); return {
 import { secretPathVerdict } from '../src/main/harness/tools/bash-secret-paths';
 const ctx = { cwd: 'C:\\Users\\me\\proj', home: 'C:\\Users\\me' };
 describe('win glob', () => {
-  it.each(['cat .env*', 'cat .e?v', 'cat ~/.ss*/id_rsa', 'cat .en[v]'])('%s', (cmd) => {
+  it.each(['cat .env*', 'cat .e?v', 'cat .en[v]'])('%s', (cmd) => {
     expect(secretPathVerdict(cmd, ctx)?.kind).toBe('secret-maybe');
+  });
+  it('cat ~/.ss*/id_rsa names a private key outright', () => {
+    expect(secretPathVerdict('cat ~/.ss*/id_rsa', ctx)?.kind).toBe('secret-path');
   });
   it.each(['cat *.ts', 'rm -rf *'])('%s quiet', (cmd) => { expect(secretPathVerdict(cmd, ctx)).toBeNull(); });
 });

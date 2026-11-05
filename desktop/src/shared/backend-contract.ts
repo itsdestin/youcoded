@@ -758,6 +758,7 @@ export const IPC = {
   ACCOUNT_USER: 'account:user',
   ACCOUNT_REFRESH: 'account:refresh',
   ACCOUNT_SIGN_OUT: 'account:sign-out',
+  ACCOUNT_SIGN_OUT_ALL: 'account:sign-out-all',
   ACCOUNT_UPDATE_PROFILE: 'account:update-profile',
   ACCOUNT_SET_HANDLE: 'account:set-handle',
   ACCOUNT_DELETE: 'account:delete',
@@ -1005,6 +1006,7 @@ export interface ChannelTypes extends ConversationQueueChannelTypes, BrowserChan
   'account:user': { request: void; response: MarketplaceUser | null };
   'account:refresh': { request: void; response: MarketplaceUser | null };
   'account:sign-out': { request: void; response: void };
+  'account:sign-out-all': { request: void; response: ApiResult<void> };
   'account:update-profile': { request: { displayName: string }; response: ApiResult<{ display_name: string }> };
   'account:set-handle': { request: { handle: string }; response: ApiResult<{ handle: string }> };
   'account:delete': { request: void; response: ApiResult<void> };
@@ -1248,6 +1250,8 @@ interface ClaudeApi {
     // Force a /auth/me round-trip; returns the fresh profile or null (401-cleared).
     refresh: () => Promise<MarketplaceUser | null>;
     signOut: () => Promise<void>;
+    // Ends the sign-in on EVERY device; signs this computer out only if the server confirmed.
+    signOutAll: () => Promise<ApiResult<void>>;
     updateProfile: (displayName: string) => Promise<ApiResult<{ display_name: string }>>;
     setHandle: (handle: string) => Promise<ApiResult<{ handle: string }>>;
     deleteAccount: () => Promise<ApiResult<void>>;

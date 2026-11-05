@@ -9,6 +9,8 @@ const pluginsDir = () => path.join(home, '.claude', 'plugins', 'marketplaces', '
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-upgrade-')); origHome = process.env.HOME;
   process.env.HOME = home; process.env.USERPROFILE = home; vi.resetModules();
+  // WHY: built-in ids (test-plugin...) now install only from a pinned git commit (covered in
+  // bundled-plugin-pins.test.ts), so the swap/restore mechanics here use a non-built-in id.
 });
 afterEach(() => { process.env.HOME = origHome; delete process.env.USERPROFILE; fs.rmSync(home, { recursive: true, force: true }); });
 
@@ -29,16 +31,16 @@ describe('plugin-installer upgrade primitives', () => {
   });
   it('upgradePluginFromLocal swaps the tree and registers the real version', async () => {
     const mod = await import('../src/main/plugin-installer');
-    w(path.join(cacheDir(), 'youcoded-chatsearch', 'plugin.json'), '{"name":"youcoded-chatsearch","version":"0.2.0"}');
-    w(path.join(cacheDir(), 'youcoded-chatsearch', 'skills', 'x', 'SKILL.md'), 'new');
-    w(path.join(pluginsDir(), 'youcoded-chatsearch', 'plugin.json'), '{"name":"youcoded-chatsearch","version":"0.1.0"}');
-    w(path.join(pluginsDir(), 'youcoded-chatsearch', 'stale.txt'), 'gone after upgrade');
-    const r = await mod.upgradePluginFromLocal('youcoded-chatsearch', 'youcoded-chatsearch', 'youcoded');
+    w(path.join(cacheDir(), 'test-plugin', 'plugin.json'), '{"name":"test-plugin","version":"0.2.0"}');
+    w(path.join(cacheDir(), 'test-plugin', 'skills', 'x', 'SKILL.md'), 'new');
+    w(path.join(pluginsDir(), 'test-plugin', 'plugin.json'), '{"name":"test-plugin","version":"0.1.0"}');
+    w(path.join(pluginsDir(), 'test-plugin', 'stale.txt'), 'gone after upgrade');
+    const r = await mod.upgradePluginFromLocal('test-plugin', 'test-plugin', 'youcoded');
     expect(r.status).toBe('installed');
-    expect(fs.existsSync(path.join(pluginsDir(), 'youcoded-chatsearch', 'stale.txt'))).toBe(false);
-    expect(fs.readFileSync(path.join(pluginsDir(), 'youcoded-chatsearch', 'skills', 'x', 'SKILL.md'), 'utf8')).toBe('new');
+    expect(fs.existsSync(path.join(pluginsDir(), 'test-plugin', 'stale.txt'))).toBe(false);
+    expect(fs.readFileSync(path.join(pluginsDir(), 'test-plugin', 'skills', 'x', 'SKILL.md'), 'utf8')).toBe('new');
     const db = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), 'utf8'));
-    expect(db.plugins['youcoded-chatsearch@youcoded'][0].version).toBe('0.2.0');
+    expect(db.plugins['test-plugin@youcoded'][0].version).toBe('0.2.0');
     expect(fs.readdirSync(pluginsDir()).filter((n) => n.startsWith('.'))).toEqual([]);
   });
   it('upgradePluginFromLocal fails honestly when the cache has no such plugin', async () => {
@@ -53,10 +55,10 @@ describe('plugin-installer upgrade primitives', () => {
   // restore path until this test.
   it('restores the old tree, reports failed, and cleans up staging when the swap dies mid-rename', async () => {
     const mod = await import('../src/main/plugin-installer');
-    w(path.join(cacheDir(), 'youcoded-chatsearch', 'plugin.json'), '{"name":"youcoded-chatsearch","version":"0.2.0"}');
-    w(path.join(cacheDir(), 'youcoded-chatsearch', 'skills', 'x', 'SKILL.md'), 'new');
-    w(path.join(pluginsDir(), 'youcoded-chatsearch', 'plugin.json'), '{"name":"youcoded-chatsearch","version":"0.1.0"}');
-    w(path.join(pluginsDir(), 'youcoded-chatsearch', 'original.txt'), 'still here');
+    w(path.join(cacheDir(), 'test-plugin', 'plugin.json'), '{"name":"test-plugin","version":"0.2.0"}');
+    w(path.join(cacheDir(), 'test-plugin', 'skills', 'x', 'SKILL.md'), 'new');
+    w(path.join(pluginsDir(), 'test-plugin', 'plugin.json'), '{"name":"test-plugin","version":"0.1.0"}');
+    w(path.join(pluginsDir(), 'test-plugin', 'original.txt'), 'still here');
 
     const realRename = fs.renameSync;
     let renameCalls = 0;
@@ -71,13 +73,13 @@ describe('plugin-installer upgrade primitives', () => {
     }) as typeof fs.renameSync);
 
     try {
-      const r = await mod.upgradePluginFromLocal('youcoded-chatsearch', 'youcoded-chatsearch', 'youcoded');
+      const r = await mod.upgradePluginFromLocal('test-plugin', 'test-plugin', 'youcoded');
       expect(r.status).toBe('failed');
       if (r.status === 'failed') expect(r.error).toMatch(/EPERM: simulated rename failure mid-swap/);
       // Old plugin tree is back at its original path with its original contents.
-      expect(fs.existsSync(path.join(pluginsDir(), 'youcoded-chatsearch', 'original.txt'))).toBe(true);
-      expect(fs.readFileSync(path.join(pluginsDir(), 'youcoded-chatsearch', 'plugin.json'), 'utf8')).toBe(
-        '{"name":"youcoded-chatsearch","version":"0.1.0"}',
+      expect(fs.existsSync(path.join(pluginsDir(), 'test-plugin', 'original.txt'))).toBe(true);
+      expect(fs.readFileSync(path.join(pluginsDir(), 'test-plugin', 'plugin.json'), 'utf8')).toBe(
+        '{"name":"test-plugin","version":"0.1.0"}',
       );
       // Staging directory was cleaned up, and no retired dir left behind either.
       expect(fs.readdirSync(pluginsDir()).filter((n) => n.startsWith('.'))).toEqual([]);
@@ -90,28 +92,28 @@ describe('plugin-installer upgrade primitives', () => {
   // upgrade failure, and must not skip registering the new version.
   it('still reports installed with the new version when only retired-tree cleanup fails', async () => {
     const mod = await import('../src/main/plugin-installer');
-    w(path.join(cacheDir(), 'youcoded-chatsearch', 'plugin.json'), '{"name":"youcoded-chatsearch","version":"0.2.0"}');
-    w(path.join(pluginsDir(), 'youcoded-chatsearch', 'plugin.json'), '{"name":"youcoded-chatsearch","version":"0.1.0"}');
+    w(path.join(cacheDir(), 'test-plugin', 'plugin.json'), '{"name":"test-plugin","version":"0.2.0"}');
+    w(path.join(pluginsDir(), 'test-plugin', 'plugin.json'), '{"name":"test-plugin","version":"0.1.0"}');
 
     const realRm = fs.rmSync;
     // Only the retired-tree removal (`.old-<id>-<pid>`) throws; the staging
     // cleanup at the top of the function must still run for real, or this
     // test can't tell the two rmSync call sites apart.
     const rmSpy = vi.spyOn(fs, 'rmSync').mockImplementation(((target: fs.PathLike, opts?: fs.RmOptions) => {
-      if (String(target).includes(`${path.sep}.old-youcoded-chatsearch-`)) {
+      if (String(target).includes(`${path.sep}.old-test-plugin-`)) {
         throw new Error('EBUSY: simulated retired-tree cleanup failure');
       }
       return (realRm as (t: fs.PathLike, o?: fs.RmOptions) => void)(target, opts);
     }) as typeof fs.rmSync);
 
     try {
-      const r = await mod.upgradePluginFromLocal('youcoded-chatsearch', 'youcoded-chatsearch', 'youcoded');
+      const r = await mod.upgradePluginFromLocal('test-plugin', 'test-plugin', 'youcoded');
       expect(r.status).toBe('installed');
-      expect(fs.readFileSync(path.join(pluginsDir(), 'youcoded-chatsearch', 'plugin.json'), 'utf8')).toBe(
-        '{"name":"youcoded-chatsearch","version":"0.2.0"}',
+      expect(fs.readFileSync(path.join(pluginsDir(), 'test-plugin', 'plugin.json'), 'utf8')).toBe(
+        '{"name":"test-plugin","version":"0.2.0"}',
       );
       const db = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), 'utf8'));
-      expect(db.plugins['youcoded-chatsearch@youcoded'][0].version).toBe('0.2.0');
+      expect(db.plugins['test-plugin@youcoded'][0].version).toBe('0.2.0');
     } finally {
       rmSpy.mockRestore();
     }
@@ -122,9 +124,9 @@ describe('plugin-installer upgrade primitives', () => {
   // Android's LocalSkillProvider.sweepStaleUpgradeDirs() tests.
   it('sweepStaleUpgradeDirs removes stale .old-/.upgrade- dirs, leaving the real plugin and a same-prefix decoy untouched', async () => {
     const { sweepStaleUpgradeDirs } = await import('../src/main/plugin-installer');
-    w(path.join(pluginsDir(), 'youcoded-chatsearch', 'plugin.json'), '{"name":"youcoded-chatsearch","version":"0.2.0"}');
-    w(path.join(pluginsDir(), '.old-youcoded-chatsearch-4242', 'plugin.json'), '{"name":"youcoded-chatsearch","version":"0.1.0"}');
-    w(path.join(pluginsDir(), '.upgrade-youcoded-chatsearch-4242', 'plugin.json'), '{"name":"youcoded-chatsearch","version":"0.2.0"}');
+    w(path.join(pluginsDir(), 'test-plugin', 'plugin.json'), '{"name":"test-plugin","version":"0.2.0"}');
+    w(path.join(pluginsDir(), '.old-test-plugin-4242', 'plugin.json'), '{"name":"test-plugin","version":"0.1.0"}');
+    w(path.join(pluginsDir(), '.upgrade-test-plugin-4242', 'plugin.json'), '{"name":"test-plugin","version":"0.2.0"}');
     // A real plugin legitimately named "old-fashioned-plugin" — no leading
     // dot, so name-PREFIX matching on ".old-" must not touch it.
     w(path.join(pluginsDir(), 'old-fashioned-plugin', 'plugin.json'), '{"name":"old-fashioned-plugin","version":"1.0.0"}');
@@ -132,7 +134,7 @@ describe('plugin-installer upgrade primitives', () => {
     sweepStaleUpgradeDirs();
 
     const remaining = fs.readdirSync(pluginsDir()).sort();
-    expect(remaining).toEqual(['old-fashioned-plugin', 'youcoded-chatsearch']);
+    expect(remaining).toEqual(['old-fashioned-plugin', 'test-plugin']);
   });
 
   it('sweepStaleUpgradeDirs is a no-op when the plugins dir does not exist yet', async () => {

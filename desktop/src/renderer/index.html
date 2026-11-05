@@ -50,6 +50,8 @@
   <script>
     (function () {
       if (!/^https?:$/.test(location.protocol)) return;
+      // The Android app serves its own bundled page over https too (appassets.androidplatform.net): it is not a copy a computer served.
+      if (location.hostname === 'appassets.androidplatform.net') return;
       addEventListener('load', function () {
         try {
           var nav = performance.getEntriesByType('navigation')[0];

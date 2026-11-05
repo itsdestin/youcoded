@@ -63,6 +63,8 @@ interface ConfigData {
   passwordHash: string | null;
   keepAwakeHours: number; // 0 = off
   everPaired: boolean;
+  // Remembered across restarts (see RemoteConfig.weakPassword).
+  weakPassword?: boolean;
 }
 
 export class RemoteConfig {
@@ -104,6 +106,9 @@ export class RemoteConfig {
         // next save. We intentionally don't load it into memory here.
         this.keepAwakeHours = data.keepAwakeHours ?? defaults.keepAwakeHours;
         this.everPaired = data.everPaired ?? defaults.everPaired;
+        // WHY saved: the hash can't tell us the length, so without this the short-password note
+        // vanished at every restart until the next sign-in. Only ever set from a password we have seen.
+        this.weakPassword = data.weakPassword === true;
         return;
       } catch {
         // Fall through to defaults
@@ -129,7 +134,10 @@ export class RemoteConfig {
     // Only a correct password tells us the real length; record it so Settings can
     // surface the short-password note for a password set before the minimum, or
     // by hand-editing the config file.
-    if (ok) this.weakPassword = plaintext.length < MIN_REMOTE_PASSWORD_LENGTH;
+    if (ok) {
+      const weak = plaintext.length < MIN_REMOTE_PASSWORD_LENGTH;
+      if (weak !== this.weakPassword) { this.weakPassword = weak; this.save(); }
+    }
     return ok;
   }
 
@@ -146,6 +154,7 @@ export class RemoteConfig {
       passwordHash: this.passwordHash,
       keepAwakeHours: this.keepAwakeHours,
       everPaired: this.everPaired,
+      weakPassword: this.weakPassword,
     }, null, 2), { mode: 0o600 });
   }
 

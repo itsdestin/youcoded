@@ -32,11 +32,11 @@ jobs:
       matrix: ${{ steps.filter.outputs.matrix }}
       packageMode: ${{ steps.filter.outputs.packageMode }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 22
       - id: filter
@@ -54,10 +54,10 @@ jobs:
       run:
         working-directory: desktop
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 22
           cache: npm
@@ -80,7 +80,7 @@ jobs:
         shell: pwsh
       - name: Run tests
         run: node ../scripts/ci-desktop.mjs shard "${{ matrix.os }}" "${{ matrix.shard }}" "${{ matrix.total }}"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         if: always()
         with:
           name: tests-${{ matrix.os }}-${{ matrix.shard }}
@@ -96,10 +96,10 @@ jobs:
       run:
         working-directory: desktop
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 22
           cache: npm
@@ -127,14 +127,14 @@ jobs:
         env:
           CI_PACKAGE_MODE: ${{ needs.changes.outputs.packageMode }}
         run: node ../scripts/ci-linux.mjs prepare
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: prepared-app
           path: ci-prepared/
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: prepared-evidence
           path: ci-results/prepared-evidence/
@@ -151,10 +151,10 @@ jobs:
         format: [AppImage, deb, rpm, pacman]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 22
           cache: npm
@@ -163,7 +163,7 @@ jobs:
         working-directory: desktop
       - name: Install Linux build deps
         run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools zstd time squashfs-tools
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
         with:
           name: prepared-app
           path: ci-prepared
@@ -173,7 +173,7 @@ jobs:
         run: node scripts/ci-linux.mjs package "${{ matrix.format }}"
       # WHY: installers are validated here but not uploaded by default. Keep
       # current manifests, package metadata and sizes, not four duplicate blobs.
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         if: always()
         with:
           name: format-${{ matrix.format }}
@@ -195,21 +195,21 @@ jobs:
       sha: ${{ steps.verify.outputs.sha }}
       packageMode: ${{ steps.verify.outputs.packageMode }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 22
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
         with:
           pattern: tests-*
           path: ci-results
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
         with:
           pattern: format-*
           path: ci-results
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
         with:
           name: prepared-evidence
           path: ci-results/prepared-evidence
@@ -218,7 +218,7 @@ jobs:
         env:
           CI_PACKAGE_MODE: ${{ needs.changes.outputs.packageMode }}
         run: node scripts/ci-desktop.mjs aggregate
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: full-ci-summary
           path: ci-results/summary.json
@@ -238,10 +238,10 @@ jobs:
       run:
         working-directory: desktop
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 22
           cache: npm
@@ -270,10 +270,10 @@ jobs:
     if: always() && needs.changes.outputs.route != 'browser'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 22
       - name: Require every selected result
@@ -287,10 +287,10 @@ jobs:
     if: always() && needs.changes.outputs.route == 'browser'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 22
       - env:

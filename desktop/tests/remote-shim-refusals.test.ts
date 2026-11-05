@@ -776,7 +776,7 @@ describe('remote-shim — voice gate', () => {
         shim = await loadShim();
         shim.installShim();
         voice = (window as any).claude.voice;
-        const pairing = shim.connectToHost('desk.local', 9900, 'pw');
+        const pairing = shim.connectToHost('desk.tail1234.ts.net', 9900, 'pw');
         const ws = await waitForSocket(1);
         ws.open();
         ws.receive({ type: 'auth:ok', token: 'tok', platform: 'desktop' });

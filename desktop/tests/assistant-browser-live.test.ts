@@ -33,6 +33,8 @@ const PAGES: Record<string, string> = {
     <a href="/file.txt" download>Get file</a>`,
   '/duplicates': `<!doctype html><title>Duplicates</title><p hidden>Shared ready</p><p>Shared ready</p><p>Shared ready</p>`,
   '/select': `<!doctype html><title>Choose</title><select aria-label="Language"><option value="en">English</option><option value="fr">French</option></select>`,
+  '/plain-form': `<!doctype html><title>Plain</title>
+    <form action="/results" method="get"><input name="n" aria-label="Your name"><button type="submit">Continue</button></form>`,
   '/results': `<!doctype html><title>Results</title><p id="r">Results page</p>`,
   '/checkout/confirm': `<!doctype html><title>Ordered</title><p>Order placed</p>`,
   '/popup': `<!doctype html><title>Popups</title><a href="/results" target="_blank">Open in new tab</a>`,
@@ -66,8 +68,8 @@ function jpegWidth(buf: Buffer): number {
   return 0;
 }
 
-function ctx(sessionId = 's1') {
-  return { sessionId, signal: new AbortController().signal, vision: true };
+function ctx(sessionId = 's1', mode: string | null = 'ask') {
+  return { sessionId, signal: new AbortController().signal, vision: true, mode };
 }
 
 // Decided at collection time so the skip is visible as a skip, not a pass.
@@ -130,6 +132,8 @@ beforeEach(() => {
   // The fixture server is on 127.0.0.1 — a "this computer" address — so the
   // person approves it for the chat, exactly as they would for a dev server.
   answers.push((p) => (p.kind === 'local' ? 'allow_chat' : null));
+  // The existing tests are about other rules: a form-submit card they did not ask for is answered "once" so it never stalls them.
+  answers.push((p) => (p.kind === 'form' ? 'once' : null));
 });
 
 const live = () => (FOUND.length ? it : it.skip);
@@ -254,11 +258,11 @@ describe('Browser, live', () => {
 
   live()('asks once per site to click/type, then not again in the same chat', async () => {
     answers.unshift((p) => (p.kind === 'site' ? 'allow_chat' : null));
-    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/form` }, ctx('s-site'));
-    const snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-site'))).text;
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/form` }, ctx('s-site', 'full-auto'));
+    const snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-site', 'full-auto'))).text;
     const ref = /searchbox "Search" \[ref=(e\d+)\]/.exec(snap)?.[1];
     expect(ref).toBeTruthy();
-    const typed = await runBrowserTool(env, 'BrowserAct', { action: 'type', ref, element: 'Search box', text: 'cats', submit: true }, ctx('s-site'));
+    const typed = await runBrowserTool(env, 'BrowserAct', { action: 'type', ref, element: 'Search box', text: 'cats', submit: true }, ctx('s-site', 'full-auto'));
     expect(typed.isError).toBeFalsy();
     expect(typed.text).toContain('Results page');
     expect(seenPrompts.filter((p) => p.kind === 'site')).toHaveLength(1);
@@ -283,6 +287,80 @@ describe('Browser, live', () => {
     expect(again.text).toMatch(/already declined/);
     expect(seenPrompts.length).toBe(before);
   }, 60_000);
+
+  live()('form submit: the first send on a site asks whatever the button says; Always allow is remembered per site', async () => {
+    const hostKey = new URL(base).host; // the app keys a site by host:port, so the test server's port is part of it
+    answers.unshift((p) => (p.kind === 'site' ? 'allow_chat' : null));
+    answers.unshift((p) => (p.kind === 'form' ? 'allow_always' : null));
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/plain-form` }, ctx('s-form1'));
+    const snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-form1'))).text;
+    const ref = /button "Continue" \[ref=(\w+)\]/.exec(snap)?.[1];
+    expect(ref).toBeTruthy();
+    const r = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref, element: 'Continue' }, ctx('s-form1'));
+    expect(r.isError).toBeFalsy();
+    expect(r.text).toContain('Results page');
+    const forms = seenPrompts.filter((p) => p.kind === 'form');
+    expect(forms).toHaveLength(1);
+    expect(forms[0].message).toBe(`Let the assistant submit a form on ${hostKey}?`);
+    expect(seenPrompts.some((p) => p.kind === 'final' || p.kind === 'site')).toBe(false);
+    expect((await env.settings.read()).alwaysAllowedFormSites).toContain(hostKey);
+    expect((await env.settings.read()).alwaysAllowedSites).not.toContain(hostKey); // its own list
+    // A different chat, same site: remembered, so no card at all for the send.
+    seenPrompts.length = 0;
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/plain-form` }, ctx('s-form2'));
+    const snap2 = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-form2'))).text;
+    const ref2 = /button "Continue" \[ref=(\w+)\]/.exec(snap2)?.[1];
+    const r2 = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref: ref2, element: 'Continue' }, ctx('s-form2'));
+    expect(r2.text).toContain('Results page');
+    expect(seenPrompts.some((p) => p.kind === 'form')).toBe(false);
+    await env.settings.removeSite(hostKey, true);
+  }, 90_000);
+
+  live()('form submit: "Allow once" asks again next time; Enter in a field counts; declining stops it', async () => {
+    answers.unshift((p) => (p.kind === 'site' ? 'allow_chat' : null));
+    answers.unshift((p) => (p.kind === 'form' ? 'once' : null));
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/plain-form` }, ctx('s-form3'));
+    let snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-form3'))).text;
+    const field = /textbox "Your name" \[ref=(\w+)\]/.exec(snap)?.[1];
+    await runBrowserTool(env, 'BrowserAct', { action: 'type', ref: field, element: 'Your name', text: 'Ana', submit: true }, ctx('s-form3'));
+    expect(seenPrompts.filter((p) => p.kind === 'form')).toHaveLength(1);
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/plain-form` }, ctx('s-form3'));
+    snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-form3'))).text;
+    const btn = /button "Continue" \[ref=(\w+)\]/.exec(snap)?.[1];
+    answers.unshift((p) => (p.kind === 'form' ? 'no' : null));
+    const r = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref: btn, element: 'Continue' }, ctx('s-form3'));
+    expect(seenPrompts.filter((p) => p.kind === 'form')).toHaveLength(2);
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/declined/);
+  }, 90_000);
+
+  live()('Full Auto sends forms without the new card, but the word check still asks', async () => {
+    answers.unshift((p) => (p.kind === 'site' ? 'allow_chat' : null));
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/plain-form` }, ctx('s-fa', 'full-auto'));
+    let snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-fa', 'full-auto'))).text;
+    const btn = /button "Continue" \[ref=(\w+)\]/.exec(snap)?.[1];
+    const r = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref: btn, element: 'Continue' }, ctx('s-fa', 'full-auto'));
+    expect(r.text).toContain('Results page');
+    expect(seenPrompts.some((p) => p.kind === 'form')).toBe(false);
+    // "Place order" is a word-check final step in every mode, and it alone asks (no second card).
+    answers.unshift((p) => (p.kind === 'final' ? 'no' : null));
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/form` }, ctx('s-fa', 'full-auto'));
+    snap = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-fa', 'full-auto'))).text;
+    const order = /button "Place order" \[ref=(\w+)\]/.exec(snap)?.[1];
+    const d = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref: order, element: 'Place order' }, ctx('s-fa', 'full-auto'));
+    expect(d.text).toMatch(/declined/);
+    expect(seenPrompts.filter((p) => p.kind === 'final')).toHaveLength(1);
+    expect(seenPrompts.some((p) => p.kind === 'form')).toBe(false);
+    // Same word-check step in Ask first: still just the one final card.
+    seenPrompts.length = 0;
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/form` }, ctx('s-fa2', 'ask'));
+    const snap2 = (await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-fa2', 'ask'))).text;
+    const order2 = /button "Place order" \[ref=(\w+)\]/.exec(snap2)?.[1];
+    const d2 = await runBrowserTool(env, 'BrowserAct', { action: 'click', ref: order2, element: 'Place order' }, ctx('s-fa2', 'ask'));
+    expect(d2.text).toMatch(/declined/);
+    expect(seenPrompts.filter((p) => p.kind === 'final')).toHaveLength(1);
+    expect(seenPrompts.some((p) => p.kind === 'form')).toBe(false);
+  }, 90_000);
 
   live()('an approved final step runs', async () => {
     answers.unshift((p) => (p.kind === 'final' ? 'once' : null));

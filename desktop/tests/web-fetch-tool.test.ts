@@ -49,6 +49,24 @@ const fetchWith = async (body: string, url = 'https://example.com/deep') => {
 // between cases (a stubbed fetch bleeding into the next test would be a silent lie).
 afterEach(() => __setWebFetchTestHooks({}));
 
+describe('WebFetch redirects and the Ask-first website question', () => {
+  const redirect = (to: string) => new Response(null, { status: 302, headers: { location: to } });
+  it('a redirect to a different website is refused and names that site (so it gets its own question)', async () => {
+    const fetchImpl = vi.fn(async (u: string) => (u.includes('a.example') ? redirect('https://b.example/x') : html('hi')));
+    __setWebFetchTestHooks({ lookup: publicLookup, fetchImpl: fetchImpl as any });
+    const r = await WebFetchTool.execute({ url: 'https://a.example/' } as any, ctx());
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('b.example');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+  it('a redirect within the same website (www folded, same host) still works', async () => {
+    const fetchImpl = vi.fn(async (u: string) => (u === 'https://a.example/' ? redirect('https://www.a.example/y') : html('<html><body><p>done</p></body></html>')));
+    __setWebFetchTestHooks({ lookup: publicLookup, fetchImpl: fetchImpl as any });
+    const r = await WebFetchTool.execute({ url: 'https://a.example/' } as any, ctx());
+    expect(r.isError).toBeFalsy();
+  });
+});
+
 describe('WebFetch', () => {
   it('refuses experiment web fetches before DNS or HTTP without changing tool metadata', async () => {
     const metadata = { name: WebFetchTool.name, description: WebFetchTool.description };
@@ -117,8 +135,9 @@ describe('WebFetch', () => {
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/private|internal/i);
   });
-  it('permissionSubject is the url', () => {
-    expect(WebFetchTool.permissionSubject({ url: 'https://a.b/c' } as any)).toBe('https://a.b/c');
+  // WHY: ask-first-per-website means the permission subject is the site, not the full address.
+  it('permissionSubject is the site, not the full url', () => {
+    expect(WebFetchTool.permissionSubject({ url: 'https://a.b/c' } as any)).toBe('a.b');
   });
 
   // --- extra edge tests (plan: "further edge tests you judge necessary") ---

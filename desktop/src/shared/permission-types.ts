@@ -19,7 +19,13 @@ export interface PermissionRule {
    *  WHY a field instead of escaping '*' inside the pattern: subjectMatches escapes
    *  '\' as a regex literal, so a backslash escape syntax would break Windows
    *  commands like `del C:\foo\*`. A discriminator sidesteps that entirely. */
-  match?: 'exact' | 'glob';
+  match?: 'exact' | 'glob' | 'safe-readonly' | 'download-host' | 'folder';
+  // 'download-host' (Q-6): pattern is `curl github.com` — covers a single plain curl/wget download from that website only
+  //   (shared/download-host.ts parses the address at decision time). 'folder' (Q-3): tool is Edit/Write, pattern is a
+  //   project-relative folder ('.' = the project folder); covers files directly in it (shared/edit-grants.ts).
+  // 'safe-readonly' (2026-10-31): the built-in "commands that never ask" rule. It has NO pattern: ruleMatches
+  // parses the Bash line against shared/safe-readonly-commands.ts instead. Only rulesForMode creates it;
+  // it is never stored as a remembered rule.
   /** Task 11: the specialist agentType (e.g. 'worker') this rule is scoped to.
    *  Absent means the rule is the ROOT session's own grant — a plain
    *  PermissionRule from before specialists existed, or a preset/deny-list/
@@ -127,6 +133,10 @@ export interface PermissionDecision {
   /** True when the winning rule came from the destructive deny-list — drives
    *  the consequence-gated "Always allow" warning (spec §2.4 precedence ruling). */
   denyListed: boolean;
+  /** Set ONLY when a saved "downloads from <website> only" rule allowed a download that follows links. The session must
+   *  run that command guarded (main/harness/download-guard.ts): every link hop stays on `host`, or the download stops.
+   *  Never set for a Yes from the person, an exact grant or a mode — those approved the command as typed. */
+  downloadGuard?: { host: string };
   /** Optional model-facing refusal detail. When absent, harness-session renders
    *  its generic "blocked by a permission rule" copy — which is what every
    *  existing caller (decidePermission) still gets. Added for specialists
@@ -164,7 +174,8 @@ export const DESTRUCTIVE_DENY_LIST: PermissionRule[] = [
 
 /** Mode baselines (spec §2.4 layer 2). Reads + web are free in EVERY preset and
  *  mode (spec §3.4 "reads + web free"): local reads (Read/Glob/Grep), TodoWrite,
- *  and the web pair (WebFetch/WebSearch) never prompt at the baseline. Higher
+ *  and the web pair (WebFetch/WebSearch) never prompt at the baseline (except WebFetch
+ *  in Ask first, which asks once per website — see the 'ask' case below). Higher
  *  layers (deny-list, remembered/denied rules) still override via last-match-wins. */
 export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
   const alwaysAllowed: PermissionRule[] = [
@@ -237,9 +248,23 @@ export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
     { tool: 'AddComment', action: 'allow' },
     { tool: 'MoveComment', action: 'allow' },
   ];
+  // "Commands that never ask" (Destin 2026-10-31): a built-in list of read-only shell commands. Placed right
+  // after the blanket ask so everything ABOVE it in precedence — the destructive deny-list and remembered
+  // rules — still wins. Not in full-auto, which already allows every command. Ask first and Auto-edit are
+  // the two modes where a person is still being asked about shell commands.
+  const readOnlyShell: PermissionRule[] = [{ tool: 'Bash', match: 'safe-readonly', action: 'allow' }];
   switch (mode) {
     case 'ask':
-      return [{ tool: '*', action: 'ask' }, ...alwaysAllowed,
+      return [{ tool: '*', action: 'ask' }, ...readOnlyShell, ...alwaysAllowed,
+        // Websites (Destin, 2026-10-31): in Ask first only, the assistant asks the
+        // first time it wants to visit each new website. WebFetch's subject is the
+        // SITE (shared/site-key.ts), so this one pattern-less ask — LAST-MATCH-WINS
+        // over the pattern-less allow in `alwaysAllowed` above — covers every site,
+        // and a remembered "Always allow" for one site (rememberedRules, the last
+        // layer) beats it for that site only. auto-edit and full-auto add no such
+        // override, so they keep fetching freely, exactly as before. WebSearch has no
+        // address to ask about and stays free in every mode.
+        { tool: 'WebFetch', action: 'ask' },
         // A Word/Excel-targeted comment mutation writes DIRECTLY into that
         // file's own bytes (design doc-comments-build-design.md §3.3/§4.3a) —
         // functionally the same act as an Edit/Write call on that file, which
@@ -270,7 +295,7 @@ export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
         { tool: 'MoveComment', pattern: '*.xlsx', action: 'ask' },
       ];
     case 'auto-edit':
-      return [{ tool: '*', action: 'ask' }, ...alwaysAllowed,
+      return [{ tool: '*', action: 'ask' }, ...readOnlyShell, ...alwaysAllowed,
         { tool: 'Edit', action: 'allow' }, { tool: 'Write', action: 'allow' },
         // Task (Task 6, spec §5 walk-away autonomy — a PINNED decision, not an
         // accident): delegating to a specialist grants that specialist nothing

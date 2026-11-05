@@ -4,6 +4,7 @@ declare const __APP_VERSION__: string;
 declare const __BUILD_CHANNEL__: string;
 import './SettingsDrawer.css';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { lastUsedText } from './remote/last-used';
 import { createPortal } from 'react-dom';
 import type { RemoteAccessView, RemoteAccessAction, RemoteAccessPreview } from './remote/preview-types';
 import { QRCodeSVG } from 'qrcode.react';
@@ -1679,7 +1680,7 @@ function RemoteButton(props: RemoteButtonProps) {
         // Nothing is Online while the listener is off — that combination is not a state
         // the real host can produce, and it read as "off, but still connected".
         online: d.online && previewView.stage !== 'disabled',
-        createdAt: 0, lastSeenAt: 0,
+        createdAt: 0, lastSeenAt: d.lastSeenAt ?? 0,
       }))
     : clients;
   const unpair = (deviceId: string) => {
@@ -2038,7 +2039,7 @@ function RemoteButton(props: RemoteButtonProps) {
                               description={revoking === row.id
                                 ? 'Unpair this device? It must pair again to reconnect.'
                                 : hostOnly ? `${row.online ? 'Online' : 'Offline'} · unpair on the computer itself`
-                                  : row.online ? 'Online' : 'Offline'}
+                                  : `${row.online ? 'Online' : 'Offline'}${lastUsedText(row.online, row.lastSeenAt)}`}
                               // WHY disabled rather than live on a phone: the host refuses this
                               // over the remote socket, exactly as it refuses the password. Left
                               // live, the row vanished from the list while the device kept full

@@ -7,8 +7,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { clipboard, dialog, shell, type BrowserWindow } from 'electron';
+import { clipboard, dialog, nativeImage, shell, type BrowserWindow } from 'electron';
+import { safeOpenExternal, openPathSafely } from '../safe-open';
 import { IPC } from '../../shared/backend-contract';
+import { privateTempDirOrFresh } from '../private-temp-dir';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
 /** The picker dialogs sit on the main window, which main builds. */
@@ -89,15 +91,27 @@ export const shellChannels: MainChannelDef[] = [
   defineChannel({
     name: IPC.CLIPBOARD_SAVE_IMAGE, kind: 'handle', desktopOnly: true,
     handler: async () => {
-      const img = clipboard.readImage();
+      // WHY: Electron 44 removed the synchronous clipboard.readImage(); clipboard.read() is now an
+      // async W3C-style call that returns items keyed by MIME type. Take the first image/* entry
+      // (PNG preferred) and let nativeImage normalise whatever format the source app used to PNG,
+      // so the file we hand back is still the same paste-<ts>.png as before.
+      const items = await clipboard.read();
+      const types = items.flatMap((item) => item.types.map((type) => ({ item, type })));
+      const hit = types.find((t) => t.type === 'image/png') ?? types.find((t) => t.type.startsWith('image/'));
+      if (!hit) return null;
+      // getType's declared result also covers the non-image "bookmark" shape; an image/* type is always a Blob.
+      const blob = (await hit.item.getType(hit.type)) as Blob;
+      const bytes = Buffer.from(await blob.arrayBuffer());
+      const img = nativeImage.createFromBuffer(bytes);
       if (img.isEmpty()) return null;
-      await fs.promises.mkdir(clipboardTmpDir, { recursive: true });
+      // Owner-only folder; if someone else already owns the usual name, a fresh unpredictable one is used.
+      const pasteDir = await privateTempDirOrFresh(clipboardTmpDir);
       if (!clipboardCleanupScheduled) {
         clipboardCleanupScheduled = true;
         setInterval(cleanupClipboardTemp, 3600_000);
       }
-      const filePath = path.join(clipboardTmpDir, `paste-${Date.now()}.png`);
-      await fs.promises.writeFile(filePath, img.toPNG());
+      const filePath = path.join(pasteDir, `paste-${Date.now()}.png`);
+      await fs.promises.writeFile(filePath, img.toPNG(), { mode: 0o600 });
       return filePath;
     },
   }),
@@ -105,7 +119,7 @@ export const shellChannels: MainChannelDef[] = [
   // Open the YouCoded CHANGELOG on GitHub in the default browser.
   defineChannel({
     name: IPC.OPEN_CHANGELOG, kind: 'handle', desktopOnly: true,
-    handler: async () => { await shell.openExternal('https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md'); },
+    handler: async () => { await safeOpenExternal('https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md'); },
   }),
 
   // Open any URL in the default browser (allowlisted to http/https — the scheme is the boundary; any HOST is fine, because
@@ -113,7 +127,7 @@ export const shellChannels: MainChannelDef[] = [
   // explicitly. Never file:, javascript:, etc.
   defineChannel({
     name: IPC.OPEN_EXTERNAL, kind: 'handle', desktopOnly: true,
-    handler: async ({ url }) => { if (typeof url === 'string' && /^https?:\/\//i.test(url)) await shell.openExternal(url); },
+    handler: async ({ url }) => { if (typeof url === 'string' && /^https?:\/\//i.test(url)) await safeOpenExternal(url, { mailto: false }); },
   }),
 
   // Reveal a local file in the OS file manager (the artifact panel's "Reveal in folder"). No-op for empty / non-string paths.
@@ -122,10 +136,11 @@ export const shellChannels: MainChannelDef[] = [
     handler: async ({ filePath }) => { if (typeof filePath === 'string' && filePath.length > 0) shell.showItemInFolder(filePath); },
   }),
 
-  // Open a local file with the OS default app (HTML to browser, .docx to Word, ...). shell.openPath resolves with ''
-  // on success or an error string on failure.
+  // Open a local file with the OS default app (HTML to browser, .docx to Word, ...). Resolves with '' on success or an
+  // error string on failure. WHY openPathSafely (audit F2): a program or script type is shown in its folder instead of being
+  // run — one click on a file chip must never start a program. Same '' result, so no error appears.
   defineChannel({
     name: IPC.OPEN_PATH, kind: 'handle', desktopOnly: true,
-    handler: async ({ filePath }) => (typeof filePath !== 'string' || filePath.length === 0 ? 'no path' : shell.openPath(filePath)),
+    handler: async ({ filePath }) => (typeof filePath !== 'string' || filePath.length === 0 ? 'no path' : openPathSafely(filePath)),
   }),
 ];

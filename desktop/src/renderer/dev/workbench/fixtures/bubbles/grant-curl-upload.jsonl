@@ -1,0 +1,3 @@
+{"type":"user_message","text":"send the report to the server"}
+{"type":"tool_use","id":"grant-curl-upload","name":"Bash","input":{"command":"curl -X POST -d @report.json https://example.com/upload","description":"Upload report"}}
+{"type":"permission_request","tool_use_id":"grant-curl-upload","requestId":"native-grant-curl-upload","denyListed":false,"permissionMode":"ask"}
