@@ -3694,9 +3694,9 @@ function AppInner() {
                  showed nothing. Render a single framed-shell clone here, only
                  in terminal view, so the same panel overlays the terminal's
                  right side. ChatView gates its own copy on `visible`, so
-                 exactly one instance mounts. Electron-only for now (Android's
-                 terminal overlay sizing is native — separate follow-up). */}
-              {getPlatform() === 'electron' && currentViewMode === 'terminal' && sessionId
+                 exactly one instance mounts. Every platform: Electron-only, the phone's Files/games
+                 panel in terminal view was a black screen (Destin, 2026-11-04). */}
+              {currentViewMode === 'terminal' && sessionId
                 && (activeDrawerOpen || sidePaneOpen) && (
                 <TerminalRightSlot
                   sessionId={sessionId}
