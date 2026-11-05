@@ -110,6 +110,9 @@ describe('the Cameras tab', () => {
   });
 
   it('starts them all again when the tab is opened again, and stops them all when the page is hidden', async () => {
+    // WHY leave the tab first: this test used to rely on the previous test having left it. When a name filter (e.g. `-t "page"`)
+    // skips that test, the page is still on Cameras, the click below does nothing and no new videos start ("expected 3 to be 6").
+    if (document.querySelector('.cam-tile')) { document.querySelector<HTMLButtonElement>('[data-home]')!.click(); await flush(); }
     const count = videos.length;
     document.querySelector<HTMLButtonElement>('[data-view="cameras"]')!.click();
     await flush();

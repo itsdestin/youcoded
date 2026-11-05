@@ -2,7 +2,7 @@
 // (tests/fixtures/old-remote-shim) is driven against the real new host: what does the old page get, and what does it show?
 // The old page waits for a `chat:hydrate` snapshot that is gone; nothing in it reloads itself on a close code, and its handling of
 // 4005 shows the password box with no message and loops. So the host answers it the way it understands.
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 
 class FakeWebSocket {
@@ -26,6 +26,9 @@ class HostSocket extends EventEmitter {
 
 describe('an old phone page against the new host', () => {
   let oldShim: any;
+  // WHY warm the host module once: its first import is slow (seconds under a loaded parallel run) and used to happen in the middle of the
+  // test, after the old page had started its restore.
+  beforeAll(async () => { await import('../src/main/remote-server'); }, 60_000);
   beforeEach(async () => {
     vi.resetModules();
     FakeWebSocket.instances = [];
@@ -53,6 +56,10 @@ describe('an old phone page against the new host', () => {
   }
 
   it('the old page asks for a snapshot with a seq and no version, and the new host answers it with the session list and a degraded snapshot holding one refresh notice per conversation', async () => {
+    // WHY the host is built BEFORE the old page connects: the old page gives a restore 10 real seconds to be answered, then shows
+    // "may be out of date" on its own. Importing the host after connecting let a slow, loaded run burn that time, and the strip then
+    // showed a third state (restoring, incomplete, incomplete). Nothing slow may sit between connecting and the answer.
+    const { ws } = await host();
     const p = oldShim.connect('pw', false);
     const sock = FakeWebSocket.instances[0];
     sock.open();
@@ -66,7 +73,6 @@ describe('an old phone page against the new host', () => {
     expect(ready.payload.seq).toBeDefined();
     expect(ready.payload.protocolVersion).toBeUndefined();          // what makes it recognisable as old
 
-    const { ws } = await host();
     ws.emit('message', JSON.stringify(ready));
     await new Promise((r) => setImmediate(r)); await new Promise((r) => setImmediate(r));
     expect(ws.frames.map((f) => f.type)).toEqual(['session:created', 'session:created', 'chat:hydrate']);
