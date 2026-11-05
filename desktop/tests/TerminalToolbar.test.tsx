@@ -50,3 +50,24 @@ describe('TerminalScrollButtons', () => {
     }
   });
 });
+
+describe('the Ctrl key', () => {
+  // It used to light up and do nothing. Held, the next letter typed into the message box goes to the program as
+  // Ctrl+letter (Ctrl+C is \x03) instead of into the box, and Ctrl lets go by itself.
+  it('turns the next typed letter into Ctrl+letter, once', async () => {
+    const sendInput = vi.fn();
+    (window as any).claude = { session: { sendInput } };
+    const { default: Toolbar, consumeCtrlLetter } = await import('../src/renderer/components/TerminalToolbar');
+    render(<Toolbar sessionId="s1" />);
+    const ctrl = screen.getByRole('button', { name: 'Ctrl' });
+    fireEvent.click(ctrl);
+    expect(ctrl.getAttribute('aria-pressed')).toBe('true');
+    let kept = false;
+    React.act(() => { kept = consumeCtrlLetter('s1', 'ab', 'abc'); });
+    expect(kept).toBe(true);
+    expect(sendInput.mock.calls).toEqual([['s1', '\x03']]);
+    expect(ctrl.getAttribute('aria-pressed')).toBe('false');
+    expect(consumeCtrlLetter('s1', 'ab', 'abd')).toBe(false);   // let go: the next letter types normally
+    expect(sendInput).toHaveBeenCalledTimes(1);
+  });
+});

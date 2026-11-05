@@ -1,59 +1,101 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from './ui';
-import { BackIcon, ForwardIcon } from './Icons';
+import { ForwardIcon } from './Icons';
 
 interface TerminalToolbarProps {
   sessionId: string;
 }
 
+// ── A one-shot Ctrl, per session ─────────────────────────────────────────────────────────────────────────────────
+// WHY (Destin, 2026-11-05, picked "make Ctrl work for the next letter"): the Ctrl key used to light up and do nothing
+// at all. On a phone the minimal message box is the only thing you type into in terminal view (TerminalView skips
+// xterm's own input on touch), so a held Ctrl turns the NEXT letter typed into that box into Ctrl+letter, sent
+// straight to the program, and then switches itself off. Anything other than one typed letter switches it off too.
+const ctrlHeld = new Set<string>();
+const ctrlListeners = new Set<() => void>();
+function setCtrlHeld(sessionId: string, held: boolean) {
+  if (held === ctrlHeld.has(sessionId)) return;
+  if (held) ctrlHeld.add(sessionId); else ctrlHeld.delete(sessionId);
+  for (const l of ctrlListeners) l();
+}
+function useCtrlHeld(sessionId: string): boolean {
+  return useSyncExternalStore(
+    (l) => { ctrlListeners.add(l); return () => { ctrlListeners.delete(l); }; },
+    () => ctrlHeld.has(sessionId),
+  );
+}
+/** InputBar (terminal view on touch): called with the box's text before and after a change. True when the change was
+ *  one letter typed while Ctrl is held: it went to the program as Ctrl+letter, so the box must keep `prev`. */
+export function consumeCtrlLetter(sessionId: string, prev: string, next: string): boolean {
+  if (!ctrlHeld.has(sessionId)) return false;
+  setCtrlHeld(sessionId, false);
+  if (next.length !== prev.length + 1) return false;
+  let i = 0;
+  while (i < prev.length && prev[i] === next[i]) i++;
+  if (next.slice(i + 1) !== prev.slice(i)) return false;
+  const ch = next[i].toUpperCase();
+  if (!/^[A-Z@[\\\]^_]$/.test(ch)) return false;
+  window.claude.session.sendInput(sessionId, String.fromCharCode(ch.charCodeAt(0) & 0x1f));
+  return true;
+}
+
+/** TEMPORARY, for the review deck's three looks (2026-11-05): the workbench's ?termKeys= switch. Removed with the two
+ *  looks Destin does not pick. */
+type Look = 'raised' | 'outlined' | 'strip';
+function look(): Look {
+  try { const v = new URLSearchParams(location.search).get('termKeys'); return v === 'outlined' || v === 'strip' ? v : 'raised'; } catch { return 'raised'; }
+}
+
 /**
- * Touch-only row of special keys (Ctrl, Esc, Tab, Enter, Space, ←, →) for terminal view, in the slot the quick
- * chips use in chat view. Sends escape sequences straight to the PTY via sendInput.
+ * Touch-only row of special keys (Ctrl, Esc, Tab, Enter, Space) for terminal view, in the slot the quick chips use in
+ * chat view. Sends escape sequences straight to the PTY via sendInput.
  *
  * WHY the shared Button (Destin, 2026-11-04: "the arrows and other terminal-only keys feel like holdovers from an
- * earlier era of the app"): the keys were hand-made pills with a fixed 6px corner, a hand-written accent fill for
- * Ctrl and tiny "←"/"→" text glyphs. Each key is now the shared `raised` button — the theme's own control corner and
- * surface, its focus ring, press shade and 44px touch area — the arrows are the app's arrow icons, and a held Ctrl is
- * the filled button marked pressed.
+ * earlier era of the app"): the keys were hand-made pills with a fixed 6px corner and a hand-written accent fill for
+ * Ctrl. Each key is now the shared button — the theme's own control corner and colours, its focus ring, press shade
+ * and 44px touch area — and a held Ctrl is the filled button marked pressed. WHY no ← → and an even share of the
+ * width (Destin, 2026-11-05): they only moved the cursor in Claude Code's own typing line, which a phone never types
+ * into, and they left "extra space/gap" at the row's end; the keys now share the row edge to edge, and scroll
+ * sideways only if they ever outgrow it. No divider lines: Destin dislikes "horizontal lines that bisect a container".
  */
 export default function TerminalToolbar({ sessionId }: TerminalToolbarProps) {
-  const [ctrlActive, setCtrlActive] = useState(false);
-
+  const ctrl = useCtrlHeld(sessionId);
+  const l = look();
   const send = useCallback((input: string) => {
+    setCtrlHeld(sessionId, false);
     window.claude.session.sendInput(sessionId, input);
   }, [sessionId]);
 
   return (
-    <div className="scroll-mask scroll-mask--chips flex gap-1 px-3 py-1 overflow-x-auto scrollbar-none items-center">
-      <Key label="Ctrl" pressed={ctrlActive} onClick={() => setCtrlActive((prev) => !prev)} />
-      <Key label="Esc" onClick={() => send('\x1b')} />
-      <Key label="Tab" onClick={() => send('\t')} />
-      {/* Enter and Space as their own keys (second review F2): answering a
-          menu in terminal view on a phone — above all a startup dialog the chat
-          cannot show — needs Enter to confirm and Space to tick a box in a
-          multi-select (the several-MCP-servers list). */}
-      <Key label="Enter" onClick={() => send('\r')} />
-      <Key label="Space" onClick={() => send(' ')} />
-      <div aria-hidden className="shrink-0 w-px h-5 bg-edge mx-0.5" />
-      <Key label="Left" icon={<BackIcon className="w-4 h-4" />} onClick={() => send('\x1b[D')} />
-      <Key label="Right" icon={<ForwardIcon className="w-4 h-4" />} onClick={() => send('\x1b[C')} />
+    <div className="scroll-mask scroll-mask--chips flex px-3 py-1 overflow-x-auto scrollbar-none">
+      <div className={`flex flex-1 gap-1 items-center${l === 'strip' ? ' bg-inset rounded-control p-1' : ''}`}>
+        <Key look={l} label="Ctrl" pressed={ctrl} onClick={() => setCtrlHeld(sessionId, !ctrl)} />
+        <Key look={l} label="Esc" onClick={() => send('\x1b')} />
+        <Key look={l} label="Tab" onClick={() => send('\t')} />
+        {/* Enter and Space as their own keys (second review F2): answering a
+            menu in terminal view on a phone — above all a startup dialog the chat
+            cannot show — needs Enter to confirm and Space to tick a box in a
+            multi-select (the several-MCP-servers list). */}
+        <Key look={l} label="Enter" onClick={() => send('\r')} />
+        <Key look={l} label="Space" onClick={() => send(' ')} />
+      </div>
     </div>
   );
 }
 
-function Key({ label, icon, pressed, onClick }: { label: string; icon?: React.ReactNode; pressed?: boolean; onClick: () => void }) {
+function Key({ look: l, label, pressed, onClick }: { look: Look; label: string; pressed?: boolean; onClick: () => void }) {
   return (
     <Button
-      variant={pressed ? 'primary' : 'raised'}
+      variant={pressed ? 'primary' : l === 'outlined' ? 'secondary' : l === 'strip' ? 'ghost' : 'raised'}
       size="sm"
       onClick={onClick}
-      aria-label={icon ? label : undefined}
       aria-pressed={pressed}
       // One height for the whole row (design rule "controls on one line share one height"); h-8 rather than sm's own
-      // ~22px because these are typed on, not read — the 44px touch area still comes from the primitive.
-      className="shrink-0 h-8 min-w-9 px-2 select-none"
+      // ~22px because these are typed on, not read — the 44px touch area still comes from the primitive. flex-1: the
+      // keys share the row's width; min-w-12 makes the row scroll rather than squeeze when they no longer fit.
+      className={`flex-1 min-w-12 h-8 px-2 select-none${l === 'strip' && !pressed ? ' text-fg-2' : ''}`}
     >
-      {icon ?? label}
+      {label}
     </Button>
   );
 }
@@ -74,6 +116,8 @@ export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
   }, [sessionId]);
   const probe = useRef<HTMLDivElement>(null);
   const right = useMessageBoxRightFor(probe);
+  const l = look();
+  const variant = l === 'outlined' ? 'secondary' : l === 'strip' ? 'ghost' : 'raised';
 
   return (
     // WHY above --terminal-bottom-inset: on a touch screen the input bar floats OVER the terminal (globals.css,
@@ -81,16 +125,15 @@ export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
     <div
       ref={probe}
       data-term-lift=""
-      className="absolute z-10 pointer-events-auto flex flex-col rounded-control border border-edge bg-panel overflow-hidden select-none"
+      className={`absolute z-10 pointer-events-auto flex flex-col gap-1.5 select-none${l === 'strip' ? ' bg-inset rounded-control p-1' : ''}`}
       style={{ right: right ?? 8, bottom: 'calc(var(--terminal-bottom-inset, 0px) + 0.5rem)' }}
     >
-      {/* Change 41 kept: a 40×40 target each — a primary touch control floating over the terminal. One card holding
-          both keys (a divider between) instead of two separate squares. */}
-      <Button variant="ghost" size="icon" aria-label="Scroll up" onClick={() => send('\x1b[A')} className="w-10 h-10 rounded-none text-fg-2">
+      {/* Change 41 kept: a 40×40 target each — a primary touch control floating over the terminal. Two keys with a
+          gap, never a line between them (Destin, 2026-11-05: "the line between the arrows is grodi"). */}
+      <Button variant={variant} size="icon" aria-label="Scroll up" onClick={() => send('\x1b[A')} className="w-10 h-10 text-fg-2">
         <ForwardIcon className="w-5 h-5 -rotate-90" />
       </Button>
-      <div aria-hidden className="h-px bg-edge" />
-      <Button variant="ghost" size="icon" aria-label="Scroll down" onClick={() => send('\x1b[B')} className="w-10 h-10 rounded-none text-fg-2">
+      <Button variant={variant} size="icon" aria-label="Scroll down" onClick={() => send('\x1b[B')} className="w-10 h-10 text-fg-2">
         <ForwardIcon className="w-5 h-5 rotate-90" />
       </Button>
     </div>
