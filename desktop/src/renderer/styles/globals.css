@@ -1896,6 +1896,10 @@ pre.yc-code code {
   to { opacity: 1; margin-left: 0; }
 }
 
+/* Round 4 (Destin: "lights can probably fade away in expanded view"): the
+   list itself shows every session's status while it is open. */
+.session-name-stack:has([data-menu-open]) .session-lights { opacity: 0; }
+
 /* Phone pill row, round 3 (Destin: "every single element in that bottom row
    appears to have a unique style/size/height/roundness"). Every chip in the
    compact row gets ONE shape: same height, corner, padding, text size. A chip
@@ -1904,10 +1908,13 @@ pre.yc-code code {
    only under ?narrowPills=compact; a pick moves this onto the chips themselves. */
 .status-row-uniform .border,
 .status-pencil-uniform {
+  /* Round 4 (Destin: "the spacing is very weird … compared to the
+     journal/inbox/etc chips"): the shortcut chips' own measures — h-6,
+     rounded-md, px-2.5 (QuickChips.tsx) — so the two rows line up. */
   height: 1.5rem;
   min-width: 1.5rem;
-  border-radius: var(--radius-sm, 4px);
-  padding: 0 0.5rem;
+  border-radius: var(--radius-md, 12px);
+  padding: 0 0.625rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;

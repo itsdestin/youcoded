@@ -2059,6 +2059,7 @@ export default function SessionStrip({
       <div
         ref={pillBarRef}
         data-session-strip
+        data-menu-open={menuOpen || undefined /* round 4: the lights under the name fade while the list is open (CSS :has) */}
         // Pointer capture is set on this container during drag (see handlePointerDown).
         // React's event delegation still fires the pill's onPointerMove/onPointerUp
         // because events bubble up through the captured element, but we also listen
@@ -2070,7 +2071,7 @@ export default function SessionStrip({
         // window's; inert on every other model, where no browser drag exists.
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className={`session-strip relative flex items-center gap-0.5 ${plainTitle ? 'hover:bg-inset cursor-pointer' : 'bg-inset'} rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink transition-shadow ${incomingDropActive ? 'ring-2 ring-accent/70' : ''}`}
+        className={`session-strip relative flex items-center gap-0.5 ${plainTitle ? (narrowTop === 'lights' ? 'cursor-pointer' : 'hover:bg-inset cursor-pointer') : 'bg-inset'} rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink transition-shadow ${incomingDropActive ? 'ring-2 ring-accent/70' : ''}`}
       >
         {/* ── Session pills ──────────────────────────────── */}
         {visibleSessions.map((s, idx) => {
@@ -2288,7 +2289,7 @@ export default function SessionStrip({
             ref={triggerBtnRef}
             onClick={handleMenuToggle}
             aria-label={narrowTop !== 'today' && hiddenCount > 0 ? `All sessions (${hiddenCount} more)` : undefined}
-            className={`flex items-center justify-center gap-0.5 h-5 ml-1 rounded-sm ${plainTitle ? '' : 'hover:bg-inset'} transition-colors text-fg-muted hover:text-fg-2 ${narrowTop !== 'today' && !plainTitle && hiddenCount > 0 ? 'px-1' : 'w-5'}`}
+            className={`flex items-center justify-center gap-0.5 h-5 ${plainTitle ? '-ml-1' : 'ml-1'} rounded-sm ${plainTitle ? '' : 'hover:bg-inset'} transition-colors text-fg-muted hover:text-fg-2 ${narrowTop !== 'today' && !plainTitle && hiddenCount > 0 ? 'px-1' : 'w-5'}`}
           >
             {narrowTop !== 'today' && !plainTitle && <PhoneCount n={hiddenCount} />}
             <svg className={`w-3 h-3 shrink-0 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>

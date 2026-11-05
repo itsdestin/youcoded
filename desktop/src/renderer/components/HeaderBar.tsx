@@ -424,6 +424,28 @@ export default React.memo(function HeaderBar({
     onToggleGamePanel, gamePanelOpen, gameConnected, challengePending,
   };
 
+  // The strip, drawn bare or (lights bar) inside the name stack below.
+  const sessionStrip = (
+    <SessionStrip
+      sessions={sessions}
+      activeSessionId={activeSessionId}
+      onSelectSession={onSelectSession}
+      onCreateSession={onCreateSession}
+      onCloseSession={onCloseSession}
+      sessionStatuses={sessionStatuses}
+      onOpenResumeBrowser={onOpenResumeBrowser}
+      onReorderSessions={onReorderSessions}
+      defaultModel={defaultModel}
+      defaultStartModel={defaultStartModel}
+      defaultSkipPermissions={defaultSkipPermissions}
+      defaultProjectFolder={defaultProjectFolder}
+      windowDirectory={windowDirectory}
+      myWindowId={myWindowId}
+      menuApiRef={stripApi}
+      drawerFooter={narrowTop === 'drawer' ? <OverflowRowList {...overflowProps} reverse /> : narrowTop === 'hub' ? <OverflowRowList {...overflowProps} reverse tiles /> : undefined}
+    />
+  );
+
   // Native harness sessions have no PTY — the chat/terminal toggle would show
   // an empty terminal pane. Hide it for them. A shell session is the mirror
   // image: it is nothing BUT a terminal, and switching it to chat would show an
@@ -608,26 +630,18 @@ export default React.memo(function HeaderBar({
           flex-1 wrapper gives the strip a pre-allocated budget (~1/3 of the
           header) so packSessions reads an available-space value rather than
           its own current content width (chicken-and-egg fix). */}
-      <div className={`flex-1 min-w-0 flex justify-center ${narrowTop === 'lights' ? 'flex-col items-center' : ''}`}>
-      <SessionStrip
-        sessions={sessions}
-        activeSessionId={activeSessionId}
-        onSelectSession={onSelectSession}
-        onCreateSession={onCreateSession}
-        onCloseSession={onCloseSession}
-        sessionStatuses={sessionStatuses}
-        onOpenResumeBrowser={onOpenResumeBrowser}
-        onReorderSessions={onReorderSessions}
-        defaultModel={defaultModel}
-        defaultStartModel={defaultStartModel}
-        defaultSkipPermissions={defaultSkipPermissions}
-        defaultProjectFolder={defaultProjectFolder}
-        windowDirectory={windowDirectory}
-        myWindowId={myWindowId}
-        menuApiRef={stripApi}
-        drawerFooter={narrowTop === 'drawer' ? <OverflowRowList {...overflowProps} reverse /> : narrowTop === 'hub' ? <OverflowRowList {...overflowProps} reverse tiles /> : undefined}
-      />
-      {narrowTop === 'lights' && <SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} />}
+      <div className="flex-1 min-w-0 flex justify-center">
+      {/* Round 4 (Destin picked the lights bar: "prettier … clean up the dead space and improve
+          alignment/centering"): the name, its arrow AND the lights are one stack with ONE hover
+          background, so the lights read as part of the button. Only that bar gets the wrapper: the
+          strip measures its PARENT's width to pack pills, and a `display: contents` wrapper has none
+          (the desktop journeys found every pill but the active one gone). */}
+      {narrowTop === 'lights' ? (
+      <div className="session-name-stack flex flex-col items-center justify-center min-w-0 max-w-full rounded-lg px-1 pb-1 hover:bg-inset transition-colors">
+      {sessionStrip}
+      {narrowTop === 'lights' && <SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} onOpen={() => stripApi.current?.openList()} />}
+      </div>
+      ) : sessionStrip}
       </div>
 
       {/* Right — view toggles. Symmetric reservation with the left cluster
