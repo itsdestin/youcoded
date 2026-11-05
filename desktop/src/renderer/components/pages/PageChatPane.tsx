@@ -27,14 +27,12 @@ interface PageChatPaneProps {
   cwd?: string;
   /** Hides the pane; the chat keeps its place and carries on (Destin: an X "reads as end chat permanently"). */
   onHide: () => void;
-  /** Docked beside the page it folds away like the page list (a panel glyph); floating it drops down (a chevron). */
-  hideGlyph: 'panel' | 'minimize';
   className?: string;
   /** Size and place, from the host. */
   style?: React.CSSProperties;
 }
 
-export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, hideGlyph, className = '', style }: PageChatPaneProps) {
+export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, className = '', style }: PageChatPaneProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -75,7 +73,7 @@ export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, hideGl
           </Tooltip>
           <Tooltip text="Hide the chat" placement="bottom">
             <Button size="icon-sm" variant="ghost" aria-label={`Hide the chat about ${page.name}`} onClick={onHide} className="w-7 h-7">
-              {hideGlyph === 'panel' ? <HidePanelGlyph /> : <HideDownGlyph />}
+              <HideDownGlyph />
             </Button>
           </Tooltip>
         </div>
@@ -95,10 +93,6 @@ function HistoryGlyph() {
 }
 function PlusGlyph() {
   return <svg {...GLYPH}><path d="M12 5v14M5 12h14" /></svg>;
-}
-/** The page list's fold glyph, mirrored: the panel's right column, the chevron pointing the way it goes. */
-function HidePanelGlyph() {
-  return <svg {...GLYPH}><rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M15 4v16" /><path d="M8 10l2 2-2 2" /></svg>;
 }
 function HideDownGlyph() {
   return <svg {...GLYPH}><path d="M6 9l6 6 6-6" /></svg>;
