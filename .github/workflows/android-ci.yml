@@ -11,6 +11,11 @@ on:
         type: boolean
         default: false
 
+# WHY (code scanning, 2026-11): read-only unless a job asks for more. Jobs that write
+# (publishing, signing, check runs) declare their own permissions, which override this.
+permissions:
+  contents: read
+
 jobs:
   # WHY: JVM validation has no packaging/native prerequisites; neither APK
   # waits for it or for another variant's runner/cache to become available.
