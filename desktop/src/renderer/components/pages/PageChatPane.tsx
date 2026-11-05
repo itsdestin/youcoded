@@ -13,13 +13,10 @@ import InputBar from '../InputBar';
 import { Button, SectionLabel, Tooltip } from '../ui';
 import { CompactSurfaceContext, type CompactSurface } from '../../state/compact-surface-context';
 import type { PageSummary } from '../../../shared/pages-types';
-import { workbenchPageUndo } from '../../workbench-mode';
+import { workbenchPageVersionsOpen } from '../../workbench-mode';
 import { useEscClose } from '../../hooks/use-esc-close';
 
-// WHY two: the Undo round compares Undo under each reply that changed the page (`pageUndo`) with a Versions list
-// in the header and no line in the replies.
-const COMPACT_REPLY_UNDO: CompactSurface = { tools: 'summary', pageUndo: true };
-const COMPACT_PLAIN: CompactSurface = { tools: 'summary' };
+const COMPACT: CompactSurface = { tools: 'summary' };
 // The header row's height, which the chat clears at its top (page-chat.css reads it): the page list's
 // label row with its 28px buttons.
 const HEADER_PX = 44;
@@ -40,8 +37,7 @@ interface PageChatPaneProps {
 export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, className = '', style }: PageChatPaneProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const undo = workbenchPageUndo();
-  const [versionsOpen, setVersionsOpen] = useState(undo.versionsOpen);
+  const [versionsOpen, setVersionsOpen] = useState(workbenchPageVersionsOpen);
 
   // The message box's height, written on THIS pane (never <html>): the main window's chat, behind the
   // page, keeps its own. Skips identical writes, like useChromeMeasurements.
@@ -60,7 +56,7 @@ export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, classN
   }, []);
 
   return (
-    <CompactSurfaceContext.Provider value={undo.style === 'reply' ? COMPACT_REPLY_UNDO : COMPACT_PLAIN}>
+    <CompactSurfaceContext.Provider value={COMPACT}>
       {/* WHY no position class here: the host's layout gives one (relative beside the page, absolute over it);
           two would fight, and `relative` won — the floating card and the phone sheet landed top-left. */}
       <div ref={paneRef} className={`page-chat-pane overflow-hidden select-none ${className}`}
@@ -75,12 +71,12 @@ export function PageChatPane({ page, sessionId, sessionName, cwd, onHide, classN
           <Tooltip text="Earlier chats about this page" placement="bottom">
             <Button size="icon-sm" variant="ghost" aria-label={`Earlier chats about ${page.name}`} className="w-7 h-7"><HistoryGlyph /></Button>
           </Tooltip>
-          {undo.style === 'versions' && (
-            <Tooltip text="Earlier versions of this page" placement="bottom">
-              <Button size="icon-sm" variant="ghost" aria-label={`Earlier versions of ${page.name}`} aria-expanded={versionsOpen}
-                onClick={() => setVersionsOpen((o) => !o)} className="w-7 h-7"><VersionsGlyph /></Button>
-            </Tooltip>
-          )}
+          {/* WHY here and not a line under each reply (Undo round, Destin picked "versions"): changes still land at once,
+              and taking one back is a trip to this list, like any version history. */}
+          <Tooltip text="Earlier versions of this page" placement="bottom">
+            <Button size="icon-sm" variant="ghost" aria-label={`Earlier versions of ${page.name}`} aria-expanded={versionsOpen}
+              onClick={() => setVersionsOpen((o) => !o)} className="w-7 h-7"><VersionsGlyph /></Button>
+          </Tooltip>
           <Tooltip text="New chat" placement="bottom">
             <Button size="icon-sm" variant="ghost" aria-label={`New chat about ${page.name}`} className="w-7 h-7"><PlusGlyph /></Button>
           </Tooltip>
@@ -123,8 +119,10 @@ const PRACTICE_VERSIONS = [
   { before: 'move my netflix bill to the 15th', when: '2:10 PM', kind: 'Its information' },
 ];
 
-/** The `versions` variant: the page as it was before each change, each with Put back. WHY under the header and the
- *  chat's own width: it is about this page, like the chat; a menu off the button would cover the button row. */
+/** The page as it was before each change, each with Put back. WHY under the header and the chat's own width: it is
+ *  about this page, like the chat; a menu off the button would cover the button row. WHY any version and nothing lost
+ *  (Destin, Undo round K-which: "it should just work like any other typical version history menu and let me resume
+ *  from any of the checkpoints"): putting one back is itself a new version, so the page you had stays in the list. */
 function PageVersionsList({ pageName, onClose }: { pageName: string; onClose: () => void }) {
   // WHY on the app's Escape stack: it sits over the chat, so one Esc closes the list and leaves the chat open
   // (shoot's Escape check caught the list and the whole page closing together).
@@ -134,6 +132,7 @@ function PageVersionsList({ pageName, onClose }: { pageName: string; onClose: ()
       <div className="flex items-center px-2 pt-1 pb-1.5">
         <span className="flex-1 text-xs font-medium text-fg-muted">Earlier versions</span>
       </div>
+      <p className="px-2 pb-2 text-xs text-fg-muted">Putting one back keeps what you have now in this list.</p>
       <div className="flex items-center gap-2 px-2 py-2 rounded-md bg-inset">
         <div className="flex-1 min-w-0">
           <div className="text-sm text-fg">Now</div>

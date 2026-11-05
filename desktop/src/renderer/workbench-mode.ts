@@ -156,21 +156,12 @@ export function workbenchPageChat(): { openOnLoad: boolean } {
   return { openOnLoad: new URLSearchParams(location.search).get('pageChat') === 'open' };
 }
 
-/** How the page's assistant offers Undo (pages-finish step 3, the Undo round; Destin on R-undo: "unsure how this
- *  would actually work in practice", so it is judged on pictures):
- *  - `reply`    a quiet line under each reply that changed the page or what it holds, with Undo
- *  - `versions` no line; a Versions button in the chat's header lists the page as it was before each change
- *  `?pageUndo=` picks one (default `reply`); `?pageUndone=1` shows the newest change already undone;
- *  `?pageVersions=open` opens the versions list. Outside the workbench: `reply`, nothing undone or open. */
-export type PageUndoStyle = 'reply' | 'versions';
-export function workbenchPageUndo(): { style: PageUndoStyle; undone: boolean; versionsOpen: boolean } {
-  if (!isWorkbenchMode()) return { style: 'reply', undone: false, versionsOpen: false };
-  const q = new URLSearchParams(location.search);
-  return {
-    style: q.get('pageUndo') === 'versions' ? 'versions' : 'reply',
-    undone: q.get('pageUndone') === '1',
-    versionsOpen: q.get('pageVersions') === 'open',
-  };
+/** The page's earlier versions, for pictures (pages-finish step 3, the Undo round: Destin picked a Versions list
+ *  in the chat's header over Undo under each reply, and asked for it to work "like any other typical version history
+ *  menu", any version put back). `?pageVersions=open` opens the list on load; outside the workbench it starts shut. */
+export function workbenchPageVersionsOpen(): boolean {
+  if (!isWorkbenchMode()) return false;
+  return new URLSearchParams(location.search).get('pageVersions') === 'open';
 }
 
 /** Chrome-style override for reviewing a chrome layout on ANY theme, without
