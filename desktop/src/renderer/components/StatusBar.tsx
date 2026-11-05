@@ -1044,6 +1044,18 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
     : nativeChips?.tokensPerSecond ?? null;
   const speedIsSessionAverage = outTokens != null && ss?.apiDuration != null && ss.apiDuration > 0;
 
+  // Customize widget — pencil icon opens the config popup, always last (inside the compact row's scroller).
+  const customizeButton = (
+    <Tooltip text="Customize status bar">
+    <button
+      onClick={() => setPopupOpen(true)}
+      className={`ml-auto ${compact ? 'shrink-0 status-pencil-uniform ' : ''}flex items-center justify-center w-5 h-5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors`}
+    >
+      <PencilIcon />
+    </button>
+    </Tooltip>
+  );
+
   return (
     <div
       // select-none: every chip and label here is chrome, not highlightable or
@@ -1053,9 +1065,9 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       // Compact phone row (2026-11-05 round): one line, tighter gaps. Inline so
       // the root keeps its literal class list (ast-grep
       // chrome-root-select-none-status-bar reads the attribute's text).
-      // Round 4: no left padding here — the scroller carries the chip row's px-3 INSIDE it, so a pill
-      // never sits against the screen edge or under the fade; the right matches it for the pencil.
-      style={compact ? { flexWrap: 'nowrap', columnGap: '0.25rem', paddingLeft: 0, paddingRight: '0.75rem' } : undefined}
+      // Round 4: no side padding here — the scroller carries the chip row's px-3 INSIDE it, so a pill
+      // never sits against the screen edge or under the fade at rest, exactly like the chip row.
+      style={compact ? { flexWrap: 'nowrap', columnGap: '0.25rem', paddingLeft: 0, paddingRight: 0 } : undefined}
     >
       <CompactRow on={compact}>
       {/* Remote chip (compact row only): replaces the header's REMOTE word on a
@@ -1733,18 +1745,13 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         </Tooltip>
       )}
 
+      {/* Round 4 (Destin: "the fade effect seems a little broken on the right side … compared
+          to the quick chips"): the pencil scrolls WITH the pills, as the chips' own pencil does,
+          so the fade sits at the screen edge instead of mid-row beside a pinned pencil. */}
+      {compact && customizeButton}
       </CompactRow>
 
-      {/* Customize widget — pencil icon opens config popup, always last.
-          In the compact row it sits OUTSIDE the scroller, so it never scrolls away. */}
-      <Tooltip text="Customize status bar">
-      <button
-        onClick={() => setPopupOpen(true)}
-        className={`ml-auto ${compact ? 'shrink-0 status-pencil-uniform ' : ''}flex items-center justify-center w-5 h-5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors`}
-      >
-        <PencilIcon />
-      </button>
-      </Tooltip>
+      {!compact && customizeButton}
 
       {/* Config popup — centered modal with grouped widgets + (i) info */}
       <WidgetConfigPopup

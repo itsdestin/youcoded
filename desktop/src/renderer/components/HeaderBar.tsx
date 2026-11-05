@@ -417,7 +417,7 @@ export default React.memo(function HeaderBar({
   // Q-3: the REMOTE label moves into the pill row under the message box
   // (StatusBar draws it there when the compact pills are on).
   const remoteInPills = narrow && workbenchNarrowPills() === 'compact';
-  const stripApi = useRef<{ openList: () => void; openNewSession: () => void } | null>(null);
+  const stripApi = useRef<{ openList: () => void; toggleList: () => void; openNewSession: () => void } | null>(null);
   const overflowProps = {
     activeSessionId,
     projectRoot: sessions.find((s) => s.id === activeSessionId)?.cwd,
@@ -638,9 +638,13 @@ export default React.memo(function HeaderBar({
           strip measures its PARENT's width to pack pills, and a `display: contents` wrapper has none
           (the desktop journeys found every pill but the active one gone). */}
       {narrowTop === 'lights' ? (
-      <div className="session-name-stack flex flex-col items-center justify-center min-w-0 max-w-full rounded-lg px-1 pb-1 hover:bg-inset transition-colors">
+      // Round 4 (Destin: "make the whole hoverable area of the current name dropdown button area
+      // clickable"): the stack takes the click itself, so its padding and the gaps between dot,
+      // name, arrow and lights all open the list. The name and arrow inside pass their clicks up
+      // (SessionStrip, narrowTop === 'lights'); the arrow stays the keyboard's way in.
+      <div onClick={() => stripApi.current?.toggleList()} className="session-name-stack cursor-pointer flex flex-col items-center justify-center min-w-0 max-w-full rounded-lg px-1 pb-1 hover:bg-inset transition-colors">
       {sessionStrip}
-      {narrowTop === 'lights' && <SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} onOpen={() => stripApi.current?.openList()} />}
+      {narrowTop === 'lights' && <SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} />}
       </div>
       ) : sessionStrip}
       </div>
