@@ -658,8 +658,13 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // Edit in chat (Page settings, the library): the page opens with its assistant open.
   const pageChatAsk = useArtifactSelector((s) => s.pageChatAsk);
   useEffect(() => { if (pageChatAsk > 0) setChatOpen(true); }, [pageChatAsk]);
-  const { open: openAssistant, forget: forgetAssistant } = assistant;
-  useEffect(() => { if (chatOpen && assistantPage && !isWorkbenchMode()) void openAssistant(); }, [chatOpen, assistantPage, openAssistant]);
+  const { forget: forgetAssistant } = assistant;
+  // WHY a ref and only [chatOpen, page] as triggers: `open` changes with the chat's status, and re-running on that
+  // would retry a failed start by itself, over and over; a failure waits for Try again.
+  const openAssistantRef = useRef(assistant.open);
+  openAssistantRef.current = assistant.open;
+  const assistantPageId = assistantPage?.id ?? null;
+  useEffect(() => { if (chatOpen && assistantPageId && !isWorkbenchMode()) void openAssistantRef.current(); }, [chatOpen, assistantPageId]);
   // The chat was closed in the main window (its tab) or ended: let it go, so the next open finds the page's
   // chats again. WHY "seen, then gone": a new chat reaches this list a moment after it starts.
   const seenChat = useRef<string | null>(null);
