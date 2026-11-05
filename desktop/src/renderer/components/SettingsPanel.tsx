@@ -29,6 +29,7 @@ import { DonateConfirm } from './DonateConfirm';
 import AssistantSettingsRow from './assistant-settings/AssistantSettings';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import type { AssistantDefaults } from './assistant-settings/pages';
+import { useAndroidSettingsData } from './android-settings-data';
 import { formatVersionLine } from '../../shared/version-line';
 // The Linux/KDE buddy helper's three-state answer. Typed centrally so the popup
 // and the launch path in App.tsx cannot drift apart on what `needed` means.
@@ -2623,10 +2624,8 @@ export function ConnectToDesktopButton() {
 }
 
 function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketplace, onPublishTheme, syncAutoOpen, onSyncAutoOpenHandled }: { open: boolean; onClose: () => void; onSendInput: (text: string) => void; onRunCommand?: (command: string) => void; onOpenThemeMarketplace?: () => void; onPublishTheme?: (slug: string) => void; syncAutoOpen?: boolean; onSyncAutoOpenHandled?: () => void }) {
-  const [loading, setLoading] = useState(true);
-  const [tier, setTier] = useState('CORE');
-  const [aboutInfo, setAboutInfo] = useState<{ version: string; build: string } | null>(null);
-  const [defaults, setDefaults] = useState<AssistantDefaults>({ skipPermissions: false, model: 'sonnet', projectFolder: '' });
+  // Read at startup and refreshed quietly on each open, so opening never flashes "Loading..." (android-settings-data.ts).
+  const { loading, tier, setTier, aboutInfo, defaults, setDefaults } = useAndroidSettingsData(open);
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
@@ -2648,26 +2647,6 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
       return unsub;
     });
   }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    setLoading(true);
-    // Fix: defer IPC calls until after the 300ms slide-in animation. Firing
-    // three parallel bridge calls synchronously visibly stutters the panel.
-    const _deferTimer = setTimeout(() => {
-    Promise.all([
-      claude.android?.getTier?.() ?? 'CORE',
-      claude.android?.getAbout?.() ?? { version: 'unknown', build: '' },
-      claude.defaults?.get?.() ?? { skipPermissions: false, model: 'sonnet', projectFolder: '' },
-    ]).then(([t, about, defs]) => {
-      setTier(t?.tier || t || 'CORE');
-      setAboutInfo(about);
-      setDefaults(defs);
-      setLoading(false);
-    }).catch(() => setLoading(false));
-    }, 350);
-    return () => clearTimeout(_deferTimer);
-  }, [open]);
 
   const handleSetTier = useCallback(async (newTier: string) => {
     const result = await claude.android?.setTier?.(newTier);
