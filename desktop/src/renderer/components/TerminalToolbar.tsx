@@ -39,23 +39,6 @@ export function consumeCtrlLetter(sessionId: string, prev: string, next: string)
   return true;
 }
 
-/** TEMPORARY, for the review deck's looks (2026-11-05): the workbench's ?termKeys= switch. Removed with the look
- *  Destin does not pick. Round 3 (he picked the tray, "torn between b/c", and "the size/spacing on both feels a bit
- *  weird though. should be more similar to the quick chips in chat"): both are now the quick chip's own size: 32px
- *  tall, small text, the chip's corner. tray = one track of chip height holding raised keys; chips = keys drawn like
- *  the quick chips themselves, no track. */
-type Look = 'tray' | 'chips';
-/** The tray's corner: the keys' own corner (the quick chip's, --radius-md, which each theme sets) plus the 4px gap
- *  around them (p-1), so the two curves run parallel in every theme. WHY (Destin, 2026-11-05, on the first tray: "all
- *  of the corner roundings are different and the internal chips almost seem to overlap the external container"): the
- *  track took one theme corner and the keys a fixed small one, with only 2px between them and the edge. Inline because
- *  the corner is a sum of a theme value and the padding; Tailwind has no token for it. */
-const TRAY = 'p-1 gap-1 bg-inset';
-const TRAY_CORNER = { borderRadius: 'calc(var(--radius-md) + 0.25rem)' };
-function look(): Look {
-  try { return new URLSearchParams(location.search).get('termKeys') === 'chips' ? 'chips' : 'tray'; } catch { return 'tray'; }
-}
-
 /**
  * Touch-only row of special keys (Ctrl, Esc, Tab, Enter, Space, ← →) for terminal view, in the slot the quick chips use in
  * chat view. Sends escape sequences straight to the PTY via sendInput.
@@ -72,7 +55,6 @@ function look(): Look {
  */
 export default function TerminalToolbar({ sessionId }: TerminalToolbarProps) {
   const ctrl = useCtrlHeld(sessionId);
-  const l = look();
   const send = useCallback((input: string) => {
     setCtrlHeld(sessionId, false);
     window.claude.session.sendInput(sessionId, input);
@@ -80,25 +62,25 @@ export default function TerminalToolbar({ sessionId }: TerminalToolbarProps) {
 
   return (
     <div className="scroll-mask scroll-mask--chips flex px-3 py-1 overflow-x-auto scrollbar-none">
-      <div className={`flex flex-1 items-center ${l === 'tray' ? TRAY : 'gap-1'}`} style={l === 'tray' ? TRAY_CORNER : undefined}>
-        <Key look={l} label="Ctrl" pressed={ctrl} onClick={() => setCtrlHeld(sessionId, !ctrl)} />
-        <Key look={l} label="Esc" onClick={() => send('\x1b')} />
-        <Key look={l} label="Tab" onClick={() => send('\t')} />
+      <div className="flex flex-1 items-center gap-1">
+        <Key label="Ctrl" pressed={ctrl} onClick={() => setCtrlHeld(sessionId, !ctrl)} />
+        <Key label="Esc" onClick={() => send('\x1b')} />
+        <Key label="Tab" onClick={() => send('\t')} />
         {/* Enter as its own key (second review F2): answering a menu in terminal view on a phone — above all a
             startup dialog the chat cannot show — needs Enter to confirm. */}
-        <Key look={l} label="Enter" onClick={() => send('\r')} />
+        <Key label="Enter" onClick={() => send('\r')} />
         {/* Space kept as a seventh key (Destin, 2026-11-05, picked "keep Space as a seventh key"): it ticks a box in a
             tick-several menu, above all the startup question about which add-on servers to allow, which only terminal
             view shows. */}
-        <Key look={l} label="Space" onClick={() => send(' ')} />
-        <Key look={l} label="Left" icon={<BackIcon className="w-4 h-4" />} onClick={() => send('\x1b[D')} />
-        <Key look={l} label="Right" icon={<ForwardIcon className="w-4 h-4" />} onClick={() => send('\x1b[C')} />
+        <Key label="Space" onClick={() => send(' ')} />
+        <Key label="Left" icon={<BackIcon className="w-4 h-4" />} onClick={() => send('\x1b[D')} />
+        <Key label="Right" icon={<ForwardIcon className="w-4 h-4" />} onClick={() => send('\x1b[C')} />
       </div>
     </div>
   );
 }
 
-function Key({ look: l, label, icon, pressed, onClick }: { look: Look; label: string; icon?: React.ReactNode; pressed?: boolean; onClick: () => void }) {
+function Key({ label, icon, pressed, onClick }: { label: string; icon?: React.ReactNode; pressed?: boolean; onClick: () => void }) {
   return (
     <Button
       variant={pressed ? 'primary' : 'raised'}
@@ -106,7 +88,7 @@ function Key({ look: l, label, icon, pressed, onClick }: { look: Look; label: st
       onClick={onClick}
       aria-pressed={pressed}
       aria-label={icon ? label : undefined}
-      // The quick chip's size and corner (QuickChips.tsx on a phone: h-8, text-2xs, rounded-md), in both looks. flex-1:
+      // The quick chip's size and corner (QuickChips.tsx on a phone: h-8, text-2xs, rounded-md). flex-1:
       // the keys share the row's width; min-w-10 makes the row scroll rather than squeeze when they no longer fit. The
       // 44px touch area still comes from the primitive.
       className="flex-1 min-w-10 h-8 px-1.5 text-2xs rounded-md select-none"
@@ -132,7 +114,6 @@ export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
   }, [sessionId]);
   const probe = useRef<HTMLDivElement>(null);
   const right = useMessageBoxRightFor(probe);
-  const l = look();
 
   return (
     // WHY above --terminal-bottom-inset: on a touch screen the input bar floats OVER the terminal (globals.css,
@@ -140,8 +121,8 @@ export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
     <div
       ref={probe}
       data-term-lift=""
-      className={`absolute z-10 pointer-events-auto flex flex-col select-none ${l === 'tray' ? TRAY : 'gap-1.5'}`}
-      style={{ ...(l === 'tray' ? TRAY_CORNER : {}), right: right ?? 8, bottom: 'calc(var(--terminal-bottom-inset, 0px) + 0.5rem)' }}
+      className="absolute z-10 pointer-events-auto flex flex-col gap-1.5 select-none"
+      style={{ right: right ?? 8, bottom: 'calc(var(--terminal-bottom-inset, 0px) + 0.5rem)' }}
     >
       {/* Change 41 kept: a 40×40 target each — a primary touch control floating over the terminal. Two keys with a
           gap, never a line between them (Destin, 2026-11-05: "the line between the arrows is grodi"). */}
