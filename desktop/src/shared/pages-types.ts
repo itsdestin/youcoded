@@ -25,7 +25,9 @@ export type PageHome =
 export type PageIcon =
   | 'page' | 'timer' | 'notes' | 'paint' | 'chart' | 'calendar' | 'list' | 'game' | 'money'
   // Built-in pages only.
-  | 'office';
+  | 'office'
+  // The built-in Automations page (pages-finish step 4).
+  | 'automation';
 
 /** The built-in Office page's id. Stable, so a pin syncs like any page's. */
 export const OFFICE_PAGE_ID = 'builtin:office';
@@ -35,6 +37,14 @@ export const OFFICE_PAGE_ID = 'builtin:office';
 export const OFFICE_PAGE_SUMMARY: PageSummary = {
   id: OFFICE_PAGE_ID, name: 'Office', description: 'Documents, spreadsheets and presentations.',
   icon: 'office', home: { kind: 'builtin' }, pinned: false, updatedAt: '2026-09-28T00:00:00Z', htmlStamp: 0,
+};
+
+/** The built-in Automations page (pages-finish step 4, Q-home: "the main area could probably be a
+ *  built-in page"). Its body is the app's own Automations view, like Office's. Design stage: only
+ *  the workbench fake lists it until the runner exists. Same id as automation-types.ts's. */
+export const AUTOMATIONS_PAGE_SUMMARY: PageSummary = {
+  id: 'builtin:automations', name: 'Automations', description: 'Jobs that run for you on a schedule, when something happens, or from a button.',
+  icon: 'automation', home: { kind: 'builtin' }, pinned: false, updatedAt: '2026-11-06T00:00:00Z', htmlStamp: 0,
 };
 
 // ── Phase 2: connections (decided on two questions decks, 2026-09-19) ──────

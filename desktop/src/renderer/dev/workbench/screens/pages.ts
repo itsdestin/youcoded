@@ -126,6 +126,17 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/file-chooser#phone-list', 'dialog', 'narrow'), params: { pagesChooserAt: 'Documents/Budgets', pagesChooserView: 'list' }, viewport: PHONE, newIn: 'after' },
   pg('pages/page/page-analytics', 'view', 'approval'),
   pg('pages/page/page-trip-board', 'view', 'approval', 'error-state'),
+  // Automations (built in, pages-finish step 4, design stage — automations-mock.ts answers).
+  pg('automations', 'view', 'automations'),
+  { ...pg('automations/first-run', 'view', 'automations', 'empty-state'), scenario: 'empty' },
+  pg('automations/job', 'view', 'automations'),
+  pg('automations/job-runs', 'view', 'automations'),
+  pg('automations/job-subscription', 'view', 'automations'),
+  pg('automations/new', 'view', 'automations'),
+  // A page's own automations, in its Page settings (the Money page has the morning check).
+  { ...pg('pages/library/settings#automations', 'automations'), params: { pagesSettings: 'page-money' } },
+  { ...pg('automations#phone', 'view', 'automations', 'narrow'), viewport: PHONE, mark: 'automations' },
+  { ...pg('automations/job#phone', 'view', 'automations', 'narrow'), viewport: PHONE, mark: 'automations/job' },
   // Office (built in, design stage). Documents need the editor add-on served on
   // 127.0.0.1:4717 — fixtures/office.ts says how.
   pg('office/home', 'view', 'office'),

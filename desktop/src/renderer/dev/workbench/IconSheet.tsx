@@ -35,7 +35,7 @@ type Entry = [label: string, node: React.ReactNode];
 // The keyed icons, by every key their type allows (kept in step with those types by hand).
 const MENU: MenuIconName[] = ['rename', 'copy', 'cut', 'paste', 'select-all', 'ask', 'comment', 'code', 'open', 'link', 'folder', 'path'];
 const PROVIDERS: ProviderIconKey[] = ['openai', 'anthropic', 'claudecode', 'google', 'qwen', 'grok', 'kimi', 'deepseek', 'meta', 'mistral', 'cohere', 'perplexity', 'claude', 'openrouter'];
-const PAGES: PageIcon[] = ['page', 'timer', 'notes', 'paint', 'chart', 'calendar', 'list', 'game', 'office'];
+const PAGES: PageIcon[] = ['page', 'timer', 'notes', 'paint', 'chart', 'calendar', 'list', 'game', 'office', 'automation'];
 const CAPS: CapabilityKind[] = ['shell', 'network', 'secret', 'files', 'auto', 'adds'];
 const FILES: FileKind[] = ['image', 'sheet', 'document', 'code', 'text', 'markdown', 'pdf', 'audio', 'video', 'archive', 'unknown'];
 

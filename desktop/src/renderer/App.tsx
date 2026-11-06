@@ -272,6 +272,7 @@ function seedNativeMode(sessionId: string, set: SetNativeModes): void {
 const SettingsPanel = deferredScreen(() => import('./components/SettingsPanel').then((m) => m.default));
 const ResumeBrowser = deferredScreen(() => import('./components/ResumeBrowser').then((m) => m.default));
 const ProjectView = deferredScreen(() => import('./components/project-view/ProjectView').then((m) => m.ProjectView));
+const AutomationCheckDialog = deferredScreen(() => import('./components/automations/AutomationCheckDialog').then((m) => m.AutomationCheckDialog));
 const PagesView = deferredScreen(() => import('./components/pages/PagesView').then((m) => m.PagesView));
 const PageHost = deferredScreen(() => import('./components/pages/PageHost').then((m) => m.PageHost));
 const GamePanel = deferredScreen(() => import('./components/game/GamePanel').then((m) => m.default));
@@ -4110,6 +4111,8 @@ function AppInner() {
           and "Edit in chat" start a conversation in the current folder — the
           creator skill that turns that conversation into a page is Phase 1's
           next task, not part of this shell. */}
+      {/* Automations (pages-finish step 4, design stage): the check a chat-made automation shows before it turns on. */}
+      <AutomationCheckDialog load={screensReady} />
       <PagesView
         load={screensReady || artifactState.pagesViewOpen}
         // Make a page / Edit open the new-session dialog (folder, model, the

@@ -6,6 +6,8 @@ const chat = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags: ['
 
 export const CHAT: readonly ScreenEntry[] = [
   chat('chat', 'view'),
+  // Pages-finish step 4 (design stage): the check an automation asked for in chat shows before it turns on.
+  { ...chat('chat/automation-check', 'automations'), session: 'wb-1' },
   // UI-only queue review. Before preserves this branch's existing queue design, not old master.
   ...['idle-before', 'idle-after', 'uncertain-before', 'uncertain-after', 'waiting-after'].map(q => ({
     ...chat(`chat#queue-${q}`, 'view'), session: 'wb-1', params: { queuePreview: q },

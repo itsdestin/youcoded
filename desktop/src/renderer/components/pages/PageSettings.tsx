@@ -21,6 +21,11 @@ import { PageGlyph } from './page-icons';
 import { CombinedRisk, ConnectionLine, FolderField, splitAddress } from './page-connections';
 import { getCapabilities } from '../../platform';
 import { publishPages } from './use-pages';
+import { useArtifactDispatch } from '../../state/ArtifactContext';
+import { SettingRow, Toggle } from '../ui';
+import { automationsBridge, publishAutomations, useAutomations } from '../automations/use-automations';
+import { startWords } from '../automations/automation-words';
+import { AUTOMATIONS_PAGE_ID } from '../../../shared/automation-types';
 
 function bridge(): PagesBridge | undefined {
   return (window as unknown as { claude?: { pages?: PagesBridge } }).claude?.pages;
@@ -112,7 +117,36 @@ function PageSettingsBody({ page, onConnect, onEdit }: { page: PageSummary; onCo
           </div>
         </div>
       </section>
+
+      <PageAutomations pageId={page.id} />
     </div>
+  );
+}
+
+/** Pages-finish step 4 (design stage): this page's own automations, listed here as well as on the
+ *  Automations page (Q-belongs). Only for a page that has some: an empty section is a promise of
+ *  nothing. Each row's switch pauses it; the button opens Automations, where its settings are. */
+function PageAutomations({ pageId }: { pageId: string }) {
+  const dispatch = useArtifactDispatch();
+  const { jobs } = useAutomations();
+  const mine = jobs.filter((j) => j.owner.kind === 'page' && j.owner.pageId === pageId);
+  if (mine.length === 0) return null;
+  const setEnabled = async (id: string, on: boolean) => {
+    const b = automationsBridge();
+    if (b) publishAutomations(await b.setEnabled(id, on));
+  };
+  return (
+    <section className="flex flex-col gap-2" data-page-automations>
+      <SectionLabel>Automations</SectionLabel>
+      <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>
+        {mine.map((j) => (
+          <SettingRow key={j.id} variant="item" title={j.name}
+            description={j.waiting ? `Waiting for you: ${j.waiting.action}` : startWords(j.start)}
+            control={<Toggle checked={j.enabled} onChange={(on) => void setEnabled(j.id, on)} aria-label={j.enabled ? `Pause ${j.name}` : `Turn on ${j.name}`} />} />
+        ))}
+        <Button variant="secondary" className="w-full" onClick={() => dispatch({ type: 'PAGE_OPENED', pageId: AUTOMATIONS_PAGE_ID })}>Open in Automations</Button>
+      </div>
+    </section>
   );
 }
 

@@ -545,7 +545,8 @@ import { fakeCameraDeps, fakeCameraRefuse, fakeCameraRefusal, FAKE_RATE_LIMIT_WH
 import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantCameraEvents, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSet, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
 import { findHomeVariant, withHomeVariant } from './fixtures/home-variants/registry';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
-import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
+import { AUTOMATIONS_PAGE_SUMMARY, OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
+import { createAutomationsMock } from './automations-mock';
 import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
 import type { PagesBridge, PageDocument, PageSocketEvent, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 import { sameEndpoint } from '../../../shared/endpoint-address';
@@ -4169,6 +4170,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, integrations, dev: devMock, voiceVocabulary, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario),
+    // Automations (pages-finish step 4, design stage): MOCK_ONLY — see automations-mock.ts.
+    automations: createAutomationsMock(activeScenario),
     office: createOfficeMock(activeScenario === 'empty'),
     docComments: createDocCommentsMock(activeScenario === 'empty'),
     browser: createBrowserMock(() => store.getState().sessions.map((x: any) => x.id)),
@@ -4360,7 +4363,8 @@ function createPagesMock(scenario: string): PagesBridge {
   // Unpinned, as a new install has it: pinning it filled the header's fourth slot,
   // and the resume journey's All Sessions click then raced the session strip
   // re-packing under verify.sh's load (failed 2 of 4 runs, 2026-09-28).
-  let pages: PageDocument[] = [OFFICE_PAGE, ...(empty ? [] : site ? seedSitePages() : seedPages())];
+  // Automations is built in too (pages-finish step 4, design stage), listed like Office.
+  let pages: PageDocument[] = [OFFICE_PAGE, ...(site ? [] : [AUTOMATIONS_PAGE]), ...(empty ? [] : site ? seedSitePages() : seedPages())];
   // `?pagesKit=1`: the Pages kit's showcase page is listed too (fixtures/kit-pieces-page.ts), so every
   // kit piece can be photographed; any other value opens that section first at phone width
   // (`?pagesKit=controls`). WHY only on request: the Pages list on every other screen keeps its cards.
@@ -4726,6 +4730,8 @@ function createPagesMock(scenario: string): PagesBridge {
 
 /** The built-in Office page as the pages list carries it — the same row main lists. */
 const OFFICE_PAGE: PageDocument = { ...OFFICE_PAGE_SUMMARY, html: '', data: null };
+/** The built-in Automations page (pages-finish step 4) — only the workbench lists it until the runner exists. */
+const AUTOMATIONS_PAGE: PageDocument = { ...AUTOMATIONS_PAGE_SUMMARY, html: '', data: null };
 
 /** `window.claude.office` for the workbench — a fake HOST around the real editor (Task 6).
  *  The editor add-on itself is served by scripts/office-workbench-server.mjs on

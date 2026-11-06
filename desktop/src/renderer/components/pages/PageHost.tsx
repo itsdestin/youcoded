@@ -53,6 +53,9 @@ import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageFileEncoding, PageFilesRequest, PageFilesResult, PageHome, PageLoadFailure, PageProgramResult, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PAGE_PROGRAM_INPUT, MAX_PAGE_SESSION_PROMPT, MAX_PINNED_PAGES, OFFICE_PAGE_ID, PAGE_CHATS_REFUSED, PAGE_PROGRAM_REFUSED, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
 import { OfficeView } from '../office/OfficeView';
+import { AutomationsView, openAutomationsAt } from '../automations/AutomationsView';
+import { useAutomationsWaiting } from '../automations/use-automations';
+import { AUTOMATIONS_PAGE_ID } from '../../../shared/automation-types';
 import { HOME_TAB, officeDocFor, previewOfficeComments, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
 import { OfficeAlerts } from '../office/OfficeAlerts';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
@@ -238,11 +241,25 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     dispatch({ type: 'PAGE_OPENED', pageId: 'page-analytics' });
     setOpenAsk('https://github.com/itsdestin/youcoded/releases/tag/v1.3.2?from=analytics&today=412&month=2186');
   });
+  // Automations (pages-finish step 4, design stage): the list, a job, its runs, a new one.
+  // At phone width it opens focused, as a pinned button would: the page list would leave it no room.
+  const automationsFocus = () => typeof window !== 'undefined' && window.innerWidth < 640;
+  useScreenOpen('automations', () => dispatch({ type: 'PAGE_OPENED', pageId: AUTOMATIONS_PAGE_ID, focus: automationsFocus() }));
+  useScreenOpen('automations/first-run', () => dispatch({ type: 'PAGE_OPENED', pageId: AUTOMATIONS_PAGE_ID }));
+  // Written out (not a loop): the screen-list test reads these names from the source.
+  const openAutomations = (v: 'job' | 'job-runs' | 'job-subscription' | 'new') => { openAutomationsAt(v); dispatch({ type: 'PAGE_OPENED', pageId: AUTOMATIONS_PAGE_ID, focus: automationsFocus() }); };
+  useScreenOpen('automations/job', () => openAutomations('job'));
+  useScreenOpen('automations/job-runs', () => openAutomations('job-runs'));
+  useScreenOpen('automations/job-subscription', () => openAutomations('job-subscription'));
+  useScreenOpen('automations/new', () => openAutomations('new'));
   useScreenOpen('office/versions', () => { void previewOfficeTabs(0, true); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   const summary = pages.find((p) => p.id === pageId) ?? null;
   // Office is built in (office-questions#Q-entry): it lists, pins and opens like
   // a page, but its body is OfficeView, never a framed page document.
   const isOffice = pageId === OFFICE_PAGE_ID;
+  // Automations is built in the same way (pages-finish step 4, Q-home): its body is AutomationsView.
+  const isAutomations = pageId === AUTOMATIONS_PAGE_ID;
+  const isBuiltinBody = isOffice || isAutomations;
   const officeKept = useOfficeTabs().docs.length > 0;
   const ownPages = pages.filter((p) => p.home.kind !== 'builtin');
   const pinnedCount = pinnedTotal ?? pages.filter((p) => p.pinned).length; // hidden Office pins count too (use-pages)
@@ -351,7 +368,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   useEffect(() => {
     if (!open) return;
     void refreshPages();
-    if (pageId === null || pageId === OFFICE_PAGE_ID) { setLoad({ state: 'idle' }); return; }
+    if (pageId === null || pageId === OFFICE_PAGE_ID || pageId === AUTOMATIONS_PAGE_ID) { setLoad({ state: 'idle' }); return; }
     let cancelled = false;
     setLoad({ state: 'loading' });
     const bridge = pagesBridge();
@@ -870,9 +887,12 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               <OfficeView projectRoot={projectRoot} visible={open && isOffice} />
             </div>
           )}
+          {open && isAutomations && (
+            <div className="absolute inset-0"><AutomationsView visible={open && isAutomations} /></div>
+          )}
           {open && <>
           {/* Photo-only marks: the view once its list has loaded, or the page once it is ready. */}
-          {load.state === 'idle' && loaded && !failed && !isOffice && <ScreenMark name="pages" />}
+          {load.state === 'idle' && loaded && !failed && !isBuiltinBody && <ScreenMark name="pages" />}
           {load.state === 'ready' && pageId && <ScreenMark name={`pages/${pageFocus ? 'focus' : 'page'}/${pageId}`} />}
           {/* WHY: first-run belongs where the Pages button lands, not a second click into Manage pages. */}
           {load.state === 'idle' && !loaded && <LoadingState what="pages" />}
@@ -882,7 +902,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               <PagesEmptyCard onMake={onCreatePage} />
             </div>
           )}
-          {load.state === 'idle' && loaded && !failed && !isOffice && ownPages.length > 0 && (
+          {load.state === 'idle' && loaded && !failed && !isBuiltinBody && ownPages.length > 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 select-none">
               <div className="text-sm font-medium text-fg-2">No page selected</div>
               <div className="text-xs text-fg-muted">Pick one from the list, or create a page.</div>
@@ -991,6 +1011,10 @@ function RailGroup({ label, children }: { label: string; children: React.ReactNo
  *  without a hard-edged band. */
 function RailRow({ page, current, pinFull, onOpen }: { page: PageSummary; current: boolean; pinFull: boolean; onOpen: () => void }) {
   const cannotPin = !page.pinned && pinFull;
+  // Pages-finish step 4 (Q-blocked note: "a visual indication that something behind that button
+  // … is waiting"): a dot on the page whose automation waits, and on Automations itself.
+  const waiting = useAutomationsWaiting();
+  const waits = page.id === AUTOMATIONS_PAGE_ID ? waiting.total > 0 : waiting.pages.has(page.id);
   return (
     <div
       role="button"
@@ -1004,6 +1028,7 @@ function RailRow({ page, current, pinFull, onOpen }: { page: PageSummary; curren
     >
       <PageGlyph icon={page.icon} customIcon={page.customIcon} className="w-4 h-4 shrink-0" />
       <span className="flex-1 min-w-0 truncate">{page.name}</span>
+      {waits && <span className="shrink-0 w-2 h-2 rounded-full bg-amber-500" role="img" aria-label="Waiting for you" data-rail-waiting />}
       <Tooltip text={cannotPin ? `Up to ${MAX_PINNED_PAGES} pinned pages` : page.pinned ? 'Unpin from the top bar' : 'Pin to the top bar'} placement="bottom">
         <Button
           size="icon-sm"

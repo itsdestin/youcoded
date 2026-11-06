@@ -22,6 +22,8 @@ const PATHS: Record<PageIcon, React.ReactNode> = {
   // bar chart with an analytics page (UX review 1, U12). A banknote was tried first and "looks like
   // a camera" at 16px (review 2).
   money: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />,
+  // Automations (built in, step 4): a lightning bolt — work that starts by itself.
+  automation: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />,
   game: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 8h12a4 4 0 014 4v2a4 4 0 01-4 4h-1l-2-2H9l-2 2H6a4 4 0 01-4-4v-2a4 4 0 014-4zM8 11v4M6 13h4M15 12h.01M18 14h.01" />,
 };
 
