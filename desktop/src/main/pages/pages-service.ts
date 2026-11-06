@@ -812,12 +812,13 @@ function partsComplete(typed: string, parts: ReadonlyArray<{ id: string; in: str
   });
 }
 
-/** The system browser (or mail program), through Electron's shell — which on the
- *  phone's headless backend is the shim that asks the Android app (the same route
- *  openPlaidLink takes). Loaded on first use so tests never touch it. */
+/** The system browser (or mail program), through the app's one checked door to the OS (safe-open.ts: web and mail
+ *  addresses only), which uses Electron's shell — on the phone's headless backend, the shim that asks the Android app
+ *  (the same route openPlaidLink takes). Loaded on first use so tests never touch it. WHY the door and not
+ *  shell.openExternal: the 2026-10-30 security audit made it the only way main opens an address (safe-open.test.ts). */
 async function openInSystemBrowser(url: string): Promise<void> {
-  const { shell } = await import('electron');
-  await shell.openExternal(url);
+  const { safeOpenExternal } = await import('../safe-open');
+  if (!(await safeOpenExternal(url))) throw new Error('That address cannot be opened.');
 }
 
 function messageOf(e: unknown): string {
