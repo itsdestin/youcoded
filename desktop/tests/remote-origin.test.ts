@@ -17,6 +17,12 @@ describe('isAllowedWsOrigin', () => {
     expect(isAllowedWsOrigin('file:///android_asset/index.html', '100.64.1.2:9900')).toBe(true);
   });
 
+  it('allows the Android app\'s page now served from its private https name, and only that exact name', () => {
+    expect(isAllowedWsOrigin('https://appassets.androidplatform.net', '100.64.1.2:9900')).toBe(true);
+    expect(isAllowedWsOrigin('https://appassets.androidplatform.net.evil.com', '100.64.1.2:9900')).toBe(false);
+    expect(isAllowedWsOrigin('http://appassets.androidplatform.net', '100.64.1.2:9900')).toBe(false);
+  });
+
   it('refuses a genuinely cross-origin page (CSWSH)', () => {
     expect(isAllowedWsOrigin('https://evil.com', 'desktop.tailnet.ts.net:9900')).toBe(false);
     // Same hostname, different port is still cross-origin.

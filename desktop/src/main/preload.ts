@@ -481,6 +481,7 @@ const IPC = {
   ACCOUNT_USER: 'account:user',
   ACCOUNT_REFRESH: 'account:refresh',
   ACCOUNT_SIGN_OUT: 'account:sign-out',
+  ACCOUNT_SIGN_OUT_ALL: 'account:sign-out-all',
   ACCOUNT_UPDATE_PROFILE: 'account:update-profile',
   ACCOUNT_SET_HANDLE: 'account:set-handle',
   ACCOUNT_DELETE: 'account:delete',
@@ -1427,6 +1428,8 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.ACCOUNT_REFRESH),
     signOut: (): Promise<void> =>
       ipcRenderer.invoke(IPC.ACCOUNT_SIGN_OUT),
+    signOutAll: (): Promise<ApiResult<void>> =>
+      ipcRenderer.invoke(IPC.ACCOUNT_SIGN_OUT_ALL),
     updateProfile: (displayName: string): Promise<ApiResult<{ display_name: string }>> =>
       ipcRenderer.invoke(IPC.ACCOUNT_UPDATE_PROFILE, { displayName }),
     setHandle: (handle: string): Promise<ApiResult<{ handle: string }>> =>
@@ -2090,7 +2093,7 @@ contextBridge.exposeInMainWorld('claude', {
     openWindowForHandoff: (sessionId: string) => browserInvoke(IPC.BROWSER_OPEN_WINDOW_FOR_HANDOFF, { sessionId }),
     setShowWindow: (show: boolean) => browserInvoke(IPC.BROWSER_SET_SHOW_WINDOW, { show }),
     updateSettings: (patch: Record<string, unknown>) => browserInvoke(IPC.BROWSER_UPDATE_SETTINGS, patch),
-    removeSite: (host: string) => browserInvoke(IPC.BROWSER_REMOVE_SITE, { host }),
+    removeSite: (host: string, form?: boolean) => browserInvoke(IPC.BROWSER_REMOVE_SITE, { host, form }),
     clearSignins: () => browserInvoke(IPC.BROWSER_CLEAR_SIGNINS),
     stop: () => browserInvoke(IPC.BROWSER_STOP),
     closeSession: (sessionId: string) => browserInvoke(IPC.BROWSER_CLOSE_SESSION, { sessionId }),

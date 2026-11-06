@@ -38,7 +38,7 @@ export interface ChildPermissionInputs {
   /** The parent session's decide() — the full configured stack (preset rules,
    *  the parent's live permission mode, the destructive deny-list, remembered
    *  "Always allow" rules). Built against the PARENT's session id and cwd. */
-  parentDecide: (tool: string, subject: string | undefined) => Promise<PermissionDecision>;
+  parentDecide: (tool: string, subject: string | undefined, where?: { shellCwd?: string; envChanged?: boolean }) => Promise<PermissionDecision>;
   charter: 'read-only' | 'read-write';
   allowedTools: string[];
   /** True when the user approved this specialist's launch (the Task-tool ask IS
@@ -75,7 +75,7 @@ export interface ChildPermissionInputs {
  */
 export function buildChildDecide(i: ChildPermissionInputs): ChildPermissionInputs['parentDecide'] {
   const allowed = new Set(i.allowedTools);
-  return async (tool: string, subject: string | undefined): Promise<PermissionDecision> => {
+  return async (tool: string, subject: string | undefined, where?: { shellCwd?: string; envChanged?: boolean }): Promise<PermissionDecision> => {
     // 1. Outside the definition's toolset. Named, not silent: the refusal lists
     //    what this specialist DOES have so the model's next step is obvious
     //    (same reasoning as SkillNotFound naming the installed skills).
@@ -96,7 +96,7 @@ export function buildChildDecide(i: ChildPermissionInputs): ChildPermissionInput
         message: `The ${tool} tool cannot run: this specialist has a read-only charter and may not modify anything. Report what you found instead of changing it.`,
       };
     }
-    const parent = await i.parentDecide(tool, subject);
+    const parent = await i.parentDecide(tool, subject, where);
     // 3. A parent deny is final — the envelope grants what the PARENT could do,
     //    never more. Passed through unchanged so its own message (if any) is
     //    what the model reads: that message is the real reason.
@@ -116,6 +116,13 @@ export function buildChildDecide(i: ChildPermissionInputs): ChildPermissionInput
     if (parent.action === 'ask' && parent.denyListed) {
       return parent;
     }
+    // 5b. A website question is NOT covered by a helper's launch approval. Approving
+    //     "let this helper do its job" never named any website, and the person chose
+    //     (Ask first) to be asked about each new site — so the ask passes through to
+    //     the parent's card, naming the helper, exactly like a deny-listed ask above.
+    //     Only WebFetch's ask is ever a website question: the site-key subject is
+    //     what the card and any remembered "Always allow" are about.
+    if (parent.action === 'ask' && tool === 'WebFetch') return parent;
     // 6/7. Parent ask. The launch approval already covered this work, so inside
     //      a granted envelope it becomes an allow. denyListed is hardcoded
     //      false here (not `parent.denyListed`): step 5 above already

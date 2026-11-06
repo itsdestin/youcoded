@@ -1,0 +1,2 @@
+# Deliberate test fake: a download test that must refuse "curl -u me:pw" (always-allow-download-host.test.ts)
+1c78d05bc43331f5ccd34f60a4e3e39ade5bd3e2:desktop/tests/always-allow-download-host.test.ts:curl-auth-user:37

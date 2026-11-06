@@ -13,6 +13,7 @@ import { findArchiveBoundary } from '../state/archive-boundary';
 import { projectTimeline } from '../state/timeline-presentation';
 import ThinkingIndicator from './ThinkingIndicator';
 import BrowserAskCard from './browser/BrowserAskCard';
+import { PendingAskBubble } from './PendingAskBubble';
 import { browserSupported } from '../state/browser-store';
 import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
@@ -1161,11 +1162,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                 pop-out bubbles aren't in that wrapper, so set it here. They're pinned
                 at the bottom and always visible, so a static `in-view` is correct. */}
             {[...awaitingTools, ...helperAsks].map((tool) => (
-                <div key={tool.requestId ?? tool.toolUseId} className="in-view flex justify-start px-4 py-0.5">
-                  <div className="assistant-bubble max-w-[85%] rounded-2xl rounded-bl-sm bg-inset px-5 py-3">
-                    <ToolCard tool={tool} sessionId={sessionId} />
-                  </div>
-                </div>
+                <PendingAskBubble key={tool.requestId ?? tool.toolUseId}>
+                  <ToolCard tool={tool} sessionId={sessionId} />
+                </PendingAskBubble>
               ))}
 
             {/* Only show thinking indicator when Claude is between tool completion

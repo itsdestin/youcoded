@@ -176,3 +176,23 @@ describe('buildChildDecide', () => {
     expect(d.message).toMatch(/Read, Glob, Grep/);
   });
 });
+
+// Ask first, websites (2026-10-31): a helper's launch approval never named any website,
+// so the first-visit question must reach the person even inside a granted envelope.
+describe('buildChildDecide: website questions', () => {
+  it('WebFetch ask passes through a granted envelope (other asks still become allows)', async () => {
+    const decide = buildChildDecide({
+      parentDecide: async () => ask,
+      charter: 'read-only', allowedTools: ['WebFetch', 'Read'], envelopeGranted: true,
+    });
+    expect((await decide('WebFetch', 'example.com')).action).toBe('ask');
+    expect((await decide('Read', '/w/a.ts')).action).toBe('allow');
+  });
+  it('a parent allow (Always-allowed site, or another mode) is still an allow', async () => {
+    const decide = buildChildDecide({
+      parentDecide: async () => allow,
+      charter: 'read-only', allowedTools: ['WebFetch'], envelopeGranted: true,
+    });
+    expect((await decide('WebFetch', 'example.com')).action).toBe('allow');
+  });
+});

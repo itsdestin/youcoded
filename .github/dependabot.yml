@@ -11,6 +11,11 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # WHY a cooldown (security audit): most hijacked npm releases are caught and pulled within days.
+    # Waiting a week before proposing a brand-new version keeps us out of that window. Dependabot
+    # SECURITY updates ignore the cooldown, so real fixes are not delayed.
+    cooldown:
+      default-days: 7
     groups:
       desktop-minor-patch:
         update-types: ["minor", "patch"]
@@ -68,11 +73,15 @@ updates:
         update-types: ["minor", "patch"]
 
   # ---- GitHub Actions ----
+  # Every third-party action is pinned to a full commit SHA (tag in a trailing comment); Dependabot
+  # bumps the SHA and the comment together.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     groups:
       actions-minor-patch:
         update-types: ["minor", "patch"]

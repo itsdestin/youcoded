@@ -15,13 +15,23 @@ describe('decidePermission', () => {
     expect(decidePermission('Edit', 'src/a.ts', layers('ask')).action).toBe('ask');
     expect(decidePermission('Bash', 'ls', layers('ask')).action).toBe('ask');
   });
-  it('web tools are free in every mode baseline', () => {
+  it('web search is free in every mode; visiting a website is free except in Ask first', () => {
     for (const mode of ['ask', 'auto-edit', 'full-auto'] as const) {
       const ws = decidePermission('WebSearch', 'anything', layers(mode));
       expect(ws).toMatchObject({ action: 'allow', denyListed: false });
-      const wf = decidePermission('WebFetch', 'https://example.com', layers(mode));
-      expect(wf).toMatchObject({ action: 'allow', denyListed: false });
     }
+    // WebFetch's subject is the SITE (shared/site-key.ts).
+    for (const mode of ['auto-edit', 'full-auto'] as const) {
+      expect(decidePermission('WebFetch', 'example.com', layers(mode))).toMatchObject({ action: 'allow', denyListed: false });
+    }
+    expect(decidePermission('WebFetch', 'example.com', layers('ask'))).toMatchObject({ action: 'ask', denyListed: false });
+  });
+  it('Ask first: an Always-allowed site is free, every other site still asks', () => {
+    const remembered = [{ tool: 'WebFetch', pattern: 'example.com', action: 'allow', match: 'exact' }];
+    expect(decidePermission('WebFetch', 'example.com', layers('ask', remembered)).action).toBe('allow');
+    expect(decidePermission('WebFetch', 'other.org', layers('ask', remembered)).action).toBe('ask');
+    // a site is not a prefix: a look-alike name is a different site
+    expect(decidePermission('WebFetch', 'example.com.evil.net', layers('ask', remembered)).action).toBe('ask');
   });
   it('auto-edit: edits allow, bash still asks', () => {
     expect(decidePermission('Edit', 'src/a.ts', layers('auto-edit')).action).toBe('allow');

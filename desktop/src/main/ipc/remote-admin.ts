@@ -20,7 +20,7 @@
 //     success. The honest "no" is the unsupported answer every shim version rejects. Pinned by remote-admin-channels.test.ts.
 // Connection housekeeping — client:ready, remote:ping, remote:rehydrate, remote:request-outcome, replay buffers, pairing and
 // auth — is transport, not a feature, and stays in remote-server.ts.
-import { shell } from 'electron';
+import { safeOpenExternal } from '../safe-open';
 import { IPC } from '../../shared/backend-contract';
 import { RemoteConfig, MIN_REMOTE_PASSWORD_LENGTH } from '../remote-config';
 import type { RemoteServer } from '../remote-server';
@@ -142,7 +142,7 @@ export const remoteAdminChannels: MainChannelDef[] = [
       if (result.url) {
         // Fire-and-forget: openExternal rejects when the OS has no handler for the scheme. The URL is returned to the renderer
         // either way, so the user can still copy it — but the rejection must not escape as an unhandled rejection.
-        void shell.openExternal(result.url).catch(() => {});
+        void safeOpenExternal(result.url).catch(() => {});   // WHY safe (audit F7): the address is the Tailscale program's output
       }
       return result;
     },

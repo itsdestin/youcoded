@@ -530,6 +530,7 @@ function SignedInBody({
     // initializers re-seed from the CURRENT profile every time.
     <EditAccountBody
       user={user}
+      signOut={signOut}
       updateProfile={updateProfile}
       setHandle={setHandle}
       deleteAccount={deleteAccount}
@@ -541,6 +542,7 @@ function SignedInBody({
 
 function EditAccountBody({
   user,
+  signOut,
   updateProfile,
   setHandle,
   deleteAccount,
@@ -548,12 +550,18 @@ function EditAccountBody({
   onDone,
 }: {
   user: MarketplaceUser;
+  signOut: () => Promise<void>;
   updateProfile: (name: string) => Promise<void>;
   setHandle: (handle: string) => Promise<void>;
   deleteAccount: () => Promise<void>;
   onClose: () => void;
   onDone: () => void;
 }) {
+  // Sign out everywhere: armed in the Danger zone below, confirmed there (see the WHY by its button).
+  const [signOutAllArmed, setSignOutAllArmed] = useState(false);
+  const [signingOutAll, setSigningOutAll] = useState(false);
+  const [signOutAllError, setSignOutAllError] = useState<string | null>(null);
+
   const [nameDraft, setNameDraft] = useState(user.display_name ?? user.login);
   const [nameSaving, setNameSaving] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
@@ -765,8 +773,58 @@ function EditAccountBody({
             the callout and the button variant below, where it belongs.
             WHY SectionLabel (labels batch): guide "no spaced capitals". */}
         <SectionLabel className="mb-2">Danger zone</SectionLabel>
-        <div className={`${CARD_LEVEL_1} p-3`}>
-        {!deleteExpanded ? (
+        <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+        {/* WHY here, in the same two-step as Delete account (Destin, 2026-11-02, on the Sign out everywhere
+            row that sat on the main Account page: "look at how we handle destructive actions elsewhere, with
+            second level menus. we should do the same"): an action that ends sign-ins on every device lives one
+            level down, on Edit account, in the Danger zone, as a red outlined button that opens a red notice and
+            then Cancel / the action. The facts (every device, this one too, paired phones stay paired) show only
+            after pressing. No typed word: unlike deleting the account, signing in again undoes it. */}
+        {/* WHY each confirm hides the other button (round-3 deck A-1b, "too busy and cluttered"): an open confirm
+            with a second red button under it read as three red things at once; now only the one you pressed shows. */}
+        {deleteExpanded ? null : !signOutAllArmed ? (
+          <Button variant="danger-outline" onClick={() => { setSignOutAllError(null); setSignOutAllArmed(true); }} className="w-full">
+            Sign out everywhere
+          </Button>
+        ) : (
+          <div className="space-y-2">
+            {/* WHY one short line (A-1b): the paired-phones sentence was a second fact on a step that only has to
+                say what pressing does. Phones paired for remote access still stay paired. */}
+            <Callout tone="danger">Signs out every device, this one too.</Callout>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setSignOutAllArmed(false)} disabled={signingOutAll} className="flex-1">
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                disabled={signingOutAll}
+                className="flex-1"
+                onClick={async () => {
+                  setSigningOutAll(true);
+                  setSignOutAllError(null);
+                  try {
+                    const res = await window.claude.account.signOutAll();
+                    if (res.ok) {
+                      await signOut(); // flips this window to signed-out; the server work is already done
+                    } else {
+                      // Nothing changed, so say so; never leave the person thinking they are signed out.
+                      setSignOutAllArmed(false);
+                      setSignOutAllError(res.status === 404
+                        ? 'The server cannot do this yet. You are still signed in everywhere.'
+                        : 'Could not reach the server, so nothing changed. You are still signed in everywhere. Try again.');
+                    }
+                  } finally {
+                    setSigningOutAll(false);
+                  }
+                }}
+              >
+                {signingOutAll ? 'Signing out…' : 'Sign out everywhere'}
+              </Button>
+            </div>
+          </div>
+        )}
+        {signOutAllError && <FieldError as="p">{signOutAllError}</FieldError>}
+        {signOutAllArmed ? null : !deleteExpanded ? (
           // Arming step -> danger-outline. red-500 becomes the --destructive
           // token so packs can restyle it (#C62828 today — no longer identical
           // to the fixed status red #DD4444, which stayed put).
