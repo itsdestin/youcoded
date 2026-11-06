@@ -175,7 +175,7 @@ export function useEntryFolding(
   const anchor = useRef<{ el: HTMLElement; top: number } | null>(null);
   /** Keys unfolded since the last commit, whose real height is read once they are drawn. */
   const justUnfolded = useRef(new Set<string>());
-  const captureAnchor = useCallback(() => {
+  const captureAnchor = useCallback((alsoSkip?: ReadonlySet<string>) => {
     const root = rootRef.current;
     anchor.current = null;
     if (!root) return;
@@ -194,11 +194,25 @@ export function useEntryFolding(
     // keeps what the reader can actually see in place; with nothing drawn in view, fall back to the topmost.
     const rootBottom = root.getBoundingClientRect().bottom;
     let pick = lo;
-    while (pick < entries.length && folded.current.has(entries[pick].dataset.entryKey ?? '')
+    const skip = (key: string) => folded.current.has(key) || !!alsoSkip?.has(key);
+    while (pick < entries.length && skip(entries[pick].dataset.entryKey ?? '')
       && entries[pick].getBoundingClientRect().top < rootBottom) pick++;
     const el = entries[pick] && entries[pick].getBoundingClientRect().top < rootBottom ? entries[pick] : entries[lo];
     if (el) anchor.current = { el, top: el.getBoundingClientRect().top - rootTop };
   }, [rootRef]);
+  // Measure the anchor AGAIN while this render is being prepared, just before the new rows reach the screen.
+  // WHY (first-draw-stability journey, 2026-11-05): the anchor is first taken when an unfold is asked for (an
+  // observer callback, a timer, a scroll), but the commit comes a render later, which on a slow or busy machine
+  // is hundreds of milliseconds. A scroll by the reader in that gap was then read as layout drift and undone:
+  // the view jumped back a whole wheel step (1,200 px at 12x CPU throttle, 2 runs in 10). Rendering and
+  // committing an ordinary update happen in one task, so nothing can scroll between this measure and the
+  // layout effect below that puts the anchor back. The rows being unfolded are still spacers in the DOM here
+  // (they left `folded` already), so they are skipped like folded rows when picking the anchor.
+  const renderedState = useRef(state);
+  if (renderedState.current !== state) {
+    renderedState.current = state;
+    if (anchor.current) captureAnchor(justUnfolded.current);
+  }
   const removalPublishPending = useRef(false);
   const publishRemovals = useCallback(() => {
     if (removalPublishPending.current) return;

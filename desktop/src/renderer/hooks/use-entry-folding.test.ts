@@ -92,6 +92,42 @@ describe('useEntryFolding', () => {
     root.remove();
   });
 
+  // first-draw-stability journey, 2026-11-05: on a slow machine the reader can scroll between the unfold being
+  // asked for and its render reaching the screen. That scroll is the reader's, not layout drift, and must stay.
+  it('keeps a scroll the reader made while an unfold was waiting to be drawn', () => {
+    const root = document.createElement('div');
+    rootRef = { current: root };
+    let scrollTop = 500;
+    Object.defineProperty(root, 'scrollTop', { get: () => scrollTop, set: (v) => { scrollTop = v; }, configurable: true });
+    root.getBoundingClientRect = () => ({ top: 0, bottom: 800, height: 800, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON() {} }) as DOMRect;
+    let api!: EntryFolding;
+    function Rows() {
+      api = useEntryFolding(true, rootRef, true, [['a', 100]]);
+      return React.createElement(React.Fragment, null,
+        React.createElement('div', { 'data-entry-key': 'a', ref: api.registerEntry }, api.isFolded('a') ? null : React.createElement('span', null, 'body')),
+        React.createElement('div', { 'data-entry-key': 'b', ref: api.registerEntry }, React.createElement('span', null, 'b')));
+    }
+    document.body.appendChild(root);
+    const view = render(React.createElement(Rows), { container: root });
+    const [a, b] = Array.from(root.children) as HTMLElement[];
+    // Positions follow the scroll: scrolling up by N moves both rows down by N.
+    const shift = () => 500 - scrollTop;
+    a.getBoundingClientRect = () => ({ top: -100 + shift(), bottom: shift(), height: 100, toJSON() {} }) as DOMRect;
+    b.getBoundingClientRect = () => { const t = 120 + shift() + (a.childElementCount > 0 ? 80 : 0); return ({ top: t, bottom: t + 200, height: 200, toJSON() {} }) as DOMRect; };
+    Object.defineProperty(a, 'offsetHeight', { get: () => (a.childElementCount > 0 ? 180 : 100), configurable: true });
+    act(() => {
+      fire([{ target: a, isIntersecting: true }, { target: b, isIntersecting: true }]);
+      vi.advanceTimersByTime(UNFOLD_DEBOUNCE_MS);
+      // The unfold is asked for; before React draws it, the reader scrolls up 300 px.
+      scrollTop -= 300;
+    });
+    expect(a.childElementCount).toBe(1);
+    // Only the 80 px the body added is taken up; the reader's 300 px stays (it used to be undone: 580).
+    expect(scrollTop).toBe(280);
+    view.unmount();
+    root.remove();
+  });
+
   it('ignores a later change of the seed (it is read once, on mount)', () => {
     const { result, rerender } = renderHook(({ seed }) => useEntryFolding(true, rootRef, true, seed), { initialProps: { seed: [['a', 100]] as Array<[string, number]> } });
     rerender({ seed: [['b', 100]] });
