@@ -124,6 +124,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#backup-timeout', 'dialog', 'error-state'), params: { syncWarn: 'timeout' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   // Removed projects and their GitHub backups (project switcher round 2, backlog row 10).
   { ...settings('settings/sync#removed', 'dialog'), params: { sync: 'removed' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
+  // The same, folded open (Removed projects became a closed fold-out row, card #213).
+  { ...settings('settings/sync#removed-open', 'dialog', 'fold'), params: { sync: 'removed' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Removed projects 2 projects, with their GitHub backups', { do: 'scroll', dir: 'down', times: 8 }] },
   // The (i) explainer: what Backup & sync copies, and what it does not (small-fixes-1).
   { ...settings('settings/sync#explainer', 'dialog'), open: ['What is this?'] },
   // The add-a-backup wizard's two failures (small-fixes-1): the helper tool's install, and making

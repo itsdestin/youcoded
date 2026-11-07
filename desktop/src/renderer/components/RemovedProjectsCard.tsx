@@ -8,17 +8,20 @@
 // this is where that copy can be found again. Shown only when there is one. A label and one
 // card (guide "Spacing"); the names are plain rows in one nested box (guide "Card levels":
 // lists of short names). Its own file so Backup & sync stays inside its line budget.
+//
+// WHY folded (Destin's phone test, 2026-11-02; offered and accepted 2026-11-07): it is reference you rarely need, and
+// open it pushed the sync log far down a phone's Backup & sync. It is now one fold-out row like "Sync log", closed,
+// saying how many projects are inside.
 import React from 'react';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, SectionLabel } from './ui';
+import { Button, CARD_LEVEL_2, FoldRow } from './ui';
 import { GithubBackupNote } from './GithubBackupNote';
 import type { SyncStatusData } from './sync-dot-state';
 
 export function RemovedProjectsCard({ removed }: { removed: SyncStatusData['removed'] }) {
   if (!removed?.length) return null;
   return (
-    <div>
-      <SectionLabel className="mb-2">Removed projects</SectionLabel>
-      <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+    <FoldRow title="Removed projects" description={`${removed.length} ${removed.length === 1 ? 'project' : 'projects'}, with their GitHub backups`}>
+      <div className="space-y-2">
         <p className="text-2xs text-fg-muted leading-relaxed">
           These no longer sync and are off your project lists. Every device kept its copy of the files.
         </p>
@@ -36,6 +39,6 @@ export function RemovedProjectsCard({ removed }: { removed: SyncStatusData['remo
         </div>
         <GithubBackupNote url={null} />
       </div>
-    </div>
+    </FoldRow>
   );
 }

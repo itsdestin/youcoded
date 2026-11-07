@@ -19,12 +19,15 @@ export type ScenarioId =
   | 'site'
   // Welcome back (design 2026-09-24): a cold start after a crash — nothing in
   // the strip, four conversations that were open when the app went down.
-  | 'welcome-back';
+  | 'welcome-back'
+  // A returning user's welcome screen: past conversations, nothing open and nothing to reopen, so the welcome page
+  // shows New session + Resume session (card #213: the Resume button's contrast on Meadow Mist).
+  | 'returning';
 
 export const SCENARIO_IDS: readonly ScenarioId[] = [
   'default', 'empty', 'no-providers', 'refused', 'stress',
   'statusbar-cc', 'statusbar-local', 'statusbar-metered', 'statusbar-unpriced', 'statusbar-delegated',
-  'site', 'welcome-back',
+  'site', 'welcome-back', 'returning',
 ];
 
 /** A row in the Resume Browser's list. Mirrors ResumeBrowser.tsx's local
@@ -339,6 +342,8 @@ export function seed(scenario: ScenarioId): MockState {
           : r),
         reopen: ['wb-past-0', 'wb-past-1', 'wb-past-2', 'wb-past-4'],
       };
+    case 'returning':
+      return { ...base, sessions: [] };
     case 'refused':
     case 'default':
     default:

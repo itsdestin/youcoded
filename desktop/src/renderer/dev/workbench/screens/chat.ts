@@ -124,6 +124,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { name: 'welcome', tags: ['view'], scenario: 'empty' },
   { name: 'welcome/back', tags: ['dialog'], scenario: 'welcome-back', mark: 'chat/resume',
     escapeStepsBack: 'Recovery requires an explicit Resume or Start fresh choice; Escape must leave the popup open.' },
+  // A returning user: past conversations but none open, so Resume session shows beside New session.
+  { name: 'welcome#returning', tags: ['view'], scenario: 'returning' },
   { name: 'welcome/new-session', tags: ['view'], scenario: 'empty', sameAs: { name: 'welcome', why: 'a first-ever launch opens the form already' } },
   { name: 'projects', tags: ['view', 'projects'] },
   { name: 'marketplace', tags: ['view', 'marketplace'] },

@@ -3837,9 +3837,9 @@ function AppInner() {
               />
             </div>
           <div
-            // invisible under Welcome back: that screen takes this one's place
+            // WHY scrolls, centred only while it fits (justify-center-safe; Destin's phone test: the new-session form was cut off with the phone sideways and could not be reached). invisible under Welcome back: that screen takes this one's place
             // until you choose (Q-where), rather than sitting on top of it.
-            className={`flex-1 flex flex-col items-center justify-center gap-3${firstTimeWelcome ? ' max-sm:justify-start max-sm:pt-2' : ''}${welcomeBackMode ? ' invisible' : ''}`}
+            className={`scroll-mask flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center-safe gap-3${firstTimeWelcome ? ' max-sm:justify-start max-sm:pt-2' : ''}${welcomeBackMode ? ' invisible' : ''}`}
             // The header is position:absolute over the top of this area, so
             // center the welcome content in the space BELOW it (and above the
             // bare frame's bottom strip) rather than behind it. --top-chrome-
@@ -4071,10 +4071,10 @@ function AppInner() {
                   </Button>
                   {/* Same decision-69 rationale as above: panel-glass is preserved
                       as a className override so wallpaper themes still re-tier it.
-                      Hidden on the first-time screen: it would list nothing. */}
+                      Hidden on the first-time screen: it would list nothing. WHY raised (Destin's phone test: unreadable on Meadow Mist): an outline alone vanished on the pale wallpaper; it now has the panel fill and border. */}
                   {!firstTimeWelcome && (
                     <Button
-                      variant="secondary"
+                      variant="raised"
                       size="lg"
                       className="panel-glass w-full px-6"
                       onClick={() => setResumeRequested(true)}
