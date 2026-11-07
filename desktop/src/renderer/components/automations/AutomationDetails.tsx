@@ -13,10 +13,10 @@
 // Settings save as you change them (guide "Popups"); a new automation is kept apart until Create.
 import React, { useEffect, useState } from 'react';
 import type { AutomationRun, AutomationStart, AutomationSummary, AutomationTool } from '../../../shared/automation-types';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, Chip, LoadingState, Menu, MenuItem, MenuNote, Pill, ProgressBar, SectionLabel, SegmentedTabs, Select, SettingRow, Textarea, TextInput, Toggle, Tooltip } from '../ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, Chip, LoadingState, Menu, MenuItem, MenuNote, MenuRadioItem, Pill, PillButton, SectionLabel, SegmentedTabs, Select, SettingRow, Textarea, TextInput, Toggle, Tooltip } from '../ui';
 import { Dialog } from '../ui/Dialog';
+import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 import { ChipRow } from '../marketplace/FactChips';
-import { TrashIcon } from '../project-view/icons';
 import { PageGlyph } from '../pages/page-icons';
 import { automationsBridge, publishAutomations } from './use-automations';
 import { OUTCOME, dollarWords, scheduleWords, tokenWords } from './automation-words';
@@ -34,16 +34,14 @@ export function blankAutomation(): AutomationSummary {
   };
 }
 
-// WHY every engine in one list (Destin, A-sub: "the underlying engine for any automation should be
-// easily interchangeable"): a job names a model, nothing else depends on which service runs it.
-// Changing it only changes how it is paid for, so only the Spending card changes.
-const MODELS: { value: string; label: string; sub: boolean }[] = [
-  { value: 'Claude Sonnet', label: 'Claude Sonnet · your Claude plan', sub: true },
-  { value: 'Claude Haiku', label: 'Claude Haiku · your Claude plan', sub: true },
-  { value: 'GPT-5', label: 'GPT-5 · your ChatGPT plan', sub: true },
-  { value: 'GPT-5 mini', label: 'GPT-5 mini · OpenRouter', sub: false },
-  { value: 'Gemini Flash', label: 'Gemini Flash · OpenRouter', sub: false },
-];
+// WHY the app's own model picker (round 2 B-sub: "use the same model selector used on other
+// surfaces"; A-sub: "the underlying engine for any automation should be easily interchangeable"):
+// a job names a model, nothing else depends on which service runs it; changing it only changes
+// how it is paid for, so only the Spending card follows. Design stage: the job keeps the label.
+function choiceOf(model: string): ModelChoice | null {
+  const alias = /^Claude (\w+)/.exec(model)?.[1]?.toLowerCase();
+  return alias ? { runtime: 'claude', alias } : null;
+}
 
 const PAGES = [
   { value: 'alone', label: 'None' },
@@ -76,8 +74,9 @@ export function AutomationDetails({ job, isNew, tab, onTab, onClose, addMenuOpen
         <div className="flex flex-col gap-4" data-automation-details={draft.id}>
           <TopCard job={draft} isNew={isNew} onChange={change} />
           {!isNew && (
-            <SegmentedTabs value={tab} onChange={(t) => onTab(t as DetailsTab)}
-              tabs={[{ id: 'settings', label: 'Settings' }, { id: 'runs', label: 'Runs' }]} />
+            // The Library's tab strip (round 2 B-details: "i still dont love … the settings/runs toggle").
+            <SegmentedTabs variant="pill" value={tab} onChange={(t) => onTab(t as DetailsTab)}
+              tabs={[{ id: 'settings', label: 'Settings' }, { id: 'runs', label: <>Runs <span className="text-fg-muted text-2xs">{draft.lastRun ? 6 : 0}</span></> }]} />
           )}
           {tab === 'runs' && !isNew ? <Runs job={draft} /> : (
             <div className="grid gap-4 grid-cols-1 md:grid-cols-2 items-start">
@@ -96,11 +95,11 @@ export function AutomationDetails({ job, isNew, tab, onTab, onClose, addMenuOpen
                     onChange={(v) => { const p = PAGES.find((x) => x.value === v)!; change({ owner: v === 'alone' ? { kind: 'alone' } : { kind: 'page', pageId: v, pageName: p.label, pageIcon: p.icon ?? 'notes' } }); }} />
                 </Group>
                 <Group label="Model">
-                  <Select value={draft.model} options={MODELS.map(({ value, label }) => ({ value, label }))}
-                    onChange={(v) => { const m = MODELS.find((x) => x.value === v)!; change({ model: v, subscription: m.sub, limit: draft.limit ?? 5 }); }} />
+                  <ModelPicker value={choiceOf(draft.model)} runsOn="host" emptyLabel={draft.model} triggerClassName=""
+                    onSelect={(c, label) => change({ model: label?.model ?? draft.model, subscription: c.runtime === 'claude' || /chatgpt/i.test(label?.provider ?? ''), limit: draft.limit ?? 5 })} />
                 </Group>
                 {/* A new job on a plan has nothing used yet and no limit, so the card would say nothing. */}
-                {!(isNew && draft.subscription) && <Group label={draft.subscription ? 'Usage' : 'Spending limit'}><SpendField job={draft} onLimit={(limit) => change({ limit })} /></Group>}
+                {!(isNew && draft.subscription) && <Group label={draft.subscription ? 'Usage' : 'Spending'}><SpendField job={draft} onLimit={(limit) => change({ limit })} /></Group>}
                 <Group label="Approvals">
                   <SegmentedTabs variant="nested" value={draft.whenAsk} onChange={(v) => change({ whenAsk: v as 'wait' | 'skip' })}
                     tabs={[{ id: 'wait', label: 'Wait for me' }, { id: 'skip', label: 'Skip and continue' }]} />
@@ -165,9 +164,10 @@ function TopCard({ job, isNew, onChange }: { job: AutomationSummary; isNew: bool
             <Chip>{job.model}</Chip>
           </ChipRow></div>
         </div>
-        <Tooltip text={job.enabled ? 'Pause' : 'Turn on'} placement="bottom">
+        {/* Round 2 B-new: no switch while creating — Create turns it on. */}
+        {!isNew && <Tooltip text={job.enabled ? 'Pause' : 'Turn on'} placement="bottom">
           <span><Toggle checked={job.enabled} onChange={(on) => onChange({ enabled: on })} aria-label={job.enabled ? 'Pause' : 'Turn on'} /></span>
-        </Tooltip>
+        </Tooltip>}
       </div>
       {job.waiting && (
         <Callout tone="warning" actionsPlacement="below"
@@ -251,13 +251,9 @@ function ToolsField({ tools, onChange, menuOpen, onMenu }: { tools: AutomationTo
           <div className="text-sm text-fg truncate">{t.label}</div>
           <div className="text-2xs text-fg-muted truncate">{t.exact ?? t.source}</div>
         </div>
-        <SegmentedTabs variant="pill" value={t.mode} onChange={(m) => onChange(tools.map((x) => (x.id === t.id ? { ...x, mode: m as 'allow' | 'ask' } : x)))}
-          tabs={[{ id: 'allow', label: 'Allow' }, { id: 'ask', label: 'Ask' }]} />
-        <Tooltip text="Remove" placement="bottom">
-          <Button size="icon-sm" variant="ghost" aria-label={`Remove ${t.label}`} className="hover:text-destructive-fg" onClick={() => onChange(tools.filter((x) => x.id !== t.id))}>
-            <TrashIcon size={14} />
-          </Button>
-        </Tooltip>
+        <ModeMenu mode={t.mode} name={t.label}
+          onMode={(m) => onChange(tools.map((x) => (x.id === t.id ? { ...x, mode: m } : x)))}
+          onRemove={() => onChange(tools.filter((x) => x.id !== t.id))} />
       </div>
     ))}
     <div ref={menuRef}><Menu open={menuOpen} onOpenChange={onMenu} label="Add a permission" className="min-w-72"
@@ -269,26 +265,48 @@ function ToolsField({ tools, onChange, menuOpen, onMenu }: { tools: AutomationTo
         </React.Fragment>
       ))}
     </Menu></div>
-    <SettingRow variant="item" title="Other websites"
-      control={<SegmentedTabs variant="pill" value={sites} onChange={(v) => setSites(v as 'never' | 'ask')} tabs={[{ id: 'never', label: 'Never' }, { id: 'ask', label: 'Ask' }]} />} />
-    <SettingRow variant="item" title="Other commands and files"
-      control={<SegmentedTabs variant="pill" value={commands} onChange={(v) => setCommands(v as 'never' | 'ask')} tabs={[{ id: 'never', label: 'Never' }, { id: 'ask', label: 'Ask' }]} />} />
+    <SettingRow variant="item" title="Other websites" control={<UnlistedMenu value={sites} name="Other websites" onChange={setSites} />} />
+    <SettingRow variant="item" title="Other commands and files" control={<UnlistedMenu value={commands} name="Other commands and files" onChange={setCommands} />} />
   </>);
+}
+
+/** Round 2 B-add ("these allow/ask toggles … don't seem to match the styling used for similar elements
+ *  elsewhere"): a state you change is the shared status pill that opens a small menu (`PillButton` +
+ *  `Menu`, guide "Lists and menus": a few choices dropping from a pill), with Remove as its last row. */
+function ModeMenu({ mode, name, onMode, onRemove }: { mode: 'allow' | 'ask'; name: string; onMode: (m: 'allow' | 'ask') => void; onRemove: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Menu open={open} onOpenChange={setOpen} align="right" label={name}
+      trigger={<PillButton tone={mode === 'allow' ? 'ok' : 'warning'} open={open} onClick={() => setOpen((o) => !o)} aria-label={`${name}: ${mode === 'allow' ? 'Always allowed' : 'Asks first'}`}>{mode === 'allow' ? 'Always allowed' : 'Asks first'}</PillButton>}>
+      <MenuRadioItem checked={mode === 'allow'} onSelect={() => onMode('allow')}>Always allowed</MenuRadioItem>
+      <MenuRadioItem checked={mode === 'ask'} onSelect={() => onMode('ask')}>Asks first</MenuRadioItem>
+      <MenuItem onSelect={onRemove}>Remove</MenuItem>
+    </Menu>
+  );
+}
+
+function UnlistedMenu({ value, name, onChange }: { value: 'never' | 'ask'; name: string; onChange: (v: 'never' | 'ask') => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Menu open={open} onOpenChange={setOpen} align="right" label={name}
+      trigger={<PillButton open={open} onClick={() => setOpen((o) => !o)} aria-label={`${name}: ${value === 'never' ? 'Never' : 'Asks first'}`}>{value === 'never' ? 'Never' : 'Asks first'}</PillButton>}>
+      <MenuRadioItem checked={value === 'never'} onSelect={() => onChange('never')}>Never</MenuRadioItem>
+      <MenuRadioItem checked={value === 'ask'} onSelect={() => onChange('ask')}>Asks first</MenuRadioItem>
+    </Menu>
+  );
 }
 
 function SpendField({ job, onLimit }: { job: AutomationSummary; onLimit: (n: number) => void }) {
   // A subscription run costs nothing extra, so it has no money limit; its use is still counted.
   if (job.subscription) return <div className="text-sm text-fg">{tokenWords(job.usage.tokens)} <span className="text-xs text-fg-muted">this month</span></div>;
   const limit = job.limit ?? 5;
-  return (<>
-    <div className="flex items-center gap-2">
-      <span className="text-sm text-fg-2">$</span>
-      <TextInput className="w-24" inputMode="decimal" value={String(limit)} onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) onLimit(n); }} aria-label="Monthly limit in dollars" />
-      <span className="text-xs text-fg-muted">a month</span>
-    </div>
-    <ProgressBar percent={Math.min(100, (job.usage.dollars / Math.max(limit, 0.01)) * 100)} />
-    <div className="text-xs text-fg-muted">{dollarWords(job.usage.dollars)} used · {tokenWords(job.usage.tokens)}</div>
-  </>);
+  // One setting row (round 2 B-details: "i still dont love the styling of the spending limit box"):
+  // the limit at the right, what's used under the title.
+  return (
+    <SettingRow variant="item" title="Monthly limit" description={`${dollarWords(job.usage.dollars)} used`}
+      control={<div className="flex items-center gap-1"><span className="text-xs text-fg-2">$</span>
+        <TextInput className="w-16" inputMode="decimal" value={String(limit)} onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) onLimit(n); }} aria-label="Monthly limit in dollars" /></div>} />
+  );
 }
 
 function Runs({ job }: { job: AutomationSummary }) {

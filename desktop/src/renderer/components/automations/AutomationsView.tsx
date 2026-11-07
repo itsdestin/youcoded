@@ -54,14 +54,11 @@ export function AutomationsView({ visible }: { visible: boolean }) {
   if (!loaded) return <LoadingState what="automations" />;
   if (failed) return <div className="p-6 max-w-xl mx-auto"><ErrorState message="Your automations couldn't be read." onRetry={() => void refreshAutomations()} /></div>;
 
+  // WHY grouped by state, not by page (round 2 B-list: "tf is 'on their own'?"): the headings are
+  // plain states anyone reads at once; a job's page is a chip on its card instead.
   const waiting = jobs.filter((j) => j.waiting);
-  const rest = jobs.filter((j) => !j.waiting);
-  const alone = rest.filter((j) => j.owner.kind === 'alone');
-  const byPage = new Map<string, AutomationSummary[]>();
-  for (const j of rest) {
-    if (j.owner.kind !== 'page') continue;
-    byPage.set(j.owner.pageName, [...(byPage.get(j.owner.pageName) ?? []), j]);
-  }
+  const on = jobs.filter((j) => !j.waiting && j.enabled);
+  const paused = jobs.filter((j) => !j.waiting && !j.enabled);
   const openJob = (job: AutomationSummary) => setOpen({ job, isNew: false, tab: 'settings' });
   // The open job follows the live list, so a change saved in the popup shows on its card.
   const shown = open && !open.isNew ? jobs.find((j) => j.id === open.job.id) ?? open.job : open?.job ?? null;
@@ -84,8 +81,8 @@ export function AutomationsView({ visible }: { visible: boolean }) {
         {jobs.length === 0 && <EmptyState message="No automations yet." />}
 
         {waiting.length > 0 && <Group label="Waiting for you" jobs={waiting} onOpen={openJob} />}
-        {alone.length > 0 && <Group label="On their own" jobs={alone} onOpen={openJob} />}
-        {[...byPage.entries()].map(([name, list]) => <Group key={name} label={name} jobs={list} onOpen={openJob} />)}
+        {on.length > 0 && <Group label="On" jobs={on} onOpen={openJob} />}
+        {paused.length > 0 && <Group label="Paused" jobs={paused} onOpen={openJob} />}
       </div>
       <AutomationDetails job={shown} isNew={open?.isNew ?? false} tab={open?.tab ?? 'settings'} addMenuOpen={addMenu} onAddMenu={setAddMenu}
         onTab={(tab) => setOpen((o) => (o ? { ...o, tab } : o))} onClose={() => { setOpen(null); setAddMenu(false); }} />
@@ -129,9 +126,9 @@ const AutomationCard = React.memo(function AutomationCard({ job, onOpen }: { job
         <div className="min-w-0 flex-1 flex flex-col gap-1">
           <div className="flex items-center gap-2 min-w-0">
             <span className={`text-sm font-medium truncate ${job.enabled ? 'text-fg' : 'text-fg-muted'}`}>{job.name}</span>
-            {!job.enabled && <Pill>Paused</Pill>}
           </div>
           <div className="flex min-w-0"><ChipRow>
+            {job.owner.kind === 'page' && <Chip>{job.owner.pageName}</Chip>}
             <Chip>{scheduleWords(job.start)}</Chip>
             <Chip>{job.model}</Chip>
           </ChipRow></div>
