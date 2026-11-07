@@ -23,6 +23,7 @@ import { Tooltip } from '../ui';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { PageGlyph, PagesIcon } from './page-icons';
 import { usePages } from './use-pages';
+import { useAutomationsWaiting } from '../automations/use-automations';
 // Shared with Settings and Projects — it used to be a private copy here.
 import { HEADER_ICON_BUTTON } from '../header/control-states';
 
@@ -35,17 +36,21 @@ export function PagesButton({ active = false }: { active?: boolean } = {}) {
   // Narrow selector (perf, 2026-09-23): redraws only when this flag flips.
   const inView = useArtifactSelector((s) => s.pageViewOpen && !s.pageFocus);
   const toggle = () => dispatch({ type: inView ? 'PAGE_VIEW_CLOSED' : 'PAGE_VIEW_OPENED' });
+  // Pages-finish step 4 (review Q-pin, Destin's pick): an automation waiting for you dots the Pages
+  // button, the way Settings' dot works, so it shows whether or not Automations is pinned.
+  const waiting = useAutomationsWaiting().total > 0;
   return (
     <Tooltip text={active ? 'Back to chat' : 'Pages'} placement="bottom">
       <button
         type="button"
-        className={`${HEADER_ICON_BUTTON} ${active ? 'text-fg bg-inset' : ''}`}
+        className={`relative ${HEADER_ICON_BUTTON} ${active ? 'text-fg bg-inset' : ''}`}
         onClick={toggle}
         aria-label="Open pages"
         aria-pressed={active}
         data-guide-anchor="pages"
       >
         <PagesIcon />
+        {waiting && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-500" role="img" aria-label="An automation is waiting for you" data-pages-waiting />}
       </button>
     </Tooltip>
   );

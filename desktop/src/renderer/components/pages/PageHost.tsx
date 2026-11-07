@@ -246,12 +246,12 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   const automationsFocus = () => typeof window !== 'undefined' && window.innerWidth < 640;
   useScreenOpen('automations', () => dispatch({ type: 'PAGE_OPENED', pageId: AUTOMATIONS_PAGE_ID, focus: automationsFocus() }));
   useScreenOpen('automations/first-run', () => dispatch({ type: 'PAGE_OPENED', pageId: AUTOMATIONS_PAGE_ID }));
-  // Written out (not a loop): the screen-list test reads these names from the source.
-  const openAutomations = (v: 'job' | 'job-runs' | 'job-subscription' | 'new') => { openAutomationsAt(v); dispatch({ type: 'PAGE_OPENED', pageId: AUTOMATIONS_PAGE_ID, focus: automationsFocus() }); };
-  useScreenOpen('automations/job', () => openAutomations('job'));
-  useScreenOpen('automations/job-runs', () => openAutomations('job-runs'));
-  useScreenOpen('automations/job-subscription', () => openAutomations('job-subscription'));
-  useScreenOpen('automations/new', () => openAutomations('new'));
+  // One popup screen; its states (`#runs`, `#new`…) pass `autoView` (screens/pages.ts).
+  useScreenOpen('automations/details', () => {
+    const v = new URLSearchParams(location.search).get('autoView');
+    openAutomationsAt(v === 'runs' || v === 'subscription' || v === 'add-menu' || v === 'new' ? v : 'details');
+    dispatch({ type: 'PAGE_OPENED', pageId: AUTOMATIONS_PAGE_ID, focus: automationsFocus() });
+  });
   useScreenOpen('office/versions', () => { void previewOfficeTabs(0, true); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   const summary = pages.find((p) => p.id === pageId) ?? null;
   // Office is built in (office-questions#Q-entry): it lists, pins and opens like

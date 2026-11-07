@@ -129,14 +129,16 @@ export const PAGES: readonly ScreenEntry[] = [
   // Automations (built in, pages-finish step 4, design stage — automations-mock.ts answers).
   pg('automations', 'view', 'automations'),
   { ...pg('automations/first-run', 'view', 'automations', 'empty-state'), scenario: 'empty' },
-  pg('automations/job', 'view', 'automations'),
-  pg('automations/job-runs', 'view', 'automations'),
-  pg('automations/job-subscription', 'view', 'automations'),
-  pg('automations/new', 'view', 'automations'),
+  // A card opens Automation details (round 2); its states share the one popup.
+  pg('automations/details', 'automations'),
+  { ...pg('automations/details#runs', 'automations'), params: { autoView: 'runs' } },
+  { ...pg('automations/details#subscription', 'automations'), params: { autoView: 'subscription' } },
+  { ...pg('automations/details#add-menu', 'automations'), params: { autoView: 'add-menu' } },
+  { ...pg('automations/details#new', 'automations'), params: { autoView: 'new' } },
+  { ...pg('automations#phone', 'view', 'automations', 'narrow'), viewport: PHONE, mark: 'automations' },
+  { ...pg('automations/details#phone', 'automations', 'narrow'), viewport: PHONE },
   // A page's own automations, in its Page settings (the Money page has the morning check).
   { ...pg('pages/library/settings#automations', 'automations'), params: { pagesSettings: 'page-money' } },
-  { ...pg('automations#phone', 'view', 'automations', 'narrow'), viewport: PHONE, mark: 'automations' },
-  { ...pg('automations/job#phone', 'view', 'automations', 'narrow'), viewport: PHONE, mark: 'automations/job' },
   // Office (built in, design stage). Documents need the editor add-on served on
   // 127.0.0.1:4717 — fixtures/office.ts says how.
   pg('office/home', 'view', 'office'),

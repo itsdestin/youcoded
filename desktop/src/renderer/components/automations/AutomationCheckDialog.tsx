@@ -18,7 +18,7 @@ import { Dialog } from '../ui/Dialog';
 import { useScreenOpen } from '../../shoot-mode';
 import { automationsBridge, publishAutomations } from './use-automations';
 import { startWords } from './automation-words';
-import { JobGlyph } from './AutomationEditor';
+import { JobGlyph } from './AutomationDetails';
 
 /** The draft the assistant hands over in the workbench: the morning money check, before it is on. */
 function sampleDraft(): AutomationSummary {
@@ -51,11 +51,10 @@ export const AutomationCheckDialog = React.memo(function AutomationCheckDialog({
   };
   return (
     <Dialog screen="chat/automation-check" open={draft !== null} onClose={close} size="panel" title="Check this automation"
-      subtitle="Nothing runs until you turn it on."
       footer={draft && (
         <div className="flex flex-col gap-2">
           <Button variant="primary" className="w-full py-2.5" onClick={() => void turnOn()}>Turn on</Button>
-          <Button variant="secondary" className="w-full py-2.5" onClick={() => { onOpenBuilder?.(draft); close(); }}>Change something else</Button>
+          <Button variant="secondary" className="w-full py-2.5" onClick={() => { onOpenBuilder?.(draft); close(); }}>Edit all settings</Button>
         </div>
       )}>
       {draft && <CheckBody draft={draft} onChange={setDraft} />}
@@ -83,7 +82,7 @@ function CheckBody({ draft, onChange }: { draft: AutomationSummary; onChange: (d
       </div>
 
       <section className="flex flex-col gap-2">
-        <SectionLabel>What it may do</SectionLabel>
+        <SectionLabel>Permissions</SectionLabel>
         <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>
           <div className={`${CARD_LEVEL_2} flex flex-col py-1`}>
             {draft.tools.map((t) => (
@@ -95,11 +94,10 @@ function CheckBody({ draft, onChange }: { draft: AutomationSummary; onChange: (d
                 </div>
                 <SegmentedTabs variant="nested" value={t.mode}
                   onChange={(m) => onChange({ ...draft, tools: draft.tools.map((x) => (x.id === t.id ? { ...x, mode: m as 'allow' | 'ask' } : x)) })}
-                  tabs={[{ id: 'allow', label: 'Always allow' }, { id: 'ask', label: 'Ask first' }]} />
+                  tabs={[{ id: 'allow', label: 'Allow' }, { id: 'ask', label: 'Ask' }]} />
               </div>
             ))}
           </div>
-          <div className="text-xs text-fg-muted">Nothing else. If it needs your OK, it waits and notifies you.</div>
         </div>
       </section>
 
@@ -112,7 +110,6 @@ function CheckBody({ draft, onChange }: { draft: AutomationSummary; onChange: (d
               onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) onChange({ ...draft, limit: n }); }} aria-label="Monthly limit in dollars" />
             <span className="text-xs text-fg-muted">a month</span>
           </div>
-          <div className="text-xs text-fg-muted">At the limit it finishes the step it is on, then stops until next month and tells you.</div>
         </div>
       </section>
     </div>

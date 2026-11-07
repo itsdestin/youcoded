@@ -34,3 +34,14 @@ export function tokenWords(n: number): string {
 export function dollarWords(d: number): string {
   return d < 0.01 && d > 0 ? 'under $0.01' : `$${d.toFixed(2)}`;
 }
+
+/** The short form for a chip ("Daily at 7:00", "Email arrives"): a card's chip row, where the full
+ *  sentence would scroll off. */
+export function scheduleWords(s: AutomationStart): string {
+  if (s.kind === 'button') return 'Page button';
+  if (s.kind === 'event') return s.event.replace(/ in Gmail$/, '').replace(/^An? /, '').replace(/^./, (c) => c.toUpperCase()).replace(/ arrives$/, ' arrives');
+  if (s.every === 'hour') return s.hours && s.hours > 1 ? `Every ${s.hours} hours` : 'Hourly';
+  if (s.every === 'week') return `${s.day ?? 'Monday'}s at ${s.at ?? '9:00'}`;
+  if (s.every === 'weekday') return `Weekdays at ${s.at ?? '9:00'}`;
+  return `Daily at ${s.at ?? '9:00'}`;
+}
