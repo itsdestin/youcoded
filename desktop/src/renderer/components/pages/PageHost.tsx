@@ -962,7 +962,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         </div>
       </div>
     </div>
-    <PageSettingsDialog page={pageSettingsOpen ? summary : null} onClose={() => setPageSettingsOpen(false)} onConnect={() => setPageSettingsOpen(false)}
+    <PageSettingsDialog page={pageSettingsOpen ? summary : null} onClose={() => setPageSettingsOpen(false)} // Connect closes settings; a different page id (Open in Automations) also opens that page.
+      onConnect={(id) => { setPageSettingsOpen(false); if (id !== pageId) dispatch({ type: 'PAGE_OPENED', pageId: id }); }}
       onEdit={onEditPage ? (p) => { setPageSettingsOpen(false); onEditPage(p); } : undefined} />
     <PageFileChooser page={chooser ? summary : null} mode={chooser}
       onChoose={(c) => {

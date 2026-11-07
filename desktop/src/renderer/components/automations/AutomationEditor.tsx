@@ -16,7 +16,7 @@
 //   Model and money         a $5 monthly limit to start (Q-limit); a subscription job has no money
 //                           limit but its use is still counted (Q-subscription note).
 // Settings save as you change them (guide "Popups and side panels"): no Save on an existing job.
-// A new one has one action, Turn on, because nothing should start running half set up.
+// A new one is kept apart until Turn on (or Save, turned off), so nothing runs half set up.
 import React, { useEffect, useState } from 'react';
 import type { AutomationRun, AutomationStart, AutomationSummary, AutomationTool } from '../../../shared/automation-types';
 import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Chip, LoadingState, Pill, ProgressBar, SectionLabel, SegmentedTabs, Select, SettingRow, Textarea, TextInput, Toggle, Tooltip } from '../ui';
@@ -61,6 +61,11 @@ export function AutomationEditor({ job: initial, isNew = false, tab, onTab, onBa
     if (b) publishAutomations(await b.save({ ...job, enabled: true }));
     onBack();
   };
+  const save = async () => {
+    const b = automationsBridge();
+    if (b) publishAutomations(await b.save({ ...job, enabled: false }));
+    onBack();
+  };
   const runNow = async () => {
     const b = automationsBridge();
     if (b) publishAutomations(await b.runNow(job.id));
@@ -71,9 +76,10 @@ export function AutomationEditor({ job: initial, isNew = false, tab, onTab, onBa
       <ScreenMark name={isNew ? 'automations/new' : tab === 'runs' ? 'automations/job-runs' : job.subscription ? 'automations/job-subscription' : 'automations/job'} />
       <div className="w-full max-w-5xl mx-auto px-4 py-6 flex flex-col gap-6">
         {/* Way back, then the job's own top card: its name, what starts it, and its switches. */}
-        <div><Button variant="ghost" size="sm" onClick={onBack}>&lsaquo; Automations</Button></div>
+        {/* UX review 1 U16: an outlined button, not a tiny ghost link (guide: anything clickable looks clickable). */}
+        <div><Button variant="secondary" size="sm" onClick={onBack}>&lsaquo; All automations</Button></div>
         <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-3`}>
-          <div className="flex items-start gap-3">
+          <div className="flex flex-wrap items-start gap-3">
             <JobGlyph job={job} />
             <div className="min-w-0 flex-1 flex flex-col gap-1.5">
               {isNew
@@ -85,8 +91,16 @@ export function AutomationEditor({ job: initial, isNew = false, tab, onTab, onBa
                 <Chip>{job.model}</Chip>
               </div>
             </div>
+            {/* UX review 1 U6: a new job's actions sit here, by its name, not at the foot of a long form; Save keeps it
+                paused. U15: at phone width the actions wrap onto their own line instead of squeezing the chips. */}
+            {isNew && (
+              <div className="shrink-0 flex items-center gap-2 max-sm:w-full max-sm:[&>*]:flex-1">
+                <Button variant="secondary" size="sm" onClick={() => void save()}>Save, turned off</Button>
+                <Button variant="primary" size="sm" onClick={() => void turnOn()}>Turn on</Button>
+              </div>
+            )}
             {!isNew && (
-              <div className="shrink-0 flex items-center gap-2">
+              <div className="shrink-0 flex items-center gap-2 max-sm:w-full max-sm:justify-end">
                 <Button variant="secondary" size="sm" onClick={() => void runNow()}>Run now</Button>
                 <Tooltip text={job.enabled ? 'Pause' : 'Turn on'} placement="bottom">
                   <span><Toggle checked={job.enabled} onChange={(on) => change({ enabled: on })} aria-label={job.enabled ? 'Pause' : 'Turn on'} /></span>
@@ -94,6 +108,11 @@ export function AutomationEditor({ job: initial, isNew = false, tab, onTab, onBa
               </div>
             )}
           </div>
+          {/* UX review 1 U1: pausing showed nothing but the switch. A paused job says so here, and what that means for a run
+              already waiting. */}
+          {!isNew && !job.enabled && (
+            <div className="flex items-center gap-2 text-xs text-fg-2"><Pill>Paused</Pill><span>It won&rsquo;t start again until you turn it back on.{job.waiting ? ' The run below still waits for your answer.' : ''}</span></div>
+          )}
           {job.waiting && (
             <div className="flex items-center gap-2 text-xs text-fg-2"><Pill tone="warning" dot>Waiting for you</Pill><span className="truncate">{job.waiting.action}</span></div>
           )}
@@ -116,9 +135,9 @@ export function AutomationEditor({ job: initial, isNew = false, tab, onTab, onBa
                 <StartField start={job.start} onChange={(start) => change({ start })} />
                 <FieldLabel>Belongs to</FieldLabel>
                 <Select value={job.owner.kind === 'page' ? job.owner.pageId : 'alone'}
-                  options={[{ value: 'alone', label: 'Nothing: on its own' }, { value: 'page-money', label: 'Money' }, { value: 'page-recipes', label: 'Recipe notes' }, { value: 'page-weekly-briefing', label: 'Weekly briefing' }]}
+                  options={[{ value: 'alone', label: 'No page' }, { value: 'page-money', label: 'Money' }, { value: 'page-recipes', label: 'Recipe notes' }, { value: 'page-weekly-briefing', label: 'Weekly briefing' }]}
                   onChange={(v) => change({ owner: v === 'alone' ? { kind: 'alone' } : { kind: 'page', pageId: v, pageName: v === 'page-money' ? 'Money' : v === 'page-recipes' ? 'Recipe notes' : 'Weekly briefing', pageIcon: v === 'page-money' ? 'money' : 'notes' } })} />
-                <div className="text-xs text-fg-muted">A page&rsquo;s jobs show on that page and in its settings, and share its spending limit. Every job is listed here either way.</div>
+                <div className="text-xs text-fg-muted">Attach it to a page to show it there and share the page&rsquo;s spending limit.</div>
               </Group>
               <Group label="What it may do">
                 <ToolsField tools={job.tools} onChange={(tools) => change({ tools })} />
@@ -130,12 +149,12 @@ export function AutomationEditor({ job: initial, isNew = false, tab, onTab, onBa
                 <SegmentedTabs variant="nested" value={job.whenAsk} onChange={(v) => change({ whenAsk: v as 'wait' | 'skip' })}
                   tabs={[{ id: 'wait', label: 'Wait for you' }, { id: 'skip', label: 'Skip it and keep going' }]} />
                 {job.whenAsk === 'wait' ? (<>
-                  <FieldLabel>Waits up to</FieldLabel>
+                  <FieldLabel>Wait up to</FieldLabel>
                   <Select value={job.waitHours === null ? 'next' : String(job.waitHours)} onChange={(v) => change({ waitHours: v === 'next' ? null : Number(v) })}
                     options={[{ value: 'next', label: 'Until it is due to run again' }, { value: '1', label: '1 hour' }, { value: '4', label: '4 hours' }, { value: '12', label: '12 hours' }, { value: '24', label: '24 hours' }]} />
-                  <FieldLabel>If you don&rsquo;t answer in time</FieldLabel>
+                  <FieldLabel>If you don&rsquo;t answer</FieldLabel>
                   <Select value={job.noAnswer} onChange={(v) => change({ noAnswer: v as AutomationSummary['noAnswer'] })}
-                    options={[{ value: 'skip', label: 'Leave that step undone and finish the rest' }, { value: 'stop', label: 'Stop the run' }, { value: 'fallback', label: 'Do something else instead' }]} />
+                    options={[{ value: 'skip', label: 'Skip that step' }, { value: 'stop', label: 'Stop the run' }, { value: 'fallback', label: 'Do something else' }]} />
                   {job.noAnswer === 'fallback' && (
                     <Textarea value={job.fallback ?? ''} placeholder="For example: save the reply as a draft and tell me." onChange={(e) => change({ fallback: e.target.value })} aria-label="Do this instead" />
                   )}
@@ -150,13 +169,14 @@ export function AutomationEditor({ job: initial, isNew = false, tab, onTab, onBa
                   {job.late === 'fallback' && (
                     <Textarea value={job.lateFallback ?? ''} placeholder="For example: only look at today, and tell me it ran late." onChange={(e) => change({ lateFallback: e.target.value })} aria-label="When late, do this" />
                   )}
-                  <div className="text-xs text-fg-muted">Automations run in YouCoded on this computer, so nothing runs while it is off or asleep. A week away gives one late run, not seven.</div>
+                  <div className="text-xs text-fg-muted">Jobs only run while this computer is on. After it wakes, a missed job runs once, not once for every time it missed.</div>
                 </Group>
               )}
               <Group label="Tell me">
+                <div className="text-xs text-fg-muted">Notifications show on this computer and your phone.</div>
                 {/* SettingRow draws its own box, so the rows sit straight in the card (no nested box around them). */}
                 <div className="flex flex-col gap-2">
-                  <SettingRow variant="item" title="When it needs you" description="On this computer and your phone."
+                  <SettingRow variant="item" title="When it needs you"
                     control={<Toggle checked={job.notify.needs} onChange={(v) => change({ notify: { ...job.notify, needs: v } })} aria-label="When it needs you" />} />
                   <SettingRow variant="item" title="When it has news" description="Only when its run says there is something worth telling."
                     control={<Toggle checked={job.notify.news} onChange={(v) => change({ notify: { ...job.notify, news: v } })} aria-label="When it has news" />} />
@@ -173,10 +193,6 @@ export function AutomationEditor({ job: initial, isNew = false, tab, onTab, onBa
           </div>
         )}
 
-        {isNew && (
-          // A new job's one action, full width at the foot (guide: one lone button is full width).
-          <Button variant="primary" className="w-full py-2.5" onClick={() => void turnOn()}>Turn on</Button>
-        )}
       </div>
     </div>
   );
@@ -252,9 +268,9 @@ function ToolsField({ tools, onChange }: { tools: AutomationTool[]; onChange: (t
     <Button variant="secondary" className="w-full">Add something it may do</Button>
     <FieldLabel>Anything not listed</FieldLabel>
     <div className="flex flex-col gap-2">
-      <SettingRow variant="item" title="Other websites" description={unlistedSites === 'never' ? 'Refused.' : 'Asks you first, each new site.'}
+      <SettingRow variant="item" title="Other websites" description={unlistedSites === 'ask' ? 'Asks you about each new site.' : undefined}
         control={<SegmentedTabs variant="pill" value={unlistedSites} onChange={(v) => setUnlistedSites(v as 'never' | 'ask')} tabs={[{ id: 'never', label: 'Never' }, { id: 'ask', label: 'Ask first' }]} />} />
-      <SettingRow variant="item" title="Other commands and files" description={unlistedCommands === 'never' ? 'Refused.' : 'Asks you first, each time.'}
+      <SettingRow variant="item" title="Other commands and files" description={unlistedCommands === 'ask' ? 'Asks you each time.' : undefined}
         control={<SegmentedTabs variant="pill" value={unlistedCommands} onChange={(v) => setUnlistedCommands(v as 'never' | 'ask')} tabs={[{ id: 'never', label: 'Never' }, { id: 'ask', label: 'Ask first' }]} />} />
     </div>
   </>);

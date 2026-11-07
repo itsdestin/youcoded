@@ -109,8 +109,9 @@ function seedRuns(job: AutomationSummary): AutomationRun[] {
   const last = job.lastRun ? [job.lastRun] : [];
   const older: AutomationRun[] = [
     { id: `${job.id}-2`, when: 'Yesterday at 7:00', outcome: 'done', summary: 'Nothing unusual.', tokens: 8_200, seconds: 19, dollars: job.subscription ? undefined : 0.01 },
-    { id: `${job.id}-3`, when: 'Tuesday at 7:00', outcome: 'missed', summary: 'Missed: the computer was off. It ran once when it woke at 9:40.', tokens: 0, seconds: 0 },
-    { id: `${job.id}-4`, when: 'Tuesday at 9:40', outcome: 'done', summary: 'Nothing unusual.', tokens: 8_900, seconds: 20, dollars: job.subscription ? undefined : 0.01 },
+    // UX review 1 U14: a run that happened late is one Done row saying so, never a "Missed" one beside it.
+    { id: `${job.id}-4`, when: 'Tuesday at 9:40', outcome: 'done', summary: 'Ran late: the computer was off at 7:00. Nothing unusual.', tokens: 8_900, seconds: 20, dollars: job.subscription ? undefined : 0.01 },
+    { id: `${job.id}-3`, when: 'Monday at 22:00', outcome: 'missed', summary: 'Skipped: the computer was asleep, and this job skips late runs.', tokens: 0, seconds: 0 },
     { id: `${job.id}-5`, when: 'Monday at 7:00', outcome: 'failed', summary: 'Couldn’t reach the model. It will try again at the next run.', tokens: 0, seconds: 30 },
     { id: `${job.id}-6`, when: 'Sunday at 7:00', outcome: 'done', summary: 'Nothing unusual.', tokens: 7_700, seconds: 18, dollars: job.subscription ? undefined : 0.01 },
   ];

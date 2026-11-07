@@ -169,19 +169,21 @@ const JobRow = React.memo(function JobRow({ job, onOpen }: { job: AutomationSumm
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 min-w-0">
           <span className={`text-sm truncate ${job.enabled ? 'text-fg' : 'text-fg-muted'}`}>{job.name}</span>
-          {job.waiting && <Pill tone="warning" dot>Waiting for you</Pill>}
           {!job.enabled && <Pill>Paused</Pill>}
         </div>
-        <div className="text-2xs text-fg-muted truncate">
+        {/* UX review 1 U15: at phone width these lines wrap instead of cutting the schedule off. */}
+        <div className="text-2xs text-fg-muted sm:truncate">
           {startWords(job.start)}{job.enabled && job.next ? ` · next ${job.next.charAt(0).toLowerCase()}${job.next.slice(1)}` : ''}
         </div>
         {last && !job.waiting && (
-          <div className="text-2xs text-fg-muted truncate">
-            {last.when}: {last.summary}
+          <div className="text-2xs text-fg-muted sm:truncate">
+            {last.when}: {last.summary}{last.skipped?.length ? ` Left for you: ${last.skipped.join(', ').toLowerCase()}.` : ''}
           </div>
         )}
+        {last && !job.waiting && last.outcome !== 'done' && <div className="sm:hidden pt-1"><Pill tone={OUTCOME[last.outcome].tone}>{OUTCOME[last.outcome].word}</Pill></div>}
       </div>
-      {last && !job.waiting && last.outcome !== 'done' && <Pill tone={OUTCOME[last.outcome].tone}>{OUTCOME[last.outcome].word}</Pill>}
+      {/* At phone width the outcome sits under the lines (below), so it doesn't squeeze them into a narrow column. */}
+      {last && !job.waiting && last.outcome !== 'done' && <span className="max-sm:hidden"><Pill tone={OUTCOME[last.outcome].tone}>{OUTCOME[last.outcome].word}</Pill></span>}
       {/* WHY stopPropagation: the switch sits inside the row, which opens the job. */}
       <Tooltip text={job.enabled ? 'Pause' : 'Turn on'} placement="bottom">
         <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>

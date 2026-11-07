@@ -21,7 +21,6 @@ import { PageGlyph } from './page-icons';
 import { CombinedRisk, ConnectionLine, FolderField, splitAddress } from './page-connections';
 import { getCapabilities } from '../../platform';
 import { publishPages } from './use-pages';
-import { useArtifactDispatch } from '../../state/ArtifactContext';
 import { SettingRow, Toggle } from '../ui';
 import { automationsBridge, publishAutomations, useAutomations } from '../automations/use-automations';
 import { startWords } from '../automations/automation-words';
@@ -118,7 +117,7 @@ function PageSettingsBody({ page, onConnect, onEdit }: { page: PageSummary; onCo
         </div>
       </section>
 
-      <PageAutomations pageId={page.id} />
+      <PageAutomations pageId={page.id} onOpen={onConnect} />
     </div>
   );
 }
@@ -126,8 +125,7 @@ function PageSettingsBody({ page, onConnect, onEdit }: { page: PageSummary; onCo
 /** Pages-finish step 4 (design stage): this page's own automations, listed here as well as on the
  *  Automations page (Q-belongs). Only for a page that has some: an empty section is a promise of
  *  nothing. Each row's switch pauses it; the button opens Automations, where its settings are. */
-function PageAutomations({ pageId }: { pageId: string }) {
-  const dispatch = useArtifactDispatch();
+function PageAutomations({ pageId, onOpen }: { pageId: string; onOpen: (pageId: string) => void }) {
   const { jobs } = useAutomations();
   const mine = jobs.filter((j) => j.owner.kind === 'page' && j.owner.pageId === pageId);
   if (mine.length === 0) return null;
@@ -144,7 +142,8 @@ function PageAutomations({ pageId }: { pageId: string }) {
             description={j.waiting ? `Waiting for you: ${j.waiting.action}` : startWords(j.start)}
             control={<Toggle checked={j.enabled} onChange={(on) => void setEnabled(j.id, on)} aria-label={j.enabled ? `Pause ${j.name}` : `Turn on ${j.name}`} />} />
         ))}
-        <Button variant="secondary" className="w-full" onClick={() => dispatch({ type: 'PAGE_OPENED', pageId: AUTOMATIONS_PAGE_ID })}>Open in Automations</Button>
+        {/* UX review 1 U2: through onConnect, which closes this window first — otherwise it stayed over Automations. */}
+        <Button variant="secondary" className="w-full" onClick={() => onOpen(AUTOMATIONS_PAGE_ID)}>Open in Automations</Button>
       </div>
     </section>
   );
