@@ -18,16 +18,16 @@ import { automationsBridge, publishAutomations, refreshAutomations, useAutomatio
 import { OUTCOME, scheduleWords } from './automation-words';
 import { AutomationDetails, JobGlyph, blankAutomation, type DetailsTab } from './AutomationDetails';
 
-type Open = { job: AutomationSummary; isNew: boolean; tab: DetailsTab; atEnd?: boolean } | null;
-type Pending = 'new' | { id: string; tab: DetailsTab; addMenu: boolean; atEnd?: boolean } | null;
+type Open = { job: AutomationSummary; isNew: boolean; tab: DetailsTab; atEnd?: boolean; openFirst?: boolean } | null;
+type Pending = 'new' | { id: string; tab: DetailsTab; addMenu: boolean; atEnd?: boolean; openFirst?: boolean } | null;
 
 // Photo-only (`shoot`): PageHost owns the screen names (this view mounts only once the page
 // opens), so it leaves what to open here; a view already showing picks it up at once.
 let startAt: Pending = null;
 let jump: ((v: Pending) => void) | null = null;
-export function openAutomationsAt(v: 'details' | 'runs' | 'subscription' | 'add-menu' | 'new' | 'lower'): void {
+export function openAutomationsAt(v: 'details' | 'runs' | 'subscription' | 'add-menu' | 'new' | 'lower' | 'lower-open'): void {
   const to: Pending = v === 'new' ? 'new'
-    : { id: v === 'subscription' || v === 'lower' ? 'job-weekly' : v === 'runs' ? 'job-money' : 'job-email', tab: v === 'runs' ? 'runs' : 'settings', addMenu: v === 'add-menu', atEnd: v === 'lower' };
+    : { id: v === 'subscription' || v === 'lower' || v === 'lower-open' ? 'job-weekly' : v === 'runs' ? 'job-money' : 'job-email', tab: v === 'runs' ? 'runs' : 'settings', addMenu: v === 'add-menu', atEnd: v === 'lower' || v === 'lower-open', openFirst: v === 'lower-open' };
   if (jump) jump(to); else startAt = to;
 }
 
@@ -46,7 +46,7 @@ export function AutomationsView({ visible }: { visible: boolean }) {
     else {
       const job = jobs.find((j) => j.id === pending.id);
       setAddMenu(pending.addMenu);
-      if (job) setOpen({ job, isNew: false, tab: pending.tab, atEnd: pending.atEnd });
+      if (job) setOpen({ job, isNew: false, tab: pending.tab, atEnd: pending.atEnd, openFirst: pending.openFirst });
     }
     setPending(null);
   }, [pending, loaded, jobs]);
@@ -84,7 +84,7 @@ export function AutomationsView({ visible }: { visible: boolean }) {
         {on.length > 0 && <Group label="On" jobs={on} onOpen={openJob} />}
         {paused.length > 0 && <Group label="Paused" jobs={paused} onOpen={openJob} />}
       </div>
-      <AutomationDetails job={shown} isNew={open?.isNew ?? false} tab={open?.tab ?? 'settings'} atEnd={open?.atEnd ?? false} addMenuOpen={addMenu} onAddMenu={setAddMenu}
+      <AutomationDetails job={shown} isNew={open?.isNew ?? false} tab={open?.tab ?? 'settings'} atEnd={open?.atEnd ?? false} openFirst={open?.openFirst ?? false} addMenuOpen={addMenu} onAddMenu={setAddMenu}
         onTab={(tab) => setOpen((o) => (o ? { ...o, tab } : o))} onClose={() => { setOpen(null); setAddMenu(false); }} />
     </div>
   );

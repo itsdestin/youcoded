@@ -13,7 +13,7 @@
 // Settings save as you change them (guide "Popups"); a new automation is kept apart until Create.
 import React, { useEffect, useState } from 'react';
 import type { AutomationDevice, AutomationLink, AutomationRun, AutomationStart, AutomationSummary, AutomationTool } from '../../../shared/automation-types';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, Chip, LoadingState, Menu, MenuItem, MenuNote, MenuRadioItem, Pill, PillButton, SectionLabel, SegmentedTabs, Select, SettingRow, Textarea, TextInput, Toggle, Tooltip } from '../ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, Chip, FoldRow, LoadingState, Menu, MenuItem, MenuNote, MenuRadioItem, Pill, PillButton, Radio, RadioGroup, SectionLabel, SegmentedTabs, Select, SettingRow, Textarea, TextInput, Toggle, Tooltip } from '../ui';
 import { Dialog } from '../ui/Dialog';
 import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 import { ChipRow } from '../marketplace/FactChips';
@@ -55,8 +55,8 @@ const LINKABLE: { group: string; items: AutomationLink[] }[] = [
   { group: 'Projects', items: [{ kind: 'project', id: 'proj-youcoded', name: 'youcoded-dev' }] },
 ];
 
-export function AutomationDetails({ job, isNew, tab, atEnd = false, onTab, onClose, addMenuOpen, onAddMenu }: {
-  job: AutomationSummary | null; isNew: boolean; tab: DetailsTab; atEnd?: boolean; onTab: (t: DetailsTab) => void; onClose: () => void;
+export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = false, onTab, onClose, addMenuOpen, onAddMenu }: {
+  job: AutomationSummary | null; isNew: boolean; tab: DetailsTab; atEnd?: boolean; openFirst?: boolean; onTab: (t: DetailsTab) => void; onClose: () => void;
   addMenuOpen: boolean; onAddMenu: (open: boolean) => void;
 }) {
   const [draft, setDraft] = useState<AutomationSummary | null>(job);
@@ -104,30 +104,58 @@ export function AutomationDetails({ job, isNew, tab, atEnd = false, onTab, onClo
                 </Group>
                 {/* A new job on a plan has nothing used yet and no limit, so the card would say nothing. */}
                 {!(isNew && draft.subscription) && <Group label={draft.subscription ? 'Usage' : 'Spending'}><SpendField job={draft} onLimit={(limit) => change({ limit })} /></Group>}
-                {/* WHY one "Rules" list of pill rows (plan deck round 2 N-lower: "this ui has gotten very
-                    convoluted … unclear what a lot of these labels/buttons mean"): every setting is one
-                    row, a plain label on the left and its current value as the same pill-with-menu the
-                    permissions use. A row that needs words (another time, other instructions) opens a
-                    field under it. */}
-                <Group label="Rules">
-                  <ChoiceRow title="Asks first items" value={draft.whenAsk} onChange={(v) => change({ whenAsk: v })}
-                    choices={[['wait', 'Wait for me'], ['skip', 'Skip them']]} />
-                  {draft.whenAsk === 'wait' && (<>
-                    <ChoiceRow title="Wait up to" value={draft.waitHours === null ? 'next' : String(draft.waitHours)} onChange={(v) => change({ waitHours: v === 'next' ? null : Number(v) })}
-                      choices={[['next', 'Its next run'], ['1', '1 hour'], ['4', '4 hours'], ['12', '12 hours'], ['24', '24 hours']]} />
-                    <ChoiceRow title="No answer by then" value={draft.noAnswer} onChange={(v) => change({ noAnswer: v })}
-                      choices={[['skip', 'Skip that step'], ['stop', 'Stop the run'], ['fallback', 'Do this instead']]} />
-                    {draft.noAnswer === 'fallback' && <Textarea value={draft.fallback ?? ''} placeholder="Save the reply as a draft." onChange={(e) => change({ fallback: e.target.value })} aria-label="Do this instead" />}
-                  </>)}
+                {/* WHY "Advanced settings" as fold-out cards, all closed (plan deck round 3 C-rules: "rules
+                    should become Advanced Settings. each … an expandable card … all should start collapsed.
+                    each should explain in plain, concise terms what the option does with pros/cons. the
+                    titles … more clear/concise/statement-like"). Each closed card's title says what the job
+                    does now, so the list reads without opening anything; opening one shows a sentence on
+                    what it covers and its choices, each with a pro and a con. */}
+                <Group label="Advanced settings">
+                  <OptionFold defaultOpen={openFirst} title={draft.whenAsk === 'skip' ? 'Skips steps that need your OK' : `Waits ${waitWords(draft.waitHours)} for your OK`}
+                    about="What a run does when it reaches something set to Asks first."
+                    value={draft.whenAsk} onChange={(v) => change({ whenAsk: v })}
+                    options={[
+                      ['wait', 'Wait for me', 'Nothing on the Asks first list happens without you.', 'The run sits paused until you answer.'],
+                      ['skip', 'Skip it and carry on', 'Runs never stall.', 'Those steps only happen when you run it yourself.'],
+                    ]}>
+                    {draft.whenAsk === 'wait' && <ChoiceRow title="Wait up to" value={draft.waitHours === null ? 'next' : String(draft.waitHours)} onChange={(v) => change({ waitHours: v === 'next' ? null : Number(v) })}
+                      choices={[['next', 'Its next run'], ['1', '1 hour'], ['4', '4 hours'], ['12', '12 hours'], ['24', '24 hours']]} />}
+                  </OptionFold>
+                  {draft.whenAsk === 'wait' && (
+                    <OptionFold title={({ skip: 'Skips that step if you don\'t answer', stop: 'Stops the run if you don\'t answer', fallback: 'Does something else if you don\'t answer' } as const)[draft.noAnswer]}
+                      about="What happens when the wait runs out with no answer."
+                      value={draft.noAnswer} onChange={(v) => change({ noAnswer: v })}
+                      options={[
+                        ['skip', 'Skip that step', 'The rest of the run still gets done.', 'The skipped step is only noted in its run.'],
+                        ['stop', 'Stop the run', 'Nothing half-finished carries on.', 'Everything after that step is lost for this run.'],
+                        ['fallback', 'Do this instead', 'You choose a safe stand-in, like saving a draft.', 'One more thing to write.'],
+                      ]}>
+                      {draft.noAnswer === 'fallback' && <Textarea value={draft.fallback ?? ''} placeholder="Save the reply as a draft." onChange={(e) => change({ fallback: e.target.value })} aria-label="Do this instead" />}
+                    </OptionFold>
+                  )}
                   {draft.start.kind !== 'button' && (<>
                     {/* Plan deck S-start note: another time, or other instructions (which can also change what it makes). */}
-                    <ChoiceRow title="Missed while off" value={draft.late} onChange={(v) => change({ late: v })}
-                      choices={[['run', 'Run once on wake'], ['later', 'Run at another time'], ['fallback', 'Run with other instructions'], ['skip', 'Skip it']]} />
-                    {draft.late === 'later' && <TextInput className="w-24" value={draft.lateAt ?? '18:00'} onChange={(e) => change({ lateAt: e.target.value })} aria-label="Run at" />}
-                    {draft.late === 'fallback' && <Textarea value={draft.lateFallback ?? ''} placeholder="Only look at today, and save a summary instead of emailing me." onChange={(e) => change({ lateFallback: e.target.value })} aria-label="Other instructions" />}
+                    <OptionFold title={({ run: 'Runs once on wake after a missed run', later: `Runs a missed run at ${draft.lateAt ?? '18:00'}`, fallback: 'Runs a missed run with other instructions', skip: 'Skips missed runs' } as const)[draft.late]}
+                      about="What happens when a run was due while the computer was off or YouCoded was closed."
+                      value={draft.late} onChange={(v) => change({ late: v })}
+                      options={[
+                        ['run', 'Run once on wake', 'You still get it, a bit late.', 'It may run at a busy moment.'],
+                        ['later', 'Run at another time', 'It waits for a time that suits you.', 'You wait longer for it.'],
+                        ['fallback', 'Run with other instructions', 'A late run can do something different, like a shorter summary.', 'One more thing to write.'],
+                        ['skip', 'Skip it', 'Nothing runs late.', 'That run never happens.'],
+                      ]}>
+                      {draft.late === 'later' && <TextInput className="w-24" value={draft.lateAt ?? '18:00'} onChange={(e) => change({ lateAt: e.target.value })} aria-label="Run at" />}
+                      {draft.late === 'fallback' && <Textarea value={draft.lateFallback ?? ''} placeholder="Only look at today, and save a summary instead of emailing me." onChange={(e) => change({ lateFallback: e.target.value })} aria-label="Other instructions" />}
+                    </OptionFold>
                     {/* Plan deck Q-overlap: "this should depend on the specific job". */}
-                    <ChoiceRow title="Due while still running" value={draft.overlap} onChange={(v) => change({ overlap: v })}
-                      choices={[['skip-new', 'Skip the new run'], ['stop-old', 'Stop the old run'], ['both', 'Run both']]} />
+                    <OptionFold title={({ 'skip-new': 'Skips a new run while one is still going', 'stop-old': 'Stops the old run when a new one is due', both: 'Runs both when a new one is due early' } as const)[draft.overlap]}
+                      about="What happens when its next run is due and the last one hasn't finished."
+                      value={draft.overlap} onChange={(v) => change({ overlap: v })}
+                      options={[
+                        ['skip-new', 'Skip the new run', 'Never two at once.', 'That turn is missed.'],
+                        ['stop-old', 'Stop the old run', 'You always get the newest run.', 'The old run\'s work is cut short.'],
+                        ['both', 'Run both', 'Nothing is missed.', 'Two runs may do the same thing twice.'],
+                      ]} />
                   </>)}
                 </Group>
                 <Group label="Runs on"><DevicesField devices={draft.devices} onChange={(devices) => change({ devices })} /></Group>
@@ -315,6 +343,36 @@ function ChoicePill<T extends string>({ name, value, choices, onChange }: { name
     </Menu>
   );
 }
+
+/** One advanced setting as a fold-out card (closed by default): the title states what the job does
+ *  now; open, a sentence on what it covers, then its choices, each with one pro and one con, and any
+ *  follow-up field for the chosen one under the list. */
+function OptionFold<T extends string>({ title, about, value, onChange, options, defaultOpen = false, children }: {
+  title: string; about: string; value: T; onChange: (v: T) => void;
+  options: [T, string, string, string][]; defaultOpen?: boolean; children?: React.ReactNode;
+}) {
+  return (
+    <FoldRow title={title} defaultOpen={defaultOpen}>
+      <div className="flex flex-col gap-2">
+        <div className="text-xs text-fg-muted">{about}</div>
+        <RadioGroup options={options.map(([v]) => v)} value={value} onChange={(v) => onChange(v as T)} aria-label={title} className="flex flex-col gap-1.5">
+          {options.map(([v, label, pro, con]) => (
+            <button key={v} type="button" onClick={() => onChange(v)} className="flex items-start gap-2 text-left rounded-md px-1 -mx-1 state-layer">
+              <Radio checked={value === v} onChange={() => onChange(v)} className="mt-0.5" />
+              <span className="flex flex-col">
+                <span className="text-sm text-fg">{label}</span>
+                <span className="text-2xs text-fg-muted">+ {pro} − {con}</span>
+              </span>
+            </button>
+          ))}
+        </RadioGroup>
+        {children}
+      </div>
+    </FoldRow>
+  );
+}
+
+function waitWords(h: number | null): string { return h === null ? 'until its next run' : `up to ${h} hour${h === 1 ? '' : 's'}`; }
 
 function ChoiceRow<T extends string>({ title, ...pill }: { title: string; value: T; choices: [T, string][]; onChange: (v: T) => void }) {
   return <SettingRow variant="item" title={title} control={<ChoicePill name={title} {...pill} />} />;
