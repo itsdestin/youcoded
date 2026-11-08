@@ -195,6 +195,7 @@ describe('EngineSupervisor', () => {
       '--no-webui', '--jinja',
       '--models-dir', 'C:/fake/cache', // discovers dropped GGUFs (LLAMA_CACHE alone doesn't)
       '--models-max', '2',
+      '--no-cache-idle-slots',       // idle chats keep their reading (2026-11-07)
       '--spec-default',              // draft-free speculative decoding (2026-09-04)
       '--cache-type-k', 'q8_0',      // 8-bit KEY cache only — see the WHY in the supervisor
       '--models-preset', PRESET_PATH, // per-model settings (design §C2)
@@ -729,12 +730,14 @@ const BASE_ARGS_FOR = (cacheDir: string): string[] => ([
   '--no-webui', '--jinja',
   '--models-dir', cacheDir,
   '--models-max', '2',
+  '--no-cache-idle-slots',
 ]);
 const BASE_ARGS = [
   '--host', '127.0.0.1', '--port', '9999',
   '--no-webui', '--jinja',
   '--models-dir', 'C:/fake/cache',
   '--models-max', '2',
+  '--no-cache-idle-slots',
 ];
 
 describe('EngineSupervisor — spawn config and the preset file', () => {

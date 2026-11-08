@@ -139,6 +139,22 @@ no usable preset file:
   preset writer reads it. **`engine-supervisor.test.ts` now pins the flag's ABSENCE from
   the command line** — it only reappears on the recovery boot that has no usable preset.
   (Raised 5→15 min and 10→25 min on 2026-09-07 per Destin.)
+- **Keeping each chat's reading (2026-11-07, b10665, Qwen3.8-27B — a hybrid `qwen35`
+  model — Z13 Vulkan; scripts and numbers in the local-model-hardening session).**
+  - **`--no-cache-idle-slots` is on the command line.** The default (with the unified KV
+    cache b10665 turns on when `--parallel` is not given) clears EVERY idle slot whenever
+    any slot starts a task and parks it in the `--cache-ram` copy — which never came
+    back for this hybrid model: chat A, then chat B, then A again re-read all 4,890
+    tokens (35.6 s); with the flag, 13 tokens (0.8 s). Overfilled on purpose (8k
+    context, three 6.4k prompts): the engine logs `try_clear_id: purging slot N`, frees
+    an idle slot, retries, and every request still answers 200.
+  - **`id_slot` pins a request to a slot** (`selected slot by id (N)`); a number past
+    the last slot is IGNORED, not refused. `engine/slot-pins.ts` gives each chat key its
+    own slot and every key-less request (model-load "hi", the model check, titles) the
+    LAST slot. Without it the engine picked the slot whose reading looked most similar —
+    and every chat's opening shares the same instructions, so chats took each other's.
+  - **`POST /models/load {model}` exists in router mode** (answers `{"success":true}` at
+    once). Unused for now — the load "hi" keeps its error text for `lastLoadError`.
 - **Speed flags (2026-09-04), both measured on b10665, Qwen3.5-9B Q8_0, Z13 Vulkan;
   guard: `test-engine/probe-speed.mjs` (flags reach the model child AND the drafter fires).
   Both are now user switches (`engine.speed` in config.json, `engine:set-config`) and

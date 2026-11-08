@@ -692,6 +692,17 @@ export class EngineSupervisor extends EventEmitter {
         // cache dir so a dropped GGUF and an -hf pull live side by side.
         '--models-dir', cfg.cacheDir,
         '--models-max', String(MODELS_MAX),
+        // Keep each idle chat's reading in its slot (2026-11-07, b10665). By default,
+        // with the shared ("unified") cache the engine uses, ANY new request clears
+        // every idle slot and parks it in a RAM copy — which never came back for the
+        // hybrid Qwen3.5/3.8 models: measured, a chat's next message after another
+        // chat (or a helper, or a title) re-read all 4,890 tokens (35.6 s) instead of
+        // 13 (0.8 s). Off, idle readings stay until the memory is actually needed;
+        // then the engine frees the idle slot used longest ago and carries on
+        // ("purging slot N", every request still answered — measured with the cache
+        // deliberately overfilled). Router children inherit it. Works with
+        // slot-pins.ts, which keeps each chat on its own slot.
+        '--no-cache-idle-slots',
         // Speed (2026-09-04, measured on b10665 — docs/engine-dependencies.md → "Speed flags"):
         // --spec-default = llama.cpp's draft-FREE speculative decoding (n-gram lookup
         // in the prompt itself, no second model). Edit/Write tool calls and rewrites
