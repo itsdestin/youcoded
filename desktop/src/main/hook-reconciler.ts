@@ -313,6 +313,53 @@ export async function reconcileHooks(): Promise<ReconcileHooksResult> {
   return result;
 }
 
+/**
+ * Remove ONE plugin's own hooks from `settings` in place, and return how many went.
+ *
+ * WHY this exists (plugin off-switch, 2026-11-05): the prune pass above only recognises a hook as
+ * plugin-owned while that plugin's folder still exists — once the folder is deleted (Uninstall) or
+ * moved aside (turned off as unsafe), its hooks look user-added and stay in settings.json for
+ * good. A hook whose command does not even point at a script inside the folder (an inline shell
+ * command) would keep RUNNING. So this is called while the folder is still in place, with that
+ * plugin's own manifest: a hook goes when its command is exactly one the manifest declares, or its
+ * script lives inside the plugin's folder. Nothing else is touched.
+ */
+export function removePluginHooksInto(settings: Settings, pluginDir: string, manifest: PluginHooksManifest | null): number {
+  if (!settings.hooks) return 0;
+  const declared = new Set<string>();
+  for (const specs of Object.values(manifest?.hooks ?? {})) {
+    for (const spec of specs ?? []) if (spec?.command) declared.add(spec.command);
+  }
+  let removed = 0;
+  for (const event of Object.keys(settings.hooks)) {
+    const entries = settings.hooks[event];
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      entry.hooks = entry.hooks.filter((h) => {
+        const ours = declared.has(h.command) || ownerRootOf(h.command, [pluginDir]) !== null;
+        if (ours) removed++;
+        return !ours;
+      });
+    }
+    settings.hooks[event] = entries.filter((e) => e.hooks.length > 0);
+    if (settings.hooks[event].length === 0) delete settings.hooks[event];
+  }
+  return removed;
+}
+
+/** Standalone form of removePluginHooksInto: reads the plugin's manifest (async — this runs from
+ *  a click and from the hourly off-switch check, rule 1 of the performance rules), then one locked
+ *  read/write of settings.json. */
+export async function removePluginHooks(pluginDir: string): Promise<number> {
+  let manifest: PluginHooksManifest | null = null;
+  for (const p of [path.join(pluginDir, 'hooks', 'hooks-manifest.json'), path.join(pluginDir, 'hooks-manifest.json')]) {
+    try { manifest = JSON.parse(await fs.promises.readFile(p, 'utf8')) as PluginHooksManifest; break; } catch { /* try the next layout */ }
+  }
+  let removed = 0;
+  await mutateSettings((settings) => { removed = removePluginHooksInto(settings as Settings, pluginDir, manifest); });
+  return removed;
+}
+
 // Exposed for tests
 export const __test = {
   extractScriptBasename,

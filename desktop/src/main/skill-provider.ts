@@ -6,6 +6,7 @@ import { SkillConfigStore } from './skill-config-store';
 import { encodeSkillLink, decodeSkillLink } from './skill-share';
 import { installPlugin, uninstallPlugin, upgradePluginFromLocal, readPinMarker, materializePinnedSource, readPluginVersion, isPluginInstalled, marketplaceCacheDir, sweepStaleUpgradeDirs, type InstallResult, upgradePluginFromGit } from './plugin-installer';
 import { pluginInstallDir, YOUCODED_PLUGINS_DIR, listInstalledPluginDirs } from './claude-code-registry';
+import { PluginOffSwitch, BLOCKED_MESSAGE, turnedOffDir, detachPluginExtras } from './plugin-blocklist';
 import { getConfig as getMarketplaceConfig } from './marketplace-config-store';
 import { reconcileHooks } from './hook-reconciler';
 import { reconcileMcp } from './mcp-reconciler';
@@ -92,6 +93,10 @@ const INDEX_TTL = 24 * 60 * 60 * 1000; // 24 hours
 // YOUCODED_CATALOG_URL: tests point it at a fake; "" disables the catalog step.
 const CATALOG_URL = process.env.YOUCODED_CATALOG_URL ?? `${MARKETPLACE_API_HOST}/catalog`;
 const CATALOG_CACHE = path.join(CACHE_DIR, 'catalog.json');
+
+// Plugin off-switch (security runbook §5). YOUCODED_BLOCKLIST_URL: tests point it at a fake; ""
+// skips the network and uses only the saved list.
+const BLOCKLIST_URL = process.env.YOUCODED_BLOCKLIST_URL ?? `${MARKETPLACE_API_HOST}/security/blocked-plugins`;
 // 1h, not 24h: the Worker already caches 5 min and CI refreshes hourly, so a newly
 // published item shows up within the hour instead of the next day.
 const CATALOG_TTL = 60 * 60 * 1000;
@@ -116,6 +121,9 @@ export class LocalSkillProvider {
   // (main.ts, at boot), but the guard is here so a future second call can't
   // silently reintroduce the repeated-invalidate behavior this finding flagged.
   private bundledIndexRefetchDone = false;
+  // Plugin off-switch (plugin-blocklist.ts). A change drops the cached Library list.
+  private offSwitch = new PluginOffSwitch(BLOCKLIST_URL, path.join(CACHE_DIR, 'blocked-plugins.json'), this.configStore,
+    () => { this.installedCache = null; this.onCacheInvalidated?.(); });
 
   setCacheInvalidationListener(cb: () => void): void {
     this.onCacheInvalidated = cb;
@@ -129,6 +137,9 @@ export class LocalSkillProvider {
 
   async listMarketplace(filters?: SkillFilters): Promise<SkillEntry[]> {
     let entries = await this.fetchIndex();
+    // Plugin off-switch: a plugin found to be unsafe disappears from the store.
+    const blocked = await this.offSwitch.getList();
+    if (blocked.size > 0) entries = entries.filter(e => !PluginOffSwitch.isBlocked(blocked, e.id, e.catalog?.partOf?.id));
     // Stats (installs, rating, ratingCount) are now served by the live
     // /stats endpoint via MarketplaceStatsProvider in the renderer.
     // skill-provider.ts no longer fetches or merges static stats.json.
@@ -169,7 +180,9 @@ export class LocalSkillProvider {
     const index = await this.fetchIndex();
     const entry = index.find(e => e.id === id);
     const installed = (await this.getInstalled()).find(s => s.id === id);
-    const base = entry || installed;
+    // Off-switch: the catalog entry has no `blocked`, so carry it over from the installed copy —
+    // the details page swaps its Install/Update buttons for the "turned off" notice on it.
+    const base = entry && installed?.blocked ? { ...entry, blocked: installed.blocked } : (entry || installed);
     if (!base) throw new Error(`Skill not found: ${id}`);
 
     // Stats are now served live from the renderer via MarketplaceStatsProvider.
@@ -201,6 +214,8 @@ export class LocalSkillProvider {
   // --- Local state ---
 
   async getInstalled(): Promise<SkillEntry[]> {
+    await this.offSwitch.waitForLaunchCheck();
+    const blocked = await this.offSwitch.getList();
     if (!this.installedCache) {
       const scanned = scanSkills();
       const privateSkills = this.configStore.getPrivateSkills();
@@ -246,8 +261,11 @@ export class LocalSkillProvider {
     const overrides = this.configStore.getOverrides();
     return this.installedCache.map(skill => {
       const o = overrides[skill.id];
-      if (!o) return skill;
-      return { ...skill, ...o };
+      const merged = o ? { ...skill, ...o } : skill;
+      // Off-switch: mark the plugin (and each of its skills) so the Library draws "Turned off".
+      if (!PluginOffSwitch.isBlocked(blocked, skill.id, skill.pluginName)) return merged;
+      const row = blocked.get(skill.id) ?? (skill.pluginName ? blocked.get(skill.pluginName) : undefined);
+      return { ...merged, blocked: row?.reason ? { reason: row.reason } : {} };
     });
   }
 
@@ -266,6 +284,9 @@ export class LocalSkillProvider {
   // --- Mutations ---
 
   async install(id: string): Promise<InstallResult> {
+    // Off-switch: never install a plugin found to be unsafe (a bundle member's bundle is checked
+    // when the recursion below reaches it).
+    if ((await this.offSwitch.getList()).has(id)) return { status: 'failed', error: BLOCKED_MESSAGE };
     const index = await this.fetchIndex();
     const entry = index.find(e => e.id === id);
     if (!entry) return { status: 'failed', error: `Skill not found in marketplace: ${id}` };
@@ -385,6 +406,7 @@ export class LocalSkillProvider {
     // WHY (audit item 24): built-in plugins move only when the app updates (to the commit baked
     // into the app). An Update click must not pull a newer or different copy from GitHub.
     if (isBundledPlugin(id)) return { ok: false, error: 'Built-in plugins are updated together with the app.' };
+    if ((await this.offSwitch.getList()).has(id)) return { ok: false, error: BLOCKED_MESSAGE };
     const index = await this.fetchIndex();
     const entry = index.find(e => e.id === id);
     if (!entry) return { ok: false, error: `Skill not found in marketplace: ${id}` };
@@ -460,10 +482,13 @@ export class LocalSkillProvider {
       // `via` is guaranteed 'YouCoded' here — the 'Claude Code' case returned above.
       let gitUpgradeCommit: string | undefined;
       if (result.status === 'already_installed' && marketplaceEntry.sourceType === 'local') {
-        const upgradeResult = await upgradePluginFromLocal(id, marketplaceEntry.sourceRef || id, marketplaceEntry.sourceMarketplace);
+        // WHY: the catalog's scanned commit; third-party `local` plugins refuse to update without it.
+        const upgradeResult = await upgradePluginFromLocal(id, marketplaceEntry.sourceRef || id, marketplaceEntry.sourceMarketplace, marketplaceEntry.catalog?.sourceCommit);
         if (upgradeResult.status !== 'installed') {
           return { ok: false, error: (upgradeResult as any).error ?? 'Update failed' };
         }
+        // WHY: a pinned third-party update reports the commit it landed on; ours report none.
+        gitUpgradeCommit = upgradeResult.commit;
       } else if (result.status === 'already_installed'
                  && (marketplaceEntry.sourceType === 'url' || marketplaceEntry.sourceType === 'git-subdir')) {
         // WHY: installPlugin returns 'already_installed' before it reaches any clone,
@@ -546,7 +571,11 @@ export class LocalSkillProvider {
   async uninstall(id: string): Promise<{ type: 'plugin' | 'prompt' }> {
     const pluginId = await this.resolveUninstallTarget(id);
     if (pluginId) {
+      // WHY: without this a plugin's hooks and connected tools outlived Uninstall (see detachPluginExtras).
+      await detachPluginExtras(pluginInstallDir(pluginId));
       await uninstallPlugin(pluginId);
+      // A plugin turned off as unsafe is held outside the plugins folder: Remove deletes that too.
+      await fs.promises.rm(turnedOffDir(pluginId), { recursive: true, force: true }).catch(() => {});
       this.configStore.removePluginInstall(pluginId);
       this.installedCache = null;
       this.onCacheInvalidated?.();
@@ -842,6 +871,11 @@ export class LocalSkillProvider {
     }
   }
 
+  /** Plugin off-switch: fetch the list and apply it (main.ts / headless-boot.ts, hourly). */
+  enforceBlocklist(fetchImpl?: typeof fetch): Promise<{ turnedOff: string[]; turnedOn: string[] }> {
+    return this.offSwitch.enforce(fetchImpl);
+  }
+
   // --- Fetch helpers ---
 
   private async fetchIndex(): Promise<SkillEntry[]> {
@@ -1045,7 +1079,9 @@ export class LocalSkillProvider {
    */
   async reconcileBundledPlugins(): Promise<Array<{ id: string; action: 'installed' | 'upgraded' | 'unchanged' | 'skipped-dev' | 'failed'; from?: string; to?: string; error?: string; via?: string }>> {
     type ReconcileAction = 'installed' | 'upgraded' | 'unchanged' | 'skipped-dev' | 'failed';
-    const ids = [...BUNDLED_PLUGIN_IDS];
+    // Off-switch: a built-in plugin on the list must not be put back at launch.
+    const blocked = await this.offSwitch.getList();
+    const ids = [...BUNDLED_PLUGIN_IDS].filter((id) => !blocked.has(id));
 
     // WHY: ~/.claude is shared with the live app; a run-dev.sh copy must never rewrite the real install.
     if (process.env.YOUCODED_PROFILE && process.env.YOUCODED_BUNDLED_UPGRADE !== '1') {
@@ -1359,3 +1395,4 @@ export class LocalSkillProvider {
     return repaired;
   }
 }
+

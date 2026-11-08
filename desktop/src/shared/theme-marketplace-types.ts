@@ -34,6 +34,10 @@ export interface ThemeRegistryEntry {
   manifestUrl: string;
   /** Map of relative asset path → download URL */
   assetUrls?: Record<string, string>;
+  // SHA-256 (hex) of every downloadable file, keyed like assetUrls plus "manifest.json". Written by
+  // wecoded-themes' build-registry.py; the installer refuses a file that does not match (2026-11).
+  // Absent on registries built before then, which install as before.
+  fileHashes?: Record<string, string>;
   /** Phase 3c: optional config schema for the settings form */
   configSchema?: ConfigSchema;
   /**

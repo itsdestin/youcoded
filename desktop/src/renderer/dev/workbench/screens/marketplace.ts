@@ -18,6 +18,11 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   mp('marketplace/detail/member', 'dialog'),
   mp('marketplace/detail/caution', 'dialog'),
   mp('marketplace/detail/connection', 'dialog'),
+  // Plugin off-switch: an installed plugin YouCoded turned off, on its detail page and on its Library card.
+  { ...mp('marketplace/detail/turned-off', 'dialog'), params: { turnedOff: '1' } },
+  { ...mp('marketplace/detail/turned-off#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 }, params: { turnedOff: '1' } },
+  { ...mp('library#plugin-turned-off', 'view'), mark: 'library', params: { turnedOff: '1' } },
+  { ...mp('library#plugin-turned-off-phone', 'view', 'narrow'), mark: 'library', viewport: { width: 390, height: 844 }, params: { turnedOff: '1' } },
   mp('marketplace/theme-detail', 'dialog'),
   mp('marketplace/theme-detail/not-installed', 'dialog'),
   // A built-in theme (ships in the app): Apply only.

@@ -46,6 +46,7 @@ import { IPC, type AttentionState, type AttentionSummary, type SessionOwnershipA
 import { VITE_DEV_PORT } from '../shared/ports';
 import { wireDevLoadRecovery } from './dev-load-recovery';
 import { log, rotateLog } from './logger';
+import { startPluginOffSwitch } from './plugin-blocklist';
 import { applyWindowsUserToolsToEnv } from './prerequisite-installer';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
@@ -331,6 +332,8 @@ skillProvider.ensureMigrated();
 // started. See the WHY on repairPackageVersions() in skill-provider.ts for
 // what breaks without the repair (permanently stale "Update available"
 // state for every in-repo plugin other than the three bundled ids).
+// Plugin off-switch (plugin-blocklist.ts): launch + hourly; open chats reload plugins on a change.
+startPluginOffSwitch(skillProvider, () => sessionManager.broadcastReloadPlugins());
 void (async () => {
   await skillProvider.repairPackageVersions();
   // Fire-and-forget: install bundled plugins if missing. Silent retry on
