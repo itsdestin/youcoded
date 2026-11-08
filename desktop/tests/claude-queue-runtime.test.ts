@@ -153,4 +153,49 @@ describe('instance-owned Claude queue runtime', () => {
   expect(await f.runtime.action('s',{kind:'enqueue',queueId:id.identity.queueId,payload:{sendEpoch:id.identity.sendEpoch,sendId:'after',originalText:'hello',attachments:[],displayContent:'hello'}})).toMatchObject({status:'queued'});
   await f.runtime.close();
  });
+ it('links the conversation when a send finds the first link failed, instead of refusing every send',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'queue-runtime-'));roots.push(root);
+  const bridge=Object.assign(new EventEmitter(),{attachQueueTransport:vi.fn(),setQueueInitializer:vi.fn(),isReady:():boolean=>true,executeQueueClear:vi.fn()});
+  const manager={getSession:()=>({id:'s',cwd:root,provider:'claude'}),sendInput:vi.fn(()=>true),queueWorkerCommand:vi.fn(async()=>({status:'revoked'}))};
+  const runtime=new ClaudeQueueRuntime({userDataRoot:()=>root,bridge:bridge as any,manager:manager as any,inputSafe:()=>false,working:()=>false,publish:vi.fn(),noteSend:vi.fn()});
+  const original=ClaudeQueue.prototype.bind;const bind=vi.spyOn(ClaudeQueue.prototype,'bind').mockRejectedValueOnce(Error('disk busy'));
+  try{
+   bridge.emit('native-ready','s','inc');bridge.emit('state','s',{claudeSessionId:'conversation',turnId:null});
+   await vi.waitFor(()=>expect(bind).toHaveBeenCalledTimes(1));
+   // No further state report comes (no turn can start without a send); the send itself must link it.
+   const id=await runtime.action('s',{kind:'identity'});if(id.status!=='identity')throw Error('identity: '+JSON.stringify(id));
+   expect(await runtime.action('s',{kind:'enqueue',queueId:id.identity.queueId,payload:{sendEpoch:id.identity.sendEpoch,sendId:'first',originalText:'hi',attachments:[],displayContent:'hi'}})).toMatchObject({status:'queued'});
+   expect(bind.mock.calls.length).toBe(2);void original;
+  }finally{bind.mockRestore();await runtime.close();}
+ });
+ it('keeps sending after the helper inside Claude Code introduces itself again',async()=>{
+  const f=await fixture();const before=await f.runtime.action('s',{kind:'identity'});if(before.status!=='identity')throw Error('identity');
+  await f.runtime.action('s',{kind:'enqueue',queueId:before.identity.queueId,payload:{sendEpoch:before.identity.sendEpoch,sendId:'waiting',originalText:'kept',attachments:[],displayContent:'kept'}});
+  f.bridge.emit('native-ready','s','inc-2');f.bridge.emit('state','s',{claudeSessionId:'conversation',turnId:null});
+  // Before: the old link was marked "transitioning" for good and every send said "Conversation identity changed".
+  const id=await f.runtime.action('s',{kind:'identity'});if(id.status!=='identity')throw Error('identity: '+JSON.stringify(id));
+  // The message that was waiting is still there, in the same queue.
+  expect(id.identity.queueId).toBe(before.identity.queueId);
+  expect(f.publish.mock.lastCall?.[1]).toMatchObject({queue:[expect.objectContaining({content:'kept'})]});
+  expect(await f.runtime.action('s',{kind:'enqueue',queueId:id.identity.queueId,payload:{sendEpoch:id.identity.sendEpoch,sendId:'after-restart',originalText:'hi',attachments:[],displayContent:'hi'}})).toMatchObject({status:'queued'});
+  await f.runtime.close();
+ });
+ it('a conversation whose chat did not close cleanly can be opened and sent to again',async()=>{
+  const f=await fixture();const first=await f.runtime.action('s',{kind:'identity'});if(first.status!=='identity')throw Error('identity');
+  await f.runtime.action('s',{kind:'enqueue',queueId:first.identity.queueId,payload:{sendEpoch:first.identity.sendEpoch,sendId:'kept',originalText:'hi',attachments:[],displayContent:'hi'}});
+  // desktop.log: "Queue close failed: Stale send epoch" — closing threw, so the conversation stayed marked live.
+  const close=vi.spyOn(ClaudeQueue.prototype,'close').mockRejectedValueOnce(Error('Stale send epoch'));
+  try{await expect(f.runtime.forget('s')).rejects.toThrow('Stale send epoch');}finally{close.mockRestore();}
+  f.bridge.emit('native-ready','s2','inc-reopened');f.bridge.emit('state','s2',{claudeSessionId:'conversation',turnId:null});
+  const id=await f.runtime.action('s2',{kind:'identity'});if(id.status!=='identity')throw Error('identity: '+JSON.stringify(id));
+  expect(await f.runtime.action('s2',{kind:'enqueue',queueId:id.identity.queueId,payload:{sendEpoch:id.identity.sendEpoch,sendId:'reopened',originalText:'again',attachments:[],displayContent:'again'}})).toMatchObject({status:'queued'});
+  await f.runtime.close();
+ });
+ it('never takes a conversation away from another chat that is still using it',async()=>{
+  const f=await fixture();
+  f.bridge.emit('native-ready','other','inc-other');f.bridge.emit('state','other',{claudeSessionId:'conversation',turnId:null});
+  expect(await f.runtime.action('other',{kind:'identity'})).toMatchObject({status:'rejected'});
+  expect(await f.runtime.action('s',{kind:'identity'})).toMatchObject({status:'identity'});
+  await f.runtime.close();
+ });
 });

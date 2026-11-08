@@ -68,6 +68,24 @@ export function sendToClaudeCode(o: OutgoingSend): string {
   return sendToClaudeLegacy(o,sendId);
 }
 
+/** How long a send waits for the conversation's queue to come ready before saying it could not send. */
+const QUEUE_READY_WAIT_MS = 10000;
+const QUEUE_READY_RETRY_MS = 1000;
+/**
+ * Ask whether the conversation's queue can take a message, asking again for a short while when it cannot YET.
+ * WHY (2026-11-07, "Queue identity is not ready"): "not ready" is usually a moment — the helper inside Claude Code
+ * catching up after the computer wakes, or the conversation being linked — and the computer now repairs both by itself.
+ * Answering the first "not ready" with a failure turned that moment into a refused message. Nothing is sent while asking.
+ */
+async function readyQueueIdentity(sessionId: string) {
+  const deadline = Date.now() + QUEUE_READY_WAIT_MS;
+  for (;;) {
+    const reply = await window.claude.session.queue.action(sessionId, { kind: 'identity' });
+    if (reply.status === 'identity' || reply.status === 'unavailable' || Date.now() >= deadline) return reply;
+    await new Promise(resolve => setTimeout(resolve, QUEUE_READY_RETRY_MS));
+  }
+}
+
 // WHY: identical text is valid new intent while a previous send awaits its acknowledgement.
 // Only settled-unknown persisted requests are retry candidates; reload intentionally resets this set.
 const inFlightQueueSends = new Set<string>();
@@ -86,10 +104,11 @@ async function sendViaHostQueue(o: OutgoingSend, sendId: string): Promise<void> 
     if(o.drawNow&&!(o.originalText??o.ptyText).trimStart().startsWith('/')){drawnSendId=request?.payload.sendId??sendId;o.dispatch({type:'USER_PROMPT',sessionId:o.sessionId,content:o.content,timestamp:Date.now(),attachments:o.paths,sendId:drawnSendId,sendTransport:'queue'});}
     if(!request){
      allowLegacyFallback=true;
-     const identity = await window.claude.session.queue.action(o.sessionId,{kind:'identity'});
+     const identity = await readyQueueIdentity(o.sessionId);
      allowLegacyFallback=false;
      if (identity.status === 'unavailable') { undraw(); sendToClaudeLegacy(o,sendId); return; }
-     if (identity.status !== 'identity') throw Error('Queue identity is not ready. The original message was not submitted.');
+     // WHY the computer's own reason: one fixed sentence for every cause made a stuck chat impossible to tell apart.
+     if (identity.status !== 'identity') throw Error(('message' in identity ? identity.message.replace(/\.?$/, '. ') : '') + 'Your message was not sent.');
      request={kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId,originalText:o.originalText??o.ptyText,attachments:[...o.paths],displayContent:o.content}};
      savePendingQueueSend(o.sessionId,request);
     }
