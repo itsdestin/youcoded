@@ -117,3 +117,15 @@ describe('every dialog is a screen, or says why not', () => {
     expect(unknown).toEqual([]);
   });
 });
+
+// WHY (Destin, 2026-11-08: a "new" situation on the release comparison showed an ordinary-looking screen with no
+// word of what was new): every state marked new carries its plain sentence, and no sentence outlives its mark.
+describe('what is new, in words', () => {
+  it('every newIn state has a sentence and every sentence has a newIn state', async () => {
+    const { WHATS_NEW } = await import('../src/renderer/dev/workbench/screens/whats-new');
+    const marked = SCREENS.filter((s) => s.newIn).map((s) => s.name).sort();
+    expect(marked.filter((n) => !WHATS_NEW[n])).toEqual([]);
+    expect(Object.keys(WHATS_NEW).filter((n) => !marked.includes(n))).toEqual([]);
+    expect(SCREENS.filter((s) => s.newIn).every((s) => s.whatsNew)).toBe(true);
+  });
+});

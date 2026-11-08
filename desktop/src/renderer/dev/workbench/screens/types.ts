@@ -34,6 +34,8 @@ export type ScreenEntry = {
    *  the last release" — so set it only for UI the last release did not have, and remove it after the
    *  next release ships. */
   newIn?: 'after';
+  /** What is new in a `newIn` state, in plain words — filled from whats-new.ts by index.ts, never set by hand. */
+  whatsNew?: string;
   /** Why Escape here steps back INSIDE the popup instead of closing it (a wizard that owns its
    *  own ✕ and Escape, inside Backup & sync). `shoot --check` then expects every layer to stay
    *  open after Escape, rather than the top one to close. */

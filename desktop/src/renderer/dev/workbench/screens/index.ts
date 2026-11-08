@@ -30,10 +30,11 @@ import { BUDDY } from './buddy';
 import { COVERAGE_A } from './coverage-a';
 import { COVERAGE_B } from './coverage-b';
 import { COVERAGE_C } from './coverage-c';
+import { WHATS_NEW } from './whats-new';
 
 export type { ScreenEntry } from './types';
 
-export const SCREENS: readonly ScreenEntry[] = [
+const LISTED: readonly ScreenEntry[] = [
   // WHY first (coverage batch C): the browser-pane confirms navigate poorly when they run beside batch B's Flappy run (a busy game
   // loop in a sibling tab stalled their page load past 15 s, a different one each `--check`); at the front they never overlap it.
   ...COVERAGE_C,
@@ -50,3 +51,6 @@ export const SCREENS: readonly ScreenEntry[] = [
   ...COVERAGE_A,
   ...COVERAGE_B,
 ];
+
+// WHY joined here (whats-new.ts says why): one place for the sentences, read beside the `newIn` marks
+export const SCREENS: readonly ScreenEntry[] = LISTED.map((s) => (s.newIn && WHATS_NEW[s.name] ? { ...s, whatsNew: WHATS_NEW[s.name] } : s));
