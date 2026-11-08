@@ -98,6 +98,7 @@ Exact router-mode arg list (no `-m`), b10665 / 2026-09-05:
 ```
 --host 127.0.0.1 --port <ENGINE_PORT> --no-webui --jinja
 --models-dir <cacheDir> --models-max 2
+--no-cache-idle-slots       # 2026-11-07: keep each chat's reading (see below)
 [--spec-default]            # unless engine.speed.speculative === false
 [--cache-type-k q8_0]       # unless engine.speed.compressCache === false
 --models-preset <NativeHome.root>/engine/models.ini
@@ -155,6 +156,16 @@ no usable preset file:
     and every chat's opening shares the same instructions, so chats took each other's.
   - **`POST /models/load {model}` exists in router mode** (answers `{"success":true}` at
     once). Unused for now — the load "hi" keeps its error text for `lastLoadError`.
+  - **What kept readings cost a NEW chat, at real sizes (2026-11-08, Vulkan, 64k shared
+    pool, four ~15,400-token openings placed on slots 0-3 in turn).** Reading the Nth
+    opening while N−1 others are kept: Qwen3.8-27B 111 / 106 / 99 / 100 s (no cost);
+    Qwen3.6-35B-A3B 19.7 / 20.3 / 20.6 / 20.9 s (+6%). An earlier run that showed +60%
+    (9B, 89 → 144 s) used ~31k-token prompts and ran while the machine was loaded
+    (load average 24-57); it does not reproduce at chat sizes. Two alternatives were
+    measured on the 27B: separate per-slot memory (`-np 4 -no-kvu`, `ctx-size` ×4)
+    105 / 94 / 94 / 95 s, and `-ctk q8_0 -ctv q8_0` on the shared pool 92 / 96 / 96 / 96 s.
+    Neither is adopted: the first quadruples context memory, the second is the fatal
+    `-fa off` case below and wants measuring on the smaller models first.
 - **Speed flags (2026-09-04), both measured on b10665, Qwen3.5-9B Q8_0, Z13 Vulkan;
   guard: `test-engine/probe-speed.mjs` (flags reach the model child AND the drafter fires).
   Both are now user switches (`engine.speed` in config.json, `engine:set-config`) and
@@ -167,6 +178,17 @@ no usable preset file:
     a 700-token essay was 9.0 → 9.3 tok/s with `draft_n` absent — the drafter simply
     never fires on novel prose, so no measured penalty. This is the shape of every
     Edit/Write tool call. The router forwards it to each model child (probe-pinned).
+  - **MTP drafting (`--spec-type draft-mtp`) — measured 2026-11-08, NOT yet adopted.**
+    Recent Qwen GGUFs carry their own next-token heads (`blk.N.nextn.*` tensors,
+    `<arch>.nextn_predict_layers`); Qwen3.8-27B-UD-Q8_K_XL and Qwen3.6-35B-A3B-UD-Q6_K_XL
+    both have them, Qwen3.5-9B-Q8_0 does not. Qwen3.8-27B, Vulkan, 4 slots, three real
+    300-token answers on a ~15k opening, two passes: today's `--spec-default` **6.7 t/s
+    with ZERO drafts** on all six; `draft-mtp --spec-draft-n-max 2` **11.1-13.8 t/s**;
+    `n-max 3` **11.5-15.4 t/s** (drafted 177-361, accepted 129-208 per answer). Reading
+    the opening was unchanged (91 s vs 91-96 s). Works with `n_slots = 4`. Untested:
+    combining it with the n-gram drafter (`--spec-type` takes a list), the 35B MoE, and
+    any model without the heads (must fall back to `--spec-default`). These 2026-11-08
+    spawns omitted `--cache-type-k q8_0`; re-check with it before adopting.
   - **`--cache-type-k q8_0`** — 8-bit KEY cache. `llama-bench` at 16,384 tokens of
     depth: generation 11.4 → 16.2 tok/s, prompt 281 → 452 tok/s, half the K memory.
   - **V cache is deliberately left f16.** `-ctv q8_0` measured a further prompt-speed
@@ -419,7 +441,32 @@ context window.
 
 #### ROCm vs Vulkan, measured
 
-**ROCm is not simply faster than Vulkan. It is a trade, and on the one machine we
+**Current verdict (re-measured 2026-11-08, same Z13, b10665, ROCm 7.2.4 system
+libraries, the app's spawn shape with `--no-cache-idle-slots --spec-default`):
+ROCm stays an optional build and must NOT be chosen automatically.** It reads
+faster only on a freshly started engine, and the app now keeps each chat's
+reading, which is exactly where ROCm falls behind.
+
+- **Fresh engine, 31.6k-token read:** ROCm 66 s vs Vulkan 89 s (Qwen3.5-9B), 75 s vs
+  94 s (Qwen3.6-35B-A3B) — ROCm 20-25% faster. Qwen3.8-27B: 205-217 s vs 244-265 s.
+- **Same read after three short requests stayed in other slots:** 9B ROCm 173 s vs
+  Vulkan 144 s; 35B ROCm over 300 s (client timeout) vs Vulkan 114 s. Short reads on
+  ROCm fade request by request (9B 453 → 326 → 269 t/s) while Vulkan stays flat.
+  Both engines ran the identical configuration (`flash_attn` on, `kv_unified = true`,
+  4 slots). The research found no upstream issue for this exact symptom; the nearest
+  is ggml-org/llama.cpp#19523 (masked-block skipping in flash attention, fixed for
+  Vulkan in #19582). Not tried: `-np 1` on ROCm, installing hipBLASLt
+  (`ROCBLAS_USE_HIPBLASLT=1`), a `GGML_HIP_ROCWMMA_FATTN` build.
+- **Writing:** now within a few percent on the 27B (Vulkan 6.19-6.73, ROCm 5.99-6.67
+  t/s), and equal on the 9B and 2B; the September 24-46% gap below did not reproduce.
+- **Small models:** the 2B's 31.6k read after three short requests took 22-27 s on
+  ROCm vs 12.5-13 s on Vulkan (no fresh-engine run of the 2B was made).
+- **Planned label change:** `BACKEND_LABELS.rocm` ("reads faster, writes slower") is
+  wrong for most models now; the verify anchor below tracks the code until it changes.
+
+The September record follows, kept as history.
+
+**(2026-09-05) ROCm is not simply faster than Vulkan. It is a trade, and on the one machine we
 have measured it loses the half a user actually watches.** The UI shipped
 `Switch to ROCm (faster on AMD)` from 2026-09-05 to 2026-09-06; that claim was
 never measured. When it was, it was wrong.
