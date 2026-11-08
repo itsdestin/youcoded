@@ -70,14 +70,15 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/assistant/cloud', 'dialog'),
   // Custom providers (2026-10-20): Add provider — empty, searching, a service picked,
   // a typed address, then the rows it closes onto (checked OK, and a refused key).
-  { ...settings('settings/assistant/cloud/add-provider', 'dialog'), newIn: 'after' },
-  { ...settings('settings/assistant/cloud/add-provider#search', 'dialog'), newIn: 'after', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }] },
-  { ...settings('settings/assistant/cloud/add-provider#picked', 'dialog'), newIn: 'after', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }] },
+  // WHY no newIn (release-comparison audit, 2026-11-07): Add provider was already in v1.3.3
+  { ...settings('settings/assistant/cloud/add-provider', 'dialog') },
+  { ...settings('settings/assistant/cloud/add-provider#search', 'dialog'), open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }] },
+  { ...settings('settings/assistant/cloud/add-provider#picked', 'dialog'), open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }] },
   // Round 2: the picked service's Models fold opened (review-1#R-3: models as cards).
-  { ...settings('settings/assistant/cloud/add-provider#models', 'dialog'), newIn: 'after', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }, { do: 'click', target: { role: 'button', labelStarts: '4 supported models' } }] },
-  { ...settings('settings/assistant/cloud/add-provider#other', 'dialog'), newIn: 'after', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'other' }, { do: 'key', key: 'Enter' }] },
-  { ...settings('settings/assistant/cloud/add-provider#added', 'dialog'), newIn: 'after', mark: 'settings/assistant/cloud', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }, { do: 'scroll', target: { role: 'textbox', label: 'Name' }, dir: 'down', times: 2 }, { do: 'type', target: { role: 'textbox', label: 'API key' }, text: 'sk-inception-123' }, { do: 'click', target: { role: 'button', label: 'Add provider' } }] },
-  { ...settings('settings/assistant/cloud/add-provider#refused', 'dialog', 'error-state'), newIn: 'after', mark: 'settings/assistant/cloud', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }, { do: 'scroll', target: { role: 'textbox', label: 'Name' }, dir: 'down', times: 2 }, { do: 'type', target: { role: 'textbox', label: 'API key' }, text: 'sk-fake-key' }, { do: 'click', target: { role: 'button', label: 'Add provider' } }] },
+  { ...settings('settings/assistant/cloud/add-provider#models', 'dialog'), open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }, { do: 'click', target: { role: 'button', labelStarts: '4 supported models' } }] },
+  { ...settings('settings/assistant/cloud/add-provider#other', 'dialog'), open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'other' }, { do: 'key', key: 'Enter' }] },
+  { ...settings('settings/assistant/cloud/add-provider#added', 'dialog'), mark: 'settings/assistant/cloud', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }, { do: 'scroll', target: { role: 'textbox', label: 'Name' }, dir: 'down', times: 2 }, { do: 'type', target: { role: 'textbox', label: 'API key' }, text: 'sk-inception-123' }, { do: 'click', target: { role: 'button', label: 'Add provider' } }] },
+  { ...settings('settings/assistant/cloud/add-provider#refused', 'dialog', 'error-state'), mark: 'settings/assistant/cloud', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }, { do: 'scroll', target: { role: 'textbox', label: 'Name' }, dir: 'down', times: 2 }, { do: 'type', target: { role: 'textbox', label: 'API key' }, text: 'sk-fake-key' }, { do: 'click', target: { role: 'button', label: 'Add provider' } }] },
   settings('settings/assistant/local', 'dialog'),
   settings('settings/assistant/local/engine-advanced', 'dialog'),
   // Failures with their Try again (small-fixes-1): the engine's set-up check, and a model download
@@ -94,7 +95,7 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // folder rows below the fold at 1440×900.
   { ...settings('settings/assistant/permissions#folder-open-hover', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 3 }, 'youcoded /home/destin/youcoded-dev/youcoded 7 ▸', { do: 'hover', target: { role: 'button', label: 'youcoded /home/destin/youcoded-dev/youcoded 7 ▾' } }] },
   // "Commands that never ask": the closed fold opened, to show the plain-words list (2026-10-31).
-  { ...settings('settings/assistant/permissions#never-ask-open', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 2 }, 'Look-only commands Used in Ask first and Auto edit. Checking things ne'] },
+  { ...settings('settings/assistant/permissions#never-ask-open', 'dialog', 'fold'), newIn: 'after', open: [{ do: 'scroll', dir: 'down', times: 2 }, 'Look-only commands Used in Ask first and Auto edit. Checking things ne'] },
   // The (i) explainer swaps the page body out, so the dialog's own mark ('settings/assistant') is the one that stays. The second
   // scrolled to the end: "Commands that never ask" and the rest of the page's rewritten sections.
   { ...settings('settings/assistant/permissions#explainer', 'dialog'), mark: 'settings/assistant', open: ['What is this?'] },
