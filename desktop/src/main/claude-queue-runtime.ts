@@ -195,7 +195,7 @@ export class ClaudeQueueRuntime {
    return {status:'done'};
   }
   if (!b) return {status:'unavailable'};
-  if (this.closed || !this.options.bridge.isReady(id)) { this.note(id, 'Claude Code helper not answering'); return { status: 'unknown', message: 'The queue connection is no longer ready. Check the conversation before sending again.', retryable: true }; }
+  if (this.closed || !this.options.bridge.isReady(id)) { this.note(id, 'Claude Code helper not answering'); return { status: 'unknown', message: 'The queue connection is no longer ready. Check the conversation before sending again.', retryable: !this.closed }; }
   try {
    await b.ready;
    // WHY retry here (2026-11-07): a chat whose first link failed was only ever linked again by the helper's next state

@@ -208,7 +208,7 @@ describe('instance-owned Claude queue runtime', () => {
   expect(await f.runtime.action('s',{kind:'identity'})).toMatchObject({status:'identity'});
   const journal=JSON.parse(await readFile(join(f.root,'claude-queues',id.identity.queueId+'.json'),'utf8'));
   expect(journal.live).toEqual({incarnation:'inc-2'});
-  expect(journal.items.find((i:any)=>i.sendId==='mid')?.status).not.toBe('waiting');
+  expect(journal.items.find((i:any)=>i.sendId==='mid')?.status).toBe('uncertain');
   expect(journal.quarantines.length).toBeGreaterThan(0);
   // The new helper is offered nothing to send: the uncertain message waits for the person to check it.
   const next=await transport.poll('s','inc-2');expect(next.kind).not.toBe('stage');

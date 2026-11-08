@@ -132,7 +132,10 @@ async function sendViaHostQueue(o: OutgoingSend, sendId: string): Promise<void> 
     const result = await window.claude.session.queue.action(o.sessionId,request);
     if (result.status === 'queued') {clearPendingQueueSend(o.sessionId,request);void settleSavedQueueSends(o.sessionId);return;} // host strip/transcript only
     if (result.status === 'unavailable') throw Error('Queue availability changed. Check the conversation before sending again.');
-    throw Error('message' in result ? result.message : 'Queued delivery could not be confirmed.');
+    // WHY plain words (the computer's reason goes to the console and its log): a refusal never queued the message; any
+    // other answer may have, so the person checks before sending again rather than risking a double.
+    console.warn('[queue] send not accepted:', result);
+    throw Error(result.status === 'rejected' ? "This chat couldn't take your message. Your message wasn't sent." : "Your message may not have been sent. Check the chat before sending it again.");
   } catch (error) {
     // A settled failure is already a recovery candidate, even while the notice module loads.
     if(activeSendId){inFlightQueueSends.delete(activeSendId);activeSendId=undefined;}
