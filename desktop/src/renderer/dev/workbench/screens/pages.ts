@@ -133,6 +133,8 @@ export const PAGES: readonly ScreenEntry[] = [
   pg('automations/details', 'automations'),
   { ...pg('automations/details#runs', 'automations'), params: { autoView: 'runs' } },
   { ...pg('automations/details#subscription', 'automations'), params: { autoView: 'subscription' } },
+  // Plan deck round 2: the lower settings (missed runs, still running when due, runs on).
+  { ...pg('automations/details#lower', 'automations'), params: { autoView: 'lower' } },
   { ...pg('automations/details#add-menu', 'automations'), params: { autoView: 'add-menu' } },
   { ...pg('automations/details#new', 'automations'), params: { autoView: 'new' } },
   { ...pg('automations#phone', 'view', 'automations', 'narrow'), viewport: PHONE, mark: 'automations' },

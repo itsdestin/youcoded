@@ -249,7 +249,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // One popup screen; its states (`#runs`, `#new`…) pass `autoView` (screens/pages.ts).
   useScreenOpen('automations/details', () => {
     const v = new URLSearchParams(location.search).get('autoView');
-    openAutomationsAt(v === 'runs' || v === 'subscription' || v === 'add-menu' || v === 'new' ? v : 'details');
+    openAutomationsAt(v === 'runs' || v === 'subscription' || v === 'add-menu' || v === 'new' || v === 'lower' ? v : 'details');
     dispatch({ type: 'PAGE_OPENED', pageId: AUTOMATIONS_PAGE_ID, focus: automationsFocus() });
   });
   useScreenOpen('office/versions', () => { void previewOfficeTabs(0, true); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });

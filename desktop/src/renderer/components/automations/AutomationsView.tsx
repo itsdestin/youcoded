@@ -18,16 +18,16 @@ import { automationsBridge, publishAutomations, refreshAutomations, useAutomatio
 import { OUTCOME, scheduleWords } from './automation-words';
 import { AutomationDetails, JobGlyph, blankAutomation, type DetailsTab } from './AutomationDetails';
 
-type Open = { job: AutomationSummary; isNew: boolean; tab: DetailsTab } | null;
-type Pending = 'new' | { id: string; tab: DetailsTab; addMenu: boolean } | null;
+type Open = { job: AutomationSummary; isNew: boolean; tab: DetailsTab; atEnd?: boolean } | null;
+type Pending = 'new' | { id: string; tab: DetailsTab; addMenu: boolean; atEnd?: boolean } | null;
 
 // Photo-only (`shoot`): PageHost owns the screen names (this view mounts only once the page
 // opens), so it leaves what to open here; a view already showing picks it up at once.
 let startAt: Pending = null;
 let jump: ((v: Pending) => void) | null = null;
-export function openAutomationsAt(v: 'details' | 'runs' | 'subscription' | 'add-menu' | 'new'): void {
+export function openAutomationsAt(v: 'details' | 'runs' | 'subscription' | 'add-menu' | 'new' | 'lower'): void {
   const to: Pending = v === 'new' ? 'new'
-    : { id: v === 'subscription' ? 'job-tidy' : v === 'runs' ? 'job-money' : 'job-email', tab: v === 'runs' ? 'runs' : 'settings', addMenu: v === 'add-menu' };
+    : { id: v === 'subscription' || v === 'lower' ? 'job-weekly' : v === 'runs' ? 'job-money' : 'job-email', tab: v === 'runs' ? 'runs' : 'settings', addMenu: v === 'add-menu', atEnd: v === 'lower' };
   if (jump) jump(to); else startAt = to;
 }
 
@@ -46,7 +46,7 @@ export function AutomationsView({ visible }: { visible: boolean }) {
     else {
       const job = jobs.find((j) => j.id === pending.id);
       setAddMenu(pending.addMenu);
-      if (job) setOpen({ job, isNew: false, tab: pending.tab });
+      if (job) setOpen({ job, isNew: false, tab: pending.tab, atEnd: pending.atEnd });
     }
     setPending(null);
   }, [pending, loaded, jobs]);
@@ -84,7 +84,7 @@ export function AutomationsView({ visible }: { visible: boolean }) {
         {on.length > 0 && <Group label="On" jobs={on} onOpen={openJob} />}
         {paused.length > 0 && <Group label="Paused" jobs={paused} onOpen={openJob} />}
       </div>
-      <AutomationDetails job={shown} isNew={open?.isNew ?? false} tab={open?.tab ?? 'settings'} addMenuOpen={addMenu} onAddMenu={setAddMenu}
+      <AutomationDetails job={shown} isNew={open?.isNew ?? false} tab={open?.tab ?? 'settings'} atEnd={open?.atEnd ?? false} addMenuOpen={addMenu} onAddMenu={setAddMenu}
         onTab={(tab) => setOpen((o) => (o ? { ...o, tab } : o))} onClose={() => { setOpen(null); setAddMenu(false); }} />
     </div>
   );
@@ -128,7 +128,7 @@ const AutomationCard = React.memo(function AutomationCard({ job, onOpen }: { job
             <span className={`text-sm font-medium truncate ${job.enabled ? 'text-fg' : 'text-fg-muted'}`}>{job.name}</span>
           </div>
           <div className="flex min-w-0"><ChipRow>
-            {job.owner.kind === 'page' && <Chip>{job.owner.pageName}</Chip>}
+            {job.links.map((l) => <Chip key={l.id}>{l.name}</Chip>)}
             <Chip>{scheduleWords(job.start)}</Chip>
             <Chip>{job.model}</Chip>
           </ChipRow></div>

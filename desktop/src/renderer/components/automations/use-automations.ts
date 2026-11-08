@@ -55,7 +55,8 @@ function waitingOf(jobs: AutomationSummary[]) {
   for (const j of jobs) {
     if (!j.waiting) continue;
     total++;
-    if (j.owner.kind === 'page') pages.add(j.owner.pageId);
+    // A waiting job lights every page it is linked to (plan deck Q-pagejobs: links, not one owner).
+    for (const l of j.links) if (l.kind === 'page') pages.add(l.id);
   }
   lastJobs = jobs;
   lastWaiting = { total, pages };

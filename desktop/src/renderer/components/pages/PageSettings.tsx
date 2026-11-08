@@ -127,7 +127,8 @@ function PageSettingsBody({ page, onConnect, onEdit }: { page: PageSummary; onCo
  *  nothing. Each row's switch pauses it; the button opens Automations, where its settings are. */
 function PageAutomations({ pageId, onOpen }: { pageId: string; onOpen: (pageId: string) => void }) {
   const { jobs } = useAutomations();
-  const mine = jobs.filter((j) => j.owner.kind === 'page' && j.owner.pageId === pageId);
+  // Every automation linked to this page, wherever it was made (plan deck Q-pagejobs).
+  const mine = jobs.filter((j) => j.links.some((l) => l.kind === 'page' && l.id === pageId));
   if (mine.length === 0) return null;
   const setEnabled = async (id: string, on: boolean) => {
     const b = automationsBridge();

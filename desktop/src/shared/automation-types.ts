@@ -34,16 +34,38 @@ export interface AutomationTool {
 /** What a waiting job does when nobody answered in time (Q-wait-long: "set ways to proceed"). */
 type AutomationNoAnswer = 'skip' | 'stop' | 'fallback';
 
-/** What a job does when its time passed while the computer was asleep (Q-asleep, per job). */
-type AutomationLate = 'run' | 'skip' | 'fallback';
+/** What a job does when its time passed while the computer was asleep (Q-asleep, per job).
+ *  Plan deck S-start note: "run differently" covers a different time as well as different
+ *  instructions (which can also change what it produces), so 'later' runs at `lateAt`. */
+type AutomationLate = 'run' | 'skip' | 'later' | 'fallback';
+
+/** A page or project an automation is linked to. Plan deck Q-pagejobs / Q-deletepage: an
+ *  automation is its own thing that can be linked to any number of pages and projects (or none),
+ *  never owned by one; a linked page may run it from a button. */
+export interface AutomationLink {
+  kind: 'page' | 'project';
+  id: string;
+  name: string;
+  icon?: PageIcon;
+}
+
+/** One device that knows about this automation (plan deck Q-devices: every synced device lists
+ *  it; each one is switched on or off for running it, with a warning when two are on). */
+export interface AutomationDevice {
+  id: string;
+  name: string;
+  /** This is the device showing the screen. */
+  here: boolean;
+  runs: boolean;
+}
 
 export interface AutomationSummary {
   id: string;
   name: string;
   /** The instruction it runs, as the person wrote or approved it. */
   instruction: string;
-  /** A page owns it, or it stands alone (Q-belongs: either; every job also shows in Automations). */
-  owner: { kind: 'page'; pageId: string; pageName: string; pageIcon: PageIcon } | { kind: 'alone' };
+  /** The pages and projects it is linked to; empty = it stands alone (every job shows in Automations). */
+  links: AutomationLink[];
   start: AutomationStart;
   /** The model's name as the model picker shows it. */
   model: string;
@@ -58,7 +80,15 @@ export interface AutomationSummary {
   /** The instruction it follows instead, when noAnswer or late is 'fallback'. */
   fallback?: string;
   late: AutomationLate;
+  /** The time a late run happens instead, when late is 'later' ("18:00"). */
+  lateAt?: string;
   lateFallback?: string;
+  /** Plan deck Q-overlap: per job — when it is due while its last run is still going. */
+  overlap: 'skip-new' | 'stop-old' | 'both';
+  /** What happens to websites and to commands or files not in `tools` (stored per job). */
+  unlisted: { sites: 'never' | 'ask'; commands: 'never' | 'ask' };
+  /** Which devices run it (plan deck Q-devices). */
+  devices: AutomationDevice[];
   /** Q-tell: three kinds, each on or off per job. */
   notify: { needs: boolean; news: boolean; fails: boolean };
   /** Monthly limit in dollars (Q-limit: $5 to start, changeable). Absent on a subscription job. */
@@ -108,7 +138,9 @@ export interface AutomationsBridge {
   save(job: AutomationSummary): Promise<AutomationSummary[]>;
   setEnabled(id: string, enabled: boolean): Promise<AutomationSummary[]>;
   runNow(id: string): Promise<AutomationSummary[]>;
-  answer(id: string, allow: boolean): Promise<AutomationSummary[]>;
+  /** Plan deck S-answer: an answer may carry a note for the assistant; Don't allow needs one, so
+   *  the run knows what to do instead rather than trying again. */
+  answer(id: string, allow: boolean, note?: string): Promise<AutomationSummary[]>;
 }
 
 /** The built-in Automations page (Q-home note: "the main area could probably be a built-in

@@ -25,14 +25,15 @@ function sampleDraft(): AutomationSummary {
   return {
     id: 'job-draft', name: 'Morning money check',
     instruction: 'Look at yesterday’s spending on the Money page. If anything looks unusual, write a short note at the top and tell me.',
-    owner: { kind: 'page', pageId: 'page-money', pageName: 'Money', pageIcon: 'money' },
+    links: [{ kind: 'page', id: 'page-money', name: 'Money', icon: 'money' }],
     start: { kind: 'schedule', every: 'day', at: '7:00' }, model: 'GPT-5 mini', subscription: false,
     tools: [
       { id: 'd-read', label: 'Read this page’s information', source: 'Money', mode: 'allow' },
       { id: 'd-note', label: 'Write a note on this page', source: 'Money', mode: 'allow' },
       { id: 'd-notify', label: 'Send you a notification', source: 'YouCoded', mode: 'allow' },
     ],
-    whenAsk: 'wait', waitHours: null, noAnswer: 'skip', late: 'run',
+    whenAsk: 'wait', waitHours: null, noAnswer: 'skip', late: 'run', overlap: 'skip-new',
+    unlisted: { sites: 'never', commands: 'never' }, devices: [{ id: 'here', name: 'This computer', here: true, runs: true }],
     notify: { needs: true, news: true, fails: true }, limit: 5, enabled: false, usage: { dollars: 0, tokens: 0 },
   };
 }
@@ -72,7 +73,7 @@ function CheckBody({ draft, onChange }: { draft: AutomationSummary; onChange: (d
           <div className="min-w-0 flex-1 flex flex-col gap-1.5">
             <div className="text-base font-semibold text-fg leading-snug">{draft.name}</div>
             <div className="flex items-center gap-1.5 overflow-x-auto scroll-mask-x">
-              <Chip>{draft.owner.kind === 'page' ? `On ${draft.owner.pageName}` : 'On its own'}</Chip>
+              {draft.links.map((l) => <Chip key={l.id}>{l.name}</Chip>)}
               <Chip>{startWords(draft.start)}</Chip>
               <Chip>{draft.model}</Chip>
             </div>

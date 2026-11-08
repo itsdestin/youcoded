@@ -6,12 +6,18 @@
 // deck (Q-uses: "basically any of these"), each set up the way his answers say it would be.
 import type { AutomationRun, AutomationSummary, AutomationsBridge } from '../../../shared/automation-types';
 
+// Plan deck Q-devices: every synced device lists the job; this one runs it, the phone doesn't.
+const DEVICES = [
+  { id: 'dev-laptop', name: 'This laptop', here: true, runs: true },
+  { id: 'dev-phone', name: 'Pixel 9', here: false, runs: false },
+];
+
 function seedJobs(): AutomationSummary[] {
   return [
     {
       id: 'job-email', name: 'Email sorter',
       instruction: 'When an email arrives, put it under the right label and draft a reply if it needs one. Never send anything without asking me.',
-      owner: { kind: 'alone' }, start: { kind: 'event', event: 'An email arrives in Gmail' },
+      links: [], start: { kind: 'event', event: 'An email arrives in Gmail' },
       model: 'GPT-5 mini', subscription: false,
       tools: [
         { id: 't-read', label: 'Read your email', source: 'Gmail', mode: 'allow' },
@@ -20,7 +26,7 @@ function seedJobs(): AutomationSummary[] {
         { id: 't-send', label: 'Send an email', source: 'Gmail', mode: 'ask' },
       ],
       whenAsk: 'wait', waitHours: 12, noAnswer: 'skip', late: 'run',
-      notify: { needs: true, news: false, fails: true }, limit: 5, enabled: true,
+      notify: { needs: true, news: false, fails: true }, limit: 5, enabled: true, overlap: 'skip-new', unlisted: { sites: 'never', commands: 'never' }, devices: DEVICES,
       usage: { dollars: 1.84, tokens: 612_000 },
       lastRun: { id: 'r-e1', when: 'Today at 9:12', outcome: 'waiting', summary: 'Labelled it "Plans" and drafted a reply to Sam Lee.', dollars: 0.02, tokens: 6_400, seconds: 14 },
       waiting: {
@@ -32,7 +38,7 @@ function seedJobs(): AutomationSummary[] {
     {
       id: 'job-money', name: 'Morning money check',
       instruction: 'Look at yesterday’s spending on this page. If anything looks unusual, write a short note at the top and tell me.',
-      owner: { kind: 'page', pageId: 'page-money', pageName: 'Money', pageIcon: 'money' },
+      links: [{ kind: 'page', id: 'page-money', name: 'Money', icon: 'money' }, { kind: 'page', id: 'page-weekly-briefing', name: 'Weekly briefing', icon: 'notes' }],
       start: { kind: 'schedule', every: 'day', at: '7:00' },
       model: 'Claude Sonnet', subscription: true,
       tools: [
@@ -40,14 +46,14 @@ function seedJobs(): AutomationSummary[] {
         { id: 't-pnote', label: 'Write a note on this page', source: 'Money', mode: 'allow' },
       ],
       whenAsk: 'skip', waitHours: null, noAnswer: 'skip', late: 'run',
-      notify: { needs: true, news: true, fails: true }, enabled: true,
+      notify: { needs: true, news: true, fails: true }, enabled: true, overlap: 'skip-new', unlisted: { sites: 'never', commands: 'never' }, devices: DEVICES,
       usage: { dollars: 0, tokens: 182_000 }, next: 'Tomorrow at 7:00',
       lastRun: { id: 'r-m1', when: 'Today at 7:00', outcome: 'news', summary: 'Flagged a $214 charge at Best Buy, about four times your usual there.', tokens: 9_100, seconds: 22 },
     },
     {
       id: 'job-shopping', name: 'Shopping list',
       instruction: 'Read this week’s meals on this page and write one shopping list, grouped by aisle, leaving out what’s already in the pantry list.',
-      owner: { kind: 'page', pageId: 'page-recipes', pageName: 'Recipe notes', pageIcon: 'notes' },
+      links: [{ kind: 'page', id: 'page-recipes', name: 'Recipe notes', icon: 'notes' }],
       start: { kind: 'button', label: 'Make this week’s shopping list' },
       model: 'Claude Haiku', subscription: true,
       tools: [
@@ -55,14 +61,14 @@ function seedJobs(): AutomationSummary[] {
         { id: 't-rwrite', label: 'Change this page’s information', source: 'Recipe notes', mode: 'allow' },
       ],
       whenAsk: 'skip', waitHours: null, noAnswer: 'skip', late: 'skip',
-      notify: { needs: true, news: false, fails: true }, enabled: true,
+      notify: { needs: true, news: false, fails: true }, enabled: true, overlap: 'skip-new', unlisted: { sites: 'never', commands: 'never' }, devices: DEVICES,
       usage: { dollars: 0, tokens: 41_000 },
       lastRun: { id: 'r-s1', when: 'Sunday at 18:40', outcome: 'done', summary: 'Made a list of 23 items in 6 aisles.', tokens: 7_800, seconds: 11 },
     },
     {
       id: 'job-weekly', name: 'Friday wrap-up',
       instruction: 'Summarise what I worked on this week from my chat list into the Weekly briefing page: what got done, what is still open, what to start Monday.',
-      owner: { kind: 'page', pageId: 'page-weekly-briefing', pageName: 'Weekly briefing', pageIcon: 'notes' },
+      links: [{ kind: 'page', id: 'page-weekly-briefing', name: 'Weekly briefing', icon: 'notes' }, { kind: 'project', id: 'proj-youcoded', name: 'youcoded-dev' }],
       start: { kind: 'schedule', every: 'week', day: 'Friday', at: '17:00' },
       model: 'Claude Sonnet', subscription: true,
       tools: [
@@ -70,27 +76,27 @@ function seedJobs(): AutomationSummary[] {
         { id: 't-wwrite', label: 'Change this page’s information', source: 'Weekly briefing', mode: 'allow' },
       ],
       whenAsk: 'wait', waitHours: null, noAnswer: 'skip', late: 'run',
-      notify: { needs: true, news: true, fails: true }, enabled: true,
+      notify: { needs: true, news: true, fails: true }, enabled: true, overlap: 'skip-new', unlisted: { sites: 'never', commands: 'never' }, devices: DEVICES,
       usage: { dollars: 0, tokens: 96_000 }, next: 'Friday at 17:00',
       lastRun: { id: 'r-w1', when: 'Friday at 17:00', outcome: 'done', summary: 'Wrote this week’s briefing: 9 things done, 4 still open.', tokens: 31_000, seconds: 48 },
     },
     {
       id: 'job-price', name: 'Headphones price watch',
       instruction: 'Check the price of the Sony WH-1000XM6 on bestbuy.com. Tell me only when it is under $200.',
-      owner: { kind: 'alone' }, start: { kind: 'schedule', every: 'hour', hours: 3 },
+      links: [], start: { kind: 'schedule', every: 'hour', hours: 3 },
       model: 'Gemini Flash', subscription: false,
       tools: [
         { id: 't-visit', label: 'Visit one website', source: 'Internet', mode: 'allow', exact: 'bestbuy.com' },
       ],
       whenAsk: 'skip', waitHours: null, noAnswer: 'skip', late: 'skip',
-      notify: { needs: true, news: true, fails: false }, limit: 5, enabled: false,
+      notify: { needs: true, news: true, fails: false }, limit: 5, enabled: false, overlap: 'skip-new', unlisted: { sites: 'never', commands: 'never' }, devices: DEVICES,
       usage: { dollars: 0.31, tokens: 204_000 },
       lastRun: { id: 'r-p1', when: 'Yesterday at 15:00', outcome: 'done', summary: 'Still $249. Nothing to tell you.', dollars: 0.004, tokens: 3_200, seconds: 6 },
     },
     {
       id: 'job-tidy', name: 'Downloads tidy-up',
       instruction: 'Sort my Downloads folder into Documents, Pictures, Installers and Other. Ask before moving anything you are not sure about.',
-      owner: { kind: 'alone' }, start: { kind: 'schedule', every: 'day', at: '2:00' },
+      links: [], start: { kind: 'schedule', every: 'day', at: '2:00' },
       model: 'Claude Haiku', subscription: true,
       tools: [
         { id: 't-list', label: 'See the files in a folder', source: 'Your computer', mode: 'allow', exact: '~/Downloads' },
@@ -98,7 +104,7 @@ function seedJobs(): AutomationSummary[] {
         { id: 't-cmd', label: 'Run one command', source: 'Your computer', mode: 'allow', exact: 'du -sh ~/Downloads' },
       ],
       whenAsk: 'skip', waitHours: null, noAnswer: 'skip', late: 'fallback', lateFallback: 'Only sort files older than a day, and tell me it ran late.',
-      notify: { needs: true, news: false, fails: true }, enabled: true,
+      notify: { needs: true, news: false, fails: true }, enabled: true, overlap: 'skip-new', unlisted: { sites: 'never', commands: 'never' }, devices: DEVICES,
       usage: { dollars: 0, tokens: 118_000 }, next: 'Tonight at 2:00',
       lastRun: { id: 'r-t1', when: 'Today at 8:31', outcome: 'skipped', summary: 'Ran late (the computer was asleep at 2:00). Sorted 41 files.', skipped: ['Moving 3 files it was not sure about'], tokens: 14_000, seconds: 37 },
     },
@@ -130,7 +136,7 @@ export function createAutomationsMock(scenario: string): AutomationsBridge {
       jobs = jobs.map((j) => (j.id === id ? { ...j, lastRun: { id: `${id}-now`, when: 'Just now', outcome: 'running', summary: 'Running…', tokens: 0, seconds: 0 } } : j));
       return copy();
     },
-    answer: async (id, allow) => {
+    answer: async (id, allow, _note) => {
       jobs = jobs.map((j) => (j.id !== id ? j : {
         ...j, waiting: undefined,
         lastRun: j.lastRun && { ...j.lastRun, outcome: allow ? 'done' : 'skipped', summary: allow ? 'Sent the reply to Sam Lee.' : 'Left the draft unsent, as you asked.' },
