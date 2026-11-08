@@ -29,6 +29,8 @@ export const CHAT: readonly ScreenEntry[] = [
     ...chat(`chat#model-switch-${when}${rt}`, 'view'), session: rt === 'cc' ? 'wb-1' : 'wb-2', params: { seed: `bubbles-model-switch-${when}${rt}` },
   }))),
   chat('chat/sessions', 'menu'),
+  // A row pointed at: its close x widens in (it takes no room until then; no newIn: the menu exists in v1.3.3).
+  { ...chat('chat/sessions#close-hover', 'menu'), open: [{ do: 'hover', target: { role: 'button', labelStarts: 'theme contrast pass' } }] },
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
   chat('chat/close-session', 'dialog'),
@@ -116,6 +118,9 @@ export const CHAT: readonly ScreenEntry[] = [
   { name: 'welcome', tags: ['view'], scenario: 'empty' },
   { name: 'welcome/back', tags: ['dialog'], scenario: 'welcome-back', mark: 'chat/resume',
     escapeStepsBack: 'Recovery requires an explicit Resume or Start fresh choice; Escape must leave the popup open.' },
+  // The folder list in a window as small as the buddy's chat (320 wide, short): never wider than the window, and it opens upward when
+  // there is no room below the button. No newIn: the folder list exists in v1.3.3 (only its fit changed).
+  { name: 'welcome/new-session#folders-small-window', tags: ['view', 'narrow'], scenario: 'empty', viewport: { width: 320, height: 380 }, open: ['youcoded'] },
   { name: 'welcome/new-session', tags: ['view'], scenario: 'empty', sameAs: { name: 'welcome', why: 'a first-ever launch opens the form already' } },
   { name: 'projects', tags: ['view', 'projects'] },
   { name: 'marketplace', tags: ['view', 'marketplace'] },
@@ -242,6 +247,13 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#background-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-background-native' } },
   { ...chat('chat#background-native-phone', 'view', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-background-native' }, viewport: { width: 390, height: 844 } },
   { ...chat('chat/specialists#cc', 'dialog'), session: 'wb-1', params: { seed: 'bubbles-background-cc' } },
+  // A watcher that reached its time limit reads as ended, not "Watching" forever (new since v1.3.3; fixtures/bubbles/background-expired-cc.jsonl).
+  { ...chat('chat#background-expired-cc', 'view'), newIn: 'after', session: 'wb-1', params: { seed: 'bubbles-background-expired-cc' } },
+  { ...chat('chat/background#cc-expired', 'dialog'), newIn: 'after', session: 'wb-1', params: { seed: 'bubbles-background-expired-cc' } },
+  // A file named in the chat that cannot be opened: the note the files drawer shows (new words since v1.3.3), once for a file that is
+  // nowhere (the drawer says where it looked) and once for a name two folders share (it lists both).
+  ...([['missing', 'todo.md'], ['two-folders', 'summary.md']] as const).map(([which, chip]) => (
+    { ...chat(`chat/files#chip-${which}`, 'pane', 'error-state'), newIn: 'after' as const, session: 'wb-1', params: { seed: 'bubbles-file-chips-cc' }, open: [chip] })),
   { ...chat('chat/background#cc', 'dialog'), newIn: 'after', session: 'wb-1', params: { seed: 'bubbles-background-cc' } },
   { ...chat('chat/background#native', 'dialog'), newIn: 'after', session: 'wb-2', params: { seed: 'bubbles-background-native' } },
   // One card per management call (a note, a status check, a stop…), so each card's own words show.
@@ -267,6 +279,8 @@ export const CHAT: readonly ScreenEntry[] = [
     open: ['Launch installer'], viewport: { width: 390, height: 844 } },
   // The update's download failed: the notice box with its sentence, Open in browser instead and
   // Try again, in the Update button's place (small-fixes-2).
+  // A download refused because the release is older than one this computer already ran (new since v1.3.3): its own sentence, no Open-in-browser.
+  { ...chat('chat/update#older', 'dialog', 'error-state'), newIn: 'after', params: { update: 'available', updateDownloadError: 'older-than-installed' }, open: ['Update now…'] },
   { ...chat('chat/update#download-failed', 'dialog', 'error-state'), params: { update: 'available', fail: 'update.download' }, open: ['Update now…'] },
   // Files in the viewer: a chart image, a diagram, a PDF (fixture files).
   chat('chat/files/open/a-sent-chart', 'pane', 'viewer'),

@@ -2421,6 +2421,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       const st = await base();
       const events = st.recentEvents.filter((e: { type: string }) => e.type !== 'error');
       if (syncSwitch === 'auth-error') return { ...st, recentEvents: [...events, { type: 'error', spaceId: 'personal', at: SYNC_NOW - 30_000, errorCode: 'github-auth', message: 'GitHub sign-in expired — reconnect your GitHub account in the Sync settings' }] };
+      // The three pauses security hardening added (2026-10-30), with the words main sends: main/github-client.ts repoPublicError,
+      // main/sync-spaces/repo-visibility.ts repoUncheckedError, main/sync-spaces/repo-trust.ts untrustedRepoError. The panel shows its
+      // own plain summary and keeps these under "Show details"; copied here because the renderer cannot import main-process files.
+      const pause = syncSwitch === 'repo-public' ? { errorCode: 'repo-public', message: 'Sync is paused because the GitHub repository "you/youcoded-personal" is public, so anyone could read what YouCoded syncs there. Make it private on GitHub (Settings, then Danger Zone), or delete it so YouCoded can create a private one, then try again.' }
+        : syncSwitch === 'repo-unconfirmed' ? { errorCode: undefined, message: 'Sync is paused because YouCoded couldn\'t confirm that the GitHub repository "you/youcoded-personal" is private. It will check again shortly. If this keeps happening, make sure you\'re connected to GitHub in the Sync settings.' }
+        : syncSwitch === 'folder-untrusted' ? { errorCode: 'sync-repo-untrusted', message: 'This folder came with its own hidden sync data that YouCoded did not create, so sync is paused for it. If you trust the folder, delete or rename the ".youcoded" folder inside it and sync will start fresh. (unexpected setting core.fsmonitor)' }
+        : null;
+      if (pause) return { ...st, recentEvents: [...events, { type: 'error', spaceId: 'personal', at: SYNC_NOW - 30_000, ...pause }] };
       if (syncSwitch === 'oversize') return { ...st, recentEvents: events, oversize: [{ spaceId: 'personal', files: ['Conversations/claude/transcripts/youcoded-dev/84ee31a9.jsonl', 'Conversations/claude/transcripts/youcoded-dev/b4c2255f.jsonl'] }], oversizeLimitMb: 50 };
       return { ...st, recentEvents: events };
     };
@@ -4099,7 +4107,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       }
       return new Promise(() => {});
     },
-    download: async () => ({ jobId: 'wb-update-1', filePath: '/home/destin/Downloads/YouCoded-1.3.0.AppImage' }),
+    // `?updateDownloadError=<code>`: the download is refused the way main refuses it, with an UpdateInstallError's own
+    // `<code>: <detail>` message (update-installer.ts), so the panel draws that code's real sentence.
+    download: async () => {
+      const code = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('updateDownloadError') : null;
+      if (code) throw new Error(`${code}: refusing rollback: 1.3.0 < highest installed 1.3.4`);
+      return { jobId: 'wb-update-1', filePath: '/home/destin/Downloads/YouCoded-1.3.0.AppImage' };
+    },
     cancel: async () => undefined,
     launch: async (jobId: string): Promise<UpdateLaunchResult> => {
       if (!updateInstall) return { success: true, quitPending: false, fallback: 'browser' };

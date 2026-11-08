@@ -11,4 +11,7 @@ export const OVERLAYS: readonly ScreenEntry[] = [
   ...['trust', 'initializing', 'handoff-waiting', 'handoff-incomplete', 'remote-unsupported', 'compacting', 'copy-picker',
     'usage', 'usage-chatgpt', 'thinking-stalled', 'thinking-prefill', 'model-loading', 'model-reload',
     'specialist-report', 'specialist-failed'].map((w) => piece(w)),
+  // Voice input that heard nothing (new since v1.3.3: the amber "No sound detected" strip and the three-reason card). waitMs lets
+  // the card's popover settle into place beside the mic.
+  ...['voice-silent', 'voice-no-sound', 'voice-too-quiet', 'voice-no-words'].map((w) => piece(w, { newIn: 'after', waitMs: 600 })),
 ];

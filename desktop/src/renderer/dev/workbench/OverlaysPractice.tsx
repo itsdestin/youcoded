@@ -16,6 +16,9 @@ import UsageCard from '../../components/UsageCard';
 import ThinkingIndicator from '../../components/ThinkingIndicator';
 import ModelLoadingBar from '../../components/ModelLoadingBar';
 import SpecialistReportCard from '../../components/SpecialistReportCard';
+import { VoiceButton, VoiceListeningStrip } from '../../components/VoiceButton';
+import { EscCloseProvider } from '../../hooks/use-esc-close';
+import type { VoiceNotice } from '../../hooks/useVoiceInput';
 import { REMOTE_UNSUPPORTED_EVENT } from '../../remote-unsupported';
 import { TRUST_PROMPT_TITLE } from '../../../shared/ink-select-parser';
 import type { UsageSnapshot } from '../../state/chat-types';
@@ -50,8 +53,24 @@ const Column = ({ children }: { children: React.ReactNode }) => (
   <div className="mx-auto pt-16" style={{ maxWidth: 720 }}>{children}</div>
 );
 
+// The message box sits at the bottom of the chat, so voice pieces sit there too: the strip above where the box would be, and the
+// mic at the box's right edge with its card hanging up and to the left, as VoiceButton places it.
+const Bottom = ({ children }: { children: React.ReactNode }) => (
+  <div className="fixed inset-x-0 bottom-0 pb-6"><div className="mx-auto px-4" style={{ maxWidth: 720 }}>{children}</div></div>
+);
+
 function Piece({ which }: { which: string }) {
   switch (which) {
+    // Voice input after nothing came through: the amber strip while listening, then the card the mic opens.
+    case 'voice-silent': return <Bottom><VoiceListeningStrip level={0} seconds={4} micSilent onStop={noop} /></Bottom>;
+    case 'voice-no-sound': case 'voice-too-quiet': case 'voice-no-words': {
+      const notice = which.slice('voice-'.length) as VoiceNotice;
+      // EscCloseProvider: the card closes on Escape through the app's own stack, which this stand-in sits outside of.
+      return <Bottom><EscCloseProvider><div className="flex justify-end">
+        <VoiceButton phase="idle" readiness={{ state: 'ready', engine: 'Parakeet' }} level={0} seconds={0} error={null} notice={notice}
+          onStart={noop} onStop={noop} onDownload={noop} onRecheck={noop} onClearError={noop} />
+      </div></EscCloseProvider></Bottom>;
+    }
     case 'moved': return <MovedGate device="Home PC" onExit={noop} onResume={noop} />;
     case 'trust': return <ChatProvider><TrustDemo /></ChatProvider>;
     case 'initializing':
@@ -109,7 +128,9 @@ export default function OverlaysPractice() {
   }, [which]);
   // Escape closes it like any layer (shoot --check presses it).
   useEffect(() => {
-    if (which === null) return undefined;
+    // WHY not for the voice card: it is a popover with its own Escape (VoiceButton closes it), and Escape must close only the
+    // top layer. This stand-in stays behind; the card going is what Escape does there.
+    if (which === null || ['voice-no-sound', 'voice-too-quiet', 'voice-no-words'].includes(which)) return undefined;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setWhich(null); } };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
@@ -121,7 +142,9 @@ export default function OverlaysPractice() {
     // WHY a small corner square without the cover: the notice is drawn by its own component over the app, so the mark
     // (which shoot checks is uncovered) must not sit under it, as in ToastPractice.
     <div className={cover ? 'fixed inset-0 text-fg bg-canvas' : 'fixed left-0 top-0 text-fg'}
-      style={{ zIndex: 100000, ...(cover ? {} : { width: 12, height: 12 }) }} role="dialog" aria-label="Overlay practice">
+      // WHY 99 for the voice card: it floats in the app's own popover layer (z 100, portaled out of the page), so a cover above
+      // that would hide the very card being photographed. Everything else sits above the whole app.
+      style={{ zIndex: which.startsWith('voice-') ? 99 : 100000, ...(cover ? {} : { width: 12, height: 12 }) }} role="dialog" aria-label="Overlay practice">
       <ScreenMark name="dev/overlay" />
       <Piece which={which} />
     </div>

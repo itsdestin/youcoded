@@ -282,7 +282,7 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
       // directly. `__SHOOT__` is false in every other build, so this import and the
       // screen list never ship in the app or the landing page's demo.
       if (typeof __SHOOT__ !== 'undefined' && __SHOOT__) {
-        const [{ installScreenDriver }, { SCREENS }, { default: IconSheet }, { default: PillSheet }, { default: OpenTasksPractice }, { default: GatePractice }, { default: ToastPractice }, { default: ToolsPractice }, { default: OverlaysPractice }] = await Promise.all([
+        const [{ installScreenDriver }, { SCREENS }, { default: IconSheet }, { default: PillSheet }, { default: OpenTasksPractice }, { default: GatePractice }, { default: ToastPractice }, { default: ToolsPractice }, { default: OverlaysPractice }, { default: BuddyPractice }] = await Promise.all([
           import('./shoot-mode'),
           import('./dev/workbench/screens'),
           // The icon sheet (`dev/icons`) sits beside the app only in the photo-only build.
@@ -298,9 +298,11 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
           import('./dev/workbench/ToolsPractice'),
           // And app overlays, toasts and chat cards no practice session reaches (`dev/overlay#…`).
           import('./dev/workbench/OverlaysPractice'),
+          // And the buddy's own windows, framed at their real size (`dev/buddy#…`).
+          import('./dev/workbench/BuddyPractice'),
         ]);
         installScreenDriver(SCREENS);
-        __mount.render(<><App /><IconSheet /><PillSheet /><OpenTasksPractice /><GatePractice /><ToastPractice /><ToolsPractice /><OverlaysPractice /></>);
+        __mount.render(<><App /><IconSheet /><PillSheet /><OpenTasksPractice /><GatePractice /><ToastPractice /><ToolsPractice /><OverlaysPractice /><BuddyPractice /></>);
         return;
       }
       // App is already statically imported above (Root renders it).

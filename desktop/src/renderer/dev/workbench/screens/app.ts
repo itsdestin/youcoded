@@ -33,6 +33,16 @@ export const APP: readonly ScreenEntry[] = [
   ...(['connecting', 'unreachable', 'tab', 'login'] as const).map((g) => ({
     name: `dev/gate#${g}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, params: { gate: g }, newIn: 'after' as const,
   })),
+  // The browser page's password screen after the computer said no (GatePractice.tsx): too many wrong passwords, a refusal for another
+  // reason, a sign-in timed out after 90 days unused (new words), and the Android app refusing a computer that is not on Tailscale
+  // (a notice over the phone's own app, so it waits for the notice to appear).
+  ...(['login-too-many', 'login-refused'] as const).map((g) => ({
+    name: `dev/gate#${g}`, tags: ['dev', 'narrow', 'error-state'], viewport: { width: 390, height: 844 }, params: { gate: g },
+    open: [{ do: 'type', target: { role: 'textbox', label: 'Password' }, text: 'practice-password' }, 'Connect'],
+    ...(g === 'login-too-many' ? { newIn: 'after' as const } : {}),
+  })),
+  { name: 'dev/gate#login-expired', tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, params: { gate: 'login-expired' }, newIn: 'after' as const },
+  { name: 'dev/gate#tailscale', tags: ['dev', 'narrow', 'error-state'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { gate: 'tailscale' }, waitMs: 3000, newIn: 'after' as const },
   ...(['lost', 'password'] as const).map((t) => ({
     name: `dev/toast#${t}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: t }, newIn: 'after' as const,
   })),

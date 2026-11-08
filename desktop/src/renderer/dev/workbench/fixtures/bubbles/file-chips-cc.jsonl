@@ -1,0 +1,3 @@
+{"type":"user_message","text":"where did you put the notes and the recap?"}
+{"type":"assistant_text","text":"The notes are in `old-notes/todo.md` and the recap is `./summary.md`. Tap either one to open it."}
+{"type":"turn_complete"}

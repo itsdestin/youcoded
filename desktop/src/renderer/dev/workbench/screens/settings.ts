@@ -95,6 +95,10 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/assistant/permissions#folder-open-hover', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 3 }, 'youcoded /home/destin/youcoded-dev/youcoded 7 ▸', { do: 'hover', target: { role: 'button', label: 'youcoded /home/destin/youcoded-dev/youcoded 7 ▾' } }] },
   // "Commands that never ask": the closed fold opened, to show the plain-words list (2026-10-31).
   { ...settings('settings/assistant/permissions#never-ask-open', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 2 }, 'Look-only commands Used in Ask first and Auto edit. Checking things ne'] },
+  // The (i) explainer swaps the page body out, so the dialog's own mark ('settings/assistant') is the one that stays. The second
+  // scrolled to the end: "Commands that never ask" and the rest of the page's rewritten sections.
+  { ...settings('settings/assistant/permissions#explainer', 'dialog'), mark: 'settings/assistant', open: ['What is this?'] },
+  { ...settings('settings/assistant/permissions#explainer-never-ask', 'dialog'), mark: 'settings/assistant', open: ['What is this?', { do: 'scroll', dir: 'down', times: 2 }] },
   settings('settings/assistant/permissions/skip-confirm', 'dialog'),
   settings('settings/assistant/specialists', 'dialog'),
   // error-notices-1 (2026-10-12): a setting that couldn't load (one line + Retry), and a
@@ -116,12 +120,17 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/performance#fold-open-hover', 'dialog', 'fold'), params: { gpus: '2' }, open: ['Why YouCoded uses the discrete GPU', { do: 'hover', target: { role: 'button', label: 'Why YouCoded uses the discrete GPU' } }], sameAs: { name: 'settings/performance#fold-open', why: 'only the pointer highlight differs, a faint tint the look-alike check may not count' } },
   // The Browser (2026-10-13): a page of Assistant settings on the computer's own window; scenes from ?browser=.
   { ...settings('settings/assistant/browser', 'dialog', 'browser'), params: { browser: 'working' } },
+  // "Sites where it can send forms" (new since v1.3.3), under "Sites you've allowed" and below the fold.
+  { ...settings('settings/assistant/browser#form-sites', 'dialog', 'browser'), newIn: 'after', params: { browser: 'working' }, open: [{ do: 'scroll', dir: 'down', times: 6 }] },
   { ...settings('settings/assistant/browser#no-browser', 'dialog', 'browser'), params: { browser: 'no-browser' } },
   { ...settings('settings/assistant/browser#downloading', 'dialog', 'browser'), params: { browser: 'downloading' } },
   settings('settings/sync', 'dialog', 'error-state'),
   { ...settings('settings/sync#log-open', 'dialog', 'fold'), params: { sync: 'ok' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Sync log', { do: 'scroll', dir: 'down', times: 8 }] },
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
   { ...settings('settings/sync#auth-error', 'dialog', 'error-state'), params: { sync: 'auth-error' } },
+  // The three pauses added by the security hardening (new since v1.3.3): the pause's own sentence sits behind "Show details".
+  ...(['repo-public', 'repo-unconfirmed', 'folder-untrusted'] as const).map((w) => (
+    { ...settings(`settings/sync#${w}`, 'dialog', 'error-state'), newIn: 'after' as const, params: { sync: w }, open: ['Show details'] })),
   { ...settings('settings/sync#oversize', 'dialog', 'error-state'), params: { sync: 'oversize' } },
   // A GitHub backup set up before computers stopped supporting it: shown honestly (small-fixes-2).
   { ...settings('settings/sync#github-unsupported', 'dialog'), params: { syncWarn: 'github' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
