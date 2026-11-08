@@ -259,8 +259,17 @@ export function ProjectView(props: ProjectViewProps) {
         setFilterOpen(false);
       }
     };
+    // WHY (Destin, 2026-11-07: "if i start scrolling the page behind while the menu is open, it should just close"):
+    // the menu is drawn on <body> and stays put, so scrolling anything but the menu itself closes it.
+    const onScroll = (e: Event) => {
+      if (!(e.target instanceof Element && e.target.closest('[data-file-filter]'))) setFilterOpen(false);
+    };
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('scroll', onScroll, { capture: true });
+    };
   }, [filterOpen]);
   // Close the popover when the active tab changes — its trigger belongs to the
   // file tabs, and leaving it open across a tab switch would strand it.
