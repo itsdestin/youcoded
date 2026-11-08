@@ -3139,6 +3139,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // (fixtures/artifacts.ts studentSessionFiles — why every session is there).
     listSession: async (sessionId: string) => {
       if (filesRefused()) return refuseAsToday('artifacts:list-session');
+      // `?files=none`: a conversation that has touched no files yet, so the drawer's empty state can be photographed.
+      // Same answer shape as the real channel (an ok list with no rows); no new channel.
+      if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('files') === 'none') return { ok: true, artifacts: [] };
       return { ok: true, artifacts: withRemoteRows(studentSwitch ? studentSessionFiles() : sessionArtifacts(sessionId)) };
     },
     listProject: async (projectId: string) => ({
@@ -3674,16 +3677,24 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
   ];
   let gitStagedCount = 0;
+  const gitError = typeof location !== 'undefined' && new URLSearchParams(location.search).get('git') === 'error';
+  const gitClean = typeof location !== 'undefined' && new URLSearchParams(location.search).get('git') === 'clean';
   const gitSubs = new Set<() => void>();
   const gitFireChanged = () => gitSubs.forEach((cb) => cb());
   const git = {
     fileStatus: async (): Promise<GitFileStatusResult> => ({
       ok: true, isRepo: true, branch: 'session/ui-consistency-audit',
-      counts: { added: 4, removed: 1 }, hasHistory: true, staged: gitStagedCount > 0, conflicted: false,
+      counts: gitClean ? null : { added: 4, removed: 1 }, hasHistory: true, staged: gitStagedCount > 0, conflicted: false,
     }),
-    fileReview: async (): Promise<GitFileReviewResult> => ({
+    fileReview: async (): Promise<GitFileReviewResult> => gitError ? ({
+      // `?git=error`: the real handler's own failure answer (ok:false with git's words), not a rejected call.
+      ok: false, error: 'fatal: not a git repository (or any of the parent directories): .git', isRepo: true, branch: null,
+      uncommitted: null, log: [], hasMore: false, stagedCount: 0,
+    }) : ({
       ok: true, isRepo: true, branch: 'session/ui-consistency-audit',
-      uncommitted: {
+      // `?git=clean`: the file has nothing uncommitted (the real answer is `uncommitted: null` for an unchanged file),
+      // so the review shows only its history.
+      uncommitted: gitClean ? null : {
         hunks: [GIT_HUNK], counts: { added: 4, removed: 1 }, staged: gitStagedCount > 0,
         untracked: false, inHead: true, binary: false, conflicted: false,
       },
@@ -4666,12 +4677,18 @@ const OFFICE_PAGE: PageDocument = { ...OFFICE_PAGE_SUMMARY, html: '', data: null
  *  content, as Destin reviewed them. */
 function createOfficeMock(empty: boolean): OfficeBridge {
   const HOUR = 3_600_000;
+  // `?office=<state>` (coverage batch B): the failure states a real host can answer with — `failed` (status cannot be read),
+  // `unavailable` (a build with no Office add-on), `versions-error` / `versions-empty` (the history list). Each mirrors a
+  // real channel's own answer (rejecting, `available: false`, an empty list); nothing here is a new channel.
+  const state = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('office');
   const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
   const recent = empty ? [] : OFFICE_FILES.map((f, i) => ({ ...f, at: ago([0.4, 5, 30][i] * HOUR) }));
   let created = 0;
   return {
-    status: async () => ({
-      available: true,
+    status: async () => {
+      if (state === 'failed') throw new Error('Mock failure (office.status)');
+      return {
+      available: state !== 'unavailable',
       recent,
       // Two files beyond Recent, so the "In <project>" list has something of its own to show
       // (Recent's files are not repeated there). They open the fixture of their kind.
@@ -4680,7 +4697,8 @@ function createOfficeMock(empty: boolean): OfficeBridge {
         { ...OFFICE_FILES[1], path: '/home/you/Projects/community-garden/Volunteer rota.xlsx', name: 'Volunteer rota.xlsx', at: ago(52 * HOUR) },
         { ...OFFICE_FILES[0], path: '/home/you/Projects/community-garden/Grant report.docx', name: 'Grant report.docx', at: ago(120 * HOUR) },
       ] },
-    }),
+      };
+    },
     create: async (kind) => {
       created += 1;
       const base = OFFICE_FILES.find((f) => f.kind === kind)!;
@@ -4720,7 +4738,8 @@ function createOfficeMock(empty: boolean): OfficeBridge {
     // "Save a copy…" answers as main would for a failed save whose translation worked.
     saveCopy: async (_token, mode) => (mode === 'check' ? { ok: true, possible: true } : { ok: true, folder: 'Documents', path: '/home/you/Documents/Garden plan (copy).docx', ...(mode === 'again' ? { unchanged: true } : {}) }),
     versions: async () => {
-      if (empty) return [];
+      if (state === 'versions-error') throw new Error('Mock failure (office.versions)');
+      if (empty || state === 'versions-empty') return [];
       const v = (id: string, h: number, reason: OfficeVersion['reason']): OfficeVersion => ({ id, at: ago(h * HOUR), reason, bytes: 37_000 });
       return [v('v4', 0.1, 'autosave'), v('v3', 0.4, 'opened'), v('v2', 3, 'autosave'), v('v1', 26, 'opened')];
     },

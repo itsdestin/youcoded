@@ -1,0 +1,4 @@
+{"type":"user_message","text":"the sidebar flickers when I change theme — figure out a fix, but show me the plan first"}
+{"type":"assistant_text","partId":"txt-0","text":"I traced it to two writes to the theme attribute in one frame. Here is what I would change."}
+{"type":"tool_use","id":"plan1","name":"ExitPlanMode","input":{"plan":"## Fix the sidebar flicker\n\n1. Make ThemeProvider batch its two writes to `data-theme` into one commit.\n2. Drop the second write from theme-engine.\n3. Add a test that counts attribute writes per theme change."}}
+{"type":"permission_request","tool_use_id":"plan1","requestId":"req-plan1"}

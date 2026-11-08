@@ -57,7 +57,22 @@ export function renderTerminalScreen(cols = 80, rows = 24): string {
     '',
   ];
 
-  const footer = [
+  // WHY (coverage batch B): the plan-approval card in the chat reads Claude Code's real plan menu off
+  // this very screen (usePlanMenu), so a photo of the card with its buttons needs the menu drawn here.
+  // `?planMenu=1` swaps the prompt box for the menu Claude Code 2.1.281 prints (tests/fixtures/plan-menu/).
+  const planMenu = typeof location !== 'undefined' && new URLSearchParams(location.search).get('planMenu') === '1';
+  const footer = planMenu ? [
+    '─'.repeat(width),
+    ' Claude has written up a plan and is ready to execute. Would you like to proceed?',
+    '',
+    ` ${BOLD}❯ 1. Yes, clear context (5% used) and auto-accept edits${RESET}`,
+    '   2. Yes, auto-accept edits',
+    '   3. Yes, manually approve edits',
+    '   4. Tell Claude what to change',
+    `      ${DIM}shift+tab to approve with this feedback${RESET}`,
+    '',
+    ` ${DIM}ctrl+g to edit in Vim · ~/.claude/plans/fix-the-flicker.md${RESET}`,
+  ] : [
     `╭${rule}╮`,
     boxLine(` › ${CURSOR}`),
     `╰${rule}╯`,

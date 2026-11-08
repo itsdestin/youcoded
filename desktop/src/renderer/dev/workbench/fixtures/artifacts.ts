@@ -400,12 +400,20 @@ const SITE_FILES: ArtifactRecord[] = [
   },
 ];
 
+// `?extraFiles=csv` (coverage batch B): one more file the session touched, a spreadsheet-as-text, so the CSV viewer can be
+// photographed. Off by default so the drawer's usual list (and every picture of it) stays exactly as it was.
+const CSV_FILE: ArtifactRecord = {
+  id: 'a-survey-csv', path: 'data/survey-results.csv', kind: 'internal', absolutePath: null, lastModified: T, status: 'active',
+  versions: [version('wb-1', 'create', T)], comments: [], tags: [],
+};
+
 export function sessionArtifacts(sessionId: string): ArtifactRecord[] {
   // Session ids come from fixtures/sessions.ts; wb-1 works in youcoded, wb-2 in
   // wecoded-themes, matching each session's cwd.
   if (sessionId === 'site-1') return SITE_FILES;
   if (sessionId === 'wb-2') return BY_PROJECT['/home/destin/youcoded-dev/wecoded-themes'];
-  return BY_PROJECT['/home/destin/youcoded-dev/youcoded'];
+  const extra = typeof location !== 'undefined' && new URLSearchParams(location.search).get('extraFiles') === 'csv';
+  return extra ? [...BY_PROJECT['/home/destin/youcoded-dev/youcoded'], CSV_FILE] : BY_PROJECT['/home/destin/youcoded-dev/youcoded'];
 }
 
 export function allFiles(projectId: string): ArtifactRecord[] {
@@ -434,6 +442,8 @@ export const SAMPLE_SVG =
   '</svg>';
 
 export const CONTENT: Record<string, string> = {
+  // The CSV viewer's sample (see CSV_FILE): neighbourhood survey answers, with a quoted comma and an empty cell to draw.
+  'a-survey-csv': 'name,neighbourhood,visits per month,comment\nAda,Eastside,4,"Love it, wish it opened earlier"\nBen,Riverside,1,\nCara,Eastside,6,More plots please\nDev,Hilltop,2,"Tools are great"\nEli,Riverside,0,Did not know it existed\nFay,Hilltop,8,Best part of my week\nGus,Eastside,3,',
   // SVG is the one image format that ALSO takes the text path — it renders
   // through ImageView but stays editable, so rendersFromBytesOnly() exempts it
   // and ActiveArtifactView still fetches its text. Without an entry here the

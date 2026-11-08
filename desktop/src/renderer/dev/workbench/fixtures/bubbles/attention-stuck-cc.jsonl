@@ -1,0 +1,3 @@
+{"type":"user_message","text":"run the whole test suite and tell me what fails"}
+{"type":"assistant_text","partId":"txt-0","text":"Starting the test run now."}
+{"type":"action","action":{"type":"ATTENTION_STATE_CHANGED","state":"stuck"}}

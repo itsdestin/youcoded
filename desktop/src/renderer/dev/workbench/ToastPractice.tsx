@@ -8,11 +8,26 @@ import { LOST_SEND_NOTICE } from '../../state/submit-outgoing';
 import { savedPasswordRefusedNotice } from '../../remote-gate';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
+// WHY (coverage batch B): the most-seen of the app's one-line notices. Their words live inline in App.tsx and the
+// phone-action code (not exported), so they are copied here; the toast itself is still the app's own <Toast>.
+// If a notice's wording changes in the app, this picture shows the old words until this table follows it.
+const NOTICES: Record<string, string> = {
+  'resume-failed': "Couldn't resume this conversation.",
+  'model-switch-failed': "Couldn't switch to Opus",
+  'handoff-unavailable': 'Live handoff is available from a computer or a remote connection to one.',
+  'slash-unavailable': "/compact isn't available in YouCoded-runtime sessions yet.",
+  'skill-unavailable': "That skill can't be started from here in a YouCoded-runtime session yet.",
+  'stop-offline': "Not connected — Stop wasn't sent. Press it again once you're back online.",
+  'mode-unconfirmed': "The permission mode didn't change. Your computer didn't confirm it.",
+  'download-failed': 'Couldn’t download Q3 sales.xlsx: the file is no longer on your computer.',
+  'open-first': 'Open a conversation first, then try again.',
+};
+
 export default function ToastPractice() {
   const [shown, setShown] = useState(false);
   useScreenOpen('dev/toast', () => {
     const which = new URLSearchParams(location.search).get('toast');
-    announce(which === 'password' ? savedPasswordRefusedNotice('Home PC') : LOST_SEND_NOTICE, 60_000);
+    announce(which === 'password' ? savedPasswordRefusedNotice('Home PC') : (which && NOTICES[which]) || LOST_SEND_NOTICE, 60_000);
     setShown(true);
   });
   // Escape closes the marker like any layer (shoot --check presses it).

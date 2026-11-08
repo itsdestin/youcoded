@@ -1,0 +1,7 @@
+{"type":"user_message","text":"/home/destin/Documents/q3-sales.xlsx /home/destin/Pictures/dashboard mockup.png what changed between these?","attachments":["/home/destin/Documents/q3-sales.xlsx","/home/destin/Pictures/dashboard mockup.png"]}
+{"type":"assistant_text","partId":"txt-0","text":"The spreadsheet has two new regions; the mockup already shows them."}
+{"type":"turn_complete"}
+{"type":"user_message","text":"also compare against last quarter","sendId":"send-unsure","unconfirmed":true}
+{"type":"action","action":{"type":"SEND_NOTE","sendId":"send-unsure","note":"unsure"}}
+{"type":"user_message","text":"and summarise the difference in one line","sendId":"send-refused","unconfirmed":true}
+{"type":"action","action":{"type":"SEND_NOTE","sendId":"send-refused","note":"not-sent"}}

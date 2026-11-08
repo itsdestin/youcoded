@@ -133,9 +133,16 @@ export function loadFixture(
           sessionId,
           content: parsed.text,
           timestamp: FIXTURE_T0 + actions.length * 1000,
+          // WHY (coverage batch B): attached-file pills and the "not sent" notes need a bubble that
+          // carries attachments / a sendId, which a plain fixture line could not express.
+          ...(Array.isArray(parsed.attachments) ? { attachments: parsed.attachments } : {}),
+          ...(typeof parsed.sendId === 'string' ? { sendId: parsed.sendId } : {}),
         };
         state = chatReducer(state, action);
         actions.push(action);
+        // `unconfirmed: true` leaves the bubble PENDING, exactly as a send the computer has not
+        // acknowledged looks — the state the refused / not-sent notes (SEND_NOTE) attach to.
+        if (parsed.unconfirmed === true) continue;
         // …then the transcript's confirmation, as a live session receives it. WHY
         // (2026-09-24): USER_PROMPT alone leaves the bubble PENDING, and the reducer
         // keeps pending bubbles at the timeline's tail (appendAbovePending) — so every
@@ -501,6 +508,14 @@ export function loadFixture(
             steps: parsed.steps, parentToolCallId: parsed.parent,
           },
         };
+        state = chatReducer(state, action);
+        actions.push(action);
+      } else if (parsed.type === 'action' && parsed.action && typeof parsed.action.type === 'string') {
+        // WHY (coverage batch B): a handful of timeline states (the /clear and /compact dividers, a
+        // send's "not sent" note) are only ever produced by a reducer action with no transcript line
+        // of their own. The fixture names the action and this adds the session and a fixed time, so
+        // the REAL reducer still draws it.
+        const action = { sessionId, timestamp: FIXTURE_T0 + actions.length * 1000, ...parsed.action } as ChatAction;
         state = chatReducer(state, action);
         actions.push(action);
       } else if (parsed.type === 'transcript_event' && parsed.event) {
