@@ -104,48 +104,37 @@ export function AutomationDetails({ job, isNew, tab, atEnd = false, onTab, onClo
                 </Group>
                 {/* A new job on a plan has nothing used yet and no limit, so the card would say nothing. */}
                 {!(isNew && draft.subscription) && <Group label={draft.subscription ? 'Usage' : 'Spending'}><SpendField job={draft} onLimit={(limit) => change({ limit })} /></Group>}
-                <Group label="Approvals">
-                  <SegmentedTabs variant="nested" value={draft.whenAsk} onChange={(v) => change({ whenAsk: v as 'wait' | 'skip' })}
-                    tabs={[{ id: 'wait', label: 'Wait for me' }, { id: 'skip', label: 'Skip and continue' }]} />
+                {/* WHY one "Rules" list of pill rows (plan deck round 2 N-lower: "this ui has gotten very
+                    convoluted … unclear what a lot of these labels/buttons mean"): every setting is one
+                    row, a plain label on the left and its current value as the same pill-with-menu the
+                    permissions use. A row that needs words (another time, other instructions) opens a
+                    field under it. */}
+                <Group label="Rules">
+                  <ChoiceRow title="Asks first items" value={draft.whenAsk} onChange={(v) => change({ whenAsk: v })}
+                    choices={[['wait', 'Wait for me'], ['skip', 'Skip them']]} />
                   {draft.whenAsk === 'wait' && (<>
-                    <Field label="Wait up to">
-                      <Select value={draft.waitHours === null ? 'next' : String(draft.waitHours)} onChange={(v) => change({ waitHours: v === 'next' ? null : Number(v) })}
-                        options={[{ value: 'next', label: 'Its next run' }, { value: '1', label: '1 hour' }, { value: '4', label: '4 hours' }, { value: '12', label: '12 hours' }, { value: '24', label: '24 hours' }]} />
-                    </Field>
-                    <Field label="Then">
-                      <Select value={draft.noAnswer} onChange={(v) => change({ noAnswer: v as AutomationSummary['noAnswer'] })}
-                        options={[{ value: 'skip', label: 'Skip that step' }, { value: 'stop', label: 'Stop the run' }, { value: 'fallback', label: 'Do something else' }]} />
-                    </Field>
-                    {draft.noAnswer === 'fallback' && <Textarea value={draft.fallback ?? ''} placeholder="Save the reply as a draft." onChange={(e) => change({ fallback: e.target.value })} aria-label="Instead" />}
+                    <ChoiceRow title="Wait up to" value={draft.waitHours === null ? 'next' : String(draft.waitHours)} onChange={(v) => change({ waitHours: v === 'next' ? null : Number(v) })}
+                      choices={[['next', 'Its next run'], ['1', '1 hour'], ['4', '4 hours'], ['12', '12 hours'], ['24', '24 hours']]} />
+                    <ChoiceRow title="No answer by then" value={draft.noAnswer} onChange={(v) => change({ noAnswer: v })}
+                      choices={[['skip', 'Skip that step'], ['stop', 'Stop the run'], ['fallback', 'Do this instead']]} />
+                    {draft.noAnswer === 'fallback' && <Textarea value={draft.fallback ?? ''} placeholder="Save the reply as a draft." onChange={(e) => change({ fallback: e.target.value })} aria-label="Do this instead" />}
+                  </>)}
+                  {draft.start.kind !== 'button' && (<>
+                    {/* Plan deck S-start note: another time, or other instructions (which can also change what it makes). */}
+                    <ChoiceRow title="Missed while off" value={draft.late} onChange={(v) => change({ late: v })}
+                      choices={[['run', 'Run once on wake'], ['later', 'Run at another time'], ['fallback', 'Run with other instructions'], ['skip', 'Skip it']]} />
+                    {draft.late === 'later' && <TextInput className="w-24" value={draft.lateAt ?? '18:00'} onChange={(e) => change({ lateAt: e.target.value })} aria-label="Run at" />}
+                    {draft.late === 'fallback' && <Textarea value={draft.lateFallback ?? ''} placeholder="Only look at today, and save a summary instead of emailing me." onChange={(e) => change({ lateFallback: e.target.value })} aria-label="Other instructions" />}
+                    {/* Plan deck Q-overlap: "this should depend on the specific job". */}
+                    <ChoiceRow title="Due while still running" value={draft.overlap} onChange={(v) => change({ overlap: v })}
+                      choices={[['skip-new', 'Skip the new run'], ['stop-old', 'Stop the old run'], ['both', 'Run both']]} />
                   </>)}
                 </Group>
-                {draft.start.kind !== 'button' && (
-                  <Group label="Missed runs">
-                    <Select value={draft.late} onChange={(v) => change({ late: v as AutomationSummary['late'] })}
-                        options={[{ value: 'run', label: 'Run once when the computer wakes' }, { value: 'later', label: 'Run at another time' }, { value: 'fallback', label: 'Run with other instructions' }, { value: 'skip', label: 'Skip them' }]} />
-                    {/* Plan deck S-start note: "run differently" means another time, or other instructions
-                        (which can also change what it makes, e.g. "only a summary, don't email"). */}
-                    {draft.late === 'later' && <Field label="Run at"><TextInput className="w-24" value={draft.lateAt ?? '18:00'} onChange={(e) => change({ lateAt: e.target.value })} aria-label="Run at" /></Field>}
-                    {draft.late === 'fallback' && <Textarea value={draft.lateFallback ?? ''} placeholder="Only look at today, and save a summary instead of emailing me." onChange={(e) => change({ lateFallback: e.target.value })} aria-label="When late" />}
-                  </Group>
-                )}
-                {draft.start.kind !== 'button' && (
-                  // Plan deck Q-overlap: "this should depend on the specific job".
-                  <Group label="Still running when due">
-                    <Select value={draft.overlap} onChange={(v) => change({ overlap: v as AutomationSummary['overlap'] })}
-                      options={[{ value: 'skip-new', label: 'Skip the new run' }, { value: 'stop-old', label: 'Stop the old run, start the new one' }, { value: 'both', label: 'Run both' }]} />
-                  </Group>
-                )}
                 <Group label="Runs on"><DevicesField devices={draft.devices} onChange={(devices) => change({ devices })} /></Group>
                 {atEnd && <ScrollHere />}
-                <Group label="Notifications">
-                  <SettingRow variant="item" title="Needs me"
-                    control={<Toggle checked={draft.notify.needs} onChange={(v) => change({ notify: { ...draft.notify, needs: v } })} aria-label="Needs me" />} />
-                  <SettingRow variant="item" title="Has news"
-                    control={<Toggle checked={draft.notify.news} onChange={(v) => change({ notify: { ...draft.notify, news: v } })} aria-label="Has news" />} />
-                  <SettingRow variant="item" title="Fails or reaches its limit"
-                    control={<Toggle checked={draft.notify.fails} onChange={(v) => change({ notify: { ...draft.notify, fails: v } })} aria-label="Fails or reaches its limit" />} />
-                </Group>
+                {/* No Notifications card: plan deck Q-notify-menu — "all system notifications will be built
+                    together later … current notification building should just be limited to the orange
+                    light". The job keeps its notify field for that later work. */}
               </div>
             </div>
           )}
@@ -311,14 +300,24 @@ function ModeMenu({ mode, name, onMode, onRemove }: { mode: 'allow' | 'ask'; nam
 }
 
 function UnlistedMenu({ value, name, onChange }: { value: 'never' | 'ask'; name: string; onChange: (v: 'never' | 'ask') => void }) {
+  return <ChoicePill name={name} value={value} onChange={onChange} choices={[['never', 'Never'], ['ask', 'Asks first']]} />;
+}
+
+/** A value you change: the shared pill that opens a small menu of its choices (guide "Lists and
+ *  menus"), the same control as a permission's mode. */
+function ChoicePill<T extends string>({ name, value, choices, onChange }: { name: string; value: T; choices: [T, string][]; onChange: (v: T) => void }) {
   const [open, setOpen] = useState(false);
+  const word = choices.find(([v]) => v === value)?.[1] ?? value;
   return (
     <Menu open={open} onOpenChange={setOpen} align="right" label={name}
-      trigger={<PillButton open={open} onClick={() => setOpen((o) => !o)} aria-label={`${name}: ${value === 'never' ? 'Never' : 'Asks first'}`}>{value === 'never' ? 'Never' : 'Asks first'}</PillButton>}>
-      <MenuRadioItem checked={value === 'never'} onSelect={() => onChange('never')}>Never</MenuRadioItem>
-      <MenuRadioItem checked={value === 'ask'} onSelect={() => onChange('ask')}>Asks first</MenuRadioItem>
+      trigger={<PillButton open={open} onClick={() => setOpen((o) => !o)} aria-label={`${name}: ${word}`}>{word}</PillButton>}>
+      {choices.map(([v, w]) => <MenuRadioItem key={v} checked={v === value} onSelect={() => onChange(v)}>{w}</MenuRadioItem>)}
     </Menu>
   );
+}
+
+function ChoiceRow<T extends string>({ title, ...pill }: { title: string; value: T; choices: [T, string][]; onChange: (v: T) => void }) {
+  return <SettingRow variant="item" title={title} control={<ChoicePill name={title} {...pill} />} />;
 }
 
 /** One box per link (one container per thing), each with Remove; Add a link lists pages and projects. */
