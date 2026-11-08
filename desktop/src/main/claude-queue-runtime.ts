@@ -44,8 +44,11 @@ export class ClaudeQueueRuntime {
     // again (it restarted or reloaded). The old binding used to be marked "transitioning" for good, so every later send in
     // the chat failed until it was reopened. Let go of the old link the way closing the chat would (in-flight deliveries
     // kept for recovery, never resent) and link afresh under the new helper; its first state report does the linking.
-    const next: Binding = { incarnation, seenConversationId: previous.seenConversationId, ready: Promise.resolve() };
-    next.ready = previous.ready.then(() => this.release(id, previous)).catch(error => this.note(id, 'Old queue link not released', error));
+    // A conversation id seen mid-Clear may already be the old one: wait for the new helper's own report instead.
+    const next: Binding = { incarnation, seenConversationId: previous.clearId || previous.transitioning ? undefined : previous.seenConversationId, ready: Promise.resolve() };
+    // Until it is released the old incarnation still counts as holding its conversation (releaseStaleLive's check).
+    this.releasing.add(previous.incarnation);
+    next.ready = previous.ready.then(() => this.release(id, previous)).catch(error => this.note(id, 'Old queue link not released', error)).finally(() => this.releasing.delete(previous.incarnation));
     this.bindings.set(id, next);
     return;
    }
@@ -93,8 +96,10 @@ export class ClaudeQueueRuntime {
   const { queue, transport } = await this.get();
   const alias = { provider: 'claude' as const, conversationId };
   // A live mark no running chat of ours holds is left over (a chat that did not close cleanly, a restarted helper): let it go.
-  await queue.releaseStaleLive(alias, incarnation => [...this.bindings.values()].some(o => o !== b && !!o.queueId && o.incarnation === incarnation));
+  await queue.releaseStaleLive(alias, incarnation => this.releasing.has(incarnation) || [...this.bindings.values()].some(o => o !== b && !!o.queueId && o.incarnation === incarnation));
   const queueId = await queue.bind(alias, b.incarnation);
+  // The chat ended while it was being linked (forget() saw no link to close): close this one instead of leaving it live.
+  if (this.closed || this.bindings.get(id) !== b) { await queue.close(queueId, b.incarnation); return; }
   b.queueId = queueId; b.conversationId = conversationId; b.transitioning = false;
   transport.bind(id, { queueId, incarnation: b.incarnation, alias, cwd: this.options.manager.getSession(id)?.cwd ?? '' });
   this.publish(id, queue.snapshot(queueId));
@@ -108,6 +113,8 @@ export class ClaudeQueueRuntime {
  }
  /** Record why sending is not possible — once per session per reason, so a retrying send cannot flood the log. */
  private readonly noted = new Map<string, string>();
+ /** Incarnations whose binding is being let go; they still hold their conversation until that finishes. */
+ private readonly releasing = new Set<string>();
  private note(id: string, msg: string, detail?: unknown): void {
   const reason = msg + (detail === undefined ? '' : ': ' + (detail instanceof Error ? detail.message : String(detail)));
   if (this.noted.get(id) === reason) return;
@@ -188,13 +195,13 @@ export class ClaudeQueueRuntime {
    return {status:'done'};
   }
   if (!b) return {status:'unavailable'};
-  if (this.closed || !this.options.bridge.isReady(id)) { this.note(id, 'Claude Code helper not answering'); return { status: 'unknown', message: 'The queue connection is no longer ready. Check the conversation before sending again.' }; }
+  if (this.closed || !this.options.bridge.isReady(id)) { this.note(id, 'Claude Code helper not answering'); return { status: 'unknown', message: 'The queue connection is no longer ready. Check the conversation before sending again.', retryable: true }; }
   try {
    await b.ready;
    // WHY retry here (2026-11-07): a chat whose first link failed was only ever linked again by the helper's next state
    // report, which comes after a turn — and no turn could start, because sending needed the link. A send now links it.
    if (!b.queueId && b.seenConversationId) { const conversationId = b.seenConversationId; b.ready = b.ready.then(() => this.link(id, b, conversationId)).catch(error => this.note(id, 'Queue link failed', error)); await b.ready; }
-   if (!b.queueId) { this.note(id, 'Conversation queue not linked yet'); return { status: 'rejected', message: 'Conversation queue is still starting.' }; }
+   if (!b.queueId) { this.note(id, 'Conversation queue not linked yet'); return { status: 'rejected', message: 'Conversation queue is still starting.', retryable: true }; }
    const { queue, transport } = await this.get(); const root = b.queueId;
    let snapshot=queue.snapshot(root);
    // Only a NEW deliberate identity lookup may roll a fully drained history. Enqueue retries retain their captured epoch.

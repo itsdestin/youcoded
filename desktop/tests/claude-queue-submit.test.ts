@@ -125,7 +125,7 @@ describe('host queued Claude submission',()=>{
   // The helper inside Claude Code catching up after the computer wakes answered "not ready" once, and that one answer refused the send.
   vi.useFakeTimers({toFake:['setTimeout','clearTimeout','Date']});
   try{
-   let asks=0;const action=vi.fn(async(_sid:string,a:any)=>a.kind==='identity'?(++asks<3?{status:'unknown',message:'The queue connection is no longer ready.'}:{status:'identity',identity:{queueId:'root',sendEpoch:'epoch'}}):{status:'queued',identity:{queueId:'root',sendEpoch:'epoch'},itemId:'item',sendId:a.payload.sendId});
+   let asks=0;const action=vi.fn(async(_sid:string,a:any)=>a.kind==='identity'?(++asks<3?{status:'unknown',message:'The queue connection is no longer ready.',retryable:true}:{status:'identity',identity:{queueId:'root',sendEpoch:'epoch'}}):{status:'queued',identity:{queueId:'root',sendEpoch:'epoch'},itemId:'item',sendId:a.payload.sendId});
    (window as any).claude={session:{queue:{action},sendInput:vi.fn()}};const dispatch=vi.fn();
    sendToClaudeCode({sessionId:'s',provider:'claude',ptyText:'after waking',content:'after waking',paths:[],dispatch,drawNow:true});
    await vi.advanceTimersByTimeAsync(2500);
@@ -133,16 +133,16 @@ describe('host queued Claude submission',()=>{
    expect(dispatch.mock.calls.some(([a])=>a.type==='SEND_DISCARD')).toBe(false);expect(announce).not.toHaveBeenCalled();
   }finally{vi.useRealTimers();}
  });
- it('says the computer\'s own reason when the queue stays not ready, and gives the words back',async()=>{
+ it('says so in plain words when the queue stays not ready, and gives the words back',async()=>{
   vi.useFakeTimers({toFake:['setTimeout','clearTimeout','Date']});
   try{
-   const action=vi.fn(async()=>({status:'rejected',message:'Conversation queue is still starting.'}));
+   const action=vi.fn(async()=>({status:'rejected',message:'Conversation queue is still starting.',retryable:true}));
    (window as any).claude={session:{queue:{action},sendInput:vi.fn()}};const dispatch=vi.fn();const restored=vi.fn();
    const { RESTORE_UNSENT_EVENT }=await import('../src/renderer/state/submit-outgoing');window.addEventListener(RESTORE_UNSENT_EVENT,restored);
    try{
     sendToClaudeCode({sessionId:'s',provider:'claude',ptyText:'stuck',content:'stuck',paths:[],dispatch,drawNow:true});
     await vi.advanceTimersByTimeAsync(12000);
-    await vi.waitFor(()=>expect(announce).toHaveBeenCalledWith('Conversation queue is still starting. Your message was not sent.'));
+    await vi.waitFor(()=>expect(announce).toHaveBeenCalledWith("Claude Code isn't answering in this chat yet. Your message wasn't sent."));
     expect(restored).toHaveBeenCalledTimes(1);expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({type:'SEND_DISCARD'}));
     expect(action.mock.calls.length).toBeGreaterThan(5);expect(action.mock.calls.every(([,a]:any)=>a.kind==='identity')).toBe(true);
    }finally{window.removeEventListener(RESTORE_UNSENT_EVENT,restored);}
@@ -156,5 +156,27 @@ describe('host queued Claude submission',()=>{
   sendToClaudeCode({sessionId:'s',provider:'claude',ptyText:'still works',content:'still works',paths:[],dispatch:vi.fn()});
   await vi.waitFor(()=>expect(action.mock.calls.some(([,a])=>a.kind==='enqueue'&&a.payload.originalText==='still works')).toBe(true));
   expect(announce).not.toHaveBeenCalled();
+ });
+ it('answers a lasting refusal at once instead of waiting',async()=>{
+  const action=vi.fn(async()=>({status:'rejected',message:'Queue already bound to another live incarnation'}));
+  (window as any).claude={session:{queue:{action},sendInput:vi.fn()}};
+  sendToClaudeCode({sessionId:'s',provider:'claude',ptyText:'x',content:'x',paths:[],dispatch:vi.fn()});
+  await vi.waitFor(()=>expect(announce).toHaveBeenCalledWith("This chat couldn't take your message. Your message wasn't sent."));
+  expect(action).toHaveBeenCalledTimes(1);
+ });
+ it('sends pressed while the queue is catching up share one wait and go out in order',async()=>{
+  vi.useFakeTimers({toFake:['setTimeout','clearTimeout','Date']});
+  try{
+   let ready=false;const order:string[]=[];
+   const action=vi.fn(async(_sid:string,a:any)=>{if(a.kind==='identity')return ready?{status:'identity',identity:{queueId:'root',sendEpoch:'epoch'}}:{status:'unknown',message:'not yet',retryable:true};order.push(a.payload.originalText);return{status:'queued',identity:{queueId:'root',sendEpoch:'epoch'},itemId:'i',sendId:a.payload.sendId};});
+   (window as any).claude={session:{queue:{action},sendInput:vi.fn()}};
+   sendToClaudeCode({sessionId:'s',provider:'claude',ptyText:'one',content:'one',paths:[],dispatch:vi.fn()});
+   sendToClaudeCode({sessionId:'s',provider:'claude',ptyText:'two',content:'two',paths:[],dispatch:vi.fn()});
+   await vi.advanceTimersByTimeAsync(2500);
+   const asked=action.mock.calls.length;ready=true;
+   await vi.advanceTimersByTimeAsync(1500);
+   await vi.waitFor(()=>expect(order).toEqual(['one','two']));
+   expect(asked).toBeLessThanOrEqual(3); // one shared wait asking once a second, not one per press
+  }finally{vi.useRealTimers();}
  });
 });

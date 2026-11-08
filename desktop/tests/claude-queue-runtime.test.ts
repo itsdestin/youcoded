@@ -198,4 +198,20 @@ describe('instance-owned Claude queue runtime', () => {
   expect(await f.runtime.action('s',{kind:'identity'})).toMatchObject({status:'identity'});
   await f.runtime.close();
  });
+ it('a message mid-delivery when the helper restarts is kept for checking, never sent again',async()=>{
+  const f=await fixture();f.safe();const id=await f.runtime.action('s',{kind:'identity'});if(id.status!=='identity')throw Error('identity');
+  await f.runtime.action('s',{kind:'enqueue',queueId:id.identity.queueId,payload:{sendEpoch:id.identity.sendEpoch,sendId:'mid',originalText:'mid',attachments:[],displayContent:'mid'}});
+  const transport=f.bridge.attachQueueTransport.mock.lastCall![0] as ClaudeQueueTransport;await transport.poll('s','inc');
+  void transport.offer('s','inc',{boundaryId:'idle',boundarySeq:1,conversationId:'conversation',turnId:null,kind:'idle',expiresAt:Date.now()+10000});
+  expect((await transport.poll('s','inc')).kind).toBe('stage');
+  f.bridge.emit('native-ready','s','inc-2');f.bridge.emit('state','s',{claudeSessionId:'conversation',turnId:null});
+  expect(await f.runtime.action('s',{kind:'identity'})).toMatchObject({status:'identity'});
+  const journal=JSON.parse(await readFile(join(f.root,'claude-queues',id.identity.queueId+'.json'),'utf8'));
+  expect(journal.live).toEqual({incarnation:'inc-2'});
+  expect(journal.items.find((i:any)=>i.sendId==='mid')?.status).not.toBe('waiting');
+  expect(journal.quarantines.length).toBeGreaterThan(0);
+  // The new helper is offered nothing to send: the uncertain message waits for the person to check it.
+  const next=await transport.poll('s','inc-2');expect(next.kind).not.toBe('stage');
+  await f.runtime.close();
+ });
 });

@@ -51,10 +51,11 @@ async function observe($) {
     if (typeof model === 'string' && model) state.model = model;
     await post($, 'state', { state });
     observationRetries = 0;
-  } catch (_) {
+  } catch (error) {
     // Observations stay off the model hook's critical path, but one lost report must not leave the host without the
     // conversation id until the next turn (which may never come): try again a few times, a few seconds apart.
-    if (running && observationRetries < 5) { observationRetries++; $.clock.after(3000, () => scheduleObservation($)); }
+    // A refusal (this helper was replaced, or the chat closed) is final: retrying it would only knock again.
+    if (running && observationRetries < 5 && ![401, 409, 410].includes(error && error.status)) { observationRetries++; $.clock.after(3000, () => scheduleObservation($)); }
   }
 }
 
