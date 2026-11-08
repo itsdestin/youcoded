@@ -32,6 +32,16 @@ describe('listPickerFolders — what the new-session picker shows, on every tran
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toHaveLength(1);
   });
 
+  it('on the phone never offers Home, the app\'s private folder, as a project', () => {
+    vi.stubEnv('YOUCODED_HEADLESS_PORT', '1234');
+    try {
+      expect(listPickerFolders(file)).toEqual([]);
+      // A phone that already seeded Home (every install before this) stops showing it too.
+      fs.writeFileSync(file, JSON.stringify([{ path: os.homedir(), nickname: 'Home', addedAt: 1 }, { path: dir, nickname: 'work', addedAt: 2 }]));
+      expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['work']);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('lists synced projects after the saved folders, badged, without repeating a saved one', () => {
     const projectsRoot = path.join(dir, 'Projects');
     const cooking = path.join(projectsRoot, 'CookinOnLowHeat');

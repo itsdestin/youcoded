@@ -10,6 +10,20 @@ import path from 'path';
 import type { SavedFolder } from '../shared/prefs-types';
 export type { SavedFolder };
 
+/** True on the phone (the only host started headless). WHY (card #213, Destin 2026-11-08): there,
+ *  home is the app's own private top folder (settings files such as providers.json), not a place the
+ *  user keeps work, so it is never offered as a project and a session with no folder opens in the
+ *  app-owned empty "No folder" instead (no-folder.ts). */
+export function homeIsAppPrivate(): boolean { return !!process.env.YOUCODED_HEADLESS_PORT; }
+
+/** Drops a Home entry where home is the app's private folder (the phone); unchanged elsewhere.
+ *  Every phone install before this change already saved one, so filtering (not just skipping the seed) is needed. */
+export function withoutPrivateHome<T extends { path: string }>(folders: T[]): T[] {
+  if (!homeIsAppPrivate()) return folders;
+  const home = path.resolve(os.homedir());
+  return folders.filter((f) => path.resolve(f.path) !== home);
+}
+
 function foldersFilePath(): string {
   return path.join(os.homedir(), '.claude', 'youcoded-folders.json');
 }
