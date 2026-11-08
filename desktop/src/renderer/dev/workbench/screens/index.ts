@@ -27,6 +27,7 @@ import { TOUR } from './tour';
 import { FLOATING } from './floating';
 import { OVERLAYS } from './overlays';
 import { BUDDY } from './buddy';
+import { COVERAGE_A } from './coverage-a';
 
 export type { ScreenEntry } from './types';
 
@@ -41,4 +42,5 @@ export const SCREENS: readonly ScreenEntry[] = [
   ...FLOATING,
   ...OVERLAYS,
   ...BUDDY,
+  ...COVERAGE_A,
 ];
