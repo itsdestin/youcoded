@@ -152,7 +152,8 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   try { await hookRelay.start(); } catch (e) { log('ERROR', 'Headless', 'Failed to start hook relay', { error: String(e) }); }
   try {
     const { runSettingsChores } = require('../launch-settings-chores');
-    await runSettingsChores();
+    // phone: also start Claude Code in fullscreen when no display mode is set (tui-fullscreen-default.ts).
+    await runSettingsChores({ phone: true });
   } catch (e) {
     log('ERROR', 'Headless', 'Failed to run settings chores', { error: String(e) });
   }

@@ -19,6 +19,7 @@ import { getCapabilities, getPlatform, isTouchDevice } from '../platform';
 import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } from '../workbench-mode';
 import { computeTerminalSurface } from '../themes/theme-engine';
 import { ScreenMark } from '../shoot-mode';
+import { swipeAction } from './terminal-swipe';
 
 // Photo-only build flag (vite.config.ts `define`); see shoot-mode.tsx.
 declare const __SHOOT__: boolean;
@@ -547,7 +548,15 @@ function TerminalView({ sessionId, visible }: Props) {
         const deltaPx = lastY - currentY + remainder;
         const lines = (deltaPx / PX_PER_LINE) | 0; // truncate toward zero
         if (lines !== 0) {
-          terminal.scrollLines(lines);
+          // Claude Code's fullscreen mode keeps its own history, so there the swipe becomes wheel
+          // reports to the program (terminal-swipe.ts — why; Destin 2026-11-08 "okay").
+          const action = swipeAction(lines, {
+            alternate: terminal.buffer.active.type === 'alternate',
+            mouseTracking: terminal.modes.mouseTrackingMode !== 'none',
+            cols: terminal.cols, rows: terminal.rows,
+          });
+          if (action.kind === 'send') window.claude.session.sendInput(sessionId, action.data);
+          else terminal.scrollLines(action.lines);
           remainder = deltaPx - lines * PX_PER_LINE;
         } else {
           remainder = deltaPx;
