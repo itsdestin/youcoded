@@ -8,6 +8,7 @@ import { ClaudeQueueTransport } from './claude-queue-transport';
 import type { QueueJournal } from '../shared/conversation-queue-types';
 import type { ConversationQueueAction, ConversationQueueReply } from '../shared/conversation-queue-channel-types';
 import type { SessionLiveBody } from '../shared/session-live-types';
+import { log } from './logger';
 
 interface Options {
  userDataRoot(): string;
@@ -23,7 +24,8 @@ interface Options {
 const IMMEDIATE_HIDE_MS = 8000;
 /** Recent confirmed sends whose transcript identity is republished with every queue snapshot. */
 const BOUND_SENDS = 16;
-interface Binding { incarnation: string; conversationId?: string; queueId?: string; ready: Promise<void>; clearId?: string; transitioning?: boolean }
+/** `seenConversationId`: the conversation the helper last reported, kept even when linking it failed, so the link can be retried. */
+interface Binding { incarnation: string; conversationId?: string; seenConversationId?: string; queueId?: string; ready: Promise<void>; clearId?: string; transitioning?: boolean }
 /** One lazy instance per runtime. No userData read/staging before final dev profile selection. */
 export class ClaudeQueueRuntime {
  private service?: Promise<{ queue: ClaudeQueue; transport: ClaudeQueueTransport }>;
@@ -37,27 +39,40 @@ export class ClaudeQueueRuntime {
  constructor(private readonly options: Options) {
   this.onReady = (id, incarnation) => {
    const previous = this.bindings.get(id);
-   if (previous && previous.incarnation !== incarnation) { previous.transitioning = true; return; } // explicit reopen required for reloaded worker capability
+   if (previous && previous.incarnation !== incarnation) {
+    // WHY replace, not freeze (2026-11-07, "Queue identity is not ready"): the helper inside Claude Code introduced itself
+    // again (it restarted or reloaded). The old binding used to be marked "transitioning" for good, so every later send in
+    // the chat failed until it was reopened. Let go of the old link the way closing the chat would (in-flight deliveries
+    // kept for recovery, never resent) and link afresh under the new helper; its first state report does the linking.
+    // A conversation id seen mid-Clear may already be the old one: wait for the new helper's own report instead.
+    const next: Binding = { incarnation, seenConversationId: previous.clearId || previous.transitioning ? undefined : previous.seenConversationId, ready: Promise.resolve() };
+    // Until it is released the old incarnation still counts as holding its conversation (releaseStaleLive's check).
+    this.releasing.add(previous.incarnation);
+    next.ready = previous.ready.then(() => this.release(id, previous)).catch(error => this.note(id, 'Old queue link not released', error)).finally(() => this.releasing.delete(previous.incarnation));
+    this.bindings.set(id, next);
+    return;
+   }
    this.bindings.set(id, previous ?? { incarnation, ready: Promise.resolve() });
   };
   this.onState = (id, state) => {
    const b = this.bindings.get(id); if (!b || !state.claudeSessionId || this.closed) return;
    const identity = state.claudeSessionId;
+   b.seenConversationId = identity;
    b.ready = b.ready.then(async () => {
-    const { queue, transport } = await this.get();
     if (b.queueId && b.conversationId !== identity) {
      // Receipt of a different ID alone is NOT a Clear authorization. Freeze; the
      // authoritative lifecycle hook/our executing Clear resolves the replacement.
+     const { queue } = await this.get();
      b.transitioning = true;
      await queue.freezeForClear(b.queueId, b.incarnation); return;
     }
-    if (!b.queueId) {
-     const queueId = await queue.bind({ provider: 'claude', conversationId: identity }, b.incarnation);
-     b.queueId = queueId; b.conversationId = identity;
-     transport.bind(id, { queueId, incarnation: b.incarnation, alias: { provider: 'claude', conversationId: identity }, cwd: this.options.manager.getSession(id)?.cwd ?? '' });
-     this.publish(id, queue.snapshot(queueId));
-    }
-   }).catch(() => { b.transitioning = true; });
+    if (!b.queueId) await this.link(id, b, identity);
+   }).catch(error => {
+    // WHY only with a link: a failed FIRST link has nothing to protect, and marking it "transitioning" made every later
+    // send fail even after a retry linked it. An unlinked chat is retried by the next state report or the next send.
+    if (b.queueId) b.transitioning = true;
+    this.note(id, 'Queue link failed', error);
+   });
   };
   options.bridge.setQueueInitializer(async () => { await this.get(); });
   options.bridge.on('native-ready', this.onReady); options.bridge.on('state', this.onState);
@@ -74,6 +89,37 @@ export class ClaudeQueueRuntime {
    await queue.restore(); this.options.bridge.attachQueueTransport(transport); return { queue, transport };
   })();
   return this.service;
+ }
+ /** Link this chat to its conversation's queue. Runs on the binding's own chain (b.ready), never alongside another step of it. */
+ private async link(id: string, b: Binding, conversationId: string): Promise<void> {
+  if (b.queueId || this.closed || this.bindings.get(id) !== b) return;
+  const { queue, transport } = await this.get();
+  const alias = { provider: 'claude' as const, conversationId };
+  // A live mark no running chat of ours holds is left over (a chat that did not close cleanly, a restarted helper): let it go.
+  await queue.releaseStaleLive(alias, incarnation => this.releasing.has(incarnation) || [...this.bindings.values()].some(o => o !== b && !!o.queueId && o.incarnation === incarnation));
+  const queueId = await queue.bind(alias, b.incarnation);
+  // The chat ended while it was being linked (forget() saw no link to close): close this one instead of leaving it live.
+  if (this.closed || this.bindings.get(id) !== b) { await queue.close(queueId, b.incarnation); return; }
+  b.queueId = queueId; b.conversationId = conversationId; b.transitioning = false;
+  transport.bind(id, { queueId, incarnation: b.incarnation, alias, cwd: this.options.manager.getSession(id)?.cwd ?? '' });
+  this.publish(id, queue.snapshot(queueId));
+ }
+ /** Close a binding's queue link exactly as ending the chat would. */
+ private async release(id: string, b: Binding): Promise<void> {
+  if (!this.service) return;
+  const s = await this.service;
+  await s.transport.unbind(id);
+  if (b.queueId) await s.queue.close(b.queueId, b.incarnation);
+ }
+ /** Record why sending is not possible — once per session per reason, so a retrying send cannot flood the log. */
+ private readonly noted = new Map<string, string>();
+ /** Incarnations whose binding is being let go; they still hold their conversation until that finishes. */
+ private readonly releasing = new Set<string>();
+ private note(id: string, msg: string, detail?: unknown): void {
+  const reason = msg + (detail === undefined ? '' : ': ' + (detail instanceof Error ? detail.message : String(detail)));
+  if (this.noted.get(id) === reason) return;
+  this.noted.set(id, reason);
+  log('WARN', 'ClaudeQueue', msg, { sessionId: id, ...(detail === undefined ? {} : { error: detail instanceof Error ? detail.message : String(detail) }) });
  }
  private publish(id: string, r: QueueJournal): void {
   const now = Date.now();
@@ -149,9 +195,13 @@ export class ClaudeQueueRuntime {
    return {status:'done'};
   }
   if (!b) return {status:'unavailable'};
-  if (this.closed || !this.options.bridge.isReady(id)) return { status: 'unknown', message: 'The queue connection is no longer ready. Check the conversation before sending again.' };
+  if (this.closed || !this.options.bridge.isReady(id)) { this.note(id, 'Claude Code helper not answering'); return { status: 'unknown', message: 'The queue connection is no longer ready. Check the conversation before sending again.', retryable: !this.closed }; }
   try {
-   await b.ready; if (!b.queueId) return { status: 'rejected', message: 'Conversation queue is still starting.' };
+   await b.ready;
+   // WHY retry here (2026-11-07): a chat whose first link failed was only ever linked again by the helper's next state
+   // report, which comes after a turn — and no turn could start, because sending needed the link. A send now links it.
+   if (!b.queueId && b.seenConversationId) { const conversationId = b.seenConversationId; b.ready = b.ready.then(() => this.link(id, b, conversationId)).catch(error => this.note(id, 'Queue link failed', error)); await b.ready; }
+   if (!b.queueId) { this.note(id, 'Conversation queue not linked yet'); return { status: 'rejected', message: 'Conversation queue is still starting.', retryable: true }; }
    const { queue, transport } = await this.get(); const root = b.queueId;
    let snapshot=queue.snapshot(root);
    // Only a NEW deliberate identity lookup may roll a fully drained history. Enqueue retries retain their captured epoch.
@@ -159,7 +209,7 @@ export class ClaudeQueueRuntime {
     await queue.rotateSendEpoch(root,snapshot.sendEpoch);snapshot=queue.snapshot(root);
    }
    const identity = { queueId: root, sendEpoch: snapshot.sendEpoch };
-   if (action.kind === 'identity') return { status: 'identity', identity };
+   if (action.kind === 'identity') { this.noted.delete(id); return { status: 'identity', identity }; }
    // WHY (2026-10-22 phone reliability): a phone whose send lost its answer (a frozen laptop, a drop) kept the request and
    // refused every different message until the exact text was retyped. The queue's items and tombstones are durable and
    // keyed by sendId, so it can say whether it ever accepted that send — read-only, nothing is resent.
@@ -205,20 +255,23 @@ export class ClaudeQueueRuntime {
     await this.identityChanged(id,'clear',result.claudeSessionId); return { status: 'done' };
    }
    return { status: 'rejected', message: 'Unsupported queue operation.' };
-  } catch (error) { return { status: 'rejected', message: error instanceof Error ? error.message : 'Queue action could not be confirmed.' }; }
+  } catch (error) { this.note(id, 'Queue action refused', error); return { status: 'rejected', message: error instanceof Error ? error.message : 'Queue action could not be confirmed.' }; }
  }
  async forget(id: string): Promise<void> {
   const b = this.bindings.get(id); if (!b) return;
   // Per-session notes and timers end with the session, so a reopened conversation never inherits a stale "waiting" note.
-  this.issues.delete(id); this.composerBusy.delete(id);
+  this.issues.delete(id); this.composerBusy.delete(id); this.noted.delete(id);
   const timer = this.republishTimers.get(id); if (timer) { clearTimeout(timer); this.republishTimers.delete(id); }
-  if (this.service) { const s = await this.service; await s.transport.unbind(id); if (b.queueId) {
-    const r=s.queue.snapshot(b.queueId);
-    // Closing a fully resolved queue can retire its old namespace; stale queueId/epoch requests cannot recreate it.
-    if(!r.items.length&&!s.queue.hasWriteBarrier(b.queueId)&&(r.tombstones.length||r.cancelledCheckouts.length))await s.queue.rotateSendEpoch(b.queueId,r.sendEpoch);
-    await s.queue.close(b.queueId,b.incarnation);
-   } }
-  this.bindings.delete(id);
+  try {
+   if (this.service) { const s = await this.service; await s.transport.unbind(id); if (b.queueId) {
+     const r=s.queue.snapshot(b.queueId);
+     // Closing a fully resolved queue can retire its old namespace; stale queueId/epoch requests cannot recreate it.
+     // WHY best effort (desktop.log 2026-11-03/06 "Queue close failed: Stale send epoch"): a failed tidy-up skipped
+     // close(), so the conversation stayed marked live and could not be linked again until the app restarted.
+     if(!r.items.length&&!s.queue.hasWriteBarrier(b.queueId)&&(r.tombstones.length||r.cancelledCheckouts.length))await s.queue.rotateSendEpoch(b.queueId,r.sendEpoch).catch(()=>{});
+     await s.queue.close(b.queueId,b.incarnation);
+    } }
+  } finally { if (this.bindings.get(id) === b) this.bindings.delete(id); }
  }
  async close(): Promise<void> {
   this.closed = true; this.options.bridge.off('native-ready',this.onReady); this.options.bridge.off('state',this.onState);

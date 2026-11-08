@@ -7,6 +7,7 @@
 // mid-send can ask afterwards whether the message arrived (state/send-reconcile.ts) instead of guessing. It is NEVER resent by itself.
 import type { ChatAction, SessionChatState } from './chat-types';
 import type { NativeSendResult } from '../../shared/types';
+import type { ConversationQueueReply } from '../../shared/conversation-queue-channel-types';
 import { sendChatMessage } from '../components/native-send';
 import { newSendId } from './send-ids';
 import { SEND_CHECK_EVENT } from './send-reconcile';
@@ -68,6 +69,33 @@ export function sendToClaudeCode(o: OutgoingSend): string {
   return sendToClaudeLegacy(o,sendId);
 }
 
+/** How long a send waits for the conversation's queue to come ready before saying it could not send. */
+const QUEUE_READY_WAIT_MS = 10000;
+const QUEUE_READY_RETRY_MS = 1000;
+/**
+ * Ask whether the conversation's queue can take a message, asking again for a short while when it says it is only not
+ * ready YET (`retryable`). WHY (2026-11-07, "Queue identity is not ready"): that is usually a moment — the helper inside
+ * Claude Code catching up after the computer wakes, or the conversation being linked — and the computer now repairs both
+ * by itself; answering the first "not yet" with a failure turned that moment into a refused message. A lasting refusal is
+ * answered at once. Sends pressed during the wait share it (and go out in order), so they never start parallel loops.
+ * Nothing is sent while asking.
+ */
+const identityWaits = new Map<string, Promise<ConversationQueueReply>>();
+function readyQueueIdentity(sessionId: string): Promise<ConversationQueueReply> {
+  const waiting = identityWaits.get(sessionId);
+  if (waiting) return waiting;
+  const wait = (async () => {
+    const deadline = Date.now() + QUEUE_READY_WAIT_MS;
+    for (;;) {
+      const reply = await window.claude.session.queue.action(sessionId, { kind: 'identity' });
+      if (!('retryable' in reply && reply.retryable) || Date.now() >= deadline) return reply;
+      await new Promise(resolve => setTimeout(resolve, QUEUE_READY_RETRY_MS));
+    }
+  })().finally(() => identityWaits.delete(sessionId));
+  identityWaits.set(sessionId, wait);
+  return wait;
+}
+
 // WHY: identical text is valid new intent while a previous send awaits its acknowledgement.
 // Only settled-unknown persisted requests are retry candidates; reload intentionally resets this set.
 const inFlightQueueSends = new Set<string>();
@@ -86,10 +114,17 @@ async function sendViaHostQueue(o: OutgoingSend, sendId: string): Promise<void> 
     if(o.drawNow&&!(o.originalText??o.ptyText).trimStart().startsWith('/')){drawnSendId=request?.payload.sendId??sendId;o.dispatch({type:'USER_PROMPT',sessionId:o.sessionId,content:o.content,timestamp:Date.now(),attachments:o.paths,sendId:drawnSendId,sendTransport:'queue'});}
     if(!request){
      allowLegacyFallback=true;
-     const identity = await window.claude.session.queue.action(o.sessionId,{kind:'identity'});
+     const identity = await readyQueueIdentity(o.sessionId);
      allowLegacyFallback=false;
      if (identity.status === 'unavailable') { undraw(); sendToClaudeLegacy(o,sendId); return; }
-     if (identity.status !== 'identity') throw Error('Queue identity is not ready. The original message was not submitted.');
+     if (identity.status !== 'identity') {
+      // WHY plain words, and the computer's own reason in the log: its reasons are written for diagnosis ("Stale send
+      // epoch"), and one fixed sentence for every cause had made a stuck chat impossible to tell apart.
+      console.warn('[queue] not ready:', identity);
+      throw Error('retryable' in identity && identity.retryable
+        ? "Claude Code isn't answering in this chat yet. Your message wasn't sent."
+        : "This chat couldn't take your message. Your message wasn't sent.");
+     }
      request={kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId,originalText:o.originalText??o.ptyText,attachments:[...o.paths],displayContent:o.content}};
      savePendingQueueSend(o.sessionId,request);
     }
@@ -97,7 +132,10 @@ async function sendViaHostQueue(o: OutgoingSend, sendId: string): Promise<void> 
     const result = await window.claude.session.queue.action(o.sessionId,request);
     if (result.status === 'queued') {clearPendingQueueSend(o.sessionId,request);void settleSavedQueueSends(o.sessionId);return;} // host strip/transcript only
     if (result.status === 'unavailable') throw Error('Queue availability changed. Check the conversation before sending again.');
-    throw Error('message' in result ? result.message : 'Queued delivery could not be confirmed.');
+    // WHY plain words (the computer's reason goes to the console and its log): a refusal never queued the message; any
+    // other answer may have, so the person checks before sending again rather than risking a double.
+    console.warn('[queue] send not accepted:', result);
+    throw Error(result.status === 'rejected' ? "This chat couldn't take your message. Your message wasn't sent." : "Your message may not have been sent. Check the chat before sending it again.");
   } catch (error) {
     // A settled failure is already a recovery candidate, even while the notice module loads.
     if(activeSendId){inFlightQueueSends.delete(activeSendId);activeSendId=undefined;}

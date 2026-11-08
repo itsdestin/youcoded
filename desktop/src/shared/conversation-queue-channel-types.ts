@@ -18,7 +18,8 @@ export type ConversationQueueReply =
   | { status: 'reserved'; item: QueueItem }
   | { status: 'lookup'; identity: ConversationQueueIdentity; found: boolean }
   | { status: 'done'; /** Dismiss: the words to put back in the dismissing screen's empty message box. */ restore?: { text: string; attachments: string[] } }
-  | { status: 'rejected' | 'unknown'; message: string };
+  /** `retryable`: the queue is only not ready YET (the helper catching up, the conversation being linked); a send may ask again shortly. */
+  | { status: 'rejected' | 'unknown'; message: string; retryable?: boolean };
 export interface ConversationQueueBridge { action(sessionId: string, action: ConversationQueueAction): Promise<ConversationQueueReply> }
 export interface ConversationQueueChannelTypes {
   'session:queue-action': { request: { sessionId: string; action: ConversationQueueAction }; response: ConversationQueueReply };
