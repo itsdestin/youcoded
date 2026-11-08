@@ -9,11 +9,13 @@ const buddy = (which: string, w: number, h: number, extra: Partial<ScreenEntry> 
 export const BUDDY: readonly ScreenEntry[] = [
   { name: 'dev/buddy', tags: ['dev', 'buddy', 'narrow'], viewport: { width: 320, height: 480 } },
   buddy('chat', 320, 480, { sameAs: { name: 'dev/buddy', why: 'the plain name opens the same default chat window' } }),
-  buddy('chat-large', 440, 660),
+  // newIn on the large size: the window's large size (buddy-geometry CHAT_SIZE_LARGE) is new since v1.3.3
+  buddy('chat-large', 440, 660, { newIn: 'after' }),
   buddy('chat-question', 320, 480),
-  buddy('chat-question-large', 440, 660),
+  buddy('chat-question-large', 440, 660, { newIn: 'after' }),
   buddy('chat-approval', 320, 480),
   buddy('welcome', 320, 480),
   buddy('group', 900, 680),
-  buddy('moods', 640, 160),
+  // newIn: the mood poses (components/buddy/mascot-mood.ts) are new since v1.3.3
+  buddy('moods', 640, 160, { newIn: 'after' }),
 ];
