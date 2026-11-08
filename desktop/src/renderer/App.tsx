@@ -96,7 +96,7 @@ import { promptShowMeansStarted, composerDisabled, usePendingPromptActive, start
 import MovedGate from './components/MovedGate';
 import { readBuddyStyle } from './components/BuddyStyleRow';
 import QuitSessionsPrompt from './components/QuitSessionsPrompt';
-import { fetchReopenList, forgetReopenList, resolveNativeBinding } from './state/welcome-back';
+import { fetchReopenList, forgetReopenList, resolveNativeBinding } from './state/welcome-back'; import { isSyncAlarm } from './state/sync-display-state';
 import CloseSessionPrompt, { CLOSE_PROMPT_SUPPRESS_KEY } from './components/CloseSessionPrompt';
 import PreferencesPopup from './components/PreferencesPopup';
 import { useNativeBinding, usePreset, NativeExtras, loadLastBinding, persistLastBinding, defaultRuntime, type Runtime, type Binding } from './components/RuntimeBinding';
@@ -2204,7 +2204,7 @@ function AppInner() {
   // Red dot on the gear icon so the user can't miss a sync failure — from
   // either sync system.
   const settingsDangerBadge = useMemo(
-    () => spacesFailing || (statusData.syncWarnings ?? []).some((w) => w?.level === 'danger'),
+    () => spacesFailing || (statusData.syncWarnings ?? []).some(isSyncAlarm), // never-set-up is grey, no dot
     [spacesFailing, statusData.syncWarnings],
   );
 
@@ -3837,7 +3837,7 @@ function AppInner() {
               />
             </div>
           <div
-            // WHY scrolls, centred only while it fits (justify-center-safe; Destin's phone test: the new-session form was cut off with the phone sideways and could not be reached). invisible under Welcome back: that screen takes this one's place
+            // WHY scrolls, centred only while it fits (justify-center-safe; Destin's phone test: the new-session form was cut off with the phone sideways and could not be reached); a short screen also drops the mascot and heading (.welcome-hero, globals.css). invisible under Welcome back: that screen takes this one's place
             // until you choose (Q-where), rather than sitting on top of it.
             className={`scroll-mask flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center-safe gap-3${firstTimeWelcome ? ' max-sm:justify-start max-sm:pt-2' : ''}${welcomeBackMode ? ' invisible' : ''}`}
             // The header is position:absolute over the top of this area, so
@@ -3881,7 +3881,7 @@ function AppInner() {
               // the buddy here.
               // YT-1 (Destin): header, mascot and text "proportionally a bit bigger compared
               // to the menu box below, and maybe just slightly higher above" it; then "just a bit smaller" (YT2-1); then a bigger buddy, slightly smaller text (GB-2).
-              <div className="flex items-center gap-2 mb-5 select-none max-sm:flex-col max-sm:text-center max-sm:px-4 max-sm:mb-2 max-sm:gap-0">
+              <div className="welcome-hero flex items-center gap-2 mb-5 select-none max-sm:flex-col max-sm:text-center max-sm:px-4 max-sm:mb-2 max-sm:gap-0">
                 {/* WHY max-sm:flex-col (2026-11-01 phone test): side-by-side mascot + heading is wider than a phone, so the heading and form labels were cut off. On a phone the mascot stacks above centred text. WHY max-sm:justify-start + w-20 mascot on the container/mascot (2026-11-01 owner, Flip7): centring parked the form at 30-83% of a phone, so dropdowns were cut off and the tour bubble covered Start session; now it sits at the top. WHY -translate-y-3 (deck glass-buddy-3 GB3-2, "fix alignment between mascot
                     and text"): the rig box centres the BODY, but the feet hang below it, so the
                     whole figure sat ~13px lower than the text block. Destin then set the text lower than
@@ -3902,7 +3902,7 @@ function AppInner() {
                 motes, sparkles) orbiting the mascot — big canvas, no clipping.
                 data-guide-anchor: the tour's first stop rings the buddy. */}
             {!firstTimeWelcome && (
-              <div data-guide-anchor="welcome-mascot" className="flex">
+              <div data-guide-anchor="welcome-mascot" className="welcome-hero flex">
                 <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
               </div>
             )}
@@ -4071,12 +4071,12 @@ function AppInner() {
                   </Button>
                   {/* Same decision-69 rationale as above: panel-glass is preserved
                       as a className override so wallpaper themes still re-tier it.
-                      Hidden on the first-time screen: it would list nothing. WHY raised (Destin's phone test: unreadable on Meadow Mist): an outline alone vanished on the pale wallpaper; it now has the panel fill and border. */}
+                      Hidden on the first-time screen: it would list nothing. WHY welcome-resume (Destin's phone test: unreadable on Meadow Mist, its dark label over the wallpaper's dark trees; a solid fill was rejected as "inconsistent" with the other themes): globals.css tints it on wallpaper themes only. */}
                   {!firstTimeWelcome && (
                     <Button
-                      variant="raised"
+                      variant="secondary"
                       size="lg"
-                      className="panel-glass w-full px-6"
+                      className="panel-glass welcome-resume w-full px-6"
                       onClick={() => setResumeRequested(true)}
                     >
                       <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

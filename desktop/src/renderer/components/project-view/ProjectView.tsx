@@ -234,6 +234,7 @@ export function ProjectView(props: ProjectViewProps) {
   // Multi-select type filter; EMPTY set = all types (Destin, 2026-07-23).
   const [types, setTypes] = useState<ReadonlySet<FileTypeGroup>>(() => new Set());
   const [fileSort, setFileSort] = useState<FileSortKey>('name');
+  const [showHidden, setShowHidden] = useState(false); // Files filter menu: "Show hidden files" (hidden-files.ts)
   // Grid vs. list for the Files tab. Remembered app-wide, NOT per project
   // (design deck 2026-09-03, Q-4a): one answer to "what view am I in" is
   // predictable; a view that changes as you switch projects reads as a glitch.
@@ -1016,6 +1017,8 @@ export function ProjectView(props: ProjectViewProps) {
                            content and there is no Artifacts tab left for it to
                            belong to. */
                         showDeletedAvailable={false}
+                        showHidden={showHidden}
+                        onShowHidden={setShowHidden}
                         onClose={() => setFilterOpen(false)}
                       />
                     )}
@@ -1062,7 +1065,7 @@ export function ProjectView(props: ProjectViewProps) {
                 conditional. Side benefit: the folder you were browsing and the
                 file you had open are still there when you come back. */}
             {activeProject && (
-              <FilesTab hidden={tab !== 'files'} project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={onFilesMutated} onClearSearch={onFilesClearSearch} onCurrentDirChange={setCurrentRelDir} pvActiveId={pvActiveId} artifactDispatch={dispatch} />
+              <FilesTab hidden={tab !== 'files'} project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} showHidden={showHidden} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={onFilesMutated} onClearSearch={onFilesClearSearch} onCurrentDirChange={setCurrentRelDir} pvActiveId={pvActiveId} artifactDispatch={dispatch} />
             )}
             {/* Keyed by project so a switch starts a fresh 50-card window at the
                 top, instead of keeping the last project's scroll depth. */}

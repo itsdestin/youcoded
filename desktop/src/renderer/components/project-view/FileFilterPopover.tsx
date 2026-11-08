@@ -75,8 +75,12 @@ export function FileFilterPopover({
   sortBy, onSortBy,
   showDeleted, onShowDeleted,
   showDeletedAvailable,
+  showHidden, onShowHidden,
   onClose,
 }: {
+  // Project View only: "Show hidden files" (hidden-files.ts). Omitted (the session drawer), the chip is not drawn.
+  showHidden?: boolean;
+  onShowHidden?(v: boolean): void;
   // MULTI-SELECT as of 2026-07-23 (Destin: "so i can filter to Docs AND images").
   // An EMPTY set means "all types" — there is no 'all' sentinel member.
   types: ReadonlySet<FileTypeGroup>;
@@ -100,10 +104,11 @@ export function FileFilterPopover({
   useEscClose(true, onClose);
 
   // Sort is a preference, not a filter, so "Clear" only resets the filters.
-  const filtersActive = types.size > 0 || (showDeletedAvailable && !!showDeleted);
+  const filtersActive = types.size > 0 || (showDeletedAvailable && !!showDeleted) || !!showHidden;
   const clear = () => {
     onTypesChange(new Set());
     if (showDeletedAvailable) onShowDeleted?.(false);
+    onShowHidden?.(false);
   };
 
   return (
@@ -156,11 +161,18 @@ export function FileFilterPopover({
       {/* "Hide code & configs" was retired 2026-07-23 (Destin): "Code & configs"
           is a TYPE, so hiding it was a second, overlapping way to filter by type.
           Only render Visibility when it still has a control to show. */}
-      {showDeletedAvailable && (
+      {(showDeletedAvailable || onShowHidden) && (
         <Group label="Visibility" multi>
-          <Chip multi active={!!showDeleted} onClick={() => onShowDeleted?.(!showDeleted)}>
-            Show deleted
-          </Chip>
+          {showDeletedAvailable && (
+            <Chip multi active={!!showDeleted} onClick={() => onShowDeleted?.(!showDeleted)}>
+              Show deleted
+            </Chip>
+          )}
+          {onShowHidden && (
+            <Chip multi active={!!showHidden} onClick={() => onShowHidden(!showHidden)}>
+              Show hidden files
+            </Chip>
+          )}
         </Group>
       )}
     </div>

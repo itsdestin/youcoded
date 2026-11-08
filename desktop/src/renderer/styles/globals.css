@@ -1425,6 +1425,24 @@ html:not([data-platform="electron"]) {
 [data-wallpaper] .panel-glass.bg-accent:hover {
   background-color: color-mix(in srgb, var(--accent) calc(var(--panels-opacity, 1) * 90%), transparent);
 }
+/* The welcome screen's Resume session button (outlined, no fill). WHY (Destin's phone test, card #213): on a wallpaper
+   theme its label sat straight on the picture, so Meadow Mist's dark label vanished over the dark trees. On wallpaper
+   themes only, it gets a tint of the theme's own background colour behind it and the full-strength text colour, so it
+   reads like the theme's other surfaces; plain themes keep the outline exactly as before. */
+[data-wallpaper] .welcome-resume {
+  background-color: color-mix(in srgb, var(--canvas) 75%, transparent);
+  color: var(--fg);
+}
+[data-wallpaper] .welcome-resume:hover {
+  background-color: color-mix(in srgb, var(--canvas) 90%, transparent);
+}
+/* The welcome screen's mascot and heading, dropped on a SHORT screen (a phone turned sideways). WHY (Destin, card #213:
+   "super janky ... even if we need to drop the mascot and text in this view. but it shouldn't change things on devices
+   where the screens already work fine like my pc"): with them, the new-session form ran off a 390px-tall screen. 500px
+   is below any desktop window people use, so a computer keeps them; the screen still scrolls if even this is too tall. */
+@media (max-height: 500px) {
+  .welcome-hero { display: none; }
+}
 
 /* Destructive variant — danger-tinted border + ring for delete/clear dialogs */
 .layer-surface[data-destructive] {

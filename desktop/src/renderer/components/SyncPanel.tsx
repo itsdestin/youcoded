@@ -14,7 +14,7 @@ import { Badge, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState,
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
-import { deriveSettingsRowState, type SyncDisplayState } from '../state/sync-display-state';
+import { deriveSettingsRowState, isSyncAlarm, type SyncDisplayState } from '../state/sync-display-state';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { BackupLogo } from './BackupLogo';
@@ -1677,7 +1677,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     return (
                       <Callout
                         key={detailsKey}
-                        tone={w.level === 'danger' ? 'danger' : 'warning'}
+                        tone={isSyncAlarm(w) ? 'danger' : w.level === 'danger' ? 'info' : 'warning'} // never set up: calm, not red (isSyncAlarm)
                         title={w.title}
                         actions={actions}
                       >

@@ -481,6 +481,8 @@ interface Props {
 const warnStyles = {
   danger: 'bg-red-400/15 text-fg-2 border-red-400/40',
   warn: 'bg-amber-500/15 text-fg-2 border-amber-500/40',
+  // Sync never set up (isSyncAlarm): a plain grey chip, not an alarm (Destin, 2026-11-07).
+  neutral: 'bg-panel text-fg-2 border-edge-dim',
 };
 
 // --- Widget visibility system ---
@@ -1559,7 +1561,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         // nothing failed. When the only alarm is "No sync configured", say what is true.
         const notSetUp = isFailing && (syncWarnings ?? []).every((w) => w.level !== 'danger' || w.code === 'PERSONAL_NOT_CONFIGURED');
         const label = notSetUp ? 'Sync off' : isFailing ? 'Sync failing' : 'Sync warning';
-        const styleClass = isFailing ? warnStyles.danger : warnStyles.warn;
+        const styleClass = notSetUp ? warnStyles.neutral : isFailing ? warnStyles.danger : warnStyles.warn;
         return (
           <Tooltip text={notSetUp ? 'Nothing is backed up yet — click to set up sync' : isFailing ? 'Sync is failing — click for details' : 'Sync warnings — click for details'}>
           <button
