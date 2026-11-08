@@ -332,7 +332,9 @@ async function notifyPhone(newUrgent, repo) {
   await fetch(`https://ntfy.sh/${topic}`, {
     method: 'POST',
     headers: { Title: 'YouCoded security alert', Priority: 'high', Tags: 'warning', Click: `https://github.com/${repo}/issues?q=is%3Aopen+label%3A${LABEL}` },
-    body: `${newUrgent.length} new urgent security item(s). Tap to open GitHub.`,
+    // WHY "hotfix candidate": Destin chose (2026-11-07) that an urgent item is answered by telling
+    // the assistant "yes hotfix", which runs the normal reviewed hotfix process (runbook §7).
+    body: `${newUrgent.length} new urgent security item(s) — hotfix candidate. Tap to open GitHub; say "yes hotfix" to the assistant to start the fix.`,
   });
 }
 
