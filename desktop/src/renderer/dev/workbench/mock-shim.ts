@@ -2046,8 +2046,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // sentence a word at a time — the same sentence the speech bench used — so
   // the live-words treatment (deck Q-2: a grey tail that settles) and the
   // first-run card (Q-5) can be judged in the workbench without a microphone.
+  // WHY voiceHold (what-changed run 9, 2026-11-08): a picture of the mic mid-sentence caught whichever word the
+  // fake had reached — a different one every time — so two pictures of the same code never matched. With
+  // `voiceHold=<n>` the fake stops after n words and keeps listening, so a screen shows the same words every time.
   const voice = createVoiceMock(
     typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('voice'),
+    { holdAt: typeof location === 'undefined' ? undefined : Number(new URLSearchParams(location.search).get('voiceHold')) || undefined },
   );
 
   const defaults: Ns<'defaults'> = {
@@ -4767,7 +4771,7 @@ const VOICE_SCRIPT = "Can you look at the budget spreadsheet I sent yesterday? R
 /** A self-contained fake of `window.claude.voice`. Exported so the compare view
  *  can mount one composer per readiness state on ONE page (each pane swaps its
  *  own instance in before its InputBar mounts — see registry.tsx `voice-mic`). */
-export function createVoiceMock(initial: string | null, opts: { loopReset?: boolean } = {}): NonNullable<Window['claude']['voice']> {
+export function createVoiceMock(initial: string | null, opts: { loopReset?: boolean; holdAt?: number } = {}): NonNullable<Window['claude']['voice']> {
   const engine = 'Parakeet';
   let readiness: VoiceReadiness =
     initial === 'needs-download' ? { state: 'needs-download', engine, sizeMb: 639 }
@@ -4840,6 +4844,7 @@ export function createVoiceMock(initial: string | null, opts: { loopReset?: bool
         // being reviewed behaves like the one that ships.
         emit({ type: 'heartbeat' });
         // The silence stop (Q-3): the script ends, two quiet seconds pass, the mic closes itself.
+        if (opts.holdAt && words >= opts.holdAt) return;   // held for a picture: still listening, no more words
         if (words < VOICE_SCRIPT.length) later(step, 300 + Math.random() * 160); else later(finish, 2000);
       };
       later(step, 450);

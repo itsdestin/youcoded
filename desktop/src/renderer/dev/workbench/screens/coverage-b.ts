@@ -33,8 +33,10 @@ const CHAT_CARDS: readonly ScreenEntry[] = [
 // WHY: the voice button's states (the fake mic hears one scripted sentence a word at a time; `voice=` sets its readiness).
 const MIC = 'Speak your message';
 const VOICE: readonly ScreenEntry[] = [
-  { ...chat('chat#voice-recording', 'view'), open: [MIC], waitMs: 500 },
-  { ...chat('chat#voice-live-words', 'view'), open: [MIC], waitMs: 3500 },
+  // Held at a fixed word (`voiceHold`) so every picture shows the same words: just started, then mid-sentence
+  // with the first sentence finished (solid) and the rest still settling (grey).
+  { ...chat('chat#voice-recording', 'view'), params: { voiceHold: '3' }, open: [MIC], waitMs: 2500 },
+  { ...chat('chat#voice-live-words', 'view'), params: { voiceHold: '14' }, open: [MIC], waitMs: 8000 },
   // The mic's own words change with its state, so each picture presses the button under its name for that state.
   ...([['needs-download', 'Speak your message (one-time download)'], ['downloading', 'Voice is downloading'], ['unavailable', "Voice isn't available"]] as const).map(([v, label]) => (
     { ...chat(`chat#voice-${v}`, 'view', ...(v === 'unavailable' ? ['error-state'] : [])), params: { voice: v }, open: [label], waitMs: 400 })),
