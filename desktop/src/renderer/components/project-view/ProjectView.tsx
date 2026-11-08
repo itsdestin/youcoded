@@ -254,7 +254,8 @@ export function ProjectView(props: ProjectViewProps) {
   useEffect(() => {
     if (!filterOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (filterWrapRef.current && !filterWrapRef.current.contains(e.target as Node)) {
+      // The popover is drawn on <body> (FileFilterPopover `anchorRef`), outside this wrapper: a tap in it is inside too.
+      if (filterWrapRef.current && !filterWrapRef.current.contains(e.target as Node) && !(e.target as Element).closest?.('[data-file-filter]')) {
         setFilterOpen(false);
       }
     };
@@ -853,11 +854,7 @@ export function ProjectView(props: ProjectViewProps) {
             the pane's own fill, rounded corners and frosted glass too. <main> stays the pane;
             the inner box scrolls on phones and is a plain column at sm+, as <main> was. */}
         <main className="screen-pane screen-pane--frame flex-1 flex flex-col overflow-hidden min-w-0 rounded-xl bg-canvas">
-        {/* WHY no scroll-mask (Destin, 2026-11-07: "filter menus like this should never be fully transparent"): a mask
-            makes this scroller a backdrop root, so on a phone every frosted surface inside it (the filter menu, the
-            project card, the tab switcher) lost its blur and showed the page straight through. Like the chat
-            transcript, the page scrolls without the fade (tests/scroll-mask.test.ts EXCEPTIONS). */}
-        <div className="flex-1 min-h-0 flex flex-col max-sm:overflow-y-auto sm:overflow-hidden">
+        <div className="scroll-mask flex-1 min-h-0 flex flex-col max-sm:overflow-y-auto sm:overflow-hidden">
           {/* No projects at all (first-run guide, spec §1 item 5): the
               explainer card replaces BOTH the hero and the seg-row + tab body —
               three tabs with "0" badges over nothing is a dashboard for nothing.
@@ -1023,6 +1020,7 @@ export function ProjectView(props: ProjectViewProps) {
                         showDeletedAvailable={false}
                         showHidden={showHidden}
                         onShowHidden={setShowHidden}
+                        anchorRef={filterWrapRef}
                         onClose={() => setFilterOpen(false)}
                       />
                     )}
