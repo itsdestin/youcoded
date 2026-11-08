@@ -67,6 +67,12 @@ const WORK_FULL = (o: DoctrineOpts) => [
   // Keeps the literal "Prefer dedicated tools over shell" that the assembly test
   // and the Bash description both point at.
   'Prefer dedicated tools over shell: Read/Glob/Grep instead of cat/find/grep, Edit instead of sed. Use absolute paths.',
+  // WHY (card #40, 2026-10-29): a file named in a reply becomes a link the user clicks, and the
+  // app opens a short path from the chat's STARTING folder — after a `cd` elsewhere, "icon6/x.png"
+  // pointed at a file that did not exist there.
+  o.audience === 'user'
+    ? 'When you name a file in a reply, give its full absolute path, so the user can open it.'
+    : null,
   ADMIN_WORK_GUIDANCE,
   // WHY: admin-work scope approval is deliberately separate from per-command cards.
   'Except for admin work as described above, approval is the app\'s job. When an action needs the user\'s permission, the app shows them a card; do not also ask in chat. If they decline, take a different approach or ask what they would prefer.',
@@ -101,6 +107,8 @@ const WORK_COMPACT = (o: DoctrineOpts) => [
   'Assume you can do what the user asks until something proves you cannot. If you have no tool for it, work out how you could get one — a script, a command already on this machine — before saying no.',
   'Change nothing unless the user clearly expects it. A question ends in an answer, not an edit.',
   'Prefer dedicated tools over shell: Read/Glob/Grep instead of cat/find/grep, Edit instead of sed. Use absolute paths.',
+  // Card #40 — see the full doctrine's line.
+  o.audience === 'user' ? 'Name files in replies by their full absolute path.' : null,
   ADMIN_WORK_GUIDANCE,
   'Except for admin work as described above, approval is the app\'s job: it shows the user a card when needed. Do not also ask in chat.',
   'For visual output (images, HTML pages), look at the result as the user will see it and fix what is wrong. After two rounds without clear progress, show it and ask whether to continue.',

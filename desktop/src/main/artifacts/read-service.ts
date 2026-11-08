@@ -201,7 +201,95 @@ type ResolvePathError =
 
 export type ResolvePathResult =
   | { ok: true; artifact: ArtifactRecord }
-  | { ok: false; error: ResolvePathError };
+  // `searchedNearby`/`elsewhere`: only on a computer-window `not-found` for a
+  // short path, when the chat's own file folders were also searched (see
+  // findBesideSessionFiles). `elsewhere` lists the absolute files found there.
+  | { ok: false; error: ResolvePathError; searchedNearby?: true; elsewhere?: string[] };
+
+/** The chat a computer window asks on behalf of — its desktop id plus, for a
+ *  resumed Claude Code chat, the conversation id its earlier files carry. */
+export interface NearSession { sessionId: string; conversationId?: string }
+
+// More candidates than this are never checked on disk: a short name in a chat
+// that touched hundreds of folders is better answered "not found" than with a
+// burst of file-system calls on one click.
+const NEARBY_CANDIDATE_CAP = 20;
+
+/** A plain relative path's segments (`./` dropped), or null for any other kind. */
+function shortPathSegments(clickedPath: string): string[] | null {
+  if (/^(?:[\\/]|~|[A-Za-z]:)/.test(clickedPath)) return null;
+  const segs = clickedPath.replace(/\\/g, '/').split('/').filter((s) => s !== '' && s !== '.');
+  return segs.length === 0 || segs.includes('..') ? null : segs;
+}
+
+/**
+ * Where else a SHORT path tapped in chat could be: the same relative path
+ * placed beside the files this chat already recorded. Strings only — nothing
+ * here touches the disk.
+ *
+ * WHY (2026-10-29, card #40): a chat starts in one folder, the assistant `cd`s
+ * into another and then names a file by a path relative to where its shell
+ * was ("icon6/s-bands.png"). The tap joined it to the chat's STARTING folder
+ * and said no file exists. The chat's own records say where it was working:
+ * a record `…/banner/icon6/finalists.png` ends in the tapped path's folder
+ * part (`icon6`), so `…/banner/icon6/s-bands.png` is a candidate.
+ *
+ * Only plain relative paths qualify (a leading `./` is dropped): absolute,
+ * `~` and `..` paths already say exactly where they mean. The folder part is
+ * compared segment by segment, case-insensitively, `\` read as `/` — the
+ * findBestMatch rule — so it behaves the same on Windows. Records are taken
+ * newest first, so the cap keeps the folders this chat used most recently.
+ */
+export function nearbyCandidates(clickedPath: string, recordAbsolutes: readonly string[], cap = NEARBY_CANDIDATE_CAP): string[] {
+  const segs = shortPathSegments(clickedPath);
+  if (!segs) return [];
+  const want = segs.slice(0, -1).map((s) => s.toLowerCase());
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const abs of recordAbsolutes) {
+    const dir = abs.replace(/\\/g, '/').split('/').slice(0, -1);
+    if (dir.length <= want.length) continue;
+    const tail = dir.slice(dir.length - want.length).map((s) => s.toLowerCase());
+    if (tail.some((s, i) => s !== want[i])) continue;
+    const candidate = [...dir.slice(0, dir.length - want.length), ...segs].join('/');
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    out.push(candidate);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+/**
+ * The files that exist at nearbyCandidates for this chat. Each candidate gets
+ * the read check artifacts:get applies (symlinks resolved, credential folders
+ * refused) and must be a regular file. A refused or missing candidate is
+ * simply left out — the answer never says WHICH, so this cannot be used to
+ * learn whether a protected file exists.
+ */
+async function findBesideSessionFiles(
+  projectRoot: string,
+  clickedPath: string,
+  alreadyTried: string,
+  artifacts: readonly ArtifactRecord[],
+  near: NearSession,
+): Promise<string[]> {
+  const mine = artifacts
+    .filter((a) => a.versions.some((v) => v.sessionId === near.sessionId
+      || (!!near.conversationId && v.conversationId === near.conversationId)))
+    .sort((a, b) => (b.lastModified ?? '').localeCompare(a.lastModified ?? ''));
+  const absolutes = mine.map((a) => trackedAbsoluteForm(a, projectRoot)).filter((p): p is string => !!p);
+  const candidates = nearbyCandidates(clickedPath, absolutes).filter((c) => canonicalize(c, null) !== alreadyTried);
+  const found: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      const auth = await authorizeArtifactRead(projectRoot, candidate, false);
+      if (!auth.ok) continue;
+      if ((await fs.promises.stat(auth.realPath)).isFile()) found.push(candidate);
+    } catch { /* unreadable: not offered */ }
+  }
+  return found;
+}
 
 /** A tracked record's comparable absolute form, or null when it has none. */
 function trackedAbsoluteForm(a: ArtifactRecord, projectRoot: string): string | null {
@@ -234,8 +322,33 @@ function trackedAbsoluteForm(a: ArtifactRecord, projectRoot: string): string | n
  *  4. Inside the folder → the same symlink-resolving, in-folder, protected-path
  *     check artifacts:get applies (authorizeArtifactRead), then a stat. A file
  *     answers the exact record discovery would build for it.
+ *  5. `nearSession` (computer windows only — ipc/artifacts.ts never passes it
+ *     for a phone): a `not-found` short path is also looked for beside this
+ *     chat's own files (findBesideSessionFiles), and the answer says so.
  */
 export async function resolveArtifactPath(
+  projectRoot: unknown,
+  clickedPath: unknown,
+  opts?: { trackedOnly?: boolean; refusePrivate?: boolean; nearSession?: NearSession },
+): Promise<ResolvePathResult> {
+  const answer = await resolveInFolder(projectRoot, clickedPath, opts);
+  const near = opts?.nearSession;
+  // Belt and braces: the phone's options (trackedOnly/refusePrivate) switch the
+  // nearby search off even if a caller ever passed both.
+  if (answer.ok || answer.error !== 'not-found' || !near || opts?.trackedOnly || opts?.refusePrivate) return answer;
+  // Only a short path was searched for anywhere else — the renderer's message
+  // claims the nearby search only when this says it ran.
+  if (!shortPathSegments(clickedPath as string)) return answer;
+  const root = projectRoot as string;
+  const tapped = clickedPath as string;
+  const sidecar = await readSidecarShared(root);
+  const artifacts = sidecar && !('corrupted' in sidecar) ? sidecar.artifacts : [];
+  const tried = canonicalize(path.resolve(root, tapped), null);
+  const elsewhere = await findBesideSessionFiles(root, tapped, tried, artifacts, near);
+  return { ok: false, error: 'not-found', searchedNearby: true, ...(elsewhere.length > 0 ? { elsewhere } : {}) };
+}
+
+async function resolveInFolder(
   projectRoot: unknown,
   clickedPath: unknown,
   opts?: { trackedOnly?: boolean; refusePrivate?: boolean },

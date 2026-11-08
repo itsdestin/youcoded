@@ -97,8 +97,11 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/browser#explainer', 'pane', 'browser'), params: { browser: 'explainer' } },
   { ...chat('chat/browser#starting', 'pane', 'browser'), params: { browser: 'starting' } },
   { ...chat('chat/browser#error', 'pane', 'browser', 'error-state'), params: { browser: 'error' } },
+  // WHY (2026-11-02 rework 3): the "extra protection is off" notice had no screen. Closed, and with its Details folded open.
+  { ...chat('chat/browser#protection-off', 'pane', 'browser'), params: { browser: 'sandbox' } },
+  { ...chat('chat/browser#protection-off-open', 'pane', 'browser'), params: { browser: 'sandbox' }, open: ['Details'], newIn: 'after' },
   { ...chat('chat/browser#narrow', 'pane', 'browser', 'narrow'), params: { browser: 'working' }, viewport: { width: 390, height: 844 } },
-  ...['site', 'final', 'local', 'handoff', 'no-browser', 'downloading'].map((b) => ({ ...chat(`chat#browser-${b}`, 'view', 'browser'), params: { browser: b } })),
+  ...['site', 'form', 'final', 'local', 'handoff', 'no-browser', 'downloading'].map((b) => ({ ...chat(`chat#browser-${b}`, 'view', 'browser'), params: { browser: b } })),
   // Right-click menus, opened on the first visible element of each kind.
   chat('chat/menu/assistant', 'menu'),
   chat('chat/menu/user', 'menu'),
@@ -125,9 +128,27 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#native', 'view'), session: 'wb-2' },
   // WHY: photograph the real admin confirmation and the unchanged push confirmation it reuses.
   { ...chat('chat#push-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-push-approval', latency: '150' }, open: ['Always allow'] },
+  // WHY (Ask first, websites): the first-visit question a native chat raises for a new site.
+  { ...chat('chat#web-visit', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-web-visit-approval', latency: '150' } },
+  // WHY (audit finding 10): the Always-allow choices for a download, an upload and a plain package install.
+  ...['curl-download', 'curl-upload', 'npm-install'].map((g) => ({ ...chat(`chat#grant-${g}`, 'view', 'approval'), session: 'wb-2', params: { seed: `bubbles-grant-${g}`, latency: '150' }, open: ['Always allow'] })),
+  // WHY (Always-allow review 2026-11-01): the new Always-allow states — a download limited to one website (and the redirect
+  // case, which keeps only the word-for-word choice), a joined-up command remembered part by part, and the file-edit card
+  // with "Allow for this chat" plus the this-file / this-folder choice.
+  { ...chat('chat#grant-curl-redirect', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-grant-curl-redirect', latency: '150' }, open: ['Always allow'] },
+  // Round-3 Q-7: a download that follows links can now take the one-website choice; this shows it picked, with its small print.
+  { ...chat('chat#grant-curl-redirect-site', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-grant-curl-redirect', latency: '150' }, open: ['Always allow', 'Always allow downloads from example.com only'] },
+  ...['chain', 'chain-risky'].map((g) => ({ ...chat(`chat#grant-${g}`, 'view', 'approval'), session: 'wb-2', params: { seed: `bubbles-grant-${g}`, latency: '150' }, open: ['Always allow', 'Each part on its own'] })),
+  { ...chat('chat#edit-ask', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-edit-ask', latency: '150' } },
+  { ...chat('chat#edit-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-edit-ask', latency: '150' }, open: ['Always allow', 'Files in src/components'] },
   { ...chat('chat#admin-approval', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' } },
   { ...chat('chat#admin-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'] },
   { ...chat('chat#admin-choices-phone', 'view', 'approval', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'], viewport: { width: 390, height: 844 } },
+  // WHY (card #207): the comment tool's outside-the-project ask, on both chat kinds and a phone.
+  { ...chat('chat#outside-comments', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-outside-comments', latency: '150' } },
+  { ...chat('chat#outside-comments-cc', 'view', 'approval'), session: 'wb-1', params: { seed: 'bubbles-outside-comments-cc', latency: '150' } },
+  { ...chat('chat#outside-comments-today-cc', 'view', 'approval'), session: 'wb-1', params: { seed: 'bubbles-outside-comments-today-cc', latency: '150' } },
+  { ...chat('chat#outside-comments-phone', 'view', 'approval', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-outside-comments', latency: '150' }, viewport: { width: 390, height: 844 } },
   // WHY: the same recovered history remains readable at every readiness phase.
   ...['opening', 'connecting', 'failed', 'ready'].flatMap(phase => [
     { ...chat(`chat#native-startup-${phase}`, 'view', 'native-startup', ...(phase === 'failed' ? ['error-state'] : [])),

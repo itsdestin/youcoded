@@ -100,12 +100,24 @@ describe('installPlugin pins to the catalog commit', () => {
     expect((r as any).error).toContain("couldn't find remote ref");
   });
 
-  it('is not reached for an entry with no catalog block — those still install latest', async () => {
-    // Guards the regression the `?? sourceSha` fallback would cause: 236 of the
-    // 302 live entries carry a stale sourceSha and must keep installing HEAD.
+  it('refuses a third-party git plugin with no pinned commit (catalog down / fallback index)', async () => {
+    // WHY (security audit SC-4): without a commit we would install the upstream
+    // repo's HEAD, unreviewed. Also guards the `?? sourceSha` fallback: a stale
+    // sourceSha must NOT count as a pin.
+    const { installPlugin, upgradePluginFromGit } = await import('../src/main/plugin-installer');
+    const r = await installPlugin({ id: 'x', sourceType: 'url', sourceRef: 'https://github.com/o/r.git', sourceSha: 'stale123' } as any);
+    expect(r).toEqual({ status: 'failed', error: "Can't verify this plugin right now, try again later." });
+    const r2 = await installPlugin({ id: 'y', sourceType: 'git-subdir', sourceRef: 'https://github.com/o/r.git', sourceSubdir: 'p' } as any);
+    expect(r2.status).toBe('failed');
+    const r3 = await upgradePluginFromGit({ id: 'x', sourceType: 'url', sourceRef: 'https://github.com/o/r.git' } as any);
+    expect(r3.status).toBe('failed');
+    expect(calls).toEqual([]); // never even ran git
+  });
+
+  it('still installs YouCoded\'s own git-sourced entries without a pin', async () => {
     const { installPlugin } = await import('../src/main/plugin-installer');
-    await installPlugin({ id: 'x', sourceType: 'url', sourceRef: 'https://github.com/o/r.git', sourceSha: 'stale123' } as any);
-    expect(calls.some((c) => c.includes('checkout'))).toBe(false);
+    const r = await installPlugin({ id: 'own', sourceType: 'url', sourceRef: 'https://github.com/o/r.git', sourceMarketplace: 'youcoded' } as any);
+    expect(r.status).toBe('installed');
   });
 
   it('pins a git-subdir source only AFTER the sparse paths are set', async () => {

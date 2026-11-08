@@ -23,6 +23,7 @@ import {
   resolveNativeXlsxComment,
   reopenNativeXlsxComment,
   moveNativeXlsxComment,
+  OUTSIDE_FILE_APPROVED,
 } from '../src/main/doc-comments/doc-comments-dispatch';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures', 'doc-comments');
@@ -129,6 +130,34 @@ describe('listNativeComments — reading a real .xlsx inside a project', () => {
     const thread = result.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'C3');
     expect(thread).toBeDefined();
     expect(thread?.text).toBe('A brand new thread.');
+  });
+});
+
+describe('a Word/Excel file outside any project, approved on the outside-file card', () => {
+  const textSelector = { kind: 'text' as const, selector: { type: 'TextQuoteSelector' as const, exact: 'Marketing emails go out', prefix: '', suffix: '', occurrence: 0 } };
+
+  it('reads and writes a Word file with the card approval, and refuses a look-alike value a window could send', async () => {
+    const loose = path.join(root, 'outside.docx');
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), loose);
+    // A window or the remote socket can only send plain data, never the symbol.
+    expect(await listNativeComments('docx', { path: loose, outsideApproval: 'outside-file-approved' as never })).toEqual({ ok: false, error: 'path-not-tracked' });
+    expect(await addNativeDocxComment({ path: loose, outsideApproval: String(OUTSIDE_FILE_APPROVED) as never, selector: textSelector, text: 'x', author: 'assistant' }))
+      .toEqual({ ok: false, error: 'path-not-tracked' });
+
+    const added = await addNativeDocxComment({ path: loose, outsideApproval: OUTSIDE_FILE_APPROVED, selector: textSelector, text: 'approved note', author: 'assistant' });
+    expect(added.ok).toBe(true);
+    const listed = await listNativeComments('docx', { path: loose, outsideApproval: OUTSIDE_FILE_APPROVED });
+    expect(listed.ok && listed.comments.some((c) => c.text === 'approved note')).toBe(true);
+  });
+
+  it('writes an Excel file with the card approval', async () => {
+    const loose = path.join(root, 'outside.xlsx');
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'q3-sales-by-rep.xlsx'), loose);
+    const cell = { kind: 'cell' as const, selector: { type: 'CellSelector' as const, cell: 'A1', sheet: 'Q3' } };
+    const added = await addNativeXlsxComment({ path: loose, outsideApproval: OUTSIDE_FILE_APPROVED, selector: cell as never, text: 'approved cell note', author: 'assistant' });
+    expect(added.ok).toBe(true);
+    const listed = await listNativeComments('xlsx', { path: loose, outsideApproval: OUTSIDE_FILE_APPROVED });
+    expect(listed.ok && listed.comments.some((c) => c.text === 'approved cell note')).toBe(true);
   });
 });
 

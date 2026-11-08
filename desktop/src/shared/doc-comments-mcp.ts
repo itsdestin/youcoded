@@ -51,12 +51,15 @@ export function docCommentsMcpToolName(serverId: string, bare: DocCommentsBareTo
   return `mcp__${serverId}__${bare}`;
 }
 
-/** The one tool that is always pre-approved via `--allowedTools`, on every
- *  target type — a read never mutates the source file or its comment store
- *  (same posture as the native tool's `permissionSubject: () => undefined`,
- *  doc-comments-tools.ts's own `ReadFileCommentsTool`). */
-export function docCommentsMcpReadTool(serverId: string): string {
-  return docCommentsMcpToolName(serverId, 'ReadFileComments');
+/** The bare comment-tool name behind either surface's spelling (native
+ *  `ReadFileComments`, Claude Code `mcp__youcoded-doc-comments-<id>__ReadFileComments`),
+ *  or null for any other tool. WHY: the outside-the-project ask card (ToolCard
+ *  PermissionButtons) is the same card on both surfaces and only needs to know
+ *  "is this a comment tool", never which session's server id it came from. */
+export function bareDocCommentsToolName(toolName: string): DocCommentsBareToolName | null {
+  const m = /^mcp__youcoded-doc-comments-[^_]+__(\w+)$/.exec(toolName);
+  const bare = m ? m[1] : toolName;
+  return (DOC_COMMENTS_BARE_TOOL_NAMES as readonly string[]).includes(bare) ? bare as DocCommentsBareToolName : null;
 }
 
 /** The five tools whose target CAN be a Word/Excel file's own bytes (§5.2a,

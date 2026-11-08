@@ -12,7 +12,7 @@ import { browserDiagnostics } from './helpers/assistant-browser-diagnostics';
 import { candidatePaths, discoverBrowsers, pickBrowser } from '../src/main/assistant-browser/browser-discovery';
 import { BrowserSettings, sanitizeBrowserPreferences, validatePatch, DEFAULT_BROWSER_PREFERENCES } from '../src/main/assistant-browser/browser-settings';
 import { classifyUrl, hostPortKey, isNeverAddress, normaliseAddress, personAddress } from '../src/main/assistant-browser/browser-net';
-import { runBrowserTool, type RunnerEnv, isFinalStep, type ElementInfo, BrowserPolicy, CALL_DEADLINE_MS } from '../src/main/assistant-browser/browser-tool-runners';
+import { runBrowserTool, type RunnerEnv, isFinalStep, isFormSubmit, isFullAutoMode, type ElementInfo, BrowserPolicy, CALL_DEADLINE_MS } from '../src/main/assistant-browser/browser-tool-runners';
 import { neutraliseUntrustedTags, wrapUntrusted } from '../src/main/harness/tools/untrusted';
 import { BrowserService, sanitizeFileName, clearStaleProfileLock, firstLine } from '../src/main/assistant-browser/browser-service';
 import { BrowserClient, type WorkerHandle } from '../src/main/assistant-browser/browser-client';
@@ -386,7 +386,8 @@ describe('where the Browser may go', () => {
 describe('final steps ask every time', () => {
   const el = (over: Partial<ElementInfo>): ElementInfo => ({
     tag: 'button', type: '', role: 'button', name: '', href: '', isSubmit: false, inForm: false,
-    formSearch: false, formAction: '', submitLabel: '', frameUrl: 'https://shop.example/', isPassword: false, ...over,
+    formSearch: false, formAction: '', submitLabel: '', frameUrl: 'https://shop.example/', isPassword: false,
+    clickSubmits: false, enterSubmits: false, ...over,
   });
 
   it('by the target\'s words', () => {
@@ -581,6 +582,15 @@ describe('the main process\'s handle on the Browser worker', () => {
     expect(fork).toHaveBeenCalledTimes(1);
     expect(states).toEqual(['s']);
     expect(c.cachedState('s')?.run).toBe('running');
+  });
+
+  it('tells the worker the conversation\'s permission mode with every call (the form ask depends on it)', async () => {
+    let w!: ReturnType<typeof fakeWorker>;
+    const fork = vi.fn(() => (w = fakeWorker((m, reply) => { if (m.t === 'call') reply({ t: 'reply', id: m.id, ok: true, value: { text: 'ok' } }); })));
+    const c = new BrowserClient({ fork, modeOf: (sid) => (sid === 'a' ? 'full-auto' : undefined) });
+    await c.callTool('a', 'BrowserSnapshot', {}, { vision: true });
+    await c.callTool('b', 'BrowserSnapshot', {}, { vision: true });
+    expect(w.sent.filter((m) => m.t === 'call').map((m) => (m as { mode?: string | null }).mode)).toEqual(['full-auto', null]);
   });
 
   it('a stopped step sends cancel; a crashed worker fails pending calls plainly and comes back on the next call', async () => {
@@ -1107,5 +1117,52 @@ describe('the Claude Code relay\'s socket', () => {
 
   it('is a per-process named pipe on Windows', async () => {
     expect(await relaySocketPath('win32')).toMatch(/^\\\\\.\\pipe\\youcoded-browser-\d+-[0-9a-f]{8}$/);
+  });
+});
+
+describe('form submits ask on the first send to each site (card: form-submit ask)', () => {
+  const el = (over: Partial<ElementInfo>): ElementInfo => ({
+    tag: 'button', type: '', role: 'button', name: 'Continue', href: '', isSubmit: true, inForm: true,
+    formSearch: false, formAction: '/step2', submitLabel: 'Continue', frameUrl: 'https://shop.example/', isPassword: false,
+    clickSubmits: true, enterSubmits: true, ...over,
+  });
+
+  it('a click in a form counts whatever the button says, in any language', () => {
+    for (const name of ['Continue', 'Next', 'Comprar', '']) expect(isFormSubmit('click', el({ name }), false)).toBe(true);
+    expect(isFormSubmit('double_click', el({}), false)).toBe(true);
+  });
+  it('Enter in a form field counts, both typed with submit and pressed', () => {
+    const field = el({ tag: 'input', type: 'text', isSubmit: false, clickSubmits: false, enterSubmits: true });
+    expect(isFormSubmit('type', field, true)).toBe(true);
+    expect(isFormSubmit('type', field, false)).toBe(false); // typing alone sends nothing
+    expect(isFormSubmit('press_key', field, false)).toBe(true);
+  });
+  it('things that send nothing do not count', () => {
+    const outside = el({ clickSubmits: false, enterSubmits: false, inForm: false });
+    expect(isFormSubmit('click', outside, false)).toBe(false);
+    expect(isFormSubmit('hover', el({}), false)).toBe(false);
+    expect(isFormSubmit('select', el({}), false)).toBe(false);
+    expect(isFormSubmit('click', null, false)).toBe(false);
+  });
+  it('only Full Auto skips the ask; an unknown or missing mode asks', () => {
+    expect(isFullAutoMode('full-auto')).toBe(true);
+    expect(isFullAutoMode('bypass')).toBe(true);
+    for (const m of ['ask', 'auto-edit', 'normal', 'auto-accept', 'plan', 'auto', '', null, undefined]) expect(isFullAutoMode(m)).toBe(false);
+  });
+  it('the form list is its own store, folds www., survives a restart and never touches the click/type list', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-form-sites-'));
+    try {
+      const a = new BrowserSettings(dir);
+      await a.allowFormSite('WWW.Example.com');
+      await a.allowFormSite('example.com');
+      const b = await new BrowserSettings(dir).read();
+      expect(b.alwaysAllowedFormSites).toEqual(['example.com']);
+      expect(b.alwaysAllowedSites).toEqual([]);
+      await a.allowSite('other.org');
+      await a.removeSite('other.org', true); // the form list was asked to remove; the click/type entry stays
+      expect((await a.read()).alwaysAllowedSites).toEqual(['other.org']);
+      await a.removeSite('www.example.com', true);
+      expect((await a.read()).alwaysAllowedFormSites).toEqual([]);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

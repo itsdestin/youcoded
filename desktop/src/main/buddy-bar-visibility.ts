@@ -2,7 +2,7 @@
  * Decides whether the buddy action bar should be visible: it is shown IFF the
  * chat is open.
  *
- * The bar used to also reveal on hover (spec §4.1), but its three actions are
+ * The bar used to also reveal on hover (spec §4.1), but its four actions are
  * only useful alongside an open chat, so a hover-reveal fired constantly for
  * nothing — the cursor merely passing over the buddy summoned it. Clicking the
  * mascot toggles the chat and the bar now rides along with it (Destin

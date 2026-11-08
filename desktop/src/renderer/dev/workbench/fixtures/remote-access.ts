@@ -21,7 +21,7 @@ export function createRemoteAccessPreview(raw: string): RemoteAccessPreview {
     // WHY empty before approval: a computer that is "not set up yet" cannot already
     // remember paired devices, and showing both at once told two different stories.
     devices: ['ready', 'disabled', 'checking', 'encrypted', 'consent'].includes(raw)
-      ? [{ id: 'phone', name: 'My phone', online: true }, { id: 'tablet', name: 'My tablet', online: false }]
+      ? [{ id: 'phone', name: 'My phone', online: true }, { id: 'tablet', name: 'My tablet', online: false, lastSeenAt: Date.UTC(2026, 9, 12) }]
       : [],
     browserEncryption: raw === 'encrypted' ? 'on' : 'off',
   };

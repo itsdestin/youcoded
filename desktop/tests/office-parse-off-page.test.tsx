@@ -115,9 +115,17 @@ const FIXTURES: Record<string, (wb: Workbook) => void> = {
     ws.getRow(5).font = { italic: true };
     ws.getCell('A5').value = 'row look'; ws.getCell('D6').value = 'end';
   },
-  'more rows and columns than the viewer shows': (wb) => {
-    const ws = wb.addWorksheet('Big');
-    for (let r = 1; r <= 2300; r++) ws.addRow(Array.from({ length: 105 }, (_, c) => (r + c) % 7 === 0 ? `t${r}-${c}` : r * c));
+  // WHY two narrow sheets, not one 2,300 x 105 (2026-10-30): that one drew 200,000 cells four times over — 15 s alone,
+  // and past the 60 s limit when the full suite shared the machine with the screenshot run. Rows and columns are cut
+  // independently (rowsTruncated / colsTruncated), so a tall sheet and a wide sheet test both cuts at 1/30 the work.
+  'more rows than the viewer shows': (wb) => {
+    const ws = wb.addWorksheet('Tall');
+    for (let r = 1; r <= 2300; r++) ws.addRow(Array.from({ length: 3 }, (_, c) => (r + c) % 7 === 0 ? `t${r}-${c}` : r * c));
+    ws.mergeCells('B3:C4');
+  },
+  'more columns than the viewer shows': (wb) => {
+    const ws = wb.addWorksheet('Wide');
+    for (let r = 1; r <= 6; r++) ws.addRow(Array.from({ length: 105 }, (_, c) => (r + c) % 7 === 0 ? `t${r}-${c}` : r * c));
     ws.mergeCells('B3:C4');
   },
 };

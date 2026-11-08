@@ -16,8 +16,7 @@ import { makeDraftToken, splitDraftTokens, draftTokenRanges, expandDraftTokens, 
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
 import { installChatRefHighlight } from './context-menu/chat-ref-highlight';
 import { AttachIcon, CompassIcon } from './Icons';
-import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
-import { StatusStrip } from './ui/StatusStrip';
+import { VoiceButton, VoiceListeningStrip, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { LocalModelDownloadStrip } from './LocalModelDownloadStrip';
 import { NativeStartupNotice } from './NativeStartupNotice';
 import { ConnectionStrip, type ConnectionStripProps } from './ConnectionStrip';
@@ -84,6 +83,8 @@ interface Props {
   sendBlocked?: boolean;
   minimal?: boolean;
   compact?: boolean;                // NEW: hides QuickChips for buddy chat
+  /** One more tool beside Attach (the buddy's screenshot button, buddy rebuild 2026-10-25). */
+  extraTool?: React.ReactNode;
   view?: ViewMode;                  // Current view mode — forwarded to dispatcher (e.g. /config behaves differently in terminal view)
   onOpenDrawer?: (searchMode: boolean) => void;
   onCloseDrawer?: () => void;
@@ -140,7 +141,7 @@ function fileNameFromPath(p: string): string {
   return p.replace(/\\/g, '/').split('/').pop() || p;
 }
 
-const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked: externalSendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider, connection }, ref) {
+const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, extraTool, disabled, sendBlocked: externalSendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider, connection }, ref) {
   const startup = useNativeStartup(provider === 'native' ? sessionId : null);
   const sendBlocked = externalSendBlocked || nativeStartupBlocked(startup);
   const draftAuthority = useRef(createQueueDraft(sessionId));
@@ -1137,12 +1138,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       {/* Feedback B: the app's thin status band, above the box, while listening. */}
       {voiceListening && voiceStyle.feedback === 'strip' && (
         <div className="px-2 sm:px-3 pb-1.5">
-          <StatusStrip
-            tone="ok"
-            action={<Button variant="secondary" size="sm" onClick={() => { void voice.stop(); }}>Stop</Button>}
-          >
-            <span className="inline-flex items-center gap-3">Listening <VoiceMeter level={voice.level} seconds={voice.seconds} /></span>
-          </StatusStrip>
+          <VoiceListeningStrip level={voice.level} seconds={voice.seconds} micSilent={voice.micSilent} onStop={() => { void voice.stop(); }} />
         </div>
       )}
       <div className="px-2 sm:px-3 pb-1 sm:pb-1.5">
@@ -1155,7 +1151,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           >
             <AttachIcon className="w-5 h-5" />
           </BrailleBurst>
-          {!minimal && (
+          {extraTool}
+          {/* WHY `onOpenDrawer`: the skills drawer belongs to the main window. The buddy's compact bar has no drawer to
+              open, and drew a compass that did nothing when pressed. */}
+          {!minimal && (!compact || onOpenDrawer) && (
             <BrailleBurst
               onTrigger={() => onOpenDrawer?.(false)}
               disabled={disabled}
@@ -1424,6 +1423,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               level={voice.level}
               seconds={voice.seconds}
               error={voice.error}
+              notice={voice.notice}
               disabled={disabled}
               onStart={startVoice}
               onStop={() => { void voice.stop(); }}

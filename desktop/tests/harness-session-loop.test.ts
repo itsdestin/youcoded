@@ -756,6 +756,133 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(askUser).toHaveBeenCalledTimes(2);
   });
 
+  it('"for this conversation" quiets ordinary edits only: secrets and outside files still stop, and a resume forgets it', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-edit-chat-'));
+    const edit = fakeTool('Edit', { permissionSubject: (args: any) => args.file_path });
+    const outside = path.join(os.tmpdir(), 'yc-outside-chat', 'one.ts');
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Edit', { file_path: 'src/a.ts' }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'Edit', { file_path: 'src/b.ts' }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c3', 'Edit', { file_path: '.env' }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c4', 'Edit', { file_path: outside }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (r: AskRequest): Promise<AskDecision> => (r.external ? { behavior: 'deny' } : { behavior: 'allow', allowEditsForChat: true }));
+    const session = new HarnessSession(makeOpts({ cwd: root, tools: [edit], decide: async () => ({ action: 'ask', denyListed: false }), askUser }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    // a.ts asked once; b.ts rode on the grant; .env was refused by the secrets guard before any card; the outside file asked.
+    expect(askUser.mock.calls.map((c) => [c[0].external, c[0].subject])).toEqual([[false, 'src/a.ts'], [true, outside]]);
+    expect((edit as any).calls).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'tool-result').some((e) => /credential or secret/.test(String(e.data.toolResult)))).toBe(true);
+    session.seedHistory([]);
+    (session as any).modelFactory = async () => scriptedModel([
+      stream(toolCallChunk('c5', 'Edit', { file_path: 'src/c.ts' }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]) as any;
+    await session.send('again');
+    expect(askUser.mock.calls.filter((c) => c[0].subject === 'src/c.ts')).toHaveLength(1);
+  });
+
+  it('"for this conversation" never applies to a deny-list stop or to a specialist child', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-edit-chat-'));
+    const edit = fakeTool('Edit', { permissionSubject: (args: any) => args.file_path });
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Edit', { file_path: 'src/a.ts' }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'Edit', { file_path: 'src/b.ts' }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', allowEditsForChat: true }));
+    const child = new HarnessSession(makeOpts({ cwd: root, tools: [edit], decide: async () => ({ action: 'ask', denyListed: false }), askUser, isSpecialistChild: true }), async () => model as any);
+    await child.send('go');
+    expect(askUser).toHaveBeenCalledTimes(2);
+  });
+
+  it('"Always allow" on an edit with the folder choice emits a rule for Edit and Write in that folder', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-edit-chat-'));
+    const edit = fakeTool('Edit', { permissionSubject: (args: any) => args.file_path });
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Edit', { file_path: 'src/ui/a.ts' }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', always: true, grantScope: 'folder' }));
+    const session = new HarnessSession(makeOpts({ cwd: root, tools: [edit], decide: async () => ({ action: 'ask', denyListed: false }), askUser }), async () => model as any);
+    const remembered: any[] = [];
+    session.on('remember-rule', (r) => remembered.push(r));
+    await session.send('go');
+    expect(remembered.map((r) => [r.tool, r.pattern, r.match])).toEqual([['Edit', 'src/ui', 'folder'], ['Write', 'src/ui', 'folder']]);
+  });
+
+  it('asks before a comment tool reaches a file outside the project, and "Allow for this chat" covers every later outside file until resume', async () => {
+    const read = fakeTool('ReadFileComments', { schema: z.object({ path: z.string() }) });
+    const outsideA = path.join(os.tmpdir(), 'yc-outside-a', 'notes.md');
+    const outsideB = path.join(os.tmpdir(), 'yc-outside-b', 'other.md');
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'ReadFileComments', { path: outsideA }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'ReadFileComments', { path: outsideB }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', allowOutsideCommentsForSession: true }));
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW, askUser }), async () => model as any);
+    await session.send('go');
+    expect(askUser).toHaveBeenCalledTimes(1);
+    expect(askUser.mock.calls[0][0]).toMatchObject({ toolName: 'ReadFileComments', external: true });
+    expect((read as any).calls).toHaveLength(2);
+    session.seedHistory([]);
+    (session as any).modelFactory = async () => scriptedModel([
+      stream(toolCallChunk('c3', 'ReadFileComments', { path: outsideB }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]) as any;
+    await session.send('again');
+    expect(askUser).toHaveBeenCalledTimes(2);
+  });
+
+  it('a comment tool inside the project never asks, and a plain "Yes" covers only that call', async () => {
+    const read = fakeTool('ReadFileComments', { schema: z.object({ path: z.string() }) });
+    const outside = path.join(os.tmpdir(), 'yc-outside', 'notes.md');
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'ReadFileComments', { path: 'inside.md' }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'ReadFileComments', { path: outside }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c3', 'ReadFileComments', { path: outside }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW, askUser }), async () => model as any);
+    await session.send('go');
+    expect(askUser).toHaveBeenCalledTimes(2);
+    expect((read as any).calls).toHaveLength(3);
+  });
+
+  it('asks for a Word file outside the project like any other outside file', async () => {
+    const read = fakeTool('ReadFileComments', { schema: z.object({ path: z.string() }) });
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'ReadFileComments', { path: path.join(os.tmpdir(), 'yc-outside', 'report.docx') }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW, askUser }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(askUser).toHaveBeenCalledTimes(1);
+    expect(askUser.mock.calls[0][0].external).toBe(true);
+    expect((read as any).calls).toHaveLength(1);
+    expect(events.find((e) => e.type === 'tool-result')!.data.toolResult).not.toMatch(/Word or Excel/);
+  });
+
+  it('never applies the outside-comments grant to a specialist child', async () => {
+    const read = fakeTool('ReadFileComments', { schema: z.object({ path: z.string() }) });
+    const outside = path.join(os.tmpdir(), 'yc-outside', 'notes.md');
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'ReadFileComments', { path: outside }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'ReadFileComments', { path: outside }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', allowOutsideCommentsForSession: true }));
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW, askUser, isSpecialistChild: true }), async () => model as any);
+    await session.send('go');
+    expect(askUser).toHaveBeenCalledTimes(2);
+  });
+
   it('askUser canceled → user-interrupt, turn ends, NO turn-complete', async () => {
     const write = fakeTool('Write');
     const model = scriptedModel([
@@ -1312,7 +1439,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     collect(session);
     await session.send('go');
     expect(askUser).not.toHaveBeenCalled();                          // internal root → no forced ask
-    expect(decide).toHaveBeenCalledWith('Read', `${spillDir}/child-1.report.md`); // reaches decide() normally
+    expect(decide).toHaveBeenCalledWith('Read', `${spillDir}/child-1.report.md`, expect.anything()); // reaches decide() normally
   });
 
   // Driven by EDIT, deliberately. Since 2026-09-05 no read outside the workspace
@@ -1376,7 +1503,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     // Consulted DIRECTLY (never short-circuited to a forced ask) — the guard
     // never ran checkPathGuard against "read-write:/etc/x" as though it were
     // an absolute path outside C:/x.
-    expect(decide).toHaveBeenCalledWith('Task', `read-write:${path.resolve(FAKE_SESSION_CWD, '/etc/x').replace(/\\/g, '/')}`);
+    expect(decide).toHaveBeenCalledWith('Task', `read-write:${path.resolve(FAKE_SESSION_CWD, '/etc/x').replace(/\\/g, '/')}`, expect.anything());
     expect(askUser).not.toHaveBeenCalled();
   });
 
@@ -1493,6 +1620,44 @@ describe('HarnessSession — multi-step turn driver', () => {
       expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'secret-path', external: false });
       expect(remembered).toEqual([]);
       expect(ran).toBe(1);
+    });
+
+    // Security hardening 2026-10-30: the files that decide what the assistant may do next always
+    // ask — even when a saved grant (Full auto / Auto-edit style "allow everything") says yes.
+    it.each([
+      'echo \'{"rules":[]}\' > ~/.youcoded/permissions.json',
+      'sed -i s/ask/allow/ $HOME/.youcoded/permission-modes.json',
+      'cp evil.json ~/.claude/settings.json',
+      'echo x > .git/hooks/pre-commit',
+    ])('asks before Bash changes a protected settings file, even with a saved allow: %s', async (command) => {
+      const { askUser, remembered, ran } = await run(command, async () => ALLOW);
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'protected-config' });
+      expect(remembered).toEqual([]);
+      expect(ran).toBe(1);
+    });
+
+    it('a plain read of a protected file does not ask', async () => {
+      const { askUser, ran } = await run('cat ~/.youcoded/config.json', async () => ALLOW);
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(1);
+    });
+
+    it.each(['Write', 'Edit'])('asks before the %s tool changes ~/.youcoded/permissions.json even with a saved allow', async (toolName) => {
+      const tool = fakeTool(toolName, { schema: z.object({ file_path: z.string() }), permissionSubject: (a: any) => a.file_path });
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', always: true }));
+      const target = require('path').join(require('os').homedir(), '.youcoded', 'permissions.json');
+      const session = new HarnessSession(makeOpts({ tools: [tool], decide: async () => ALLOW, askUser }), async () => scriptedModel([
+        stream(toolCallChunk('c1', toolName, { file_path: target }), finishChunk('tool-calls')),
+        stream(...textChunks('b', 'ok'), finishChunk('stop')),
+      ]) as any);
+      const remembered: unknown[] = [];
+      session.on('remember-rule', (r) => remembered.push(r));
+      collect(session);
+      await session.send('go');
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ floorStop: 'protected-config' });
+      expect(remembered).toEqual([]);
     });
 
     it('leaves a command that only mentions a similar word alone', async () => {

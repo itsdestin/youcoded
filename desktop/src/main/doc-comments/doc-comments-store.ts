@@ -2,7 +2,10 @@
 // (docs/active/specs/2026-09-26-doc-comments-build-design.md §1.5). Owns:
 // resolving a (path, projectRoot) pair to its one-sidecar-per-file location
 // (§1.3/§1.4), refusing anything that resolves outside the project (§1.5,
-// review 2 F1's corrected, full-path-realpath containment check), and every
+// review 2 F1's corrected, full-path-realpath containment check) — a file
+// outside every project is reached only WITHOUT a projectRoot, after the
+// person allowed it (card #207), and keeps its comments in the per-machine
+// ~/.youcoded/loose-file-comments/ store (locateFallback) — and every
 // read/mutation against that sidecar via mutateFileUnderLock — the same
 // primitive artifact-store.ts already trusts for cross-process safety
 // between a dev instance and the built app sharing ~/.claude/~/YouCoded

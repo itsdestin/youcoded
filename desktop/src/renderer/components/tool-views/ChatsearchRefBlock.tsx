@@ -29,7 +29,8 @@ export default function ChatsearchRefBlock({ shortIds }: { shortIds: string[] })
   if (!rows.length) return null;
 
   return (
-    <div className="my-2 rounded-lg border border-edge bg-well overflow-hidden">
+    // conv-refs: a hook for the buddy's small window, which drops the frame around the rows (buddy.css).
+    <div className="conv-refs my-2 rounded-lg border border-edge bg-well overflow-hidden">
       <ul className="flex flex-col gap-1.5 p-2">
         {rows.map((r, i) => <ChatsearchRow key={r.status === 'ok' ? r.id : i} r={r} tagIndex={tagIndex} />)}
       </ul>

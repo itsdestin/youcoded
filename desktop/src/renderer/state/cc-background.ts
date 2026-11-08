@@ -7,7 +7,19 @@
 // Split out of chat-reducer.ts, which calls them from three cases.
 import type { CcBackgroundRun, ToolCallState } from '../../shared/types';
 import type { ChatAction, SessionChatState } from './chat-types';
-import { settleCommands, type BackgroundCommands } from './background-commands';
+import { settleCommands, type BackgroundCommand, type BackgroundCommands } from './background-commands';
+
+/** A launch's command record, carrying the end already read for it (from
+ *  ccBackgroundOnLaunch) — a newer history page, or a main-transcript notice read
+ *  before a helper's launch. One place, so the conversation's own commands and a
+ *  helper's settle the same way. */
+export function commandWithKnownEnd(cmd: BackgroundCommand, bg: CcBackgroundRun): BackgroundCommand {
+  if (bg.status === 'running') return cmd;
+  return {
+    ...cmd, status: bg.status, ...(bg.exitCode !== undefined ? { exitCode: bg.exitCode } : {}),
+    ...(bg.summary ? { summary: bg.summary } : {}), ...(bg.endedAt ? { endedAt: bg.endedAt } : {}),
+  };
+}
 
 /** The background record a Claude Code launch receipt starts — or, when the
  *  work's end was already read (a newer history page, or a repeated receipt
@@ -63,7 +75,14 @@ export function stopRunningBackground(
 export function stopRunningCommands(
   cmds: BackgroundCommands, which: (toolUseId: string) => boolean, endedAt?: number,
 ): BackgroundCommands {
-  return settleCommands(cmds, (c) => which(c.toolUseId), { status: 'stopped', endedAt });
+  // WHY the helper's id too: a helper's own command is launched inside the helper's
+  // transcript, so its tool-use id is never in the main transcript's "launched before the
+  // restart" list (ipc-handlers reads only the main file there) — the restart reap skipped
+  // it and it read "Running" forever. The helper's Agent call IS in that list. Accepted
+  // edge: a helper resumed after the restart whose NEW command is still running on the same
+  // page reads stopped early.
+  return settleCommands(cmds, (c) => which(c.toolUseId) || (!!c.ownerHelper && which(c.ownerHelper.toolUseId)),
+    { status: 'stopped', endedAt });
 }
 
 /** A SendMessage that RESUMED a finished helper (`resumedAgentId` on its

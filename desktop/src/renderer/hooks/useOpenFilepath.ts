@@ -56,7 +56,11 @@ const latestTapBySession = new Map<string, number>();
 const tapInFlightBySession = new Map<string, number>();
 let tapSerial = 0;
 
-type HostAnswer = { ok: true; artifact: ArtifactRecord } | { ok: false; error: string };
+type HostAnswer =
+  | { ok: true; artifact: ArtifactRecord }
+  // searchedNearby / elsewhere: the host also looked beside this chat's own
+  // files for a short path (card #40) — what it found there, if anything.
+  | { ok: false; error: string; searchedNearby?: boolean; elsewhere?: string[] };
 type HostLookup =
   | { kind: 'answer'; answer: HostAnswer }
   | { kind: 'no-channel' }            // this bridge cannot answer: use the older lookup
@@ -77,13 +81,14 @@ type HostLookup =
  * found", which nothing had shown.
  */
 async function askHost(
-  resolvePath: (projectRoot: string, filePath: string) => Promise<any>,
+  resolvePath: (projectRoot: string, filePath: string, sessionId?: string) => Promise<any>,
   cwd: string,
   path: string,
+  sessionId?: string,
 ): Promise<HostLookup> {
   let res: any;
   try {
-    res = await resolvePath(cwd, path);
+    res = sessionId ? await resolvePath(cwd, path, sessionId) : await resolvePath(cwd, path);
   } catch (err: any) {
     const detail = err?.message ? String(err.message) : String(err ?? '');
     return /^remote-unsupported\b/.test(detail) ? { kind: 'no-channel' } : { kind: 'failed', detail };
@@ -92,7 +97,14 @@ async function askHost(
     return { kind: 'answer', answer: { ok: true, artifact: res.artifact } };
   }
   if (res?.ok === false && res.error === 'not-implemented-on-mobile') return { kind: 'no-channel' };
-  if (res?.ok === false && typeof res.error === 'string') return { kind: 'answer', answer: { ok: false, error: res.error } };
+  if (res?.ok === false && typeof res.error === 'string') {
+    const elsewhere = Array.isArray(res.elsewhere) ? res.elsewhere.filter((p: unknown): p is string => typeof p === 'string' && p.length > 0) : [];
+    return { kind: 'answer', answer: {
+      ok: false, error: res.error,
+      ...(res.searchedNearby === true ? { searchedNearby: true } : {}),
+      ...(elsewhere.length > 0 ? { elsewhere } : {}),
+    } };
+  }
   // An answer of no recognisable shape: keep the pre-channel behaviour.
   return { kind: 'no-channel' };
 }
@@ -217,20 +229,24 @@ export async function openFilepath(
     if (!cwd) { failed('YouCoded doesn’t know which folder this conversation is in.'); return; }
     const folder: string = cwd;
 
-    const artifactify = async (unrecordable?: string): Promise<void> => {
-      const args = buildArtifactifyArgs(path, folder);
+    // `target` (card #40): the file to record, when it is not the tapped text itself — the
+    // absolute location the host found beside this chat's other files. The tapped text there is
+    // a short path that would record a file in the chat's folder that does not exist.
+    // Answers the id it selected, or null when it did not.
+    const artifactify = async (unrecordable?: string, target: string = path): Promise<string | null> => {
+      const args = buildArtifactifyArgs(target, folder);
       // Null for exactly one case: a path starting with ~, which the renderer has no home
       // directory to expand against.
-      if (!args) { failed(unrecordable ?? 'paths that start with ~ can’t be opened from chat yet.'); return; }
+      if (!args) { failed(unrecordable ?? 'paths that start with ~ can’t be opened from chat yet.'); return null; }
       await (window.claude as any).artifacts.appendVersion(folder, sessionId, args);
-      if (!isCurrent()) return;
+      if (!isCurrent()) return null;
       const refreshed = await (window.claude as any).artifacts.listSession(sessionId, folder);
-      if (!isCurrent()) return;
-      let selected = false;
+      if (!isCurrent()) return null;
+      let selected: string | null = null;
       if (refreshed?.ok && Array.isArray(refreshed.artifacts)) {
         // The folder is REQUIRED here: without it a same-named file elsewhere could be opened
         // in this one's place (the wrong-CLAUDE.md bug, 2026-09-11).
-        const added = findBestMatch(refreshed.artifacts as ArtifactRecord[], path, folder);
+        const added = findBestMatch(refreshed.artifacts as ArtifactRecord[], target, folder);
         if (added) {
           // Deferred mode: hold SESSION_ARTIFACTS_LOADED back too — dispatching
           // it without a match still reveals the panel via the drawer's list
@@ -238,13 +254,32 @@ export async function openFilepath(
           if (!drawerOpensImmediately) dispatch({ type: 'DRAWER_OPENED', sessionId });
           dispatch({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: refreshed.artifacts });
           dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: added.id });
-          selected = true;
+          selected = added.id;
         } else if (drawerOpensImmediately) {
           dispatch({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: refreshed.artifacts });
         }
       }
       // Recorded, but it did not come back in the list: nothing more is known.
       if (!selected) failed();
+      return selected;
+    };
+
+    // Card #40: open the ONE file the host found beside this chat's other files, the way a tap
+    // on its full location would open it.
+    const openFoundElsewhere = async (abs: string): Promise<void> => {
+      const resolvePath = (window.claude as any)?.artifacts?.resolvePath;
+      const again: HostLookup = await askHost(resolvePath, folder, abs);
+      if (!isCurrent()) return;
+      const second = again.kind === 'answer' ? again.answer : null;
+      if (second?.ok) {
+        show(second.artifact);
+      } else if (second && second.error === 'outside-project' && getCapabilities().projectWrites) {
+        await artifactify(undefined, abs);
+      } else {
+        // It was there a moment ago; whatever the second look said is the truth now.
+        failWith(second ? describeRefusal(second.error, name)
+          : again.kind === 'failed' && again.detail ? `Couldn’t open ${name}: ${again.detail}` : `Couldn’t open ${name}.`);
+      }
     };
 
     try {
@@ -258,7 +293,9 @@ export async function openFilepath(
       //    starts in the same tick it always did.
       const resolvePath = (window.claude as any)?.artifacts?.resolvePath;
       const lookup: HostLookup = typeof resolvePath === 'function'
-        ? await askHost(resolvePath, folder, path)
+        // WHY sessionId only on a tap (card #40): it lets the host look beside this chat's own
+        // files for a short path. An auto-open nobody clicked must not open a file by that guess.
+        ? await askHost(resolvePath, folder, path, drawerOpensImmediately ? sessionId : undefined)
         : { kind: 'no-channel' };
       if (!isCurrent()) return;
       if (lookup.kind === 'failed') {
@@ -286,6 +323,19 @@ export async function openFilepath(
           // what the host established — outside the folder — not "not found"
           // (review 2026-09-11, finding 6).
           await artifactify(`Couldn’t open ${name} — it’s outside this chat’s project folder, and a path starting with ~ can’t be opened from outside the folder.`);
+          return;
+        }
+        if (answer.error === 'not-found' && answer.elsewhere?.length === 1 && drawerOpensImmediately) {
+          await openFoundElsewhere(answer.elsewhere[0]);
+          return;
+        }
+        if (answer.error === 'not-found' && (answer.elsewhere?.length ?? 0) > 1) {
+          // Never guess between two real files: say where they are (card #40).
+          failWith(`Couldn’t open ${name} — this chat has files named that in more than one folder:\n${answer.elsewhere!.join('\n')}`);
+          return;
+        }
+        if (answer.error === 'not-found' && answer.searchedNearby) {
+          failWith(`Couldn’t open ${name} — it isn’t in this chat’s folder (${folder}) or next to the other files this chat worked on.`);
           return;
         }
         failWith(describeRefusal(answer.error, name));

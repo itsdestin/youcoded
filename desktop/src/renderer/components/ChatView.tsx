@@ -13,6 +13,7 @@ import { findArchiveBoundary } from '../state/archive-boundary';
 import { projectTimeline } from '../state/timeline-presentation';
 import ThinkingIndicator from './ThinkingIndicator';
 import BrowserAskCard from './browser/BrowserAskCard';
+import { PendingAskBubble } from './PendingAskBubble';
 import { browserSupported } from '../state/browser-store';
 import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
@@ -115,6 +116,10 @@ interface Props {
    *  error card names the provider and picks its billing page from them. */
   model?: string;
   providerType?: string;
+  /** The buddy's chat window hosts this view (buddy rebuild, 2026-10-25). It has no room for a side pane, so it never opens
+   *  the files drawer or a game, and a Preview card asks the main window instead of opening one here. Spacing is the
+   *  buddy's own CSS (buddy.css), not this flag. */
+  compact?: boolean;
 }
 
 // Memoised at the bottom of the file — see the WHY there.
@@ -129,7 +134,7 @@ const MODEL_LOADING_DEMOS: Record<string, Omit<React.ComponentProps<typeof Model
   unloaded: { ...DEMO_BASE, modelState: 'sleeping', everResident: true },
 };
 
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, filling, modelLoadingDemo, model, providerType }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, filling, modelLoadingDemo, model, providerType, compact }: Props) {
   const demoLoading = modelLoadingDemo ? workbenchModelLoading() : null; // workbench review only
   // Paused while hidden: an unstamped session's lookup registers a listener and reads
   // the provider lists, and a hidden tab does no work (performance.md rule 2).
@@ -164,7 +169,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // `sessionActive` gates which of the many mounted ChatViews actually
   // responds — see the WHY comment inside the hook (deliberately not
   // `visible`, which also depends on the chat/terminal toggle).
-  useSessionPreviewListener(sessionId, sessionActive, artifactDispatch);
+  useSessionPreviewListener(sessionId, sessionActive && !compact, artifactDispatch);
   // WHY drawerOpen &&: expand is app-wide, so ungated it hid every OTHER session's chat.
   const drawerExpanded = drawerOpen && drawerExpandedFlag;
   // The game pane and artifact drawer share the framed-shell's right slot.
@@ -1169,11 +1174,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                 pop-out bubbles aren't in that wrapper, so set it here. They're pinned
                 at the bottom and always visible, so a static `in-view` is correct. */}
             {[...awaitingTools, ...helperAsks].map((tool) => (
-                <div key={tool.requestId ?? tool.toolUseId} className="in-view flex justify-start px-4 py-0.5">
-                  <div className="assistant-bubble max-w-[85%] rounded-2xl rounded-bl-sm bg-inset px-5 py-3">
-                    <ToolCard tool={tool} sessionId={sessionId} />
-                  </div>
-                </div>
+                <PendingAskBubble key={tool.requestId ?? tool.toolUseId}>
+                  <ToolCard tool={tool} sessionId={sessionId} />
+                </PendingAskBubble>
               ))}
 
             {/* Only show thinking indicator when Claude is between tool completion
@@ -1326,7 +1329,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             ChatView is hidden and TerminalRightSlot renders the panel instead.
             Without this gate the drawer/game would mount in BOTH places at
             once (double SessionDrawer / GamePanel). */}
-        {visible && (gameOpen ? (
+        {visible && !compact && (gameOpen ? (
           <>
             <div className="frame-divider" />
             <div className="drawer-pane game-pane">{gamePane}</div>

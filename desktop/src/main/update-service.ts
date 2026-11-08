@@ -11,6 +11,7 @@ import path from 'path';
 import https from 'https';
 import { spawn } from 'child_process';
 import { app, BrowserWindow, shell } from 'electron';
+import { safeOpenExternal } from './safe-open';
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost, deriveDownloadFilename, cleanupStaleDownloads, RESERVED_CACHE_FILES } from './update-installer';
 import type { UpdateProgressEvent, UpdateInstallErrorCode, UpdateBetaChannelState, UpdateAutoInstallState, UpdateDownloadResult, UpdateCachedDownloadResult, UpdateLaunchResult } from '../shared/update-install-types';
 import { verifyDownloadedUpdate, compareVersions, hashFileSha256 } from './update-manifest-verify';
@@ -198,7 +199,8 @@ function createUpdateService() {
       if (result.success && result.quitPending) scheduleQuit();
       else launchActive = false;
     },
-    shellOpenExternal: (url: string) => shell.openExternal(url),
+    // WHY safeOpenExternal (audit F7): the fallback address comes from update metadata, so only a web address may be opened.
+    shellOpenExternal: async (url: string) => { await safeOpenExternal(url); },
     appRelaunch: () => app.relaunch(),
     fallbackDownloadUrl: () => cachedUpdateStatus?.download_url ?? '',
     // production reads process.env.APPIMAGE (Linux only); tests pass an override.
@@ -268,6 +270,31 @@ function createUpdateService() {
     console.error('[update] could not fetch the signed release file:', m.status === 'rejected' ? m.reason : (g as PromiseRejectedResult).reason);
     return { ok: false, pulled: is404(m) || is404(g) };
   }
+  // WHY (audit SC-9): remember the highest version this machine has ever run, so a signed-but-older
+  // release can never be offered as an "update". Stored next to the other update state; a missing or
+  // unreadable file just means no extra protection (the running-version check still applies).
+  const highestVersionPath = path.join(updateCacheDir, 'highest-installed.json');
+  async function readHighestInstalled(): Promise<string | null> {
+    try {
+      const v = JSON.parse(await fs.promises.readFile(highestVersionPath, 'utf8'))?.version;
+      return typeof v === 'string' && v ? v : null;
+    } catch { return null; }
+  }
+  async function recordHighestInstalled(): Promise<void> {
+    try {
+      const running = app.getVersion();
+      // WHY (integration review 2026-11-01): a developer or test build (unpackaged, or a pre-release such as a beta)
+      // often carries a HIGHER number than any real release; remembering it would block every real update below it.
+      // Only a packaged, final release raises the bar.
+      if (app.isPackaged === false || /-/.test(running)) return;
+      const stored = await readHighestInstalled();
+      if (stored && compareVersions(stored, running) >= 0) return;
+      await fs.promises.mkdir(updateCacheDir, { recursive: true });
+      const tmp = `${highestVersionPath}.${process.pid}.tmp`; // the dev instance shares this folder's parent
+      await fs.promises.writeFile(tmp, JSON.stringify({ version: running }));
+      await fs.promises.rename(tmp, highestVersionPath);
+    } catch { /* best effort: protection is additive */ }
+  }
   async function verifyAgainstRelease(filePath: string, target: VerifyTarget, opts: { signed?: { ok: true } & SignedBytes; fileName?: string } = {}): Promise<{ code: UpdateInstallErrorCode | null; transient?: boolean; sha256?: string; pulled?: boolean }> {
     const { manifestUrl, signatureUrl, tag } = target;
     if (!manifestUrl || !signatureUrl || !tag) {
@@ -289,6 +316,7 @@ function createUpdateService() {
         tag,
         currentVersion: app.getVersion(),
         publicKeyPem: UPDATE_SIGNING_PUBLIC_KEY_PEM,
+        highestInstalledVersion: await readHighestInstalled(),
       });
       const entry = manifest?.assets?.find((a: { name: string }) => a.name === fileName);
       return { code: null, sha256: entry?.sha256 };
@@ -434,7 +462,7 @@ function createUpdateService() {
     // a clean copy rather than re-verifying the same corrupt bytes.
     const verifyError = await verifyBeforeLaunch(payload.filePath);
     if (verifyError) {
-      if (verifyError === 'verify-failed') { try { await fs.promises.unlink(payload.filePath); } catch { /* ignore */ } }
+      if (verifyError === 'verify-failed' || verifyError === 'older-than-installed') { try { await fs.promises.unlink(payload.filePath); } catch { /* ignore */ } }
       return { success: false as const, error: verifyError };
     }
     const result = await launchInstaller({ jobId: payload.jobId, filePath: payload.filePath });
@@ -626,6 +654,7 @@ function createUpdateService() {
       if (autoInstallSupported) void loadAutoInstall();
       await loadPending().catch(() => {});
       await processAttempt().catch(() => {});
+      await recordHighestInstalled(); // audit SC-9: every launch counts as a successful install of this version
       notifyStatusChanged(); // `needs_password` / `install_refused` just became known
     })();
   }

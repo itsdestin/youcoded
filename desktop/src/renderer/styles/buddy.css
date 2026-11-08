@@ -74,8 +74,8 @@ html[data-mode="buddy-bar"] #root {
    Apple HIG design systems for glass surfaces.
    backdrop-filter stays for content INSIDE the bubble (e.g. bubbles
    scrolling past the input area get subtly blurred under it when theme
-   has --panels-blur > 0). overflow:hidden clips the bubble feed + input
-   pill to the rounded corner curve during scroll.
+   has --panels-blur > 0). overflow:hidden clips the chat + message box
+   to the rounded corner curve during scroll.
    isolation:isolate establishes a stacking context so the ::before
    noise layer with z-index:-1 stays confined between the panel
    background and the chat UI, without bleeding into the parent.
@@ -95,13 +95,11 @@ html[data-mode="buddy-chat"] .buddy-chat-panel {
       rgba(255, 255, 255, 0) 60%,
       rgba(0, 0, 0, 0.04) 100%
     ),
-    color-mix(
-      in srgb,
-      var(--panel) calc(clamp(0.88, var(--panels-opacity, 1), 0.94) * 100%),
-      transparent
-    ) !important;
-  backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
-  -webkit-backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+    /* WHY solid: Destin, 2026-10-30, "i want to try making the main chat window … opaque" — the
+       desktop no longer shows through the chat (it was 88–94% of the theme's panel colour). */
+    var(--panel) !important;
+  /* No backdrop-filter: a solid panel has nothing behind it worth blurring, and the header and
+     message box now carry their own frost over the conversation. */
   /* WHY the theme's popup corner, not a fixed 18px (guide principle 2: corners come from the
      theme's shape setting): the same var(--radius-xl) .layer-surface gives every popup. */
   border-radius: var(--radius-xl);
@@ -258,12 +256,10 @@ body[data-mode="buddy-chat"] .input-bar-container form {
     0 0 0 1px color-mix(in srgb, var(--edge) 50%, transparent);
 }
 
-/* Buddy-chat floating chips (SessionPill, AttentionStrip, and anything
-   else using .layer-surface inside the buddy) get the same drop shadow +
-   rim-ring styling as the form pill, so all three floating elements
-   inside the bubble read as a coherent set. Inline style on SessionPill
-   uses `border:none` which strips .layer-surface's 1px solid edge —
-   box-shadow ring restores the ring without fighting the inline override.
+/* Buddy-chat floating surfaces (anything using .layer-surface inside the
+   buddy: menus, popovers) get the same drop shadow + rim-ring styling, so the
+   floating elements inside the small window read as a coherent set. The
+   box-shadow ring restores the edge where an inline `border:none` strips it.
    !important because layer-surface already sets box-shadow. */
 body[data-mode="buddy-chat"] .layer-surface {
   box-shadow:
@@ -308,6 +304,19 @@ body[data-mode="buddy-chat"] ::-webkit-scrollbar-thumb:hover {
    The root only carries the fade; the pop lives on the buttons. */
 body[data-mode="buddy-bar"] .buddy-bar-root {
   transition: opacity 140ms ease;
+  /* The panel sits at the bottom of its window, beside his hands; the room
+     above it is for the button hints (BAR_TOOLTIP_ROOM in buddy-geometry.ts). */
+  align-items: flex-end;
+  padding-bottom: 8px;
+  box-sizing: border-box;
+}
+/* Taskbar style: the bar hangs directly under the chat (computeTrayLayout), so
+   the panel sits at the TOP of its window, 8px under the chat, and the hints
+   open below it. At the bottom, the hint room became a 34px gap. */
+body[data-mode="buddy-bar"] .buddy-bar-root[data-under="1"] {
+  align-items: flex-start;
+  padding-top: 8px;
+  padding-bottom: 0;
 }
 body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="0"] {
   opacity: 0;
@@ -331,25 +340,40 @@ body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn:nth
 body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn:nth-child(3) {
   animation-delay: 140ms;
 }
+body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn:nth-child(4) {
+  animation-delay: 210ms;
+}
 @keyframes buddy-btn-pop {
   from { opacity: 0; transform: scale(0.2); }
   to { opacity: 1; transform: scale(1); }
 }
 
-/* Hover/press bounce, matching the floater's own feel (Destin 2026-07-17).
-   Uses the independent `scale` property, NOT `transform` — the pop-in above
-   animates `transform`, and the two compose instead of clobbering each other.
-   Exactly the trick .mascot-wrap uses for hover-scale vs breathing-translate.
-   The bar window is padded (BAR_PADDING in buddy-bar-geometry.ts) so the grown
-   button has room; without that it would clip against the window frame. */
-body[data-mode="buddy-bar"] .buddy-bar-btn {
-  transition: scale 160ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 120ms ease;
+/* The bar's buttons are the app's shared Button and Tooltip, in the popup
+   surface or not (BuddyBarApp; buddy-rebuild-review4#C-4: "it should match
+   other youcoded design standards"). Only two things here are the buddy's own:
+   the root fills the window and centres the row, and the floater's press
+   bounce (Destin 2026-07-17) — the independent `scale` property, so it never
+   fights the pop-in's `transform` above. */
+.buddy-bar-root {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
 }
-body[data-mode="buddy-bar"] .buddy-bar-btn:hover { scale: 1.14; }
-body[data-mode="buddy-bar"] .buddy-bar-btn:active { scale: 0.94; }
-body[data-mode="buddy-bar"] .buddy-bar-btn[data-busy="1"] {
-  scale: 0.92;
-  opacity: 0.7;
+.buddy-bar-btn {
+  transition: scale 160ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.buddy-bar-btn:active { scale: 0.94; }
+.buddy-bar-btn[data-busy="1"] { scale: 0.92; }
+/* The button strip's panel is solid, like the chat (Destin, 2026-10-30: "the button strip above the
+   chat window is still transparent"). Over a wallpaper theme .layer-surface turns see-through and
+   frosted; here the desktop would show through, and there is nothing of the app's to frost. */
+body[data-mode="buddy-bar"] .layer-surface {
+  background-color: var(--panel) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* ── Alive & responsive (spec §5) ──
@@ -367,7 +391,8 @@ body[data-mode="buddy-mascot"] .mascot-wrap:hover { scale: 1.06; }
 body[data-mode="buddy-mascot"] .mascot-wrap.mascot-grabbed { scale: 0.94; }
 
 body[data-mode="buddy-mascot"] .mascot-breathing {
-  animation: buddy-breathe 4s ease-in-out infinite;
+  /* steps(): an infinite loop redraws at the panel's full rate otherwise (performance.md rule 6). */
+  animation: buddy-breathe 4s steps(20) infinite;
 }
 @keyframes buddy-breathe {
   0%, 100% { translate: 0 0; }
@@ -437,41 +462,239 @@ body[data-mode="buddy-mascot"] .mascot-sink[data-swing="left"] .mascot-lean { ro
    top edge — the chat normally hangs BELOW the mascot, so growing downward
    from there reads as the panel dropping out of the buddy.
 
-   Open is deliberately springy (Destin 2026-07-16 — the old 120ms ease-out
-   read as a flat fade), but the panel fills the window edge-to-edge and
-   Electron clips anything past the window bounds. The earlier
-   cubic-bezier(…1.56…) overshoot carried the panel PAST scale(1) — ~7% over,
-   ~11px each side / ~17px top+bottom on the 320×480 window — so the peak
-   frame's edges got clipped off (Destin 2026-07-17: "too large for its
-   container, edges briefly disappear").
+   History: a plain 120ms fade read as flat (2026-07-16); a spring that passed full size had its edges clipped by the
+   window (2026-07-17); the inward dip that replaced it read as jitter (2026-10-30). Below is the current answer. */
+/* The chat grows out of the buddy (buddy-rebuild-questions#Q-7, "the chat grows out of the buddy and tucks back
+   in, quickly"): main says which side of the chat he is on (buddy:chat-state `mascot`), and the panel scales from
+   that edge. Transform and opacity only.
 
-   Fix: the spring now PEAKS at scale(1) — the window edge — and the bounce
-   lives INWARD (a slight dip below full size, then settle back up). The eye
-   still reads a spring arriving and settling, but the panel never exceeds the
-   window, so nothing clips. The bounce is carried by the keyframe stops, so
-   the timing function must NOT overshoot (a back-out curve would blow past a
-   1.0 stop mid-segment and re-introduce the clip) — plain ease-out.
-
-   Close stays quick and non-bouncy: main hides the window 140ms after cueing
-   the exit, and anything longer would just get truncated mid-animation. */
+   WHY one long glide instead of the spring (Destin, 2026-10-30: "a bit odd/jittery … still having it feel
+   premium/polished"): the old open reached full size at about 135ms, then dipped to 97% and came back within the
+   next ~120ms. At that speed the eye reads the dip as a shudder, not a bounce. Now the panel covers most of its
+   distance at once and slows smoothly into place over 300ms (an "expo-out" curve), with no reversal. That keeps the
+   lively start that replaced the old flat fade (2026-07-16) and never passes full size, so nothing is clipped at the
+   window edge (2026-07-17). The fade finishes before the movement does, so the text is solid while it settles.
+   Close: 130ms accelerating away. Main hides the window at 140ms, so it must end before then. */
+body[data-mode="buddy-chat"] .buddy-chat-pre { opacity: 0; }
 body[data-mode="buddy-chat"] .buddy-chat-enter {
-  animation: buddy-chat-in 360ms ease-out;
+  animation: buddy-chat-fade-in 180ms cubic-bezier(0.3, 0, 0.2, 1) both,
+             buddy-chat-rise-in 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
   transform-origin: 50% 0%;
+  will-change: transform, opacity;
 }
 body[data-mode="buddy-chat"] .buddy-chat-exit {
-  animation: buddy-chat-out 120ms ease-in forwards;
+  animation: buddy-chat-out 130ms cubic-bezier(0.4, 0, 1, 1) forwards;
   transform-origin: 50% 0%;
+  will-change: transform, opacity;
 }
-@keyframes buddy-chat-in {
-  /* scale is capped at 1.0 (the window edge); the 68%/84% dip-and-recover is
-     the spring settle, staying safely inside the window the whole time. */
-  0% { opacity: 0; transform: scale(0.84) translateY(-10px); }
-  52% { opacity: 1; transform: scale(1) translateY(0); }
-  68% { transform: scale(0.972) translateY(0); }
-  84% { transform: scale(0.994) translateY(0); }
-  100% { transform: scale(1) translateY(0); }
+body[data-mode="buddy-chat"] .buddy-chat-panel[data-mascot="below"].buddy-chat-enter,
+body[data-mode="buddy-chat"] .buddy-chat-panel[data-mascot="below"].buddy-chat-exit {
+  transform-origin: 50% 100%;
+  --buddy-chat-from: 8px;
+}
+@keyframes buddy-chat-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes buddy-chat-rise-in {
+  from { transform: translateY(var(--buddy-chat-from, -8px)) scale(0.94); }
+  to { transform: none; }
 }
 @keyframes buddy-chat-out {
-  from { opacity: 1; transform: scale(1); }
-  to { opacity: 0; transform: scale(0.95); }
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(calc(var(--buddy-chat-from, -8px) / 2)) scale(0.97); }
+}
+/* The size button (buddy-rebuild-tryit2#U-1): the panel fades out (90ms, the same CHAT_RESIZE_FADE_MS main waits),
+   the window changes size and place while it is invisible, and the panel grows back in from its centre. WHY no
+   overshoot on the way back in any more: the old curve passed full size and came back, the same small shudder. */
+body[data-mode="buddy-chat"] .buddy-chat-resize-out {
+  animation: buddy-chat-resize-out 90ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;
+}
+body[data-mode="buddy-chat"] .buddy-chat-resize-in {
+  animation: buddy-chat-fade-in 160ms cubic-bezier(0.3, 0, 0.2, 1) both,
+             buddy-chat-resize-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;
+}
+@keyframes buddy-chat-resize-out {
+  to { opacity: 0; transform: scale(0.97); }
+}
+@keyframes buddy-chat-resize-in {
+  from { transform: scale(0.97); }
+  to { transform: none; }
+}
+/* Reduced motion: the same timing with no movement, only the fade. */
+@media (prefers-reduced-motion: reduce) {
+  body[data-mode="buddy-chat"] .buddy-chat-enter,
+  body[data-mode="buddy-chat"] .buddy-chat-resize-in { animation: buddy-chat-fade-in 180ms ease-out both; }
+  body[data-mode="buddy-chat"] .buddy-chat-exit,
+  body[data-mode="buddy-chat"] .buddy-chat-resize-out { animation: buddy-chat-fade-out 120ms ease-in forwards; }
+}
+@keyframes buddy-chat-fade-out {
+  to { opacity: 0; }
+}
+
+/* ── The small main chat (buddy rebuild, 2026-10-25) ──
+   The buddy hosts the main window's ChatView, SessionStrip and InputBar
+   (BuddyChat.tsx). Destin's note on buddy-rebuild-questions#Q-2: "super
+   optimized for the small window … maximize visible text and reduce scroll
+   burden". So everything below SHRINKS SPACE, never text: the 13px chat size
+   above stays, the gutters, bubble padding, row gaps and the chrome around
+   them get smaller. Scoped to the buddy chat window; the main window is
+   untouched. */
+html[data-mode="buddy-chat"] .buddy-chat-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  /* Clear: only the floating header bar inside it is drawn, so messages slide all the way up
+     behind the bar and stay plainly visible around and above it. Destin, 2026-10-30: "the header
+     bar itself should be blurred, and the area around it/above it should not be". The panel-
+     coloured fade this replaced hid them. */
+  background: transparent;
+  padding-bottom: 2px;
+}
+/* The floating header bar: frosted glass over the conversation. With Reduced effects (no blur)
+   it is nearly solid instead, so text never sits unblurred behind the buttons. */
+html[data-mode="buddy-chat"] .buddy-chat-header .header-bar {
+  background-color: color-mix(in srgb, var(--panel) 94%, transparent) !important;
+}
+/* WHY gated here and a literal blur: the theme engine's glass sheet only runs over a wallpaper,
+   but what sits behind these two is the conversation itself, in every theme. Gating on
+   [data-reduced-effects] keeps the app's "turn the glass off" switch working (react-renderer
+   rule: no blur Reduced effects cannot remove); the literal px is because Chromium does not
+   repaint a blur written through a variable. */
+html[data-mode="buddy-chat"]:not([data-reduced-effects]) .buddy-chat-header .header-bar {
+  background-color: color-mix(in srgb, var(--panel) 62%, transparent) !important;
+  backdrop-filter: blur(14px) saturate(1.2) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.2) !important;
+}
+/* The message box: the same frost, so replies scrolling under it show through blurred. Its own
+   rounded shape carries the blur (the wrapper around it has none — see .input-bar-container). */
+html[data-mode="buddy-chat"]:not([data-reduced-effects]) .input-bar-container form {
+  background-color: color-mix(in srgb, var(--inset) 62%, transparent) !important;
+  backdrop-filter: blur(14px) saturate(1.2) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.2) !important;
+}
+html[data-mode="buddy-chat"] .buddy-chat-header .header-bar {
+  /* The main window's .header-bar is absolutely placed over its chrome; here it
+     is the header's only content, so it flows and gives the header its height. */
+  position: relative !important;
+  inset: auto !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  padding: 0 8px;
+}
+html[data-mode="buddy-chat"] .buddy-chat-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0 6px 6px;
+  background: transparent !important;
+  z-index: 20;
+}
+/* WHY the scroll's own padding: the main window's chat clears its header and
+   message box with --top/--bottom-chrome-height plus roomy extra space (24px
+   top, a float gap below). The buddy keeps the clearance and drops the extra. */
+/* Messages fade out over the last few pixels before the window's top and bottom edges instead
+   of being cut off by them (Destin, 2026-10-30: "messages should begin fading away just a tiny
+   bit before they reach the top/bottom of the window"). A mask on the scroller, not a painted
+   band, so the frosted header bar and message box still see the real messages behind them. */
+html[data-mode="buddy-chat"] .chat-scroll {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 18px, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 18px, #000 calc(100% - 18px), transparent);
+}
+html[data-mode="buddy-chat"] .chat-scroll {
+  padding-top: calc(var(--top-chrome-height, 34px) + 2px) !important;
+  padding-bottom: calc(var(--bottom-chrome-height, 56px) + var(--queued-strip-height, 0px) + 6px) !important;
+}
+/* Side gutters 16px → 6px: at 320px wide the main window's gutters cost a
+   tenth of every line. */
+html[data-mode="buddy-chat"] .timeline-entry > .px-4,
+html[data-mode="buddy-chat"] .chat-scroll .in-view.px-4 {
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+}
+html[data-mode="buddy-chat"] .timeline-entry > .py-2 {
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
+}
+/* Bubbles use nearly the full row: the main window's 80–85% caps leave
+   a dead column that is wasted width in a small window. */
+html[data-mode="buddy-chat"] .assistant-bubble {
+  max-width: 96% !important;
+}
+html[data-mode="buddy-chat"] .user-bubble {
+  max-width: 88% !important;
+}
+/* 8px 13px: 10px sides read as text touching the bubble's edge (buddy-rebuild-review2#R-3). */
+body[data-mode="buddy-chat"] .user-bubble,
+body[data-mode="buddy-chat"] .assistant-bubble {
+  padding: 8px 13px;
+  line-height: 1.45;
+}
+/* The All sessions menu takes the window's whole width (less a 6px margin):
+   at the main window's min(24rem, 88vw) a session name kept ~90px. */
+html[data-mode="buddy-chat"] .session-menu {
+  width: calc(100vw - 12px) !important;
+  left: 6px !important;
+}
+/* Message times (buddy-rebuild-gaps#G-1, contract R25): only the newest
+   message keeps its time; every other one folds its time away and shows it
+   after the pointer has rested on the message for 0.6 s. Folded with height
+   and opacity, not display, so the delay can run. WHY restored (2026-10-30):
+   the 2026-10-26 refactor of this file dropped the block by accident, and every
+   message showed its time again — the final review caught it. */
+html[data-mode="buddy-chat"] .timeline-entry .bubble-timestamp {
+  max-height: 0;
+  margin-top: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: opacity 120ms ease, max-height 0ms linear 120ms, margin-top 0ms linear 120ms;
+}
+html[data-mode="buddy-chat"] .timeline-entry:hover .bubble-timestamp {
+  max-height: 1em;
+  margin-top: 4px;
+  opacity: 1;
+  transition: opacity 120ms ease 600ms, max-height 0ms linear 600ms, margin-top 0ms linear 600ms;
+}
+html[data-mode="buddy-chat"] .timeline-entry:nth-last-child(1 of .timeline-entry) .bubble-timestamp {
+  max-height: 1em;
+  margin-top: 4px;
+  opacity: 1;
+  transition: none;
+}
+/* A warning with buttons (AttentionBanner): at 320px the buttons beside the
+   sentence squeezed it to two or three words a line. The sentence takes the
+   full row and the buttons wrap beneath it, right-aligned. */
+html[data-mode="buddy-chat"] .attention-bubble {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+html[data-mode="buddy-chat"] .attention-bubble > span:not(:first-child),
+html[data-mode="buddy-chat"] .attention-bubble > span:only-child {
+  flex: 1 1 calc(100% - 24px);
+}
+html[data-mode="buddy-chat"] .chat-scroll .in-view.px-4 {
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+}
+/* The All sessions menu in the small window (buddy-rebuild-tryit#T-8):
+   - each row's name and folder line start where "All sessions" does — the
+     main window's rows begin with a drag grip, which the buddy hides, so they
+     sat 8px further left;
+   - its height follows the window, so it grows and shrinks with the size
+     button instead of keeping the height it opened at. */
+html[data-mode="buddy-chat"] .session-menu [data-session-id] {
+  padding-left: 8px;
+}
+html[data-mode="buddy-chat"] .session-menu {
+  max-height: calc(100vh - 48px) !important;
+  --session-menu-available-height: calc(100vh - 48px) !important;
 }

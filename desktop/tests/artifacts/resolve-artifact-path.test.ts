@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveArtifactPath } from '../../src/main/artifacts/read-service';
+import { resolveArtifactPath, nearbyCandidates } from '../../src/main/artifacts/read-service';
 import { discoverProjectFiles, discoveredFileRecord } from '../../src/main/artifacts/project-file-discovery';
 import { SIDECAR_SCHEMA_VERSION } from '../../src/shared/artifacts/types';
 
@@ -221,6 +221,115 @@ describe('no existence oracle', () => {
       const touched = await fsPathsTouchedBy(async () => { res = await resolveArtifactPath(root, target, { trackedOnly: true }); });
       expect(res, target).toEqual({ ok: false, error: 'not-tracked' });
       expect(touched, target).not.toContain(target);
+    }
+  });
+});
+
+// A chat starts in one folder (chatRoot), the assistant `cd`s into another
+// (work) and names a file by a path relative to it: "icon6/s-bands.png". The
+// chat's own records say where it was working, so the computer's window finds
+// it there. A phone never gets this search.
+describe('a short path is also looked for beside this chat\'s own files', () => {
+  let chatRoot: string;
+  let work: string;
+  let other: string;
+  const NEAR = { sessionId: 'sess-near' };
+
+  beforeAll(() => {
+    chatRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-near-chat-')));
+    work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-near-work-')));
+    other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-near-other-')));
+    for (const dir of [work, other]) fs.mkdirSync(path.join(dir, 'icon6'));
+    fs.writeFileSync(path.join(work, 'icon6', 'finalists.png'), 'png');
+    fs.writeFileSync(path.join(work, 'icon6', 's-bands.png'), 'png');
+    fs.writeFileSync(path.join(other, 'icon6', 'only-other.png'), 'png');
+    fs.mkdirSync(path.join(work, '.ssh'));
+    fs.writeFileSync(path.join(work, '.ssh', 'config'), 'Host x\n');
+    fs.writeFileSync(path.join(work, '.ssh', 'id_rsa'), '-----BEGIN KEY-----\n');
+    fs.mkdirSync(path.join(chatRoot, '.youcoded'));
+    const at = new Date().toISOString();
+    const ext = (id: string, abs: string, sessionId: string, extra: Record<string, unknown> = {}) => ({
+      id, kind: 'external', path: path.basename(abs), absolutePath: abs, lastModified: at, status: 'active',
+      versions: [{ id: `${id}-v`, ts: at, type: 'read', author: 'user', sessionId, ...extra }], comments: [], tags: [],
+    });
+    fs.writeFileSync(path.join(chatRoot, '.youcoded', 'artifacts.json'), JSON.stringify({
+      $schema: SIDECAR_SCHEMA_VERSION, projectId: 'near', name: 'near', createdAt: at, updatedAt: at,
+      artifacts: [
+        ext('rec-finalists', path.join(work, 'icon6', 'finalists.png'), 'sess-near'),
+        ext('rec-ssh', path.join(work, '.ssh', 'config'), 'sess-near'),
+        // Another chat's file: its folder is never searched for this chat.
+        ext('rec-other', path.join(other, 'icon6', 'x.png'), 'sess-someone-else'),
+        // An earlier run of a resumed chat: matched by its conversation id.
+        ext('rec-resumed', path.join(other, 'icon6', 'y.png'), 'sess-old-desktop-id', { conversationId: 'conv-1' }),
+      ],
+      manualExcludes: [], manualIncludes: [],
+    }));
+  });
+
+  afterAll(async () => {
+    for (const dir of [chatRoot, work, other]) await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 });
+  });
+
+  it('finds the file beside a file this chat recorded, by its full location', async () => {
+    expect(await resolveArtifactPath(chatRoot, 'icon6/s-bands.png', { nearSession: NEAR }))
+      .toEqual({ ok: false, error: 'not-found', searchedNearby: true, elsewhere: [path.join(work, 'icon6', 's-bands.png').replace(/\\/g, '/')] });
+    // A leading ./ and a bare name work too.
+    expect(await resolveArtifactPath(chatRoot, './icon6/s-bands.png', { nearSession: NEAR })).toMatchObject({ elsewhere: [expect.stringContaining('s-bands.png')] });
+    expect(await resolveArtifactPath(chatRoot, 's-bands.png', { nearSession: NEAR })).toMatchObject({ elsewhere: [expect.stringContaining('s-bands.png')] });
+  });
+
+  it('another chat\'s folders are not searched; a resumed chat\'s earlier ones are', async () => {
+    expect(await resolveArtifactPath(chatRoot, 'icon6/only-other.png', { nearSession: NEAR }))
+      .toEqual({ ok: false, error: 'not-found', searchedNearby: true });
+    expect(await resolveArtifactPath(chatRoot, 'icon6/only-other.png', { nearSession: { sessionId: 'sess-new', conversationId: 'conv-1' } }))
+      .toMatchObject({ elsewhere: [expect.stringContaining('only-other.png')] });
+  });
+
+  it('a credential file beside a recorded file is never offered, and reads exactly like a missing one', async () => {
+    const protectedAnswer = await resolveArtifactPath(chatRoot, 'id_rsa', { nearSession: NEAR });
+    const missingAnswer = await resolveArtifactPath(chatRoot, 'no-such-key', { nearSession: NEAR });
+    expect(protectedAnswer).toEqual({ ok: false, error: 'not-found', searchedNearby: true });
+    expect(missingAnswer).toEqual(protectedAnswer);
+  });
+
+  it('absolute, ~ and ../ paths are not searched for anywhere else', async () => {
+    for (const p of [path.join(chatRoot, 'icon6', 's-bands.png'), 'sub/../icon6/s-bands.png']) {
+      expect(await resolveArtifactPath(chatRoot, p, { nearSession: NEAR }), p).toEqual({ ok: false, error: 'not-found' });
+    }
+  });
+
+  it('the phone\'s options switch the search off even when a session is named', async () => {
+    let res: unknown;
+    const touched = await fsPathsTouchedBy(async () => {
+      res = await resolveArtifactPath(chatRoot, 'icon6/s-bands.png', { refusePrivate: true, nearSession: NEAR });
+    });
+    expect(res).toEqual({ ok: false, error: 'not-found' });
+    expect(touched.filter((p) => p.startsWith(work))).toEqual([]);
+    expect(await resolveArtifactPath(chatRoot, 'icon6/s-bands.png', { trackedOnly: true, nearSession: NEAR }))
+      .toEqual({ ok: false, error: 'not-tracked' });
+  });
+
+  it('without a session the answer is exactly as before', async () => {
+    expect(await resolveArtifactPath(chatRoot, 'icon6/s-bands.png')).toEqual({ ok: false, error: 'not-found' });
+  });
+});
+
+describe('nearbyCandidates — where a short path could be, from strings alone', () => {
+  it('matches the folder part segment by segment, ignoring case and backslashes', () => {
+    expect(nearbyCandidates('Icon6\\s.png', ['/w/icon6/a.png'])).toEqual(['/w/Icon6/s.png']);
+    expect(nearbyCandidates('icon6/s.png', ['/w/other/a.png'])).toEqual([]);
+    expect(nearbyCandidates('a/b/s.png', ['/w/a/b/x.png', '/v/b/x.png'])).toEqual(['/w/a/b/s.png']);
+  });
+
+  it('never yields more than the cap, newest records first, without repeats', () => {
+    const many = Array.from({ length: 50 }, (_, i) => `/d${i}/f.png`);
+    expect(nearbyCandidates('s.png', [...many.slice(0, 2), ...many])).toHaveLength(20);
+    expect(nearbyCandidates('s.png', ['/a/f.png', '/a/g.png', '/b/f.png'])).toEqual(['/a/s.png', '/b/s.png']);
+  });
+
+  it('refuses every path that already says where it is', () => {
+    for (const p of ['/abs/s.png', '~/s.png', 'C:\\x\\s.png', '../s.png', 'a/../s.png', '', './']) {
+      expect(nearbyCandidates(p, ['/w/a.png']), p).toEqual([]);
     }
   });
 });

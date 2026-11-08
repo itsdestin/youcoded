@@ -299,7 +299,7 @@ export function useEntryFolding(
     // so every entry present on the FIRST commit already called registerEntry()
     // while observer.current was still null. Pre-fix those elements sat in
     // elements.current forever unobserved: entries already on screen when
-    // ChatView / PreviewTimeline / BubbleFeed mounted could never fold. The
+    // ChatView / PreviewTimeline mounted could never fold. The
     // same gap reopens whenever this effect's deps change and it builds a new
     // observer, so sweep elements.current unconditionally rather than only on
     // first mount. registerEntry's own io.observe() still covers entries

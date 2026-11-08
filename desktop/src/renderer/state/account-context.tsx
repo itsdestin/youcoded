@@ -175,7 +175,7 @@ export function AccountProvider({
       while (true) {
         if (cancelledRef.current || signInEpoch.current !== epoch) return; // unmounted / cancelled — stop loop
         if (Date.now() > deadline) {
-          throw new Error("sign-in timed out — please try again");
+          throw new Error("Sign-in didn't finish. Finish signing in with your web browser on this computer, then try again.");
         }
 
         const pollRes = await window.claude.account.poll(device_code);

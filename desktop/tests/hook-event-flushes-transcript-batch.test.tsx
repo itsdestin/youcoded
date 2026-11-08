@@ -8,12 +8,12 @@
 // apply to the reducer FIRST, inserting a tool-group segment mid-stream and
 // splitting one assistant bubble into two. applyHookEvent
 // (state/hook-dispatcher.ts) fixes this by flushing the transcript batch
-// before it dispatches — shared by App.tsx (main window) and BubbleFeed.tsx
+// before it dispatches — shared by App.tsx (main window) and useBuddyFeed.ts
 // (buddy window), both of which have their own transcript batcher instance
 // (a separate BrowserWindow/renderer process each) but reach the SAME
 // module-level `active` pointer via transcript-batch.ts's flush/install
 // pair. These tests drive the REAL batcher, the REAL reducer and (for
-// BubbleFeed) the REAL component — a fake of any would pass while the
+// useBuddyFeed) the REAL component — a fake of any would pass while the
 // ordering it exists to guarantee was wrong. Modeled on
 // tests/remote-snapshot-cut-line.test.tsx, which pins the same module for a
 // different caller (the remote snapshot exporter).
@@ -21,7 +21,7 @@ import React from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, act, cleanup } from '@testing-library/react';
 import { ChatProvider, useChatStore, type ChatStore } from '../src/renderer/state/chat-context';
-import { BubbleFeed } from '../src/renderer/components/buddy/BubbleFeed';
+import { useBuddyFeed } from '../src/renderer/components/buddy/useBuddyFeed';
 import { installTranscriptBatcher, type TranscriptBatcher } from '../src/renderer/state/transcript-batch';
 import { applyHookEvent } from '../src/renderer/state/hook-dispatcher';
 import type { HookEvent } from '../src/shared/types';
@@ -107,24 +107,16 @@ describe('applyHookEvent flushes the transcript batch before a hook action lands
   });
 });
 
-// BubbleFeed builds two IntersectionObservers unconditionally (the fold hook
-// and its own bottom-scroll sentinel) — a minimal no-op stub, since this test
-// exercises the reducer race, not folding or scroll-pin behaviour.
-class NoopIO {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-  takeRecords() { return []; }
-}
+// The buddy's feed hook draws nothing, so the harness renders no DOM.
+function Feed({ sessionId }: { sessionId: string }) { useBuddyFeed(sessionId); return null; }
 
-describe('BubbleFeed (buddy window) applies the same protection through the shared batcher', () => {
+describe('useBuddyFeed (buddy window) applies the same protection through the shared batcher', () => {
   let transcriptHandler: ((event: unknown) => void) | null = null;
   let hookHandler: ((event: unknown) => void) | null = null;
 
   beforeEach(() => {
     transcriptHandler = null;
     hookHandler = null;
-    (window as any).IntersectionObserver = NoopIO;
     (window as any).claude = {
       on: {
         transcriptEvent: (h: (event: unknown) => void) => { transcriptHandler = h; return h; },
@@ -140,18 +132,18 @@ describe('BubbleFeed (buddy window) applies the same protection through the shar
   it('a same-partId text stream stays ONE segment across a mid-stream PermissionRequest', () => {
     let store: ChatStore | null = null;
     function Probe() { store = useChatStore(); return null; }
-    render(<ChatProvider><Probe /><BubbleFeed sessionId="s1" /></ChatProvider>);
+    render(<ChatProvider><Probe /><Feed sessionId="s1" /></ChatProvider>);
     expect(transcriptHandler).not.toBeNull();
     expect(hookHandler).not.toBeNull();
 
-    // Both chunks of the SAME streamed message queue up in BubbleFeed's own
+    // Both chunks of the SAME streamed message queue up in the feed's own
     // batcher first — mirrors the real order (a message's chunks all arrive
     // before the NEXT step's permission ask does) with a stalled frame.
     act(() => { transcriptHandler!({ type: 'assistant-text', sessionId: 's1', uuid: 'u1', timestamp: 1, data: { text: 'Draft is in for your review. Now', partId: 'p1' } }); });
     act(() => { transcriptHandler!({ type: 'assistant-text', sessionId: 's1', uuid: 'u2', timestamp: 2, data: { text: ' the invites.', partId: 'p1' } }); });
-    expect(textSegments(store!)).toEqual([]);   // queued in BubbleFeed's own batcher, not yet applied
+    expect(textSegments(store!)).toEqual([]);   // queued in the feed's own batcher, not yet applied
 
-    act(() => { hookHandler!(permissionRequest); });   // BubbleFeed's hook effect: applyHookEvent flushes first
+    act(() => { hookHandler!(permissionRequest); });   // useBuddyFeed's hook effect: applyHookEvent flushes first
 
     const segments = textSegments(store!);
     expect(segments.map((s) => s.type)).toEqual(['text', 'tool-group']);

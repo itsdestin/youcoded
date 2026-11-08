@@ -8,6 +8,8 @@ import {
   registerPluginInstall,
   unregisterPluginInstall,
 } from './claude-code-registry';
+import { isBundledPlugin } from '../shared/bundled-plugins';
+import { getBundledPin, PIN_MARKER_FILE } from './bundled-plugin-sync';
 
 /**
  * Installs Claude Code plugins under our own marketplace root at
@@ -124,13 +126,21 @@ interface MarketplaceEntry {
 // `sourceMarketplace` alone; it comes from fetchable JSON and can be spoofed
 // if the registry is compromised. This is an allowlist on the canonical
 // repo URL the code was actually fetched from.
-const TRUSTED_POSTINSTALL_ORGS = ['itsdestin/', 'destinationunknown/'];
+// WHY exact owner match (2026-10 security audit SC-6): the old check was
+// `sourceRef.includes('github.com/itsdestin/')`, which also passes
+// `https://evil.example/github.com/itsdestin/x.git` or a query string that merely
+// contains the text. We now parse the URL and require https, host github.com
+// and the first path segment to equal a trusted owner exactly.
+const TRUSTED_POSTINSTALL_ORGS = ['itsdestin', 'destinationunknown'];
 
-function isPostInstallTrusted(entry: MarketplaceEntry): boolean {
+export function isPostInstallTrusted(entry: MarketplaceEntry): boolean {
   if (!entry.postInstall || !entry.sourceRef) return false;
-  return TRUSTED_POSTINSTALL_ORGS.some(org =>
-    entry.sourceRef.includes(`github.com/${org}`),
-  );
+  let u: URL;
+  try { u = new URL(entry.sourceRef); } catch { return false; }
+  if (u.protocol !== 'https:' || u.hostname.toLowerCase() !== 'github.com') return false;
+  if (u.username || u.password || u.port) return false;
+  const owner = u.pathname.split('/').filter(Boolean)[0]?.toLowerCase();
+  return !!owner && TRUSTED_POSTINSTALL_ORGS.includes(owner);
 }
 
 function runShell(command: string, cwd: string): Promise<{ ok: boolean; output: string }> {
@@ -168,17 +178,76 @@ function runGit(...args: string[]): Promise<{ ok: boolean; output: string }> {
   });
 }
 
-function copyDirSync(src: string, dest: string): void {
+/**
+ * WHY (2026-10 security audit SC-10): a cloned plugin repo can contain symlinks
+ * such as `notes.txt -> ~/.ssh/id_rsa`. fs.copyFileSync FOLLOWS symlinks, so the
+ * private file's contents would be copied into the plugin folder where the
+ * model can read them. We never follow a link out of the plugin: links whose
+ * real target is outside the source root are skipped; links to a file inside
+ * the root are copied as plain files; links to folders are skipped (cycles).
+ */
+export function copyDirSync(src: string, dest: string, rootReal?: string): void {
+  const root = rootReal ?? fs.realpathSync(src);
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
+    if (entry.isSymbolicLink()) {
+      let real: string;
+      try { real = fs.realpathSync(srcPath); } catch { continue; } // dangling
+      if (!isContainedIn(real, root)) {
+        console.warn(`[plugin-installer] skipped symlink pointing outside the plugin: ${entry.name}`);
+        continue;
+      }
+      if (fs.statSync(real).isFile()) fs.copyFileSync(real, destPath);
+      continue;
+    }
     if (entry.isDirectory()) {
-      copyDirSync(srcPath, destPath);
-    } else {
+      copyDirSync(srcPath, destPath, root);
+    } else if (entry.isFile()) {
       fs.copyFileSync(srcPath, destPath);
     }
   }
+}
+
+/**
+ * Same protection for `url` plugins, which are cloned straight into place (so
+ * copyDirSync never runs): delete any symlink whose real target is outside the
+ * plugin folder. The .git folder is left alone.
+ */
+export function removeEscapingSymlinks(dir: string): number {
+  let removed = 0;
+  let root: string;
+  try { root = fs.realpathSync(dir); } catch { return 0; }
+  const walk = (d: string) => {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      if (entry.name === '.git') continue;
+      const p = path.join(d, entry.name);
+      if (entry.isSymbolicLink()) {
+        let inside = false;
+        try { inside = isContainedIn(fs.realpathSync(p), root); } catch { /* dangling */ }
+        if (!inside) { try { fs.rmSync(p, { force: true }); removed++; } catch { /* best effort */ } }
+      } else if (entry.isDirectory()) {
+        walk(p);
+      }
+    }
+  };
+  walk(dir);
+  return removed;
+}
+
+/**
+ * WHY (2026-10 security audit SC-4): a third-party git plugin must be installed
+ * at the exact commit the catalog scanned. The fallback index.json has no
+ * commit, so with the catalog server unreachable we would install whatever the
+ * upstream repo's HEAD is right now. Refuse instead. YouCoded's own marketplace
+ * entries (sourceMarketplace "youcoded") are exempt; they are our own repos.
+ */
+const UNVERIFIABLE_PLUGIN_ERROR = "Can't verify this plugin right now, try again later.";
+function needsPinButHasNone(entry: MarketplaceEntry): boolean {
+  if (entry.sourceType !== 'url' && entry.sourceType !== 'git-subdir') return false;
+  if (entry.sourceMarketplace === 'youcoded') return false;
+  return !entry.sourceCommit;
 }
 
 /** Check if a plugin is already installed via Claude Code's /plugin install.
@@ -262,11 +331,63 @@ export function readPluginVersion(dir: string): string | null {
 // Private alias so the existing call sites below compile unchanged.
 const readCachedPluginVersion = readPluginVersion;
 
+/**
+ * WHY (2026-10 security audit, item 24): put exactly `commit`'s copy of `sourceRef` into the
+ * marketplace cache and refuse anything else. The commit is fetched by id when this machine
+ * does not already have it, then confirmed to be that very commit before a single file is
+ * used. When the commit is already on disk (an earlier launch) nothing is downloaded, so a
+ * launch with no internet still works. Any failure leaves the cache folder untouched.
+ */
+export async function materializePinnedSource(cacheRepo: string, commit: string, sourceRef: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!/^[0-9a-f]{40}$/.test(commit)) return { ok: false, error: 'Invalid pinned commit' };
+  const sourceDir = path.join(cacheRepo, sourceRef);
+  if (!isContainedIn(sourceDir, cacheRepo) || path.resolve(sourceDir) === path.resolve(cacheRepo)) {
+    return { ok: false, error: 'Invalid source ref (path traversal blocked)' };
+  }
+  // Cache clone missing (never created, or deleted): create it, then fetch the pin below.
+  const cacheExists = await fs.promises.access(cacheRepo).then(() => true, () => false);
+  if (!cacheExists) {
+    await fs.promises.mkdir(CACHE_DIR, { recursive: true });
+    const cloned = await runGit('clone', '--depth', '1', '--branch', marketplaceBranch, getMarketplaceRepo('youcoded'), cacheRepo);
+    if (!cloned.ok) return { ok: false, error: `could not download the built-in plugin version this app needs: ${cloned.output.slice(0, 200)}` };
+    setCacheTimestamp(cacheRepo);
+  }
+  const isThatCommit = async () => {
+    const r = await runGit('-C', cacheRepo, 'rev-parse', '--verify', '--quiet', `${commit}^{commit}`);
+    return r.ok && r.output.trim() === commit;
+  };
+  if (!(await isThatCommit())) {
+    const fetched = await runGit('-C', cacheRepo, 'fetch', '--depth', '1', 'origin', commit);
+    if (!fetched.ok) return { ok: false, error: `could not download the built-in plugin version this app needs: ${fetched.output.slice(0, 200)}` };
+    if (!(await isThatCommit())) return { ok: false, error: 'the downloaded version is not the one this app expects, so it was not used' };
+  }
+  // Clear first: a path checkout restores files but never deletes ones the pinned commit lacks.
+  await fs.promises.rm(sourceDir, { recursive: true, force: true });
+  const out = await runGit('-C', cacheRepo, 'checkout', '--force', commit, '--', sourceRef);
+  if (!out.ok) return { ok: false, error: `could not read the pinned plugin files: ${out.output.slice(0, 200)}` };
+  return { ok: true };
+}
+
+/** Records which pinned commit an installed built-in plugin came from (see planBundledSync). */
+async function writePinMarker(dir: string, commit: string): Promise<void> {
+  try { await fs.promises.writeFile(path.join(dir, PIN_MARKER_FILE), commit); } catch { /* best effort: worst case it is reinstalled once more */ }
+}
+
+/** The commit recorded by writePinMarker, or null. */
+export async function readPinMarker(dir: string): Promise<string | null> {
+  try { return (await fs.promises.readFile(path.join(dir, PIN_MARKER_FILE), 'utf8')).trim() || null; } catch { return null; }
+}
+
 async function installFromLocal(id: string, sourceRef: string, sourceMarketplace?: string, expectedVersion?: string): Promise<InstallResult> {
   // Phase 3a: source-aware repo selection — YouCoded entries clone from
   // itsdestin/wecoded-marketplace, not the Anthropic upstream repo.
   // YOUCODED_MARKETPLACE_BRANCH overrides the branch for test harnesses
   // (e.g., running the decomposition-v3 branch on a scratch machine).
+  // WHY: a built-in plugin comes from the pinned commit of OUR marketplace repo only. The
+  // folder and repo are taken from the pin, not from the (remotely fetched) index entry.
+  const pin = isBundledPlugin(id) ? getBundledPin(id) : undefined;
+  if (isBundledPlugin(id) && !pin) return { status: 'failed', error: 'This app build has no pinned version for this built-in plugin.' };
+  if (pin) { sourceRef = pin.sourceRef; sourceMarketplace = 'youcoded'; }
   const cacheRepo = path.join(CACHE_DIR, getCacheRepoName(sourceMarketplace));
   const repoUrl = getMarketplaceRepo(sourceMarketplace);
 
@@ -284,7 +405,7 @@ async function installFromLocal(id: string, sourceRef: string, sourceMarketplace
     const { ok, output } = await runGit('clone', '--depth', '1', '--branch', marketplaceBranch, repoUrl, cacheRepo);
     if (!ok) return { status: 'failed', error: `Failed to clone marketplace repo: ${output.slice(0, 200)}` };
     setCacheTimestamp(cacheRepo);
-  } else {
+  } else if (!pin) {
     shouldRefresh = Date.now() - getCacheTimestamp(cacheRepo) > CACHE_REFRESH_MS;
     if (!shouldRefresh && expectedVersion) {
       const cachedVersion = readCachedPluginVersion(path.join(cacheRepo, sourceRef));
@@ -308,6 +429,10 @@ async function installFromLocal(id: string, sourceRef: string, sourceMarketplace
     // Fetch failure (offline, rate-limited) → proceed with cached copy
   }
 
+  if (pin) {
+    const m = await materializePinnedSource(cacheRepo, pin.commit, pin.sourceRef);
+    if (!m.ok) return { status: 'failed', error: m.error };
+  }
   const sourceDir = path.join(cacheRepo, sourceRef);
   // Security: prevent sourceRef from escaping the cache directory (e.g. "../../.ssh")
   if (!isContainedIn(sourceDir, cacheRepo)) {
@@ -320,6 +445,7 @@ async function installFromLocal(id: string, sourceRef: string, sourceMarketplace
   const targetDir = path.join(PLUGINS_DIR, id);
   if (fs.existsSync(targetDir)) fs.rmSync(targetDir, { recursive: true, force: true });
   copyDirSync(sourceDir, targetDir);
+  if (pin) await writePinMarker(targetDir, pin.commit);
   return { status: 'installed' };
 }
 
@@ -379,6 +505,7 @@ export async function upgradePluginFromGit(entry: MarketplaceEntry): Promise<Ins
   if (sourceType !== 'url' && sourceType !== 'git-subdir') {
     return { status: 'failed', error: `upgradePluginFromGit does not handle source type "${sourceType}"` };
   }
+  if (needsPinButHasNone(entry)) return { status: 'failed', error: UNVERIFIABLE_PLUGIN_ERROR };
   fs.mkdirSync(PLUGINS_DIR, { recursive: true });
   const targetDir = path.join(PLUGINS_DIR, id);
   const staging = path.join(PLUGINS_DIR, `.upgrade-${id}-${process.pid}`);
@@ -414,7 +541,15 @@ export async function upgradePluginFromGit(entry: MarketplaceEntry): Promise<Ins
 
 export async function upgradePluginFromLocal(id: string, sourceRef: string, sourceMarketplace?: string): Promise<InstallResult> {
   if (!SAFE_ID_RE.test(id)) return { status: 'failed', error: 'Invalid plugin id' };
+  // WHY (audit item 24): built-in plugins only ever move to the commit this app was built with.
+  const pin = isBundledPlugin(id) ? getBundledPin(id) : undefined;
+  if (isBundledPlugin(id) && !pin) return { status: 'failed', error: 'This app build has no pinned version for this built-in plugin.' };
+  if (pin) { sourceRef = pin.sourceRef; sourceMarketplace = 'youcoded'; }
   const cacheRepo = path.join(CACHE_DIR, getCacheRepoName(sourceMarketplace));
+  if (pin) {
+    const m = await materializePinnedSource(cacheRepo, pin.commit, pin.sourceRef);
+    if (!m.ok) return { status: 'failed', error: m.error };
+  }
   const sourceDir = path.join(cacheRepo, sourceRef);
   // Security: prevent sourceRef from escaping the cache directory (e.g. "../../.ssh")
   if (!isContainedIn(sourceDir, cacheRepo)) return { status: 'failed', error: 'Invalid source ref (path traversal blocked)' };
@@ -429,6 +564,7 @@ export async function upgradePluginFromLocal(id: string, sourceRef: string, sour
     // into a half-written staging dir.
     fs.rmSync(staging, { recursive: true, force: true });
     copyDirSync(sourceDir, staging);
+    if (pin) await writePinMarker(staging, pin.commit);
     if (fs.existsSync(targetDir)) fs.renameSync(targetDir, retired);
     fs.renameSync(staging, targetDir);
   } catch (err: any) {
@@ -527,8 +663,10 @@ async function installFromUrl(id: string, url: string, commit?: string, targetOv
   if (commit) {
     const pinned = await pinToCommit(targetDir, commit);
     if (!pinned.ok) return { status: 'failed', error: `could not check out the listed version ${commit}: ${pinned.output.slice(0, 200)}` };
+    removeEscapingSymlinks(targetDir);
     return { status: 'installed', commit: pinned.commit };
   }
+  removeEscapingSymlinks(targetDir);
   return { status: 'installed' };
 }
 
@@ -558,6 +696,8 @@ async function installFromGitSubdir(id: string, repoUrl: string, subdir: string,
     }
 
     const sourceDir = path.join(tmpDir, subdir);
+    // WHY: audit SC-10 — never copy from outside the checkout even if `subdir` holds `..`.
+    if (!isContainedIn(sourceDir, tmpDir)) return { status: 'failed', error: 'Invalid plugin subdirectory' };
     if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
       return { status: 'failed', error: `Subdirectory not found after checkout: ${subdir}` };
     }
@@ -573,10 +713,16 @@ async function installFromGitSubdir(id: string, repoUrl: string, subdir: string,
 }
 
 export async function installPlugin(entry: MarketplaceEntry): Promise<InstallResult> {
-  const { id, sourceType, sourceRef } = entry;
+  const { id, sourceRef } = entry;
+  // WHY (audit item 24): a built-in plugin is always our own marketplace folder at the pinned
+  // commit, whatever the fetched index says about its source.
+  const sourceType = isBundledPlugin(id) ? 'local' : entry.sourceType;
   if (!id) return { status: 'failed', error: 'Missing plugin id' };
   // Security: validate plugin ID to prevent path traversal (e.g. "../../.ssh")
   if (!SAFE_ID_RE.test(id)) return { status: 'failed', error: 'Invalid plugin id' };
+
+  // Refuse before touching anything (see needsPinButHasNone).
+  if (needsPinButHasNone(entry)) return { status: 'failed', error: UNVERIFIABLE_PLUGIN_ERROR };
 
   // Guard: already in progress
   if (installsInProgress.has(id)) return { status: 'installing' };

@@ -858,7 +858,7 @@ describe('TRANSCRIPT_TOOL_USE landing on a preparing card that already holds an 
 // ---------------------------------------------------------------------------
 // 2026-08-16: a host-injected user-role turn (a delivered specialist report,
 // TranscriptEvent.data.injected = 'specialist-report') must carry its marker
-// onto the timeline entry so ChatView/BubbleFeed can draw it as a system
+// onto the timeline entry so ChatView can draw it as a system
 // notice rather than the user's own bubble.
 describe('TRANSCRIPT_USER_MESSAGE carries the host-injected marker', () => {
   it('stamps `injected` on the appended entry, and leaves a real user message unmarked', () => {

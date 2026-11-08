@@ -1,7 +1,7 @@
 // The two live listeners every chat screen runs, written ONCE: the transcript stream and the computer's `session:live` pushes.
 //
 // WHY one module (sync-fix6, Destin 2026-10-04: the floating buddy's chat must show the same lines as the main window): the main window
-// (App.tsx) and the buddy (BubbleFeed.tsx) each wired their own `transcript:event` and `session:live` listeners, and the buddy added a typed
+// (App.tsx) and the buddy (useBuddyFeed.ts) each wired their own `transcript:event` and `session:live` listeners, and the buddy added a typed
 // ledger (`BUDDY_LIVE`) of event types it skipped. Three of them (a /clear, an interrupt, the skill card) were gaps nobody had decided on, and
 // any wiring written twice can drift again. Both screens now attach through these two functions, so the translation (`eventToAction`), the
 // routing and batching (`routeTranscriptEvent`) and the host's lines (`applySessionLive`) are literally the same code. What is genuinely a

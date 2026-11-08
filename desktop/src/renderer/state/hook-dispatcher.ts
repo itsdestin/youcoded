@@ -1,6 +1,6 @@
 import { HookEvent, type FloorStop } from '../../shared/types';
 
-const FLOOR_STOPS: FloorStop[] = ['removal', 'removal-if-empty', 'removal-unknown', 'secret-path', 'secret-maybe', 'admin'];
+const FLOOR_STOPS: FloorStop[] = ['removal', 'removal-if-empty', 'removal-unknown', 'secret-path', 'secret-maybe', 'admin', 'protected-config'];
 import { ChatAction } from './chat-types';
 import { flushTranscriptActions } from './transcript-batch';
 
@@ -80,6 +80,8 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
         external: external || undefined,
         floorStop,
         permissionMode,
+        // Validated like the mode: only a literal true counts, so an older or foreign peer degrades to "not offered".
+        chainsHonoured: payload.chainsHonoured === true ? true : undefined,
         specialist,
       };
     }
@@ -163,7 +165,7 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
 
 /**
  * Computes the action for a hook event and applies it — shared by App.tsx (main
- * window) and BubbleFeed.tsx (buddy window), both of which batch transcript
+ * window) and useBuddyFeed.ts (buddy window), both of which batch transcript
  * deltas into animation frames but dispatch hook events immediately. WHY the
  * flush (2026-09-28, journeys/permission-approve.json step 8 flake under
  * load): a stalled frame can leave a chronologically earlier transcript delta

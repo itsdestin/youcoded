@@ -10,8 +10,8 @@ import { BuddyResumeList } from './BuddyResumeList';
  * a second one read as clutter — Destin 2026-07-16).
  *
  * Both buttons now open something. New session swaps the CTA cluster for the
- * shared BuddyNewSessionForm (also reused by SessionPill's dropdown, so the two
- * buddy entry points cannot drift); Resume session swaps it for BuddyResumeList.
+ * shared BuddyNewSessionForm (also used by PageCreateDialog); Resume session
+ * swaps it for BuddyResumeList.
  *
  * WHY RESUME CHANGED (Destin, 2026-09-10). Resume used to set an error string —
  * "Open Resume from the main window for now" — and do nothing else: a July

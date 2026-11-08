@@ -19,7 +19,7 @@ import { defineChannel, type MainChannelDef } from './channel-def';
 
 /** The floater's window manager (BuddyWindowManager) as these channels use it. */
 interface BuddyManagerLike {
-  show(style?: 'floating' | 'tray'): void; hide(): void; toggleChat(): void; dismiss(): void; dragEnded(): void; setMascotHit(over: boolean): void;
+  show(style?: 'floating' | 'tray'): void; hide(): void; toggleChat(): void; toggleChatSize(): void; dismiss(): void; dragEnded(): void; setMascotHit(over: boolean): void;
   setViewedSession(sessionId: string): void;
   getViewedSession(): string | null;
   moveMascotFromPointer(localDx: number, localDy: number): void;
@@ -173,14 +173,10 @@ export const buddyChannels: MainChannelDef[] = [
   defineChannel({ name: IPC.BUDDY_HIDE, kind: 'handle', desktopOnly: true, handler: () => manager().hide() }),
   defineChannel({ name: IPC.BUDDY_TOGGLE_CHAT, kind: 'handle', desktopOnly: true, handler: () => manager().toggleChat() }),
   defineChannel({ name: IPC.BUDDY_SET_SESSION, kind: 'handle', desktopOnly: true, handler: ({ sessionId }) => { manager().setViewedSession(sessionId); } }),
-  defineChannel({
-    name: IPC.BUDDY_SUBSCRIBE, kind: 'handle', desktopOnly: true,
-    // No replay kick is needed here — the renderer calls window.claude.detach.requestTranscriptReplay(sessionId) right
-    // after subscribe resolves, which sends transcript:replay-from-start; history streams back via the normal
-    // TRANSCRIPT_EVENT channel, which reaches owner plus subscribers (including this new subscription).
-    handler: ({ sessionId }, ctx) => { deps.windowRegistry?.subscribe(sessionId, ctx.sender?.id ?? -1); },
-  }),
-  defineChannel({ name: IPC.BUDDY_UNSUBSCRIBE, kind: 'handle', desktopOnly: true, handler: ({ sessionId }, ctx) => { deps.windowRegistry?.unsubscribe(sessionId, ctx.sender?.id ?? -1); } }),
+  // WHY no buddy:subscribe / buddy:unsubscribe any more (buddy rebuild, 2026-10-25; buddy-rebuild-questions#S-2): set-session
+  // above already moves the chat window's subscription (BuddyWindowManager.setViewedSession), so the renderer's own
+  // subscribe calls were a second, doubled bookkeeping of the same thing — removed with the old BubbleFeed.
+  defineChannel({ name: IPC.BUDDY_TOGGLE_CHAT_SIZE, kind: 'handle', desktopOnly: true, handler: () => manager().toggleChatSize() }),
   defineChannel({ name: IPC.BUDDY_GET_VIEWED_SESSION, kind: 'handle', desktopOnly: true, handler: () => manager().getViewedSession() }),
   // Fire-and-forget drag handler. High-frequency (one event per pointermove); `on` rather than `handle` avoids the async
   // round-trip. CSS -webkit-app-region: drag was removed from BuddyMascot because on Windows Electron implements it via

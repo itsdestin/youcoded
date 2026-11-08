@@ -254,8 +254,6 @@ const IPC = {
   BUDDY_HIDE: 'buddy:hide',
   BUDDY_TOGGLE_CHAT: 'buddy:toggle-chat',
   BUDDY_SET_SESSION: 'buddy:set-session',
-  BUDDY_SUBSCRIBE: 'buddy:subscribe',
-  BUDDY_UNSUBSCRIBE: 'buddy:unsubscribe',
   BUDDY_GET_VIEWED_SESSION: 'buddy:get-viewed-session',
   BUDDY_MOVE_MASCOT: 'buddy:move-mascot',
   BUDDY_CAPTURE_DESKTOP: 'buddy:capture-desktop',
@@ -269,10 +267,13 @@ const IPC = {
   BUDDY_BAR_STATE: 'buddy:bar-state',
   BUDDY_MASCOT_STATE: 'buddy:mascot-state',
   BUDDY_CHAT_STATE: 'buddy:chat-state',
+  BUDDY_TOGGLE_CHAT_SIZE: 'buddy:toggle-chat-size',
+  BUDDY_CHAT_SIZE: 'buddy:chat-size',
   BUDDY_HELPER_STATUS: 'buddy:helper-status',
   BUDDY_INSTALL_HELPER: 'buddy:install-helper',
   BUDDY_REMOVE_HELPER: 'buddy:remove-helper',
   SESSION_FOCUS_REQUEST: 'session:focus-request',
+  SESSION_SEEN_IN_BUDDY: 'session:seen-in-buddy',
   SESSION_ATTENTION_SUMMARY: 'session:attention-summary',
   ATTENTION_REPORT: 'attention:report',
   ATTENTION_GET_SUMMARY: 'attention:get-summary',
@@ -470,6 +471,7 @@ const IPC = {
   ACCOUNT_USER: 'account:user',
   ACCOUNT_REFRESH: 'account:refresh',
   ACCOUNT_SIGN_OUT: 'account:sign-out',
+  ACCOUNT_SIGN_OUT_ALL: 'account:sign-out-all',
   ACCOUNT_UPDATE_PROFILE: 'account:update-profile',
   ACCOUNT_SET_HANDLE: 'account:set-handle',
   ACCOUNT_DELETE: 'account:delete',
@@ -1415,6 +1417,8 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.ACCOUNT_REFRESH),
     signOut: (): Promise<void> =>
       ipcRenderer.invoke(IPC.ACCOUNT_SIGN_OUT),
+    signOutAll: (): Promise<ApiResult<void>> =>
+      ipcRenderer.invoke(IPC.ACCOUNT_SIGN_OUT_ALL),
     updateProfile: (displayName: string): Promise<ApiResult<{ display_name: string }>> =>
       ipcRenderer.invoke(IPC.ACCOUNT_UPDATE_PROFILE, { displayName }),
     setHandle: (handle: string): Promise<ApiResult<{ handle: string }>> =>
@@ -1946,8 +1950,7 @@ contextBridge.exposeInMainWorld('claude', {
     hide: () => ipcRenderer.invoke(IPC.BUDDY_HIDE),
     toggleChat: () => ipcRenderer.invoke(IPC.BUDDY_TOGGLE_CHAT),
     setSession: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_SET_SESSION, { sessionId }),
-    subscribe: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_SUBSCRIBE, { sessionId }),
-    unsubscribe: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_UNSUBSCRIBE, { sessionId }),
+    toggleChatSize: () => ipcRenderer.invoke(IPC.BUDDY_TOGGLE_CHAT_SIZE),
     getViewedSession: () => ipcRenderer.invoke(IPC.BUDDY_GET_VIEWED_SESSION),
     // Fire-and-forget: pointer drag fires ~60 events/sec; invoke() round-trips
     // would starve the renderer. Main clamps target to visible workArea.
@@ -1985,8 +1988,8 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.BUDDY_STATUS_CHANGED, listener);
       return () => ipcRenderer.removeListener(IPC.BUDDY_STATUS_CHANGED, listener);
     },
-    onBarState: (cb: (s: { visible: boolean }) => void) => {
-      const listener = (_: unknown, s: { visible: boolean }) => cb(s);
+    onBarState: (cb: (s: { visible: boolean; under?: boolean }) => void) => {
+      const listener = (_: unknown, s: { visible: boolean; under?: boolean }) => cb(s);
       ipcRenderer.on(IPC.BUDDY_BAR_STATE, listener);
       return () => ipcRenderer.removeListener(IPC.BUDDY_BAR_STATE, listener);
     },
@@ -1995,15 +1998,25 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.BUDDY_MASCOT_STATE, listener);
       return () => ipcRenderer.removeListener(IPC.BUDDY_MASCOT_STATE, listener);
     },
-    onChatState: (cb: (s: { visible: boolean }) => void) => {
-      const listener = (_: unknown, s: { visible: boolean }) => cb(s);
+    onChatState: (cb: (s: { visible: boolean; mascot?: 'above' | 'below'; resize?: 'out' | 'in' }) => void) => {
+      const listener = (_: unknown, s: { visible: boolean; mascot?: 'above' | 'below'; resize?: 'out' | 'in' }) => cb(s);
       ipcRenderer.on(IPC.BUDDY_CHAT_STATE, listener);
       return () => ipcRenderer.removeListener(IPC.BUDDY_CHAT_STATE, listener);
+    },
+    onChatSize: (cb: (size: 'small' | 'large') => void) => {
+      const listener = (_: unknown, size: 'small' | 'large') => cb(size);
+      ipcRenderer.on(IPC.BUDDY_CHAT_SIZE, listener);
+      return () => ipcRenderer.removeListener(IPC.BUDDY_CHAT_SIZE, listener);
     },
     onFocusSession: (cb: (sessionId: string) => void) => {
       const listener = (_: unknown, sessionId: string) => cb(sessionId);
       ipcRenderer.on(IPC.SESSION_FOCUS_REQUEST, listener);
       return () => ipcRenderer.removeListener(IPC.SESSION_FOCUS_REQUEST, listener);
+    },
+    onSeenInBuddy: (cb: (sessionId: string) => void) => {
+      const listener = (_: unknown, sessionId: string) => cb(sessionId);
+      ipcRenderer.on(IPC.SESSION_SEEN_IN_BUDDY, listener);
+      return () => ipcRenderer.removeListener(IPC.SESSION_SEEN_IN_BUDDY, listener);
     },
     // ── The Linux/KDE buddy helper (design §4) ──
     //
@@ -2069,7 +2082,7 @@ contextBridge.exposeInMainWorld('claude', {
     openWindowForHandoff: (sessionId: string) => browserInvoke(IPC.BROWSER_OPEN_WINDOW_FOR_HANDOFF, { sessionId }),
     setShowWindow: (show: boolean) => browserInvoke(IPC.BROWSER_SET_SHOW_WINDOW, { show }),
     updateSettings: (patch: Record<string, unknown>) => browserInvoke(IPC.BROWSER_UPDATE_SETTINGS, patch),
-    removeSite: (host: string) => browserInvoke(IPC.BROWSER_REMOVE_SITE, { host }),
+    removeSite: (host: string, form?: boolean) => browserInvoke(IPC.BROWSER_REMOVE_SITE, { host, form }),
     clearSignins: () => browserInvoke(IPC.BROWSER_CLEAR_SIGNINS),
     stop: () => browserInvoke(IPC.BROWSER_STOP),
     closeSession: (sessionId: string) => browserInvoke(IPC.BROWSER_CLOSE_SESSION, { sessionId }),
@@ -2408,9 +2421,9 @@ contextBridge.exposeInMainWorld('claude', {
     // Resolve ONE file path tapped in chat to the record the drawer opens — a
     // tracked record, or the on-disk file inside the folder. Replaces
     // downloading the whole project list to find one file (read-service.ts
-    // resolveArtifactPath). Answers { ok:true, artifact } or { ok:false, error }.
-    resolvePath: (projectRoot: string, filePath: string) =>
-      ipcRenderer.invoke('artifacts:resolve-path', { projectRoot, path: filePath }),
+    // resolveArtifactPath). Answers { ok:true, artifact } or { ok:false, error }; `sessionId` also searches beside that chat's files (card #40).
+    resolvePath: (projectRoot: string, filePath: string, sessionId?: string) =>
+      ipcRenderer.invoke('artifacts:resolve-path', { projectRoot, path: filePath, sessionId }),
     listProjectsIndex: (opts?: { withCounts?: boolean }) =>
       ipcRenderer.invoke('artifacts:list-projects-index', opts),
     // opts: { full? } — full opts into reading up to FULL_READ_MAX_BYTES for a

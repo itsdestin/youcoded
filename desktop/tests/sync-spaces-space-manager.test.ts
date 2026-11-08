@@ -176,6 +176,10 @@ describe('SpaceManager — non-blocking reads and writes', () => {
     let maxInFlight = 0;
     let writes = 0;
     vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (...args: any[]) => {
+      // WHY only this manager's file (2026-10-30, CI saw "expected 2 to be 1" once): fs.promises is shared by the whole
+      // test process, so any other write landing during the slow-disk window counted as a second writer. Only writes
+      // to this state file's temp name are the manager's.
+      if (!String(args[0]).startsWith(stateFile)) return (realWrite as any)(...args);
       inFlight++; writes++;
       maxInFlight = Math.max(maxInFlight, inFlight);
       await new Promise((r) => setTimeout(r, 5)); // a slow disk widens any race

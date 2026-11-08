@@ -28,10 +28,12 @@
 // makes even a plain-text/markdown reply ask every time, contradicting §5.2a's
 // "sparingly... frictionless" intent for the common case.
 //
-// The mechanism this build uses: `ReadFileComments` alone is allow-listed
-// (DOC_COMMENTS_MCP_READ_TOOL, session-manager.ts) — a read never mutates
-// anything, so it is safe unconditionally, the same posture the native tool's
-// `permissionSubject: () => undefined` already gives it. The five mutation
+// The mechanism this build uses: no tool is allow-listed. `ReadFileComments`
+// was until card #207 — a read never mutates anything — but a pre-allowed
+// read never reached the app, so one aimed at a file OUTSIDE the project
+// could not ask first. main's cc-outside-comments.ts now answers an
+// in-project read "allow" at once and raises the outside-file card for an
+// outside one. The five mutation
 // tools are deliberately NOT allow-listed; instead, main.ts's own
 // `hookRelay.on('hook-event', ...)` — the SAME `PermissionRequest` hook path
 // that already auto-approves a handful of other categories
@@ -110,7 +112,6 @@ import {
   YOUCODED_PROJECT_ROOT_ENV,
   DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV,
   YOUCODED_MCP_TOKEN_ENV,
-  docCommentsMcpReadTool,
 } from '../shared/doc-comments-mcp';
 import {
   READ_FILE_COMMENTS_DESCRIPTION,
@@ -145,6 +146,7 @@ var fs = require('fs');
 var fsp = fs.promises;
 var path = require('path');
 var crypto = require('crypto');
+var os = require('os');
 
 var PROTOCOL_FALLBACK = '2025-06-18';
 // Cosmetic only (shown in /mcp) — the actual mcp__{server}__{tool} prefix
@@ -215,6 +217,39 @@ function nativeFormatFor(filePath) {
 
 var SIDECAR_DIR = ['.youcoded', 'comments'];
 var PENDING_DIR = ['.youcoded', 'comments', '.pending'];
+// Card #207: the per-machine store for files outside any project — the SAME
+// folder and sha256(realpath) key doc-comments-store.ts's locateFallback uses,
+// so the app's comments pane and this script read and write one file.
+var FALLBACK_DIR = ['.youcoded', 'loose-file-comments'];
+
+/** True when p, as written, is root or below it (no disk reads). */
+function lexicallyInside(root, p) {
+  var rel = path.relative(root, p);
+  return rel === '' || (rel !== '..' && rel.indexOf('..' + path.sep) !== 0 && !path.isAbsolute(rel));
+}
+
+/** Card #207: an ABSOLUTE path outside this session's project. Only reached
+ *  after Claude Code let the call through, which for a file outside the
+ *  project means the person answered the app's outside-file card (main.ts
+ *  never auto-approves one without their chat-wide grant), or the session runs
+ *  with permissions skipped. A Word/Excel file's comments live inside the file,
+ *  so it goes through this chat's own queue (under the project folder, like
+ *  any Word/Excel request) naming the outside file; the app applies it with
+ *  the card's approval (pending-mutation-queue.ts targetScope). */
+function locateOutside(filePath, realProjectRoot) {
+  if (!path.isAbsolute(filePath)) return Promise.resolve({ error: 'path-outside-project' });
+  var abs = path.resolve(filePath);
+  return realpathWithNonexistentTail(abs).then(function (real) {
+    var resolved = real || abs;
+    if (nativeFormatFor(resolved)) {
+      var pendingDir = path.join.apply(path, [realProjectRoot].concat(PENDING_DIR));
+      return { realProjectRoot: realProjectRoot, sourceAbsolutePath: resolved, pendingDir: pendingDir };
+    }
+    var hash = crypto.createHash('sha256').update(resolved).digest('hex');
+    var sidecarPath = path.join.apply(path, [os.homedir()].concat(FALLBACK_DIR, [hash + '.json']));
+    return { sidecarPath: sidecarPath, sourceAbsolutePath: resolved };
+  });
+}
 
 /** Resolves filePath against the ONE trusted project root this process was
  *  spawned with (env, never model input — see this file's TS header) and
@@ -231,7 +266,18 @@ function locate(filePath) {
     if (!realProjectRoot) return { error: 'path-outside-project' };
     var abs = path.resolve(realProjectRoot, filePath);
     return checkContainment(realProjectRoot, abs).then(function (realAbs) {
-      if (realAbs === null) return { error: 'path-outside-project' };
+      if (realAbs === null) {
+        // WHY (independent review, 2026-10-30): the app decides "outside the
+        // project, show the card" from the path as written. A shortcut
+        // (symlink, or a Windows junction) INSIDE the project that leads out
+        // of it looks inside there, so it got no card and would have been
+        // followed here to the real file. Refuse it, as before card #207;
+        // naming the real file's own path still works, after the card.
+        if (lexicallyInside(realProjectRoot, abs) || lexicallyInside(path.resolve(PROJECT_ROOT), path.resolve(filePath))) {
+          return { error: 'path-outside-project' };
+        }
+        return locateOutside(filePath, realProjectRoot);
+      }
       var rel = path.relative(realProjectRoot, realAbs);
       var sidecarPath = path.join.apply(path, [realProjectRoot].concat(SIDECAR_DIR, [rel + '.json']));
       var pendingDir = path.join.apply(path, [realProjectRoot].concat(PENDING_DIR));
@@ -1092,5 +1138,8 @@ export function deployClaudeCodeDocCommentsMcp(
   // another OS user, this is belt-and-suspenders on the file itself.
   fs.chmodSync(configPath, 0o600);
 
-  return { serverPath, configPath, allowedTools: [docCommentsMcpReadTool(serverId)], serverId, token, deployDir: dir };
+  // Card #207: nothing is pre-allowed any more. A pre-allowed read never reached the app, so a
+  // read of a file outside the project could not ask first; cc-outside-comments.ts now answers an
+  // in-project read "allow" at once instead, so in-project reads still never show a card.
+  return { serverPath, configPath, allowedTools: [], serverId, token, deployDir: dir };
 }

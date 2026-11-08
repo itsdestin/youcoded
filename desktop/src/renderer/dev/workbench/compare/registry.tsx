@@ -59,7 +59,8 @@ import { ChatProvider, useChatDispatch } from '../../../state/chat-context';
 import { StopMotionContext, type StopMotion } from '../../../components/StopButton';
 import { SkillProvider } from '../../../state/skill-context';
 import { createVoiceMock } from '../mock-shim';
-import { VoiceStyleContext, DEFAULT_VOICE_STYLE, type VoiceStyle } from '../../../components/VoiceButton';
+import { VoiceButton, VoiceListeningStrip, VoiceStyleContext, DEFAULT_VOICE_STYLE, type VoiceStyle } from '../../../components/VoiceButton';
+import type { VoiceNotice } from '../../../hooks/useVoiceInput';
 // chatsearch-present Round 6: the real label→color resolver ChatsearchFindCard
 // uses — reused (not re-derived) so a tag rendered here can never disagree
 // with a tag rendered on the search-result row about what color it gets, and
@@ -7047,6 +7048,31 @@ function StopComposerDemo({ motion }: { motion: StopMotion }) {
   );
 }
 
+// ── voice-no-sound ───────────────────────────────────────────────────────────
+// What the composer says when the microphone hears nothing (Destin, 2026-11-03:
+// his mic was muted and voice just "spun and left no text"). The workbench never
+// opens a real microphone, so these drive the two real pieces straight from the
+// state the hook would produce: the listening band, and the mic's card.
+function VoiceSilentStripDemo({ silent }: { silent: boolean }) {
+  return (
+    <div className="px-3 py-3">
+      <VoiceListeningStrip level={0} seconds={4} micSilent={silent} onStop={() => {}} />
+    </div>
+  );
+}
+function VoiceNoticeDemo({ notice }: { notice: VoiceNotice }) {
+  // Room above the mic for the card, which opens upward from it.
+  return (
+    <div className="flex justify-end items-end px-6 pb-4" style={{ minHeight: 260 }}>
+      <VoiceButton
+        phase="idle" readiness={{ state: 'ready', engine: 'Parakeet' }} level={0} seconds={0}
+        error={null} notice={notice}
+        onStart={() => {}} onStop={() => {}} onDownload={() => {}} onRecheck={() => {}} onClearError={() => {}}
+      />
+    </div>
+  );
+}
+
 export const COMPARE_SURFACES: CompareSurface[] = [
   {
     id: 'stop-button-alive',
@@ -7125,6 +7151,24 @@ export const COMPARE_SURFACES: CompareSurface[] = [
         ],
       },
     ],
+  },
+  {
+    id: 'voice-no-sound',
+    label: 'Message box — when the mic hears nothing',
+    question: 'Do these tell you clearly that the microphone heard nothing, and what to do?',
+    frame: 'canvas',
+    paneWidth: { min: 440, max: 700 },
+    rounds: [{
+      n: 1,
+      basis: 'Destin, 2026-11-03: a muted mic showed "Listening", heard nothing, spun, and left no text with no explanation.',
+      candidates: [
+        { id: 'strip-before', label: 'Before · Listening', note: 'Today: green "Listening" even when nothing at all is arriving.', render: () => <VoiceSilentStripDemo silent={false} /> },
+        { id: 'strip-silent', label: 'After · No sound', note: 'After three seconds of pure silence the band turns amber and says so; it turns green again the moment sound arrives.', render: () => <VoiceSilentStripDemo silent /> },
+        { id: 'card-no-sound', label: 'Card · No sound', note: 'Stopped, and every slice was silence (muted, switched off, wrong mic).', render: () => <VoiceNoticeDemo notice="no-sound" /> },
+        { id: 'card-too-quiet', label: 'Card · Too quiet', note: 'Stopped, sound arrived but never loud enough to be words.', render: () => <VoiceNoticeDemo notice="too-quiet" /> },
+        { id: 'card-no-words', label: 'Card · No words', note: 'Stopped, loud enough, but no words came out (also what a phone shows).', render: () => <VoiceNoticeDemo notice="no-words" /> },
+      ],
+    }],
   },
   {
     id: 'voice-mic',

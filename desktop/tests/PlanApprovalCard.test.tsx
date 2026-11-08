@@ -11,7 +11,6 @@ import path from 'path';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import ToolCard from '../src/renderer/components/ToolCard';
-import { CompactToolStrip } from '../src/renderer/components/buddy/CompactToolStrip';
 import { ExpiredApprovalActions } from '../src/renderer/components/ExpiredApprovalActions';
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import type { ToolCallState } from '../src/shared/types';
@@ -309,30 +308,5 @@ describe('a kept card that is not a plan', () => {
     mount('ask', planTool({ toolName: 'AskUserQuestion', input: { questions: [{ question: 'Pick one', header: 'Q', multiSelect: false, options: [{ label: 'Red' }, { label: 'Blue' }] }] }, requestId: undefined, expired: true } as Partial<ToolCallState>));
     await screen.findByRole('button', { name: 'Dismiss — I answered in the terminal' });
     expect(screen.queryByRole('button', { name: 'Red' })).toBeNull();
-  });
-});
-
-describe('the buddy floater and a plan approval', () => {
-  it('offers no Allow/Deny (a hook allow does not approve a plan) and points at the main window', () => {
-    render(
-      <ChatProvider>
-        <CompactToolStrip tools={[planTool()]} sessionId="s1" />
-      </ChatProvider>,
-    );
-    expect(screen.getByText('Review the plan in the main window')).toBeTruthy();
-    expect(screen.queryByText(/Allow/)).toBeNull();
-    expect(screen.queryByText(/Deny/)).toBeNull();
-  });
-});
-
-describe('the buddy floater and a kept card', () => {
-  it('offers only Dismiss, worded as the claim it is', () => {
-    render(
-      <ChatProvider>
-        <CompactToolStrip tools={[planTool({ toolName: 'Bash', input: { command: 'ls' }, requestId: undefined, expired: true } as Partial<ToolCallState>)]} sessionId="s1" />
-      </ChatProvider>,
-    );
-    expect(screen.getByText('Dismiss — I answered in the terminal')).toBeTruthy();
-    expect(screen.queryByText(/Allow/)).toBeNull();
   });
 });

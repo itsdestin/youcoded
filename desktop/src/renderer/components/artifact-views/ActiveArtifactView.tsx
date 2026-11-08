@@ -25,6 +25,7 @@ import { CodeCommentsRail } from '../comments/CodeCommentsRail';
 import { CodeCommentPopover } from '../comments/CodeCommentPopover';
 import { requestThreadAgain } from '../comments/CommentsMargin';
 import { useDocComments } from '../../state/doc-comments-store';
+import { commentTargetFor } from '../comments/comment-target';
 import { useNarrowByRef } from '../../hooks/use-container-narrow';
 // Round 3: Comments mode needs margin-card room the drawer's DEFAULT width
 // doesn't have (see the effect below's own WHY) — reuses the drawer's
@@ -733,7 +734,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // it independently): "Open in comments" on a RESOLVED thread must reveal
   // it — Comments mode hides resolved by default, and jumping to a thread
   // nobody can see would look like the link did nothing.
-  const { comments: pathComments, setShowResolved: setPathShowResolved } = useDocComments(artifact.path, projectRoot);
+  // Card #207: an outside file's comments go by its real location (comment-target.ts).
+  const commentAt = useMemo(() => commentTargetFor(artifact, projectRoot), [artifact.kind, artifact.path, artifact.absolutePath, projectRoot]);
+  const { comments: pathComments, setShowResolved: setPathShowResolved } = useDocComments(commentAt.path, commentAt.projectRoot);
   // The Comments button's number counts OPEN comments only — "Comments 4"
   // with two already resolved read as four things still waiting on you.
   const openCount = pathComments.filter((c) => !c.resolved).length;
@@ -795,11 +798,11 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       if (pathComments.find((c) => c.id === commentId)?.resolved) setPathShowResolved(true);
       // An explicit click is always honoured once; only REMOUNTS are ignored
       // (CommentsMargin's HANDLED_THREADS).
-      requestThreadAgain(artifact.path);
+      requestThreadAgain(commentAt.path);
       setFocusThreadId(commentId);
     }
     setCommentsMode('comments');
-  }, [pathComments, setPathShowResolved, artifact.path]);
+  }, [pathComments, setPathShowResolved, commentAt.path]);
 
   // CHANGE (Destin, testing the dev instance): code files used to force-
   // switch into the WHOLE Comments panel the instant a fresh draft appeared
@@ -1001,7 +1004,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
             {/* Photo-only build: inside Suspense, so `shoot` marks the file only once its viewer loaded. */}
             <ScreenMark name={`chat/files/open/${artifact.id}`} />
             <ViewerComponent
-              path={artifact.path}
+              path={commentAt.path}
               artifactId={artifact.id}
               content={content}
               contentInfo={contentInfo}
@@ -1019,7 +1022,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
               commentsMode={commentsMode}
               onOpenComments={openComments}
               focusThreadId={focusThreadId}
-              projectRoot={projectRoot}
+              projectRoot={commentAt.projectRoot}
             />
           </Suspense>
           </ViewerErrorBoundary>
@@ -1029,13 +1032,13 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
             own comment has the WHY). Comments mode only; Reading mode for code
             is the plain editor, full width, same as markdown. */}
         {showCodeRail && commentsMode === 'comments' && (
-          <CodeCommentsRail path={artifact.path} projectRoot={projectRoot} />
+          <CodeCommentsRail path={commentAt.path} projectRoot={commentAt.projectRoot} />
         )}
         {/* CHANGE: Reading mode's own small floating box (see the import's
             WHY) — the code-file equivalent of ReadingHighlights' popover,
             replacing the old force-switch-to-panel effect. */}
         {showCodeRail && commentsMode === 'reading' && (
-          <CodeCommentPopover path={artifact.path} projectRoot={projectRoot} />
+          <CodeCommentPopover path={commentAt.path} projectRoot={commentAt.projectRoot} />
         )}
       </div>
       {/* Partial-view notice — floats over the BOTTOM of the doc pane, in the

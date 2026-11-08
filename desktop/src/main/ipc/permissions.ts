@@ -7,6 +7,7 @@
 import { IPC } from '../../shared/backend-contract';
 import type { HookRelay } from '../hook-relay';
 import { defineChannel, type MainChannelDef } from './channel-def';
+import { takeCommentAnswer } from '../cc-outside-comments';
 
 let hookRelay: HookRelay | undefined;
 /** Called by registerIpcHandlers with the hook relay (the same object the phone door holds). It is the
@@ -20,7 +21,9 @@ export const permissionsChannels: MainChannelDef[] = [
     name: IPC.PERMISSION_RESPOND, kind: 'handle',
     handler: ({ requestId, decision }, ctx) => {
       if (ctx.runtime?.nativeHost.respondPermission(requestId, decision as Record<string, unknown>)) return true;
-      return hookRelay ? hookRelay.respond(requestId, decision) : false;
+      // Card #207: an outside-file comment answer may carry "Allow for this chat"; it is
+      // recorded and stripped here, since Claude Code's hook answer has no such field.
+      return hookRelay ? hookRelay.respond(requestId, takeCommentAnswer(requestId, decision as object)) : false;
     },
   }),
   // list READS the store directly: it only reports what is on disk. No runtime means no grants to show.

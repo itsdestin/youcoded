@@ -46,6 +46,24 @@ describe('PermissionBroker', () => {
     }
   });
 
+  it('accepts "Allow for this chat" on comments only for a main assistant\'s outside-file comment ask', async () => {
+    const broker = new PermissionBroker();
+    const emitted: any[] = [];
+    broker.on('hook-event', (e) => emitted.push(e));
+    for (const [request, allowed] of [
+      [{ sessionId: 's', toolName: 'ReadFileComments', toolInput: {}, external: true, denyListed: false }, true],
+      [{ sessionId: 's', toolName: 'AddComment', toolInput: {}, external: true, permissionMode: 'full-auto', denyListed: false }, true],
+      [{ sessionId: 's', toolName: 'ReadFileComments', toolInput: {}, external: false, denyListed: false }, false],
+      [{ sessionId: 's', toolName: 'Edit', toolInput: {}, external: true, denyListed: false }, false],
+      [{ sessionId: 's', toolName: 'ReadFileComments', toolInput: {}, external: true, denyListed: false, raisedBy: 'child' }, false],
+    ] as const) {
+      const pending = broker.ask(request);
+      const id = emitted.filter((e) => e.type === 'PermissionRequest').at(-1).payload._requestId;
+      broker.respond(id, { decision: { behavior: 'allow' }, allowOutsideCommentsForSession: true });
+      expect((await pending).allowOutsideCommentsForSession === true).toBe(allowed);
+    }
+  });
+
   it.each(['command', 'full-auto', 'session'] as const)('accepts the %s admin selector only on an allowed admin ask', async (scope) => {
     const broker = new PermissionBroker();
     const emitted: any[] = [];

@@ -13,6 +13,7 @@ import { randomUUID } from 'crypto';
 import type { GrantScope } from '../../shared/bash-grant-shapes';
 import { isAdminApprovalScope, type AdminApprovalScope } from '../../shared/admin-approval';
 import { adminCommandVerdict } from './tools/admin-command';
+import { bareDocCommentsToolName } from '../../shared/doc-comments-mcp';
 import type { HookEvent, FloorStop } from '../../shared/types';
 
 export interface AskRequest {
@@ -40,6 +41,9 @@ export interface AskRequest {
    *  renderer's cue to swap the generic row for the safety-stop footer
    *  (spec 2026-08-12, M5 2b). Optional: CC-path asks never carry it. */
   permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
+  /** Q-1: this session's Bash shell reads joined-up commands the way the permission engine does (bash, never PowerShell),
+   *  so the card may offer "Each part on its own". Shown to the card; absent means the choice is not offered. */
+  chainsHonoured?: boolean;
   /** Plan 1b Task 8: set by childAskRouter when this ask is being ROUTED from a
    *  specialist child rather than raised directly by `sessionId`'s own turn.
    *  `sessionId` above is already the PARENT's id by the time this reaches
@@ -90,6 +94,10 @@ export interface AskDecision {
   grantScope?: GrantScope;
   /** Memory-only consent to outside-folder file edits; never a stored permission rule. */
   allowExternalEditsForSession?: boolean;
+  /** Q-2: memory-only consent to edit and create files INSIDE the project until this conversation ends. Never stored. */
+  allowEditsForChat?: boolean;
+  /** Card #207: memory-only consent to comments on outside files for this chat. */
+  allowOutsideCommentsForSession?: boolean;
   /** Validated choice on an admin approval; never accepted on other asks or a deny. */
   adminApprovalScope?: AdminApprovalScope;
   /** A HUMAN answered "no" on a card — set ONLY by respond() below, which is
@@ -145,6 +153,10 @@ interface PendingAsk {
   /** Only a permission ask of this shape may mint an ephemeral outside-edit
    *  grant (master, merged in); a password ask never can, so it stays absent. */
   canGrantExternalEdits?: boolean;
+  /** Card #207: only a main assistant's outside-file comment ask may mint it. */
+  canGrantOutsideComments?: boolean;
+  /** Q-2: only the main assistant's ordinary Write/Edit ask (not an outside-folder or floor-forced one). */
+  canGrantEditsForChat?: boolean;
   canGrantAdmin?: boolean;
   /** The exact PermissionRequest/PasswordRequest this ask emitted, minus its
    *  timestamp, kept so the heartbeat re-announces something byte-identical.
@@ -228,6 +240,7 @@ export class PermissionBroker extends EventEmitter {
           // Spread-omitted (not `undefined`-valued) so the CC-path payload
           // shape is byte-identical to before this field existed.
           ...(req.permissionMode ? { permissionMode: req.permissionMode } : {}),
+          ...(req.chainsHonoured ? { chainsHonoured: true } : {}),
         },
       };
       const entry: PendingAsk = {
@@ -238,6 +251,14 @@ export class PermissionBroker extends EventEmitter {
         // Only a main assistant's Full Auto Write/Edit outside-folder ask can do so.
         canGrantExternalEdits: req.external === true && req.permissionMode === 'full-auto'
           && !req.raisedBy && (req.toolName === 'Write' || req.toolName === 'Edit'),
+        // WHY (card #207): same posture — only an outside-file ask from a
+        // comment tool, raised by the main assistant, can grant chat-wide
+        // comment access; any other approval carrying the field gets nothing.
+        canGrantOutsideComments: req.external === true && !req.raisedBy && bareDocCommentsToolName(req.toolName) !== null,
+        // Q-2: the "this conversation" edit choice exists only on an ordinary Write/Edit card from the main assistant.
+        // Outside-folder and floor-forced asks have their own cards and can never mint it.
+        canGrantEditsForChat: req.external !== true && !req.floorStop && !req.raisedBy
+          && (req.toolName === 'Write' || req.toolName === 'Edit'),
         // WHY: a renderer selector cannot turn an unrelated approval into admin authority.
         canGrantAdmin: req.toolName === 'Bash' && (!req.floorStop || req.floorStop === 'admin')
           && typeof req.toolInput.command === 'string' && adminCommandVerdict(req.toolInput.command)?.kind === 'admin',
@@ -390,7 +411,7 @@ export class PermissionBroker extends EventEmitter {
     // Validate to the two literals and FAIL NARROW on anything else. This value
     // is PERSISTED (unlike permissionMode, which is display-only), so it is
     // checked here AND re-derived at the session rather than trusted.
-    const grantScope: GrantScope = decision.grantScope === 'wide' ? 'wide' : 'exact';
+    const grantScope: GrantScope = decision.grantScope === 'wide' || decision.grantScope === 'folder' ? decision.grantScope : 'exact';
     // Stamp a human "no" so the driver can tell it from a policy refusal (see
     // AskDecision.dismissed).
     const resolved: AskDecision = {
@@ -399,6 +420,10 @@ export class PermissionBroker extends EventEmitter {
         ? { adminApprovalScope: decision.adminApprovalScope } : {}),
       ...(behavior === 'allow' && entry.canGrantExternalEdits && decision.allowExternalEditsForSession === true
         ? { allowExternalEditsForSession: true } : {}),
+      ...(behavior === 'allow' && entry.canGrantEditsForChat && decision.allowEditsForChat === true
+        ? { allowEditsForChat: true } : {}),
+      ...(behavior === 'allow' && entry.canGrantOutsideComments && decision.allowOutsideCommentsForSession === true
+        ? { allowOutsideCommentsForSession: true } : {}),
       ...(behavior === 'deny' ? { dismissed: true } : {}), ...(updatedInput ? { updatedInput } : {}),
     };
 

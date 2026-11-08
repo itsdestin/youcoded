@@ -76,7 +76,7 @@ function renderContent(p: Props): React.ReactNode {
     case 'user':
       // A host-injected user-role turn (a delivered specialist report) is an
       // EVENT for the assistant, not anyone's words — a compact collapsed card,
-      // see SpecialistReportCard. MUST mirror BubbleFeed.tsx.
+      // see SpecialistReportCard. MUST mirror useBuddyFeed.ts.
       return entry.injected ? (
         <SpecialistReportCard
           message={entry.message}

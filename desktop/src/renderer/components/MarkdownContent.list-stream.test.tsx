@@ -38,8 +38,15 @@ vi.mock('remark-parse', async (importOriginal) => {
 });
 afterEach(cleanup);
 
+// CPU each test here may use. WHY its own number, not the shared 30 s (measured 2026-10-29): these redraw a 70-100 item
+// list after every word and compare it with a full redraw, so the heaviest — "mounts in the middle of the list" — used
+// 18.5 s of CPU alone at load 7 on 32 threads, and 30.9 s inside verify.sh at load 19-28, failing a budget that was set
+// when the group used 1.5-3 s. Contention inflates a process's CPU 2-4× (tests/helpers/cpu-budget.ts), so 60 s holds a
+// correct run on a busy machine; the regression this guards — a per-character cost turning per-message — costs minutes.
+const LONG_LIST_STREAM_CPU_BUDGET_MS = 60_000;
+
 describe('MarkdownContent while a long list streams in', { timeout: CPU_BOUND_WALL_LIMIT_MS }, () => {
-  budgetCpuPerTest();
+  budgetCpuPerTest(LONG_LIST_STREAM_CPU_BUDGET_MS);
   const Bubble = ({ md, incremental, live = incremental }: { md: string; incremental?: boolean; live?: boolean }) => (
     <SessionRefsEnabled.Provider value={true}>
       <MarkdownContent content={md} sessionId="s1" incremental={incremental} live={live} />

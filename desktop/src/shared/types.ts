@@ -82,10 +82,10 @@ export interface PortableModelRef {
  *    command's output or reached by a cd the text cannot follow;
  *  - 'secret-path': the command reads a secret or credential file — the same
  *    list the file tools refuse (harness/tools/bash-secret-paths.ts);
- *    'secret-maybe': it could (a glob, a find with no usable filter).
+ *    'secret-maybe': it could (a glob, a find with no usable filter); 'protected-config': it changes a file that controls what the assistant may do (harness/tools/protected-config.ts).
  *  The card's wording comes from this, so it never claims more than the check
  *  knows (review N11). */
-export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe' | 'admin';
+export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe' | 'admin' | 'protected-config';
 
 /** A running Bash call whose `sudo` is waiting for the computer password
  *  (admin-password design, 2026-09-25). The card asks for it; the password
@@ -407,6 +407,7 @@ export type SubagentSegment =
       external?: boolean;
       floorStop?: FloorStop;
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
+      chainsHonoured?: boolean;
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
       resolvedRequestId?: string;
@@ -640,6 +641,7 @@ export interface ToolCallState {
    *  'full-auto' + denyListed swaps the generic button row for the safety-stop
    *  footer (spec 2026-08-12, M5 2b). Absent on CC asks. */
   permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
+  chainsHonoured?: boolean;
   /** Specialists 1c: set on a TOP-LEVEL card only when a child's routed ask
    *  could not be nested (its Task card is not on this timeline) — the card
    *  then labels who asked instead of reading as the parent's own ask. */
@@ -1259,8 +1261,8 @@ export interface AttentionSummary {
     attentionState: AttentionState;
     awaitingApproval: boolean;
     // Derived dot color from the main window's reducer (matches what the
-    // main session switcher renders). Pushed to buddy surfaces so the
-    // SessionPill's dot is visually identical to the same session's dot
+    // main session switcher renders). Pushed to the buddy too, so its
+    // SessionStrip's dots are visually identical to the same session's dot
     // in the main window. Absent for sessions that haven't reported yet.
     status?: SessionStatusDotColor;
   }>;
@@ -1367,8 +1369,8 @@ export interface BuddyApi {
   hide(): Promise<void>;
   toggleChat(): Promise<void>;
   setSession(sessionId: string): Promise<void>;
-  subscribe(sessionId: string): Promise<void>;
-  unsubscribe(sessionId: string): Promise<void>;
+  /** Switch the chat between its two sizes (the bar's size button); main answers on onChatSize. */
+  toggleChatSize(): Promise<void>;
   getViewedSession(): Promise<string | null>;
   // Fire-and-forget. Called by BuddyMascot during pointer drag; main
   // places the mascot at the supplied target (clamped to visible workArea).
@@ -1397,10 +1399,14 @@ export interface BuddyApi {
   dismiss(): Promise<void>;
   getStatus(): Promise<{ dismissed: boolean; visible: boolean }>;
   onStatusChanged(cb: (s: { dismissed: boolean; visible: boolean }) => void): () => void;
-  onBarState(cb: (s: { visible: boolean }) => void): () => void;
+  onBarState(cb: (s: { visible: boolean; under?: boolean }) => void): () => void;
   onMascotState(cb: (s: { mode: 'free' | 'docked' | 'peeking'; edge: string | null }) => void): () => void;
-  onChatState(cb: (s: { visible: boolean }) => void): () => void;
+  /** `mascot`: which side of the chat he is on, so the chat grows out of him. */
+  onChatState(cb: (s: { visible: boolean; mascot?: 'above' | 'below'; resize?: 'out' | 'in' }) => void): () => void;
+  onChatSize(cb: (size: 'small' | 'large') => void): () => void;
   onFocusSession(cb: (sessionId: string) => void): () => void;
+  /** The buddy chat is showing this session, so the window that owns it counts it as seen (clears its blue dot). */
+  onSeenInBuddy(cb: (sessionId: string) => void): () => void;
 }
 
 // Marketplace redesign Phase 1 — per-entry component inventory for the

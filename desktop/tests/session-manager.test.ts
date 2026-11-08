@@ -477,11 +477,11 @@ describe('SessionManager', () => {
     const allowedIdx = args.indexOf('--allowedTools');
     const allowedTools = args.slice(allowedIdx + 1);
     expect(allowedTools).toContain('mcp__youcoded__SendUserLink');
-    expect(allowedTools).toContain(`mcp__${serverId}__ReadFileComments`);
-    // The five mutation tools are never pre-approved (§5.2a) — a plain-text
-    // target is auto-approved elsewhere (permission-auto-approve.ts), a
-    // Word/Excel target gets an ordinary ask.
-    for (const bare of ['ReplyToComment', 'ResolveComment', 'ReopenComment', 'AddComment', 'MoveComment']) {
+    // No comment tool is pre-approved: main answers each ask itself
+    // (cc-outside-comments.ts for reads and outside files,
+    // permission-auto-approve.ts for in-project changes), which is what lets
+    // a file outside the project ask first.
+    for (const bare of ['ReadFileComments', 'ReplyToComment', 'ResolveComment', 'ReopenComment', 'AddComment', 'MoveComment']) {
       expect(allowedTools).not.toContain(`mcp__${serverId}__${bare}`);
     }
   });

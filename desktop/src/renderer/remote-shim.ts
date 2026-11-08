@@ -5,6 +5,8 @@
 
 // Type-only, plus table-error-flag (one tiny value; imported from backend-contract it would pull the whole contract into the Android bundle — WHY 2026-09-30 one-core R3-3).
 import type { VoiceReadiness } from '../shared/voice-types';
+import { isAndroidAppPage } from './android-page';
+import { isConnectionAllowed, TAILSCALE_ONLY_MESSAGE } from '../shared/cleartext-hosts';
 import type { RemoteBridge } from '../shared/backend-contract';
 import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 
@@ -13,7 +15,7 @@ import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage, saidInPlace } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT, OUTCOME_UNKNOWN_EVENT } from './remote-events';
 import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
-import { CLOSE_REPLACED } from '../shared/remote-close-codes';
+import { CLOSE_REPLACED, CLOSE_DEVICE_EXPIRED } from '../shared/remote-close-codes';
 import { firstFrameProtocols, TOOK_FRAMES_PROTOCOL } from '../shared/first-frames';
 import { markPage, startConnection, markConnection, markWake, takeReport } from './remote-timings';
 import { readRemotePlace, remotePlaceStorages, remotePlaceHost } from './state/remote-place';
@@ -101,7 +103,7 @@ export type SavedKeySignInEvent =
 
 /** Refusals that mean the saved key can never sign in again. `no-password-configured` is not
  *  one: remote access is switched off on the computer, and the key works again once it is on. */
-const KEY_IS_DEAD = new Set(['revoked', 'unknown', 'invalid-credentials']);
+const KEY_IS_DEAD = new Set(['revoked', 'expired', 'unknown', 'invalid-credentials']);
 
 /** Which row this browser has on each computer, kept apart from the key. WHY (Destin, 2026-09-11:
  *  "each sign in seems to create a new device entry in the remote access menu? even though all
@@ -453,7 +455,7 @@ const VOICE_REMOTE_REASON =
  *  halves are needed: `!targetUrl` ALONE is also true of a plain remote browser
  *  tab, which is precisely where the microphone must not appear. */
 function isAndroidLocal(): boolean {
-  return location.protocol === 'file:' && !targetUrl;
+  return isAndroidAppPage() && !targetUrl;
 }
 
 // Fix: queue application messages sent before the WS auth handshake completes,
@@ -534,14 +536,14 @@ function isTouchFirstDevice(): boolean {
 
 /** The Android app, paired to a computer: its own runtime is only reachable on a side connection. */
 function isAndroidPaired(): boolean {
-  return location.protocol === 'file:' && !!targetUrl;
+  return isAndroidAppPage() && !!targetUrl;
 }
 
 function getWsUrl(): string {
   // If a remote host override is set, use it (connectToHost sets this)
   if (targetUrl) return targetUrl;
   // Android WebView loads from file:// — connect to local bridge server.
-  if (location.protocol === 'file:') return localBridgeUrl();
+  if (isAndroidAppPage()) return localBridgeUrl();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 }
@@ -1398,7 +1400,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
     for (const sid of [...parked.keys()]) releaseParked(sid);   // an old connection's held pushes: the new one refills anyway
     // Decided now, not when the close arrives: by then the Android app may already have gone back
     // to its own runtime, which changes the answer (finding 1).
-    const localBridge = location.protocol === 'file:' && !targetUrl;
+    const localBridge = isAndroidAppPage() && !targetUrl;
     // Security: when connecting to the local Android bridge (file:// protocol),
     // use the auth token passed via URL query param by WebViewHost.
     // The token is in the URL so it's available before any JS runs (no race).
@@ -1611,7 +1613,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         // the cleartext-traffic policy or a wrong host/port/firewall.
         let message: string;
         if (!didOpen) {
-          message = `Cannot reach host at ${url}. Check the host, port, and network (VPN/firewall).`;
+          message = `Cannot reach host at ${url}. Check the host, port, and network (VPN/firewall).${isAndroidAppPage() && !localBridge ? ' If YouCoded on your computer is not up to date, update it to connect.' : ''}`; // WHY the added sentence: a computer on an older YouCoded refuses the phone app's page address and the phone cannot tell that from "unreachable"
         } else if (code === 4029) {
           message = 'Too many failed attempts. Wait a minute and try again.';
         } else if (code === 4000) {
@@ -1649,7 +1651,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         // attempt asks for the password once, rather than retrying forever.
         localStorage.removeItem('youcoded-remote-token');
         console.warn('[remote-shim] host refused this device permanently:', event.code, event.reason);
-        noteRefusedAfterConnecting(event.code === 4003 ? 'revoked' : event.code === 4004 ? 'retired' : 'unsupported-version');
+        noteRefusedAfterConnecting(event.code === 4003 ? 'revoked' : event.code === CLOSE_DEVICE_EXPIRED ? 'expired' : event.code === 4004 ? 'retired' : 'unsupported-version');
       } else {
         const storedToken = localStorage.getItem('youcoded-remote-token');
         if (storedToken) {
@@ -1670,7 +1672,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
  * on upgrade day every device retrying at once is what would trip the host's own limiter.
  */
 function isTerminalClose(code: number): boolean {
-  return code === 4003 || code === 4004 || code === 4005;
+  return code === 4003 || code === 4004 || code === 4005 || code === CLOSE_DEVICE_EXPIRED; // 4006: signed out after 90 days unused
 }
 
 function scheduleReconnect(token: string): void {
@@ -1725,7 +1727,7 @@ function onSavedKeyAttemptFailed(err: unknown, token: string): void {
   if (failure?.kind === 'refused') {
     savedKeyListener?.({ type: 'refused', reason: failure.reason });
     if (hasConnectedBefore) noteRefusedAfterConnecting(failure.reason);
-    if (location.protocol === 'file:' && targetUrl) {
+    if (isAndroidAppPage() && targetUrl) {
       // The Android app paired to a computer that will never take its key goes back to its own
       // runtime now. Any other refusal (remote access switched off on the computer) keeps the
       // pairing and keeps trying slowly: deleting it would unpair the phone (finding 1).
@@ -2007,6 +2009,9 @@ function disconnect(): void {
  * reached already fails the connect with "Can't reach your computer".
  */
 export async function connectToHost(host: string, port: number, password: string): Promise<void> {
+  // WHY first, before disconnecting anything (2026-10-30 audit A1): plain ws:// is allowed only to a Tailscale address; a refused
+  // address leaves the current connection alone. `cleartextRefused` lets the sign-in gate stop retrying (it can never succeed).
+  if (!isConnectionAllowed(`ws://${host}:${port}/ws`)) throw Object.assign(new Error(TAILSCALE_ONLY_MESSAGE), { cleartextRefused: true });
   const { setConnectionMode } = await import('./platform');
 
   // Disconnect from current server (local bridge or previous remote)
@@ -2172,7 +2177,7 @@ export function installShim(): void {
   }
   // Android WebView (file://) always starts in local mode — clear any stale remote target
   // that could redirect connect('android-local') to a dead remote server
-  if (location.protocol === 'file:') {
+  if (isAndroidAppPage()) {
     localStorage.removeItem('youcoded-remote-target');
     localStorage.removeItem('youcoded-remote-token');
   } else {
@@ -2475,6 +2480,7 @@ export function installShim(): void {
       // Force a /auth/me round-trip; returns the fresh profile or null (401-cleared).
       refresh: (): Promise<MarketplaceUser | null> => invoke('account:refresh'),
       signOut: (): Promise<void> => invoke('account:sign-out'),
+      signOutAll: (): Promise<ApiResult<unknown>> => invoke('account:sign-out-all'),
       updateProfile: (displayName: string): Promise<ApiResult<unknown>> =>
         invoke('account:update-profile', { displayName }),
       setHandle: (handle: string): Promise<ApiResult<unknown>> =>
@@ -2847,9 +2853,9 @@ export function installShim(): void {
       // root gate as the other reads). Its { ok:false, error } answers are DATA
       // the caller words for the person (not-found, not-allowed…), so this
       // channel is deliberately NOT in REJECT_ON_NOT_OK. On the Android app the
-      // bridge answers not-implemented-on-mobile and the caller falls back.
-      resolvePath: (projectRoot: string, filePath: string) =>
-        invoke('artifacts:resolve-path', { projectRoot, path: filePath }),
+      // bridge answers not-implemented-on-mobile and the caller falls back. The host drops `sessionId` for this door (card #40).
+      resolvePath: (projectRoot: string, filePath: string, sessionId?: string) =>
+        invoke('artifacts:resolve-path', { projectRoot, path: filePath, sessionId }),
       listProjectsIndex: (opts?: { withCounts?: boolean }) =>
         invoke('artifacts:list-projects-index', opts ?? {}),
       // This transport sends an OBJECT payload, not positional args — `full`
@@ -3278,8 +3284,7 @@ export function installShim(): void {
       hide: () => { throw new Error('Buddy is desktop-only in this version'); },
       toggleChat: () => { throw new Error('Buddy is desktop-only in this version'); },
       setSession: () => { throw new Error('Buddy is desktop-only in this version'); },
-      subscribe: () => { throw new Error('Buddy is desktop-only in this version'); },
-      unsubscribe: () => { throw new Error('Buddy is desktop-only in this version'); },
+      toggleChatSize: () => { throw new Error('Buddy is desktop-only in this version'); },
       getViewedSession: () => { throw new Error('Buddy is desktop-only in this version'); },
       // No-op (not throw): drag handlers fire constantly while the user moves
       // the pointer; throwing would spam the console on any platform where
@@ -3300,7 +3305,9 @@ export function installShim(): void {
       onBarState: () => () => { /* no-op unsubscribe */ },
       onMascotState: () => () => { /* no-op unsubscribe */ },
       onChatState: () => () => { /* no-op unsubscribe */ },
+      onChatSize: () => () => { /* no-op unsubscribe */ },
       onFocusSession: () => () => { /* no-op unsubscribe */ },
+      onSeenInBuddy: () => () => { /* no-op unsubscribe: the buddy is a desktop window */ },
       // ── The Linux/KDE buddy helper (design §4) ──
       // Answered locally, not thrown and not sent over the wire. Two reasons.
       // First, the honest answer really is this one: a phone or a remote browser
@@ -3356,7 +3363,7 @@ export function installShim(): void {
       openWindowForHandoff: (sessionId: string) => invoke('browser:open-window-for-handoff', { sessionId }),
       setShowWindow: (show: boolean) => invoke('browser:set-show-window', { show }),
       updateSettings: (patch: Record<string, unknown>) => invoke('browser:update-settings', patch),
-      removeSite: (host: string) => invoke('browser:remove-site', { host }),
+      removeSite: (host: string, form?: boolean) => invoke('browser:remove-site', { host, form }),
       clearSignins: () => invoke('browser:clear-signins'),
       stop: () => invoke('browser:stop'),
       closeSession: (sessionId: string) => invoke('browser:close-session', { sessionId }),

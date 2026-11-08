@@ -1,0 +1,3 @@
+{"type": "user_message", "text": "change the page title"}
+{"type": "tool_use", "id": "edit-ask", "name": "Edit", "input": {"file_path": "src/components/Header.tsx", "old_string": "<h1>Home</h1>", "new_string": "<h1>Welcome</h1>"}}
+{"type": "permission_request", "tool_use_id": "edit-ask", "requestId": "native-edit-ask", "denyListed": false, "permissionMode": "ask"}
