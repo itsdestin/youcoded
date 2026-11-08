@@ -30,7 +30,9 @@ export type ScreenEntry = {
   mark?: string;
   /** `'after'`: a state that opens something only the new code has (a switch just added), so a
    *  before/after skips it on the before side instead of reporting it NOT TAKEN (close-session
-   *  friction, proposal 20). Remove it once the before side has the state too. */
+   *  friction, proposal 20). The release comparison (what-changed) also reads it as "new in the app since
+   *  the last release" — so set it only for UI the last release did not have, and remove it after the
+   *  next release ships. */
   newIn?: 'after';
   /** Why Escape here steps back INSIDE the popup instead of closing it (a wizard that owns its
    *  own ✕ and Escape, inside Backup & sync). `shoot --check` then expects every layer to stay

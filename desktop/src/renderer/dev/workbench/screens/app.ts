@@ -31,7 +31,9 @@ export const APP: readonly ScreenEntry[] = [
   // The phone's start-up screens (dev/workbench/GatePractice.tsx) and its two new notices (ToastPractice.tsx): the real gate / toast over
   // pretend connections, at phone size. Phone-reliability review deck, 2026-10-22.
   ...(['connecting', 'unreachable', 'tab', 'login'] as const).map((g) => ({
-    name: `dev/gate#${g}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, params: { gate: g }, newIn: 'after' as const,
+    // WHY no newIn (2026-11-07): newIn means "new since the last release" — these four gate screens were in
+    // v1.3.3's GatePractice, so a release comparison must not call them new
+    name: `dev/gate#${g}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, params: { gate: g },
   })),
   // The browser page's password screen after the computer said no (GatePractice.tsx): too many wrong passwords, a refusal for another
   // reason, a sign-in timed out after 90 days unused (new words), and the Android app refusing a computer that is not on Tailscale
@@ -44,7 +46,8 @@ export const APP: readonly ScreenEntry[] = [
   { name: 'dev/gate#login-expired', tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, params: { gate: 'login-expired' }, newIn: 'after' as const },
   { name: 'dev/gate#tailscale', tags: ['dev', 'narrow', 'error-state'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { gate: 'tailscale' }, waitMs: 3000, newIn: 'after' as const },
   ...(['lost', 'password'] as const).map((t) => ({
-    name: `dev/toast#${t}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: t }, newIn: 'after' as const,
+    // WHY only "lost" is new: the password toast was already in v1.3.3's ToastPractice
+    name: `dev/toast#${t}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: t }, ...(t === 'lost' ? { newIn: 'after' as const } : {}),
   })),
   // The workbench tool-card gallery, one section per picture (dev/workbench/ToolsPractice.tsx): every tool
   // card from its recorded fixtures — common calls, agents, failures and approvals, admin password,
