@@ -202,6 +202,7 @@ import { appendUserHistory, claimBusyMessage, supersedeToolGroup, userMessageDat
 import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile, type ImageLimits } from './capability-profile';
 import { adaptForWire, encodeImagesForWire } from './wire-adapter';
+import { LocalPrewarm } from './local-prewarm';
 import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, summaryProvenanceNote, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
 import { toReport, type PrefillProgress } from '../providers/prefill-progress';
 import { messageTokens, messagesTokens, requestOccupancy, requestFixedTokens, type UsageAnchor, APPROX_CHARS_PER_TOKEN } from './message-size';
@@ -1166,6 +1167,7 @@ export class HarnessSession extends EventEmitter {
     // Filtering (rather than clearing all history) preserves ordinary text and
     // local call/results while preventing incompatible private parts reaching wire.
     if (changed) this.stripOpenAIContinuation();
+    if (changed) this.warmup.cancel();   // it read the old model's copy
     // Caches are model-scoped on every provider, so a real swap makes the next
     // request a known full miss. A same-binding call (a pricing or context
     // refresh) moves nothing and must not claim to.
@@ -2130,6 +2132,36 @@ export class HarnessSession extends EventEmitter {
    *  nothing is parked, which is the entire race guard for the Retry button. */
   private resolveRetry: (() => void) | null = null;
   private lastPrefillReading: PrefillProgress | null = null; // previous reading → toReport's per-batch ETA rate
+  // The background read of this chat's opening (local-prewarm.ts). While a turn
+  // waits for it, its progress IS the turn's reading progress on screen.
+  private readonly warmup = new LocalPrewarm();
+  private warmupLast: PrefillProgress | null = null;
+  private warmupWaiting = false;
+
+  /** Read this chat's opening into the local engine now, so the next message
+   *  reuses it (local-prewarm.ts). Same model, system text, tools and history
+   *  as the next request, plus a one-character placeholder message in place of
+   *  the user's — everything before it is what the next request will reuse. */
+  prewarm(): void {
+    if (this.abort || this.opts.isSpecialistChild || this.history.at(-1)?.role === 'user') return;
+    const binding = this.binding;
+    this.warmup.start(async (signal) => {
+      this.warmupLast = null;
+      const model = await this.modelFactory(binding, {
+        serialToolCalls: this.profile.constrainToolArgs && !this.profile.supportsParallelToolCalls,
+        onPrefillProgress: (p) => { this.warmupLast = p; if (this.warmupWaiting) this.emitPrefillProgress(p); },
+        cacheKey: this.opts.sessionId,
+      });
+      const prefix = [...this.history];
+      const tools = this.buildAiTools();
+      const messages = adaptForWire(prefix, { nativeImageToolResults: this.profile.nativeImageToolResults, supportsVision: this.profile.supportsVision });
+      const result = streamText({ model, system: this.systemText, messages: encodeImagesForWire([...messages, { role: 'user', content: '.' }]),
+        ...(Object.keys(tools).length > 0 ? { tools } : {}), maxOutputTokens: 1, abortSignal: signal, onError: () => { /* thrown below */ } });
+      for await (const part of result.fullStream as AsyncIterable<any>) if (part.type === 'error') throw part.error;
+      return { prefix, modelId: binding.modelId, promptTokens: messagesTokens(messages) + Math.ceil(this.systemText.length / APPROX_CHARS_PER_TOKEN) };
+    });
+  }
+
   private emitPrefillProgress(p: PrefillProgress): void {
     // Prefill progress after the first token would be describing work the user
     // can already see the result of; the notice is a pre-output affordance only.
@@ -2787,6 +2819,15 @@ export class HarnessSession extends EventEmitter {
     let partialAssistantText = '';
 
     try {
+      // A background read of this chat's opening still going: wait for it rather
+      // than read the same text twice side by side (local-prewarm.ts), showing its
+      // progress as this turn's. Then only what came after it counts as new.
+      const warm = await this.warmup.beforeTurn(this.abort.signal, () => {
+        this.warmupWaiting = true;
+        if (this.warmupLast) this.emitPrefillProgress(this.warmupLast);
+      });
+      this.warmupWaiting = false;
+      if (warm && warm.modelId === this.binding.modelId && warm.prefix.every((m, i) => this.history[i] === m)) this.lastStepPromptTokens = warm.promptTokens;
       // Serial-only when the profile constrains args AND the model can't do parallel
       // tool calls (spec §4.2 — small local models): the factory injects
       // parallel_tool_calls:false on the local-engine branch. Cloud factories ignore it.
@@ -4391,5 +4432,5 @@ export class HarnessSession extends EventEmitter {
     return this.pendingSteers.splice(0);
   }
 
-  destroy(): void { this._currentUsageProgress = null; this.abort?.abort(); this.removeAllListeners(); }
+  destroy(): void { this._currentUsageProgress = null; this.abort?.abort(); this.warmup.cancel(); this.removeAllListeners(); }
 }

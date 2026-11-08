@@ -2585,6 +2585,17 @@ export class NativeSessionHost extends EventEmitter {
     return type === 'local-engine' ? binding!.modelId : null;
   }
 
+  /** As a local chat's model loads: read the chat's opening into the engine in
+   *  the background, so the first reply starts in seconds rather than minutes
+   *  (harness/local-prewarm.ts). The request waits in the engine until the model
+   *  is in memory, then reads. Never throws. */
+  async prewarmLocal(sessionId: string): Promise<void> {
+    const entry = this.live.get(sessionId);
+    if (!entry || entry.parentSessionId) return;
+    if ((await this.localModelForSession(sessionId).catch(() => null)) == null) return;
+    if (this.live.get(sessionId) === entry) entry.session.prewarm();
+  }
+
   /** Set a session's permission mode (renderer chip → NATIVE_SET_PERMISSION_MODE).
    *  Validates LOUDLY: an unknown mode string is a renderer/wiring bug, so throw
    *  (rejecting the invoke() promise at the ipcMain.handle boundary) rather than

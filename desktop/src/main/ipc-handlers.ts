@@ -836,13 +836,7 @@ export function registerIpcHandlers(
       }
       nativeStarting.delete(info.id);
       nativeExited.delete(info.id);
-      // Eager-load the bound model the moment the session opens (like LM Studio),
-      // so the loading bar + GB progress appear immediately rather than only after
-      // the first message. Fire-and-forget; the model poll drives the UI.
-      // WHY local only: a cloud model id sent here booted the local engine and logged a bogus load error.
-      void nativeHost.localModelForSession(info.id)
-        .then((id) => (id ? engineManager.loadModel(id).then(() => pushCurrentModelState(info.id, id)) : undefined))
-        .catch(() => { /* engine not installed / boot failed — the first send surfaces it */ });
+      warmLocalModel(info.id);   // load a local model now and read the chat's opening (see the function)
     } else if (info.provider === 'claude') {
       // Contract R23: EVERY chat carries the line saying what the assistant
       // started with — a Claude Code chat is still a chat. The native runtime
@@ -1771,7 +1765,20 @@ export function registerIpcHandlers(
   nativeHost.on('model-changed', (e: { sessionId: string; model: string }) => {
     publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'model', model: e.model });
     pushCurrentModelState(e.sessionId, e.model);
+    warmLocalModel(e.sessionId);   // a switch to a local model gets the same head start as opening on one
   });
+  // Load a local chat's model as it opens (like LM Studio), so the loading bar appears at once rather than
+  // after the first message, then read the chat's opening in the background (prewarmLocal) so the first
+  // reply starts in seconds. Fire-and-forget; the model poll drives the UI.
+  // WHY local only: a cloud model id sent here booted the local engine and logged a bogus load error.
+  function warmLocalModel(sessionId: string): void {
+    void nativeHost.localModelForSession(sessionId)
+      .then((id) => (id ? engineManager.loadModel(id).then(() => {
+        pushCurrentModelState(sessionId, id);
+        return nativeHost.prewarmLocal(sessionId);
+      }) : undefined))
+      .catch(() => { /* engine not installed / boot failed — the first send surfaces it */ });
+  }
   nativeHost.on('permission-mode', (e: { sessionId: string; mode: NativePermissionMode }) => {
     publish(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e);
   });
