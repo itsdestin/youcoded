@@ -7,6 +7,10 @@
 // `*` also matches the empty string, so a bare "git push" matches "git push*".
 import type { PermissionRule } from './permission-types';
 import { CODE_RUNNING_CORPUS, HOSTILE_CORPUS } from './bash-hostile-corpus';
+import { riskyVariant } from './bash-risky-variants';
+import { readOnlyVerdict } from './safe-readonly-commands';
+import { downloadHostRuleCovers } from './download-host';
+import { folderRuleCovers } from './edit-grants';
 
 /** Escape a literal run of a pattern for a RegExp, keeping `?` as one character. */
 function globLiteral(text: string): string {
@@ -60,8 +64,21 @@ export const BOUNDED_RUNG_VETO: readonly string[] = [
 
 /** What the decision knows about the session a subject came from. */
 export interface MatchContext {
+  /** The session's project folder. Only a `folder` edit rule reads it (to turn an absolute file path into a project-relative one). */
+  cwd?: string;
   /** The Bash tool is running PowerShell, not bash. */
   powershell?: boolean;
+  /** The command is one part of a joined-up line. A download-host rule then does NOT cover a download that follows
+   *  links: the same-website guard wraps a whole command, and a part inside a chain cannot be wrapped. */
+  chainPart?: boolean;
+  /** The two checks the built-in read-only list cannot do from text alone (computed in main by
+   *  tools/readonly-guard.ts before deciding). Absent = NOT done = the list does not apply: fail closed. */
+  readOnlyChecks?: {
+    /** No word in the command leads (by name or by symlink) to a credential file. */
+    pathsOk: boolean;
+    /** The project's git settings run no programs. Only consulted when the command uses git. */
+    gitOk: boolean;
+  };
 }
 
 /** The ONE function that knows what a whole rule means. `subjectMatches` above is
@@ -76,6 +93,28 @@ export function ruleMatches(rule: PermissionRule, subject: string, context: Matc
   // promise cannot afford ('RM -rf /' is not 'rm -rf /' on the platforms Bash
   // runs on). No trimming either: the stored pattern IS the approved command.
   if (rule.match === 'exact') return rule.pattern !== undefined && subject === rule.pattern;
+  // The built-in read-only list (shared/safe-readonly-commands.ts). Every condition must hold; any doubt = no match,
+  // so the mode's blanket rule asks as before.
+  if (rule.match === 'safe-readonly') {
+    if (rule.tool !== 'Bash' || rule.action !== 'allow') return false;
+    const checks = context.readOnlyChecks;
+    if (!checks || !checks.pathsOk) return false;
+    const v = readOnlyVerdict(subject, { powershell: context.powershell });
+    return v.safe && (!v.usesGit || checks.gitOk);
+  }
+  // Q-6: "downloads from <website> only". The website is PARSED from the command at decision time (shared/download-host.ts);
+  // a glob over the command text could not stop a second address riding along. Same operator rule as wildcard grants:
+  // a chained command is never covered here (the engine judges each part of a chain on its own).
+  if (rule.match === 'download-host') {
+    if (rule.tool !== 'Bash' || rule.action !== 'allow' || context.powershell) return false;
+    return downloadHostRuleCovers(rule.pattern, subject, { allowFollowing: !context.chainPart });
+  }
+  // Q-3: "files in this folder". Secret files, files outside the project and linked-out files never reach a rule
+  // (tool-layer path guard runs first), so this only answers "is the file directly in the saved folder".
+  if (rule.match === 'folder') {
+    if (rule.action !== 'allow' || (rule.tool !== 'Edit' && rule.tool !== 'Write')) return false;
+    return folderRuleCovers(rule.pattern, subject, context.cwd);
+  }
   if (!subjectMatches(subject, rule.pattern)) return false;
 
   const pattern = rule.pattern;
@@ -95,7 +134,16 @@ export function ruleMatches(rule: PermissionRule, subject: string, context: Matc
   // before an entry joined CODE_RUNNING_CORPUS (an old "Any node command") stops
   // working instead of keeping its reach; the user is simply asked again. Grants
   // covering the destructive families are NOT voided — see bash-hostile-corpus.ts.
-  return !grantRunsAnyCode(pattern);
+  if (grantRunsAnyCode(pattern)) return false;
+  // SAFETY RULE 5 (2026-10-31, audit finding 10) — a wildcard grant never covers
+  // the RISKY form of a command. "Any curl command" was meant as downloading, but
+  // the same words also matched a curl that uploads; "Any npm install command"
+  // also matched packages running their own setup scripts. Checked here, at
+  // decision time, so grants saved earlier are narrowed too (they keep covering
+  // the safe forms and simply ask for the risky ones). Also refuses commands that
+  // start with a variable assignment or contain text the shell fills in later.
+  // An EXACT grant returned above and is unaffected: it names one string.
+  return riskyVariant(subject, pattern) === null;
 }
 
 /** Safety rules 1–3 for a wildcard Bash allow grant: everything ruleMatches

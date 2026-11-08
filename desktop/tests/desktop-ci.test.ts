@@ -1,7 +1,7 @@
 /* eslint-disable no-template-curly-in-string -- WHY: contracts assert literal GitHub expressions, not JavaScript templates. */
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, statSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { parse } from 'yaml';
@@ -15,6 +15,11 @@ const step = (job: any, name: string) => {
 };
 // WHY parsed source: these are cross-workflow GitHub dependencies, not TS AST
 // shapes. Runtime evidence has its own executable Node contracts.
+// WHY (2026-10 security audit): third-party actions are pinned to a full commit SHA (tag kept as a comment),
+// so tests match the action by name and assert the pin instead of a movable tag like @v7.
+const isAction = (item: any, name: string) => typeof item.uses === 'string' && item.uses.startsWith(`${name}@`);
+const PINNED_GRADLE = /^gradle\/actions\/setup-gradle@[0-9a-f]{40}$/;
+
 describe('Desktop CI selected coverage', () => {
   it('preserves events and browser defaults without granting diagnostics full completion', () => {
     const config = workflow();
@@ -48,10 +53,10 @@ describe('Desktop CI selected coverage', () => {
     expect(filesystemTools.run).toContain('squashfs-tools');
     expect(jobs.prepare.steps.indexOf(filesystemTools)).toBeLessThan(jobs.prepare.steps.indexOf(step(jobs.prepare, 'Test CI policy and evidence')));
     expect(step(jobs.formats, 'Install Linux build deps').run).toContain('squashfs-tools');
-    const formatUpload = jobs.formats.steps.find((item: any) => item.uses === 'actions/upload-artifact@v7');
+    const formatUpload = jobs.formats.steps.find((item: any) => isAction(item, 'actions/upload-artifact'));
     expect(formatUpload.with.path).toBe('ci-results/format-${{ matrix.format }}/');
     expect(formatUpload.with['include-hidden-files']).toBe(true); // Retain .PKGINFO/.MTREE/.INSTALL too.
-    expect(jobs.prepare.steps.find((item: any) => item.uses === 'actions/upload-artifact@v7').with['compression-level']).toBe(0);
+    expect(jobs.prepare.steps.find((item: any) => isAction(item, 'actions/upload-artifact')).with['compression-level']).toBe(0);
     expect(jobs.android.uses).toBe('./.github/workflows/android-ci.yml');
     expect(jobs.android.if).toBe("needs.changes.outputs.route == 'full'");
     expect(jobs.formats.needs).toEqual(['changes', 'prepare']);
@@ -63,7 +68,7 @@ describe('Desktop CI selected coverage', () => {
     expect(step(jobs.evidence, 'Verify fresh selected file union and package evidence').id).toBe('verify');
     expect(jobs.changes.steps.find((item: any) => item.id === 'filter').run).toBe('node scripts/ci-policy.mjs changes');
     for (const job of Object.values(jobs) as any[]) for (const item of job.steps ?? []) {
-      if (item.uses === 'actions/checkout@v7') expect(item.with.ref).toBe('${{ github.sha }}');
+      if (isAction(item, 'actions/checkout')) expect(item.with.ref).toBe('${{ github.sha }}');
     }
     const scripts = JSON.parse(readSource(join(__dirname, '../package.json'))).scripts;
     expect(scripts.test).toBe('vitest'); expect(scripts.pretest).toBeUndefined(); expect(scripts.posttest).toBeUndefined();
@@ -90,19 +95,19 @@ describe('Desktop CI selected coverage', () => {
     for (const job of Object.values(config.jobs) as any[]) {
       expect(job.concurrency).toBeUndefined();
       expect(job['runs-on']).toBe('ubuntu-latest');
-      expect(job.steps.filter((item: any) => item.uses === 'actions/checkout@v7').map((item: any) => item.with.ref)).toEqual(['${{ github.sha }}']);
-      expect(job.steps.find((item: any) => item.uses === 'actions/setup-node@v7').with['node-version']).toBe(22);
+      expect(job.steps.filter((item: any) => isAction(item, 'actions/checkout')).map((item: any) => item.with.ref)).toEqual(['${{ github.sha }}']);
+      expect(job.steps.find((item: any) => isAction(item, 'actions/setup-node')).with['node-version']).toBe(22);
     }
     for (const job of [jvm, apk]) {
       expect(job.if).toBe('!inputs.collect_sources');
       expect(job.needs).toBeUndefined();
       expect(step(job, 'Set up JDK 17').with).toEqual({ 'java-version': '17', distribution: 'temurin' });
-      expect(step(job, 'Setup Gradle').uses).toBe('gradle/actions/setup-gradle@v6');
+      expect(step(job, 'Setup Gradle').uses).toMatch(PINNED_GRADLE);
       expect(job.env.CI_GRADLE_FLAGS).toBe(`-PciPackagingDependencies=true --init-script scripts/ci-android-producers.gradle -Dorg.gradle.jvmargs=-Xmx2g ${job === apk ? '--build-cache' : '--no-build-cache'}`);
       expect(step(job, 'Record current Android input identity').run).toBe('node scripts/ci-inputs.mjs start');
       expect(JSON.stringify(job)).not.toMatch(/--configuration-cache|--ignore-scripts|keystore|secrets\./);
     }
-    expect(jvm.steps.find((item: any) => item.uses === 'actions/setup-node@v7').with).toEqual({ 'node-version': 22 });
+    expect(jvm.steps.find((item: any) => isAction(item, 'actions/setup-node')).with).toEqual({ 'node-version': 22 });
     expect(JSON.stringify(jvm)).not.toMatch(/npm|docker|clang|lld|YOUCODED_COMMON_NATIVE_CACHE|actions\/cache/);
     expect(step(jvm, 'Test runtime redistribution fixtures').run).toBe("python3 -m unittest discover -s app/runtime -p 'test_*.py' -v");
     expect(step(jvm, 'Verify all variant lint producer graphs').run).toBe('./gradlew lintDebug lintReleaseTest lintRelease --dry-run $CI_GRADLE_FLAGS');
@@ -148,7 +153,7 @@ describe('Desktop CI selected coverage', () => {
     expect(step(completion, 'Require selected Android producers').run).toBe('node scripts/ci-android-policy.mjs');
     expect(step(completion, 'Require selected Android producers').if).toBeUndefined();
     ordered(completion, ['Test Android completion policy', 'Require selected Android producers', 'Aggregate current Android inputs and outputs', 'Upload Android input evidence']);
-    const download = completion.steps.find((item: any) => item.uses === 'actions/download-artifact@v8');
+    const download = completion.steps.find((item: any) => isAction(item, 'actions/download-artifact'));
     expect(download.if).toBe('!inputs.collect_sources');
     expect(download.with).toEqual({ pattern: 'android-scope-*', path: 'ci-android-results' });
     expect(completion.steps.indexOf(download)).toBeGreaterThan(completion.steps.indexOf(step(completion, 'Require selected Android producers')));
@@ -201,7 +206,7 @@ describe('Desktop CI selected coverage', () => {
     expect(build.env).toEqual({ ELECTRON_SKIP_BINARY_DOWNLOAD: '1' });
     expect(step(build, 'Set up JDK 17').with).toEqual({ 'java-version': '17', distribution: 'temurin' });
     expect(step(build, 'Set up Node.js').with['node-version']).toBe(22);
-    expect(step(build, 'Setup Gradle').uses).toBe('gradle/actions/setup-gradle@v6');
+    expect(step(build, 'Setup Gradle').uses).toMatch(PINNED_GRADLE);
     expect(step(build, 'Install runtime build tools').run).toBe('sudo apt-get update -q && sudo apt-get install -y -q clang lld');
     expect(step(build, 'Test runtime redistribution fixtures').run).toBe("python3 -m unittest discover -s app/runtime -p 'test_*.py' -v");
     expect(step(build, 'Configure APK version comparator').run).toContain('docker pull alpine:3.24');
@@ -212,7 +217,7 @@ describe('Desktop CI selected coverage', () => {
     expect(step(build, 'Upload inspected source preflight archive').if).toBe('inputs.collect_sources');
     expect(step(build, 'Retain source preflight evidence').if).toBe('always() && inputs.collect_sources && failure()');
     expect(JSON.stringify(workflow())).not.toContain('ELECTRON_SKIP_BINARY_DOWNLOAD');
-    expect(build.steps.filter((item: any) => item.uses === 'actions/checkout@v7').map((item: any) => item.with.ref)).toEqual(['${{ github.sha }}']);
+    expect(build.steps.filter((item: any) => isAction(item, 'actions/checkout')).map((item: any) => item.with.ref)).toEqual(['${{ github.sha }}']);
     for (const name of ['Upload debug APK', 'Upload releaseTest APK']) {
       expect(step(build, name).with['compression-level']).toBe(0);
       expect(step(build, name).with['if-no-files-found']).toBe('error');
@@ -234,5 +239,16 @@ describe('Desktop CI selected coverage', () => {
     expect(step(build, 'Upload Android input evidence').with).toEqual({ name: 'android-current-inputs', path: 'ci-android-evidence.json', 'if-no-files-found': 'error', 'retention-days': 7 });
     for (const [name, artifact, variant] of [['Upload debug APK', 'youcoded-debug', 'debug'], ['Upload releaseTest APK', 'youcoded-releasetest', 'releaseTest']]) expect(step(build, name).with).toEqual({ name: artifact, path: `app/build/outputs/apk/${variant}/*.apk`, 'if-no-files-found': 'error', 'compression-level': 0, 'retention-days': 14 });
     for (const name of ['Verify packaged runtime and source archive', 'Upload inspected source preflight archive', 'Retain source preflight evidence', 'Upload debug APK', 'Upload releaseTest APK']) expect(step(build, name)).toBeTruthy();
+  });
+});
+
+describe('third-party actions are pinned to commit SHAs', () => {
+  it('every uses: in the CI workflows is a local path or a 40-character commit', () => {
+    const dir = join(__dirname, '../../.github/workflows');
+    for (const f of readdirSync(dir).filter((n) => n.endsWith('.yml'))) {
+      for (const m of readSource(join(dir, f)).matchAll(/^\s*-?\s*uses:\s*(\S+)/gm)) {
+        expect(m[1].startsWith('./') || /@[0-9a-f]{40}$/.test(m[1]), `${f}: ${m[1]}`).toBe(true);
+      }
+    }
   });
 });

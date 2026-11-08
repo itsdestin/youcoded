@@ -22,6 +22,26 @@ import BrailleSpinner from '../BrailleSpinner';
 import { ScreenMark } from '../../shoot-mode';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import BrowserAskCard from './BrowserAskCard';
+
+// WHY module-level (not saved): hiding the chip lasts until YouCoded is next opened. The computer's setting does not
+// change on its own, so showing it again on every panel open would nag; but a relaunch shows it once more, so
+// "the browser has no extra protection" is never hidden for good.
+let sandboxNoticeDismissedThisLaunch = false;
+
+/** The "extra protection is off" notice: the app's one notice box (Callout, warning tone) with its words folded
+ *  under "Details" and an ✕ at the top right to hide it - the same shape as every other notice that has a cause
+ *  behind it (an install that failed, a download that stopped).
+ *  WHY (Destin, 2026-11-02, rejecting a custom amber chip: "look for similar examples of errors with details and
+ *  follow the examples"): an invented chip matched nothing. Nothing new is drawn here.
+ *  WHY the ✕ (round-3 deck S-1, "replace got it with an x in the top right"): the box's own dismiss, Callout's onDismiss. */
+function SandboxNotice({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <Callout tone="warning" compact className="mx-3 my-2" onDismiss={onDismiss}
+      details={'This computer doesn\'t allow the browser\'s built-in protection against harmful websites. Pages still load, but be careful which sites the assistant visits. To turn it back on, allow "unprivileged user namespaces" in your system settings.'}>
+      Extra browser protection is off.
+    </Callout>
+  );
+}
 import { ContextMenu } from '../context-menu/ContextMenu';
 
 function bridge() { return (window as any).claude.browser; }
@@ -473,6 +493,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   // Gone the moment it's pressed; the saved setting follows. A failed save
   // only means it shows again next time.
   const [explainerDismissed, setExplainerDismissed] = useState(false);
+  const [sandboxNoticeHidden, setSandboxNoticeHidden] = useState(sandboxNoticeDismissedThisLaunch);
   const dismissExplainer = useCallback(async () => {
     setExplainerDismissed(true);
     const n = ++infoSeq.current;
@@ -489,9 +510,14 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
     if (!active) return;
     navigator.clipboard?.writeText(active.url).then(() => {
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      // WHY kept and cleared on unmount: an un-cancelled timer fired after a test's page was torn down ("window is not
+      // defined"), failing the full suite under load; it would also set state on a closed panel in the app.
+      if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
     }).catch(() => {});
   }, [active]);
+  const copiedTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => { if (copiedTimer.current) window.clearTimeout(copiedTimer.current); }, []);
   // WHY the open button shows the assistant's OWN browser as a real window
   // (Destin, 2026-10-22): handing the address to the person's default browser
   // opened it in their own Chrome profile — without the assistant's sign-ins,
@@ -679,6 +705,12 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
           actions={<Button variant="secondary" size="sm" onClick={dismissExplainer}>Got it</Button>}>
           <p>Private: separate from your own browser and sign-ins. Sites you sign into here stay signed in until you sign out. You can click, scroll and type in the page yourself.</p>
         </Callout>
+      )}
+      {/* WHY a one-line notice with Details (Destin, 2026-11-01: "much smaller ... details on expansion"; 2026-11-02: follow the
+          existing error examples). On some Linux computers the browser can only start without its protective sandbox; that
+          used to be a log line nobody reads. Now: the shared notice box, one line, the explanation under Details, and Got it to hide it. */}
+      {state?.sandboxOff && state.run === 'running' && !myChrome && !sandboxNoticeHidden && (
+        <SandboxNotice onDismiss={() => { sandboxNoticeDismissedThisLaunch = true; setSandboxNoticeHidden(true); }} />
       )}
       {narrow && state?.prompt && <BrowserAskCard sessionId={sessionId} />}
       {body}

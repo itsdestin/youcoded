@@ -21,9 +21,9 @@ jobs:
     name: Linux — walk-through on the real app
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with: { sparse-checkout: .github/real-app }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with: { node-version: '22' }
       - name: Get the packaged app
         env: { GH_TOKEN: '${{ github.token }}', RUN: '${{ inputs.run }}' }
@@ -52,7 +52,7 @@ jobs:
         # WHY: artifacts on this public repo can be downloaded; GitHub only masks the whole secret in logs.
         if: always()
         run: find look -type f \( -name '*.log' -o -name '*.json' \) -exec sed -i -E 's/sk-ant-[A-Za-z0-9_.-]+/sk-ant-[hidden]/g' {} +
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         if: always()
         with: { name: linux-walkthrough, path: look/, retention-days: 7 }
 
@@ -60,9 +60,9 @@ jobs:
     name: Windows — install, then walk-through
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with: { sparse-checkout: .github/real-app }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with: { node-version: '22' }
       - name: Get the real installer and install it silently, as a user's double-click would
         shell: pwsh
@@ -86,7 +86,7 @@ jobs:
         if: always()
         shell: bash
         run: find look -type f \( -name '*.log' -o -name '*.json' \) -exec sed -i -E 's/sk-ant-[A-Za-z0-9_.-]+/sk-ant-[hidden]/g' {} +
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         if: always()
         with: { name: windows-walkthrough, path: look/, retention-days: 7 }
 
@@ -94,9 +94,9 @@ jobs:
     name: Mac — install, then walk-through
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with: { sparse-checkout: .github/real-app }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with: { node-version: '22' }
       - name: Get the real installer and drag the app into Applications, as a user would
         env: { GH_TOKEN: '${{ github.token }}', RUN: '${{ inputs.installers }}' }
@@ -116,6 +116,6 @@ jobs:
       - name: Hide anything key-shaped before saving the recording
         if: always()
         run: find look -type f \( -name '*.log' -o -name '*.json' \) -exec sed -i '' -E 's/sk-ant-[A-Za-z0-9_.-]+/sk-ant-[hidden]/g' {} +
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         if: always()
         with: { name: mac-walkthrough, path: look/, retention-days: 7 }

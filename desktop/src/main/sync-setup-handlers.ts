@@ -318,6 +318,12 @@ export async function createGithubRepo(repoName: string): Promise<{
   if (result.code !== 0) {
     // Check for "already exists" error — that's OK, use it
     if (result.stderr.includes('already exists')) {
+      // WHY (security hardening 2026-10-30): only adopt an existing repo if it is PRIVATE;
+      // otherwise synced conversations would be pushed somewhere anyone can read.
+      const vis = await safeExec('gh', ['api', `repos/${username}/${repoName}`, '--jq', '.private']);
+      if (vis.code !== 0 || vis.stdout.trim() !== 'true') {
+        return { success: false, repoUrl: null, error: `The GitHub repository "${repoName}" already exists and is not private, so YouCoded will not sync into it. Make it private on GitHub (or delete it) and try again.` };
+      }
       return { success: true, repoUrl: `https://github.com/${username}/${repoName}` };
     }
     return { success: false, repoUrl: null, error: result.stderr || 'Failed to create repository' };

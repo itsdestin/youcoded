@@ -46,7 +46,7 @@ jobs:
     needs: pick
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with: { sparse-checkout: .github/real-app }
       - name: Get the phone app the nightly run built
         env: { GH_TOKEN: '${{ github.token }}' }
@@ -60,7 +60,7 @@ jobs:
     needs: pick
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with: { ref: '${{ needs.pick.outputs.sha }}', sparse-checkout: desktop/scripts }
       - name: Get the packaged app the nightly run built
         env: { GH_TOKEN: '${{ github.token }}' }

@@ -245,7 +245,9 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
       })}
       {isBug && tick({
         title: 'Recent logs', label: 'Include recent logs', checked: logs, onChange: chooseLogs,
-        hint: 'The app’s last 200 lines of activity. You can read them, and remove anything private, before sending.',
+        // WHY (Destin, 2026-10-31, security audit): the app hides known key and password shapes, but that
+        // cannot catch everything, and the ticket is public. Say so instead of implying the logs are clean.
+        hint: 'The app’s last 200 lines of activity, posted publicly. Passwords and keys it recognizes are hidden, but it can miss some, so read them and remove anything private before sending.',
       })}
       {tick({
         title: 'Screenshots or files', label: 'Finish with attachments in GitHub', checked: attachments, onChange: setAttachments,
@@ -268,7 +270,14 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
         {status && <Pill tone={status.tone}>{status.text}</Pill>}
       </div>
       <p className="text-xs text-fg-2 whitespace-pre-wrap break-words">{description.trim() || 'No description yet.'}</p>
-      <div className="text-2xs text-fg-muted pt-1 space-y-1">{foot ?? <p>This ticket will be public on GitHub.</p>}</div>
+      <div className="text-2xs text-fg-muted pt-1 space-y-1">{foot ?? <>
+        {/* WHY ONE line (Destin, 2026-11-01 deck: "too much copy and too busy"; his earlier ask still stands:
+            "adequately explain to users what they're uploading, where its visible"). The title and description
+            are visible right above; everything else sent is the "Sent with it" list below, so no sentence
+            repeats either. This line carries only the one fact those cannot: the ticket is public. Where it
+            lands (itsdestin/youcoded on GitHub) is submitIssue's target in main/dev-tools.ts. */}
+        <p>Posted publicly on GitHub in itsdestin/youcoded — anyone can read it.</p>
+      </>}</div>
     </div>
   </section>;
 

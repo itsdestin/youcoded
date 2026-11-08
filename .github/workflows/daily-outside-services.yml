@@ -14,8 +14,9 @@ jobs:
   services:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # WHY pinned to a commit (desktop-ci.test.ts): a moved tag cannot swap the code a workflow runs; same versions as the other workflows
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with: { sparse-checkout: .github/real-app }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with: { node-version: '22' }
       - run: node .github/real-app/outside-services.mjs

@@ -136,7 +136,7 @@ export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: Bro
         send({ t: 'info-changed' });
         return info();
       }
-      case 'remove-site': await settings.removeSite(c.host); send({ t: 'info-changed' }); return info();
+      case 'remove-site': await settings.removeSite(c.host, c.form === true); send({ t: 'info-changed' }); return info();
       case 'clear-signins': {
         // Signing out of everything = the browser's whole storage. Stop first:
         // Chrome holds the folder open.
@@ -181,7 +181,7 @@ export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: Bro
     if (m.t === 'call') {
       const ac = new AbortController();
       calls.set(m.id, ac);
-      void runBrowserTool(env, m.tool, m.args, { sessionId: m.sessionId, signal: ac.signal, vision: m.vision })
+      void runBrowserTool(env, m.tool, m.args, { sessionId: m.sessionId, signal: ac.signal, vision: m.vision, mode: m.mode ?? null })
         .then((value) => send({ t: 'reply', id: m.id, ok: true, value }))
         .finally(() => calls.delete(m.id));
     } else if (m.t === 'cancel') {

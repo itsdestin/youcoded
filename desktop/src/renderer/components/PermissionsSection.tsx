@@ -17,6 +17,8 @@ import type { ReportContext } from './development/ReportDesign';
 import {
   describeRule,
   broadNote,
+  narrowedNote,
+  wideDownloadNote,
   ruleKind,
   RULE_KIND_ORDER,
   RULE_KIND_LABEL,
@@ -24,6 +26,7 @@ import {
 } from './permissions/describe-rule';
 import { CROSS_PROJECT_SLUG } from '../../shared/permission-types';
 import { BACKUP_WARNING } from './backup-warning-copy';
+import { NeverAskCommands } from './permissions/NeverAskCommands';
 import type {
   NativePermissionMode,
   PermissionRule,
@@ -194,12 +197,14 @@ const MODES: readonly { id: NativePermissionMode; label: string; line: string }[
     // "Reading and searching never ask" is the explainer's own wording, and it
     // is the fact that stops this reading as "asks about everything".
     // Destin's 2026-08-26/27 copy review: gerunds, one clause shorter.
-    line: 'Checks with you before changing a file or running a command. Reading and searching never interrupt you.',
+    // 2026-10-31: also names the first visit to each new website (Ask first now asks about those).
+    // Looking-only commands (ls, git status…) also run without asking — see NeverAskCommands.
+    line: 'Checks with you before changing a file, running a command or visiting a new website. Reading and searching inside your project, and look-only commands, never interrupt you.',
   },
   {
     id: 'auto-edit',
     label: 'Auto edit',
-    line: 'Changes files without asking. Still checks before running a command.',
+    line: 'Changes files without asking. Still checks before running a command, except look-only ones.',
   },
   {
     id: 'full-auto',
@@ -210,7 +215,10 @@ const MODES: readonly { id: NativePermissionMode; label: string; line: string }[
     // (native-session-host.ts:291-301), so it does outrank them. Naming the
     // list as the exception to the mode is true either way; claiming it can
     // never be overridden would not be.
-    line: 'Works without checking with you, so you can leave it running. It still asks before:',
+    // WHY "can't catch everything" (Destin, 2026-10-31, security audit): the list is a set of known
+    // dangerous commands, so it is not complete. Same claim as the first-time Full auto warning
+    // (first-time-warnings.ts), which repeats this list.
+    line: 'Works without checking with you, so you can leave it running. It still asks before these, but they can’t catch everything:',
   },
 ];
 
@@ -381,6 +389,16 @@ export default function PermissionsSection() {
 
   const names = projects ? folderNames(projects) : new Map<string, string>();
   const withRules = (projects ?? []).filter((project) => project.rules.length > 0);
+  // Older grants this change narrowed (see describe-rule.ts narrowedNote).
+  const narrowedCount = withRules.reduce((n, p) => n + p.rules.filter((r) => narrowedNote(r) !== null).length, 0);
+  // Per-device convenience only; if storage is unavailable the note just shows again.
+  const [narrowedSeen, setNarrowedSeen] = useState(() => {
+    try { return localStorage.getItem('youcoded-narrowed-grants-seen') === '1'; } catch { return false; }
+  });
+  const dismissNarrowed = () => {
+    setNarrowedSeen(true);
+    try { localStorage.setItem('youcoded-narrowed-grants-seen', '1'); } catch { /* shows again next time */ }
+  };
   // D2 (2026-08-26): the cross-project bucket is not a folder and it outranks
   // every folder — the grants in it are in force wherever the user is working,
   // so it reads first rather than sorted in among places it does not belong to.
@@ -471,6 +489,9 @@ export default function PermissionsSection() {
         </div>
       </div>
 
+      {/* ── 1b. Commands that never ask (reference fold, no control) ─────────── */}
+      <NeverAskCommands />
+
       {/* ── 2. What you already waved through ─────────────────────────────── */}
       <div>
         <SectionLabel className="mb-2">Always allowed</SectionLabel>
@@ -504,6 +525,18 @@ export default function PermissionsSection() {
               these. Full auto never asks anyway, except for the four above &mdash; and an
               &ldquo;Always allow&rdquo; on one of those removes even that check.
             </p>
+
+            {narrowedCount > 0 && !narrowedSeen && (
+              // One-time note: only shown when an older grant was actually
+              // narrowed, and dismissed for good on "Got it".
+              <Callout tone="info">
+                <span className="text-2xs leading-relaxed">
+                  {narrowedCount === 1 ? '1 older “Always allow” now covers less' : `${narrowedCount} older “Always allow” choices now cover less`}.
+                  {' '}Downloads, plain installs and similar still work. Sending files out, installs that run package setup scripts and a few other risky forms now ask each time. Each one is marked below.
+                </span>
+                <Button variant="secondary" className="mt-1.5 py-1" onClick={dismissNarrowed}>Got it</Button>
+              </Callout>
+            )}
 
             {projects === null ? (
               <LoadingState what="what you've approved" variant="inline" />
@@ -804,7 +837,10 @@ function RuleRow({
   // grants as exact, and a scoped Bash grant ("Pushing to master") is narrow by
   // construction and says what it covers in its own sentence — putting the scary
   // note on it would teach the user to ignore it where it is true.
-  const detail = [described.width === 'tool-wide' ? broadNote(rule.tool) : null, grantedLabel(rule.grantedAt)]
+  // WHY (audit finding 10): an older grant such as "Any curl command" now covers
+  // less than it used to. Say so on the row, in plain words, so a later re-ask
+  // is not a mystery.
+  const detail = [described.width === 'tool-wide' ? broadNote(rule.tool) : null, narrowedNote(rule), wideDownloadNote(rule), grantedLabel(rule.grantedAt)]
     .filter(Boolean)
     .join(' · ');
 

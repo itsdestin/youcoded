@@ -2,6 +2,7 @@ import type { ThemeTokens, ThemeShape, ThemeFont, ThemeBackground, ThemeLayout, 
 // Dev-only chrome-style override (`?chrome=float`); a no-op in production — see
 // workbench-mode.ts for why importing it here is safe.
 import { workbenchChromeStyle } from '../workbench-mode';
+import { isAllowedGoogleFontUrl, sanitizeCSS } from './theme-validator';
 
 /** True when the theme composites a real layer behind the chrome — a wallpaper
  *  image or a gradient. This is THE predicate that stamps `[data-wallpaper]` on
@@ -109,7 +110,9 @@ export function applyThemeFont(font: ThemeFont | undefined): string | null {
   }
 
   // Inject or update Google Font <link> if URL is provided
-  const url = font['google-font-url'];
+  // WHY the host check here too (audit SC-1): validateTheme drops a bad address, but this is the one place the link is
+  // actually created, so a theme that reached it any other way still cannot point the app at an arbitrary stylesheet.
+  const url = isAllowedGoogleFontUrl(font['google-font-url']) ? font['google-font-url'] : undefined;
   if (url) {
     if (!linkEl) {
       linkEl = document.createElement('link');
@@ -718,7 +721,9 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
       customEl.id = customCSSId;
       document.head.appendChild(customEl);
     }
-    customEl.textContent = theme.custom_css;
+    // WHY sanitize at the point of use (audit F3): only registry installs went through sanitizeCSS; a hand-installed or
+    // synced theme file reached this line unchecked. A clean stylesheet comes back byte-identical, so built-in themes are unchanged.
+    customEl.textContent = sanitizeCSS(theme.custom_css);
   } else if (customEl) {
     customEl.textContent = '';
   }

@@ -138,6 +138,10 @@ describe("AccountSection", () => {
     expect(utils.queryByLabelText("Display name")).toBeNull();
     expect(utils.queryByLabelText("Handle")).toBeNull();
     expect(utils.queryByRole("button", { name: "Delete account" })).toBeNull();
+    // Sign out everywhere is a destructive action, so it lives one level down with Delete account
+    // (Destin, 2026-11-02), not on this page.
+    expect(utils.queryByRole("button", { name: "Sign out everywhere" })).toBeNull();
+    expect(utils.queryByText("Lost a device?")).toBeNull();
   });
 
   // WHY: the Account row must NEVER paint the browser's broken-image glyph; both slots (row icon and popup summary) swap to our person glyph.
@@ -303,6 +307,46 @@ describe("AccountSection", () => {
     fireEvent.change(confirmInput, { target: { value: "delete" } });
 
     expect(confirmBtn.disabled).toBe(false);
+  });
+
+  // Sign out everywhere: the same two-step as Delete account, in the Danger zone on Edit account.
+  it("sign out everywhere: red button in the Danger zone, facts + Cancel / confirm after pressing", async () => {
+    const signOutAll = vi.fn().mockResolvedValue({ ok: true });
+    (globalThis as any).window.claude = signedInMock("octo", { account: { signOutAll } });
+    const utils = renderSection();
+    await flush();
+    await openPopup(utils, true);
+
+    // Nothing happens, and the facts are not shown, until the button is pressed.
+    expect(utils.queryByText(/every device, this one too/)).toBeNull();
+    fireEvent.click(utils.getByRole("button", { name: "Sign out everywhere" }));
+    expect(utils.getByText(/every device/)).toBeTruthy();
+    // Only the confirm that is open shows: Delete account is hidden until Cancel.
+    expect(utils.queryByRole("button", { name: "Delete account" })).toBeNull();
+    expect(signOutAll).not.toHaveBeenCalled();
+
+    // Cancel puts the single button back.
+    fireEvent.click(utils.getByRole("button", { name: "Cancel" }));
+    expect(utils.queryByText(/every device, this one too/)).toBeNull();
+    expect(utils.getByRole("button", { name: "Delete account" })).toBeTruthy();
+
+    // Confirming ends every sign-in, then this window's own.
+    fireEvent.click(utils.getByRole("button", { name: "Sign out everywhere" }));
+    fireEvent.click(utils.getAllByRole("button", { name: "Sign out everywhere" })[0]);
+    await waitFor(() => expect(signOutAll).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((globalThis as any).window.claude.account.signOut).toHaveBeenCalled());
+  });
+
+  it("sign out everywhere: when the server cannot be reached nothing changes and it says so", async () => {
+    const signOutAll = vi.fn().mockResolvedValue({ ok: false, status: 0 });
+    (globalThis as any).window.claude = signedInMock("octo", { account: { signOutAll } });
+    const utils = renderSection();
+    await flush();
+    await openPopup(utils, true);
+    fireEvent.click(utils.getByRole("button", { name: "Sign out everywhere" }));
+    fireEvent.click(utils.getAllByRole("button", { name: "Sign out everywhere" })[0]);
+    await waitFor(() => expect(utils.getByText(/nothing changed/)).toBeTruthy());
+    expect((globalThis as any).window.claude.account.signOut).not.toHaveBeenCalled();
   });
 
   // ── Blocked users (view mode) ──────────────────────────────────────────────

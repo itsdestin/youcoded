@@ -184,6 +184,46 @@ describe('smartTruncateLog', () => {
   });
 });
 
+describe('redactLog — more key shapes (public bug reports)', () => {
+  // Fake, clearly non-real values built to match each provider's published shape.
+  const cases: Array<[string, string, string]> = [
+    ['OpenAI', 'key=sk-' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4', '[REDACTED-API-KEY]'],
+    ['OpenAI project', 'key=sk-proj-' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6', '[REDACTED-API-KEY]'],
+    ['OpenRouter', 'OPENROUTER=sk-or-v1-' + 'abcdef0123456789abcdef0123456789', '[REDACTED-OPENROUTER-KEY]'],
+    ['Google', 'k=AIza' + 'SyA1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7', '[REDACTED-GOOGLE-KEY]'],
+    ['Slack bot', 'SLACK=xoxb-' + '1234567890-abcdefghijkl', '[REDACTED-SLACK-TOKEN]'],
+    ['Slack user', 'SLACK=xoxp-' + '1234567890-abcdefghijkl', '[REDACTED-SLACK-TOKEN]'],
+    ['AWS', 'AWS_ACCESS_KEY_ID=AKIA' + 'ABCDEFGHIJKLMNOP', '[REDACTED-AWS-KEY]'],
+    ['Plaid', 'token access-sandbox-' + '8ab976e6-64bc-4b38-98f7-731e7a349970', '[REDACTED-PLAID-TOKEN]'],
+    ['JWT', 'jwt eyJhbGciOiJIUzI1NiJ9.' + 'eyJzdWIiOiIxMjM0NTY3ODkwIn0.' + 'abcDEF123_-xyz', '[REDACTED-JWT]'],
+    ['fine-grained GitHub', 'github_pat_' + '11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz0123456789', '[REDACTED-GH-TOKEN]'],
+  ];
+  it.each(cases)('redacts a %s key', (_n, input, label) => {
+    const out = redactLog(input, '/h');
+    expect(out).toContain(label);
+    // None of the secret body survives.
+    expect(out).not.toMatch(/[A-Za-z0-9]{24,}/);
+  });
+
+  it('keeps the word Bearer but removes the token after it', () => {
+    expect(redactLog('Authorization: Bearer abcdef0123456789ABCDEF.tok-en', '/h'))
+      .toBe('Authorization: Bearer [REDACTED-TOKEN]');
+  });
+
+  it('Anthropic keys keep their own label (specific shapes run before the generic sk-)', () => {
+    expect(redactLog('sk-ant-api03-' + 'abcdefghij0123456789ABCDEFGH', '/h')).toBe('[REDACTED-ANTHROPIC-KEY]');
+  });
+
+  it('leaves ordinary text alone', () => {
+    const t = 'ask-me-anything about sk-learn; task-runner started at /srv/app; Bearer of news';
+    expect(redactLog(t, '/h')).toBe(t);
+  });
+
+  it('home path in either slash direction becomes ~', () => {
+    expect(redactLog('C:/Users/alice/proj and C:\\Users\\alice\\proj', 'C:\\Users\\alice')).toBe('~/proj and ~\\proj');
+  });
+});
+
 describe('redactLog', () => {
   it('replaces the user home dir with ~', () => {
     expect(redactLog('opened C:\\Users\\alice\\projects\\foo', 'C:\\Users\\alice'))

@@ -174,6 +174,28 @@ describe('background commands list (C4, C5, command store)', () => {
     // …and the helper card itself is unaffected.
     expect(card(s, 'toolu_A').ccBackground?.status).toBe('running');
   });
+  // A reopened conversation replays the main transcript before the helpers', so an end that
+  // only the main transcript recorded (a kill on restart) is read BEFORE the helper's launch.
+  it("a helper's command whose end was read before its launch is listed as ended, not running", () => {
+    let s = feed(addTool(init(), 'toolu_A', 'Agent', { description: 'Builder' }), result('toolu_A', 'launched', { status: 'async_launched', agentId: 'a3ecf' }));
+    s = d(s, { type: 'TRANSCRIPT_BACKGROUND_TASK', sessionId: S, uuid: 'nk', toolUseId: 'toolu_H', taskIds: ['bh1'], status: 'stopped', summary: 'killed', timestamp: 9 } as ChatAction);
+    s = addTool(s, 'toolu_H', 'Bash', { command: 'npm test', description: 'Tests' }, { parentAgentToolUseId: 'toolu_A', agentId: 'a3ecf' } as Partial<ChatAction>);
+    s = d(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: S, uuid: 'rh', toolUseId: 'toolu_H', result: 'moved to background', isError: false, backgroundTaskId: 'bh1', parentAgentToolUseId: 'toolu_A', timestamp: 5 } as ChatAction);
+    expect(cmds(s)).toEqual([expect.objectContaining({ label: 'Tests', status: 'stopped', ownerHelper: expect.objectContaining({ toolUseId: 'toolu_A' }) })]);
+  });
+  it("a restart stops a helper's commands launched before it, as it does the conversation's own", () => {
+    const helper = (e: TranscriptEvent): TranscriptEvent => ({ ...e, data: { ...e.data, parentAgentToolUseId: 'toolu_A', agentId: 'a3ecf' } } as TranscriptEvent);
+    const older: TranscriptEvent[] = [
+      { type: 'tool-use', sessionId: S, uuid: 'u1', timestamp: 1, data: { toolUseId: 'toolu_A', toolName: 'Agent', toolInput: { description: 'Builder' } } },
+      ...ev(result('toolu_A', 'launched', { status: 'async_launched', agentId: 'a3ecf' })),
+      helper({ type: 'tool-use', sessionId: S, uuid: 'u2', timestamp: 2, data: { toolUseId: 'toolu_H', toolName: 'Bash', toolInput: { command: 'until false; do sleep 10; done' } } }),
+      ...ev(result('toolu_H', 'moved to background', { backgroundTaskId: 'bh1' })).map(helper),
+    ];
+    const load = (ids: string[]) => d(init(), { type: 'HISTORY_PAGE_LOADED', sessionId: S, events: older, cursor: null, hasMore: false, reconcileInterruptedToolIds: ids } as ChatAction);
+    expect(cmds(load(['toolu_A']))[0]).toMatchObject({ toolUseId: 'toolu_H', status: 'stopped' });
+    // A helper launched after the restart is not in the list: its command keeps running.
+    expect(cmds(load(['toolu_OTHER']))[0].status).toBe('running');
+  });
   it('an unchanged event returns the same list object (cached selector)', () => {
     const s = bashBg(init());
     expect(backgroundCommandList(s.get(S)!)).toBe(backgroundCommandList(s.get(S)!));

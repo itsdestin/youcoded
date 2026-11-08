@@ -113,7 +113,7 @@ const FAMILIES: Record<string, Family> = {
   // WHY derived: a hand-listed array let two new dev:* channels escape every check once.
   'dev:*': { req: [...contractIpc.values()].filter((v) => v.startsWith('dev:') && !DESKTOP_ONLY_DEV.has(v)) },
   'account:*': { req: ['account:start', 'account:poll', 'account:signed-in', 'account:user', 'account:refresh', 'account:sign-out',
-    'account:update-profile', 'account:set-handle', 'account:delete', 'account:export'] },
+    'account:sign-out-all', 'account:update-profile', 'account:set-handle', 'account:delete', 'account:export'] },
   'social:*': { req: ['social:lookup-handle', 'social:send-request', 'social:list-requests', 'social:accept-request', 'social:decline-request',
     'social:cancel-request', 'social:list-friends', 'social:unfriend', 'social:block', 'social:unblock', 'social:list-blocks',
     'social:presence-connect', 'social:presence-disconnect', 'social:presence-send'], push: ['social:presence-event'], table: 'social' },
@@ -392,7 +392,8 @@ describe('models:* and engine:set-* channel parity', () => {
       return !def || def.desktopOnly || def.remoteAllowed === false;
     });
     expect(notServed).toEqual([]);
-  });
+    // WHY 120 s: the first import of the whole channel table is slow on a loaded machine (timed out at 30 s under load).
+  }, 120_000);
 });
 
 describe('office, docComments: per-feature wiring', () => {

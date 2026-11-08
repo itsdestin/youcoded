@@ -89,7 +89,7 @@ describe('a phone browser knows it is remote', () => {
     // file:// with no target is a WebView talking to a runtime on the same phone. It has a
     // real terminal buffer and real theme files, so it is not remote and must not be told
     // it is. The platform string cannot make this call: the host labels everyone 'desktop'.
-    expect(shim).toContain("return location.protocol === 'file:' && !targetUrl;");
+    expect(shim).toContain("return isAndroidAppPage() && !targetUrl;");
   });
 });
 

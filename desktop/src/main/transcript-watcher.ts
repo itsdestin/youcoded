@@ -467,7 +467,7 @@ const TASK_NOTIFICATION_RE = /<task-notification>([\s\S]*?)<\/task-notification>
 /**
  * One 'background-task' event per <task-notification> in `raw` that reports an
  * end state. Notices without a status (a Monitor's streamed event) change no
- * card and yield nothing. Shape measured on 2026-09-24 across 1,915 notices:
+ * card and yield nothing — except a Monitor's time-limit notice, which is its end. Shape measured on 2026-09-24 across 1,915 notices:
  * <task-id> (one, or several for an orphan summary on resume), usually a
  * <tool-use-id>, <status> completed|failed|killed|stopped, <summary>, and for
  * a helper a <result> holding its final report.
@@ -479,9 +479,15 @@ function taskNotificationEvents(raw: string, sessionId: string, uuid: string, ti
   for (const m of raw.matchAll(TASK_NOTIFICATION_RE)) {
     const body = m[1];
     const status = tagText(body, 'status');
+    // WHY: a Monitor that reaches its own time limit reports that ONLY as one more streamed
+    // <event> with no <status> ("[Monitor expired after 15m …]" / "[Monitor timed out — …]").
+    // Skipping it left the watcher reading "Watching" forever — 235 of 980 Monitors measured
+    // across this machine's transcripts on 2026-11-05. It ended normally, so: completed.
+    const expiry = status ? undefined : monitorExpiryText(body);
     const mapped = status === 'completed' ? 'completed'
       : status === 'failed' ? 'failed'
       : status === 'killed' || status === 'stopped' ? 'stopped'
+      : expiry ? 'completed'
       : null;
     if (!mapped) continue;
     const taskIds = [...body.matchAll(/<task-id>([\s\S]*?)<\/task-id>/g)]
@@ -495,7 +501,8 @@ function taskNotificationEvents(raw: string, sessionId: string, uuid: string, ti
     const rs = body.indexOf('<result>');
     const re = body.lastIndexOf('</result>');
     const result = rs !== -1 && re > rs ? body.slice(rs + '<result>'.length, re).trim() : undefined;
-    const summary = tagText(body, 'summary');
+    // An expiry's own sentence says how the watcher ended; its <summary> only names it.
+    const summary = expiry ?? tagText(body, 'summary');
     // A Bash command's exit code exists only inside the summary sentence.
     const exit = summary ? /exit code (-?\d+)/i.exec(summary) : null;
     out.push({
@@ -517,6 +524,16 @@ function taskNotificationEvents(raw: string, sessionId: string, uuid: string, ti
     i++;
   }
   return out;
+}
+
+/** The text of a Monitor's time-limit notice, or undefined. Claude Code writes it as the
+ *  notice's <event>, bracketed, in two wordings (350 "expired after", 166 "timed out" measured
+ *  2026-11-05). Anchored at the start so a watched program's own output that merely
+ *  mentions these words is never read as the watcher ending. */
+function monitorExpiryText(body: string): string | undefined {
+  const ev = tagText(body, 'event');
+  if (!ev || !/^\[Monitor (expired after|timed out)\b/.test(ev)) return undefined;
+  return ev.replace(/^\[|\]$/g, '').trim();
 }
 
 function tagText(body: string, tag: string): string | undefined {

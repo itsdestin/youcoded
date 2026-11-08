@@ -23,9 +23,19 @@ export interface WorkerHandle {
 }
 
 export interface BrowserClientOptions {
+  /** The conversation's permission mode as the app last read it (native 'ask' | 'auto-edit' | 'full-auto'; Claude Code 'normal' | 'bypass' | …).
+   *  WHY here: the worker has no session records; the form-submit ask must know whether the person chose Full Auto. */
+  modeOf?: (sessionId: string) => string | null | undefined;
   fork: () => WorkerHandle;
   log?: (level: 'INFO' | 'WARN' | 'ERROR', msg: string, data?: Record<string, unknown>) => void;
 }
+
+// WHY a late-bound lookup (kept here, not in browser-electron.ts, so tests and headless code never import electron):
+// the client is created on first use, but the session records the mode is read from are built by create-runtime.ts.
+// Same pattern as setOutsideCommentsModeLookup.
+let modeLookup: (sessionId: string) => string | null | undefined = () => null;
+export function setBrowserModeLookup(lookup: (sessionId: string) => string | null | undefined): void { modeLookup = lookup; }
+export function browserModeOf(sessionId: string): string | null | undefined { return modeLookup(sessionId); }
 
 const RESPAWN_WINDOW_MS = 5 * 60_000;
 const MAX_RESPAWNS = 3;
@@ -117,7 +127,7 @@ export class BrowserClient extends EventEmitter {
   /** Run one Browser tool. Never rejects: a worker failure becomes an error result. */
   async callTool(sessionId: string, tool: string, args: unknown, opts: { signal?: AbortSignal; vision: boolean }): Promise<RunResult> {
     try {
-      return await this.request<RunResult>((id) => ({ t: 'call', id, sessionId, tool, args, vision: opts.vision }), opts.signal);
+      return await this.request<RunResult>((id) => ({ t: 'call', id, sessionId, tool, args, vision: opts.vision, mode: this.opts.modeOf?.(sessionId) ?? null }), opts.signal);
     } catch (e) {
       return { text: (e as Error).message, isError: true };
     }

@@ -13,6 +13,7 @@ import { Button, Pill, Radio, RadioGroup, Textarea, Tooltip } from './ui';
 // The card renders the widths this SHARED derivation produced and sends back only
 // which one was chosen — it never builds a rule pattern of its own.
 import { bashGrantOptions, bashNoGrantNote, type GrantScope } from '../../shared/bash-grant-shapes';
+import { editGrantChoices, isFileEditTool } from '../../shared/edit-grants';
 import { CheckIcon, FailIcon, QuestionIcon, ChevronIcon, NoteIcon, StoppedIcon, ChatIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
 import { isAndroid } from '../platform';
@@ -43,6 +44,8 @@ import { toolActionLabel } from '../utils/tool-group-summary';
 import { PlanApprovalCard } from './PlanApprovalCard';
 import { ExpiredApprovalActions } from './ExpiredApprovalActions';
 import { shellEndKind } from '../state/native-run-facts';
+import { siteKeyFor } from '../../shared/site-key';
+import type { ToolCardAsk } from './permissions/ToolCardAsk';
 
 // --- Helpers for friendly display ---
 
@@ -568,8 +571,11 @@ function grantFolderName(workDir: unknown, sessionCwd?: string): string {
 
 const NATIVE_ALWAYS_ALLOW = 'native:always-allow';
 
-export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, permissionMode, onResponded, onFailed, onAnswerNow, answerUnconfirmed = false, bare = false, noKeyboard = false }: {
+export function PermissionButtons({ requestId, suggestions, denyListed, command, filePath, chainsHonoured, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, site, permissionMode, onResponded, onFailed, onAnswerNow, answerUnconfirmed = false, bare = false, noKeyboard = false, custom }: {
   requestId: string;
+  /** A non-tool ask (the browser's) that must look and behave exactly like a tool ask (Destin, 2026-11-02): same
+   *  colours, keys and click-only rule, with its own question, note and place to send the answer. */
+  custom?: { question: string; note?: React.ReactNode; answer: (decision: object) => Promise<unknown> };
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
    *  buttons on the same line as the request. Confirm and safety-stop paths
@@ -583,6 +589,12 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
    *  Bash-only (DESTRUCTIVE_DENY_LIST has no non-Bash entries), so this is
    *  `input.command` — the same string harness-session.ts:562 persists. */
   command?: string;
+  /** Q-2/Q-3: the file a Write/Edit ask is about, as the assistant wrote it. Gives the edit card its extra choices
+   *  ("Allow for this chat", and "Only this file" vs "Files in <folder>" under Always allow). */
+  filePath?: string;
+  /** Q-1: set by the native host when this session's shell reads a joined-up command the way the engine does. Without it the
+   *  card does not offer "Each part on its own" (rules that never fire would be a silent no-op). */
+  chainsHonoured?: boolean;
   /** Basename of the session cwd. The rule is scoped to that directory's slug
    *  (permission-store.ts:35-43), so naming the folder is what makes the grant's
    *  scope checkable — a worktree does NOT inherit its parent repo's rules. */
@@ -604,6 +616,10 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
    *  when the button is actually offered — a note about a control that is not
    *  there is noise. */
   alwaysAllowNote?: string;
+  /** Ask first, websites: the site a WebFetch ask is about (shared/site-key.ts), so
+   *  the card can name it plainly. Only a native ask shows it; Claude Code asks about
+   *  websites in its own words. */
+  site?: string;
   /** The session's mode when the ask fired (native broker only). 'full-auto'
    *  + denyListed renders the safety-stop footer instead of the generic row —
    *  Full auto's only rule-based ask IS the destructive-command stop, and a
@@ -647,6 +663,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     && !specialistName && (toolName === 'Write' || toolName === 'Edit');
   const budgetStop = isNative && permissionMode === 'full-auto'
     && (toolName === 'doom_loop' || toolName === 'max_steps');
+  const siteAsk = isNative && toolName === 'WebFetch' && !!site;
   const [confirmingExternal, setConfirmingExternal] = useState(false);
   // WHY (card #207): a comment tool reaching a file outside the chat's project
   // gets its own three-choice row — once / this chat / no — like the Browser's
@@ -666,8 +683,8 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // only which option was chosen (see alwaysAllowDecision). Only native asks
   // carry a real Bash command — CC asks keep their suggestions-driven behavior.
   const grantOptions = useMemo(
-    () => (isNative && typeof command === 'string' ? bashGrantOptions(command) : []),
-    [isNative, command],
+    () => (isNative && typeof command === 'string' ? bashGrantOptions(command, { chains: chainsHonoured === true }) : []),
+    [isNative, command, chainsHonoured],
   );
   // A Bash ask whose command yields NO option may not be always-allowed at all
   // (a bare `git push`: its target is not in the command and changes underneath
@@ -676,12 +693,18 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     () => (isNative && typeof command === 'string' ? bashNoGrantNote(command) : null),
     [isNative, command],
   );
+  // Q-2/Q-3: an ordinary file-edit ask (not outside the project, not a helper's, no floor) gets an "Allow for this chat"
+  // button, and its Always allow asks "this file or this folder?". Same list the shared module gave main, so the
+  // sentence and the stored rule cannot disagree.
+  const editAsk = isNative && !specialistName && isFileEditTool(toolName) && typeof filePath === 'string' && !external && !floorStop;
+  const editChoices = useMemo(() => (editAsk ? editGrantChoices(filePath) : []), [editAsk, filePath]);
+  const choices: Array<{ scope: GrantScope; label: string; limits: string; parts?: string[] }> = grantOptions.length > 0 ? grantOptions : editChoices;
   const noGrantPossible = isNative && typeof command === 'string' && grantOptions.length === 0;
   // Which width the user picked. Preselected narrow; irrelevant when the
   // derivation offered only one option (see chosenScope).
   const [grantPick, setGrantPick] = useState<GrantScope>('exact');
-  const chosenScope: GrantScope = grantOptions.length === 1 ? grantOptions[0].scope : grantPick;
-  const chosen = grantOptions.find((o) => o.scope === chosenScope) ?? grantOptions[0];
+  const chosenScope: GrantScope = choices.length === 1 ? choices[0].scope : grantPick;
+  const chosen = choices.find((o) => o.scope === chosenScope) ?? choices[0];
   const canAlwaysAllow = (hasSuggestions || isNative) && !suppressAlwaysAllow && !noGrantPossible;
   // Both layouts start on index 0 — Yes / Run it, a one-time allow.
   // WHY: the generic row used to start on Always allow, so any Enter the card
@@ -698,7 +721,8 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     setResponding(true);
     setUnconfirmed(false);
     try {
-      const delivered = await (window as any).claude.session.respondToPermission(requestId, decision);
+      // A non-tool ask is answered through its own channel, not the session's permission socket.
+      const delivered = await (custom ? custom.answer(decision) : (window as any).claude.session.respondToPermission(requestId, decision));
       if (delivered === false) {
         // The host confirmed the request is already closed — that one IS expired.
         console.warn('Permission response not delivered — socket already closed');
@@ -718,7 +742,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       // stays answerable instead, and says what is actually known.
       setUnconfirmed(true);
     }
-  }, [requestId, onResponded, onFailed, onAnswerNow]);
+  }, [requestId, onResponded, onFailed, onAnswerNow, custom]);
   // Same sentence in every button layout below (and in the question card and the
   // buddy's compact strip): the answer's fate is unknown, so it says only that.
   const unconfirmedNote = unconfirmed || answerUnconfirmed ? (
@@ -738,9 +762,9 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 
   // Admin commands use the SAME consequence confirmation as other restricted actions.
   const onAlwaysAllow = useCallback(() => {
-    if (canChooseAdmin || denyListed || grantOptions.length > 0) { setConfirmingAlways(true); return; }
+    if (canChooseAdmin || denyListed || choices.length > 0) { setConfirmingAlways(true); return; }
     handleRespond(alwaysAllowDecision());
-  }, [canChooseAdmin, adminApprovalScope, denyListed, grantOptions.length, handleRespond, hasSuggestions, suggestions, chosenScope]);
+  }, [canChooseAdmin, adminApprovalScope, denyListed, choices.length, handleRespond, hasSuggestions, suggestions, chosenScope]);
 
   // Keyboard order matches the visible row: Run it / Deny / Always allow.
   const actions = useRef<(() => void)[]>([]);
@@ -766,10 +790,15 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       ]
     : [
         () => handleRespond({ decision: { behavior: 'allow' } }),
+        ...(editAsk ? [() => handleRespond({ decision: { behavior: 'allow' }, allowEditsForChat: true })] : []),
         ...(canAlwaysAllow ? [onAlwaysAllow] : []),
         () => handleRespond({ decision: { behavior: 'deny' } }),
       ];
   const count = actions.current.length;
+  // Button positions in the default row (keyboard focus and refs follow them).
+  const chatIdx = editAsk ? 1 : -1;
+  const alwaysIdx = canAlwaysAllow ? (editAsk ? 2 : 1) : -1;
+  const noIdx = 1 + (editAsk ? 1 : 0) + (canAlwaysAllow ? 1 : 0);
 
   // Global keyboard navigation: arrows cycle, Enter activates. Suspended while
   // the consequence confirm is open so arrow/Enter don't drive the hidden row,
@@ -820,15 +849,15 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
             named grant like "Always allow pushing to master", and ambiguous when
             there are two options to choose between. */}
         <p className="text-xs font-medium text-fg-2">
-          {canChooseAdmin ? 'Always allow admin commands?' : grantOptions.length > 1
+          {canChooseAdmin ? 'Always allow admin commands?' : choices.length > 1
             ? `Always allow this${folderName ? ` in ${folderName}` : ''}?`
-            : grantOptions.length === 1 && grantOptions[0].scope === 'wide'
-              ? `${grantOptions[0].label}${folderName ? ` in ${folderName}` : ''}?`
+            : choices.length === 1 && choices[0].scope === 'wide'
+              ? `${choices[0].label}${folderName ? ` in ${folderName}` : ''}?`
               : `Always allow this exact command${folderName ? ` in ${folderName}` : ''}?`}
         </p>
-        {command && (
+        {(command ?? (editAsk ? filePath : undefined)) && (
           <p className="text-2xs leading-relaxed text-fg-2 bg-inset/70 px-2 py-1.5 rounded-sm break-all">
-            {command}
+            {command ?? filePath}
           </p>
         )}
         {denyListed && (
@@ -849,15 +878,15 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
         {/* The width choice. Only rendered when the derivation actually produced
             two — a named grant replaces its exact rung rather than sitting beside
             it, so every `git push` lands on the single-option path. */}
-        {canChooseAdmin ? <AdminApprovalChoices scope={adminApprovalScope} onChange={setAdminApprovalScope} responding={responding} /> : grantOptions.length > 1 && (
+        {canChooseAdmin ? <AdminApprovalChoices scope={adminApprovalScope} onChange={setAdminApprovalScope} responding={responding} /> : choices.length > 1 && (
           <RadioGroup
-            options={grantOptions.map((o) => o.scope)}
+            options={choices.map((o) => o.scope)}
             value={chosenScope}
             onChange={(next) => setGrantPick(next as GrantScope)}
             aria-label="How much to allow"
             className="flex flex-col gap-1.5 pt-0.5"
           >
-            {grantOptions.map((o) => (
+            {choices.map((o) => (
               <button
                 key={o.scope}
                 type="button"
@@ -867,7 +896,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
               >
                 <Radio checked={chosenScope === o.scope} onChange={() => setGrantPick(o.scope)} className="mt-0.5" />
                 <span className="text-2xs text-fg-2 break-all">
-                  {o.scope === 'exact' ? 'Only this exact command' : o.label}
+                  {o.scope === 'exact' ? (editAsk ? 'Only this file' : 'Only this exact command') : o.label}
                 </span>
               </button>
             ))}
@@ -877,6 +906,12 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
             the two cases that re-ask anyway (a chained command, a flag that
             changes what the command does) — the after-the-fact explanation was
             deliberately dropped, so this line is load-bearing. Settled R2·C. */}
+        {/* Q-1: a joined-up command's "each part" choice lists what will be remembered, one line per part. */}
+        {!canChooseAdmin && chosen?.parts && chosen.parts.length > 0 && (
+          <ul aria-label="What will be remembered" className="list-disc pl-4 space-y-0.5 text-2xs text-fg-2 break-all">
+            {chosen.parts.map((part) => <li key={part}>{part}</li>)}
+          </ul>
+        )}
         {!canChooseAdmin && chosen && (
           <p className="text-3xs text-fg-muted leading-relaxed">{chosen.limits}</p>
         )}
@@ -941,7 +976,14 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     // paint an accent ring on top of this one on the selected button. Left alone
     // on purpose; don't "finish the migration" by adding FOCUS_RING here.
     <div className={bare ? 'space-y-1.5' : 'px-3 py-2 border-t border-edge bg-inset/30 space-y-1.5'}>
-    <div className="flex items-center gap-2">
+    {/* Ask first, websites: the question names the site, like the other asks' headings
+        ("Always allow this exact command?"), so the person never has to infer it from
+        the card's header line. */}
+    {siteAsk && <p className="text-xs font-medium text-fg-2 break-all">Visit {site}?</p>}
+    {custom && <p className="text-xs font-medium text-fg-2 break-words">{custom.question}</p>}
+    {/* WHY flex-wrap: an edit ask has four buttons; at phone width a whole button dropping to the next row reads
+        cleaner than a label split in two (same as OutsideCommentsAsk). */}
+    <div className="flex flex-wrap items-center gap-2">
       <button
         ref={el => { buttonsRef.current[0] = el; }}
         disabled={responding}
@@ -950,21 +992,35 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       >
         Yes
       </button>
+      {/* Q-2: edits only. Allows edits until this chat ends; nothing is saved to Settings.
+          WHY this label and colour (round-3 deck E-1, "not how we've styled this anywhere else"): it copies the one
+          existing chat-long button, OutsideCommentsAsk's "Allow for this chat" — same words, same blue — instead of
+          the pale one-off green it had. */}
+      {editAsk ? (
+        <button
+          ref={el => { buttonsRef.current[chatIdx] = el; }}
+          disabled={responding}
+          onClick={() => handleRespond({ decision: { behavior: 'allow' }, allowEditsForChat: true })}
+          className={`px-3 ${pad} text-xs font-medium rounded-lg whitespace-nowrap ${BROAD_ALLOW_COLORS} transition-colors disabled:opacity-50 ${focusIdx === chatIdx ? ring : ''}`}
+        >
+          Allow for this chat
+        </button>
+      ) : null}
       {canAlwaysAllow ? (
         <button
-          ref={el => { buttonsRef.current[1] = el; }}
+          ref={el => { buttonsRef.current[alwaysIdx] = el; }}
           disabled={responding}
           onClick={onAlwaysAllow}
-          className={`px-3 ${pad} text-xs font-medium rounded-lg ${BROAD_ALLOW_COLORS} transition-colors disabled:opacity-50 ${focusIdx === 1 ? ring : ''}`}
+          className={`px-3 ${pad} text-xs font-medium rounded-lg ${BROAD_ALLOW_COLORS} transition-colors disabled:opacity-50 ${focusIdx === alwaysIdx ? ring : ''}`}
         >
           Always allow
         </button>
       ) : null}
       <button
-        ref={el => { buttonsRef.current[canAlwaysAllow ? 2 : 1] = el; }}
+        ref={el => { buttonsRef.current[noIdx] = el; }}
         disabled={responding}
         onClick={() => handleRespond({ decision: { behavior: 'deny' } })}
-        className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-red-100 transition-colors disabled:opacity-50 ${focusIdx === (canAlwaysAllow ? 2 : 1) ? ring : ''}`}
+        className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-red-100 transition-colors disabled:opacity-50 ${focusIdx === noIdx ? ring : ''}`}
       >
         No
       </button>
@@ -981,9 +1037,24 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       {floorStop && (
         <p className="text-3xs text-fg-muted leading-relaxed">{floorAskNote(floorStop)}</p>
       )}
+      {/* What each answer covers, in words — Yes is per chat (not per page) and
+          Always allow is per site and folder, which the buttons alone cannot say. */}
+      {siteAsk && (
+        <p className="text-3xs text-fg-muted leading-relaxed">
+          Yes lets the assistant visit {site} for the rest of this chat.
+          {canAlwaysAllow ? ` Always allow remembers ${site}${folderName ? ` in ${folderName}` : ''}.` : ''}
+        </p>
+      )}
+      {custom?.note && <p className="text-3xs text-fg-muted leading-relaxed">{custom.note}</p>}
       {/* D2: the promise "Always allow" is about to make, in the user's words.
           Gated on canAlwaysAllow so it never describes a button that isn't
           rendered — the failure the noGrantNote above exists to avoid. */}
+      {editAsk && (
+        <p className="text-3xs text-fg-muted leading-relaxed">
+          {/* WHY shorter (round-3 E-1): one clause, in the same words as the button, like OutsideCommentsAsk's note. */}
+          Allow for this chat covers edits in this project until the chat ends.
+        </p>
+      )}
       {canAlwaysAllow && alwaysAllowNote && (
         <p className="text-3xs text-fg-muted leading-relaxed">{alwaysAllowNote}</p>
       )}
@@ -1323,9 +1394,11 @@ interface Props {
   // the "lifted card" color only shows inside groups; standalone cards stay
   // transparent and inherit the bubble color.
   inGroup?: boolean;
+  /** A permission ask that is not a tool call (the assistant browser's): same card, the caller's words and answer. */
+  ask?: ToolCardAsk;
 }
 
-export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }: Props) {
+export default React.memo(function ToolCard({ tool, sessionId, inGroup = false, ask }: Props) {
   // Seed from the module-level mode so a card that mounts AFTER Ctrl+O fired
   // (e.g. when its parent tool group just opened) starts in the right state.
   // Chatsearch cards used to force-open here (their whole point was the
@@ -1373,7 +1446,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   // the helper or command it acts on — look up that one name (a narrow selector; every
   // other card has no target and subscribes to nothing).
   const targetLabel = useBackgroundTarget(sessionId, managementTargetId(tool.toolName, tool.input));
-  const display = friendlyToolDisplay(tool, {
+  const display = ask ? { label: ask.label, detail: ask.detail ?? '' } : friendlyToolDisplay(tool, {
     taskTargetTitle: taskTarget?.title,
     taskTargetRunning: taskTarget ? taskTarget.status === 'running' : undefined,
     targetLabel,
@@ -1402,6 +1475,8 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   // is pure ceremony. Render header only, no chevron, non-interactive, with a
   // lighter dashed border so it reads as an annotation, not an expandable card.
   const isCompactSkill = tool.toolName === 'Skill';
+  // A non-tool ask has nothing to expand: a plain header line like a compact skill's, with the normal border.
+  const staticHeader = isCompactSkill || !!ask;
   // Same helper the header label and the body use, so all three agree.
   const isChatsearch = !!describeChatsearchCall(tool);
 
@@ -1467,7 +1542,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
       {runIcon === 'stopped' && (
         <span className="text-4xs uppercase tracking-wide text-fg-muted shrink-0">stopped</span>
       )}
-      {!isCompactSkill && (
+      {!staticHeader && (
         <span data-testid="tool-card-chevron" className="shrink-0 inline-flex">
           <ChevronIcon className="w-3.5 h-3.5 text-fg-muted" expanded={expanded} />
         </span>
@@ -1478,8 +1553,8 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   return (
     <div className={`${cardBorder} rounded-lg overflow-hidden ${inGroup ? 'bg-inset' : ''}`} data-tool-use-id={tool.toolUseId}>
       {/* Header */}
-      {isCompactSkill ? (
-        <div className={headerClass}>{headerContent}</div>
+      {staticHeader ? (
+        <div className={isCompactSkill ? headerClass : 'w-full flex items-center gap-1.5 px-3 py-1.5 text-left select-none'}>{headerContent}</div>
       ) : (
         <button onClick={() => setExpanded(!expanded)} className={headerClass}>
           {headerContent}
@@ -1589,8 +1664,9 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         ) : (
           <PermissionButtons
             requestId={tool.requestId}
+            custom={ask && { question: ask.question, note: ask.note, answer: ask.answer }}
             // A helper's request is click-only — see PermissionButtons.noKeyboard.
-            noKeyboard={!!tool.specialist}
+            noKeyboard={!!tool.specialist || !!ask?.noKeyboard}
             suggestions={tool.permissionSuggestions}
             denyListed={tool.denyListed}
             toolName={tool.toolName}
@@ -1598,6 +1674,8 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             specialistName={tool.specialist?.title}
             permissionMode={tool.permissionMode}
             command={typeof (tool.input as any)?.command === 'string' ? (tool.input as any).command : undefined}
+            filePath={typeof (tool.input as any)?.file_path === 'string' ? (tool.input as any).file_path : undefined}
+            chainsHonoured={tool.chainsHonoured}
             folderName={sessionCwd ? basename(sessionCwd) : undefined}
             // Budget gates are a plain Yes/No "Continue?" — no "Always allow".
             // `tool.external` joins them: the engine forces an ask for every path
@@ -1625,10 +1703,11 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             // lookup POSITIVELY resolves (never shown-then-hidden), and an
             // unresolved hire must never be offered a grant optimistically —
             // we would not know which width it was even asking for.
+            site={tool.toolName === 'WebFetch' ? siteKeyFor((tool.input as any)?.url) : undefined}
             floorStop={tool.floorStop}
             // `tool.floorStop`: a floor (protected-folder removal, secret file)
             // forced this ask below every rule, so a grant could never skip it.
-            suppressAlwaysAllow={tool.toolName === 'max_steps' || tool.toolName === 'doom_loop' || tool.external === true
+            suppressAlwaysAllow={!!ask?.noAlways || tool.toolName === 'max_steps' || tool.toolName === 'doom_loop' || tool.external === true
               || !!tool.floorStop
               || (tool.toolName === 'Task' && !!tool.input?.task_id)
               || (tool.toolName === 'Task' && !tool.input?.task_id && !hireDefinition)
@@ -1651,9 +1730,10 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
                     ? `Always allow covers this helper in ${grantFolderName(tool.input?.work_dir, sessionCwd)} only, because it is defined inside the project. If its file changes, you'll be asked again.`
                     : undefined)
               : undefined}
-            onResponded={onRespondedCb}
-            onFailed={onFailedCb}
-            onAnswerNow={answerNow}
+            // A non-tool ask has no tool record or phone pending-answer to update: its `answer` is the whole round trip.
+            onResponded={ask ? undefined : onRespondedCb}
+            onFailed={ask ? undefined : onFailedCb}
+            onAnswerNow={ask ? undefined : answerNow}
             answerUnconfirmed={tool.answerUnconfirmed}
           />
         );
@@ -1692,7 +1772,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
       {/* Expanded details — per-tool parsed views, raw fallback otherwise.
           Skill cards never render a body (the only response is the redundant
           "Launching skill: X" line). */}
-      {!isCompactSkill && expanded && (
+      {!staticHeader && expanded && (
         <div data-testid="tool-card-body">
           <ToolBody tool={tool} sessionId={sessionId} />
         </div>

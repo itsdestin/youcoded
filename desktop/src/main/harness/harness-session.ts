@@ -11,6 +11,7 @@
 // surface is FROZEN — this driver emits ONLY the pre-existing TranscriptEventType
 // values; max_steps and doom_loop surface as PERMISSION ASKS (askUser), never as
 // new event types.
+import { guardDownload } from './download-guard';
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow } from '../providers/context-overflow';
@@ -37,12 +38,15 @@ import type { PermissionDecision, PermissionRule } from '../../shared/permission
 import { adminRuleFor } from '../../shared/admin-approval';
 import { applyAdminApproval } from './admin-approval';
 import { bashGrantOptions, type GrantScope } from '../../shared/bash-grant-shapes';
+import { folderRulesFor, isFileEditTool } from '../../shared/edit-grants';
+import { getShell } from './tools/bash';
 import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServices } from './tools/types';
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
 import { outsideCommentsVerdict } from './tools/doc-comments-tools';
 import { syncBrowserTools } from './tools/browser';
 import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
+import { protectedConfigStop } from './tools/protected-config';
 import { adminCommandVerdict, refuseMessage, visibleSudoLines } from './tools/admin-command';
 import * as os from 'os';
 import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote, withEdgeCap } from './image-support';
@@ -143,21 +147,32 @@ function isExistingFile(absPath: string): boolean {
  *  goes through here, merging in `specialist` itself (this
  *  function has no concept of a specialist key — it's the same builder a
  *  root session's own ask uses). */
-export function rememberedRuleFor(
+export function rememberedRulesFor(
   toolName: string,
   subject: string | undefined,
   scope: GrantScope | undefined,
-): PermissionRule | null {
+  cwd?: string,
+  opts: { chains?: boolean } = {},
+): PermissionRule[] {
   if (toolName === 'Bash' && typeof subject === 'string') {
     // The subject is passed through untouched — bashGrantOptions does not trim,
     // so the exact rung is byte-identical to what the engine compares later.
-    const options = bashGrantOptions(subject);
+    const options = bashGrantOptions(subject, opts);
     // Empty means no grant of any width may be offered (a bare `git push`, whose
     // target is not in the command and changes underneath the grant). Fail closed.
-    if (options.length === 0) return null;
+    if (options.length === 0) return [];
     // Fall back to the NARROWEST option when the requested width was not offered
     // for this command — never widen past what bashGrantOptions produced.
-    return (options.find((o) => o.scope === (scope ?? 'exact')) ?? options[0]).rule;
+    const picked = options.find((o) => o.scope === (scope ?? 'exact')) ?? options[0];
+    // Q-1: a joined-up command's "each part on its own" choice stores one rule per part.
+    return picked.rules ?? [picked.rule];
+  }
+  // Q-3: "files in this folder" on an edit stores a folder rule for Edit AND Write (so a NEW file in the folder is
+  // covered too). WHY the exact fallback: if the folder cannot be derived (a path outside the project, a `..`), the
+  // narrowest grant is the only honest one. Secret files and outside files never get this far: the card hides Always allow.
+  if (scope === 'folder' && isFileEditTool(toolName) && typeof subject === 'string') {
+    const folderRules = folderRulesFor(subject, cwd);
+    if (folderRules) return folderRules;
   }
   // Fix (Critical 1, final review): Task's subject is undefined ONLY for a
   // task_id management call (steer/resume/interrupt), which never carries a
@@ -172,12 +187,13 @@ export function rememberedRuleFor(
   // call — mirrors the existing "no grant possible" precedent (Bash commands
   // with no safe width, e.g. bare `git push`, above return null the same way).
   // The ask itself still resolves 'allow' for this one call either way.
-  if (toolName === 'Task' && subject === undefined) return null;
-  if (subject === undefined) return { tool: toolName, action: 'allow' };
+  if (toolName === 'Task' && subject === undefined) return [];
+  if (subject === undefined) return [{ tool: toolName, action: 'allow' }];
   // Non-Bash subjects are literal paths / ids. match:'exact' makes them mean what
   // the confirm always claimed — a path containing '*' was a wildcard grant.
-  return { tool: toolName, pattern: subject, action: 'allow', match: 'exact' };
+  return [{ tool: toolName, pattern: subject, action: 'allow', match: 'exact' }];
 }
+
 import { formatAnswers } from './tools/ask-user-question';
 import { formatArgErrors } from './tools/arg-errors';
 import { parseToolArgs } from './tool-args';
@@ -242,7 +258,7 @@ export interface HarnessSessionOpts {
   takeReadyBusyMessage?: () => ({ id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; restore?: () => void } | undefined);
   /** Pure permission decision for (tool, subject) — the configured layers
    *  (preset/mode/deny-list/remembered). Absent → every gated tool asks. */
-  decide?: (tool: string, subject: string | undefined) => Promise<PermissionDecision>;
+  decide?: (tool: string, subject: string | undefined, where?: { shellCwd?: string; envChanged?: boolean }) => Promise<PermissionDecision>;
   /** Raise an interactive permission ask (broker.ask bound to this session).
    *  Also the surface for the max_steps / doom_loop budget asks. */
   askUser?: (req: AskRequest) => Promise<AskDecision>;
@@ -293,6 +309,8 @@ export interface HarnessSessionOpts {
    *  either check alone still cannot let a specialist spawn its own
    *  specialists. Absent/false for every ordinary (non-child) session. */
   isSpecialistChild?: boolean;
+  /** A helper reads the sites its parent chat already approved (Ask first). */
+  parentApprovedSites?: () => ReadonlySet<string>;
   /** Task 10 (plan 1b): directories checkPathGuard treats as internal to THIS
    *  session — readable without an external_directory ask, the same way
    *  Bash's own spillRoot() is (tools/guards.ts). Wired by NativeSessionHost
@@ -865,11 +883,21 @@ export class HarnessSession extends EventEmitter {
   private shellEnv: Record<string, string> | null = null;
   /** Ephemeral, root-only approval across all outside folders; never serialized. */
   private externalEditsAllowed = false;
+  /** Q-2: "Allow for this chat" on an edit card — edits and new files INSIDE the project are allowed until this
+   *  conversation ends. Memory-only, root-only (a helper never holds a chat-wide grant), reset on resume; never
+   *  written to permissions.json. Path guards (secrets, outside the project) and the saved-permissions floor still
+   *  ask first: it only quiets the ordinary "may I change this file?" card. */
+  private editsAllowedForChat = false;
   /** Card #207: "Allow for this chat" on a comment tool's outside-file ask.
    *  Covers comments on ANY outside plain file (Destin chose any-file over
    *  per-folder, 2026-10-29), never the files themselves; same memory-only,
    *  root-only, reset-on-resume contract as externalEditsAllowed. */
   private outsideCommentsAllowed = false;
+  /** Ask-first websites: sites (shared/site-key.ts) the person said Yes to in this
+   *  chat, so a second page on the same site does not ask again. Memory-only and
+   *  reset on resume like the grants above. A helper writes only its OWN set; it
+   *  also reads its parent's (opts.parentApprovedSites), never the other way. */
+  readonly approvedSites = new Set<string>();
   private adminCommandsAllowed = false; // memory-only consent, never serialized
   private retryDelays: number[];
   // Resolved capability profile (Task 5). Drives the doom-loop window + tool
@@ -1066,7 +1094,9 @@ export class HarnessSession extends EventEmitter {
     this.shellCwd = null; // a resumed session starts back at the workspace root
     this.shellEnv = null; // same contract — a resumed session starts with a fresh env too
     this.externalEditsAllowed = false; // consent never survives a resume
+    this.editsAllowedForChat = false;
     this.outsideCommentsAllowed = false;
+    this.approvedSites.clear();
     this.adminCommandsAllowed = false;
   }
 
@@ -4132,15 +4162,22 @@ export class HarnessSession extends EventEmitter {
     }
     const isAdmin = adminVerdict?.kind === 'admin';
     // 4. Re-read configured rules (including mode-scoped admin consent) on every call.
-    const configuredBase: PermissionDecision = externalAsk
+    const decidedBase: PermissionDecision = externalAsk
       ? { action: 'ask', denyListed: false }
-      : await permissionCallback(() => this.opts.decide?.(call.toolName, subject) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
+      : await permissionCallback(() => this.opts.decide?.(call.toolName, subject, { shellCwd: this.shellCwd ?? undefined, envChanged: this.shellEnv !== null && Object.keys(this.shellEnv).length > 0 }) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
+    // Ask first, websites: a site already approved in this chat (here, or by the parent
+    // chat for a helper) turns the first-visit ask into an allow. Only an ASK is
+    // softened: a deny rule the person set for the site still denies.
+    const siteApproved = call.toolName === 'WebFetch' && typeof subject === 'string'
+      && (this.approvedSites.has(subject) || (this.opts.parentApprovedSites?.().has(subject) ?? false));
+    const configuredBase: PermissionDecision = siteApproved && decidedBase.action === 'ask' && !decidedBase.denyListed
+      ? { action: 'allow', denyListed: false } : decidedBase;
     let skipUpfrontAdminPassword = isAdmin && (this.adminCommandsAllowed || configuredBase.passwordlessAdminAllowed === true);
     const configured = isAdmin ? applyAdminApproval(configuredBase, subject!, skipUpfrontAdminPassword) : configuredBase;
     const checkOtherFloors = isBash && (!isAdmin || skipUpfrontAdminPassword);
     const rmFloor = checkOtherFloors ? destructiveRmVerdict(subject!, bashCtx) : null;
     const secretFloor = checkOtherFloors && !rmFloor ? secretPathVerdict(subject!, bashCtx) : null;
-    const floorStop: FloorStop | undefined = isAdmin && !skipUpfrontAdminPassword ? 'admin' : (rmFloor?.kind ?? secretFloor?.kind);
+    const floorStop: FloorStop | undefined = isAdmin && !skipUpfrontAdminPassword ? 'admin' : (rmFloor?.kind ?? secretFloor?.kind ?? protectedConfigStop(call.toolName, subject, this.opts.cwd, isBash)); // saved permissions/hooks always ask (tools/protected-config.ts)
     if (floorStop) log('INFO', 'HarnessSession', 'a floor below the permission rules forced an ask', { sessionId: this.opts.sessionId, floor: floorStop });
     // denyListed: true so Full auto shows its stop band (worded per floorStop —
     // deny-list-copy.ts) like any deny-list stop, instead of silently running.
@@ -4157,7 +4194,13 @@ export class HarnessSession extends EventEmitter {
     // retries the identical call until its step budget is gone. The generic
     // sentence stays the default for every decide() that supplies no message.
     if (decision.action === 'deny') return { text: decision.message ?? `The ${call.toolName} call was blocked by a permission rule.`, isError: true };
-    if (decision.action === 'ask') {
+    // Q-2: the person already said "for this conversation" to file edits. Only an ordinary ask is softened: a deny, a
+    // deny-list stop and every forced ask (outside the project, secrets floor, saved-permissions floor) still happen.
+    const editsPreApproved = decision.action === 'ask' && !decision.denyListed && !forcedAsk && this.editsAllowedForChat
+      && !this.opts.isSpecialistChild && (call.toolName === 'Write' || call.toolName === 'Edit');
+    // Set below when the person's Always allow saves a one-website download rule (see 4b).
+    let ask_savedDownloadHost: string | undefined;
+    if (decision.action === 'ask' && !editsPreApproved) {
       // An ABSENT handler is a WIRING gap, not a user cancel — surface it as a
       // decline RESULT (the model can't proceed) instead of the 'interrupted'
       // sentinel, so a misconfiguration never masquerades as an ESC/interrupt.
@@ -4176,10 +4219,14 @@ export class HarnessSession extends EventEmitter {
       // was ever asked. Falls back to the real-decline copy
       // (still accurate for an actual respond({behavior:'deny'})).
       if (d.behavior !== 'allow') return { text: d.message ?? 'The user declined this action. Ask what they would like instead, or try a different approach.', isError: true };
+      // Yes on a website's first-visit card covers that site for the rest of this chat.
+      if (call.toolName === 'WebFetch' && typeof subject === 'string') this.approvedSites.add(subject);
       // WHY: only the specific outside-file ask can authorize this memory-only
       // exception. Child sessions never inherit it, even when sharing a parent.
       if (externalAsk && !this.opts.isSpecialistChild && d.allowExternalEditsForSession === true
         && (call.toolName === 'Write' || call.toolName === 'Edit')) this.externalEditsAllowed = true;
+      if (d.allowEditsForChat === true && !externalAsk && !floorStop && !this.opts.isSpecialistChild
+        && (call.toolName === 'Write' || call.toolName === 'Edit')) this.editsAllowedForChat = true;
       // Card #207: the comment-tool counterpart — main assistant only.
       if (externalAsk && commentsReach.kind === 'outside' && !this.opts.isSpecialistChild
         && d.allowOutsideCommentsForSession === true) this.outsideCommentsAllowed = true;
@@ -4197,8 +4244,11 @@ export class HarnessSession extends EventEmitter {
         // The card sent a width, not a pattern — rememberedRuleFor derives the
         // rule here, in main. null means this command may not be remembered at
         // any width, so nothing is emitted.
-        const rule = rememberedRuleFor(call.toolName, subject, d.grantScope);
-        if (rule) this.emit('remember-rule', rule);
+        for (const rule of rememberedRulesFor(call.toolName, subject, d.grantScope, this.opts.cwd, { chains: getShell().label !== 'PowerShell' })) {
+          this.emit('remember-rule', rule);
+          // WHY: they chose "this website only", so this first run is guarded too. (guardDownload re-checks the command's own website.)
+          if (rule.match === 'download-host') ask_savedDownloadHost = rule.pattern?.split(' ')[1];
+        }
       }
     }
 
@@ -4218,9 +4268,19 @@ export class HarnessSession extends EventEmitter {
       }
     }
 
+    // 4b. Same-website guard (review deck round 3, Q-7): only a link-following download allowed by a saved one-website rule
+    //     (or just saved with Always allow) is walked and rewritten; a plain Yes, exact grant or mode runs as typed.
+    let execArgs = args;
+    const guardHost = decision.action === 'allow' ? decision.downloadGuard?.host : ask_savedDownloadHost;
+    if (guardHost !== undefined && isBash && typeof subject === 'string') {
+      const g = await guardDownload(subject, guardHost, { signal: this.abort!.signal });
+      if (g.kind === 'stopped') return { text: g.message, isError: true };
+      execArgs = { ...(args as object), command: g.command } as typeof args;
+    }
+
     // 5. Execute (defineTool owns truncation + the actionable-error catch).
     this.toolCallCount += 1;
-    return tool.execute(args, {
+    return tool.execute(execArgs, {
       sessionId: this.opts.sessionId,
       cwd: this.opts.cwd,
       signal: this.abort!.signal,
