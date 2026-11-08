@@ -46,6 +46,12 @@ const EXCEPTIONS: Exception[] = [
       'Minimalist layout fades the transcript with ChatEdgeFade, a masked wallpaper copy laid over it.',
   },
   {
+    file: 'components/project-view/ProjectView.tsx',
+    has: 'flex-1 min-h-0 flex flex-col max-sm:overflow-y-auto sm:overflow-hidden',
+    why: 'The projects page scrolls only on a phone, and holds frosted surfaces (the files filter menu, the project ' +
+      'card, the tab switcher): a mask would make it a backdrop root and strip their blur (Destin, 2026-11-07).',
+  },
+  {
     file: 'components/SessionPreviewPane.tsx',
     has: 'relative min-h-0 flex-1 overflow-y-auto py-3',
     why: 'The conversation preview\'s bubbles are frosted like the chat\'s — same backdrop-root reason.',
