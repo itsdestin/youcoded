@@ -303,9 +303,16 @@ export function useEntryFolding(
       // 1,500 px lead inside a 100 ms wait (Chrome 10x CPU throttle: the first-draw-stability journey
       // showed a blank spacer in view). One observer callback already batches every entry that crossed
       // the line together, so there is nothing left to coalesce; the timer only added latency.
+      // WHY flushSync here too, not a plain state update: flushUnfold takes the entries off the folded list at
+      // once, but a plain update is DRAWN whenever React's scheduler gets to it, which on a busy page is several
+      // frames later. Meanwhile the scroll listener below finds nothing left to unfold (the list already says
+      // "drawn"), so the reader saw blank spacers in view, and when the late draw finally landed at the top of
+      // the conversation (scrollTop 0) the shorter real height could no longer be corrected: a lasting jump.
+      // Both seen in the first-draw-stability journey under Chrome CPU throttling, 2026-11-08 (logged: scroll
+      // handler "27 folded -> 27" while spacers were in the window). Committing here draws them in this task.
       if (enteredBand) {
         if (unfoldTimer.current != null) { clearTimeout(unfoldTimer.current); unfoldTimer.current = null; }
-        flushUnfold();
+        flushSync(() => flushUnfold());
       }
     }, { root, rootMargin: FOLD_ROOT_MARGIN });
     observer.current = io;
