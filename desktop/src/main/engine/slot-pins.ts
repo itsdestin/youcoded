@@ -29,7 +29,9 @@ export class SlotPins {
 
   /** The engine's real slot count for a model (from its /props). */
   setSlotCount(modelId: string, n: number): void {
-    if (this.counts.get(modelId) === n) return;
+    // Compared with the count IN USE (the default before the engine answered):
+    // the engine confirming the default must not drop every chat's slot.
+    if ((this.counts.get(modelId) ?? DEFAULT_SLOTS) === n) { this.counts.set(modelId, n); return; }
     this.counts.set(modelId, n);
     this.pins.delete(modelId); // slot numbers from the old count may not exist
   }

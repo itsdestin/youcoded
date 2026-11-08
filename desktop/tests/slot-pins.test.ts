@@ -14,6 +14,14 @@ describe('SlotPins', () => {
     expect(p.slotFor('m', 'chat-a')).toBe(a);
   });
 
+  it('the engine confirming the slot count it was assumed to have keeps every chat on its slot', () => {
+    const p = new SlotPins();
+    const a = p.slotFor('m', 'a');
+    p.setSlotCount('m', 4);
+    expect(p.slotFor('m', 'b')).not.toBe(a);
+    expect(p.slotFor('m', 'a')).toBe(a);
+  });
+
   it('requests that are not a chat share the last slot, which no chat is given', () => {
     const p = new SlotPins();
     p.setSlotCount('m', 4);
