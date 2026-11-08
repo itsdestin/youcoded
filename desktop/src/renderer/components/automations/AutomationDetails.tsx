@@ -93,25 +93,36 @@ export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = 
                 <Group label="Permissions">
                   <ToolsField tools={draft.tools} unlisted={draft.unlisted} onChange={(tools) => change({ tools })} onUnlisted={(unlisted) => change({ unlisted })} menuOpen={addMenuOpen} onMenu={onAddMenu} />
                 </Group>
+                {/* WHY Runs on moved under Permissions (Destin: "too busy … poor visual hierarchy"): the
+                    right column held five groups and the left three, so the popup read as one long
+                    scroll on the right. Instruction / when / what it may do / where it runs now read
+                    down the left as the job's own definition; link, model and the rarely-changed
+                    advanced rules sit on the right. */}
+                <Group label="Runs on"><DevicesField devices={draft.devices} onChange={(devices) => change({ devices })} /></Group>
               </div>
               <div className="flex flex-col gap-4">
                 {/* WHY links, not one page (plan deck Q-pagejobs / Q-deletepage: "an automation should be
                     something i can assign to any page/project, or multiple"): one box per link. */}
                 <Group label="Linked to"><LinksField links={draft.links} onChange={(links) => change({ links })} /></Group>
+                {/* WHY Model and its usage are ONE card (guide "Cards for things … a card that holds one idea
+                    keeps it together; never split one idea into separate boxes"): what you pay for a run is
+                    a fact about the model, and two labelled cards for it was the busiest spot on the right. */}
                 <Group label="Model">
                   <ModelPicker value={choiceOf(draft.model)} runsOn="host" emptyLabel={draft.model} triggerClassName=""
                     onSelect={(c, label) => change({ model: label?.model ?? draft.model, subscription: c.runtime === 'claude' || /chatgpt/i.test(label?.provider ?? ''), limit: draft.limit ?? 5 })} />
+                  {/* A new job on a plan has nothing used yet and no limit, so the row would say nothing. */}
+                  {!(isNew && draft.subscription) && <SpendField job={draft} onLimit={(limit) => change({ limit })} />}
                 </Group>
-                {/* A new job on a plan has nothing used yet and no limit, so the card would say nothing. */}
-                {!(isNew && draft.subscription) && <Group label={draft.subscription ? 'Usage' : 'Spending'}><SpendField job={draft} onLimit={(limit) => change({ limit })} /></Group>}
-                {/* WHY "Advanced settings" as fold-out cards, all closed (plan deck round 3 C-rules: "rules
-                    should become Advanced Settings. each … an expandable card … all should start collapsed.
-                    each should explain in plain, concise terms what the option does with pros/cons. the
-                    titles … more clear/concise/statement-like"). Each closed card's title says what the job
-                    does now, so the list reads without opening anything; opening one shows a sentence on
-                    what it covers and its choices, each with a pro and a con. */}
-                <Group label="Advanced settings">
-                  <OptionFold defaultOpen={openFirst} title={draft.whenAsk === 'skip' ? 'Skips steps that need your OK' : `Waits ${waitWords(draft.waitHours)} for your OK`}
+                {/* WHY "Advanced settings" stays four closed fold-outs, now with a short NAME and the
+                    current choice under it (plan deck round 3 C-rules: "should become Advanced Settings …
+                    expandable … all should start collapsed … explain in plain, concise terms what the
+                    option does with pros/cons"). Before, each closed row was a whole sentence, so the list
+                    was four long lines with arrows. Name + current state is how every Settings row reads,
+                    so the list scans without opening anything. They are boxed rows straight under the
+                    label (the Settings list), not rows inside another card: a fold is already a box. */}
+                <section className="flex flex-col gap-2">
+                  <SectionLabel>Advanced settings</SectionLabel>
+                  <OptionFold defaultOpen={openFirst} name="Approvals" title={draft.whenAsk === 'skip' ? 'Skips steps that need your OK' : `Waits ${waitWords(draft.waitHours)} for your OK`}
                     about="What a run does when it reaches something set to Asks first."
                     value={draft.whenAsk} onChange={(v) => change({ whenAsk: v })}
                     options={[
@@ -122,7 +133,7 @@ export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = 
                       choices={[['next', 'Its next run'], ['1', '1 hour'], ['4', '4 hours'], ['12', '12 hours'], ['24', '24 hours']]} />}
                   </OptionFold>
                   {draft.whenAsk === 'wait' && (
-                    <OptionFold title={({ skip: 'Skips that step if you don\'t answer', stop: 'Stops the run if you don\'t answer', fallback: 'Does something else if you don\'t answer' } as const)[draft.noAnswer]}
+                    <OptionFold name="No answer" title={({ skip: 'Skips that step if you don\'t answer', stop: 'Stops the run if you don\'t answer', fallback: 'Does something else if you don\'t answer' } as const)[draft.noAnswer]}
                       about="What happens when the wait runs out with no answer."
                       value={draft.noAnswer} onChange={(v) => change({ noAnswer: v })}
                       options={[
@@ -135,7 +146,7 @@ export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = 
                   )}
                   {draft.start.kind !== 'button' && (<>
                     {/* Plan deck S-start note: another time, or other instructions (which can also change what it makes). */}
-                    <OptionFold title={({ run: 'Runs once on wake after a missed run', later: `Runs a missed run at ${draft.lateAt ?? '18:00'}`, fallback: 'Runs a missed run with other instructions', skip: 'Skips missed runs' } as const)[draft.late]}
+                    <OptionFold name="Missed runs" title={({ run: 'Runs once on wake after a missed run', later: `Runs a missed run at ${draft.lateAt ?? '18:00'}`, fallback: 'Runs a missed run with other instructions', skip: 'Skips missed runs' } as const)[draft.late]}
                       about="What happens when a run was due while the computer was off or YouCoded was closed."
                       value={draft.late} onChange={(v) => change({ late: v })}
                       options={[
@@ -148,7 +159,7 @@ export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = 
                       {draft.late === 'fallback' && <Textarea value={draft.lateFallback ?? ''} placeholder="Only look at today, and save a summary instead of emailing me." onChange={(e) => change({ lateFallback: e.target.value })} aria-label="Other instructions" />}
                     </OptionFold>
                     {/* Plan deck Q-overlap: "this should depend on the specific job". */}
-                    <OptionFold title={({ 'skip-new': 'Skips a new run while one is still going', 'stop-old': 'Stops the old run when a new one is due', both: 'Runs both when a new one is due early' } as const)[draft.overlap]}
+                    <OptionFold name="Overlapping runs" title={({ 'skip-new': 'Skips a new run while one is still going', 'stop-old': 'Stops the old run when a new one is due', both: 'Runs both when a new one is due early' } as const)[draft.overlap]}
                       about="What happens when its next run is due and the last one hasn't finished."
                       value={draft.overlap} onChange={(v) => change({ overlap: v })}
                       options={[
@@ -157,8 +168,7 @@ export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = 
                         ['both', 'Run both', 'Nothing is missed.', 'Two runs may do the same thing twice.'],
                       ]} />
                   </>)}
-                </Group>
-                <Group label="Runs on"><DevicesField devices={draft.devices} onChange={(devices) => change({ devices })} /></Group>
+                </section>
                 {atEnd && <ScrollHere />}
                 {/* No Notifications card: plan deck Q-notify-menu — "all system notifications will be built
                     together later … current notification building should just be limited to the orange
@@ -202,10 +212,19 @@ function TopCard({ job, isNew, onChange }: { job: AutomationSummary; isNew: bool
             <Chip>{job.model}</Chip>
           </ChipRow></div>
         </div>
-        {/* Round 2 B-new: no switch while creating — Create turns it on. */}
-        {!isNew && <Tooltip text={job.enabled ? 'Pause' : 'Turn on'} placement="bottom">
-          <span><Toggle checked={job.enabled} onChange={(on) => onChange({ enabled: on })} aria-label={job.enabled ? 'Pause' : 'Turn on'} /></span>
-        </Tooltip>}
+        {/* Round 2 B-new: no switch while creating — Create turns it on.
+            WHY Run now moved up beside the switch (Destin: "too busy … poor visual hierarchy"): it was a
+            full-width outlined bar under the ask, a third row of controls in the card. The two things you
+            do to the job as a whole now sit together at the top right; the ask below keeps the card's
+            only filled button (Allow), so the eye goes to what is waiting. */}
+        {!isNew && (
+          <div className="flex items-center gap-3 shrink-0">
+            <Button variant="secondary" size="sm" onClick={() => void runNow()}>Run now</Button>
+            <Tooltip text={job.enabled ? 'Pause' : 'Turn on'} placement="bottom">
+              <span><Toggle checked={job.enabled} onChange={(on) => onChange({ enabled: on })} aria-label={job.enabled ? 'Pause' : 'Turn on'} /></span>
+            </Tooltip>
+          </div>
+        )}
       </div>
       {job.waiting && (
         <Callout tone="warning" actionsPlacement="below"
@@ -218,11 +237,11 @@ function TopCard({ job, isNew, onChange }: { job: AutomationSummary; isNew: bool
           <div className="flex flex-col gap-2">
             <span>{job.waiting.action}</span>
             {job.waiting.detail && <div className={`${CARD_LEVEL_2} px-3 py-2 text-xs text-fg-2 whitespace-pre-wrap select-text`}>{job.waiting.detail}</div>}
-            <Textarea rows={2} value={note} placeholder="Note for the assistant (needed for Don't allow)" onChange={(e) => setNote(e.target.value)} aria-label="Note for the assistant" />
+            {/* WHY one line, not a two-line box: a note is a short steer, and the tall empty box made the ask the biggest thing in the popup. */}
+            <TextInput value={note} placeholder="Note (needed to not allow)" onChange={(e) => setNote(e.target.value)} aria-label="Note for the assistant" />
           </div>
         </Callout>
       )}
-      {!isNew && <Button variant="secondary" className="w-full" onClick={() => void runNow()}>Run now</Button>}
     </div>
   );
 }
@@ -290,8 +309,9 @@ function ToolsField({ tools, unlisted, onChange, onUnlisted, menuOpen, onMenu }:
     {tools.map((t) => (
       <div key={t.id} className={`${CARD_LEVEL_2} flex items-center gap-2 px-3 py-2`} data-automation-tool={t.id}>
         <div className="min-w-0 flex-1">
-          <div className="text-sm text-fg truncate">{t.label}</div>
-          <div className="text-2xs text-fg-muted truncate">{t.exact ?? t.source}</div>
+          {/* WHY wrapping, not truncated: "Read your chat list and…" cut off the one thing you need to read to decide. */}
+          <div className="text-sm text-fg break-words">{t.label}</div>
+          <div className="text-2xs text-fg-muted break-words">{t.exact ?? t.source}</div>
         </div>
         <ModeMenu mode={t.mode} name={t.label}
           onMode={(m) => onChange(tools.map((x) => (x.id === t.id ? { ...x, mode: m } : x)))}
@@ -307,8 +327,15 @@ function ToolsField({ tools, unlisted, onChange, onUnlisted, menuOpen, onMenu }:
         </React.Fragment>
       ))}
     </Menu></div>
-    <SettingRow variant="item" title="Other websites" control={<UnlistedMenu value={unlisted.sites} name="Other websites" onChange={(sites) => onUnlisted({ ...unlisted, sites })} />} />
-    <SettingRow variant="item" title="Other commands and files" control={<UnlistedMenu value={unlisted.commands} name="Other commands and files" onChange={(commands) => onUnlisted({ ...unlisted, commands })} />} />
+    {/* WHY the two catch-all rows are plain rows in ONE shared box under a small name, not two more
+        boxed rows with the same pill (guide "Lists of short names … plain rows inside one shared box"):
+        they are the defaults for everything NOT listed above, a different kind of thing from a listed
+        permission, and five identical boxes in a row made the card read as one flat list. */}
+    <div className="text-xs text-fg-muted mt-1">Anything not listed</div>
+    <div className={`${CARD_LEVEL_2} flex flex-col gap-1 px-3 py-2`}>
+      <SettingRow variant="item" header title="Websites" control={<UnlistedMenu value={unlisted.sites} name="Other websites" onChange={(sites) => onUnlisted({ ...unlisted, sites })} />} />
+      <SettingRow variant="item" header title="Commands and files" control={<UnlistedMenu value={unlisted.commands} name="Other commands and files" onChange={(commands) => onUnlisted({ ...unlisted, commands })} />} />
+    </div>
   </>);
 }
 
@@ -347,21 +374,23 @@ function ChoicePill<T extends string>({ name, value, choices, onChange }: { name
 /** One advanced setting as a fold-out card (closed by default): the title states what the job does
  *  now; open, a sentence on what it covers, then its choices, each with one pro and one con, and any
  *  follow-up field for the chosen one under the list. */
-function OptionFold<T extends string>({ title, about, value, onChange, options, defaultOpen = false, children }: {
-  title: string; about: string; value: T; onChange: (v: T) => void;
+function OptionFold<T extends string>({ name, title, about, value, onChange, options, defaultOpen = false, children }: {
+  name: string; title: string; about: string; value: T; onChange: (v: T) => void;
   options: [T, string, string, string][]; defaultOpen?: boolean; children?: React.ReactNode;
 }) {
   return (
-    <FoldRow title={title} defaultOpen={defaultOpen}>
-      <div className="flex flex-col gap-2">
+    <FoldRow title={name} description={title} defaultOpen={defaultOpen}>
+      <div className="flex flex-col gap-3">
         <div className="text-xs text-fg-muted">{about}</div>
-        <RadioGroup options={options.map(([v]) => v)} value={value} onChange={(v) => onChange(v as T)} aria-label={title} className="flex flex-col gap-1.5">
+        <RadioGroup options={options.map(([v]) => v)} value={value} onChange={(v) => onChange(v as T)} aria-label={name} className="flex flex-col gap-2">
           {options.map(([v, label, pro, con]) => (
             <button key={v} type="button" onClick={() => onChange(v)} className="flex items-start gap-2 text-left rounded-md px-1 -mx-1 state-layer">
               <Radio checked={value === v} onChange={() => onChange(v)} className="mt-0.5" />
               <span className="flex flex-col">
                 <span className="text-sm text-fg">{label}</span>
-                <span className="text-2xs text-fg-muted">+ {pro} − {con}</span>
+                {/* WHY two lines with words, not "+ … − …" on one: the signs ran together and read as a code. */}
+                <span className="text-2xs text-fg-muted">Good: {pro}</span>
+                <span className="text-2xs text-fg-muted">Catch: {con}</span>
               </span>
             </button>
           ))}
@@ -383,7 +412,7 @@ function LinksField({ links, onChange }: { links: AutomationLink[]; onChange: (l
   const [open, setOpen] = useState(false);
   const free = LINKABLE.map((g) => ({ ...g, items: g.items.filter((i) => !links.some((l) => l.id === i.id)) })).filter((g) => g.items.length > 0);
   return (<>
-    {links.length === 0 && <div className="text-xs text-fg-muted">Not linked</div>}
+    {/* WHY no "Not linked" line: the button under the label already says nothing is linked (guide "Say it once"). */}
     {links.map((l) => (
       <div key={l.id} className={`${CARD_LEVEL_2} flex items-center gap-2 px-3 py-2`} data-automation-link={l.id}>
         {l.icon && <PageGlyph icon={l.icon} className="w-4 h-4 text-fg-2 shrink-0" />}
@@ -396,7 +425,7 @@ function LinksField({ links, onChange }: { links: AutomationLink[]; onChange: (l
     ))}
     {free.length > 0 && (
       <Menu open={open} onOpenChange={setOpen} label="Link to a page or project" className="min-w-60"
-        trigger={<Button variant="secondary" className="w-full" onClick={() => setOpen((o) => !o)}>Link to a page or project</Button>}>
+        trigger={<Button variant="secondary" className="w-full" onClick={() => setOpen((o) => !o)}>{links.length === 0 ? 'Link to a page or project' : 'Add a link'}</Button>}>
         {free.map((g) => (
           <React.Fragment key={g.group}>
             <MenuNote><span className="text-2xs text-fg-muted">{g.group}</span></MenuNote>
@@ -414,7 +443,7 @@ function DevicesField({ devices, onChange }: { devices: AutomationDevice[]; onCh
   const on = devices.filter((d) => d.runs).length;
   return (<>
     {devices.map((d) => (
-      <SettingRow key={d.id} variant="item" title={d.here ? `${d.name} (this one)` : d.name}
+      <SettingRow key={d.id} variant="item" header title={d.here ? `${d.name} (this one)` : d.name}
         control={<Toggle checked={d.runs} onChange={(v) => onChange(devices.map((x) => (x.id === d.id ? { ...x, runs: v } : x)))} aria-label={`Runs on ${d.name}`} />} />
     ))}
     {on > 1 && <Callout tone="warning" compact>On for {on} devices, so it may run on each of them.</Callout>}
@@ -432,12 +461,13 @@ function ScrollHere() {
 
 function SpendField({ job, onLimit }: { job: AutomationSummary; onLimit: (n: number) => void }) {
   // A subscription run costs nothing extra, so it has no money limit; its use is still counted.
-  if (job.subscription) return <div className="text-sm text-fg">{tokenWords(job.usage.tokens)} <span className="text-xs text-fg-muted">this month</span></div>;
+  // WHY a plain row (name left, figure right) instead of its own card: it sits under the model in the same card now.
+  if (job.subscription) return <SettingRow variant="item" header title="Used this month" value={tokenWords(job.usage.tokens)} />;
   const limit = job.limit ?? 5;
   // One setting row (round 2 B-details: "i still dont love the styling of the spending limit box"):
   // the limit at the right, what's used under the title.
   return (
-    <SettingRow variant="item" title="Monthly limit" description={`${dollarWords(job.usage.dollars)} used`}
+    <SettingRow variant="item" header title="Monthly limit" description={`${dollarWords(job.usage.dollars)} used`}
       control={<div className="flex items-center gap-1"><span className="text-xs text-fg-2">$</span>
         <TextInput className="w-16" inputMode="decimal" value={String(limit)} onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) onLimit(n); }} aria-label="Monthly limit in dollars" /></div>} />
   );
