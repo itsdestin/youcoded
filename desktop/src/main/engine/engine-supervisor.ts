@@ -33,6 +33,7 @@ import { scanGgufCache, scanGgufCacheAsync } from './cache-scan';
 import { isFollowerPart } from '../../shared/gguf-split';
 import { renderPresetFile, writePresetFile } from './model-presets';
 import { openEngineLog, type EngineLog } from './engine-log';
+import { slotField } from './slot-pins';
 
 /** Everything the spawn reads out of `~/.youcoded/config.json` — re-read at
  *  EVERY spawn (and at every idle check), never frozen into the constructor. */
@@ -1491,7 +1492,7 @@ export class EngineSupervisor extends EventEmitter {
    *  immediately; the model poll (fast while loading) then tracks 'loading' +
    *  resident bytes → the progress bar. Routed through trackedFetch so it counts
    *  as activity (never reaped mid-load). */
-  async loadModel(modelId: string): Promise<void> {
+  async loadModel(modelId: string, slot?: number): Promise<void> {
     const base = await this.ensureRunning(); // http://127.0.0.1:port/v1
     // The outcome is EMITTED rather than returned. This warm-up is deliberately
     // not awaited (the caller returns at once so the UI can show 'loading'), and
@@ -1502,7 +1503,7 @@ export class EngineSupervisor extends EventEmitter {
     void this.trackedFetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1, stream: false }),
+      body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1, stream: false, ...slotField(slot) }),
     }).then(async (res: Response) => {
       let body = '';
       // Read the body only on a failure, and never let a body that cannot be

@@ -26,6 +26,7 @@ import {
 } from './model-presets';
 import type { BinaryCheckOptions, BinaryCheckResult } from './model-presets';
 import { LoadTimes } from './load-times';
+import { SlotPins, slotField } from './slot-pins';
 import { contextLengthFor } from '../models/fit-estimator';
 import { readManifest, removeManifest, markManifestComplete, isManifestComplete } from '../models/download-manifest';
 import { ManifestBackfill, defaultBackfillLookups, isStaleBackfillMiss } from '../models/manifest-backfill';
@@ -59,6 +60,8 @@ export interface LocalEngineHook {
    *  CLEARS the reading rather than leaving the previous reply's number
    *  standing under a newer one. Feeds the engine card's fact line. */
   recordReply(timings: ReplyTimings | null): void;
+  /** The engine slot for a request: a chat's own (its session id), or the shared spare (slot-pins.ts). */
+  slotFor?(modelId: string, key?: string): number | undefined;
 }
 
 /** Pick the asset to install: the preferred backend if it ships an asset for
@@ -380,6 +383,8 @@ export class EngineManager extends EventEmitter {
 
   /** Past load durations on this machine — the bar's estimate where bytes can't be measured. */
   private readonly loadTimes: LoadTimes;
+  /** Which engine slot each chat keeps (slot-pins.ts). Per run: slots empty when the engine restarts. */
+  private readonly slotPins = new SlotPins();
 
   constructor(
     private home: NativeHome,
@@ -1340,7 +1345,7 @@ export class EngineManager extends EventEmitter {
     if (!inst) throw new Error('The local engine is not installed yet.');
     await this.rebuildSupervisor(inst);
     await this.supervisor!.ensureServable(modelId);
-    await this.supervisor!.loadModel(modelId);
+    await this.supervisor!.loadModel(modelId, this.slotPins.slotFor(modelId)); // the spare slot: never a chat's reading
   }
 
   /** Is a llama-server process running right now? Asked by "Add vision" (design
@@ -1423,6 +1428,7 @@ export class EngineManager extends EventEmitter {
       },
       ensureServable: async (modelId: string) => this.ensureServable(modelId),
       recordReply: (timings) => this.recordReply(timings),
+      slotFor: (modelId, key) => this.slotPins.slotFor(modelId, key),
       // Bound lazily: the supervisor may not exist yet when the registry is
       // constructed; by the time the AI SDK fetches, ensureRunning built it.
       fetchImpl: () => (input: any, init?: any) => {
@@ -1547,6 +1553,7 @@ export class EngineManager extends EventEmitter {
       // existed, and its tests pinned the wrong name); `n_slots` stays as a
       // fallback for older llama.cpp builds a user may still be running.
       const totalSlots = resolveSlotCount(props?.total_slots ?? props?.n_slots);
+      if (totalSlots) this.slotPins.setSlotCount(modelId, totalSlots);
       const trained = this.trainedContextFor(modelId);
       // Fall back to the -c WE spawned the server with, not a blind constant.
       //
@@ -1834,6 +1841,7 @@ export class EngineManager extends EventEmitter {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1, stream: false,
+          ...slotField(this.slotPins.slotFor(modelId)),   // the spare slot: never a chat's reading
         }),
         signal: abort.signal,
       });

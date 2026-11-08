@@ -19,6 +19,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { wrapLanguageModel, type LanguageModel } from 'ai';
 import type { ProviderConfig, ProviderStatus, ModelBinding } from '../../shared/provider-types';
 import type { LocalEngineHook } from '../engine/engine-manager';
+import { slotField } from '../engine/slot-pins';
 import { NativeHome } from '../native-home';
 import { SecretsStore } from './secrets-store';
 import type { ChatGptAuth } from './chatgpt-auth';
@@ -364,6 +365,9 @@ export class ProviderRegistry {
         // prefill-progress.ts for why this rides a fetch wrapper rather than the
         // SDK's stream.
         const engine = this.localEngine;
+        // Each chat keeps its own engine slot, so chats stop re-reading each
+        // other's openings (engine/slot-pins.ts); no key = the shared spare slot.
+        const slot = engine.slotFor?.(binding.modelId, opts?.cacheKey);
         const localFetch = withPrefillProgress(
           engine.fetchImpl(),
           opts?.onPrefillProgress,
@@ -392,10 +396,10 @@ export class ProviderRegistry {
           // ONE transformRequestBody for BOTH hooks — the SDK accepts a single
           // function, so two `...(cond ? {transformRequestBody} : {})` spreads
           // would silently overwrite each other. Still attached only when
-          // something actually needs it: with neither flag set the request body
+          // something actually needs it: with none of them set (no slot = a fake engine) the request body
           // must stay byte-identical to the SDK's default (pinned by
           // provider-registry.test.ts).
-          ...(opts?.serialToolCalls || opts?.onPrefillProgress
+          ...(opts?.serialToolCalls || opts?.onPrefillProgress || slot !== undefined
             ? {
               transformRequestBody: (b: Record<string, any>) => ({
                 ...b,
@@ -408,6 +412,7 @@ export class ProviderRegistry {
                 // keys, so this degrades to "no progress reported" rather than
                 // failing the request.
                 ...(opts?.onPrefillProgress ? { return_progress: true } : {}),
+                ...slotField(slot),
               }),
             }
             : {}),

@@ -1167,6 +1167,21 @@ describe('per-model settings', () => {
     });
   });
 
+  // The loading request is not a chat: it goes to the spare slot, so loading a
+  // model for a new chat never lands on another chat's saved reading (slot-pins.ts).
+  it('loading a model sends its request to the spare slot, never a chat\'s', async () => {
+    plantInstall();
+    await plantConfig();
+    const fetchImpl = makeFetch();
+    mgr = makeManager(fetchImpl);
+    await mgr.loadModel('alpha');
+    await vi.waitFor(() => {
+      const call = fetchImpl.mock.calls.find((c: any[]) => String(c[0]).includes('/chat/completions'));
+      expect(JSON.parse(call[1].body).id_slot).toBe(3);
+    });
+    expect(mgr.registryHook().slotFor!('alpha', 'a-chat')).not.toBe(3);
+  });
+
   describe('lastLoadError has TWO sources, and both reach the model', () => {
     it('source 1 — the router\'s own message when a load of that model fails', async () => {
       plantInstall();

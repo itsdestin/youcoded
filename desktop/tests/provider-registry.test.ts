@@ -357,6 +357,18 @@ describe('ProviderRegistry', () => {
       expect(body.model).toBe('m');
     });
 
+    // Each chat keeps its own engine slot so chats stop re-reading each other's
+    // openings (engine/slot-pins.ts): the chat's key goes to the engine, and
+    // the slot it answers rides the request as llama.cpp's id_slot.
+    it('languageModel(local): a chat\'s request names the engine slot kept for that chat', async () => {
+      const slotFor = vi.fn((_m: string, key?: string) => (key === 'chat-a' ? 1 : 3));
+      const reg = new ProviderRegistry(new NativeHome(root), secrets, makeHook({ slotFor }));
+      await reg.init();
+      const model = await reg.languageModel({ providerId: 'local', modelId: 'm' }, { cacheKey: 'chat-a' });
+      expect((model as any).config.transformRequestBody({ model: 'm' })).toEqual({ model: 'm', id_slot: 1 });
+      expect(slotFor).toHaveBeenCalledWith('m', 'chat-a');
+    });
+
     // T19: the fetch handed to the SDK for a local send must report the finished
     // reply's speed back to the engine, so the card's fact line can show it.
     // Reaches through `.config.fetch` (same seam the transformRequestBody tests
