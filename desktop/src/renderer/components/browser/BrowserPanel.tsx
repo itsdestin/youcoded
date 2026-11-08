@@ -19,7 +19,7 @@ import { Button, Callout, Dialog, DocumentTabs, EmptyState, ErrorState, FieldErr
 import { PanelIconButton } from '../panel-icon-button';
 import { BackIcon, ForwardIcon, GlobeIcon, ReloadIcon, StopIcon } from '../Icons';
 import BrailleSpinner from '../BrailleSpinner';
-import { ScreenMark } from '../../shoot-mode';
+import { ScreenMark, useScreenOpen } from '../../shoot-mode';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import BrowserAskCard from './BrowserAskCard';
 
@@ -527,6 +527,8 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   const windowShown = (running ? state?.windowShown : info?.settings.showWindow) ?? false;
   const [confirmWindow, setConfirmWindow] = useState<null | boolean>(null);
   const [switching, setSwitching] = useState(false);
+  // WHY (screen coverage): photo-only build, `shoot` raises the confirm by name — the state the window button sets.
+  useScreenOpen('chat/browser/window-confirm', () => setConfirmWindow(true));
   const applyWindow = useCallback(async (show: boolean) => {
     setConfirmWindow(null);
     setSwitching(true);
@@ -719,7 +721,8 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
         onClose={() => setConfirmWindow(null)}
         title={confirmWindow ? 'Open the browser window?' : 'Hide the browser window?'}
         size="prompt"
-        noScreen="a two-button confirm inside the Browser panel; its wording is pinned by BrowserPanel.test.tsx"
+        // WHY: marks the confirm for `shoot` (photo build only draws it); invisible.
+        screen="chat/browser/window-confirm"
       >
         <p className="text-sm text-fg-2">
           {confirmWindow ? 'Opening' : 'Hiding'} the window restarts the browser. Pages reopen where they were, but anything typed and not yet sent is lost.

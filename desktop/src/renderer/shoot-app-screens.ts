@@ -8,7 +8,8 @@ import { openBrowserPane } from './state/browser-store';
 import type { Dispatch, SetStateAction } from 'react';
 import { useScreenOpen } from './shoot-mode';
 import { GUIDE_STOPS } from './components/guide/guide-stops';
-import { setTourStart } from './components/guide/guide-state';
+import { setTourStart, setTipsArmed } from './components/guide/guide-state';
+import { TIPS, resetTipsForSitting, triggerTip } from './components/guide/tips';
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
 
@@ -64,6 +65,10 @@ export function useAppScreens(s: AppScreenSetters): void {
   // The buddy's tour on one stop: `tour/<stop id>`. WHY (backup-warning-1): the
   // tour had no picture at all, so a change to one of its stops could not be shown.
   useScreenOpen('tour', (stop) => { setTourStart(stop); s.setTourOpen(true); }, GUIDE_STOPS.map((t) => t.id));
+  // WHY (screen coverage): the buddy's tips show only at their own moment (a first tag, a first resume…). `tip/<id>` arms tips
+  // in this throwaway photo tab, clears the one-per-sitting cap and raises that tip through the same triggerTip a real moment calls.
+  useScreenOpen('tip', (tip) => { if (tip) { setTipsArmed(true); resetTipsForSitting(); triggerTip(tip); setTipsArmed(false); } }, TIPS.map((t) => t.id));
+  // (Disarmed again at once: the arming is stored in the tab, and left on it would let the NEXT screen's own moment raise a tip over it.)
   // Not a screen: the driver selects an entry's practice session through this first.
   useScreenOpen('_select-session', (id) => { if (id) s.selectSession(id); });
   // The chat itself: nothing to open, it is where the app starts.

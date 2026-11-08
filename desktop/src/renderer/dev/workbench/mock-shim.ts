@@ -4187,6 +4187,16 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     } } } : {}),
     skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, integrations, dev: devMock, voiceVocabulary, ...(remote ? { remote } : {}),
+    // WHY only with `?github=code` (coverage batch C): the "Connect GitHub" modal shows a one-time code that a real GitHub
+    // hands out mid-flow. This answers with a fixed sample code and never finishes; without the switch the page keeps
+    // treating GitHub as unavailable, exactly as before, so no existing picture changes.
+    ...(typeof location !== 'undefined' && new URLSearchParams(location.search).get('github') === 'code' ? { github: {
+      status: async () => ({ installed: true, authed: false }),
+      connectStart: async () => ({ userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: Date.now() + 15 * 60_000 }),
+      connectCancel: async () => ({ ok: true }),
+      onConnectDone: () => () => {},
+      disconnect: async () => ({ ok: true }),
+    } } : {}),
     pages: createPagesMock(activeScenario),
     office: createOfficeMock(activeScenario === 'empty'),
     docComments: createDocCommentsMock(activeScenario === 'empty'),
@@ -4684,11 +4694,16 @@ function createOfficeMock(empty: boolean): OfficeBridge {
   const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
   const recent = empty ? [] : OFFICE_FILES.map((f, i) => ({ ...f, at: ago([0.4, 5, 30][i] * HOUR) }));
   let created = 0;
+  let statusCalls = 0;
   return {
     status: async () => {
-      if (state === 'failed') throw new Error('Mock failure (office.status)');
+      // WHY the `-later` switches (coverage batch C): the Pages list hides Office whenever the FIRST status answer is a failure or
+      // "not available", so Office's own failed / not-included notices are reached only when a later answer differs. These answer
+      // the list normally, then fail (or say unavailable) for Office's own request.
+      const nth = ++statusCalls;
+      if (state === 'failed' || (state === 'failed-later' && nth > 1)) throw new Error('Mock failure (office.status)');
       return {
-      available: state !== 'unavailable',
+      available: state !== 'unavailable' && !(state === 'unavailable-later' && nth > 1),
       recent,
       // Two files beyond Recent, so the "In <project>" list has something of its own to show
       // (Recent's files are not repeated there). They open the fixture of their kind.

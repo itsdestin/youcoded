@@ -111,7 +111,9 @@ describe('every dialog is a screen, or says why not', () => {
 
   it('a literal screen= name is in the screen list', () => {
     const unknown = dialogs.flatMap((d) => [...d.tag.matchAll(/\bscreen="([^"]+)"/g)].map((m) => m[1]))
-      .filter((n) => !listed.map(base).includes(n));
+      // WHY a parent counts when a listed name sits under it: a dialog reached through a file (chat/files/revert/<id>) is marked with the
+      // family's name, while the list names the family's members.
+      .filter((n) => !listed.map(base).some((l) => l === n || l.startsWith(n + '/')));
     expect(unknown).toEqual([]);
   });
 });

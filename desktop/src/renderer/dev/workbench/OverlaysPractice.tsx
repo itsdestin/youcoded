@@ -17,6 +17,8 @@ import ThinkingIndicator from '../../components/ThinkingIndicator';
 import ModelLoadingBar from '../../components/ModelLoadingBar';
 import SpecialistReportCard from '../../components/SpecialistReportCard';
 import { VoiceButton, VoiceListeningStrip } from '../../components/VoiceButton';
+import { RootErrorBoundary } from '../../components/RootErrorBoundary';
+import ErrorBoundary from '../../components/ErrorBoundary';
 import { EscCloseProvider } from '../../hooks/use-esc-close';
 import type { VoiceNotice } from '../../hooks/useVoiceInput';
 import { REMOTE_UNSUPPORTED_EVENT } from '../../remote-unsupported';
@@ -25,6 +27,10 @@ import type { UsageSnapshot } from '../../state/chat-types';
 import { ScreenMark, useScreenOpen } from '../../shoot-mode';
 
 const noop = () => {};
+
+// A part that fails the moment it draws, so the REAL crash screens (the app's two error boundaries) can be photographed.
+// The words are plain practice text, not a made-up cause.
+function Boom(): never { throw new Error('Practice crash: this part was made to fail so its crash screen can be photographed.'); }
 
 // A fixed time so the "taking a while" countdown and elapsed counters read the same in every picture.
 const usage = (over: Partial<UsageSnapshot> = {}): UsageSnapshot => ({
@@ -71,6 +77,9 @@ function Piece({ which }: { which: string }) {
           onStart={noop} onStop={noop} onDownload={noop} onRecheck={noop} onClearError={noop} />
       </div></EscCloseProvider></Bottom>;
     }
+    // The outermost boundary's "YouCoded failed to start" (no theme, inline styles), and the in-app crash box for one part.
+    case 'crash-root': return <RootErrorBoundary><Boom /></RootErrorBoundary>;
+    case 'crash-panel': return <Column><ErrorBoundary name="Files"><Boom /></ErrorBoundary></Column>;
     case 'moved': return <MovedGate device="Home PC" onExit={noop} onResume={noop} />;
     case 'trust': return <ChatProvider><TrustDemo /></ChatProvider>;
     case 'initializing':

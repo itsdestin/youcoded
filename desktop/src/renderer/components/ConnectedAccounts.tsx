@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, FieldError, SectionLabel } from './ui';
 import ConnectGithubModal from './ConnectGithubModal';
+import { useScreenOpen } from '../shoot-mode';
 import { SavedPageKeys } from './pages/SavedPageKeys';
 
 // Connected-accounts sub-page INSIDE the Account popup (Destin feedback,
@@ -37,6 +38,8 @@ export function ConnectedAccountsBody({ status, refresh }: {
   refresh: () => Promise<void>;
 }) {
   const [showConnect, setShowConnect] = useState(false);
+  // WHY (screen coverage): photo-only build, `shoot` raises the Connect GitHub modal by name — the state its button sets.
+  useScreenOpen('settings/account/connections/connect-github', () => setShowConnect(true));
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

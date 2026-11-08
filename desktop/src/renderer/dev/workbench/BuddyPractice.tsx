@@ -11,7 +11,10 @@ import { MOOD_POSE, type MascotMood } from '../../components/buddy/mascot-mood';
 import { CHAT_SIZE, CHAT_SIZE_LARGE } from '../../../shared/buddy-geometry';
 import { ScreenMark, useScreenOpen } from '../../shoot-mode';
 
-type Piece = { view: string; width: number; height: number; /** text that must be in the frame before it counts as drawn */ ready?: string; /** extra wait for a page that frames another page */ settleMs?: number; extra?: Record<string, string> };
+type Piece = { view: string; width: number; height: number; /** text that must be in the frame before it counts as drawn */ ready?: string; /** extra wait for a page that frames another page */ settleMs?: number; extra?: Record<string, string>;
+  /** Buttons to press inside the frame once it has drawn, in order (by their words) — the buddy is its own window, so the
+   *  shoot cannot click into it; this page can, because the frame is the same origin. */
+  press?: readonly string[]; /** text that must be in the frame after the presses before it counts as drawn */ after?: string };
 
 const PIECES: Record<string, Piece> = {
   chat: { view: 'buddy-chat', ...CHAT_SIZE },
@@ -25,6 +28,11 @@ const PIECES: Record<string, Piece> = {
   welcome: { view: 'buddy-chat', ...CHAT_SIZE, ready: 'New session', extra: { scenario: 'empty' } },
   // The whole buddy on a desktop: mascot, round buttons and chat.
   group: { view: 'buddy-group', width: 900, height: 680, settleMs: 5000 },
+  // The welcome screen's two panes, opened the way a person opens them (coverage batch C).
+  'welcome-new': { view: 'buddy-chat', ...CHAT_SIZE, ready: 'New session', extra: { scenario: 'empty' }, press: ['New session'], after: 'Create session' },
+  'welcome-resume': { view: 'buddy-chat', ...CHAT_SIZE, ready: 'New session', extra: { scenario: 'empty' }, press: ['Resume session'], after: 'Back' },
+  // The Resume list when the conversations cannot be read.
+  'welcome-resume-error': { view: 'buddy-chat', ...CHAT_SIZE, ready: 'New session', extra: { scenario: 'empty', fail: 'session.browse' }, press: ['Resume session'], after: 'Couldn\u2019t load your conversations' },
 };
 
 /** Waits until the frame's own page has drawn (the shipping window, not the loading screen), then lets the mark show. */
@@ -49,8 +57,17 @@ function Frame({ piece, onReady }: { piece: Piece; onReady: () => void }) {
       if (!done && drawn) {
         done = true;
         clearInterval(id);
+        // Press the piece's buttons (if any) one by one, then wait for the words they bring up.
+        const press = async () => {
+          for (const label of piece.press ?? []) {
+            const b = [...(ref.current?.contentDocument?.querySelectorAll('button') ?? [])].find((x) => (x.textContent ?? '').includes(label));
+            (b as HTMLButtonElement | undefined)?.click();
+            await new Promise((r) => setTimeout(r, 400));
+          }
+          for (const t1 = performance.now(); piece.after && performance.now() - t1 < 8000 && !(ref.current?.contentDocument?.body?.innerText ?? '').replace(/'/g, '\u2019').includes(piece.after);) await new Promise((r) => setTimeout(r, 150));
+        };
         // The conversation fills a moment after the shell; one more beat so the mark never beats the messages.
-        setTimeout(onReady, piece.settleMs ?? 1200);
+        void press().then(() => setTimeout(onReady, piece.settleMs ?? 1200));
       }
       if (performance.now() - t0 > 20_000) clearInterval(id); // never marks: shoot then fails loudly with this screen's name
     }, 150);

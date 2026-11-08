@@ -9,6 +9,7 @@
 // Activity is passed in: the host has no business reading chat state itself.
 import React, { useEffect, useState } from 'react';
 import GuideBubble from './GuideBubble';
+import { ScreenMark } from '../../shoot-mode';
 import { dismissTip, stopAllTips, useActiveTip } from './tips';
 
 interface Props {
@@ -38,6 +39,8 @@ export default function GuideTipHost({ busy }: Props) {
       ]}
     >
       {tip.text}
+      {/* shoot's `tip/<id>` screens prove which tip is showing (renders nothing outside the photo-only build). */}
+      <ScreenMark name={`tip/${tip.id}`} />
     </GuideBubble>
   );
 }

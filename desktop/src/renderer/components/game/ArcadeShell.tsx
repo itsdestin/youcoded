@@ -9,7 +9,7 @@
 // what the server said to what a screen renders, so those states can be tested
 // without mounting anything. This file only decides which screen is showing.
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useGameState, useGameDispatch } from '../../state/game-context';
 import { useAccount } from '../../state/account-context';
 import { useTheme } from '../../state/theme-context';
@@ -107,6 +107,24 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
   useScreenOpen('chat/games/connect-four', () => openById('connect-four'));
   useScreenOpen('chat/games/connect-four/lobby', () => {});
   useScreenOpen('chat/games/flappy/play', () => setPlaying(true));
+  // WHY (screen coverage): the Connect Four end-of-game card needs a finished match. Photo-only build: once the practice
+  // match is under way, `shoot` hands the shell a finished board (four in a column, you win) through the same GAME_STATE
+  // a real last move produces. The ref only mirrors state; the opener never runs outside the photo-only build.
+  const liveState = useRef(state);
+  liveState.current = state;
+  useScreenOpen('chat/games/connect-four/game-over', () => {
+    const t0 = Date.now();
+    const finish = () => {
+      const s = liveState.current;
+      if (s.screen !== 'playing') { if (Date.now() - t0 < 8000) setTimeout(finish, 50); return; }
+      const seat = s.seat ?? 0;
+      const mine = seat + 1, theirs = 2 - seat;
+      dispatch({ type: 'GAME_STATE', turnSeat: seat === 0 ? 1 : 0, outcome: { winnerSeat: seat },
+        play: { board: [[mine, mine, mine, mine, 0, 0], [theirs, theirs, theirs, 0, 0, 0], [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]],
+          lastMove: { col: 0, row: 3 }, winLine: [[0, 0], [0, 1], [0, 2], [0, 3]] } });
+    };
+    finish();
+  });
   /** Your own bests, read from this computer on mount (§4.2). These are what
    *  every screen shows when there is no server board — which is currently
    *  ALWAYS outside the workbench, and is also the signed-out and offline case. */
@@ -347,7 +365,7 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
             <div className="relative flex flex-col flex-1 min-h-0">
               <ConnectFourBoard connection={connection} />
               <GameChat connection={connection} />
-              {state.screen === 'game-over' && <GameOverlay connection={connection} />}
+              {state.screen === 'game-over' && <GameOverlay connection={connection} screen="chat/games/connect-four/game-over" />}
             </div>
           ) : (
             <GameLobby connection={connection} incognito={incognito} onToggleIncognito={onToggleIncognito} gameId={openGame.id} onAddFriend={leave} />

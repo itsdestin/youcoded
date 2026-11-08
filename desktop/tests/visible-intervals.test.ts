@@ -38,6 +38,7 @@ const ALLOWLIST: Record<string, string> = {
   'state/account-context.tsx': 'account refresh every 15 minutes — negligible',
   'dev/workbench/compare/registry.tsx': 'workbench-only, never in the shipped app',
   'dev/workbench/mock-shim.ts': 'workbench-only fake backend, never in the shipped app',
+  'dev/workbench/BuddyPractice.tsx': 'photo-only build page (shoot), never in the shipped app',
 };
 
 function walk(dir: string): string[] {

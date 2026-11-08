@@ -34,7 +34,8 @@ function UnsavedChangesDialog({
       title="Unsaved changes"
       size="prompt"
       layer={3}
-      noScreen="Only opens while leaving a file with unsaved edits; covered by unsaved-dialog-esc-stack.test.tsx."
+      // WHY: marks the prompt so `shoot` can photograph it (screens/coverage-c.ts edits a file, types, presses Esc); invisible.
+      screen="chat/files/unsaved"
       footer={(
         <div className="flex flex-col gap-2">
           <Button variant="primary" className="w-full" onClick={onSave}>Save</Button>
@@ -60,7 +61,7 @@ function UnsavedChangesDialog({
 export function useUnsavedGuard(
   handleRef: React.RefObject<ActiveArtifactHandle | null>,
   fileName: string
-): { guard: (action: () => void) => void; dialog: React.ReactNode } {
+): { guard: (action: () => void) => void; dialog: React.ReactNode; askForScreenshot: () => void } {
   const [pending, setPending] = useState<(() => void) | null>(null);
   const pendingRef = useRef<(() => void) | null>(null);
   pendingRef.current = pending;
@@ -104,5 +105,7 @@ export function useUnsavedGuard(
     />
   ) : null;
 
-  return { guard, dialog };
+  // WHY: photo-only (`shoot`) raises the prompt without a dirty editor; nothing in the app calls this.
+  const askForScreenshot = useCallback(() => setPending(() => () => {}), []);
+  return { guard, dialog, askForScreenshot };
 }

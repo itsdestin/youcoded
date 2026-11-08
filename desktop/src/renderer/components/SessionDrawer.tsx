@@ -397,7 +397,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   }, [commentsState.active]);
   // D3: every navigation away from a dirty editor goes through this guard
   // (Save / Discard / Cancel dialog) instead of silently discarding the draft.
-  const { guard: guardUnsaved, dialog: unsavedDialog } = useUnsavedGuard(
+  const { guard: guardUnsaved, dialog: unsavedDialog, askForScreenshot } = useUnsavedGuard(
     editRef, active ? (active.path.split('/').pop() ?? active.path) : 'This file');
   // Content pane node — the list collapses when the user engages the artifact
   // here (clicks into it or scrolls it), not when they merely preview by
@@ -435,6 +435,11 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // whenever a new git op runs inside the view and (b) whenever review closes,
   // so a stale discard failure can never linger into a reopened review.
   const [discardAsk, setDiscardAsk] = useState<{ willTrash: boolean } | null>(null);
+  // WHY (screen coverage): photo-only build. `shoot` opens a file and raises the Revert confirm / the "Unsaved changes" prompt
+  // directly (the real routes are Review changes → Revert, and Edit → Esc, but a mark must show BEFORE any click). Same states
+  // those routes set; nothing else changes. No-ops outside the photo-only build.
+  useScreenOpen('chat/files/revert', (id) => { if (id) { dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: id }); setDiscardAsk({ willTrash: false }); } }, allArtifacts.map((a) => a.id));
+  useScreenOpen('chat/files/unsaved', (id) => { if (id) { dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: id }); askForScreenshot(); } }, allArtifacts.map((a) => a.id));
   const [discardError, setDiscardError] = useState<string | null>(null);
   // Monotonic token for in-flight discards (see runGuardedDiscard): bumped on
   // close so a discard still in flight when the review closes is SUPERSEDED —

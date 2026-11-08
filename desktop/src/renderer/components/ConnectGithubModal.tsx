@@ -197,10 +197,10 @@ export default function ConnectGithubModal({ onClose, onConnected }: Props) {
         aria-label="Connect GitHub"
         scrollBody={false}
         className="p-5"
-        // Its real content is a live GitHub OAuth device-code poll (the `code`
-        // stage) that can't be entered without a genuine in-flight flow — the
-        // other stages are a spinner or a one-line status. `explore` covers it.
-        noScreen="a live GitHub device-code OAuth poll in flight; explore covers it"
+        // WHY marked only at the code stage (the one with the real content): the checking and error stages are
+        // a spinner or one line, and a spinner must never count as "showing". Photo build: the workbench's fake
+        // GitHub hands out a sample code (`?github=code`). The mark draws nothing.
+        screen={stage === 'code' && code ? 'settings/account/connections/connect-github' : undefined}
       >
         {/* Header — consistent across every stage */}
         <div className="flex items-start justify-between gap-3">

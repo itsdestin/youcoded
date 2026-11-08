@@ -32,7 +32,8 @@ export function DiscardConfirmDialog({ fileName, willTrash, onConfirm, onCancel 
       destructive
       size="prompt"
       title={willTrash ? 'Move file to trash' : 'Revert changes'}
-      noScreen="opens only from Git review's Revert changes… on a file with uncommitted edits; explore covers it"
+      // WHY: marks the confirm so `shoot` can photograph it (screens/coverage-c.ts replays Review changes → Revert); invisible.
+      screen="chat/files/revert"
     >
       <div className="space-y-2 text-xs text-fg-2 leading-relaxed">
         <p className="font-medium text-fg break-all">

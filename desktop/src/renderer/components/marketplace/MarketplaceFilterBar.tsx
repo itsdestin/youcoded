@@ -24,6 +24,7 @@ import { CATALOG_ITEM_TYPES, CATALOG_TYPE_LABEL, catalogType, type CatalogItemTy
 import { typeIcon } from "./type-icons";
 import { useMarketplace } from "../../state/marketplace-context";
 import { useEscClose } from "../../hooks/use-esc-close";
+import { useScreenOpen, ScreenMark } from "../../shoot-mode";
 import { useNarrowViewport } from "../../hooks/use-narrow-viewport";
 
 // Marketplace overhaul (2026-08-27, decision #1): the type switch names the
@@ -107,6 +108,8 @@ interface Props {
 export default function MarketplaceFilterBar({ value, onChange }: Props) {
   const compact = useNarrowViewport();
   const [sheetOpen, setSheetOpen] = useState(false);
+  // WHY (screen coverage): photo-only build, `shoot` opens the phone filter sheet by name — what the Filters button does.
+  useScreenOpen('marketplace/skills/filters', () => setSheetOpen(true));
   const typeTabs = useTypeTabs(value.type ?? "all");
 
   // Maps a Type tab id back onto FilterState.type. "all" → null keeps
@@ -226,6 +229,8 @@ function FilterSheet({
         className="fixed inset-x-2 max-h-[80vh] rounded-2xl flex flex-col"
         style={{ bottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
       >
+        {/* WHY: lets `shoot` prove the sheet is showing; hidden, photo build only. */}
+        <ScreenMark name="marketplace/skills/filters" />
         <header className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-edge-dim bg-panel">
           <h2 id="marketplace-filter-sheet-title" className="text-base font-semibold text-fg">Filters</h2>
           <button

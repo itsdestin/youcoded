@@ -3,9 +3,12 @@ import { GameConnection } from '../../state/game-types';
 import { OverlayPanel } from '../overlays/Overlay';
 import { Button } from '../ui';
 import { recordSentence } from './head-to-head';
+import { ScreenMark } from '../../shoot-mode';
 
 interface Props {
   connection: GameConnection;
+  /** Photo-only (`shoot`): the screen name this card marks itself with. Draws nothing. */
+  screen?: string;
 }
 
 // End-of-game overlay. Renders as a small centered card so the final board
@@ -13,7 +16,7 @@ interface Props {
 // piece layout while deciding Rematch vs. Back to Lobby. Glassmorphism
 // refactor (see GLASSMORPHISM-REFACTOR-PLAN.md § GameOverlay) replaced the
 // old full-screen scrim with this trimmed centered layer-surface card.
-export default function GameOverlay({ connection }: Props) {
+export default function GameOverlay({ connection, screen }: Props) {
   const state = useGameState();
   const dispatch = useGameDispatch();
 
@@ -46,6 +49,8 @@ export default function GameOverlay({ connection }: Props) {
         layer={2}
         className="flex flex-col items-center gap-4 px-6 py-5 pointer-events-auto"
       >
+        {/* WHY: lets `shoot` prove the card is showing; hidden, photo build only. */}
+        {screen && <ScreenMark name={screen} />}
         <div className="flex flex-col items-center gap-1">
           <span className={`text-3xl font-black ${headlineClass}`}>{headline}</span>
           {outcome && !draw && (

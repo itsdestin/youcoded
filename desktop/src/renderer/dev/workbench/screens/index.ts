@@ -29,10 +29,14 @@ import { OVERLAYS } from './overlays';
 import { BUDDY } from './buddy';
 import { COVERAGE_A } from './coverage-a';
 import { COVERAGE_B } from './coverage-b';
+import { COVERAGE_C } from './coverage-c';
 
 export type { ScreenEntry } from './types';
 
 export const SCREENS: readonly ScreenEntry[] = [
+  // WHY first (coverage batch C): the browser-pane confirms navigate poorly when they run beside batch B's Flappy run (a busy game
+  // loop in a sibling tab stalled their page load past 15 s, a different one each `--check`); at the front they never overlap it.
+  ...COVERAGE_C,
   ...SETTINGS,
   ...CHAT,
   ...MARKETPLACE,

@@ -13,6 +13,7 @@
 // the things a person may want to undo: allowed sites, saved sign-ins.
 import { useCallback, useEffect, useState } from 'react';
 import type { BrowserInfo, MyChromeCheck } from '../../../shared/browser-types';
+import { useScreenOpen } from '../../shoot-mode';
 import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, LoadingState, OneJobCard, OneJobText, ProgressBar, RadioGroup, SectionLabel, Select, SettingRow, Toggle } from '../ui';
 
 function bridge() { return (window as any).claude.browser; }
@@ -70,6 +71,11 @@ export default function BrowserSettings() {
     if (p.kind === 'mychrome' && p.value === !!info?.settings.useMyChrome) return;
     if ((info?.sessionsWithTabs ?? 0) > 0) setPending(p); else apply(p);
   }, [info, apply]);
+
+  // WHY (screen coverage): photo-only build, `shoot` raises each confirm by name — the same state the real buttons set.
+  useScreenOpen('settings/assistant/browser/window-confirm', () => setPending({ kind: 'window', value: true }));
+  useScreenOpen('settings/assistant/browser/switch-confirm', () => setPending({ kind: 'mychrome', value: true }));
+  useScreenOpen('settings/assistant/browser/signout-confirm', () => setConfirmClear(true));
 
   const s = info?.settings;
   const which = s?.useMyChrome ? 'my-chrome' : 'own';
@@ -233,7 +239,8 @@ export default function BrowserSettings() {
         title={pending?.kind === 'window' ? (pending.value ? 'Show the browser window?' : 'Hide the browser window?') : 'Switch browsers?'}
         size="panel"
         layer={3}
-        noScreen="a two-button confirm inside Assistant settings → Browser; its wording is pinned by BrowserSettings.test.tsx"
+        // WHY: one popup, two questions (window / switch browser): each is its own screen. Invisible mark.
+        screen={pending?.kind === 'window' ? 'settings/assistant/browser/window-confirm' : 'settings/assistant/browser/switch-confirm'}
       >
         {/* WHY the shared one-job card (guide "Popups": every one-job popup, short questions too). */}
         <OneJobCard actions={<>
@@ -254,7 +261,8 @@ export default function BrowserSettings() {
         size="panel"
         layer={3}
         destructive
-        noScreen="a two-button confirm inside Assistant settings → Browser; its wording is pinned by BrowserSettings.test.tsx"
+        // WHY: marks the sign-out confirm for `shoot`; invisible.
+        screen="settings/assistant/browser/signout-confirm"
       >
         <OneJobCard actions={<>
           <Button variant="danger" onClick={() => { setConfirmClear(false); void run(() => bridge().clearSignins()); }}>Sign out of everything</Button>

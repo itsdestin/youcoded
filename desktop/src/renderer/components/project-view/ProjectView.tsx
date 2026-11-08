@@ -361,6 +361,9 @@ export function ProjectView(props: ProjectViewProps) {
       : !p.missing && !findSpaceFor(p.path, syncStatus));
     if (pick) setDeletingProject(pick);
   }, ['synced', 'missing']);
+  // WHY (screen coverage): photo-only build, `shoot` raises the import-result alert with the "already in this folder" outcome,
+  // worded and titled by the same helper a real import uses. Nothing is imported.
+  useScreenOpen('projects/files/import-result', () => setImportResult({ title: importResultTitle({ hardFailures: 0, partial: 0, alreadyInPlace: 1 }), lines: ['notes.txt is already in this folder — nothing to import.'] }));
   useScreenOpen('projects/turn-on-sync', () => { if (activeProject) setTurnOnSyncFor({ path: activeProject.path, name: activeProject.name }); });
 
   // ESC closes the browser via the shared LIFO stack — the header says
@@ -1199,6 +1202,8 @@ export function ProjectView(props: ProjectViewProps) {
             aria-label={importResult.title}
             className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 p-6 max-w-md w-[calc(100%-2rem)]"
           >
+            {/* WHY: lets `shoot` prove the alert is showing; hidden, photo build only. */}
+            <ScreenMark name="projects/files/import-result" />
             <h3 className="text-lg font-semibold mb-2 text-fg">{importResult.title}</h3>
             {/* One line per file the user needs to know about. */}
             <div className="flex flex-col gap-1 mb-4 text-sm text-fg">

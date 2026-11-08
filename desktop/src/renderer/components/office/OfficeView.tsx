@@ -256,9 +256,10 @@ function OfficeHome({ load, project, actionError, onRetry, onCreate, onPick, onO
   load: StatusLoad; project: OfficeStatus['project']; actionError: React.ReactNode;
   onRetry: () => void; onCreate: (k: OfficeKind) => void; onPick: () => void; onOpen: (f: OfficeFile) => void;
 }) {
-  if (load.state === 'failed') return <div className="p-6 max-w-xl mx-auto"><ErrorState message="Office could not be started." onRetry={onRetry} /></div>;
+  // WHY the two hidden marks (screen coverage): lets `shoot` prove which of these notices is showing; photo build only.
+  if (load.state === 'failed') return <div className="p-6 max-w-xl mx-auto"><ScreenMark name="office/home/failed" /><ErrorState message="Office could not be started." onRetry={onRetry} /></div>;
   // Specific and certain, and no Retry: nothing the person can do here changes it.
-  if (load.state === 'unavailable') return <div className="p-6 max-w-xl mx-auto"><EmptyState message="Office isn't included in this build." /></div>;
+  if (load.state === 'unavailable') return <div className="p-6 max-w-xl mx-auto"><ScreenMark name="office/home/unavailable" /><EmptyState message="Office isn't included in this build." /></div>;
   // WHY Home is drawn while Recent loads (fix round 1): New and "Open a file…" need no list, and
   // must never wait on a slow drive; only the Recent list itself shows it is loading.
   const recent = load.state === 'ready' ? load.status.recent : null;
