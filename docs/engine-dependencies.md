@@ -178,17 +178,28 @@ no usable preset file:
     a 700-token essay was 9.0 → 9.3 tok/s with `draft_n` absent — the drafter simply
     never fires on novel prose, so no measured penalty. This is the shape of every
     Edit/Write tool call. The router forwards it to each model child (probe-pinned).
-  - **MTP drafting (`--spec-type draft-mtp`) — measured 2026-11-08, NOT yet adopted.**
-    Recent Qwen GGUFs carry their own next-token heads (`blk.N.nextn.*` tensors,
-    `<arch>.nextn_predict_layers`); Qwen3.8-27B-UD-Q8_K_XL and Qwen3.6-35B-A3B-UD-Q6_K_XL
-    both have them, Qwen3.5-9B-Q8_0 does not. Qwen3.8-27B, Vulkan, 4 slots, three real
-    300-token answers on a ~15k opening, two passes: today's `--spec-default` **6.7 t/s
-    with ZERO drafts** on all six; `draft-mtp --spec-draft-n-max 2` **11.1-13.8 t/s**;
-    `n-max 3` **11.5-15.4 t/s** (drafted 177-361, accepted 129-208 per answer). Reading
-    the opening was unchanged (91 s vs 91-96 s). Works with `n_slots = 4`. Untested:
-    combining it with the n-gram drafter (`--spec-type` takes a list), the 35B MoE, and
-    any model without the heads (must fall back to `--spec-default`). These 2026-11-08
-    spawns omitted `--cache-type-k q8_0`; re-check with it before adopting.
+  - **MTP drafting — ON per model since 2026-11-09, for DENSE models whose file has the
+    heads (`model-presets.ts` `MTP_ENTRIES`, chosen in `EngineManager.refreshMtpModels`).**
+    Recent Qwen GGUFs carry their own next-token heads (`blk.N.nextn.*`,
+    `<arch>.nextn_predict_layers`). The section gets `spec-type = draft-mtp` and
+    `spec-draft-n-max = 3`; the command line keeps `--spec-default`, and the child gets
+    both (probed: `--spec-default --spec-draft-n-max 3 --spec-type draft-mtp`), so file
+    rewrites keep the n-gram win. Measured b10665, Vulkan, Strix Halo, `-ctk q8_0`, 4 slots,
+    ~15k opening, two passes each:
+    - Qwen3.8-27B (dense): replies 6.5-6.7 → 11.0-12.0 t/s; a 700-token file rewrite
+      42 → 57 t/s; the opening read 91.5-91.8 s → 95-96 s (~4%; earlier gaps were a busy
+      machine). With its `mmproj` loaded, an image question answered the same at
+      6.95 → 12.96 t/s.
+    - Qwen3.6-35B-A3B (mixture of experts): replies 47-48 → 50-52 t/s, reading 5-15%
+      slower — not worth it, so `expert_count > 0` gets no MTP.
+    - **A model WITHOUT the heads must never get it:** Qwen3.5-9B-Q8_0 with `draft-mtp`
+      → `failed to create MTP context`, every request 500 "failed to load". Hence per
+      model, from the file, never by name.
+    - `--spec-draft-type-k q8_0` (compressing MTP's own cache) changed nothing
+      measurable; not used. The "Speculative decoding" switch off removes MTP too; a
+      user's own `spec-*` extra option wins over ours.
+    - History: found 2026-07-14 (+25% on the 35B without `--spec-default`), lost when
+      `knowledge-debt.md` was deleted on 2026-07-15 before it reached the roadmap.
   - **`--cache-type-k q8_0`** — 8-bit KEY cache. `llama-bench` at 16,384 tokens of
     depth: generation 11.4 → 16.2 tok/s, prompt 281 → 452 tok/s, half the K memory.
   - **V cache is deliberately left f16.** `-ctv q8_0` measured a further prompt-speed

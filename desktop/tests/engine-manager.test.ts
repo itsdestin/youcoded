@@ -15,6 +15,8 @@ import {
 import { EngineAcquisition } from '../src/main/engine/engine-acquisition';
 import { ENGINE_VERSION } from '../src/main/engine/engine-pin';
 import { updateEngineConfig, readEngineConfig } from '../src/main/engine/engine-config';
+import { presetFilePath } from '../src/main/engine/model-presets';
+import { T, buildGguf } from './helpers/gguf-fixture';
 
 // The ROCm prerequisite reading decides whether a faster-engine row is 'ready'
 // or 'needs-prereqs', and the real one asks THIS machine — so whether the
@@ -169,6 +171,54 @@ describe('EngineManager — on a temp home', () => {
     fs.writeFileSync(path.join(dir, '.complete'),
       JSON.stringify({ version: ENGINE_VERSION, backend, binaryRelPath: 'llama-server.exe' }));
   }
+
+  describe('EngineManager — MTP drafting is turned on per model, from the model file', () => {
+    // WHY from the file: `--spec-type draft-mtp` makes a model WITHOUT the heads
+    // refuse to load, and the same family ships with and without them.
+    async function plantFiles() {
+      const cacheDir = path.join(root, 'cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(path.join(cacheDir, 'qwen-heads-Q8_0.gguf'), buildGguf([
+        { key: 'general.architecture', type: T.string, value: 'qwen35' },
+        { key: 'qwen35.block_count', type: T.u32, value: 65 },
+        { key: 'qwen35.nextn_predict_layers', type: T.u32, value: 1 },
+      ]));
+      // Heads, but a mixture of experts: measured too small a gain to pay MTP's reading cost.
+      fs.writeFileSync(path.join(cacheDir, 'qwen-moe-heads-Q6_K.gguf'), buildGguf([
+        { key: 'general.architecture', type: T.string, value: 'qwen35moe' },
+        { key: 'qwen35moe.block_count', type: T.u32, value: 41 },
+        { key: 'qwen35moe.nextn_predict_layers', type: T.u32, value: 1 },
+        { key: 'qwen35moe.expert_count', type: T.u32, value: 256 },
+      ]));
+      fs.writeFileSync(path.join(cacheDir, 'gemma-plain-Q8_0.gguf'), buildGguf([
+        { key: 'general.architecture', type: T.string, value: 'gemma4' },
+        { key: 'gemma4.block_count', type: T.u32, value: 35 },
+      ]));
+      await updateEngineConfig(home, { cacheDir });
+    }
+    const presetText = () => fs.readFileSync(presetFilePath(home.root), 'utf8');
+
+    it('writes MTP into the section of a dense model with heads, and not for a plain or mixture-of-experts model', async () => {
+      await plantFiles();
+      const mgr = new EngineManager(home, userData, 9999, {});
+      await (mgr as any).refreshMtpModels();
+      (mgr as any).writeModelPresets();
+      const file = presetText();
+      expect(file).toMatch(/\[qwen-heads-Q8_0\]\nspec-type = draft-mtp\nspec-draft-n-max = 3/);
+      expect(file).not.toMatch(/\[gemma-plain-Q8_0\]/);
+      expect(file).not.toMatch(/\[qwen-moe-heads-Q6_K\]/);
+      expect((mgr as any).spawnConfig().mtpModelIds).toEqual(['qwen-heads-Q8_0']);
+    });
+
+    it('writes no MTP when Speculative decoding is switched off', async () => {
+      await plantFiles();
+      const mgr = new EngineManager(home, userData, 9999, {});
+      await mgr.setConfig({ speed: { speculative: false } });
+      await (mgr as any).refreshMtpModels();
+      (mgr as any).writeModelPresets();
+      expect(presetText()).not.toMatch(/spec-type/);
+    });
+  });
 
   describe.skipIf(process.platform === 'win32')('EngineManager — the device-list backfill reaches the UI', () => {
     it('emits status-changed once acquisition fills in a pre-feature marker', async () => {

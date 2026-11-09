@@ -26,7 +26,7 @@ function header(over: Partial<GgufHeader> = {}): GgufHeader {
     embeddingLength: null, keyLength: null, valueLength: null,
     keyLengthSwa: null, valueLengthSwa: null, slidingWindow: null,
     slidingWindowPattern: null, slidingWindowPatternLayers: null,
-    fullAttentionInterval: null, nextnPredictLayers: null,
+    fullAttentionInterval: null, nextnPredictLayers: null, expertCount: null,
     recurrentLayers: null, sharedKvLayers: null, slidingLayers: null,
     ssmConvKernel: null, ssmStateSize: null, ssmInnerSize: null, ssmGroupCount: null,
     contextBytesIsUpperBound: false, archBytes: 0,

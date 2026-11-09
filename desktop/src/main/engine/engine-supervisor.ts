@@ -44,6 +44,9 @@ export interface EngineSpawnConfig {
   /** The two speed switches (design §B). Both default ON — that is what shipped
    *  before they were switchable, so a config file without them behaves as today. */
   speed?: { speculative?: boolean; compressCache?: boolean };
+  /** Models whose file carries MTP heads; their preset section turns MTP on
+   *  (model-presets.ts MTP_ENTRIES). Absent = none known yet. */
+  mtpModelIds?: readonly string[];
   /** `engine.models` — the per-model sections of the preset file. Keyed by model
    *  id, which is a FILENAME, so it is only ever read with an own-property check. */
   models?: Readonly<Record<string, Partial<ModelSettings>>> | null;
@@ -56,6 +59,10 @@ export interface EngineSupervisorOpts {
   readConfig: () => EngineSpawnConfig;
   /** Absolute path of the per-model settings file (`~/.youcoded/engine/models.ini`). */
   presetPath: string;
+  /** Awaited before each spawn reads its config — lets the owner refresh what
+   *  it can only learn asynchronously (which model files carry MTP heads).
+   *  A failure is ignored: the spawn goes ahead with what was known. */
+  beforeSpawn?: () => Promise<void>;
   env?: NodeJS.ProcessEnv;   // test override
   fetchImpl?: typeof fetch;  // test override
   readyDeadlineMs?: number;  // default 30_000 — first Vulkan init can be slow
@@ -637,6 +644,9 @@ export class EngineSupervisor extends EventEmitter {
     this.apiKey = randomBytes(32).toString('hex');
     this.lastStartupOutput = '';
     this.emit('status-changed');
+    // WHY before config(): the preset written below needs to know which models
+    // can use MTP, and that is read from each model file's header (async).
+    try { await this.opts.beforeSpawn?.(); } catch { /* spawn with what is known */ }
     const cfg = this.config();
     const fetchImpl = this.authedFetch;
     const readyDeadlineMs = this.opts.readyDeadlineMs ?? 30_000;
@@ -839,6 +849,8 @@ export class EngineSupervisor extends EventEmitter {
         sleepIdleSeconds: cfg.sleepIdleSeconds ?? SLEEP_IDLE_SECONDS,
         modelIds,
         settings: cfg.models ?? null,
+        mtpModelIds: new Set(cfg.mtpModelIds ?? []),
+        speculative: cfg.speed?.speculative !== false,
       });
       write(filePath, contents);
       // Read back before betting the engine's startup on it. Deliberately NOT a

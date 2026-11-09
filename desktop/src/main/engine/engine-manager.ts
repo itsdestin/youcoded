@@ -28,7 +28,8 @@ import type { BinaryCheckOptions, BinaryCheckResult } from './model-presets';
 import { LoadTimes } from './load-times';
 import { SlotPins, slotField } from './slot-pins';
 import { contextLengthFor } from '../models/fit-estimator';
-import { readManifest, removeManifest, markManifestComplete, isManifestComplete } from '../models/download-manifest';
+import { readManifest, removeManifest, markManifestComplete, isManifestComplete, installedDirFor } from '../models/download-manifest';
+import { GgufHeaderCache, readLocalGgufHeader, localHeaderStamp } from '../models/gguf-header';
 import { ManifestBackfill, defaultBackfillLookups, isStaleBackfillMiss } from '../models/manifest-backfill';
 import type { BackfillCandidate, BackfillLookups } from '../models/manifest-backfill';
 import { scanGgufCache, scanLocalDownloads, isComplete, visionModelIdsOnDisk } from './cache-scan';
@@ -707,6 +708,8 @@ export class EngineManager extends EventEmitter {
       modelIds: scanGgufCache(cfg.cacheDir).map((m) => m.id),
       settings: cfg.models,
       preserve: held.size > 0 ? held : undefined,
+      mtpModelIds: this.mtpModelIds,
+      speculative: this.spawnConfig().speed?.speculative !== false,
     });
     writePresetFile(filePath, contents);
   }
@@ -1258,7 +1261,42 @@ export class EngineManager extends EventEmitter {
         compressCache: speed?.compressCache !== false,
       },
       models: models && typeof models === 'object' ? models : null,
+      mtpModelIds: [...this.mtpModelIds],
     };
+  }
+
+  /** Ids of downloaded models whose file carries MTP heads. Read from each file's
+   *  header (cached by modification time, shared with the Local Models panel's
+   *  cache), so it is refreshed asynchronously before every spawn and every
+   *  preset rewrite rather than inside the synchronous config read.
+   *
+   *  WHY from the file and never from the model's name: the heads are a property
+   *  of the conversion, not the family — the same Qwen3.5-9B ships with them in one
+   *  repo and without them in another, and turning MTP on for a file without them
+   *  makes that model refuse to load. Best-effort: an unreadable header just
+   *  means no MTP for that model. */
+  private mtpModelIds = new Set<string>();
+  private mtpHeaderCache: GgufHeaderCache | null = null;
+  private async refreshMtpModels(): Promise<void> {
+    const cacheDir = readEngineConfig(this.home).cacheDir;
+    this.mtpHeaderCache ??= new GgufHeaderCache(this.userDataDir);
+    const next = new Set<string>();
+    for (const { id } of scanGgufCache(cacheDir)) {
+      const filePath = path.join(installedDirFor(cacheDir, id), `${id}.gguf`);
+      try {
+        const stamp = localHeaderStamp((await fs.promises.stat(filePath)).mtimeMs);
+        const key = `local:${filePath}`;
+        let header = this.mtpHeaderCache.get(key, stamp);
+        if (!header) { header = await readLocalGgufHeader(filePath); this.mtpHeaderCache.set(key, stamp, header); }
+        // Dense only. WHY: measured 2026-11-08 on Strix Halo — Qwen3.8-27B (dense)
+        // wrote replies 6.5 → 11-12 t/s with MTP; Qwen3.6-35B-A3B (mixture of
+        // experts, ~3B used per token) only 47 → 50-52 t/s while its reading got
+        // 5-15% slower. An MoE is already fast per token, so guessing ahead has
+        // little to save.
+        if ((header.nextnPredictLayers ?? 0) > 0 && !(header.expertCount ?? 0)) next.add(id);
+      } catch { /* unreadable or split-named file: no MTP for it */ }
+    }
+    this.mtpModelIds = next;
   }
 
   private async rebuildSupervisor(installed: InstalledEngine): Promise<void> {
@@ -1272,6 +1310,7 @@ export class EngineManager extends EventEmitter {
       // now actually restarts with the new setting. Passing cfg.* here is what
       // used to freeze the old values into the object for its whole life.
       readConfig: () => this.spawnConfig(),
+      beforeSpawn: () => this.refreshMtpModels(),
       presetPath: presetFilePath(this.home.root),
       // Beside models.ini: per machine, never synced (engine-log.ts).
       logPath: path.join(path.dirname(presetFilePath(this.home.root)), 'engine.log'),
@@ -1383,6 +1422,9 @@ export class EngineManager extends EventEmitter {
     // (writeModelPresets holds it back) — this reload must not unload a model
     // mid-reply, which is the entire reason the pending flag exists (design §C2).
     const merged = await this.mergeIdlePendingSettings();
+    // A finished download may be a model with MTP heads: learn that before the
+    // section is written, or it would get MTP only at the next engine start.
+    await this.refreshMtpModels().catch(() => {});
     try { this.writeModelPresets(); } catch { /* keep the file the engine already read */ }
     await this.supervisor.refreshModels();
     for (const id of merged) await this.unloadModel(id);

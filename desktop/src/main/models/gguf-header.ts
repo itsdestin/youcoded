@@ -97,6 +97,9 @@ const WANTED = new Set([
   'attention.recurrent_layers',
   'full_attention_interval',
   'nextn_predict_layers',
+  // How many experts a mixture-of-experts model has (absent or 0 = dense). Read so
+  // MTP drafting is turned on only for dense models (engine-manager.ts).
+  'expert_count',
   // The recurrent (Mamba-style) layers of a hybrid model do not hold an
   // attention cache, but they DO hold a state of their own, and it is not
   // small — 598 MiB on Qwen3.8-27B. These four keys are what sizes it.
@@ -213,6 +216,8 @@ export interface GgufHeader {
   ssmStateSize: number | null;
   ssmInnerSize: number | null;
   ssmGroupCount: number | null;
+  /** Experts in a mixture-of-experts model; null/0 = a dense model. */
+  expertCount: number | null;
   /** The resolved per-layer sliding map (true = this layer slides), from the
    *  bool array when the file has one, else from the scalar period and the
    *  architecture's dense-first rule. null = the reader could not build one. */
@@ -357,7 +362,7 @@ function emptyHeader(architecture: string): GgufHeader {
     slidingWindowPattern: null, slidingWindowPatternLayers: null,
     fullAttentionInterval: null, nextnPredictLayers: null,
     recurrentLayers: null, sharedKvLayers: null, slidingLayers: null,
-    ssmConvKernel: null, ssmStateSize: null, ssmInnerSize: null, ssmGroupCount: null,
+    ssmConvKernel: null, ssmStateSize: null, ssmInnerSize: null, ssmGroupCount: null, expertCount: null,
     contextBytesIsUpperBound: false, archBytes: 0,
   };
 }
@@ -505,6 +510,7 @@ function applyRaw(h: GgufHeader, raw: Map<string, number | boolean | string | (n
   h.ssmStateSize = num(h, raw, 'ssm.state_size');
   h.ssmInnerSize = num(h, raw, 'ssm.inner_size');
   h.ssmGroupCount = num(h, raw, 'ssm.group_count');
+  h.expertCount = num(h, raw, 'expert_count');
 
   // Per-head width: the explicit key when the file has one, else the classic
   // embedding ÷ heads. Falling back silently is safe — it is what llama.cpp
@@ -712,7 +718,9 @@ export async function fetchRemoteGgufHeader(url: string, fetchImpl: FetchLike = 
 // ---------------------------------------------------------------------------
 
 const CACHE_FILE = 'gguf-headers-cache.json';
-const CACHE_VERSION = 1;
+// 2 (2026-11-09): headers gained `expertCount`; a version-1 entry lacks it and
+// would make an MoE model look dense, so old entries are re-read once.
+const CACHE_VERSION = 2;
 
 interface CacheEntry { stamp: string; header: GgufHeader }
 interface CacheFile { version: number; entries: Record<string, CacheEntry> }
