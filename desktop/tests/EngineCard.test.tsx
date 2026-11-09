@@ -155,7 +155,7 @@ describe('EngineCard — what a rejected switch actually reads like', () => {
   it('strips the IPC wrapper off a refused switch, leaving the sentence alone', async () => {
     const status = {
       ...installed('b10665', 'b10665'),
-      backendOptions: [{ backend: 'rocm', label: 'Try ROCm (AMD) — reads faster, writes slower', state: 'ready' }],
+      backendOptions: [{ backend: 'rocm', label: 'Try ROCm (AMD) — usually slower in real use', state: 'ready' }],
     };
     (globalThis as any).window.claude = {
       engine: {

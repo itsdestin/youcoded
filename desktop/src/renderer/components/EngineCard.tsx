@@ -87,6 +87,9 @@ const CHIP_WORDS: Record<string, string> = { cuda: 'NVIDIA', rocm: 'AMD', metal:
 // happen, so pushing ROCm at everyone with an AMD chip made most of them
 // slower. It stays available — findable, not sold. Numbers and method:
 // docs/engine-dependencies.md → "ROCm vs Vulkan, measured".
+// Re-measured 2026-11-08: writing is now about equal, but ROCm reads faster only
+// on a freshly started engine and falls behind once other chats' readings are
+// kept (the app keeps them on purpose), so the row says "slower in real use".
 const OPTIONAL_BACKENDS = new Set<string>(['rocm']);
 
 export default function EngineCard({ showDetails = false }: { showDetails?: boolean }) {
@@ -316,8 +319,8 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
             // on screen reads as a promise about the reader's.
             optional
               ? (opt.state === 'needs-prereqs'
-                  ? `Not recommended. ${build} needs AMD's software installed first, and it writes replies more slowly than ${current}.`
-                  : `Not recommended. ${build} begins reading a long message sooner, but writes its reply more slowly than ${current}.`)
+                  ? `Not recommended. ${build} needs AMD's software installed first, and it is usually slower than ${current} in real use.`
+                  : `Not recommended. ${build} can read a long message sooner right after it starts, but it slows down as your conversations build up, so it is usually slower than ${current}.`)
               : (opt.state === 'needs-prereqs'
                   ? `${build} needs AMD's software installed first.`
                   : `${build} is usually much faster than ${current} on this chip.`),

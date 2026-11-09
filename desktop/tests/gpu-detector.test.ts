@@ -221,7 +221,7 @@ describe('backendOptions — every gate', () => {
   it('AMD gfx1151 on Linux x64 with the libraries → ROCm, ready', () => {
     // This machine.
     const opts = backendOptions({ ...base, platform: 'linux', arch: 'x64', vendor: 'amd', gfxTarget: 'gfx1151' });
-    expect(opts).toEqual([{ backend: 'rocm', label: 'Try ROCm (AMD) — reads faster, writes slower', state: 'ready' }]);
+    expect(opts).toEqual([{ backend: 'rocm', label: 'Try ROCm (AMD) — usually slower in real use', state: 'ready' }]);
   });
   // 2026-09-05, measured on this machine (engine b10665, AMD Strix Halo /
   // Radeon 8060S, Qwen3.5-9B Q8 and Qwen3.8-27B Q8, 200 forced tokens,
@@ -261,7 +261,7 @@ describe('backendOptions — every gate', () => {
     expect(pickAsset('win32', 'x64', 'rocm')?.gfxTargets).not.toContain('gfx942');
     // Windows publishes no gfx target to read, so it offers on vendor alone.
     const opts = backendOptions({ ...base, platform: 'win32', arch: 'x64', vendor: 'amd', gfxTarget: null });
-    expect(opts).toEqual([{ backend: 'rocm', label: 'Try ROCm (AMD) — reads faster, writes slower', state: 'ready' }]);
+    expect(opts).toEqual([{ backend: 'rocm', label: 'Try ROCm (AMD) — usually slower in real use', state: 'ready' }]);
   });
   it('an AMD chip the pin does not list at all → nothing offered', () => {
     // gfx803 (Polaris) is not in either row.

@@ -465,10 +465,16 @@ export function detectGpu(): Promise<GpuInfo> {
  *  and WROTE the reply 24–46% SLOWER than the Vulkan build it replaces. Writing
  *  is the half a user sits and watches, so "faster" was false for the part that
  *  matters. The label now names the trade instead of promising a win. Numbers
- *  and method: docs/engine-dependencies.md → "ROCm vs Vulkan, measured". */
+ *  and method: docs/engine-dependencies.md → "ROCm vs Vulkan, measured".
+ *
+ *  WHY "usually slower in real use" (re-measured 2026-11-08, same chip): the
+ *  writing gap is gone, and ROCm reads faster only on a freshly started
+ *  engine. Once other chats' readings are kept — which the app does on purpose
+ *  (slot-pins.ts) — its reading falls behind Vulkan and keeps fading, so the
+ *  old "reads faster" half of the label stopped being true too. */
 const BACKEND_LABELS: Partial<Record<EngineBackend, string>> = {
   cuda: 'Switch to CUDA (faster on NVIDIA)',
-  rocm: 'Try ROCm (AMD) — reads faster, writes slower',
+  rocm: 'Try ROCm (AMD) — usually slower in real use',
 };
 
 export interface BackendOptionInput {

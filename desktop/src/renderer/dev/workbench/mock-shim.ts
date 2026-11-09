@@ -1847,7 +1847,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     deviceName: 'AMD Radeon 8060S Graphics',
     loadedModelsBytes: activeScenario === 'stress' ? 9_527_502_048 : 0,
     lastReply: activeScenario === 'stress' ? { promptPerSecond: 383, generatePerSecond: 16.4 } : null,
-    backendOptions: currentBackend === 'rocm' ? [] : [{ backend: 'rocm' as const, label: 'Try ROCm (AMD) \u2014 reads faster, writes slower', state: 'needs-prereqs' as const }],
+    backendOptions: currentBackend === 'rocm' ? [] : [{ backend: 'rocm' as const, label: 'Try ROCm (AMD) \u2014 usually slower in real use', state: 'needs-prereqs' as const }],
     speed: { ...speed },
     configApplyPending,
     // `stress` is the scenario with a model loaded and a reply just measured, so
