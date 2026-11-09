@@ -1,6 +1,7 @@
 // "Notify user" reliability (2026-10-26, notify-user plan Part 3): capable sessions no longer get the app's automatic
 // "Response ready" blue, so the assistant must call NotifyUser whenever it hands the conversation back, and only then.
-// Each case is one situation from the plan's expected-experience table (docs/active/plans/2026-10-26-notify-user-red-and-model-driven.md):
+// Each case is one situation from the plan's expected-experience table (workspace commit c0101e182, docs/active/plans/2026-10-26-notify-user-red-and-model-driven.md; now
+// 2026-10-26-notify-user.md, which marks the quick-answer and background cases as encoding the REJECTED rule):
 //   E1 finished a task          → exactly one notification, at the end
 //   E2 checkpoint, keeps going  → a notification with more work after it
 //   E4 quick conversational one → no notification

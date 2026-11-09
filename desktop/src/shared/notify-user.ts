@@ -10,6 +10,10 @@
 // Deliberately NOT here (Destin, 2026-10-26): "needs your input". The assistant
 // can only make a conversation's light BLUE; red stays reserved for the app's own
 // permission and question cards.
+//
+// STATUS (2026-11-09): this branch is reference only. Destin rejected the assistant owning "ready"
+// (readyIsTheModels / NOTIFY_INSTRUCTION's "short answer" carve-out) on 2026-10-27; the feature will be
+// redesigned and rebuilt from master. See the workspace doc docs/active/plans/2026-10-26-notify-user.md.
 import { CLAUDE_CODE_MCP_SERVER_ID } from './send-user-link';
 
 /** The native harness tool's name. */
