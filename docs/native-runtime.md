@@ -96,9 +96,9 @@ is refused, and a stored file over that size is refused at restore. The refusal
 happens after the fence, so an oversized replacement leaves the older checkpoint
 ineligible rather than restorable-but-stale.
 
-**Fallback reason codes.** Every failure logs one fixed code and no content; the
-session silently falls back to rebuilding history from the transcript, which is
-correct but loses the ciphertext. Publish: `stale-generation`, `oversized`,
+**Fallback reason codes.** Every failure logs one fixed code and no content. The
+session first tries a validated public compaction record, then ordinary transcript
+reconstruction; neither can recover private reasoning ciphertext. Publish: `stale-generation`, `oversized`,
 `write-failed`, `unreferenced-history`, plus `persistence-failed` /
 `unknown-reference` from the transcript flush and `publish-failed` if the store
 itself rejects. Restore: `ineligible`, `malformed`, `oversized`,
@@ -107,6 +107,18 @@ itself rejects. Restore: `ineligible`, `malformed`, `oversized`,
 continuation identity cannot be built (ChatGPT signed out). The line carries a
 `phase` of `publish` or `restore`, because a restore fallback is routine (no
 sidecar yet, another device, a changed model) and used to read as a failed write.
+
+**Interrupted-history recovery.** Reconstruction pairs results only with the
+immediately preceding assistant call group, excludes unmatched/duplicate outputs
+from model memory, and supplies completion-unknown results for calls whose results
+were not saved. The readable source transcript is unchanged. A validated public
+summary remains usable when its retained suffix needs these repairs: transformed
+messages keep `null` origins rather than claiming persisted references. Such
+origins cannot prove a new portable cut. UUID/origin capture metadata does not
+make a rebuilt history an exact accepted prefix; the host passes an explicit
+restore mode so only reconstructed resumes can use the emergency request-only
+context fit after an unfittable summary. Exact checkpoints and live prefixes stay
+protected.
 
 **Credential epoch.** The checkpoint is bound to a continuation identity, which
 for ChatGPT is `providerId\0modelId\0sha256(accountId)\0credentialEpoch`. The

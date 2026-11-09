@@ -3296,27 +3296,27 @@ export class NativeSessionHost extends EventEmitter {
           session.seedHistory(restored.messages, {
             eventUuids: restored.eventUuids, revision: restored.revision,
             transformation: restored.transformation, continuationBinding: identity,
-            messageOrigins,
+            messageOrigins, restoreMode: 'exact',
           });
           return;
         }
         this.logContinuation(sessionId, restored.reason, 'restore');
       }
     }
-    // WHY: the private exact snapshot is optional. The public checkpoint has
-    // its own persisted cut, and is safe across binding/prompt changes.
+    // WHY: public checkpoints rebuild from a persisted cut, not an exact accepted
+    // prefix; capture metadata must not disable emergency fitting after restore.
     if (portable) {
       session.seedHistory(portable.messages, {
-        eventUuids: portable.eventUuids, messageOrigins: portable.origins,
+        restoreMode: 'reconstructed', eventUuids: portable.eventUuids, messageOrigins: portable.origins,
         transformation: { kind: 'summary', summaryEventUuid: portable.eventUuids[0] },
       });
       return;
     }
-    // Ordinary reconstruction (spec §2.5), seeded with every persisted uuid
-    // after the last context-clear barrier so a session that has no checkpoint
-    // — a cross-device transcript, a fallback, an app that predates this —
-    // still becomes durable at its very next publication.
-    session.seedHistory(rebuilt.messages, { eventUuids: persistedUuidsAfterLastClear(persisted), messageOrigins: rebuilt.origins });
+    // Ordinary reconstruction (spec §2.5): seed persisted UUIDs after the last
+    // clear so cross-device, legacy and fallback histories become durable again
+    // at their next publication.
+    session.seedHistory(rebuilt.messages, { restoreMode: 'reconstructed',
+      eventUuids: persistedUuidsAfterLastClear(persisted), messageOrigins: rebuilt.origins });
   }
 
   /** Subscribe a freshly-built HarnessSession: forward its events to the

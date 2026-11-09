@@ -31,9 +31,9 @@ import { compactionSourceDigest } from './compaction-record';
 // Pure string helpers and a type only — the READER itself stays injected.
 import { imageNote, downscaledNote, deliverableImageMediaType, UNDELIVERABLE_IMAGE_EXTENSIONS, type ImageReadResult } from './image-support';
 
-// Synthesized result text for a tool-call that has no persisted result — a
-// transcript truncated by a crash mid-execution (see backfillUnpairedToolCalls).
-const CRASH_UNPAIRED_TEXT = 'Canceled: this call never completed (the app was closed mid-execution).';
+// WHY: missing persistence proves neither cancellation nor execution failure.
+// A tool may have changed disk before its result was lost; never invite blind retry.
+const CRASH_UNPAIRED_TEXT = 'Recovery: no saved result; completion unknown. This call may have run; inspect current state before retrying.';
 
 /** Re-reads a persisted image path at rebuild time. Injected (not imported) so
  *  the module stays pure and tests need no filesystem. Production passes a
@@ -107,9 +107,10 @@ export function restorePortableHistory(events: TranscriptEvent[], readImage?: Re
     const suffix = [...active.slice(from, i), ...active.slice(i + 1)]
       .filter(e => e.type !== 'compact-summary');
     const rebuilt = rebuildHistoryWithOrigins(suffix, readImage);
-    // Synthetic tool repairs have no persisted UUID. Refuse to publish an
-    // apparently portable history whose tail cannot be cited on a later cut.
-    if (rebuilt.origins.some(origin => !origin?.length)) { reject(); continue; }
+    // WHY: pairing repairs in the retained suffix do not invalidate this
+    // already-proven summary/cut. Rejecting it resurrects the entire retired
+    // history and can overflow context. Keep repaired origins null: future
+    // capture/compaction must still prove its own cut, not cite invented events.
     const summary = markAppGenerated({ role: 'user', content: `[Earlier conversation summary]\n${marker.data.summary}` } as ModelMessage);
     return { messages: [summary, ...rebuilt.messages], origins: [[marker.uuid], ...rebuilt.origins],
       eventUuids: [marker.uuid, ...suffix.map(e => e.uuid).filter((uuid): uuid is string => typeof uuid === 'string' && !!uuid)],
@@ -305,6 +306,9 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
       // it did live. Rendering is a separate concern (a compact card); without
       // this a resumed session would replay a turn whose opening move has no cause.
       case 'skill-invoked':
+        // WHY: skill instructions are user-role barriers too; pending calls and
+        // results must close before them, never pair across the instructions.
+        flushAssistant(); flushResults();
         if (e.data.body) {
           out.push(markAppGenerated({ role: 'user', content: e.data.args ? `${e.data.body}\n\n${e.data.args}` : e.data.body }));
           origins.push([e.uuid]);
@@ -345,14 +349,19 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
  *   - MID-STREAM ORPHAN: after a crash the session was resumed and MORE events
  *     appended, so an unpaired tool-use sits in the MIDDLE (assistant tool-call
  *     directly followed by a user-message) — the store is never healed.
- * fitToContext only trims LEADING orphans, so neither case is caught downstream;
- * a bricked session persists across sends. Synthesize an isError tool-result for
- * each unpaired call — faithful to the live interrupt/cancel back-fill.
+ * Failed writes can also persist outputs without calls, or duplicate outputs.
+ * Drop those model-facing outputs rather than inventing missing tool inputs.
+ * Synthesize a completion-unknown recovery result for each unpaired call;
+ * source transcript events remain untouched in both directions.
  */
 function backfillUnpairedToolCalls(messages: ModelMessage[]): ModelMessage[] {
   const out: ModelMessage[] = [];
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
+    // WHY: failed disk writes can lose the call while retaining its output.
+    // Only the immediately preceding assistant group may authorize results;
+    // never fabricate missing inputs or change the persisted transcript.
+    if (msg.role === 'tool') continue;
     out.push(msg);
     if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
     const calls = (msg.content as Array<{ type: string }>).filter((p): p is ToolCallPart => p.type === 'tool-call');
@@ -360,21 +369,29 @@ function backfillUnpairedToolCalls(messages: ModelMessage[]): ModelMessage[] {
 
     const next = messages[i + 1];
     const nextIsTool = !!next && next.role === 'tool' && Array.isArray(next.content);
+    const expected = new Set(calls.map(c => c.toolCallId));
     const covered = new Set<string>();
+    const valid: ToolResultPart[] = [];
     if (nextIsTool) {
-      for (const p of next!.content as ToolResultPart[]) if (p.type === 'tool-result') covered.add(p.toolCallId);
+      for (const p of next.content as ToolResultPart[]) {
+        // WHY: parallel groups can contain both good and orphan/duplicate
+        // outputs. Consume each expected ID once and keep valid parts intact.
+        if (p.type !== 'tool-result' || !expected.has(p.toolCallId) || covered.has(p.toolCallId)) continue;
+        covered.add(p.toolCallId);
+        valid.push(p);
+      }
     }
     const missing = calls.filter((c) => !covered.has(c.toolCallId));
-    if (missing.length === 0) continue;
 
     const synthetic: ToolResultPart[] = missing.map((c) => ({
       type: 'tool-result', toolCallId: c.toolCallId, toolName: c.toolName,
       output: { type: 'text', value: CRASH_UNPAIRED_TEXT },
     }));
     if (nextIsTool) {
-      // Partial coverage: merge synthetic results into the following tool
-      // message and CONSUME the original (i++), so it isn't emitted twice.
-      out.push({ role: 'tool', content: [...(next!.content as ToolResultPart[]), ...synthetic] });
+      // WHY: unchanged messages retain identity (and their backed origins).
+      // A filtered or backfilled message is new, so its origin becomes null.
+      out.push(valid.length === next.content.length && !synthetic.length
+        ? next : { role: 'tool', content: [...valid, ...synthetic] });
       i++;
     } else {
       // No tool message follows (truncated tail, or the tool-call sits right
