@@ -72,6 +72,15 @@ export function registerTerminal(sessionId: string, terminal: Terminal) {
   terminals.set(sessionId, terminal);
 }
 
+/** Paste text into a session's terminal as if typed (xterm adds the bracketed-paste markers when the program asked for
+ *  them). The phone's Attach and Paste keys (TerminalToolbar). False when that terminal is not open. */
+export function pasteIntoTerminal(sessionId: string, text: string): boolean {
+  const t = terminals.get(sessionId);
+  if (!t) return false;
+  t.paste(text);
+  return true;
+}
+
 export function unregisterTerminal(sessionId: string) {
   terminals.delete(sessionId);
 }

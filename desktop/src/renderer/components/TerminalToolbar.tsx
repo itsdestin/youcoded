@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from './ui';
-import { BackIcon, ForwardIcon } from './Icons';
+import { AttachIcon, BackIcon, ForwardIcon } from './Icons';
+import { pasteIntoTerminal } from '../hooks/terminal-registry';
 
 interface TerminalToolbarProps {
   sessionId: string;
+  /** The phone app types straight into the terminal (no message box): the row trades Enter and the arrows (now on
+   *  the D-pad) for Attach and Paste. */
+  direct?: boolean;
+  /** Short notices (an empty clipboard, a failed paste). */
+  onToast?: (msg: string) => void;
 }
 
 // ── A one-shot Ctrl, per session ─────────────────────────────────────────────────────────────────────────────────
@@ -39,6 +45,29 @@ export function consumeCtrlLetter(sessionId: string, prev: string, next: string)
   return true;
 }
 
+/** Phone app (typing straight into the terminal): the letter typed while Ctrl is held becomes Ctrl+letter, and Ctrl
+ *  switches itself off after any key. Returns what to send to the program. */
+export function applyHeldCtrl(sessionId: string, data: string): string {
+  if (!ctrlHeld.has(sessionId)) return data;
+  setCtrlHeld(sessionId, false);
+  if (data.length !== 1) return data;
+  const ch = data.toUpperCase();
+  if (!/^[A-Z@[\\\]^_]$/.test(ch)) return data;
+  return String.fromCharCode(ch.charCodeAt(0) & 0x1f);
+}
+
+/** WHY on every key (2026-11-08): in the phone app the keyboard types into the terminal, and a tap that moved focus
+ *  to the key would close the keyboard after every Esc or arrow. Stopping the press's default keeps focus (and the
+ *  keyboard) where it was; the click still fires. */
+function keepTyping(e: React.MouseEvent) {
+  e.preventDefault();
+}
+
+/** A file path as Claude Code reads it from typed text: quoted when it holds a space. */
+function pathForTerminal(p: string): string {
+  return /\s/.test(p) ? `"${p}"` : p;
+}
+
 /**
  * Touch-only row of special keys (Ctrl, Esc, Tab, Enter, Space, ← →) for terminal view, in the slot the quick chips use in
  * chat view. Sends escape sequences straight to the PTY via sendInput.
@@ -53,12 +82,51 @@ export function consumeCtrlLetter(sessionId: string, prev: string, next: string)
  * choices in Claude Code's side-by-side menus and along its typing line. No divider lines: Destin dislikes "horizontal
  * lines that bisect a container".
  */
-export default function TerminalToolbar({ sessionId }: TerminalToolbarProps) {
+export default function TerminalToolbar({ sessionId, direct, onToast }: TerminalToolbarProps) {
   const ctrl = useCtrlHeld(sessionId);
   const send = useCallback((input: string) => {
     setCtrlHeld(sessionId, false);
     window.claude.session.sendInput(sessionId, input);
   }, [sessionId]);
+
+  // WHY Attach and Paste here (Destin, 2026-11-08: "add an attachment button … since it won't be in the input bar
+  // anymore. Might also want like a paste button"): in the phone app terminal view has no message box, so its
+  // paperclip and a long-press paste are gone. Both go in as a terminal paste, exactly as if typed: a picked file's
+  // path (Claude Code reads a pasted path as that file), or the clipboard's text.
+  const attach = useCallback(async () => {
+    setCtrlHeld(sessionId, false);
+    try {
+      const paths = await window.claude.dialog.openFile();
+      if (paths.length > 0) pasteIntoTerminal(sessionId, paths.map(pathForTerminal).join(' ') + ' ');
+    } catch {
+      onToast?.('Couldn\'t attach that file. Try again.');
+    }
+  }, [sessionId, onToast]);
+  const paste = useCallback(async () => {
+    setCtrlHeld(sessionId, false);
+    try {
+      const r = await (window.claude as unknown as { android?: { readClipboard?: () => Promise<{ text?: string } | null> } }).android?.readClipboard?.();
+      if (r?.text) pasteIntoTerminal(sessionId, r.text);
+      else onToast?.('Nothing to paste. Copy some text first.');
+    } catch {
+      onToast?.('Couldn\'t read the clipboard. Try again.');
+    }
+  }, [sessionId, onToast]);
+
+  if (direct) {
+    return (
+      <div className="scroll-mask scroll-mask--chips flex px-3 py-1 overflow-x-auto scrollbar-none">
+        <div className="flex flex-1 items-center gap-1">
+          <Key label="Ctrl" pressed={ctrl} onClick={() => setCtrlHeld(sessionId, !ctrl)} />
+          <Key label="Esc" onClick={() => send('\x1b')} />
+          <Key label="Tab" onClick={() => send('\t')} />
+          <Key label="Space" onClick={() => send(' ')} />
+          <Key label="Attach file" icon={<AttachIcon className="w-4 h-4" />} onClick={() => { void attach(); }} />
+          <Key label="Paste" onClick={() => { void paste(); }} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="scroll-mask scroll-mask--chips flex px-3 py-1 overflow-x-auto scrollbar-none">
@@ -83,6 +151,7 @@ export default function TerminalToolbar({ sessionId }: TerminalToolbarProps) {
 function Key({ label, icon, pressed, onClick }: { label: string; icon?: React.ReactNode; pressed?: boolean; onClick: () => void }) {
   return (
     <Button
+      onMouseDown={keepTyping}
       variant={pressed ? 'primary' : 'raised'}
       size="sm"
       onClick={onClick}
@@ -108,12 +177,14 @@ function Key({ label, icon, pressed, onClick }: { label: string; icon?: React.Re
  * insets the message box differently (and themes add their own margins), so the pair now lines up with the send
  * button inside that box, whatever put it there. Until it is measured it keeps the old 8px.
  */
-export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
+export function TerminalScrollButtons({ sessionId, direct }: TerminalToolbarProps) {
   const send = useCallback((input: string) => {
     window.claude.session.sendInput(sessionId, input);
   }, [sessionId]);
   const probe = useRef<HTMLDivElement>(null);
-  const right = useMessageBoxRightFor(probe);
+  const measured = useMessageBoxRightFor(probe);
+  // The phone app's terminal view has no message box to line up with (its box is hidden): the key row's own inset.
+  const right = direct ? DPAD_RIGHT_PX : measured;
 
   return (
     // WHY above --terminal-bottom-inset: on a touch screen the input bar floats OVER the terminal (globals.css,
@@ -124,14 +195,51 @@ export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
       className="absolute z-10 pointer-events-auto flex flex-col gap-1.5 select-none"
       style={{ right: right ?? 8, bottom: 'calc(var(--terminal-bottom-inset, 0px) + 0.5rem)' }}
     >
+      {direct ? <DPad send={send} /> : <>
       {/* Change 41 kept: a 40×40 target each — a primary touch control floating over the terminal. Two keys with a
           gap, never a line between them (Destin, 2026-11-05: "the line between the arrows is grodi"). */}
-      <Button variant="raised" size="icon" aria-label="Scroll up" onClick={() => send('\x1b[A')} className="w-10 h-10 text-fg-2 rounded-md">
+      <Button onMouseDown={keepTyping} variant="raised" size="icon" aria-label="Scroll up" onClick={() => send('\x1b[A')} className="w-10 h-10 text-fg-2 rounded-md">
         <ForwardIcon className="w-5 h-5 -rotate-90" />
       </Button>
-      <Button variant="raised" size="icon" aria-label="Scroll down" onClick={() => send('\x1b[B')} className="w-10 h-10 text-fg-2 rounded-md">
+      <Button onMouseDown={keepTyping} variant="raised" size="icon" aria-label="Scroll down" onClick={() => send('\x1b[B')} className="w-10 h-10 text-fg-2 rounded-md">
         <ForwardIcon className="w-5 h-5 rotate-90" />
       </Button>
+      </>}
+    </div>
+  );
+}
+
+/** The D-pad's gap from the right edge: the key row's own side padding (px-3). */
+const DPAD_RIGHT_PX = 12;
+
+/** Phone app: the D-pad where the up/down pair floats. WHY (Destin, 2026-11-08): "get rid of enter altogether. And
+ *  put the current like send button in between the up and down arrows. And then maybe put the left right arrows …
+ *  to the side of that, like a little … D pad". Send is Enter: it sends what was typed and confirms a menu choice. */
+function DPad({ send }: { send: (input: string) => void }) {
+  const pad = 'w-10 h-10 text-fg-2 rounded-md';
+  return (
+    <div className="grid grid-cols-3 gap-1">
+      <span />
+      <Button onMouseDown={keepTyping} variant="raised" size="icon" aria-label="Up" onClick={() => send('\x1b[A')} className={pad}>
+        <ForwardIcon className="w-5 h-5 -rotate-90" />
+      </Button>
+      <span />
+      <Button onMouseDown={keepTyping} variant="raised" size="icon" aria-label="Left" onClick={() => send('\x1b[D')} className={pad}>
+        <BackIcon className="w-5 h-5" />
+      </Button>
+      <Button onMouseDown={keepTyping} size="icon" aria-label="Send" onClick={() => send('\r')} className="w-10 h-10 rounded-md">
+        <svg className="w-4 h-4 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+        </svg>
+      </Button>
+      <Button onMouseDown={keepTyping} variant="raised" size="icon" aria-label="Right" onClick={() => send('\x1b[C')} className={pad}>
+        <ForwardIcon className="w-5 h-5" />
+      </Button>
+      <span />
+      <Button onMouseDown={keepTyping} variant="raised" size="icon" aria-label="Down" onClick={() => send('\x1b[B')} className={pad}>
+        <ForwardIcon className="w-5 h-5 rotate-90" />
+      </Button>
+      <span />
     </div>
   );
 }

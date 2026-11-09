@@ -3761,7 +3761,7 @@ function AppInner() {
                 />
               )}
               {isTerminalTouch && sessionId && (
-                <TerminalScrollButtons sessionId={sessionId} />
+                <TerminalScrollButtons sessionId={sessionId} direct={getPlatform() === 'android'} />
               )}
             </div>
             {/* Always mounted so draft text survives chat↔terminal switches.

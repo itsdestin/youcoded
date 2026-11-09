@@ -20,6 +20,10 @@ import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } fro
 import { computeTerminalSurface } from '../themes/theme-engine';
 import { ScreenMark } from '../shoot-mode';
 import { swipeAction } from './terminal-swipe';
+import { applyHeldCtrl } from './TerminalToolbar';
+
+/** Finger travel (px) under which a touch on the phone's terminal is a tap, not a swipe. */
+const TAP_SLOP_PX = 8;
 
 // Photo-only build flag (vite.config.ts `define`); see shoot-mode.tsx.
 declare const __SHOOT__: boolean;
@@ -95,6 +99,8 @@ function TerminalView({ sessionId, visible }: Props) {
   const feederRef = useRef<{ id: string; feeder: TerminalFeeder } | null>(null);
   const updateThumbRef = useRef<(() => void) | null>(null);
   const visibleRef = useRef(visible);
+  /** The phone app types straight into this terminal (set when the terminal is made). */
+  const directRef = useRef(false);
   visibleRef.current = visible;
   // Previous `visible`, updated only inside the visibility effect (NOT on every
   // render like visibleRef). Lets the glyph-atlas heal below fire on a genuine
@@ -164,12 +170,19 @@ function TerminalView({ sessionId, visible }: Props) {
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // Touch platforms (Android, remote browser) render xterm display-only:
+    // Touch platforms other than the phone app (a phone browser) render xterm display-only:
     // typing flows through the InputBar minimal-mode <textarea> instead of
     // xterm's hidden textarea (which would summon the soft keyboard and
     // expose the historical xterm.js mobile IME issues). disableStdin
     // suppresses xterm's input handling entirely.
     const touch = isTouchDevice();
+    // WHY the phone app types straight into the terminal (Destin, 2026-11-08, after trying it: "this actually works super
+    // well in this new terminal renderer"; then "completely replace the … keyboard with just the native terminal
+    // typing"): with Claude Code's fullscreen mode the old mobile-keyboard trouble is gone, so in the Android app the
+    // phone's keyboard types into xterm itself and terminal view has no message box (InputBar `direct`). A phone
+    // BROWSER (remote access) keeps the message box (Destin: "Phone app only") — its keyboards are untested here.
+    const direct = touch && getPlatform() === 'android';
+    directRef.current = direct;
     const terminal = new Terminal({
       allowProposedApi: true,
       cursorBlink: true,
@@ -180,7 +193,7 @@ function TerminalView({ sessionId, visible }: Props) {
       fontSize: touch ? 12 : 14,
       fontFamily: TERMINAL_FONT,
       theme: getXtermTheme(xtermBackgroundRef.current),
-      disableStdin: touch,
+      disableStdin: touch && !direct,
     });
 
     const fitAddon = new FitAddon();
@@ -500,10 +513,11 @@ function TerminalView({ sessionId, visible }: Props) {
     // also skip onData wiring to make sure no path can deliver text from
     // xterm's hidden textarea to the PTY (the InputBar minimal-mode textarea
     // is the canonical input on touch).
-    if (!touch) {
+    if (!touch || direct) {
       terminal.onData((data) => {
         if (!visibleRef.current) return;
-        window.claude.session.sendInput(sessionId, data);
+        // The phone's held Ctrl key turns the next letter into Ctrl+letter (TerminalToolbar).
+        window.claude.session.sendInput(sessionId, direct ? applyHeldCtrl(sessionId, data) : data);
       });
     }
 
@@ -527,7 +541,11 @@ function TerminalView({ sessionId, visible }: Props) {
       // accumulate into eventual single-line scrolls instead of being lost.
       let remainder = 0;
 
+      // The phone app: a tap (the finger barely moved) opens the keyboard on the terminal; a swipe only scrolls.
+      let startY = 0;
+      let moved = false;
       const onTouchStart = (e: TouchEvent) => {
+        if (e.touches.length === 1) { startY = e.touches[0].clientY; moved = false; }
         if (e.touches.length !== 1) {
           active = false;
           return;
@@ -543,6 +561,7 @@ function TerminalView({ sessionId, visible }: Props) {
         e.preventDefault();
         e.stopPropagation();
         const currentY = e.touches[0].clientY;
+        if (Math.abs(currentY - startY) > TAP_SLOP_PX) moved = true;
         // delta > 0 → finger moved up → show newer (scroll down: positive)
         // delta < 0 → finger moved down → show older (scroll up: negative)
         const deltaPx = lastY - currentY + remainder;
@@ -563,7 +582,8 @@ function TerminalView({ sessionId, visible }: Props) {
         }
         lastY = currentY;
       };
-      const onTouchEnd = () => {
+      const onTouchEnd = (e: TouchEvent) => {
+        if (direct && e.type === 'touchend' && active && !moved) terminal.focus();
         active = false;
         remainder = 0;
       };
@@ -700,7 +720,8 @@ function TerminalView({ sessionId, visible }: Props) {
         // re-rasterize, so the rig counts clears per switch (terminal-registry).
         noteAtlasClear();
       }
-      const raf = requestAnimationFrame(() => terminalRef.current?.focus());
+      // Not in the phone app: focusing there opens the keyboard every time terminal view is shown; a tap opens it.
+      const raf = requestAnimationFrame(() => { if (!directRef.current) terminalRef.current?.focus(); });
       return () => cancelAnimationFrame(raf);
     }
     if (!visible && terminalRef.current) {
