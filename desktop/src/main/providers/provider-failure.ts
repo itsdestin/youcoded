@@ -183,6 +183,14 @@ export function classifyFailure(error: unknown): ProviderFailure {
 export function logTurnFailure(sessionId: string, error: unknown): ProviderFailure {
   const failure = classifyFailure(error);
   const e: any = (error as any)?.lastError ?? error;
-  log('WARN', 'HarnessSession', 'turn ended with a provider error', { sessionId, kind: failure.kind, code: failure.code, status: e?.statusCode ?? e?.status });
+  // WHY the NUMBERS of a too-long refusal (2026-11-09): a local turn ended "too long" with
+  // ~22.6k of a 32k window used, and the log held only kind/code, so whether the engine
+  // counted the prompt, the reply allowance or something else could not be told. Only the
+  // digits are kept ("request (34100 tokens) exceeds … (32768 tokens)" → [34100, 32768]):
+  // the trace stays content-free, as the test for this function requires.
+  const tokenCounts = failure.kind === 'too-long'
+    ? (String(e?.responseBody ?? e?.message ?? '').match(/\d{3,7}/g) ?? []).slice(0, 4).map(Number)
+    : [];
+  log('WARN', 'HarnessSession', 'turn ended with a provider error', { sessionId, kind: failure.kind, code: failure.code, status: e?.statusCode ?? e?.status, ...(tokenCounts.length ? { tokenCounts } : {}) });
   return failure;
 }

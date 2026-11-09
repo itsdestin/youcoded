@@ -8,10 +8,10 @@
 /** Characters per token used ONLY to turn room into a cap. Deliberately pessimistic (the history
  *  estimator uses 4): code measured ~3 on the real chats, and an over-cut is recoverable (the notice
  *  says how to read more) while an over-fit is not. */
-export const CAP_CHARS_PER_TOKEN = 3;
+const CAP_CHARS_PER_TOKEN = 3;
 /** The model always gets at least this much, however little room is left; compaction (not a
  *  zero-length result) is the way out of a nearly-full window. */
-export const MIN_RESULT_CHARS = 2_000;
+const MIN_RESULT_CHARS = 2_000;
 
 /** Cap `text` to `roomTokens`. Returns `text` untouched when it fits. `hint` is the tool's own
  *  "how to get the rest" sentence (FIT_MORE_HINT); absent for tools that cannot narrow. */

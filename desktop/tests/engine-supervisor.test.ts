@@ -1898,8 +1898,8 @@ describe('EngineSupervisor — abandoned bodies do not leak inFlight', () => {
     sup = makeSupervisor(okFetch());
     await sup.ensureRunning();
     await sup.loadModel('m-Q4_K_M');
-    await new Promise((r) => setTimeout(r, 20));
-    expect(sup.busy()).toBe(false);
+    // loadModel counts the request synchronously, so this waits for the release itself.
+    await vi.waitFor(() => expect(sup.busy()).toBe(false));
   });
 
   it('aborting the request releases inFlight even if the body is never read', async () => {

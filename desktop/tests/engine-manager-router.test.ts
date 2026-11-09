@@ -922,7 +922,10 @@ describe('per-model settings', () => {
       });
       mgr = makeManager(fetchImpl, { supervisorOpts: { pidOnPort: () => 4242, exeForPid: () => null, readyDeadlineMs: 5_000, readyPollMs: 5 } });
       const booting = mgr.registryHook().ensureRunning();
-      setImmediate(() => {
+      // The crash is staged once the first child EXISTS: the supervisor now reads model
+      // headers (MTP) before it spawns, so a fixed next-tick crash could land before the
+      // listeners are attached.
+      void vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(1)).then(() => {
         // The engine's own words for "I could not read that file at all" — no
         // model is named, so there is no section to drop and T7 boots without it.
         first.stderr!.emit('data', Buffer.from(
@@ -1235,7 +1238,10 @@ describe('per-model settings', () => {
       mgr = makeManager(fetchImpl, { supervisorOpts: { pidOnPort: () => 4242, exeForPid: () => null, readyDeadlineMs: 5_000, readyPollMs: 5 } });
 
       const booting = mgr.registryHook().ensureRunning();
-      setImmediate(() => {
+      // The crash is staged once the first child EXISTS: the supervisor now reads model
+      // headers (MTP) before it spawns, so a fixed next-tick crash could land before the
+      // listeners are attached.
+      void vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(1)).then(() => {
         first.stderr!.emit('data', Buffer.from(
           '0.00.050.247 E srv    llama_server: failed to initialize router models: '
           + "option 'not-a-real-flag' not recognized in preset 'alpha'"

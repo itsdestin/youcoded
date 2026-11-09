@@ -406,7 +406,7 @@ export interface PresetFileInput {
  *  Measured 2026-11-08, Qwen3.8-27B Q8 on Strix Halo: replies 6.7 → 11-15 t/s,
  *  reading unchanged. History: found 2026-07-14 (+25% on Qwen3.6-35B-A3B), then
  *  lost when its to-do list was deleted — docs/engine-dependencies.md. */
-export const MTP_ENTRIES: readonly PresetEntry[] = [
+const MTP_ENTRIES: readonly PresetEntry[] = [
   { key: 'spec-type', value: 'draft-mtp' },
   { key: 'spec-draft-n-max', value: '3' },
 ];

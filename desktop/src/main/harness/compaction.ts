@@ -405,7 +405,7 @@ const TOOL_MARKUP = /<tool_call\b[\s\S]*?(?:<\/tool_call>|$)|<function=[\s\S]*?(
 const BARE_JSON_CALL = /^\s*[[{][\s\S]*"(?:name|tool|function|tool_name)"\s*:[\s\S]*"(?:arguments|args|input|parameters)"\s*:[\s\S]*[\]}]\s*$/;
 /** Shortest believable summary: 1% of the replaced text, clamped to 16..600 characters, and never
  *  more than half of a tiny span. A real handoff is >1,000 characters; "Done." or a lone tag is not. */
-export function minSummaryChars(spanChars: number): number {
+function minSummaryChars(spanChars: number): number {
   return Math.min(Math.max(16, Math.min(600, Math.floor(spanChars * 0.01))), Math.floor(spanChars / 2));
 }
 /** True when `text` must not replace history: empty, tool-call markup (alone or after stripping it
