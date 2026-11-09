@@ -138,10 +138,7 @@ export function useVisualViewport() {
       // reporting (on Android WebView: essentially just the IME).
       // Math.max guards against negative values during orientation changes.
       const reported = Math.max(0, window.innerHeight - vv.height - vv.offsetTop, nativeTo);
-      // WHY .xterm too (Destin, 2026-11-08: "when you type the frame still needs to move when the keyboard comes up"):
-      // the phone app types straight into the terminal now (TerminalView `direct`), so its keyboard is for the bottom
-      // bar and the terminal just as the message box's was — both slide up with it ([data-term-lift]).
-      const forChat = !!document.activeElement?.closest?.('.bottom-float, .xterm');
+      const forChat = !!document.activeElement?.closest?.('.bottom-float');
       // Only the Android app's keyboard glides; a phone browser already reports it a frame at a time.
       const glide = native && !reduced();
       // Popups and menus take the keyboard's final height at once: one re-check, not one per step.

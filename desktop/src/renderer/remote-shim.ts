@@ -3185,8 +3185,6 @@ export function installShim(): void {
       removePairedDevice: (host: string, port: number) =>
         hasAndroidHost() ? invokeAndroidHost('android:remove-paired-device', { host, port }) : Promise.resolve(),
       scanQr: () => hasAndroidHost() ? invokeAndroidHost('android:scan-qr') : Promise.resolve(null),
-      // The phone app's Paste key in terminal view (TerminalToolbar): the page cannot read the clipboard itself.
-      readClipboard: () => hasAndroidHost() ? invokeAndroidHost('android:read-clipboard') : Promise.resolve(null),
     },
     off: (channel: string, handler: Callback) => removeListener(channel, handler),
     removeAllListeners: (channel: string) => removeAllListeners(channel),

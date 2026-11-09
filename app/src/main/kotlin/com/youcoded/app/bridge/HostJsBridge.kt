@@ -100,14 +100,6 @@ class HostJsBridge(
                     }
                 }
             }
-            // WHY (Destin, 2026-11-08: "Might also want like a paste button"): the phone app's terminal view has no
-            // message box to long-press, and the page cannot read the clipboard itself, so its Paste key asks here.
-            // Read on the main thread: Android only lets the app in front read the clipboard.
-            "android:read-clipboard" -> main.post {
-                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
-                reply(id, JSONObject().put("text", text ?: JSONObject.NULL))
-            }
             // A tapped "needs you" alert: the page asks once for the session to open (and the phone forgets it).
             "android:take-pending-session" -> {
                 val sid = pendingSession; pendingSession = null
@@ -219,7 +211,7 @@ class HostJsBridge(
         /** Every type [invoke] answers. Pinned against the shim by desktop/tests/android-host-channels.test.ts. */
         val TYPES = listOf(
             "android:get-tier", "android:set-tier", "android:get-about", "android:get-paired-devices",
-            "android:save-paired-device", "android:remove-paired-device", "android:scan-qr", "android:pick-files", "android:read-clipboard",
+            "android:save-paired-device", "android:remove-paired-device", "android:scan-qr", "android:pick-files",
             "android:take-pending-session", "system:notify-stack-state", "voice:status", "voice:download", "voice:start", "voice:stop", "voice:cancel",
         )
     }

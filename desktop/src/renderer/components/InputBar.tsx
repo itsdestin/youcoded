@@ -143,10 +143,6 @@ function fileNameFromPath(p: string): string {
 }
 
 const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, extraTool, disabled, sendBlocked: externalSendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider, connection }, ref) {
-  // The phone app's terminal view: the phone keyboard types straight into the terminal (TerminalView `direct`), so
-  // the message box is hidden and the key row carries Attach and Paste (Destin, 2026-11-08: "completely replace the
-  // … keyboard with just the native terminal typing"). A phone browser keeps the box ("Phone app only").
-  const direct = !!minimal && isAndroid();
   const startup = useNativeStartup(provider === 'native' ? sessionId : null);
   const sendBlocked = externalSendBlocked || nativeStartupBlocked(startup);
   const draftAuthority = useRef(createQueueDraft(sessionId));
@@ -1112,7 +1108,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       {/* Terminal view (minimal) renders the Esc/Tab/Ctrl/arrow helper row in
           the same slot QuickChips occupies in chat view, so both modes share
           the same "pill row above input bar" visual inside one container. */}
-      {minimal && <TerminalToolbar sessionId={sessionId} direct={direct} onToast={onToast} />}
+      {minimal && <TerminalToolbar sessionId={sessionId} />}
       {!minimal && !compact && <QuickChips onChipTap={handleChip} />}
 
       {attachments.length > 0 && (
@@ -1151,8 +1147,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           </StatusStrip>
         </div>
       )}
-      {/* `hidden`, not unmounted, so a draft typed before switching views is still here in chat view. */}
-      <div className={`px-2 sm:px-3 pb-1 sm:pb-1.5${direct ? ' hidden' : ''}`}>
+      <div className="px-2 sm:px-3 pb-1 sm:pb-1.5">
         <form onSubmit={handleSubmit} className="flex items-center gap-1.5 sm:gap-2 bg-inset rounded-xl px-2 sm:px-3 py-2">
           <BrailleBurst
             onTrigger={handleAttachClick}
