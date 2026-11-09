@@ -140,6 +140,16 @@ no usable preset file:
   preset writer reads it. **`engine-supervisor.test.ts` now pins the flag's ABSENCE from
   the command line** — it only reappears on the recovery boot that has no usable preset.
   (Raised 5→15 min and 10→25 min on 2026-09-07 per Destin.)
+- **"Busy" means a request whose answer is still unread (fixed 2026-11-09).**
+  `trackedFetch` counts a request as running (`inFlight`, read by `busy()`) until its
+  body is read, cancelled, or its signal aborts. The model-load "hi"
+  (`EngineSupervisor.loadModel`) and the model check (`EngineManager.probeModelLoad`)
+  read the body only on failure, so every SUCCESSFUL load left the engine busy forever:
+  on the desktop (1.3.3) a context change waited the full 10-minute apply limit
+  (`CONFIG_APPLY_MAX_WAIT_MS`) and idle shutdown never fired. Every caller now reads or
+  cancels its body, success too (rule: `.claude/rules/engine-local-models.md`). Guards:
+  `engine-supervisor.test.ts` "abandoned bodies do not leak inFlight",
+  `engine-manager.test.ts` "a successful model load's answer is read to the end".
 - **Keeping each chat's reading (2026-11-07, b10665, Qwen3.8-27B — a hybrid `qwen35`
   model — Z13 Vulkan; scripts and numbers in the local-model-hardening session).**
   - **`--no-cache-idle-slots` is on the command line.** The default (with the unified KV
@@ -472,8 +482,8 @@ reading, which is exactly where ROCm falls behind.
   t/s), and equal on the 9B and 2B; the September 24-46% gap below did not reproduce.
 - **Small models:** the 2B's 31.6k read after three short requests took 22-27 s on
   ROCm vs 12.5-13 s on Vulkan (no fresh-engine run of the 2B was made).
-- **Planned label change:** `BACKEND_LABELS.rocm` ("reads faster, writes slower") is
-  wrong for most models now; the verify anchor below tracks the code until it changes.
+- **Label (changed 2026-11-09):** `BACKEND_LABELS.rocm` was "reads faster, writes
+  slower"; it now reads "Try ROCm (AMD) — usually slower in real use" (verify anchor below).
 
 The September record follows, kept as history.
 
