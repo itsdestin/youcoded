@@ -410,6 +410,8 @@ export default React.memo(function HeaderBar({
   //   drawer — ☰ opens a side drawer holding sessions AND the menu's places
   //   pair   — ☰ and Projects on the left, New session and the view switch
   //            on the right, the name between them
+  // DECIDED (round 4): `lights` — pair's buttons, one plain name button with
+  // the status lights under it. Every other value is deleted at build time.
   const narrowTop = narrow ? workbenchNarrowTop() : 'today';
   // Round 3 (Destin's L-1 note): `plain`, `lights` and `hub` keep pair's two
   // buttons each side; only the name button and what ☰ opens differ.

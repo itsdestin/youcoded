@@ -14,8 +14,10 @@
 //
 // WHY a separate file: SessionStrip.tsx is held to a line budget
 // (tests/line-budgets.test.ts), and these are pieces the strip only places.
-// Workbench-only until Destin picks a shape (switches in workbench-mode.ts);
-// the losing shapes are deleted then.
+// Workbench-only (switches in workbench-mode.ts). DECIDED in round 4: the name
+// opens `dropdown`; ☰ stays today's small menu. The build deletes sheet, full,
+// drawer and hub (hub's reference copy: youcoded-dev
+// docs/active/prototypes/2026-11-05-phone-hub/).
 import React, { useEffect, useState } from 'react';
 import { Button, CloseButton, SectionLabel, Tooltip } from '../ui';
 import { STATUS_LABEL, type SessionStatusColor } from '../StatusDot';

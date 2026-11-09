@@ -202,8 +202,14 @@ export function workbenchNetworkOffline(): boolean {
  *  SEE and operate the options before choosing, so each open question is a
  *  workbench switch on the real components. Every switch only changes the
  *  narrow (<640px) layout, and anything unrecognised — or any document that is
- *  not the workbench — is `today`, so the app itself never changes. Once he
- *  picks, the winner becomes the narrow layout and these switches are deleted.
+ *  not the workbench — is `today`, so the app itself never changes.
+ *
+ *  DECIDED (rounds 2-4, answers in that folder; status in its README.md):
+ *  narrowTop=`lights`, narrowList=`dropdown`, narrowPills=`compact`. NOT YET
+ *  BUILT: the build makes those the real narrow layout and deletes these
+ *  switches and every other value (name, drawer, pair, plain, hub, sheet,
+ *  full). `hub` is kept only as a reference in youcoded-dev
+ *  docs/active/prototypes/2026-11-05-phone-hub/.
  *
  *  - `narrowTop`   top bar: `today` · `name` (current session's full name, a
  *                  count on the arrow) · `drawer` (name only; sessions and the
