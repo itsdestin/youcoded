@@ -23,6 +23,7 @@ for (const stream of [process.stdout, process.stderr]) {
 import os from 'os';
 import fs from 'fs';
 import { SessionManager } from './session-manager';
+import { ClaudeControlBridge } from './claude-control-bridge';
 import { HookRelay } from './hook-relay';
 import { hookWindowTargets } from './hook-window-route';
 import { WindowRegistry } from './window-registry';
@@ -254,7 +255,8 @@ let deviceIdentity: { id: string } | null = null;
 // (per-INSTALL, for leases). null = no durable machine identity: register nothing.
 let machineIdentity: { id: string } | null = null;
 const holderTakeoverRef: { fn: (sessionId: string, from?: { deviceId: string; device: string }, transferNonce?: string) => void } = { fn: () => {} };
-const sessionManager = new SessionManager();
+// WHY lazy root: the dev userData override is applied later, before the first session; never stage into the built app's profile.
+const sessionManager = new SessionManager({ claudeControls: new ClaudeControlBridge(() => path.join(app.getPath('userData'), 'claude-control')) });
 
 // Multi-window ownership: maps sessionId -> windowId and tracks leader for
 // singletons (PartyKit lobby). Populated when sessions are created and

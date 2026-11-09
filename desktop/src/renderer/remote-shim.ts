@@ -902,8 +902,9 @@ export function applyResponse(
 ): void {
   switch (responseOutcome(channel, payload)) {
     case 'unsupported':
-      noteUnsupported(channel);
-      entry.reject(new Error(`remote-unsupported: ${channel}`));
+      // WHY: the optional direct-control path can fall back only when the host explicitly has no handler.
+      if (channel !== 'session:claude-control') noteUnsupported(channel);
+      entry.reject(Object.assign(new Error(`remote-unsupported: ${channel}`), { code: 'REMOTE_UNSUPPORTED', channel }));
       return;
     // A handler that answered `{ ok:false, error }` is a FAILURE — resolving it
     // hands the caller a failure dressed as a success. See REJECT_ON_NOT_OK.
@@ -2106,6 +2107,10 @@ export function installShim(): void {
       forgetReopen: (ids: string[]) => invoke('session:forget-reopen', { ids }),
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
       sendInput: (sessionId: string, text: string, notice?: 'model-switch', sendId?: string) => (noteSendEpoch(sessionId, sendId), fire('session:input', { sessionId, text, notice, sendId })),
+      control: (sessionId: string, request: import('../shared/claude-control-types').ClaudeControlRequest) => {
+        if (request.kind === 'send-text') noteSendEpoch(sessionId, request.sendId);
+        return invoke('session:claude-control', { sessionId, request });
+      },
       // WHY a no-op (2026-10-14, Android clean rebuild): only the old Kotlin runtime needed the page to read its terminal for it;
       // every host now runs the desktop backend, which reads the terminal itself (session-screens.ts).
       reportInputBlocked: (_sessionId: string, _blocked: boolean) => {},

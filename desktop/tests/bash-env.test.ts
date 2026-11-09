@@ -90,9 +90,15 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  // WHY: native YouCoded launches can inherit a working askpass integration. This suite
+  // models its own server availability, not the test runner's ambient admin capability.
+  vi.stubEnv('SUDO_ASKPASS', undefined);
+  vi.stubEnv('YOUCODED_ASKPASS_SOCKET', undefined);
+  vi.stubEnv('YOUCODED_ASKPASS_RUNTIME', undefined);
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-env-'));
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   try {
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
   } catch {
@@ -108,10 +114,18 @@ describe('Bash env — the sudo askpass variables', () => {
     expect(r.text).toContain(`${ADMIN_ENV.SUDO_ASKPASS}|${ADMIN_ENV.YOUCODED_ASKPASS_SOCKET}|${ADMIN_ENV.YOUCODED_ASKPASS_RUNTIME}`);
   });
 
-  it('is absent entirely when the askpass server never started (ctx.adminPasswordEnv unset) — sudo fails exactly as before', async () => {
+  it('injects no askpass variables when neither the environment nor ctx.adminPasswordEnv provides them', async () => {
     const ctx = makeCtx();
     const r = await BashTool.execute({ command: 'echo "[$SUDO_ASKPASS][$YOUCODED_ASKPASS_SOCKET][$YOUCODED_ASKPASS_RUNTIME]"' }, ctx);
     expect(r.text).toContain('[][][]');
+  });
+
+  it('preserves ambient askpass settings when ctx.adminPasswordEnv is unset', async () => {
+    vi.stubEnv('SUDO_ASKPASS', '/test/ambient/youcoded-askpass');
+    vi.stubEnv('YOUCODED_ASKPASS_SOCKET', '/test/ambient/askpass.sock');
+    vi.stubEnv('YOUCODED_ASKPASS_RUNTIME', '/test/ambient/runtime');
+    const r = await BashTool.execute({ command: 'echo "[$SUDO_ASKPASS][$YOUCODED_ASKPASS_SOCKET][$YOUCODED_ASKPASS_RUNTIME]"' }, makeCtx());
+    expect(r.text).toContain('[/test/ambient/youcoded-askpass][/test/ambient/askpass.sock][/test/ambient/runtime]');
   });
 
   it('wins over a persisted shellEnv value from an earlier persistent_env call (applied AFTER shellEnv)', async () => {

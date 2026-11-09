@@ -30,6 +30,7 @@ import type { UsageSnapshot } from '../state/chat-types';
 import { sendBlock, pendingInteractionRefusalCopy, waitForMessageBox } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
 import { sendToClaudeCode, sendToNative, canDrawSendNow, RESTORE_UNSENT_EVENT } from '../state/submit-outgoing';
+import { sendClaudeCommand } from '../state/claude-control';
 import { optimisticScreen, connected } from '../state/pending-action';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
@@ -818,8 +819,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         return true;
       }
       if (route.via === 'pty') {
-        // For commands like /clear and /compact that still need Claude Code's own state to change.
-        window.claude.session.sendInput(sessionId, route.text);
+        // Selected commands change Claude's own state through the mod; all other commands keep the existing PTY path.
+        sendClaudeCommand(sessionId, route.text);
         return true;
       }
       if (route.via === 'none-native-no-pty') {

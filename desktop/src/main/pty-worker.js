@@ -474,6 +474,14 @@ process.on('message', (msg) => {
       delete childEnv.CLAUDE_CODE_ENTRYPOINT;
       delete childEnv.CLAUDE_CODE_EXECPATH;
       delete childEnv.CLAUDE_EFFORT;
+      // WHY: an app started from another Claude session must never inherit that
+      // session's control capability. Only this parent-issued pair is admitted.
+      for (const key of Object.keys(childEnv)) if (key.startsWith('YOUCODED_CC_CONTROL_')) delete childEnv[key];
+      if (msg.sessionId && msg.controlEnv) {
+        for (const key of ['YOUCODED_CC_CONTROL_URL', 'YOUCODED_CC_CONTROL_TOKEN']) {
+          if (typeof msg.controlEnv[key] === 'string') childEnv[key] = msg.controlEnv[key];
+        }
+      }
       ptyProcess = pty.spawn(shell, args, {
         name: 'xterm-256color',
         cols: msg.cols || 120,

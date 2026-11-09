@@ -5,6 +5,7 @@ import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard
 import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { announceSwitch, announceNoSession, noteSwitchIntent } from './state/switch-marks';
+import { sendClaudeCommand, stopClaudeTurn } from './state/claude-control';
 import { SessionTerminal } from './components/SessionTerminal';
 import ChatView from './components/ChatView';
 import PendingHandoffView from './components/PendingHandoffView';
@@ -790,7 +791,7 @@ function AppInner() {
     // bails actually fire for native/destroyed sessions and skip optimistic writes.
     if (!canPtySend(sessionsRef.current.find((x) => x.id === sid), chatStateMapRef.current.get(sid))) return false;
     if (notifyIfPtyBlocked(sid)) return false;
-    window.claude.session.sendInput(sid, text, notice);
+    sendClaudeCommand(sid, text, notice);
     return true;
   }, [notifyIfPtyBlocked]);
 
@@ -2920,10 +2921,8 @@ function AppInner() {
         window.claude.native.interrupt(s.activeSessionId);
         return;
       }
-      // One byte to the PTY — Claude Code treats it as an interrupt.
-      // Single-byte writes do NOT trigger Ink's 500ms paste-mode coalescing,
-      // so no chunking or pacing is needed. See docs/PITFALLS.md -> "PTY Writes".
-      window.claude.session.sendInput(s.activeSessionId, '\x1b');
+      // WHY: Stop and popup dismissal keep the CLI's native Escape behavior, including running-tool cancellation.
+      stopClaudeTurn(s.activeSessionId);
     };
     // Bubble phase on purpose — EscCloseProvider owns capture phase, and we
     // need to read e.defaultPrevented AFTER capture-phase overlay handlers run.

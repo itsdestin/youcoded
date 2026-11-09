@@ -11,6 +11,8 @@ import { sendChatMessage } from '../components/native-send';
 import { newSendId } from './send-ids';
 import { SEND_CHECK_EVENT } from './send-reconcile';
 import { runPending, optimisticScreen } from './pending-action';
+import { requestClaudeControl } from './claude-control';
+import { screenInputBlock } from './pty-input-gate';
 
 /** The gap between attached-file paths sent to Claude Code: longer than Ink's 500 ms paste window, so each path is its own paste (verified on a 4-image send). */
 const FILE_GAP_MS = 600;
@@ -49,7 +51,24 @@ export const CC_SEND_CHECK_MS = 6000;
  */
 export function sendToClaudeCode(o: OutgoingSend): string {
   const sendId = newSendId();
-  o.dispatch({ type: 'USER_PROMPT', sessionId: o.sessionId, content: o.content, timestamp: Date.now(), attachments: o.paths, sendId });
+  // WHY: plugin prompts do not expand @file mentions. Keep every @-bearing message on the CLI composer
+  // path before dispatch rather than guessing its evolving mention grammar (emails safely take that path too).
+  const direct = o.paths.length === 0 && !!o.ptyText && !o.ptyText.includes('@') && !o.ptyText.trimStart().startsWith('/') && typeof window.claude.session.control === 'function';
+  o.dispatch({ type: 'USER_PROMPT', sessionId: o.sessionId, content: o.content, timestamp: Date.now(), attachments: o.paths, sendId, ...(direct ? { sendTransport: 'direct' as const } : {}) });
+  if (direct) {
+    void requestClaudeControl(o.sessionId, { kind: 'send-text', text: o.ptyText, sendId }).then((result) => {
+      if (result.status === 'unavailable') {
+        // The transport has positively proved no operation was dispatched. Recheck focus after the round trip.
+        if (screenInputBlock(o.sessionId)) { o.dispatch({ type: 'SEND_NOTE', sessionId: o.sessionId, sendId, note: 'not-sent' }); return; }
+        o.dispatch({ type: 'SEND_TRANSPORT', sessionId: o.sessionId, sendId, transport: 'pty' });
+        window.claude.session.sendInput(o.sessionId, o.ptyText + '\r', undefined, sendId);
+      } else if (result.status === 'unknown' || result.status === 'rejected') {
+        o.dispatch({ type: 'SEND_NOTE', sessionId: o.sessionId, sendId, note: result.status === 'unknown' ? 'unsure' : 'not-sent' });
+      }
+    });
+    if (optimisticScreen()) setTimeout(() => window.dispatchEvent(new CustomEvent(SEND_CHECK_EVENT)), CC_SEND_CHECK_MS);
+    return sendId;
+  }
   o.paths.forEach((p, idx) => {
     setTimeout(() => { window.claude.session.sendInput(o.sessionId, p + ' '); }, idx * FILE_GAP_MS);
   });

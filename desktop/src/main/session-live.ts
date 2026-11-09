@@ -25,6 +25,7 @@ import { IPC } from '../shared/backend-contract';
 import { clearDividerId } from '../shared/divider-ids';
 import type { PromptCardButton, SessionLiveBody } from '../shared/session-live-types';
 import type { InputBlock } from '../shared/cc-input-focus';
+import type { ClaudeControlRequest, ClaudeControlResult } from '../shared/claude-control-types';
 
 /** Typed into the terminal as a whole write: `/model opus[1m]` + Enter. A write that is only part of a line never matches. */
 const MODEL_COMMAND_RE = /^\/model[ \t]+(\S+)[ \t]*\r?$/;
@@ -50,7 +51,7 @@ const COMPACT_CHECK_MS = 30_000;
 
 export interface SessionLiveDeps {
   publish: Publish;
-  records: Pick<SessionRecords, 'facts' | 'hasPrompt' | 'isCompacting' | 'openPrompts'>;
+  records: Pick<SessionRecords, 'facts' | 'hasPrompt' | 'isCompacting' | 'openPrompts' | 'epochOf'>;
   /** Is this a Claude Code session? (A native session's host says these things itself; a shell has none.) */
   isClaude(sessionId: string): boolean;
   now?: () => number;
@@ -71,6 +72,8 @@ export class SessionLiveFacts {
   /** A /model the host announced and has not yet seen confirmed: what to put back if Claude Code refused it. */
   private readonly pendingModel = new Map<string, { alias: string; prev: string | null; dividerId: string | null; at: number; turnStarted: boolean; popup: boolean; confirmed: boolean }>();
   private ids = 0;
+  private readonly directReceipts = new Map<string, Set<string>>();
+  private readonly stopTargets = new Map<string, { sessionId: string; epoch: string; userUuid: string; accepted?: boolean }>();
 
   constructor(private readonly deps: SessionLiveDeps) {
     this.now = deps.now ?? Date.now;
@@ -108,23 +111,87 @@ export class SessionLiveFacts {
   noteInput(sessionId: string, text: string, notice?: unknown): void {
     if (!this.deps.isClaude(sessionId) || typeof text !== 'string') return;
     const model = MODEL_COMMAND_RE.exec(text);
-    if (model) {
-      const alias = claudeAliasForModelId(model[1]);
-      // Only a model we can NAME is announced: an unrecognised argument (a raw dated id, a typo) shows nothing honest.
-      if (alias) {
-        const dividerId = notice === 'model-switch' ? this.nextId('model-switch') : null;
-        // WHY `prev` comes from the unconfirmed switch before it (2026-10-02, sync-fix1): a second /model typed while the first still waits (a "Switch model?" pop-up, or
-        // a quick back-and-forth) must not take the FIRST announced label as "the model the session was on"; if the second is declined the label would revert
-        // to a model the session never ran.
-        const earlier = this.pendingModel.get(sessionId);
-        this.pendingModel.set(sessionId, { alias, prev: earlier && !earlier.confirmed ? earlier.prev : (this.deps.records.facts(sessionId)?.model ?? null), dividerId, at: this.now(), turnStarted: false, popup: false, confirmed: false });
-        this.live(sessionId, { kind: 'model', model: alias });
-        if (dividerId) this.live(sessionId, { kind: 'model-switch', id: dividerId, label: `Model switched to ${CLAUDE_ALIAS_LABELS[alias]}` });
-      }
-      return;
-    }
+    if (model) { this.modelRequested(sessionId, model[1], notice, true); return; }
     if (COMPACT_COMMAND_RE.test(text)) { this.compactStarted(sessionId); return; }
     if (CLEAR_COMMAND_RE.test(text)) this.clearTyped(sessionId);
+  }
+
+  private modelRequested(sessionId: string, requested: string, notice: unknown, announce: boolean): void {
+    const alias = claudeAliasForModelId(requested);
+    if (!alias) return;
+    const dividerId = announce && notice === 'model-switch' ? this.nextId('model-switch') : null;
+    // WHY: a second request must retain the last confirmed model, not an earlier optimistic label.
+    const earlier = this.pendingModel.get(sessionId);
+    this.pendingModel.set(sessionId, { alias, prev: earlier && !earlier.confirmed ? earlier.prev : (this.deps.records.facts(sessionId)?.model ?? null), dividerId, at: this.now(), turnStarted: false, popup: false, confirmed: false });
+    if (announce) this.live(sessionId, { kind: 'model', model: alias });
+    if (dividerId) this.live(sessionId, { kind: 'model-switch', id: dividerId, label: `Model switched to ${CLAUDE_ALIAS_LABELS[alias]}` });
+  }
+
+  /** A structured request starts no fake terminal input or optimistic model change. */
+  directCommandStarted(sessionId: string, request: ClaudeControlRequest): void {
+    if (!this.deps.isClaude(sessionId) || request.kind !== 'command') return;
+    if (request.command === 'compact') this.compactStarted(sessionId);
+    // Cached model switches can still ask in the native menu. Preserve its declined-switch reconciliation.
+    if (request.command === 'model' && request.args) this.modelRequested(sessionId, request.args, request.notice, false);
+  }
+
+  /** Capture BEFORE handoff, not when a possibly delayed receipt arrives. */
+  directStopTargeted(sessionId: string, requestId: string, userUuid?: string | null): void {
+    if (!this.deps.isClaude(sessionId)) return;
+    const epoch = this.deps.records.epochOf(sessionId);
+    // WHY: the file watcher may lag a whole turn. Only the plugin's exact opening row is safe.
+    if (!userUuid || !epoch) return;
+    this.stopTargets.set(requestId, { sessionId, epoch, userUuid });
+    // WHY: a lost receipt must not grow memory forever; eviction loses completion, never stops different work.
+    if (this.stopTargets.size > 512) this.stopTargets.delete(this.stopTargets.keys().next().value!);
+  }
+
+  private confirmStop(sessionId: string, requestId: string, userUuid: string): void {
+    const target = this.stopTargets.get(requestId);
+    if (!target?.accepted || target.sessionId !== sessionId || target.userUuid !== userUuid) return;
+    if (target.epoch !== this.deps.records.epochOf(sessionId)) { this.stopTargets.delete(requestId); return; }
+    const facts = this.deps.records.facts(sessionId);
+    if (!facts?.working || facts.turnUserUuid !== userUuid) return;
+    this.stopTargets.delete(requestId);
+    this.live(sessionId, { kind: 'stop-confirmed', id: requestId, userUuid, at: this.now() });
+  }
+
+  directCommandFinished(sessionId: string, request: ClaudeControlRequest, result: ClaudeControlResult): void {
+    if (!this.deps.isClaude(sessionId)) return;
+    if (request.kind === 'stop') {
+      if (result.status !== 'accepted') return;
+      const target = this.stopTargets.get(result.requestId);
+      this.stopTargets.delete(result.requestId);
+      // WHY: keep the receipt until the exact file row arrives, not until just any next user appears.
+      if (!target || target.sessionId !== sessionId || target.epoch !== this.deps.records.epochOf(sessionId)) return;
+      target.accepted = true;
+      this.stopTargets.set(result.requestId, target);
+      this.confirmStop(sessionId, result.requestId, target.userUuid);
+      return;
+    }
+    if (request.kind !== 'command') return;
+    if (result.status === 'rejected') {
+      if (request.command === 'compact') this.compactEnded(sessionId, 'failed');
+      return;
+    }
+    if (result.status !== 'accepted') return; // Unknown is not a failed operation.
+    const seen = this.directReceipts.get(sessionId) ?? new Set<string>();
+    if (seen.has(result.requestId)) return;
+    seen.add(result.requestId); this.directReceipts.set(sessionId, seen);
+    if (seen.size > 512) seen.delete(seen.values().next().value!);
+    if (request.command === 'model' && result.model && !isPlaceholderModelId(result.model)) {
+      // WHY: a command can return successfully while retaining another model; publish the getter's answer, never its requested alias.
+      const actual = claudeAliasForModelId(result.model) ?? result.model;
+      const previous = this.deps.records.facts(sessionId)?.model;
+      this.pendingModel.delete(sessionId); this.clearPopupTimer(sessionId);
+      this.live(sessionId, { kind: 'model', model: actual });
+      if (request.notice === 'model-switch' && actual !== previous) {
+        this.live(sessionId, { kind: 'model-switch', id: `model-direct-${result.requestId}`, label: `Model switched to ${CLAUDE_ALIAS_LABELS[actual as keyof typeof CLAUDE_ALIAS_LABELS] ?? actual}` });
+      }
+    } else if (request.command === 'clear' && result.claudeSessionId) {
+      this.noteSessionStart(sessionId, 'clear', result.claudeSessionId);
+    }
+    // A compact summary remains file-authoritative; its event ends the pending marker, not a guessed receipt.
   }
 
   /**
@@ -149,8 +216,13 @@ export class SessionLiveFacts {
    */
   noteTranscript(sessionId: string, event: unknown): void {
     if (!this.deps.isClaude(sessionId)) return;
-    const e = (event ?? {}) as { type?: string; timestamp?: number; data?: { model?: unknown; parentAgentToolUseId?: unknown; slashCommand?: unknown } };
+    const e = (event ?? {}) as { type?: string; uuid?: string; timestamp?: number; data?: { model?: unknown; parentAgentToolUseId?: unknown; slashCommand?: unknown } };
     if (e.data?.parentAgentToolUseId) return;
+    if (e.type === 'user-message' && e.uuid) {
+      for (const [id, target] of this.stopTargets) {
+        if (target.sessionId === sessionId && target.userUuid === e.uuid) this.confirmStop(sessionId, id, e.uuid);
+      }
+    }
     const pm = this.pendingModel.get(sessionId);
     if (pm) {
       // Claude Code records a /model command when it RUNS it: that is the confirmation (also for one that waited behind a "Switch model?" pop-up).
@@ -256,6 +328,8 @@ export class SessionLiveFacts {
 
   /** The session ended: nothing left to watch. */
   forget(sessionId: string): void {
+    this.directReceipts.delete(sessionId);
+    for (const [id, target] of this.stopTargets) if (target.sessionId === sessionId) this.stopTargets.delete(id);
     this.disarm(sessionId);
     const w = this.clearTimers.get(sessionId);
     if (w !== undefined) (this.deps.clearTimer ?? ((h: unknown) => clearTimeout(h as NodeJS.Timeout)))(w);

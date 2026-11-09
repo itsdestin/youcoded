@@ -24,7 +24,7 @@ const WORKER_SRC = fs
   .replace(/^#![^\n]*\n/, '');
 
 /** Load the real pty-worker with a fake node-pty, and spawn its PTY. */
-export function loadWorker(subagentModel?: string, extraEnv: Record<string, string> = {}, platform: string = process.platform) {
+export function loadWorker(subagentModel?: string, extraEnv: Record<string, string> = {}, platform: string = process.platform, spawnFields: { sessionId?: string; controlEnv?: Record<string, string> } = {}) {
   const writes: string[] = [];
   let spawnedEnv: Record<string, string | undefined> = {};
   let onExit: ((result: { exitCode: number }) => void) | undefined;
@@ -71,7 +71,7 @@ export function loadWorker(subagentModel?: string, extraEnv: Record<string, stri
   const listeners = fakeProcess.listeners('message');
   expect(listeners).toHaveLength(1);
   const deliver = listeners[0] as (msg: any) => void;
-  deliver({ type: 'spawn', command: '/bin/sh', args: [], cwd: '/tmp', cols: 120, rows: 30, sessionId: 'test-claude-session' });
+  deliver({ type: 'spawn', command: '/bin/sh', args: [], cwd: '/tmp', cols: 120, rows: 30, sessionId: 'test-claude-session', ...spawnFields });
   writes.length = 0;   // drop anything the spawn itself wrote
   const emitData = (d: string) => { for (const cb of [...dataListeners]) cb(d); };
   return { deliver, writes, spawnedEnv, fakePty, fakeProcess, emitData, exitPty: () => onExit?.({ exitCode: 0 }) };

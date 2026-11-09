@@ -16,6 +16,8 @@ interface QueuedItem { queueId: string; content: string; timestamp: number }
 export interface PromptCardButton { label: string; input: string; submitInput?: string; pick?: { signature: string; index: number } }
 
 export type SessionLiveBody =
+  /** Confirmed addressed API abort: lifecycle only, not a fabricated transcript/history record. */
+  | { kind: 'stop-confirmed'; id: string; userUuid: string; at: number }
   /** The queue as it is NOW (a snapshot, so a screen that missed events is right after the next one). Native sessions only. */
   | { kind: 'queue'; queue: QueuedItem[] }
   /** The session's model changed: the raw model id or alias the chip is drawn from. */

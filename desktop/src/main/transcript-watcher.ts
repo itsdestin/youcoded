@@ -171,11 +171,19 @@ export function parseTranscriptLine(
       }
     }
 
+    const rawUserText = typeof content === 'string' ? content : extractTextFromBlocks(content);
+    // WHY (actual 2.1.300/302 mod captures): /model may omit promptId, while /compact adds
+    // an ordinary-looking plugin row before its real command/summary. Neither is a new chat turn.
+    const bridgeCommand = parsed.origin?.kind === 'plugin' && parsed.origin.name === 'youcoded-control-bridge' && parsed.origin.asUser !== true;
+    if (bridgeCommand && /^\/compact(?:[ \t]|$)/.test(rawUserText)) return [];
+    if (/^\s*<command-name>/.test(rawUserText)) {
+      const command = slashCommandText(rawUserText);
+      if (command) return [{ type: 'user-message', sessionId, uuid, timestamp, data: { text: command, slashCommand: true } }];
+    }
+
     // User-typed prompt: has a promptId and text content (not tool results)
     if (parsed.promptId) {
-      const raw = typeof content === 'string'
-        ? content
-        : extractTextFromBlocks(content);
+      const raw = rawUserText;
       // Background task end notices ride in as user lines (origin
       // 'task-notification'). Their tags strip to nothing below, which used to
       // drop them entirely — the only record that a background helper finished.

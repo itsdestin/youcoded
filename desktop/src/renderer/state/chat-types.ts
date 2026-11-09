@@ -256,7 +256,7 @@ export type TimelineEntry =
   // `sendId` / `sendNote` (one-core R5-4b): the screen's id for a message it sent, and what it knows about whether the computer got it while no echo has
   // arrived (`unsure` = could not tell, `not-sent` = the computer's record shows it never arrived). Both are dropped when the transcript confirms the
   // bubble, so a note can never outlive the doubt it describes.
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean }
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty'; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean }
   | { kind: 'assistant-turn'; turnId: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -289,6 +289,8 @@ export interface SessionChatState {
   currentGroupId: string | null;
   /** ID of the current assistant turn (text + tool groups accumulate here) */
   currentTurnId: string | null;
+  /** Recorded user identity for scoped direct Stop completion (not an assistant bubble id). */
+  transcriptTurnUuid?: string;
   /** Timestamp of last activity from Claude — used to reset the thinking timeout */
   lastActivityAt: number;
   /** Tool IDs belonging to the current active turn — cleared on turn end */
@@ -542,7 +544,10 @@ export type ChatAction =
       attachments?: string[];
       /** This screen's id for the send (one-core R5-4b), so the bubble can say whether the computer got it. */
       sendId?: string;
+      /** Direct/uncertain sends must never receive the terminal's automatic Enter retry. */
+      sendTransport?: 'direct' | 'pty';
     }
+  | { type: 'SEND_TRANSPORT'; sessionId: string; sendId: string; transport: 'direct' | 'pty' }
   | {
       // What the computer's record said about an unconfirmed send (one-core R5-4b): `unsure`, `not-sent`, or null (it was received: no note).
       type: 'SEND_NOTE';
@@ -997,6 +1002,14 @@ export type ChatAction =
   // user-interrupt markers ("[Request interrupted by user]" / "...for tool
   // use"). Task 5 consumes this in the reducer to end the in-flight turn
   // without rendering the marker as a user bubble.
+  | {
+      type: 'DIRECT_STOP_CONFIRMED';
+      sessionId: string;
+      uuid: string;
+      userUuid: string;
+      timestamp: number;
+      usage?: never;
+    }
   | {
       type: 'TRANSCRIPT_INTERRUPT';
       sessionId: string;

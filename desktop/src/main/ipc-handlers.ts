@@ -42,6 +42,7 @@ import { registerDesktopChannels } from './ipc/channel-table';
 import { bindSkillsDeps } from './ipc/skills';
 import { bindSyncSpacesDeps } from './ipc/sync-spaces';
 import { bindSessionOps, sessionProviderFor, findTranscriptSlug } from './ipc/session';
+import { subscribeClaudeControlReceipts } from './claude-control-receipts';
 import { bindThemeMarketplace } from './ipc/theme-marketplace';
 import { bindFirstRunNative } from './ipc/first-run';
 import type { OutboxBroadcast } from './chatsearch-index/outbox-drain';
@@ -428,6 +429,8 @@ export function registerIpcHandlers(
     // A Claude Code session: not native (its host says these things itself) and not a plain shell.
     isClaude: (id) => { const p = sessionManager.getSession(id)?.provider; return p !== 'native' && p !== 'shell' && !!sessionManager.getSession(id); },
   });
+
+  const stopClaudeControlReceipts = subscribeClaudeControlReceipts(sessionManager, runtime.records, liveFacts);
 
   // WHY (one-core R5-4b): the computer's own copy of each running Claude Code terminal, read for the "may be stuck" check and for the cards a terminal
   // shows. Everything it finds leaves through liveFacts (so through publish). It exists only while a turn runs, a session is starting or a menu is up.
@@ -2434,6 +2437,7 @@ export function registerIpcHandlers(
     catch { return false; }
   };
   const cleanup = function cleanup(): Promise<void> {
+    stopClaudeControlReceipts();
     stopThemeWatcher();
     statusPush.stop();
     summaryPush.stop();

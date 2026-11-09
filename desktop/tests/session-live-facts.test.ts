@@ -9,6 +9,12 @@ import { SessionRecords } from '../src/main/session-record';
 import { createPublish } from '../src/main/publish';
 import { SessionLiveFacts, COMPACT_IDLE_LIMIT_MS } from '../src/main/session-live';
 import { detectPermissionMode } from '../src/shared/permission-mode-detect';
+import { chatReducer } from '../src/renderer/state/chat-reducer';
+import { eventToAction } from '../src/renderer/state/transcript-event-actions';
+import { routeSessionLive } from '../src/renderer/state/transcript-batch';
+import { EventEmitter } from 'node:events';
+import { subscribeClaudeControlReceipts } from '../src/main/claude-control-receipts';
+import type { SessionManager } from '../src/main/session-manager';
 
 const S = 'sess-1';
 function host(opts: { claude?: boolean; now?: () => number; setTimer?: any; clearTimer?: any } = {}) {
@@ -26,6 +32,136 @@ function host(opts: { claude?: boolean; now?: () => number; setTimer?: any; clea
 }
 
 const DIR = path.join(__dirname, 'fixtures', 'plan-menu');
+
+// The API abort may leave only partial assistant text on disk, with no interrupt marker.
+describe('confirmed addressed direct Stop', () => {
+  function running(initial = true) {
+    const h = host();
+    let state = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: S });
+    const transcript = (type: string, uuid: string, data: any = {}) => {
+      const event = { sessionId: S, type, uuid, timestamp: 100, data } as any;
+      h.records.note(S, 'transcript:event', event);
+      for (const action of eventToAction(event, { live: true })) state = chatReducer(state, action);
+      h.live.noteTranscript(S, event);
+    };
+    const drain = () => {
+      for (const body of h.lives()) routeSessionLive(body, { batcher: { push: a => { state = chatReducer(state, a); } }, contextTokens: () => null });
+    };
+    if (initial) {
+      transcript('user-message', 'user-one', { text: 'hello' });
+      transcript('assistant-text', 'partial', { text: 'Partial answer' });
+    }
+    return { ...h, transcript, drain, dispatch: (a: any) => { state = chatReducer(state, a); }, chat: () => state.get(S)! };
+  }
+  it.each(['before', 'after'])('correlates an immediate Stop when the exact user row arrives %s its receipt', order => {
+    const h = running(false);
+    h.live.directStopTargeted(S, 'stop-one', 'user-one');
+    if (order === 'before') h.transcript('user-message', 'user-one', { text: 'hello' });
+    h.live.directCommandFinished(S, { kind: 'stop' }, { status: 'accepted', requestId: 'stop-one' });
+    if (order === 'after') h.transcript('user-message', 'user-one', { text: 'hello' });
+    h.drain();
+    expect(h.records.facts(S)!.working).toBe(false);
+    expect(h.chat().isThinking).toBe(false);
+    expect(h.lives().filter(e => e.kind === 'stop-confirmed')).toHaveLength(1);
+    h.transcript('assistant-text', 'late-partial', { text: 'Partial answer from disk' });
+    expect(h.records.facts(S)!.working).toBe(false);
+    expect(h.chat().isThinking).toBe(false);
+    expect(JSON.stringify([...h.chat().assistantTurns.values()])).toContain('Partial answer from disk');
+  });
+  it('never substitutes a stale host UUID or the next observed user for the plugin target', () => {
+    const h = running();
+    h.live.directStopTargeted(S, 'stop-one', 'user-two');
+    h.live.directCommandFinished(S, { kind: 'stop' }, { status: 'accepted', requestId: 'stop-one' });
+    expect(h.records.facts(S)!.working).toBe(true);
+    expect(h.lives()).toEqual([]);
+    h.transcript('user-message', 'unrelated', { text: 'not the target' });
+    expect(h.records.facts(S)!.working).toBe(true);
+    h.transcript('user-message', 'user-two', { text: 'target' });
+    expect(h.records.facts(S)!.working).toBe(false);
+  });
+  it('does not fall back to the host user when a targeted Stop has no exact plugin UUID', () => {
+    const h = running();
+    h.live.directStopTargeted(S, 'stop-one');
+    h.live.directCommandFinished(S, { kind: 'stop' }, { status: 'accepted', requestId: 'stop-one' });
+    expect(h.records.facts(S)!.working).toBe(true);
+    expect(h.lives()).toEqual([]);
+  });
+  it.each(['unknown', 'rejected'])('does not retain a %s receipt to close a delayed user', status => {
+    const h = running(false);
+    h.live.directStopTargeted(S, 'stop-one', 'user-one');
+    h.live.directCommandFinished(S, { kind: 'stop' }, { status: status as 'unknown' | 'rejected', message: 'not confirmed' });
+    h.transcript('user-message', 'user-one', { text: 'hello' });
+    expect(h.records.facts(S)!.working).toBe(true);
+    expect(h.lives()).toEqual([]);
+  });
+  it('ends only the addressed turn without inventing a transcript line or losing partial text', () => {
+    const h = running();
+    const manager = Object.assign(new EventEmitter(), { hasSession: (id: string) => id === S });
+    const unsubscribe = subscribeClaudeControlReceipts(manager as unknown as Pick<SessionManager, 'on' | 'off' | 'hasSession'>, h.records, h.live);
+    manager.emit('claude-control-stop-targeted', S, 'stop-one', 'user-one');
+    manager.emit('claude-control-settled', S, { kind: 'stop' }, { status: 'accepted', requestId: 'stop-one' });
+    unsubscribe();
+    expect(manager.listenerCount('claude-control-stop-targeted')).toBe(0);
+    expect(manager.listenerCount('claude-control-settled')).toBe(0);
+    expect(h.records.facts(S)!.working).toBe(false);
+    h.drain();
+    expect(h.chat().isThinking).toBe(false);
+    expect([...h.chat().assistantTurns.values()][0]).toMatchObject({ stopReason: 'interrupted' });
+    expect(JSON.stringify([...h.chat().assistantTurns.values()])).toContain('Partial answer');
+    expect(h.sent.filter(e => e.type === 'transcript:event')).toEqual([]);
+    expect(h.records.fillTail(S).at(-1)?.type).toBe('session:live');
+  });
+  it.each(['unknown', 'rejected', 'idle', 'newer', 'duplicate'])('does not end work on %s completion', mode => {
+    const h = running();
+    if (mode !== 'idle') h.live.directStopTargeted(S, 'stop-one', 'user-one');
+    if (mode === 'duplicate') {
+      h.live.directCommandFinished(S, { kind: 'stop' }, { status: 'accepted', requestId: 'stop-one' });
+      h.drain();
+    }
+    if (mode === 'newer' || mode === 'duplicate') h.transcript('user-message', 'user-two', { text: 'next' });
+    const result = mode === 'unknown' || mode === 'rejected' ? { status: mode, message: 'not confirmed' } as const : { status: 'accepted', requestId: 'stop-one' } as const;
+    h.live.directCommandFinished(S, { kind: 'stop' }, result);
+    h.drain();
+    expect(h.records.facts(S)!.working).toBe(true);
+    expect(h.chat().isThinking).toBe(true);
+  });
+  it.each(['recorded', 'optimistic'])('ignores a frame-delayed completion after a newer %s message', mode => {
+    const h = running();
+    h.live.directStopTargeted(S, 'stop-one', 'user-one');
+    h.live.directCommandFinished(S, { kind: 'stop' }, { status: 'accepted', requestId: 'stop-one' });
+    if (mode === 'recorded') h.transcript('user-message', 'user-two', { text: 'next' });
+    else h.dispatch({ type: 'USER_PROMPT', sessionId: S, content: 'next', timestamp: 200 });
+    h.drain();
+    expect(h.chat().isThinking).toBe(true);
+  });
+  it('does not let a receipt from a destroyed record stop a recreated session', () => {
+    const h = running();
+    h.live.directStopTargeted(S, 'stop-one', 'user-one');
+    h.records.drop(S); h.records.begin(S);
+    h.transcript('user-message', 'user-one', { text: 'hello' });
+    h.live.directCommandFinished(S, { kind: 'stop' }, { status: 'accepted', requestId: 'stop-one' });
+    expect(h.records.facts(S)!.working).toBe(true);
+    expect(h.lives()).toEqual([]);
+  });
+  it('keeps late partial assistant text without reopening the stopped turn', () => {
+    const h = running();
+    h.live.directStopTargeted(S, 'stop-one', 'user-one');
+    h.live.directCommandFinished(S, { kind: 'stop' }, { status: 'accepted', requestId: 'stop-one' });
+    h.drain();
+    h.transcript('assistant-text', 'partial-after-stop', { text: 'Last partial words' });
+    expect(h.chat().isThinking).toBe(false);
+    expect(h.records.facts(S)!.working).toBe(false);
+    expect(JSON.stringify([...h.chat().assistantTurns.values()])).toContain('Last partial words');
+  });
+  it('deduplicates a transcript interrupt before it can affect the next turn', () => {
+    const h = running();
+    h.transcript('user-interrupt', 'interrupt-one', { kind: 'plain' });
+    h.transcript('user-message', 'user-two', { text: 'next' });
+    h.transcript('user-interrupt', 'interrupt-one', { kind: 'plain' });
+    expect(h.records.facts(S)!.working).toBe(true);
+    expect(h.chat().isThinking).toBe(true);
+  });
+});
 const chunksOf = (f: string): string[] => JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8')).chunks.map((c: any) => Buffer.from(c.b64, 'base64').toString('utf8'));
 
 describe('permission mode, read once from real Claude Code 2.1.281 terminal captures', () => {
@@ -73,6 +209,47 @@ describe('words in a reply are not the footer', () => {
   it('the footer still counts: glyph before it, or "(shift+tab" after it', () => {
     expect(detectPermissionMode('\x1b[38;2;72;150;140m⏸ plan mode on\x1b[39m')).toBe('plan');
     expect(detectPermissionMode('accept edits on \x1b[22G(shift+tab to cycle)')).toBe('auto-accept');
+  });
+});
+
+describe('confirmed direct commands', () => {
+  it('publishes the observed model rather than assuming the requested alias applied, once per receipt', () => {
+    const h = host();
+    const request = { kind: 'command', command: 'model', args: 'sonnet', notice: 'model-switch' } as const;
+    const result = { status: 'accepted', requestId: 'r1', model: 'claude-haiku-5-5' } as const;
+    h.live.directCommandFinished(S, request, result);
+    h.live.directCommandFinished(S, request, result);
+    expect(h.records.facts(S)!.model).toBe('haiku');
+    expect(h.lives().filter(e => e.kind === 'model-switch')).toHaveLength(1);
+    expect(h.lives().find(e => e.kind === 'model-switch').label).toContain('Haiku');
+  });
+  it('keeps the native cached-model confirmation and restores the observed model when it is declined', () => {
+    const timers: Array<() => void> = [];
+    const h = host({ setTimer: (fn: () => void) => { timers.push(fn); return fn; }, clearTimer: () => {} });
+    h.records.note(S, 'session:live', { sessionId: S, kind: 'model', model: 'opus[1m]' });
+    h.live.directCommandStarted(S, { kind: 'command', command: 'model', args: 'haiku' });
+    expect(h.lives().filter(e => e.kind === 'model')).toEqual([]);
+    h.live.inputBlock(S, { kind: 'popup', heading: 'Switch model?' });
+    h.live.inputBlock(S, null);
+    expect(timers).toHaveLength(1); timers[0]();
+    expect(h.lives().filter(e => e.kind === 'model')).toEqual([{ sessionId: S, kind: 'model', model: 'opus[1m]' }]);
+    h.live.forget(S);
+  });
+
+  it('does not duplicate a clear already reported by the classic hook', () => {
+    const h = host(); h.live.noteSessionStart(S, 'clear', 'new-conversation');
+    h.live.directCommandFinished(S, { kind: 'command', command: 'clear' }, { status: 'accepted', requestId: 'clear-r', claudeSessionId: 'new-conversation' });
+    expect(h.lives().filter(e => e.kind === 'clear')).toHaveLength(1);
+  });
+  it('keeps an ambiguous compaction pending but ends a definite refusal', () => {
+    const h = host(); const request = { kind: 'command', command: 'compact' } as const;
+    h.live.directCommandStarted(S, request);
+    expect(h.records.isCompacting(S)).toBe(true);
+    h.live.directCommandFinished(S, request, { status: 'unknown', message: 'reply lost' });
+    expect(h.records.isCompacting(S)).toBe(true);
+    h.live.directCommandFinished(S, request, { status: 'rejected', message: 'refused before invocation' });
+    expect(h.records.isCompacting(S)).toBe(false);
+    h.live.forget(S);
   });
 });
 

@@ -31,6 +31,22 @@ describe('Claude Code specialist model launch default', () => {
   });
 });
 
+describe('Claude control environment isolation', () => {
+  const inherited = { YOUCODED_CC_CONTROL_URL: 'http://old-host', YOUCODED_CC_CONTROL_TOKEN: 'old-secret' };
+  it('uses only this session\'s allowlisted bridge fields', () => {
+    const { spawnedEnv } = loadWorker(undefined, inherited, process.platform, { controlEnv: { YOUCODED_CC_CONTROL_URL: 'http://127.0.0.1:1234', YOUCODED_CC_CONTROL_TOKEN: 'new-secret', PATH: 'untrusted-path' } });
+    expect(spawnedEnv.YOUCODED_CC_CONTROL_TOKEN).toBe('new-secret');
+    expect(spawnedEnv.YOUCODED_CC_CONTROL_URL).toBe('http://127.0.0.1:1234');
+    expect(spawnedEnv.PATH).not.toBe('untrusted-path');
+  });
+  it('does not leak an inherited bridge into an unsupported session or shell', () => {
+    expect(loadWorker(undefined, inherited).spawnedEnv.YOUCODED_CC_CONTROL_TOKEN).toBeUndefined();
+    const { spawnedEnv } = loadWorker(undefined, inherited, process.platform, { sessionId: '', controlEnv: inherited });
+    expect(spawnedEnv.YOUCODED_CC_CONTROL_TOKEN).toBeUndefined();
+    expect(spawnedEnv.YOUCODED_CC_CONTROL_URL).toBeUndefined();
+  });
+});
+
 describe('pty-worker handoff stop', () => {
   it('bounds the parent acknowledgment wait and exits on failed send or disconnect', async () => {
     vi.useFakeTimers();

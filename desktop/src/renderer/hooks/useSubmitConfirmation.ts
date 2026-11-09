@@ -96,10 +96,11 @@ export function useSubmitConfirmation(args: UseSubmitConfirmationArgs) {
       return;
     }
 
-    const stillPending = session.timeline.some(
+    const stillPending = session.timeline.find(
       (e) => e.kind === 'user' && e.message.id === messageId && e.pending,
     );
-    if (!stillPending) {
+    // WHY: a direct call can be queued or its acknowledgment lost; Enter cannot recover it and may answer a menu.
+    if (!stillPending || (stillPending.kind === 'user' && stillPending.sendTransport === 'direct')) {
       tracked.delete(messageId);
       return;
     }
@@ -201,7 +202,7 @@ export function useSubmitConfirmation(args: UseSubmitConfirmationArgs) {
         const trackProvider = argsRef.current.providerForSession?.(sessionId);
         if (trackProvider === 'native' || trackProvider === 'shell') continue;
         for (const entry of session.timeline) {
-          if (entry.kind !== 'user' || !entry.pending) continue;
+          if (entry.kind !== 'user' || !entry.pending || entry.sendTransport === 'direct') continue;
           const messageId = entry.message.id;
           seen.add(messageId);
           if (tracked.has(messageId)) continue;
