@@ -1056,12 +1056,11 @@ export class HarnessSession extends EventEmitter {
     this.profile = opts.profile ?? CLOUD_DEFAULT;
   }
 
-  /** Resume path: NativeSessionHost rebuilds history from stored events, or —
-   *  with a `seed` — restores a durable accepted-history checkpoint (cache
-   *  Stage 4). Without a seed the capture starts empty at the next revision, so
-   *  the session becomes durable again at its first publish. */
+  /** restoreMode distinguishes rebuilt histories from exact accepted prefixes.
+   *  Legacy defaults: no seed reconstructs; a seed preserves an exact prefix. */
   seedHistory(messages: ModelMessage[], seed?: AcceptedHistorySeed & {
     continuationBinding?: string; messageOrigins?: Array<string[] | null>;
+    restoreMode?: 'exact' | 'reconstructed';
   }): void {
     this.history = messages;
     this.reconcileTriggerVisibility();
@@ -1071,7 +1070,8 @@ export class HarnessSession extends EventEmitter {
       seed.messageOrigins.every(part => part === null || part.every(uuid => known.has(uuid)))
       ? seed.messageOrigins.map(part => part ? [...part] : null)
       : messages.map(() => null);
-    this.legacyReopenFit = !seed;
+    // WHY: UUID/origin capture also seeds rebuilds; only restoreMode proves an exact accepted prefix.
+    this.legacyReopenFit = (seed?.restoreMode ?? (seed ? 'exact' : 'reconstructed')) === 'reconstructed';
     this.failedCompactionRevision = null;
     this.usageAnchor = null;
     this._contextUsedTokens = null;
@@ -2290,6 +2290,7 @@ export class HarnessSession extends EventEmitter {
       this.historyOrigins[0] = [summaryUuid];
       this.capture.recordEvent(summaryUuid);   // same reasoning as maybeCompact's
       this.capture.markSummary(summaryUuid, this.historyOrigins[1]?.[0]);
+      this.legacyReopenFit = false; // WHY: the committed summary ends reconstructed-prefix recovery.
       return { ok: true };
     } finally {
       this.abort = null;
@@ -2305,7 +2306,6 @@ export class HarnessSession extends EventEmitter {
    *  while the conversation keeps its file, its id and its full readable
    *  scrollback. Chosen over "start a new session" so a reset doesn't scatter
    *  half-conversations through the user's history.
-   *
    *  Refuses while a turn is in flight rather than yanking history out from
    *  under a running turn — the same reasoning (and the same honest coded
    *  refusal) as compactNow. */
@@ -2322,9 +2322,9 @@ export class HarnessSession extends EventEmitter {
     // /clear is exactly when a user looks at the chip to confirm it worked.
     const contextUsedAfter = this.reprojectContextUsed(estimateBefore);
     this.prefixMoved = true;   // the next request shares nothing with the last one — a known full miss
-    // No seed: the accepted list empties AND takes the next revision, so a
-    // checkpoint published before the clear can never be restored over it.
+    // No seed: empty capture advances revision, invalidating pre-clear checkpoints.
     this.capture.reset();
+    this.legacyReopenFit = false; // WHY: post-clear history is wholly live, never eligible for recovery trimming.
     // Fix 1 (CRITICAL, 2026-08-11): the dedupe cache must not outlive the
     // history it was vouching for. Left alive, a model that re-Reads an
     // unchanged file after /clear gets "already visible earlier in this
