@@ -572,15 +572,19 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
                   <span className="flex items-center gap-1">
                     Speculative decoding
                     <AnchorTip label="About speculative decoding" title="Speculative decoding" widthClass="w-72">
-                      The engine guesses several words ahead from text already in the
-                      conversation, then checks the guesses in one go. Replies that repeat
-                      earlier text — a file being edited, a quote — come back up to six times
-                      faster; other replies are unchanged, and the words are exactly what the
-                      model would have written anyway.
+                      {/* WHY "models that include their own guesser" (2026-11-09): MTP
+                          (model-presets.ts MTP_ENTRIES) now speeds up ordinary replies on
+                          dense models whose file has the heads, so "other replies are
+                          unchanged" stopped being true. */}
+                      The engine guesses several words ahead, then checks the guesses in
+                      one go. Replies that repeat earlier text — a file being edited, a
+                      quote — come back up to six times faster, and models that include
+                      their own guesser write ordinary replies faster too. The words are
+                      exactly what the model would have written anyway.
                     </AnchorTip>
                   </span>
                 )}
-                description="Faster replies when text repeats."
+                description="Faster replies, most of all when text repeats."
                 control={(
                   <Toggle
                     checked={speed.speculative}
