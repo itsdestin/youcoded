@@ -1881,3 +1881,35 @@ describe('EngineSupervisor — the engine\'s password', () => {
     expect(new Headers(fetchMock.mock.calls[0][1].headers).get('content-type')).toBe('application/json');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fault 3: a request whose body nobody reads must not hold the engine busy.
+// ---------------------------------------------------------------------------
+describe('EngineSupervisor — abandoned bodies do not leak inFlight', () => {
+  const okFetch = () => vi.fn(async (url: string) => {
+    const u = String(url);
+    if (u.endsWith('/health')) return { ok: true, status: 200 } as any;
+    if (u.includes('/models')) return { ok: true, status: 200, json: async () => ({ data: [] }) } as any;
+    return new Response(JSON.stringify({ choices: [] }), { status: 200 }); // the 'hi' reply, with a body
+  });
+
+  it('a successful model warm-up releases inFlight', async () => {
+    mockSpawn.mockReturnValue(makeFakeChild());
+    sup = makeSupervisor(okFetch());
+    await sup.ensureRunning();
+    await sup.loadModel('m-Q4_K_M');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sup.busy()).toBe(false);
+  });
+
+  it('aborting the request releases inFlight even if the body is never read', async () => {
+    mockSpawn.mockReturnValue(makeFakeChild());
+    sup = makeSupervisor(okFetch());
+    await sup.ensureRunning();
+    const ac = new AbortController();
+    await sup.trackedFetch('http://127.0.0.1:9999/v1/chat/completions', { method: 'POST', body: '{}', signal: ac.signal });
+    expect(sup.busy()).toBe(true);
+    ac.abort();
+    expect(sup.busy()).toBe(false);
+  });
+});

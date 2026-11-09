@@ -1077,6 +1077,17 @@ export class EngineSupervisor extends EventEmitter {
     const release = () => {
       if (!released) { released = true; this.inFlight--; releaseModel(); this.touch(); }
     };
+    // WHY: safety net for any caller that abandons a body without cancelling it
+    // (e.g. a probe that checks res.ok and returns). The caller's own abort
+    // signal firing means it no longer wants the answer, so stop holding the
+    // engine busy. Deliberately NOT a timer or GC hook: a long prefill can send
+    // no bytes for minutes, so a timeout would let idle shutdown cut a live
+    // stream, and GC timing is unpredictable.
+    const sig: AbortSignal | undefined = init?.signal ?? (typeof Request !== 'undefined' && input instanceof Request ? input.signal : undefined);
+    if (sig) {
+      if (sig.aborted) release();
+      else sig.addEventListener('abort', release, { once: true });
+    }
     const reader = (res.body as ReadableStream<Uint8Array>).getReader();
     const self = this;
     const stream = new ReadableStream<Uint8Array>({
@@ -1519,7 +1530,12 @@ export class EngineSupervisor extends EventEmitter {
       let body = '';
       // Read the body only on a failure, and never let a body that cannot be
       // read turn a real HTTP answer into a "could not be reached".
-      if (!res.ok) { try { body = await res.text(); } catch { body = ''; } }
+      // WHY always consume (not only on failure): trackedFetch holds inFlight until
+      // the body is fully read or cancelled. On success this body was left
+      // untouched, so inFlight stayed > 0 forever — busy() then made every engine
+      // settings change wait out its full 10-minute cap and blocked idle shutdown
+      // (fault 3, present since v1.3.3). A successful 'hi' reply is tiny.
+      try { const t = await res.text(); if (!res.ok) body = t; } catch { body = ''; }
       this.emit('model-load-result', { modelId, ok: res.ok, status: res.status, body });
     }).catch((e: any) => {
       // The request could not be made at all — report what happened, not a guess.

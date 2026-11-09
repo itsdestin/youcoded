@@ -1845,8 +1845,14 @@ export class EngineManager extends EventEmitter {
         }),
         signal: abort.signal,
       });
+      // WHY the body is read on success too: trackedFetch counts this request as
+      // running until its body is fully read or cancelled. Returning on res.ok
+      // without reading left it counted forever — the engine then always looked
+      // busy, so a settings change waited out its 10-minute cap and idle shutdown
+      // never came (fault 3, same shape as the supervisor's load "hi").
+      const text = await res.text().catch(() => '');
       if (res.ok) return null;
-      return { kind: 'answered', message: routerErrorText(res.status, await res.text().catch(() => '')) };
+      return { kind: 'answered', message: routerErrorText(res.status, text) };
     } catch (e: any) {
       // The request could not be made, or took longer than a model load ever
       // should. Report what actually happened — never a guess at why.

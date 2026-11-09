@@ -1003,6 +1003,31 @@ describe('EngineManager — on a temp home', () => {
       expect(readEngineConfig(home).backend).toBe('rocm');
     });
 
+    it("a successful model load's answer is read to the end, so the engine is not left looking busy", async () => {
+      // The real fetch here is the supervisor's trackedFetch, which counts a request
+      // as running until its body is read or cancelled — an unread success body kept
+      // the engine "busy" forever (settings waited 10 minutes; idle shutdown never ran).
+      plantInstall('vulkan');
+      await plantModel();
+      let drained = false;
+      const fetchImpl = (async () => new Response(new ReadableStream({
+        start(c) { c.enqueue(new TextEncoder().encode('{"choices":[]}')); c.close(); },
+      }), { status: 200 }) as unknown as Response) as unknown as typeof fetch;
+      const mgr = new EngineManager(home, userData, 9999, {
+        fetchImpl: (async (u: any, i: any) => {
+          const res = await fetchImpl(u, i);
+          const text = res.text.bind(res);
+          (res as any).text = async () => { const t = await text(); drained = true; return t; };
+          return res;
+        }) as unknown as typeof fetch,
+      });
+      stubDownload(mgr, { devices: [ROCM_DEVICE] });
+      stubBoots(mgr);
+      await mgr.setBackend('rocm');
+      expect(readEngineConfig(home).backend).toBe('rocm');
+      expect(drained).toBe(true);
+    });
+
     it('an install that was ALREADY on disk is never deleted, however the check fails', async () => {
       plantInstall('vulkan');
       // Here the real acquisition.install() runs: it finds this marker, sees a
