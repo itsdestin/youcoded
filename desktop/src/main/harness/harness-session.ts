@@ -14,7 +14,8 @@
 import { guardDownload } from './download-guard';
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
-import { isContextOverflow } from '../providers/context-overflow';
+import { isContextOverflow, ContextCannotFitError } from '../providers/context-overflow';
+import { capResultToRoom } from './tool-result-room';
 import { imageTooLarge, manyImageEdgeLimit } from '../providers/image-too-large';
 import { classifyFailure, abortableDelay, retryWaitMs, logTurnFailure, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
 import { truncationRecovery, CONTINUE_TURN_TEXT } from './truncation-recovery';
@@ -203,7 +204,7 @@ import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile, type ImageLimits } from './capability-profile';
 import { adaptForWire, encodeImagesForWire } from './wire-adapter';
 import { LocalPrewarm } from './local-prewarm';
-import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, summaryProvenanceNote, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
+import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, isJunkSummary, summaryProvenanceNote, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
 import { toReport, type PrefillProgress } from '../providers/prefill-progress';
 import { messageTokens, messagesTokens, requestOccupancy, requestFixedTokens, type UsageAnchor, APPROX_CHARS_PER_TOKEN } from './message-size';
 import { createSkillTool } from './tools/skill';
@@ -1963,7 +1964,7 @@ export class HarnessSession extends EventEmitter {
     const sourceRevision = this.capture.revision;
     let generated: { text: string; usage?: StepUsage } = { text: '' };
     this.summaryInputCannotFit = false;
-    try { generated = await this.generateSummary(model, span, aiTools); } catch { generated = { text: '' }; }
+    generated = await this.summaryWithRetry(model, span, aiTools);
     const summary = generated.text;
     if (!summary.trim() || !this.compactionCandidateFits(summary, keep)) {
       this.failedCompactionRevision = this.capture.revision;
@@ -2029,6 +2030,35 @@ export class HarnessSession extends EventEmitter {
     this.failedCompactionRevision = null;
     this.legacyReopenFit = false;
     return true;
+  }
+
+  /** Cut a tool result to the room the next request has left (tool-result-room.ts). `gathered` is the
+   *  results already collected for this step, which are not in history yet. */
+  private capToolText(toolName: string, text: string, gathered: any[]): string {
+    const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
+      fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
+      maxTokens: this.maxOutputTokens });
+    const used = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
+      revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens
+      + (gathered.length ? messageTokens({ role: 'tool', content: gathered } as ModelMessage) : 0);
+    return capResultToRoom(text, plan.trigger - used, FIT_MORE_HINT[toolName]);
+  }
+
+  /** Ask for a summary; a junk answer (empty, tool-call markup, implausibly short — isJunkSummary) is
+   *  asked for ONCE more with a plain-prose reminder. Returns '' when both are junk, so the caller
+   *  keeps history untouched (fault 2). A thrown request counts as junk. */
+  private async summaryWithRetry(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>, focus?: string): Promise<{ text: string; usage?: StepUsage }> {
+    // WHY tokens x 4, not JSON length: the span's real size as the budget sees it. Opaque reasoning ciphertext
+    // makes the JSON ~100k characters for a few hundred tokens, which would demand an impossibly long summary.
+    const spanChars = messagesTokens(span) * APPROX_CHARS_PER_TOKEN;
+    this.summaryInputCannotFit = false;   // per-request flag; a stale true from an earlier call must not skip this one
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (this.interrupted || this.abort?.signal.aborted || this.summaryInputCannotFit) break;   // retrying cannot help these
+      let generated: { text: string; usage?: StepUsage } = { text: '' };
+      try { generated = await this.generateSummary(model, span, aiTools, focus, attempt > 0); } catch { /* counts as junk */ }
+      if (!isJunkSummary(generated.text, spanChars)) return generated;
+    }
+    return { text: '' };
   }
 
   /** Adopt a pruned history and its bookkeeping consequences. */
@@ -2273,7 +2303,7 @@ export class HarnessSession extends EventEmitter {
         });
         // The same tool set a turn would carry, so the summary request's
         // prefix matches the conversation's (see generateSummary).
-        generated = await this.generateSummary(model, span, this.buildAiTools(), focus);
+        generated = await this.summaryWithRetry(model, span, this.buildAiTools(), focus);
       } catch {
         generated = { text: '' };
       }
@@ -2397,13 +2427,15 @@ export class HarnessSession extends EventEmitter {
   /** Model-generated summary of the retired span. Only the summarizer's tool
    * output copy may be shortened; the accepted history is never front-trimmed.
    * WHY: incomplete streams and failed fits must leave history untouched. */
-  private async generateSummary(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>, focus?: string): Promise<{ text: string; usage?: StepUsage }> {
+  private async generateSummary(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>, focus?: string, plainProseNudge = false): Promise<{ text: string; usage?: StepUsage }> {
     // Preserve the whole retired prefix. The old hard trim removed messages
     // from the front of this span, potentially losing the original request or
     // a paired tool batch before the model could summarize either.
     // Provenance rides at the END of the instruction so the span stays
     // byte-identical to what the provider cached (see summaryProvenanceNote).
-    const instruction = summarizePrompt(focus) + summaryProvenanceNote(span);
+    // WHY the nudge (retry only): the first answer was junk, often a tool call from a small model; say plainly what is wanted.
+    const instruction = summarizePrompt(focus) + summaryProvenanceNote(span)
+      + (plainProseNudge ? '\n\nReply with the written summary only, as plain text. Do not call any tool or write tool-call markup.' : '');
     const instructionTokens = Math.ceil(instruction.length / APPROX_CHARS_PER_TOKEN);
     const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
       fixedCost: requestFixedTokens(this.systemText, aiTools), summaryOverhead: instructionTokens,
@@ -3264,10 +3296,15 @@ export class HarnessSession extends EventEmitter {
           // Turn the tool's promised image paths into deliverable parts, charging
           // the per-turn budget/dedupe and amending the text with a named note
           // for every skip (Task 5 — the driver never promises silently).
-          const delivered = this.resolveToolImages(payload, imageBudget, call.toolCallId);
-          // WHY: the tool-result event is also the visible persisted transcript.
-          // Never trim it here for a small model; an unfit newest group must
-          // fail explicitly, not erase data before the summarizer can see it.
+          // WHY the cap sits here (fault 1, 2026-11-08): this is the one point where the result is
+          // not yet in history OR the transcript, so the model, the saved chat and a reopen all see
+          // the same (cut) text, and the call/result pairing is untouched (same part, shorter text).
+          // Room = what the next request can still hold below the compaction trigger, counting the
+          // results already gathered for this step. A big window never bites in practice.
+          const delivered = this.resolveToolImages({ ...payload, text: this.capToolText(call.toolName, payload.text, resultParts) }, imageBudget, call.toolCallId);
+          // WHY: the tool-result event is also the visible persisted transcript,
+          // so it carries exactly the (possibly room-capped) text the model got —
+          // never a second, different trim here.
           recordResult(this.emitEvent('tool-result', {
             toolUseId: call.toolCallId, toolName: call.toolName,
             toolResult: delivered.text, isError: payload.isError ?? false,
@@ -3526,8 +3563,11 @@ export class HarnessSession extends EventEmitter {
       // occupancy, not a lower chars/4 estimate that promises extra output.
       estimatedInput: requestOccupancy({ history: fittedHistory, identity: this.requestSizingIdentity(),
         revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens });
+    // WHY a typed error (fault 5): it must reach the user as the same 'too-long' card (with Summarise)
+    // as the engine's own refusal. The automatic summary was already tried by maybeCompact before this
+    // request unless that exact history had already failed (failedCompactionRevision fence).
     if (requestPlan.replyCap <= 0)
-      throw new Error('The conversation cannot fit this model’s context window.');
+      throw new ContextCannotFitError();
     const streamArgs: any = {
       model,
       system: this.systemText,

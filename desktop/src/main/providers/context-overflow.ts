@@ -30,3 +30,12 @@ export function isContextOverflow(error: unknown, providerId: string, providerTy
   if (providerType === 'openai-compatible') return (e.statusCode ?? e.status) === 400 && body.error?.code === 'context_length_exceeded';
   return false;
 }
+
+/** The harness's own pre-send refusal ("the conversation cannot fit this model's window").
+ *  WHY (fault 5, 2026-11-08): it was a plain Error, so the user got an unclassified failure card
+ *  while the engine's identical refusal got "too long" + Summarise. `failureKind` is read by
+ *  classifyFailure (provider-failure.ts) so both reach the user as the same kind and code. */
+export class ContextCannotFitError extends Error {
+  readonly failureKind = 'too-long' as const;
+  constructor() { super('The conversation cannot fit this model’s context window.'); this.name = 'ContextCannotFitError'; }
+}

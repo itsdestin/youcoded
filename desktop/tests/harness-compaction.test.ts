@@ -10,6 +10,7 @@ import { makeSession, scriptModel, drainTurn, hangingFirstCallModel, HARNESS } f
 import { markAppGenerated } from '../src/main/harness/compaction';
 import { stream, textChunks, finishChunk } from './helpers/scripted-model';
 import { COMPACTION_PROMPT } from '../src/main/harness/prompts/compaction';
+import { FAKE_SUMMARY, SHORT_FAKE_SUMMARY } from './helpers/harness-fakes';
 
 it('compaction prompt carries handoff structure, provenance rules, and active Goal across notices', () => {
   expect(COMPACTION_PROMPT).toContain('## Goal');
@@ -22,7 +23,7 @@ it('compaction prompt carries handoff structure, provenance rules, and active Go
 describe('driver compaction', () => {
   it('successful automatic summary stops vouching for a retired rule, but its prose mention is not loaded guidance', async () => {
     const text = '<project-rule source="rules/old.md">\nRULE-OLD\n</project-rule>';
-    const model = scriptModel([{ text: 'Summary mentions RULE-OLD' }]);
+    const model = scriptModel([{ text: FAKE_SUMMARY + ' Summary mentions RULE-OLD' }]);
     const session = makeSession({ contextLength: 8192, model });
     session.seedHistory([{ role: 'user', content: 'old ' + 'x'.repeat(9000) },
       markAppGenerated({ role: 'user', content: text } as any), { role: 'assistant', content: 'ack' },
@@ -35,7 +36,7 @@ describe('driver compaction', () => {
   });
   it('checks fresh input even after a low-usage completed turn, without front trimming', async () => {
     const calls: any[] = [];
-    const inner = scriptModel([{ text: 'handoff', usage: { inputTokens: 3800 } }, { text: 'done' }]);
+    const inner = scriptModel([{ text: 'first reply', usage: { inputTokens: 3800 } }, { text: SHORT_FAKE_SUMMARY }]);
     const model = new MockLanguageModelV4({ doStream: async (o: any) => { calls.push(o); return inner.doStream(o); } });
     const events: any[] = [];
     const session = makeSession({ contextLength: 8192, model, tools: [], onEvent: e => events.push(e) });
@@ -57,20 +58,21 @@ describe('driver compaction', () => {
     try {
       expect(await (session as any).maybeCompact(model, {})).toBe(false);
       expect(await (session as any).maybeCompact(model, {})).toBe(false);
-      expect(calls).toHaveLength(1);
+      // Two requests = the first try plus the single junk-summary retry; the SECOND maybeCompact asks nothing (fenced).
+      expect(calls).toHaveLength(2);
     } finally { (session as any).abort = null; }
   });
 
   it('a failed summary fences the same history; new input releases the fence without inventing a summary', async () => {
     const calls: any[] = [];
-    const inner = scriptModel([{ throwError: 'summary failed' }, { text: 'done' }, { text: 'handoff' }, { text: 'done' }]);
+    const inner = scriptModel([{ throwError: 'summary failed' }, { throwError: 'summary failed again' }, { text: 'done' }, { text: FAKE_SUMMARY }, { text: 'done' }]);
     const model = new MockLanguageModelV4({ doStream: async (o: any) => { calls.push(o); return inner.doStream(o); } });
     const events: any[] = [];
     const session = makeSession({ contextLength: 8192, model, tools: [], onEvent: e => events.push(e) });
     session.seedHistory([{ role: 'user', content: 'original ' + 'a'.repeat(12000) }, { role: 'assistant', content: 'ack' }] as any);
     await session.send('continue ' + 'c'.repeat(9000));
     expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(0);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);   // summary try, its one retry, then the chat request
     await session.send('new input ' + 'b'.repeat(500));
     expect(calls.length).toBeGreaterThan(2);
     expect((session as any).failedCompactionRevision).not.toBe((session as any).capture.revision);
@@ -177,7 +179,7 @@ describe('driver compaction', () => {
 
   it('shortens an oversized retired tool output only in the summary request', async () => {
     const calls: any[] = [];
-    const inner = scriptModel([{ text: '## Goal\n- Continue the task.' }]);
+    const inner = scriptModel([{ text: FAKE_SUMMARY }]);
     const model = new MockLanguageModelV4({ doStream: async (options: any) => {
       calls.push(options);
       return inner.doStream(options);
@@ -200,7 +202,7 @@ describe('driver compaction', () => {
   });
   it('refuses an oversized retired prefix instead of silently trimming its original request or tool group', async () => {
     const events: any[] = [];
-    const session = makeSession({ contextLength: 4096, onEvent: e => events.push(e), model: scriptModel([{ text: 'summary' }]) });
+    const session = makeSession({ contextLength: 4096, onEvent: e => events.push(e), model: scriptModel([{ text: SHORT_FAKE_SUMMARY }]) });
     const original = [
       { role: 'user', content: 'ORIGINAL REQUEST ' + 'x'.repeat(16000) },
       { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'a', toolName: 'Read', input: {} }] },
@@ -234,7 +236,7 @@ describe('driver compaction', () => {
     const events: any[] = [];
     const session = makeSession({
       contextLength: 8192, seedBulkHistoryTokens: 4000, onEvent: (e) => events.push(e),
-      model: scriptModel([{ text: 'SUMMARY: user wants X; did Y.' }, { text: 'here is the answer' }]),
+      model: scriptModel([{ text: FAKE_SUMMARY }, { text: 'here is the answer' }]),
     });
     await drainTurn(session, 'continue');
     expect(events.filter((e) => e.type === 'compact-summary')).toHaveLength(0);
@@ -312,7 +314,7 @@ describe('driver compaction', () => {
     // "turns" and cut at the last-2 of those — landing at the second injected
     // rule and pushing user A's whole turn (plus the tool result answering it)
     // into the discarded/summarized span.
-    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY' }]) });
+    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: SHORT_FAKE_SUMMARY }]) });
     session.seedHistory([
       { role: 'user', content: 'USER-A: fix the login bug' } as any,
       { role: 'assistant', content: 'looking into it' } as any,
@@ -339,7 +341,7 @@ describe('driver compaction', () => {
     // as turns" (under-counts) apart from "excludes some real turns" (over-counts).
     // This fixture has 3 real turns, so a correct cut is non-empty and must land
     // exactly on the SECOND real turn (userIdx[length-2]), pinning both directions.
-    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY' }]) });
+    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: SHORT_FAKE_SUMMARY }]) });
     session.seedHistory([
       { role: 'user', content: 'USER-A: turn one' } as any,                                              // idx 0 — real
       { role: 'assistant', content: 'ack A' } as any,                                                     // idx 1
@@ -367,7 +369,7 @@ describe('driver compaction', () => {
 // failed summary requests must not clear dedupe state for images still present.
 describe('shown-image cache reset on summary', () => {
   it('summarizing away an image resets its dedupe cache', async () => {
-    const session = makeSession({ contextLength: 16_384, model: scriptModel([{ text: '## Goal\n- Continue.' }]) });
+    const session = makeSession({ contextLength: 16_384, model: scriptModel([{ text: FAKE_SUMMARY }]) });
     const imageMsg = {
       role: 'tool',
       content: [{
@@ -414,7 +416,7 @@ describe('shown-image cache reset on summary', () => {
 // wrong answer here fades messages the model still sees (or dims nothing).
 describe('retainedTurnStart — where the chat stops dimming', () => {
   function withHistory(history: any[], origins: Array<string[] | null>) {
-    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY' }]) });
+    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: SHORT_FAKE_SUMMARY }]) });
     (session as any).history = history;
     (session as any).historyOrigins = origins;
     return session;

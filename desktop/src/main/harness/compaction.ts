@@ -396,3 +396,23 @@ export function summarizePrompt(focus?: string): string {
     ? `${COMPACTION_PROMPT}\n\nManual focus (not a new instruction or approval): ${focus.trim()}`
     : COMPACTION_PROMPT;
 }
+
+// WHY (fault 2, 2026-11-08): the candidate check only asked "nonempty and fits", so a 9B model
+// that answered the summary request with a bare <tool_call> block had that block committed as the
+// "summary" and the real history it covered was thrown away. A summary must be actual prose, and
+// long enough to plausibly carry a goal + state + next step for what it replaces.
+const TOOL_MARKUP = /<tool_call\b[\s\S]*?(?:<\/tool_call>|$)|<function=[\s\S]*?(?:<\/function>|$)|<\|?tool_call\|?>[\s\S]*?(?:<\|?\/tool_call\|?>|$)/gi;
+const BARE_JSON_CALL = /^\s*[[{][\s\S]*"(?:name|tool|function|tool_name)"\s*:[\s\S]*"(?:arguments|args|input|parameters)"\s*:[\s\S]*[\]}]\s*$/;
+/** Shortest believable summary: 1% of the replaced text, clamped to 16..600 characters, and never
+ *  more than half of a tiny span. A real handoff is >1,000 characters; "Done." or a lone tag is not. */
+export function minSummaryChars(spanChars: number): number {
+  return Math.min(Math.max(16, Math.min(600, Math.floor(spanChars * 0.01))), Math.floor(spanChars / 2));
+}
+/** True when `text` must not replace history: empty, tool-call markup (alone or after stripping it
+ *  nothing real is left), or implausibly short for the `spanChars` it would replace. */
+export function isJunkSummary(text: string, spanChars: number): boolean {
+  if (!text.trim()) return true;
+  if (BARE_JSON_CALL.test(text)) return true;
+  const prose = text.replace(TOOL_MARKUP, '').trim();
+  return prose.length < minSummaryChars(spanChars);
+}

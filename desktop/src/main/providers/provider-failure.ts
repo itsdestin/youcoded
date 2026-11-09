@@ -112,6 +112,9 @@ export function classifyFailure(error: unknown): ProviderFailure {
   if (!e || typeof e !== 'object') return { kind: 'unknown', code: 'unknown' };
   // Codes an earlier layer already decided (OpenRouter's ProviderAccountError,
   // ChatGPT sign-in) — those layers read the provider's real answer.
+  // The harness's own pre-send "cannot fit" refusal (context-overflow.ts) is the same kind and code as the
+  // engine's refusal below, so both show one card with Summarise (fault 5).
+  if (e.failureKind === 'too-long') return { kind: 'too-long', code: 'context-too-long' };
   if (typeof e.errorCode === 'string') return { kind: 'account', code: e.errorCode };
 
   const status: number | undefined = e.statusCode ?? e.status;

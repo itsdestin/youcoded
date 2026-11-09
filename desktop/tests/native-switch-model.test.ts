@@ -7,7 +7,7 @@
 // model but is sized for the new one; every failure stays on the current model.
 import { describe, it, expect, vi } from 'vitest';
 import { NativeSessionHost } from '../src/main/harness/native-session-host';
-import { makeSession, scriptModel } from './helpers/harness-fakes';
+import { makeSession, scriptModel, FAKE_SUMMARY } from './helpers/harness-fakes';
 
 describe('HarnessSession.fitForWindow', () => {
   const long = (n: number) => Array.from({ length: n }, (_, i) => ([
@@ -39,7 +39,7 @@ describe('HarnessSession.fitForWindow', () => {
   });
 
   it('compactNow(target) sizes the kept tail for the new model and fits it', async () => {
-    const s = makeSession({ contextLength: 200_000, model: scriptModel([{ text: 'Goal: keep going.' }]) });
+    const s = makeSession({ contextLength: 200_000, model: scriptModel([{ text: FAKE_SUMMARY }]) });
     s.seedHistory(long(40) as any);
     expect(s.fitForWindow(32_768)).toBe('needs-summary');
     expect(await s.compactNow(undefined, 32_768)).toEqual({ ok: true });
@@ -154,7 +154,7 @@ it('Summarize and switch says a compaction began, on the same push every screen 
 // skill's body, so the guard must forget it — or the model is told a skill it
 // no longer has is "already loaded".
 it('a committed summary forgets which skills were loaded', async () => {
-  const s = makeSession({ contextLength: 200_000, model: scriptModel([{ text: 'Goal: continue.' }]) });
+  const s = makeSession({ contextLength: 200_000, model: scriptModel([{ text: FAKE_SUMMARY }]) });
   s.seedHistory(Array.from({ length: 40 }, (_, i) => ([
     { role: 'user', content: `question ${i} ${'x'.repeat(2_000)}` },
     { role: 'assistant', content: `answer ${i} ${'y'.repeat(2_000)}` },

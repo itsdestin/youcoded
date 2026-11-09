@@ -40,6 +40,7 @@ import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { HARNESS, makeOpts, fakeTool, makeSession, scriptModel, drainTurn, FAKE_SESSION_CWD } from './helpers/harness-fakes';
 import { CLOUD_DEFAULT, resolveProfile, IMAGE_LIMITS_OPENAI } from '../src/main/harness/capability-profile';
 import { looseData } from '../src/shared/transcript-event-types';
+import { FAKE_SUMMARY, SHORT_FAKE_SUMMARY, TINY_FAKE_SUMMARY } from './helpers/harness-fakes';
 
 function collect(session: HarnessSession): TranscriptEvent[] {
   const events: TranscriptEvent[] = [];
@@ -78,7 +79,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     const scripts = [
       stream(toolCallChunk('c1', 'Read', { file_path: 'a' }), finishChunk('tool-calls')),
       stream({ type: 'error', error: overflow }),
-      stream(...textChunks('s', 'handoff'), finishChunk('stop')),
+      stream(...textChunks('s', FAKE_SUMMARY), finishChunk('stop')),
       stream(...textChunks('a', 'done'), finishChunk('stop')),
     ];
     const prompts: any[] = [];
@@ -102,7 +103,7 @@ describe('HarnessSession — multi-step turn driver', () => {
       responseBody: JSON.stringify({ error: { message: 'too long', type: 'invalid_request_error', code: 'context_length_exceeded' } }) });
     const scripts = [
       stream({ type: 'error', error: overflow }),
-      stream(...textChunks('s', 'handoff'), finishChunk('stop')),
+      stream(...textChunks('s', FAKE_SUMMARY), finishChunk('stop')),
       stream(...textChunks('a', 'done'), finishChunk('stop')),
     ];
     let index = 0;
@@ -136,7 +137,9 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(caps[1]).toBeGreaterThan(0);
   });
 
-  it('preserves a giant tool result in the transcript rather than trimming it before the next request', async () => {
+  it('cuts a giant tool result to the room left, identically in the transcript, the saved history and the next request', async () => {
+    // Replaces the older rule "never cut, fail explicitly": on a small window that failure was the
+    // user-visible bug (2026-11-08). The cut result still says how to read the rest.
     const read = fakeTool('Read', { onExecute: () => ({ text: 'x'.repeat(30_000) }) });
     const seen: any[] = [];
     const model = scriptedModel([
@@ -147,11 +150,11 @@ describe('HarnessSession — multi-step turn driver', () => {
     const events = collect(session);
     await session.send('read file');
     expect((read as any).calls).toHaveLength(1);
-    expect(events.find(e => e.type === 'tool-result')!.data.toolResult).toBe('x'.repeat(30_000));
-    expect(JSON.stringify(session.acceptedHistory().messages)).toContain('x'.repeat(30_000));
-    // A scripted provider may accept a request that a real small-window model
-    // would reject; regardless, no output is erased before the provider sees it.
-    expect(JSON.stringify(seen[1])).toContain('x'.repeat(30_000));
+    const shown: string = events.find(e => e.type === 'tool-result')!.data.toolResult;
+    expect(shown.length).toBeLessThan(30_000);
+    expect(shown).toMatch(/truncated.*offset\/limit/s);
+    expect(JSON.stringify(session.acceptedHistory().messages)).toContain(JSON.stringify(shown).slice(1, -1));
+    expect(JSON.stringify(seen[1])).toContain(JSON.stringify(shown).slice(1, -1));
   });
 
   it('does not retry an overflow after output has begun', async () => {
@@ -180,7 +183,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     const overflow = Object.assign(new Error('rejected'), { statusCode: 400,
       responseBody: JSON.stringify({ error: { metadata: { error_type: 'context_length_exceeded' } } }) });
     const chunks = expectedCalls === 3
-      ? [stream({ type: 'error', error: overflow }), stream(...textChunks('s', 'handoff'), finishChunk('stop')),
+      ? [stream({ type: 'error', error: overflow }), stream(...textChunks('s', FAKE_SUMMARY), finishChunk('stop')),
         stream({ type: 'error', error })]
       : [stream({ type: 'error', error })];
     let calls = 0;
@@ -2844,7 +2847,7 @@ describe('shown-image cache resets on history-discarding events', () => {
       // WHY: a complete summary and its output allowance cannot fit the old
       // 6k history into a 4k window; use a feasible over-trigger window.
       contextLength: 32_768, seedBulkHistoryTokens: 25_000, onEvent: (e) => events.push(e),
-      model: scriptModel([{ text: 'SUMMARY: user wants X; did Y.' }, { text: 'here is the answer' }]),
+      model: scriptModel([{ text: FAKE_SUMMARY }, { text: 'here is the answer' }]),
     });
     // Seed the cache as if an image had been delivered earlier in the
     // (about to be summarized) history — resolveToolImages itself is not
@@ -2857,15 +2860,15 @@ describe('shown-image cache resets on history-discarding events', () => {
   });
 
   it('Fix 2: manual compaction (compactNow) resets the dedupe cache along with the discarded span', async () => {
-    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY: ok' }]) });
+    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: TINY_FAKE_SUMMARY }]) });
     // At least 2 user-delimited turns so summarizeCutIndex() finds a
     // condensable span (compactNow has no MIN_SUMMARIZE_SPAN thrash guard, so
     // small content is enough — unlike the maybeCompact test above).
     session.seedHistory([
-      { role: 'assistant', content: 'a1' } as any,
-      { role: 'user', content: 'u1' } as any,
-      { role: 'assistant', content: 'a2' } as any,
-      { role: 'user', content: 'u2' } as any,
+      { role: 'assistant', content: 'a1' + ' padding'.repeat(60) } as any,
+      { role: 'user', content: 'u1' + ' padding'.repeat(60) } as any,
+      { role: 'assistant', content: 'a2' + ' padding'.repeat(60) } as any,
+      { role: 'user', content: 'u2' + ' padding'.repeat(60) } as any,
     ]);
     (session as any).shownImages.set('/fake/already-shown.png', 111);
     const result = await session.compactNow();
@@ -3395,17 +3398,17 @@ describe('HarnessSession — the model factory always gets the session id as cac
 
   it('the compaction path passes cacheKey === sessionId too', async () => {
     const seen: Array<{ cacheKey?: string }> = [];
-    const model = scriptModel([{ text: 'SUMMARY: ok' }]);
+    const model = scriptModel([{ text: TINY_FAKE_SUMMARY }]);
     const session = new HarnessSession(
       makeOpts({ sessionId: 'sess-xyz', contextLength: 4096, tools: [], decide: async () => ALLOW }),
       recordingFactory(seen, model),
     );
     // Two user-delimited turns so compactNow finds a span it can condense.
     session.seedHistory([
-      { role: 'assistant', content: 'a1' } as any,
-      { role: 'user', content: 'u1' } as any,
-      { role: 'assistant', content: 'a2' } as any,
-      { role: 'user', content: 'u2' } as any,
+      { role: 'assistant', content: 'a1' + ' padding'.repeat(60) } as any,
+      { role: 'user', content: 'u1' + ' padding'.repeat(60) } as any,
+      { role: 'assistant', content: 'a2' + ' padding'.repeat(60) } as any,
+      { role: 'user', content: 'u2' + ' padding'.repeat(60) } as any,
     ]);
     expect(await session.compactNow()).toEqual({ ok: true });
     expect(seen).toHaveLength(1);
