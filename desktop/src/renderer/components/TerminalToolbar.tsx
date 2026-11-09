@@ -117,12 +117,13 @@ export default function TerminalToolbar({ sessionId, direct, onToast }: Terminal
     return (
       <div className="scroll-mask scroll-mask--chips flex px-3 py-1 overflow-x-auto scrollbar-none">
         <div className="flex flex-1 items-center gap-1">
+          {/* Attach and Paste first (Destin, 2026-11-08 review: "put paperclip and paste on the lefthand side"). */}
+          <Key label="Attach file" icon={<AttachIcon className="w-4 h-4" />} onClick={() => { void attach(); }} />
+          <Key label="Paste" onClick={() => { void paste(); }} />
           <Key label="Ctrl" pressed={ctrl} onClick={() => setCtrlHeld(sessionId, !ctrl)} />
           <Key label="Esc" onClick={() => send('\x1b')} />
           <Key label="Tab" onClick={() => send('\t')} />
           <Key label="Space" onClick={() => send(' ')} />
-          <Key label="Attach file" icon={<AttachIcon className="w-4 h-4" />} onClick={() => { void attach(); }} />
-          <Key label="Paste" onClick={() => { void paste(); }} />
         </div>
       </div>
     );
@@ -227,9 +228,11 @@ function DPad({ send }: { send: (input: string) => void }) {
       <Button onMouseDown={keepTyping} variant="raised" size="icon" aria-label="Left" onClick={() => send('\x1b[D')} className={pad}>
         <BackIcon className="w-5 h-5" />
       </Button>
+      {/* An Enter-key symbol (↵), not the chat's send arrow (Destin, 2026-11-08 review: "make this look like an enter
+          key symbol … the send button in this view look odd sitting next to the right arrow"). */}
       <Button onMouseDown={keepTyping} size="icon" aria-label="Send" onClick={() => send('\r')} className="w-10 h-10 rounded-md">
-        <svg className="w-4 h-4 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+        <svg className="w-5 h-5 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 5v6a3 3 0 01-3 3H5m0 0l4-4m-4 4l4 4" />
         </svg>
       </Button>
       <Button onMouseDown={keepTyping} variant="raised" size="icon" aria-label="Right" onClick={() => send('\x1b[C')} className={pad}>
