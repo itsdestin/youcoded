@@ -346,6 +346,11 @@ interface LiveEntry {
   // quiesce()/teardown await this to know the in-flight turn has actually settled
   // — the host has no other awaitable handle on the fire-and-forget runTurns.
   running?: Promise<void>;
+  /** Arrival generation, not queue length: an awaited empty claim cannot erase a newer wake. */
+  deliveryVersion?: number;
+  injectedReports?: Set<string>;
+  deliveryDraining?: boolean;
+  noticeReceipts?: number;
   // Specialists (plan 1a): set ONLY on a child minted by createChild. It is the
   // back-pointer that lets destroy() de-register this child from its parent's
   // childrenOf set without re-reading the header off disk (see childrenOf).
@@ -519,6 +524,7 @@ export class NativeSessionHost extends EventEmitter {
   // queueDelivery() itself when the parent is already idle. A Set, not a
   // counter: membership is all that matters — the delivery loop re-reads the
   // real count from the ledger every time it runs.
+  activityDiagnostic?: import('./activity-diagnostics').ActivityDiagnostic;
   private pendingDeliveryParents = new Set<string>();
 
   // Task 4 fix-pass 2 — in-memory fallback delivery lane. WHY this exists:
@@ -573,6 +579,17 @@ export class NativeSessionHost extends EventEmitter {
    *  successful delivery) would risk losing it to a runNotice failure with no
    *  way to retry, so callers that fail to actually deliver must put it back;
    *  see the delivery loop's own catch for that half. */
+  private clearFallbackForRun(parentId: string, rec: DelegationRecord): void {
+    // WHY: a completed notice turn may have already started a new run of this child.
+    const fallback = this.inMemoryFallback.get(rec.childId);
+    if (fallback?.parentId === parentId && fallback.rec.parentToolCallId === rec.parentToolCallId) this.inMemoryFallback.delete(rec.childId);
+  }
+
+  private restoreFallback(parentId: string, rec: DelegationRecord): void {
+    // Never replace a newer run's sole fallback copy after an old notice await.
+    if (!this.inMemoryFallback.has(rec.childId)) this.inMemoryFallback.set(rec.childId, { parentId, rec });
+  }
+
   private takeInMemoryFallback(parentId: string): { childId: string; rec: DelegationRecord } | undefined {
     for (const [childId, entry] of this.inMemoryFallback) {
       if (entry.parentId === parentId) {
@@ -1041,6 +1058,9 @@ export class NativeSessionHost extends EventEmitter {
         missedSteers = await this.ledger.takeMissedSteers(parent.cwd, parentId, opts.childId, {
           status: 'running', startedAt: Date.now(), endedAt: undefined, failureText: undefined,
           delivered: false, background: !!opts.background,
+          // WHY: a resumed run has a new Task invocation; receipt/dedupe identity
+          // must not retain the previous run's tool-call ID.
+          parentToolCallId: opts.parentToolCallId,
           // Fix (Critical 2, final review): this patch merges onto the SAME
           // ledger row RUN 1 left behind (resume never recordStart's a second
           // row — see this method's own header comment) — every field RUN 1's
@@ -1113,13 +1133,13 @@ export class NativeSessionHost extends EventEmitter {
     if (this.ledger && parent.cwd) {
       if (reportPath) {
         try {
-          await this.ledger.update(parent.cwd, parentId, opts.childId, { reportPath });
+          await this.ledger.updateForRun(parent.cwd, parentId, opts.childId, opts.parentToolCallId, { reportPath });
         } catch (ledgerErr) {
           log('ERROR', 'NativeSessionHost', 'failed to record a truncation-time spill path for a resumed specialist — the report is still returned to the caller', { childId: opts.childId, parentId, error: String(ledgerErr) });
         }
       }
       try {
-        await this.ledger.confirmDelivered(parent.cwd, parentId, opts.childId);
+        await this.ledger.confirmDelivered(parent.cwd, parentId, opts.childId, opts.parentToolCallId);
       } catch (ledgerErr) {
         log('ERROR', 'NativeSessionHost', 'failed to mark a resumed specialist delivered in the ledger — the report is still returned to the caller', { childId: opts.childId, parentId, error: String(ledgerErr) });
       }
@@ -1450,7 +1470,7 @@ export class NativeSessionHost extends EventEmitter {
       // here must never discard the report already produced above.
       if (reportPath) {
         try {
-          await this.ledger.update(parentCwd, parentId, childId, { reportPath });
+          await this.ledger.updateForRun(parentCwd, parentId, childId, opts.parentToolCallId, { reportPath });
         } catch (ledgerErr) {
           log('ERROR', 'NativeSessionHost', 'failed to record a truncation-time spill path in the ledger — the report is still returned to the caller', { childId, parentId, error: String(ledgerErr) });
         }
@@ -1461,7 +1481,7 @@ export class NativeSessionHost extends EventEmitter {
       // as still-undelivered forever. Own try/catch, log-only: a bookkeeping
       // failure here must never discard the report already produced above.
       try {
-        await this.ledger.confirmDelivered(parentCwd, parentId, childId);
+        await this.ledger.confirmDelivered(parentCwd, parentId, childId, opts.parentToolCallId);
       } catch (ledgerErr) {
         log('ERROR', 'NativeSessionHost', 'failed to mark a foreground specialist delivered in the ledger — the report is still returned to the caller', { childId, parentId, error: String(ledgerErr) });
       }
@@ -1615,6 +1635,8 @@ export class NativeSessionHost extends EventEmitter {
    *  real turn reaches too) is what actually injects the report(s). */
   private queueDelivery(parentId: string): void {
     this.pendingDeliveryParents.add(parentId);
+    const entry = this.live.get(parentId);
+    if (entry) entry.deliveryVersion = (entry.deliveryVersion ?? 0) + 1;
     this.kickIdleDeliveryPass(parentId);
   }
 
@@ -1661,6 +1683,8 @@ export class NativeSessionHost extends EventEmitter {
     const arr = this.pendingHostNotices.get(parentId) ?? [];
     arr.push({ text, meta });
     this.pendingHostNotices.set(parentId, arr);
+    const entry = this.live.get(parentId)!;
+    entry.deliveryVersion = (entry.deliveryVersion ?? 0) + 1;
     this.kickIdleDeliveryPass(parentId);
   }
 
@@ -3318,6 +3342,10 @@ export class NativeSessionHost extends EventEmitter {
   private wire(sessionId: string, cwd: string, session: HarnessSession, mcpLease?: McpLease, projectInstructionFiles: readonly ProjectInstructionFile[] = []): void {
     const entry: LiveEntry = { session, cwd, appendChain: Promise.resolve(), compactionGeneration: this.restoredCompactionGeneration.get(session) ?? 0, queue: [], inFlight: false, mcpLease, projectInstructionFiles };
     this.live.set(sessionId, entry);
+    session.setDeliveryBoundary(async () => {
+      if (this.live.get(sessionId) !== entry || entry.holdDeliveries || entry.quiescing) return;
+      await this.drainDeliveries(sessionId, entry, 'boundary');
+    });
     this.retainModel(sessionId, session.binding.modelId); // ref-count this model
     // Persist "Always allow" decisions for THIS session's project. The session
     // emits 'remember-rule' {tool, pattern?, action} — a plain EventEmitter
@@ -3327,6 +3355,11 @@ export class NativeSessionHost extends EventEmitter {
     // not break the turn (the rule is a convenience, re-asked next time).
     session.on('remember-rule', (rule: PermissionRule) => this.rememberRule(sessionId, cwd, rule));
     session.on('transcript-event', (event: TranscriptEvent) => {
+      if (event.type === 'user-message' && event.data.injected) entry.noticeReceipts = (entry.noticeReceipts ?? 0) + 1;
+      if (event.type === 'user-message' && event.data.injected === 'specialist-report') {
+        const meta = event.data.injectedMeta;
+        if (meta && 'childId' in meta) (entry.injectedReports ??= new Set()).add(JSON.stringify([meta.childId, meta.parentToolCallId]));
+      }
       // (1) Forward NOW — not gated on the disk write (see module header).
       this.emit('transcript-event', event);
       // A committed summary was already appended on this chain. Never write
@@ -3538,7 +3571,7 @@ export class NativeSessionHost extends EventEmitter {
       // app's lifetime. Release the hold and rethrow the ORIGINAL error
       // unchanged (never guess/replace a cause — error-message-standards.md).
       session = new HarnessSession(
-        { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
+        { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free, activityDiagnostic: this.activityDiagnostic,
           commitCompaction: proposal => this.commitCompaction(opts.sessionId, session, proposal),
           takeReadyBusyMessage: () => this.takeReadyBusyMessage(opts.sessionId, session),
           ...(mcpServers ? { mcpServers } : {}),
@@ -3687,7 +3720,7 @@ export class NativeSessionHost extends EventEmitter {
     let session: HarnessSession;
     session = new HarnessSession(
       {
-        sessionId: childId, cwd: workDir, binding, contextLength, profile, pricing, free,
+        sessionId: childId, cwd: workDir, binding, contextLength, profile, pricing, free, activityDiagnostic: this.activityDiagnostic,
         commitCompaction: proposal => this.commitCompaction(childId, session, proposal),
 // WHY: specialist work is bounded by its narrow tool set, parent-managed
         // lifecycle controls, and the delegation spawn backstop—not an arbitrary
@@ -3900,18 +3933,48 @@ export class NativeSessionHost extends EventEmitter {
       log('WARN', 'NativeSessionHost', 'reconcileDelegations: failed to read the ledger — skipping restart reconcile for this resume', { parentId, error: String((err as any)?.message ?? err) });
       return;
     }
+    let receipts: Set<string>;
+    try {
+      const events = records.some(r => r.background && !r.delivered) ? await this.store.readEventsAsync(parentId, cwd) : [];
+      receipts = new Set(events.flatMap(e => {
+        if (e.type !== 'user-message' || e.data.injected !== 'specialist-report') return [];
+        const meta = e.data.injectedMeta;
+        return meta && 'childId' in meta ? [JSON.stringify([meta.childId, meta.parentToolCallId])] : [];
+      }));
+    } catch (err) {
+      // Absence is evidence only after a successful complete transcript read.
+      log('WARN', 'NativeSessionHost', 'delivery receipt reconcile could not read transcript', { error: String(err) });
+      return;
+    }
     let hasUndelivered = false;
     for (const rec of records) {
+      if (rec.background && !rec.delivered && (!rec.claimedBy || rec.claimedBy.instanceId === OWNER.instanceId || !isOwnerAlive(rec.claimedBy))) {
+        try {
+          const injected = receipts.has(JSON.stringify([rec.childId, rec.parentToolCallId]));
+          if (injected) {
+            await this.ledger.confirmDelivered(cwd, parentId, rec.childId, rec.parentToolCallId);
+            continue;
+          }
+          if (rec.injectionAttempted) {
+            // WHY: complete durable transcript has no correlated receipt. Recover
+            // marker-before-injection crashes; never infer this from delivered=false.
+            await this.ledger.updateForRun(cwd, parentId, rec.childId, rec.parentToolCallId, { injectionAttempted: false });
+          }
+        } catch (err) {
+          log('WARN', 'NativeSessionHost', 'delivery receipt reconcile failed', { childId: rec.childId, error: String(err) });
+          continue;
+        }
+      }
       if (rec.status === 'running' && !isOwnerAlive(rec.owner)) {
         try {
-          await this.ledger.update(cwd, parentId, rec.childId, { status: 'interrupted', endedAt: Date.now() });
+          await this.ledger.updateForRun(cwd, parentId, rec.childId, rec.parentToolCallId, { status: 'interrupted', endedAt: Date.now() });
         } catch (err) {
           log('WARN', 'NativeSessionHost', 'reconcileDelegations: failed to mark a dead-owner running child interrupted', { parentId, childId: rec.childId, error: String((err as any)?.message ?? err) });
         }
       }
       if (rec.claimedBy && !isOwnerAlive(rec.claimedBy)) {
         try {
-          await this.ledger.releaseClaim(cwd, parentId, rec.childId);
+          await this.ledger.releaseClaim(cwd, parentId, rec.childId, rec.parentToolCallId);
         } catch (err) {
           log('WARN', 'NativeSessionHost', 'reconcileDelegations: failed to release a dead-owner delivery lease', { parentId, childId: rec.childId, error: String((err as any)?.message ?? err) });
         }
@@ -4045,7 +4108,7 @@ export class NativeSessionHost extends EventEmitter {
       // error unchanged (error-message-standards.md).
       session = new HarnessSession(
         // `binding` (not header.binding) — same override reason as above.
-        { sessionId, cwd, harness, binding, contextLength, profile, pricing, free,
+        { sessionId, cwd, harness, binding, contextLength, profile, pricing, free, activityDiagnostic: this.activityDiagnostic,
           commitCompaction: proposal => this.commitCompaction(sessionId, session, proposal),
           takeReadyBusyMessage: () => this.takeReadyBusyMessage(sessionId, session),
           ...(mcpServers ? { mcpServers } : {}),
@@ -4269,13 +4332,14 @@ export class NativeSessionHost extends EventEmitter {
       // delivery and FIFO dispatch until BOTH lanes are quiet at the same boundary.
       for (;;) {
         while (next !== undefined) {
-          if (this.live.get(sessionId) !== entry) return;
+          if (this.live.get(sessionId) !== entry || entry.quiescing) return;
           // A user-started turn lifts the post-Stop hold so the model reads
           // parked reports as context, not as a new turn of their own.
-          if (entry.holdDeliveries && next !== IDLE_PASS) {
+          if (next !== IDLE_PASS && (entry.holdDeliveries || this.pendingDeliveryParents.has(sessionId) || this.pendingHostNotices.has(sessionId))) {
+            const held = entry.holdDeliveries;
             entry.holdDeliveries = false;
-            await this.drainDeliveries(sessionId, entry, 'splice');
-            if (this.live.get(sessionId) !== entry) return;
+            await this.drainDeliveries(sessionId, entry, held ? 'splice' : 'boundary');
+            if (this.live.get(sessionId) !== entry || entry.quiescing) return;
           }
           try {
             if (typeof next === 'function') await next();
@@ -4297,8 +4361,12 @@ export class NativeSessionHost extends EventEmitter {
         }
         // Stop pressed during this pass: leave reports parked, but never park
         // submitted user messages. A notice pass can receive sends while awaiting.
+        const drainedVersion = entry.deliveryVersion;
         if (!entry.holdDeliveries && !entry.quiescing) await this.drainDeliveries(sessionId, entry, 'turn');
         if (this.live.get(sessionId) !== entry || entry.quiescing) return;
+        // WHY: arrivals during the final await could not wake an inFlight owner.
+        // Revisit BOTH lanes only for new arrivals, not an unchanged failed report.
+        if (!entry.holdDeliveries && entry.deliveryVersion !== drainedVersion) continue;
         next = entry.queue[0]?.ready === false ? undefined : entry.queue.shift();
         if (next === undefined) break;
         this.announceQueue(sessionId);
@@ -4321,23 +4389,36 @@ export class NativeSessionHost extends EventEmitter {
   /** `mode` — 'turn': each notice is a real model turn (runNotice); 'splice':
    *  each notice is written into history and the transcript with NO model
    *  call (spliceNotice) — the post-Stop path, run right before the user's
-   *  next message so the model reads the reports as that message's context. */
-  private deliverNotice(entry: LiveEntry, mode: 'turn' | 'splice', text: string, meta?: InjectedMeta): Promise<void> {
-    return mode === 'splice' ? entry.session.spliceNotice(text, meta) : entry.session.runNotice(text, meta);
+   *  next message so the model reads the reports as that message's context.
+   *  'boundary': history-only in the active driver's completed-response/tool-batch
+   *  gap. It is active continuation, not a Stop-held splice or a reentrant turn. */
+  private deliverNotice(entry: LiveEntry, mode: 'turn' | 'splice' | 'boundary', text: string, meta?: InjectedMeta): Promise<void> {
+    return mode === 'turn' ? entry.session.runNotice(text, meta) : entry.session.spliceNotice(text, meta);
   }
 
-  private async drainDeliveries(sessionId: string, entry: LiveEntry, mode: 'turn' | 'splice'): Promise<void> {
-    // Plan 1b Task 8: plain-text host notices drain FIRST, unconditionally —
-    // no `this.ledger` gate, since this lane exists whether or not a
-    // NativeHome/ledger was ever wired (see pendingHostNotices' own WHY).
-    // Same destroy()-race shape as the ledger loop below: recheck liveness
-    // before AND after the injecting await, and leave the text in place
-    // (don't shift it off) on either a destroy race or a genuine runNotice
-    // failure, so the next idle boundary retries it.
+  private async drainDeliveries(sessionId: string, entry: LiveEntry, mode: 'turn' | 'splice' | 'boundary'): Promise<void> {
+    // WHY: a notice turn also reaches a response/tool boundary. It may splice
+    // OTHER results before a human correction; current items are atomically
+    // removed/marked before injection, so they cannot consume themselves.
+    const outerDrain = entry.deliveryDraining;
+    if (outerDrain && mode !== 'boundary') return;
+    entry.deliveryDraining = true;
+    try {
+      let version: number | undefined;
+      do {
+        version = entry.deliveryVersion;
+        await this.drainDeliveriesInner(sessionId, entry, mode);
+      } while (this.live.get(sessionId) === entry && !entry.holdDeliveries && !entry.quiescing && entry.deliveryVersion !== version);
+    } finally { entry.deliveryDraining = outerDrain; }
+  }
+
+  private async drainDeliveriesInner(sessionId: string, entry: LiveEntry, mode: 'turn' | 'splice' | 'boundary'): Promise<void> {
+    // WHY: shell notices exist without a ledger. Claim each batch before injection;
+    // restore only provably uninjected failures, respecting Stop and generation changes.
     const notices = this.pendingHostNotices.get(sessionId);
     if (notices) {
       while (notices.length > 0) {
-        if (this.live.get(sessionId) !== entry) break;
+        if (this.live.get(sessionId) !== entry || entry.holdDeliveries || entry.quiescing) break;
         // D8: every shell notice already queued goes out as ONE turn — each
         // runNotice is a full model turn over the whole conversation, so three
         // builds finishing during one busy turn must not cost three turns.
@@ -4361,55 +4442,32 @@ export class NativeSessionHost extends EventEmitter {
           : headKind === 'shell-running'
             ? { kind: 'shell-running', runs: batch.flatMap((n) => (n.meta?.kind === 'shell-running' ? n.meta.runs : [])) }
             : head.meta;
+        // Claim before awaiting: the driver's nested safe boundary can consume
+        // newer notices, but never the current one (one injection owner).
+        for (const n of batch) { const i = notices.indexOf(n); if (i >= 0) notices.splice(i, 1); }
+        const receiptsBefore = entry.noticeReceipts;
         try {
           await this.deliverNotice(entry, mode, text, meta);
         } catch (err) {
-          log('WARN', 'NativeSessionHost', 'host notice delivery failed — will retry at the next idle boundary', { sessionId, error: String((err as any)?.message ?? err) });
+          if (entry.noticeReceipts === receiptsBefore && this.live.get(sessionId) === entry) {
+            const pending = this.pendingHostNotices.get(sessionId) ?? [];
+            pending.unshift(...batch);
+            this.pendingHostNotices.set(sessionId, pending);
+          }
+          log('WARN', 'NativeSessionHost', 'host notice delivery failed; uninjected notices remain pending for the next boundary', { sessionId, error: String((err as any)?.message ?? err) });
           break;
         }
-        if (this.live.get(sessionId) !== entry) break; // destroy raced the notice itself
-        for (const n of batch) { const i = notices.indexOf(n); if (i >= 0) notices.splice(i, 1); }
+        if (this.live.get(sessionId) !== entry) break;
       }
-      if (notices.length === 0) this.pendingHostNotices.delete(sessionId);
+      if (notices.length === 0 && this.pendingHostNotices.get(sessionId) === notices) this.pendingHostNotices.delete(sessionId);
     }
-    // WHY (spec §3, Task 4): background completions inject as a synthetic
-    // user-role turn at an idle boundary — never spliced mid-turn (role
-    // alternation + local prompt cache). A claim is a LEASE: delivered flips
-    // only after the injected turn has run. A crash between claim and
-    // injection leaves a dead-owner lease that Task 9's reconcile releases —
-    // the report is re-delivered after restart, never lost. Guarded on
-    // `pendingDeliveryParents.has(sessionId)` first (cheap, in-memory) so this
-    // never pays for a ledger read on the common case (a session with no
-    // specialists, ever).
+    // WHY: pending hints avoid ledger I/O for sessions without reports. Claims
+    // are leases; confirmation follows injection. Restart reconciles markers
+    // against correlated durable transcript receipts, not the delivery boolean.
     if (this.ledger && this.pendingDeliveryParents.has(sessionId)) {
-      // Snapshotted ONCE, before the pass starts: every report drained in
-      // THIS pass shares the parent's headroom together, so each is formatted
-      // as if all of them are landing at once — not optimistically
-      // re-measured smaller after an earlier one in the SAME pass has already
-      // been confirmed delivered (the 1a arithmetic pin: computeReportBudget
-      // splits headroom across CONCURRENT reporters, and everything queued
-      // here became concurrent the moment it queued while the parent was busy).
-      // Counts only 'completed' records: a 'failed' record's notice is a
-      // short, fixed string built straight from failureText in formatDelivery
-      // — it never goes through formatSpecialistReport's budget math, so it
-      // isn't a "reporter" competing for headroom in the sense this count means.
-      // Includes the in-memory fallback lane's own 'completed' entries for
-      // this parent (Task 4 fix-pass 2) — those are just as much competing
-      // for the same headroom in this pass as a ledger-backed one is.
-      //
-      // Fix (Task 4 fix pass 4, Finding 5): `this.ledger.listFor(...)` reads
-      // the sidecar file straight off disk (NativeHome.readJson) and CAN
-      // throw on a real I/O error (anything but ENOENT rethrows — see its
-      // own comment) — unlike every ledger call inside the while loop below,
-      // this one was unguarded, so a throw here escaped this whole function
-      // before the loop even started, with nothing to log it: not a wedge
-      // (runTurns' outer finally still clears inFlight) and not a lost
-      // report (the pending flag is untouched, so the next idle boundary
-      // retries) — but silent, unlike every other ledger failure in this
-      // file. Guarded here the same way: log, then degrade to the
-      // single-reporter default rather than let a purely cosmetic budget
-      // computation abort a delivery pass that could otherwise still
-      // succeed via claimUndelivered/takeInMemoryFallback below.
+      // WHY: split shared headroom across all completed durable/fallback reporters
+      // once per pass. Failed notices are fixed-size, not report-budget consumers.
+      // A cosmetic budget read failure must not block real delivery (log + default).
       let concurrentReporters = 1;
       try {
         const fallbackCompletedForParent = [...this.inMemoryFallback.values()]
@@ -4419,77 +4477,36 @@ export class NativeSessionHost extends EventEmitter {
       } catch (err) {
         log('WARN', 'NativeSessionHost', 'failed to compute concurrentReporters for this delivery pass — defaulting to 1 (a report may be formatted as if it were the only one landing)', { sessionId, error: String((err as any)?.message ?? err) });
       }
-      // ONE loop drains both lanes: the ledger (durable, tried first every
-      // iteration) and the in-memory fallback (Task 4 fix-pass 2 — tried only
-      // once the ledger has nothing left to claim). A single loop, rather
-      // than two sequential ones, is what keeps every `break` below reaching
-      // the SAME `entry.inFlight = false` at the bottom — an early `return`
-      // here would leave a session permanently stuck "in flight".
+      // Prefer durable claims, then fallback. runTurns' finally releases the host
+      // slot for every exit; a failed claim still allows the fallback lane through.
       while (this.pendingDeliveryParents.has(sessionId)) {
-        // Fix (Task 4 fix pass 3): claimUndelivered itself can throw under the
-        // exact systemic failure (disk full, corrupt sidecar, lock
-        // exhaustion) the in-memory fallback lane exists to survive — and it
-        // runs at the TOP of every iteration, before the fallback lane below
-        // gets a turn. Guarding it here (rather than leaving it unguarded, as
-        // it was pre-fix) is what stops that throw from both wedging the
-        // session (now also backstopped by runTurns' outer finally) AND, more
-        // subtly, from stranding a report already sitting safely in
-        // `inMemoryFallback` by never letting this pass reach it. Treat "the
-        // ledger threw" the same as "the ledger has nothing claimable this
-        // iteration" — `rec` stays null and control falls through to the
-        // fallback lane below in the SAME iteration.
+        if (this.live.get(sessionId) !== entry || entry.quiescing || entry.holdDeliveries) break;
+        const claimVersion = entry.deliveryVersion;
         let rec: DelegationRecord | null = null;
+        let claimFailed = false;
         try {
           rec = await this.ledger.claimUndelivered(entry.cwd, sessionId);   // lease, not delivery
         } catch (err) {
+          claimFailed = true;
           log('WARN', 'NativeSessionHost', 'claimUndelivered failed — falling back to the in-memory lane for this pass', { sessionId, error: String((err as any)?.message ?? err) });
         }
         if (rec) {
-          // Fix (Task 4 fix-pass, finding 3): destroy() (direct, or via
-          // destroyAll() at app shutdown, which has no in-flight gate) can
-          // land in the gap between any of this loop's awaits. destroy() sets
-          // no "destroyed" flag anything here checks — it aborts the stream
-          // and removeAllListeners()s the session (THAT is what actually
-          // stops transcript appends being persisted), then drops it from
-          // `this.live`. So `entry` can go on being a perfectly usable,
-          // callable object pointing at an orphaned session that no longer
-          // persists or emits anything — runNotice() on it would resolve
-          // normally, having shown the report to nobody. The sibling
-          // queue-drain loop above guards the exact same race with
-          // `this.live.get(sessionId) !== entry`; this recheck is that same
-          // guard, run before every remaining step so a destroy mid-delivery
-          // releases the claimed lease (leaving the record claimable again
-          // for the next real delivery pass) instead of either silently
-          // confirming a report nobody saw or losing the lease forever.
+          // WHY: destroy removes listeners, not callable methods. Never inject
+          // into an orphan that cannot persist/forward its receipt; release its lease.
           if (this.live.get(sessionId) !== entry) {
-            await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId);
+            await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId, rec.parentToolCallId);
             break;
           }
-          // Fix pass 5: stamp the durable "about to inject" marker strictly
-          // BEFORE calling runNotice() — never after. HarnessSession.beginTurn
-          // (harness-session.ts) emits the transcript event SYNCHRONOUSLY,
-          // before its own first await, so by the time runNotice()'s
-          // returned promise has even begun its async work the injection has
-          // either already happened or (only its re-entrancy guard, which
-          // cannot fire here — this loop only calls runNotice() at an idle
-          // boundary) never will. This is what lets claimUndelivered tell a
-          // claim that never reached runNotice() apart from one that did.
-          //
-          // If THIS write itself throws, we can't learn afterward whether it
-          // committed (see markInjectionAttempted's own comment for the full
-          // reasoning) — logged, and deliberately NOT treated as a reason to
-          // abandon this delivery attempt: proceeding to runNotice() anyway.
-          // Tracked so the catch below can say something TRUE about whether
-          // a later failure is retryable, instead of assuming it always is
-          // (final-review fix — see that catch's own comment).
-          let injectionMarkerStamped = true;
+          // WHY: formatting/spill failures are provably pre-injection. Do all
+          // preparation before stamping; a marker is not a delivery receipt.
           try {
-            await this.ledger.markInjectionAttempted(entry.cwd, sessionId, rec.childId);
-          } catch (err) {
-            injectionMarkerStamped = false;
-            log('WARN', 'NativeSessionHost', 'markInjectionAttempted failed — proceeding with delivery anyway; see markInjectionAttempted\'s own comment for the residual duplicate risk this can leave', { childId: rec.childId, parentId: sessionId, error: String((err as any)?.message ?? err) });
-          }
-          try {
+            // WHY: even if BOTH bookkeeping writes failed, this live generation
+            // witnessed the genuine injection. Retry confirmation, not the model turn.
+            if (entry.injectedReports?.has(JSON.stringify([rec.childId, rec.parentToolCallId]))) {
+              await this.ledger.confirmDelivered(entry.cwd, sessionId, rec.childId, rec.parentToolCallId);
+              this.clearFallbackForRun(sessionId, rec);
+              continue;
+            }
             const delivery = this.formatDelivery(sessionId, entry.cwd, rec, concurrentReporters);
             // Task 10: a NEWLY-created truncation-time spill (delivery.reportPath
             // absent from the claimed record) gets recorded in the ledger too —
@@ -4498,10 +4515,23 @@ export class NativeSessionHost extends EventEmitter {
             // hand for THIS injection either way.
             if (delivery.reportPath && delivery.reportPath !== rec.reportPath) {
               try {
-                await this.ledger.update(entry.cwd, sessionId, rec.childId, { reportPath: delivery.reportPath });
+                await this.ledger.updateForRun(entry.cwd, sessionId, rec.childId, rec.parentToolCallId, { reportPath: delivery.reportPath });
               } catch (err) {
                 log('WARN', 'NativeSessionHost', 'failed to record a truncation-time spill path in the ledger', { childId: rec.childId, parentId: sessionId, error: String((err as any)?.message ?? err) });
               }
+            }
+            if (this.live.get(sessionId) !== entry || entry.holdDeliveries || entry.quiescing) {
+              await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId, rec.parentToolCallId); break;
+            }
+            try {
+              await this.ledger.markInjectionAttempted(entry.cwd, sessionId, rec.childId, rec.parentToolCallId);
+            } catch (err) {
+              log('WARN', 'NativeSessionHost', 'injection marker write failed; proceeding with delivery', { childId: rec.childId, error: String(err) });
+            }
+            if (this.live.get(sessionId) !== entry || entry.holdDeliveries || entry.quiescing) {
+              // No injection call has begun: even a commit-then-throw marker is safe to clear.
+              if (this.live.get(sessionId) === entry) await this.ledger.updateForRun(entry.cwd, sessionId, rec.childId, rec.parentToolCallId, { injectionAttempted: false });
+              await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId, rec.parentToolCallId); break;
             }
             await this.deliverNotice(entry, mode, delivery.text, {
               // Header data for the renderer's compact SpecialistReportCard —
@@ -4517,15 +4547,12 @@ export class NativeSessionHost extends EventEmitter {
             // never be reached on a session that stopped being live while the
             // notice was in flight.
             if (this.live.get(sessionId) !== entry) {
-              await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId);
+              await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId, rec.parentToolCallId);
               break;
             }
-            await this.ledger.confirmDelivered(entry.cwd, sessionId, rec.childId); // only now is it delivered
-            // A ledger write CAN still land after all — the in-memory
-            // fallback (Task 4 fix-pass 2) only exists for the window where
-            // it didn't; clean up any leftover entry for the same child so it
-            // can never be double-delivered by the fallback lane below.
-            this.inMemoryFallback.delete(rec.childId);
+            await this.ledger.confirmDelivered(entry.cwd, sessionId, rec.childId, rec.parentToolCallId); // only now is it delivered
+            // Remove only this run's fallback; the notice may have resumed the child.
+            this.clearFallbackForRun(sessionId, rec);
             continue; // more ledger records may remain — try the ledger again before falling to the fallback lane
           } catch (err) {
             // Fix (Task 4 fix pass 3): releaseClaimSafely (not a bare await)
@@ -4533,24 +4560,16 @@ export class NativeSessionHost extends EventEmitter {
             // confirmDelivered threw); a SECOND throw from the release call
             // itself must not escape and skip the `break` below, which is
             // what lets the fallback lane still run this same pass.
-            await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId);
-            // Final-review fix: this used to unconditionally say "will retry
-            // at the next idle boundary". That was false in the dominant
-            // case — markInjectionAttempted (above) durably stamps
-            // injectionAttempted BEFORE runNotice() is ever called, and
-            // claimUndelivered's eligibility filter (delegation-ledger.ts)
-            // excludes any record with injectionAttempted set, no matter
-            // what releaseClaimSafely just did to the lease. Once that
-            // marker landed, THIS record can never be reclaimed again — the
-            // release above only frees a lease nothing is allowed to grab.
-            // The message now says what's actually true given whether the
-            // marker write above succeeded; it is internal-log-only, but
-            // it's exactly the line a future session would trust while
-            // debugging a "report never arrived" complaint.
-            const retryNote = injectionMarkerStamped
-              ? 'the injection marker was already stamped before this failure, so claimUndelivered will never reclaim this record again — this report will not be retried'
-              : 'markInjectionAttempted itself failed above, so this record MAY still be reclaimed at the next idle boundary (not guaranteed — see markInjectionAttempted\'s own comment on the ambiguity when its own write fails)';
-            log('WARN', 'NativeSessionHost', `background specialist delivery failed — ${retryNote}`, { childId: rec.childId, parentId: sessionId, error: String((err as any)?.message ?? err) });
+            if (this.live.get(sessionId) === entry && !entry.injectedReports?.has(JSON.stringify([rec.childId, rec.parentToolCallId]))) {
+              // WHY: the genuine synchronous injection event is absent. Never clear
+              // a marker after an observed injection or ambiguous confirm failure.
+              try { await this.ledger.updateForRun(entry.cwd, sessionId, rec.childId, rec.parentToolCallId, { injectionAttempted: false }); }
+              catch (releaseError) { log('WARN', 'NativeSessionHost', 'pre-injection marker release failed', { error: String(releaseError) }); }
+            }
+            await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId, rec.parentToolCallId);
+            log('WARN', 'NativeSessionHost', 'background specialist delivery failed; pre-injection failures remain pending, observed injections are not replayed', {
+              childId: rec.childId, parentId: sessionId, error: String((err as any)?.message ?? err),
+            });
             break;
           }
         }
@@ -4558,36 +4577,42 @@ export class NativeSessionHost extends EventEmitter {
         // a report whose completion write never landed on disk still needs
         // to reach the parent THIS session (see inMemoryFallback's own WHY
         // for what that guarantees and what it genuinely does not).
-        //
-        // Unlike claimUndelivered/confirmDelivered/releaseClaim above,
-        // takeInMemoryFallback does no I/O — it's a synchronous for..of over
-        // a plain in-memory Map plus a .delete(). Nothing here can throw
-        // (short of an engine-level OOM, which no try/catch in this file
-        // handles either), so it isn't wrapped like the disk-backed calls
-        // are — a try/catch here would guard a path that cannot fire, not
-        // add resilience (fix pass 5, replacing an earlier version of this
-        // comment that argued for the guard on file-wide-consistency grounds
-        // alone while admitting the same thing).
+        // takeInMemoryFallback consumes synchronously; failed delivery restores it.
+        // WHY: Stop/takeover can arrive during the awaited claim (including
+        // null/throw). Do not consume the sole fallback copy until still eligible.
+        if (this.live.get(sessionId) !== entry || entry.holdDeliveries || entry.quiescing) break;
         const fallback = this.takeInMemoryFallback(sessionId);
-        if (!fallback) { this.pendingDeliveryParents.delete(sessionId); break; }
-        // Same destroy()-race guard as the ledger path above.
-        if (this.live.get(sessionId) !== entry) {
-          this.inMemoryFallback.set(fallback.childId, { parentId: sessionId, rec: fallback.rec }); // put it back — never delivered, so never drop it
+        if (!fallback) {
+          // WHY: a completion queued while the empty claim awaited owns a NEW hint.
+          if (!claimFailed && entry.deliveryVersion !== claimVersion) continue;
+          // A storage failure says nothing about emptiness. Keep the hint, but
+          // retry only at the next real boundary/arrival (no failure busy-spin).
+          if (!claimFailed) this.pendingDeliveryParents.delete(sessionId);
           break;
         }
+        // Recheck eligibility before injection as well as before consumption.
+        if (this.live.get(sessionId) !== entry || entry.holdDeliveries || entry.quiescing) {
+          this.restoreFallback(sessionId, fallback.rec); // put it back — never delivered, so never drop it
+          break;
+        }
+        if (entry.injectedReports?.has(JSON.stringify([fallback.childId, fallback.rec.parentToolCallId]))) continue;
         try {
           // Task 10: no ledger persistence attempt here for a newly-spilled
           // reportPath — unlike the claimed-record path above, `fallback.rec`
           // has no live ledger row in a deliverable state to attach it to (see
           // this lane's own WHY, right above); the correct path is still what
           // lands in THIS injection's footer either way.
-          await this.deliverNotice(entry, mode, this.formatDelivery(sessionId, entry.cwd, fallback.rec, concurrentReporters).text);
+          await this.deliverNotice(entry, mode, this.formatDelivery(sessionId, entry.cwd, fallback.rec, concurrentReporters).text, {
+            childId: fallback.childId, parentToolCallId: fallback.rec.parentToolCallId,
+            title: fallback.rec.title, agentType: fallback.rec.agentType,
+            description: fallback.rec.description, status: fallback.rec.status === 'failed' ? 'failed' : 'completed',
+          });
           if (this.live.get(sessionId) !== entry) {
             // destroy() landed mid-notice: runNotice on a torn-down session
             // resolves normally without showing the report to anyone (same
             // "no throw" shape the ledger path's own recheck guards against)
             // — put the entry back so a later pass can still try.
-            this.inMemoryFallback.set(fallback.childId, { parentId: sessionId, rec: fallback.rec });
+            this.restoreFallback(sessionId, fallback.rec);
             break;
           }
           // Delivered — this was the ONLY copy (nothing durable backs it), so
@@ -4597,7 +4622,7 @@ export class NativeSessionHost extends EventEmitter {
           // Delivery genuinely failed (not a destroy race) — put it back so
           // the next idle boundary retries it, same as the ledger path's
           // releaseClaim.
-          this.inMemoryFallback.set(fallback.childId, { parentId: sessionId, rec: fallback.rec });
+          this.restoreFallback(sessionId, fallback.rec);
           log('WARN', 'NativeSessionHost', 'in-memory fallback specialist delivery failed — will retry at the next idle boundary', { childId: fallback.childId, parentId: sessionId, error: String((err as any)?.message ?? err) });
           break;
         }
@@ -4609,38 +4634,12 @@ export class NativeSessionHost extends EventEmitter {
     // that happens to precede it).
   }
 
-  /** Best-effort release of a delivery-claim lease: swallows a throw from the
-   *  ledger itself rather than letting it propagate.
-   *
-   *  WHY this needs to exist — NOT what an earlier version of this comment
-   *  claimed. All three call sites in drainDeliveries `break` UNCONDITIONALLY
-   *  right after calling this, regardless of whether the release itself
-   *  succeeds: every one of them exits the delivery `while` loop outright: the
-   *  fallback lane is only ever reached through the DIFFERENT branch at the
-   *  top of that loop (where `rec` came back null), never by falling through
-   *  from here. And runTurns' own outer try/finally (fix pass 3) already
-   *  guarantees `entry.inFlight` clears even if this were a bare, unguarded
-   *  `await this.ledger.releaseClaim(...)`. So this helper is not load-bearing
-   *  for either of those.
-   *
-   *  What it DOES earn its place for: every other ledger call in this file
-   *  logs its own failure on the way out (recordDelegationStart,
-   *  runDelegation, spawnSpecialist above). Without this wrapper, a
-   *  releaseClaim failure would be the one ledger call in the file that fails
-   *  SILENTLY — the throw would propagate out of drainDeliveries and then out
-   *  of runTurns with nothing left to log it, and it would never even surface
-   *  as a rejection for anything to notice: both places that build
-   *  `entry.running` resolve on rejection too (`.then(resolve, resolve)`), so
-   *  the error would vanish with no record anywhere, not even a delayed one.
-   *  Not releasing leaves the lease claimed by this (live) session's owner
-   *  marker, so claimUndelivered won't reclaim it until this session dies
-   *  (Task 9's dead-owner reconcile) or a later pass recognizes it as this
-   *  same process's own stale lease (fix pass 4's self-claim branch in
-   *  claimUndelivered) — an honest degradation, not a silent one; logged here
-   *  so it's actually visible. */
-  private async releaseClaimSafely(parentCwd: string, parentId: string, childId: string): Promise<void> {
+  /** WHY: release failures must be logged, not disappear through running's
+   *  resolve-on-rejection wrapper. A retained lease may recover through the
+   *  ledger's self/dead-owner eligibility; outer finally still releases inFlight. */
+  private async releaseClaimSafely(parentCwd: string, parentId: string, childId: string, parentToolCallId: string): Promise<void> {
     try {
-      await this.ledger?.releaseClaim(parentCwd, parentId, childId);
+      await this.ledger?.releaseClaim(parentCwd, parentId, childId, parentToolCallId);
     } catch (err) {
       log('WARN', 'NativeSessionHost', 'releaseClaim failed — the delivery lease may stay held until owner-liveness reconcile releases it', { parentId, childId, error: String((err as any)?.message ?? err) });
     }

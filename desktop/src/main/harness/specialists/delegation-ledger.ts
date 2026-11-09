@@ -548,11 +548,20 @@ export class DelegationLedger {
     return claimed;
   }
 
+  /** WHY: a notice turn can resume the same child. Compare the claimed run INSIDE
+   *  the mutation lock so old delivery bookkeeping cannot modify its replacement. */
+  async updateForRun(parentCwd: string, parentId: string, childId: string, parentToolCallId: string, patch: Partial<DelegationRecord>): Promise<void> {
+    await this.mutate(parentCwd, parentId, data => ({
+      v: FILE_VERSION,
+      delegations: data.delegations.map(d => d.childId === childId && d.parentToolCallId === parentToolCallId ? { ...d, ...patch } : d),
+    }));
+  }
+
   /** Stamp the durable "injection attempted" marker (fix pass 5). Callers
    *  (native-session-host.ts's delivery loop) MUST call this strictly BEFORE
    *  runNotice() — see the field's own comment on DelegationRecord and
-   *  claimUndelivered's for why the ordering matters. A plain, unconditional
-   *  update() like confirmDelivered/releaseClaim below.
+   *  claimUndelivered's for why the ordering matters. Production callers pass
+   *  parentToolCallId so the mutation cannot stamp a later resumed run.
    *
    *  WHAT HAPPENS IF THIS WRITE ITSELF THROWS: the caller cannot learn
    *  afterward whether it committed — the same commit-then-throw-on-lock-
@@ -570,23 +579,26 @@ export class DelegationLedger {
    *  documented rather than silently accepted; it is markedly narrower than
    *  the exposure before this fix, where EVERY confirmDelivered failure
    *  risked a duplicate, not just this one compounding failure. */
-  async markInjectionAttempted(parentCwd: string, parentId: string, childId: string): Promise<void> {
-    await this.update(parentCwd, parentId, childId, { injectionAttempted: true });
+  async markInjectionAttempted(parentCwd: string, parentId: string, childId: string, parentToolCallId?: string): Promise<void> {
+    if (parentToolCallId !== undefined) await this.updateForRun(parentCwd, parentId, childId, parentToolCallId, { injectionAttempted: true });
+    else await this.update(parentCwd, parentId, childId, { injectionAttempted: true });
   }
 
-  async confirmDelivered(parentCwd: string, parentId: string, childId: string): Promise<void> {
+  async confirmDelivered(parentCwd: string, parentId: string, childId: string, parentToolCallId?: string): Promise<void> {
     // The injected turn has ACTUALLY run at this point — only now is it safe
-    // to say the report was delivered.
-    await this.update(parentCwd, parentId, childId, { delivered: true });
+    // to say the report was delivered, and only for the run that was injected.
+    if (parentToolCallId !== undefined) await this.updateForRun(parentCwd, parentId, childId, parentToolCallId, { delivered: true });
+    else await this.update(parentCwd, parentId, childId, { delivered: true });
   }
 
-  async releaseClaim(parentCwd: string, parentId: string, childId: string): Promise<void> {
+  async releaseClaim(parentCwd: string, parentId: string, childId: string, parentToolCallId?: string): Promise<void> {
     // Delivery attempt failed (or was abandoned) after claiming — clear the
     // lease so a later pass can claim it again. Explicit undefined (rather
     // than omitting the keys) so the patch actually overwrites whatever lease
     // is on disk; JSON.stringify drops undefined-valued keys on write, so the
     // record reads back exactly like "never claimed".
-    await this.update(parentCwd, parentId, childId, { claimedBy: undefined, claimedAt: undefined });
+    if (parentToolCallId !== undefined) await this.updateForRun(parentCwd, parentId, childId, parentToolCallId, { claimedBy: undefined, claimedAt: undefined });
+    else await this.update(parentCwd, parentId, childId, { claimedBy: undefined, claimedAt: undefined });
   }
 }
 

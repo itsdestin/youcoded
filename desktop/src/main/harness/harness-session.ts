@@ -207,7 +207,10 @@ import {
 } from './pricing';
 import { log } from '../logger';
 
+import {activitySpan, type ActivityDiagnostic} from './activity-diagnostics';
+
 export interface HarnessSessionOpts {
+  activityDiagnostic?: ActivityDiagnostic;
   sessionId: string; cwd: string; harness: HarnessManifest; binding: ModelBinding;
   /** Model context window (from the catalog); null → conservative 32k default. */
   contextLength?: number | null;
@@ -1001,6 +1004,11 @@ export class HarnessSession extends EventEmitter {
   constructor(private opts: HarnessSessionOpts, private modelFactory: ModelFactory) {
     super();
     this.binding = opts.binding;
+    if (opts.activityDiagnostic && opts.askUser) {
+      const ask = opts.askUser; let sequence = 0;
+      opts.askUser = req => activitySpan(opts.activityDiagnostic, {id: `ask-${++sequence}`,
+        sessionId: opts.sessionId, scope: opts.isSpecialistChild ? 'child' : 'parent'}, 'ask', () => ask(req), () => !!this.abort?.signal.aborted);
+    }
     this.toolByName = new Map((opts.tools ?? []).map((t) => [t.name, t]));
     this.retryDelays = opts.retryDelays ?? [1000, 2000, 4000];
     this.profile = opts.profile ?? CLOUD_DEFAULT;
@@ -2453,57 +2461,49 @@ export class HarnessSession extends EventEmitter {
       modelAttachments ?? attachments);
   }
 
-  /** Task 4 (native specialists, background execution) — inject a background
-   *  specialist's finished report (or typed failure) as a full, real turn.
-   *  Same turn machinery as send()/runSkill(), with ONE difference: the
-   *  `user-message` event carries `data.injected: 'specialist-report'` — a
-   *  data-field extension (shared/types.ts), never a new event type, so a
-   *  renderer that doesn't know the field yet still shows a plain message.
-   *
-   *  WHY a real turn and not a history-only splice: the model needs to
-   *  actually SEE and reason about the report on its next step, which means
-   *  it has to go through the model exactly like any other turn — this is
-   *  not a status update, it is new information the parent must act on.
-   *  Callers (NativeSessionHost.runTurns) are responsible for only calling
-   *  this at an idle boundary — beginTurn's own re-entrancy guard would throw
-   *  if it were called mid-turn, by design (never splice into a running turn:
-   *  role alternation + the local prompt cache both depend on it). */
+  /** WHY: idle results need an actual model turn to resume work. Busy results
+   *  instead splice inside the driver's safe boundary; never reenter beginTurn.
+   *  Both use existing user-message events and app-generated provenance. */
   async runNotice(text: string, meta?: InjectedMeta): Promise<void> {
     // G-1: the discriminant tells the renderer which card folds this turn —
     // a Task card (specialist report) or a Bash card (shell-complete).
     const injected = injectedLabel(meta);
     return this.beginTurn(text, () => this.emitEvent('user-message', {
       text, injected,
-      // Structured header data for the renderer's SpecialistReportCard —
-      // optional so every existing caller/test that passes text alone is
-      // unchanged; the card falls back to the prose when it's absent.
+      // Optional structured card header; older/plain notices retain prose fallback.
       ...(meta ? { injectedMeta: meta } : {}),
     }), [], true);
   }
 
-  /** The quiet twin of runNotice: the same text and the same `user-message`
-   *  transcript event, but NO model turn — the report goes into history and
-   *  the model reads it at the start of the next turn the user begins.
-   *  Used only after a Stop (NativeSessionHost.holdDeliveries): the user asked
-   *  for silence, so a finished helper must not be the thing that breaks it.
-   *  Consecutive user-role history entries are a shape every provider we ship
-   *  already accepts: the retired per-turn `<specialists-status>` block ran it
-   *  in production for weeks, and `<project-rule>` injections still do.
-   *  Same idle-only precondition as runNotice: never mid-turn. */
+  // History-only delivery is permitted only at idle or the driver's explicit
+  // completed-response/tool-batch gap. No running stream/action is interrupted.
+  private deliveryBoundary?: () => Promise<void>;
+  private atDeliveryBoundary = false;
+
+  /** Host-owned drain; only the serialized driver invokes it after accepted groups. */
+  setDeliveryBoundary(drain: () => Promise<void>): void { this.deliveryBoundary = drain; }
+
+  private async absorbBackgroundResults(): Promise<boolean> {
+    if (!this.deliveryBoundary || this.interrupted || this.abort?.signal.aborted) return false;
+    const before = this.history.length;
+    // WHY: permit history-only injection in this narrow gap, never during a stream,
+    // tool execution or compaction. No reentrant send and no human-approval reset.
+    this.atDeliveryBoundary = true;
+    try { await this.deliveryBoundary(); }
+    finally { this.atDeliveryBoundary = false; }
+    return this.history.length !== before;
+  }
+
   async spliceNotice(text: string, meta?: InjectedMeta): Promise<void> {
-    if (this.abort) {
+    if (this.abort && !this.atDeliveryBoundary) {
       throw new Error('HarnessSession: spliceNotice called while a turn is in flight — callers must only splice at an idle boundary.');
     }
     const injected = injectedLabel(meta);
     const uuid = this.emitEvent('user-message', { text, injected, ...(meta ? { injectedMeta: meta } : {}) });
     this.history.push(markAppGenerated({ role: 'user', content: text }));
     this.historyOrigins.push([uuid]);
-    // WHY (cache Stage 4): this push is exactly beginTurn's user push — the
-    // message text IS the emitted event's text — so it must be recorded the
-    // same way. Without this the store has no event to reference and falls
-    // back to copying the whole report into the private sidecar as a literal,
-    // which both duplicates transcript content and fails publication outright
-    // once a report exceeds the 64 KiB literal bound.
+    // WHY: cite the transcript event instead of duplicating large notices as
+    // private sidecar literals (which would exceed publication's 64 KiB limit).
     this.capture.recordEvent(uuid);
   }
 
@@ -2982,6 +2982,8 @@ export class HarnessSession extends EventEmitter {
         const orderlyFinish = step.finishReason === undefined
           || ORDERLY_EMPTY_FINISHES.has(step.finishReason);
         if (isEmptyStep && orderlyFinish) {
+          const background = await this.absorbBackgroundResults();
+          if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
           consecutiveEmptySteps++;
           if (consecutiveEmptySteps === 1) {
             // Withdraw any preparing card the dead step left on screen — the
@@ -3011,8 +3013,8 @@ export class HarnessSession extends EventEmitter {
             });
             continue turnLoop;
           }
-          // WHY: second empty is a final boundary; new input re-arms recovery.
-          if (absorbReadyMessage()) {
+          // WHY: new context can continue even after the final empty response.
+          if (absorbReadyMessage() || background) {
             consecutiveEmptySteps = 0;
             continue turnLoop;
           }
@@ -3022,8 +3024,9 @@ export class HarnessSession extends EventEmitter {
         consecutiveEmptySteps = 0;   // any real step re-arms the single retry
 
         if (step.toolCalls.length === 0) {
-          // WHY: no await before completion; late heads use the host drain.
-          if (absorbReadyMessage()) continue turnLoop;
+          const background = await this.absorbBackgroundResults();
+          if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
+          if (absorbReadyMessage() || background) continue turnLoop;
           // Natural stop; mapStopReason handles truncated output as max_tokens.
           stopReason = mapStopReason(step.finishReason);
           break;
@@ -3092,6 +3095,8 @@ export class HarnessSession extends EventEmitter {
                 this.emitEvent('user-interrupt', abandonedTurnUsage());
                 return;
               }
+              await this.absorbBackgroundResults();
+              if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
               absorbReadyMessage(); // ready human correction precedes replan
               continue turnLoop;
             }
@@ -3170,6 +3175,8 @@ export class HarnessSession extends EventEmitter {
         // AFTER the tool results so the model reads the rule alongside what it
         // just learned, and before it decides the next step.
         this.injectPathTriggers(step.toolCalls);
+        await this.absorbBackgroundResults();
+        if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
 
         // WHY (Destin, 2026-09-28 PR-review deck Q-1): a message sent mid-task is
         // read once the whole batch of actions the assistant already chose has
@@ -4174,18 +4181,14 @@ export class HarnessSession extends EventEmitter {
 
     // 5. Execute (defineTool owns truncation + the actionable-error catch).
     this.toolCallCount += 1;
-    return tool.execute(args, {
+    return activitySpan(this.opts.activityDiagnostic, {id: call.toolCallId, toolCallId: call.toolCallId,
+      sessionId: this.opts.sessionId, scope: this.opts.isSpecialistChild ? 'child' : 'parent'}, 'execution', () => tool.execute(args, {
       sessionId: this.opts.sessionId,
       cwd: this.opts.cwd,
       signal: this.abort!.signal,
-      // Task 6/7: the Task tool's own call id, threaded through as
-      // createChild's future parentToolCallId so the host can stamp the
-      // child's display events with the launch card they belong under.
+      // Task call identity stamps child events under their launch card.
       toolCallId: call.toolCallId,
-      // This session's CURRENT binding identifies the provider for automatic
-      // specialist defaults and serves an explicit `model: "parent"` request.
-      // Reads this.binding, not opts.binding, so a mid-session swap is reflected on the
-      // very next tool call, same as every other live-state field here.
+      // Read the CURRENT binding so model swaps affect specialist defaults too.
       binding: this.binding,
       readRegistry: this.readRegistry,
       servedReads: this.servedReads,      // G-11 re-read dedupe (see the field's WHY)
@@ -4199,13 +4202,9 @@ export class HarnessSession extends EventEmitter {
       setShellEnv: (next: Record<string, string>) => {
         this.shellEnv = next;
       },
-      // G-1: the session's shell registry (host-owned — see
-      // NativeSessionHost.shellsFor). Spread so an unwired session leaves
-      // ctx.shells genuinely absent rather than explicitly undefined.
+      // Host-owned registry; absent when unwired.
       ...(this.opts.shells ? { shells: this.opts.shells } : {}),
-      // admin-password design §2.3/§6/§11 task 5: same spread convention —
-      // absent means Bash never registers/never gets the askpass env,
-      // exactly the pre-feature behavior.
+      // Absent password services mean Bash never registers or receives askpass env.
       ...(this.opts.runningCalls ? { runningCalls: this.opts.runningCalls } : {}),
       ...(this.opts.adminPasswordEnv ? { adminPasswordEnv: this.opts.adminPasswordEnv } : {}),
       ...(this.opts.adminPasswordService ? { adminPasswordService: this.opts.adminPasswordService } : {}),
@@ -4215,7 +4214,7 @@ export class HarnessSession extends EventEmitter {
       // driver gates with, so its derivative is never refused downstream.
       imageLimits: this.profile.imageLimits,
       ...(this.opts.toolServices ? { services: this.opts.toolServices } : {}),
-    });
+    }), () => !!this.abort?.signal.aborted);
   }
 
   /** Exponential backoff for transient provider errors (429/5xx/network),

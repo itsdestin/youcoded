@@ -57,6 +57,36 @@ describe('DelegationLedger', () => {
     expect(rows[0]).toMatchObject({ childId: 'c1', agentType: 'explorer', status: 'running' });
   });
 
+  it('old-run delivery mutations leave the replacement run and its lease untouched', async () => {
+    await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', parentToolCallId: 'run-b', claimedBy: OWNER, claimedAt: 42 }));
+    const before = ledger.listFor(CWD, 'p1');
+    await ledger.confirmDelivered(CWD, 'p1', 'c1', 'run-a');
+    await ledger.markInjectionAttempted(CWD, 'p1', 'c1', 'run-a');
+    await ledger.releaseClaim(CWD, 'p1', 'c1', 'run-a');
+    await ledger.updateForRun(CWD, 'p1', 'c1', 'run-a', { reportPath: 'old-report', injectionAttempted: false });
+    expect(ledger.listFor(CWD, 'p1')).toEqual(before);
+    await ledger.confirmDelivered(CWD, 'p1', 'c1', 'run-b');
+    expect(ledger.listFor(CWD, 'p1')[0].delivered).toBe(true);
+  });
+
+  it('checks the claimed run inside the mutation after a concurrent resume reset', async () => {
+    await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', parentToolCallId: 'run-a' }));
+    let entered!: () => void, release!: () => void;
+    const blocked = new Promise<void>(resolve => { entered = resolve; });
+    const proceed = new Promise<void>(resolve => { release = resolve; });
+    const mutate = home.mutateJson.bind(home);
+    const spy = vi.spyOn(home, 'mutateJson').mockImplementationOnce(async (...args) => {
+      entered(); await proceed; return mutate(...args);
+    });
+    const oldConfirmation = ledger.confirmDelivered(CWD, 'p1', 'c1', 'run-a');
+    try {
+      await blocked;
+      await ledger.update(CWD, 'p1', 'c1', { parentToolCallId: 'run-b', delivered: false });
+    } finally { release(); }
+    await oldConfirmation; spy.mockRestore();
+    expect(ledger.listFor(CWD, 'p1')[0]).toMatchObject({ parentToolCallId: 'run-b', delivered: false });
+  });
+
   it('listFor returns [] when no file exists yet', () => {
     expect(ledger.listFor(CWD, 'never-delegated')).toEqual([]);
   });
