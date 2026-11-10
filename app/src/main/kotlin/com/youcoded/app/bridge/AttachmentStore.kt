@@ -8,18 +8,19 @@ import java.io.InputStream
  *
  * WHY (2026-11-09 final review, Q-15): the copies were never deleted, had no size limit, and a failed copy
  * showed nothing at all, as if the person had cancelled. Attaching a long video a few times quietly filled
- * the phone. Now: a copy older than a day is removed, a file over the limit is refused, and both a refusal
+ * the phone. Now: a copy older than seven days is removed, a file over the limit is refused, and both a refusal
  * and a failure come back as a sentence the app shows. Kept free of Android classes so it is unit-tested.
  */
 object AttachmentStore {
     /** Larger than anything the assistant can usefully read; small enough that a few picks cannot fill a phone. */
     const val MAX_BYTES = 100L * 1024 * 1024
-    const val MAX_AGE_MS = 24L * 60 * 60 * 1000
+    // WHY seven days, not one (Destin, 2026-11-10): coming back to a chat two days later, "the file I sent" was gone.
+    const val MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
 
     /** A picked file that was not attached, with the sentence to show. */
     class Refused(message: String) : Exception(message)
 
-    /** Remove every pick folder last written more than a day ago. Never throws: clean-up must not block a pick. */
+    /** Remove every pick folder last written more than seven days ago. Never throws: clean-up must not block a pick. */
     fun sweep(root: File, now: Long = System.currentTimeMillis()) {
         runCatching {
             root.listFiles()?.forEach { pick ->

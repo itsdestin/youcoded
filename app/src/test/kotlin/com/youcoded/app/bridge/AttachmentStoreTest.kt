@@ -8,7 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
-/** Pins the paperclip's size limit and one-day clean-up (2026-11-09 final review, Q-15). */
+/** Pins the paperclip's size limit and seven-day clean-up (2026-11-09 final review, Q-15). */
 class AttachmentStoreTest {
     private fun root(): File = Files.createTempDirectory("attachments").toFile()
 
@@ -43,11 +43,11 @@ class AttachmentStoreTest {
         assertEquals(1024L, out.length())
     }
 
-    @Test fun `copies older than a day are removed and newer ones kept`() {
+    @Test fun `copies older than seven days are removed and newer ones kept`() {
         val r = root()
         val old = AttachmentStore.save(r, "old.txt", "x".byteInputStream(), now = 1)
         val fresh = AttachmentStore.save(r, "new.txt", "y".byteInputStream(), now = 2)
-        val now = 10L * 24 * 60 * 60 * 1000
+        val now = 30L * 24 * 60 * 60 * 1000
         old.setLastModified(now - AttachmentStore.MAX_AGE_MS - 1); old.parentFile!!.setLastModified(now - AttachmentStore.MAX_AGE_MS - 1)
         fresh.setLastModified(now - 1000); fresh.parentFile!!.setLastModified(now - 1000)
         AttachmentStore.sweep(r, now)
