@@ -128,9 +128,11 @@ class MuslSectionTests(unittest.TestCase):
             shutil.copyfile(SCRIPT.with_name(name), self.here / name)
         (self.here / 'pins.env').write_text('fixture input pins\n')
         (self.here / 'runtime-redistribution.py').write_text('# fixture record command\n')
-        # Alpine's patch step needs the network; the fixture stands in for it and leaves the marker the cache key reads.
-        (self.here / 'alpine-musl-patches.py').write_text(
-            'import pathlib, sys\npathlib.Path(sys.argv[2], ".alpine-patches.json").write_text(\'{"alpine": "fixture-r0", "patches": []}\\n\')\n')
+        # Alpine's patch step is the real script's job; the fixture stands in for it (argv: apply <src> <version>)
+        # and provides the manifest the cache key reads.
+        (self.here / 'alpine-musl-patches.py').write_text('import pathlib, sys\nassert sys.argv[1] == "apply"\n')
+        (self.here / 'alpine-musl-patches').mkdir()
+        (self.here / 'alpine-musl-patches' / 'manifest.json').write_text('{"alpine": "fixture-r0", "patches": []}\n')
         self.cache = self.root / 'downloads'
         self.cache.mkdir()
         self.sysroot = self.cache / 'sysroot'
