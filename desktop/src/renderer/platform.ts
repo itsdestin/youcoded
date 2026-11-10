@@ -9,7 +9,7 @@
 //     CAPABILITY. Ask `getCapabilities().x`. The host decides the answer and sends it in the handshake (seam S7,
 //     shared/capabilities.ts); nothing here guesses it from the platform.
 //   · "Does this screen LOOK or FEEL different?" (touch-sized buttons, a soft keyboard, a narrower layout) is a property of
-//     the device. Ask `isAndroid()` / `isTouchDevice()` / `getPlatform()`. These are genuine look-and-feel differences, not
+//     the device. Ask `isAndroid()` / `getPlatform()` (and renderer/device.ts for layout questions). These are genuine look-and-feel differences, not
 //     capability gaps. `isRemoteMode()` is the connection mode: the conversation lives on a computer this screen is
 //     watching, which changes WHEN state is available (catching up after a drop), not what the screen can do.
 import { useEffect, useState } from 'react';
@@ -64,10 +64,6 @@ export function getPlatform(): Platform {
 
 export function isAndroid(): boolean {
   return getPlatform() === 'android'
-}
-
-export function isTouchDevice(): boolean {
-  return getPlatform() === 'android' || getPlatform() === 'browser'
 }
 
 /** The word for the device the app's own work happens on: "phone" in the Android app running its own on-phone

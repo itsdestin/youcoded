@@ -8,7 +8,8 @@ import { lastUsedText } from './remote/last-used';
 import { createPortal } from 'react-dom';
 import type { RemoteAccessView, RemoteAccessAction, RemoteAccessPreview } from './remote/preview-types';
 import { QRCodeSVG } from 'qrcode.react';
-import { isAndroid, isTouchDevice, useCurrentPlatform } from '../platform';
+import { isAndroid, getCapabilities, useCurrentPlatform } from '../platform';
+import { prefersTouchInput } from '../utils/touch-input';
 import ThemeScreen from './ThemeScreen';
 import SyncSection from './SyncPanel';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
@@ -3066,9 +3067,10 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
         {/* The Browser's settings are a page of Assistant settings (Destin, 2026-10-15). */}
         <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
-        {/* WHY hidden on a phone's web browser: the buddy floater is a separate always-on-top computer window; a
-            touch screen has nothing to float it over (Android hides it too). Settings here are the host's, but this row can't act. */}
-        {!isTouchDevice() && <BuddyButton />}
+        {/* WHY hidden wherever the buddy cannot exist: the floater is a separate always-on-top computer window. Asks the
+            screen's own `buddy` ability (shared/capabilities.ts) instead of guessing from the device kind, so a laptop
+            on remote access no longer shows a row that cannot act (2026-11-10 tidy). */}
+        {getCapabilities().buddy && <BuddyButton />}
 
         <SoundButton />
 
@@ -3142,7 +3144,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
 
         {/* WHY hidden on touch screens (phone browser): no physical keyboard, so a hotkey list is noise. Android's own
             settings already omit it; this keeps both phones consistent. */}
-        {!isTouchDevice() && (<>
+        {!prefersTouchInput() && (<>
         <SettingRow
           icon={
             <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">

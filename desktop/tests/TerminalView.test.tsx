@@ -471,6 +471,20 @@ describe('mount logic', () => {
       expect(terminalCtorArgs[0]).toMatchObject({ fontSize: 14 });
     });
 
+    // The terminal library listens for paste even while its terminal is hidden, so a paste into the chat's message
+    // box used to reach Claude Code a second time, raw. Only the terminal on screen may send.
+    it('sends what is typed or pasted only while the terminal is the one on screen', () => {
+      const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
+      const typed = onDataSpy.mock.calls[0][0] as (data: string) => void;
+      const send = (window as any).claude.session.sendInput;
+      typed('pasted while hidden');
+      expect(send).not.toHaveBeenCalled();
+      rerender(<TerminalView sessionId="s1" visible={true} />);
+      typed('typed while shown');
+      expect(send).toHaveBeenCalledWith('s1', 'typed while shown');
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
     it('passes sessionId to usePtyOutput and null to usePtyRawBytes', () => {
       render(<TerminalView sessionId="s1" visible={true} />);
       expect(usePtyOutput).toHaveBeenCalledWith('s1', expect.any(Function));

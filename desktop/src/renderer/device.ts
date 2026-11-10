@@ -22,6 +22,14 @@ export function inPhoneApp(): boolean {
   return getPlatform() === 'android';
 }
 
+/** One pane at a time (a list, then the thing picked from it) instead of two side by side?
+ *  Yes in a narrow window, and always in the phone app: a foldable's inner screen is wider than 640px, so width
+ *  alone left a squeezed two-pane layout on a phone (2026-11-01 phone test). Pass the caller's own
+ *  useNarrowViewport() reading so the screen re-draws when the window is resized. */
+export function onePaneLayout(narrow: boolean): boolean {
+  return narrow || inPhoneApp();
+}
+
 /** Should buttons and rows be finger-sized (taller, easier to tap)?
  *
  *  Yes on a touch screen, and in a narrow window on a computer. WHY (Destin's final-review answers: narrow computer

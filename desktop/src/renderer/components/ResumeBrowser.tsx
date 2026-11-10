@@ -10,7 +10,7 @@ import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
 import { useChunkedReveal } from '../hooks/use-chunked-reveal';
-import { isAndroid } from '../platform';
+import { onePaneLayout } from '../device';
 import SessionPreviewPane from './SessionPreviewPane';
 import type { ChatsearchProvider } from '../../shared/chatsearch-refs';
 import { ResumeFilterPopover } from './ResumeFilterPopover';
@@ -599,7 +599,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   //    to pass it. The list is fully usable without the panel, which is what
   //    makes hiding it legitimate rather than a narrow "fix" that removes the
   //    only route to something.
-  const previewOn = !narrowViewport && !isAndroid();
+  const previewOn = !onePaneLayout(narrowViewport);   // device.ts
   // Model, Skip permissions, new window and the in-flight resume — shared with
   // the Projects page's preview (ResumeOptions.tsx).
   const resumeOptions = useResumeOptions(defaultModel, defaultSkipPermissions);

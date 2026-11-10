@@ -46,7 +46,6 @@ import { SearchIcon, PlusIcon, TrashIcon } from './icons';
 import { Button, CloseButton, Pill, SectionLabel } from '../ui';
 import { ScreenMark } from '../../shoot-mode';
 import { prefersTouchInput } from '../../utils/touch-input';
-import { isAndroid } from '../../platform';
 
 export function ProjectSwitcher({
   projects,
@@ -73,7 +72,7 @@ export function ProjectSwitcher({
   // Not on touch (2026-11-01 phone test): the on-screen keyboard jumped up and covered the
   // project list on open, the same problem the command drawer and Resume had. Tap the field to type.
   useEffect(() => {
-    if (prefersTouchInput() || isAndroid()) return;
+    if (prefersTouchInput()) return;   // already true in the phone app (utils/touch-input.ts)
     inputRef.current?.focus();
   }, []);
 

@@ -11,7 +11,7 @@
 // that have no common ancestor short of App, and a useSyncExternalStore is how
 // this renderer already shares that kind of state (rules: react-renderer).
 import { useSyncExternalStore } from 'react';
-import { deviceNoun, isTouchDevice } from '../../platform';
+import { deviceNoun, getCapabilities } from '../../platform';
 import { markTipSeen, setTipsArmed, tipSeen, tipsArmed } from './guide-state';
 
 export interface GuideTip {
@@ -43,7 +43,7 @@ const emit = () => listeners.forEach((l) => l());
 export function triggerTip(id: string): boolean {
   if (active || shownThisSitting || !tipsArmed() || tipSeen(id)) return false;
   // WHY: a phone can't run local models or float a buddy, so those tips would point at things it doesn't have (2026-11-01 test).
-  if ((id === 'local-models' && deviceNoun() === 'phone') || (id === 'floater' && isTouchDevice())) return false;
+  if ((id === 'local-models' && deviceNoun() === 'phone') || (id === 'floater' && !getCapabilities().buddy)) return false;
   const tip = TIPS.find((t) => t.id === id);
   if (!tip) return false;
   active = tip;

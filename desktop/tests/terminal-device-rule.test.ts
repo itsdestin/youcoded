@@ -67,6 +67,17 @@ describe('terminal layout by device', () => {
     expect(css).not.toMatch(/data-platform="electron"\]/);
   });
 
+  // WHY a source check: the terminal is hidden in chat view and shown in terminal view. If any of its three inset
+  // values depended on which view is open, it would change size on every flip, and every new size makes Claude Code
+  // redraw (doubled banner on Windows; fixed 2026-07). Style rules and the screen code cannot be tied together otherwise.
+  it('the terminal keeps one size in chat view and terminal view: its insets never depend on the view', () => {
+    const css = ['keyboard.css', 'globals.css', 'frame-outline.css', 'float-chrome.css', 'terminal-scrollbar.css', 'phone-density.css']
+      .map(f => read('styles/' + f)).join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*--terminal-(?:top|side|bottom)-inset\s*:[^{}]*)\}/g)];
+    expect(rules.length).toBeGreaterThanOrEqual(4);
+    for (const [, selector] of rules) expect(selector, selector.trim()).not.toMatch(/data-view-mode/);
+  });
+
   it('a hidden terminal is sized only under the phone layout, so the computer app does nothing while hidden', () => {
     expect(read('components/TerminalView.tsx')).toMatch(/clientHeight === 0\) \{ if \(holdRowsOnTouch\) proposeHidden\(el\); return; \}/);
     expect(read('components/TerminalView.tsx')).toContain('const holdRowsOnTouch = phoneTerminalLayout();');

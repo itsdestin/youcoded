@@ -43,7 +43,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
-import { isAndroid } from '../../platform';
+import { onePaneLayout } from '../../device';
 import { isWorkbenchDocument, workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
 import { ON_INSET_CONTROL } from '../header/control-states';
@@ -150,7 +150,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // list without leaving the page, while Back to chat keeps its separate job.
   // WHY phoneLayout (2026-11-01 phone test, #15): a foldable's inner screen is wider than 640px, so width alone left the
   // squeezed two-pane layout on a phone. The Android app always gets the phone layout.
-  const phoneLayout = narrow || isAndroid();
+  const phoneLayout = onePaneLayout(narrow);   // device.ts
   // Phone: the list and the open page are two full-width screens that slide between each other (owner's decision).
   // Picking a page from the list no longer jumps to the full-screen "focus" view; it slides the list away instead.
   const [phoneListOpen, setPhoneListOpen] = useState(true);
