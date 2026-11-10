@@ -2,6 +2,7 @@
 // Electron main process, no PTY and no remote server. See
 // docs/active/specs/2026-07-29-ui-workbench-design.md.
 
+import { markTerminalLayout } from '../../device';
 import { createStore } from './mock-store';
 import { createMockShim } from './mock-shim';
 import { SCENARIO_IDS, type ScenarioId } from './scenarios';
@@ -108,6 +109,9 @@ function declarePlatform(): void {
   if (typeof document !== 'undefined' && !document.documentElement.dataset.platform) {
     document.documentElement.dataset.platform = w.__PLATFORM__;
   }
+  // WHY: device.ts labelled the terminal layout when it loaded, before the lines above chose a device; the real
+  // app re-labels after its handshake (remote-shim), so the practice app must too or styles and script disagree.
+  markTerminalLayout();
 }
 
 export function installMock(): void {

@@ -4,7 +4,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { phoneTerminalLayout, inPhoneApp } from '../src/renderer/device';
+import { phoneTerminalLayout, inPhoneApp, markTerminalLayout } from '../src/renderer/device';
 
 const SRC = join(__dirname, '..', 'src', 'renderer');
 const read = (p: string) => readFileSync(join(SRC, p), 'utf8');
@@ -17,12 +17,23 @@ describe('terminal layout by device', () => {
   afterEach(() => { delete (globalThis as any).window; });
   const on = (platform: string | undefined) => { (globalThis as any).window = { __PLATFORM__: platform }; };
 
-  it('the computer app gets the computer terminal; every other screen gets the phone layout', () => {
+  it('phone app and touch browser get the phone layout; computer app and a mouse laptop\'s browser get the computer terminal', () => {
     on('electron'); expect(phoneTerminalLayout()).toBe(false);
     on('android'); expect(phoneTerminalLayout()).toBe(true); expect(inPhoneApp()).toBe(true);
     on('browser'); expect(phoneTerminalLayout()).toBe(true); expect(inPhoneApp()).toBe(false);
-    // What a computer tells a mouse laptop's browser (remote-server.ts authOkMessage). Destin's open decision.
-    on('desktop'); expect(phoneTerminalLayout()).toBe(true);
+    // What a computer tells a mouse laptop's browser (remote-server.ts authOkMessage). Destin, 2026-11-10: computer terminal.
+    on('desktop'); expect(phoneTerminalLayout()).toBe(false);
+  });
+
+  it('the style sheets are told the same answer, and again after a browser learns what it is', () => {
+    const html = { dataset: {} as Record<string, string> };
+    (globalThis as any).document = { documentElement: html };
+    try {
+      on(undefined); markTerminalLayout(); expect(html.dataset.termLayout).toBe('computer');   // browser, before the handshake
+      on('browser'); markTerminalLayout(); expect(html.dataset.termLayout).toBe('phone');
+      on('desktop'); markTerminalLayout(); expect(html.dataset.termLayout).toBe('computer');
+    } finally { delete (globalThis as any).document; }
+    expect(read('remote-shim.ts')).toMatch(/__PLATFORM__ = platform;\s*markTerminalLayout\(\);/);
   });
 
   it('no script but device.ts spells the rule out for itself', () => {
@@ -30,11 +41,15 @@ describe('terminal layout by device', () => {
       .filter(p => !p.endsWith(join('renderer', 'device.ts')) && !p.includes(join('dev', 'workbench')))
       .filter(p => /getPlatform\(\)\s*!==\s*'electron'/.test(readFileSync(p, 'utf8')));
     expect(copies).toEqual([]);
+    expect(read('components/TerminalView.tsx')).not.toMatch(/=\s*isTouchDevice\(\)/);
   });
 
-  it('the two style rules that must agree with it are still keyed the same way', () => {
-    expect(read('styles/keyboard.css')).toContain('html:not([data-platform="electron"]) [data-term-lift]');
-    expect(read('styles/globals.css')).toContain('html:not([data-platform="electron"]) {');
+  it('every terminal style rule keys on the layout label, never on the app kind', () => {
+    const css = ['keyboard.css', 'globals.css', 'frame-outline.css', 'float-chrome.css'].map(f => read('styles/' + f)).join('\n');
+    expect(css).toContain('html[data-term-layout="phone"] [data-term-lift]');
+    expect(css).toContain('html[data-term-layout="phone"] {');
+    // WHY: data-platform is written once at load, so a rule keyed on it cannot follow a browser's handshake.
+    expect(css).not.toMatch(/data-platform="electron"\]/);
   });
 
   it('a hidden terminal is sized only under the phone layout, so the computer app does nothing while hidden', () => {

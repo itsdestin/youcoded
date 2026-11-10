@@ -15,7 +15,7 @@ import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { attachRenderPause, type RenderPause } from './xterm-render-pause';
 import { useTheme } from '../state/theme-context';
-import { getCapabilities, isTouchDevice } from '../platform';
+import { getCapabilities } from '../platform';
 import { phoneTerminalLayout } from '../device';
 import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } from '../workbench-mode';
 import { computeTerminalSurface } from '../themes/theme-engine';
@@ -170,7 +170,8 @@ function TerminalView({ sessionId, visible }: Props) {
     // xterm's hidden textarea (which would summon the soft keyboard and
     // expose the historical xterm.js mobile IME issues). disableStdin
     // suppresses xterm's input handling entirely.
-    const touch = isTouchDevice();
+    // WHY phoneTerminalLayout (2026-11-10): the same one rule as the message box and the size lock (device.ts).
+    const touch = phoneTerminalLayout();
     const terminal = new Terminal({
       allowProposedApi: true,
       cursorBlink: true,

@@ -37,7 +37,7 @@
   }
 }
 /* Same two geometry overrides the glass takes (globals.css, same reasons). */
-html[data-platform="electron"][data-view-mode="terminal"] .chrome-outline {
+html[data-term-layout="computer"][data-view-mode="terminal"] .chrome-outline {
   --bottom-chrome-total: calc(var(--frame-edge) + var(--vvp-offset, 0px));
 }
 .chrome-outline--bare {

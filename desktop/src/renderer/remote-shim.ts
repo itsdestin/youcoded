@@ -21,6 +21,7 @@ import { markPage, startConnection, markConnection, markWake, takeReport } from 
 import { readRemotePlace, remotePlaceStorages, remotePlaceHost } from './state/remote-place';
 import { markScreensReady } from './state/screens-ready';
 import { setConnectionMode, platformAfterHandshake } from './platform';
+import { markTerminalLayout } from './device';
 markPage('connection-code'); // this module's code has arrived and run (remote-timings.ts)
 import { announce } from './utils/announce';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
@@ -1555,8 +1556,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
             ? `${msg.deviceId}:${msg.secret}`
             : (localStorage.getItem('youcoded-remote-token') ?? msg.deviceId ?? '');
           if (token) localStorage.setItem('youcoded-remote-token', token);
-          // Preserve __PLATFORM__ when connecting to a remote desktop from Android —
-          // the desktop server responds with platform:"electron" but we're still on a phone
+          // Keep __PLATFORM__ when the Android app connects to a computer: it answers "electron" but this is a phone.
           // WHY via platformAfterHandshake: the Android app's own page must stay 'android' even when it talks to its
           // own on-phone backend (preservePlatform is false then) — otherwise the phone got the desktop's settings.
           // A phone's plain web browser still becomes 'browser' (touch-first) so its terminal/keyboard behave; a
@@ -1569,7 +1569,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
               touchFirst: isTouchFirstDevice(),
               hostPlatform: msg.platform,
             });
-            if (platform) (window as any).__PLATFORM__ = platform;
+            if (platform) { (window as any).__PLATFORM__ = platform; markTerminalLayout(); }   // device.ts: styles learn the terminal layout
           }
           // Naming capability, straight off the handshake — no extra round
           // trip, and settled before the first paint that could show a naming

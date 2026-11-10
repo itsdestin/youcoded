@@ -853,7 +853,7 @@ body[data-input-style="floating"]:not([data-chrome-style="floating"]) {
    up with the keyboard (useVisualViewport). The terminal now runs to the screen's bottom behind the bar, and its text
    grid stops above the bar (--terminal-bottom-inset below). */
 .bottom-docked { position: absolute; z-index: 20; }
-html:not([data-platform="electron"]) {
+html[data-term-layout="phone"] {
   --terminal-bottom-inset: calc(var(--bottom-chrome-height, 0px) + var(--input-edge-inset, 0px));
 }
 
@@ -2327,10 +2327,10 @@ pre.yc-code code {
   --chat-right-offset: calc(var(--frame-edge) * 2 + var(--right-pane-width, 480px));
 }
 
-/* ─── Terminal-view frame insets (desktop electron only) ─────────────────
-   Scoped to [data-platform="electron"] because the bottom-chrome collapse
-   below is electron-only (App.tsx gates it on getPlatform()==='electron');
-   on Android/browser the input bar stays visible in terminal view, so
+/* ─── Terminal-view frame insets (computer terminal layout only) ─────────
+   Scoped to [data-term-layout="computer"] (device.ts: the computer app and, since 2026-11-10, a mouse laptop's
+   browser) because the bottom-chrome collapse below happens only there (App.tsx, phoneTerminalLayout());
+   on a phone or touch browser the input bar stays visible in terminal view, so
    --bottom-chrome-height is a real measured height and must not be overridden.
 
    TOP inset: Claude Code wipes the screen (\e[2J) and repaints its UI from
@@ -2363,7 +2363,7 @@ html {
    --frame-edge on framed themes to match. Theme-driven (not view-driven) so the
    terminal stays one width across chat/terminal toggles — no ConPTY reflow.
    Floating themes have no side chrome, so they keep the default 0. */
-html[data-platform="electron"] body:not([data-chrome-style="floating"]):not([data-input-style="floating"]) {
+html[data-term-layout="computer"] body:not([data-chrome-style="floating"]):not([data-input-style="floating"]) {
   --terminal-side-inset: var(--frame-edge);
   /* BOTTOM inset (theme-driven like --terminal-side-inset, NOT view-gated):
      lifts the xterm grid above the bottom frame strip on framed themes so the
@@ -2379,7 +2379,7 @@ html[data-platform="electron"] body:not([data-chrome-style="floating"]):not([dat
      mechanism). Floating themes have no bottom strip → 0. */
   --terminal-bottom-inset: var(--frame-edge);
 }
-html[data-platform="electron"][data-view-mode="terminal"] .chrome-glass {
+html[data-term-layout="computer"][data-view-mode="terminal"] .chrome-glass {
   --bottom-chrome-height: var(--frame-edge);
   /* ALSO override --bottom-chrome-total here. The base rule only sets
      --bottom-chrome-height, expecting the base --bottom-chrome-total (defined

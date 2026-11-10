@@ -20,13 +20,13 @@ describe('touch terminal bottom chrome', () => {
     expect(app).toMatch(/currentViewMode === 'chat' \? ' bottom-float' : isTerminalTouch \? ' bottom-float bottom-docked' : ''/);
   });
 
-  it('off Electron, the terminal grid stops above the floating bar and SLIDES with the keyboard, never shrinks', () => {
-    const rule = css.match(/html:not\(\[data-platform="electron"\]\)\s*\{([^}]*)\}/);
+  it('under the phone terminal layout, the terminal grid stops above the floating bar and SLIDES with the keyboard, never shrinks', () => {
+    const rule = css.match(/html\[data-term-layout="phone"\]\s*\{([^}]*)\}/);
     expect(rule, 'touch terminal bottom inset rule missing').toBeTruthy();
     expect(rule![1]).toMatch(/--terminal-bottom-inset:\s*calc\(var\(--bottom-chrome-height/);
     // A keyboard height in the inset resized the terminal on every open, and Claude Code printed its screen again.
     expect(rule![1]).not.toMatch(/--vvp-offset/);
-    const lift = keyboardCss.match(/html:not\(\[data-platform="electron"\]\) \[data-term-lift\]\s*\{([^}]*)\}/);
+    const lift = keyboardCss.match(/html\[data-term-layout="phone"\] \[data-term-lift\]\s*\{([^}]*)\}/);
     expect(lift, 'terminal keyboard lift rule missing').toBeTruthy();
     // The grid also slides by --term-grid-lift (TerminalView: rows overhanging a taller message box), so a taller box
     // never shrinks the terminal either (terminal-size-lock.ts).

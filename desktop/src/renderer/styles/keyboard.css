@@ -13,7 +13,7 @@
    its grid, its tinted strips and its scroll arrows ([data-term-lift]) move up with the bar — the top lines pass
    under the header while typing — and Claude Code never sees the keyboard. During the slide useVisualViewport moves
    them directly; once it settles this rule holds them. */
-html:not([data-platform="electron"]) [data-term-lift] {
+html[data-term-layout="phone"] [data-term-lift] {
   transform: translateY(calc(-1 * (var(--vvp-offset, 0px) + var(--term-grid-lift, 0px))));
 }
 /* --term-grid-lift: set by TerminalView on the text grid only (0 everywhere else). WHY (Destin, 2026-11-03, "still

@@ -92,7 +92,6 @@ vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 // before render.
 vi.mock('../src/renderer/platform', () => ({
   isAndroid: vi.fn().mockReturnValue(false),
-  isTouchDevice: vi.fn().mockReturnValue(false),
   isRemoteMode: vi.fn().mockReturnValue(false),
   getPlatform: vi.fn().mockReturnValue('electron'),
   // The terminal reads which stream the host sends from the screen's capabilities (R4-1), not from the platform name.
@@ -163,7 +162,8 @@ beforeEach(() => {
   termGrid = { rows: 24 };
   proposedDims = { cols: 80, rows: 24 };
   mockActiveTheme = null;
-  vi.mocked(platform.isTouchDevice).mockReturnValue(false);
+  // WHY getPlatform (2026-11-10): the terminal asks device.ts phoneTerminalLayout(), which reads the device kind.
+  vi.mocked(platform.getPlatform).mockReturnValue('electron');
 });
 
 // Pins the WebGL glyph-atlas heal in TerminalView.
@@ -383,7 +383,7 @@ describe('mount logic', () => {
 
   describe('TerminalView mount logic — touch platform', () => {
     beforeEach(() => {
-      vi.mocked(platform.isTouchDevice).mockReturnValue(true);
+      vi.mocked(platform.getPlatform).mockReturnValue('browser');
     });
 
     it('passes disableStdin: true to the Terminal constructor', () => {
@@ -443,7 +443,16 @@ describe('mount logic', () => {
 
   describe('TerminalView mount logic — desktop', () => {
     beforeEach(() => {
-      vi.mocked(platform.isTouchDevice).mockReturnValue(false);
+      vi.mocked(platform.getPlatform).mockReturnValue('electron');
+    });
+
+    // Destin, 2026-11-10: a mouse laptop on remote access ('desktop') gets the computer terminal, typed into directly.
+    it('a mouse laptop\'s browser takes typing and the computer font size', () => {
+      vi.mocked(platform.getPlatform).mockReturnValue('desktop' as any);
+      render(<TerminalView sessionId="s1" visible={true} />);
+      const opts = terminalCtorArgs[0];
+      expect(opts.disableStdin).toBeFalsy();
+      expect(opts.fontSize).toBe(14);
     });
 
     it('does not pass disableStdin (or passes false)', () => {

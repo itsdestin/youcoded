@@ -8,27 +8,36 @@
 // The history, with pictures: youcoded-dev docs/active/design/2026-11-09-phone-final-review/terminal-by-device.html
 //
 // Four facts, each read at CALL time (the app kind and connection are only known after the backend says hello):
-//   inPhoneApp()        this page is the Android app
-//   narrow window       under 640px wide: NARROW_VIEWPORT_QUERY / useNarrowViewport (re-exported, not copied)
-//   touchFirst()        fingers, not a mouse, are the main way in
-//   assistantIsLocal()  the assistant runs on THIS device (false when watching a computer)
+//   phone app      inPhoneApp(), below
+//   narrow window  under 640px wide: hooks/use-narrow-viewport.ts
+//   touch          fingers, not a mouse, are the main way in: utils/touch-input.ts prefersTouchInput()
+//   local          the assistant runs on THIS device: platform.ts isRemoteMode()
+// The last three keep their existing home until their callers move here (an unused copy fails the dead-code check).
 // "Can this screen do X?" stays shared/capabilities.ts; these are look-and-feel only.
 import { getPlatform } from './platform';
 
-// The other facts keep their one existing home until their callers move here (an unused copy fails the dead-code
-// check): narrow window = hooks/use-narrow-viewport.ts, touch-first = utils/touch-input.ts prefersTouchInput(),
-// assistant on this device = platform.ts isRemoteMode().
 export function inPhoneApp(): boolean {
   return getPlatform() === 'android';
 }
 
 /** Does terminal view use the phone layout: a message box and key row under a terminal that is only looked at?
  *
- *  Today: every screen except the computer app's own window. That is the rule the released app has had since
- *  2026-04 (App.tsx isTerminalTouch); it was copied into four places, and this is now the only copy in script
- *  (the two style rules that must agree are pinned by tests/terminal-device-rule.test.ts).
- *  Whether a MOUSE laptop's browser should get the computer terminal instead is Destin's open decision; changing
- *  it is this one line plus those two style rules. */
+ *  Yes for the phone app and a touch browser (phone, tablet); no for the computer app AND a mouse laptop's browser.
+ *  WHY the laptop changed (Destin, 2026-11-10, "yeah computer makes more sense"): since 2026-04 the rule was "anything
+ *  but the computer app", which gave a mouse laptop on remote access the phone's message box, key row and scroll arrows
+ *  stretched across a big screen while its terminal still took typing: two ways to type. Nobody chose that.
+ *  The page learns which browser it is from the handshake (platform.ts platformAfterHandshake): touch → 'browser',
+ *  mouse → the computer's answer ('desktop'). */
 export function phoneTerminalLayout(): boolean {
-  return getPlatform() !== 'electron';
+  const p = getPlatform();
+  return p === 'android' || p === 'browser';
 }
+
+/** Tell the style sheets which terminal layout this is: <html data-term-layout="phone|computer">.
+ *  WHY its own label: the style rules used to key on data-platform, which is written once at page load, before a
+ *  browser knows what it is. Called here at load and again by remote-shim once the handshake has answered. */
+export function markTerminalLayout(): void {
+  if (typeof document === 'undefined' || !document.documentElement?.dataset) return;
+  document.documentElement.dataset.termLayout = phoneTerminalLayout() ? 'phone' : 'computer';
+}
+markTerminalLayout();
