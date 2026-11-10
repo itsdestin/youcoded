@@ -112,7 +112,11 @@ function TerminalView({ sessionId, visible }: Props) {
   const backingStyle = workbenchBacking === 'today' ? null : TERMINAL_BACKING_STYLE[workbenchBacking];
 
   // Detect if the theme has a visual background (wallpaper image, gradient, or glassmorphism)
-  const bg = activeTheme?.background;
+  // WHY the capability (Destin, 2026-11-10, a laptop-browser picture: "the terminal cuts off before the bottom of the
+  // frame"): a screen on remote access gets a theme's colours but not its wallpaper (theme-context.tsx applies the
+  // theme with no background there). This read the full theme anyway, so the terminal alone drew a wallpaper sheet
+  // over a page styled as flat, and the strip under its last row showed in a different colour.
+  const bg = getCapabilities().themePictures ? activeTheme?.background : undefined;
   // Which theme token xterm paints as its opaque background. The shipped answer
   // is the theme engine's (P-20.2: 'panel' under a wallpaper/gradient — the
   // same predicate that stamps [data-wallpaper] on <html> — 'canvas' on a flat
