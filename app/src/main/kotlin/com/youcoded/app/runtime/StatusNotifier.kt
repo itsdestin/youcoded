@@ -43,7 +43,16 @@ class StatusNotifier(private val context: Context, private val ongoing: (String)
                 .putExtra(EXTRA_SESSION_ID, id)
             // A distinct request code per session, or Android would reuse the first session's intent for all.
             val tap = PendingIntent.getActivity(context, idFor(id), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            // WHY a public version (review, 2026-11-10): the text can be a command the assistant wants to run
+            // ("Wants to run: …"), with a path or address in it. On a LOCKED phone only this plain line is shown;
+            // the full text appears once the phone is unlocked.
+            val onLockScreen = Notification.Builder(context, NEEDS_CHANNEL)
+                .setContentTitle("A session needs you")
+                .setSmallIcon(android.R.drawable.stat_notify_chat)
+                .build()
             nm.notify(idFor(id), Notification.Builder(context, NEEDS_CHANNEL)
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
+                .setPublicVersion(onLockScreen)
                 .setContentTitle("${n.optString("name").ifBlank { "A session" }} needs you")
                 .setContentText(n.optString("text"))
                 .setStyle(Notification.BigTextStyle().bigText(n.optString("text")))

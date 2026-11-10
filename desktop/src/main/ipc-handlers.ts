@@ -632,7 +632,7 @@ export function registerIpcHandlers(
     // Snapshot BEFORE spawn (a fallback page can otherwise include new turns); then a resume naming no model reopens on the conversation's own, for every screen and both doors (resume-model.ts).
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
       ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
-    opts = await withResumeModel(opts, resumeBoundary?.jsonlPath); checkWindow();
+    opts = await withResumeModel(opts, resumeBoundary?.jsonlPath); await sessionManager.primeStartMode?.(opts.cwd); checkWindow(); // primeStartMode: the folder's own default permission mode, read before the start
     const info = sessionManager.createSession(opts);
     if (resumeBoundary) resumePageBoundaries.set(info.id, resumeBoundary);
     // WHY: a holder takeover can arrive during the FIRST native await or before

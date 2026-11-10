@@ -15,7 +15,7 @@
 //
 // If the account or model cannot use auto, Claude Code falls back to its plain mode and prints a notice
 // ("auto mode is unavailable for your plan"); shared/permission-mode-detect.ts reads that and corrects the badge.
-import { getField } from './claude-settings';
+import { getField, readProjectDefaultMode } from './claude-settings';
 import type { PermissionMode } from '../shared/types';
 
 /** Claude Code's own names for its modes -> the badge's names. */
@@ -31,6 +31,21 @@ export function claudeStartMode(skipPermissions: boolean, userDefaultMode: unkno
   const own = typeof userDefaultMode === 'string' ? BADGE_FOR_CC_MODE[userDefaultMode] : undefined;
   if (own) return { args: [], badge: own };
   return { args: ['--permission-mode', 'auto'], badge: 'auto' };
+}
+
+// A default mode set for ONE FOLDER (its .claude/settings.local.json, then .claude/settings.json), remembered per folder.
+// WHY (independent review, 2026-11-10): only the person's own settings file was read, so a project that sets its own
+// default (say, always plan mode in this repo) was silently outranked by the "auto" start option: the very override
+// case 2 above exists to avoid. Remembered for the same reason as the person's own default below: starting a session
+// must not stop to read a file. The session-create request reads it first (ipc-handlers.ts), and it is refreshed after
+// every start; a start that arrives another way before any read falls back to the person's default.
+const projectModes = new Map<string, unknown>();
+
+export function projectDefaultMode(cwd: string | undefined): unknown { return cwd ? projectModes.get(cwd) : undefined; }
+
+export async function refreshProjectDefaultMode(cwd: string | undefined): Promise<void> {
+  if (!cwd) return;
+  try { projectModes.set(cwd, await readProjectDefaultMode(cwd)); } catch { /* keep the last known value */ }
 }
 
 // The person's own permissions.defaultMode, remembered. WHY remembered: starting a session must not stop to

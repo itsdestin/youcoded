@@ -390,6 +390,31 @@ describe('a first-run menu Claude Code draws without its usual footer', () => {
   });
 });
 
+describe('ordinary terminal text is never taken for a first-run menu', () => {
+  const BOX_END = '╰' + '─'.repeat(58) + '╯';
+
+  it('a quoted message from the conversation, straight under a box edge', () => {
+    const screen = [BOX_END, '> please do these:', '  fix the bug', '  add a test', '● On it.'].join('\n');
+    expect(parseInkSelect(screen)).toBeNull();
+    expect(readStartupDialog(screen)).toBeNull();
+  });
+
+  it('the same without a reply under it yet (no heading says what is asked)', () => {
+    expect(parseInkSelect([BOX_END, '> please do these:', '  fix the bug', '  add a test'].join('\n'))).toBeNull();
+  });
+
+  it('a multi-line draft in Claude Code\'s own message box', () => {
+    const screen = [' some reply', RULE, '❯ line one of my draft', '  line two', RULE, '  ? for shortcuts'].join('\n');
+    expect(parseInkSelect(screen)).toBeNull();
+  });
+
+  it('a numbered list with no footer gets no card while starting (a replayed conversation looks the same)', () => {
+    const screen = [RULE, ' Notes', '', ' ❯ 1. alpha', '   2. beta'].join('\n');
+    const menu = parseInkSelect(screen);
+    expect(menu && cardTitleFor(menu, true, screen)).toBeFalsy();
+  });
+});
+
 describe('the last safety net: something is asking, and nothing above could read it', () => {
   it('a cursor row with no footer and no message box is reported as unsure, with its heading', () => {
     const screen = [RULE, ' Pick your favourite', '', ' ❯ Only one row here'].join('\n');

@@ -24,6 +24,7 @@ function toOnlineUser(u: ServerUser): OnlineUser {
 
 /** Gaps between re-asserting "connect" while the backend has said nothing at all; the last repeats. */
 const CONNECT_REASSERT_MS = [4_000, 8_000, 15_000, 30_000];
+const CONNECT_REASSERT_MAX = 8;
 
 /** Backoff for re-reading the incognito choice after a failed read; the last value repeats. */
 const INCOGNITO_READ_RETRY_MS = [2_000, 5_000, 15_000, 30_000];
@@ -140,6 +141,10 @@ export function usePresence(isLeader: boolean = true) {
       void window.claude.social.presenceConnect({ hidden: incognito }).catch(() => {});
       timer = setTimeout(() => {
         if (!alive || liveEventsRef.current !== heardAtStart) return;
+        // WHY a cap (review, 2026-11-10): a web browser on remote access is refused presence by the computer and
+        // never hears an event, so this asked again twice a minute for as long as the tab stayed open. A phone whose
+        // socket was still connecting is heard well within these tries (about three minutes).
+        if (n + 1 >= CONNECT_REASSERT_MAX) return;
         attempt(n + 1);
       }, CONNECT_REASSERT_MS[Math.min(n, CONNECT_REASSERT_MS.length - 1)]);
     };

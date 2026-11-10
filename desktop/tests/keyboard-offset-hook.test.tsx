@@ -5,7 +5,8 @@
 // to change nothing. Each case names the complaint it protects.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { useVisualViewport, KEYBOARD_OFFSET_EVENT } from '../src/renderer/hooks/useVisualViewport';
+import { useVisualViewport } from '../src/renderer/hooks/useVisualViewport';
+import { KEYBOARD_OFFSET_EVENT } from '../src/renderer/hooks/keyboard-live-lift';
 
 type Listener = () => void;
 let now = 0;

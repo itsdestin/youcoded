@@ -56,14 +56,21 @@
 /* 7. No scrollbar in the chat on a phone (Destin, 2026-11-02: the scrollbar "popping in/out of the chat window when it
    shrinks makes all of the text and such on screen shift"; then, of a reserved 4px lane: "it looks odd and messages
    and such look off center"). A phone scrolls by touch, the way phone chat apps do with no bar; the jump-to-newest
-   button still shows when you have scrolled up. */
-@media (max-width: 639.98px) {
+   button still shows when you have scrolled up.
+   WHY touch only (Destin, final review: a narrow COMPUTER window gets the phone's "spacing yes, rest no"): this used
+   to key on width alone, so a mouse user who snapped the window to half a screen lost the chat's scroll bar. */
+@media (max-width: 639.98px) and (pointer: coarse), (max-width: 639.98px) and (hover: none) {
   html:not([data-mode^="buddy"]) .chat-scroll {
     scrollbar-width: none;
   }
   html:not([data-mode^="buddy"]) .chat-scroll::-webkit-scrollbar {
     display: none;
   }
+}
+/* The phone app itself, whatever its WebView reports about its pointer. */
+@media (max-width: 639.98px) {
+  html[data-platform="android"]:not([data-mode^="buddy"]) .chat-scroll { scrollbar-width: none; }
+  html[data-platform="android"]:not([data-mode^="buddy"]) .chat-scroll::-webkit-scrollbar { display: none; }
 }
 
 /* WHY nearer the edge without a frame (Destin, 2026-11-03: "in floating themes the terminal should go to the left/right

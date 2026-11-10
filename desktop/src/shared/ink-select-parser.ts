@@ -642,6 +642,14 @@ function parseUnnumbered(lines: string[], selectorIdx: number): ParsedMenu | nul
     for (let i = last + 1; i < lines.length; i++) if (stripAnsi(lines[i]).trim()) below++;
     if (below > 6) return null;
     if (options.some((o) => o.length > 90 && /\.$/.test(o))) return null;
+    // Three more, found by an independent review (2026-11-10) that fed it ordinary terminal text:
+    //  - Claude Code's message box is on screen: this is a multi-line DRAFT in that box, not a menu;
+    //  - the options start straight under the box rule, with no heading: that is a quoted message from the
+    //    conversation ("> please do these:" over indented lines), where a real dialog always says what it asks;
+    //  - a reply marker (● or ⎿) under the options: the conversation is on screen.
+    if (readInputFocus(lines.join('\n')).kind !== 'popup') return null;
+    if (!readHeading(lines, top, first, width)) return null;
+    for (let i = last + 1; i < lines.length; i++) if (/^\s*[●⎿]/.test(stripAnsi(lines[i]))) return null;
   }
 
   const firstOptionLine = first;
@@ -701,6 +709,8 @@ const ASKS_FOR_A_KEY = /\b(press|hit)\s+(enter|return|any key|space)\b|\benter t
 
 function readFooterlessQuestion(lines: string[], screenText: string): { heading: string; unsure: true } | null {
   if (readInputFocus(screenText).kind !== 'popup') return null;
+  // A reply marker near the bottom means the conversation is on screen (a quoted "> …" line is not a question).
+  if (lines.slice(-15).some((l) => /^\s*[●⎿]/.test(l))) return null;
   let asks = -1;
   for (let i = lines.length - 1; i >= Math.max(0, lines.length - 15); i--) {
     const t = lines[i].trim();

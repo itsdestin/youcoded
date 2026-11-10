@@ -23,6 +23,8 @@ import { detectPermissionMode, detectAutoRefused } from '../shared/permission-mo
 import type { PermissionMode } from '../shared/types';
 /** How much of the previous terminal piece is kept: the footer line (glyph + phrase + escapes) fits well inside it. */
 const OUTPUT_TAIL_CHARS = 200;
+/** How long after a session's first output Claude Code's "auto is not available" notice is believed. */
+const AUTO_REFUSAL_WINDOW_MS = 30_000;
 import { claudeAliasForModelId, isPlaceholderModelId } from '../shared/model-ids';
 import { IPC } from '../shared/backend-contract';
 import { clearDividerId } from '../shared/divider-ids';
@@ -86,6 +88,7 @@ export class SessionLiveFacts {
   private readonly directReceipts = new Map<string, Set<string>>();
   /** The end of each Claude Code session's last terminal piece (see noteOutput). */
   private readonly outputTails = new Map<string, string>();
+  private readonly firstOutputAt = new Map<string, number>();
   private readonly stopTargets = new Map<string, { sessionId: string; epoch: string; userUuid: string; accepted?: boolean }>();
 
   constructor(private readonly deps: SessionLiveDeps) {
@@ -116,7 +119,13 @@ export class SessionLiveFacts {
     let mode = detectPermissionMode(joined, tail.length);
     // No footer in this piece, the session is believed to be in auto, and Claude Code just said auto is not
     // available: it has fallen back to its plain mode, which draws no footer (permission-mode-detect.ts).
-    if (!mode && this.deps.currentMode?.(sessionId) === 'auto' && detectAutoRefused(joined, tail.length)) mode = 'normal';
+    // WHY only in a session's first AUTO_REFUSAL_WINDOW_MS (review, 2026-11-10): Claude Code prints the notice as it
+    // starts. The same words later are a chat ABOUT auto mode, a quoted file or a test run, and they turned a
+    // correct AUTO badge into NORMAL.
+    const startedAt = this.firstOutputAt.get(sessionId) ?? this.now();
+    this.firstOutputAt.set(sessionId, startedAt);
+    const starting = this.now() - startedAt <= AUTO_REFUSAL_WINDOW_MS;
+    if (!mode && starting && this.deps.currentMode?.(sessionId) === 'auto' && detectAutoRefused(joined, tail.length)) mode = 'normal';
     if (!mode) return;
     const known = this.deps.records.facts(sessionId)?.permissionMode ?? null;
     if (known === mode) return;
@@ -387,6 +396,7 @@ export class SessionLiveFacts {
   forget(sessionId: string): void {
     this.directReceipts.delete(sessionId);
     this.outputTails.delete(sessionId);
+    this.firstOutputAt.delete(sessionId);
     for (const [id, target] of this.stopTargets) if (target.sessionId === sessionId) this.stopTargets.delete(id);
     this.disarm(sessionId);
     const w = this.clearTimers.get(sessionId);

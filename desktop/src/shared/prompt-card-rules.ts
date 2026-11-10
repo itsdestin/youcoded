@@ -66,7 +66,9 @@ export function cardTitleFor(menu: ParsedMenu, starting: boolean, screen: string
   // WHY (Destin, 2026-11-09 final review F-2, "terminal as an absolute last resort"): while a session is STARTING, a menu with no footer still gets a
   // card when Claude Code's message box is off the screen, the same shape-not-name proof used mid-session. A first-run screen Claude Code adds or
   // rewords then gets buttons instead of "answer it in terminal view". Mid-session an unnumbered footerless menu (menu.loose) stays card-less, as before.
-  const startupMenu = starting && boxGone;
+  // Only the unnumbered kind (menu.loose), which has passed the reader's extra proofs. A NUMBERED footerless menu at startup keeps the old answer (no
+  // card; the loading cover then offers terminal view): a numbered list quoted in a replayed conversation looks exactly like one (review, 2026-11-10).
+  const startupMenu = starting && boxGone && menu.loose === true;
   if (menu.loose && !starting) return null;
   if (!menu.dialog && !popupHoldsKeyboard && !startupMenu) return null;
   // Belt and braces: parseInkSelect already refuses a menu with the message box under it (its last ❯ is then the input row), so a quoted menu in a reply

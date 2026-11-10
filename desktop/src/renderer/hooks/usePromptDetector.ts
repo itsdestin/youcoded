@@ -210,7 +210,7 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
       if (found?.unsure) {
         if (!unsureRef.current.has(sid)) {
           unsureRef.current.set(sid, { screen, timer: setTimeout(() => {
-            unsureRef.current.delete(sid);
+            // The entry stays (same screen = already decided), so an idle screen does not arm a timer per redraw.
             if (getVisibleScreenText(sid) === screen && (optionsRef.current.isStarting?.(sid) ?? false)) setUnreadableStartupDialog(sid, { heading: found.heading });
           }, UNSURE_SETTLE_MS) });
         }

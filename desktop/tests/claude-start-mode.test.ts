@@ -1,7 +1,10 @@
 // Pins which mode a new Claude Code session is started in and what its badge shows at once
 // (2026-11-09 final review, Q-8 / F-7: "always start in auto ... unless i toggle bypass permissions").
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { claudeStartMode } from '../src/main/claude-start-mode';
+import { claudeStartMode, projectDefaultMode, refreshProjectDefaultMode } from '../src/main/claude-start-mode';
 import { detectPermissionMode, detectAutoRefused } from '../src/shared/permission-mode-detect';
 import { SessionLiveFacts } from '../src/main/session-live';
 import { SessionRecords } from '../src/main/session-record';
@@ -25,6 +28,26 @@ describe('claudeStartMode', () => {
   it('treats an unrecognised or non-text setting as unset', () => {
     expect(claudeStartMode(false, 'something-new').badge).toBe('auto');
     expect(claudeStartMode(false, 42).badge).toBe('auto');
+  });
+});
+
+describe("a folder's own default mode", () => {
+  it('is read from the folder, local file first, and outranks naming auto', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'yc-startmode-'));
+    try {
+      expect(projectDefaultMode(dir)).toBeUndefined();
+      mkdirSync(join(dir, '.claude'));
+      writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ permissions: { defaultMode: 'plan' } }));
+      await refreshProjectDefaultMode(dir);
+      expect(projectDefaultMode(dir)).toBe('plan');
+      expect(claudeStartMode(false, projectDefaultMode(dir))).toEqual({ args: [], badge: 'plan' });
+      writeFileSync(join(dir, '.claude', 'settings.local.json'), JSON.stringify({ permissions: { defaultMode: 'acceptEdits' } }));
+      await refreshProjectDefaultMode(dir);
+      expect(projectDefaultMode(dir)).toBe('acceptEdits');
+      writeFileSync(join(dir, '.claude', 'settings.local.json'), '{ not json');
+      await refreshProjectDefaultMode(dir);
+      expect(projectDefaultMode(dir)).toBe('plan');
+    } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); }
   });
 });
 
@@ -62,6 +85,19 @@ describe('the badge of a session started in auto', () => {
     const r = reader('auto');
     r.live.noteOutput('s', '   auto mode unavailable for this model\r');
     expect(r.modes).toEqual(['normal']);
+  });
+
+  it('is left alone when the same words turn up later in the session (a chat about auto mode)', () => {
+    let t = 1_000;
+    const records = new SessionRecords({});
+    records.begin('s');
+    const modes: string[] = [];
+    const publish = createPublish({ records, toWindows: (_s, channel, args) => { if (channel === 'session:permission-mode') modes.push((args[0] as any).mode); }, toSockets: () => {} });
+    const live = new SessionLiveFacts({ publish, records, isClaude: () => true, currentMode: () => 'auto', now: () => t } as any);
+    live.noteOutput('s', 'Claude Code v2.1.322\r');
+    t += 5 * 60_000;
+    live.noteOutput('s', '● The notice reads "auto mode is unavailable for your plan".\r');
+    expect(modes).toEqual([]);
   });
 
   it('is left alone by the same notice when the session is in another mode (seen in real plan-mode captures)', () => {

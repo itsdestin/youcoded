@@ -22,7 +22,7 @@ import com.youcoded.app.MainActivity
  *     a screen in the front task; a separate Chrome window gives it none.
  *  2. [bringBack]: when the backend reports the sign-in finished, MainActivity is brought forward (clearing the
  *     tab above it). Android can still refuse (it varies by version and maker), so if YouCoded is not on screen
- *     a moment later a "Signed in" notification is shown; tapping it is always allowed to open the app.
+ *     a moment later a "Back to YouCoded" notification is shown; tapping it is always allowed to open the app.
  */
 object SignInReturn {
     private const val CHANNEL_ID = "sign_in_return"
@@ -69,7 +69,8 @@ object SignInReturn {
             nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Sign-in finished", NotificationManager.IMPORTANCE_HIGH))
             val open = PendingIntent.getActivity(context, 0, back, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             nm.notify(NOTIFICATION_ID, Notification.Builder(context, CHANNEL_ID)
-                .setContentTitle("Signed in")
+                // WHY not "Signed in" (review, 2026-11-10): this also shows after a sign-in that failed.
+                .setContentTitle("Back to YouCoded")
                 .setContentText("Tap to go back to YouCoded.")
                 .setSmallIcon(android.R.drawable.stat_notify_chat)
                 .setContentIntent(open).setAutoCancel(true).build())

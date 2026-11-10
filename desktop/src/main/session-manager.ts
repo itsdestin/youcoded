@@ -11,7 +11,7 @@ import { SessionInfo, SessionProvider } from '../shared/types';
 import type { ModelBinding } from '../shared/provider-types';
 import { EventEmitter } from 'events';
 import { log } from './logger';
-import { claudeStartMode, userDefaultMode, refreshUserDefaultMode } from './claude-start-mode';
+import { claudeStartMode, userDefaultMode, projectDefaultMode, refreshUserDefaultMode, refreshProjectDefaultMode } from './claude-start-mode';
 import { deployClaudeCodeLinkMcp } from './claude-code-mcp';
 import { deployClaudeCodeDocCommentsMcp } from './claude-code-doc-comments-mcp';
 import { browserRelayAttachment } from './assistant-browser/claude-code-browser-mcp';
@@ -238,6 +238,9 @@ export class SessionManager extends EventEmitter {
   private readonly ptySizes = new Map<string, { cols: number; rows: number }>();
   getPtySize(id: string): { cols: number; rows: number } | null { return this.ptySizes.get(id) ?? null; }
 
+  /** Read the folder's own default permission mode before a start, so it is respected the first time (claude-start-mode.ts). Never throws. */
+  async primeStartMode(cwd: string | undefined): Promise<void> { await refreshProjectDefaultMode(cwd); }
+
   createSession(opts: CreateSessionOpts): SessionInfo {
     const provider: SessionProvider = opts.provider || 'claude';
     // Resolve CWD: fall back to home directory if empty or nonexistent.
@@ -326,8 +329,8 @@ export class SessionManager extends EventEmitter {
     // spawns bare.
     const args: string[] = [];
     // The mode Claude Code is told to start in, and so what the badge shows at once (claude-start-mode.ts).
-    const startMode = claudeStartMode(!!opts.skipPermissions, userDefaultMode());
-    void refreshUserDefaultMode(); // for the next session (claude-start-mode.ts)
+    const startMode = claudeStartMode(!!opts.skipPermissions, projectDefaultMode(resolvedCwd) ?? userDefaultMode());
+    void refreshUserDefaultMode(); void refreshProjectDefaultMode(resolvedCwd); // for the next session (claude-start-mode.ts)
     if (!isShell) {
       args.push(...startMode.args);
       if (opts.resumeSessionId) {

@@ -68,7 +68,8 @@ jobs:
   # channel's name can read it); the run's summary page has them. Silent when the NTFY_TOPIC secret is not set.
   alert:
     needs: drift
-    if: failure()
+    # A check that hangs until its time limit ends as "cancelled", not "failure"; both must alert (review, 2026-11-10).
+    if: ${{ always() && (needs.drift.result == 'failure' || needs.drift.result == 'cancelled') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}

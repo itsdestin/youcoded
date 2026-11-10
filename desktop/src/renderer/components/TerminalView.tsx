@@ -369,8 +369,9 @@ function TerminalView({ sessionId, visible }: Props) {
       lastCols = pendingCols;
       lastRows = pendingRows;
       window.claude.session.resize(sessionId, pendingCols, pendingRows);
-      // Remembered so the NEXT new session starts at this size (terminal-hidden-size.ts — why).
-      saveProgramSize(pendingCols, pendingRows);
+      // Remembered so the NEXT new session starts at this size (terminal-hidden-size.ts — why). Phone layout only
+      // (review, 2026-11-10): the computer terminal never uses it, and this wrote to storage on every window-drag step.
+      if (holdRowsOnTouch) saveProgramSize(pendingCols, pendingRows);
       // Fix: make resizing actually clear a corrupt glyph atlas. Resizing is
       // the first thing a user tries when text looks wrong, and until now it
       // did nothing for this failure mode (the repaint re-samples the same
@@ -467,7 +468,7 @@ function TerminalView({ sessionId, visible }: Props) {
         // another window or a phone was showing, with none of the phone's keep-the-size guard. The computer app is
         // back to the released behaviour: a hidden terminal does nothing (458c1356a, the 0x0 "bunched text" fix).
         if (el.clientWidth === 0 || el.clientHeight === 0) { if (holdRowsOnTouch) proposeHidden(el); return; }
-        if (visibleRef.current) saveTerminalBottomInset(parseFloat(getComputedStyle(el).bottom) || 0);
+        if (holdRowsOnTouch && visibleRef.current) saveTerminalBottomInset(parseFloat(getComputedStyle(el).bottom) || 0);
         // Touch screen, same window, same columns: only the chrome over the terminal moved (a second line in the
         // message box, the first show after a hidden guess). Keep the program's size — a resize would make Claude Code
         // print lines twice — and slide the grid so its last rows stay above the box (terminal-size-lock.ts).

@@ -117,6 +117,7 @@ class BackendService : Service() {
         generation++
         synchronized(this) { process?.also { process = null } }?.destroy()
         hostServer?.close()
+        foregroundWatcher?.let { (application as android.app.Application).unregisterActivityLifecycleCallbacks(it); foregroundWatcher = null }
         networkCallback?.let { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) }
         setKeepAwake(false)
         scope.cancel()
@@ -299,7 +300,9 @@ class BackendService : Service() {
 
     private fun watchForeground() {
         // WHY explicit values: the start callback fires inside MainActivity's super.onStart(), before it sets `visible = true`.
-        (application as android.app.Application).registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
+        // Kept so onDestroy can remove it (review, 2026-11-10): each restarted service used to leave its watcher
+        // behind, holding the dead service and doing this work again on every app open.
+        val watcher = object : android.app.Application.ActivityLifecycleCallbacks {
             override fun onActivityStarted(a: android.app.Activity) { if (a is MainActivity) { statusNotifier.cancelNeeds(); tellForeground(true) } }
             override fun onActivityStopped(a: android.app.Activity) { if (a is MainActivity) tellForeground(false) }
             override fun onActivityCreated(a: android.app.Activity, b: android.os.Bundle?) {}
@@ -307,8 +310,11 @@ class BackendService : Service() {
             override fun onActivityPaused(a: android.app.Activity) {}
             override fun onActivitySaveInstanceState(a: android.app.Activity, b: android.os.Bundle) {}
             override fun onActivityDestroyed(a: android.app.Activity) {}
-        })
+        }
+        foregroundWatcher = watcher
+        (application as android.app.Application).registerActivityLifecycleCallbacks(watcher)
     }
+    private var foregroundWatcher: android.app.Application.ActivityLifecycleCallbacks? = null
 
     private fun buildNotification(text: String = "Your assistant is running"): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)

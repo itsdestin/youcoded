@@ -22,7 +22,8 @@ import { useEntryFolding } from '../hooks/use-entry-folding';
 import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
 import { messageTimeMarks } from '../state/message-time-marks';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
-import { KEYBOARD_OFFSET_EVENT } from '../hooks/useVisualViewport';
+import { prefersTouchInput } from '../utils/touch-input';
+import { KEYBOARD_OFFSET_EVENT } from '../hooks/keyboard-live-lift';   // its own home: the scroll-listener check reads the name there
 import { keyboardContentLift } from '../state/keyboard-lift';
 import { SessionContextBanner } from './SessionContextBanner';
 import SessionContextPopup from './SessionContextPopup';
@@ -300,7 +301,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   const archiveBoundary = useMemo(() => findArchiveBoundary(presentation.timeline), [presentation.timeline]);
   // Phone only: which messages keep their time (state/message-time-marks.ts). Null on a computer, so no row's props
   // change there when a new message arrives.
-  const narrowView = useNarrowViewport();
+  // WHY touch as well as narrow (final review: a narrow COMPUTER window gets the phone's spacing, nothing else):
+  // width alone hid message times for a mouse user in a half-screen window.
+  const narrowView = useNarrowViewport() && prefersTouchInput();
   // Keyed on the reducer's timeline, NOT the turns (performance.md rule 4): the turns change with every streamed word,
   // the set of messages and their times only when a message arrives, and this walks the whole conversation.
   const timeMarks = useMemo(() => (narrowView ? messageTimeMarks(presentation.timeline, presentation.assistantTurns) : null),

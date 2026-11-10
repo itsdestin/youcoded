@@ -37,6 +37,9 @@ export function onePaneLayout(narrow: boolean): boolean {
  *  so a phone's web browser on remote access, a tablet and a narrow computer window got mouse-sized buttons.
  *  Read at draw time, not subscribed: these are answer cards and chips that redraw often. */
 export function fingerSized(): boolean {
+  // WHY not in a buddy window (review, 2026-11-10): the buddy's small chat window is always under 640px wide, so
+  // "narrow" was true there and its cards grew taller on a computer.
+  if (typeof document !== 'undefined' && document.documentElement?.dataset?.mode?.startsWith('buddy')) return prefersTouchInput();
   if (prefersTouchInput()) return true;
   try { return typeof window !== 'undefined' && !!window.matchMedia?.(NARROW_VIEWPORT_QUERY).matches; } catch { return false; }
 }

@@ -13,7 +13,6 @@ import { createKeyboardLiveLift } from './keyboard-live-lift';
 // height once through window.__ycImeOffset; the page glides there itself.
 //
 // Desktop is unaffected: visualViewport.height === innerHeight and nothing calls __ycImeOffset, so both stay 0.
-export { KEYBOARD_OFFSET_EVENT } from './keyboard-live-lift';
 
 export function useVisualViewport() {
   useEffect(() => {
