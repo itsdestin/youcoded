@@ -184,4 +184,38 @@ describe('installTheme checks every file before writing any', () => {
     const p = await setup({ [evil]: manifest }, undefined, evil);
     expect(await p.installTheme('check-me')).toMatchObject({ status: 'failed', error: expect.stringContaining('not hosted') });
   });
+
+  // WHY: the Update badge compares this recorded stamp to the store's current one, so an in-place
+  // edit with no version bump is noticed, and re-running install (= Update) must store the NEW
+  // stamp or the badge would never clear.
+  it('records the file-list stamp on install and refreshes it on update', async () => {
+    const { themeFingerprint } = await import('../src/shared/theme-fingerprint');
+    const recorded: any[] = [];
+    const p = await setup({ [`${ORIGIN}/manifest.json`]: manifest, [`${ORIGIN}/assets/a.svg`]: svg },
+      { 'manifest.json': sha(manifest), 'assets/a.svg': sha(svg) });
+    (p as any).configStore = { recordPackageInstall: (id: string, pkg: any) => recorded.push({ id, pkg }) };
+    expect((await p.installTheme('check-me')).status).toBe('installed');
+    const first = themeFingerprint({ fileHashes: { 'manifest.json': sha(manifest), 'assets/a.svg': sha(svg) } });
+    expect(recorded[0]).toMatchObject({ id: 'theme:check-me', pkg: { themeFingerprint: first } });
+
+    // The author edits the mascot in place (same version); the store lists a new hash.
+    const svg2 = '<svg xmlns="http://www.w3.org/2000/svg"><g/></svg>';
+    (p as any).fetchRegistry = async () => ({ version: 1, themes: [{
+      slug: 'check-me', name: 'Check Me', author: 'a', dark: true, source: 'community', features: [], version: '1.0.0',
+      manifestUrl: `${ORIGIN}/manifest.json`, assetUrls: { 'assets/a.svg': `${ORIGIN}/assets/a.svg` },
+      fileHashes: { 'manifest.json': sha(manifest), 'assets/a.svg': sha(svg2) },
+    }] });
+    (globalThis.fetch as any) = vi.fn(async (url: string) => new Response(url.endsWith('a.svg') ? svg2 : manifest, { status: 200 }));
+    expect((await p.updateTheme('check-me')).ok).toBe(true);
+    expect(fs.readFileSync(path.join(dir, 'assets', 'a.svg'), 'utf8')).toBe(svg2);
+    expect(recorded[1].pkg.themeFingerprint).not.toBe(first);
+  });
+
+  it('records no stamp when the store lists no hashes (stays quiet)', async () => {
+    const recorded: any[] = [];
+    const p = await setup({ [`${ORIGIN}/manifest.json`]: manifest, [`${ORIGIN}/assets/a.svg`]: svg });
+    (p as any).configStore = { recordPackageInstall: (id: string, pkg: any) => recorded.push(pkg) };
+    await p.installTheme('check-me');
+    expect(recorded[0].themeFingerprint).toBeUndefined();
+  });
 });

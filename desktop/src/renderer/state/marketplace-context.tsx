@@ -34,6 +34,7 @@ const claude = () => (window as any).claude;
 // upgrade path disagrees with.
 import { isNewerVersion } from '../../shared/version-compare';
 import { isBundledPlugin } from '../../shared/bundled-plugins';
+import { themeFingerprint, themeFilesChanged } from '../../shared/theme-fingerprint';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -600,7 +601,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     for (const theme of themeEntries) {
       const pkg = packages[`theme:${theme.slug}`];
       if (!pkg) continue;
-      if (isNewerVersion(pkg.version, theme.version)) {
+      // WHY: also flag a theme whose listed files changed with no version bump (Morning Rounds).
+      // Only fires when this install recorded a stamp of the same kind; older installs stay quiet.
+      if (isNewerVersion(pkg.version, theme.version)
+        || themeFilesChanged(pkg.themeFingerprint, themeFingerprint(theme))) {
         result[theme.slug] = true;
       }
     }
