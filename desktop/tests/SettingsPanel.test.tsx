@@ -157,6 +157,23 @@ describe('SettingsPanel — remote access panel', () => {
     expect(screen.queryByText('Skip password on Tailscale')).toBeNull();
   });
 
+  it('keeps a phone signed out after 90 unused days as a muted row that Remove clears with no confirm', () => {
+    const onAction = vi.fn();
+    const view: RemoteAccessView = {
+      stage: 'ready', address, prerequisite: 'ready',
+      devices: [{ id: 'phone', name: 'My phone', online: true }, { id: 'old', name: 'Old phone', online: false, lastSeenAt: Date.UTC(2026, 6, 20), expired: true }],
+    };
+    render(<RemoteAccessMockPanel view={view} onAction={onAction} />);
+    expect(screen.getByText('Signed out after 90 days unused')).toBeTruthy();
+    // Not described as Offline / Last used: it is signed out, not merely away.
+    expect(screen.queryByText(/Offline · Last used/)).toBeNull();
+    expect(screen.getByText('Old phone').closest('.opacity-60')).not.toBeNull();
+    // Unpair's "pair again" confirm does not apply: the phone is already signed out.
+    expect(screen.queryByRole('button', { name: 'Unpair Old phone' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Old phone' }));
+    expect(onAction).toHaveBeenCalledWith({ type: 'revoke', deviceId: 'old' });
+  });
+
   it('reports a failed check without inventing a cause', () => {
     const action = mount('conflict');
     expect(screen.getByText(/another service/)).toBeTruthy();
