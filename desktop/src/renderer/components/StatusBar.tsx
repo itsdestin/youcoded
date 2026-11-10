@@ -60,6 +60,8 @@ interface StatusData {
     downloaded?: boolean;
     /** #183: installing it asks for a password (a Linux package, a non-administrator Mac). */
     needs_password?: boolean;
+    /** #186: another pacman package owns this copy (AUR youcoded-bin); the popup says so instead of offering an update. */
+    managed_by_other_package?: boolean;
   } | null;
   announcement: { message: string; expires?: string | null } | null;
   contextPercent: number | null;

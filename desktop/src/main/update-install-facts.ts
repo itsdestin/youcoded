@@ -17,6 +17,9 @@ export interface InstallFacts {
   /** The one refusal that also stops the BACKGROUND download: an AppImage whose folder cannot be
    *  written has nowhere to stage, and nothing could ever replace it (design E9). */
   noBackgroundDownload: boolean;
+  /** #186: pacman owns the binary but it is not the official `youcoded` package (e.g. AUR
+   *  `youcoded-bin`). Optional, set only when true, so every other install's facts are unchanged. */
+  managedByOtherPackage?: boolean;
 }
 
 export interface InstallFactsDeps {
@@ -61,7 +64,14 @@ export async function computeInstallFacts(deps: InstallFactsDeps): Promise<Insta
     if (path.posix.basename(bundle) !== 'YouCoded.app' || bundle.includes('/AppTranslocation/')) facts.installRefused = true;
     facts.needsPassword = !(await deps.canWrite(bundle)) || !(await deps.canWrite(path.posix.dirname(bundle)));
   } else if (deps.platform === 'linux') {
-    if (deps.linuxKind === 'pacman' || deps.linuxKind === 'deb' || deps.linuxKind === 'rpm') {
+    if (deps.linuxKind === 'pacman-other') {
+      // WHY refuse outright (card #186): the official .pacman conflicts with `youcoded-bin`, so
+      // downloading ~200 MB and running `pkexec pacman -U` would only end in "install failed".
+      // No password prompt, no download; the popup says to update with the package manager.
+      facts.installRefused = true;
+      facts.noBackgroundDownload = true;
+      facts.managedByOtherPackage = true;
+    } else if (deps.linuxKind === 'pacman' || deps.linuxKind === 'deb' || deps.linuxKind === 'rpm') {
       facts.needsPassword = true;
     } else if (deps.linuxKind === 'appimage' && deps.env.APPIMAGE) {
       // Never "needs a password": the AppImage replaces itself with the user's own rights. If its

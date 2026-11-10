@@ -517,6 +517,8 @@ function createUpdateService() {
       downloaded: !!pending && pendingFileOk && pending.version === status.latest,
       needs_password: !!facts?.needsPassword,
       install_refused: !!facts?.installRefused,
+      // Only present when true so other installs' status is byte-for-byte what it was (#186).
+      ...(facts?.managedByOtherPackage ? { managed_by_other_package: true } : {}),
       // WHY (code review F5): the popup may say "installs by itself when you quit" only when a quit really will.
       // Everything except the switch (the renderer holds the live switch and ANDs it).
       installs_on_quit: quitInstallPossible(),
