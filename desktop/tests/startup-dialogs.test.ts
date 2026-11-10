@@ -14,6 +14,7 @@
 //   • that anything uncertain is refused rather than guessed.
 // After a Claude Code update: re-run the capture, then this file.
 import { describe, it, expect, afterEach } from 'vitest';
+import { cardTitleFor } from '../src/shared/prompt-card-rules';
 import {
   parseInkSelect, menuToButtons, readStartupDialog,
 } from '../src/shared/ink-select-parser';
@@ -314,8 +315,58 @@ describe('the startup-dialog driver never guesses', () => {
 });
 
 describe('the unnumbered reader refuses what it cannot be sure of', () => {
-  it('no dialog footer → not a menu (a quoted list in the conversation)', () => {
-    expect(parseInkSelect(trustScreen(0, { footer: false }))).toBeNull();
+  it('a quoted list in the conversation (rows of reply under it) is not a menu', () => {
+    const quoted = trustScreen(0, { footer: false }) + '\n' + Array.from({ length: 8 }, (_, i) => ` reply line ${i}`).join('\n');
+    expect(parseInkSelect(quoted)).toBeNull();
+  });
+});
+
+describe('a first-run menu Claude Code draws without its usual footer', () => {
+  const footerless = trustScreen(0, { footer: false });
+  const menu = parseInkSelect(footerless)!;
+  // A screen nobody has taught the app about: no known title anywhere in it.
+  const unknownScreen = [RULE, ' Try the new thing?', '', ' It does something helpful.', '', ' ❯ Maybe later', '   Turn it on'].join('\n');
+  const unknown = parseInkSelect(unknownScreen)!;
+
+  it('is still read, and marked as read without the footer', () => {
+    expect(menu.options).toEqual(['No, exit', 'Yes, I trust this folder']);
+    expect(menu.dialog).toBe(false);
+    expect(menu.loose).toBe(true);
+    // Answered the same careful way as any unnumbered menu: one confirmed cursor move at a time.
+    expect(menuToButtons(menu).every((b) => b.pick?.signature === menu.signature)).toBe(true);
+  });
+
+  it('gets a card while the session is starting, titled with its own heading', () => {
+    expect(cardTitleFor(unknown, true, unknownScreen)).toEqual({ title: 'Try the new thing?', generic: false });
+  });
+
+  it('gets no card once the session has started', () => {
+    expect(cardTitleFor(unknown, false, unknownScreen)).toBeNull();
+  });
+
+  it('gets no card while Claude Code\'s message box is on screen', () => {
+    const withBox = unknownScreen + '\n' + RULE + '\n❯ \n' + RULE;
+    expect(cardTitleFor(unknown, true, withBox)).toBeNull();
+  });
+});
+
+describe('the last safety net: something is asking, and nothing above could read it', () => {
+  it('a cursor row with no footer and no message box is reported as unsure, with its heading', () => {
+    const screen = [RULE, ' Pick your favourite', '', ' ❯ Only one row here'].join('\n');
+    expect(parseInkSelect(screen)).toBeNull();
+    expect(readStartupDialog(screen)).toEqual({ heading: 'Pick your favourite', unsure: true });
+  });
+
+  it('"Press Enter to continue" with no cursor is reported too', () => {
+    expect(readStartupDialog([RULE, ' Welcome', '', ' Press Enter to continue'].join('\n'))).toEqual({ heading: 'Welcome', unsure: true });
+  });
+
+  it('a screen that is only still drawing (no cursor row, no key asked for) is not', () => {
+    expect(readStartupDialog([RULE, ' Claude Code v2.1.300', ' Loading…'].join('\n'))).toBeNull();
+  });
+
+  it('the ordinary message box is not', () => {
+    expect(readStartupDialog([' some reply', RULE, '❯ hello', RULE, '  ? for shortcuts'].join('\n'))).toBeNull();
   });
 
   it('no box rule above → not a menu', () => {

@@ -1,3 +1,5 @@
+import { readInputFocus } from './cc-input-focus';
+
 const ANSI_ESCAPE = /\u001b\[[0-9;]*[a-zA-Z]/g;
 
 // Canonical title the parser assigns to CC's folder-trust prompt. It is an
@@ -114,6 +116,10 @@ export interface ParsedMenu {
    *  cancel") sits under the options: a live dialog, not text that merely
    *  looks like a list. */
   dialog?: boolean;
+  /** True for an unnumbered menu read WITHOUT Claude Code's footer under it (see parseUnnumbered): everything else
+   *  about it was certain, the footer was just not there. Only a session that is still starting may show it as a
+   *  card, and only when Claude Code's message box is off the screen (prompt-card-rules.ts cardTitleFor). */
+  loose?: boolean;
   /** Identity of the option set (labels in order, not the cursor). What a
    *  verified-navigation answer re-checks before every keystroke. */
   signature?: string;
@@ -624,7 +630,19 @@ function parseUnnumbered(lines: string[], selectorIdx: number): ParsedMenu | nul
   if (options.length < 2 || selectedIndex < 0) return null;
   if (options.some((o) => o.length > 200)) return null;
   if (options.some((o) => CHECKBOX_ROW.test(o))) return null;
-  if (!hasFooterBelow(lines, last)) return null;
+  // WHY a footerless menu is still read (Destin, 2026-11-09 final review F-2: the terminal is "an absolute last
+  // resort", and first-run screens must be sturdy against Claude Code changing them): the theme picker already had no
+  // footer and needed its own reader; the next new screen would have hung on "Initializing session…" the same way.
+  // Every other proof above still holds (box rule, exact column, certain wrapping, no checkboxes). Without the
+  // footer two more are asked: the menu sits at the bottom of the screen (at most 6 non-empty rows under it), and no
+  // option reads like a sentence of the conversation (ends in a full stop and is long).
+  const dialog = hasFooterBelow(lines, last);
+  if (!dialog) {
+    let below = 0;
+    for (let i = last + 1; i < lines.length; i++) if (stripAnsi(lines[i]).trim()) below++;
+    if (below > 6) return null;
+    if (options.some((o) => o.length > 90 && /\.$/.test(o))) return null;
+  }
 
   const firstOptionLine = first;
   const title = extractTitle(lines, firstOptionLine, options, top, true);
@@ -641,7 +659,8 @@ function parseUnnumbered(lines: string[], selectorIdx: number): ParsedMenu | nul
     optionNumbers: options.map(() => null),
     promptLines,
     heading: readHeading(lines, top, firstOptionLine, width),
-    dialog: true,
+    dialog,
+    ...(dialog ? {} : { loose: true }),
     signature: signatureOf(options),
   };
 }
@@ -652,9 +671,13 @@ function parseUnnumbered(lines: string[], selectorIdx: number): ParsedMenu | nul
  * new session is waiting on a dialog this parser cannot turn into buttons (a
  * multi-select, a layout nobody has seen yet), the app must say so at once
  * rather than sit on "Initializing session…". Returns the dialog's heading, or
- * null when no dialog footer is on screen.
+ * null when nothing on screen looks like a question.
+ *
+ * `unsure` (F-2, the last safety net): there is NO footer, but Claude Code's message box is not on screen and its
+ * last rows hold a cursor row, a checkbox row or "press Enter". That is also true for a moment while Claude Code is
+ * still drawing, so the caller shows it only once the screen has stopped changing (usePromptDetector).
  */
-export function readStartupDialog(screenText: string): { heading: string } | null {
+export function readStartupDialog(screenText: string): { heading: string; unsure?: boolean } | null {
   const lines = stripAnsi(screenText).split('\n');
   // A full-screen read (Android's, or a buffer with blank rows below the
   // dialog) ends in empty rows; the footer is near the last NON-empty one.
@@ -664,7 +687,7 @@ export function readStartupDialog(screenText: string): { heading: string } | nul
     const t = lines[i].trim();
     if (DIALOG_FOOTER.test(t) && t.length < 100) { footer = i; break; }
   }
-  if (footer < 0) return null;
+  if (footer < 0) return readFooterlessQuestion(lines, screenText);
   let top = Math.max(0, footer - 40);
   let width = 0;
   for (let i = footer - 1; i >= Math.max(0, footer - 40); i--) {
@@ -672,6 +695,25 @@ export function readStartupDialog(screenText: string): { heading: string } | nul
     if (PROMPT_BOUNDARY.test(t)) { top = i + 1; width = t.length; break; }
   }
   return { heading: readHeading(lines, top, footer, width) ?? '' };
+}
+
+const ASKS_FOR_A_KEY = /\b(press|hit)\s+(enter|return|any key|space)\b|\benter to continue\b/i;
+
+function readFooterlessQuestion(lines: string[], screenText: string): { heading: string; unsure: true } | null {
+  if (readInputFocus(screenText).kind !== 'popup') return null;
+  let asks = -1;
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 15); i--) {
+    const t = lines[i].trim();
+    if (/^[❯>]\s+\S/.test(t) || CHECKBOX_ROW.test(t) || (ASKS_FOR_A_KEY.test(t) && t.length < 100)) { asks = i; break; }
+  }
+  if (asks < 0) return null;
+  let top = Math.max(0, asks - 40);
+  let width = 0;
+  for (let i = asks - 1; i >= Math.max(0, asks - 40); i--) {
+    const t = lines[i].trim();
+    if (PROMPT_BOUNDARY.test(t)) { top = i + 1; width = t.length; break; }
+  }
+  return { heading: readHeading(lines, top, asks, width) ?? '', unsure: true };
 }
 
 /**
