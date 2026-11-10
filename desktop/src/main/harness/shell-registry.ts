@@ -271,6 +271,18 @@ export function stateText(run: Pick<ShellRun, 'status' | 'exitCode' | 'signal' |
   return `exited ${code} · ${elapsed}`;
 }
 
+/** How a command carried over from before an app restart reads to the MODEL.
+ *  WHY (card #220): BashOutput/KillShell only knew this session's live commands, so
+ *  asking about an id from before a restart got "No background command ... none" —
+ *  false, because the command existed and we know (or honestly do not know) how it
+ *  ended. These words keep "exit code unknown" and "may still be running" distinct
+ *  from a plain exit, matching what the chat cards say. */
+export function restoredStateText(v: ShellRunView, now = Date.now()): string {
+  if (v.maybeStillRunning) return `ended while the app was closed, and may still be running (it cannot be stopped from here) · exit code unknown`;
+  if (v.exitUnknown) return `ended while the app was closed · exit code unknown`;
+  return stateText(v, now);
+}
+
 /** The §4.4 finished notice. A user Stop is reported too (the model must know
  *  its server is gone); KillShell's own result is its notice, so the host never
  *  asks for one in that case. */
@@ -625,6 +637,12 @@ export class ShellRegistry extends EventEmitter {
 
   /** Views of commands carried over from a previous run (see restoreFrom). */
   restoredViews(): ShellRunView[] { return [...this.restored.values()].map((r) => this.restoredView(r)); }
+
+  /** One command carried over from a previous run, as a view (undefined if none by that id). */
+  getRestored(shellId: string): ShellRunView | undefined {
+    const e = this.restored.get(shellId);
+    return e ? this.restoredView(e) : undefined;
+  }
 
   /** 'running' | 'exited' | 'stopped' for a live OR restored command, else undefined. */
   statusOf(shellId: string): ShellRun['status'] | undefined {
