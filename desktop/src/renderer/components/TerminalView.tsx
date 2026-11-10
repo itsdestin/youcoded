@@ -112,11 +112,7 @@ function TerminalView({ sessionId, visible }: Props) {
   const backingStyle = workbenchBacking === 'today' ? null : TERMINAL_BACKING_STYLE[workbenchBacking];
 
   // Detect if the theme has a visual background (wallpaper image, gradient, or glassmorphism)
-  // WHY the capability (Destin, 2026-11-10, a laptop-browser picture: "the terminal cuts off before the bottom of the
-  // frame"): a screen on remote access gets a theme's colours but not its wallpaper (theme-context.tsx applies the
-  // theme with no background there). This read the full theme anyway, so the terminal alone drew a wallpaper sheet
-  // over a page styled as flat, and the strip under its last row showed in a different colour.
-  const bg = getCapabilities().themePictures ? activeTheme?.background : undefined;
+  const bg = activeTheme?.background;
   // Which theme token xterm paints as its opaque background. The shipped answer
   // is the theme engine's (P-20.2: 'panel' under a wallpaper/gradient — the
   // same predicate that stamps [data-wallpaper] on <html> — 'canvas' on a flat
@@ -968,7 +964,11 @@ function TerminalView({ sessionId, visible }: Props) {
           // surface. Re-point it at the variant's token so a `scrim` shot on a
           // wallpaper theme doesn't show a panel-coloured strip under a canvas
           // grid. Never set in the app (backingStyle is null there).
-          ...(backingStyle ? { '--terminal-backing': backingColor } as React.CSSProperties : null),
+          // WHY always, not only for mock-ups (Destin, 2026-11-10, a laptop-browser picture: "the terminal cuts off
+          // before the bottom of the frame"): on remote access the page is styled with no wallpaper, so the engine's
+          // --terminal-backing is the flat colour while this terminal still paints its wallpaper sheet. The strip
+          // under the last row then showed in a different colour from the rows. Same colour as the fill above, always.
+          ...({ '--terminal-backing': backingColor } as React.CSSProperties),
         }}
       />
     </div>

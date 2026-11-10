@@ -95,8 +95,7 @@ vi.mock('../src/renderer/platform', () => ({
   isRemoteMode: vi.fn().mockReturnValue(false),
   getPlatform: vi.fn().mockReturnValue('electron'),
   // The terminal reads which stream the host sends from the screen's capabilities (R4-1), not from the platform name.
-  // themePictures: this screen may draw a theme's wallpaper (false on remote access: colours only).
-  getCapabilities: vi.fn().mockReturnValue({ terminalTransport: 'text', themePictures: true }),
+  getCapabilities: vi.fn().mockReturnValue({ terminalTransport: 'text' }),
 }));
 
 // Avoid pulling theme context — the component reads CSS vars from
@@ -413,7 +412,7 @@ describe('mount logic', () => {
         expect(usePtyRawBytes).toHaveBeenCalledWith('s1', expect.any(Function));
         expect(usePtyOutput).toHaveBeenCalledWith(null, expect.any(Function));
       } finally {
-        vi.mocked(platform.getCapabilities).mockReturnValue({ terminalTransport: 'text', themePictures: true } as any);
+        vi.mocked(platform.getCapabilities).mockReturnValue({ terminalTransport: 'text' } as any);
       }
     });
 
@@ -646,7 +645,9 @@ describe('workbench screen and terminal surface', () => {
       expect(container().style.backgroundColor).toBe('var(--panel)');
       expect(terminalCtorArgs[0].theme.background).toBe(PANEL_FALLBACK);
       // No variant → the engine's --terminal-backing is left alone.
-      expect(container().style.getPropertyValue('--terminal-backing')).toBe('');
+      // The strip under the last row uses the same colour the grid is filled with, on every screen: on remote access
+      // the page's own value is the flat colour, and the strip showed as a band (a laptop-browser picture).
+      expect(container().style.getPropertyValue('--terminal-backing')).toBe('var(--panel)');
     });
 
     it('`legacy` reproduces the pre-decision surface for Before shots: --canvas xterm at a literal 0.6, even on a wallpaper theme', () => {
@@ -740,22 +741,6 @@ describe('workbench screen and terminal surface', () => {
       expect(container().style.opacity).toBe('var(--terminal-xterm-opacity)');
       expect(container().style.backgroundColor).toBe('');
       expect(terminalCtorArgs[0].theme.background).toBe(THEME_CANVAS);
-    });
-
-    it('on remote access a wallpaper theme draws a flat terminal, like the rest of that screen: no wallpaper layer, canvas fill, full opacity', () => {
-      vi.mocked(platform.getCapabilities).mockReturnValue({ terminalTransport: 'text', themePictures: false } as any);
-      try {
-        const theme = makeTheme(WALLPAPER);
-        applyThemeToDom({ ...theme, background: undefined });   // what theme-context.tsx applies on such a screen
-        mockActiveTheme = theme;
-        render(<TerminalView sessionId="s1" visible={true} />);
-        expect(document.querySelector('.terminal-wallpaper')).toBeNull();
-        expect(container().style.opacity).toBe('1');
-        expect(container().style.backgroundColor).toBe('var(--canvas)');
-        expect(terminalCtorArgs[0].theme.background).toBe(THEME_CANVAS);
-      } finally {
-        vi.mocked(platform.getCapabilities).mockReturnValue({ terminalTransport: 'text', themePictures: true } as any);
-      }
     });
 
     it('wallpaper theme: xterm paints --panel, the container is filled with var(--panel) at the engine opacity, which defaults to the 0.8 floor', () => {
