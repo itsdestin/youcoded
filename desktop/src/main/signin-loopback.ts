@@ -62,7 +62,9 @@ export async function startSigninListener(ttlMs = SIGNIN_LISTENER_TTL_MS): Promi
       });
       return { port: (server.address() as AddressInfo).port, take: () => queue.shift() ?? null, isClosed: () => closed, close };
     } catch (e: any) {
-      if (e?.code !== 'EADDRINUSE') { close(); throw e; }
+      // WHY EACCES too: Windows reserves some port ranges (Hyper-V, WSL, excluded ranges) and answers a listen
+      // there with EACCES, not EADDRINUSE. Another random port works, so treat it as "this one is taken".
+      if (e?.code !== 'EADDRINUSE' && e?.code !== 'EACCES') { close(); throw e; }
     }
   }
   close();
