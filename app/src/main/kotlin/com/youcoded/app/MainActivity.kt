@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.Row
@@ -204,12 +205,11 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
                 .distinctUntilChanged()
                 .collect { target ->
                     val dp = (target - gapPx()).coerceAtLeast(0) / density.density
-                    android.util.Log.d("YcIme", "target=$target -> ${dp}dp")
                     webView?.evaluateJavascript("window.__ycImeOffset&&window.__ycImeOffset($dp)", null)
                 }
         }
         // WHY the keyboard's RESTING height is sent too, once its slide ends (Destin, 2026-11-03: "the frame/input area
-        // still slightly overshoots the keyboard sometimes before falling back down"; the log above caught it): Samsung's
+        // still slightly overshoots the keyboard sometimes before falling back down"; a temporary log caught it): Samsung's
         // keyboard on a Z Flip7 often announces its final height as 284 dp when it starts to slide and corrects it to
         // 255 dp a third of a second later, after the slide — so the page glided to 284 and fell back. The page cannot
         // know at the start; with the resting height it corrects at once AND remembers the pair, so the next open
@@ -222,7 +222,6 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
                 .distinctUntilChanged()
                 .collect { rest ->
                     val dp = (rest - gapPx()).coerceAtLeast(0) / density.density
-                    android.util.Log.d("YcIme", "rest=$rest -> ${dp}dp")
                     webView?.evaluateJavascript("window.__ycImeOffset&&window.__ycImeOffset($dp,true)", null)
                 }
         }
@@ -270,12 +269,18 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
     /**
      * The backend could not start. WHY (2026-11-01 phone test, docs/error-message-standards.md): the old screen dumped
      * raw log text. Now: a plain sentence that claims no cause, the technical text folded away under "Show details",
-     * Try again, and Report bug (a prefilled GitHub issue carrying the app/Android versions and the end of backend.log).
+     * Try again, and Report bug (says what a report holds, then opens a prefilled GitHub issue).
      */
     @Composable
     private fun Failed(detail: String) {
         val retrying = remember { mutableStateOf(false) }
         val showDetails = remember { mutableStateOf(false) }
+        // WHY (2026-11-09 final review, Q-14): Report bug used to open a public ticket with app log lines already
+        // in it, unannounced. It now opens this panel first: what the report holds, the exact log lines, and a
+        // tick to leave them out, like the bug-report step in the rest of the app.
+        val reporting = remember { mutableStateOf(false) }
+        val includeLog = remember { mutableStateOf(true) }
+        val logLines = remember(detail) { startupLogLines(detail) }
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(32.dp),
             verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
@@ -293,29 +298,46 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
             }
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(onClick = { reportStartupBug(detail) }) { Text("Report bug") }
+                OutlinedButton(onClick = { reporting.value = !reporting.value }) { Text("Report bug") }
                 Button(enabled = !retrying.value, onClick = { retrying.value = true; BackendService.start(applicationContext, restart = true) }) {
                     // WHY "Try again": every retry button in YouCoded reads exactly this (error-notices-1#EN-Q1).
                     Text(if (retrying.value) "Trying again…" else "Try again")
                 }
             }
+            if (reporting.value) {
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "A report opens a public page on GitHub in your browser, where you can edit it before sending. It holds this app’s version, your Android version and your phone’s model.",
+                    style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Start,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = includeLog.value, onCheckedChange = { includeLog.value = it })
+                    Text("Include the app’s log, shown below. It can contain folder and file names.", style = MaterialTheme.typography.bodyMedium)
+                }
+                if (includeLog.value) {
+                    Text(logLines.joinToString("\n"), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Start)
+                    Spacer(Modifier.height(8.dp))
+                }
+                Button(onClick = { reportStartupBug(if (includeLog.value) logLines else emptyList()) }) { Text("Open report") }
+            }
         }
     }
 
-    /** Open a prefilled GitHub issue: app + Android version and the last lines of the backend's log, kept short enough for a link. */
-    private fun reportStartupBug(detail: String) {
-        val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "unknown"
-        val logTail = runCatching {
+    /** The end of the backend's log, cut to what fits in a link (GitHub rejects very long ones): what a report would carry. */
+    private fun startupLogLines(detail: String): List<String> {
+        var lines = runCatching {
             java.io.File(RuntimeInstaller(applicationContext).userData, "backend.log").readLines().takeLast(40)
-        }.getOrElse { listOf(detail) }.ifEmpty { listOf(detail) }
-        fun body(lines: List<String>) =
-            "The assistant could not start.\n\nApp version: $version\nAndroid: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}\n\n" +
-                "Last lines of backend.log:\n```\n${lines.joinToString("\n")}\n```\n"
-        // GitHub rejects very long links, so drop the oldest log lines until the encoded text fits.
-        var lines = logTail.map { it.take(400) }
-        while (Uri.encode(body(lines)).length > 6000 && lines.size > 1) lines = lines.drop(1)
-        val text = Uri.encode(body(lines))
-        val url = "https://github.com/itsdestin/youcoded/issues/new?title=" + Uri.encode("Android: assistant couldn’t start") + "&body=" + text
+        }.getOrElse { listOf(detail) }.ifEmpty { listOf(detail) }.map { it.take(400) }
+        while (Uri.encode(lines.joinToString("\n")).length > 5500 && lines.size > 1) lines = lines.drop(1)
+        return lines
+    }
+
+    /** Open a prefilled GitHub issue: app + Android version, and [logLines] only when the person left the tick on. */
+    private fun reportStartupBug(logLines: List<String>) {
+        val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "unknown"
+        val body = "The assistant could not start.\n\nApp version: $version\nAndroid: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}\n" +
+            if (logLines.isEmpty()) "" else "\nLast lines of backend.log:\n```\n${logLines.joinToString("\n")}\n```\n"
+        val url = "https://github.com/itsdestin/youcoded/issues/new?title=" + Uri.encode("Android: assistant couldn’t start") + "&body=" + Uri.encode(body)
         runCatching { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))) }
     }
 

@@ -96,11 +96,20 @@ class HostJsBridge(
             "android:pick-files" -> main.post {
                 ui.pickFiles { uris ->
                     io.launch {
-                        try {
-                            reply(id, JSONObject().put("paths", JSONArray(uris.mapNotNull { copyForBackend(it) })))
-                        } catch (e: Exception) {
-                            reply(id, null, e.message ?: "The phone could not read that file.")
+                        // WHY (2026-11-09 final review, Q-15): yesterday's copies go first so the folder cannot grow
+                        // without limit; each file then succeeds or fails on its own, and every file left out is
+                        // named on screen (one bad file used to drop the whole pick, silently).
+                        AttachmentStore.sweep(java.io.File(context.filesDir, "tmp/attachments"))
+                        val paths = JSONArray()
+                        val refused = mutableListOf<String>()
+                        for (uri in uris) {
+                            try { paths.put(copyForBackend(uri)) }
+                            catch (e: AttachmentStore.Refused) { refused += e.message ?: "A file could not be attached." }
                         }
+                        if (refused.isNotEmpty()) main.post {
+                            android.widget.Toast.makeText(context, refused.joinToString("\n"), android.widget.Toast.LENGTH_LONG).show()
+                        }
+                        reply(id, JSONObject().put("paths", paths))
                     }
                 }
             }
@@ -165,25 +174,29 @@ class HostJsBridge(
         else -> JSONObject().put("state", "ready").put("engine", "your phone's speech recognition")
     }
 
-    /** Copy a picked content:// file into files/tmp/attachments (the backend cannot open content:// links); returns its path. */
-    private fun copyForBackend(uri: android.net.Uri): String? {
+    /**
+     * Copy a picked content:// file into files/tmp/attachments (the backend cannot open content:// links); returns its path.
+     * WHY (2026-11-09 final review, Q-15): throws AttachmentStore.Refused with a sentence to show when the file is
+     * too large or unreadable, instead of returning nothing (which looked exactly like cancelling).
+     */
+    private fun copyForBackend(uri: android.net.Uri): String {
         val resolver = context.contentResolver
         var name = resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
             if (it.moveToFirst()) it.getString(0) else null
         } ?: uri.lastPathSegment ?: "attachment"
         // Keep the name readable but safe: no folders, no odd characters.
         name = name.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._ -]"), "_").take(100).ifBlank { "attachment" }
-        // WHY (2026-11-01 phone test): a "<time>-<name>" file name leaked into the chip, the sent message and the
-        // session title. Each pick gets its own folder instead, so the path's last part is the real file name and
-        // two picks of "image.jpg" still cannot overwrite each other.
-        val root = java.io.File(context.filesDir, "tmp/attachments").apply { mkdirs() }
-        var folder = java.io.File(root, "${System.currentTimeMillis()}")
-        var n = 0
-        while (!folder.mkdirs()) folder = java.io.File(root, "${System.currentTimeMillis()}-${++n}")
-        val out = java.io.File(folder, name)
-        val input = resolver.openInputStream(uri) ?: return null
-        input.use { i -> out.outputStream().use { o -> i.copyTo(o) } }
-        return out.path
+        val root = java.io.File(context.filesDir, "tmp/attachments")
+        val input = runCatching { resolver.openInputStream(uri) }.getOrNull()
+            ?: throw AttachmentStore.Refused("The phone could not open $name, so it was not attached.")
+        return try {
+            AttachmentStore.save(root, name, input).path
+        } catch (e: AttachmentStore.Refused) {
+            throw e
+        } catch (e: Exception) {
+            // The cause is unknown here (storage full, the file's app withdrew access…), so the sentence does not guess.
+            throw AttachmentStore.Refused("The phone could not copy $name, so it was not attached.")
+        }
     }
 
     private fun readDevices(): JSONArray =

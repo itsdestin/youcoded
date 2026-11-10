@@ -81,7 +81,10 @@ class RuntimeInstaller(private val context: Context) {
         progress("Unpacking tools…")
         File(etc, "ssl/certs").mkdirs()
         copyAsset("runtime/ca-certificates.crt", File(etc, "ssl/certs/ca-certificates.crt"))
-        File(usr, "share").mkdirs()
+        // WHY (2026-11-09 final review): unpacking used to add to whatever an older version left here. After an
+        // update that changed the ICU version there were two icu/<version> folders, none was chosen, and the
+        // assistant crashed at startup again. Everything in share comes from share.tgz, so start it empty.
+        clearDir(File(usr, "share"))
         untarGz(context.assets.open("runtime/share.tgz"), File(usr, "share"))
 
         val staging = File(files, "backend.new")
@@ -115,7 +118,7 @@ class RuntimeInstaller(private val context: Context) {
         // WHY: Alpine's Node carries only a stub ICU; its real data file (usr/share/icu/<version>/icudt<version>l.dat,
         // packed by build-runtime.sh) must be pointed at, or toLocaleString() throws "Icu error" and the
         // backend dies at boot. The version folder is found at runtime so an Alpine upgrade needs no code change.
-        File(usr, "share/icu").listFiles { f -> f.isDirectory }?.singleOrNull()?.let { put("NODE_ICU_DATA", it.path) }
+        newestIcuDir(File(usr, "share/icu"))?.let { put("NODE_ICU_DATA", it.path) }
         put("YOUCODED_USER_DATA", userData.path)
         // WHY: the bundled Linux's hostname is always "localhost", so the phone listed itself as
         // "localhost" in Backup & sync's device list. Hand the backend the phone's own name (the one
@@ -228,6 +231,18 @@ class RuntimeInstaller(private val context: Context) {
     }
 
     companion object {
+        /**
+         * The icu/<version> folder to point Node at: the highest version that really holds a data file.
+         * WHY (2026-11-09 final review): this used to demand exactly one folder and set nothing otherwise, so a
+         * leftover folder from an older version brought the startup crash back. install() now clears leftovers;
+         * this is the second guard, and it also ignores an empty folder.
+         */
+        fun newestIcuDir(icu: File): File? =
+            icu.listFiles { f -> f.isDirectory && f.listFiles { d -> d.name.startsWith("icudt") && d.name.endsWith(".dat") }?.isNotEmpty() == true }
+                ?.maxWithOrNull(compareBy<File>({ versionKey(it.name).getOrElse(0) { 0 } }, { versionKey(it.name).getOrElse(1) { 0 } }, { versionKey(it.name).getOrElse(2) { 0 } }, { it.name }))
+
+        private fun versionKey(name: String): List<Int> = name.split('.').map { it.toIntOrNull() ?: 0 }
+
         private const val TAG = "RuntimeInstaller"
         /** Inside the unpacked node_modules: the fingerprint of the dependencies it holds (see installBackend). */
         private const val DEPS_STAMP_FILE = ".youcoded-deps-stamp"

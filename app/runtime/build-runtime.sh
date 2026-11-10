@@ -180,6 +180,9 @@ cp "$R/etc/ssl/certs/ca-certificates.crt" "$ASSETS/ca-certificates.crt"
 # terminfo for bash/readline, git's templates, ICU data: small trees the app unpacks into files/usr/share.
 # WHY icu: Alpine's Node ships only a stub libicudata; without icu/<ver>/icudt<ver>l.dat, number/date
 # formatting (toLocaleString) throws "Icu error" and the backend dies at boot. RuntimeInstaller sets NODE_ICU_DATA.
+# WHY (2026-11-09 final review): a missing icu folder used to be skipped without a word, which would ship an
+# app that crashes at startup on every phone. Stop the build instead.
+ls "$R"/usr/share/icu/*/icudt*.dat >/dev/null 2>&1 || { echo "[build-runtime] FAILED: no ICU data file under $R/usr/share/icu (is the icu-data-full package in pins?). The app would crash at startup without it." >&2; exit 1; }
 (cd "$R/usr/share" && tar czf "$ASSETS/share.tgz" $(for d in terminfo git-core icu; do [ -d "$d" ] && echo "$d"; done))
 [ -d "$R/etc/terminfo" ] && (cd "$R/etc" && tar czf "$ASSETS/etc-terminfo.tgz" terminfo) || true
 echo "$APP_ID" > "$ASSETS/app-id.txt"
