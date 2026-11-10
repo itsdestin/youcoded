@@ -111,6 +111,19 @@ export function checkAlpineNodeLag({ alpineNode, nodeIndex, branch }) {
   }];
 }
 
+// Phone app's musl: built from source with Alpine's patches VENDORED in app/runtime/alpine-musl-patches/
+// (manifest.json names the Alpine package version they came from). A package-version comparison of the
+// shipped APK cannot see this layer, so compare the vendored set with Alpine's current musl package.
+export function checkMuslPatches({ vendored, alpineMusl, branch }) {
+  if (!vendored || !alpineMusl || compareAlpine(alpineMusl, vendored) <= 0) return [];
+  return [{
+    key: 'android-musl-patches-stale',
+    severity: 'high',
+    title: `Phone app's musl patches are behind Alpine: vendored ${vendored}, Alpine ${branch} has ${alpineMusl}`,
+    body: `The phone's C library is compiled from source with Alpine's patches vendored in \`app/runtime/alpine-musl-patches/\` (currently from Alpine musl ${vendored}). Alpine ${branch} now ships musl ${alpineMusl}, so newer fixes are missing from the next phone build.\n\n**What to do:** in a session, run \`python3 app/runtime/alpine-musl-patches.py refresh\`, commit \`app/runtime/alpine-musl-patches/\`, and (if the musl version itself changed) bump \`MUSL_VERSION\` in \`pins.env\` after a phone test. Then rebuild and release the phone app. This issue closes itself once the vendored set matches.`,
+  }];
+}
+
 // Desktop installer's pinned Node.js: has Node published a newer SECURITY release of the same line,
 // or is the line near end of life?
 export function checkDesktopNode({ pinned, nodeIndex, nodeEol, now }) {
@@ -247,8 +260,10 @@ async function readPins(root) {
     .split('\n').filter((l) => /^[A-Z_]+=/.test(l)).map((l) => { const i = l.indexOf('='); return [l.slice(0, i), l.slice(i + 1).replace(/^"|"$/g, '')]; }));
   const prereq = await readFile(join(root, 'desktop/src/main/prerequisite-installer.ts'), 'utf8');
   const lock = JSON.parse(await readFile(join(root, 'desktop/package-lock.json'), 'utf8'));
+  const muslPatches = JSON.parse(await readFile(join(root, 'app/runtime/alpine-musl-patches/manifest.json'), 'utf8').catch(() => '{}'));
   return {
     alpineBranch: pins.ALPINE_BRANCH,
+    muslPatches: muslPatches.alpine,
     claudeCode: pins.CLAUDE_CODE_VERSION,
     desktopNode: prereq.match(/const NODE_VERSION = '([^']+)'/)?.[1],
     gh: prereq.match(/const GH_VERSION = '([^']+)'/)?.[1],
@@ -278,6 +293,7 @@ export async function gather(root, repo, now = Date.now()) {
     const community = await getJson(`https://secdb.alpinelinux.org/${pins.alpineBranch}/community.json`).catch(() => ({ packages: [] }));
     return checkAlpineShipped({ release, shipped: packages, secdb: { packages: [...secdb.packages, ...community.packages] }, branch: pins.alpineBranch });
   });
+  await run('android-musl', async () => checkMuslPatches({ vendored: pins.muslPatches, alpineMusl: alpineIndexVersion(pins.alpineBranch, 'musl'), branch: pins.alpineBranch }));
   if (nodeIndex) {
     await run('android-node', async () => checkAlpineNodeLag({ alpineNode: alpineIndexVersion(pins.alpineBranch, 'nodejs'), nodeIndex, branch: pins.alpineBranch }));
     await run('desktop-node', async () => checkDesktopNode({ pinned: pins.desktopNode, nodeIndex, nodeEol, now }));

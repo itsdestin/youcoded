@@ -11,7 +11,9 @@
 #    and its library path to /data/data/<appId>/files/usr/lib; the app fills that folder with symlinks
 #    into the native-library folder at startup (RuntimeInstaller.kt). The path names the package, so each
 #    build variant (.dev, .releasetest) gets its own build of this folder.
-#  - musl is built from source with patch-musl.py (name lookups read $YOUCODED_ETC/resolv.conf).
+#  - musl is built from source: Alpine's own patches first (vendored in alpine-musl-patches/, so the phone's
+#    libc carries the same security fixes as Alpine's package), then patch-musl.py (name lookups read
+#    $YOUCODED_ETC/resolv.conf).
 #  - ycshim.c is linked FIRST into every executable: io_uring, #! scripts, /bin/sh, /etc.
 #  - Claude Code is its official musl build, byte-for-byte; claude-launch.c starts it through the loader.
 # Needs: bash, curl, tar, python3, clang + lld (any recent LLVM). Downloads are cached in $CACHE.
@@ -75,6 +77,11 @@ MUSL_TGZ="$CACHE/musl-$MUSL_VERSION.tar.gz"
 rm -rf "$CACHE/musl-$MUSL_VERSION"
 say "musl $MUSL_VERSION"
 tar xzf "$MUSL_TGZ" -C "$CACHE"
+# WHY (2026-11-10, card #219): Alpine ships this same musl version with its own security patches on top
+# (1.2.6-r3 carried three CVE fixes); the plain upstream download left them out of the phone's libc.
+# Alpine's patches (vendored in alpine-musl-patches/, refreshed by `alpine-musl-patches.py refresh`) go
+# first, ours after — fails closed on a checksum mismatch, an apply error or a musl version that differs.
+python3 -I "$HERE/alpine-musl-patches.py" apply "$CACHE/musl-$MUSL_VERSION" "$MUSL_VERSION"
 python3 -I "$HERE/patch-musl.py" "$CACHE/musl-$MUSL_VERSION"
 rm -f "$MUSL_SO"
 CRT="$(find "$SR" -name 'libclang_rt.builtins-aarch64.a' | head -1)"
@@ -84,6 +91,7 @@ MUSL_KEY=""
 if [ -n "${YOUCODED_COMMON_NATIVE_CACHE:-}" ] && [ "${YOUCODED_COLLECT_SOURCES:-0}" != 1 ]; then
   MUSL_KEY="$(python3 -I "$HERE/native-cache.py" key \
     --input "archive=$MUSL_TGZ" --input "patch=$HERE/patch-musl.py" \
+    --input "alpine-patches=$HERE/alpine-musl-patches/manifest.json" --input "alpine-patcher=$HERE/alpine-musl-patches.py" \
     --input "build=$HERE/build-runtime.sh" --input "helper=$HERE/native-cache.py" \
     --input "pins=$HERE/pins.env" --input "sysroot=$OUT/evidence/sysroot/inputs.json" --input "crt=$CRT" \
     --value "clang=$(clang --version)" --value "linker=$(ld.lld --version)" --value "host=$(uname -m)" \
