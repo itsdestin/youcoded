@@ -1,10 +1,10 @@
+import { fingerSized } from '../device';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InteractivePrompt } from '../state/chat-types';
 import { THEME_PICKER_TITLE, TRUST_PROMPT_TITLE } from '../../shared/ink-select-parser';
 import { CheckIcon } from './Icons';
 import { FolderIcon } from './project-view/icons';
 import { Button, ButtonVariant } from './ui/Button';
-import { isAndroid } from '../platform';
 import { useTheme } from '../state/theme-context';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useCardKeysLive } from '../state/card-keys-context';
@@ -255,7 +255,7 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
   const ring = 'ring-2 ring-accent/50';
 
   if (trust) {
-    const pad = isAndroid() ? 'py-2' : 'py-1';
+    const pad = fingerSized() ? 'py-2' : 'py-1';
     return (
       <div className="flex justify-start px-4 py-1">
         <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-inset px-2 py-1">
@@ -336,7 +336,7 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
                   variant={confirming ? 'danger' : variantFor(btn.label, index, defIdx)}
                   // py-2 on Android for a touch-sized target, same as ToolCard's
                   // permission buttons (`pad`).
-                  className={[isAndroid() ? 'py-2' : '', selected].filter(Boolean).join(' ')}
+                  className={[fingerSized() ? 'py-2' : '', selected].filter(Boolean).join(' ')}
                   disabled={sending}
                   onClick={() => activate(index)}
                   onMouseEnter={() => setFocusIdx(index)}

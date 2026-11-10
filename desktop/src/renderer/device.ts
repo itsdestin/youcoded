@@ -15,9 +15,22 @@
 // The last three keep their existing home until their callers move here (an unused copy fails the dead-code check).
 // "Can this screen do X?" stays shared/capabilities.ts; these are look-and-feel only.
 import { getPlatform } from './platform';
+import { prefersTouchInput } from './utils/touch-input';
+import { NARROW_VIEWPORT_QUERY } from './hooks/use-narrow-viewport';
 
 export function inPhoneApp(): boolean {
   return getPlatform() === 'android';
+}
+
+/** Should buttons and rows be finger-sized (taller, easier to tap)?
+ *
+ *  Yes on a touch screen, and in a narrow window on a computer. WHY (Destin's final-review answers: narrow computer
+ *  windows get the phone's "spacing yes, rest no"; touch-and-narrow): this used to ask "is this the Android app?",
+ *  so a phone's web browser on remote access, a tablet and a narrow computer window got mouse-sized buttons.
+ *  Read at draw time, not subscribed: these are answer cards and chips that redraw often. */
+export function fingerSized(): boolean {
+  if (prefersTouchInput()) return true;
+  try { return typeof window !== 'undefined' && !!window.matchMedia?.(NARROW_VIEWPORT_QUERY).matches; } catch { return false; }
 }
 
 /** Does terminal view use the phone layout: a message box and key row under a terminal that is only looked at?

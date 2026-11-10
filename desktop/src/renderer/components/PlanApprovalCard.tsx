@@ -1,6 +1,6 @@
+import { fingerSized } from '../device';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, TextInput } from './ui';
-import { isAndroid } from '../platform';
 import { usePlanMenu, nextTerminalUpdate } from '../hooks/usePlanMenu';
 import { getVisibleScreenText } from '../hooks/terminal-registry';
 import { feedbackOption, type PlanMenu } from '../parser/plan-menu-parser';
@@ -102,7 +102,7 @@ export function PlanApprovalCard({ sessionId, onAnswered }: {
     setError(FAILURE_COPY[res.reason]);
   }, [sessionId]);
 
-  const pad = isAndroid() ? 'py-2' : 'py-1';
+  const pad = fingerSized() ? 'py-2' : 'py-1';
   const wrap = 'px-3 py-2 border-t border-edge bg-inset/30 space-y-2';
 
   if (!menu) {

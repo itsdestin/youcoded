@@ -4,7 +4,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { phoneTerminalLayout, inPhoneApp, markTerminalLayout } from '../src/renderer/device';
+import { phoneTerminalLayout, inPhoneApp, markTerminalLayout, fingerSized } from '../src/renderer/device';
 
 const SRC = join(__dirname, '..', 'src', 'renderer');
 const read = (p: string) => readFileSync(join(SRC, p), 'utf8');
@@ -34,6 +34,21 @@ describe('terminal layout by device', () => {
       on('desktop'); markTerminalLayout(); expect(html.dataset.termLayout).toBe('computer');
     } finally { delete (globalThis as any).document; }
     expect(read('remote-shim.ts')).toMatch(/__PLATFORM__ = platform;\s*markTerminalLayout\(\);/);
+  });
+
+  it('buttons are finger-sized on a touch screen and in a narrow computer window, mouse-sized in a wide one', () => {
+    const screen = (platform: string, matches: (q: string) => boolean) => {
+      (globalThis as any).window = { __PLATFORM__: platform, matchMedia: (q: string) => ({ matches: matches(q) }) };
+    };
+    screen('electron', () => false); expect(fingerSized()).toBe(false);
+    screen('electron', q => q.includes('max-width')); expect(fingerSized()).toBe(true);      // narrow computer window
+    screen('browser', q => q.includes('pointer: coarse')); expect(fingerSized()).toBe(true); // phone browser, tablet
+    screen('desktop', () => false); expect(fingerSized()).toBe(false);                       // mouse laptop's browser
+    screen('android', () => false); expect(fingerSized()).toBe(true);
+    // The spacing sites ask the one rule, not "is this the Android app?".
+    for (const f of ['ToolCard', 'PromptCard', 'PlanApprovalCard', 'QuickChips', 'EditPencilButton', 'permissions/AdminPasswordPrompt']) {
+      expect(read(`components/${f}.tsx`), f).not.toMatch(/isAndroid\(\) \?/);
+    }
   });
 
   it('no script but device.ts spells the rule out for itself', () => {

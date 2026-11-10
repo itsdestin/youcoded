@@ -1,3 +1,4 @@
+import { fingerSized } from '../device';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { browserToolOf } from '../../shared/browser-types';
 import { browserToolDisplay } from './browser/browser-tool-display';
@@ -16,7 +17,6 @@ import { bashGrantOptions, bashNoGrantNote, type GrantScope } from '../../shared
 import { editGrantChoices, isFileEditTool } from '../../shared/edit-grants';
 import { CheckIcon, FailIcon, QuestionIcon, ChevronIcon, NoteIcon, StoppedIcon, ChatIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
-import { isAndroid } from '../platform';
 import ToolBody from './tool-views/ToolBody';
 import { useExpandAllToggle, getInitialExpanded } from '../hooks/useExpandAllToggle';
 import { isTypingTarget } from '../utils/is-typing-target';
@@ -835,7 +835,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     return () => window.removeEventListener('keydown', handler);
   }, [responding, confirmingAlways, confirmingExternal, keysLive, noKeyboard, focusIdx, count, popupOpen]);
 
-  const pad = isAndroid() ? 'py-2' : 'py-1';
+  const pad = fingerSized() ? 'py-2' : 'py-1';
   const ring = 'ring-2 ring-white/40';
 
   // Consequence-gated confirm — plain-language warning before persisting a rule
@@ -1268,7 +1268,7 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
     return () => window.removeEventListener('keydown', handler);
   }, [responding, keysLive, focusedOption, optionCount, allOptions, handleSelect, handleSubmit, popupOpen]);
 
-  const pad = isAndroid() ? 'py-2' : 'py-1.5';
+  const pad = fingerSized() ? 'py-2' : 'py-1.5';
   let flatIdx = 0; // Running index across all questions' options for keyboard focus
 
   if (compact) {
