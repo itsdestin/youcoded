@@ -7,9 +7,9 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import * as inputs from './ci-inputs.mjs';
 const { androidOutputs } = inputs;
-const scopes = ['jvm', 'debug', 'releaseTest'];
-const jvmPaths = ['Debug', 'Release', 'ReleaseTest'].map(variant => `app/build/test-results/test${variant}UnitTest/TEST-current.xml`);
-const scopePaths = { jvm: jvmPaths, debug: ['app/build/outputs/apk/debug/current.apk'], releaseTest: ['app/build/outputs/apk/releaseTest/current.apk'] };
+const scopes = ['jvm', 'debug'];
+const jvmPaths = ['Debug', 'Release'].map(variant => `app/build/test-results/test${variant}UnitTest/TEST-current.xml`);
+const scopePaths = { jvm: jvmPaths, debug: ['app/build/outputs/apk/debug/current.apk'] };
 const expectedIdentity = { sha: 'current', tree: 'current-tree', lock: 'lock', config: 'config', builder: 'builder' };
 function records() {
   return scopes.map(scope => ({ scope, identity: { ...expectedIdentity }, outputs: scopePaths[scope].map(name => ({ path: name, sha256: 'a'.repeat(64) })) }));
@@ -52,15 +52,15 @@ test('Android aggregation binds all scopes to current identity with deterministi
 });
 const invalidRecords = {
   'missing scope': rows => rows.pop(),
-  'duplicate scope': rows => { rows[2] = structuredClone(rows[1]); },
-  'unknown scope': rows => { rows[2].scope = 'all'; },
+  'duplicate scope': rows => { rows[1] = structuredClone(rows[0]); },
+  'unknown scope': rows => { rows[1].scope = 'all'; },
   'extra record': rows => rows.push(structuredClone(rows[0])),
   'stale identity': rows => { rows[1].identity.sha = 'old'; },
   'missing identity': rows => { delete rows[1].identity; },
   'empty outputs': rows => { rows[1].outputs = []; },
   'missing JVM variant': rows => rows[0].outputs.pop(),
   'duplicate path': rows => rows[0].outputs.push({ ...rows[0].outputs[0] }),
-  'cross-scope duplicate path': rows => { rows[2].outputs[0] = { ...rows[1].outputs[0] }; },
+  'cross-scope duplicate path': rows => { rows[0].outputs[0] = { ...rows[1].outputs[0] }; },
   'wrong APK variant': rows => { rows[1].outputs[0].path = 'app/build/outputs/apk/release/current.apk'; },
   'wrong JVM variant': rows => { rows[0].outputs[0].path = 'app/build/test-results/testOtherUnitTest/TEST-current.xml'; },
   'wrong extension': rows => { rows[1].outputs[0].path += '.txt'; },
@@ -110,7 +110,7 @@ test('Android CLI producers and aggregate enforce current identity and exact art
   }
   ok('aggregate');
   const combined = JSON.parse(fs.readFileSync(path.join(root, 'ci-android-evidence.json'), 'utf8'));
-  assert.deepEqual(combined.scopes, scopes); assert.equal(combined.outputs.length, 5);
+  assert.deepEqual(combined.scopes, scopes); assert.equal(combined.outputs.length, 3);
   fs.mkdirSync(path.join(root, 'ci-android-results', 'unexpected'));
   assert.notEqual(cli('aggregate').status, 0);
   fs.rmdirSync(path.join(root, 'ci-android-results', 'unexpected'));
@@ -118,7 +118,8 @@ test('Android CLI producers and aggregate enforce current identity and exact art
   fs.renameSync(debug, `${debug}-wrong`); assert.notEqual(cli('aggregate').status, 0); fs.renameSync(`${debug}-wrong`, debug);
   const evidenceFile = path.join(debug, 'ci-android-evidence.json');
   const evidence = JSON.parse(fs.readFileSync(evidenceFile, 'utf8'));
-  evidence.scope = 'releaseTest'; fs.writeFileSync(evidenceFile, JSON.stringify(evidence)); assert.notEqual(cli('aggregate').status, 0);
+  evidence.scope = 'jvm'; // WHY: a record claiming the wrong scope must be rejected
+   fs.writeFileSync(evidenceFile, JSON.stringify(evidence)); assert.notEqual(cli('aggregate').status, 0);
   evidence.scope = 'debug'; evidence.identity.sha = 'old'; fs.writeFileSync(evidenceFile, JSON.stringify(evidence)); assert.notEqual(cli('aggregate').status, 0);
   // WHY: later dirty-source checks must not pass merely because this earlier
   // stale record remains invalid. Restore it and prove the clean aggregate.
@@ -133,10 +134,10 @@ test('Android CLI producers and aggregate enforce current identity and exact art
   }
 });
 
-test('Android current output evidence requires both real APKs and all three nonempty JVM report directories', async () => {
+test('Android current output evidence requires the real debug APK and both nonempty JVM report directories', async () => {
   const root = fs.mkdtempSync(path.join(tmpdir(), 'ci-android-'));
-  const files = ['app/build/outputs/apk/debug/current.apk', 'app/build/outputs/apk/releaseTest/current.apk',
-    ...['Debug', 'Release', 'ReleaseTest'].map(variant => `app/build/test-results/test${variant}UnitTest/TEST-current.xml`)];
+  const files = ['app/build/outputs/apk/debug/current.apk',
+    ...['Debug', 'Release'].map(variant => `app/build/test-results/test${variant}UnitTest/TEST-current.xml`)];
   try {
     for (const name of files) { fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true }); fs.writeFileSync(path.join(root, name), 'current output'); }
     assert.equal((await androidOutputs(root)).length, files.length);

@@ -178,7 +178,7 @@ class MuslSectionTests(unittest.TestCase):
         return jni / 'libldmusl.so'
 
     def test_opt_in_reuses_compile_but_keeps_sources_for_every_variant(self):
-        for variant in ('debug', 'releaseTest', 'release'):
+        for variant in ('debug', 'release'):
             self.build(variant)
         self.assertEqual(self.count.read_text().splitlines(), ['compiled'])
 

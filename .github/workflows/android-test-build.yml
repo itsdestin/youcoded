@@ -6,8 +6,8 @@ on:
       base:
         description: >-
           Next-feature-release beta prefix. Blank selects it automatically, with beta
-          numbers restarting at 1 after each feature release. Build types add -dev or
-          -releasetest, e.g. 1.4.0-beta.1-releasetest after release 1.3.1.
+          numbers restarting at 1 after each feature release. The test build adds -dev,
+          e.g. 1.4.0-beta.1-dev after release 1.3.1.
         required: false
         default: ''
 
@@ -31,7 +31,7 @@ jobs:
       # that did not, which is exactly why it was the one telling lies.
       #
       # versionCode is deliberately NOT stamped. These APKs install as separate
-      # apps (.dev / .releasetest), so Play never sees the number, and raising
+      # apps (.dev), so Play never sees the number, and raising
       # it here would block installing a LOCAL build (still the hand-set 20)
       # over a CI one — Android refuses a lower versionCode. The analytics
       # problem is versionName's alone, so versionName is all this touches.
@@ -100,8 +100,8 @@ jobs:
         run: ./gradlew test
 
       # WHY one copy (Destin, 2026-11-10: "a single way to test the app"): this used to hand over a Dev copy and a
-      # ReleaseTest copy. The Dev copy is now shrunk like the release (app/build.gradle.kts), so it is the only file
-      # to install; android-ci.yml still builds ReleaseTest on every change as the exact-release safety net.
+      # second, separate shrunk copy. The Dev copy is now shrunk like the release (app/build.gradle.kts), so it is the
+      # only file to install, and android-ci.yml builds that same debug build on every change.
       - name: Build the test copy (YouCoded Dev, R8 shrunk)
         run: ./gradlew assembleDebug
 

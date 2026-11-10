@@ -6,11 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { identity, hash } from './ci-evidence.mjs';
 import { isMain } from './ci-policy.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
-const scopes = ['jvm', 'debug', 'releaseTest'];
-const jvmPrefixes = ['Debug', 'Release', 'ReleaseTest'].map(variant => `app/build/test-results/test${variant}UnitTest/`);
+// WHY (2026-11-10): the separate releaseTest build is gone; the debug build is itself R8-shrunk now.
+const scopes = ['jvm', 'debug'];
+const jvmPrefixes = ['Debug', 'Release'].map(variant => `app/build/test-results/test${variant}UnitTest/`);
 function scopePrefixes(scope) {
   assert.ok(['all', ...scopes].includes(scope), `Unknown Android scope: ${scope}`);
-  const apks = (scope === 'all' ? ['debug', 'releaseTest'] : scopes.includes(scope) && scope !== 'jvm' ? [scope] : [])
+  const apks = (scope === 'all' ? ['debug'] : scopes.includes(scope) && scope !== 'jvm' ? [scope] : [])
     .map(variant => `app/build/outputs/apk/${variant}/`);
   return [...apks, ...(scope === 'all' || scope === 'jvm' ? jvmPrefixes : [])];
 }
@@ -31,7 +32,7 @@ export async function androidOutputs(root, scope = 'all') {
   return outputs;
 }
 export function aggregateAndroid(records, expectedIdentity) {
-  assert.ok(Array.isArray(records) && records.length === scopes.length, 'Expected exactly three Android scope records');
+  assert.ok(Array.isArray(records) && records.length === scopes.length, 'Expected exactly two Android scope records');
   const outputs = [], seen = new Set();
   // WHY: downloaded evidence is untrusted until its identity, complete scope union
   // and exact normalized variant paths are checked; a success flag is not proof.
@@ -79,6 +80,6 @@ async function main() {
     });
     fs.writeFileSync(path.join(root, 'ci-android-evidence.json'), JSON.stringify(aggregateAndroid(records, input), null, 2) + '\n');
     console.log('Android current scope evidence aggregated');
-  } else throw new Error('Use start|android|jvm|debug|releaseTest|aggregate');
+  } else throw new Error('Use start|android|jvm|debug|aggregate');
 }
 if (isMain(import.meta.url)) main().catch(error => { console.error(error); process.exitCode = 1; });

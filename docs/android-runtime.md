@@ -48,7 +48,7 @@ remaining collection/legal-review blockers; a successful development build is no
 | Android rule | Answer |
 |---|---|
 | An app may only execute files Android unpacked into its native-library folder | Every program ships as `jniLibs/arm64-v8a/lib<name>.so` (`useLegacyPackaging`); `files/usr/bin/<name>` are symlinks to them |
-| No `/lib/ld-musl-aarch64.so.1` | Each program's interpreter is rewritten (patchelf) to `/data/data/<appId>/files/usr/lib/ld-musl-aarch64.so.1`, a symlink to the bundled musl; RUNPATH `files/usr/lib`. The path names the package, so each variant (`.dev`, `.releasetest`) has its own build |
+| No `/lib/ld-musl-aarch64.so.1` | Each program's interpreter is rewritten (patchelf) to `/data/data/<appId>/files/usr/lib/ld-musl-aarch64.so.1`, a symlink to the bundled musl; RUNPATH `files/usr/lib`. The path names the package, so each variant (`.dev`, and the release) has its own build |
 | App seccomp kills `io_uring_setup` (libuv probes it; `UV_USE_IO_URING=0` does not help) | `ycshim.c` (linked first into every program) answers ENOSYS |
 | No exec of files in the app's data folder (`#!` scripts) | The shim runs the script's interpreter instead (execve/execv/execvp/execvpe) |
 | No `/bin/sh`, `/usr/bin/env`, `/etc/resolv.conf`, `/etc/ssl` | Shim maps missing `/bin/*`, `/usr/bin/*` to PATH and `/etc/x` to `$YOUCODED_ETC/x`; musl reads `$YOUCODED_ETC/resolv.conf` (patch-musl.py); `BackendService` writes it from the active network; `SSL_CERT_FILE`/`GIT_SSL_CAINFO` name the bundled CA file |

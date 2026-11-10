@@ -451,7 +451,7 @@ class Fixtures(unittest.TestCase):
         self.assertIn('if: inputs.collect_sources', section)
         self.assertIn('runtime-redistribution.py bind_backend', section)
         self.assertIn('runtime-redistribution.py release', section)
-        self.assertIn('app/build/outputs/apk/releaseTest/*.apk', section)
+        self.assertIn('app/build/outputs/apk/debug/*.apk', section)
 
     def test_certificate_data_keeps_its_original_embedded_mpl_notice(self):
         content = '# This Source Code Form is subject to the Mozilla Public License, v. 2.0.\ncertificate data'

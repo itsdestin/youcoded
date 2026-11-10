@@ -10,7 +10,7 @@
 #  - Each executable's interpreter is rewritten to /data/data/<appId>/files/usr/lib/ld-musl-aarch64.so.1
 #    and its library path to /data/data/<appId>/files/usr/lib; the app fills that folder with symlinks
 #    into the native-library folder at startup (RuntimeInstaller.kt). The path names the package, so each
-#    build variant (.dev, .releasetest) gets its own build of this folder.
+#    build variant (.dev and the release) gets its own build of this folder.
 #  - musl is built from source with patch-musl.py (name lookups read $YOUCODED_ETC/resolv.conf).
 #  - ycshim.c is linked FIRST into every executable: io_uring, #! scripts, /bin/sh, /etc.
 #  - Claude Code is its official musl build, byte-for-byte; claude-launch.c starts it through the loader.
