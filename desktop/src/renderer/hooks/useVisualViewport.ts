@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
 import { createImeRestMemory, type ImeRestMemory } from '../state/ime-rest-memory';
+import { aimGlide, stepGlide, newGlide } from '../state/keyboard-glide';
+import { createKeyboardLiveLift } from './keyboard-live-lift';
 
 // The on-screen keyboard's height, for the page. Writes two variables on <html> (see the comment in the hook):
 // --vvp-offset (the keyboard while it types into the chat's message box; globals.css lifts the message box with a
@@ -11,18 +13,7 @@ import { createImeRestMemory, type ImeRestMemory } from '../state/ime-rest-memor
 // height once through window.__ycImeOffset; the page glides there itself.
 //
 // Desktop is unaffected: visualViewport.height === innerHeight and nothing calls __ycImeOffset, so both stay 0.
-/** Fired on window each time --vvp-offset changes (the keyboard opened, closed or resized). */
-export const KEYBOARD_OFFSET_EVENT = 'youcoded:keyboard-offset';
-
-/** The Android keyboard's slide: ~340 ms measured on a Galaxy Z Flip7; Android's keyboard curve (fast start, gentle stop). */
-const IME_GLIDE_MS = 300;
-/** cubic-bezier(0.2, 0, 0, 1) at progress t (0-1): x(u) is solved for u by bisection, then y(u). */
-function imeEase(t: number): number {
-  const bez = (a: number, b: number, u: number) => 3 * a * u * (1 - u) ** 2 + 3 * b * u * u * (1 - u) + u ** 3;
-  let lo = 0, hi = 1, u = t;
-  for (let i = 0; i < 20; i++) { u = (lo + hi) / 2; if (bez(0.2, 0, u) < t) lo = u; else hi = u; }
-  return bez(0, 1, u);
-}
+export { KEYBOARD_OFFSET_EVENT } from './keyboard-live-lift';
 
 export function useVisualViewport() {
   useEffect(() => {
@@ -45,9 +36,8 @@ export function useVisualViewport() {
     //   --kb-offset  — the keyboard, whatever it types into: popups, the session menu and the file editor keep clear of it.
     //   --vvp-offset — the keyboard only while it types into the chat's own message box (.bottom-float); the chat's
     //                  frame edge, message box, messages and empty-chat hint follow this one, and stay put otherwise.
-    type Glide = { from: number; to: number; start: number; cur: number };
-    const kb: Glide = { from: 0, to: 0, start: 0, cur: 0 };
-    const chat: Glide = { from: 0, to: 0, start: 0, cur: 0 };
+    const kb = newGlide();
+    const chat = newGlide();
     let nativeTo = 0;
     let native = false;
     let lastKb = -1;
@@ -67,63 +57,8 @@ export function useVisualViewport() {
       native = true;
       schedule();
     };
-    const aim = (g: Glide, to: number, glide: boolean, now: number) => {
-      if (to === g.to) return;
-      g.from = g.cur; g.to = to; g.start = now;
-      if (!glide) g.cur = to;
-    };
-    // True while the glide is still moving.
-    const step = (g: Glide, now: number): boolean => {
-      if (g.cur === g.to) return false;
-      const t = Math.min(1, (now - g.start) / IME_GLIDE_MS);
-      g.cur = t >= 1 ? g.to : g.from + (g.to - g.from) * imeEase(t);
-      return t < 1;
-    };
-
-    // WHY the glide does not write the page-wide variable each step (Destin, 2026-11-02: "it still feels jumpy/stuttery"):
-    // measured on the Z Flip7, one change to a variable on <html> makes the page re-check every element's styles, 6-7 ms
-    // on a calm page (up to 75 ms when busy), close to the whole 8 ms frame. So while gliding, only the few things that
-    // visibly move are changed, directly and cheaply — the message box and the empty-chat hint by transform, the frame's
-    // two bottom-edge elements (.chrome-glass, .chrome-outline, which hold nothing inside), and the messages (ChatView,
-    // through the event's `lift`). When the glide ends, --vvp-offset takes the final value once and the direct changes
-    // are removed in the same frame, so nothing moves at the hand-over.
-    let settled = 0;                // what --vvp-offset on <html> says
-    let edgeBase: Map<HTMLElement, string> | null = null;
-    const liveEls = () => ({
-      bar: document.querySelector<HTMLElement>('.bottom-float:not(.buddy-chat-bottom)'),
-      hint: document.querySelector<HTMLElement>('.empty-chat-hint'),
-      // A touch terminal's grid, strips and arrows ride up with the bar instead of shrinking (globals.css, [data-term-lift]).
-      lifts: document.querySelectorAll<HTMLElement>('[data-term-lift]'),
-      edges: [...document.querySelectorAll<HTMLElement>('.chrome-glass, .chrome-outline')],
-    });
-    const showLive = (c: number) => {
-      const lift = c - settled;
-      const { bar, hint, lifts, edges } = liveEls();
-      if (bar) bar.style.transform = `translateY(${-c}px)`;
-      // WHY the grid lift too: the terminal grid may already be slid up over a taller message box (keyboard.css,
-      // --term-grid-lift); dropping it for the glide would make the grid jump down and back.
-      for (const el of lifts) el.style.transform = `translateY(calc(${-c}px - var(--term-grid-lift, 0px)))`;
-      if (hint) hint.style.transform = `translateY(${-c / 2}px)`;
-      if (!edgeBase) edgeBase = new Map(edges.map((el) => [el, getComputedStyle(el).getPropertyValue('--bottom-chrome-total').trim()]));
-      for (const [el, base] of edgeBase) if (base) el.style.setProperty('--bottom-chrome-total', `calc(${base} + ${lift}px)`);
-      window.dispatchEvent(new CustomEvent(KEYBOARD_OFFSET_EVENT, { detail: { lift } }));
-    };
-    const clearLive = () => {
-      const { bar, hint, lifts } = liveEls();
-      if (bar) bar.style.transform = '';
-      for (const el of lifts) el.style.transform = '';
-      if (hint) hint.style.transform = '';
-      if (edgeBase) for (const el of edgeBase.keys()) el.style.removeProperty('--bottom-chrome-total');
-      edgeBase = null;
-    };
-    const settle = (c: number) => {
-      settled = c;
-      lastChat = c;
-      document.documentElement.style.setProperty('--vvp-offset', `${c}px`);
-      clearLive();
-      // ChatView keeps the newest message in view above the keyboard (it no longer gets a smaller window to notice).
-      window.dispatchEvent(new CustomEvent(KEYBOARD_OFFSET_EVENT, { detail: { lift: 0 } }));
-    };
+    // What moves on the page during a glide and at its end: keyboard-live-lift.ts.
+    const live = createKeyboardLiveLift();
 
     let lastStep = 0;
     const apply = () => {
@@ -141,17 +76,18 @@ export function useVisualViewport() {
       // Only the Android app's keyboard glides; a phone browser already reports it a frame at a time.
       const glide = native && !reduced();
       // Popups and menus take the keyboard's final height at once: one re-check, not one per step.
-      aim(kb, reported, false, now);
-      aim(chat, forChat ? reported : 0, glide, now);
-      step(kb, now);
-      const moving = step(chat, now);
+      aimGlide(kb, reported, false, now);
+      aimGlide(chat, forChat ? reported : 0, glide, now);
+      stepGlide(kb, now);
+      const moving = stepGlide(chat, now);
       const k = Math.round(kb.cur);
       if (k !== lastKb) { lastKb = k; document.documentElement.style.setProperty('--kb-offset', `${k}px`); }
       // Clamp sub-pixel jitter — some devices fire values like 398.6 vs 399.0 back-to-back mid-animation.
       const c = Math.round(chat.cur);
-      if (moving) { schedule(); showLive(c); return; }
-      if (c === lastChat && !edgeBase) return;
-      settle(c);
+      if (moving) { schedule(); live.show(c); return; }
+      if (c === lastChat && !live.gliding()) return;
+      lastChat = c;
+      live.settle(c);
     };
 
     const schedule = () => {
