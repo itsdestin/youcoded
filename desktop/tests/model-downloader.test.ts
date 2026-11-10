@@ -214,7 +214,9 @@ describe('ModelDownloader', () => {
   it('keeps the manifest when the download is cancelled — that is what makes resume possible', async () => {
     const dl = new ModelDownloader(dir, dripUntilAbort);
     const id = dl.start('unsloth/M-GGUF', quantOpt(false), () => {});
-    await new Promise((r) => setTimeout(r, 60));
+    // WHY wait for the manifest, not 60 ms: the test is "cancelling keeps the manifest", so the manifest has to exist
+    // before the cancel; a pause only guessed that the download had got that far on a busy machine.
+    await vi.waitFor(() => expect(fs.existsSync(path.join(dir, MANIFEST))).toBe(true));
     dl.cancel(id);
     await dl.wait(id).catch(() => {});
     expect(fs.existsSync(path.join(dir, MANIFEST))).toBe(true);

@@ -59,12 +59,18 @@ describe('schemas', () => {
 
 describe.skipIf(!posix)('BashOutput', () => {
   it('id mode: header + new output since the last look; then the "nothing new" sentence', async () => {
-    const run = start('echo one; sleep 0.5; echo two');
+    // WHY a gate file, not `sleep 0.5`: the command must stay "still running, nothing new" for
+    // exactly as long as the first two looks take. A fixed half second let "two" arrive between
+    // the looks on a slow machine (macOS CI, 2026-11-05: the second look returned the
+    // first-look text). The test now releases "two" itself, after both looks.
+    const gate = path.join(dir, 'release-two');
+    const run = start(`echo one; while [ ! -e '${gate}' ]; do sleep 0.05; done; echo two`);
     await waitFor(() => reg.tailText(run, 5).includes('one'));
     const a = await BashOutputTool.execute({ shell_id: run.shellId }, ctx());
     expect(a.text).toMatch(new RegExp(`^${run.shellId} · running · \\d+s\\none$`));
     const b = await BashOutputTool.execute({ shell_id: run.shellId }, ctx());
     expect(b.text).toMatch(new RegExp(`^No new output from ${run.shellId} since your last look \\(still running · \\d+s\\)\\. You'll be told when it finishes — do NOT poll for it\\.$`));
+    fs.writeFileSync(gate, '');
     await run.exited;
     const c = await BashOutputTool.execute({ shell_id: run.shellId }, ctx());
     expect(c.text).toMatch(new RegExp(`^${run.shellId} · exited 0 · \\d+s\\ntwo$`));

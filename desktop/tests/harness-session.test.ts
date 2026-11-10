@@ -119,11 +119,14 @@ describe('HarnessSession', () => {
 
   it('interrupt() aborts and emits user-interrupt instead of session-error', async () => {
     const never = new ReadableStream({ start() { /* never enqueues, never closes */ } });
-    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: never as any }) });
+    // WHY a started flag instead of a 30 ms pause: the pause only guessed that the turn had reached the
+    // model; on a busy machine interrupt() could land before the stream existed, which is a different path.
+    let streamOpened = false;
+    const model = new MockLanguageModelV4({ doStream: async () => { streamOpened = true; return { stream: never as any }; } });
     const session = new HarnessSession(opts, async () => model as any);
     const events = collect(session);
     const sendP = session.send('hi');
-    await new Promise((r) => setTimeout(r, 30));
+    await vi.waitFor(() => expect(streamOpened).toBe(true));
     session.interrupt();
     await sendP;
     expect(events.some((e) => e.type === 'user-interrupt')).toBe(true);
