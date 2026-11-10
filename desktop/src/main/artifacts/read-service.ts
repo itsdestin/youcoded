@@ -278,7 +278,7 @@ async function findBesideSessionFiles(
     .filter((a) => a.versions.some((v) => v.sessionId === near.sessionId
       || (!!near.conversationId && v.conversationId === near.conversationId)))
     .sort((a, b) => (b.lastModified ?? '').localeCompare(a.lastModified ?? ''));
-  const absolutes = mine.map((a) => trackedAbsoluteForm(a, projectRoot)).filter((p): p is string => !!p);
+  const absolutes = mine.map((a) => trackedAbsolutePlain(a, projectRoot)).filter((p): p is string => !!p);
   const candidates = nearbyCandidates(clickedPath, absolutes).filter((c) => canonicalize(c, null) !== alreadyTried);
   const found: string[] = [];
   for (const candidate of candidates) {
@@ -291,12 +291,23 @@ async function findBesideSessionFiles(
   return found;
 }
 
-/** A tracked record's comparable absolute form, or null when it has none. */
+/** A tracked record's comparable absolute form (lowercased on Windows), or null when it has none. */
 function trackedAbsoluteForm(a: ArtifactRecord, projectRoot: string): string | null {
-  if (a.kind === 'internal') return a.path ? canonicalize(path.join(projectRoot, a.path), null) : null;
+  const plain = trackedAbsolutePlain(a, projectRoot);
+  return plain === null ? null : canonicalize(plain, null);
+}
+
+/** The same path with its real capitalisation, forward slashes and `..` resolved.
+ *  WHY separate (nightly Windows failure): the "found beside your chat's files" answer is shown to the
+ *  user, but it was built from the lowercased comparable form, so a Windows user saw
+ *  "c:/users/me/banner/icon6/s-bands.png" with every folder name flattened. Compare with
+ *  trackedAbsoluteForm; show this one. */
+function trackedAbsolutePlain(a: ArtifactRecord, projectRoot: string): string | null {
+  const plain = (p: string) => path.resolve(p).replace(/\\/g, '/');
+  if (a.kind === 'internal') return a.path ? plain(path.join(projectRoot, a.path)) : null;
   // A legacy relative absolutePath would resolve against the process cwd —
   // never let it match anything (write-authorization.ts, isAbsoluteRecorded).
-  return a.absolutePath && isAbsoluteRecorded(a.absolutePath) ? canonicalize(a.absolutePath, null) : null;
+  return a.absolutePath && isAbsoluteRecorded(a.absolutePath) ? plain(a.absolutePath) : null;
 }
 
 /**

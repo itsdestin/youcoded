@@ -27,7 +27,12 @@ describe('createExistsProbe', () => {
     const files = Array.from({ length: 500 }, (_, i) => path.join(root, 'deep', 'er', `f${i}.md`));
     const out = await createExistsProbe().existsAll(files);
     expect(out.every((v) => v === false)).toBe(true);
-    // a handful of checks up the tree (never one per file)
-    expect(access.mock.calls.length).toBeLessThanOrEqual(5);
+    // Each folder on the way up is asked about at most once (never one check per file). The ceiling is
+    // counted from the real path, not a fixed 5: the temp folder is 2 levels deep on Linux but ~6 on macOS
+    // (/private/var/folders/xx/yyy/T) and ~7 on Windows (C:\\Users\\x\\AppData\\Local\\Temp).
+    let folders = 0;
+    for (let d = path.dirname(files[0]); ; d = path.dirname(d)) { folders++; if (path.dirname(d) === d) break; }
+    expect(access.mock.calls.length).toBeLessThanOrEqual(folders);
+    expect(access.mock.calls.length).toBeLessThan(files.length / 10);
   });
 });
