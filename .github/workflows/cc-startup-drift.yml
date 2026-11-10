@@ -59,3 +59,24 @@ jobs:
           node test-conpty/check-startup-drift.mjs --latest --app && exit 0
           echo "::warning::First run reported a difference or failed — retrying once to rule out a flake."
           node test-conpty/check-startup-drift.mjs --latest --app
+
+  # Ping Destin's phone when the check above ends red (final review F-2, 2026-11-09: "piggyback on" the drift watch).
+  # WHY its own job: the job above runs an untrusted package and is given no secrets on purpose. This one runs no
+  # code from the repository or from npm, only one request. The message carries no details (anyone who knows the
+  # channel's name can read it); the run's summary page has them. Silent when the NTFY_TOPIC secret is not set.
+  alert:
+    needs: drift
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Tell Destin's phone
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC not set; the red run is the only notice."; exit 0; fi
+          curl -fsS -H "Title: YouCoded: Claude Code changed" -H "Priority: high" -H "Tags: warning" -H "Click: $RUN_URL" \
+            -d "The newest Claude Code changed its first-run or startup screens. YouCoded may need an update before people hit it. Tap to open the run." \
+            "https://ntfy.sh/$NTFY_TOPIC" > /dev/null
