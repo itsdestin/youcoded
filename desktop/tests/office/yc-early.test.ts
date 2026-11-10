@@ -15,6 +15,17 @@ const HAS_ADDON = fs.existsSync(SCRIPT);
 const SOURCE = HAS_ADDON ? fs.readFileSync(SCRIPT, 'utf8') : '';
 const describeAddon = describe.skipIf(!HAS_ADDON);
 
+// WHY a guard besides the skip: a skipped file reports green, so if a CI job's fetch step ever
+// stopped working, these checks would vanish without a red mark. The two jobs that fetch the
+// bundle with --required (desktop-test-build.yml, desktop-release.yml) set YC_OFFICE_ADDON_REQUIRED=1
+// on their test step, which turns "bundle missing" into a failure. Left unset everywhere else
+// (a dev machine, the PR job that does not fetch it) so those still skip cleanly.
+describe('yc-early.js: the add-on bundle is present where the job fetched it', () => {
+  it('has the bundle when the job says it must', () => {
+    if (process.env.YC_OFFICE_ADDON_REQUIRED === '1') expect(HAS_ADDON).toBe(true);
+  });
+});
+
 interface Opts { settings?: { status: number; body: string } | 'throws'; storage?: Record<string, string>; }
 
 /** A fake editor window the script is run in. */
@@ -66,7 +77,7 @@ describeAddon('yc-early.js: peer connections are turned off', () => {
   });
 });
 
-describe("yc-early.js: the person's saved settings are written in before the editor starts", () => {
+describeAddon("yc-early.js: the person's saved settings are written in before the editor starts", () => {
   it('seeds missing keys, never overwrites one the page already has, skips non-text values', () => {
     const { store } = load({
       storage: { 'de-settings-unit': 'page-value' },
@@ -130,7 +141,7 @@ describeAddon('yc-early.js: the external-links warning and the automatic link re
   });
 });
 
-describe("yc-early.js: a sheet's view counts at least 1000 rows and 52 columns", () => {
+describeAddon("yc-early.js: a sheet's view counts at least 1000 rows and 52 columns", () => {
   function sheetView(win: any, rowsTo: number, colsTo: number) {
     const View = function (this: any) { this.nRowsCount = 0; this.nColsCount = 0; this.cols = []; } as any;
     const keep = function () {};
