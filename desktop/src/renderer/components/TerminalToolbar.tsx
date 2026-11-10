@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from './ui';
 import { BackIcon, ForwardIcon } from './Icons';
 
@@ -138,15 +138,20 @@ export function TerminalScrollButtons({ sessionId }: TerminalToolbarProps) {
 
 /** How far in from the right of the box it floats in the given element must sit to line up over the send button:
  *  the message box's right edge plus the box's own inner padding. Re-measured when either box changes size. */
+// WHY remembered between mounts and measured before the first paint (Destin, 2026-11-10: "if i quickly switch between
+// chat/terminal, the up/down arrows in terminal view clearly jitter left/right a bit"): the pair is rebuilt each time
+// terminal view opens, and used to be drawn once at the 8px fallback and then moved to the measured place a frame later.
+let lastRight: number | null = null;
 function useMessageBoxRightFor(el: React.RefObject<HTMLDivElement | null>): number | null {
-  const [right, setRight] = useState<number | null>(null);
-  useEffect(() => {
+  const [right, setRight] = useState<number | null>(lastRight);
+  useLayoutEffect(() => {
     const host = el.current?.offsetParent as HTMLElement | null;
     const form = document.querySelector<HTMLElement>('.input-bar-container form');
     if (!host || !form) return;
     const measure = () => {
       const pad = parseFloat(getComputedStyle(form).paddingRight) || 0;
       const next = Math.max(0, Math.round(host.getBoundingClientRect().right - form.getBoundingClientRect().right + pad));
+      lastRight = next;
       setRight((prev) => (prev === next ? prev : next));
     };
     measure();

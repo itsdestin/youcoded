@@ -41,9 +41,15 @@ describe('TerminalScrollButtons', () => {
       bar.appendChild(form);
       document.body.appendChild(bar);
       Object.defineProperty(HTMLElement.prototype, 'offsetParent', { configurable: true, get() { return host; } });
-      render(<TerminalScrollButtons sessionId="s1" />, { container: host });
+      const first = render(<TerminalScrollButtons sessionId="s1" />, { container: host });
       const pair = screen.getByRole('button', { name: 'Scroll up' }).parentElement!;
       expect(pair.style.right).toBe('18px');   // 390 − 380 = 10px gap, + 8px padding
+      // Reopening terminal view rebuilds the pair. It starts where it was last measured, never back at the 8px
+      // fallback for a frame (the left/right jitter on a quick chat/terminal switch). Shown with nothing to measure.
+      first.unmount();
+      bar.remove();
+      render(<TerminalScrollButtons sessionId="s1" />);
+      expect(screen.getByRole('button', { name: 'Scroll up' }).parentElement!.style.right).toBe('18px');
     } finally {
       (globalThis as any).ResizeObserver = RO;
       if (offsetParent) Object.defineProperty(HTMLElement.prototype, 'offsetParent', offsetParent);
