@@ -101,6 +101,18 @@ android {
             // would otherwise collide on 127.0.0.1:9901 and the dev app's
             // WebView would hang forever on "Connecting...".
             buildConfigField("int", "BRIDGE_PORT", "9951")
+            // WHY shrunk like the release (Destin, 2026-11-10: "two builds is weird and confusing", he wants "a single
+            // way to test the app"): the Dev copy used to skip R8, so everything tested on a phone ran code the release
+            // never ships, and the separate ReleaseTest copy that closed the gap was built but rarely installed. The Dev
+            // copy now goes through the same shrinking and renaming with the same rules, and is the one copy to test.
+            // It stays debuggable, so the page can still be inspected and its files read while diagnosing; R8 therefore
+            // keeps debug information and skips some optimisations the real release applies (not identical, by design).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
         release {
             isMinifyEnabled = true

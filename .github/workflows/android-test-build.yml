@@ -99,25 +99,24 @@ jobs:
       - name: Run unit tests
         run: ./gradlew test
 
-      # Build BOTH flavors so manual artifact downloads cover the same
-      # parity surface as the per-push CI. See android-ci.yml for the
-      # rationale on why releaseTest belongs alongside debug.
-      - name: Build debug APK
+      # WHY one copy (Destin, 2026-11-10: "a single way to test the app"): this used to hand over a Dev copy and a
+      # ReleaseTest copy. The Dev copy is now shrunk like the release (app/build.gradle.kts), so it is the only file
+      # to install; android-ci.yml still builds ReleaseTest on every change as the exact-release safety net.
+      - name: Build the test copy (YouCoded Dev, R8 shrunk)
         run: ./gradlew assembleDebug
 
-      - name: Build releaseTest APK (R8 minified, debug-signed)
-        run: ./gradlew assembleReleaseTest
-
-      - name: Upload debug APK
+      - name: Upload the test copy
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: youcoded-test-apk
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 7
 
-      - name: Upload releaseTest APK
+      # The file that turns a shrunk build's scrambled crash report back into readable names.
+      - name: Upload crash-report lookup file
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
-          name: youcoded-test-apk-releasetest
-          path: app/build/outputs/apk/releaseTest/*.apk
+          name: youcoded-test-apk-mapping
+          path: app/build/outputs/mapping/debug/mapping.txt
+          if-no-files-found: warn
           retention-days: 7
