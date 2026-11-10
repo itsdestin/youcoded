@@ -15,7 +15,8 @@ import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { attachRenderPause, type RenderPause } from './xterm-render-pause';
 import { useTheme } from '../state/theme-context';
-import { getCapabilities, getPlatform, isTouchDevice } from '../platform';
+import { getCapabilities, isTouchDevice } from '../platform';
+import { phoneTerminalLayout } from '../device';
 import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } from '../workbench-mode';
 import { computeTerminalSurface } from '../themes/theme-engine';
 import { ScreenMark } from '../shoot-mode';
@@ -401,7 +402,7 @@ function TerminalView({ sessionId, visible }: Props) {
     // WINDOW, not the chrome over the terminal. A hidden terminal's guess below, or the first fit, decides it; after
     // that a fit with the same window, character size and column count keeps the rows and only slides the grid (see
     // fitAndSync). Desktop (Electron) is unchanged: its terminal is not covered by a floating box, so it always fits.
-    const holdRowsOnTouch = getPlatform() !== 'electron';   // the same test as keyboard.css's [data-term-lift] rule
+    const holdRowsOnTouch = phoneTerminalLayout();   // device.ts; keyboard.css's [data-term-lift] rule must agree
     let basis: SizeBasis | null = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FitAddon reads the same private field
     const cellSize = (): { width: number; height: number } | undefined => (terminal as any)._core?._renderService?.dimensions?.css?.cell;
@@ -437,7 +438,7 @@ function TerminalView({ sessionId, visible }: Props) {
       if (!size) return;
       // Same window and columns as the size already decided: keep it. The guess uses a remembered (or chat view's)
       // bottom inset, so it can be a row or two off the real fit; that is not worth a redraw.
-      if (holdRowsOnTouch && keepProgramSize(basis, basisFor(size.cols))) return;
+      if (keepProgramSize(basis, basisFor(size.cols))) return;
       if (terminal.cols !== size.cols || terminal.rows !== size.rows) terminal.resize(size.cols, size.rows);
       basis = basisFor(size.cols);
       queueSize(size.cols, size.rows);
@@ -460,13 +461,20 @@ function TerminalView({ sessionId, visible }: Props) {
       try {
         const el = containerRef.current;
         if (!el) return;
-        if (el.clientWidth === 0 || el.clientHeight === 0) { proposeHidden(el); return; }
+        // WHY phone layout only (2026-11-09): sizing a hidden terminal was built for the phone's doubled banner and
+        // reached the computer app by accident (this line had no device check). There it could resize a session
+        // another window or a phone was showing, with none of the phone's keep-the-size guard. The computer app is
+        // back to the released behaviour: a hidden terminal does nothing (458c1356a, the 0x0 "bunched text" fix).
+        if (el.clientWidth === 0 || el.clientHeight === 0) { if (holdRowsOnTouch) proposeHidden(el); return; }
         if (visibleRef.current) saveTerminalBottomInset(parseFloat(getComputedStyle(el).bottom) || 0);
         // Touch screen, same window, same columns: only the chrome over the terminal moved (a second line in the
         // message box, the first show after a hidden guess). Keep the program's size — a resize would make Claude Code
         // print lines twice — and slide the grid so its last rows stay above the box (terminal-size-lock.ts).
         const proposed = holdRowsOnTouch ? fitAddon.proposeDimensions() : undefined;
         if (proposed?.cols && keepProgramSize(basis, basisFor(proposed.cols))) {
+          // WHY here too: a phone terminal that was sized while hidden takes this early exit on its first show, so the
+          // practice screen was never written and the phone terminal pictures came out empty (2026-11-09).
+          writeWorkbenchScreenOnce();
           setGridLift(el);
           updateThumb();
           return;

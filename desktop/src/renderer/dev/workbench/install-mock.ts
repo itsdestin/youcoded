@@ -90,7 +90,10 @@ function declarePlatform(): void {
   // toggleOnLeft) still see 'electron' — film the phone NARROW (390 wide), where
   // the narrow layout hides that toggle anyway.
   // `typeof location` guard: workbench-install-mock.test.ts runs this in Node.
-  if (!w.__PLATFORM__ && typeof location !== 'undefined' && new URLSearchParams(location.search).get('platform') === 'android') w.__PLATFORM__ = 'android';
+  // WHY 'desktop' too (2026-11-09): that is what a computer tells a MOUSE laptop's browser it is (remote-server.ts
+  // authOkMessage), and nothing could picture that device: its terminal is half computer, half phone.
+  const wantPlatform = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('platform') : null;
+  if (!w.__PLATFORM__ && (wantPlatform === 'android' || wantPlatform === 'desktop')) w.__PLATFORM__ = wantPlatform;
   // `?connection=remote` renders the app as a PHONE BROWSER paired to a desktop: the
   // platform a remote shim reports ('browser') and the connection mode it declares on
   // auth ('remote'). This is what every isRemoteMode() branch keys on — the theme

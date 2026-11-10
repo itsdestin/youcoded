@@ -65,7 +65,6 @@ export function useVisualViewport() {
     w.__ycImeOffset = (px: number, rest?: boolean) => {
       nativeTo = rest ? restMemory.rest(px) : restMemory.announce(px);
       native = true;
-      document.documentElement.dataset.ime = 'native';
       schedule();
     };
     const aim = (g: Glide, to: number, glide: boolean, now: number) => {
@@ -173,7 +172,6 @@ export function useVisualViewport() {
       document.removeEventListener('focusin', schedule);
       document.removeEventListener('focusout', schedule);
       delete w.__ycImeOffset;
-      delete document.documentElement.dataset.ime;
       document.documentElement.style.removeProperty('--vvp-offset');
       document.documentElement.style.removeProperty('--kb-offset');
     };

@@ -122,6 +122,7 @@ import { createRefillRetry } from './state/refill-retry';
 
 import FirstRunView from './components/FirstRunView';
 import { getCapabilities, getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
+import { phoneTerminalLayout } from './device';
 import { deferredScreen } from './components/deferred-screen';
 import { markScreensReady, useScreensReady } from './state/screens-ready';
 import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
@@ -3410,7 +3411,7 @@ function AppInner() {
   }, []);
 
   // Terminal mode on touch/remote platforms — show minimal input with special keys
-  const isTerminalTouch = currentViewMode === 'terminal' && getPlatform() !== 'electron';
+  const isTerminalTouch = currentViewMode === 'terminal' && phoneTerminalLayout();   // device.ts: the one rule
 
   // Chrome geometry observers (--bottom/top-chrome-* CSS vars + Android layout
   // report). Extracted to useChromeMeasurements in tranche 1 — logic unchanged.
@@ -3760,7 +3761,7 @@ function AppInner() {
             {/* Always mounted so draft text survives chat↔terminal switches.
                inert disables focus/keyboard/paste when hidden so keystrokes
                reach xterm instead of the buried textarea. */}
-              <div ref={bottomBarRef} className={`chrome-wrapper chrome-wrapper--bottom bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : isTerminalTouch ? ' bottom-float bottom-docked' : ''}`} {...(currentViewMode !== 'chat' && getPlatform() === 'electron' ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
+              <div ref={bottomBarRef} className={`chrome-wrapper chrome-wrapper--bottom bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : isTerminalTouch ? ' bottom-float bottom-docked' : ''}`} {...(currentViewMode !== 'chat' && !phoneTerminalLayout() ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
                 {/* A shell session draws NONE of the bottom chrome: no composer
                     (there is nothing to send a message to), and so no Stop
                     button, no model chip and no way into the model picker — all
