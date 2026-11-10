@@ -155,4 +155,25 @@ describe('folder paths that differ only by letter case', () => {
       expect(removeFolder(lower, file)).toBe(sameFolder);
     });
   }
+
+  // WHY (reviewer finding): add, rename and describe still compared with plain ===, so on
+  // Windows/macOS the other casing made a second entry or reported "not found".
+  for (const [platform, sameFolder] of [['win32', true], ['darwin', true], ['linux', false]] as const) {
+    it(`${platform}: add, rename and describe ${sameFolder ? 'find the one saved folder' : 'treat the other casing as a different folder'}`, () => {
+      setPlatform(platform);
+      const upper = path.join(dir, 'Docs');
+      const lower = path.join(dir, 'docs');
+      fs.writeFileSync(file, JSON.stringify([{ path: upper, nickname: 'saved', addedAt: 5 }]));
+      addFolder(lower, undefined, file);
+      const saved = () => JSON.parse(fs.readFileSync(file, 'utf8')) as { path: string; nickname: string; description?: string | null }[];
+      expect(saved()).toHaveLength(sameFolder ? 1 : 2);
+      expect(renameFolder(lower, 'renamed', file)).toBe(true);
+      expect(setFolderDescription(lower, 'about', file)).toBe(true);
+      const hit = saved().find((f) => f.path === (sameFolder ? upper : lower))!;
+      expect(hit.nickname).toBe('renamed');
+      expect(hit.description).toBe('about');
+      // The other entry (Linux only) is untouched.
+      if (!sameFolder) expect(saved().find((f) => f.path === upper)!.nickname).toBe('saved');
+    });
+  }
 });

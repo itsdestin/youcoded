@@ -75,7 +75,9 @@ export function listPickerFolders(file?: string): PickerFolder[] {
 export function addFolder(folderPath: string, nickname: string | undefined, file?: string): SavedFolder {
   const folders = readFolders(file);
   const normalized = path.resolve(folderPath);
-  const existing = folders.find((f) => path.resolve(f.path) === normalized);
+  // WHY pathKey (not ===): on Windows/macOS /Users/me/Docs and /Users/me/docs are the same folder,
+  // so adding the other spelling must find the saved entry instead of making a second one.
+  const existing = folders.find((f) => pathKey(f.path) === pathKey(normalized));
   // Adding a removed synced project's folder back lists it on THIS computer again (backlog
   // row 10). Sync stays stopped — a stop is permanent — so it shows as "Sync stopped".
   const readd = isRemovedManaged(normalized);
@@ -104,7 +106,8 @@ export function removeFolder(folderPath: string, file?: string): boolean {
 export function renameFolder(folderPath: string, nickname: string, file?: string): boolean {
   const folders = readFolders(file);
   const normalized = path.resolve(folderPath);
-  const entry = folders.find((f) => path.resolve(f.path) === normalized);
+  // WHY pathKey: same case-blind match as add/remove, so the other casing still finds the entry.
+  const entry = folders.find((f) => pathKey(f.path) === pathKey(normalized));
   if (!entry) return false;
   entry.nickname = nickname;
   writeFolders(folders, file);
@@ -114,7 +117,8 @@ export function renameFolder(folderPath: string, nickname: string, file?: string
 export function setFolderDescription(folderPath: string, description: string, file?: string): boolean {
   const folders = readFolders(file);
   const normalized = path.resolve(folderPath);
-  const entry = folders.find((f) => path.resolve(f.path) === normalized);
+  // WHY pathKey: same case-blind match as add/remove, so the other casing still finds the entry.
+  const entry = folders.find((f) => pathKey(f.path) === pathKey(normalized));
   if (!entry) return false;
   // Trim + cap here as well as in the UI: the renderer is a mirror, never the boundary. String(…
   // ?? '') so a null/undefined caller throws on neither transport.
