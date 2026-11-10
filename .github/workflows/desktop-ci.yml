@@ -149,7 +149,11 @@ jobs:
       fail-fast: false
       matrix:
         format: [AppImage, deb, rpm, pacman]
-    runs-on: ubuntu-latest
+    # WHY pinned (2026-11-10): GitHub is moving ubuntu-latest from 24.04 to 26.04, so a run
+    # lands on either. On 26.04 the rpm step failed twice with "bsdtar: Unrecognized archive
+    # format" on code that passed on 24.04 hours earlier (master c5bfdb2c). Unpin only after
+    # the rpm check is shown to pass on 26.04. The RELEASE workflow still uses ubuntu-latest.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
