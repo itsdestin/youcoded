@@ -1,7 +1,9 @@
 name: Claude Code startup-dialog drift
 
 # Has the LATEST published Claude Code changed the dialogs it shows before a
-# session starts (folder trust, bypass warning, MCP-server approval)?
+# session starts (folder trust, bypass warning, MCP-server approval) and the
+# FIRST-INSTALL screens a brand-new install sees (theme picker, sign-in method
+# choice; recorded signed-out and never answered)?
 #
 # WHY: each time Claude Code reshaped one of these (the 2.1.2xx trust rewrite,
 # 2.1.281 dropping the option numbers), new YouCoded sessions sat on

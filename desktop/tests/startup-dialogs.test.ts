@@ -47,7 +47,34 @@ const MCP_ONE = {
 };
 /** A multi-select checkbox dialog: deliberately NOT turned into buttons. */
 const UNREADABLE = (heading: string) => ({ unreadable: heading });
-type Expect = typeof TRUST | ReturnType<typeof UNREADABLE>;
+/**
+ * A first-install screen (no "Enter to confirm" footer, so not a "dialog"): the
+ * user must still get BUTTONS while the session starts. WHY a separate kind
+ * (first-install coverage): the theme picker is a different menu shape from the
+ * trust dialogs, so the dialog-only assertions would not fit it; the one that
+ * matters here is that cardTitleFor() gives a card at all.
+ */
+const SCREEN = (title: string, options: string[], cursor: number, extra: { numbered?: boolean; narrow?: string[] } = {}) =>
+  ({ screen: true as const, title, options, cursor, numbered: !!extra.numbered, narrow: extra.narrow });
+const THEME = SCREEN('Choose a Theme', [
+  'Auto (match terminal)', 'Dark mode', 'Light mode', 'Dark mode (colorblind-friendly)',
+  'Light mode (colorblind-friendly)', 'Dark mode (ANSI colors only)', 'Light mode (ANSI colors only)',
+], 1);
+const SIGN_IN = SCREEN('Select Login Method', [
+  'Claude account with subscription · Individual, Team, or Enterprise',
+  'Anthropic Console account · API usage billing',
+  '3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI',
+], 0, {
+  numbered: true,
+  // WHY: at phone width (50 columns) the real screen, as Claude Code 2.1.322 draws it, shows
+  // "…API usage" with the word "billing" missing — captured as-is, not a parser loss.
+  narrow: [
+    'Claude account with subscription · Individual, Team, or Enterprise',
+    'Anthropic Console account · API usage',
+    '3rd-party platform · Amazon Bedrock, Microsoft Foundry, Google Vertex AI',
+  ],
+});
+type Expect = typeof TRUST | ReturnType<typeof UNREADABLE> | ReturnType<typeof SCREEN>;
 
 // Every captured scenario → what each of its dialogs must read as. A fixture
 // missing from this table fails the "every capture is covered" test below, so a
@@ -68,6 +95,8 @@ const EXPECTED: Record<string, Expect[]> = {
   'bypass-untrusted': [TRUST, BYPASS],
   'untrusted-signed-in': [TRUST],
   'bypass-untrusted-signed-in': [TRUST, BYPASS],
+  // A brand-new install: theme picker, then the sign-in choice (recorded, never answered).
+  'first-install': [THEME, SIGN_IN],
 };
 
 const open: FixtureTerminal[] = [];
@@ -101,6 +130,17 @@ describe('startup-dialog captures', () => {
         it(`dialog ${i + 1} reads as ${'unreadable' in want ? 'unreadable (answer in terminal)' : `"${want.title}"`}`, async () => {
           const screen = await screenAt(load(file), `dialog-${i + 1}-visible`);
           const menu = parseInkSelect(screen);
+          if ('screen' in want) {
+            // The user gets buttons: a card with the expected title, and the options as printed.
+            expect(menu, `the app does not read this first-install screen:\n${screen}`).not.toBeNull();
+            expect(cardTitleFor(menu!, true, screen)).toEqual({ title: want.title, generic: false });
+            expect(menu!.title).toBe(want.title);
+            const wantOptions = want.narrow && load(file).cols < 60 ? want.narrow : want.options;
+            expect(menu!.options).toEqual(wantOptions);
+            expect(menu!.selectedIndex).toBe(want.cursor);
+            expect(menuToButtons(menu!).map((b) => b.label)).toEqual(wantOptions);
+            return;
+          }
           if ('unreadable' in want) {
             expect(menu).toBeNull();
             expect(readStartupDialog(screen)).toEqual({ heading: want.unreadable });
