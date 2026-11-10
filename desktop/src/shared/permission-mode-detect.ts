@@ -73,3 +73,20 @@ export function detectPermissionMode(raw: string, rawNewFrom = 0): PermissionMod
   if (found.has('plan mode on')) return 'plan';
   return 'normal';
 }
+
+// WHY (2026-11-09 final review F-7): the app now asks Claude Code to start in auto. Where the plan, the model or fast
+// mode rules auto out, Claude Code falls back to its plain mode and says so in one of these notices (read from
+// Claude Code 2.1.300's own text and seen in real 2.1.281 captures). Its plain mode draws no footer at all, so without
+// this the badge would go on saying AUTO.
+// WHY a separate question, asked ONLY about a session believed to be in auto (main/session-live.ts): the real
+// captures show the same notice flashing by while a session sits in plan mode, where it changes nothing. Treating
+// it as "the mode is now normal" everywhere turned a correct PLAN badge into NORMAL.
+const AUTO_REFUSED_RE = /auto mode (?:is unavailable|unavailable|isn['’]t available|is off while)/i;
+
+/** Did this piece complete one of Claude Code's "auto is not available" notices? (`rawNewFrom` as in detectPermissionMode.) */
+export function detectAutoRefused(raw: string, rawNewFrom = 0): boolean {
+  const head = raw.slice(0, rawNewFrom).replace(CURSOR_GAP_RE, ' ');
+  const data = head + raw.slice(rawNewFrom).replace(CURSOR_GAP_RE, ' ');
+  const m = AUTO_REFUSED_RE.exec(data);
+  return !!m && m.index + m[0].length > head.length;
+}

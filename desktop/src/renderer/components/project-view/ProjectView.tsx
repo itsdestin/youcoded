@@ -88,6 +88,7 @@ function readStoredFileView(): FileViewMode {
 }
 import { Button, SearchFilterPill } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
+import { readStoredShowHidden, storeShowHidden } from './hidden-files';
 import { getCapabilities } from '../../platform';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
@@ -234,7 +235,10 @@ export function ProjectView(props: ProjectViewProps) {
   // Multi-select type filter; EMPTY set = all types (Destin, 2026-07-23).
   const [types, setTypes] = useState<ReadonlySet<FileTypeGroup>>(() => new Set());
   const [fileSort, setFileSort] = useState<FileSortKey>('name');
-  const [showHidden, setShowHidden] = useState(false); // Files filter menu: "Show hidden files" (hidden-files.ts)
+  // Files filter menu: "Show hidden files". Remembered on this device (hidden-files.ts), and unlike the type
+  // filter it is not reset when the project changes: it is a preference, not a description of one project.
+  const [showHidden, setShowHidden] = useState(readStoredShowHidden);
+  useEffect(() => { storeShowHidden(showHidden); }, [showHidden]);
   // Grid vs. list for the Files tab. Remembered app-wide, NOT per project
   // (design deck 2026-09-03, Q-4a): one answer to "what view am I in" is
   // predictable; a view that changes as you switch projects reads as a glitch.

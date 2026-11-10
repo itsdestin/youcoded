@@ -19,7 +19,7 @@
 // Electron-free and injected, like publish.ts: tests drive it with a record and a fake publish.
 import type { Publish } from './publish';
 import type { SessionRecords } from './session-record';
-import { detectPermissionMode } from '../shared/permission-mode-detect';
+import { detectPermissionMode, detectAutoRefused } from '../shared/permission-mode-detect';
 import type { PermissionMode } from '../shared/types';
 /** How much of the previous terminal piece is kept: the footer line (glyph + phrase + escapes) fits well inside it. */
 const OUTPUT_TAIL_CHARS = 200;
@@ -66,6 +66,8 @@ export interface SessionLiveDeps {
    *  screen that reloads its session list (the phone at start-up or after a reconnect) re-seeded NORMAL from it while Claude Code
    *  said auto; the footer is not redrawn until the next turn, so it stayed wrong. The caller writes the mode back into the info. */
   onModeRead?: (sessionId: string, mode: PermissionMode) => void;
+  /** The mode the session's own info holds now: the mode it was started in, then each one read here (onModeRead writes it back). */
+  currentMode?: (sessionId: string) => string | undefined;
 }
 
 export class SessionLiveFacts {
@@ -111,7 +113,10 @@ export class SessionLiveFacts {
     const tail = this.outputTails.get(sessionId) ?? '';
     const joined = tail + data;
     this.outputTails.set(sessionId, joined.slice(-OUTPUT_TAIL_CHARS));
-    const mode = detectPermissionMode(joined, tail.length);
+    let mode = detectPermissionMode(joined, tail.length);
+    // No footer in this piece, the session is believed to be in auto, and Claude Code just said auto is not
+    // available: it has fallen back to its plain mode, which draws no footer (permission-mode-detect.ts).
+    if (!mode && this.deps.currentMode?.(sessionId) === 'auto' && detectAutoRefused(joined, tail.length)) mode = 'normal';
     if (!mode) return;
     const known = this.deps.records.facts(sessionId)?.permissionMode ?? null;
     if (known === mode) return;

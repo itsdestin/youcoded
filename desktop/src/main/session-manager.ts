@@ -11,6 +11,7 @@ import { SessionInfo, SessionProvider } from '../shared/types';
 import type { ModelBinding } from '../shared/provider-types';
 import { EventEmitter } from 'events';
 import { log } from './logger';
+import { claudeStartMode, userDefaultMode, refreshUserDefaultMode } from './claude-start-mode';
 import { deployClaudeCodeLinkMcp } from './claude-code-mcp';
 import { deployClaudeCodeDocCommentsMcp } from './claude-code-doc-comments-mcp';
 import { browserRelayAttachment } from './assistant-browser/claude-code-browser-mcp';
@@ -200,6 +201,7 @@ export class SessionManager extends EventEmitter {
   constructor(options: SessionManagerOptions = {}) {
     super();
     this.controlOptions = options;
+    void refreshUserDefaultMode(); // learn the person's own default mode before the first session starts
     // WHY: a secret/held poll cannot outlive its app-owned CLI, including natural worker failures.
     if (options.claudeControls) {
       this.on('session-exit', (id: string) => options.claudeControls!.closeSession(id));
@@ -323,10 +325,11 @@ export class SessionManager extends EventEmitter {
     // Build Claude CLI args. A shell session takes none of them — `$SHELL`
     // spawns bare.
     const args: string[] = [];
+    // The mode Claude Code is told to start in, and so what the badge shows at once (claude-start-mode.ts).
+    const startMode = claudeStartMode(!!opts.skipPermissions, userDefaultMode());
+    void refreshUserDefaultMode(); // for the next session (claude-start-mode.ts)
     if (!isShell) {
-      if (opts.skipPermissions) {
-        args.push('--dangerously-skip-permissions');
-      }
+      args.push(...startMode.args);
       if (opts.resumeSessionId) {
         args.push('--resume', opts.resumeSessionId);
       }
@@ -446,7 +449,8 @@ export class SessionManager extends EventEmitter {
       id,
       name: opts.name,
       cwd: resolvedCwd,
-      permissionMode: opts.skipPermissions ? 'bypass' : 'normal',
+      // A shell session has no Claude Code mode; it keeps the old plain value.
+      permissionMode: isShell ? (opts.skipPermissions ? 'bypass' : 'normal') : startMode.badge,
       skipPermissions: opts.skipPermissions,
       status: 'active',
       createdAt: Date.now(),

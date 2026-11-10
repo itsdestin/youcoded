@@ -504,6 +504,7 @@ const IPC = {
   ANALYTICS_SET_OPT_IN: 'analytics:set-opt-in',
   ARCADE_LEADERBOARD: 'arcade:leaderboard',
   ARCADE_RECORDS: 'arcade:records',
+  ARCADE_ROOM_TICKET: 'arcade:room-ticket',
   ARCADE_STATUS: 'arcade:status',
   ARCADE_SUBMIT_SCORE: 'arcade:submit-score',
   ARTIFACTS_APPEND_VERSION: 'artifacts:append-version',
@@ -2269,6 +2270,8 @@ contextBridge.exposeInMainWorld('claude', {
     submitScore: (game: string, score: number) => ipcRenderer.invoke('arcade:submit-score', { game, score }),
     // Head-to-head records. `game` is optional — omitted means every game.
     records: (game?: string) => ipcRenderer.invoke('arcade:records', { game }),
+    // A one-time pass to join a two-player room (2026-11-09 final review F-3).
+    roomTicket: (game: string, room: string) => ipcRenderer.invoke('arcade:room-ticket', { game, room }),
   },
   permissions: {
     list: () => ipcRenderer.invoke('permissions:list'),

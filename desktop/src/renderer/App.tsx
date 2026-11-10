@@ -337,8 +337,6 @@ function AppInner() {
   // 'unknown' is a display-only sentinel (never fed back into the real
   // PermissionMode enforcement logic) — see matchPermissionMode below.
   const [permissionModes, setPermissionModes] = useState<Map<string, PermissionMode | 'unknown'>>(new Map());
-  // Sessions whose Claude Code mode has been read from the terminal (or chosen by the user) — see seedModeUnconfirmed.
-  const modeReadFromTerminal = useRef(new Set<string>());
   // Native sessions carry a SEPARATE permission mode (harness policy, not a CC
   // PTY mode). Kept in its own map so the two unions never mix; default 'ask' is
   // read lazily (no per-session seeding) since NativeSessionHost also defaults to
@@ -1631,7 +1629,6 @@ function AppInner() {
     const sessionPermissionModeHandler = (window.claude.on as any).sessionPermissionMode?.((sid: string, mode: string) => {
       const valid: PermissionMode[] = ['normal', 'auto-accept', 'plan', 'auto', 'bypass'];
       if (!valid.includes(mode as PermissionMode)) return;
-      modeReadFromTerminal.current.add(sid); // the real mode is known now — see seedModeUnconfirmed
       setPermissionModes((prev) => {
         if (prev.get(sid) === mode) return prev;
         return new Map(prev).set(sid, mode as PermissionMode);
@@ -3071,23 +3068,9 @@ function AppInner() {
   // as 'unknown', not 'normal' — 'normal' would claim a specific, possibly wrong
   // permission posture instead of admitting YouCoded hasn't determined it yet.
   const currentPermissionMode: PermissionMode | 'unknown' = sessionId ? (permissionModes.get(sessionId) ?? 'unknown') : 'normal';
-  // WHY (2026-11-01 phone test; Destin's guess confirmed in code): the host seeds EVERY new Claude Code session as
-  // 'normal' (session-manager.ts) and only learns the real mode when Claude Code first draws its "auto mode on"-style
-  // footer (session-live.ts). So a session that really starts in Auto showed NORMAL, then flipped to AUTO. A seeded
-  // 'normal' is a guess: hide the badge for the first few seconds until the terminal confirms a mode (or the user
-  // picks one). After the grace window 'normal' is shown, because Claude Code's footer says nothing at all in its
-  // plain default mode, so waiting forever would hide a correct badge.
-  const MODE_GRACE_MS = 6000;
-  const seedModeUnconfirmed = !!sessionId && !!currentSession && currentSession.provider !== 'native'
-    && currentPermissionMode === 'normal' && !currentSession.skipPermissions
-    && !modeReadFromTerminal.current.has(sessionId)
-    && Date.now() - (currentSession.createdAt ?? 0) < MODE_GRACE_MS;
-  const [, setModeGraceTick] = useState(0);
-  useEffect(() => {
-    if (!seedModeUnconfirmed || !currentSession) return;
-    const t = setTimeout(() => setModeGraceTick((n) => n + 1), Math.max(50, MODE_GRACE_MS - (Date.now() - currentSession.createdAt)));
-    return () => clearTimeout(t);
-  }, [seedModeUnconfirmed, currentSession?.id, currentSession?.createdAt]);
+  // WHY no "unconfirmed" grace any more (2026-11-09 final review F-7): the host now TELLS Claude Code which mode to
+  // start in (main/claude-start-mode.ts), so the seeded mode is a fact and the badge shows from the first moment.
+  // It used to be a guess ('normal'), hidden for six seconds until the terminal confirmed or corrected it.
   // Native mode defaults to 'ask' only for the brief window before the async
   // getPermissionMode() call above resolves (mirrors NativeSessionHost's real
   // starting mode) — once it resolves, the map always holds either the real
@@ -3179,7 +3162,6 @@ function AppInner() {
     const next = cycle[(idx + 1) % cycle.length];
     const apply = () => {
       if (cycleClaudeNow(sessionId, currentPermissionMode, next)) return;
-      modeReadFromTerminal.current.add(sessionId); // the user chose it: no longer a guess
       setPermissionModes((prev) => new Map(prev).set(sessionId, next));
       // Send Shift+Tab to the PTY to cycle Claude Code's permission mode
       window.claude.session.sendInput(sessionId, '\x1b[Z');
@@ -3804,7 +3786,7 @@ function AppInner() {
                   modelProviderType={activeProviderType}
                   usagePlan={onChatGptPlan ? 'chatgpt' : 'claude'}
                   provider={isNativeSession ? 'native' : 'claude'}
-                  permissionMode={isPendingTab || seedModeUnconfirmed ? undefined : isNativeSession ? currentNativeMode : currentPermissionMode}
+                  permissionMode={isPendingTab ? undefined : isNativeSession ? currentNativeMode : currentPermissionMode}
                   onCyclePermission={isNativeSession ? cycleNativePermission : cyclePermission}
                   permissionPending={!!sessionId && modePending.has(`mode:${sessionId}`)}
                   fast={fastMode}

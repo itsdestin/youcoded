@@ -183,7 +183,8 @@ export interface FakePartySocketOptions {
   host?: string;
   room?: string;
   party?: string;
-  query?: Record<string, string | undefined | null>;
+  // The real client passes a function here (it fetches a room pass); the fake is only ever handed the plain form.
+  query?: Record<string, string | undefined | null> | (() => Promise<Record<string, string | undefined | null>>);
 }
 
 export class FakePartySocket implements PartySocketLike {

@@ -74,9 +74,12 @@ A fix would build the programs with a relative-path launcher or rewrite the path
   Claude Code). It rewrites the lock to the latest versions and prints what changed. Then build and run on a phone;
   commit the lock and `pins.env` only after that passes. Alpine drops old package files, so an old lock stops
   building once upstream moves on: refresh it rather than editing it by hand.
-- Needs network and `apk version -t` (see `docs/android-redistribution.md`); not run in CI.
+- Needs network and `apk version -t` (see `docs/android-redistribution.md`).
+- **Proposed automatically:** `.github/workflows/runtime-pins-refresh.yml` runs the script every Monday and opens or
+  updates one pull request (`auto/runtime-pins-refresh`) when anything moved. It never merges; the phone test above
+  still decides (final review 2026-11-09, Q-13).
 - ICU: Node needs `usr/share/icu/<ver>/icudt<ver>l.dat` (packed in `share.tgz`; `RuntimeInstaller.environment()`
-  sets `NODE_ICU_DATA` to the one version folder), or `toLocaleString` throws and the backend dies at boot.
+  sets `NODE_ICU_DATA` to the newest version folder that holds a data file; `install()` empties `usr/share` first so an older version's folder cannot linger; `build-runtime.sh` stops if the data file is missing), or `toLocaleString` throws and the backend dies at boot.
 
 ## On-device layout (`files/` = the app's files folder)
 

@@ -102,7 +102,9 @@ and **2048** are solo and never touch the network to be playable.
   **relays that know no rules**; each client re-validates every incoming move
   (chess.js lives in the renderer). They are the ONLY parties any client connects to
   (`party: 'connectfour'` / `party: 'chess'`).
-  - URL: `wss://api.youcoded.ai/parties/<connectfour|chess>/<room>?username=…`
+  - URL: `wss://api.youcoded.ai/parties/<connectfour|chess>/<room>?ticket=…` — a one-time pass from
+    `POST /games/ticket` (signed in), fetched per connection through `arcade:room-ticket`; the room names the
+    player from the pass and closes itself after 6 hours or 30 idle minutes (2026-11-09)
     (`party-client.ts` `PARTYKIT_HOST`, overridable with `VITE_PARTYKIT_HOST`;
     partysocket's default `/parties/` prefix matches the Worker). The party name
     comes from the Worker binding name (`CONNECTFOUR` → `connectfour`) — renaming a

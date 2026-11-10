@@ -429,6 +429,7 @@ export function registerIpcHandlers(
   const liveFacts = new SessionLiveFacts({
     publish,
     records: runtime.records,
+    currentMode: (id) => sessionManager.getSession(id)?.permissionMode,
     onModeRead: (id, mode) => { const info = sessionManager.getSession(id); if (info) info.permissionMode = mode; }, // WHY: see session-live.ts onModeRead
     // A Claude Code session: not native (its host says these things itself) and not a plain shell.
     isClaude: (id) => { const p = sessionManager.getSession(id)?.provider; return p !== 'native' && p !== 'shell' && !!sessionManager.getSession(id); },

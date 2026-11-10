@@ -3527,6 +3527,8 @@ export function installShim(): void {
       // Head-to-head records. `game` is optional; the far side reads
       // payload.game and treats an absent one as "every game".
       records: (game?: string) => invoke('arcade:records', { game }),
+      // A one-time pass to join a two-player room (2026-11-09 final review F-3).
+      roomTicket: (game: string, room: string) => invoke('arcade:room-ticket', { game, room }),
     },
     permissions: {
       list: () => invoke('permissions:list'),
