@@ -61,19 +61,27 @@ describe('workbench fixture clock', () => {
 
   describe('the workbench clock shim', () => {
     const RealDate = Date;
+    // WHY a hand-made "real" Date and not vi.useFakeTimers: the fake-timer Date ignores `new.target`, which would hide
+    // exactly what the subclass/constructor cases below check. This one behaves like the browser's: honours
+    // subclassing, and reads a clock the test moves by hand.
+    let clock = 0;
+    class TestDate extends RealDate {
+      constructor(...a: unknown[]) { if (a.length === 0) super(clock); else super(...(a as [number])); }
+      static now() { return clock; }
+    }
     afterEach(() => {
       vi.unstubAllGlobals();
-      vi.useRealTimers();
       (globalThis as { Date: DateConstructor }).Date = RealDate;
       vi.resetModules();
     });
     const load = async (realNow: Date, search = '?mode=workbench') => {
-      vi.useFakeTimers();
-      vi.setSystemTime(realNow);
+      clock = realNow.getTime();
+      (globalThis as { Date: DateConstructor }).Date = TestDate as unknown as DateConstructor;
       vi.stubGlobal('location', { search });
       vi.resetModules();
       await import('../src/renderer/dev/workbench/clock-shim');
     };
+    const tick = (ms: number) => { clock += ms; };
 
     for (const [h, m] of [[3, 0], [8, 0], [15, 30], [23, 30]]) {
       it(`a page loaded at ${h}:${String(m).padStart(2, '0')} starts at 08:00 today and keeps ticking`, async () => {
@@ -81,12 +89,22 @@ describe('workbench fixture clock', () => {
         const n = new Date();
         expect([n.getDate(), n.getHours(), n.getMinutes()]).toEqual([10, 8, 0]);
         expect(new Date(Date.now()).getHours()).toBe(8);
-        vi.advanceTimersByTime(90_000);
+        tick(90_000);
         expect(new Date().getMinutes()).toBe(1); // still ticking, from 08:00
         // A date that names its own moment is left alone.
         expect(new Date(2020, 0, 2, 3, 4).getHours()).toBe(3);
         expect(new Date('2020-01-02T03:04:05Z').getTime()).toBe(Date.UTC(2020, 0, 2, 3, 4, 5));
         expect(new Date() instanceof Date).toBe(true);
+        expect(new Date().constructor).toBe(Date);
+        class Stamp extends Date { label() { return `${this.getHours()}h`; } }
+        const st = new Stamp();
+        expect(st).toBeInstanceOf(Stamp);
+        expect(st.label()).toBe('8h');
+        expect(new Stamp(0).getTime()).toBe(0);
+        class Other extends RealDate {}
+        const viaReflect = Reflect.construct(Date, [], Other);
+        expect(viaReflect).toBeInstanceOf(Other);
+        expect(viaReflect.getHours()).toBe(8);
       });
     }
 
@@ -107,9 +125,28 @@ describe('workbench fixture clock', () => {
     });
   });
 
-  it('relative fixture times (negative numbers) become base + offset; real epochs are untouched', () => {
-    const out = rebaseFixtureTimes('{"timestamp":-1000,"startedAt": -5000,"x":-3,"endedAt":42,"r":"{\\"scheduledFor\\":-7}"}', 1_000_000);
-    expect(out).toBe('{"timestamp":999000,"startedAt": 995000,"x":-3,"endedAt":42,"r":"{\\"scheduledFor\\":999993}"}');
+  it('fixture offsets before AND after the base become base + offset; real epochs and other keys are untouched', () => {
+    const out = rebaseFixtureTimes('{"timestamp":-1000,"startedAt": 300000,"x":-3,"endedAt":1753800348000,"r":"{\\"scheduledFor\\":-7}"}', 1_000_000);
+    expect(out).toBe('{"timestamp":999000,"startedAt": 1300000,"x":-3,"endedAt":1753800348000,"r":"{\\"scheduledFor\\":999993}"}');
+  });
+
+  it('every time in every workbench .jsonl fixture lands after the year 2020 once loaded', () => {
+    const TIME = /"(?:timestamp|startedAt|endedAt|at|scheduledFor)\\?":\s*(-?\d+)/g;
+    const y2020 = Date.UTC(2020, 0, 1);
+    const checked: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const p = join(dir, name);
+        if (statSync(p).isDirectory()) { walk(p); continue; }
+        if (extname(p) !== '.jsonl') continue;
+        for (const m of rebaseFixtureTimes(readFileSync(p, 'utf8')).matchAll(TIME)) {
+          checked.push(p);
+          expect(Number(m[1]), `${p}: ${m[0]}`).toBeGreaterThan(y2020);
+        }
+      }
+    };
+    walk(WORKBENCH);
+    expect(checked.length).toBeGreaterThanOrEqual(13); // the 13 converted stamps are all seen
   });
 
   it('no file under dev/workbench still hardcodes the old 2025 epoch', () => {

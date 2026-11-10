@@ -24,19 +24,23 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && typeof lo
     const RealDate = Date;
     const delta = fixtureNow(RealDate.now()) - RealDate.now();
     const shiftedNow = () => RealDate.now() + delta;
-    (globalThis as { Date: DateConstructor }).Date = new Proxy(RealDate, {
+    const ShiftedDate = new Proxy(RealDate, {
       get(target, prop, receiver) {
         if (prop === 'now') return shiftedNow;
         return Reflect.get(target, prop, receiver);
       },
-      construct(target, args) {
+      construct(target, args, newTarget) {
         // Only the no-argument form means "the current moment"; every other form names a moment itself.
-        if (args.length === 0) return new target(shiftedNow());
-        return Reflect.construct(target, args);
+        // newTarget is passed through so `class X extends Date {}` and Reflect.construct keep working, and
+        // `new Date().constructor === Date` (newTarget is this proxy, whose prototype is the real one).
+        return Reflect.construct(target, args.length ? args : [shiftedNow()], newTarget);
       },
       apply(target) {
         return new target(shiftedNow()).toString();
       },
     });
+    // Instances share the real prototype, so point its `constructor` at the shifted Date: `new Date().constructor === Date`.
+    Object.getPrototypeOf(new RealDate()).constructor = ShiftedDate;
+    (globalThis as { Date: DateConstructor }).Date = ShiftedDate;
   }
 }

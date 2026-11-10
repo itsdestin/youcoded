@@ -45,13 +45,17 @@ export const FIXTURE_BASE = /* @__PURE__ */ fixtureBase();
 /** The base shifted by `offsetMs` (negative = earlier). */
 export const at = (offsetMs: number): number => FIXTURE_BASE + offsetMs;
 
-// Fixture .jsonl files cannot import this, so a time there is written as a NEGATIVE number: milliseconds
-// relative to the base (e.g. "startedAt":-4999000). Real epoch times are never negative, so the sign is the
-// marker; only these time-bearing keys are touched. The pattern also matches inside an escaped JSON string
+// Fixture .jsonl files cannot import this, so a time there is written as an OFFSET in milliseconds from the
+// base, negative = before it ("startedAt":-4999000), positive = after it ("timestamp": 300000). A real epoch is
+// ~1.7e12, so any number under these time-bearing keys whose size is far below that (OFFSET_LIMIT) is an offset and
+// anything bigger passes through untouched. (First version recognised only negatives, so the two "+5 min" helper
+// stamps in claude-code.jsonl came out as 1970.) The pattern also matches inside an escaped JSON string
 // (`\"scheduledFor\":-4700000` in a tool result), which is why it tolerates a backslash before the quote.
-const RELATIVE_TIME = /("(?:timestamp|startedAt|endedAt|at|scheduledFor)\\?":\s*)(-\d+)/g;
+const OFFSET_LIMIT = 1e11;
+const RELATIVE_TIME = /("(?:timestamp|startedAt|endedAt|at|scheduledFor)\\?":\s*)(-?\d+)/g;
 
-/** Turn the base-relative negative times in one fixture line into real epoch milliseconds. */
+/** Turn the base-relative offsets in one fixture line into real epoch milliseconds. */
 export function rebaseFixtureTimes(text: string, base: number = FIXTURE_BASE): string {
-  return text.replace(RELATIVE_TIME, (_m, key: string, rel: string) => `${key}${base + Number(rel)}`);
+  return text.replace(RELATIVE_TIME, (whole: string, key: string, num: string) =>
+    Math.abs(Number(num)) < OFFSET_LIMIT ? `${key}${base + Number(num)}` : whole);
 }
