@@ -27,10 +27,6 @@ export const TIPS: readonly GuideTip[] = [
   { id: 'local-models', text: 'Models can run on your own computer, free and private. Local models live under Settings, Assistant settings.' },
   { id: 'floater', text: 'The buddy can sit on your desktop while you work elsewhere and wave when a session needs you. Turn it on under Settings, Buddy floater.' },
   { id: 'themes', text: 'Themes change more than colours: the buddy, the wallpaper and the chat bubbles all come with one. Settings, Appearance.' },
-  // WHY (Destin, final review F-8, "No switch"): the phone starts Claude Code in its fullscreen display so lines never
-  // print twice (main/tui-fullscreen-default.ts). Nothing in the app said so, or how to change it. Shown the first time
-  // terminal view opens in the phone app running its own assistant (App.tsx).
-  { id: 'terminal-fullscreen', text: 'Terminal view here redraws in place, so lines never print twice. Prefer the scrolling style? Send /tui default in a chat. Your phone remembers it.' },
   { id: 'help', text: 'Something went wrong? Report a bug sends the details to the maintainers, and the community at r/youcoded is a good place to ask.' },
 ];
 

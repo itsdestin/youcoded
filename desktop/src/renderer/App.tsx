@@ -122,7 +122,7 @@ import { createRefillRetry } from './state/refill-retry';
 
 import FirstRunView from './components/FirstRunView';
 import { getCapabilities, getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
-import { phoneTerminalLayout, inPhoneApp } from './device';
+import { phoneTerminalLayout } from './device';
 import { deferredScreen } from './components/deferred-screen';
 import { markScreensReady, useScreensReady } from './state/screens-ready';
 import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
@@ -3387,8 +3387,6 @@ function AppInner() {
     if (isFirstRun !== false) return;
     if (bumpCounter('launches') === 3 && getCapabilities().buddy) triggerTip('floater'); // R4-1: the tip is about the buddy, so it asks `buddy`
   }, [isFirstRun]);
-  // Phone app with its own assistant only: that is where fullscreen display is the seeded default (tips.ts).
-  useEffect(() => { if (currentViewMode === 'terminal' && !tourOpen && inPhoneApp() && !isRemoteMode()) triggerTip('terminal-fullscreen'); }, [currentViewMode, tourOpen]);
   useEffect(() => {
     if (!settingsOpen || tourOpen) return;
     const done = guideDoneAt();
