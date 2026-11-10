@@ -128,3 +128,31 @@ describe('a synced project removed on any device leaves the lists; its files sta
     expect(listPickerFolders(file).map((f) => f.path)).toEqual([dir, paf]);
   });
 });
+
+// WHY (card #151 item 4): "same folder" now goes through one pathKey(): letter case is ignored
+// on Windows and macOS (their disks ignore it) but NOT on Linux, where Docs and docs are two
+// folders. The platform is stubbed so every OS's CI checks all three behaviours.
+describe('folder paths that differ only by letter case', () => {
+  const realPlatform = process.platform;
+  const setPlatform = (p: string) => Object.defineProperty(process, 'platform', { value: p });
+  afterEach(() => setPlatform(realPlatform));
+
+  for (const [platform, sameFolder] of [['win32', true], ['darwin', true], ['linux', false]] as const) {
+    it(`${platform}: picker badge + dedupe + removal ${sameFolder ? 'treat them as one folder' : 'keep them as two folders'}`, () => {
+      setPlatform(platform);
+      const projectsRoot = path.join(dir, 'Projects');
+      const upper = path.join(projectsRoot, 'Paf');
+      const lower = path.join(projectsRoot, 'paf');
+      fs.writeFileSync(file, JSON.stringify([{ path: upper, nickname: 'saved', addedAt: 5 }]));
+      // The managed list spells the same project in lower case.
+      h.managed = { projectsRoot: projectsRoot.toLowerCase(), listProjects: () => [{ path: lower, name: 'paf' }] };
+      const list = listPickerFolders(file);
+      // dedupe: one row when the OS ignores case, two on Linux
+      expect(list).toHaveLength(sameFolder ? 1 : 2);
+      // managed badge on the saved row only when the projects root matches ignoring case
+      expect(list[0].managed).toBe(sameFolder ? true : undefined);
+      // removal by the differently-cased path
+      expect(removeFolder(lower, file)).toBe(sameFolder);
+    });
+  }
+});
