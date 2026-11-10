@@ -7,7 +7,13 @@ import { describe, expect, it } from 'vitest';
 // classes the editor publishes (sdkjs) and swaps a few methods. Nothing pinned that the swaps
 // became what they are meant to be, or that every OTHER editor feature stayed exactly as sdkjs
 // made it. It is loaded here, as the page would, against stand-ins for the editor's classes.
-const SOURCE = fs.readFileSync(path.join(__dirname, '../../office-addon/editors/yc-early.js'), 'utf8');
+// WHY skipped when absent: office-addon/ is the checksum-pinned bundle scripts/fetch-office.mjs
+// downloads (gitignored, never committed), the same way the x2t tests skip without it. CI fetches
+// it with --required (desktop-test-build.yml), so the checks run there.
+const SCRIPT = path.join(__dirname, '../../office-addon/editors/yc-early.js');
+const HAS_ADDON = fs.existsSync(SCRIPT);
+const SOURCE = HAS_ADDON ? fs.readFileSync(SCRIPT, 'utf8') : '';
+const describeAddon = describe.skipIf(!HAS_ADDON);
 
 interface Opts { settings?: { status: number; body: string } | 'throws'; storage?: Record<string, string>; }
 
@@ -48,7 +54,7 @@ function load(opts: Opts = {}) {
 
 const canvas = (win: any, id: string) => { const c = new win.HTMLCanvasElement(); c.id = id; return c; };
 
-describe('yc-early.js: peer connections are turned off', () => {
+describeAddon('yc-early.js: peer connections are turned off', () => {
   it('both constructors throw and cannot be put back', () => {
     const { win } = load();
     for (const name of ['RTCPeerConnection', 'webkitRTCPeerConnection']) {
@@ -84,7 +90,7 @@ describe("yc-early.js: the person's saved settings are written in before the edi
   });
 });
 
-describe('yc-early.js: the external-links warning and the automatic link refresh do nothing', () => {
+describeAddon('yc-early.js: the external-links warning and the automatic link refresh do nothing', () => {
   it('Api.onNeedUpdateExternalReferenceOnOpen becomes a no-op, whether the class is published after or before', () => {
     const { win } = load();
     const other = function () { return 'kept'; };
@@ -173,7 +179,7 @@ describe("yc-early.js: a sheet's view counts at least 1000 rows and 52 columns",
   });
 });
 
-describe('yc-early.js: slim scrollbars', () => {
+describeAddon('yc-early.js: slim scrollbars', () => {
   it('ScrollSettings: every instance has no arrows; the rest of the class is as sdkjs made it', () => {
     const { win } = load();
     const Orig = function (this: any) { this.showArrows = true; this.scrollerColor = '#112233'; } as any;
@@ -244,7 +250,7 @@ describe('yc-early.js: slim scrollbars', () => {
   });
 });
 
-describe('yc-early.js: canvas painting changes only on the named canvases', () => {
+describeAddon('yc-early.js: canvas painting changes only on the named canvases', () => {
   it('the slide list background is cleared on a glass theme only, and only for the full-canvas fill', () => {
     const { win } = load();
     const thumbs = canvas(win, 'id_thumbnails_background');
