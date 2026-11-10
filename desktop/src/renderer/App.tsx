@@ -23,6 +23,8 @@ import { useChatViewHandlers } from './hooks/use-chatview-handlers';
 import { useOpenSessionFromHost } from './hooks/use-open-session-from-host';
 import { useAppScreens } from './shoot-app-screens';
 import { ScreenMark } from './shoot-mode';
+import { OPEN_LIBRARY_EVENT } from './utils/plugin-off-notice';
+import PluginTurnedOffNotice from './components/PluginTurnedOffNotice';
 import { DevWindowLabel } from './components/DevWindowLabel';
 
 import ErrorBoundary from './components/ErrorBoundary';
@@ -664,10 +666,19 @@ function AppInner() {
   useEffect(() => {
     const onNotice = (e: Event) => {
       const d = (e as CustomEvent<AppNoticeDetail>).detail;
-      if (d?.message) setToast(d.durationMs ? { message: d.message, durationMs: d.durationMs } : d.message);
+      if (!d?.message) return;
+      // The action's own click also puts the toast away, like "Send anyway" does.
+      const action = d.action ? { label: d.action.label, onClick: () => { setToast(null); d.action!.onClick(); } } : undefined;
+      setToast(d.durationMs || action ? { message: d.message, durationMs: d.durationMs, action } : d.message);
     };
     window.addEventListener(APP_NOTICE_EVENT, onNotice);
     return () => window.removeEventListener(APP_NOTICE_EVENT, onNotice);
+  }, []);
+  // Plugin off-switch: the toast's "Show" button asks for Your library.
+  useEffect(() => {
+    const open = () => setActiveView('library');
+    window.addEventListener(OPEN_LIBRARY_EVENT, open);
+    return () => window.removeEventListener(OPEN_LIBRARY_EVENT, open);
   }, []);
   // Zoom state + handlers extracted to useZoomControls (tranche 1).
   const { zoomPercent, zoomVisible, handleZoomIn, handleZoomOut, handleZoomReset } = useZoomControls();
@@ -4410,6 +4421,7 @@ function AppInner() {
           <Toast>. The primitive owns auto-dismiss, which is why 14 setTimeout
           calls came out of this file — every one of them was a chance to leak a
           timer past unmount. */}
+      <PluginTurnedOffNotice />
       {toast && (
         <Toast
           message={typeof toast === 'string' ? toast : toast.message}

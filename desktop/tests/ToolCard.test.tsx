@@ -304,7 +304,7 @@ describe('Always-allow on a deny-listed tool', () => {
       render(<ChatProvider><ToolCard tool={denyListedTool()} sessionId="s1" /></ChatProvider>);
       fireEvent.click(screen.getByRole('button', { name: 'Always allow' }));
       expect(respondToPermission).not.toHaveBeenCalled();
-      expect(screen.getByText(/Always allow this exact command/)).toBeTruthy();
+expect(screen.getByText(/Always allow this exact command/)).toBeTruthy();
     });
 
     it('states the project-scoped consequence (copy shared with the full-auto stop)', () => {

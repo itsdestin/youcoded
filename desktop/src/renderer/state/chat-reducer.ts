@@ -20,7 +20,7 @@ import { localUserMessage } from './local-user-message';
 import { reconcileQueueBubbles, boundPendingIndex, recordedUserMessage } from './queue-bubbles';
 import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
-import { applyBackgroundTaskEnd, applyTaskStop, ccBackgroundOnLaunch, markHelperReopened, reopenResumedHelper, stopRunningBackground, stopRunningCommands } from './cc-background';
+import { applyBackgroundTaskEnd, applyTaskStop, ccBackgroundOnLaunch, commandWithKnownEnd, markHelperReopened, reopenResumedHelper, stopRunningBackground, stopRunningCommands } from './cc-background';
 import { specialistFacts } from './native-run-facts';
 import { ccCommandFromLaunch, nativeCommandFromRun, putCommand, settleCommands } from './background-commands';
 import { answerStep, reannounced, reconcileAnswers } from './permission-answer';
@@ -729,11 +729,15 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
   let backgroundCommands = session.backgroundCommands;
   if (action.type === 'TRANSCRIPT_TOOL_RESULT' && !action.isError && action.backgroundTaskId && existingToolSegment
       && (existingToolSegment.toolName === 'Bash' || existingToolSegment.toolName === 'Monitor')) {
-    backgroundCommands = putCommand(backgroundCommands, ccCommandFromLaunch({
+    const cmd = ccCommandFromLaunch({
       toolUseId: action.toolUseId, toolName: existingToolSegment.toolName, input: existingToolSegment.input ?? {},
       taskId: action.backgroundTaskId, persistent: action.backgroundPersistent, startedAt: action.timestamp,
       owner: { toolUseId: parentId, ...(parent.agentId ? { agentId: parent.agentId } : {}) },
-    }));
+    });
+    // WHY the known end: a page replays helpers' events after the main transcript's, so a kill noted
+    // only there is read BEFORE this launch — without it the command read "Running" forever.
+    backgroundCommands = putCommand(backgroundCommands,
+      commandWithKnownEnd(cmd, ccBackgroundOnLaunch(session, action.toolUseId, action.backgroundTaskId, undefined)));
   }
   const next = new Map(state);
   next.set(action.sessionId, { ...session, toolCalls, seenUuids, totals, backgroundCommands });
@@ -1947,6 +1951,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             // Carried so the full-auto safety-stop footer survives the
             // synthetic→real tool-id handover (spec 2026-08-12, M5 2b).
             permissionMode: synTool.permissionMode,
+            chainsHonoured: synTool.chainsHonoured,
             // A kept card (hook closed, Claude Code's menu possibly still up)
             // must stay kept across the handover — without it the card has no
             // requestId AND no flag: unanswerable and unresolvable.
@@ -2025,6 +2030,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             external: superseded.external,
             floorStop: superseded.floorStop,
             permissionMode: superseded.permissionMode,
+            chainsHonoured: superseded.chainsHonoured,
           }
         : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId, answerPending: superseded?.answerPending, answerUnconfirmed: superseded?.answerUnconfirmed };
       toolCalls.set(action.toolUseId, {
@@ -2120,11 +2126,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
               toolUseId: action.toolUseId, toolName: existing.toolName, input: existing.input ?? {},
               taskId: action.backgroundTaskId!, persistent: action.backgroundPersistent, startedAt: action.timestamp,
             });
-            // A launch whose end was already read (a newer history page) lists its real end.
-            backgroundCommands = putCommand(backgroundCommands, bg.status === 'running' ? cmd : {
-              ...cmd, status: bg.status, ...(bg.exitCode !== undefined ? { exitCode: bg.exitCode } : {}),
-              ...(bg.summary ? { summary: bg.summary } : {}), ...(bg.endedAt ? { endedAt: bg.endedAt } : {}),
-            });
+            backgroundCommands = putCommand(backgroundCommands, commandWithKnownEnd(cmd, bg)); // an end already read wins
           }
         }
       }
@@ -2509,6 +2511,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             external: action.external,
             floorStop: action.floorStop,
             permissionMode: action.permissionMode,
+            chainsHonoured: action.chainsHonoured,
           };
           const target = inputIdx >= 0 ? inputIdx : nameIdx;
           if (target >= 0) {
@@ -2647,6 +2650,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
           external: action.external,
           floorStop: action.floorStop,
           permissionMode: action.permissionMode,
+          chainsHonoured: action.chainsHonoured,
           ...(action.specialist ? { specialist: action.specialist } : {}),
         });
         found = true;
@@ -2673,6 +2677,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
           external: action.external,
           floorStop: action.floorStop,
           permissionMode: action.permissionMode,
+          chainsHonoured: action.chainsHonoured,
           ...(action.specialist ? { specialist: action.specialist } : {}),
         });
 

@@ -17,6 +17,28 @@ import { browserInfo, browserState, installBrowserBridge } from './helpers/brows
 afterEach(() => cleanup());
 
 describe('Browser panel', () => {
+  it('says so in the shared notice box: one line, the explanation under Details, the ✕ hides it', () => {
+    installBrowserBridge();
+    setBrowserState(browserState({ sandboxOff: true }));
+    render(<BrowserPanel sessionId="s1" />);
+    // The app's one warning box (Callout, warning tone), not a one-off chip: tinted + bordered like every notice.
+    const line = screen.getByText('Extra browser protection is off.');
+    const box = line.closest('.border-amber-500\\/25');
+    expect(box).not.toBeNull();
+    // The long explanation waits behind the shared Details fold, inside the box.
+    expect(screen.queryByText(/built-in protection against harmful websites/)).toBeNull();
+    fireEvent.click(within(box as HTMLElement).getByRole('button', { name: /Details/ }));
+    expect(within(box as HTMLElement).getByText(/built-in protection against harmful websites/)).toBeInTheDocument();
+    // Round-3 S-1: the box's own ✕ at the top right, not a "Got it" button.
+    expect(within(box as HTMLElement).queryByRole('button', { name: 'Got it' })).toBeNull();
+    fireEvent.click(within(box as HTMLElement).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText('Extra browser protection is off.')).toBeNull();
+    cleanup();
+    setBrowserState(browserState());
+    render(<BrowserPanel sessionId="s1" />);
+    expect(screen.queryByText('Extra browser protection is off.')).toBeNull();
+  });
+
   it('shows the live picture and asks for pictures only while it is showing', async () => {
     const b = installBrowserBridge();
     setBrowserState(browserState());

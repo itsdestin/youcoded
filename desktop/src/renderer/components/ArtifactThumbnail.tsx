@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ArtifactRecord } from '../../shared/artifacts/types';
 import { MarkdownHeadPreview } from './HeadPreview';
+import { HTML_THUMBNAIL_CSP, previewFrameProps, withPolicyMeta } from './artifact-views/html-preview-csp';
 
 interface Props {
   artifact: ArtifactRecord;
@@ -74,6 +75,8 @@ export function ArtifactThumbnail({ artifact, projectPath, className = '', bgCla
   const containerRef = useRef<HTMLDivElement>(null);
   const [inView, setInView] = useState(false);
   const [content, setContent] = useState<string | null>(null);
+  // Built once per file text, not per render: a card re-renders on every resize and scroll tick.
+  const htmlSrcDoc = useMemo(() => (kind === 'html' && content !== null ? withPolicyMeta(content, HTML_THUMBNAIL_CSP) : ''), [kind, content]);
   const [imgFailed, setImgFailed] = useState(false);
   // blob: URL for image thumbnails (read-binary → Blob). Revoked on change/unmount.
   const [imgUrl, setImgUrl] = useState<string | null>(null);
@@ -229,7 +232,9 @@ export function ArtifactThumbnail({ artifact, projectPath, className = '', bgCla
         // thumbnail, instead of a 1:1 cropped top-left fragment. Empty sandbox =
         // scripts disabled; pointer-events none keeps the parent <button> clickable.
         <iframe
-          srcDoc={content}
+          // WHY the policy (audit F8): no scripts here already; this also stops the card from sending anything out (html-preview-csp.ts).
+          srcDoc={htmlSrcDoc}
+          {...previewFrameProps(HTML_THUMBNAIL_CSP)}
           sandbox=""
           loading="lazy"
           title=""

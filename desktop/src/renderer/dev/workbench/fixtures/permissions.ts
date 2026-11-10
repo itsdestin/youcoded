@@ -26,6 +26,10 @@ export function permissions(): StoredProject[] {
       cwd: '/home/destin/youcoded-dev/youcoded',
       rules: [
         { tool: 'Bash', pattern: 'git push origin master', action: 'allow', grantedAt: at(2) },
+        // Older wide grants (no grantedAt = saved before the narrowing): these now cover less.
+        { tool: 'Bash', pattern: 'curl*', action: 'allow', match: 'glob' },
+        { tool: 'Bash', pattern: 'npm install*', action: 'allow', match: 'glob', grantedAt: at(30) },
+        { tool: 'Bash', pattern: 'npm run*', action: 'allow', match: 'glob', grantedAt: at(30) },
         { tool: 'Edit', pattern: 'desktop/src/renderer/App.tsx', action: 'allow', grantedAt: at(9) },
         // Tool-wide: no pattern. Must render as visibly broader than the rest.
         { tool: 'Write', action: 'allow', grantedAt: at(1) },

@@ -3,7 +3,7 @@
 // photographed without a main process or a real browser.
 //
 // `?browser=<scene>` picks what the active conversation's browser is doing:
-//   working (default when set) · site · final · local · handoff · no-browser ·
+//   working (default when set) · sandbox (protection off chip) · site · final · local · handoff · no-browser ·
 //   downloading · error · starting · explainer (first-run explainer showing)
 // Without the switch the browser says nothing, exactly like a conversation that
 // never browsed (no header button, no panel).
@@ -15,6 +15,7 @@ export function createBrowserMock(sessionIds: () => string[]) {
   const prefs: BrowserPreferences = {
     showWindow: false, useMyChrome: false, preferredBrowser: null,
     alwaysAllowedSites: scene ? ['library.example.org', 'github.com'] : [],
+    alwaysAllowedFormSites: scene ? ['github.com'] : [],
     explainerSeen: scene !== 'explainer',
   };
   const stateListeners = new Set<(s: BrowserSessionState) => void>();
@@ -34,12 +35,14 @@ export function createBrowserMock(sessionIds: () => string[]) {
     };
     switch (scene) {
       case 'site': return { ...base, busy: true, prompt: { kind: 'site', id: 'p1', host: 'library.example.org', allowAlways: true, message: 'Let the assistant click and type on library.example.org?' } };
+      case 'form': return { ...base, busy: true, prompt: { kind: 'form', id: 'p6', host: 'library.example.org', allowAlways: true, message: 'Let the assistant submit a form on library.example.org?' } };
       case 'final': return { ...base, busy: true, prompt: { kind: 'final', id: 'p2', host: 'library.example.org', message: 'The assistant wants to click "Place hold" on library.example.org.' } };
       case 'local': return { ...base, busy: true, prompt: { kind: 'local', id: 'p3', host: '192.168.1.1:80', message: 'The assistant wants to open 192.168.1.1:80, an address on this computer or your home network.' } };
       case 'handoff': return { ...base, busy: true, prompt: { kind: 'handoff', id: 'p4', message: 'Please sign in to your library account, then press I\'m done.' } };
       case 'no-browser': return { ...base, run: 'stopped', tabs: [], busy: true, prompt: { kind: 'no-browser', id: 'p5', message: 'The assistant needs a browser for this. YouCoded can download one for it (about 150 MB, kept inside YouCoded).' } };
       case 'downloading': return { ...base, run: 'stopped', tabs: [], busy: false, downloadPercent: 42 };
       case 'error': return { ...base, run: 'error', tabs: [], busy: false, error: 'The browser couldn\'t start because its saved data is in use by another copy of YouCoded. Close the other copy and try again.' };
+      case 'sandbox': return { ...base, sandboxOff: true };
       case 'starting': return { ...base, run: 'starting', tabs: [], busy: true };
       default: return base;
     }
@@ -72,7 +75,7 @@ export function createBrowserMock(sessionIds: () => string[]) {
     openWindowForHandoff: async () => true,
     setShowWindow: async (show: boolean) => { prefs.showWindow = show; emitInfo(); return info(); },
     updateSettings: async (patch: Partial<BrowserPreferences>) => { Object.assign(prefs, patch); emitInfo(); return info(); },
-    removeSite: async (host: string) => { prefs.alwaysAllowedSites = prefs.alwaysAllowedSites.filter((h) => h !== host); emitInfo(); return info(); },
+    removeSite: async (host: string, form?: boolean) => { if (form) prefs.alwaysAllowedFormSites = prefs.alwaysAllowedFormSites.filter((h) => h !== host); else prefs.alwaysAllowedSites = prefs.alwaysAllowedSites.filter((h) => h !== host); emitInfo(); return info(); },
     clearSignins: async () => info(),
     stop: async () => true,
     closeSession: async () => true,

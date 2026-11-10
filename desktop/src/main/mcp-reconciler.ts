@@ -197,7 +197,8 @@ async function writeClaudeJsonAtomic(data: ClaudeJson): Promise<void> {
   // `<file>.<pid>.tmp` was safe only because the write was synchronous. Now two reconciles in one
   // process (launch + a plugin install) can overlap, and a shared temp name would make the second
   // rename fail. The result on disk is the same: the old whole file or the new whole file.
-  await atomicWrite(CLAUDE_JSON, JSON.stringify(data, null, 2));
+  // 0600: this file holds decrypted MCP env vars and headers (security hardening 2026-10-30).
+  await atomicWrite(CLAUDE_JSON, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
 /** Convert a manifest entry to the shape Claude Code expects in .claude.json. */
@@ -426,6 +427,58 @@ export interface ReconcileMcpResult {
 let reconcileChain: Promise<unknown> = Promise.resolve();
 export function reconcileMcp(): Promise<ReconcileMcpResult> {
   const run = reconcileChain.then(reconcileMcpNow, reconcileMcpNow);
+  reconcileChain = run.catch(() => {});
+  return run;
+}
+
+/**
+ * Pure: delete from `servers` every entry this plugin's manifest put there, and return the names.
+ *
+ * WHY (plugin off-switch, 2026-11-05): the manifest scan is additive-only, so a plugin's connected
+ * tools stayed in ~/.claude.json after Uninstall — and one that is an online service (`type: http`)
+ * or an `npx` command would keep being started by Claude Code with the plugin gone. An entry goes
+ * only when it is STRUCTURALLY IDENTICAL to what we wrote for this plugin (current or older token
+ * expansion, either platform's command), the same "untouched" test the repair path above uses, so
+ * an entry the person edited or one that merely shares a name is left alone.
+ */
+export function removeManifestEntries(
+  servers: Record<string, unknown>,
+  manifest: { entries: McpManifestEntry[]; pluginRoot: string },
+): string[] {
+  const removed: string[] = [];
+  for (const entry of manifest.entries) {
+    if (!entry || !entry.name || !(entry.name in servers)) continue;
+    const existing = servers[entry.name];
+    const candidates = [false, true].flatMap((isWindows) => [
+      buildServerConfig(entry, manifest.pluginRoot, isWindows),
+      buildServerConfig(entry, manifest.pluginRoot, isWindows, legacyExpand),
+    ]);
+    if (candidates.some((c) => c !== null && isDeepStrictEqual(existing, c))) {
+      delete servers[entry.name];
+      removed.push(entry.name);
+    }
+  }
+  return removed;
+}
+
+/** Remove one plugin's connected tools from ~/.claude.json. Call it while the plugin's folder is
+ *  still in place (its manifest says what to remove). Queued with reconcileMcp so the two never
+ *  overwrite each other's changes. Never writes when the file can't be read (see readClaudeJsonFrom). */
+export function removePluginMcpServers(pluginDir: string): Promise<string[]> {
+  const job = async (): Promise<string[]> => {
+    let entries: McpManifestEntry[];
+    try {
+      const data = JSON.parse(await fs.promises.readFile(path.join(pluginDir, 'mcp-manifest.json'), 'utf8'));
+      entries = Array.isArray(data) ? data : (data.servers ?? []);
+    } catch { return []; }
+    const claudeJson = await readClaudeJson();
+    if (claudeJson === null || !isPlainObject(claudeJson.mcpServers)) return [];
+    const servers = claudeJson.mcpServers;
+    const removed = removeManifestEntries(servers, { entries, pluginRoot: pluginDir });
+    if (removed.length > 0) await writeClaudeJsonAtomic(claudeJson);
+    return removed;
+  };
+  const run = reconcileChain.then(job, job);
   reconcileChain = run.catch(() => {});
   return run;
 }

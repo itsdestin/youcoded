@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { log } from './logger';
-import { isExpired, type Announcement } from '../shared/announcement';
+import { isExpired, sanitizeAnnouncementText, type Announcement } from '../shared/announcement';
 
 /**
  * Announcement Service
@@ -57,9 +57,12 @@ function parseAnnouncement(text: string): { message: string; expires?: string } 
       // Fetch-time expiry filter: already-past dates are treated as empty.
       // Prevents a freshly-fetched stale entry from ever entering the cache.
       if (isExpired(expires)) return null;
-      return { message: dateMatch[2].trim(), expires };
+      // WHY sanitize (audit SC-8): see sanitizeAnnouncementText.
+      const message = sanitizeAnnouncementText(dateMatch[2]);
+      return message ? { message, expires } : null;
     }
-    return { message: trimmed };
+    const message = sanitizeAnnouncementText(trimmed);
+    return message ? { message } : null;
   }
   return null;
 }

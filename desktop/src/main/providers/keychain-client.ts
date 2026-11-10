@@ -1,4 +1,5 @@
 import type { EventEmitter } from 'node:events';
+import { NoSecureStorageError } from './keychain-launch';
 
 export type KeychainRequest = { operation: 'available' } | { operation: 'encrypt' | 'decrypt'; value: string };
 export type KeychainFailure = 'unavailable' | 'encrypt' | 'decrypt';
@@ -61,8 +62,12 @@ export class KeychainClient {
       child.send(active.request, (error) => {
         if (error && this.child === child && this.active === active) this.onError();
       });
-    } catch {
-      this.fail(new KeychainTransportError('The keychain helper could not start or receive the request. Try again.'));
+    } catch (error) {
+      // WHY: a known reason (no secure storage on this computer) is shown as itself; only an unexplained
+      // start failure gets the generic retry message. Never invent the cause (error-message standards).
+      this.fail(error instanceof NoSecureStorageError
+        ? new KeychainTransportError(error.message)
+        : new KeychainTransportError('The keychain helper could not start or receive the request. Try again.'));
     }
   }
 

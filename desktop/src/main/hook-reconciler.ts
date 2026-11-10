@@ -83,13 +83,21 @@ function readPluginManifest(pluginDir: string): PluginHooksManifest | null {
   return null;
 }
 
-function listPluginManifests(): PluginHooksManifest[] {
+// WHY pluginDir travels with the manifest (2026-10 security audit SC-5): the
+// reconciler must know WHICH plugin a manifest belongs to so it can refuse to
+// rewrite a hook that belongs to someone else.
+interface LoadedManifest {
+  manifest: PluginHooksManifest;
+  pluginDir: string;
+}
+
+function listPluginManifests(): LoadedManifest[] {
   // Walk both the top-level toolkit clone and the marketplace subtree.
   // See listInstalledPluginDirs() for why both are needed.
-  const manifests: PluginHooksManifest[] = [];
+  const manifests: LoadedManifest[] = [];
   for (const pluginDir of listInstalledPluginDirs()) {
     const m = readPluginManifest(pluginDir);
-    if (m && m.hooks) manifests.push(m);
+    if (m && m.hooks) manifests.push({ manifest: m, pluginDir });
   }
   return manifests;
 }
@@ -172,9 +180,47 @@ function pruneDeadPluginHooks(settings: Settings, pluginRoots: string[]): number
  * references the same script basename as the manifest spec. Matching on
  * basename tolerates path changes across plugin reorganizations.
  */
+/**
+ * Who owns an existing hook command? Returns the plugin root directory whose
+ * folder contains the script, or null when the script lives outside every
+ * known plugin root (a user-added hook).
+ */
+function ownerRootOf(command: string, roots: string[]): string | null {
+  const scriptPath = extractScriptPath(command);
+  if (!scriptPath) return null;
+  const normalized = path.normalize(scriptPath);
+  for (const root of roots) {
+    if (normalized.startsWith(path.normalize(root) + path.sep)) return root;
+  }
+  return null;
+}
+
+/**
+ * WHY (2026-10 security audit SC-5): matching on script name alone let plugin B
+ * ship a hook called `session-start.sh` and have the reconciler REWRITE plugin
+ * A's (or the user's) hook command to B's. An existing hook may only be
+ * rewritten when it is already this plugin's own (same plugin folder, or the
+ * same plugin id at an older install location) or sits in the deleted legacy
+ * youcoded-core clone that the app itself created. Anything else is left
+ * untouched and the plugin's hook is treated as a separate entry.
+ */
+function mayRewrite(
+  existingCommand: string,
+  spec: ManifestHookSpec,
+  pluginDir: string,
+  roots: string[],
+): boolean {
+  if (existingCommand === spec.command) return true; // nothing to hijack
+  const owner = ownerRootOf(existingCommand, roots);
+  if (!owner) return false; // user-added or unknown: never overwrite
+  if (ownedLegacyRoots().some((r) => path.normalize(r) === path.normalize(owner))) return true;
+  return path.basename(owner) === path.basename(pluginDir);
+}
+
 function findMatchingEntry(
   existing: SettingsHookEntry[] | undefined,
   spec: ManifestHookSpec,
+  ownership?: { pluginDir: string; roots: string[] },
 ): { entryIdx: number; hookIdx: number } | null {
   if (!existing) return null;
   const targetBasename = extractScriptBasename(spec.command);
@@ -187,6 +233,8 @@ function findMatchingEntry(
     for (let j = 0; j < entry.hooks.length; j++) {
       const h = entry.hooks[j];
       if (extractScriptBasename(h.command) === targetBasename) {
+        // Same script name but a different owner: not "the same logical hook".
+        if (ownership && !mayRewrite(h.command, spec, ownership.pluginDir, ownership.roots)) continue;
         return { entryIdx: i, hookIdx: j };
       }
     }
@@ -204,13 +252,14 @@ export function reconcileHooksInto(settings: Settings): ReconcileHooksResult {
   let updatedPath = 0;
   let updatedTimeout = 0;
 
-  for (const manifest of manifests) {
+  const ownershipRoots = [...listInstalledPluginDirs(), ...ownedLegacyRoots()];
+  for (const { manifest, pluginDir } of manifests) {
     for (const [event, specs] of Object.entries(manifest.hooks)) {
       settings.hooks[event] = settings.hooks[event] || [];
       const list = settings.hooks[event];
 
       for (const spec of specs) {
-        const match = findMatchingEntry(list, spec);
+        const match = findMatchingEntry(list, spec, { pluginDir, roots: ownershipRoots });
 
         if (match) {
           const existingHook = list[match.entryIdx].hooks[match.hookIdx];
@@ -264,10 +313,58 @@ export async function reconcileHooks(): Promise<ReconcileHooksResult> {
   return result;
 }
 
+/**
+ * Remove ONE plugin's own hooks from `settings` in place, and return how many went.
+ *
+ * WHY this exists (plugin off-switch, 2026-11-05): the prune pass above only recognises a hook as
+ * plugin-owned while that plugin's folder still exists — once the folder is deleted (Uninstall) or
+ * moved aside (turned off as unsafe), its hooks look user-added and stay in settings.json for
+ * good. A hook whose command does not even point at a script inside the folder (an inline shell
+ * command) would keep RUNNING. So this is called while the folder is still in place, with that
+ * plugin's own manifest: a hook goes when its command is exactly one the manifest declares, or its
+ * script lives inside the plugin's folder. Nothing else is touched.
+ */
+export function removePluginHooksInto(settings: Settings, pluginDir: string, manifest: PluginHooksManifest | null): number {
+  if (!settings.hooks) return 0;
+  const declared = new Set<string>();
+  for (const specs of Object.values(manifest?.hooks ?? {})) {
+    for (const spec of specs ?? []) if (spec?.command) declared.add(spec.command);
+  }
+  let removed = 0;
+  for (const event of Object.keys(settings.hooks)) {
+    const entries = settings.hooks[event];
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      entry.hooks = entry.hooks.filter((h) => {
+        const ours = declared.has(h.command) || ownerRootOf(h.command, [pluginDir]) !== null;
+        if (ours) removed++;
+        return !ours;
+      });
+    }
+    settings.hooks[event] = entries.filter((e) => e.hooks.length > 0);
+    if (settings.hooks[event].length === 0) delete settings.hooks[event];
+  }
+  return removed;
+}
+
+/** Standalone form of removePluginHooksInto: reads the plugin's manifest (async — this runs from
+ *  a click and from the hourly off-switch check, rule 1 of the performance rules), then one locked
+ *  read/write of settings.json. */
+export async function removePluginHooks(pluginDir: string): Promise<number> {
+  let manifest: PluginHooksManifest | null = null;
+  for (const p of [path.join(pluginDir, 'hooks', 'hooks-manifest.json'), path.join(pluginDir, 'hooks-manifest.json')]) {
+    try { manifest = JSON.parse(await fs.promises.readFile(p, 'utf8')) as PluginHooksManifest; break; } catch { /* try the next layout */ }
+  }
+  let removed = 0;
+  await mutateSettings((settings) => { removed = removePluginHooksInto(settings as Settings, pluginDir, manifest); });
+  return removed;
+}
+
 // Exposed for tests
 export const __test = {
   extractScriptBasename,
   extractScriptPath,
   findMatchingEntry,
+  mayRewrite,
   pruneDeadPluginHooks,
 };

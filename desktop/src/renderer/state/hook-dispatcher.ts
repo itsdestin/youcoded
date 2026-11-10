@@ -1,6 +1,6 @@
 import { HookEvent, type FloorStop } from '../../shared/types';
 
-const FLOOR_STOPS: FloorStop[] = ['removal', 'removal-if-empty', 'removal-unknown', 'secret-path', 'secret-maybe', 'admin'];
+const FLOOR_STOPS: FloorStop[] = ['removal', 'removal-if-empty', 'removal-unknown', 'secret-path', 'secret-maybe', 'admin', 'protected-config'];
 import { ChatAction } from './chat-types';
 import { flushTranscriptActions } from './transcript-batch';
 
@@ -80,6 +80,8 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
         external: external || undefined,
         floorStop,
         permissionMode,
+        // Validated like the mode: only a literal true counts, so an older or foreign peer degrades to "not offered".
+        chainsHonoured: payload.chainsHonoured === true ? true : undefined,
         specialist,
       };
     }

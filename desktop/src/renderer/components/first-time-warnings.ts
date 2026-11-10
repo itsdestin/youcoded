@@ -46,7 +46,9 @@ export const WARNING_COPY: Record<WarningKind, WarningCopy> = {
   'full-auto': {
     title: 'Before you pick Full auto',
     body: [
-      'Full auto lets the assistant work without checking with you, except for the few things it always asks about.',
+      // WHY the second sentence (Destin, 2026-10-31, security audit): the always-asks list matches
+      // known dangerous commands, so it cannot be complete. The warning must not imply it is.
+      'Full auto lets the assistant work without checking with you, except for the few things it always asks about. Those stops catch the most dangerous commands, but they can’t catch everything.',
       'Anything else it can do on its own, including changing and deleting files, and a mistake reaches your files before you see it.',
       'Keep your own backups of anything you cannot replace.',
     ],

@@ -557,8 +557,10 @@ describe('PermissionsSection — the "All projects" card', () => {
     render(<PermissionsSection />);
 
     // The bucket arrives SECOND from the backend and must still read first.
-    const headers = await screen.findAllByRole('button', { expanded: false });
-    expect(headers).toHaveLength(2);
+    // The "Commands that never ask" fold is also a closed header; it is not a folder card.
+    const folderHeaders = () => screen.getAllByRole('button', { expanded: false }).filter((b) => !(b.textContent ?? '').includes('Look-only commands'));
+    await waitFor(() => expect(folderHeaders()).toHaveLength(2));
+    const headers = folderHeaders();
     expect(headers[0].textContent).toContain('All projects');
     expect(headers[1].textContent).toContain('alpha');
 

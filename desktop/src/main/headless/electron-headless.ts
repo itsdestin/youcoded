@@ -186,10 +186,12 @@ export const nativeImage = {
   createFromBitmap: () => emptyImage,
   createFromBuffer: () => emptyImage,
 };
+// WHY: mirrors Electron 44's async clipboard (read/readText/writeText return promises); the phone has
+// no desktop clipboard, so reads are empty. The removed sync readImage is gone from the real module too.
 export const clipboard = {
-  readImage: () => emptyImage,
-  readText: () => '',
-  writeText: (): void => {},
+  read: async (): Promise<never[]> => [],
+  readText: async (): Promise<string> => '',
+  writeText: async (): Promise<void> => {},
 };
 
 let keepAwakeIds = 0;

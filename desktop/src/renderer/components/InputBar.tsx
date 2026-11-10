@@ -16,8 +16,7 @@ import { makeDraftToken, splitDraftTokens, draftTokenRanges, expandDraftTokens, 
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
 import { installChatRefHighlight } from './context-menu/chat-ref-highlight';
 import { AttachIcon, CompassIcon } from './Icons';
-import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
-import { StatusStrip } from './ui/StatusStrip';
+import { VoiceButton, VoiceListeningStrip, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { LocalModelDownloadStrip } from './LocalModelDownloadStrip';
 import { NativeStartupNotice } from './NativeStartupNotice';
 import { ConnectionStrip, type ConnectionStripProps } from './ConnectionStrip';
@@ -1139,12 +1138,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       {/* Feedback B: the app's thin status band, above the box, while listening. */}
       {voiceListening && voiceStyle.feedback === 'strip' && (
         <div className="px-2 sm:px-3 pb-1.5">
-          <StatusStrip
-            tone="ok"
-            action={<Button variant="secondary" size="sm" onClick={() => { void voice.stop(); }}>Stop</Button>}
-          >
-            <span className="inline-flex items-center gap-3">Listening <VoiceMeter level={voice.level} seconds={voice.seconds} /></span>
-          </StatusStrip>
+          <VoiceListeningStrip level={voice.level} seconds={voice.seconds} micSilent={voice.micSilent} onStop={() => { void voice.stop(); }} />
         </div>
       )}
       <div className="px-2 sm:px-3 pb-1 sm:pb-1.5">
@@ -1430,6 +1424,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               level={voice.level}
               seconds={voice.seconds}
               error={voice.error}
+              notice={voice.notice}
               disabled={disabled}
               onStart={startVoice}
               onStop={() => { void voice.stop(); }}

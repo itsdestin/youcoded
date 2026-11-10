@@ -90,7 +90,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "acorn": "^8.18.0",
     "ajv": "^8.20.0",
-    "electron": "^41.10.7",
+    "electron": "^44.10.0",
     "electron-builder": "^26.15.3",
     "jsdom": "^30.0.1",
     "knip": "^6.34.0",
@@ -110,5 +110,10 @@
     "node-pty": false,
     "koffi": false,
     "electron-winstaller": false
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
   }
 }

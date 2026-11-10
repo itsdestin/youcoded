@@ -14,6 +14,7 @@
 //     watching, which changes WHEN state is available (catching up after a drop), not what the screen can do.
 import { useEffect, useState } from 'react';
 import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
+import { isAndroidAppPage } from './android-page';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, type Capabilities } from '../shared/capabilities';
 
 // ─── Startup: decide the platform before any component module evaluates ──────
@@ -38,7 +39,7 @@ if (typeof window !== 'undefined' && !(window as any).__PLATFORM__) {
   // (window.claude is installed later by remote-shim.ts), so it falls through to the file: branch.
   if ((window as any).claude) {
     (window as any).__PLATFORM__ = 'electron';
-  } else if (typeof location !== 'undefined' && location.protocol === 'file:') {
+  } else if (typeof location !== 'undefined' && isAndroidAppPage()) {
     (window as any).__PLATFORM__ = 'android';
   }
 }
@@ -82,18 +83,18 @@ export function deviceNoun(): 'phone' | 'computer' {
  *  WHY this lives here and is pure: the Android app's page is a file:// page that starts as 'android'. The handshake
  *  used to overwrite that with 'browser' (a rule meant for a phone's plain web browser reaching a computer), so the
  *  real app showed DESKTOP settings and screens (2026-11-01 phone test, finding 6). The test pins every case.
- *  - Android app (file:// page): ALWAYS stays 'android' — talking to its own phone backend or to a paired computer.
+ *  - Android app (its own page, see android-page.ts): ALWAYS stays 'android' — talking to its own phone backend or to a paired computer.
  *  - Phone web browser (touch-first, http): 'browser', whatever the computer says.
  *  - Mouse-first browser: whatever the computer says, defaulting to 'browser'.
  *  - A reconnect-in-progress from the Android app (preserve) keeps what it has. */
 export function platformAfterHandshake(input: {
   current: string | undefined
-  isFilePage: boolean
+  inAndroidApp: boolean
   preserve: boolean
   touchFirst: boolean
   hostPlatform?: string
 }): string | undefined {
-  if (input.isFilePage && input.current === 'android') return 'android'
+  if (input.inAndroidApp && input.current === 'android') return 'android'
   if (input.preserve) return input.current
   return input.touchFirst ? 'browser' : (input.hostPlatform || 'browser')
 }
@@ -151,7 +152,7 @@ async function fetchOsPlatform(): Promise<OsPlatform> {
   const w = window as any;
   if (!w.claude?.getPlatform) {
     // Defensive fallback for older shims — detect Android via file: protocol.
-    const fallback: OsPlatform = location.protocol === 'file:' ? 'android' : 'linux';
+    const fallback: OsPlatform = isAndroidAppPage() ? 'android' : 'linux';
     cachedOs = fallback;
     return fallback;
   }

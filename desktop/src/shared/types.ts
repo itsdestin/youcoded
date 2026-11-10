@@ -82,10 +82,10 @@ export interface PortableModelRef {
  *    command's output or reached by a cd the text cannot follow;
  *  - 'secret-path': the command reads a secret or credential file — the same
  *    list the file tools refuse (harness/tools/bash-secret-paths.ts);
- *    'secret-maybe': it could (a glob, a find with no usable filter).
+ *    'secret-maybe': it could (a glob, a find with no usable filter); 'protected-config': it changes a file that controls what the assistant may do (harness/tools/protected-config.ts).
  *  The card's wording comes from this, so it never claims more than the check
  *  knows (review N11). */
-export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe' | 'admin';
+export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe' | 'admin' | 'protected-config';
 
 /** A running Bash call whose `sudo` is waiting for the computer password
  *  (admin-password design, 2026-09-25). The card asks for it; the password
@@ -407,6 +407,7 @@ export type SubagentSegment =
       external?: boolean;
       floorStop?: FloorStop;
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
+      chainsHonoured?: boolean;
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
       resolvedRequestId?: string;
@@ -640,6 +641,7 @@ export interface ToolCallState {
    *  'full-auto' + denyListed swaps the generic button row for the safety-stop
    *  footer (spec 2026-08-12, M5 2b). Absent on CC asks. */
   permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
+  chainsHonoured?: boolean;
   /** Specialists 1c: set on a TOP-LEVEL card only when a child's routed ask
    *  could not be nested (its Task card is not on this timeline) — the card
    *  then labels who asked instead of reading as the parent's own ask. */
@@ -1034,6 +1036,10 @@ export interface SkillEntry {
   // in order to read the frontmatter. Absent for registry-only entries the user
   // has not installed.
   skillDir?: string;
+
+  // Plugin off-switch: on an installed plugin the server listed as unsafe (already turned off).
+  // WHY an object: room for a plain-words reason; the UI shows one fixed sentence today.
+  blocked?: { reason?: string };
 }
 
 export interface SkillDetailView extends SkillEntry {
@@ -1108,6 +1114,8 @@ export interface PackageInfo {
   // alongside the version compare. Absent on every pre-Task-17 install, which is
   // why the compare must treat "no commit recorded" as "nothing to say".
   commit?: string;
+  // Plugin off-switch: turned off as unsafe; folder held aside and settings kept (plugin-blocklist.ts).
+  turnedOff?: boolean;
   // Decomposition v3 §9.8: cross-device sync can surface a package that's
   // present in config but not yet on disk (e.g., Android pulled a desktop
   // config but hasn't installed the package yet). "pending" UIs can show an

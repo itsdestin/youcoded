@@ -24,6 +24,7 @@ export type UpdateInstallErrorCode =
   | 'url-rejected'          // failed HTTPS / domain allowlist check
   | 'busy'                  // another download or installer launch is already active
   | 'verify-failed'         // manifest/hash/size/version mismatch — corrupt download, retry once
+  | 'older-than-installed'  // a validly signed release older than one this computer already ran — not retried
   | 'signature-invalid'     // manifest signature didn't verify — do NOT retry, do NOT offer browser
   | 'not-supported';        // Android stub's universal error
 

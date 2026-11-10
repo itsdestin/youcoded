@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { platformAfterHandshake } from '../src/renderer/platform';
 
-const base = { current: 'android', isFilePage: true, preserve: false, touchFirst: true, hostPlatform: 'desktop' };
+const base = { current: 'android', inAndroidApp: true, preserve: false, touchFirst: true, hostPlatform: 'desktop' };
 
 describe('platformAfterHandshake', () => {
   it('Android app talking to its own phone backend stays android', () => {
@@ -12,9 +12,9 @@ describe('platformAfterHandshake', () => {
     expect(platformAfterHandshake({ ...base, preserve: true, hostPlatform: 'electron' })).toBe('android');
   });
   it('a phone web browser becomes browser', () => {
-    expect(platformAfterHandshake({ ...base, current: undefined, isFilePage: false })).toBe('browser');
+    expect(platformAfterHandshake({ ...base, current: undefined, inAndroidApp: false })).toBe('browser');
   });
   it('a mouse-first browser takes the host answer', () => {
-    expect(platformAfterHandshake({ ...base, current: undefined, isFilePage: false, touchFirst: false, hostPlatform: 'desktop' })).toBe('desktop');
+    expect(platformAfterHandshake({ ...base, current: undefined, inAndroidApp: false, touchFirst: false, hostPlatform: 'desktop' })).toBe('desktop');
   });
 });

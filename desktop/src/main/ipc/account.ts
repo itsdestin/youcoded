@@ -14,7 +14,8 @@
 // startup, so the handlers reach them through bindAccountDeps; before that runs they answer
 // "signed out" (the same fallback remote-server had when no store was injected).
 import fs from 'fs';
-import { dialog, shell } from 'electron';
+import { dialog } from 'electron';
+import { safeOpenExternal } from '../safe-open';
 import { IPC } from '../../shared/backend-contract';
 import type { ApiResult } from '../../shared/account-types';
 import type { MarketplaceAuthStore } from '../marketplace-auth-store';
@@ -24,6 +25,7 @@ import { notifySignedOut } from '../social-handlers';
 import { clearArcadeCache } from '../arcade-handlers';
 import { reconcileInstalls, type InstalledSkillSource } from '../install-reconcile';
 import { defineChannel, type MainChannelDef } from './channel-def';
+import { startSigninListener, type SigninListener } from '../signin-loopback';
 
 type Client = ReturnType<typeof createMarketplaceApiClient>;
 interface AccountDeps {
@@ -54,15 +56,28 @@ function toStoredUser(me: { id: string; login: string; avatar_url: string | null
   return { id: me.id, login: me.login, avatar_url: me.avatar_url ?? '', display_name: me.display_name, handle: me.handle ?? null };
 }
 
+// Sign-in listeners by device code. Only one sign-in at a time: starting another closes the old one.
+const signinListeners = new Map<string, SigninListener>();
+function closeAllSigninListeners(): void {
+  for (const l of signinListeners.values()) l.close();
+  signinListeners.clear();
+}
+
 export const accountChannels: MainChannelDef[] = [
   // Device-code sign-in: main opens the browser (the renderer cannot call shell.openExternal).
   defineChannel({
     name: IPC.ACCOUNT_START, kind: 'handle', remoteAllowed: false,
     handler: () => wrap(async () => {
       const { client } = need();
-      const out = await client.authStart();
+      closeAllSigninListeners();
+      const listener = await startSigninListener();
+      let out;
+      try {
+        out = await client.authStart(listener.port);
+      } catch (e) { listener.close(); throw e; }
+      signinListeners.set(out.device_code, listener);
       // openExternal can fail on some Linux sandboxes (Flatpak). Non-fatal: the renderer shows the URL.
-      await shell.openExternal(out.auth_url).catch((err) =>
+      await safeOpenExternal(out.auth_url).catch((err) =>
         console.warn('[marketplace] openExternal failed; user must open URL manually:', err));
       return out;
     }),
@@ -71,8 +86,28 @@ export const accountChannels: MainChannelDef[] = [
     name: IPC.ACCOUNT_POLL, kind: 'handle', remoteAllowed: false,
     handler: ({ deviceCode }) => wrap(async () => {
       const { client, store, installedSkillSource } = need();
-      const res = await client.authPoll(deviceCode);
+      const listener = signinListeners.get(deviceCode);
+      // Bound to this computer: the Worker only hands over the session to an app holding the secret its browser
+      // redirect delivered to our listener. Every secret that arrived is tried once (junk sent to the port is
+      // answered "pending" by the Worker and dropped); the real one completes the sign-in.
+      let res: Awaited<ReturnType<typeof client.authPoll>> = { status: 'pending' };
+      if (!listener) {
+        res = await client.authPoll(deviceCode); // an older flow with no listener: nothing local to wait for
+      } else {
+        for (let secret = listener.take(); secret !== null; secret = listener.take()) {
+          res = await client.authPoll(deviceCode, secret);
+          if (res.status === 'complete') break;
+        }
+        // WHY an error instead of "pending" forever: if the listener has shut down with no working secret, the
+        // browser never reached this computer (a different computer, a blocked local address, or a sign-in service
+        // that has not been updated) and waiting longer cannot help.
+        if (res.status !== 'complete' && listener.isClosed()) {
+          signinListeners.delete(deviceCode);
+          throw new Error("YouCoded didn't hear back from your web browser. Finish signing in on this computer, then try again.");
+        }
+      }
       if (res.status === 'complete') {
+        listener?.close(); signinListeners.delete(deviceCode);
         // The Worker returns the profile alongside the token: store both so user() works at once
         // (the games lobby needs user.login as the player tag).
         if (res.user) store.setSession(res.token, toStoredUser(res.user));
@@ -137,6 +172,21 @@ export const accountChannels: MainChannelDef[] = [
       store.signOut();
       notifySignedOut(); // drop the presence socket so we don't linger online
       clearArcadeCache(); // and forget the cached friends leaderboard
+    },
+  }),
+  // WHY (Destin, 2026-10-31, security audit): "Sign out" only ends THIS computer's sign-in. This ends
+  // every device's. Unlike sign-out it is NOT best-effort: if the server cannot be reached we stay
+  // signed in and say so, because clearing locally would look like success while other devices still work.
+  defineChannel({
+    name: IPC.ACCOUNT_SIGN_OUT_ALL, kind: 'handle', remoteAllowed: false,
+    handler: () => {
+      const { store, client } = need();
+      return wrap(async () => {
+        await client.logoutAll();
+        store.signOut();
+        notifySignedOut();
+        clearArcadeCache();
+      });
     },
   }),
   defineChannel({

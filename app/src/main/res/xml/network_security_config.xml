@@ -1,34 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Remote access (paired desktop) transmits cleartext ws:// to whatever host the
-  user paired. Android's default NSC (API 28+) blocks cleartext to arbitrary
-  hosts, which produced "Connection closed before auth" because the QR/pairing
-  URL encodes a raw Tailscale CGNAT IP (e.g. 100.64.1.2) or a LAN IP — neither
-  is a .ts.net MagicDNS domain, so the prior allowlist blocked every real
-  pairing target.
+  Remote access (paired desktop) transmits plain ws:// to the paired computer. Android's default (API 28+) blocks that to
+  arbitrary hosts, which broke pairing by raw Tailscale address in v1.1.x, so it is permitted at this level.
 
-  Why broadly permit cleartext: Android's NetworkSecurityConfig <domain> only
-  matches DNS hostnames — it has no CIDR/IP-range matching. We can't pre-
-  enumerate every possible LAN (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12) or
-  Tailscale CGNAT (100.64.0.0/10) address a user might pair to. A scoped
-  <domain-config> covering only *.ts.net would still leave LAN pairs and
-  Tailscale CGNAT pairs broken — those were the original v1.1.x bug.
+  Plain ws:// / http:// is still PERMITTED here, but the app refuses it everywhere except the
+  phone itself and Tailscale (2026-10-30 security audit A1, Destin: "Tailscale only").
 
-  The app's threat model (documented in desktop/CLAUDE.md and surfaced to end
-  users in the root README "Remote Access" section) assumes:
-    (1) Tailscale users get WireGuard encryption end-to-end under the
-        cleartext WS,
-    (2) LAN users accept the same cleartext exposure the existing
-        desktop-to-browser remote path already has,
-    (3) every connection is still gated by a bcrypt-verified password
-        handshake at the WebSocket layer regardless of transport,
-    (4) user intent is explicit — they pair a device before connecting.
+  Why this file cannot say that itself: Android's NetworkSecurityConfig <domain> only matches DNS
+  hostnames. It has no CIDR/IP-range matching, and the pairing QR encodes a raw Tailscale address
+  (100.64.0.0/10), so denying cleartext here would break every pairing. Where the rule is enforced
+  instead, in code (all must agree):
+    - renderer/remote-shim.ts connectToHost() and shared/cleartext-hosts.ts (the page, before it dials);
+    - HostJsBridge "android:save-paired-device" (a computer is saved only at an allowed address);
+    - WebViewUrlRouter (a download link over plain http only from an allowed address);
+    - AppWebView.shouldInterceptRequest (any other plain http request the page makes is refused).
+  The shared rule is CleartextPolicy.kt: loopback, 100.64.0.0/10, fd7a:115c:a1e0::/48 and *.ts.net.
 
-  If we ever ship WSS / TLS-over-WS, tighten this back up. Play Store
-  submissions: this trade-off is disclosed in the README and should be
-  reflected in the Data safety form's "Data is encrypted in transit" answer
-  (false for the LAN/Tailscale-cleartext case, with the WireGuard underlay
-  noted).
+  Tailscale users get WireGuard encryption under the plain WebSocket, and every connection is still
+  gated by a bcrypt-verified password handshake. Play Store "Data safety": plain traffic now happens
+  only to Tailscale/loopback addresses.
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true" />

@@ -93,19 +93,20 @@ export interface DetectionResult {
 
 // WHY 22 (2026-10-03): Node 20 stopped getting security fixes in April 2026. 22 is supported to
 // April 2027 and still runs on macOS 11+ — Node 24 needs macOS 13.5, which would strand older Macs.
-const NODE_VERSION = 'v22.23.3';
+// WHY 22.23.4 (2026-10-30): security release of the 22 line (Brotli decoder fix); hashes re-copied from its SHASUMS256.txt.
+const NODE_VERSION = 'v22.23.4';
 // From https://nodejs.org/dist/<NODE_VERSION>/SHASUMS256.txt — bump together.
 const NODE_WIN_SHA256 = {
-  x64: '2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71',
-  arm64: '33dad22e4cef5ee8f9fbb1b0d037fdacd0e56d12a4580f0d63f68b894deab535',
+  x64: 'cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20',
+  arm64: 'a8b8cd79cbbb3062435f449591d98dd63730bbbf30ce2d7cc3a6376c236cb111',
 } as const;
 // WHY checked on macOS/Linux too: the tarball used to be unpacked without any check, so a
 // corrupted or tampered download became the Node every Claude Code session runs.
 const NODE_TARBALL_SHA256: Record<string, string> = {
-  'darwin-arm64': '23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53',
-  'darwin-x64': '8a677b0219178efd6eb0e475457c4afb452b521a92f6e67845a73bd85727f2a8',
-  'linux-arm64': '5ced2d48d1d7198739b7f86804de0171aefb6823b684b12341d3321afc3cb0b2',
-  'linux-x64': '1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af',
+  'darwin-arm64': 'c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428',
+  'darwin-x64': 'efcc2b0db6f94bf53eddb038fe2b370277a042bd29e4f19b8f8e23598795b819',
+  'linux-arm64': 'f7a1e486dbc8b286847815b477d4fb5e9fb963ed4489c3e1588853d685f589f9',
+  'linux-x64': 'b8492284c76a54baf58d61668dd0e41ee0fc98adabf9503d30f05d08f55b4406',
 };
 // Pinned, NOT "latest": the download URL interpolates the version into the
 // asset filename (gh_<ver>_macOS_arm64.zip), so there is no /latest/ URL that
@@ -113,7 +114,19 @@ const NODE_TARBALL_SHA256: Record<string, string> = {
 // installer depend on the GitHub API being reachable and unauthenticated.
 // Bump deliberately; the only constraint is that the release still publishes
 // the macOS .zip / Linux .tar.gz assets this installer expects.
-const GH_VERSION = '2.96.0';
+const GH_VERSION = '2.103.3';
+// WHY (2026-10 security audit SC-7): the gh archive used to be unpacked on TLS alone. These are
+// the SHA-256 values from the release's own gh_<ver>_checksums.txt
+// (https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_checksums.txt). The linux-amd64
+// and macOS-arm64 values were also re-checked by hashing the downloaded archives. Bump with GH_VERSION.
+// WHY (security watch, 2026-11): 2.96.0 had three published low-severity flaws (fixed in 2.97.0);
+// moved to the newest release, whose archives keep the same gh_<ver>_<plat>_<arch>/bin/gh layout.
+export const GH_ARCHIVE_SHA256: Record<string, string> = {
+  'gh_2.103.3_linux_amd64.tar.gz': '4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d',
+  'gh_2.103.3_linux_arm64.tar.gz': 'ee32df2323c8847f5fac6cb6b4b69ca75828e9329a8f22f677021f7b3306ce63',
+  'gh_2.103.3_macOS_amd64.zip': 'a2f86418f4350ae6e9ec60d5000bdf7665728436946a97fc27fe50e6ae752682',
+  'gh_2.103.3_macOS_arm64.zip': 'd700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062',
+};
 const PATH_MARKER = '# Added by YouCoded first-run installer';
 
 /** Root dir for YouCoded-managed user-local tools (macOS: ~/Library/..., Linux: ~/.youcoded). */
@@ -1035,6 +1048,16 @@ export async function installGhUserLocal(): Promise<{ success: boolean; error?: 
         `https://github.com/cli/cli/releases/download/v${GH_VERSION}/${stem}.${ext}`,
         archivePath,
       );
+
+      // Check the fingerprint BEFORE anything is unpacked or run.
+      const expected = GH_ARCHIVE_SHA256[`${stem}.${ext}`];
+      if (!expected || (await sha256File(archivePath)) !== expected) {
+        fs.unlink(archivePath, () => {});
+        return {
+          success: false,
+          error: 'The GitHub CLI download did not match its expected fingerprint. Check your connection and try again.',
+        };
+      }
 
       // Extract to a scratch dir first, then copy out only the binary. Keeps
       // the tools bin dir flat and avoids leaving the archive's LICENSE/man

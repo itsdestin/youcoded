@@ -3771,10 +3771,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // Parallel Agents", the marketplace publisher) from the drawer: the skills
   // drawer opens on camera in the marketplace beat.
   const DEVELOPER_BUNDLES = ['superpowers', 'wecoded-marketplace-publisher'];
+  // Plugin off-switch: the turned-off practice plugin (Tab Tidy) appears only under ?turnedOff=1,
+  // so every other Library picture stays exactly as it was (its screens: screens/marketplace.ts).
+  const turnedOffSwitch = typeof location !== 'undefined' && new URLSearchParams(location.search).get('turnedOff') === '1';
   let installedSkills: Record<string, unknown>[] = INSTALLED_SKILLS
     .filter((s) => !studentSwitch || !DEVELOPER_BUNDLES.includes(s.pluginName))
+    .filter((s) => turnedOffSwitch || !('blocked' in s))
     .map((s) => ({ ...s }));
   const installedPackages: Record<string, any> = JSON.parse(JSON.stringify(INSTALLED_PACKAGES));
+  if (!turnedOffSwitch) delete installedPackages['tab-tidy'];
   // Quick chips are a STATEFUL mock, not a canned read: the editor writes
   // through setChips on every add/remove/reorder/edit, so a read-only fixture
   // would make every mutation appear to do nothing. Mirrors the real store's

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, shell, webContents, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, webContents, dialog } from 'electron';
 import { browserToolService, startBrowserSupport, stopBrowserSupport, wireBrowserSessionCleanup } from './assistant-browser/browser-main';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
@@ -46,12 +46,13 @@ import { IPC, type AttentionState, type AttentionSummary, type SessionOwnershipA
 import { VITE_DEV_PORT } from '../shared/ports';
 import { wireDevLoadRecovery } from './dev-load-recovery';
 import { log, rotateLog } from './logger';
+import { startPluginOffSwitch } from './plugin-blocklist';
 import { applyWindowsUserToolsToEnv } from './prerequisite-installer';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { canDeliverToRenderer, sendToRenderer, wireRendererRecovery } from './renderer-recovery';
 import { registerThemeProtocol } from './theme-protocol';
-import { sealOfficeFrames } from './office/office-frame-guard';
+import { safeOpenExternal, secureAppWindow } from './window-hardening';
 import { officeIpc } from './ipc/office'; // the table's Office channels reach the modules below through this (ipc/office.ts)
 import { startOffice } from './office/office-boot';
 import { getOfficeSessions, quitOfficeSessions } from './office/office-session-registry';
@@ -331,6 +332,8 @@ skillProvider.ensureMigrated();
 // started. See the WHY on repairPackageVersions() in skill-provider.ts for
 // what breaks without the repair (permanently stale "Update available"
 // state for every in-repo plugin other than the three bundled ids).
+// Plugin off-switch (plugin-blocklist.ts): launch + hourly; open chats reload plugins on a change.
+startPluginOffSwitch(skillProvider, () => sessionManager.broadcastReloadPlugins());
 void (async () => {
   await skillProvider.repairPackageVersions();
   // Fire-and-forget: install bundled plugins if missing. Silent retry on
@@ -763,11 +766,11 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   win.webContents.on('will-navigate', (event, url) => {
     if (!isAppPageUrl(url, path.join(__dirname, '../renderer/index.html'), DEV_SERVER_URL)) event.preventDefault();
   });
-  sealOfficeFrames(win.webContents); // WHY: subframes skip will-navigate; Office frames never leave office: (office-frame-guard.ts)
+  secureAppWindow(win, { devServerUrl: DEV_SERVER_URL, mainDir: __dirname, log }); // WHY: subframes skip will-navigate, and Electron grants every page permission by default (window-hardening.ts)
   // Security: deny window.open() but route safe http(s)/mailto to the OS browser
   win.webContents.setWindowOpenHandler(({ url }) => {
     // Rejects when the OS has no handler for the scheme — must not escape as an unhandled rejection.
-    if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url).catch(() => {});
+    if (/^(https?:|mailto:)/i.test(url)) void safeOpenExternal(url).catch(() => {});
     return { action: 'deny' as const };
   });
   // Disable Chromium's pinch-to-zoom so our IPC zoom handler is the sole zoom path
@@ -1049,7 +1052,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
     // WHY: this isolated experiment's request ceiling must refuse a model
     // dispatch before the provider fetch; never enable it in the built app.
     beforeModelRequest: LUNA_REQUEST_GUARD,
-    openExternal: (url) => LUNA_REQUEST_GUARD ? openLunaAuthBrowser(url, process.env.LUNA_HOST_BROWSER_HOME ?? '') : shell.openExternal(url),
+    openExternal: (url) => LUNA_REQUEST_GUARD ? openLunaAuthBrowser(url, process.env.LUNA_HOST_BROWSER_HOME ?? '') : safeOpenExternal(url).then(() => undefined),
     // The object still exists under the kill switch (the launch check reads the
     // account file through it), but it must not talk to OpenAI: the poll
     // refreshes the token, and a rejected refresh deletes the saved sign-in.
@@ -1446,6 +1449,7 @@ void app.whenReady().then(async () => {
     await hookRelay.start();
   } catch (e) {
     log('ERROR', 'Main', 'Failed to start hook relay', { error: String(e) });
+    sessionManager.setPipeName(''); // WHY: never hand sessions a socket name we could not make private (hook-relay.ts); with none, hook scripts do nothing
   }
   perfMark('main:chore:hook-relay:done');
 

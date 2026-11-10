@@ -35,13 +35,13 @@ jobs:
     steps:
       # No token left in .git/config: the job runs an untrusted package (npm's
       # latest Claude Code) and nothing it starts should find one.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           persist-credentials: false
 
       # No `cache: npm`: an untrusted package runs here, and the npm cache is
       # shared with the build workflows.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 22
 

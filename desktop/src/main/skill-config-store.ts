@@ -354,6 +354,15 @@ export class SkillConfigStore {
     this.save();
   }
 
+  /** Plugin off-switch: mark or clear "turned off as unsafe". Touches nothing else in the record. */
+  setPackageTurnedOff(id: string, off: boolean): void {
+    const config = this.load();
+    const pkg = config.packages?.[id];
+    if (!pkg || Boolean(pkg.turnedOff) === off) return;
+    if (off) pkg.turnedOff = true; else delete pkg.turnedOff;
+    this.save();
+  }
+
   removePackage(id: string): void {
     const config = this.load();
     if (config.packages) {

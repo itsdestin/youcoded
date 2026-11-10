@@ -23,8 +23,9 @@ import { parseHTML } from 'linkedom';
 // @ts-ignore -- no type declarations for 'turndown'
 import TurndownService from 'turndown';
 import { defineTool } from './registry';
-import { guardedFetch, readBodyCapped, NetGuardError, type GuardedFetchOpts } from './net-guard';
+import { guardedFetch, readBodyCapped, NetGuardError, type GuardedFetchOpts, type HostDecision } from './net-guard';
 import type { ToolResultPayload } from './types';
+import { siteKeyFor } from '../../../shared/site-key';
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
@@ -785,7 +786,12 @@ export const WebFetchTool = defineTool<z.infer<typeof inputSchema>>({
   // parameter to page through) and also composeNotice's no-bounds fallback
   // (Task 19) for the rare defineTool pipeline-cap-only case.
   moreHint: 'fetch a more specific URL, or a narrower section of the page',
-  permissionSubject: (args) => args.url,
+  // WHY the site, not the URL (Ask-first website question, 2026-10-31): the person is
+  // asked about a WEBSITE, so the thing a remembered "Always allow" stores and the
+  // engine compares is the site key (host, lower case, "www." folded — see
+  // shared/site-key.ts), never one page's address. An unreadable address keeps its
+  // raw text so it can only ever be matched by itself.
+  permissionSubject: (args) => siteKeyFor(args.url) ?? args.url,
   async execute(args, ctx) {
     // WHY: the Luna reservation guard counts model sends, not tool-network
     // traffic. Keep the advertised tool stable but fail before DNS or HTTP.
@@ -794,7 +800,20 @@ export const WebFetchTool = defineTool<z.infer<typeof inputSchema>>({
     }
     let res: Response, finalUrl: string;
     try {
-      ({ res, finalUrl } = await guardedFetch(args.url, { signal: ctx.signal, ...testHooks }));
+      ({ res, finalUrl } = await guardedFetch(args.url, {
+        signal: ctx.signal,
+        // WHY (integration review 2026-11-01): the person is asked about the site they were TOLD about (the first
+        // address). A redirect to a different website is a visit to that website, so it must be asked about too:
+        // stop here and name it, and the next WebFetch of that address goes through the normal website question.
+        allowHost: (_h, hop, hopUrl): HostDecision => {
+          if (hop === 0) return { ok: true };
+          const asked = siteKeyFor(args.url);
+          const now = siteKeyFor(hopUrl.toString());
+          return !asked || now === asked ? { ok: true }
+            : { ok: false, message: `${asked} redirected to a different website (${now}). Fetch ${hopUrl.toString()} directly if you want to visit it; the person is asked about each new website.` };
+        },
+        ...testHooks,
+      }));
     } catch (err) {
       if (err instanceof NetGuardError) return { text: `WebFetch blocked: ${err.message}`, isError: true };
       throw err; // defineTool's catch turns it into an actionable error result
