@@ -8,6 +8,7 @@
 // (main/platform.ts), and the profile folder / app version arrive as plain values.
 // tests/create-runtime.test.ts proves nothing reachable from this file imports Electron.
 import type { ToolServices } from './harness/tools/types';
+import { returnToApp } from './headless/host-bridge';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -211,6 +212,9 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   // path: checked first, and saved only if OpenRouter didn't refuse it.
   const openRouterSignIn = new OpenRouterSignIn({
     openExternal: (url) => platform.openExternal(url),
+    // WHY (Destin, final review Q-12): on the phone, bring YouCoded back from the browser when OpenRouter's
+    // sign-in ends. returnToApp does nothing unless the Android app started this backend (no host socket).
+    onBrowserDone: returnToApp,
     acceptKey: async (key) => {
       const check = await providerRegistry.testConnection('openrouter', key);
       if (check.verdict !== 'rejected') await providerRegistry.setKey('openrouter', key);

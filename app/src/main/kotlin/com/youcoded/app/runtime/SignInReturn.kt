@@ -28,12 +28,24 @@ object SignInReturn {
     private const val CHANNEL_ID = "sign_in_return"
     private const val NOTIFICATION_ID = 4101
 
-    /** Sign-in pages worth keeping inside the app. Other links still go to the person's browser as before. */
+    /** Sign-in pages worth keeping inside the app. Other links still go to the person's browser as before.
+     *  WHY java.net.URI, not android.net.Uri (Destin, final review Q-12): plain JVM tests can run this check.
+     *  WHY the youcoded.ai entry: the YouCoded account sign-in link is api.youcoded.ai/auth/github/start-redirect,
+     *  which has neither "oauth" in its path nor a redirect_uri, so it used to open in the phone's browser with
+     *  no way back. */
     fun isSignInLink(url: String): Boolean {
-        val u = Uri.parse(url)
+        val u = runCatching { java.net.URI(url) }.getOrNull() ?: return false
         val host = (u.host ?: "").lowercase()
+        val path = u.path ?: ""
+        val query = u.rawQuery ?: ""
         val known = listOf("claude.ai", "claude.com", "anthropic.com", "openai.com", "chatgpt.com")
-        return known.any { host == it || host.endsWith(".$it") } && (u.getQueryParameter("redirect_uri") != null || u.path?.contains("oauth") == true)
+        if (known.any { host == it || host.endsWith(".$it") } &&
+            (query.split("&").any { it.startsWith("redirect_uri=") } || path.contains("oauth"))) return true
+        // OpenRouter's sign-in page (callback_url comes back to the phone's own loopback address).
+        if ((host == "openrouter.ai" || host.endsWith(".openrouter.ai")) && path.startsWith("/auth")) return true
+        // GitHub's "enter your code" page, used by the GitHub connect (Destin, final review Q-12).
+        if (host == "github.com" && path.startsWith("/login/device")) return true
+        return host == "api.youcoded.ai" && path.startsWith("/auth/")
     }
 
     /** Show [url] as a Custom Tab on top of [activity]. Works with no extra library: the "session" extra is what marks an

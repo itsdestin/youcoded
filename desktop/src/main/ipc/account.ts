@@ -25,6 +25,7 @@ import { notifySignedOut } from '../social-handlers';
 import { clearArcadeCache } from '../arcade-handlers';
 import { reconcileInstalls, type InstalledSkillSource } from '../install-reconcile';
 import { defineChannel, type MainChannelDef } from './channel-def';
+import { returnToApp } from '../headless/host-bridge';
 import { startSigninListener, type SigninListener } from '../signin-loopback';
 
 type Client = ReturnType<typeof createMarketplaceApiClient>;
@@ -70,7 +71,10 @@ export const accountChannels: MainChannelDef[] = [
     handler: () => wrap(async () => {
       const { client } = need();
       closeAllSigninListeners();
-      const listener = await startSigninListener();
+      // WHY returnToApp (Destin, final review Q-12): on the phone, bring YouCoded back when the browser finishes
+      // the YouCoded sign-in. It does nothing unless the Android app started this backend, so computers and
+      // remote browsers are untouched.
+      const listener = await startSigninListener(undefined, returnToApp);
       let out;
       try {
         out = await client.authStart(listener.port);
