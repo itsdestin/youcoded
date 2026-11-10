@@ -15,26 +15,32 @@
 // the oldest row at ~17:45 the previous evening, which reads "Yesterday at 5:45 PM" — a plausible spread
 // that keeps the original relative gaps (and so the original ordering) intact.
 //
-// Early-morning rule: if the tools run before the base (plus a margin for the "after" offsets), the base
-// would be in the FUTURE, and anything measured against the real clock ("just now", "5m ago") would read
-// oddly. So the base falls back to YESTERDAY's 07:40. Such a run's pictures show "Yesterday at 7:40 AM"
-// instead of "7:40 AM"; that is the accepted cost of never showing a time that has not happened yet.
+// "Now" (follow-up, same card): every relative label ("19m ago"), day label ("Yesterday") and load-anchored
+// time ("7:57 AM" under a running helper) is measured against the page's clock, so a picture taken at 03:00
+// differed from one taken at 15:00. The workbench therefore shows a clock that, at page load, always reads
+// 08:00 local today (clock-shim.ts installs it; it keeps ticking). 08:00 is after every made-up time, so
+// nothing is ever in the future AND no early-morning fallback is needed: the base is simply today 07:40.
 
 const BASE_HOUR = 7;
 const BASE_MINUTE = 40;
-/** Room for the offsets that land after the base (largest fixture offset is +348 s; reply-script adds 1 s per event). */
-const FUTURE_MARGIN_MS = 10 * 60_000;
+const NOW_HOUR = 8;
+const NOW_MINUTE = 0;
 
-/** The shared base for a given "now": that local day at 07:40, or the day before if that is not safely past. */
+/** The shared base for a given real "now": that local day at 07:40. */
 export function fixtureBase(now: number = Date.now()): number {
   const d = new Date(now);
-  const today = new Date(d.getFullYear(), d.getMonth(), d.getDate(), BASE_HOUR, BASE_MINUTE).getTime();
-  if (today + FUTURE_MARGIN_MS <= now) return today;
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1, BASE_HOUR, BASE_MINUTE).getTime();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), BASE_HOUR, BASE_MINUTE).getTime();
 }
 
-/** Fixed for the page's life: every consumer reads the same value even if the page stays open past midnight. */
-export const FIXTURE_BASE = fixtureBase();
+/** What the workbench's clock reads at page load for a given real "now": that local day at 08:00. */
+export function fixtureNow(now: number = Date.now()): number {
+  const d = new Date(now);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), NOW_HOUR, NOW_MINUTE).getTime();
+}
+
+/** Fixed for the page's life: every consumer reads the same value even if the page stays open past midnight.
+ *  The PURE mark lets a production bundle (which never installs the clock) drop this call. */
+export const FIXTURE_BASE = /* @__PURE__ */ fixtureBase();
 
 /** The base shifted by `offsetMs` (negative = earlier). */
 export const at = (offsetMs: number): number => FIXTURE_BASE + offsetMs;

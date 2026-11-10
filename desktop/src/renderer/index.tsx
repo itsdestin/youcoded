@@ -1,3 +1,6 @@
+// Workbench-only clock (a no-op everywhere else). Must stay the FIRST import: modules evaluate in order, so
+// everything below reads the shifted clock. See dev/workbench/clock-shim.ts.
+import './dev/workbench/clock-shim';
 // Must run before any component import — sets window.__PLATFORM__ synchronously
 // so module-level isAndroid()/isRemoteMode() reads in imported files see the
 // right value. See platform.ts (the startup block) for why.
