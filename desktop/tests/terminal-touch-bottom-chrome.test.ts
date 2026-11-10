@@ -33,6 +33,12 @@ describe('touch terminal bottom chrome', () => {
     expect(lift![1]).toMatch(/transform:\s*translateY\(calc\(-1 \* \(var\(--vvp-offset, 0px\) \+ var\(--term-grid-lift, 0px\)\)\)\)/);
   });
 
+  it('the only scroll bar in the terminal is ours: the library\'s own grey one is hidden, and ours stays inside the frame on a phone', () => {
+    const css = readSource(path.join(__dirname, '..', 'src', 'renderer', 'styles', 'terminal-scrollbar.css'));
+    expect(css).toMatch(/\.terminal-overlay-scroll \.xterm \.xterm-scrollable-element > \.scrollbar\s*\{\s*display:\s*none !important;/);
+    expect(css).toMatch(/html\[data-term-layout="phone"\] body[^{]*\.terminal-scrollbar-thumb\s*\{\s*right:\s*calc\(2px \+ var\(--frame-edge, 0px\)\);/);
+  });
+
   it('the docked class sits on the same layer as the floating one, above the glass', () => {
     const rule = css.match(/\.bottom-docked\s*\{([^}]*)\}/);
     expect(rule, '.bottom-docked rule missing').toBeTruthy();

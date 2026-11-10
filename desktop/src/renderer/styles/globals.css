@@ -6,7 +6,7 @@
 @import "./scroll-mask.css"; /* WHY here, once: every screen using .scroll-mask gets it, and the design lint knows the class. */
 @import "./frame-outline.css";
 @import "./phone-density.css"; /* WHY: phone-width chat spacing (card #213); the file says what and why. */
-@import "./keyboard.css"; /* WHY: the empty-chat hint above the keyboard (card #213). */
+@import "./keyboard.css"; @import "./terminal-scrollbar.css"; /* WHY: the empty-chat hint above the keyboard (card #213); the terminal's one scroll bar. */
 @import "./input-bar.css"; /* WHY: the message box hint stays on one line beside the stop button (card #213). */
 @import "./brand.css"; /* WHY here: the logo and setup's brand surface (first-run rebuild), known to the design lint like every other class. */
 
