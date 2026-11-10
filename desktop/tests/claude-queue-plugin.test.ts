@@ -263,6 +263,18 @@ describe('single-module native queue admission', () => {
     expect(h.events.at(-1)).toMatchObject({ kind: 'revoked', composerSafe: true });
     h.release(); await pending;
   });
+  it('clears its own shortened box on dismissal but keeps a shortened box the person changed', async () => {
+    for (const changed of [false, true]) {
+      const h = harness(); h.$.prompt.fill.mockImplementation(async ({ text }: any) => { h.setBox(text === '' ? '' : shortenLikeClaudeCode(text, 1)); return { isFilled: true }; });
+      const wire = longText(170); const { pending, lease } = await h.arm(wire);
+      const left = shortenLikeClaudeCode(wire, 4); h.setBox(changed ? left + ' and more' : left);
+      await h.pollCommand({ kind: 'abandon', attempt: lease });
+      expect(h.events.at(-1)).toMatchObject({ kind: 'abandoned', attemptId: lease.attemptId });
+      // A leftover copy would hold the next queued message back and could be sent a second time by hand.
+      expect(h.box()).toBe(changed ? left + ' and more' : '');
+      h.release(); await pending;
+    }
+  });
   it('ignores nested-agent batches without creating a fence', async () => {
     const h = harness(); const next = vi.fn(async () => ({})); await h.emit('classic.PostToolBatch', { agent_id: 'worker' }, next);
     expect(next).toHaveBeenCalledTimes(1); expect(h.events).toEqual([]);
