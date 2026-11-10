@@ -86,6 +86,11 @@ describe('tips', () => {
     expect(triggerTip('notes')).toBe(false);
   });
 
+  it('the phone is told terminal view is fullscreen and how to change it', () => {
+    const tip = TIPS.find(t => t.id === 'terminal-fullscreen')!;
+    expect(tip.text).toContain('/tui default');
+  });
+
   it('every tip has an id and a sentence a student can read', () => {
     for (const t of TIPS) {
       expect(t.id).toMatch(/^[a-z-]+$/);
