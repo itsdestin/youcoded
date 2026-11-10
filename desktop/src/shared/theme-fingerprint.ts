@@ -7,6 +7,10 @@
 // change. We stamp the installed record with this value at install/update time and flag an
 // update when the listed value differs.
 //
+// Known limitation: an install recorded under `contentHash` (or with no stamp) stays quiet after
+// the registry starts listing `fileHashes`, until the user next reinstalls/updates that theme:
+// a missed Update, never a false one.
+//
 // Pure JS (no node crypto) because the main process (to record) and the renderer (to compare)
 // must compute exactly the same string from the same registry entry.
 

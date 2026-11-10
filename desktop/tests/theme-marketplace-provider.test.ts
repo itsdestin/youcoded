@@ -218,4 +218,29 @@ describe('installTheme checks every file before writing any', () => {
     await p.installTheme('check-me');
     expect(recorded[0].themeFingerprint).toBeUndefined();
   });
+
+  it('records a contentHash-based stamp when the entry has only a contentHash', async () => {
+    const recorded: any[] = [];
+    const p = await setup({ [`${ORIGIN}/manifest.json`]: manifest, [`${ORIGIN}/assets/a.svg`]: svg });
+    (p as any).fetchRegistry = async () => ({ version: 1, themes: [{
+      slug: 'check-me', name: 'Check Me', author: 'a', dark: true, source: 'community', features: [],
+      manifestUrl: `${ORIGIN}/manifest.json`, assetUrls: { 'assets/a.svg': `${ORIGIN}/assets/a.svg` },
+      contentHash: 'sha256:ABC123',
+    }] });
+    (p as any).configStore = { recordPackageInstall: (_id: string, pkg: any) => recorded.push(pkg) };
+    expect((await p.installTheme('check-me')).status).toBe('installed');
+    expect(recorded[0].themeFingerprint).toBe('ch:sha256:abc123');
+  });
+
+  // WHY: a failed Update must leave the old stamp, or the badge would clear while the old files
+  // are still installed (a silent lie). The record is written only after the files landed.
+  it('a failed install or update records nothing, so the old stamp stays', async () => {
+    const recorded: any[] = [];
+    const p = await setup({ [`${ORIGIN}/manifest.json`]: manifest, [`${ORIGIN}/assets/a.svg`]: '<svg onload="x"/>' },
+      { 'manifest.json': sha(manifest), 'assets/a.svg': sha(svg) });
+    (p as any).configStore = { recordPackageInstall: (_id: string, pkg: any) => recorded.push(pkg) };
+    expect((await p.installTheme('check-me')).status).toBe('failed');
+    expect((await p.updateTheme('check-me')).ok).toBe(false);
+    expect(recorded).toHaveLength(0);
+  });
 });
