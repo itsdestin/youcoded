@@ -33,7 +33,7 @@
 {"type": "subagent_tool_use", "parent": "ag2", "id": "ag2-t1", "name": "Read", "input": {"file_path": "src/renderer/components/TerminalPane.tsx"}, "elapsedMs": 96000}
 {"type": "subagent_tool_result", "parent": "ag2", "tool_use_id": "ag2-t1", "content": "1  // xterm fit addon"}
 {"type": "tool_use", "id": "ag3", "name": "Agent", "input": {"description": "Sweep the settings dialogs", "subagent_type": "general-purpose", "prompt": "Check every scrollable settings dialog for the same bug."}}
-{"type": "subagent_tool_use", "parent": "ag3", "id": "ag3-t1", "name": "Grep", "input": {"pattern": "overflow-y", "path": "src/renderer/components/settings"}, "timestamp": 1753800300000}
+{"type": "subagent_tool_use", "parent": "ag3", "id": "ag3-t1", "name": "Grep", "input": {"pattern": "overflow-y", "path": "src/renderer/components/settings"}, "timestamp": 300000}
 {"type": "subagent_tool_result", "parent": "ag3", "tool_use_id": "ag3-t1", "content": "11 files matched"}
-{"type": "subagent_text", "parent": "ag3", "text": "None of the settings dialogs stick to the bottom at all — they open at the top and stay where the user leaves them. Nothing to fix here.", "timestamp": 1753800348000}
+{"type": "subagent_text", "parent": "ag3", "text": "None of the settings dialogs stick to the bottom at all — they open at the top and stay where the user leaves them. Nothing to fix here.", "timestamp": 348000}
 {"type": "tool_result", "tool_use_id": "ag3", "content": "No occurrences. Settings dialogs never stick to the bottom, so the re-arm bug cannot apply to them."}
