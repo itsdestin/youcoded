@@ -271,6 +271,29 @@ export function stateText(run: Pick<ShellRun, 'status' | 'exitCode' | 'signal' |
   return `exited ${code} · ${elapsed}`;
 }
 
+/** How a command carried over from before an app restart reads to the MODEL.
+ *  WHY (card #220): BashOutput/KillShell only knew this session's live commands, so
+ *  asking about an id from before a restart got "No background command ... none" —
+ *  false, because the command existed and we know (or honestly do not know) how it
+ *  ended. These words keep "exit code unknown" and "may still be running" distinct
+ *  from a plain exit, matching what the chat cards say. */
+export function restoredStateText(v: ShellRunView, now = Date.now()): string {
+  if (v.maybeStillRunning) return `ended while the app was closed, and may still be running (it cannot be stopped from here) · exit code unknown`;
+  if (v.exitUnknown) return `ended while the app was closed · exit code unknown`;
+  return stateText(v, now);
+}
+
+/** The one-line-per-command list the model reads, in BashOutput's list mode and in the task list:
+ *  commands from before a restart first, then this session's. WHY one function (card #220): the two
+ *  places must never disagree, and keeping it here keeps the big session host file from growing. */
+export function shellListLines(reg: Pick<ShellRegistry, 'list' | 'restoredViews'> | undefined): string[] {
+  const short = (c: string) => (c.length > 60 ? `${c.slice(0, 55)}…` : c);
+  return [
+    ...(reg?.restoredViews() ?? []).map((r) => `${r.shellId} · ${restoredStateText(r)} · ${short(r.command ?? '')}`),
+    ...(reg?.list() ?? []).map((r) => `${r.shellId} · ${stateText(r)} · ${short(r.command)}`),
+  ];
+}
+
 /** The §4.4 finished notice. A user Stop is reported too (the model must know
  *  its server is gone); KillShell's own result is its notice, so the host never
  *  asks for one in that case. */
@@ -626,6 +649,12 @@ export class ShellRegistry extends EventEmitter {
   /** Views of commands carried over from a previous run (see restoreFrom). */
   restoredViews(): ShellRunView[] { return [...this.restored.values()].map((r) => this.restoredView(r)); }
 
+  /** One command carried over from a previous run, as a view (undefined if none by that id). */
+  getRestored(shellId: string): ShellRunView | undefined {
+    const e = this.restored.get(shellId);
+    return e ? this.restoredView(e) : undefined;
+  }
+
   /** 'running' | 'exited' | 'stopped' for a live OR restored command, else undefined. */
   statusOf(shellId: string): ShellRun['status'] | undefined {
     return this.runs.get(shellId)?.status ?? this.restored.get(shellId)?.rec.status;
@@ -786,6 +815,13 @@ export class ShellRegistry extends EventEmitter {
     const entry = this.restored.get(shellId);
     if (!entry || entry.rec.status !== 'running' || !entry.rec.pid) return { ok: false };
     const pid = entry.rec.pid;
+    // WHY re-check the start stamp (card #220): restore proved this was our process, but time has
+    // passed. If the number now belongs to a different process, signalling it could kill something
+    // unrelated, so refuse and record the original as ended. (No stamp or no /proc: unchanged.)
+    if (entry.rec.procStart && process.platform === 'linux') {
+      const now = await processStartStamp(pid);
+      if (now !== undefined && now !== entry.rec.procStart) { this.finishRestored(entry); return { ok: false }; }
+    }
     entry.stopReason = reason;
     // killTree needs only a pid and the ability to signal; the real ChildProcess died with the old app.
     // exitCode reads the group's real state (review F4): killTree escalates to SIGKILL only while
