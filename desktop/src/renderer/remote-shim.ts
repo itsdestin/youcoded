@@ -1617,7 +1617,13 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         // the cleartext-traffic policy or a wrong host/port/firewall.
         let message: string;
         if (!didOpen) {
-          message = `Cannot reach host at ${url}. Check the host, port, and network (VPN/firewall).${isAndroidAppPage() && !localBridge ? ' If YouCoded on your computer is not up to date, update it to connect.' : ''}`; // WHY the added sentence: a computer on an older YouCoded refuses the phone app's page address and the phone cannot tell that from "unreachable"
+          // WHY two wordings (Destin, 2026-11-10, his Flip against a computer on 1.3.3): the phone app got a technical address
+          // and "host, port, network (VPN/firewall)" when the real cause was an out-of-date computer app, which refuses the
+          // phone app's page address — and the phone cannot tell that from "unreachable". So the phone app names every cause
+          // it cannot rule out, in plain words, the update first; the address is on the saved computer's row just below.
+          message = isAndroidAppPage() && !localBridge
+            ? 'Couldn’t connect to your computer. Make sure YouCoded on it is up to date and open, and that Tailscale is on for both devices.'
+            : `Cannot reach host at ${url}. Check the host, port, and network (VPN/firewall).`;
         } else if (code === 4029) {
           message = 'Too many failed attempts. Wait a minute and try again.';
         } else if (code === 4000) {
@@ -3191,6 +3197,10 @@ export function installShim(): void {
       removePairedDevice: (host: string, port: number) =>
         hasAndroidHost() ? invokeAndroidHost('android:remove-paired-device', { host, port }) : Promise.resolve(),
       scanQr: () => hasAndroidHost() ? invokeAndroidHost('android:scan-qr') : Promise.resolve(null),
+      // WHY the app is asked, not the backend (Destin, 2026-11-10): remote.detectTailscale looks for a computer's Tailscale
+      // program, which the phone does not have, so the Connect to Desktop warning was always on. `on: null` = unknown.
+      tailscaleStatus: (): Promise<{ on: boolean | null }> => hasAndroidHost() ? invokeAndroidHost('android:tailscale-status') : Promise.resolve({ on: null }),
+      openTailscale: (): Promise<{ opened: boolean }> => hasAndroidHost() ? invokeAndroidHost('android:open-tailscale') : Promise.resolve({ opened: false }),
     },
     off: (channel: string, handler: Callback) => removeListener(channel, handler),
     removeAllListeners: (channel: string) => removeAllListeners(channel),

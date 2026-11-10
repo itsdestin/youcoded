@@ -2284,8 +2284,12 @@ export function ConnectToDesktopButton() {
   const [formHost, setFormHost] = useState('');
   const [formPort, setFormPort] = useState('9900');
   const [formPassword, setFormPassword] = useState('');
-  const [tailscaleStatus, setTailscaleStatus] = useState<{ connected: boolean; ip?: string } | null>(null);
-  const [tailscaleLoading, setTailscaleLoading] = useState(false);
+  // WHY three answers (Destin, 2026-11-10): the warning used to ask the backend, which cannot see the phone's Tailscale and
+  // always said "not connected" — so it showed with Tailscale on and could not be allowed to block anything. The phone app
+  // now answers itself: true, false, or null when it cannot tell (then no warning and nothing blocked).
+  const [tailscaleOn, setTailscaleOn] = useState<boolean | null>(null);
+  // "Try anyway": the check could be wrong on an unusual phone, and a wrong "off" must never lock anyone out.
+  const [tailscaleOverride, setTailscaleOverride] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
   const claude = (window as any).claude;
   // photo-only build: only mounted inside AndroidSettings (`?platform=android`);
@@ -2314,13 +2318,23 @@ export function ConnectToDesktopButton() {
   // Check Tailscale status when popup opens
   useEffect(() => {
     if (!open) return;
-    setTailscaleLoading(true);
     setConnectError(null);
-    claude.remote?.detectTailscale?.()
-      .then((status: any) => setTailscaleStatus(status ?? null))
-      .catch(() => setTailscaleStatus(null))
-      .finally(() => setTailscaleLoading(false));
+    setTailscaleOverride(false);
+    let live = true;
+    const check = () => {
+      Promise.resolve(claude.android?.tailscaleStatus?.())
+        .then((status: any) => { if (live) setTailscaleOn(typeof status?.on === 'boolean' ? status.on : null); })
+        .catch(() => { if (live) setTailscaleOn(null); });
+    };
+    check();
+    // Coming back from the Tailscale app (the warning's own button sends the person there) re-checks, so the warning
+    // clears without closing and reopening this screen.
+    const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { live = false; document.removeEventListener('visibilitychange', onVisible); };
   }, [open]);
+  // Off, and not overridden. Never while a computer is connected: that connection is the proof Tailscale works.
+  const tailscaleBlocks = tailscaleOn === false && !tailscaleOverride && !remoteConnected;
 
   const doConnect = useCallback(async (device: PairedDevice) => {
     setConnecting(true);
@@ -2436,16 +2450,25 @@ export function ConnectToDesktopButton() {
       >
 
               {/* Tailscale warning */}
-              {!tailscaleLoading && tailscaleStatus !== null && !tailscaleStatus.connected && (
+              {tailscaleBlocks && (
                 <Callout
                   tone="warning"
                   // WHY no warning triangle (final-review#ST-30, Destin: "remove the
                   // exclamation triangle thing in front of tailscale not connected"):
                   // the box's amber tint already says "warning", and it was the only
                   // notice in the app with a glyph of its own.
-                  title="Tailscale not connected"
+                  title="Turn on Tailscale to connect"
+                  // WHY buttons, and the rows below switched off (Destin, 2026-11-10: "it still lets me click desktop to
+                  // connect, despite the fact that it obviously won't work … probably too subtle given its significance").
+                  actionsPlacement="below"
+                  actions={
+                    <>
+                      <Button variant="ghost" size="sm" onClick={() => setTailscaleOverride(true)}>Try anyway</Button>
+                      <Button size="sm" onClick={() => { void claude.android?.openTailscale?.(); }}>Open Tailscale</Button>
+                    </>
+                  }
                 >
-                  Enable Tailscale on this phone before connecting. Both devices must be on the same Tailscale network.
+                  Tailscale is off on this phone. YouCoded reaches your computer only through Tailscale, on both devices.
                 </Callout>
               )}
 
@@ -2504,7 +2527,7 @@ export function ConnectToDesktopButton() {
                         description={`${device.host}:${device.port}`}
                         descriptionClassName="text-fg-muted font-mono"
                         onClick={() => doConnect(device)}
-                        disabled={connecting || remoteConnected}
+                        disabled={connecting || remoteConnected || tailscaleBlocks}
                         control={
                           <Button variant="ghost" size="sm" onClick={() => handleRemoveDevice(device)}>
                             Remove
@@ -2540,10 +2563,10 @@ export function ConnectToDesktopButton() {
                       </p>
                       {/* Both only had an active: state, so on desktop nothing
                           happened on hover at all. */}
-                      <Button onClick={handleScanQr} className="w-full">
+                      <Button onClick={handleScanQr} disabled={tailscaleBlocks} className="w-full">
                         Scan QR code
                       </Button>
-                      <Button variant="secondary" onClick={() => setShowConnectForm(true)} className="w-full">
+                      <Button variant="secondary" onClick={() => setShowConnectForm(true)} disabled={tailscaleBlocks} className="w-full">
                         Enter manually
                       </Button>
                     </div>

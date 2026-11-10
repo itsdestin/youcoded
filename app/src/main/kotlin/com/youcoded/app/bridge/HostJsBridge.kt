@@ -89,6 +89,18 @@ class HostJsBridge(
                 PairedDeviceStore.prefs(context).edit().putString(DEVICES, kept.toString()).apply()
                 reply(id, true)
             }
+            // WHY the app answers (Destin, 2026-11-10): the backend's Tailscale check looks for a computer program the phone
+            // does not have and always said "not connected". `on` is null when the phone would not say.
+            "android:tailscale-status" -> reply(id, JSONObject().put("on", com.youcoded.app.ui.TailscaleProbe.isOn() ?: JSONObject.NULL))
+            // The warning's button: the Tailscale app if it is installed, else its Play Store page. `opened` false: neither worked.
+            "android:open-tailscale" -> {
+                val flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                val app = context.packageManager.getLaunchIntentForPackage("com.tailscale.ipn")?.addFlags(flags)
+                val store = android.content.Intent(android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("https://play.google.com/store/apps/details?id=com.tailscale.ipn")).addFlags(flags)
+                val opened = listOfNotNull(app, store).any { intent -> runCatching { context.startActivity(intent) }.isSuccess }
+                reply(id, JSONObject().put("opened", opened))
+            }
             "android:scan-qr" -> main.post { ui.scanQr { url -> reply(id, JSONObject().put("url", url ?: JSONObject.NULL)) } }
             // WHY (2026-11-01 phone test): the paperclip asked the headless backend for a file dialog, which has no
             // screen and always answered "cancelled". The system picker lives here, so the phone's paperclip asks
@@ -229,6 +241,7 @@ class HostJsBridge(
         val TYPES = listOf(
             "android:get-tier", "android:set-tier", "android:get-about", "android:get-paired-devices",
             "android:save-paired-device", "android:remove-paired-device", "android:scan-qr", "android:pick-files",
+            "android:tailscale-status", "android:open-tailscale",
             "android:take-pending-session", "system:notify-stack-state", "voice:status", "voice:download", "voice:start", "voice:stop", "voice:cancel",
         )
     }
