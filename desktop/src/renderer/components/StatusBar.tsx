@@ -1,4 +1,5 @@
 import { gitChipLabel } from '../state/git-chip-label';
+import { versionPillTooltip } from './version-pill-tooltip';
 import { useState, useCallback, useEffect, useSyncExternalStore, memo } from 'react';
 import { useChatStore } from '../state/chat-context';
 import { useEscClose } from '../hooks/use-esc-close';
@@ -1611,11 +1612,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {show('version') && updateStatus && (
         <Tooltip text={
             (devLabel ? `Dev instance: ${devLabel} — ` : '') +
-            (updateStatus.update_available && updateStatus.downloaded
-              ? `v${updateStatus.latest} is downloaded — click to restart and update`
-              : updateStatus.update_available
-              ? `Update available: v${updateStatus.latest} — click to download`
-              : `YouCoded v${updateStatus.current}`)
+            versionPillTooltip(updateStatus)
           }>
         <button
           onClick={() => setUpdatePanelOpen(true)}
