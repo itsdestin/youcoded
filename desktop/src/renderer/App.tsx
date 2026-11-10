@@ -42,10 +42,9 @@ import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptShrink
 import { attachTranscriptFeed, attachSessionLiveFeed } from './state/screen-feed';
 import { useDropEndedSessionsOnReconnect, withAnnouncedName } from './state/session-list-sync';
 import {
-  remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
-  choosePlaceOnHydrate, chooseAfterDestroyed,
-} from './state/remote-place';
-import { readDesktopPlace, writeDesktopPlace, chooseDesktopPlace } from './state/desktop-place';
+  remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace, choosePlaceOnHydrate, chooseAfterDestroyed,
+} from './state/remote-place'; // (two lines joined to stay inside this file's line budget)
+import { chooseDesktopPlaceFromList, useSessionListLoaded } from './state/desktop-place';
 import { ArtifactProvider, createArtifactStore } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
@@ -347,14 +346,7 @@ function AppInner() {
   const [initializedSessions, setInitializedSessions] = useState<Set<string>>(new Set());
   // Has the list of open sessions arrived from this computer at least once? The welcome screen
   // must not call anyone a first-time user before it has — see first-run-screen.ts.
-  const [sessionListLoaded, setSessionListLoaded] = useState(false);
-  // WHY (card #146): keep this window's saved place current as the user switches chats (null clears it so no stale
-  // id lingers). Waits for the first chat list: before it arrives sessionId is still null, and saving that would erase
-  // the place we are about to restore. Desktop only; phones have their own memory (remote-place.ts).
-  useEffect(() => {
-    if (!sessionListLoaded || isRemoteMode()) return;
-    writeDesktopPlace(window.sessionStorage, sessionId);
-  }, [sessionId, sessionListLoaded]);
+  const [sessionListLoaded, setSessionListLoaded] = useSessionListLoaded(sessionId, isRemoteMode()); // WHY (#146): also saves this window's chat; see desktop-place.ts
   // Past conversations to resume: true / false / null = unknown (not asked, or the question
   // failed — which over remote access happens on every dropped connection).
   const [hasResumable, setHasResumable] = useState<boolean | null>(null);
@@ -1872,7 +1864,7 @@ function AppInner() {
       // sessions on mount — see comment above this effect).
       performance.mark('yc:sessions-listed');
       // Even an empty list is an answer: it is what tells the welcome screen it may decide.
-      setSessionListLoaded(true);
+      setSessionListLoaded(true); // WHY (#146): must stay in this same block as the setSessionId restore below (desktop-place.ts)
       if (!list || list.length === 0) {
         // A remote client with nothing to fill is done filling (and decides its place: there is none).
         if (isRemoteMode()) { decideRemotePlace([]); reportFillRound([]); }
@@ -1919,15 +1911,7 @@ function AppInner() {
         // not sent to this phone until it opens them (one-core R5-3); their dots come from the computer's summary.
         void Promise.all(choice ? [remoteWatchRef.current.watch(choice)] : []).then(reportFillRound);
       } else {
-        // WHY (card #146): after a reload, reopen the chat this window was on instead of always the oldest one.
-        // `list` is already only this window's chats, so a saved chat that was closed or moved to another window
-        // is not in it and we fall back to the first chat exactly as before.
-        const desktopChoice = chooseDesktopPlace({
-          stored: readDesktopPlace(window.sessionStorage),
-          ownedSessionIds: list.map((s: any) => s.id),
-          mayAutoSelect: mayAutoSelect(),
-        });
-        setSessionId((prev) => prev ?? desktopChoice);
+        setSessionId((prev) => prev ?? chooseDesktopPlaceFromList(list, mayAutoSelect())); // WHY (#146): reopen the chat this window was on after a reload; see desktop-place.ts
       }
       // Existing sessions that have STARTED skip the "Initializing" cover; one
       // still on its startup dialogs does not (SessionInfo.awaitingStart).

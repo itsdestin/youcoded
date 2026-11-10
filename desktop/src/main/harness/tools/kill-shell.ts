@@ -21,9 +21,15 @@ export const KillShellTool = defineTool({
     // real command — say its true state, and stop it if it is verifiably still alive.
     const old = !run ? reg?.getRestored(args.shell_id) : undefined;
     if (reg && old) {
+      // WHY its own wording (card #220): a command we only know may still be alive must not read
+      // "is not running" — the model would take that as "done". It is never signalled either.
+      if (old.maybeStillRunning) return { text: `${old.shellId} cannot be stopped from here — ${restoredStateText(old)}.`, isError: true };
       if (old.status !== 'running') return { text: `${old.shellId} is not running — ${restoredStateText(old)}.`, isError: true };
-      await reg.kill(old.shellId, 'assistant');
+      const res = await reg.kill(old.shellId, 'assistant');
       const after = reg.getRestored(old.shellId);
+      // WHY check the result: the registry refuses (ok: false) when it cannot prove the process
+      // is still the same one; saying "Stopped" then would be a lie, so report the true state.
+      if (!res.ok) return { text: `${old.shellId} could not be stopped — ${restoredStateText(after ?? old)}.`, isError: true };
       const head = after && after.status !== 'running'
         ? `Stopped ${old.shellId} (was: ${old.command}).`
         : `Sent the stop signal to ${old.shellId} (was: ${old.command}), but it had not exited after 5 s — it should be gone shortly.`;

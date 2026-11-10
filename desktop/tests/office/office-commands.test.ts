@@ -88,6 +88,30 @@ describe('office commands without the translator', () => {
     expect(written).toContain('editor reported a fault');
   });
 
+  // WHY: a document word shaped like a script position must not be logged; only the editor's own scripts are.
+  it('js_log drops a document word shaped like a script position', async () => {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    await run(s.token, 'js_log', { msg: 'Error: Maria-Salary-85000.js:1:2 and (office://abc/web/sdk-all.js:5:6)' });
+    const written = JSON.stringify(vi.mocked(log).mock.calls);
+    expect(written).not.toContain('Maria');
+    expect(written).not.toContain('85000');
+    expect(written).toContain('sdk-all.js:5:6');
+  });
+
+  // WHY: only the first 4000 characters are scanned, but the real length is still reported.
+  it('js_log scans a very large message only in part and still reports its length', async () => {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    const msg = `Error ${'x'.repeat(5000)} TypeError at sdk-all.js:1:2` + 'y'.repeat(1_000_000);
+    vi.mocked(log).mockClear();
+    await run(s.token, 'js_log', { msg });
+    const written = JSON.stringify(vi.mocked(log).mock.calls);
+    expect(written).toContain(`"length":${msg.length}`);
+    expect(written).not.toContain('TypeError');
+    expect(written).not.toContain('sdk-all.js:1:2');
+  });
+
   it('refuses an unknown command and an unknown token', async () => {
     const s = await sessionFor(MEMO);
     const run = createOfficeCommands({ root: ROOT, sessions });

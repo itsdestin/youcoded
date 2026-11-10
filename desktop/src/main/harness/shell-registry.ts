@@ -283,6 +283,17 @@ export function restoredStateText(v: ShellRunView, now = Date.now()): string {
   return stateText(v, now);
 }
 
+/** The one-line-per-command list the model reads, in BashOutput's list mode and in the task list:
+ *  commands from before a restart first, then this session's. WHY one function (card #220): the two
+ *  places must never disagree, and keeping it here keeps the big session host file from growing. */
+export function shellListLines(reg: Pick<ShellRegistry, 'list' | 'restoredViews'> | undefined): string[] {
+  const short = (c: string) => (c.length > 60 ? `${c.slice(0, 55)}…` : c);
+  return [
+    ...(reg?.restoredViews() ?? []).map((r) => `${r.shellId} · ${restoredStateText(r)} · ${short(r.command ?? '')}`),
+    ...(reg?.list() ?? []).map((r) => `${r.shellId} · ${stateText(r)} · ${short(r.command)}`),
+  ];
+}
+
 /** The §4.4 finished notice. A user Stop is reported too (the model must know
  *  its server is gone); KillShell's own result is its notice, so the host never
  *  asks for one in that case. */
@@ -804,6 +815,13 @@ export class ShellRegistry extends EventEmitter {
     const entry = this.restored.get(shellId);
     if (!entry || entry.rec.status !== 'running' || !entry.rec.pid) return { ok: false };
     const pid = entry.rec.pid;
+    // WHY re-check the start stamp (card #220): restore proved this was our process, but time has
+    // passed. If the number now belongs to a different process, signalling it could kill something
+    // unrelated, so refuse and record the original as ended. (No stamp or no /proc: unchanged.)
+    if (entry.rec.procStart && process.platform === 'linux') {
+      const now = await processStartStamp(pid);
+      if (now !== undefined && now !== entry.rec.procStart) { this.finishRestored(entry); return { ok: false }; }
+    }
     entry.stopReason = reason;
     // killTree needs only a pid and the ability to signal; the real ChildProcess died with the old app.
     // exitCode reads the group's real state (review F4): killTree escalates to SIGKILL only while

@@ -11,6 +11,8 @@
 // from an earlier run can never match. localStorage is NOT used (it is shared by all windows).
 // Tested in tests/desktop-place.test.ts.
 
+import { useEffect, useState } from 'react';
+
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 const KEY = 'youcoded-desktop-place';
@@ -42,4 +44,32 @@ export function chooseDesktopPlace(input: {
   if (!mayAutoSelect) return null;
   if (stored && ownedSessionIds.includes(stored)) return stored;
   return ownedSessionIds[0] ?? null;
+}
+
+/** Reads this window's saved chat and picks where to open, given the chat list main returned. */
+export function chooseDesktopPlaceFromList(list: { id: string }[], mayAutoSelect: boolean): string | null {
+  return chooseDesktopPlace({
+    stored: readDesktopPlace(window.sessionStorage),
+    ownedSessionIds: list.map((s) => s.id),
+    mayAutoSelect,
+  });
+}
+
+/**
+ * "Has the first chat list arrived?" state, plus the effect that keeps the saved place current.
+ *
+ * WHY the save waits for the list, and the INVARIANT it depends on: before the list arrives the
+ * current chat is still null, and saving "null" would erase the place we are about to restore.
+ * So App must call setSessionListLoaded(true) in the SAME synchronous block as the setSessionId
+ * that restores the place (React then applies both in one render). If they ever split, the save
+ * would run with loaded=true and chat=null and wipe the saved place first. Pinned by
+ * tests/desktop-place.test.ts (source scan of App.tsx). Desktop only: phones use remote-place.ts.
+ */
+export function useSessionListLoaded(sessionId: string | null, remote: boolean): [boolean, (v: boolean) => void] {
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    if (!loaded || remote) return;
+    writeDesktopPlace(window.sessionStorage, sessionId);
+  }, [sessionId, loaded, remote]);
+  return [loaded, setLoaded];
 }

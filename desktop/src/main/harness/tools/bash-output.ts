@@ -5,7 +5,7 @@
 // in harness-session.ts, since polling is the one call that is SUPPOSED to repeat.
 import { z } from 'zod';
 import { defineTool } from './registry';
-import { stateText, restoredStateText } from '../shell-registry';
+import { stateText, restoredStateText, shellListLines } from '../shell-registry';
 
 /** Lines returned per read; earlier ones stay in the log the moreHint names. */
 export const BASH_OUTPUT_MAX_LINES = 200;
@@ -30,16 +30,10 @@ export const BashOutputTool = defineTool({
   async execute(args, ctx) {
     const reg = ctx.shells;
     if (!args.shell_id) {
-      const runs = reg?.list() ?? [];
       // WHY restored ones too (card #220): commands from before an app restart are
       // still this conversation's commands; leaving them out told the model "none".
-      const old = reg?.restoredViews() ?? [];
-      if (runs.length === 0 && old.length === 0) return { text: 'No background commands in this conversation.' };
-      const short = (c: string) => (c.length > 60 ? `${c.slice(0, 55)}…` : c);
-      const lines = [
-        ...old.map((r) => `${r.shellId} · ${restoredStateText(r)} · ${short(r.command ?? '')}`),
-        ...runs.map((r) => `${r.shellId} · ${stateText(r)} · ${short(r.command)}`),
-      ];
+      const lines = shellListLines(reg);
+      if (lines.length === 0) return { text: 'No background commands in this conversation.' };
       return { text: lines.join('\n') };
     }
     const running = [

@@ -6,7 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { BashOutputTool, BASH_OUTPUT_MAX_LINES } from '../src/main/harness/tools/bash-output';
 import { KillShellTool } from '../src/main/harness/tools/kill-shell';
-import { ShellRegistry } from '../src/main/harness/shell-registry';
+import { ShellRegistry, shellListLines } from '../src/main/harness/shell-registry';
 import type { ToolContext } from '../src/main/harness/tools/types';
 
 // Per-process. Background shell logs land in
@@ -153,6 +153,53 @@ describe.skipIf(!posix)('commands restored after a restart', () => {
     const r = await BashOutputTool.execute({ shell_id: 'sh-old1' }, ctx());
     expect(r.text).toMatch(/while the app was closed/);
     expect(r.text).toMatch(/exit code unknown/);
+    // WHY: the plain "ended, end not seen" state must NOT claim the command may still be alive.
+    expect(r.text).not.toMatch(/may still be running/);
+  });
+  it('a pre-restart command that may still be alive says so, and KillShell NEVER signals it', async () => {
+    if (process.platform !== 'linux') return;
+    const { spawn } = await import('child_process');
+    const child = spawn('/bin/bash', ['-c', 'sleep 60'], { detached: true, stdio: 'ignore' });
+    child.unref();
+    try {
+      // No start stamp: we cannot prove the process is ours, so it is "maybe still running".
+      await reg.restoreFrom([rec({ status: 'running', exitCode: undefined, endedAt: undefined, pid: child.pid, procStart: undefined })]);
+      const out = await BashOutputTool.execute({ shell_id: 'sh-old1' }, ctx());
+      expect(out.text).toMatch(/may still be running/);
+      const k = await KillShellTool.execute({ shell_id: 'sh-old1' }, ctx());
+      expect(k.isError).toBe(true);
+      expect(k.text).toMatch(/^sh-old1 cannot be stopped from here — /);
+      expect(k.text).not.toMatch(/is not running/);
+      expect(() => process.kill(child.pid!, 0)).not.toThrow(); // still alive: nothing was signalled
+    } finally {
+      try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+  it('KillShell refuses, and signals nothing, when the saved start stamp no longer matches the process', async () => {
+    if (process.platform !== 'linux') return;
+    const { spawn } = await import('child_process');
+    const child = spawn('/bin/bash', ['-c', 'sleep 60'], { detached: true, stdio: 'ignore' });
+    child.unref();
+    try {
+      const { processStartStamp } = await import('../src/main/harness/shell-sidecar');
+      const procStart = await processStartStamp(child.pid!);
+      await reg.restoreFrom([rec({ status: 'running', exitCode: undefined, endedAt: undefined, pid: child.pid, procStart })]);
+      // The number is now "reused": pretend the saved stamp belonged to an earlier process.
+      (reg as any).restored.get('sh-old1').rec.procStart = 'not-this-process';
+      const k = await KillShellTool.execute({ shell_id: 'sh-old1' }, ctx());
+      expect(k.isError).toBe(true);
+      expect(k.text).toMatch(/could not be stopped/);
+      expect(k.text).not.toMatch(/^Stopped/);
+      expect(() => process.kill(child.pid!, 0)).not.toThrow();
+    } finally {
+      try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+  it('the task-list lines include pre-restart commands with their true state', async () => {
+    await reg.restoreFrom([rec({}), rec({ shellId: 'sh-old2', exitCode: undefined, pid: 2 ** 22 + 999, procStart: '1', status: 'running' })]);
+    const lines = shellListLines(reg);
+    expect(lines.some((l) => l.startsWith('sh-old1 · exited 3'))).toBe(true);
+    expect(lines.some((l) => l.startsWith('sh-old2 · ended while the app was closed · exit code unknown'))).toBe(true);
   });
   it('KillShell on a finished pre-restart command says its real state, not "No background command"', async () => {
     await reg.restoreFrom([rec({})]);
