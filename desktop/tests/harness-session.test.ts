@@ -126,7 +126,8 @@ describe('HarnessSession', () => {
     const session = new HarnessSession(opts, async () => model as any);
     const events = collect(session);
     const sendP = session.send('hi');
-    await vi.waitFor(() => expect(streamOpened).toBe(true));
+    // WHY 5 s: vi.waitFor defaults to 1 s, which a loaded CI machine can overrun.
+    await vi.waitFor(() => expect(streamOpened).toBe(true), { timeout: 5000 });
     session.interrupt();
     await sendP;
     expect(events.some((e) => e.type === 'user-interrupt')).toBe(true);

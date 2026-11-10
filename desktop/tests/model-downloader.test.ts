@@ -110,7 +110,8 @@ describe('ModelDownloader', () => {
     const id = dl.start('unsloth/M-GGUF', quantOpt(false), (p) => events.push(p));
     // WHY a signal, not a 60 ms sleep (final review F55): the cancel must land MID-download;
     // the first progress event is the proof that it started, however busy the machine is.
-    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
+    // WHY 5 s: vi.waitFor defaults to 1 s, which a loaded CI machine can overrun.
+    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 5000 });
     dl.cancel(id);
     await expect(dl.wait(id)).rejects.toThrow(/cancel/i);
     expect(events[events.length - 1].state).toBe('cancelled');
@@ -216,7 +217,8 @@ describe('ModelDownloader', () => {
     const id = dl.start('unsloth/M-GGUF', quantOpt(false), () => {});
     // WHY wait for the manifest, not 60 ms: the test is "cancelling keeps the manifest", so the manifest has to exist
     // before the cancel; a pause only guessed that the download had got that far on a busy machine.
-    await vi.waitFor(() => expect(fs.existsSync(path.join(dir, MANIFEST))).toBe(true));
+    // WHY 5 s: vi.waitFor defaults to 1 s, which a loaded CI machine can overrun.
+    await vi.waitFor(() => expect(fs.existsSync(path.join(dir, MANIFEST))).toBe(true), { timeout: 5000 });
     dl.cancel(id);
     await dl.wait(id).catch(() => {});
     expect(fs.existsSync(path.join(dir, MANIFEST))).toBe(true);
