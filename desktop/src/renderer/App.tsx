@@ -1864,7 +1864,7 @@ function AppInner() {
       // sessions on mount — see comment above this effect).
       performance.mark('yc:sessions-listed');
       // Even an empty list is an answer: it is what tells the welcome screen it may decide.
-      setSessionListLoaded(true); // WHY (#146): must stay in this same block as the setSessionId restore below (desktop-place.ts)
+      setSessionListLoaded(true);
       if (!list || list.length === 0) {
         // A remote client with nothing to fill is done filling (and decides its place: there is none).
         if (isRemoteMode()) { decideRemotePlace([]); reportFillRound([]); }

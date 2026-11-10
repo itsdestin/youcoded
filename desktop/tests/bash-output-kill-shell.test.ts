@@ -188,7 +188,7 @@ describe.skipIf(!posix)('commands restored after a restart', () => {
       (reg as any).restored.get('sh-old1').rec.procStart = 'not-this-process';
       const k = await KillShellTool.execute({ shell_id: 'sh-old1' }, ctx());
       expect(k.isError).toBe(true);
-      expect(k.text).toMatch(/could not be stopped/);
+      expect(k.text).toMatch(/is not running/);
       expect(k.text).not.toMatch(/^Stopped/);
       expect(() => process.kill(child.pid!, 0)).not.toThrow();
     } finally {

@@ -11,7 +11,7 @@
 // from an earlier run can never match. localStorage is NOT used (it is shared by all windows).
 // Tested in tests/desktop-place.test.ts.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
@@ -56,19 +56,27 @@ export function chooseDesktopPlaceFromList(list: { id: string }[], mayAutoSelect
 }
 
 /**
+ * Should the save effect write right now? WHY (review, 2026-11-10): "no chat on screen" is only
+ * worth saving (it forgets the place) once this window HAS shown a chat since loading. Before
+ * that, an empty screen just means the restore has not landed yet, and writing it would erase
+ * the very place we are about to restore. This makes the save safe whatever order App updates
+ * its state in.
+ */
+export function shouldSavePlace(sessionId: string | null, hasShownChat: boolean): boolean {
+  return sessionId !== null || hasShownChat;
+}
+
+/**
  * "Has the first chat list arrived?" state, plus the effect that keeps the saved place current.
- *
- * WHY the save waits for the list, and the INVARIANT it depends on: before the list arrives the
- * current chat is still null, and saving "null" would erase the place we are about to restore.
- * So App must call setSessionListLoaded(true) in the SAME synchronous block as the setSessionId
- * that restores the place (React then applies both in one render). If they ever split, the save
- * would run with loaded=true and chat=null and wipe the saved place first. Pinned by
- * tests/desktop-place.test.ts (source scan of App.tsx). Desktop only: phones use remote-place.ts.
+ * WHY the save waits for the list: nothing is known about this window's chats before it arrives.
+ * Desktop only: phones use remote-place.ts.
  */
 export function useSessionListLoaded(sessionId: string | null, remote: boolean): [boolean, (v: boolean) => void] {
   const [loaded, setLoaded] = useState(false);
+  const hasShownChat = useRef(false);
   useEffect(() => {
-    if (!loaded || remote) return;
+    if (!loaded || remote || !shouldSavePlace(sessionId, hasShownChat.current)) return;
+    if (sessionId) hasShownChat.current = true;
     writeDesktopPlace(window.sessionStorage, sessionId);
   }, [sessionId, loaded, remote]);
   return [loaded, setLoaded];

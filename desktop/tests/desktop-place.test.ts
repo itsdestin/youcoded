@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { readDesktopPlace, writeDesktopPlace, chooseDesktopPlace, chooseDesktopPlaceFromList } from '../src/renderer/state/desktop-place';
+import { readDesktopPlace, writeDesktopPlace, chooseDesktopPlace, chooseDesktopPlaceFromList, shouldSavePlace } from '../src/renderer/state/desktop-place';
 
 function memoryStorage() {
   const m = new Map<string, string>();
@@ -65,20 +65,19 @@ describe('which chat a desktop window opens on', () => {
   });
 });
 
-// WHY (invariant): the save effect must never run with "list loaded" true while the restored chat is
-// still null, or it would erase the saved place before it is restored. React batches both updates
-// only when they are made in the same synchronous block, so this pins that setSessionListLoaded(true)
-// and the restoring setSessionId stay in the one session.list().then callback with no await between.
-describe('App keeps the loaded flag and the place restore in one block', () => {
-  const src = readFileSync(path.resolve(__dirname, '../src/renderer/App.tsx'), 'utf8');
-  it('setSessionListLoaded(true) and chooseDesktopPlaceFromList share one callback with no await between', () => {
-    const loadedAt = src.indexOf('setSessionListLoaded(true)');
-    const restoreAt = src.indexOf('chooseDesktopPlaceFromList(list');
-    expect(loadedAt).toBeGreaterThan(0);
-    expect(restoreAt).toBeGreaterThan(loadedAt);
-    const between = src.slice(loadedAt, restoreAt);
-    expect(between).not.toMatch(/\bawait\b|setTimeout|queueMicrotask/);
-    expect(src.lastIndexOf('window.claude.session.list().then', loadedAt)).toBeGreaterThan(loadedAt - 800);
+// WHY: the save must never erase the saved place before it is restored. An empty screen is only
+// saved (forgetting the place) after this window has shown a chat; before that it means "not restored yet".
+describe('saving the place', () => {
+  it('does not save an empty screen before any chat has shown (the restore has not landed yet)', () => {
+    expect(shouldSavePlace(null, false)).toBe(false);
+  });
+  it('saves a chat, and saves the empty screen once a chat has shown (the last chat was closed)', () => {
+    expect(shouldSavePlace('a', false)).toBe(true);
+    expect(shouldSavePlace(null, true)).toBe(true);
+  });
+  it('App still restores with the list in hand', () => {
+    const src = readFileSync(path.resolve(__dirname, '../src/renderer/App.tsx'), 'utf8');
+    expect(src).toContain('prev ?? chooseDesktopPlaceFromList(list, mayAutoSelect())');
   });
   it('picks from a list by id, reading this window storage', () => {
     (globalThis as any).window = { sessionStorage: memoryStorage() };

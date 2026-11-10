@@ -29,7 +29,7 @@ export const KillShellTool = defineTool({
       const after = reg.getRestored(old.shellId);
       // WHY check the result: the registry refuses (ok: false) when it cannot prove the process
       // is still the same one; saying "Stopped" then would be a lie, so report the true state.
-      if (!res.ok) return { text: `${old.shellId} could not be stopped — ${restoredStateText(after ?? old)}.`, isError: true };
+      if (!res.ok) return { text: `${old.shellId} ${after && after.status !== 'running' ? 'is not running' : 'could not be stopped'} — ${restoredStateText(after ?? old)}.`, isError: true };
       const head = after && after.status !== 'running'
         ? `Stopped ${old.shellId} (was: ${old.command}).`
         : `Sent the stop signal to ${old.shellId} (was: ${old.command}), but it had not exited after 5 s — it should be gone shortly.`;
