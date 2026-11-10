@@ -45,6 +45,7 @@ import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
   choosePlaceOnHydrate, chooseAfterDestroyed,
 } from './state/remote-place';
+import { readDesktopPlace, writeDesktopPlace, chooseDesktopPlace } from './state/desktop-place';
 import { ArtifactProvider, createArtifactStore } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
@@ -347,6 +348,13 @@ function AppInner() {
   // Has the list of open sessions arrived from this computer at least once? The welcome screen
   // must not call anyone a first-time user before it has — see first-run-screen.ts.
   const [sessionListLoaded, setSessionListLoaded] = useState(false);
+  // WHY (card #146): keep this window's saved place current as the user switches chats (null clears it so no stale
+  // id lingers). Waits for the first chat list: before it arrives sessionId is still null, and saving that would erase
+  // the place we are about to restore. Desktop only; phones have their own memory (remote-place.ts).
+  useEffect(() => {
+    if (!sessionListLoaded || isRemoteMode()) return;
+    writeDesktopPlace(window.sessionStorage, sessionId);
+  }, [sessionId, sessionListLoaded]);
   // Past conversations to resume: true / false / null = unknown (not asked, or the question
   // failed — which over remote access happens on every dropped connection).
   const [hasResumable, setHasResumable] = useState<boolean | null>(null);
@@ -1911,7 +1919,15 @@ function AppInner() {
         // not sent to this phone until it opens them (one-core R5-3); their dots come from the computer's summary.
         void Promise.all(choice ? [remoteWatchRef.current.watch(choice)] : []).then(reportFillRound);
       } else {
-        setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
+        // WHY (card #146): after a reload, reopen the chat this window was on instead of always the oldest one.
+        // `list` is already only this window's chats, so a saved chat that was closed or moved to another window
+        // is not in it and we fall back to the first chat exactly as before.
+        const desktopChoice = chooseDesktopPlace({
+          stored: readDesktopPlace(window.sessionStorage),
+          ownedSessionIds: list.map((s: any) => s.id),
+          mayAutoSelect: mayAutoSelect(),
+        });
+        setSessionId((prev) => prev ?? desktopChoice);
       }
       // Existing sessions that have STARTED skip the "Initializing" cover; one
       // still on its startup dialogs does not (SessionInfo.awaitingStart).
