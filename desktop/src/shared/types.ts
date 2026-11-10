@@ -982,10 +982,6 @@ export interface SkillEntry {
   installedAt?: string;
   updatedAt?: string;
   repoUrl?: string;
-  // Phase 3c: optional config schema — when present, the detail view renders
-  // a settings form for this entry. Anthropic plugins using native config.json
-  // should NOT set this field.
-  configSchema?: ConfigSchema;
 
   // Marketplace redesign Phase 1 — soft filter/curation fields populated from
   // overrides/<id>.json; all optional so pre-extension cache reads still work.
@@ -1539,23 +1535,6 @@ export interface HistoryMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
-}
-
-// Phase 3c: per-entry config schema for marketplace packages. Entries
-// that declare configSchema get a settings form in the detail view.
-// Anthropic plugins using their own native config.json are left alone.
-export interface ConfigField {
-  name: string;
-  type: 'string' | 'boolean' | 'number' | 'select';
-  label: string;
-  description?: string;
-  default?: string | boolean | number;
-  required?: boolean;
-  options?: { value: string; label: string }[]; // for 'select' type
-}
-
-export interface ConfigSchema {
-  fields: ConfigField[];
 }
 
 // Decomposition v3 §9.9: what SkillDetail needs to render integration badges.

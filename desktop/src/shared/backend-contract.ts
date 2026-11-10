@@ -260,8 +260,6 @@ export const IPC = {
   // Unified marketplace — packages + update + config (Phase 3)
   MARKETPLACE_GET_PACKAGES: 'marketplace:get-packages',
   SKILLS_UPDATE: 'skills:update',
-  MARKETPLACE_GET_CONFIG: 'marketplace:get-config',
-  MARKETPLACE_SET_CONFIG: 'marketplace:set-config',
   // Phase 4 — force-refresh the featured/index caches without waiting for
   // the 24h TTL. Useful right after /feature curation lands.
   MARKETPLACE_INVALIDATE_CACHE: 'marketplace:invalidate-cache',

@@ -106,7 +106,6 @@ import { deriveSelfLastSyncEpochSec } from './sync-spaces/self-sync-status';
 // createGithubConnect is the stateful orchestrator that owns the in-flight flow.
 import { createGithubConnect, setGithubConnect } from './github-connect';
 import { getGithubClient } from './github-client';
-import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { log } from './logger';
 import { attachStartupDialogLog } from './startup-dialog-log';

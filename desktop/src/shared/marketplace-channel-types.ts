@@ -46,8 +46,6 @@ export interface MarketplaceChannelTypes {
   'skills:update': { request: { id: string }; response: SkillUpdateResult };
   // marketplace:* — packages, per-entry config, the file viewer and the signed-in write endpoints.
   'marketplace:get-packages': { request: void; response: MarketplacePackages };
-  'marketplace:get-config': { request: { id: string }; response: Record<string, unknown> };
-  'marketplace:set-config': { request: { id: string; values: Record<string, unknown> }; response: { ok: true } };
   'marketplace:invalidate-cache': { request: void; response: void };
   'marketplace:read-component': { request: { pluginId: string; kind: MarketplaceComponentKind; name: string }; response: MarketplaceComponentResult };
   'marketplace:install': { request: { pluginId: string }; response: ApiResult<void> };
@@ -114,8 +112,6 @@ export interface SkillsBridge {
 
 export interface MarketplaceBridge {
   getPackages: () => Promise<C['marketplace:get-packages']['response']>;
-  getConfig: (id: string) => Promise<C['marketplace:get-config']['response']>;
-  setConfig: (id: string, values: Record<string, unknown>) => Promise<C['marketplace:set-config']['response']>;
   invalidateCache: () => Promise<void>;
   readComponent: (args: C['marketplace:read-component']['request']) => Promise<C['marketplace:read-component']['response']>;
 }
