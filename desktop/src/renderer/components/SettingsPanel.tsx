@@ -2458,7 +2458,7 @@ export function ConnectToDesktopButton() {
                   // the box's amber tint already says "warning", and it was the only
                   // notice in the app with a glyph of its own.
                   title="Turn on Tailscale to connect"
-                  // WHY buttons, and the rows below switched off (Destin, 2026-11-10: "it still lets me click desktop to
+                  // WHY buttons, and the sections below hidden (Destin, 2026-11-10: "it still lets me click desktop to
                   // connect, despite the fact that it obviously won't work … probably too subtle given its significance").
                   actionsPlacement="below"
                   actions={
@@ -2506,8 +2506,8 @@ export function ConnectToDesktopButton() {
                 <ErrorState mode="recoverable" message={deviceError.message} onRetry={deviceError.retry} variant="inline" />
               )}
 
-              {/* Saved devices — always listed */}
-              {pairedDevices.length > 0 && (
+              {/* Saved devices and Add device hide while Tailscale is off (Destin, 2026-11-10: "kinda just clutter"); Try anyway brings them back. */}
+              {!tailscaleBlocks && pairedDevices.length > 0 && (
                 <section>
                   {/* WHY SectionLabel, sentence case (labels batch, guide: no
                       spaced capitals — decisions H-3/L-1…L-4). */}
@@ -2527,7 +2527,7 @@ export function ConnectToDesktopButton() {
                         description={`${device.host}:${device.port}`}
                         descriptionClassName="text-fg-muted font-mono"
                         onClick={() => doConnect(device)}
-                        disabled={connecting || remoteConnected || tailscaleBlocks}
+                        disabled={connecting || remoteConnected}
                         control={
                           <Button variant="ghost" size="sm" onClick={() => handleRemoveDevice(device)}>
                             Remove
@@ -2546,7 +2546,7 @@ export function ConnectToDesktopButton() {
               )}
 
               {/* Add new device */}
-              {!remoteConnected && !connecting && (
+              {!tailscaleBlocks && !remoteConnected && !connecting && (
                 <section>
                   {/* WHY "Add device": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
                   {pairedDevices.length > 0 && (
@@ -2563,10 +2563,10 @@ export function ConnectToDesktopButton() {
                       </p>
                       {/* Both only had an active: state, so on desktop nothing
                           happened on hover at all. */}
-                      <Button onClick={handleScanQr} disabled={tailscaleBlocks} className="w-full">
+                      <Button onClick={handleScanQr} className="w-full">
                         Scan QR code
                       </Button>
-                      <Button variant="secondary" onClick={() => setShowConnectForm(true)} disabled={tailscaleBlocks} className="w-full">
+                      <Button variant="secondary" onClick={() => setShowConnectForm(true)} className="w-full">
                         Enter manually
                       </Button>
                     </div>

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The phone's Connect to Desktop screen and Tailscale (Destin, 2026-11-10): the warning used to be always on (it asked
 // the backend, which cannot see the phone's Tailscale) and let a doomed connection be tapped anyway. It now follows the
-// phone app's own answer: off → a firm notice and nothing to tap, with a way past it; on or unknown → no notice.
+// phone app's own answer: off → a firm notice alone (the saved computers and add buttons are hidden), with a way past it; on or unknown → no notice.
 import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
@@ -32,15 +32,14 @@ const tapSaved = async () => { fireEvent.click(await screen.findByText('100.111.
 afterEach(() => { cleanup(); connectToHost.mockClear(); delete (window as any).claude; });
 
 describe('Connect to Desktop: Tailscale off on the phone', () => {
-  it('says so, offers the Tailscale app, and nothing that connects can be tapped', async () => {
+  it('says so, offers the Tailscale app, and shows nothing that connects', async () => {
     const { openTailscale } = open(false);
     await screen.findByText('Turn on Tailscale to connect');
-    await tapSaved();
-    expect((screen.getByText('Scan QR code').closest('button') as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByText('Enter manually').closest('button') as HTMLButtonElement).disabled).toBe(true);
+    // Settle: the saved computers load on their own promise; give them the chance to (wrongly) appear.
+    await new Promise((r) => setTimeout(r, 0));
+    for (const gone of ['100.111.147.124:9900', 'Saved devices', 'Scan QR code', 'Enter manually']) expect(screen.queryByText(gone)).toBeNull();
     fireEvent.click(screen.getByText('Open Tailscale'));
     expect(openTailscale).toHaveBeenCalledTimes(1);
-    expect(connectToHost).not.toHaveBeenCalled();
   });
 
   it('"Try anyway" lifts it, so a wrong reading never locks anyone out', async () => {
