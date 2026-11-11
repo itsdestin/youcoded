@@ -2319,7 +2319,7 @@ export function ConnectToDesktopButton() {
   useEffect(() => {
     if (!open) return;
     setConnectError(null);
-    setTailscaleOverride(false);
+    setTailscaleOverride(false); setTailscaleOn(null); // WHY null first (final review): a reopen must not flash the last opening's answer
     let live = true;
     const check = () => {
       Promise.resolve(claude.android?.tailscaleStatus?.())

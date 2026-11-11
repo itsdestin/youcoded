@@ -60,6 +60,19 @@ describe('Connect to Desktop: Tailscale off on the phone', () => {
   });
 });
 
+describe('Connect to Desktop: reopened after Tailscale came on', () => {
+  it('does not show the last opening\'s warning while the new answer is on its way', async () => {
+    open(false);
+    await screen.findByText('Turn on Tailscale to connect');
+    fireEvent.click(screen.getByLabelText('Close Connect to Desktop'));
+    // The new answer never arrives in this test, so anything drawn now comes from what was remembered.
+    (window as any).claude.android.tailscaleStatus = () => new Promise(() => {});
+    fireEvent.click(screen.getByText('Connect to Desktop'));
+    await screen.findByText('Scan QR code');
+    expect(screen.queryByText('Turn on Tailscale to connect')).toBeNull();
+  });
+});
+
 describe('Connect to Desktop: Tailscale on, or the phone cannot tell', () => {
   for (const on of [true, null]) {
     it(`shows no warning and blocks nothing (${on})`, async () => {

@@ -47,6 +47,12 @@ jobs:
         run: ./gradlew lintDebug lintRelease --dry-run $CI_GRADLE_FLAGS
       - name: Run unit tests
         run: ./gradlew test $CI_GRADLE_FLAGS
+      # WHY (final review, 2026-11-10): the Dev copy is debuggable, so its R8 pass may skip optimisations the real
+      # release applies, and the removed releaseTest build was the only place the release's own pass ran before a
+      # tag. This runs that exact pass (shrink, rename, optimise the non-debuggable release code) without packaging,
+      # signing or the bundled programs, so a release-only R8 failure shows on a pull request, not at tag time.
+      - name: Shrink the release code (R8, as the release does)
+        run: ./gradlew minifyReleaseWithR8 $CI_GRADLE_FLAGS
       - name: Verify current JVM inputs and outputs
         run: node scripts/ci-inputs.mjs jvm
       - name: Upload JVM input evidence

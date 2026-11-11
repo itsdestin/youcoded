@@ -112,8 +112,10 @@ describe('Desktop CI selected coverage', () => {
     expect(step(jvm, 'Test runtime redistribution fixtures').run).toBe("python3 -m unittest discover -s app/runtime -p 'test_*.py' -v");
     expect(step(jvm, 'Verify all variant lint producer graphs').run).toBe('./gradlew lintDebug lintRelease --dry-run $CI_GRADLE_FLAGS');
     expect(step(jvm, 'Run unit tests').run).toBe('./gradlew test $CI_GRADLE_FLAGS');
+    // The release's own R8 pass runs on every change (the debuggable Dev copy may skip some of it).
+    expect(step(jvm, 'Shrink the release code (R8, as the release does)').run).toBe('./gradlew minifyReleaseWithR8 $CI_GRADLE_FLAGS');
     expect(step(jvm, 'Verify current JVM inputs and outputs').run).toBe('node scripts/ci-inputs.mjs jvm');
-    ordered(jvm, ['Record current Android input identity', 'Test runtime redistribution fixtures', 'Verify all variant lint producer graphs', 'Run unit tests', 'Verify current JVM inputs and outputs', 'Upload JVM input evidence']);
+    ordered(jvm, ['Record current Android input identity', 'Test runtime redistribution fixtures', 'Verify all variant lint producer graphs', 'Run unit tests', 'Shrink the release code (R8, as the release does)', 'Verify current JVM inputs and outputs', 'Upload JVM input evidence']);
     for (const name of ['Verify all variant lint producer graphs', 'Run unit tests', 'Verify current JVM inputs and outputs']) expect(step(jvm, name).if).toBeUndefined();
     expect(jvm.steps.indexOf(step(jvm, 'Run unit tests'))).toBeLessThan(jvm.steps.indexOf(step(jvm, 'Verify current JVM inputs and outputs')));
     expect(step(jvm, 'Upload JVM input evidence').with).toEqual({ name: 'android-scope-jvm', path: 'ci-android-evidence.json', 'if-no-files-found': 'error', 'retention-days': 7 });
