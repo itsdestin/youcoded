@@ -13,7 +13,7 @@ vi.mock('../../src/main/logger', () => ({ log: vi.fn() }));
 
 import { noteOwnWrite } from '../../src/main/artifacts/project-watcher';
 import { log } from '../../src/main/logger';
-import { awaitIdle, CLOSE_DRAIN_MS, createOfficeCommands, drainSession, OFFICE_COMMANDS } from '../../src/main/office/office-commands';
+import { awaitIdle, awaitSaveDirSweeps, CLOSE_DRAIN_MS, createOfficeCommands, drainSession, OFFICE_COMMANDS } from '../../src/main/office/office-commands';
 import { X2T_TIMEOUT_MS } from '../../src/main/office/x2t';
 import { createSessions, type OfficeSession } from '../../src/main/office/office-sessions';
 import { convert, FORMAT, X2tError } from '../../src/main/office/x2t';
@@ -385,6 +385,22 @@ describe('office command errors the editor is shown', () => {
   it('gives a general message, with no cause guessed, for anything else', async () => {
     expect(await saveError(new X2tError('x2t failed (1)', 1, `bad input ${dir}/x`))).toBe("Office couldn't save this file.");
     expect(await saveError(new Error(`something odd at ${dir}/y`))).toBe("Office couldn't save this file.");
+  });
+
+  // WHY: the converter's error output names paths and can quote the document; desktop.log goes into bug reports.
+  it("never writes the converter's error text to the app log, only its exit code, length and known markers", async () => {
+    const secret = 'Maria Salary 85,000 confidential';
+    const stderr = `Uncaught TypeError: cannot read "${secret}" in ${dir}/docs/file.docx\nstd::bad_alloc`;
+    vi.mocked(log).mockClear();
+    await saveError(new X2tError('x2t failed (89)', 89, stderr));
+    const written = JSON.stringify(vi.mocked(log).mock.calls);
+    expect(written).not.toContain('Maria');
+    expect(written).not.toContain('85,000');
+    expect(written).not.toContain(dir);
+    expect(written).not.toContain('file.docx');
+    expect(written).toContain('"exit":89');
+    expect(written).toContain(`"outputLength":${stderr.length}`);
+    expect(written).toContain('"markers":["std::bad_alloc","Uncaught","TypeError"]');
   });
 
   it('says the file cannot be found when opening a missing file', async () => {
@@ -1031,6 +1047,127 @@ describe.skipIf(!HAS_ADDON)('Save As with the bundled x2t, to every format each 
   it('a presentation: pptx, odp and pdf', async () => {
     await exportAll(path.join(TEMPLATES, 'blank.pptx'), 'docs/slides.pptx', ['pptx', 'odp', 'pdf']);
   }, X2T_WARMUP_BUDGET_MS);
+});
+
+// A crash mid-save leaves a hidden folder holding the document beside the file; it is cleaned up
+// once over an hour old — on open, before a copy or export there, and on the file's next save.
+describe('hidden leftover save folders', () => {
+  const HOUR_MS = 60 * 60 * 1000;
+  async function leftover(beside: string, ageMs: number): Promise<string> {
+    const d = path.join(path.dirname(beside), `.${path.basename(beside)}.office-save-${Math.random().toString(36).slice(2, 8)}`);
+    await mkdir(d, { recursive: true });
+    await writeFile(path.join(d, path.basename(beside)), 'document content');
+    const when = new Date(Date.now() - ageMs);
+    await utimes(d, when, when);
+    return d;
+  }
+
+  it('removes one over an hour old when the document opens, and leaves a fresh one alone', async () => {
+    const s = await sessionFor(MEMO);
+    const stale = await leftover(s.path, 2 * HOUR_MS);
+    const fresh = await leftover(s.path, 5 * 60 * 1000); // a save of a few minutes ago may still be running
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+    await run(s.token, 'open_file', {});
+    await awaitSaveDirSweeps();
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+  });
+
+  it('removes one beside an export target when exporting there again', async () => {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+    await writeBin(run, s.token);
+    const target = path.join(dir, 'out', 'memo 2.docx');
+    await mkdir(path.dirname(target), { recursive: true });
+    const stale = await leftover(target, 2 * HOUR_MS);
+    await run.saveAs(s.token, target);
+    await awaitSaveDirSweeps();
+    expect(await readdir(path.dirname(target))).toEqual(['memo 2.docx']);
+    expect(existsSync(stale)).toBe(false);
+  });
+
+  it('never lets a failed cleanup fail the open', async () => {
+    const s = await sessionFor(MEMO);
+    const stale = await leftover(s.path, 2 * HOUR_MS);
+    const real = fsNode.readdir.bind(fsNode);
+    const folder = path.dirname(s.path);
+    vi.spyOn(fsNode, 'readdir').mockImplementation(((p: string, ...rest: unknown[]) =>
+      p === folder ? Promise.reject(Object.assign(new Error('EIO'), { code: 'EIO' })) : (real as (...a: unknown[]) => unknown)(p, ...rest)) as never);
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+    await expect(run(s.token, 'open_file', {})).resolves.toEqual(expect.any(String));
+    await awaitSaveDirSweeps();
+    expect(vi.mocked(fsNode.readdir)).toHaveBeenCalledWith(folder);
+    expect(existsSync(stale)).toBe(true); // the cleanup could not look; nothing else changed
+  });
+});
+
+// An editor kept open across a version restore copies its OWN pictures, not the restored file's.
+describe('a copy from an editor kept across a restore', () => {
+  /** A translator stand-in that records what the copy's media folder held when it ran. */
+  function recordingConvert(seen: Array<Record<string, string>>, gate?: Promise<void>, entered?: () => void) {
+    return async (r: string, from: string, to: string) => {
+      // The document's own saves translate <temp>/Editor.bin; a copy translates its private copy.
+      if (!path.basename(path.dirname(from)).startsWith('copy-')) {
+        entered?.();
+        if (gate) await gate;
+        return fakeDoc(r, from, to);
+      }
+      const media = path.join(path.dirname(from), 'media');
+      const files: Record<string, string> = {};
+      for (const n of await readdir(media).catch(() => [] as string[])) files[n] = (await readFile(path.join(media, n))).toString('utf8');
+      seen.push(files);
+      return fakeDoc(r, from, to);
+    };
+  }
+  /** The editor's pictures before the restore, then put aside, then the reload rebuilds media/. */
+  async function restoredSession(run: ReturnType<typeof createOfficeCommands>, s: OfficeSession) {
+    await mkdir(path.join(s.temp, 'media'), { recursive: true });
+    await writeFile(path.join(s.temp, 'media', 'image1.png'), 'kept editor picture');
+    await run.keepMedia(s.token);
+    await rm(path.join(s.temp, 'media'), { recursive: true, force: true });
+    await mkdir(path.join(s.temp, 'media'), { recursive: true });
+    await writeFile(path.join(s.temp, 'media', 'image1.png'), 'restored file picture');
+  }
+  const bin = Buffer.from('kept editor bytes').toString('base64');
+
+  it('includes a picture inserted after the restore, and keeps its own picture over the restored one of the same name', async () => {
+    const s = await sessionFor(MEMO);
+    const seen: Array<Record<string, string>> = [];
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: recordingConvert(seen) });
+    await restoredSession(run, s);
+    // Insert → Picture after the restore: office-pictures.ts stores it in <temp>/media as picture-<hex>.
+    await writeFile(path.join(s.temp, 'media', 'picture-0123456789abcdef.png'), 'inserted after restore');
+    const target = path.join(dir, 'copies', 'memo (copy).docx');
+    await mkdir(path.dirname(target), { recursive: true });
+    await run.saveCopy(s.token, target, bin);
+    expect(seen).toEqual([{ 'image1.png': 'kept editor picture', 'picture-0123456789abcdef.png': 'inserted after restore' }]);
+  });
+
+  it('lets go of the put-aside pictures only after a copy already asked for has used them', async () => {
+    const s = await sessionFor(MEMO);
+    const seen: Array<Record<string, string>> = [];
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    let entered!: () => void;
+    const translating = new Promise<void>((r) => (entered = r));
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: recordingConvert(seen, gate, entered) });
+    await restoredSession(run, s);
+    await writeBin(run, s.token);
+    // A save is translating, so the copy waits its turn in the document's queue...
+    const saving = run(s.token, 'save_file', {});
+    await translating;
+    const target = path.join(dir, 'copies', 'memo (copy).docx');
+    await mkdir(path.dirname(target), { recursive: true });
+    const copying = run.saveCopy(s.token, target, bin);
+    // ...and the editor is let go meanwhile (e.g. Discard on the close prompt).
+    const releasing = run.releaseKeptMedia(s.token);
+    // settle: give a release that does not wait its turn the time to remove the folder.
+    await new Promise((r) => setTimeout(r, 50));
+    open();
+    await Promise.all([saving, copying, releasing]);
+    expect(seen).toEqual([{ 'image1.png': 'kept editor picture' }]);
+    expect((await readdir(s.temp)).filter((n) => n.startsWith('media-kept-'))).toEqual([]);
+  });
 });
 
 // Print (finish plan Task 3): the PDF the print window shows.
