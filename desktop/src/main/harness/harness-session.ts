@@ -1192,9 +1192,15 @@ export class HarnessSession extends EventEmitter {
     if (contextLength !== undefined) this.opts.contextLength = contextLength;
     if (profile) this.profile = profile;
     // WHY: a history that fit the old provider must never reach a stricter one.
-    // Re-applying the gate here (not only on the error path) means the first
-    // request after a switch already carries the note, not the picture.
-    if (profile) this.enforceImageLimits();
+    // Card #66 (f3): the gate used to run HERE, synchronously and without
+    // shrinking, so a picture the new model could take smaller was replaced by
+    // the note. Shrinking is async (~0.4 s a picture, in the resize worker), so
+    // it is only MARKED here and done at the top of the next model request
+    // (runSteps, before maybeCompact), inside the turn that owns history: a
+    // send issued straight after the switch cannot race it, the switch itself
+    // stays instant, and the wait shows as the turn's ordinary thinking state.
+    // Unshrinkable pictures still become the note there (fitImagesToLimits).
+    if (profile) this.imagesRefitPending = true;
     // Same applied-only-when-provided shape as contextLength: a swap to a
     // model with no published price must be able to CLEAR a price the old
     // model had, so `null` is a real value here and only `undefined` skips.
@@ -2073,6 +2079,10 @@ export class HarnessSession extends EventEmitter {
    *  cleared like commitPrune does, so a later Read re-delivers — prepared. */
   private collapseOversizedImages(limits: ImageLimits): boolean { return this.adoptImageRewrite(collapseOversizedImageParts(this.history, limits)); }
 
+  /** Set by a model switch (setBinding): the next request fits pictures to the
+   *  new limits with shrinking. See setBinding's WHY (card #66 f3). */
+  private imagesRefitPending = false;
+
   /** enforceImageLimits, but SHRINKING over-limit pictures first (fitHistoryToImageLimits). */
   private async fitImagesToLimits(): Promise<boolean> { return this.adoptImageRewrite(await fitHistoryToImageLimits(this.history, this.imageLimits, this.opts.toolServices?.images, this.abort?.signal)); }
 
@@ -2849,6 +2859,12 @@ export class HarnessSession extends EventEmitter {
         }
         // Check the NEXT request after steers, tool results and new input. A
         // prior step's measured input alone cannot represent these additions.
+        // A model switch since the last request (setBinding): fit the pictures
+        // to the new limits, SHRINKING where possible, before maybeCompact's
+        // non-shrinking gate would turn them into the note. Same rewrite and
+        // bookkeeping as the provider-rejection path below (adoptImageRewrite:
+        // capture.mutated, prefixMoved, shownImages cleared).
+        if (this.imagesRefitPending) { this.imagesRefitPending = false; await this.fitImagesToLimits(); }
         await this.maybeCompact(model, aiTools);
         // Consume the prefix-moved flag into THIS request: everything above
         // (compaction, a swap between turns) has had its say, and the request

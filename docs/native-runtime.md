@@ -1246,8 +1246,13 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   The built worker runs from inside `app.asar` with no unpacking (smoke-tested 2026-10-07).
   <!-- verify: {"path": "youcoded/desktop/src/main/create-runtime.ts", "contains": "'image-cache'"} -->
 - **Enforcement** (`HarnessSession.enforceImageLimits`): the gate is re-applied to in-memory
-  history on every provider/profile change (`setBinding`) and before any compaction or summary
-  (`maybeCompact`, `compactNow`). The history rewrite itself lives in `harness/image-history.ts`.
+  history before any compaction or summary (`maybeCompact`, `compactNow`). A provider/profile
+  change (`setBinding`) only marks `imagesRefitPending`; the next model request, inside its turn
+  and before `maybeCompact`, runs `fitImagesToLimits`, which SHRINKS an over-limit picture where
+  the resize worker can and falls back to the note where it cannot (card #66 f3). Same in-memory
+  rewrite and checkpoint trade-off as the many-image recovery below. A `/compact` run between the
+  switch and the next send still uses the non-shrinking gate. The history rewrite itself lives
+  in `harness/image-history.ts`.
 - **Recovery** (`providers/image-too-large.ts`, `collapseOversizedImages`): on that exact 400 —
   accepted in `error.message`, `detail` or a top-level `message`; the live object was never
   captured — with no output started, image parts over the reported limit collapse to the note,
@@ -1263,8 +1268,9 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
 
 - **The image cache is never swept.** Deleting it is safe: a missing derivative becomes a
   "no longer available" / "could not be read" note on reopen.
-- **After a switch to stricter limits, a derivative that no longer fits is COLLAPSED to the note,
-  not re-prepared** — a fresh Read of the original prepares a copy for the new provider.
+- **After a switch to stricter limits, a derivative that no longer fits is shrunk in memory, or
+  COLLAPSED to the note when it cannot be shrunk, not re-prepared from its file** — a fresh Read
+  of the original prepares a copy for the new provider.
 - **A user-message picture collapsed in memory is labelled `image`** until a reopen relabels it by
   basename (the rebuild knows the path).
 - **A picture whose preparation failed** is told to the model with the preparer's reason live; on

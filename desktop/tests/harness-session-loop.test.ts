@@ -3561,10 +3561,59 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
     session.seedHistory(blockedHistory());
     const before = session.acceptedHistory().revision;
     session.setBinding({ providerId: 'chatgpt', modelId: 'gpt-y' }, null, chatgpt());
-    expect(session.acceptedHistory().revision).toBeGreaterThan(before);
     await session.send('now?');
+    // No image service here, so nothing can be shrunk: the picture becomes the note, as before.
+    expect(session.acceptedHistory().revision).toBeGreaterThan(before);
     expect(JSON.stringify(prompts[0].prompt)).toContain(NOTE);
     expect(JSON.stringify(prompts[0].prompt)).not.toContain(huge.toString('base64'));
+  });
+
+  // Card #66 (f3): an ordinary switch used only the non-shrinking gate, so a
+  // picture the new model could have taken smaller was replaced by the note.
+  describe('a switch to stricter limits shrinks pictures when it can', () => {
+    const okModel = (prompts: any[]) => new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: stream(...textChunks('a', 'ok'), finishChunk('stop')) }) }; } });
+    const shrinker = (calls: number[], result: 'fit' | 'none') => ({
+      prepare: async () => ({ kind: 'unchanged' as const }), preparedPathFor: () => null,
+      shrinkBytes: async (_bytes: Buffer, limits: any) => {
+        calls.push(limits.maxEdgePx);
+        if (result === 'none') return null;
+        return { bytes: Buffer.concat([pngHeader(300, 600), Buffer.alloc(8)]), mediaType: 'image/png' as const };
+      },
+    });
+
+    it('sends the shrunk picture, not the note, on the first request after the switch — even a send issued straight after it', async () => {
+      const prompts: any[] = []; const calls: number[] = [];
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax(),
+        toolServices: { images: shrinker(calls, 'fit') } as any }), async () => okModel(prompts) as any);
+      session.seedHistory(blockedHistory());
+      session.setBinding({ providerId: 'chatgpt', modelId: 'gpt-y' }, null, chatgpt());
+      // The switch itself does no picture work: the shrinking happens off the switch, inside the next turn.
+      expect((session as any).history[2].content[0].output.value[1].data.data).toBe(huge);
+      expect(calls).toEqual([]);
+      await session.send('now?');
+      expect(calls).toHaveLength(1);
+      const sent = JSON.stringify(prompts[0].prompt);
+      expect(sent).not.toContain(NOTE);
+      expect(sent).not.toContain(huge.toString('base64'));
+      expect(sent).toContain('now?');                                                  // the new message was not lost
+      const out = (session.acceptedHistory().messages.find((m: any) => m.role === 'tool') as any).content[0].output;
+      expect(out.value[0].text).toBe('Read images');
+      expect(imageDimensions(out.value[1].data.data)).toEqual({ width: 300, height: 600 });
+      // Once per switch, not once per request.
+      await session.send('again');
+      expect(calls).toHaveLength(1);
+    });
+
+    it('falls back to the note when the picture cannot be shrunk', async () => {
+      const prompts: any[] = []; const calls: number[] = [];
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax(),
+        toolServices: { images: shrinker(calls, 'none') } as any }), async () => okModel(prompts) as any);
+      session.seedHistory(blockedHistory());
+      session.setBinding({ providerId: 'chatgpt', modelId: 'gpt-y' }, null, chatgpt());
+      await session.send('now?');
+      expect(calls).toHaveLength(1);
+      expect(JSON.stringify(prompts[0].prompt)).toContain(NOTE);
+    });
   });
 
   it('a summary never receives an over-limit picture: compaction enforces the limits first', async () => {
