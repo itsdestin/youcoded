@@ -140,12 +140,11 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   }
 
   // Hooks: Claude Code reaches this backend through the relay scripts it is told about in its settings.
-  // Card #11 (b): a launch edit refused for another program's lock is retried once in the background (main.ts has the WHY).
-  const settingsLocked = { installLocked: false, choresLocked: false };
+  let installLocked = false; // card #11 b: a locked settings.json is retried once in the background (startLaunchSettingsRetry)
   try {
     const { runInstallHooksChore } = require('../launch-settings-chores');
     const r = await runInstallHooksChore({ version: app.getVersion(), packaged: true });
-    settingsLocked.installLocked = r.refused === 'locked';
+    installLocked = r.refused === 'locked';
     log('INFO', 'Headless', 'Hooks installed', { copied: r.copied, written: r.written, refused: r.refused });
   } catch (e) {
     log('ERROR', 'Headless', 'Failed to install hooks', { error: String(e) });
@@ -156,21 +155,11 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
     sessionManager.setPipeName('');
   }
   try {
-    const { runSettingsChores } = require('../launch-settings-chores');
+    const { runSettingsChores, startLaunchSettingsRetry } = require('../launch-settings-chores');
     const r = await runSettingsChores();
-    settingsLocked.choresLocked = r.refused === 'locked';
+    startLaunchSettingsRetry({ version: app.getVersion(), packaged: true }, { installLocked, choresLocked: r.refused === 'locked' }, (level: 'INFO' | 'WARN', msg: string, data?: Record<string, unknown>) => log(level, 'Headless', msg, data));
   } catch (e) {
     log('ERROR', 'Headless', 'Failed to run settings chores', { error: String(e) });
-  }
-  try {
-    const { scheduleLockedSettingsRetry, runInstallHooksChore, runSettingsChores } = require('../launch-settings-chores');
-    void scheduleLockedSettingsRetry(settingsLocked, {
-      runInstallHooks: (o: { lockWaitMs: number }) => runInstallHooksChore({ version: app.getVersion(), packaged: true }, o),
-      runChores: (o: { lockWaitMs: number }) => runSettingsChores(o),
-      log: (level: 'INFO' | 'WARN', message: string, data?: Record<string, unknown>) => log(level, 'Headless', message, data),
-    });
-  } catch (e) {
-    log('ERROR', 'Headless', 'Failed to schedule the settings retry', { error: String(e) });
   }
   try {
     const { reconcileMcp } = require('../mcp-reconciler');

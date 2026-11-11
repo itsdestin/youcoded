@@ -133,3 +133,14 @@ export function scheduleLockedSettingsRetry(
     }
   });
 }
+
+/** The launch wiring (main.ts, headless-boot.ts): the retry with the real
+ *  chores. Fire-and-forget — it must never hold launch back. */
+export function startLaunchSettingsRetry(build: { version: string; packaged: boolean },
+  launch: { installLocked: boolean; choresLocked: boolean }, log: LockedSettingsRetryDeps['log']): void {
+  void scheduleLockedSettingsRetry(launch, {
+    runInstallHooks: (o) => runInstallHooksChore(build, o),
+    runChores: (o) => runSettingsChores(o),
+    log,
+  });
+}
