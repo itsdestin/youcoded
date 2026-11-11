@@ -138,3 +138,52 @@ describe('a synced project removed on any device leaves the lists; its files sta
     expect(listPickerFolders(file).map((f) => f.path)).toEqual([dir, paf]);
   });
 });
+
+// WHY (card #151 item 4): "same folder" now goes through one pathKey(): letter case is ignored
+// on Windows and macOS (their disks ignore it) but NOT on Linux, where Docs and docs are two
+// folders. The platform is stubbed so every OS's CI checks all three behaviours.
+describe('folder paths that differ only by letter case', () => {
+  const realPlatform = process.platform;
+  const setPlatform = (p: string) => Object.defineProperty(process, 'platform', { value: p });
+  afterEach(() => setPlatform(realPlatform));
+
+  for (const [platform, sameFolder] of [['win32', true], ['darwin', true], ['linux', false]] as const) {
+    it(`${platform}: picker badge + dedupe + removal ${sameFolder ? 'treat them as one folder' : 'keep them as two folders'}`, () => {
+      setPlatform(platform);
+      const projectsRoot = path.join(dir, 'Projects');
+      const upper = path.join(projectsRoot, 'Paf');
+      const lower = path.join(projectsRoot, 'paf');
+      fs.writeFileSync(file, JSON.stringify([{ path: upper, nickname: 'saved', addedAt: 5 }]));
+      // The managed list spells the same project in lower case.
+      h.managed = { projectsRoot: projectsRoot.toLowerCase(), listProjects: () => [{ path: lower, name: 'paf' }] };
+      const list = listPickerFolders(file);
+      // dedupe: one row when the OS ignores case, two on Linux
+      expect(list).toHaveLength(sameFolder ? 1 : 2);
+      // managed badge on the saved row only when the projects root matches ignoring case
+      expect(list[0].managed).toBe(sameFolder ? true : undefined);
+      // removal by the differently-cased path
+      expect(removeFolder(lower, file)).toBe(sameFolder);
+    });
+  }
+
+  // WHY (reviewer finding): add, rename and describe still compared with plain ===, so on
+  // Windows/macOS the other casing made a second entry or reported "not found".
+  for (const [platform, sameFolder] of [['win32', true], ['darwin', true], ['linux', false]] as const) {
+    it(`${platform}: add, rename and describe ${sameFolder ? 'find the one saved folder' : 'treat the other casing as a different folder'}`, () => {
+      setPlatform(platform);
+      const upper = path.join(dir, 'Docs');
+      const lower = path.join(dir, 'docs');
+      fs.writeFileSync(file, JSON.stringify([{ path: upper, nickname: 'saved', addedAt: 5 }]));
+      addFolder(lower, undefined, file);
+      const saved = () => JSON.parse(fs.readFileSync(file, 'utf8')) as { path: string; nickname: string; description?: string | null }[];
+      expect(saved()).toHaveLength(sameFolder ? 1 : 2);
+      expect(renameFolder(lower, 'renamed', file)).toBe(true);
+      expect(setFolderDescription(lower, 'about', file)).toBe(true);
+      const hit = saved().find((f) => f.path === (sameFolder ? upper : lower))!;
+      expect(hit.nickname).toBe('renamed');
+      expect(hit.description).toBe('about');
+      // The other entry (Linux only) is untouched.
+      if (!sameFolder) expect(saved().find((f) => f.path === upper)!.nickname).toBe('saved');
+    });
+  }
+});

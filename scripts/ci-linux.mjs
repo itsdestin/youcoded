@@ -187,7 +187,11 @@ async function nativeMetadata(format, installer, payload, directory, expected) {
     scripts = ['postinst', 'postrm'].map(key => fs.readFileSync(path.join(metadata, key), 'utf8')).join('\n');
     for (const key of ['postinst', 'postrm']) await run('bash', ['-n', path.join(metadata, key)]);
   } else {
-    await run('bsdtar', ['-xpf', installer, '-C', payload]);
+    // WHY (2026-11-10): the runner's apt moved libarchive-tools 3.7.2 -> 3.8.5 between two runs of the SAME commit and
+    // image, and bsdtar 3.8.5 refuses our rpm ("Unrecognized archive format"), turning master red. rpm's own rpm2cpio
+    // (the `rpm` package installed beside it) reads the rpm; bsdtar then only has to read a plain cpio stream.
+    if (format === 'rpm') await run('bash', ['-c', 'set -o pipefail; rpm2cpio "$1" | bsdtar -xpf - -C "$2"', 'rpm-unpack', installer, payload]);
+    else await run('bsdtar', ['-xpf', installer, '-C', payload]);
     if (format === 'rpm') {
       await text('rpm', ['-qp', '--xml', installer], 'raw.xml');
       const values = (await text('rpm', ['-qp', '--queryformat', '%{NAME}\n%{VERSION}\n', installer], 'identity')).split('\n');

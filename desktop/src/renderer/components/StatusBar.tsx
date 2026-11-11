@@ -1,4 +1,5 @@
 import { gitChipLabel } from '../state/git-chip-label';
+import { versionPillTooltip } from './version-pill-tooltip';
 import { useState, useCallback, useEffect, useSyncExternalStore, memo } from 'react';
 import { useChatStore } from '../state/chat-context';
 import { useEscClose } from '../hooks/use-esc-close';
@@ -60,6 +61,8 @@ interface StatusData {
     downloaded?: boolean;
     /** #183: installing it asks for a password (a Linux package, a non-administrator Mac). */
     needs_password?: boolean;
+    /** #186: another pacman package owns this copy (AUR youcoded-bin); the popup says so instead of offering an update. */
+    managed_by_other_package?: boolean;
   } | null;
   announcement: { message: string; expires?: string | null } | null;
   contextPercent: number | null;
@@ -1614,11 +1617,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {show('version') && updateStatus && (
         <Tooltip text={
             (devLabel ? `Dev instance: ${devLabel} — ` : '') +
-            (updateStatus.update_available && updateStatus.downloaded
-              ? `v${updateStatus.latest} is downloaded — click to restart and update`
-              : updateStatus.update_available
-              ? `Update available: v${updateStatus.latest} — click to download`
-              : `YouCoded v${updateStatus.current}`)
+            versionPillTooltip(updateStatus)
           }>
         <button
           onClick={() => setUpdatePanelOpen(true)}

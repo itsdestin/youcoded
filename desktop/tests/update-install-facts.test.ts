@@ -11,6 +11,17 @@ describe('what installing an update here would take', () => {
     expect(await computeInstallFacts(base({ linuxKind }))).toMatchObject({ needsPassword: true, installRefused: false });
   });
 
+  // Card #186: the official .pacman conflicts with the AUR youcoded-bin package, so nothing is
+  // downloaded or installed for it, and the popup tells the person to use their package manager.
+  it('an install owned by another pacman package is refused: no password, no download', async () => {
+    expect(await computeInstallFacts(base({ linuxKind: 'pacman-other' })))
+      .toEqual({ needsPassword: false, installRefused: true, noBackgroundDownload: true, managedByOtherPackage: true });
+  });
+
+  it('the flag appears nowhere else: the official package carries no extra field', async () => {
+    expect(await computeInstallFacts(base({ linuxKind: 'pacman' }))).not.toHaveProperty('managedByOtherPackage');
+  });
+
   it('an AppImage never needs a password', async () => {
     expect(await computeInstallFacts(base({ linuxKind: 'appimage', env: { APPIMAGE: '/home/u/YouCoded.AppImage' } })))
       .toEqual({ needsPassword: false, installRefused: false, noBackgroundDownload: false });

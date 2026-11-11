@@ -339,7 +339,7 @@ describe('skills, marketplace, theme-marketplace and first-run: every channel is
   it('every name in the contract has a table entry', () => {
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const names = Object.values(IPC).filter((v) => FAMILY.test(v) && !PUSHES.has(v));
-    expect(names.length).toBe(55); // 23 skills + 13 marketplace + 9 theme-marketplace + 10 first-run; a new one must be decided here
+    expect(names.length).toBe(53); // 23 skills + 11 marketplace (get-config/set-config deleted, card #151) + 9 theme-marketplace + 10 first-run; a new one must be decided here
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
   it('exactly these are open to a phone (what a phone could do before, plus the abilities opened on request); everything else is refused', () => {
@@ -362,7 +362,7 @@ describe('skills, marketplace, theme-marketplace and first-run: every channel is
     ].sort());
   });
   it('a phone asking for anything else here gets the standard refusal, and the handler never runs', async () => {
-    for (const type of ['marketplace:get-config', 'marketplace:set-config', 'theme-marketplace:refresh-registry', 'theme-marketplace:generate-preview', 'first-run:skip', 'first-run:state', 'first-run:local-download']) {
+    for (const type of ['theme-marketplace:refresh-registry', 'theme-marketplace:generate-preview', 'first-run:skip', 'first-run:state', 'first-run:local-download']) {
       expect((await overRemote(type, {})).answer, type).toEqual({ ok: false, error: `This feature isn't available over remote access yet (${type}).`, unsupported: true });
     }
   });

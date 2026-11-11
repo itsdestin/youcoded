@@ -12,6 +12,7 @@ import { THEMES_DIR, listUserThemes, userThemeManifest } from './theme-watcher';
 import { synthesizeLocalThemeEntries, type LocalThemeRecord } from './local-theme-synthesizer';
 import { generateThemePreview } from './theme-preview-generator';
 import { SkillConfigStore } from './skill-config-store';
+import { themeFingerprint } from '../shared/theme-fingerprint';
 
 // Registry is fetched from this URL (GitHub Pages or raw GitHub)
 // Every theme file the installer downloads must come from here (see fileProblem).
@@ -251,6 +252,9 @@ export class ThemeMarketplaceProvider {
             source: 'marketplace',
             installedAt: new Date().toISOString(),
             removable: true,
+            // WHY: remember which file list we just installed so a later in-place edit (same
+            // version number) is noticed. Undefined when the store listed no hashes -> stays quiet.
+            themeFingerprint: themeFingerprint(entry),
             components: [{
               type: 'theme',
               path: themeDir,

@@ -16,7 +16,7 @@ import type {
 // wrap + the 401-clear closure are shared with marketplace-api-handlers.ts via
 // handler-utils.ts so the renderer sees ONE consistent ApiResult error contract
 // across account:* and social:* — .status must survive the contextBridge.
-import { wrap, makeClearSessionOn401 } from "./handler-utils";
+import { wrap, makeClearSessionOn401, setSessionLostListener } from "./handler-utils";
 // Platform-owned presence socket (Task 6). The account session token and the
 // WebSocket live in the main process; the renderer only ever sees relayed
 // social:presence-event pushes and expresses desired connection state.
@@ -118,6 +118,11 @@ export function startSocial(
     // Remote browsers share the desktop's single account/presence connection.
     remoteServer?.broadcast({ type: "social:presence-event", payload: ev });
   };
+
+  // WHY (card #216): the app signed the account out by itself (the server rejected the session). Relay it as one
+  // more presence event, so it reaches every window and the Android app through the paths that already exist, with
+  // no new message to keep in step across preload / remote-shim / the contract. The screen decides whether to show it.
+  setSessionLostListener(() => broadcastPresenceEvent({ type: "session-lost" }));
 
   // One desired-state connection manager. getToken() is read lazily at connect
   // time so a token that appears after sign-in is picked up on the next attempt.

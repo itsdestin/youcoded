@@ -543,6 +543,7 @@ import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
 import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
 import type { PagesBridge, PageDocument, PageSocketEvent, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 import { sameEndpoint } from '../../../shared/endpoint-address';
+import { FIXTURE_BASE } from './fixtures/clock';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
  *
@@ -1165,7 +1166,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         permissionMode: opts.skipPermissions ? 'bypass' : 'normal',
         skipPermissions: !!opts.skipPermissions,
         status: 'active',
-        createdAt: 1_753_800_000_000,
+        createdAt: FIXTURE_BASE,
         provider: opts.provider ?? 'claude',
         harnessId: (opts as any).harnessId,
         model: opts.model,
@@ -2937,9 +2938,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       outgoing: [{ id: 'req-lee', to: { id: 'lee', display_name: 'Lee', handle: 'lee', avatar_url: null }, created_at: jakeNowSec }],
     }
     : { incoming: [], outgoing: [] };
-  // Holds the one onPresenceEvent callback the app registers (usePresence.ts
-  // subscribes exactly once) so presenceConnect can push events into it.
-  let presenceListener: ((ev: { type: string; [k: string]: unknown }) => void) | null = null;
+  // Holds the onPresenceEvent callbacks the app registers so presenceConnect can push events into them.
+  // WHY a set (card #216): usePresence AND the account context (the "signed out by the app" notice) now
+  // both subscribe, like the real channel allows; one slot let the second subscriber silence the first.
+  type PresenceCb = (ev: { type: string; [k: string]: unknown }) => void;
+  const presenceCallbacks = new Set<PresenceCb>();
+  const presenceListener = (ev: Parameters<PresenceCb>[0]) => { for (const cb of presenceCallbacks) cb(ev); };
   let presenceLive = false;
   const social: Ns<'social'> = {
     lookupHandle: async () => ({ ok: false, status: 404, message: 'No one has that handle' }),
@@ -2969,16 +2973,16 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // "connected fires before anyone is listening" bug if one existed.
       setTimeout(() => {
         if (!presenceLive) return; // disconnected again before this fired
-        presenceListener?.({ type: 'connected' });
+        presenceListener({ type: 'connected' });
         // §6.6's degraded case, taken through the REAL path: an `error` frame
         // is what a genuine outage sends, so the picker's "can't reach the game
         // server" line comes from the reducer rather than from a fixture that
         // no server would ever have produced. Solo tiles are untouched (§4.2).
         if (arcadeVersusIsDown(arcadeScenario)) {
-          presenceListener?.({ type: 'error', message: "Can't reach the game server" });
+          presenceListener({ type: 'error', message: "Can't reach the game server" });
           return;
         }
-        presenceListener?.({ type: 'presence', users: presenceUsers });
+        presenceListener({ type: 'presence', users: presenceUsers });
       }, 150);
       return { ok: true };
     },
@@ -2986,7 +2990,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       presenceLive = false;
       // No `code` → the reducer's silent "deliberate teardown" path, matching
       // what a real incognito toggle / sign-out looks like to usePresence.ts.
-      presenceListener?.({ type: 'disconnected' });
+      presenceListener({ type: 'disconnected' });
       return { ok: true };
     },
     // Challenge/accept round-tripping isn't implemented — GameLobby.tsx's
@@ -3009,7 +3013,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         const before = arcadeRecordsFor(arcadeScenario, msg.game).value[0];
         const bump = msg.outcome === 'win' ? 'wins' : msg.outcome === 'loss' ? 'losses' : 'draws';
         setTimeout(() => {
-          presenceListener?.({
+          presenceListener({
             type: 'game-record',
             game: msg.game!,
             opponent: msg.opponent,
@@ -3023,8 +3027,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return { ok: true };
     },
     onPresenceEvent: (cb) => {
-      presenceListener = cb;
-      return () => { if (presenceListener === cb) presenceListener = null; };
+      presenceCallbacks.add(cb);
+      return () => { presenceCallbacks.delete(cb); };
     },
   };
 

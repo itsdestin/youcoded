@@ -22,6 +22,7 @@ import {
 } from '../src/renderer/state/marketplace-stats-context';
 import { SkillProvider } from '../src/renderer/state/skill-context';
 import type { SkillEntry } from '../src/shared/types';
+import { themeFingerprint } from '../src/shared/theme-fingerprint';
 
 // WHY: each section below was its own file, so each started with an empty
 // /stats cache and the environment's own fetch; put both back after every case.
@@ -638,6 +639,89 @@ describe('updateAvailable: version OR commit', () => {
     entries = [row()];
     packages = { x: { version: '1.0.0', source: 'marketplace', commit: OLD } };
     expect((await readUpdateAvailable()).x).toBeUndefined();
+  });
+});
+
+// Pins when a THEME shows Update (marketplace-context.tsx, the themeEntries loop).
+// WHY: a theme edited in place with no version bump (Morning Rounds) never offered Update. The
+// store's file list is now stamped at install time (shared/theme-fingerprint.ts), and a different
+// stamp means "the files changed". Every "stay quiet" case below is one where guessing would
+// put a false Update badge on someone's library.
+describe('theme updateAvailable: version OR changed files', () => {
+  const FH_A = themeFingerprint({ fileHashes: { 'manifest.json': 'aa', 'assets/m.svg': 'bb' } })!;
+  const FH_B = themeFingerprint({ fileHashes: { 'manifest.json': 'aa', 'assets/m.svg': 'cc' } })!;
+  const themeRow = (over: Record<string, unknown> = {}) => ({
+    slug: 't', name: 'T', author: 'a', dark: false, source: 'community', features: [],
+    manifestUrl: '', version: '1.0.0', ...over,
+  } as any);
+
+  let packages: Record<string, any>;
+  let themes: any[];
+
+  function setupWindowClaude() {
+    (globalThis as any).window = (globalThis as any).window ?? {};
+    (globalThis as any).window.claude = {
+      skills: {
+        listMarketplace: vi.fn(async () => []), list: vi.fn(async () => []),
+        getFavorites: vi.fn(async () => []), getFeatured: vi.fn(async () => ({ hero: [], rails: [] })),
+        install: vi.fn(), uninstall: vi.fn(), setFavorite: vi.fn(), update: vi.fn(), publish: vi.fn(),
+        getChips: vi.fn(async () => []), setChips: vi.fn(), setOverride: vi.fn(),
+        getCuratedDefaults: vi.fn(async () => []),
+      },
+      marketplace: { getPackages: vi.fn(async () => packages) },
+      theme: { marketplace: { list: vi.fn(async () => themes), install: vi.fn(), uninstall: vi.fn(), update: vi.fn() } },
+      appearance: { getFavoriteThemes: vi.fn(async () => []) },
+    };
+  }
+
+  let seen: Record<string, boolean> = {};
+  function Probe() { seen = useMarketplace().updateAvailable; return null; }
+  async function read() {
+    await act(async () => {
+      render(<SkillProvider><MarketplaceProvider><Probe /></MarketplaceProvider></SkillProvider>);
+    });
+    return seen;
+  }
+  const pkg = (over: Record<string, unknown> = {}) => ({ version: '1.0.0', source: 'marketplace', ...over });
+
+  beforeEach(() => { setupWindowClaude(); vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  it('shows Update when the listed file stamp differs from the recorded one', async () => {
+    themes = [themeRow({ fileHashes: { 'manifest.json': 'aa', 'assets/m.svg': 'cc' } })];
+    packages = { 'theme:t': pkg({ themeFingerprint: FH_A }) };
+    expect((await read()).t).toBe(true);
+    expect(FH_A).not.toBe(FH_B);
+  });
+
+  it('says nothing when the stamp is unchanged', async () => {
+    themes = [themeRow({ fileHashes: { 'assets/m.svg': 'bb', 'manifest.json': 'aa' } })];
+    packages = { 'theme:t': pkg({ themeFingerprint: FH_A }) };
+    expect((await read()).t).toBeUndefined();
+  });
+
+  it('says nothing for an install made before stamps were recorded', async () => {
+    themes = [themeRow({ fileHashes: { 'manifest.json': 'aa', 'assets/m.svg': 'cc' } })];
+    packages = { 'theme:t': pkg() };
+    expect((await read()).t).toBeUndefined();
+  });
+
+  it('says nothing when the listed entry carries no hashes', async () => {
+    themes = [themeRow()];
+    packages = { 'theme:t': pkg({ themeFingerprint: FH_A }) };
+    expect((await read()).t).toBeUndefined();
+  });
+
+  it('says nothing when the evidence kind changed (recorded contentHash, now listed fileHashes)', async () => {
+    themes = [themeRow({ fileHashes: { 'manifest.json': 'aa' } })];
+    packages = { 'theme:t': pkg({ themeFingerprint: 'ch:sha256:abc' }) };
+    expect((await read()).t).toBeUndefined();
+  });
+
+  it('still shows Update for a newer version when no stamp was recorded', async () => {
+    themes = [themeRow({ version: '1.1.0' })];
+    packages = { 'theme:t': pkg() };
+    expect((await read()).t).toBe(true);
   });
 });
 

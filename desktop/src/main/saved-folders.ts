@@ -58,14 +58,20 @@ export function writeFolders(folders: SavedFolder[], file: string = foldersFileP
   }
 }
 
-// Case-insensitive on Windows for the same reason FOLDERS_REMOVE compares that
-// way: callers hold canonical (lowercase-drive) paths while the store holds
-// path.resolve (uppercase-drive) form. A case-sensitive compare silently
-// fails to match on Windows.
+/** The ONE way to compare two folder paths for "same folder".
+ *  WHY: this was spelled four ways (always lower-case, Windows-only lower-case, a Windows-only
+ *  helper, plain ===). Windows and macOS disks ignore letter case (and Project View hands in
+ *  a lowercase-drive `c:\\…` while the store holds `C:\\…`), so they compare lower-cased;
+ *  Linux disks are case-sensitive, so `/home/a/Docs` and `/home/a/docs` are two folders there.
+ *  Unicode is normalised to NFC because macOS spells accented names decomposed. Reads
+ *  process.platform per call so tests can stub it. */
+export function pathKey(p: string): string {
+  const r = path.resolve(p).normalize('NFC');
+  return process.platform === 'win32' || process.platform === 'darwin' ? r.toLowerCase() : r;
+}
+
 function samePath(a: string, b: string): boolean {
-  const ra = path.resolve(a);
-  const rb = path.resolve(b);
-  return process.platform === 'win32' ? ra.toLowerCase() === rb.toLowerCase() : ra === rb;
+  return pathKey(a) === pathKey(b);
 }
 
 /** Rewrite one entry's path (used when a folder is moved on disk). Returns

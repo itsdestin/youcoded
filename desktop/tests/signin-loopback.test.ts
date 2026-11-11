@@ -33,6 +33,28 @@ describe('sign-in loopback listener', () => {
     expect(arrived).toHaveBeenCalledTimes(1);
   });
 
+  // A listen on a port Windows keeps reserved fails with EACCES; the listener must try another port.
+  it.each(['EACCES', 'EADDRINUSE'])('retries on another port when the first listen fails with %s', async (code) => {
+    const real = http.Server.prototype.listen;
+    const spy = vi.spyOn(http.Server.prototype, 'listen').mockImplementationOnce(function (this: http.Server) {
+      process.nextTick(() => this.emit('error', Object.assign(new Error(`listen ${code} 127.0.0.1:49831`), { code })));
+      return this;
+    });
+    try {
+      open = await startSigninListener();
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect((await get(open.port, '/')).status).toBe(404); // really listening
+    } finally { spy.mockRestore(); expect(http.Server.prototype.listen).toBe(real); }
+  });
+
+  it('still fails straight away on any other listen error', async () => {
+    const spy = vi.spyOn(http.Server.prototype, 'listen').mockImplementationOnce(function (this: http.Server) {
+      process.nextTick(() => this.emit('error', Object.assign(new Error('boom'), { code: 'EMFILE' })));
+      return this;
+    });
+    try { await expect(startSigninListener()).rejects.toThrow('boom'); expect(spy).toHaveBeenCalledTimes(1); } finally { spy.mockRestore(); }
+  });
+
   it('binds 127.0.0.1 only, on a high port', async () => {
     open = await startSigninListener();
     expect(open.port).toBeGreaterThanOrEqual(1024);

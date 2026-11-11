@@ -161,6 +161,10 @@ jobs:
       # throwaway branch with this step deleted. Windows-only, off unless someone asks for it.
       - name: Run tests
         if: ${{ !(inputs.skip_windows_tests && matrix.name == 'windows') }}
+        # WHY: this job fetched the Office add-on with --required above; the yc-early tests skip
+        # without it, so this makes a missing bundle a red failure instead of a silent skip.
+        env:
+          YC_OFFICE_ADDON_REQUIRED: "1"
         run: npm test
 
       # Must run BEFORE the build — electron-builder's deb/rpm/pacman packagers

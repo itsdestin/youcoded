@@ -1,9 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  compareAlpine, checkAlpineShipped, checkAlpineNodeLag, checkDesktopNode, checkElectron,
+  compareAlpine, checkAlpineShipped, checkAlpineNodeLag, checkMuslPatches, checkDesktopNode, checkElectron,
   checkGitForWindows, osvFinding, planIssues,
 } from './security-watch.mjs';
+
+test('phone musl: vendored Alpine patches older than the current package are a finding', () => {
+  assert.equal(checkMuslPatches({ vendored: '1.2.6-r3', alpineMusl: '1.2.6-r4', branch: 'v3.24' })[0].key, 'android-musl-patches-stale');
+  assert.equal(checkMuslPatches({ vendored: '1.2.6-r3', alpineMusl: '1.2.7-r0', branch: 'v3.24' })[0].severity, 'high');
+  assert.deepEqual(checkMuslPatches({ vendored: '1.2.6-r3', alpineMusl: '1.2.6-r3', branch: 'v3.24' }), []);
+  assert.deepEqual(checkMuslPatches({ vendored: undefined, alpineMusl: '1.2.6-r3', branch: 'v3.24' }), []);
+});
 
 const NOW = Date.parse('2026-11-05T00:00:00Z');
 

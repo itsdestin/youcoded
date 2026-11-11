@@ -12,6 +12,20 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
+// WHY (card #151 item 4): updateFolderPath finds its entry through pathKey — case-blind on
+// Windows/macOS only. Platform stubbed so each OS's CI checks all three.
+describe('updateFolderPath with a differently-cased old path', () => {
+  const realPlatform = process.platform;
+  afterEach(() => Object.defineProperty(process, 'platform', { value: realPlatform }));
+  for (const [platform, matches] of [['win32', true], ['darwin', true], ['linux', false]] as const) {
+    it(`${platform}: ${matches ? 'matches' : 'does not match'}`, () => {
+      Object.defineProperty(process, 'platform', { value: platform });
+      writeFolders([{ path: path.join(tmp, 'Docs'), nickname: 'd', addedAt: 1 }], file);
+      expect(updateFolderPath(path.join(tmp, 'docs'), path.join(tmp, 'moved'), file)).toBe(matches);
+    });
+  }
+});
+
 describe('saved-folders store', () => {
   it('readFolders returns [] for a missing file', () => {
     expect(readFolders(file)).toEqual([]);

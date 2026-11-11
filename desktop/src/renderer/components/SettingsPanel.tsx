@@ -5,6 +5,7 @@ declare const __BUILD_CHANNEL__: string;
 import './SettingsDrawer.css';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { lastUsedText } from './remote/last-used';
+import { DEVICE_EXPIRY_DAYS } from '../../shared/remote-close-codes';
 import { createPortal } from 'react-dom';
 import type { RemoteAccessView, RemoteAccessAction, RemoteAccessPreview } from './remote/preview-types';
 import { QRCodeSVG } from 'qrcode.react';
@@ -155,6 +156,8 @@ interface RemoteDeviceRow {
   online: boolean;
   createdAt: number;
   lastSeenAt: number;
+  /** Signed out after DEVICE_EXPIRY_DAYS unused: shown as a quiet row until the owner removes it (card #216). */
+  expired?: boolean;
 }
 
 interface Props {
@@ -1683,6 +1686,7 @@ function RemoteButton(props: RemoteButtonProps) {
         // the real host can produce, and it read as "off, but still connected".
         online: d.online && previewView.stage !== 'disabled',
         createdAt: 0, lastSeenAt: d.lastSeenAt ?? 0,
+        expired: d.expired,
       }))
     : clients;
   const unpair = (deviceId: string) => {
@@ -2038,7 +2042,11 @@ function RemoteButton(props: RemoteButtonProps) {
                               variant="item"
                               icon={<span className={`w-2 h-2 rounded-full shrink-0 ${row.online ? 'bg-green-400' : 'bg-fg-faint'}`} />}
                               title={row.name}
-                              description={revoking === row.id
+                              // WHY (card #216): an expired phone is already signed out, so its row says so in
+                              // plain words, sits muted, and offers only "Remove" (no confirm: nothing is lost).
+                              className={row.expired ? 'opacity-60' : ''}
+                              description={row.expired ? `Signed out after ${DEVICE_EXPIRY_DAYS} days unused`
+                                : revoking === row.id
                                 ? 'Unpair this device? It must pair again to reconnect.'
                                 : hostOnly ? `${row.online ? 'Online' : 'Offline'} · unpair on the computer itself`
                                   : `${row.online ? 'Online' : 'Offline'}${lastUsedText(row.online, row.lastSeenAt)}`}
@@ -2048,7 +2056,9 @@ function RemoteButton(props: RemoteButtonProps) {
                               // access — the refusal came back as an ordinary value and nothing
                               // read it. The refusal is a rejection now, and the button is not
                               // offered here at all.
-                              control={revoking === row.id
+                              control={row.expired
+                                ? <Button variant="ghost" size="sm" disabled={hostOnly} aria-label={`Remove ${row.name}`} onClick={() => unpair(row.id)}>Remove</Button>
+                                : revoking === row.id
                                 ? <div className="flex gap-1">
                                     <Button variant="ghost" size="sm" onClick={() => setRevoking(null)}>Cancel</Button>
                                     <Button variant="danger-outline" size="sm" onClick={() => { unpair(row.id); setRevoking(null); }}>Confirm unpair</Button>

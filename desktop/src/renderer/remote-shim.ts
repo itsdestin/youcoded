@@ -2469,9 +2469,6 @@ export function installShim(): void {
     // Phase 3: unified marketplace (packages map + per-entry config)
     marketplace: {
       getPackages: () => invoke('marketplace:get-packages'),
-      getConfig: (id: string) => invoke('marketplace:get-config', { id }),
-      setConfig: (id: string, values: Record<string, any>) =>
-        invoke('marketplace:set-config', { id, values }),
       invalidateCache: () => invoke('marketplace:invalidate-cache'),
       readComponent: (args: { pluginId: string; kind: 'skill' | 'command' | 'agent'; name: string }) =>
         invoke('marketplace:read-component', args),

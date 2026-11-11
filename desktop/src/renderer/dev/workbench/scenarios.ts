@@ -2,6 +2,7 @@ import type { SessionInfo } from '../../../shared/types';
 import type { TagRecord } from '../../../shared/tags';
 import type { StoredProject } from '../../../shared/permission-types';
 import type { FlagName } from '../../components/resume-browser-filters';
+import { FIXTURE_BASE } from './fixtures/clock';
 import { sessions, siteSessions, studentSessions } from './fixtures/sessions';
 import { permissions as seedPermissions, stressPermissions } from './fixtures/permissions';
 import { providers as seedProviders, catalog as seedCatalog, type ProviderRow, type CatalogRow } from './fixtures/providers';
@@ -89,7 +90,7 @@ const PROJECTS = [
 
 // Fixed base timestamp, not Date.now(): a seed that moves with the clock makes
 // "2 minutes ago" vs "3 days ago" groupings non-reproducible between reviews.
-const T0 = 1_753_800_000_000;
+const T0 = FIXTURE_BASE;
 
 function past(i: number, name: string, extra: Partial<PastSession> = {}): PastSession {
   const [path, slug] = PROJECTS[i % PROJECTS.length];

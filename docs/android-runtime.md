@@ -35,6 +35,9 @@ Android app (one APK)
 
 `build-runtime.sh <applicationId> <out>` (Gradle `buildRuntime<Variant>`) assembles them from the
 Alpine branch and upstream versions in `pins.env`: Alpine Linux **musl** packages (Node, bash, git, ripgrep), musl built from source with
+Alpine's own patches applied first (vendored in `app/runtime/alpine-musl-patches/` with their sha512s from Alpine's APKBUILD; `alpine-musl-patches.py apply`
+verifies and applies them, `alpine-musl-patches.py refresh` updates the set from aports by git, and the daily security watch says when a refresh is
+due — so the phone's libc carries the same security fixes as Alpine's `musl` package; before 2026-11-10 it silently lacked them) and then
 `patch-musl.py`, `ycshim.c`, `yc-open.c`, node-pty cross-built, and Claude Code's official
 `linux-arm64-musl` package. `build-backend.sh` (Gradle `buildBackend`) packs the desktop backend
 (`backend.tgz`, production dependencies, other platforms' native builds removed).
