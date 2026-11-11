@@ -5,7 +5,7 @@
 // in harness-session.ts, since polling is the one call that is SUPPOSED to repeat.
 import { z } from 'zod';
 import { defineTool } from './registry';
-import { stateText } from '../shell-registry';
+import { stateText, restoredStateText, shellListLines } from '../shell-registry';
 
 /** Lines returned per read; earlier ones stay in the log the moreHint names. */
 export const BASH_OUTPUT_MAX_LINES = 200;
@@ -30,16 +30,26 @@ export const BashOutputTool = defineTool({
   async execute(args, ctx) {
     const reg = ctx.shells;
     if (!args.shell_id) {
-      const runs = reg?.list() ?? [];
-      if (runs.length === 0) return { text: 'No background commands in this conversation.' };
-      const lines = runs.map((r) => {
-        const cmd = r.command.length > 60 ? `${r.command.slice(0, 55)}…` : r.command;
-        return `${r.shellId} · ${stateText(r)} · ${cmd}`;
-      });
+      // WHY restored ones too (card #220): commands from before an app restart are
+      // still this conversation's commands; leaving them out told the model "none".
+      const lines = shellListLines(reg);
+      if (lines.length === 0) return { text: 'No background commands in this conversation.' };
       return { text: lines.join('\n') };
     }
-    const running = reg?.list().filter((r) => r.status === 'running').map((r) => r.shellId) ?? [];
+    const running = [
+      ...(reg?.list().filter((r) => r.status === 'running').map((r) => r.shellId) ?? []),
+      ...(reg?.restoredViews().filter((r) => r.status === 'running').map((r) => r.shellId) ?? []),
+    ];
     const read = reg ? await reg.read(args.shell_id) : undefined;
+    const old = !read ? reg?.getRestored(args.shell_id) : undefined;
+    if (old) {
+      // From before an app restart: its output no longer streams, so give what was
+      // saved (last lines) and the log file, and say plainly that this is a record.
+      const tail = old.tail?.trim() || '(no output was saved)';
+      return {
+        text: `${old.shellId} · ${restoredStateText(old)}\nThis command started before the app was restarted, so new output no longer reaches you. Last saved lines:\n${tail}${old.logPath ? `\nFull log: ${old.logPath}` : ''}`,
+      };
+    }
     if (!read) return { text: unknownId(args.shell_id, running), isError: true };
     const { run, text, truncated } = read;
     const state = stateText(run);

@@ -1,4 +1,4 @@
-import { CLAUDE_QUEUE_WIRE_LIMITS, CLAUDE_QUEUE_COMPOSER_DROPPED, CLAUDE_QUEUE_COMPOSER_MAY_DROP } from '../shared/claude-queue-wire-limits';
+import { CLAUDE_QUEUE_WIRE_LIMITS, CLAUDE_QUEUE_COMPOSER_DROPPED, CLAUDE_QUEUE_COMPOSER_MAY_DROP, CLAUDE_QUEUE_COMPOSER_SHORTEN } from '../shared/claude-queue-wire-limits';
 
 /** WHY embedded with the existing module: this CLI permits ONE hooks module per plugin. */
 export const CLAUDE_QUEUE_PLUGIN_SOURCE = String.raw`
@@ -128,8 +128,11 @@ async function queueStage($, lease) {
   // becomes LF). An exact-only read-back left such a message sitting in the box "Unconfirmed". The box holds OUR text
   // when it is the wire minus only those characters; that read-back is what Enter will submit, and admission restores
   // the exact wire bytes (onQueueAdmission). Anything else is not ours.
-  const ours = readback.text === lease.wireText || (readback.text !== '' && queueSameModuloDropped(readback.text, lease.wireText));
-  if (ours && queueOwned?.attemptId === lease.attemptId) queueOwned.stagedText = readback.text;
+  // WHY (2026-11-10, card #246): over 10,000 characters the box SHOWS a shortened form while Enter submits the whole
+  // text; queueShortenedSubmit proves the shortened form is exactly ours and returns what Enter will submit.
+  const shortened = readback.text === lease.wireText ? null : queueShortenedSubmit(readback.text, lease.wireText);
+  const ours = readback.text === lease.wireText || shortened !== null || (readback.text !== '' && queueSameModuloDropped(readback.text, lease.wireText));
+  if (ours && queueOwned?.attemptId === lease.attemptId) { queueOwned.stagedText = readback.text; if (shortened !== null) queueOwned.submitText = shortened; }
   const latest = await $.state.get(queueRef);
   if (!fill.isFilled || !ours || latest.value?.attemptId !== lease.attemptId || latest.value.state !== 'armed'
     || !queueFenceValid(lease) || await $.clock.now() >= lease.expiresAt) throw new Error('Queue staging no longer owned');
@@ -140,9 +143,30 @@ function queueSameModuloDropped(a, b) {
   const strip = (t) => t.replace(/\r\n?/g, '\n').replace(new RegExp(${JSON.stringify(CLAUDE_QUEUE_COMPOSER_DROPPED)}, 'gu'), '').replace(new RegExp(${JSON.stringify(CLAUDE_QUEUE_COMPOSER_MAY_DROP)}, 'gu'), '');
   return strip(a) === strip(b);
 }
+// Claude Code's box shows text over ${CLAUDE_QUEUE_COMPOSER_SHORTEN.over} characters as first ${CLAUDE_QUEUE_COMPOSER_SHORTEN.keep} + marker + last ${CLAUDE_QUEUE_COMPOSER_SHORTEN.keep}
+// (cc-dependencies.md). Accept ONLY the exact shape built from our own text — the same head, tail and hidden line count —
+// so a human edit anywhere visible fails. Returns the whole text Enter submits, or null when the box is not ours.
+function queueShortenedSubmit(shown, wire) {
+  const over = ${CLAUDE_QUEUE_COMPOSER_SHORTEN.over}, keep = ${CLAUDE_QUEUE_COMPOSER_SHORTEN.keep};
+  const marker = /^\[\.\.\.Truncated text #(\d+) \+(\d+) lines\.\.\.\]/.exec(shown.slice(keep));
+  if (!marker) return null;
+  // The box first applies the same newline / invisible-character changes queueSameModuloDropped tolerates; try each.
+  const lf = wire.replace(/\r\n?/g, '\n');
+  const bases = [wire, lf, lf.replace(new RegExp(${JSON.stringify(CLAUDE_QUEUE_COMPOSER_MAY_DROP)}, 'gu'), '')];
+  for (const base of bases) {
+    if (base.length <= over) continue;
+    const middle = base.slice(keep, -keep);
+    const breaks = (middle.match(/\r\n|\r|\n/g) || []).length;
+    if (shown === base.slice(0, keep) + '[...Truncated text #' + marker[1] + ' +' + breaks + ' lines...]' + base.slice(-keep)) return base;
+  }
+  return null;
+}
 // The box holds exactly what OUR staging put there: the wire, or the read-back staging accepted as ours.
 function queueBoxIsOurs(text, owned) {
-  return !!owned && (text === owned.wireText || (typeof owned.stagedText === 'string' && owned.stagedText !== '' && text === owned.stagedText));
+  return !!owned && (text === owned.wireText || (typeof owned.stagedText === 'string' && owned.stagedText !== '' && text === owned.stagedText)
+    // WHY (card #246): a box that re-shortens our text after a refused Enter may number its marker differently; the
+    // exact head/tail/line-count shape built from OUR text is still proof, and only staged ownership reaches here.
+    || (owned.staged === true && typeof owned.submitText === 'string' && (queueShortenedSubmit(text, owned.wireText) !== null || queueShortenedSubmit(text, owned.wireText.trim()) !== null)));
 }
 async function queueRevoke($, lease) {
   if (!lease || lease.incarnation !== incarnation || queueWasAbandoned(lease)) return;
@@ -250,7 +274,10 @@ async function onQueueAdmission($, e, next) {
     // exact staged readback remains the ownership proof; restore those same bytes
     // through the supported prompt rewrite after admission, never silently truncate.
     const staged = typeof lease.stagedText === 'string' && lease.stagedText !== '' ? lease.stagedText : lease.wireText;
-    if (e.text !== lease.wireText && e.text !== lease.wireText.trim() && e.text !== staged && e.text !== staged.trim()) {
+    // A shortened box (card #246) submits the whole text it stands for, which staging recorded as submitText.
+    const whole = typeof lease.submitText === 'string' && lease.submitText !== '' ? lease.submitText : null;
+    if (e.text !== lease.wireText && e.text !== lease.wireText.trim() && e.text !== staged && e.text !== staged.trim()
+      && (whole === null || (e.text !== whole && e.text !== whole.trim()))) {
       await queueEvent($, lease, 'unknown', { detail: 'Submitted input no longer matches the owned composer' });
       return { drop: 'The message box changed during queued delivery. Review the message before sending again.' };
     }

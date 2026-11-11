@@ -42,9 +42,9 @@ import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptShrink
 import { attachTranscriptFeed, attachSessionLiveFeed } from './state/screen-feed';
 import { useDropEndedSessionsOnReconnect, withAnnouncedName } from './state/session-list-sync';
 import {
-  remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
-  choosePlaceOnHydrate, chooseAfterDestroyed,
-} from './state/remote-place';
+  remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace, choosePlaceOnHydrate, chooseAfterDestroyed,
+} from './state/remote-place'; // (two lines joined to stay inside this file's line budget)
+import { chooseDesktopPlaceFromList, useSessionListLoaded } from './state/desktop-place';
 import { ArtifactProvider, createArtifactStore } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
@@ -346,7 +346,7 @@ function AppInner() {
   const [initializedSessions, setInitializedSessions] = useState<Set<string>>(new Set());
   // Has the list of open sessions arrived from this computer at least once? The welcome screen
   // must not call anyone a first-time user before it has — see first-run-screen.ts.
-  const [sessionListLoaded, setSessionListLoaded] = useState(false);
+  const [sessionListLoaded, setSessionListLoaded] = useSessionListLoaded(sessionId, isRemoteMode()); // WHY (#146): also saves this window's chat; see desktop-place.ts
   // Past conversations to resume: true / false / null = unknown (not asked, or the question
   // failed — which over remote access happens on every dropped connection).
   const [hasResumable, setHasResumable] = useState<boolean | null>(null);
@@ -1911,7 +1911,7 @@ function AppInner() {
         // not sent to this phone until it opens them (one-core R5-3); their dots come from the computer's summary.
         void Promise.all(choice ? [remoteWatchRef.current.watch(choice)] : []).then(reportFillRound);
       } else {
-        setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
+        setSessionId((prev) => prev ?? chooseDesktopPlaceFromList(list, mayAutoSelect())); // WHY (#146): reopen the chat this window was on after a reload; see desktop-place.ts
       }
       // Existing sessions that have STARTED skip the "Initializing" cover; one
       // still on its startup dialogs does not (SessionInfo.awaitingStart).

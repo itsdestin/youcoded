@@ -191,6 +191,28 @@ export async function awaitIdle(): Promise<void> {
   while (inflight.size > 0) await Promise.allSettled([...inflight]);
 }
 
+// WHY (privacy): the editor's log text can quote the person's document ("cannot read cell
+// 'Salary: Maria 85,000'"), and desktop.log is attached to bug reports. So the text itself is
+// never written. We keep only facts that cannot be document words: how long it was, which
+// built-in JavaScript error kind it was (fixed list), and where in the editor's code it came
+// from (file name + line numbers only, matched strictly). Anything unrecognised is dropped.
+const SAFE_ERROR_KINDS = ['TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'EvalError', 'URIError', 'AggregateError', 'DOMException', 'QuotaExceededError'];
+// WHY an allow-list of file names (not a pattern): a document word can look exactly like a
+// script position ("Maria-Salary-85000.js:1:2"), so a name is logged only if it is one of the
+// editor's own scripts (taken from the editor add-on's files). Anything else is dropped.
+const EDITOR_SCRIPTS = new Set(['sdk-all.js', 'sdk-all-min.js', 'app.js', 'code.js', 'AllFonts.js', 'yc-bridge.js', 'yc-early.js', 'yc-comments.js']);
+// WHY only the first 4000 characters are scanned: the editor can send a huge message; a fixed
+// bound keeps this from ever stalling the app. The true length is still reported.
+const LOG_SCAN_CHARS = 4000;
+export function editorLogFacts(msg: string): Record<string, unknown> {
+  const head = msg.slice(0, LOG_SCAN_CHARS);
+  const kinds = SAFE_ERROR_KINDS.filter((k) => head.includes(k));
+  // Frames look like "at fn (office://TOKEN/path/sdk-all.js:12:34)"; keep "sdk-all.js:12:34" only.
+  const where = [...head.matchAll(/([A-Za-z0-9_.-]{1,60}\.js):(\d{1,8}):(\d{1,8})/g)]
+    .filter((m) => EDITOR_SCRIPTS.has(m[1])).slice(0, 5).map((m) => `${m[1]}:${m[2]}:${m[3]}`);
+  return { source: 'editor', length: msg.length, errorKinds: kinds, where };
+}
+
 // WHY map at the boundary (fix round 1; docs/error-message-standards.md): a specific message
 // only where the cause is known for certain, otherwise a general one that guesses nothing. The
 // raw error (with its paths and x2t's stderr) goes to the log, never to the editor frame.
@@ -540,7 +562,7 @@ export function createOfficeCommands(deps: {
       switch (cmd) {
         case 'js_log': {
           const msg = String(args.msg ?? '');
-          if (/error|fail/i.test(msg)) log('WARN', 'Office', `editor: ${msg.slice(0, 300)}`);
+          if (/error|fail/i.test(msg)) log('WARN', 'Office', 'editor reported a fault', editorLogFacts(msg));
           return null;
         }
         case 'get_current_path':
