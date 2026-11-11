@@ -164,9 +164,14 @@ function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPlu
           )}
         </div>
       )}
-      <span className="text-sm font-medium text-fg leading-tight">{skill.displayName}</span>
-      <span className="text-2xs text-fg-muted mt-1 leading-snug line-clamp-2 flex-1">{skill.description}</span>
-      <div className="mt-2 self-start">{badge}</div>
+      {/* WHY the right padding (Destin's phone test: "Marketplace Publisher" ran under its icons): the icons float over
+          the card's top-right corner, so the name keeps clear of them and wraps instead. Two icons need about 40px past
+          the card's own padding, one about 16px. */}
+      <span className={`text-sm font-medium text-fg leading-tight ${hasFavorite && hasPluginBadge ? 'pr-10' : hasFavorite || hasPluginBadge ? 'pr-4' : ''}`}>{skill.displayName}</span>
+      {/* WHY the badge takes the spare height (mt-auto), not the description: a description stretched by flex-1 showed
+          a cut third line under its two-line limit whenever a neighbouring tile's longer name made the row taller. */}
+      <span className="text-2xs text-fg-muted mt-1 leading-snug line-clamp-2">{skill.description}</span>
+      <div className="mt-auto pt-2 self-start">{badge}</div>
     </div>
   );
 }

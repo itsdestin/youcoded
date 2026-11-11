@@ -32,9 +32,12 @@ export interface ScreenBandProps {
   /** Back to chat. */
   onBack: () => void;
   backLabel?: string;
+  /** A screen's own control, drawn just before "Back to chat" (Pages on a phone: the
+   *  list ↔ page switch, which used to float over the page's top-left corner). */
+  extra?: React.ReactNode;
 }
 
-export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, active, title, icon, onBack, backLabel = 'Back to chat' }: ScreenBandProps) {
+export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, active, title, icon, onBack, backLabel = 'Back to chat', extra }: ScreenBandProps) {
   const headerRef = useRef<HTMLDivElement>(null);
   // Float chrome only (a no-op elsewhere): the same wallpaper-derived icon tint
   // as the chat header. The chat's bottom controls are hidden under a screen and
@@ -65,6 +68,7 @@ export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, sett
         {title}
       </div>
       <div className="header-controls-right flex items-center justify-end gap-1 sm:gap-2">
+        {extra}
         {/* WHY the light inset pill again, key first (final-review#FV-6, Destin
             2026-10-14: "i really don't want esc/back to chat to be filled. it should
             be a light button like the old version was"). H-5 had made it a filled

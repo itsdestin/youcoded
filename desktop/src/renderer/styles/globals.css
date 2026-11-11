@@ -5,6 +5,9 @@
 @import "./float-chrome.css";
 @import "./scroll-mask.css"; /* WHY here, once: every screen using .scroll-mask gets it, and the design lint knows the class. */
 @import "./frame-outline.css";
+@import "./phone-density.css"; /* WHY: phone-width chat spacing (card #213); the file says what and why. */
+@import "./keyboard.css"; @import "./terminal-scrollbar.css"; /* WHY: the empty-chat hint above the keyboard (card #213); the terminal's one scroll bar. */
+@import "./input-bar.css"; /* WHY: the message box hint stays on one line beside the stop button (card #213). */
 @import "./brand.css"; /* WHY here: the logo and setup's brand surface (first-run rebuild), known to the design lint like every other class. */
 
 @source "../../";
@@ -544,6 +547,17 @@ html {
 .xterm {
   height: 100%;
 }
+/* WHY (2026-11-01 phone test): on a phone the terminal grid runs edge to edge inside the
+   frame, and the frame's 1px outline painted over the first column — "Quick" read "uick".
+   A little inner space on the left; xterm's fit step subtracts .xterm padding, so the
+   columns still fit. Phone width only (the 640px breakpoint); the float chrome keeps its
+   own padding (float-chrome.css, more specific). */
+@media (max-width: 639.98px) {
+  .terminal-overlay-scroll .xterm {
+    /* 12px, not 6: measured on the phone, 6px still left column 0 (Claude Code's "❯") half under the outline. */
+    padding-left: 12px;
+  }
+}
 
 .xterm-viewport {
   height: 100% !important;
@@ -813,7 +827,10 @@ body[data-input-style="floating"]:not([data-chrome-style="floating"]) {
      gap above the input bar's VISIBLE edge, the same gap the queued cards and
      the other floats keep (see :root below). - 2px: an assistant row's own
      py-0.5, so the gap is measured to the bubble, not to its row. */
-  padding-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--input-edge-inset, 0px) + var(--chat-float-gap, 0.375rem) - 2px + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + var(--vvp-offset, 0px));
+  padding-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--input-edge-inset, 0px) + var(--chat-float-gap, 0.375rem) - 2px + var(--queued-strip-height, 0px) + var(--model-status-height, 0px));
+  /* The keyboard SHORTENS the scroller instead of padding it (card #213, Destin: the "started with" banner jumped): padding
+     made even an empty chat scrollable, so its first line scrolled away when the keyboard opened. */
+  margin-bottom: var(--vvp-offset, 0px);
 }
 
 /* Inset the scrollbar track so it stops below the header and above the
@@ -822,15 +839,23 @@ body[data-input-style="floating"]:not([data-chrome-style="floating"]) {
    travel range matches the content's actual scrollable area. */
 .chat-scroll::-webkit-scrollbar-track {
   margin-top: var(--top-chrome-height, 2.5rem);
-  margin-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--input-edge-inset, 0px) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + var(--vvp-offset, 0px));
+  margin-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--input-edge-inset, 0px) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px));
 }
 
 /* Bottom chrome (input + status bars) — mirrors header pattern.
    Absolutely positioned so chat messages scroll behind the chrome.
    React toggles .bottom-float based on view mode. */
-/* Touch terminal view: bottom chrome in the layout but above .chrome-glass, or
-   its key row is invisible in framed themes (2026-09-24; terminal-touch-bottom-chrome test). */
-.bottom-docked { position: relative; z-index: 20; }
+/* Touch terminal view: bottom chrome above .chrome-glass, or its key row is invisible in framed themes (2026-09-24;
+   terminal-touch-bottom-chrome test). Since 2026-11-03 it also carries .bottom-float: it FLOATS over the terminal the
+   way it floats over the chat. WHY (Destin: "theres a hard edge at the bottom now tho where the terminal meets the
+   input bar, especially in floating themes"; and tapping the bar in terminal view left it behind the keyboard): docked
+   in the layout, the terminal's tinted sheet stopped in a line at the bar's top edge, and only a floating bar rides
+   up with the keyboard (useVisualViewport). The terminal now runs to the screen's bottom behind the bar, and its text
+   grid stops above the bar (--terminal-bottom-inset below). */
+.bottom-docked { position: absolute; z-index: 20; }
+html[data-term-layout="phone"] {
+  --terminal-bottom-inset: calc(var(--bottom-chrome-height, 0px) + var(--input-edge-inset, 0px));
+}
 
 .bottom-float {
   position: absolute;
@@ -1400,6 +1425,26 @@ body[data-input-style="floating"]:not([data-chrome-style="floating"]) {
 [data-wallpaper] .panel-glass.bg-accent:hover {
   background-color: color-mix(in srgb, var(--accent) calc(var(--panels-opacity, 1) * 90%), transparent);
 }
+/* The welcome screen's Resume session button (outlined, no fill). WHY (Destin's phone test, card #213): on a wallpaper
+   theme its label sat straight on the picture, so Meadow Mist's dark label vanished over the dark trees. On wallpaper
+   themes only, it gets a tint of the theme's own background colour behind it and the full-strength text colour, so it
+   reads like the theme's other surfaces; plain themes keep the outline exactly as before. */
+[data-wallpaper] .welcome-resume {
+  background-color: color-mix(in srgb, var(--canvas) 50%, transparent);
+  color: var(--fg);
+}
+[data-wallpaper] .welcome-resume:hover {
+  background-color: color-mix(in srgb, var(--canvas) 65%, transparent);
+}
+/* The welcome screen's mascot, dropped on a SHORT screen (a phone turned sideways). WHY (Destin, card #213:
+   "super janky ... even if we need to drop the mascot and text in this view. but it shouldn't change things on devices
+   where the screens already work fine like my pc"; then "keep at least the start your first session text"): with the
+   mascot, the new-session form ran off a 390px-tall screen. The heading stays; its one-line explanation goes too. 500px
+   is below any desktop window people use, so a computer keeps them; the screen still scrolls if even this is too tall. */
+@media (max-height: 500px) {
+  .welcome-hero { display: none; }       /* the mascot and the one-line explanation under the heading */
+  .welcome-head { margin-bottom: 0.25rem; }
+}
 
 /* Destructive variant — danger-tinted border + ring for delete/clear dialogs */
 .layer-surface[data-destructive] {
@@ -1553,6 +1598,13 @@ body[data-input-style="floating"]:not([data-chrome-style="floating"]) {
    at these contrast levels, ~7x fewer presented frames. */
 .stepped-hover {
   transition-timing-function: steps(4);
+}
+/* WHY no colour fade on a touch screen (phone speed lab, 2026-11-02, Z Flip7): tapping a Settings row that opens a
+   popup (Appearance) started the row's colour fade BEHIND the popup's blurred backdrop, and every step of that fade
+   made the phone redo the blur over the whole screen — 12 frames drawn while the popup opened instead of 5, most of
+   them late. A finger has no hover to ease into, so the colour simply changes. */
+@media (hover: none) {
+  .stepped-hover { transition: none; }
 }
 .card-interactive:active {
   background-color: var(--edge);
@@ -2275,10 +2327,10 @@ pre.yc-code code {
   --chat-right-offset: calc(var(--frame-edge) * 2 + var(--right-pane-width, 480px));
 }
 
-/* ─── Terminal-view frame insets (desktop electron only) ─────────────────
-   Scoped to [data-platform="electron"] because the bottom-chrome collapse
-   below is electron-only (App.tsx gates it on getPlatform()==='electron');
-   on Android/browser the input bar stays visible in terminal view, so
+/* ─── Terminal-view frame insets (computer terminal layout only) ─────────
+   Scoped to [data-term-layout="computer"] (device.ts: the computer app and, since 2026-11-10, a mouse laptop's
+   browser) because the bottom-chrome collapse below happens only there (App.tsx, phoneTerminalLayout());
+   on a phone or touch browser the input bar stays visible in terminal view, so
    --bottom-chrome-height is a real measured height and must not be overridden.
 
    TOP inset: Claude Code wipes the screen (\e[2J) and repaints its UI from
@@ -2297,7 +2349,11 @@ pre.yc-code code {
    bottom matches the sides, and inset the terminal content by the same amount
    so xterm's last row isn't painted over. Floating-chrome themes have no frame
    chrome (chrome-glass is display:none), so they opt out of the bottom strip. */
-html[data-platform="electron"] {
+/* WHY the TOP inset is on every platform, not only Electron (Destin, 2026-11-03: "the top of the terminal in a new
+   session on the phone seems to sink under the header a bit in a way i think we've resolved on pc"): the phone and a
+   remote browser overlay the same header, and measured on a Z Flip7 the terminal started at y=0 under a 40px header.
+   Only the BOTTOM collapse below is Electron-only; the top inset never depended on it. */
+html {
   --terminal-top-inset: var(--top-chrome-bottom, 3rem);
 }
 /* SIDE inset: framed themes paint --frame-edge-wide chrome strips down the left
@@ -2307,7 +2363,7 @@ html[data-platform="electron"] {
    --frame-edge on framed themes to match. Theme-driven (not view-driven) so the
    terminal stays one width across chat/terminal toggles — no ConPTY reflow.
    Floating themes have no side chrome, so they keep the default 0. */
-html[data-platform="electron"] body:not([data-chrome-style="floating"]):not([data-input-style="floating"]) {
+html[data-term-layout="computer"] body:not([data-chrome-style="floating"]):not([data-input-style="floating"]) {
   --terminal-side-inset: var(--frame-edge);
   /* BOTTOM inset (theme-driven like --terminal-side-inset, NOT view-gated):
      lifts the xterm grid above the bottom frame strip on framed themes so the
@@ -2323,7 +2379,7 @@ html[data-platform="electron"] body:not([data-chrome-style="floating"]):not([dat
      mechanism). Floating themes have no bottom strip → 0. */
   --terminal-bottom-inset: var(--frame-edge);
 }
-html[data-platform="electron"][data-view-mode="terminal"] .chrome-glass {
+html[data-term-layout="computer"][data-view-mode="terminal"] .chrome-glass {
   --bottom-chrome-height: var(--frame-edge);
   /* ALSO override --bottom-chrome-total here. The base rule only sets
      --bottom-chrome-height, expecting the base --bottom-chrome-total (defined

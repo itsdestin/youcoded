@@ -1,11 +1,12 @@
 // Task 6.4: MarkdownView is now a fully controlled component.
 // Edit state (editing, draft) is managed by ActiveArtifactView in SessionDrawer.tsx
 // so the conflict banner has access to the in-progress draft.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import MarkdownContent from '../MarkdownContent';
 import { PROGRESSIVE_MIN_CHARS } from '../markdown-blocks';
 import { requestFindRewalk } from './artifact-find-bridge';
 import type { ArtifactViewProps } from './types';
+import { setTaskChecked } from './task-list';
 // Doc comments: the highlights / comment pane layout is shared with the Word
 // and spreadsheet viewers (CommentableDocument's own WHY). Skipped in edit
 // mode: a highlighted span over a live textarea draft has nothing to anchor to.
@@ -53,8 +54,9 @@ function sliceEnd(text: string, from: number): number {
 export function MarkdownView({
   path, content,
   editing = false, draft = '', onDraftChange,
-  commentsMode = 'reading', onOpenComments, focusThreadId, projectRoot,
+  commentsMode = 'reading', onOpenComments, focusThreadId, projectRoot, onToggleTask,
 }: ArtifactViewProps) {
+  const bodyRef = useRef<HTMLDivElement>(null);
   // How a big file is being drawn, decided ONCE per text: sliced (first screenful now, the rest a slice
   // per frame) or whole. `done` is what Find and the comment highlights wait for.
   // WHY it is state keyed by the text and cleared on entering Edit (review 2026-10-22): a flag that outlived
@@ -74,6 +76,25 @@ export function MarkdownView({
   const cur = view.content === content ? view : { content, slice: sliceNow, done: !sliceNow };
   if (view.content !== content && content !== null && !editing) setView(cur);
   useEffect(() => { if (content !== null && !editing && !cur.slice) lastShown.current = { path, content }; });
+  // WHY (2026-11-01 phone test): the renderer draws task-list checkboxes disabled, so they could not be ticked.
+  // When the file can be saved, switch them on after each draw; a tick edits the matching `[ ]` in the source and
+  // saves through the host (which does the changed-on-disk check). A box that cannot be saved stays disabled.
+  const isMd = path.endsWith('.md') || path.endsWith('.markdown');
+  const tickable = !!onToggleTask && !editing && isMd && content !== null;
+  useEffect(() => {
+    if (!tickable) return;
+    bodyRef.current?.querySelectorAll<HTMLInputElement>('input[type="checkbox"][disabled]').forEach((el) => {
+      el.disabled = false;
+      el.style.cursor = 'pointer';
+    });
+  });
+  const onTick = (e: ChangeEvent<HTMLDivElement>) => {
+    const t = e.target as HTMLElement;
+    if (!tickable || !(t instanceof HTMLInputElement) || t.type !== 'checkbox') return;
+    const boxes = Array.from(bodyRef.current?.querySelectorAll('input[type="checkbox"]') ?? []);
+    const next = setTaskChecked(content as string, boxes.indexOf(t), t.checked);
+    if (next !== null) onToggleTask?.(next);
+  };
   if (content === null) {
     // Loading / missing / read-error are rendered by ActiveArtifactView (which
     // knows WHICH of the three it is — see ArtifactContentState). A null here
@@ -133,7 +154,7 @@ export function MarkdownView({
           instead of patching nodes the highlights moved; the highlights then
           re-apply to the new text. Nothing changes while the text is the same. */}
       {isMarkdown
-        ? <MarkdownContent key={content} content={content} progressive={cur.slice} onProgressive={cur.slice ? onDone : undefined} />
+        ? <div ref={bodyRef} onChange={onTick}><MarkdownContent key={content} content={content} progressive={cur.slice} onProgressive={cur.slice ? onDone : undefined} /></div>
         : cur.slice
           ? <ProgressiveText key={content} text={content} onDone={onDone} />
           : <pre key={content} className="font-mono text-sm whitespace-pre-wrap">{content}</pre>}

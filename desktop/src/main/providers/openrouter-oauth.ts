@@ -49,6 +49,10 @@ export interface OpenRouterSignInDeps {
   /** Check the new key and save it. Answers what the check found; a
    *  'rejected' key must NOT have been saved. */
   acceptKey: (key: string) => Promise<{ verdict?: 'verified' | 'rejected' | 'unchecked'; message: string }>;
+  /** Called once when the browser's trip ends (signed in, or it failed and the page says to look in the app).
+   *  WHY (Destin, final review Q-12): on the phone this brings YouCoded back in front of the browser. Never called
+   *  for Cancel or a timeout, because then the person is already in the app or has walked away. */
+  onBrowserDone?: () => void;
   fetch?: typeof fetch;
   listen?: ListenFn;
   randomBytes?: RandomBytesFn;
@@ -188,6 +192,7 @@ export class OpenRouterSignIn {
     if (!code) {
       reply(res, 400, "OpenRouter didn't send the sign-in back. Return to YouCoded and try again.");
       this.finish(round, { error: "OpenRouter didn't send the sign-in back. Try again." });
+      this.browserDone();
       return;
     }
     const outcome = await this.exchange(round, code);
@@ -200,6 +205,12 @@ export class OpenRouterSignIn {
       reply(res, 200, "The sign-in didn't finish. Go back to YouCoded to see why and try again. You can close this tab.");
     }
     this.finish(round, outcome);
+    this.browserDone();
+  }
+
+  /** A broken return hook must never break sign-in. */
+  private browserDone(): void {
+    try { this.deps.onBrowserDone?.(); } catch { /* best effort */ }
   }
 
   private async exchange(round: Round, code: string): Promise<SignInOutcome> {

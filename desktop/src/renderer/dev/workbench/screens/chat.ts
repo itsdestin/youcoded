@@ -23,6 +23,11 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#phone-catching-up', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'restoring' } },
   { ...chat('chat#phone-out-of-date', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'incomplete' } },
   { ...chat('chat#remote-reconnecting-wide', 'view'), session: 'wb-1', params: { connection: 'remote', conversation: 'reconnecting' } },
+  // Card #213 (phone retest, 2026-11-02): Claude Code's Trust this folder card next to a permission card, on a phone, for the
+  // compact prompt-card review.
+  { ...chat('chat#trust-phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { seed: 'bubbles-trust-cc', platform: 'android' } },
+  { ...chat('chat#phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { platform: 'android' } },
+  { ...chat('chat#permission-phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { seed: 'bubbles-approval-cc', platform: 'android' } },
   // Model switch in the chat (2026-10-22 review): the same conversation as each runtime drew a switch before (a "/model …" bubble on
   // Claude Code, nothing on native) and after (the "Model switched to …" divider). Both sides come from this checkout's fixtures.
   ...(['cc', 'native'] as const).flatMap(rt => (['before-', ''] as const).map(when => ({
@@ -90,6 +95,15 @@ export const CHAT: readonly ScreenEntry[] = [
   ...['skip-permissions', 'full-auto', 'small-model'].map((k) => chat(`chat/first-time-warning/${k}`, 'dialog')),
   chat('chat/files', 'pane'),
   chat('chat/terminal', 'view'),
+  // Terminal view on a phone, in each chrome style: the key row above the box and the floating up/down
+  // arrows (TerminalToolbar.tsx) only show on a touch screen, so these are the pictures of them.
+  ...([['phone', undefined], ['phone-floating', 'floating'], ['phone-float', 'float']] as const).map(([state, chrome]) => ({
+    ...chat(`chat/terminal#${state}`, 'view', 'narrow'),
+    params: { platform: 'android', ...(chrome ? { chrome } : {}) }, viewport: { width: 390, height: 844 },
+  })),
+  // Terminal view in a web browser reaching a computer (2026-11-09): a mouse laptop, and a phone's browser.
+  { ...chat('chat/terminal#laptop-browser', 'view'), params: { platform: 'desktop', connection: 'remote' } },
+  { ...chat('chat/terminal#phone-browser', 'view', 'narrow'), params: { connection: 'remote' }, viewport: { width: 390, height: 844 } },
   chat('chat/games', 'pane'),
   // The Browser (2026-10-13): the panel (opened by name) and the ask card in the chat, per
   // scene of the workbench's fake browser (?browser=, dev/workbench/browser-mock.ts).
@@ -116,6 +130,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { name: 'welcome', tags: ['view'], scenario: 'empty' },
   { name: 'welcome/back', tags: ['dialog'], scenario: 'welcome-back', mark: 'chat/resume',
     escapeStepsBack: 'Recovery requires an explicit Resume or Start fresh choice; Escape must leave the popup open.' },
+  // A returning user: past conversations but none open, so Resume session shows beside New session.
+  { name: 'welcome#returning', tags: ['view'], scenario: 'returning' },
   { name: 'welcome/new-session', tags: ['view'], scenario: 'empty', sameAs: { name: 'welcome', why: 'a first-ever launch opens the form already' } },
   { name: 'projects', tags: ['view', 'projects'] },
   { name: 'marketplace', tags: ['view', 'marketplace'] },

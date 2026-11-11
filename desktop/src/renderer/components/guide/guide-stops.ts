@@ -55,7 +55,7 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
   },
   {
     id: 'sessions',
-    text: 'A session is one conversation with the assistant, working in one folder. Pick the folder and the model here and press Create; each session gets its own tab along the top.',
+    text: 'A session is one conversation with the assistant, working in one folder. Pick the folder and the model here, then start the session; each session gets its own tab along the top.',
     screen: 'welcome-form',
     anchor: 'new-session-form',
     pose: 'inquisitive',

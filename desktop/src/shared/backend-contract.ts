@@ -793,6 +793,7 @@ export const IPC = {
   // Listed here so the contract is the COMPLETE set of names; R3 gives each a table entry.
   ARCADE_LEADERBOARD: 'arcade:leaderboard',
   ARCADE_RECORDS: 'arcade:records',
+  ARCADE_ROOM_TICKET: 'arcade:room-ticket',
   ARCADE_STATUS: 'arcade:status',
   ARCADE_SUBMIT_SCORE: 'arcade:submit-score',
   ARTIFACTS_APPEND_VERSION: 'artifacts:append-version',

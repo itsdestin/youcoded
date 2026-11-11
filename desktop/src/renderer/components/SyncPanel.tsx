@@ -14,13 +14,15 @@ import { Badge, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState,
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
-import { deriveSettingsRowState, type SyncDisplayState } from '../state/sync-display-state';
+import { deriveSettingsRowState, isSyncAlarm, type SyncDisplayState } from '../state/sync-display-state';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { BackupLogo } from './BackupLogo';
 import SyncSetupWizard, { githubBackupWorks, WizardHeaderContext, type FirstBackup, type WizardHeaderInfo } from './SyncSetupWizard';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { additionalBackupsSummary, timeAgo } from './sync-additional-summary';
 import ConnectGithubModal from './ConnectGithubModal';
 import type { PastSession } from '../../shared/types';
 import { latestUnresolvedError, deriveSyncBoxState, oversizeNotice, type SyncStatusData } from './sync-dot-state';
@@ -133,17 +135,6 @@ interface SyncStatus {
 }
 
 // --- Helpers ---
-
-function timeAgo(epoch: number): string {
-  const seconds = Math.floor(Date.now() / 1000 - epoch);
-  if (seconds < 60) return 'just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
 
 
 // Map the derived sync display state to a status-dot tailwind class.
@@ -444,6 +435,7 @@ interface SyncPopupProps {
 function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupProps) {
   // Always mounted when open (parent uses {open && <SyncPopup>}) — so open=true is correct here.
   useEscClose(true, onClose);
+  const narrow = useNarrowViewport();
   const [status, setStatus] = useState<SyncStatus | null>(initialStatus);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(!initialStatus);
@@ -1307,7 +1299,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         <div
                           role="tablist"
                           aria-label="Synced content"
-                          className="flex gap-2"
+                          // WHY flex-wrap + tighter phone gap (Destin, 2026-11-01: "conversations pill inaccessible"): on a phone the
+                          // third pill ran off the card's edge where it could not be tapped; now it drops to a second line if needed.
+                          className="flex flex-wrap gap-2 max-sm:gap-1.5"
                           onKeyDown={(e) => {
                             // Left/Right arrow roving between the three pills.
                             if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
@@ -1439,9 +1433,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               // WHY its own label (nothing-bare-2#N2-5, Destin: "additional backups now
               // appear to be under main backups"): once the first card has a label,
               // every card on the page needs one, or the next reads as filed under it.
-              return (<div>
-                <SectionLabel className="mb-2">Additional backups</SectionLabel>
-                <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
+              // WHY folded on a phone (density-review D-4): the tallest section, set up once, pushed this popup past one
+              // screen. The row summarises it and opens itself on a problem, so a failure is never hidden behind it.
+              const anyError = list.some(b => b.lastError != null) || Object.keys(uploadFailure).length > 0;
+              const summary = additionalBackupsSummary(list, masterOn, anyError);
+              const body = (<>
                   {/* WHY `header` (Destin, 2026-09-28): this row IS the card's header —
                       a boxed row here read as a card inside the card. */}
                   <SettingRow
@@ -1631,7 +1627,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       )}
                     </div>
                   )}
-                </div></div>
+              </>);
+              if (narrow) return <FoldRow title="Additional backups" description={summary} defaultOpen={anyError}><div className="space-y-1.5">{body}</div></FoldRow>;
+              return (<div>
+                <SectionLabel className="mb-2">Additional backups</SectionLabel>
+                <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>{body}</div></div>
               );
             })()}
 
@@ -1677,7 +1677,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     return (
                       <Callout
                         key={detailsKey}
-                        tone={w.level === 'danger' ? 'danger' : 'warning'}
+                        tone={isSyncAlarm(w) ? 'danger' : w.level === 'danger' ? 'info' : 'warning'} // never set up: calm, not red (isSyncAlarm)
                         title={w.title}
                         actions={actions}
                       >

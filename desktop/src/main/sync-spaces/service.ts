@@ -3,7 +3,7 @@
 // exposes the functions IPC + remote-server call. Mirrors the sync-state.ts
 // singleton pattern (setSyncService).
 import fs from 'fs';
-import os from 'os';
+import { selfDeviceName } from './device-registry';
 import path from 'path';
 import { ManagedRoots } from './managed-roots';
 import { SpaceManager, repoNameForSpace } from './space-manager';
@@ -140,7 +140,7 @@ export function setSyncSpacesLeaseEventListener(fn: ((ev: LeaseEvent) => void) |
 // no-migration guarantee). Failure-tolerant: a client error means "no token".
 function makeTransport(): GitTransport {
   return new GitTransport({
-    deviceName: os.hostname(),
+    deviceName: selfDeviceName(), // the phone's real name, not "localhost" (device-registry)
     getAuthToken: async () => {
       try { return (await getGithubClient()?.getToken())?.token ?? null; }
       catch { return null; }
@@ -437,7 +437,7 @@ async function startEngine(log: (m: string) => void): Promise<void> {
     roots!.spaces().find((s) => repoNameForSpace(s) === key) ?? null;
   hubSocket = createSyncHubSocket({
     getToken: () => authStore?.getToken() ?? null,
-    deviceName: os.hostname(),
+    deviceName: selfDeviceName(), // the phone's real name, not "localhost" (device-registry)
     // Durable machineId (undefined when this machine has none) — keys the DO's
     // per-device recency map so a relayed signal maps to a "Your devices" row.
     deviceId: machineId ?? undefined,

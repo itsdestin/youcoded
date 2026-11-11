@@ -84,6 +84,8 @@ export function analyticsSuppression(
   if (env.YOUCODED_SMOKE_TEST === "1") return "smoke-test";
   if (env.YOUCODED_NO_ANALYTICS === "1") return "switched-off";
   if (!official) return "unofficial-build";
+  // WHY: the Android releaseTest build type was removed 2026-11-10, but old "-releasetest" installs still exist
+  // in the wild and must keep being classed as test builds, so the pattern stays.
   if (/-(dev|releasetest)(\.|$)/.test(version)) return "test-build";
   return null;
 }

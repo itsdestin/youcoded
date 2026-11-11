@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveSyncState, deriveWarningSeverity } from './sync-display-state';
+import { deriveSyncState, deriveWarningSeverity, isSyncAlarm } from './sync-display-state';
 import type { SyncWarning } from '../../main/sync-state';
 
 const NOW_EPOCH = Math.floor(Date.now() / 1000);
@@ -165,5 +165,15 @@ describe('deriveWarningSeverity', () => {
       ],
       { backendId: 'drive-1' },
     )).toBe('failing');
+  });
+});
+
+// Destin, 2026-11-07 ("Grey, no dot"): never having set up sync is not an alarm, so it gets no red and no Settings dot;
+// a real failure still does.
+describe('isSyncAlarm', () => {
+  it('treats "no sync configured" as calm and a real danger warning as an alarm', () => {
+    expect(isSyncAlarm({ level: 'danger', code: 'PERSONAL_NOT_CONFIGURED' })).toBe(false);
+    expect(isSyncAlarm({ level: 'danger', code: 'AUTH_FAILED' })).toBe(true);
+    expect(isSyncAlarm({ level: 'warn', code: 'PERSONAL_STALE' })).toBe(false);
   });
 });

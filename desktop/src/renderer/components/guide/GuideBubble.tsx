@@ -35,9 +35,11 @@ interface Props {
   label: string;
   /** The ✕. When given, it sits at the top right, beside the eyebrow. */
   onClose?: () => void;
+  /** Dock the bubble under the header instead of above the bottom bar — for a stop whose control sits at the bottom of a phone screen. */
+  atTop?: boolean;
 }
 
-export default function GuideBubble({ eyebrow, children, buttons, pose, label, onClose }: Props) {
+export default function GuideBubble({ eyebrow, children, buttons, pose, label, onClose, atTop }: Props) {
   return createPortal(
     <div
       role="dialog"
@@ -50,7 +52,10 @@ export default function GuideBubble({ eyebrow, children, buttons, pose, label, o
         // Above whichever bottom chrome is there: the input bar in a session,
         // the bare frame's strip on the welcome screen (which is the header's
         // height, not --bottom-chrome-height — globals.css .chrome-glass--bare).
-        bottom: 'calc(max(var(--bottom-chrome-height, 0px), var(--top-chrome-height, 2.5rem)) + 20px)',
+        // WHY atTop (2026-11-01 phone test): on a phone the form's Start session button is at the bottom, exactly where the bubble sits.
+        ...(atTop
+          ? { top: 'calc(var(--top-chrome-height, 2.5rem) + 12px)' }
+          : { bottom: 'calc(max(var(--bottom-chrome-height, 0px), var(--top-chrome-height, 2.5rem)) + 20px)' }),
         zIndex: CONTENT_Z[4],
         maxWidth: 'calc(100vw - 2rem)',
       }}

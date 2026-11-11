@@ -2,8 +2,8 @@
 // The app root must not redraw on every streamed word.
 //
 // AppInner read the streaming session's WHOLE state three times — through
-// useSessionTasks (for the tasks chip), useTrustGateActive (for the trust
-// overlay) and a bare useChatState (for one "is it thinking" flag). Each of
+// useSessionTasks (for the tasks chip), usePendingPromptActive (for the
+// startup cover) and a bare useChatState (for one "is it thinking" flag). Each of
 // those re-rendered the entire shell — header, session pills, status bar,
 // input bar, the parked settings drawer and every session's chat and terminal
 // — once per streamed word, about 60 times a second while a reply arrived.
@@ -19,7 +19,7 @@ import { render, act, cleanup } from '@testing-library/react';
 import { ChatProvider, useChatStore, useSessionIsThinking, type ChatStore } from '../src/renderer/state/chat-context';
 import type { ChatAction } from '../src/renderer/state/chat-types';
 import { useSessionTasks } from '../src/renderer/hooks/useSessionTasks';
-import { useTrustGateActive } from '../src/renderer/components/TrustGate';
+import { usePendingPromptActive } from '../src/renderer/state/startup-dialog-store';
 import ToolBody from '../src/renderer/components/tool-views/ToolBody';
 import { TRUST_PROMPT_TITLE } from '../src/shared/ink-select-parser';
 import type { ToolCallState } from '../src/shared/types';
@@ -30,7 +30,7 @@ let renders = 0;
 function Probe() {
   renders++;
   useSessionTasks(SID);
-  useTrustGateActive(SID);
+  usePendingPromptActive(SID);
   useSessionIsThinking(SID);
   return null;
 }
@@ -79,16 +79,16 @@ describe('the app root and a streaming reply', () => {
   });
 });
 
-// The trust-gate selector caches its timeline scan by the timeline array's
+// The pending-prompt selector caches its timeline scan by the timeline array's
 // identity. Words stream (no flip, no rescan) → a trust prompt lands → the
 // gate flips on → the prompt is answered → it flips off. Pinned through the
 // real store so the cache is exercised across timeline changes.
-describe('the trust gate and a streaming reply', () => {
+describe('the pending-prompt flag and a streaming reply', () => {
   it('flips on when the prompt lands and off when it is answered, and ignores words in between', () => {
     let store!: ChatStore;
     let renders2 = 0;
     let active = false;
-    function Gate() { renders2++; active = useTrustGateActive(SID); return null; }
+    function Gate() { renders2++; active = usePendingPromptActive(SID); return null; }
     function Grab() { store = useChatStore(); return null; }
     render(<ChatProvider><Grab /><Gate /></ChatProvider>);
     act(() => { store.dispatch({ type: 'SESSION_INIT', sessionId: SID }); store.dispatch(text(0)); });

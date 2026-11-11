@@ -11,6 +11,7 @@ import { SessionInfo, SessionProvider } from '../shared/types';
 import type { ModelBinding } from '../shared/provider-types';
 import { EventEmitter } from 'events';
 import { log } from './logger';
+import { claudeStartMode, userDefaultMode, projectDefaultMode, refreshUserDefaultMode, refreshProjectDefaultMode } from './claude-start-mode';
 import { deployClaudeCodeLinkMcp } from './claude-code-mcp';
 import { deployClaudeCodeDocCommentsMcp } from './claude-code-doc-comments-mcp';
 import { browserRelayAttachment } from './assistant-browser/claude-code-browser-mcp';
@@ -144,6 +145,11 @@ type ClaudeControls = Pick<ClaudeControlBridge, 'prepare' | 'execute' | 'isReady
 interface SessionManagerOptions {
   claudeControls?: ClaudeControls;
   detectClaudeMods?: () => Promise<boolean>;
+  /** Phone only: a folder for Claude Code's cross-session messaging socket. WHY (2026-11-01 phone test): Claude Code refuses
+   *  any socket folder with an ancestor owned by someone other than you or root, and Android's /data belongs to the system
+   *  account, so every session printed "Cross-session messaging is off". Its own --messaging-socket-path option skips that walk
+   *  (checked on the phone: warning gone with it, present without). One socket per session, so two sessions never share one. */
+  claudeMessagingSocketDir?: string;
 }
 
 /** WHY: unknown major/minor families keep the existing path until their mod contracts are checked. */
@@ -195,6 +201,7 @@ export class SessionManager extends EventEmitter {
   constructor(options: SessionManagerOptions = {}) {
     super();
     this.controlOptions = options;
+    void refreshUserDefaultMode(); // learn the person's own default mode before the first session starts
     // WHY: a secret/held poll cannot outlive its app-owned CLI, including natural worker failures.
     if (options.claudeControls) {
       this.on('session-exit', (id: string) => options.claudeControls!.closeSession(id));
@@ -230,6 +237,9 @@ export class SessionManager extends EventEmitter {
   /** Each PTY session's current size (the spawn size, then every resize), so a headless copy of its terminal lays text out at the same width. */
   private readonly ptySizes = new Map<string, { cols: number; rows: number }>();
   getPtySize(id: string): { cols: number; rows: number } | null { return this.ptySizes.get(id) ?? null; }
+
+  /** Read the folder's own default permission mode before a start, so it is respected the first time (claude-start-mode.ts). Never throws. */
+  async primeStartMode(cwd: string | undefined): Promise<void> { await refreshProjectDefaultMode(cwd); }
 
   createSession(opts: CreateSessionOpts): SessionInfo {
     const provider: SessionProvider = opts.provider || 'claude';
@@ -318,15 +328,20 @@ export class SessionManager extends EventEmitter {
     // Build Claude CLI args. A shell session takes none of them — `$SHELL`
     // spawns bare.
     const args: string[] = [];
+    // The mode Claude Code is told to start in, and so what the badge shows at once (claude-start-mode.ts).
+    const startMode = claudeStartMode(!!opts.skipPermissions, projectDefaultMode(resolvedCwd) ?? userDefaultMode());
+    void refreshUserDefaultMode(); void refreshProjectDefaultMode(resolvedCwd); // for the next session (claude-start-mode.ts)
     if (!isShell) {
-      if (opts.skipPermissions) {
-        args.push('--dangerously-skip-permissions');
-      }
+      args.push(...startMode.args);
       if (opts.resumeSessionId) {
         args.push('--resume', opts.resumeSessionId);
       }
       if (opts.model) {
         args.push('--model', opts.model);
+      }
+      // Short name: a socket path is capped near 108 characters, and the phone's app folder is already ~50 of them.
+      if (this.controlOptions.claudeMessagingSocketDir) {
+        args.push('--messaging-socket-path', path.join(this.controlOptions.claudeMessagingSocketDir, `ccmsg-${id.slice(0, 8)}.sock`));
       }
       // Attach this session's app-owned MCP servers. Claude Code's
       // `--mcp-config`/`--allowedTools` are both variadic ("Load MCP servers
@@ -437,7 +452,8 @@ export class SessionManager extends EventEmitter {
       id,
       name: opts.name,
       cwd: resolvedCwd,
-      permissionMode: opts.skipPermissions ? 'bypass' : 'normal',
+      // A shell session has no Claude Code mode; it keeps the old plain value.
+      permissionMode: isShell ? (opts.skipPermissions ? 'bypass' : 'normal') : startMode.badge,
       skipPermissions: opts.skipPermissions,
       status: 'active',
       createdAt: Date.now(),

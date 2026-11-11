@@ -12,6 +12,7 @@
 // a subtitle; the number you got is the headline, because that is the thing a
 // high-score game is asking you to beat.
 
+import { prefersTouchInput } from '../../utils/touch-input';
 import { Button, Pill } from '../ui';
 
 interface Props {
@@ -67,7 +68,8 @@ export default function RunOverCard({
         <Button variant="primary" size="sm" onClick={onRetry}>Play again</Button>
       </div>
 
-      {retryKeyHint && (
+      {/* WHY: no keyboard on a phone — "or press Space" would be noise there. */}
+      {retryKeyHint && !prefersTouchInput() && (
         <span className="text-3xs text-fg-muted pt-1">or press {retryKeyHint}</span>
       )}
     </div>

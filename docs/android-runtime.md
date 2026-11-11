@@ -14,7 +14,7 @@ Android app (one APK)
 │   bridge/HostJsBridge  window.YouCodedHost: the page's phone-only calls (voice, saved computers, QR, back, version)
 │   runtime/BackendService  foreground service: lays out programs, starts/restarts node, resolv.conf, wake lock
 │   runtime/RuntimeInstaller files/usr symlinks into the native-lib folder; unpacks backend.tgz
-│   runtime/HostSocketServer the backend's calls to the phone (open a link, keep awake, notify)
+│   runtime/HostSocketServer the backend's calls to the phone (open a link, keep awake, notify, status: live counts + "needs you" alerts from desktop/src/main/background-status.ts)
 ├─ WebView: the shared React page, remote-shim in "android-local" mode → ws://localhost:<port>, token sign-in
 └─ node desktop/dist/main/headless/headless-main.js  (the desktop backend, Electron replaced by a stand-in)
     └─ node-pty → Claude Code 2.1.x (official musl build), bash, git, rg — all bundled
@@ -51,7 +51,7 @@ remaining collection/legal-review blockers; a successful development build is no
 | Android rule | Answer |
 |---|---|
 | An app may only execute files Android unpacked into its native-library folder | Every program ships as `jniLibs/arm64-v8a/lib<name>.so` (`useLegacyPackaging`); `files/usr/bin/<name>` are symlinks to them |
-| No `/lib/ld-musl-aarch64.so.1` | Each program's interpreter is rewritten (patchelf) to `/data/data/<appId>/files/usr/lib/ld-musl-aarch64.so.1`, a symlink to the bundled musl; RUNPATH `files/usr/lib`. The path names the package, so each variant (`.dev`, `.releasetest`) has its own build |
+| No `/lib/ld-musl-aarch64.so.1` | Each program's interpreter is rewritten (patchelf) to `/data/data/<appId>/files/usr/lib/ld-musl-aarch64.so.1`, a symlink to the bundled musl; RUNPATH `files/usr/lib`. The path names the package, so each variant (`.dev`, and the release) has its own build |
 | App seccomp kills `io_uring_setup` (libuv probes it; `UV_USE_IO_URING=0` does not help) | `ycshim.c` (linked first into every program) answers ENOSYS |
 | No exec of files in the app's data folder (`#!` scripts) | The shim runs the script's interpreter instead (execve/execv/execvp/execvpe) |
 | No `/bin/sh`, `/usr/bin/env`, `/etc/resolv.conf`, `/etc/ssl` | Shim maps missing `/bin/*`, `/usr/bin/*` to PATH and `/etc/x` to `$YOUCODED_ETC/x`; musl reads `$YOUCODED_ETC/resolv.conf` (patch-musl.py); `BackendService` writes it from the active network; `SSL_CERT_FILE`/`GIT_SSL_CAINFO` name the bundled CA file |
@@ -70,12 +70,35 @@ Code reaches the phone with an app release (bump `CLAUDE_CODE_VERSION` in `pins.
 or a second user, the app's files live under `/data/user/<n>/…`, so the bundled programs cannot start there.
 A fix would build the programs with a relative-path launcher or rewrite the paths at first launch.
 
+### Locked versions and the release step
+- `app/runtime/alpine-lock.json` lists the exact Alpine package versions and file hashes the build may use;
+  `build-runtime.sh` stops if the index or a downloaded file differs (set via `YOUCODED_ALPINE_LOCK`).
+- **Each release, first:** `python3 app/runtime/update-pins.py` (add `--apply-claude` to also take the newest
+  Claude Code). It rewrites the lock to the latest versions and prints what changed. Then build and run on a phone;
+  commit the lock and `pins.env` only after that passes. Alpine drops old package files, so an old lock stops
+  building once upstream moves on: refresh it rather than editing it by hand.
+- Needs network and `apk version -t` (see `docs/android-redistribution.md`).
+- **Proposed automatically:** `.github/workflows/runtime-pins-refresh.yml` runs the script every Monday and opens or
+  updates one pull request (`auto/runtime-pins-refresh`) when anything moved. It never merges; the phone test above
+  still decides (final review 2026-11-09, Q-13).
+- ICU: Node needs `usr/share/icu/<ver>/icudt<ver>l.dat` (packed in `share.tgz`; `RuntimeInstaller.environment()`
+  sets `NODE_ICU_DATA` to the newest version folder that holds a data file; `install()` empties `usr/share` first so an older version's folder cannot linger; `build-runtime.sh` stops if the data file is missing), or `toLocaleString` throws and the backend dies at boot.
+
 ## On-device layout (`files/` = the app's files folder)
 
 `usr/{bin,lib,libexec/git-core,share,etc}` · `backend/` (unpacked backend.tgz; `node_modules/node-pty/build/Release/pty.node`
 is copied from the native-lib folder) · `home/` (HOME: `~/.claude`, conversations) · `userdata/` (the
 backend's userData; `backend.log` is the backend's console) · `tmp/` (TMPDIR). `RuntimeInstaller` rebuilds the
 links whenever the app version or the native-lib folder changes.
+
+**Updates keep the dependencies (2026-11-01).** `backend.tgz` starts with `./.deps-stamp` (a fingerprint of `node_modules/` +
+`legal/`, ~15,400 of its ~17,000 files) and ends with those two folders. When the stamp matches
+`backend/node_modules/.youcoded-deps-stamp`, `RuntimeInstaller.installBackend` moves the existing copy into the new layout and
+stops reading at the first dependency entry ("Updating the assistant…"); otherwise it unpacks everything ("Unpacking the
+assistant…"). Before: ~10.7 s on a Galaxy Z Flip7 after every update. logcat `RuntimeInstaller` "runtime laid out in N ms" and
+`BackendService` "backend ready in N ms" time the two loading screens. Phone sessions also start Claude Code with
+`--messaging-socket-path` (one socket per session in `tmp/`): Android's `/data` is owned by the system account, so Claude
+Code's own socket-folder check always failed and printed "Cross-session messaging is off".
 
 ## Developing
 

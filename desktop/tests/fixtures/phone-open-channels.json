@@ -11,6 +11,7 @@
   "appearance:set",
   "arcade:leaderboard",
   "arcade:records",
+  "arcade:room-ticket",
   "arcade:status",
   "arcade:submit-score",
   "artifacts:check-existence",

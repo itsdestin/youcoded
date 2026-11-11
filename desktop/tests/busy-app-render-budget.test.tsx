@@ -292,6 +292,9 @@ describe('eight tabs open: one plain switch', () => {
       .querySelector('path[d^="M10.325 4.317"]')?.closest('button');
     expect(gear, 'the settings button').toBeTruthy();
     const panel = () => document.querySelector('.settings-drawer')?.parentElement;
+    // WHY wait: Settings loads its code on demand (App.tsx deferredScreen, 2026-10-22), so the closed panel appears a
+    // moment after the app; asserting at once failed whenever that load had not finished yet.
+    for (let i = 0; i < 40 && !panel(); i++) await app.wait(50);
     expect(panel()?.className).toContain('-translate-x-full');
     await act(async () => { fireEvent.click(gear!); });
     await app.wait(400);

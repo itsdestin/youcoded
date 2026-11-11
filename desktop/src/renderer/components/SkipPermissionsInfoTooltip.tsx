@@ -29,7 +29,7 @@ export function SkipPermissionsInfoTooltip() {
     >
       <p className="text-xs font-semibold text-fg mb-1.5">Normally, your assistant asks first</p>
       <p>
-        Before Claude does anything that could change your computer — like editing a file, running a command, or going online — a little box pops up asking you to approve it. Reading files in your project is safe and doesn't need approval.
+        Before Claude does anything that could change your device — like editing a file, running a command, or going online — a little box pops up asking you to approve it. Reading files in your project is safe and doesn't need approval.
       </p>
 
       <p className="text-xs font-semibold text-fg mt-2.5 mb-1.5">What this toggle does</p>

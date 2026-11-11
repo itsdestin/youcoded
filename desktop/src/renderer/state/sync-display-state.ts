@@ -19,6 +19,13 @@ export interface DeriveSyncStateInput {
 
 const TWENTY_FOUR_HOURS_SECONDS = 86400;
 
+/** True when a sync warning should look like an alarm: red, and a red dot on Settings. WHY "never set up" is not one
+ *  (Destin, 2026-11-07, picked "Grey, no dot"): someone who simply hasn't turned sync on is not broken, so a new user
+ *  was greeted with red on day one. That warning stays (it explains how to set up sync) but is drawn calm and grey. */
+export function isSyncAlarm(w: { level?: string; code?: string } | null | undefined): boolean {
+  return w?.level === 'danger' && w.code !== 'PERSONAL_NOT_CONFIGURED';
+}
+
 export function deriveSyncState(input: DeriveSyncStateInput): SyncDisplayState {
   const { hasBackends, syncInProgress, lastSyncEpoch, warnings, scope } = input;
 

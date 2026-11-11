@@ -34,7 +34,7 @@ const DESKTOP_LIBS: { lib: string; license: string; source: string }[] = [
   { lib: 'node-pty', license: 'MIT', source: 'github.com/microsoft/node-pty' },
   { lib: 'Tailwind CSS', license: 'MIT', source: 'github.com/tailwindlabs/tailwindcss' },
   { lib: 'highlight.js', license: 'BSD 3-Clause', source: 'github.com/highlightjs/highlight.js' },
-  { lib: 'partysocket / PartyKit', license: 'MIT / ISC', source: 'github.com/partykit/partykit' },
+  { lib: 'partysocket', license: 'MIT / ISC', source: 'github.com/partykit/partykit' },
   { lib: 'Cascadia Code', license: 'SIL OFL', source: 'github.com/microsoft/cascadia-code' },
 ];
 
@@ -149,7 +149,7 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
                 <FoldRow title="Remote access and games">
                   <div className="space-y-1.5">
                     <p className="text-2xs text-fg-dim leading-relaxed">Remote access (when enabled) serves the UI over your local network or Tailscale. Remote connections are NOT TLS-encrypted — use Tailscale for sensitive conversations since it provides WireGuard encryption end-to-end.</p>
-                    <p className="text-2xs text-fg-dim leading-relaxed">Multiplayer game moves are relayed through a PartyKit server (Cloudflare) only while a game is open; challenges and the friends lobby go through the YouCoded server. No game traffic is retained server-side beyond the active room.</p>
+                    <p className="text-2xs text-fg-dim leading-relaxed">Multiplayer game moves are relayed through the YouCoded server (hosted by Cloudflare) only while a game is open; challenges and the friends lobby go through the YouCoded server. No game traffic is retained server-side beyond the active room.</p>
                   </div>
                 </FoldRow>
               ) : (

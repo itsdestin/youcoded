@@ -169,7 +169,7 @@ describe('the approved float look', () => {
     for (const sheet of ['.framed-shell > .drawer-pane {', '.screen-pane {', '.terminal-overlay-scroll {']) expect(css).toContain(sheet);
     expect(css).toMatch(/\.drawer-pane :is\(\.drawer-aside, \.game-panel\) \{\s*background-color: transparent/);
     // The terminal card is desktop-only: on phones the message box sits under it.
-    expect(css).toMatch(/html\[data-platform="electron"\] \[data-chrome-style='float'\] \.terminal-overlay-scroll \{/);
+    expect(css).toMatch(/html\[data-term-layout="computer"\] \[data-chrome-style='float'\] \.terminal-overlay-scroll \{/);
     // WHY no inset: an inset left an untinted strip between the card edge and the grid.
     expect(css).toContain('--terminal-side-inset: 0px;');
     expect(css).toMatch(/\.terminal-overlay-scroll \.xterm \{\s*padding:/);

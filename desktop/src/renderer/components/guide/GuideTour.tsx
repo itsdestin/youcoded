@@ -17,6 +17,7 @@ import { GUIDE_STOPS, type GuideAction, type GuideScreen, type GuideStop } from 
 import { ScreenMark } from '../../shoot-mode';
 import { takeTourStart } from './guide-state';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 
 interface Props {
   stops?: readonly GuideStop[];
@@ -32,6 +33,7 @@ export default function GuideTour({ stops = GUIDE_STOPS, onOpenScreen, onExit, o
   // The photo-only build may ask for a later stop (guide-state takeTourStart).
   const [index, setIndex] = useState(() => { const at = takeTourStart(); return Math.max(0, at ? stops.findIndex((s) => s.id === at) : 0); });
   const stop = stops[index];
+  const narrow = useNarrowViewport();
   const last = index === stops.length - 1;
 
   // `escKey` re-registers Escape (TourEscape below) in the same update that
@@ -88,7 +90,7 @@ export default function GuideTour({ stops = GUIDE_STOPS, onOpenScreen, onExit, o
       {stop.anchor && <GuideRing anchor={stop.anchor} />}
       {/* WHY onClose = Escape's action (decisions "Tour: Escape"): the ✕ closes only the
           bubble and leaves the screen under it open, exactly as Escape does. */}
-      <GuideBubble eyebrow={`${index + 1} of ${stops.length}`} buttons={buttons} pose={stop.pose} label="Tour" onClose={() => onExit(false, true)}>
+      <GuideBubble eyebrow={`${index + 1} of ${stops.length}`} buttons={buttons} pose={stop.pose} label="Tour" atTop={narrow && stop.screen === 'welcome-form'} onClose={() => onExit(false, true)}>
         {!anchorPresent && stop.textWhenMissing ? stop.textWhenMissing : stop.text}
         {/* shoot's `tour/<stop>` screens prove the bubble is showing that stop
             (renders nothing outside the photo-only build). */}
