@@ -7,10 +7,10 @@ import { useMarketplace } from '../state/marketplace-context';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useDrawerResize } from '../hooks/useDrawerResize';
 import { useEscClose } from '../hooks/use-esc-close';
-import { isAndroid } from '../platform';
 import { CARD_LEVEL_1, EmptyState, ErrorState, FilterChip, SectionLabel } from './ui';
 import { useDrawerFilter, type DrawerFilterStore } from '../state/drawer-filter-store';
 import { ScreenMark } from '../shoot-mode';
+import { prefersTouchInput } from '../utils/touch-input';
 
 interface Props {
   open: boolean;
@@ -81,7 +81,9 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
   useEffect(() => {
     if (!open || searchMode) return;
     setSearch('');
-    if (isAndroid()) return;
+    // WHY prefersTouchInput, not isAndroid(): isAndroid() read false in the real app, and a touchscreen laptop
+    // has the same problem — the on-screen keyboard covered half the list (2026-11-01 phone test).
+    if (prefersTouchInput()) return;   // already true in the phone app (utils/touch-input.ts)
     // Small delay to let the transition start before focusing
     const t = setTimeout(() => searchRef.current?.focus(), 50);
     return () => clearTimeout(t);
@@ -236,13 +238,11 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
           tests/drawer-card-glass.test.ts. */}
       <div
         ref={resize.drawerRef}
-        className={`command-drawer fixed bottom-0 left-0 right-0 z-50 flex flex-col bg-panel border-t border-edge-dim rounded-t-xl overflow-hidden transition-transform duration-300 ease-out ${
-          open ? 'translate-y-0' : 'translate-y-full'
-        }`}
+        className={`command-drawer fixed bottom-0 left-0 right-0 z-50 flex flex-col bg-panel border-t border-edge-dim rounded-t-xl overflow-hidden transition-transform duration-300 ease-out`}
         // WHY a set height, not a 45vh cap (LB-3, 2026-10-01): it opens at 70% and the
         // handle moves it, so the box keeps its height even when few skills are listed.
-        // The height eases only on a click-to-full; while dragging it follows the pointer.
-        style={{ height: resize.height, transitionProperty: resize.dragging ? 'transform' : 'transform, height' }}
+        // It is laid out at FULL height and slid down, opening, closing and resizing alike (useDrawerResize.ts — why).
+        style={resize.style}
       >
         {open && !searchMode && <ScreenMark name="chat/skills" />}
         {open && searchMode && <ScreenMark name="chat/commands" />}
@@ -326,7 +326,14 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
         {/* Padding lives on an inner wrapper so the scrolling element itself has
             no padding — the fade then meets the drawer's outer edges.
             The drawer's own overflow:hidden + rounded-t-xl clips the top corners. */}
-        <div ref={scrollRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
+        <div
+          ref={scrollRef}
+          className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1"
+          // WHY: the drawer's bottom `hiddenPx` is below the screen (it slides rather than resizing), so the list is
+          // padded by that much to end on screen, and its fade ends at the screen's edge. While a drag reveals more,
+          // the fade's strip is dropped so the cards coming into view are not hidden under it until the finger lifts.
+          style={{ paddingBottom: resize.hiddenPx, ['--scroll-mask-under' as string]: `${resize.dragging ? 0 : resize.hiddenPx}px` }}
+        >
           <div className="pb-4">
           {isSearching ? (
             // Search mode: flat filtered list of skills + commands, no chip row

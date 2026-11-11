@@ -10,7 +10,7 @@ import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
 import { useChunkedReveal } from '../hooks/use-chunked-reveal';
-import { isAndroid } from '../platform';
+import { onePaneLayout } from '../device';
 import SessionPreviewPane from './SessionPreviewPane';
 import type { ChatsearchProvider } from '../../shared/chatsearch-refs';
 import { ResumeFilterPopover } from './ResumeFilterPopover';
@@ -33,6 +33,7 @@ import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from './Resum
 import './ResumeBrowser.css';
 import { resolveNativeBinding } from '../state/welcome-back';
 import { ScreenMark, useScreenOpen } from '../shoot-mode';
+import { prefersTouchInput } from '../utils/touch-input';
 
 // ── The conversation preview panel (2026-09-10) ─────────────────────────────
 // Every decision below is an answered review-deck step, not a default. Five
@@ -628,7 +629,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   //    to pass it. The list is fully usable without the panel, which is what
   //    makes hiding it legitimate rather than a narrow "fix" that removes the
   //    only route to something.
-  const previewOn = !narrowViewport && !isAndroid();
+  const previewOn = !onePaneLayout(narrowViewport);   // device.ts
   // Model, Skip permissions, new window and the in-flight resume — shared with
   // the Projects page's preview (ResumeOptions.tsx).
   const resumeOptions = useResumeOptions(defaultModel, defaultSkipPermissions);
@@ -740,6 +741,8 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
       setSelectedTagIds(new Set());
       setSortDir('desc');
       loadSessions();
+      // WHY: no autofocus on touch — the on-screen keyboard covered half the list; tapping the box still opens it (2026-11-01 phone test).
+      if (prefersTouchInput()) return;
       const t = setTimeout(() => searchRef.current?.querySelector('input')?.focus(), 50);
       return () => clearTimeout(t);
     }
@@ -1744,13 +1747,15 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>
         <OverlayPanel
           layer={1}
+          // WHY max-sm (2026-11-01): 70vh left a phone's Resume list ~30% shorter than the screen
+          // allows; on phones it may use the screen minus a scrim margin, then scrolls.
           // Preview mode swaps max-h for a DEFINITE height. The
           // note on the list below explains why: with only a max-height, a
           // flex-1 child does not grow in Chromium, and the transcript column
           // needs a real height to scroll inside.
           className={`w-full pointer-events-auto flex flex-col ${previewOn
             ? 'max-w-[1000px] h-[76vh]'
-            : 'max-w-md max-h-[70vh]'}`}
+            : 'max-w-md max-h-[70vh] max-sm:max-h-[calc(100dvh-3rem)]'}`}
           style={{ position: 'relative', zIndex: 'auto' }}
           onClick={(e) => e.stopPropagation()}
         >

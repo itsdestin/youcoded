@@ -4,6 +4,7 @@ import { mutateSettings, type MutateSettingsResult } from './claude-settings';
 import { reconcileHooksInto, type ReconcileHooksResult } from './hook-reconciler';
 import { applyPromptSuggestionDisabled, type EnforcePromptSuggestionResult } from './disable-prompt-suggestion';
 import { seedCleanupPeriodInto, type SeedRetentionResult } from './retention-default';
+import { seedTuiFullscreenInto, type SeedTuiResult } from './tui-fullscreen-default';
 
 // The launch chores that edit ~/.claude/settings.json, composed for main.ts.
 //
@@ -65,19 +66,24 @@ export interface SettingsChoresResult extends MutateSettingsResult {
   hooks: ReconcileHooksResult;
   promptSuggestion: EnforcePromptSuggestionResult;
   retention: SeedRetentionResult;
+  /** Phone only: fullscreen display mode seeded when absent (tui-fullscreen-default.ts). */
+  tui: SeedTuiResult;
 }
 
 /** Plugin-hook reconcile, prompt-suggestion off, retention default: three
  *  callbacks, one locked cycle, in that order. */
-export async function runSettingsChores(opts: { lockWaitMs?: number } = {}): Promise<SettingsChoresResult> {
+export async function runSettingsChores({ phone = false, lockWaitMs }: { phone?: boolean; lockWaitMs?: number } = {}): Promise<SettingsChoresResult> {
   let hooks: ReconcileHooksResult = { added: 0, updatedPath: 0, updatedTimeout: 0, pruned: 0, manifestCount: 0 };
   let promptSuggestion: EnforcePromptSuggestionResult = { changed: false, prior: undefined };
   let retention: SeedRetentionResult = { changed: false, effective: undefined };
+  let tui: SeedTuiResult = { changed: false, effective: undefined };
   const r = await mutateSettings((settings) => {
     hooks = reconcileHooksInto(settings);
     promptSuggestion = applyPromptSuggestionDisabled(settings);
     retention = seedCleanupPeriodInto(settings);
-  }, opts);
+    // Phone only, in the same locked write: see tui-fullscreen-default.ts.
+    if (phone) tui = seedTuiFullscreenInto(settings);
+  }, { lockWaitMs });
   if (r.refused) {
     // The lock could not be taken, so nothing landed; report each chore as
     // unchanged rather than as done — including the reconciler's counts, or
@@ -87,8 +93,9 @@ export async function runSettingsChores(opts: { lockWaitMs?: number } = {}): Pro
     hooks = { added: 0, updatedPath: 0, updatedTimeout: 0, pruned: 0, manifestCount: hooks.manifestCount };
     promptSuggestion = { changed: false, prior: promptSuggestion.prior };
     retention = { changed: false, effective: undefined };
+    tui = { changed: false, effective: undefined };
   }
-  return { ...r, hooks, promptSuggestion, retention };
+  return { ...r, hooks, promptSuggestion, retention, tui };
 }
 
 // ── One later, longer try when another program held the lock (card #11 b) ──
@@ -137,10 +144,12 @@ export function scheduleLockedSettingsRetry(
 /** The launch wiring (main.ts, headless-boot.ts): the retry with the real
  *  chores. Fire-and-forget — it must never hold launch back. */
 export function startLaunchSettingsRetry(build: { version: string; packaged: boolean },
-  launch: { installLocked: boolean; choresLocked: boolean }, log: LockedSettingsRetryDeps['log']): void {
+  launch: { installLocked: boolean; choresLocked: boolean }, log: LockedSettingsRetryDeps['log'], phone = false): void {
   void scheduleLockedSettingsRetry(launch, {
     runInstallHooks: (o) => runInstallHooksChore(build, o),
-    runChores: (o) => runSettingsChores(o),
+    // WHY phone is carried through (merge with the Android work, 2026-11-11): the phone's launch
+    // chores also set Claude Code's fullscreen default; a retry without it would skip that one.
+    runChores: (o) => runSettingsChores({ ...o, phone }),
     log,
   });
 }

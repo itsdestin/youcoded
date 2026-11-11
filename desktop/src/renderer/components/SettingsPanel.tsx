@@ -9,7 +9,8 @@ import { DEVICE_EXPIRY_DAYS } from '../../shared/remote-close-codes';
 import { createPortal } from 'react-dom';
 import type { RemoteAccessView, RemoteAccessAction, RemoteAccessPreview } from './remote/preview-types';
 import { QRCodeSVG } from 'qrcode.react';
-import { isAndroid, useCurrentPlatform } from '../platform';
+import { isAndroid, getCapabilities, useCurrentPlatform } from '../platform';
+import { prefersTouchInput } from '../utils/touch-input';
 import ThemeScreen from './ThemeScreen';
 import SyncSection from './SyncPanel';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
@@ -31,6 +32,7 @@ import { DonateConfirm } from './DonateConfirm';
 import AssistantSettingsRow from './assistant-settings/AssistantSettings';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import type { AssistantDefaults } from './assistant-settings/pages';
+import { useAndroidSettingsData } from './android-settings-data';
 import { formatVersionLine } from '../../shared/version-line';
 // The Linux/KDE buddy helper's three-state answer. Typed centrally so the popup
 // and the launch path in App.tsx cannot drift apart on what `needed` means.
@@ -2292,8 +2294,12 @@ export function ConnectToDesktopButton() {
   const [formHost, setFormHost] = useState('');
   const [formPort, setFormPort] = useState('9900');
   const [formPassword, setFormPassword] = useState('');
-  const [tailscaleStatus, setTailscaleStatus] = useState<{ connected: boolean; ip?: string } | null>(null);
-  const [tailscaleLoading, setTailscaleLoading] = useState(false);
+  // WHY three answers (Destin, 2026-11-10): the warning used to ask the backend, which cannot see the phone's Tailscale and
+  // always said "not connected" — so it showed with Tailscale on and could not be allowed to block anything. The phone app
+  // now answers itself: true, false, or null when it cannot tell (then no warning and nothing blocked).
+  const [tailscaleOn, setTailscaleOn] = useState<boolean | null>(null);
+  // "Try anyway": the check could be wrong on an unusual phone, and a wrong "off" must never lock anyone out.
+  const [tailscaleOverride, setTailscaleOverride] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
   const claude = (window as any).claude;
   // photo-only build: only mounted inside AndroidSettings (`?platform=android`);
@@ -2322,13 +2328,23 @@ export function ConnectToDesktopButton() {
   // Check Tailscale status when popup opens
   useEffect(() => {
     if (!open) return;
-    setTailscaleLoading(true);
     setConnectError(null);
-    claude.remote?.detectTailscale?.()
-      .then((status: any) => setTailscaleStatus(status ?? null))
-      .catch(() => setTailscaleStatus(null))
-      .finally(() => setTailscaleLoading(false));
+    setTailscaleOverride(false); setTailscaleOn(null); // WHY null first (final review): a reopen must not flash the last opening's answer
+    let live = true;
+    const check = () => {
+      Promise.resolve(claude.android?.tailscaleStatus?.())
+        .then((status: any) => { if (live) setTailscaleOn(typeof status?.on === 'boolean' ? status.on : null); })
+        .catch(() => { if (live) setTailscaleOn(null); });
+    };
+    check();
+    // Coming back from the Tailscale app (the warning's own button sends the person there) re-checks, so the warning
+    // clears without closing and reopening this screen.
+    const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { live = false; document.removeEventListener('visibilitychange', onVisible); };
   }, [open]);
+  // Off, and not overridden. Never while a computer is connected: that connection is the proof Tailscale works.
+  const tailscaleBlocks = tailscaleOn === false && !tailscaleOverride && !remoteConnected;
 
   const doConnect = useCallback(async (device: PairedDevice) => {
     setConnecting(true);
@@ -2444,16 +2460,25 @@ export function ConnectToDesktopButton() {
       >
 
               {/* Tailscale warning */}
-              {!tailscaleLoading && tailscaleStatus !== null && !tailscaleStatus.connected && (
+              {tailscaleBlocks && (
                 <Callout
                   tone="warning"
                   // WHY no warning triangle (final-review#ST-30, Destin: "remove the
                   // exclamation triangle thing in front of tailscale not connected"):
                   // the box's amber tint already says "warning", and it was the only
                   // notice in the app with a glyph of its own.
-                  title="Tailscale not connected"
+                  title="Turn on Tailscale to connect"
+                  // WHY buttons, and the sections below hidden (Destin, 2026-11-10: "it still lets me click desktop to
+                  // connect, despite the fact that it obviously won't work … probably too subtle given its significance").
+                  actionsPlacement="below"
+                  actions={
+                    <>
+                      <Button variant="ghost" size="sm" onClick={() => setTailscaleOverride(true)}>Try anyway</Button>
+                      <Button size="sm" onClick={() => { void claude.android?.openTailscale?.(); }}>Open Tailscale</Button>
+                    </>
+                  }
                 >
-                  Enable Tailscale on this phone before connecting. Both devices must be on the same Tailscale network.
+                  Tailscale is off on this phone. YouCoded reaches your computer only through Tailscale, on both devices.
                 </Callout>
               )}
 
@@ -2491,8 +2516,8 @@ export function ConnectToDesktopButton() {
                 <ErrorState mode="recoverable" message={deviceError.message} onRetry={deviceError.retry} variant="inline" />
               )}
 
-              {/* Saved devices — always listed */}
-              {pairedDevices.length > 0 && (
+              {/* Saved devices and Add device hide while Tailscale is off (Destin, 2026-11-10: "kinda just clutter"); Try anyway brings them back. */}
+              {!tailscaleBlocks && pairedDevices.length > 0 && (
                 <section>
                   {/* WHY SectionLabel, sentence case (labels batch, guide: no
                       spaced capitals — decisions H-3/L-1…L-4). */}
@@ -2531,7 +2556,7 @@ export function ConnectToDesktopButton() {
               )}
 
               {/* Add new device */}
-              {!remoteConnected && !connecting && (
+              {!tailscaleBlocks && !remoteConnected && !connecting && (
                 <section>
                   {/* WHY "Add device": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
                   {pairedDevices.length > 0 && (
@@ -2634,10 +2659,8 @@ export function ConnectToDesktopButton() {
 }
 
 function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketplace, onPublishTheme, syncAutoOpen, onSyncAutoOpenHandled }: { open: boolean; onClose: () => void; onSendInput: (text: string) => void; onRunCommand?: (command: string) => void; onOpenThemeMarketplace?: () => void; onPublishTheme?: (slug: string) => void; syncAutoOpen?: boolean; onSyncAutoOpenHandled?: () => void }) {
-  const [loading, setLoading] = useState(true);
-  const [tier, setTier] = useState('CORE');
-  const [aboutInfo, setAboutInfo] = useState<{ version: string; build: string } | null>(null);
-  const [defaults, setDefaults] = useState<AssistantDefaults>({ skipPermissions: false, model: 'sonnet', projectFolder: '' });
+  // Read at startup and refreshed quietly on each open, so opening never flashes "Loading..." (android-settings-data.ts).
+  const { loading, tier, setTier, aboutInfo, defaults, setDefaults } = useAndroidSettingsData(open);
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
@@ -2659,26 +2682,6 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
       return unsub;
     });
   }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    setLoading(true);
-    // Fix: defer IPC calls until after the 300ms slide-in animation. Firing
-    // three parallel bridge calls synchronously visibly stutters the panel.
-    const _deferTimer = setTimeout(() => {
-    Promise.all([
-      claude.android?.getTier?.() ?? 'CORE',
-      claude.android?.getAbout?.() ?? { version: 'unknown', build: '' },
-      claude.defaults?.get?.() ?? { skipPermissions: false, model: 'sonnet', projectFolder: '' },
-    ]).then(([t, about, defs]) => {
-      setTier(t?.tier || t || 'CORE');
-      setAboutInfo(about);
-      setDefaults(defs);
-      setLoading(false);
-    }).catch(() => setLoading(false));
-    }, 350);
-    return () => clearTimeout(_deferTimer);
-  }, [open]);
 
   const handleSetTier = useCallback(async (newTier: string) => {
     const result = await claude.android?.setTier?.(newTier);
@@ -3097,7 +3100,10 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
         {/* The Browser's settings are a page of Assistant settings (Destin, 2026-10-15). */}
         <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
-        <BuddyButton />
+        {/* WHY hidden wherever the buddy cannot exist: the floater is a separate always-on-top computer window. Asks the
+            screen's own `buddy` ability (shared/capabilities.ts) instead of guessing from the device kind, so a laptop
+            on remote access no longer shows a row that cannot act (2026-11-10 tidy). */}
+        {getCapabilities().buddy && <BuddyButton />}
 
         <SoundButton />
 
@@ -3169,7 +3175,9 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
         <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
         <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
 
-        {/* Keyboard Shortcuts */}
+        {/* WHY hidden on touch screens (phone browser): no physical keyboard, so a hotkey list is noise. Android's own
+            settings already omit it; this keeps both phones consistent. */}
+        {!prefersTouchInput() && (<>
         <SettingRow
           icon={
             <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
@@ -3182,6 +3190,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onClick={() => setShowShortcuts(true)}
         />
         <ShortcutsPopup open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+        </>)}
 
         <SettingRow
           icon={

@@ -10,6 +10,7 @@
 // Only TYPES come from remote-shim. The caller loads the shim with a dynamic import, so the
 // desktop bundle never evaluates it (the same reason remote-events.ts exists).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { markBootReady } from './boot-ready';
 import { Button, FieldError, TextInput } from './components/ui';
 import { BrandWordmark } from './components/brand/BrandLockup';
 import BrailleSpinner from './components/BrailleSpinner';
@@ -23,7 +24,11 @@ import { DEVICE_EXPIRY_DAYS } from '../shared/remote-close-codes';
  * borderless "Use this phone only" that read as loose text, and a password box under a notice that no password could fix.
  * They are sign-in screens, and the guide gives sign-in screens setup's look.
  */
-function GateShell({ children }: { children: React.ReactNode }) {
+function GateShell({ children, loading = false }: { children: React.ReactNode; loading?: boolean }) {
+  // A screen that asks something of the user (sign in, can't reach the computer, reload) tells the Android app the
+  // page is ready, so its brand loading screen gives way to it (MainActivity pageReady; App.tsx says so for the app).
+  // A "connecting…" screen does not: the app's own loading screen keeps covering until there is something to see.
+  useEffect(() => { if (!loading) markBootReady(); }, [loading]);
   return (
     <div className="brand-surface absolute inset-0">
       <div className="scroll-mask absolute inset-0 overflow-y-auto">
@@ -217,7 +222,7 @@ function LoginScreen({ onLogin, notice }: { onLogin: (password: string) => Promi
 /** Connecting with nothing to decide: the heading with the app's spinner beside it, as setup's busy steps show. */
 function GateConnecting({ label }: { label: string }) {
   return (
-    <GateShell>
+    <GateShell loading>
       <h1 className="brand-heading text-2xl text-fg inline-flex items-center gap-3" role="status">
         <BrailleSpinner size="lg" />
         {label}

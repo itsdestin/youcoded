@@ -13,11 +13,15 @@
 // shared LIFO stack. Click-outside closing is owned by the PARENT (ProjectView
 // listens on the wrapper that contains both the trigger button and this
 // popover) — owning it here would race the trigger's own click and re-toggle.
-import React from 'react';
+import React, { useLayoutEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { OverlayPanel } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
 import type { FileTypeGroup } from '../../../shared/artifacts/categorization';
 import type { FileSortKey } from './tabs/FilesTab';
 import { ScreenMark } from '../../shoot-mode';
+
+const MENU_WIDTH = 264; // w-[264px] below
 import { SectionLabel } from '../ui';
 
 const TYPE_OPTIONS: { value: FileTypeGroup; label: string }[] = [
@@ -75,8 +79,19 @@ export function FileFilterPopover({
   sortBy, onSortBy,
   showDeleted, onShowDeleted,
   showDeletedAvailable,
+  showHidden, onShowHidden,
+  anchorRef,
   onClose,
 }: {
+  // Project View: draw the menu on <body>, under this element's right edge. WHY (Destin, 2026-11-07: "filter menus like
+  // this should never be fully transparent"): on a phone the projects page scrolls and keeps the app's edge fade, a
+  // mask, which makes it a backdrop root, so a frosted menu INSIDE it could not blur what was behind and showed the
+  // page straight through. Drawn outside it, like the app's other dropdowns (OverflowMenu), the glass works and the
+  // page keeps its fade. Omitted (the session drawer), the menu stays where it was.
+  anchorRef?: React.RefObject<HTMLElement | null>;
+  // Project View only: "Show hidden files" (hidden-files.ts). Omitted (the session drawer), the chip is not drawn.
+  showHidden?: boolean;
+  onShowHidden?(v: boolean): void;
   // MULTI-SELECT as of 2026-07-23 (Destin: "so i can filter to Docs AND images").
   // An EMPTY set means "all types" — there is no 'all' sentinel member.
   types: ReadonlySet<FileTypeGroup>;
@@ -100,18 +115,26 @@ export function FileFilterPopover({
   useEscClose(true, onClose);
 
   // Sort is a preference, not a filter, so "Clear" only resets the filters.
-  const filtersActive = types.size > 0 || (showDeletedAvailable && !!showDeleted);
+  const filtersActive = types.size > 0 || (showDeletedAvailable && !!showDeleted) || !!showHidden;
   const clear = () => {
     onTypesChange(new Set());
     if (showDeletedAvailable) onShowDeleted?.(false);
+    onShowHidden?.(false);
   };
 
-  return (
-    <div
-      className="layer-surface absolute right-0 top-full mt-2 w-[264px] p-3 flex flex-col gap-3 z-30"
-      role="dialog"
-      aria-label="File filters"
-    >
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  useLayoutEffect(() => {
+    const r = anchorRef?.current?.getBoundingClientRect();
+    if (!r) return;
+    // Right edge under the anchor's right edge (as `right-0` did), kept 8px inside the window.
+    setPos({ top: r.bottom + 8, left: Math.max(8, Math.min(r.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8)) });
+  }, [anchorRef]);
+  if (anchorRef && !pos) return null;
+
+  // Portaled: the shared panel at L4, like the project card's own menu (ProjectHero) — never a hardcoded z-[9000].
+  const body = (
+    <>
+      <div className="scroll-mask min-h-0 overflow-y-auto scrollbar-none p-3 flex flex-col gap-3">
       <ScreenMark name="projects/files/filter" />
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-fg">Filters</span>
@@ -156,13 +179,42 @@ export function FileFilterPopover({
       {/* "Hide code & configs" was retired 2026-07-23 (Destin): "Code & configs"
           is a TYPE, so hiding it was a second, overlapping way to filter by type.
           Only render Visibility when it still has a control to show. */}
-      {showDeletedAvailable && (
+      {(showDeletedAvailable || onShowHidden) && (
         <Group label="Visibility" multi>
-          <Chip multi active={!!showDeleted} onClick={() => onShowDeleted?.(!showDeleted)}>
-            Show deleted
-          </Chip>
+          {showDeletedAvailable && (
+            <Chip multi active={!!showDeleted} onClick={() => onShowDeleted?.(!showDeleted)}>
+              Show deleted
+            </Chip>
+          )}
+          {onShowHidden && (
+            <Chip multi active={!!showHidden} onClick={() => onShowHidden(!showHidden)}>
+              Show hidden files
+            </Chip>
+          )}
         </Group>
       )}
+      </div>
+    </>
+  );
+  if (anchorRef && pos) {
+    return createPortal(
+      <OverlayPanel
+        layer={4}
+        data-file-filter=""
+        role="dialog"
+        aria-label="File filters"
+        className="overlay-no-drag fixed w-[264px] flex flex-col"
+        // Drawn on <body> it no longer scrolls with the page, so it stops 8px above the window's bottom and scrolls inside.
+        style={{ ...pos, maxHeight: `calc(100dvh - ${pos.top + 8}px)` }}
+      >
+        {body}
+      </OverlayPanel>,
+      document.body,
+    );
+  }
+  return (
+    <div className="layer-surface absolute right-0 top-full mt-2 w-[264px] flex flex-col z-30" role="dialog" aria-label="File filters">
+      {body}
     </div>
   );
 }

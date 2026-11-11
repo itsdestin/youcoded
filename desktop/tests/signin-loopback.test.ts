@@ -20,6 +20,19 @@ let open: SigninListener | null = null;
 afterEach(() => { open?.close(); open = null; vi.useRealTimers(); });
 
 describe('sign-in loopback listener', () => {
+  // WHY (Destin, final review Q-12): the browser reaching the listener is the cue to bring YouCoded back on the
+  // phone. Told once per sign-in, and never for a request the listener refuses.
+  it('tells the app the browser arrived once, and not for refused requests', async () => {
+    const arrived = vi.fn();
+    open = await startSigninListener(undefined, arrived);
+    await get(open.port, '/youcoded-signin?secret=abc');
+    await get(open.port, '/other?secret=' + SECRET);
+    expect(arrived).not.toHaveBeenCalled();
+    await get(open.port, '/youcoded-signin?secret=' + SECRET);
+    await get(open.port, '/youcoded-signin?secret=' + 'b2'.repeat(32));
+    expect(arrived).toHaveBeenCalledTimes(1);
+  });
+
   // A listen on a port Windows keeps reserved fails with EACCES; the listener must try another port.
   it.each(['EACCES', 'EADDRINUSE'])('retries on another port when the first listen fails with %s', async (code) => {
     const real = http.Server.prototype.listen;

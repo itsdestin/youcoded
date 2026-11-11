@@ -5,7 +5,7 @@ import QuickChips, { QuickChip } from './QuickChips';
 import { createQueueDraft } from '../state/queue-draft';
 import { readQueueTransferDraft, saveQueueTransferDraft, updateQueueTransferDraft } from '../state/queue-transfer-storage';
 import { pendingQueueSend } from '../state/pending-queue-send';
-import TerminalToolbar from './TerminalToolbar';
+import TerminalToolbar, { consumeCtrlLetter } from './TerminalToolbar';
 import { Button } from './ui';
 import { AttachmentChip } from './AttachmentChip';
 // Round 2 (Destin): reference tokens ride INSIDE the draft as invisible
@@ -1234,6 +1234,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             }}
             onChange={(e) => {
               const val = e.target.value;
+              if (minimal && sessionId && consumeCtrlLetter(sessionId, text, val)) return;   // a held Ctrl: sent as Ctrl+letter
               // Typing while the mic is open ends dictation, and EVERYTHING in the
               // box stays — including the grey, still-being-reconsidered words.
               //

@@ -165,6 +165,34 @@ describe('the three settings chores after install-hooks', () => {
     expect(fs.readFileSync(settingsFile(), 'utf8')).toBe(correct);
   });
 
+  it('on the phone, also start Claude Code in fullscreen, only when no display mode is set', async () => {
+    fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
+    fs.writeFileSync(settingsFile(), JSON.stringify({ promptSuggestionEnabled: false, cleanupPeriodDays: 30, hooks: {} }));
+    const r = await runSettingsChores({ phone: true });
+    expect(r.tui).toEqual({ changed: true, effective: 'fullscreen' });
+    expect(readSettings().tui).toBe('fullscreen');
+    // The user's own `/tui default` survives every later boot.
+    fs.writeFileSync(settingsFile(), JSON.stringify({ promptSuggestionEnabled: false, cleanupPeriodDays: 30, hooks: {}, tui: 'default' }));
+    __resetSettingsMemo();
+    expect((await runSettingsChores({ phone: true })).tui.changed).toBe(false);
+    expect(readSettings().tui).toBe('default');
+  });
+
+  it('on the phone, a missing or corrupt file still gets fullscreen, the corrupt one kept beside it', async () => {
+    expect((await runSettingsChores({ phone: true })).tui.changed).toBe(true); // no file at all
+    fs.writeFileSync(settingsFile(), 'not json');
+    __resetSettingsMemo();
+    const r = await runSettingsChores({ phone: true });
+    expect(fs.readFileSync(r.repaired!.backupPath, 'utf8')).toBe('not json');
+    expect(readSettings().tui).toBe('fullscreen');
+  });
+
+  it('on a computer, never set a display mode (the desktop keeps Claude Code\'s own default)', async () => {
+    const r = await runSettingsChores();
+    expect(r.tui.changed).toBe(false);
+    expect(readSettings().tui).toBeUndefined();
+  });
+
   it('reconcile a required plugin hook in the same cycle', async () => {
     const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'marketplaces', 'youcoded', 'plugins', 'p');
     const script = path.join(pluginRoot, 'hooks', 'start.sh');

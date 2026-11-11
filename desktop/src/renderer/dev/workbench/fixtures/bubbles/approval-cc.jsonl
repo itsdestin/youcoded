@@ -1,0 +1,3 @@
+{"type":"user_message","text":"install the project's dependencies"}
+{"type":"tool_use","id":"npm-1","name":"Bash","input":{"command":"npm install","description":"Install dependencies"}}
+{"type":"permission_request","tool_use_id":"npm-1","requestId":"req-npm-1"}

@@ -1,0 +1,87 @@
+name: Phone programs refresh
+
+# Proposes newer versions of the programs bundled into the Android app (Node, git, bash, ripgrep, Claude Code).
+#
+# WHY (Destin, 2026-11-09 final review Q-13, picked "Automatic proposal"): the phone ships a fixed, known-good
+# set of programs. Moving that set forward was one line in a document someone had to remember before each
+# release, so a forgotten step would ship old programs, including old security fixes. This job runs the same
+# refresh script weekly and, when anything moved, opens (or updates) ONE pull request with the result.
+#
+# It never merges anything. A new set is a PHONE TEST (docs/android-runtime.md): build it, run it on a real
+# phone, then merge. Pull requests opened by this job do not start the normal checks by themselves (GitHub's
+# rule for automated pull requests); push any commit to the branch, or run Android CI by hand on it.
+#
+# Needs NO secrets beyond the job's own token. If the repository setting "Allow GitHub Actions to create and
+# approve pull requests" is off, the last step fails with that message and the branch is still pushed.
+on:
+  schedule:
+    # 06:17 UTC every Monday, off the hour on purpose (GitHub delays :00 cron under load).
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-pins-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write        # push the proposal branch
+      pull-requests: write   # open or update the one pull request
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          ref: master
+
+      # The refresh script compares package versions the way Alpine does; the build uses the same command.
+      - name: Refresh the locked versions
+        id: refresh
+        env:
+          YOUCODED_APK_VERSION: docker run --rm alpine:3.24 apk version -t
+        run: |
+          set -euo pipefail
+          python3 app/runtime/update-pins.py --apply-claude | tee "$RUNNER_TEMP/refresh.txt"
+          if git diff --quiet -- app/runtime/alpine-lock.json app/runtime/pins.env; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing to refresh: every bundled program is already the latest." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update the proposal
+        if: steps.refresh.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: auto/runtime-pins-refresh
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add app/runtime/alpine-lock.json app/runtime/pins.env
+          git commit -m "Refresh the Android app's bundled program versions"
+          # This branch belongs to this job alone and is rebuilt from master each run, so replacing it is intended.
+          git push --force origin "$BRANCH"
+          {
+            echo "The weekly refresh found newer versions of the programs bundled into the Android app."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/refresh.txt"
+            echo '```'
+            echo
+            echo "**Before merging:** build the app from this branch and run it on a real phone (start a chat, sign in, sync)."
+            echo "A new set of programs is a phone test, not something the automatic checks can prove."
+            echo "The normal checks do not start by themselves on this pull request; push a commit to the branch or run Android CI on it by hand."
+          } > "$RUNNER_TEMP/body.md"
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')" ]; then
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --base master --head "$BRANCH" \
+              --title "Refresh the Android app's bundled program versions" --body-file "$RUNNER_TEMP/body.md"
+          fi
+          cat "$RUNNER_TEMP/body.md" >> "$GITHUB_STEP_SUMMARY"

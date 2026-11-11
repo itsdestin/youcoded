@@ -2,7 +2,7 @@
 // startup dialogs structurally. These pin that it names the changes that broke
 // the app before — and that its reading of the saved captures is stable.
 import { describe, it, expect } from 'vitest';
-import { readDialogShape, shapeSummary, diffSummaries } from '../test-conpty/startup-dialog-shape.mjs';
+import { readDialogShape, readScreenShape, shapeSummary, diffSummaries } from '../test-conpty/startup-dialog-shape.mjs';
 import { FixtureTerminal, listPlanFixtures, loadPlanFixture, STARTUP_FIXTURE_DIR } from './helpers/plan-menu-fixtures';
 
 const RULE = '─'.repeat(80);
@@ -38,7 +38,9 @@ describe('startup-dialog drift diff', () => {
       for (const [i, m] of fx.marks.filter((x: any) => /^dialog-\d+-visible$/.test(x.label)).entries()) {
         const t = new FixtureTerminal(fx);
         await t.advanceToMark(m.label);
-        const shape = shapeSummary(readDialogShape(t.androidScreen().split('\n')));
+        // A first-install screen (kind 'screen': theme picker, sign-in choice) is read by its own reader, as the capture did.
+        const read = fx.dialogs[i]?.kind === 'screen' ? readScreenShape : readDialogShape;
+        const shape = shapeSummary(read(t.androidScreen().split('\n')));
         t.dispose();
         expect(diffSummaries(`${fx.key} dialog ${i + 1}`, fx.dialogs[i], shape)).toEqual({ breaking: [], notes: [] });
       }

@@ -1,3 +1,4 @@
+import { fingerSized } from '../device';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { browserToolOf } from '../../shared/browser-types';
 import { browserToolDisplay } from './browser/browser-tool-display';
@@ -16,7 +17,6 @@ import { bashGrantOptions, bashNoGrantNote, type GrantScope } from '../../shared
 import { editGrantChoices, isFileEditTool } from '../../shared/edit-grants';
 import { CheckIcon, FailIcon, QuestionIcon, ChevronIcon, NoteIcon, StoppedIcon, ChatIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
-import { isAndroid } from '../platform';
 import ToolBody from './tool-views/ToolBody';
 import { useExpandAllToggle, getInitialExpanded } from '../hooks/useExpandAllToggle';
 import { isTypingTarget } from '../utils/is-typing-target';
@@ -220,12 +220,14 @@ export function friendlyToolDisplay(
       return { label, detail };
     }
 
+    // WHY file names only in Read/Write/Edit rows (2026-11-01 phone test): rows showed raw device paths like
+    // /data/user/0/com.youcoded.app.dev/files/home/plants.md. The full path is still in the expanded card.
     case 'Read': {
       // Fix: a non-string file_path crashed basename(); non-number offset/limit
       // and non-string pages rendered "[object Object]" in the detail line.
       const fp = asString(input.file_path);
       const label = toolActionLabel('Read', active);
-      let detail = fp ? `· ${fp}` : '';
+      let detail = fp ? `· ${basename(fp)}` : '';
       const offset = typeof input.offset === 'number' ? input.offset : undefined;
       const limit = typeof input.limit === 'number' ? input.limit : undefined;
       const pages = asString(input.pages);
@@ -278,7 +280,7 @@ export function friendlyToolDisplay(
       const fp = asString(input.file_path);
       return {
         label: toolActionLabel('Write', active),
-        detail: fp ? `· ${fp}` : '',
+        detail: fp ? `· ${basename(fp)}` : '',
       };
     }
 
@@ -286,7 +288,7 @@ export function friendlyToolDisplay(
       // Fix: a non-string file_path crashed basename(); a non-string old_string
       // crashed .replace().
       const fp = asString(input.file_path);
-      let detail = fp ? `· ${fp}` : '';
+      let detail = fp ? `· ${basename(fp)}` : '';
       const oldStr = asString(input.old_string);
       if (oldStr) {
         detail += ` ${truncate(oldStr.replace(/\n/g, '⏎'), 40)}`;
@@ -833,7 +835,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     return () => window.removeEventListener('keydown', handler);
   }, [responding, confirmingAlways, confirmingExternal, keysLive, noKeyboard, focusIdx, count, popupOpen]);
 
-  const pad = isAndroid() ? 'py-2' : 'py-1';
+  const pad = fingerSized() ? 'py-2' : 'py-1';
   const ring = 'ring-2 ring-white/40';
 
   // Consequence-gated confirm — plain-language warning before persisting a rule
@@ -1266,7 +1268,7 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
     return () => window.removeEventListener('keydown', handler);
   }, [responding, keysLive, focusedOption, optionCount, allOptions, handleSelect, handleSubmit, popupOpen]);
 
-  const pad = isAndroid() ? 'py-2' : 'py-1.5';
+  const pad = fingerSized() ? 'py-2' : 'py-1.5';
   let flatIdx = 0; // Running index across all questions' options for keyboard focus
 
   if (compact) {
@@ -1285,7 +1287,7 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
       {questions.map((q, qi) => (
         <div key={qi}>
           <div className="text-xs font-medium text-fg-2 mb-1">
-            {q.header && <span className="text-fg-muted mr-1">{q.header}:</span>}
+            {q.header && <span className="text-fg-muted mr-1">{/[?:]$/.test(q.header) ? q.header : `${q.header}:`}</span>}
             {q.question}
           </div>
           <div className="space-y-1">

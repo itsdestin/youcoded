@@ -164,6 +164,21 @@ export async function getField(field: string): Promise<unknown> {
   return getJsonPath(await readSettings(), field);
 }
 
+/**
+ * permissions.defaultMode set for ONE FOLDER (its .claude/settings.local.json, then .claude/settings.json), or
+ * undefined. Read-only and never memoised: these are the project's files, not the person's own settings file above.
+ * WHY here: this file is the one place allowed to read a Claude settings file (tests/claude-settings.test.ts).
+ */
+export async function readProjectDefaultMode(cwd: string): Promise<unknown> {
+  for (const name of ['settings.local.json', 'settings.json']) {
+    try {
+      const mode = JSON.parse(await fs.promises.readFile(path.join(cwd, '.claude', name), 'utf8'))?.permissions?.defaultMode;
+      if (typeof mode === 'string') return mode;
+    } catch { /* missing or malformed: not set here */ }
+  }
+  return undefined;
+}
+
 /** Set (or, with null/undefined, delete) one dot-path field under the lock.
  *  Resolves false when the file was locked or the field is unsafe. */
 export async function setField(field: string, value: unknown): Promise<boolean> {

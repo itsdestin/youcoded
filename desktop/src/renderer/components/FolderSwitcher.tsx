@@ -15,7 +15,6 @@ import { fieldClasses, Pill, Tooltip, ErrorState } from './ui';
 import { FIELD_TRIGGER_STATES } from './ui/field';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 import { NO_FOLDER_CWD, NO_FOLDER_DIR_NAME } from '../../shared/no-folder';
-import { isAndroid } from '../platform';
 import { POPOVER_Z } from './overlays/Overlay';
 
 interface SavedFolder {
@@ -266,9 +265,10 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
               even when there are no saved folders yet. Same row shape as a
               folder; the sentinel is swapped for the app-owned empty folder in
               main (shared/no-folder.ts). */}
-          {/* Desktop and remote only: the phone's own runtime creates sessions
-              from the cwd it is handed and knows nothing of the sentinel. */}
-          {!isAndroid() && (
+          {/* On the phone too (card #213, 2026-11-08): the phone has run the
+              desktop backend since 2026-10-14, which swaps the sentinel like
+              any computer, and the phone no longer lists its app-private Home,
+              so this row is its clean starting place (main/saved-folders.ts). */}
           <div className="py-1 border-b border-edge-dim">
             <div
               onClick={() => handleSelect(NO_FOLDER_CWD)}
@@ -286,7 +286,6 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
               </div>
             </div>
           </div>
-          )}
           {loadFailed && folders.length === 0 && (
             <div className="p-2">
               <ErrorState variant="inline" message="Couldn't load your projects." onRetry={() => { void load(); }} />

@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+// WHY: phone wording for the remove-key question (2026-11-01 phone test).
+import { deviceNoun } from '../platform';
 import React from 'react';
 import { Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Chip, CloseButton, ErrorState, FieldError, FoldRow, SectionLabel, TextInput, Toggle, TypeableSelect } from './ui';
 import type { SelectOption } from './ui/Select';
@@ -420,7 +422,7 @@ function ProviderRow({ provider, onChanged, initialNote }: {
       {confirmingRemove && (
         <div className={`${CARD_LEVEL_2} space-y-2 rounded-lg p-3`}>
           <p className="text-2xs text-fg-dim leading-relaxed">
-            Remove {provider.label}? Its API key is deleted from this computer.
+            Remove {provider.label}? Its API key is deleted from this {deviceNoun()}.
           </p>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={() => setConfirmingRemove(false)} className="flex-1 py-2">

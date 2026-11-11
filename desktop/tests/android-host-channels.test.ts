@@ -10,7 +10,9 @@ const repo = path.join(__dirname, '..', '..');
 const shim = fs.readFileSync(path.join(repo, 'desktop/src/renderer/remote-shim.ts'), 'utf8');
 const kotlin = fs.readFileSync(path.join(repo, 'app/src/main/kotlin/com/youcoded/app/bridge/HostJsBridge.kt'), 'utf8');
 
-const fromShim = new Set([...shim.matchAll(/invokeAndroidHost\('([^']+)'/g)].map((m) => m[1]));
+// The page's own helpers (android-local-bridge.ts) ask the app too, so scan them with the shim.
+const bridge = fs.readFileSync(path.join(repo, 'desktop/src/renderer/android-local-bridge.ts'), 'utf8');
+const fromShim = new Set([...(shim + bridge).matchAll(/invokeAndroidHost\('([^']+)'/g)].map((m) => m[1]));
 const typesBlock = kotlin.slice(kotlin.indexOf('val TYPES = listOf('), kotlin.indexOf(')', kotlin.indexOf('val TYPES = listOf(')));
 const declared = new Set([...typesBlock.matchAll(/"([^"]+)"/g)].map((m) => m[1]));
 const handled = new Set([...kotlin.matchAll(/^\s*"([a-z]+:[a-z-]+)" ->/gm)].map((m) => m[1]));
