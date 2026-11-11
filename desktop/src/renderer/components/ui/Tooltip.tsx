@@ -117,7 +117,10 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
   // branch ("at least one theme must stay in the cycle" appears only on the last
   // remaining theme). An empty string must render nothing rather than an empty
   // bubble, and it cannot be an early return, because hooks run unconditionally.
-  const armed = text.trim().length > 0;
+  // WHY `?? ''`: the type says string, but a session that reached the screen
+  // with no name passed undefined here and the throw took down the whole window
+  // ("YouCoded failed to start"). Missing text is treated as empty: no bubble.
+  const armed = (text ?? '').trim().length > 0;
 
   const cancelTimer = () => {
     if (timer.current) clearTimeout(timer.current);

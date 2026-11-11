@@ -11,6 +11,7 @@ import { SessionInfo, SessionProvider } from '../shared/types';
 import type { ModelBinding } from '../shared/provider-types';
 import { EventEmitter } from 'events';
 import { log } from './logger';
+import { NEW_SESSION } from '../shared/session-title';
 import { deployClaudeCodeLinkMcp } from './claude-code-mcp';
 import { deployClaudeCodeDocCommentsMcp } from './claude-code-doc-comments-mcp';
 import { browserRelayAttachment } from './assistant-browser/claude-code-browser-mcp';
@@ -232,6 +233,13 @@ export class SessionManager extends EventEmitter {
   getPtySize(id: string): { cols: number; rows: number } | null { return this.ptySizes.get(id) ?? null; }
 
   createSession(opts: CreateSessionOpts): SessionInfo {
+    // WHY: every session on every door is minted here (desktop windows, the
+    // remote/phone server, the Android backend, dev tools, Run in terminal), and
+    // a `session.create` call with no name made a session whose `name` was
+    // undefined — the header crashed the whole window on it. A missing or blank
+    // name gets the same default the New session button sends; a real name is
+    // kept exactly as given.
+    if (typeof opts.name !== 'string' || opts.name.trim() === '') opts = { ...opts, name: NEW_SESSION };
     const provider: SessionProvider = opts.provider || 'claude';
     // Resolve CWD: fall back to home directory if empty or nonexistent.
     const cwdExists = !!opts.cwd && fs.existsSync(opts.cwd);
