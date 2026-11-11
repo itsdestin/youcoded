@@ -33,7 +33,7 @@ function previewReducer(state: ChatState, action: ChatAction | typeof RESET): Ch
   return action.type === RESET.type ? new Map() : chatReducer(state, action as ChatAction);
 }
 
-export default function SessionPreviewPane({ provider, id, title, onSettled, projectSlug, backdrop = true }: {
+export default function SessionPreviewPane({ provider, id, title, onSettled, projectSlug, backdrop = true, topInset = 0, onTopReserved }: {
   provider: ChatsearchProvider;
   id: string;
   title: string;
@@ -53,6 +53,13 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
    *  action card sits below this pane — passes false, so the two do not meet
    *  at a seam. */
   backdrop?: boolean;
+  /** Height in px of something the host floats over the top of this pane (the
+   *  Resume browser's copied conversation card). 0 = nothing floats; the side
+   *  drawer and Projects pass nothing. See fitTopInset below. */
+  topInset?: number;
+  /** Told whenever the room under the floating card is reserved or released,
+   *  so the host can hold the card in place while it is. */
+  onTopReserved?: (reserved: boolean) => void;
 }) {
   const key = previewSessionKey(id);
   const [chat, dispatch] = useReducer(previewReducer, undefined, () => new Map() as ChatState);
@@ -186,10 +193,58 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
     return () => io.disconnect();
   }, [hasMore, loadingOlder, olderError, loadOlder]);
 
+  // ── Room under a floating card (card #190) ──────────────────────────────
+  // The Resume browser floats its conversation card over the top of this pane
+  // and slides it away only when the reader scrolls. A conversation too short
+  // to scroll could never move it, so its caption and first message stayed
+  // hidden under the card for good. So: when the content, measured WITHOUT the
+  // reserved room, fits in the pane (natural height <= visible height — i.e.
+  // it cannot scroll today), the top padding grows by the card's height.
+  // Content that can scroll today gets nothing: it looks and slides exactly as
+  // before. The decision uses the natural height on purpose, so adding the
+  // room can never flip it back (no oscillation). `appliedInset` is the room
+  // currently added; the bottom distance is kept across a change, the same
+  // anchor the prepend below uses, so the newest message does not move.
+  const appliedInset = useRef(0);
+  const topInsetRef = useRef(topInset);
+  topInsetRef.current = topInset;
+  const onTopReservedRef = useRef(onTopReserved);
+  onTopReservedRef.current = onTopReserved;
+  const fitTopInset = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const inset = topInsetRef.current;
+    const natural = el.scrollHeight - appliedInset.current;
+    const next = inset > 0 && natural <= el.clientHeight ? inset : 0;
+    if (next === appliedInset.current) return;
+    const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // 0.75rem = the scroller's own py-3, kept under the reserved room.
+    el.style.paddingTop = next ? `calc(0.75rem + ${next}px)` : '';
+    el.toggleAttribute('data-top-reserved', next > 0);
+    const wasReserved = appliedInset.current > 0;
+    appliedInset.current = next;
+    el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - fromBottom);
+    if (wasReserved !== next > 0) onTopReservedRef.current?.(next > 0);
+  }, []);
+  // Content or size changes the layout effects below do not see (a window
+  // resize, a tool card expanded) are caught here. Only when a host floats
+  // something: the drawer and Projects pass no inset and get no observer.
+  const reserveOn = topInset > 0;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!reserveOn || !el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => fitTopInset());
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child);
+    return () => ro.disconnect();
+  }, [reserveOn, phase.kind, !!session, fitTopInset]);
+
   // Before paint, so neither the jump nor the prepend is ever SEEN moving.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    // First, so the jump below lands on the final height.
+    fitTopInset();
     if (jumpToEnd.current) {
       jumpToEnd.current = false;
       el.scrollTop = el.scrollHeight;
@@ -197,7 +252,7 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
       el.scrollTop = el.scrollHeight - keepFromBottom.current;
       keepFromBottom.current = null;
     }
-  }, [chat, phase]);
+  }, [chat, phase, topInset, fitTopInset]);
 
   return (
     <div className={`relative flex h-full min-h-0 w-full min-w-0 flex-col${backdrop ? ' preview-backdrop' : ''}`}>
