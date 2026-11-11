@@ -517,6 +517,8 @@ function createUpdateService() {
       downloaded: !!pending && pendingFileOk && pending.version === status.latest,
       needs_password: !!facts?.needsPassword,
       install_refused: !!facts?.installRefused,
+      // Only present when true so other installs' status is byte-for-byte what it was (#186).
+      ...(facts?.managedByOtherPackage ? { managed_by_other_package: true } : {}),
       // WHY (code review F5): the popup may say "installs by itself when you quit" only when a quit really will.
       // Everything except the switch (the renderer holds the live switch and ANDs it).
       installs_on_quit: quitInstallPossible(),
@@ -733,6 +735,11 @@ function createUpdateService() {
     // WHY (design D26): an unpackaged build has nothing it could install, and a developer's checkout
     // must not pull 150 MB because it is older than the latest release.
     if (!app.isPackaged) throw new UpdateInstallError('unsupported-platform', 'updates are not downloaded by an unpackaged build');
+    // WHY here (card #186): the popup and the status bar hide "Update now" for an install owned by
+    // another package (AUR youcoded-bin), but nothing in the main process stopped a download, and
+    // `facts` is empty until startup finishes, so a click in that window would have fetched ~200 MB
+    // that `pacman -U` then refuses. `initDone` was awaited above, so `facts` is read after it is known.
+    if (facts?.managedByOtherPackage) throw new UpdateInstallError('unsupported-platform', 'this copy of YouCoded is managed by another package (for example the AUR); update it with your package manager');
     const target = latestTarget();
     if (!target.tag || !target.manifestUrl || !target.signatureUrl) {
       brakedTag = target.tag ?? target.version;

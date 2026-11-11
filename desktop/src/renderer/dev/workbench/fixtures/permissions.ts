@@ -1,9 +1,10 @@
+import { FIXTURE_BASE } from './clock';
 import { CROSS_PROJECT_SLUG, type StoredProject } from '../../../../shared/permission-types';
 
 // Fixed timestamps, not Date.now(): a seed that moves with the clock makes
 // "granted 3 days ago" non-reproducible between design reviews (same reason
 // scenarios.ts pins T0).
-const T0 = 1_753_800_000_000;
+const T0 = FIXTURE_BASE;
 const at = (daysAgo: number) => new Date(T0 - daysAgo * 86_400_000).toISOString();
 
 /** Two projects, deliberately mixed. Row shapes that MUST stay represented:

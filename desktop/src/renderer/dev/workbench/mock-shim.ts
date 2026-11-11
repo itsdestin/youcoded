@@ -543,6 +543,7 @@ import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
 import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
 import type { PagesBridge, PageDocument, PageSocketEvent, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 import { sameEndpoint } from '../../../shared/endpoint-address';
+import { FIXTURE_BASE } from './fixtures/clock';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
  *
@@ -1165,7 +1166,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         permissionMode: opts.skipPermissions ? 'bypass' : 'normal',
         skipPermissions: !!opts.skipPermissions,
         status: 'active',
-        createdAt: 1_753_800_000_000,
+        createdAt: FIXTURE_BASE,
         provider: opts.provider ?? 'claude',
         harnessId: (opts as any).harnessId,
         model: opts.model,

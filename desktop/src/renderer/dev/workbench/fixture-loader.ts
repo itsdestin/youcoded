@@ -23,6 +23,7 @@ import { chatReducer } from '../../state/chat-reducer';
 import type { ChatState, ChatAction, ToolCallState } from '../../state/chat-types';
 import { eventToAction } from '../../state/transcript-event-actions';
 import type { TranscriptEvent } from '../../../shared/types';
+import { FIXTURE_BASE, rebaseFixtureTimes } from './fixtures/clock';
 
 const SANDBOX_SESSION_ID = 'sandbox';
 
@@ -79,7 +80,7 @@ export interface LoadOptions {
 
 // Fixed base timestamp, not Date.now(): fixtures must replay identically on
 // every load, and a moving clock makes bubble grouping non-reproducible.
-const FIXTURE_T0 = 1_753_800_000_000;
+const FIXTURE_T0 = FIXTURE_BASE;
 
 /** A fixture line's own `timestamp` (epoch ms) when it has one, else the
  *  synthetic clock every other action here uses — one second per action, so
@@ -118,7 +119,7 @@ export function loadFixture(
     const actions: ChatAction[] = [];
 
     for (const line of lines) {
-      const parsed = JSON.parse(line);
+      const parsed = JSON.parse(rebaseFixtureTimes(line));
 
       if (parsed.type === 'text' && typeof parsed.text === 'string') {
         // Text lines are fixture annotations only — append directly, no reducer.

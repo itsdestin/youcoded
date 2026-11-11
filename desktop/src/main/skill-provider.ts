@@ -7,7 +7,6 @@ import { encodeSkillLink, decodeSkillLink } from './skill-share';
 import { installPlugin, uninstallPlugin, upgradePluginFromLocal, readPinMarker, materializePinnedSource, readPluginVersion, isPluginInstalled, marketplaceCacheDir, sweepStaleUpgradeDirs, type InstallResult, upgradePluginFromGit } from './plugin-installer';
 import { pluginInstallDir, YOUCODED_PLUGINS_DIR, listInstalledPluginDirs } from './claude-code-registry';
 import { PluginOffSwitch, BLOCKED_MESSAGE, turnedOffDir, detachPluginExtras } from './plugin-blocklist';
-import { getConfig as getMarketplaceConfig } from './marketplace-config-store';
 import { reconcileHooks } from './hook-reconciler';
 import { reconcileMcp } from './mcp-reconciler';
 import { log } from './logger';
@@ -399,10 +398,9 @@ export class LocalSkillProvider {
 
   /**
    * Phase 3b: update an installed plugin by re-running the install logic with
-   * the latest marketplace entry, overwriting files at the same path. Config
-   * in ~/.claude/youcoded-config/<id>.json is NOT touched.
+   * the latest marketplace entry, overwriting files at the same path.
    */
-  async update(id: string): Promise<{ ok: boolean; newVersion?: string; error?: string; missingRequiredFields?: string[] }> {
+  async update(id: string): Promise<{ ok: boolean; newVersion?: string; error?: string }> {
     // WHY (audit item 24): built-in plugins move only when the app updates (to the commit baked
     // into the app). An Update click must not pull a newer or different copy from GitHub.
     if (isBundledPlugin(id)) return { ok: false, error: 'Built-in plugins are updated together with the app.' };
@@ -520,31 +518,12 @@ export class LocalSkillProvider {
       this.installedCache = null;
       this.onCacheInvalidated?.();
 
-      // Phase 3c: check if the new configSchema has required fields missing
-      // from the existing user config. Don't block the update — just surface
-      // the field names so the renderer can prompt the user.
-      const missingRequiredFields = this.checkMissingConfigFields(id, entry);
-      return { ok: true, newVersion, ...(missingRequiredFields.length > 0 ? { missingRequiredFields } : {}) };
+      // WHY no config check here: the old "required settings missing" result had no reader (no screen ever showed it)
+      // and no registry entry declares a settings schema, so it was removed with the unused get/set-config channels.
+      return { ok: true, newVersion };
     }
 
     return { ok: false, error: result.status === 'failed' ? (result as any).error : 'Update failed' };
-  }
-
-  /**
-   * Phase 3c: compare the entry's configSchema against the user's saved config.
-   * Returns names of required fields that are missing from the saved config.
-   */
-  private checkMissingConfigFields(id: string, entry: SkillEntry): string[] {
-    const schema = (entry as any).configSchema;
-    if (!schema?.fields?.length) return [];
-    try {
-      const config = getMarketplaceConfig(id);
-      return schema.fields
-        .filter((f: { required?: boolean; name: string }) => f.required && (config[f.name] === undefined || config[f.name] === ''))
-        .map((f: { name: string }) => f.name);
-    } catch {
-      return [];
-    }
   }
 
   /**
