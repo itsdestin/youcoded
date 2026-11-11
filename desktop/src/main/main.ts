@@ -1426,10 +1426,15 @@ void app.whenReady().then(async () => {
   // to parse the file a second time just to log a stale-path warning — the
   // diagnostic for the "stuck on Initializing" symptom after a removed dev
   // worktree.
+  // Card #11 (b): which launch edits of ~/.claude/settings.json another program's
+  // lock turned away — retried once in the background after the window is up
+  // (scheduleLockedSettingsRetry, below the chores), never by waiting longer here.
+  const settingsLocked = { installLocked: false, choresLocked: false };
   if (!process.env.YOUCODED_PROFILE) {
     try {
       const { runInstallHooksChore } = require('./launch-settings-chores');
       const r = await runInstallHooksChore({ version: app.getVersion(), packaged: app.isPackaged });
+      settingsLocked.installLocked = r.refused === 'locked';
       if (r.skippedWorktree) log('WARN', 'Main', 'Hook scripts live inside a dev worktree — install-hooks skipped (set YOUCODED_PROFILE when running dev)');
       else {
         if (r.repaired > 0) log('WARN', 'Main', 'Stale hook commands repaired', { count: r.repaired });
@@ -1491,6 +1496,7 @@ void app.whenReady().then(async () => {
   try {
     const { runSettingsChores } = require('./launch-settings-chores');
     const r = await runSettingsChores();
+    settingsLocked.choresLocked = r.refused === 'locked';
     log('INFO', 'Main', 'Plugin hooks reconciled', r.hooks);
     if (r.promptSuggestion.changed) log('INFO', 'Main', 'Prompt suggestion force-disabled', { prior: r.promptSuggestion.prior });
     if (r.retention.changed) log('INFO', 'Main', 'Seeded cleanupPeriodDays default', { effective: r.retention.effective });
@@ -1498,6 +1504,17 @@ void app.whenReady().then(async () => {
     if (r.refused) log('WARN', 'Main', 'Settings chores not written', { refused: r.refused });
   } catch (e) {
     log('ERROR', 'Main', 'Failed to run settings chores', { error: String(e) });
+  }
+  try {
+    // Not awaited: it starts seconds later and must never hold the window back.
+    const { scheduleLockedSettingsRetry, runInstallHooksChore, runSettingsChores } = require('./launch-settings-chores');
+    void scheduleLockedSettingsRetry(settingsLocked, {
+      runInstallHooks: (o: { lockWaitMs: number }) => runInstallHooksChore({ version: app.getVersion(), packaged: app.isPackaged }, o),
+      runChores: (o: { lockWaitMs: number }) => runSettingsChores(o),
+      log: (level: 'INFO' | 'WARN', message: string, data?: Record<string, unknown>) => log(level, 'Main', message, data),
+    });
+  } catch (e) {
+    log('ERROR', 'Main', 'Failed to schedule the settings retry', { error: String(e) });
   }
   perfMark('main:chore:hook-reconcile:done');
   perfMark('main:chore:prompt-suggestion:done');
