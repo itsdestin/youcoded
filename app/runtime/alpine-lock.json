@@ -47,8 +47,8 @@
    "sha256": "ff3fecfc32c9a1bed4a47a32ccfee6f6f575708258f912c218dce8ed0d892221"
   },
   "git": {
-   "version": "2.54.0-r0",
-   "sha256": "ea41e2f837f1f6a8b66e72a5ece0fc75cca44f76f49cf5500d467fc5627d0ab7"
+   "version": "2.54.1-r0",
+   "sha256": "6a9dc5e00013a8daecedd1c2951ec16fc69f0e5ade6847db81e86a9e658323b7"
   },
   "gmp": {
    "version": "6.3.0-r4",
