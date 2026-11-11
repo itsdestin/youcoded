@@ -457,9 +457,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     // at the end) so an edited queued message gets the same "ready to review/
     // send" placement.
     fillDraft: (sentText: string, paths?: string[]) => {
-      // WHY (card #62 fault c): a native queued message with files comes back as words + chips. Its words are in sent
-      // form, so reference markers become chips again exactly as the Claude Code edit does (fillQueuedDraftIfCurrent).
-      // Files already in the box are kept (hasDraft() looks only at words), the restored ones added after them.
+      // WHY (card #62 fault c): a native queued message with files comes back as words + chips; its words are in sent form, so reference markers
+      // become chips again as in the Claude Code edit (fillQueuedDraftIfCurrent). Files already in the box are kept, the restored ones added after.
       const draftText = paths?.length ? tokenizeComposeRefs(sentText) : sentText;
       setText(draftText);
       if (paths?.length) setAttachments((cur) => [...cur, ...paths.filter((p) => !cur.some((a) => a.path === p))
