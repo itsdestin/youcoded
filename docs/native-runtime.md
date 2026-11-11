@@ -496,7 +496,11 @@ Shipped as youcoded PRs #352, #353, #354, #355. What is now true, and why:
   content. Overwrites also preserve CRLF/BOM via Edit's exported `preserveFormat`.
 - **Edit** — every parameter described; `old_string` says: exactly once, never include Read's
   `%6d\t` line-number prefix, keep to 1–3 lines. The read-gate refusal names session resume
-  as a cause (`readRegistry` resets on resume).
+  as a cause (`readRegistry` resets on resume). On "not found" only (never `replace_all`),
+  one normalised retry folds curly quotes, Unicode dashes and non-breaking spaces to plain
+  and ignores spaces at line ends; it is accepted only if it finds ONE place, replaces exactly
+  that original span, inserts `new_string` unchanged, and the result says the match was
+  normalised (`findNormalisedSpan`, card #66 c). The description still says "exact" on purpose.
 - **Bash** — the description no longer suggests re-running "piped through head/tail" (no
   `pipefail`: `cmd | tail` masks the exit code); it says Read the saved file, or redirect and
   `echo exit=$?`. The same sentence was fixed in the per-call spill notice and the static

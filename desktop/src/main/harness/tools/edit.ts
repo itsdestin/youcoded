@@ -37,6 +37,63 @@ export function preserveFormat(original: string, edited: string): string {
   return out;
 }
 
+// ── Normalised fallback for "old_string not found" (card #66 item c) ────────
+// Small models loop on "not found" when the file holds curly quotes, Unicode
+// dashes, non-breaking spaces or trailing spaces where they typed plain ones
+// (or the reverse). Both sides are folded the same way: these characters map
+// to their plain form, and spaces/tabs at a line's end are dropped. A match is
+// accepted only if it is the ONLY place the folded old_string occurs (overlaps
+// counted), and it is mapped back to the exact original characters it covers.
+const FOLD: Record<string, string> = {
+  '‘': "'", '’': "'", '‚': "'", '‛': "'", '′': "'",
+  '“': '"', '”': '"', '„': '"', '‟': '"', '″': '"',
+  '‐': '-', '‑': '-', '‒': '-', '–': '-', '—': '-', '―': '-', '−': '-',
+  ' ': ' ', ' ': ' ', ' ': ' ',
+};
+const isLineSpace = (c: string) => c === ' ' || c === '\t' || c === ' ' || c === ' ' || c === ' ';
+
+/** Folds `text` and records, for each folded character, its index in `text`.
+ *  Spaces/tabs immediately before a newline are dropped; at the very end of
+ *  the text only when `dropAtEnd` (the file's last line ends there, but the
+ *  END of an old_string is mid-line as often as not, so its spaces are kept). */
+function foldForMatch(text: string, dropAtEnd: boolean): { text: string; at: number[] } {
+  const out: string[] = [];
+  const at: number[] = [];
+  let i = 0;
+  while (i < text.length) {
+    if (isLineSpace(text[i])) {
+      let j = i;
+      while (j < text.length && isLineSpace(text[j])) j++;
+      const atLineEnd = j < text.length ? text[j] === '\n' : dropAtEnd;
+      if (!atLineEnd) for (let k = i; k < j; k++) { out.push(FOLD[text[k]] ?? text[k]); at.push(k); }
+      i = j;
+      continue;
+    }
+    out.push(FOLD[text[i]] ?? text[i]);
+    at.push(i);
+    i++;
+  }
+  return { text: out.join(''), at };
+}
+
+/** The original [start, end) of the ONE place `oldString` matches `body` after
+ *  folding, or null when it matches nowhere or in more than one place. */
+function findNormalisedSpan(body: string, oldString: string): { start: number; end: number } | null {
+  const needle = foldForMatch(oldString, false).text;
+  if (!needle) return null;
+  const hay = foldForMatch(body, true);
+  const first = hay.text.indexOf(needle);
+  if (first === -1 || hay.text.indexOf(needle, first + 1) !== -1) return null;
+  return { start: hay.at[first], end: hay.at[first + needle.length - 1] + 1 };
+}
+
+/** Appended to a successful normalised edit so the model knows the file's real
+ *  characters differ from what it typed (and does not keep typing the same). */
+const NORMALISED_MATCH_NOTE =
+  'Note: old_string did not match exactly. It was matched after treating curly quotes, Unicode dashes and '
+  + 'non-breaking spaces as plain ones and ignoring spaces at line ends, so the file\'s real characters differ '
+  + 'from what you typed. new_string was inserted exactly as you wrote it.';
+
 // G-4 (2026-08-26 tools investigation): these were bare. Every peer harness
 // describes them, and the two rules that matter most live on old_string —
 // Read prints a `%6d\t` line-number prefix that a small model copies verbatim
@@ -137,11 +194,33 @@ async function editLocked(args: z.infer<typeof EDIT_INPUT>, ctx: ToolContext): P
     // guard), leaving the edited region LF — acceptable, mixed files are already broken.
     const lfBody = body.replace(/\r\n/g, '\n');
     const count = lfBody.split(args.old_string).length - 1;
-    if (count === 0)
-      return {
-        text: 'Edit failed: old_string not found. Re-Read the file and copy the exact text, including whitespace.',
-        isError: true,
-      };
+    if (count === 0) {
+      // Card #66 (c): one normalised retry, ONLY here and never for
+      // replace_all (an exact-match edit and every replace_all are untouched).
+      const span = args.replace_all ? null : findNormalisedSpan(lfBody, args.old_string);
+      if (!span)
+        return {
+          text: 'Edit failed: old_string not found. Re-Read the file and copy the exact text, including whitespace.',
+          isError: true,
+        };
+      // Exactly the ORIGINAL span is replaced; every other character of the
+      // file stays as it was. new_string goes in exactly as the model wrote it
+      // — if the file used curly quotes and the model typed straight ones, we
+      // do not guess which the model meant for the new text (it may be fixing
+      // them), and the result says the file's characters differ so it can look.
+      const edited = lfBody.slice(0, span.start) + args.new_string + lfBody.slice(span.end);
+      const hunks = toHunks(lfBody, edited, args.file_path);
+      if (hunks.length === 0) {
+        return {
+          text: `Edited ${args.file_path}: 0 replacements — old_string and new_string are identical, nothing changed.`,
+          structuredPatch: hunks,
+        };
+      }
+      const final = preserveFormat(original, edited);
+      await fs.promises.writeFile(abs, final);
+      ctx.readRegistry.set(canonical, fingerprintOf(final)); // our own write stays "read"
+      return { text: `Edited ${args.file_path}. ${NORMALISED_MATCH_NOTE}`, structuredPatch: hunks };
+    }
     if (count > 1 && !args.replace_all) {
       return {
         text: `Edit failed: old_string matches ${count} times. Add surrounding context to make it unique, or pass replace_all: true.`,
