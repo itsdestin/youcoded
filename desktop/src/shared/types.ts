@@ -1110,6 +1110,10 @@ export interface PackageInfo {
   // alongside the version compare. Absent on every pre-Task-17 install, which is
   // why the compare must treat "no commit recorded" as "nothing to say".
   commit?: string;
+  // Themes only: stamp of the theme store's file list at install/update time (shared/theme-fingerprint.ts).
+  // WHY: lets the Update badge notice a theme edited in place without a version bump. Absent on
+  // installs made before this existed, which must stay quiet.
+  themeFingerprint?: string;
   // Plugin off-switch: turned off as unsafe; folder held aside and settings kept (plugin-blocklist.ts).
   turnedOff?: boolean;
   // Decomposition v3 §9.8: cross-device sync can surface a package that's

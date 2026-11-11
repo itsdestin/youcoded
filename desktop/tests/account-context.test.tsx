@@ -571,3 +571,59 @@ describe("AccountProvider", () => {
     expect(getByTestId("user").textContent).toBe("");
   });
 });
+
+// The "signed out by itself" notice (card #216): the main process sends a presence event of type "session-lost".
+describe("AccountProvider — signed out by the app", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { cleanup(); vi.useRealTimers(); });
+
+  function mountWith(openExternal: boolean) {
+    let push: (ev: { type: string }) => void = () => {};
+    const mock = makeMock();
+    mock.account.signedIn = vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false);
+    mock.account.user = vi.fn().mockResolvedValueOnce({ id: "github:1", login: "u", avatar_url: "a" }).mockResolvedValue(null);
+    (globalThis.window as any).claude = {
+      ...mock,
+      capabilities: { openExternal },
+      social: { onPresenceEvent: (cb: typeof push) => { push = cb; return () => {}; } },
+    };
+    const notices: Array<{ message: string; action?: { label: string; onClick: () => void } }> = [];
+    const onNotice = (e: Event) => notices.push((e as CustomEvent).detail);
+    window.addEventListener("youcoded:notice", onNotice);
+    const view = render(<AccountProvider pollIntervalMs={10}><Probe /></AccountProvider>);
+    return { push: (ev: { type: string }) => push(ev), notices, mock, view, off: () => window.removeEventListener("youcoded:notice", onNotice) };
+  }
+
+  it("flips to signed-out and raises one notice whose button starts sign-in again", async () => {
+    const t = mountWith(true);
+    await settle();
+    expect(t.view.getByTestId("state").textContent).toBe("in");
+    await act(async () => { t.push({ type: "session-lost" }); });
+    await settle();
+    expect(t.view.getByTestId("state").textContent).toBe("out");
+    expect(t.notices).toHaveLength(1);
+    expect(t.notices[0].message).toBe("You were signed out of your YouCoded account. Friends see you as offline until you sign in again.");
+    expect(t.notices[0].action?.label).toBe("Sign in again");
+    await act(async () => { t.notices[0].action!.onClick(); });
+    await settle();
+    expect(t.mock.account.start).toHaveBeenCalledTimes(1);
+    t.off();
+  });
+
+  it("ignores other presence events", async () => {
+    const t = mountWith(true);
+    await settle();
+    await act(async () => { t.push({ type: "connected" }); });
+    expect(t.notices).toHaveLength(0);
+    t.off();
+  });
+
+  it("gives a phone browser (which cannot sign in) no notice", async () => {
+    const t = mountWith(false);
+    await settle();
+    await act(async () => { t.push({ type: "session-lost" }); });
+    await settle();
+    expect(t.notices).toHaveLength(0);
+    t.off();
+  });
+});

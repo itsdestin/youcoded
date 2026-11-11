@@ -29,6 +29,8 @@ import React, {
 } from "react";
 import type { MarketplaceUser } from "../../main/marketplace-auth-store";
 import { useOnRemoteReconnect } from "../hooks/useOnRemoteReconnect";
+import { getCapabilities } from "../platform";
+import { announceSessionLost } from "../utils/session-lost-notice";
 
 // ── Context shape ─────────────────────────────────────────────────────────────
 
@@ -147,6 +149,22 @@ export function AccountProvider({
   // And after a remote reconnect: a read lost while the phone was away left "Sign in" on screen
   // for a signed-in user until the page reloaded (2026-09-11 phone pass sweep).
   useOnRemoteReconnect(() => { reloadFromStore().catch(() => { /* next reconnect retries */ }); });
+
+  // WHY (card #216): the app signs the account out by itself when the server stops recognising the sign-in. The
+  // main process says so with a presence event of type "session-lost" (once per sign-out event, never for a
+  // sign-out the person chose). We flip to signed-out at once, then raise ONE notice with a "Sign in again" button.
+  // WHY the openExternal check: a phone browser watching this computer can see the account but cannot sign in
+  // (the sign-in calls are owner-only), so a button there would do nothing — it gets no notice.
+  const startSignInRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    const off = window.claude?.social?.onPresenceEvent?.((ev) => {
+      if (ev.type !== "session-lost") return;
+      signInEpoch.current += 1; // a sign-in poll started before the loss must not resurrect the old session
+      void reloadFromStore().catch(() => { /* the next focus refresh corrects it */ });
+      if (getCapabilities().openExternal) announceSessionLost(() => { void startSignInRef.current(); });
+    });
+    return () => { off?.(); };
+  }, [reloadFromStore]);
 
   // Start the device-code OAuth flow.
   // Prevents concurrent flows with signInPending guard.
@@ -307,6 +325,8 @@ export function AccountProvider({
       clearInterval(timer);
     };
   }, [signedIn, refresh]);
+
+  startSignInRef.current = startSignIn;
 
   // Fix: memoize context value so consumers only re-render when signedIn / user /
   // signInPending / signInError actually change. Action fns (startSignIn, refresh,

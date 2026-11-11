@@ -149,7 +149,9 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/sync/remove-backend', 'dialog'),
   settings('settings/remote', 'dialog'),
   // Set up, with a paired phone and a paired tablet last used a while ago (the "Last used" line; 90-day sign-out).
-  { ...settings('settings/remote#devices', 'dialog'), params: { remotePreview: 'ready' } },
+  { ...settings('settings/remote#devices', 'dialog'), params: { remotePreview: 'ready' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
+  // Card #216: the same list with a phone signed out after 90 unused days, kept as a quiet row with Remove.
+  { ...settings('settings/remote#devices-expired', 'dialog'), params: { remotePreview: 'ready-expired' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   settings('settings/help', 'dialog'),
   // Scrolled to its last group, where Get beta builds and (#183) Install updates automatically sit.
   { ...settings('settings/help#updates', 'dialog'), open: [{ do: 'scroll', target: { role: 'button', labelStarts: 'Contribute to YouCoded' }, dir: 'down', times: 3 }] },
