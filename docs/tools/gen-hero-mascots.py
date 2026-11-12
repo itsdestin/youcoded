@@ -259,8 +259,10 @@ def button(slug, name, accent, warm, idle, acts) -> str:
     return (
         '<button class="mascot" data-theme="%s" data-idle="%s" data-acts="%s" data-face="welcome"\n'
         '  aria-label="Use the %s look" style="%s"><span class="m-chip"></span>\n'
-        '<svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">\n'
-        '%s\n</svg><span class="m-name">%s</span></button>'
+        # WHY the m-fig span: the idle motion runs on this plain box, never on the
+        # <svg> (see "LAYER 1" in index.html's RIGGED MASCOTS styles).
+        '<span class="m-fig"><svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">\n'
+        '%s\n</svg></span><span class="m-name">%s</span></button>'
     ) % (slug, idle, acts, name, style, body, name)
 
 
