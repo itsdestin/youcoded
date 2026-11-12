@@ -1249,7 +1249,10 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   history before any compaction or summary (`maybeCompact`, `compactNow`). A provider/profile
   change (`setBinding`) only marks `imagesRefitPending`; the next model request's `maybeCompact`,
   inside its turn, runs `fitImagesToLimits` in place of that gate, which SHRINKS an over-limit picture where
-  the resize worker can and falls back to the note where it cannot (card #66 f3). Same in-memory
+  the resize worker can and falls back to the note where it cannot (card #66 f3). The result is
+  adopted only if history is still the array it started from: a switch landing mid-shrink (its
+  strip rewrites history and origins) discards it and fits once more against the newest limits,
+  then the non-shrinking gate; a Stop mid-shrink discards it and re-marks the refit. Same in-memory
   rewrite and checkpoint trade-off as the many-image recovery below. A `/compact` run between the
   switch and the next send still uses the non-shrinking gate. The history rewrite itself lives
   in `harness/image-history.ts`.

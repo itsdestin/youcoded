@@ -2073,8 +2073,18 @@ export class HarnessSession extends EventEmitter {
   private collapseOversizedImages(limits: ImageLimits): boolean { return this.adoptImageRewrite(collapseOversizedImageParts(this.history, limits)); }
 
   private imagesRefitPending = false;   // set by a model switch; see setBinding's WHY (card #66 f3)
-  /** enforceImageLimits, but SHRINKING over-limit pictures first (fitHistoryToImageLimits). */
-  private async fitImagesToLimits(): Promise<boolean> { return this.adoptImageRewrite(await fitHistoryToImageLimits(this.history, this.imageLimits, this.opts.toolServices?.images, this.abort?.signal)); }
+  /** enforceImageLimits, but SHRINKING over-limit pictures first. WHY the checks after the await: a switch landing mid-shrink
+   *  rewrites history (its strip drops private parts, rebuilds historyOrigins); adopting a result built from the OLD array
+   *  would revive them and misalign origins. So: discard, fit once more against the newest limits, then the non-shrinking
+   *  gate (never loops). A Stop discards and re-marks, so the next request shrinks rather than leaving the note. */
+  private async fitImagesToLimits(again = true): Promise<boolean> {
+    const from = this.history, length = from.length, signal = this.abort?.signal;
+    const next = await fitHistoryToImageLimits(from, this.imageLimits, this.opts.toolServices?.images, signal);
+    if (signal?.aborted) { this.imagesRefitPending = true; return false; }
+    if (this.history === from && from.length === length) return this.adoptImageRewrite(next);
+    this.imagesRefitPending = false;
+    return again ? this.fitImagesToLimits(false) : this.enforceImageLimits();
+  }
 
   /** A step stopped at the output limit: queue the continue / split message and
    *  withdraw any cut-off tool card. False = recovery spent; end the turn as before. */

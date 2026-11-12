@@ -3438,6 +3438,30 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
     let index = 0;
     return new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: scripts[index++] ?? stream(finishChunk('stop')) }) }; } });
   };
+  /** An image service whose FIRST shrink waits until the test releases it (a slow resize
+   *  worker), so a model switch or a Stop can land while pictures are being shrunk. */
+  const heldShrinker = () => {
+    let release!: () => void; let started!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const running = new Promise<void>((r) => { started = r; });
+    const edges: number[] = [];
+    const images = { prepare: async () => ({ kind: 'unchanged' as const }), preparedPathFor: () => null,
+      shrinkBytes: async (bytes: Buffer, limits: any) => {
+        edges.push(limits.maxEdgePx);
+        if (edges.length === 1) { started(); await gate; }
+        const d = imageDimensions(bytes)!; const s = (limits.maxEdgePx * 0.9) / Math.max(d.width, d.height);
+        return { bytes: Buffer.concat([pngHeader(Math.floor(d.width * s), Math.floor(d.height * s)), Buffer.alloc(8)]), mediaType: 'image/png' as const };
+      } };
+    return { images, edges, release, running };
+  };
+  /** A provider-private reasoning message (ChatGPT's encrypted reasoning): a real switch strips it, dropping the whole message. */
+  const privateReasoning = { role: 'assistant', content: [{ type: 'reasoning', text: 'PRIVATE-THOUGHT', providerOptions: { openai: { itemId: 'rs_1' } } }] } as any;
+  const toolPicture = (session: HarnessSession) => (session as any).history.find((m: any) => m.role === 'tool').content[0].output.value[1].data.data as Buffer;
+  const expectStripHeld = (session: HarnessSession) => {
+    const history = (session as any).history as any[];
+    expect(JSON.stringify(history)).not.toContain('PRIVATE-THOUGHT');
+    expect((session as any).historyOrigins).toHaveLength(history.length);
+  };
 
   it('safety net: collapses the offending image to the note, retries ONCE, the turn completes, no tool rerun', async () => {
     const read = fakeTool('Read');
@@ -3518,6 +3542,24 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
       expect(session.imageLimits.maxEdgePx).toBe(2000);
       await session.send('more');
       expect(prompts).toHaveLength(3);                                                  // no second rejection
+    });
+
+    it('a switch landing while the rejected pictures shrink: the stale result is dropped, the strip holds, the retry fits the newest model', async () => {
+      const prompts: any[] = []; const held = heldShrinker();
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000, profile: anthropic(),
+        toolServices: { images: held.images } as any }), async () => rejectOnce(prompts) as any);
+      const seeded = wideHistory(); seeded.splice(3, 0, privateReasoning);
+      session.seedHistory(seeded);
+      const sending = session.send('continue');
+      await held.running;
+      session.setBinding({ providerId: 'chatgpt', modelId: 'gpt-y' }, null, { ...chatgpt(), imageLimits: { maxEdgePx: 1000, maxPatches: 30_000 } });
+      held.release();
+      await sending;
+      expectStripHeld(session);
+      expect(held.edges).toEqual([2000, 1000]);
+      expect(imageDimensions(toolPicture(session))).toEqual({ width: 900, height: 562 });
+      expect(prompts).toHaveLength(2);
+      expect(JSON.stringify(prompts[1].prompt)).not.toContain('PRIVATE-THOUGHT');
     });
 
     it('without an image service, falls back to the note for that picture and still recovers', async () => {
@@ -3613,6 +3655,48 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
       await session.send('now?');
       expect(calls).toHaveLength(1);
       expect(JSON.stringify(prompts[0].prompt)).toContain(NOTE);
+    });
+
+    it('a second switch landing while pictures shrink: the stale result is dropped, the strip holds, and the picture fits the newest model', async () => {
+      const prompts: any[] = []; const held = heldShrinker();
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax(),
+        toolServices: { images: held.images } as any }), async () => okModel(prompts) as any);
+      const seeded = blockedHistory(); seeded.splice(3, 0, privateReasoning);
+      session.seedHistory(seeded);
+      // Same model, stricter profile: marks the refit WITHOUT stripping, so the reasoning is still there when shrinking starts.
+      session.setBinding({ providerId: 'openrouter', modelId: 'm' }, null, chatgpt());
+      const sending = session.send('now?');
+      await held.running;
+      const strictest = { ...chatgpt(), imageLimits: { maxEdgePx: 500, maxPatches: 30_000 } };
+      session.setBinding({ providerId: 'anthropic', modelId: 'claude-x' }, null, strictest);   // strips the private reasoning
+      held.release();
+      await sending;
+      expectStripHeld(session);
+      expect(Math.max(imageDimensions(toolPicture(session))!.width, imageDimensions(toolPicture(session))!.height)).toBeLessThanOrEqual(500);
+      expect(held.edges).toEqual([8192, 500, 500]);                                    // shrunk again against the newest limits (ok.png is over 500 too)
+      const sent = JSON.stringify(prompts[0].prompt);
+      expect(sent).not.toContain('PRIVATE-THOUGHT');
+      expect(sent).not.toContain(NOTE);
+      expect(sent).not.toContain(huge.toString('base64'));
+    });
+
+    it('a Stop while pictures shrink leaves them for the next request to shrink, not to the note', async () => {
+      const prompts: any[] = []; const held = heldShrinker();
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax(),
+        toolServices: { images: held.images } as any }), async () => okModel(prompts) as any);
+      session.seedHistory(blockedHistory());
+      session.setBinding({ providerId: 'chatgpt', modelId: 'gpt-y' }, null, chatgpt());
+      const sending = session.send('now?');
+      await held.running;
+      session.interrupt();
+      held.release();
+      await sending;
+      expect(toolPicture(session)).toBe(huge);                                          // untouched: no note, no half-done rewrite
+      await session.send('again');
+      expect(held.edges).toHaveLength(2);
+      const sent = JSON.stringify(prompts.at(-1).prompt);
+      expect(sent).not.toContain(NOTE);
+      expect(sent).not.toContain(huge.toString('base64'));
     });
   });
 
