@@ -23,6 +23,9 @@ jobs:
           - os: macos-latest
             artifact: desktop/release/*.dmg
             name: macos
+          # WHY ubuntu-latest again (card #247, 2026-11-11): pinned to 24.04 for one commit while the
+          # 26.04 rpm was unproven. It is now proven to install on Fedora-family systems (see the
+          # note on the `formats` job in desktop-ci.yml), and the package checks run on this same image.
           - os: ubuntu-latest
             artifact: |
               desktop/release/*.AppImage
