@@ -1310,9 +1310,17 @@ body.iv2-rise.intro-go .flankrow{animation:iv2-rise .6s cubic-bezier(.22,1,.36,1
    proportions (.82s long on a .78s beat), so each exit still lands exactly on
    the next word's entry whatever the beat is. */
 body.iv2 .cycler-word{animation-duration:calc(var(--beat) * 1.0513)}
-body.iv2 .cycler-word-1{animation-delay:var(--beat)}
-body.iv2 .cycler-word-2{animation-delay:calc(var(--beat) * 2)}
-body.iv2 .cycler-word-3{animation-delay:calc(var(--beat) * 3)}
+/* WHY --lead is its own, shorter number (Destin, round 3: "the pause before
+   useful comes in is still a tad too long"): the wait before the FIRST word is
+   not a beat between words -- nothing is being read yet -- so it only needs to
+   outlast the headline's own arrival. The beat between words is unchanged. */
+body.iv2 .cycler-word-1{animation-delay:var(--lead)}
+body.iv2 .cycler-word-2{animation-delay:calc(var(--lead) + var(--beat))}
+body.iv2 .cycler-word-3{animation-delay:calc(var(--lead) + var(--beat) * 2)}
+/* The switcher shrinks to its first and last buttons on a phone-width window,
+   where the full box covered the headline it is there to show. */
+@media(max-width:700px){.iv2-bar{width:auto;flex-direction:row;padding:6px}
+  .iv2-bar span,.iv2-bar a:not(:first-child):not(:last-child){display:none}}
 /* The prototype's own switcher box; never present without ?intro=.
    WHY bottom-left and stacked: centred, it sat on the page's download pill. */
 .iv2-bar{position:fixed;left:12px;bottom:12px;z-index:9999;display:flex;flex-direction:column;
@@ -2138,7 +2146,8 @@ html{-webkit-tap-highlight-color:transparent}
   if (!today) {
     document.body.classList.add('iv2', 'iv2-' + start, 'iv2-' + motion);
     document.body.style.setProperty('--beat', beat + 'ms');
-    window.IV2_BEAT = beat;
+    document.body.style.setProperty('--lead', '520ms');
+    window.IV2_BEAT = beat; window.IV2_LEAD = 520;
   }
   document.addEventListener('DOMContentLoaded', function(){
     var bar = document.createElement('div'); bar.className = 'iv2-bar';
@@ -4745,7 +4754,13 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
     if (!flank || !document.body.classList.contains('intro-mode')) return;
     flank.style.setProperty('--intro-lift', '0px');
     var r = flank.getBoundingClientRect();
-    var lift = Math.round(innerHeight / 2 - (r.top + r.height / 2));
+    // WHY subtract the entrance's own offset (PROTOTYPE, measured 2026-11-12):
+    // this also runs when the web fonts finish, which can land WHILE the
+    // "rising up" entrance is still sliding the row up from 40px low. The
+    // measurement then included that temporary offset and the headline
+    // settled 40px above the middle of the window for the whole intro.
+    var slid = parseFloat((getComputedStyle(flank).translate || '').split(' ')[1]) || 0;
+    var lift = Math.round(innerHeight / 2 - (r.top - slid + r.height / 2));
     flank.style.setProperty('--intro-lift', (lift > 0 ? lift : 0) + 'px');
   }
   setLift();
@@ -4805,6 +4820,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // PROTOTYPE: see body.iv2 in the stylesheet.
   var IV2 = document.body.classList.contains('iv2');
   var BEAT = window.IV2_BEAT || 780;
+  var LEAD = window.IV2_LEAD || 520;   // headline's arrival -> first word
   // "Closed up" start: the word slot begins at zero width, so the headline
   // arrives as a centred, complete-looking phrase instead of one with a hole
   // at the end; step -1 means "no word yet".
@@ -4817,6 +4833,26 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       if (introEnded) return;          // a mascot click already took over
       // Measure in the real font and re-centre before anything moves.
       slots.forEach(function(sl){ sl.w = measure(sl.el); });
+      // PROTOTYPE, closed-up start. WHY this check (measured 2026-11-12 on a
+      // 430px-wide phone): closed, "Make Your Technology" fitted on ONE line,
+      // and the moment "Useful." opened its slot the headline re-wrapped to
+      // two, shoving the robots down mid-animation. Starting closed is only
+      // safe when opening the slot cannot change how many lines the headline
+      // takes; where it would, the space is held open from the start instead.
+      // Transitions are off for the test so the widths apply at once.
+      if (CLOSED) {
+        var h1 = flank && flank.querySelector('h1');
+        var tall = function(step){
+          slots.forEach(function(sl){ sl.el.style.transition = 'none'; });
+          applyStep(step);
+          return h1 ? h1.getBoundingClientRect().height : 0;
+        };
+        var shut = tall(-1), open = Math.max(tall(0), tall(1), tall(2));
+        if (Math.abs(open - shut) > 1) { CLOSED = false; curStep = 0; }
+        applyStep(curStep);
+        if (h1) h1.getBoundingClientRect();          // settle before transitions return
+        slots.forEach(function(sl){ sl.el.style.transition = ''; });
+      }
       applyStep(curStep);
       setLift();
       document.body.classList.add('intro-go');
@@ -4824,9 +4860,18 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
         // PROTOTYPE (body.iv2): every step sits on one even beat, counted from
         // the moment the headline arrives. Each theme still leads its word by
         // the shipped 100ms so the colour change finishes as the word settles.
-        var at = IV2 ? BEAT * (i + 1) - 100 : step.at;
+        var at = IV2 ? LEAD + BEAT * i - 100 : step.at;
+        // WHY the slot opens early on the first word (Destin, round 3: "the
+        // first move just seems a little too aggressive like the icons barely
+        // make it out of the way"). From closed, the line has to slide a whole
+        // word's width apart, and the word used to bump in 100ms into that
+        // slide -- on top of the robots that had not moved yet. The slide now
+        // starts 280ms ahead, so it is nearly finished when the word lands.
+        var openEarly = IV2 && CLOSED && i === 0;
+        if (openEarly) timers.push(setTimeout(function(){ curStep = 0; applyStep(0); }, LEAD - 280));
         timers.push(setTimeout(function(){
           applyTheme(step.theme);
+          if (openEarly) return;
           curStep = i;
           applyStep(i);
         }, at));
@@ -4835,7 +4880,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       // 820ms). The rise fires right on that settle now -- the pause that used to
       // sit between them is what read as a slow tail.
       // PROTOTYPE: same 180ms after the last word as shipped (2360 - 2180).
-      timers.push(setTimeout(endIntro, IV2 ? BEAT * 3 + 180 : 2360));
+      timers.push(setTimeout(endIntro, IV2 ? LEAD + BEAT * 2 + 180 : 2360));
     });
   }
   function introReady(){
