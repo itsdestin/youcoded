@@ -1283,59 +1283,56 @@ body.intro-mode > footer{transform:translateY(34px)}
   body.intro-mode .flankrow{transform:none}}
 
 
-/* ==== PROTOTYPE 2026-11-12, round 2: intro entrance options (body.iv2) =======
-   WHY: Destin, 2026-11-12 -- every load sat frozen on "Make Your Technology ___"
-   with an empty slot (up to 0.7s waiting for the font and wallpapers, then
-   another 0.62s before "Useful." bumped in). Round 1 brought the headline in
-   with "Useful." already showing; he rejected it: "it feels like it *starts*
-   with useful, then just does a 2-item cycle. i want it to feel like it starts
-   purple, then move through all 3 items ... the timing/beat needs to feel
-   satisfying and consistent".
-   So: nothing shows until the font and wallpapers are ready, then the headline
-   arrives ON THE PURPLE THEME, and all three words bump in on one even beat
-   (--beat): "Useful." one beat after the headline, "Fun." two, "Yours." three.
-   Switched on by ?intro=<start>-<motion>-<beat ms> (script right after <body>).
-   Nothing here applies without body.iv2, so the page as shipped is unchanged.
+/* ==== The opening intro, 2026-11-12 (body.iv2) ==============================
+   WHY (Destin, 2026-11-12): every load sat frozen on "Make Your Technology ___"
+   with an empty slot -- up to 0.7s waiting for the font and wallpapers, then
+   another 0.62s before "Useful." bumped in. Settled over seven rounds with him:
+     1. Nothing shows until the fonts and wallpapers are ready (700ms cap).
+     2. The nav and the headline row rise in together ON THE PURPLE THEME, the
+        headline CLOSED UP -- "Make Your Technology" centred, no empty slot --
+        with the robots a little apart from it.
+     3. --lead later the line opens and "Useful." arrives letter by letter;
+        "Fun." and "Yours." bump up one --beat apart; the page rises in.
+   He rejected arriving with "Useful." already showing ("feels like it *starts*
+   with useful, then just does a 2-item cycle").
+   The script half is the word-cycler block at the end of the page.
 
    The entrance uses the separate `translate` property, never `transform`:
    .flankrow's transform is the intro's centring lift (above). */
+body.iv2{--beat:720ms;--lead:620ms}
 body.iv2:not(.intro-go):not(.cycler-static) .nav,
 body.iv2:not(.intro-go):not(.cycler-static) .flankrow{opacity:0}
 body.iv2.intro-go .nav{animation:iv2-fade .45s ease backwards}
-body.iv2-fade.intro-go .flankrow{animation:iv2-fade .5s ease backwards}
-body.iv2-rise.intro-go .flankrow{animation:iv2-rise .45s cubic-bezier(.22,1,.36,1) backwards}
+body.iv2.intro-go .flankrow{animation:iv2-rise .45s cubic-bezier(.22,1,.36,1) backwards}
 @keyframes iv2-fade{from{opacity:0}}
 @keyframes iv2-rise{from{opacity:0;translate:0 26px}}
-/* One beat between every step. The word's own animation keeps the shipped
+/* One beat between words. A word's own animation keeps the original
    proportions (.82s long on a .78s beat), so each exit still lands exactly on
-   the next word's entry whatever the beat is. */
+   the next word's entry whatever the beat is.
+   WHY --lead is its own, shorter number ("the pause before useful comes in is
+   still a tad too long"): the wait before the FIRST word is not a beat between
+   words -- nothing is being read yet -- so it only has to outlast the
+   headline's own arrival. */
 body.iv2 .cycler-word{animation-duration:calc(var(--beat) * 1.0513)}
-/* WHY --lead is its own, shorter number (Destin, round 3: "the pause before
-   useful comes in is still a tad too long"): the wait before the FIRST word is
-   not a beat between words -- nothing is being read yet -- so it only needs to
-   outlast the headline's own arrival. The beat between words is unchanged. */
-body.iv2 .cycler-word-1{animation-delay:var(--lead)}
 body.iv2 .cycler-word-2{animation-delay:calc(var(--lead) + var(--beat))}
 body.iv2 .cycler-word-3{animation-delay:calc(var(--lead) + var(--beat) * 2)}
-/* First word from a closed-up start: the word is clipped to its slot so the
-   opening reveals it (see the sequence script), and the opening itself is a
-   little longer and softer than the snap used between words, because it
-   travels about four times as far. */
-body.iv2-first .cycler-stage{clip-path:inset(0 -5px 0 0)}
+/* The first opening travels about four times as far as the shifts between
+   later words, so it gets a slightly softer curve than their snap. */
 body.iv2-first .word-cycler{transition:width .5s cubic-bezier(.22,.9,.32,1)}
-/* The tint now lives inside each wallpaper layer (see flip() in applyTheme). */
+/* The wallpaper's tint lives inside each wallpaper layer (flip() in
+   applyTheme), so it crossfades with the picture; this element is unused. */
 body.iv2 .bd-scrim{display:none}
 /* During the intro the wallpaper lands a little sooner after its word (.5s,
-   not .65s): with 0.7s between words the old fade had barely finished before
-   the next one began, so the background never came to rest. */
+   not .65s): with 0.72s between words the longer fade had barely finished
+   before the next began, so the background never came to rest. */
 body.iv2.intro-mode .bd-layer{transition:opacity .5s ease}
-/* "Robots start" option (Destin, round 5: "start the empty 'make your
+/* Robots start a little apart (Destin: "start the empty 'make your
    technology...' state with the icons slightly further to the left/right of
    the text ... that way they maybe have to move just a bit less to fit the
    first 'useful'"). While the headline is still closed (body.iv2-shut) it
-   carries extra room on both sides, a share of the first word's width set by
+   carries extra room on both sides, half of what the first word needs, set by
    the script; that room is handed back, on the same curve, as the slot opens,
-   so the robots travel only what is left. Wide layout only: at 1020px and
+   so the robots travel only the other half. Wide layout only: at 1020px and
    below the robots sit UNDER the headline and there is nothing to spread. */
 @media(min-width:1021px){
   /* WHY :not(.iv2-shut): the transition must exist only on the way OUT. With it
@@ -1344,60 +1341,33 @@ body.iv2.intro-mode .bd-layer{transition:opacity .5s ease}
   body.iv2:not(.iv2-shut) .hero-flank .flankrow h1{transition:margin .5s cubic-bezier(.22,.9,.32,1)}
   body.iv2-shut .hero-flank .flankrow h1{margin:0 var(--iv2-spread,0px)}
 }
-/* ---- First word, left-to-right options (body.iv2-u) -------------------------
-   The word no longer rides the shared bump. Three small animations instead:
-     iv2-show    switches it on, already in place, as its reveal begins;
-     iv2-reveal-* the left-to-right reveal itself (one per option);
-     iv2-leave   the same bump-out exit as before, on the same clock, so
-                 "Fun." still lands exactly as "Useful." leaves.
+/* ---- The first word arrives letter by letter --------------------------------
+   Destin picked this over sliding up, two wipes and a slide-out (round 7).
+   "Useful." does not ride the shared bump. Instead:
+     iv2-show   switches the word on, already in place, as its letters begin;
+     iv2-letter each letter (wrapped in <b> by the script) pops up 24ms after
+                the one before;
+     iv2-leave  the same bump-out exit as the other words, on the same clock,
+                so "Fun." still lands exactly as "Useful." leaves.
    ON THE BEAT: a bumped word is readable ~80ms after its beat and settled by
-   ~160ms. The reveal therefore starts 100ms BEFORE the beat and ends 140ms
-   after it, so its middle -- the moment the word reads -- sits where the
-   bump's does. Frame-traced against the opening slot so the word's leading
-   edge never gets ahead of the room being made for it. */
-body.iv2-u .cycler-word-1{
-  animation-name:iv2-show,iv2-leave,iv2-reveal-wipe;
-  animation-duration:1ms,calc(var(--beat) * .1577),240ms;
-  animation-delay:calc(var(--lead) - 100ms),calc(var(--lead) + var(--beat) * .8936),calc(var(--lead) - 100ms);
-  animation-timing-function:linear,linear,cubic-bezier(.3,.6,.35,1);
-  animation-fill-mode:forwards,forwards,both}
+   ~160ms. The letters start 110ms BEFORE the beat and the last lands ~170ms
+   after it, so the word reads at the same moment a bumped one does.
+   Frame-traced against the opening slot: the newest letter never gets ahead
+   of the room being made for it. */
+body.iv2 .cycler-word-1{
+  animation-name:iv2-show,iv2-leave;
+  animation-duration:1ms,calc(var(--beat) * .1577);
+  animation-delay:calc(var(--lead) - 110ms),calc(var(--lead) + var(--beat) * .8936);
+  animation-timing-function:linear;animation-fill-mode:forwards}
 @keyframes iv2-show{to{opacity:1;transform:none}}
 @keyframes iv2-leave{0%{transform:translateY(0);opacity:1} 47%{transform:translateY(4%);opacity:1}
   100%{transform:translateY(-110%);opacity:0}}
-/* The reveal runs on its own clock, so the slot must not also clip the word. */
-body.iv2-u.iv2-first .cycler-stage{clip-path:inset(0 -50vw 0 0)}
-@keyframes iv2-reveal-wipe{from{clip-path:inset(-20% 100% -20% 0)} to{clip-path:inset(-20% -6px -20% 0)}}
-body.iv2-u-soft .cycler-word-1{animation-name:iv2-show,iv2-leave,iv2-reveal-soft;
-  -webkit-mask-image:linear-gradient(90deg,#000 0 40%,transparent 60% 100%);mask-image:linear-gradient(90deg,#000 0 40%,transparent 60% 100%);
-  -webkit-mask-size:300% 100%;mask-size:300% 100%;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat}
-@keyframes iv2-reveal-soft{from{-webkit-mask-position:100% 0;mask-position:100% 0} to{-webkit-mask-position:0 0;mask-position:0 0}}
-/* Sliding out: the word travels right from fully behind the end of
-   "Technology"; the clip keeps whatever is still behind it hidden. */
-body.iv2-u-slide .cycler-word-1{animation-name:iv2-show,iv2-leave,iv2-reveal-slide}
-@keyframes iv2-reveal-slide{from{translate:-100% 0;clip-path:inset(-20% -6px -20% 100%)}
-  to{translate:0 0;clip-path:inset(-20% -6px -20% 0)}}
-/* Letter by letter: the word itself is simply on; each letter (split by the
-   script) pops up 24ms after the one before, the last landing ~170ms after
-   the beat. */
-body.iv2-u-letters .cycler-word-1{animation-name:iv2-show,iv2-leave,none}
-body.iv2-u-letters .cycler-word-1 b{display:inline-block;font:inherit;opacity:0;
+body.iv2 .cycler-word-1 b{display:inline-block;font:inherit;opacity:0;
   animation:iv2-letter 140ms cubic-bezier(.3,.6,.35,1) both;
   animation-delay:calc(var(--lead) - 110ms + var(--i) * 24ms)}
-body.iv2-u-letters:not(.intro-go) .cycler-word-1 b{animation-play-state:paused}
+body.iv2:not(.intro-go) .cycler-word-1 b{animation-play-state:paused}
 @keyframes iv2-letter{from{opacity:0;transform:translateY(38%)} to{opacity:1;transform:none}}
 body.cycler-static .cycler-word-1 b{animation:none}
-/* The switcher shrinks to its first and last buttons on a phone-width window,
-   where the full box covered the headline it is there to show. */
-@media(max-width:700px){.iv2-bar{width:auto;flex-direction:row;padding:6px}
-  .iv2-bar span,.iv2-bar a:not(:first-child):not(:last-child){display:none}}
-/* The prototype's own switcher box; never present without ?intro=.
-   WHY bottom-left and stacked: centred, it sat on the page's download pill. */
-.iv2-bar{position:fixed;left:12px;bottom:12px;z-index:9999;display:flex;flex-direction:column;
-  gap:5px;align-items:stretch;text-align:center;width:170px;padding:8px 10px;border-radius:14px;
-  background:rgba(20,14,28,.92);color:#fff;font:500 13px/1.2 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35)}
-.iv2-bar a{color:#fff;text-decoration:none;padding:6px 10px;border-radius:9px;background:rgba(255,255,255,.12)}
-.iv2-bar a.on{background:#B77BE0;color:#1a0f24}
-.iv2-bar span{opacity:.65;padding-top:3px}
 
 /* ---- Headline size classes for the wording variants (2026-08-31) ----------
    The headline sits BETWEEN two mascot groups in a centred flex row, so its
@@ -2197,41 +2167,7 @@ html{-webkit-tap-highlight-color:transparent}
 }
 
 </style></head>
-<body class="intro-mode fade-d pill-accent legend-on h1-md">
-<script>
-/* PROTOTYPE 2026-11-12 (intro entrance; see body.iv2 in the stylesheet).
-   WHY here, first thing in <body>: the classes must be on before the first
-   paint, or the old half-empty headline flashes before the new intro starts.
-   LOCKED by Destin (rounds 2-6): headline starts closed up, rises in, robots
-   start a little apart, 720ms between words. The one thing still open is how
-   the FIRST word arrives (round 7: "having useful kinda slide out/unveil
-   left-to-right instead of sliding up"):
-     up      bumps up from below, like the other two words
-     wipe    uncovered left to right, hard edge
-     soft    uncovered left to right, feathered edge
-     slide   slides out to the right from behind "Technology"
-     letters its letters pop in one after another, left to right */
-(function(){
-  var m = /[?&]intro=(up|wipe|soft|slide|letters)\b/.exec(location.search);
-  if (!m) return;
-  var first = m[1];
-  document.body.classList.add('iv2', 'iv2-closed', 'iv2-rise');
-  if (first !== 'up') document.body.classList.add('iv2-u', 'iv2-u-' + first);
-  document.body.style.setProperty('--beat', '720ms');
-  document.body.style.setProperty('--lead', '620ms');
-  window.IV2_BEAT = 720; window.IV2_LEAD = 620; window.IV2_SPREAD = 0.5;
-  document.addEventListener('DOMContentLoaded', function(){
-    var bar = document.createElement('div'); bar.className = 'iv2-bar';
-    var html = '<span>"Useful." arrives by</span>';
-    [['up','Sliding up (as now)'],['wipe','Wipe'],['soft','Soft wipe'],['slide','Sliding out'],['letters','Letter by letter']].forEach(function(o){
-      html += '<a href="?intro=' + o[0] + '"' + (o[0] === first ? ' class="on"' : '') + '>' + o[1] + '</a>';
-    });
-    html += '<span></span><a href="' + location.search + '">Replay</a>';
-    bar.innerHTML = html;
-    document.body.appendChild(bar);
-  });
-})();
-</script>
+<body class="intro-mode fade-d pill-accent legend-on h1-md iv2">
 
 <div class="backdrop" id="backdrop"><div class="bd-layer" id="bd-a"></div><div class="bd-layer" id="bd-b"></div><div class="bd-scrim"></div></div>
 
@@ -2918,16 +2854,14 @@ function applyTheme(slug){
     if (ticket !== fadeTicket) return;
     fadeTicket++;                      // the cap and the decode both call this; first one wins
     var next = useA ? bdB : bdA, cur = useA ? bdA : bdB;
-    // PROTOTYPE (body.iv2), traced 2026-11-12: the tint over the wallpaper
-    // (.bd-scrim) is a gradient built from a colour variable, and browsers do
-    // not fade gradients -- so on every theme change the whole window's tint
-    // SNAPPED to the new theme in one frame while the wallpaper under it took
-    // .65s to follow (light-purple picture under a near-black tint, and back).
-    // Painting the tint INTO each wallpaper layer makes it part of the same
+    // WHY the tint is painted INTO the layer (traced 2026-11-12): it used to be
+    // a separate element (.bd-scrim), a gradient built from a colour variable,
+    // and browsers do not fade gradients -- so on every theme change the whole
+    // window's tint SNAPPED to the new theme in one frame while the wallpaper
+    // under it took .65s to follow. As part of the layer it rides the same
     // opacity crossfade, which the graphics card does without redrawing.
-    next.style.background = document.body.classList.contains('iv2')
-      ? 'linear-gradient(rgba(' + rgb(t.canvas) + ',.30), rgba(' + rgb(t.canvas) + ',.62) 55%, rgba(' + rgb(t.canvas) + ',.86)), ' + backdropCss(t)
-      : backdropCss(t);
+    var tint = rgb(t.canvas);
+    next.style.background = 'linear-gradient(rgba(' + tint + ',.30), rgba(' + tint + ',.62) 55%, rgba(' + tint + ',.86)), ' + backdropCss(t);
     next.style.backgroundSize = 'cover'; next.style.backgroundPosition = 'center';
     next.style.opacity = 1; cur.style.opacity = 0; useA = !useA;
   };
@@ -2964,13 +2898,13 @@ function applyTheme(slug){
   requestAnimationFrame(function(){ setTimeout(function(){
     if (syncTicket === embedSyncTicket) syncEmbedTheme();
   }, 0); });
-  // PROTOTYPE (body.iv2), measured 2026-11-12: during the intro the demo
+  // WHY skipped during the intro (measured 2026-11-12): the demo
   // window is invisible, yet every word swapped its still picture (a decode of
   // a large image nobody can see) and re-measured its rounded mask, which
   // forces the browser to restyle the whole page on the spot -- 14-45ms of
   // stall at the exact moment each word's slide begins. Both now wait for the
   // intro's end (the listener just below), when the demo is about to appear.
-  if (document.body.classList.contains('iv2') && document.body.classList.contains('intro-mode')) {
+  if (document.body.classList.contains('intro-mode')) {
     rethemeClips(slug);
     return;
   }
@@ -2979,7 +2913,6 @@ function applyTheme(slug){
   if (typeof maskEmbed === 'function') maskEmbed();
 }
 document.addEventListener('yc:intro-end', function(){
-  if (!document.body.classList.contains('iv2')) return;
   setEmbedPoster();
   if (typeof maskEmbed === 'function') maskEmbed();
 });
@@ -4763,9 +4696,9 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 (function(){
   var cyclers = [].slice.call(document.querySelectorAll('.word-cycler'));
   if (!cyclers.length) return;
-  // PROTOTYPE ("Letter by letter"): wrap each letter of the first word so it
-  // can arrive on its own. Done before anything is measured.
-  if (document.body.classList.contains('iv2-u-letters')) {
+  // The first word arrives letter by letter (see the stylesheet): wrap each
+  // letter so it can animate on its own. Done before anything is measured.
+  {
     var w1 = document.querySelector('.cycler-word-1'), txt = w1.textContent;
     w1.textContent = '';
     txt.split('').forEach(function(ch, i){
@@ -4773,12 +4706,12 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
     });
   }
 
+  // Themes in the order their words arrive; timing comes from LEAD and BEAT
+  // (below), which mirror --lead and --beat in the stylesheet.
   var HERO_SEQUENCE = [
-    // 100ms ahead of each word's CSS delay (.62 / 1.40 / 2.18s) so the 0.5s
-    // theme crossfade completes exactly as the word settles.
-    { theme: 'golden-sunbreak',     at: 520  },   // "Useful."
-    { theme: 'halftone-dimension',  at: 1300 },   // "Fun."
-    { theme: 'youcoded',           at: 2080 }    // "Yours." - rests here
+    { theme: 'golden-sunbreak' },      // "Useful."
+    { theme: 'halftone-dimension' },   // "Fun."
+    { theme: 'youcoded' }              // "Yours." - rests here
   ];
 
   // Each word is measured at its natural size by cloning it into the cycler
@@ -4827,11 +4760,15 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   }
   function cancel(){
     timers.forEach(clearTimeout); timers = [];
-    document.body.classList.remove('iv2-first', 'iv2-shut');   // PROTOTYPE: their removal timers were just cleared
-    // Taken over before the words were released: they would stay paused and the
-    // slot empty, so show the resting word the way the static path does.
-    if (!document.body.classList.contains('intro-go')) {
+    document.body.classList.remove('iv2-first', 'iv2-shut');   // their removal timers were just cleared
+    // Taken over mid-intro: go straight to the resting word, the way the static
+    // path does. WHY always (2026-11-12), not only before the words were
+    // released: the timers that open the word's slot were just cleared, and the
+    // headline now starts CLOSED -- left alone, the words kept animating into a
+    // zero-width slot, drawn on top of the robots.
+    if (!introEnded) {
       document.body.classList.add('cycler-static');
+      curStep = 2;
       applyStep(2);
     }
     endIntro();
@@ -4849,7 +4786,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
     if (!flank || !document.body.classList.contains('intro-mode')) return;
     flank.style.setProperty('--intro-lift', '0px');
     var r = flank.getBoundingClientRect();
-    // WHY subtract the entrance's own offset (PROTOTYPE, measured 2026-11-12):
+    // WHY subtract the entrance's own offset (measured 2026-11-12):
     // this also runs when the web fonts finish, which can land WHILE the
     // "rising up" entrance is still sliding the row up from 40px low. The
     // measurement then included that temporary offset and the headline
@@ -4867,7 +4804,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   function applyStep(i){
     slots.forEach(function(sl){
       var wide = 0;
-      if (i < 0) { setWidth(sl.el, 0); return; }   // PROTOTYPE: closed-up start
+      if (i < 0) { setWidth(sl.el, 0); return; }   // -1 = closed up, no word yet
       sl.steps[i].forEach(function(idx){ if (idx >= 0 && sl.w[idx] > wide) wide = sl.w[idx]; });
       setWidth(sl.el, wide);
     });
@@ -4885,8 +4822,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // ends the line -- there is nothing after it to shove -- but mid-sentence it
   // drags the rest of the headline (and both mascot groups, since the row is
   // centred) left and right on every beat.
-  // (CLOSED is assigned further down; `var` would still be undefined here.)
-  var curStep = document.body.classList.contains('iv2-closed') ? -1 : 0;
+  var curStep = -1;                    // the headline starts closed up
   applyStep(curStep);
   // Widths measured before the web font arrives are the FALLBACK font's, and it
   // is wider -- that is where 42px of dead space after the final word came from.
@@ -4912,15 +4848,14 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // On a simulated 3 Mbit/s link with 70ms latency everything was ready in
   // ~110ms; 700ms is headroom above that, and the most a bad link can add.
   var START_CAP_MS = 700;
-  // PROTOTYPE: see body.iv2 in the stylesheet.
-  var IV2 = document.body.classList.contains('iv2');
-  var BEAT = window.IV2_BEAT || 780;
-  var LEAD = window.IV2_LEAD || 620;
-  var SPREAD = window.IV2_SPREAD || 0;         // "Robots start" option, 0..1   // headline's arrival -> first word
-  // "Closed up" start: the word slot begins at zero width, so the headline
-  // arrives as a centred, complete-looking phrase instead of one with a hole
-  // at the end; step -1 means "no word yet".
-  var CLOSED = document.body.classList.contains('iv2-closed');
+  // Keep in step with --beat and --lead on body.iv2 in the stylesheet.
+  var BEAT = 720;                      // between words
+  var LEAD = 620;                      // headline's arrival -> first word
+  var SPREAD = 0.5;                    // share of the first word's room the robots start with
+  // The word slot begins at zero width, so the headline arrives as a centred,
+  // complete-looking phrase instead of one with a hole at the end. Turned off
+  // below where opening the slot would re-wrap the headline.
+  var CLOSED = true;
   var started = false;
   function beginSequence(){
     if (started) return;
@@ -4929,7 +4864,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       if (introEnded) return;          // a mascot click already took over
       // Measure in the real font and re-centre before anything moves.
       slots.forEach(function(sl){ sl.w = measure(sl.el); });
-      // PROTOTYPE, closed-up start. WHY this check (measured 2026-11-12 on a
+      // WHY this check (measured 2026-11-12 on a
       // 430px-wide phone): closed, "Make Your Technology" fitted on ONE line,
       // and the moment "Useful." opened its slot the headline re-wrapped to
       // two, shoving the robots down mid-animation. Starting closed is only
@@ -4945,8 +4880,8 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
         };
         var shut = tall(-1), open = Math.max(tall(0), tall(1), tall(2));
         if (Math.abs(open - shut) > 1) { CLOSED = false; curStep = 0; }
-        // "Robots start": extra room each side while closed, as a share of
-        // half the first word's width (1 = the robots never move for it).
+        // Robots start a little apart: extra room each side while closed, as a
+        // share of half the first word's width (see body.iv2-shut).
         if (CLOSED && SPREAD && slots[0]) {
           flank.style.setProperty('--iv2-spread', Math.round(SPREAD * (slots[0].w[0] + 4) / 2) + 'px');
           document.body.classList.add('iv2-shut');
@@ -4958,28 +4893,25 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       applyStep(curStep);
       setLift();
       document.body.classList.add('intro-go');
-      if (IV2 && CLOSED) {
+      if (CLOSED) {
         document.body.classList.add('iv2-first');
         // Off again just before the second word's own changes begin.
         timers.push(setTimeout(function(){ document.body.classList.remove('iv2-first'); }, LEAD + BEAT - 150));
       }
       HERO_SEQUENCE.forEach(function(step, i){
-        // PROTOTYPE (body.iv2): every step sits on one even beat, counted from
-        // the moment the headline arrives. Each theme still leads its word by
-        // the shipped 100ms so the colour change finishes as the word settles.
-        var at = IV2 ? LEAD + BEAT * i - 100 : step.at;
-        // WHY the first word is different (rounds 2-4, frame-traced 2026-11-12).
-        // From closed, the line has to open a whole word's width (194px on a
-        // desktop, against ~50px between later words). Round 2 opened it 100ms
-        // ahead like the other beats and the word landed while the robots were
-        // still in its way ("the icons barely make it out of the way"); round 3
-        // opened it 280ms ahead and the empty gap sliding open on its own read
-        // as a separate, odd move, with the background changing on a third
-        // clock. Now ONE thing happens: background and opening start together,
-        // a touch earlier than on later beats, and until the next beat the word
-        // is clipped to its slot (body.iv2-first), so it is revealed BY the
-        // opening instead of racing the robots across it.
-        if (IV2 && CLOSED && i === 0) at = LEAD - 140;
+        // Every step sits on one even beat, counted from the moment the headline
+        // arrives. Each theme leads its word by 100ms so the colour change is
+        // well under way as the word lands.
+        var at = LEAD + BEAT * i - 100;
+        // WHY the first word starts its changes 40ms earlier (rounds 2-4,
+        // frame-traced 2026-11-12). From closed, the line has to open a whole
+        // word's width (about four times the shift between later words). With
+        // the usual 100ms head start the word landed while the robots were
+        // still in its way ("the icons barely make it out of the way"); opening
+        // it much earlier, on its own, read as a separate odd move with the
+        // background on a third clock. So background and opening start
+        // TOGETHER, just early enough that the room is there for each letter.
+        if (CLOSED && i === 0) at = LEAD - 140;
         timers.push(setTimeout(function(){
           applyTheme(step.theme);
           curStep = i;
@@ -4987,11 +4919,10 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
           document.body.classList.remove('iv2-shut');   // hand the spare room back as the slot opens
         }, at));
       });
-      // 'Yours.' starts at 2180 and settles ~2344 (its bump is done at 20% of
-      // 820ms). The rise fires right on that settle now -- the pause that used to
-      // sit between them is what read as a slow tail.
-      // PROTOTYPE: same 180ms after the last word as shipped (2360 - 2180).
-      timers.push(setTimeout(endIntro, IV2 ? LEAD + BEAT * 2 + 180 : 2360));
+      // The page rises 180ms after the last word's beat, right as its bump
+      // settles (20% into its animation) -- a pause between the two is what
+      // once read as a slow tail.
+      timers.push(setTimeout(endIntro, LEAD + BEAT * 2 + 180));
     });
   }
   function introReady(){
@@ -5011,7 +4942,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
     return Promise.all(waits);
   }
   if (window.Promise) {
-    // PROTOTYPE (body.iv2), measured 2026-11-12: the moment the fonts and
+    // WHY the extra wait (measured 2026-11-12): the moment the fonts and
     // wallpapers land is also when the browser re-lays-out the whole page in
     // the new fonts and decodes the pictures -- one 0.1-0.25s burst of work.
     // The entrance used to start INSIDE that burst, so its first frames were
@@ -5019,7 +4950,6 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
     // every font (not only the headline's), then lets two frames go by so the
     // burst is over before anything moves. Still under the same 700ms cap.
     introReady().then(function(){
-      if (!IV2) return beginSequence();
       var all = (document.fonts && document.fonts.ready) || Promise.resolve();
       all.then(function(){ requestAnimationFrame(function(){ requestAnimationFrame(beginSequence); }); });
     });
