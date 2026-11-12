@@ -1283,6 +1283,56 @@ body.intro-mode > footer{transform:translateY(34px)}
   body.intro-mode .flankrow{transform:none}}
 
 
+/* ==== PROTOTYPE 2026-11-12: intro entrance options (body.iv2) ===============
+   WHY: Destin, 2026-11-12 -- every load sat frozen on "Make Your Technology ___"
+   with an empty slot (up to 0.7s waiting for the font and wallpapers, then
+   another 0.62s before "Useful." bumped in). These options instead hold a plain
+   purple screen for that wait, then bring the headline in COMPLETE, with
+   "Useful." already in its slot, and only then start the word cycle.
+   Switched on by ?intro=<style>[-page] (script right after <body>). Nothing
+   here applies without body.iv2, so the page as shipped is unchanged. Once he
+   picks, the chosen option becomes the default and the rest is deleted.
+
+   The entrance uses the separate `translate` / `scale` properties, never
+   `transform`: .flankrow's transform is the intro's centring lift (above). */
+body.iv2:not(.intro-go):not(.cycler-static) .nav,
+body.iv2:not(.intro-go):not(.cycler-static) .flankrow{opacity:0}
+body.iv2.intro-go .nav{animation:iv2-fade .6s ease backwards}
+body.iv2-fade.intro-go .flankrow{animation:iv2-fade .6s ease backwards}
+body.iv2-rise.intro-go .flankrow{animation:iv2-rise .75s cubic-bezier(.22,1,.36,1) backwards}
+body.iv2-zoom.intro-go .flankrow{animation:iv2-zoom .75s cubic-bezier(.22,1,.36,1) backwards}
+@keyframes iv2-fade{from{opacity:0}}
+@keyframes iv2-rise{from{opacity:0;translate:0 48px}}
+@keyframes iv2-zoom{from{opacity:0;scale:.93;filter:blur(8px)}}
+/* "Useful." is there from the start, so it only needs its EXIT: the last 15%
+   of the old .82s bump (starting at .62s + 85% of .82s = 1.317s), which lands
+   on "Fun."'s entry exactly as before. Words two and three are untouched. */
+body.iv2 .cycler-word-1{opacity:1;transform:none;
+  animation-name:iv2-leave;animation-delay:1.317s;animation-duration:.123s}
+@keyframes iv2-leave{0%{transform:translateY(0);opacity:1} 47%{transform:translateY(4%);opacity:1}
+  100%{transform:translateY(-110%);opacity:0}}
+/* "-page" options: the whole page arrives WITH the headline instead of after
+   the last word. The headline starts in its real place (no centring lift), and
+   the page's own existing .55s fade/rise carries everything in. body.intro-mode
+   stays on until the last word so the scripts that wait for the intro's end
+   (the live demo's boot, the clips) behave exactly as they do today. */
+body.iv2-full.intro-mode .flankrow{transform:none}
+body.iv2-full.intro-mode :is(.kicker,.hero-sub,.dlrow,.hero-app,.dlfloat),
+body.iv2-full.intro-mode > :is(section,footer){opacity:1;pointer-events:auto;transform:none}
+body.iv2-full.intro-mode:not(.intro-go):not(.cycler-static) :is(.kicker,.hero-sub,.dlrow,.hero-app,.dlfloat),
+body.iv2-full.intro-mode:not(.intro-go):not(.cycler-static) > :is(section,footer){opacity:0;pointer-events:none}
+body.iv2-full.iv2-rise.intro-mode:not(.intro-go):not(.cycler-static) :is(.hero-sub,.dlrow,.hero-app),
+body.iv2-full.iv2-rise.intro-mode:not(.intro-go):not(.cycler-static) > :is(section,footer){transform:translateY(48px)}
+/* The prototype's own switcher bar; never present without ?intro=. */
+/* WHY bottom-left and stacked: centred, it sat on top of the page's own
+   floating download pill. */
+.iv2-bar{position:fixed;left:12px;bottom:12px;z-index:9999;display:flex;flex-direction:column;
+  gap:5px;align-items:stretch;text-align:center;width:150px;padding:8px 10px;border-radius:14px;
+  background:rgba(20,14,28,.92);color:#fff;font:500 13px/1.2 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35)}
+.iv2-bar a{color:#fff;text-decoration:none;padding:6px 10px;border-radius:9px;background:rgba(255,255,255,.12)}
+.iv2-bar a.on{background:#B77BE0;color:#1a0f24}
+.iv2-bar span{opacity:.65;padding:0 2px 0 6px}
+
 /* ---- Headline size classes for the wording variants (2026-08-31) ----------
    The headline sits BETWEEN two mascot groups in a centred flex row, so its
    usable width is roughly 880px at 1440 -- about 16 characters at the default
@@ -2082,6 +2132,37 @@ html{-webkit-tap-highlight-color:transparent}
 
 </style></head>
 <body class="intro-mode fade-d pill-accent legend-on h1-md">
+<script>
+/* PROTOTYPE 2026-11-12 (intro entrance options; see body.iv2 in the stylesheet).
+   WHY here, first thing in <body>: the classes must be on before the first
+   paint, or the old half-empty headline flashes before the option takes over.
+   ?intro=today shows the shipped behaviour with the switcher bar, for comparing. */
+(function(){
+  var m = /[?&]intro=(today|fade|rise|zoom)(-page)?/.exec(location.search);
+  if (!m) return;
+  var style = m[1], full = !!m[2];
+  if (style !== 'today') {
+    document.body.classList.add('iv2', 'iv2-' + style);
+    if (full) document.body.classList.add('iv2-full');
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    var bar = document.createElement('div'); bar.className = 'iv2-bar';
+    var html = '<span>Entrance</span>';
+    [['today','Today'],['fade','Fade in'],['rise','Rise up'],['zoom','Zoom in']].forEach(function(o){
+      var href = '?intro=' + o[0] + (full && o[0] !== 'today' ? '-page' : '');
+      html += '<a href="' + href + '"' + (o[0] === style ? ' class="on"' : '') + '>' + o[1] + '</a>';
+    });
+    if (style !== 'today') {
+      html += '<span>Rest of page</span>' +
+        '<a href="?intro=' + style + '"' + (full ? '' : ' class="on"') + '>After the words</a>' +
+        '<a href="?intro=' + style + '-page"' + (full ? ' class="on"' : '') + '>With the headline</a>';
+    }
+    html += '<span></span><a href="' + location.search + '">Replay</a>';
+    bar.innerHTML = html;
+    document.body.appendChild(bar);
+  });
+})();
+</script>
 
 <div class="backdrop" id="backdrop"><div class="bd-layer" id="bd-a"></div><div class="bd-layer" id="bd-b"></div><div class="bd-scrim"></div></div>
 
@@ -4720,6 +4801,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // On a simulated 3 Mbit/s link with 70ms latency everything was ready in
   // ~110ms; 700ms is headroom above that, and the most a bad link can add.
   var START_CAP_MS = 700;
+  var IV2 = document.body.classList.contains('iv2');   // PROTOTYPE: see body.iv2 in the stylesheet
   var started = false;
   function beginSequence(){
     if (started) return;
@@ -4732,6 +4814,10 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       setLift();
       document.body.classList.add('intro-go');
       HERO_SEQUENCE.forEach(function(step, i){
+        // PROTOTYPE (body.iv2): "Useful." is already in its slot when the
+        // headline arrives, so its theme comes in with the entrance itself
+        // rather than half a second later.
+        if (IV2 && i === 0) { applyTheme(step.theme); return; }
         timers.push(setTimeout(function(){
           applyTheme(step.theme);
           curStep = i;
@@ -4761,7 +4847,12 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
     return Promise.all(waits);
   }
   if (window.Promise) {
-    introReady().then(beginSequence);
+    // PROTOTYPE (body.iv2): hold the plain purple screen for at least a beat.
+    // WHY: on a refresh everything is cached and "ready" within a few
+    // milliseconds, so without a floor the purple moment Destin asked for
+    // would not exist; 250ms reads as deliberate without feeling like a wait.
+    var purpleLeft = IV2 ? Math.max(0, 250 - performance.now()) : 0;
+    introReady().then(function(){ setTimeout(beginSequence, purpleLeft); });
     setTimeout(beginSequence, START_CAP_MS);
   } else {
     beginSequence();
