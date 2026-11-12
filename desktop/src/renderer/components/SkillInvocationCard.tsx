@@ -1,5 +1,6 @@
 import { NoteIcon } from './Icons';
 import { FilepathToken } from './FilepathToken';
+import { Tooltip } from './ui';
 
 /**
  * A user-invoked skill (/skill-name) in the timeline.
@@ -49,12 +50,14 @@ export default function SkillInvocationCard({
       <div className="max-w-[80%] bg-inset rounded-2xl rounded-br-sm px-4 py-2.5">
         <div className="flex items-center gap-2">
           <NoteIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
-          <span className="text-sm text-fg-2" title={displayName}>
-            Invoked skill:{' '}
-            {skillPath
-              ? <FilepathToken path={skillPath} sessionId={sessionId} variant="inline" label={bare} />
-              : bare}
-          </span>
+          <Tooltip text={displayName}>
+            <span className="text-sm text-fg-2">
+              Invoked skill:{' '}
+              {skillPath
+                ? <FilepathToken path={skillPath} sessionId={sessionId} variant="inline" label={bare} />
+                : bare}
+            </span>
+          </Tooltip>
         </div>
         {args && (
           <div className="mt-1 text-xs text-fg-dim break-words">{args}</div>

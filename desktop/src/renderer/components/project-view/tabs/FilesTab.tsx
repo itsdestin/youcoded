@@ -134,6 +134,7 @@ import { TabHeading } from '../TabHeading';
 import { useScrollFade } from '../../../hooks/useScrollFade';
 import { useOfficeHeaderAction } from '../../office/use-office-edit-screen';
 import { useScreenOpen, ScreenMark } from '../../../shoot-mode';
+import { Tooltip } from '../../ui';
 
 // The rounded box the list-view rows sit in — the same container language the
 // content-search groups already use. Module scope, NOT inside the component: a
@@ -704,47 +705,47 @@ function FilesTabImpl({
       // Fixed h-44 (PITFALL: without a fixed card height the thumbnail flex-shrinks
       // to zero in a short grid row, collapsing cards into blank pills). The
       // thumbnail is flex-1; both text lines are shrink-0 so the card stays uniform.
-      <button
-        key={a.id}
-        type="button"
-        // hover-lift replaces `transition-transform duration-200 hover:scale-[1.02]`:
-        // same lift on desktop, guarded by @media (hover: hover) so a tap on the
-        // Android WebView can't leave the card stuck at 1.02 (spec §9.E).
-        // WHY card-raised (decisions "Card look" K-3, "Card shadow" F-3): file cards are raised
-        // cards with the one medium shadow. They were flat ("mixed elevation in one grid",
-        // 2026-07-08); the folder cards beside them stay flat for now — their tab-and-body
-        // shape has no single box to shadow (a known deviation in the design guide).
-        className={`layer-surface card-raised !rounded-lg relative flex flex-col h-44 overflow-hidden text-left hover-lift ${
-          isActive ? 'border-accent' : ''
-        } ${isDeleted ? 'opacity-60' : ''}`}
-        onClick={() => openFile(a)}
-        title={isDeleted ? `${a.path}\nDeleted (file is no longer on disk)` : a.path}
-      >
-        <ArtifactThumbnail
-          artifact={a}
-          projectPath={project.path}
-          className={`flex-1 min-h-0 w-full border-b border-edge-dim ${isDeleted ? 'grayscale' : ''}`}
-        />
-        {isDeleted && (
-          <span
-            className="absolute top-2 right-2 px-1.5 py-0.5 text-3xs font-semibold bg-canvas/80 border border-edge rounded text-fg-2"
-            aria-label="Deleted"
-          >
-            deleted
+      <Tooltip key={a.id} text={isDeleted ? `${a.path}\nDeleted (file is no longer on disk)` : a.path}>
+        <button
+          type="button"
+          // hover-lift replaces `transition-transform duration-200 hover:scale-[1.02]`:
+          // same lift on desktop, guarded by @media (hover: hover) so a tap on the
+          // Android WebView can't leave the card stuck at 1.02 (spec §9.E).
+          // WHY card-raised (decisions "Card look" K-3, "Card shadow" F-3): file cards are raised
+          // cards with the one medium shadow. They were flat ("mixed elevation in one grid",
+          // 2026-07-08); the folder cards beside them stay flat for now — their tab-and-body
+          // shape has no single box to shadow (a known deviation in the design guide).
+          className={`layer-surface card-raised !rounded-lg relative flex flex-col h-44 overflow-hidden text-left hover-lift ${
+            isActive ? 'border-accent' : ''
+          } ${isDeleted ? 'opacity-60' : ''}`}
+          onClick={() => openFile(a)}
+        >
+          <ArtifactThumbnail
+            artifact={a}
+            projectPath={project.path}
+            className={`flex-1 min-h-0 w-full border-b border-edge-dim ${isDeleted ? 'grayscale' : ''}`}
+          />
+          {isDeleted && (
+            <span
+              className="absolute top-2 right-2 px-1.5 py-0.5 text-3xs font-semibold bg-canvas/80 border border-edge rounded text-fg-2"
+              aria-label="Deleted"
+            >
+              deleted
+            </span>
+          )}
+          <span className={`px-2.5 pt-2 pb-0.5 text-xs font-mono truncate w-full text-fg-2 shrink-0 ${isDeleted ? 'line-through' : ''}`}>
+            {filename}
           </span>
-        )}
-        <span className={`px-2.5 pt-2 pb-0.5 text-xs font-mono truncate w-full text-fg-2 shrink-0 ${isDeleted ? 'line-through' : ''}`}>
-          {filename}
-        </span>
-        {/* In flat mode (search / type filter) show the file's folder for
-            context; in folder view the breadcrumb already gives location, so
-            show the kind instead. */}
-        <span className="px-2.5 pb-2.5 text-3xs text-fg-muted shrink-0 truncate">
-          {flat && a.path.includes('/')
-            ? a.path.slice(0, a.path.lastIndexOf('/'))
-            : kindLabel(a.path)}
-        </span>
-      </button>
+          {/* In flat mode (search / type filter) show the file's folder for
+              context; in folder view the breadcrumb already gives location, so
+              show the kind instead. */}
+          <span className="px-2.5 pb-2.5 text-3xs text-fg-muted shrink-0 truncate">
+            {flat && a.path.includes('/')
+              ? a.path.slice(0, a.path.lastIndexOf('/'))
+              : kindLabel(a.path)}
+          </span>
+        </button>
+      </Tooltip>
     );
   };
 
@@ -772,49 +773,49 @@ function FilesTabImpl({
       ? a.path.slice(0, a.path.lastIndexOf('/'))
       : kindLabel(a.path);
     return (
-      <button
-        key={a.id}
-        type="button"
-        className={`${ROW_CLS} ${isActive ? 'bg-inset text-fg' : 'hover:bg-well'} ${isDeleted ? 'opacity-60' : ''}`}
-        onClick={() => openFile(a)}
-        title={isDeleted ? `${a.path}\nDeleted (file is no longer on disk)` : a.path}
-      >
-        <span className={`shrink-0 ${isActive ? 'text-accent' : 'text-fg-muted'}`}>
-          <MiniTypeIcon path={a.path} size={15} />
-        </span>
-        <span className={`flex-1 min-w-0 truncate text-xs font-mono text-fg-2 ${isDeleted ? 'line-through' : ''}`}>
-          {filename}
-        </span>
-        {isDeleted && (
-          <span className="shrink-0 px-1.5 py-0.5 text-3xs font-semibold border border-edge rounded text-fg-muted">
-            deleted
+      <Tooltip key={a.id} text={isDeleted ? `${a.path}\nDeleted (file is no longer on disk)` : a.path}>
+        <button
+          type="button"
+          className={`${ROW_CLS} ${isActive ? 'bg-inset text-fg' : 'hover:bg-well'} ${isDeleted ? 'opacity-60' : ''}`}
+          onClick={() => openFile(a)}
+        >
+          <span className={`shrink-0 ${isActive ? 'text-accent' : 'text-fg-muted'}`}>
+            <MiniTypeIcon path={a.path} size={15} />
           </span>
-        )}
-        <span className="max-sm:hidden shrink-0 w-32 truncate text-3xs text-fg-muted">{secondary}</span>
-        <span className="max-sm:hidden shrink-0 w-20 text-right text-3xs text-fg-muted">
-          {relTime(a.lastModified)}
-        </span>
-      </button>
+          <span className={`flex-1 min-w-0 truncate text-xs font-mono text-fg-2 ${isDeleted ? 'line-through' : ''}`}>
+            {filename}
+          </span>
+          {isDeleted && (
+            <span className="shrink-0 px-1.5 py-0.5 text-3xs font-semibold border border-edge rounded text-fg-muted">
+              deleted
+            </span>
+          )}
+          <span className="max-sm:hidden shrink-0 w-32 truncate text-3xs text-fg-muted">{secondary}</span>
+          <span className="max-sm:hidden shrink-0 w-20 text-right text-3xs text-fg-muted">
+            {relTime(a.lastModified)}
+          </span>
+        </button>
+      </Tooltip>
     );
   };
 
   const renderFolderRow = (f: FolderSummary) => (
-    <button
-      key={'dir:' + f.path}
-      type="button"
-      className={`${ROW_CLS} hover:bg-well`}
-      onClick={() => setCurrentDir(f.path)}
-      title={f.path}
-    >
-      <span className="shrink-0 text-accent"><FolderCardIcon size={15} strokeWidth={1.5} /></span>
-      <span className="flex-1 min-w-0 truncate text-xs font-mono text-fg-2">{f.name}</span>
-      <span className="max-sm:hidden shrink-0 w-32 truncate text-3xs text-fg-muted">
-        {itemsLabel(f)}
-      </span>
-      {/* A folder has no single modified time — the column stays empty rather
-          than borrowing one file's date and reading as the folder's. */}
-      <span className="max-sm:hidden shrink-0 w-20" />
-    </button>
+    <Tooltip key={'dir:' + f.path} text={f.path}>
+      <button
+        type="button"
+        className={`${ROW_CLS} hover:bg-well`}
+        onClick={() => setCurrentDir(f.path)}
+      >
+        <span className="shrink-0 text-accent"><FolderCardIcon size={15} strokeWidth={1.5} /></span>
+        <span className="flex-1 min-w-0 truncate text-xs font-mono text-fg-2">{f.name}</span>
+        <span className="max-sm:hidden shrink-0 w-32 truncate text-3xs text-fg-muted">
+          {itemsLabel(f)}
+        </span>
+        {/* A folder has no single modified time — the column stays empty rather
+            than borrowing one file's date and reading as the folder's. */}
+        <span className="max-sm:hidden shrink-0 w-20" />
+      </button>
+    </Tooltip>
   );
 
   // A folder card. Its preview is the folder's first few files by name and its
@@ -833,67 +834,67 @@ function FilesTabImpl({
           // count live INSIDE the folder body (a footer below the preview),
           // so they read as part of the folder, not a caption floating
           // beneath it.
-          <button
-            key={'dir:' + f.path}
-            type="button"
-            // hover-lift: see the doc-card comment above — the scale is
-            // guarded by @media (hover: hover) for the Android WebView.
-            className="group relative flex flex-col h-44 text-left hover-lift"
-            onClick={() => setCurrentDir(f.path)}
-            title={f.path}
-          >
-            {/* Folder tab (nub). ml-4 clears the body's rounded top-left
-                corner. The nub carries its OWN bottom border and overlaps
-                the body by exactly 1px (-mb-px), so its border sits ON the
-                body's top border: the separating line stays visible across
-                the joint AND there's no seam gap at fractional zoom levels.
-                (border-b-0 + overlap covered the line; border-b-0 without
-                overlap left a subpixel gap — both were reported.) */}
-            <div className="relative -mb-px ml-4 h-3 w-14 rounded-t-md bg-panel border border-edge group-hover:border-accent/60 transition-colors" />
-            {/* Folder body — preview AND the name/count footer, all inside one
-                bordered, rounded container so they read as the same folder.
-                All four corners rounded — the old rounded-tl-none square
-                corner under the tab read as a glitch, not a folder. bg-panel
-                (not bg-inset) so the folder body matches the file card's
-                .layer-surface background — the two card kinds previously
-                used different tokens and read as mismatched (user feedback
-                2026-07-19). */}
-            <div className="flex-1 min-h-0 flex flex-col rounded-lg border border-edge bg-panel overflow-hidden group-hover:border-accent/60 transition-colors">
-              <div className="flex-1 min-h-0 overflow-hidden">
-                {previewFiles.length > 0 ? (
-                  <div className="flex flex-col gap-1.5 p-2.5">
-                    {/* First few filenames only — no overflow line (the
-                        footer's "N items" count already tells the rest). */}
-                    {previewFiles.map((s) => (
-                      <div key={s.id} className="flex items-center gap-1.5 min-w-0">
-                        <span className="text-fg-muted shrink-0"><MiniTypeIcon path={s.path} /></span>
-                        <span className="text-2xs text-fg-2 truncate">{fileNameOf(s)}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  // No previewable files (a folder of subfolders) — folder glyph.
-                  <div className="h-full w-full flex items-center justify-center bg-well text-accent">
-                    <FolderCardIcon size={40} strokeWidth={1.5} />
-                  </div>
-                )}
-              </div>
-              {/* Footer inside the folder: name (with accent folder glyph) + count.
-                  bg-panel + the doc-caption typography (12px mono fg-2 name,
-                  10.5px fg-muted second line) — same token as the folder
-                  body above, so the whole card and the doc cards share one
-                  background color. */}
-              <div className="shrink-0 border-t border-edge-dim px-2.5 py-1.5 bg-panel">
-                <div className="text-xs font-mono text-fg-2 flex items-center gap-1.5">
-                  <span className="text-accent shrink-0"><FolderCardIcon size={13} strokeWidth={1.5} /></span>
-                  <span className="truncate">{f.name}</span>
+          <Tooltip key={'dir:' + f.path} text={f.path}>
+            <button
+              type="button"
+              // hover-lift: see the doc-card comment above — the scale is
+              // guarded by @media (hover: hover) for the Android WebView.
+              className="group relative flex flex-col h-44 text-left hover-lift"
+              onClick={() => setCurrentDir(f.path)}
+            >
+              {/* Folder tab (nub). ml-4 clears the body's rounded top-left
+                  corner. The nub carries its OWN bottom border and overlaps
+                  the body by exactly 1px (-mb-px), so its border sits ON the
+                  body's top border: the separating line stays visible across
+                  the joint AND there's no seam gap at fractional zoom levels.
+                  (border-b-0 + overlap covered the line; border-b-0 without
+                  overlap left a subpixel gap — both were reported.) */}
+              <div className="relative -mb-px ml-4 h-3 w-14 rounded-t-md bg-panel border border-edge group-hover:border-accent/60 transition-colors" />
+              {/* Folder body — preview AND the name/count footer, all inside one
+                  bordered, rounded container so they read as the same folder.
+                  All four corners rounded — the old rounded-tl-none square
+                  corner under the tab read as a glitch, not a folder. bg-panel
+                  (not bg-inset) so the folder body matches the file card's
+                  .layer-surface background — the two card kinds previously
+                  used different tokens and read as mismatched (user feedback
+                  2026-07-19). */}
+              <div className="flex-1 min-h-0 flex flex-col rounded-lg border border-edge bg-panel overflow-hidden group-hover:border-accent/60 transition-colors">
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  {previewFiles.length > 0 ? (
+                    <div className="flex flex-col gap-1.5 p-2.5">
+                      {/* First few filenames only — no overflow line (the
+                          footer's "N items" count already tells the rest). */}
+                      {previewFiles.map((s) => (
+                        <div key={s.id} className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-fg-muted shrink-0"><MiniTypeIcon path={s.path} /></span>
+                          <span className="text-2xs text-fg-2 truncate">{fileNameOf(s)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    // No previewable files (a folder of subfolders) — folder glyph.
+                    <div className="h-full w-full flex items-center justify-center bg-well text-accent">
+                      <FolderCardIcon size={40} strokeWidth={1.5} />
+                    </div>
+                  )}
                 </div>
-                <div className="text-3xs text-fg-muted pl-[20px]">
-                  {itemsLabel(f)}
+                {/* Footer inside the folder: name (with accent folder glyph) + count.
+                    bg-panel + the doc-caption typography (12px mono fg-2 name,
+                    10.5px fg-muted second line) — same token as the folder
+                    body above, so the whole card and the doc cards share one
+                    background color. */}
+                <div className="shrink-0 border-t border-edge-dim px-2.5 py-1.5 bg-panel">
+                  <div className="text-xs font-mono text-fg-2 flex items-center gap-1.5">
+                    <span className="text-accent shrink-0"><FolderCardIcon size={13} strokeWidth={1.5} /></span>
+                    <span className="truncate">{f.name}</span>
+                  </div>
+                  <div className="text-3xs text-fg-muted pl-[20px]">
+                    {itemsLabel(f)}
+                  </div>
                 </div>
               </div>
-            </div>
-          </button>
+            </button>
+          </Tooltip>
     );
   };
 
@@ -929,20 +930,20 @@ function FilesTabImpl({
           ]).map((v) => {
             const active = view === v.id;
             return (
-              <button
-                key={v.id}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                title={v.label}
-                aria-label={v.label}
-                onClick={() => onViewChange(v.id)}
-                className={`p-1 rounded-md inline-flex items-center justify-center transition-colors ${
-                  active ? 'text-accent bg-inset' : 'text-fg-muted hover:text-fg hover:bg-inset'
-                }`}
-              >
-                {v.icon}
-              </button>
+              <Tooltip key={v.id} text={v.label}>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  aria-label={v.label}
+                  onClick={() => onViewChange(v.id)}
+                  className={`p-1 rounded-md inline-flex items-center justify-center transition-colors ${
+                    active ? 'text-accent bg-inset' : 'text-fg-muted hover:text-fg hover:bg-inset'
+                  }`}
+                >
+                  {v.icon}
+                </button>
+              </Tooltip>
             );
           })}
         </div>
@@ -1084,30 +1085,31 @@ function FilesTabImpl({
                         return (
                           <div key={group.path} className="rounded-md border border-edge-dim overflow-hidden">
                             {/* Group header toggles the hit list (collapsed by default). */}
-                            <button
-                              type="button"
-                              onClick={() => toggleGroup(group.path)}
-                              className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left min-w-0 bg-well/60 hover:bg-well transition-colors ${expanded ? 'border-b border-edge-dim' : ''}`}
-                              title={group.path}
-                            >
-                              <ChevronIcon className="w-3 h-3 shrink-0" expanded={expanded} />
-                              <span className="text-xs font-mono font-medium text-fg-2 shrink-0">{filename}</span>
-                              {dir && <span className="text-2xs font-mono text-fg-muted truncate min-w-0">{dir}</span>}
-                              <span className="text-2xs text-fg-muted shrink-0 ml-auto">
-                                {group.hits.length} {group.hits.length === 1 ? 'match' : 'matches'}
-                              </span>
-                            </button>
-                            {expanded && group.hits.map((hit, i) => (
+                            <Tooltip text={group.path}>
                               <button
-                                key={`${hit.line}:${i}`}
                                 type="button"
-                                onClick={() => openContentHit(hit)}
-                                className="w-full flex items-baseline gap-2 pl-7 pr-2.5 py-1 text-left min-w-0 hover:bg-well transition-colors"
-                                title={`${group.path}:${hit.line}`}
+                                onClick={() => toggleGroup(group.path)}
+                                className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left min-w-0 bg-well/60 hover:bg-well transition-colors ${expanded ? 'border-b border-edge-dim' : ''}`}
                               >
-                                <span className="text-2xs font-mono text-fg-muted shrink-0 w-8 text-right">{hit.line}</span>
-                                <span className="text-xs font-mono text-fg-dim truncate min-w-0 flex-1">{hit.text}</span>
+                                <ChevronIcon className="w-3 h-3 shrink-0" expanded={expanded} />
+                                <span className="text-xs font-mono font-medium text-fg-2 shrink-0">{filename}</span>
+                                {dir && <span className="text-2xs font-mono text-fg-muted truncate min-w-0">{dir}</span>}
+                                <span className="text-2xs text-fg-muted shrink-0 ml-auto">
+                                  {group.hits.length} {group.hits.length === 1 ? 'match' : 'matches'}
+                                </span>
                               </button>
+                            </Tooltip>
+                            {expanded && group.hits.map((hit, i) => (
+                              <Tooltip key={`${hit.line}:${i}`} text={`${group.path}:${hit.line}`}>
+                                <button
+                                  type="button"
+                                  onClick={() => openContentHit(hit)}
+                                  className="w-full flex items-baseline gap-2 pl-7 pr-2.5 py-1 text-left min-w-0 hover:bg-well transition-colors"
+                                >
+                                  <span className="text-2xs font-mono text-fg-muted shrink-0 w-8 text-right">{hit.line}</span>
+                                  <span className="text-xs font-mono text-fg-dim truncate min-w-0 flex-1">{hit.text}</span>
+                                </button>
+                              </Tooltip>
                             ))}
                           </div>
                         );
@@ -1325,15 +1327,19 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
         <>
           {/* Office files open in Office instead of the default app (office-review#B-inline). */}
           {office ? (
-            <button type="button" className={TOOL_BTN_NEUTRAL} onClick={office.onClick} title={office.title}>
-              {office.glyph}
-              Office
-            </button>
+            <Tooltip text={office.title}>
+              <button type="button" className={TOOL_BTN_NEUTRAL} onClick={office.onClick}>
+                {office.glyph}
+                Office
+              </button>
+            </Tooltip>
           ) : (
-            <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleOpenExternal} title="Open with the default app">
-              <ExternalLinkIcon size={13} />
-              Open
-            </button>
+            <Tooltip text="Open with the default app">
+              <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleOpenExternal}>
+                <ExternalLinkIcon size={13} />
+                Open
+              </button>
+            </Tooltip>
           )}
           <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleReveal}>
             <FolderIcon size={13} />
@@ -1345,12 +1351,14 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
           Download where the desktop has Open and Reveal — the file lands in the
           phone's own downloads folder, and the transfer does not block the chat. */}
       {isRemoteMode() && (
-        <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleDownload} aria-label="Download" title="Download">
-          <DownloadIcon size={13} />
-          {/* Icon-only at phone width: with the label, Download and Copy path
-              left the file name one syllable ("latenc…") — tester U20. */}
-          {!narrowViewport && 'Download'}
-        </button>
+        <Tooltip text="Download">
+          <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleDownload} aria-label="Download">
+            <DownloadIcon size={13} />
+            {/* Icon-only at phone width: with the label, Download and Copy path
+                left the file name one syllable ("latenc…") — tester U20. */}
+            {!narrowViewport && 'Download'}
+          </button>
+        </Tooltip>
       )}
       <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleCopyPath}>
         <LinkIcon size={13} />

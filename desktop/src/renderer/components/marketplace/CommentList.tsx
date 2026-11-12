@@ -24,6 +24,7 @@ import {
   type CommentEntry,
 } from '../../state/marketplace-api-client';
 import { CARD_LEVEL_2, LoadingState, EmptyState, FieldError } from '../ui';
+import { Tooltip } from '../ui';
 
 // Unauthenticated client — listComments is a public endpoint
 const apiClient = createMarketplaceApiClient({
@@ -62,7 +63,9 @@ function CommentRow({ c, pluginId, held = false }: { c: CommentEntry; pluginId: 
             post-time toast, because the toast is gone the moment the page is
             reopened — and a comment that silently vanished reads as "deleted". */}
         {held && <span className="text-2xs text-fg-muted">Held for review · only you can see it</span>}
-        <span className="ml-auto text-2xs text-fg-muted shrink-0" title={when.title}>{when.text}</span>
+        <Tooltip text={when.title}>
+          <span className="ml-auto text-2xs text-fg-muted shrink-0">{when.text}</span>
+        </Tooltip>
       </div>
       <p className="text-sm text-fg-2 leading-relaxed whitespace-pre-wrap pl-8">{c.text}</p>
     </div>

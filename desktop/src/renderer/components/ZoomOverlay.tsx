@@ -1,4 +1,5 @@
 import { OverlayPanel } from './overlays/Overlay';
+import { Tooltip } from './ui';
 
 /**
  * Floating zoom overlay — appears when user zooms in/out via Ctrl+/- or pinch,
@@ -38,33 +39,36 @@ export function ZoomOverlay({ zoomPercent, visible, onZoomIn, onZoomOut, onZoomR
       // Prevent zoom gestures on the overlay itself from bubbling
       onWheel={(e) => e.stopPropagation()}
     >
-      <button
-        onClick={onZoomOut}
-        className="w-7 h-7 flex items-center justify-center rounded hover:bg-well
-                   text-fg-dim hover:text-fg transition-colors"
-        title="Zoom out (Ctrl+−)"
-      >
-        −
-      </button>
+      <Tooltip text="Zoom out (Ctrl+−)">
+        <button
+          onClick={onZoomOut}
+          className="w-7 h-7 flex items-center justify-center rounded hover:bg-well
+                     text-fg-dim hover:text-fg transition-colors"
+        >
+          −
+        </button>
+      </Tooltip>
 
       {/* Clickable percentage label — resets to 100% */}
-      <button
-        onClick={onZoomReset}
-        className="min-w-[3.5rem] text-center font-medium tabular-nums
-                   hover:text-accent transition-colors cursor-pointer"
-        title="Reset zoom (Ctrl+0)"
-      >
-        {zoomPercent}%
-      </button>
+      <Tooltip text="Reset zoom (Ctrl+0)">
+        <button
+          onClick={onZoomReset}
+          className="min-w-[3.5rem] text-center font-medium tabular-nums
+                     hover:text-accent transition-colors cursor-pointer"
+        >
+          {zoomPercent}%
+        </button>
+      </Tooltip>
 
-      <button
-        onClick={onZoomIn}
-        className="w-7 h-7 flex items-center justify-center rounded hover:bg-well
-                   text-fg-dim hover:text-fg transition-colors"
-        title="Zoom in (Ctrl++)"
-      >
-        +
-      </button>
+      <Tooltip text="Zoom in (Ctrl++)">
+        <button
+          onClick={onZoomIn}
+          className="w-7 h-7 flex items-center justify-center rounded hover:bg-well
+                     text-fg-dim hover:text-fg transition-colors"
+        >
+          +
+        </button>
+      </Tooltip>
     </div>
     </OverlayPanel>
   );

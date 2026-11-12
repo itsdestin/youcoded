@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from 'react';
+import { Tooltip } from './ui';
 
 const BRAILLE_CHARS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 function getThemeColors(): string[] {
@@ -55,37 +56,38 @@ export default function BrailleBurst({ children, onTrigger, disabled, className,
   }, [disabled, onTrigger]);
 
   return (
-    <button
-      type="button"
-      onClick={burst}
-      disabled={disabled}
-      className={`relative ${className || ''}`}
-      title={title}
-    >
-      {children}
-      {particles.map((p) => {
-        const rad = (p.angle * Math.PI) / 180;
-        const tx = Math.cos(rad) * p.dist;
-        const ty = Math.sin(rad) * p.dist;
-        return (
-          <span
-            key={p.id}
-            className="absolute pointer-events-none text-3xs"
-            style={{
-              color: p.color,
-              left: '50%',
-              top: '50%',
-              transform: 'translate(-50%, -50%)',
-              animation: `braille-burst 380ms ease-out ${p.delay}ms forwards`,
-              opacity: 0,
-              '--burst-x': `${tx}px`,
-              '--burst-y': `${ty}px`,
-            } as React.CSSProperties}
-          >
-            {p.char}
-          </span>
-        );
-      })}
-    </button>
+    <Tooltip text={title ?? ''}>
+      <button
+        type="button"
+        onClick={burst}
+        disabled={disabled}
+        className={`relative ${className || ''}`}
+      >
+        {children}
+        {particles.map((p) => {
+          const rad = (p.angle * Math.PI) / 180;
+          const tx = Math.cos(rad) * p.dist;
+          const ty = Math.sin(rad) * p.dist;
+          return (
+            <span
+              key={p.id}
+              className="absolute pointer-events-none text-3xs"
+              style={{
+                color: p.color,
+                left: '50%',
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                animation: `braille-burst 380ms ease-out ${p.delay}ms forwards`,
+                opacity: 0,
+                '--burst-x': `${tx}px`,
+                '--burst-y': `${ty}px`,
+              } as React.CSSProperties}
+            >
+              {p.char}
+            </span>
+          );
+        })}
+      </button>
+    </Tooltip>
   );
 }

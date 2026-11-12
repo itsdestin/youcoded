@@ -4,6 +4,7 @@
 import { useState, useCallback } from 'react';
 import { Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, FieldError, TextInput } from './ui';
 import { deviceActivityLabel, relativeMs } from './device-activity-label';
+import { Tooltip } from './ui';
 
 // Map process.platform to a plain, human word. Empty string (unknown platform)
 // falls through to '' so the caller can omit it rather than print a raw code.
@@ -126,14 +127,15 @@ export function DevicesTab({ devices, onRename, onRemove, syncInProgress, lastSy
                   />
                 ) : (
                   // Click the name to edit — it's just a nickname, so no confirm gate.
-                  <button
-                    type="button"
-                    onClick={() => { setEditingId(d.id); setDraft(d.name); }}
-                    className="text-xs text-fg-2 hover:text-fg truncate text-left"
-                    title="Click to rename this device"
-                  >
-                    {d.name}
-                  </button>
+                  <Tooltip text="Click to rename this device">
+                    <button
+                      type="button"
+                      onClick={() => { setEditingId(d.id); setDraft(d.name); }}
+                      className="text-xs text-fg-2 hover:text-fg truncate text-left"
+                    >
+                      {d.name}
+                    </button>
+                  </Tooltip>
                 )}
                 {d.self && <span className="text-3xs text-fg-muted shrink-0">(this device)</span>}
               </div>

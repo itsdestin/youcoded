@@ -24,6 +24,7 @@ import { EmptyState } from '../../ui';
 import { TabHeading } from '../TabHeading';
 import { useScrollFade } from '../../../hooks/useScrollFade';
 import { useScreenOpen } from '../../../shoot-mode';
+import { Tooltip } from '../../ui';
 
 interface ConversationsTabProps {
   // Lifted, cached list from ProjectView. null = still loading for this project.
@@ -45,17 +46,18 @@ const ConversationRow = React.memo(function ConversationRow({ session: c, tagsBy
     // The Resume card's surface (SessionCardDetails.tsx; ResumeBrowser.tsx
     // explains why not .layer-surface). shrink-0 so the scroll container
     // doesn't compress rows and clip their text.
-    <button
-      type="button"
-      title={title}
-      onClick={() => onOpenPreview(c)}
-      className={`w-full text-left shrink-0 ${SESSION_CARD_SURFACE} px-3 pt-2 pb-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
-    >
-      <SessionCardTitle title={title} />
-      <SessionCardTags session={c} tagsById={tagsById} />
-      {/* No project in the trail: this whole page is one project. */}
-      <SessionCardMeta session={c} showProject={false} />
-    </button>
+    <Tooltip text={title}>
+      <button
+        type="button"
+        onClick={() => onOpenPreview(c)}
+        className={`w-full text-left shrink-0 ${SESSION_CARD_SURFACE} px-3 pt-2 pb-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+      >
+        <SessionCardTitle title={title} />
+        <SessionCardTags session={c} tagsById={tagsById} />
+        {/* No project in the trail: this whole page is one project. */}
+        <SessionCardMeta session={c} showProject={false} />
+      </button>
+    </Tooltip>
   );
 }, (a, b) => a.session === b.session && a.onOpenPreview === b.onOpenPreview
   // Only the tags THIS row shows matter; a registry change for other tags

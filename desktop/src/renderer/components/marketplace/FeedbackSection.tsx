@@ -13,6 +13,7 @@ import type { CommentEntry } from '../../state/marketplace-api-client';
 import { Button, FieldError, InputGroup } from '../ui';
 import CommentList from './CommentList';
 import SignInPromptModal from './SignInPromptModal';
+import { Tooltip } from '../ui';
 
 /** This device's localStorage, or null where it is unavailable (some WebView
  *  privacy modes throw on the accessor itself). Without it a held comment is
@@ -60,11 +61,13 @@ export function ThumbsSummary({ up, down, size = 'sm', showTotal = false }: { up
     ? `${s.up} of ${s.total} ${s.total === 1 ? 'person' : 'people'} who installed this found it helpful`
     : `${s.pct}% of ${s.total.toLocaleString()} people who installed this found it helpful`;
   return (
-    <span className={`inline-flex items-center gap-1 ${cls} text-fg-dim whitespace-nowrap`} title={title} data-thumbs>
-      <span className="inline-flex text-fg-dim"><ThumbIcon /></span>
-      <span className="text-fg-2">{low ? s.up : `${s.pct}%`}</span>
-      {showTotal && !low && <span className="text-fg-muted ml-1">{s.total.toLocaleString()}</span>}
-    </span>
+    <Tooltip text={title}>
+      <span className={`inline-flex items-center gap-1 ${cls} text-fg-dim whitespace-nowrap`} data-thumbs>
+        <span className="inline-flex text-fg-dim"><ThumbIcon /></span>
+        <span className="text-fg-2">{low ? s.up : `${s.pct}%`}</span>
+        {showTotal && !low && <span className="text-fg-muted ml-1">{s.total.toLocaleString()}</span>}
+      </span>
+    </Tooltip>
   );
 }
 

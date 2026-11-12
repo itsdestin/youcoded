@@ -11,6 +11,7 @@ import { CARD_LEVEL_1, EmptyState, ErrorState, FilterChip, SectionLabel } from '
 import { useDrawerFilter, type DrawerFilterStore } from '../state/drawer-filter-store';
 import { ScreenMark } from '../shoot-mode';
 import { prefersTouchInput } from '../utils/touch-input';
+import { Tooltip } from './ui';
 
 interface Props {
   open: boolean;
@@ -148,27 +149,27 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
   const renderCommandCard = (entry: CommandEntry) => {
     const clickable = entry.clickable;
     return (
-      <button
-        key={`cmd:${entry.name}`}
-        type="button"
-        onClick={clickable ? () => onSelectCommand(entry) : undefined}
-        disabled={!clickable}
-        title={!clickable ? entry.disabledReason : undefined}
-        // Change 22: command cards share the drawer grid with SkillCard, so they
-        // move to the same surface — migrating one and not the other splits the
-        // grid into two card species. WHY CARD_LEVEL_1 (final-review#GM-1): the same
-        // first-level card as SkillCard and Settings, so it separates from the panel drawer.
-        className={`${CARD_LEVEL_1} p-3 text-left flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-          clickable
-            ? 'card-interactive cursor-pointer'
-            : 'opacity-50 cursor-not-allowed'
-        }`}
-      >
-        <span className="font-mono text-sm text-fg">{entry.name}</span>
-        <span className="text-xs text-fg-muted mt-1 line-clamp-2">
-          {entry.description || (clickable ? '' : entry.disabledReason)}
-        </span>
-      </button>
+      <Tooltip key={`cmd:${entry.name}`} text={(!clickable ? entry.disabledReason : undefined) ?? ''}>
+        <button
+          type="button"
+          onClick={clickable ? () => onSelectCommand(entry) : undefined}
+          disabled={!clickable}
+          // Change 22: command cards share the drawer grid with SkillCard, so they
+          // move to the same surface — migrating one and not the other splits the
+          // grid into two card species. WHY CARD_LEVEL_1 (final-review#GM-1): the same
+          // first-level card as SkillCard and Settings, so it separates from the panel drawer.
+          className={`${CARD_LEVEL_1} p-3 text-left flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+            clickable
+              ? 'card-interactive cursor-pointer'
+              : 'opacity-50 cursor-not-allowed'
+          }`}
+        >
+          <span className="font-mono text-sm text-fg">{entry.name}</span>
+          <span className="text-xs text-fg-muted mt-1 line-clamp-2">
+            {entry.description || (clickable ? '' : entry.disabledReason)}
+          </span>
+        </button>
+      </Tooltip>
     );
   };
 
@@ -295,26 +296,28 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
             {/* Pencil — opens Your library (favorites/installed management).
                 Falls back to the legacy Skill Manager when the redesign flag
                 is off; onOpenLibrary is only supplied in that mode. */}
-            <button
-              onClick={() => { onClose(); (onOpenLibrary ?? onOpenManager)(); }}
-              className="shrink-0 p-1 rounded-sm hover:bg-inset text-fg-muted hover:text-fg transition-colors"
-              title={onOpenLibrary ? "Your library — favorites & installed" : "Manage skills"}
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
+            <Tooltip text={onOpenLibrary ? "Your library — favorites & installed" : "Manage skills"}>
+              <button
+                onClick={() => { onClose(); (onOpenLibrary ?? onOpenManager)(); }}
+                className="shrink-0 p-1 rounded-sm hover:bg-inset text-fg-muted hover:text-fg transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </Tooltip>
             {/* Market stall — jump straight to the marketplace discovery
                 view. Heroicons "building-storefront" outline. */}
-            <button
-              onClick={() => { onClose(); onOpenMarketplace(); }}
-              className="shrink-0 p-1 rounded-sm hover:bg-inset text-fg-muted hover:text-fg transition-colors"
-              title="Open marketplace"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 21v-7.5a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 .75.75V21m-4.5 0H2.36m11.14 0H18m0 0h3.64m-1.39 0V9.349M3.75 21V9.349m0 0a3.001 3.001 0 0 0 3.75-.615A2.993 2.993 0 0 0 9.75 9.75c.896 0 1.7-.393 2.25-1.016a2.993 2.993 0 0 0 2.25 1.016c.896 0 1.7-.393 2.25-1.016a3.001 3.001 0 0 0 3.75.614m-16.5 0a3.004 3.004 0 0 1-.621-4.72l1.189-1.19A1.5 1.5 0 0 1 5.378 3h13.243a1.5 1.5 0 0 1 1.06.44l1.19 1.189a3 3 0 0 1-.621 4.72M6.75 18h3.75a.75.75 0 0 0 .75-.75V13.5a.75.75 0 0 0-.75-.75H6.75a.75.75 0 0 0-.75.75v3.75c0 .414.336.75.75.75Z" />
-              </svg>
-            </button>
+            <Tooltip text="Open marketplace">
+              <button
+                onClick={() => { onClose(); onOpenMarketplace(); }}
+                className="shrink-0 p-1 rounded-sm hover:bg-inset text-fg-muted hover:text-fg transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 21v-7.5a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 .75.75V21m-4.5 0H2.36m11.14 0H18m0 0h3.64m-1.39 0V9.349M3.75 21V9.349m0 0a3.001 3.001 0 0 0 3.75-.615A2.993 2.993 0 0 0 9.75 9.75c.896 0 1.7-.393 2.25-1.016a2.993 2.993 0 0 0 2.25 1.016c.896 0 1.7-.393 2.25-1.016a3.001 3.001 0 0 0 3.75.614m-16.5 0a3.004 3.004 0 0 1-.621-4.72l1.189-1.19A1.5 1.5 0 0 1 5.378 3h13.243a1.5 1.5 0 0 1 1.06.44l1.19 1.189a3 3 0 0 1-.621 4.72M6.75 18h3.75a.75.75 0 0 0 .75-.75V13.5a.75.75 0 0 0-.75-.75H6.75a.75.75 0 0 0-.75.75v3.75c0 .414.336.75.75.75Z" />
+                </svg>
+              </button>
+            </Tooltip>
           </div>
         </div>
 

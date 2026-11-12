@@ -27,6 +27,7 @@ import { ProviderIcon } from './ProviderIcon';
 import { useScreenOpen } from '../shoot-mode';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
+import { Tooltip } from './ui';
 
 // quants() decorates every option with a GPU-aware fit label.
 type QuantWithFit = QuantOption & { fit: FitEstimate };
@@ -798,12 +799,14 @@ export function LocalModelRow({
                 buttons beside it, and the tail is what tells two builds apart.
                 Native title is the app's documented tool for a plain hover hint
                 (ui/AnchorTip.tsx header). */}
-            <p className="text-xs text-fg font-medium truncate flex items-center gap-1.5" title={model.id}>
-              <span className="truncate">{displayName(model)}</span>
-              {/* S-3 / round-2 P-6: an eye for a model that sees images, a page for
-                  text-only; the words live in the hover bubble. */}
-              {model.status === 'complete' && <ModalityMark vision={model.vision ?? 'none'} />}
-            </p>
+            <Tooltip text={model.id}>
+              <p className="text-xs text-fg font-medium truncate flex items-center gap-1.5">
+                <span className="truncate">{displayName(model)}</span>
+                {/* S-3 / round-2 P-6: an eye for a model that sees images, a page for
+                    text-only; the words live in the hover bubble. */}
+                {model.status === 'complete' && <ModalityMark vision={model.vision ?? 'none'} />}
+              </p>
+            </Tooltip>
             {subtitle && <p className="text-3xs text-fg-muted">{subtitle}</p>}
             {/* Its own line, in full — Destin, 2026-08-27 (A3). It is free to wrap;
                 the room came from the detail line above, which handed its state

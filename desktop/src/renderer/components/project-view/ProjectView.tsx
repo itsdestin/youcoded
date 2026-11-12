@@ -91,6 +91,7 @@ import { ImportFileDialog } from './ImportFileDialog';
 import { readStoredShowHidden, storeShowHidden } from './hidden-files';
 import { getCapabilities } from '../../platform';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
+import { Tooltip } from '../ui';
 
 interface ProjectViewProps {
   // cwd of the conversation that is focused RIGHT NOW (undefined on the welcome
@@ -959,34 +960,34 @@ export function ProjectView(props: ProjectViewProps) {
                 {SEGMENTS.map((s) => {
                   const active = tab === s.id;
                   return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      // Active segment absorbs the leftover width on narrow so
-                      // the pill spans the screen exactly; inactive ones stay
-                      // at their icon width. title= carries the label for the
-                      // icon-only state (aria-label does the same for AT).
-                      className={`shrink-0 ${active ? 'max-sm:flex-1 max-sm:min-w-0' : ''} px-2.5 sm:px-3.5 py-1.5 rounded-control text-sm-tight font-medium inline-flex items-center justify-center gap-1.5 sm:gap-2 transition-colors ${
-                        active
-                          ? 'bg-accent text-on-accent'
-                          : 'text-fg-2 hover:text-fg hover:bg-inset'
-                      }`}
-                      onClick={() => setTab(s.id)}
-                      title={s.label}
-                      aria-label={s.label}
-                      // The first-run tour's Files stop rings the Files tab.
-                      data-guide-anchor={s.id === 'files' ? 'files-tab' : undefined}
-                      aria-current={active ? 'page' : undefined}
-                    >
-                      <span className="shrink-0 inline-flex">{s.icon}</span>
-                      {/* Label + count collapse to nothing on an inactive
-                          segment below 640px — that's what buys the room for
-                          all three to fit without scrolling. */}
-                      <span className={`truncate ${active ? '' : 'max-sm:hidden'}`}>{s.label}</span>
-                      <span className={`text-2xs shrink-0 ${active ? 'opacity-80' : 'text-fg-muted max-sm:hidden'}`}>
-                        {s.count}
-                      </span>
-                    </button>
+                    <Tooltip key={s.id} text={s.label}>
+                      <button
+                        type="button"
+                        // Active segment absorbs the leftover width on narrow so
+                        // the pill spans the screen exactly; inactive ones stay
+                        // at their icon width. title= carries the label for the
+                        // icon-only state (aria-label does the same for AT).
+                        className={`shrink-0 ${active ? 'max-sm:flex-1 max-sm:min-w-0' : ''} px-2.5 sm:px-3.5 py-1.5 rounded-control text-sm-tight font-medium inline-flex items-center justify-center gap-1.5 sm:gap-2 transition-colors ${
+                          active
+                            ? 'bg-accent text-on-accent'
+                            : 'text-fg-2 hover:text-fg hover:bg-inset'
+                        }`}
+                        onClick={() => setTab(s.id)}
+                        aria-label={s.label}
+                        // The first-run tour's Files stop rings the Files tab.
+                        data-guide-anchor={s.id === 'files' ? 'files-tab' : undefined}
+                        aria-current={active ? 'page' : undefined}
+                      >
+                        <span className="shrink-0 inline-flex">{s.icon}</span>
+                        {/* Label + count collapse to nothing on an inactive
+                            segment below 640px — that's what buys the room for
+                            all three to fit without scrolling. */}
+                        <span className={`truncate ${active ? '' : 'max-sm:hidden'}`}>{s.label}</span>
+                        <span className={`text-2xs shrink-0 ${active ? 'opacity-80' : 'text-fg-muted max-sm:hidden'}`}>
+                          {s.count}
+                        </span>
+                      </button>
+                    </Tooltip>
                   );
                 })}
               </div>

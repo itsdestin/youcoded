@@ -1,4 +1,5 @@
 import React from 'react';
+import { Tooltip } from './Tooltip';
 
 /**
  * The one button. Every button in the app goes through this — never hand-roll
@@ -247,9 +248,9 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
   ref,
 ) {
   const size = (rest as { size?: ButtonSize }).size ?? 'md';
-  const { size: _omit, ...domProps } = rest as NativeButtonProps & { size?: ButtonSize };
+  const { size: _omit, title, ...domProps } = rest as NativeButtonProps & { size?: ButtonSize };
 
-  return (
+  const button = (
     <button
       ref={ref}
       // Default to "button" so a Button inside a <form> can't accidentally submit it.
@@ -259,4 +260,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       {...domProps}
     />
   );
+  // WHY: a `title` on a shared Button used to reach the DOM as the browser's own grey hover
+  // bubble, which no theme can style (card #135, design guide: hints are the app's own).
+  // Tooltip clones the button, so the DOM and layout are unchanged; no title means no wrapper.
+  return title ? <Tooltip text={title}>{button}</Tooltip> : button;
 });

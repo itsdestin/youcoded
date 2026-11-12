@@ -220,7 +220,9 @@ const CommandRow = memo(function CommandRow({ c, sessionId, onJump }: {
           )}
         </div>
       </div>
-      {showCommand && <div className="text-2xs font-mono text-fg-dim truncate" title={c.command}>{c.command}</div>}
+      {showCommand && <Tooltip text={c.command ?? ''}>
+        <div className="text-2xs font-mono text-fg-dim truncate">{c.command}</div>
+      </Tooltip>}
       <div className="text-2xs text-fg-muted">{facts.join(' · ')}</div>
     </li>
   );

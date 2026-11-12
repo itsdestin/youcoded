@@ -23,6 +23,7 @@ import { ChipRow, CountChip, ThumbsChip } from "./FactChips";
 import { Button, Callout, Chip, Pill } from "../ui";
 import { THEME_PREVIEW_FRAME } from "../appearance/ThemeCard";
 import { CATALOG_TYPE_LABEL, isInstallableSource } from "../../../shared/catalog-types";
+import { Tooltip } from '../ui';
 
 export type MarketplaceCardEntry =
   | { kind: "skill"; entry: SkillEntry }
@@ -225,11 +226,13 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
   // picture's shape, so the whole window shows; the card is taller by that much.
   const previewFrame = { aspectRatio: '16 / 10', borderRadius: 'calc(var(--radius-xl) - 4px) calc(var(--radius-xl) - 4px) var(--radius-sm) var(--radius-sm)' };
   const themeSwatches = item.kind === "theme" && themePreviewFailed && themeTokens && Object.keys(themeTokens).length > 0 ? (
-    <div data-theme-swatches style={previewFrame} className={`m-1 mb-0 flex ${THEME_PREVIEW_FRAME}`} title={`${item.entry.name} colours — preview image unavailable`}>
-      {Object.entries(themeTokens).map(([name, color]) => (
-        <span key={name} className="flex-1" style={{ background: color as string }} />
-      ))}
-    </div>
+    <Tooltip text={`${item.entry.name} colours — preview image unavailable`}>
+      <div data-theme-swatches style={previewFrame} className={`m-1 mb-0 flex ${THEME_PREVIEW_FRAME}`}>
+        {Object.entries(themeTokens).map(([name, color]) => (
+          <span key={name} className="flex-1" style={{ background: color as string }} />
+        ))}
+      </div>
+    </Tooltip>
   ) : null;
   const blurb = item.kind === "skill"
     ? (item.entry.tagline || item.entry.description || "")
@@ -325,19 +328,20 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
         <div className="shrink-0 flex flex-col items-end gap-1.5">
           {showUpdateAction && <UpdateButton id={updateId} kind={kind} />}
           {!suppressCorner && !notInstallable && kind === 'skill' && !isInstalled && !isInstalling && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); install(); }}
-              aria-label="Install"
-              title="Install"
-              className="p-3 rounded-md text-fg-dim hover:text-fg hover:bg-inset transition-colors"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="7 10 12 15 17 10" />
-                <line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
-            </button>
+            <Tooltip text="Install">
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); install(); }}
+                aria-label="Install"
+                className="p-3 rounded-md text-fg-dim hover:text-fg hover:bg-inset transition-colors"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+              </button>
+            </Tooltip>
           )}
         </div>
       </div>
@@ -483,20 +487,23 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
           Only rendered for skills that belong to a marketplace plugin;
           stopPropagation prevents the card's own onClick from firing. */}
       {pluginBadge && (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); pluginBadge.onClick(); }}
-          title={`Open ${pluginBadge.name}`}
-          className="self-start text-3xs font-medium px-2 py-0.5 rounded-full shrink-0 bg-accent/10 text-accent border border-accent/30 hover:bg-accent/20 transition-colors truncate max-w-full"
-        >
-          {pluginBadge.name}
-        </button>
+        <Tooltip text={`Open ${pluginBadge.name}`}>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); pluginBadge.onClick(); }}
+            className="self-start text-3xs font-medium px-2 py-0.5 rounded-full shrink-0 bg-accent/10 text-accent border border-accent/30 hover:bg-accent/20 transition-colors truncate max-w-full"
+          >
+            {pluginBadge.name}
+          </button>
+        </Tooltip>
       )}
       {/* Round 2: what it can do, as WORDS on their own line — "Runs
           commands · Uses the internet · Needs a key". Only the risky kinds,
           only when there are any; the sentences are on the detail page. The
           numbers and contents that shared this foot are chips now (U-1). */}
-      {capLine && <p className="mt-auto hidden sm:block text-2xs text-fg-dim truncate" title={capLine}>{capLine}</p>}
+      {capLine && <Tooltip text={capLine}>
+        <p className="mt-auto hidden sm:block text-2xs text-fg-dim truncate">{capLine}</p>
+      </Tooltip>}
       {turnedOffNotice && <div className="mt-auto">{turnedOffNotice}</div>}
       </div>
     </div>

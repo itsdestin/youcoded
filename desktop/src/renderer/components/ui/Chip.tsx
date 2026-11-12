@@ -1,4 +1,5 @@
 import type { HTMLAttributes, ReactNode } from 'react';
+import { Tooltip } from './Tooltip';
 
 /**
  * The fact chip — one short fact in a row of them: "Likely safe", "@destin", "412 installs",
@@ -16,6 +17,9 @@ import type { HTMLAttributes, ReactNode } from 'react';
  */
 export const CHIP = 'inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-2xs text-fg-2 bg-inset border border-edge-dim whitespace-nowrap';
 
-export function Chip({ children, className = '', ...rest }: { children: ReactNode; className?: string } & Omit<HTMLAttributes<HTMLSpanElement>, 'className' | 'children'> & Record<`data-${string}`, unknown>) {
-  return <span className={`${CHIP} ${className}`.trim()} data-chip {...rest}>{children}</span>;
+export function Chip({ children, className = '', title, ...rest }: { children: ReactNode; className?: string } & Omit<HTMLAttributes<HTMLSpanElement>, 'className' | 'children'> & Record<`data-${string}`, unknown>) {
+  const chip = <span className={`${CHIP} ${className}`.trim()} data-chip {...rest}>{children}</span>;
+  // WHY: a chip's `title` used to be the browser's own hover bubble (card #135); the app's hint
+  // follows the theme. Tooltip clones the span, so layout is unchanged.
+  return title ? <Tooltip text={title}>{chip}</Tooltip> : chip;
 }
