@@ -537,3 +537,26 @@ describe('GitHub backups on a computer', () => {
     expect(screen.queryByRole('button', { name: /GitHub Stores your data/ })).toBeNull();
   });
 });
+
+// WHY (error inventory 2026-09-10, Settings row 75): a sync log that could not be read said
+// "No sync log entries yet." - the same words as a log that is truly empty.
+describe('Sync log that cannot be read', () => {
+  afterEach(() => { cleanup(); delete (window as any).claude; });
+
+  it('says it could not load, with the reason and Try again, instead of "No sync log entries yet."', async () => {
+    const getLog = vi.fn()
+      .mockResolvedValueOnce([])                       // the panel's first load succeeds
+      .mockRejectedValueOnce(new Error('log file locked'))  // opening the fold fails
+      .mockResolvedValue([JSON.stringify({ ts: '2026-11-12T10:00:00Z', level: 'INFO', msg: 'Pushed' })]);
+    stub({ getLog }, []);
+    render(<SyncSection autoOpen />);
+    fireEvent.click(await screen.findByText('Sync log'));
+    expect(await screen.findByText(/Couldn't load the sync log: .*log file locked/)).toBeInTheDocument();
+    expect(screen.queryByText('No sync log entries yet.')).toBeNull();
+    // The error box's own Try again (the first one in the log fold) re-asks and shows the lines.
+    const again = screen.getAllByRole('button', { name: 'Try again' });
+    await act(async () => { fireEvent.click(again[again.length - 1]); });
+    await waitFor(() => expect(screen.queryByText(/Couldn't load the sync log/)).toBeNull());
+    expect(await screen.findByText('Pushed')).toBeInTheDocument();
+  });
+});

@@ -439,6 +439,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const narrow = useNarrowViewport();
   const [status, setStatus] = useState<SyncStatus | null>(initialStatus);
   const [logLines, setLogLines] = useState<string[]>([]);
+  // WHY (error inventory 2026-09-10, Settings row 75): a log that could not be read said "No sync log
+  // entries yet." - the same words as a log that is genuinely empty. The failure is now kept and shown.
+  const [logError, setLogError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!initialStatus);
   const [syncing, setSyncing] = useState(false);
   const [showLog, setShowLog] = useState(false);
@@ -1714,13 +1717,24 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               onToggle={async (next) => {
                 setShowLog(next);
                 if (next) {
-                  try { const log = await claude.sync.getLog(30); setLogLines(log); } catch {}
+                  try { const log = await claude.sync.getLog(30); setLogLines(log); setLogError(null); }
+                  catch (e) { setLogError(plainMessage(e, 'The log did not come back.')); }
                 }
               }}
             >
                 <div>
+                  {logError && (
+                    <ErrorState
+                      variant="inline"
+                      message={`Couldn't load the sync log: ${logError}`}
+                      onRetry={async () => {
+                        try { setLogLines(await claude.sync.getLog(30)); setLogError(null); }
+                        catch (e) { setLogError(plainMessage(e, 'The log did not come back.')); }
+                      }}
+                    />
+                  )}
                   {logLines.length === 0 ? (
-                    <div className="text-2xs text-fg-muted px-2 py-3">No sync log entries yet.</div>
+                    !logError && <div className="text-2xs text-fg-muted px-2 py-3">No sync log entries yet.</div>
                   ) : (
                     // WHY two boxes (2026-10-15, the one scroll fade): the fade is a mask, so on the
                     // bordered box it would fade the border and fill too. The outer box frames;
@@ -1755,7 +1769,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       group is never bare text. */}
                   <Button
                     variant="secondary"
-                    onClick={async () => { try { setLogLines(await claude.sync.getLog(30)); } catch {} }}
+                    onClick={async () => { try { setLogLines(await claude.sync.getLog(30)); setLogError(null); } catch (e) { setLogError(plainMessage(e, 'The log did not come back.')); } }}
                     className="w-full mt-1.5"
                   >
                     Refresh
