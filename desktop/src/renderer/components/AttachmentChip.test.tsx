@@ -11,7 +11,7 @@ afterEach(() => { cleanup(); clearAttachmentPreviews(); });
 describe('AttachmentChip picture source', () => {
   it('uses the browser copy when the phone picked this picture', () => {
     URL.createObjectURL = vi.fn(() => 'blob:phone-copy'); URL.revokeObjectURL = vi.fn();
-    rememberAttachmentPreview('/srv/uploads/cat.png', new Blob(['x']));
+    rememberAttachmentPreview('/srv/uploads/cat.png', new Blob(['x'], { type: 'image/png' }));
     const { container } = render(<AttachmentChip path="/srv/uploads/cat.png" onRemove={() => {}} />);
     expect(container.querySelector('img')).toHaveAttribute('src', 'blob:phone-copy');
   });

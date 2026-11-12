@@ -11,6 +11,7 @@ const MAX_KEPT = 20;
 
 /** Remember the browser's own copy of an uploaded picture, keyed by the computer-side path it was uploaded to. */
 export function rememberAttachmentPreview(computerPath: string, file: Blob): void {
+  if (!file.type.startsWith('image/')) return; // pictures only: other files keep the file-type glyph
   if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return;
   const old = previews.get(computerPath);
   if (old) URL.revokeObjectURL(old);

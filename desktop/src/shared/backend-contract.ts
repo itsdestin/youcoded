@@ -974,7 +974,6 @@ export interface ChannelTypes extends ConversationQueueChannelTypes, BrowserChan
   'defaults:set': { request: Partial<SessionDefaults>; response: SessionDefaults | null };
   'settings:get': { request: { field: string }; response: unknown };
   'settings:set': { request: { field: string; value: unknown }; response: boolean };
-  /** Card #11 a: the damaged-settings-file notice, handed out once (null = nothing to say). */
   'settings:repair-notice': { request: void; response: { backupPath: string } | null };
   'modes:get': { request: void; response: ModelModes };
   'modes:set': { request: Partial<ModelModes>; response: ModelModes | null };

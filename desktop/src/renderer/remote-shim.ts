@@ -2150,11 +2150,7 @@ async function pickAndUploadFiles(): Promise<string[]> {
         size: file.size,
       });
       // WHY (2026-10-01 one-core R3-SEC): a refusal (file over the size cap) now comes back as a sentence; show it instead of dropping the file silently.
-      if (result?.path) {
-        paths.push(result.path);
-        // Card #194: keep the browser's own copy of a picture so the attachment card can preview it (see utils/remote-attachment-previews.ts).
-        if (file.type.startsWith('image/')) rememberAttachmentPreview(result.path, file);
-      } else if (typeof result?.error === 'string') announce(result.error, 5000);
+      if (result?.path) { paths.push(result.path); rememberAttachmentPreview(result.path, file); /* card #194: the browser's own copy, for the card's picture */ } else if (typeof result?.error === 'string') announce(result.error, 5000);
     } catch (err) {
       console.error('Failed to upload file:', file.name, err);
     }
@@ -2751,8 +2747,7 @@ export function installShim(): void {
     settings: {
       get: (field: string) => invoke('settings:get', { field }),
       set: (field: string, value: unknown) => invoke('settings:set', { field, value }),
-      // Desktop-only channel (phones cannot reach it): resolves null instead of throwing, so a phone just sees no notice.
-      takeRepairNotice: (): Promise<{ backupPath: string } | null> => invoke('settings:repair-notice').catch(() => null),
+      takeRepairNotice: (): Promise<{ backupPath: string } | null> => invoke('settings:repair-notice').catch(() => null), // desktop-only channel: a phone gets null, never an error
     },
     modes: {
       get: () => invoke('modes:get'),
