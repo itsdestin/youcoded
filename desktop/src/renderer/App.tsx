@@ -113,6 +113,7 @@ import { PageCreateDialog, usePageCreate } from './components/pages/PageCreateDi
 import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider, PastSession } from '../shared/types';
+import { cycleTarget, useNativePermissionCycle, usePageChatPermission, usePermissionLatest } from './hooks/usePermissionCycles';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
 import { createFirstPageLoader, type FirstPageLoader, type PageHint } from './state/first-page-loader';
@@ -3081,43 +3082,19 @@ function AppInner() {
   const { gate: gateSmallModel, dialog: smallModelWarning } = useFirstTimeGate('small-model');
   const { gate: gateFullAuto, dialog: fullAutoWarning } = useFirstTimeGate('full-auto');
 
-  const cycleNativePermission = useCallback(async () => {
-    if (!sessionId) return;
-    const cycle: NativePermissionMode[] = ['ask', 'auto-edit', 'full-auto'];
-    // currentNativeMode may be 'unknown' — indexOf then legitimately returns -1,
-    // which wraps to index 0 below, so cycling from an unknown state starts fresh.
-    const idx = cycle.indexOf(currentNativeMode as NativePermissionMode);
-    const next = cycle[(idx + 1) % cycle.length];
-    const apply = async () => {
-    if (cycleNativeNow(sessionId, currentNativeMode, next)) return;   // R6-2: a phone draws the new mode at once (hooks/usePhoneSessionActions.ts)
-    try {
-      const applied = await window.claude.native.setPermissionMode(sessionId, next);
-      // Validate before storing: the normal path returns a bare mode string, but
-      // the remote path converts a host throw into a resolved {ok:false,...}
-      // object (remote-shim). Storing that would corrupt the chip's
-      // PERMISSION_DISPLAY lookup — leave state unchanged on anything unexpected.
-      const VALID: NativePermissionMode[] = ['ask', 'auto-edit', 'full-auto'];
-      if (VALID.includes(applied as NativePermissionMode)) {
-        setNativePermissionModes((prev) => new Map(prev).set(sessionId, applied as NativePermissionMode));
-      } else {
-        console.error('Native permission mode not applied:', applied);
-      }
-    } catch (err) {
-      // A rejected invoke means an unknown-mode wiring bug in the host — leave
-      // the chip on its current (unchanged) mode rather than lying about state.
-      console.error('Failed to set native permission mode:', err);
-    }
-    };
-    // Cycling INTO Full auto is switching it on: the first time, the warning.
-    if (next === 'full-auto') { gateFullAuto(() => { void apply(); }); return; }
-    await apply();
-  }, [sessionId, currentNativeMode, gateFullAuto, cycleNativeNow]);
+  // Both cycles take a session id, for the page chat's chip (hooks/usePermissionCycles.ts).
+  const permLatest = usePermissionLatest({ activeId: sessionId, modes: permissionModes, nativeModes: nativePermissionModes, models: sessionModels });
+  const cycleNativePermission = useNativePermissionCycle({ latest: permLatest, setNativePermissionModes, gateFullAuto, cycleNativeNow });
 
   // Shift+Tab cycles permission mode in chat view
   // (In terminal view, the raw escape code reaches the PTY directly)
   const cyclePermissionRef = useRef<(() => void) | null>(null);
-  const cyclePermission = useCallback(() => {
+  const cyclePermission = useCallback((forId?: unknown) => {
+    const sessionId = cycleTarget(forId, permLatest);
     if (!sessionId) return;
+    const canBypass = sessionsRef.current.find((x) => x.id === sessionId)?.skipPermissions ?? false;
+    const currentModel = permLatest.current.models.get(sessionId) ?? 'unknown';
+    const currentPermissionMode: PermissionMode | 'unknown' = permLatest.current.modes.get(sessionId) ?? 'unknown';
     // 'auto' is plan-gated by Anthropic — only included in the optimistic cycle
     // when the active session is on Opus 4.7 1M (the only model in our
     // ModelAlias union that has access). On other models, CC's Shift+Tab won't
@@ -3160,7 +3137,8 @@ function AppInner() {
     // same warning the form's toggle shows.
     if (next === 'bypass') { gateSkip(apply); return; }
     apply();
-  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip, cycleClaudeNow, showBlockedSend]);
+  }, [gateSkip, cycleClaudeNow, showBlockedSend]);
+  const pageChatPermission = usePageChatPermission({ sessionsRef, cycleNative: cycleNativePermission, cycleClaude: cyclePermission, modes: permissionModes, nativeModes: nativePermissionModes });
   cyclePermissionRef.current = cyclePermission;
 
   useEffect(() => {
@@ -4136,6 +4114,7 @@ function AppInner() {
         onEditPage={editPage}
         // The page's assistant (pages-finish step 3) names its chat from this list and notices when its tab closes.
         sessions={sessions}
+        chatPermission={pageChatPermission}
       />
       <PageCreateDialog
         request={pageCreate}

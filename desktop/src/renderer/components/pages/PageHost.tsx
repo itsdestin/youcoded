@@ -47,6 +47,8 @@ import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { isWorkbenchDocument, isWorkbenchMode, workbenchPageChat, workbenchScreenFrame } from '../../workbench-mode';
 import { ChatIcon } from '../Icons';
 import { PageChatPane } from './PageChatPane';
+import type { PermissionMode } from '../../../shared/types';
+import type { NativePermissionMode } from '../../../shared/permission-types';
 import { createPageSaveQueue, type PageSaveQueue } from './page-save-queue';
 import { usePageAssistant } from './use-page-assistant';
 import { Button, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
@@ -145,6 +147,8 @@ interface PageHostProps {
   onEditPage?: (page: PageSummary) => void;
   /** The app's open chats (id and name), for the page assistant's title, and to notice its chat was closed. */
   sessions?: ReadonlyArray<{ id: string; name: string }>;
+  /** A chat's permission mode and its cycle, from App (which owns every session's mode), for the page chat's chip. */
+  chatPermission?: (sessionId: string) => { mode: PermissionMode | NativePermissionMode | 'unknown'; cycle: () => void } | null;
 }
 
 /** The practice app's seeded conversation (?seed=bubbles-page-money-cc; a `-cc` seed fills wb-1), which the workbench's page chat shows:
@@ -165,7 +169,7 @@ const PAGE_CHAT_FLOAT_WIDTH = 340;
 /** How long a page's further "Open this website?" asks are ignored after a Cancel. */
 const OPEN_QUIET_MS = 30_000;
 
-export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage, projectRoot = null, onStartSession, onEditPage, sessions }: PageHostProps) {
+export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage, projectRoot = null, onStartSession, onEditPage, sessions, chatPermission }: PageHostProps) {
   // Narrow selectors (perf, 2026-09-23): only the page flags this host shows.
   const dispatch = useArtifactDispatch();
   const open = useArtifactSelector((s) => s.pageViewOpen);
@@ -965,6 +969,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               onNewChat={assistant.startNew} onRetry={assistant.open}
               onHide={() => setChatOpen(false)}
               beforePutBack={beforePutBack} afterPutBack={afterPutBack}
+              permission={chatSessionId ? chatPermission?.(chatSessionId) ?? null : null}
               className={`screen-pane screen-pane--panel page-chat-floating absolute right-3 bottom-3 z-10 rounded-xl bg-canvas${seeThrough ? ' panel-glass' : ''}`}
               style={narrow ? { left: 12, height: '62%' } : { width: PAGE_CHAT_FLOAT_WIDTH, height: 'min(75%, 560px)' }} />
           )}

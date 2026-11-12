@@ -171,6 +171,37 @@ export const PERMISSION_DISPLAY: Record<PermissionMode | NativePermissionMode | 
   unknown:       { label: 'PERMISSION UNKNOWN',  shortLabel: 'UNKNOWN', color: 'var(--fg-2)', bg: 'var(--panel)', border: 'rgba(221,68,68,0.5)' },
 };
 
+/** The permission-mode chip: shows a chat's mode, and a press moves to the next one.
+ *  WHY its own piece (2026-11-12): the page's chat shows the SAME chip as the status bar (Destin: "i should be able
+ *  to pick between permissions modes for that specific chat like i would in a real full session"), so it is one
+ *  control used twice, not a look-alike. `compact` always uses the short label (the page chat's narrow header). */
+export function PermissionChip({ mode, onCycle, pending, compact, tooltipPlacement }: {
+  mode: PermissionMode | NativePermissionMode | 'unknown';
+  onCycle?: () => void;
+  pending?: boolean;
+  compact?: boolean;
+  tooltipPlacement?: 'top' | 'bottom';
+}) {
+  const d = PERMISSION_DISPLAY[mode];
+  return (
+    <Tooltip placement={tooltipPlacement} text={mode === 'unknown'
+      ? "YouCoded couldn't confirm this session's permission mode — click to set one explicitly"
+      : compact ? `${d.label} — click to change` : 'Click to cycle permission mode (Shift+Tab)'}>
+      <button
+        onClick={onCycle} data-permission-chip=""
+        className={`px-1.5 py-0.5 rounded-sm border cursor-pointer hover:brightness-125 transition-colors${pending ? ' opacity-60' : ''}`}
+        aria-busy={pending || undefined}
+        style={{ backgroundColor: d.bg, color: d.color, borderColor: d.border }}
+      >
+        {compact ? d.shortLabel : (<>
+          <span className="sm:hidden">{d.shortLabel}</span>
+          <span className="hidden sm:inline">{d.label}</span>
+        </>)}
+      </button>
+    </Tooltip>
+  );
+}
+
 // --- Native (local-model) StatusBar chips (Task 12) ---
 // Native-runtime sessions have no CC statusline writing .usage-cache.json, so
 // their context/tokens/speed chips are derived directly from the per-turn usage
@@ -1073,25 +1104,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       )}
 
       {/* Permission mode chip — always second */}
-      {permissionMode && (
-        <Tooltip text={permissionMode === 'unknown'
-          ? "YouCoded couldn't confirm this session's permission mode — click to set one explicitly"
-          : 'Click to cycle permission mode (Shift+Tab)'}>
-        <button
-          onClick={onCyclePermission}
-          className={`px-1.5 py-0.5 rounded-sm border cursor-pointer hover:brightness-125 transition-colors${permissionPending ? ' opacity-60' : ''}`}
-          aria-busy={permissionPending || undefined}
-          style={{
-            backgroundColor: PERMISSION_DISPLAY[permissionMode].bg,
-            color: PERMISSION_DISPLAY[permissionMode].color,
-            borderColor: PERMISSION_DISPLAY[permissionMode].border,
-          }}
-        >
-          <span className="sm:hidden">{PERMISSION_DISPLAY[permissionMode].shortLabel}</span>
-          <span className="hidden sm:inline">{PERMISSION_DISPLAY[permissionMode].label}</span>
-        </button>
-        </Tooltip>
-      )}
+      {permissionMode && <PermissionChip mode={permissionMode} onCycle={onCyclePermission} pending={permissionPending} />}
 
       {/* Session tags & note — fixed control (design §"In-session surface").
           Hidden on Android (touch UI deferred); shown on desktop + remote. */}

@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ChatView from '../ChatView';
 import InputBar from '../InputBar';
 import { Button, ErrorState, LoadingState, SectionLabel, Tooltip } from '../ui';
+import { PermissionChip } from '../StatusBar';
 import { CompactSurfaceContext, type CompactSurface } from '../../state/compact-surface-context';
 import type { PageAssistantChat, PageSummary, PagesBridge, PageVersion } from '../../../shared/pages-types';
 import { workbenchPageVersionsOpen } from '../../workbench-mode';
@@ -41,6 +42,9 @@ interface PageChatPaneProps {
    *  version's files are written; afterwards the page is loaded afresh when something was put back. */
   beforePutBack?: () => Promise<void>;
   afterPutBack?: (changed: boolean) => void;
+  /** This chat's permission mode and the press that moves to the next one: the status bar's own chip, for this
+   *  chat (Destin, 2026-11-10 review deck). Absent while there is no chat, or where the app cannot tell. */
+  permission?: { mode: React.ComponentProps<typeof PermissionChip>['mode']; cycle: () => void } | null;
   className?: string;
   /** Size and place, from the host. */
   style?: React.CSSProperties;
@@ -48,7 +52,7 @@ interface PageChatPaneProps {
 
 type Popover = 'chats' | 'versions' | null;
 
-export function PageChatPane({ page, sessionId, sessionName, status, error, chats, onListChats, onOpenChat, onNewChat, onRetry, onHide, beforePutBack, afterPutBack, className = '', style }: PageChatPaneProps) {
+export function PageChatPane({ page, sessionId, sessionName, status, error, chats, onListChats, onOpenChat, onNewChat, onRetry, onHide, beforePutBack, afterPutBack, permission, className = '', style }: PageChatPaneProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [popover, setPopover] = useState<Popover>(() => (workbenchPageVersionsOpen() ? 'versions' : null));
@@ -86,6 +90,11 @@ export function PageChatPane({ page, sessionId, sessionName, status, error, chat
         <div className="page-chat-header absolute top-0 inset-x-0 z-30 select-none flex items-center gap-1 pl-4 pr-2" style={{ height: HEADER_PX }}>
           {/* The label cuts a long name with "…" (page-chat.css): SectionLabel owns its type, the row its width. */}
           <div className="flex-1 min-w-0"><SectionLabel>{sessionId ? sessionName : 'New chat'}</SectionLabel></div>
+          {/* WHY before the icon buttons, in its own colour: it is the one control here that changes what the assistant
+              may do without asking, and it is the same chip, same words and colours, as under a full chat. */}
+          {sessionId && status === 'ready' && permission && (
+            <span className="shrink-0 text-xs mr-1"><PermissionChip mode={permission.mode} onCycle={permission.cycle} compact tooltipPlacement="bottom" /></span>
+          )}
           <Tooltip text="Earlier chats about this page" placement="bottom">
             <Button size="icon-sm" variant="ghost" aria-label={`Earlier chats about ${page.name}`} aria-expanded={popover === 'chats'}
               onClick={() => { if (popover !== 'chats') onListChats(); toggle('chats'); }} className="w-7 h-7"><HistoryGlyph /></Button>
