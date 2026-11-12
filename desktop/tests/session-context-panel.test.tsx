@@ -56,10 +56,10 @@ describe('rules are sorted by where they apply', () => {
     expect(screen.getByText('Not everything fit')).toBeInTheDocument();
     // Short, named summary — never "file(s)" or a bare count.
     expect(screen.getByText('Shortened · AGENTS.md')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('tab', { name: 'Project' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Project context' }));
     // Folder names, not long absolute paths; a same-folder file that was not used is named.
     expect(screen.getByText('From the “workspace” folder · Outlined parent · CLAUDE.md here not used')).toBeInTheDocument();
-    expect(screen.getByText('This project · Read in full')).toBeInTheDocument();
+    expect(screen.getByText('Read before every chat in this project')).toBeInTheDocument();
   });
 
   it('counts the captured chain on Overview and keeps the same rows on Project', () => {
@@ -68,9 +68,9 @@ describe('rules are sorted by where they apply', () => {
       { path: '/workspace/repo/CLAUDE.md', truncated: false },
     ], skills: [], tools: ['Read'] });
     expect(screen.getByText(/2 rules files/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('tab', { name: 'Project' }));
-    expect(screen.getByText('From the “workspace” folder · Read in full')).toBeInTheDocument();
-    expect(screen.getByText('This project · Read in full')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Project context' }));
+    expect(screen.getByText('From the “workspace” folder')).toBeInTheDocument();
+    expect(screen.getByText('Read before every chat in this project')).toBeInTheDocument();
   });
 
   it('counts the project file and your own file on separate Overview rows', () => {
@@ -81,29 +81,30 @@ describe('rules are sorted by where they apply', () => {
 
   it('puts the project file on Project and your every-project file on Global, never both on one', () => {
     show(withUser);
-    fireEvent.click(screen.getByRole('tab', { name: 'Project' }));
-    expect(screen.getByText(/This project ·/)).toBeInTheDocument();
-    expect(screen.queryByText(/You, in every project ·/)).toBeNull();
-    fireEvent.click(screen.getByRole('tab', { name: 'Global' }));
-    expect(screen.getByText(/You, in every project ·/)).toBeInTheDocument();
-    expect(screen.queryByText(/This project ·/)).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Project context' }));
+    expect(screen.getByText('Read before every chat in this project')).toBeInTheDocument();
+    expect(screen.queryByText('Read before every chat, in every project')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Global context' }));
+    expect(screen.getByText('Read before every chat, in every project')).toBeInTheDocument();
+    expect(screen.queryByText('Read before every chat in this project')).toBeNull();
   });
 
-  it('does not claim we read your file in full — only that we did not shorten it', () => {
+  it('a file nobody shortened claims nothing about how it was read', () => {
     // For a Claude Code chat "Read in full" would be a claim about someone
-    // else's work: the CLI manages its own window and we cannot see what it did.
+    // else's work; deck round 1 (T-5) dropped "didn't shorten it" as well.
     show(withUser);
-    for (const tab of ['Project', 'Global']) {
+    for (const tab of ['Project context', 'Global context']) {
       fireEvent.click(screen.getByRole('tab', { name: tab }));
       expect(screen.queryByText(/Read in full/)).toBeNull();
-      expect(screen.getAllByText(/didn’t shorten it/).length).toBe(1);
+      expect(screen.queryByText(/didn’t shorten it/)).toBeNull();
     }
   });
 
   it('a native chat says plainly that it has no every-project file, rather than showing nothing', () => {
     show({ assembledBy: 'youcoded', skills: [], tools: ['Read'], contextWindowTokens: 8000 });
-    fireEvent.click(screen.getByRole('tab', { name: 'Global' }));
-    expect(screen.getByText(/not an every-project file/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Global context' }));
+    expect(screen.getByText('No every-project rules')).toBeInTheDocument();
+    expect(screen.getByText(/from the project’s folders only/)).toBeInTheDocument();
   });
 });
 
@@ -121,27 +122,31 @@ describe('skills and tools are sorted by where they come from', () => {
 
   it('a project skill shows on Project only, and the rest on Global', () => {
     show(mixed);
-    fireEvent.click(screen.getByRole('tab', { name: 'Global' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Global context' }));
     expect(screen.getByText('everywhere')).toBeInTheDocument();
     expect(screen.getByText('old-record')).toBeInTheDocument();
     expect(screen.queryByText('local-one')).toBeNull();
-    fireEvent.click(screen.getByRole('tab', { name: 'Project' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Project context' }));
     expect(screen.getByText('local-one')).toBeInTheDocument();
     expect(screen.queryByText('everywhere')).toBeNull();
   });
 
   it('an add-on is one row naming how many tools it brought, not a row per tool', () => {
     show(mixed);
-    fireEvent.click(screen.getByRole('tab', { name: 'Global' }));
-    expect(screen.getByText('calendar')).toBeInTheDocument();
-    expect(screen.getByText('2 tools')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Global context' }));
+    expect(screen.getByText('calendar add-on')).toBeInTheDocument();
     expect(screen.queryByText('mcp__calendar__list_events')).toBeNull();
+    // Deck round 1, T-4: built-in tools are ONE row that lists every tool when opened.
+    expect(screen.queryByText('Read')).toBeNull();
+    fireEvent.click(screen.getByText('Built into YouCoded'));
     expect(screen.getByText('Read')).toBeInTheDocument();
+    expect(screen.getByText('Bash')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Show all/ })).toBeNull();
   });
 
   it('a long list shows five rows and a button naming the full count', () => {
     show({ ...mixed, skills: Array.from({ length: 12 }, (_, n) => ({ id: `p:s${n}`, label: `skill-${n}`, scope: 'global' as const })) });
-    fireEvent.click(screen.getByRole('tab', { name: 'Global' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Global context' }));
     expect(screen.getByText('skill-4')).toBeInTheDocument();
     expect(screen.queryByText('skill-5')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Show all 12' }));
@@ -151,9 +156,9 @@ describe('skills and tools are sorted by where they come from', () => {
   it('a project with nothing of its own says so instead of showing a blank tab', () => {
     show({ assembledBy: 'youcoded', skills: [], tools: ['Read'], contextWindowTokens: 8000 });
     expect(screen.getByText('Nothing is specific to this project')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('tab', { name: 'Project' }));
-    expect(screen.getByText('There is no rules file for this project.')).toBeInTheDocument();
-    expect(screen.getByText('This project has no skills of its own.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Project context' }));
+    expect(screen.getByText('No rules file for this project')).toBeInTheDocument();
+    expect(screen.getByText('No skills of its own')).toBeInTheDocument();
   });
 });
 
@@ -168,30 +173,30 @@ describe('a Claude Code chat never claims what it cannot know', () => {
     show(cc);
     expect(screen.getByText('Runs this chat')).toBeInTheDocument();
     expect(screen.getByText('Claude Code')).toBeInTheDocument();
-    expect(screen.getByText(/doesn’t share them with YouCoded/)).toBeInTheDocument();
+    expect(screen.getByText(/may not be 100% accurate/)).toBeInTheDocument();
   });
 
   it('does not present an unknown tool set as an empty one', () => {
     show(cc);
-    fireEvent.click(screen.getByRole('tab', { name: 'Global' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Global context' }));
     // "no tools — the assistant can only talk" would be a lie in the more
     // alarming direction: it reads as a capability this chat lacks.
     expect(screen.queryByText(/can only talk/)).toBeNull();
-    expect(screen.getByText(/chooses its own tools/)).toBeInTheDocument();
+    expect(screen.getByText('Chosen by Claude Code')).toBeInTheDocument();
   });
 
   it('says the system instructions are Claude Code’s, not that there are none', () => {
     show(cc);
-    fireEvent.click(screen.getByRole('tab', { name: 'Global' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Global context' }));
     expect(screen.queryByText(/Nothing was reported/)).toBeNull();
-    expect(screen.getByText(/writes its own system instructions/)).toBeInTheDocument();
+    expect(screen.getByText('Written by Claude Code')).toBeInTheDocument();
   });
 
   it('a NATIVE chat with no tools still says so plainly', () => {
     // The other side of the same coin: when we DO know the tool set is empty,
     // that is a fact about the chat and must still be stated.
     show({ assembledBy: 'youcoded', tools: [], skills: [], contextWindowTokens: 8000 });
-    fireEvent.click(screen.getByRole('tab', { name: 'Global' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Global context' }));
     expect(screen.getByText(/can only talk/)).toBeInTheDocument();
   });
 });

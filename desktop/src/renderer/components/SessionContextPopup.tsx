@@ -82,7 +82,7 @@ const basename = (p: string) => p.split(/[\\/]/).slice(-1)[0];
  *  absolute paths that overflow the card on a phone. The nearest file is "This
  *  project"; each broader one is named by the folder it lives in. */
 function instructionLabel(filePath: string, isNearest: boolean): string {
-  if (isNearest) return 'This project';
+  if (isNearest) return 'Read before every chat in this project';
   const folder = filePath.split(/[\\/]/).slice(-2, -1)[0];
   return folder && !/^[A-Za-z]:$/.test(folder) ? `From the “${folder}” folder` : 'From the top-level folder';
 }
@@ -235,25 +235,26 @@ function FileText({ sessionId, kind, id, what }: { sessionId?: string; kind: 'pr
 /** One instruction file, with its text open — there is at most one of each, so
  *  unlike a skill card this does not wait to be asked.
  *
- *  `assembledByClaudeCode` changes what "not shortened" is allowed to mean. For
- *  the native harness it is a record: we read the file, we did not cut it. For a
- *  Claude Code chat it means only that WE did not cut it — Claude Code manages
- *  its own window and we cannot see what it did. Saying "read in full" there
- *  would be a claim about someone else's work. */
-function RulesCard({ file, kind, label, sessionId, openFile, assembledByClaudeCode, id }: {
+ *  WHY the line under the name says WHEN the file is read and nothing else
+ *  (Destin, deck round 1, T-5: remove "You, in every project" and "YouCoded
+ *  didn't shorten it"; say what the section pulls in — "instructions injected
+ *  before every chat … in every project"): the explanation lives inside the
+ *  card, so no grey sentence has to sit loose above it. A file that WAS
+ *  shortened still says so — that is a warning, not decoration. */
+function RulesCard({ file, kind, label, sessionId, openFile, id }: {
   file: { path: string; truncated: boolean; note?: string | null; notUsed?: string | null };
   kind: 'project' | 'user';
   id?: string;
   label: string;
   sessionId?: string;
   openFile: (p: string) => void | Promise<void>;
-  assembledByClaudeCode: boolean;
 }) {
-  const description = file.truncated
-    ? (file.note ?? 'Shortened to fit')
-    : assembledByClaudeCode
-      ? 'YouCoded didn’t shorten it'
-      : 'Read in full';
+  const description = [
+    label,
+    file.truncated ? (file.note ?? 'Shortened to fit') : null,
+    // Only one file per folder is used; name the one that was not.
+    file.notUsed ? `${file.notUsed} here not used` : null,
+  ].filter(Boolean).join(' · ');
   return (
     <DetailCard
       header={(
@@ -262,8 +263,7 @@ function RulesCard({ file, kind, label, sessionId, openFile, assembledByClaudeCo
           className="rounded-none bg-transparent"
           icon={<Dot ok={!file.truncated} />}
           title={basename(file.path)}
-          // Only one file per folder is used; name the one that was not.
-          description={`${label} · ${description}${file.notUsed ? ` · ${file.notUsed} here not used` : ''}`}
+          description={description}
           accessory={<Button variant="secondary" size="sm" onClick={() => { void openFile(file.path); }}>Open</Button>}
         />
       )}
@@ -356,7 +356,8 @@ export default function SessionContextPopup({ open, onClose, context, sessionId 
 /** Rows shown before "Show all N" — the app's existing tail (PermissionsSection
  *  ROWS_PER_KIND, LocalModelsSection). WHY here (#251): Global now holds your
  *  skills AND the engine's instructions AND its tools on one tab, and 47 skill
- *  rows ahead of them would bury everything below. Hiding one row behind a click
+ *  rows ahead of them would bury everything below. Skills only: each skill row
+ *  opens its own text, so they cannot fold into one row the way tools do. Hiding one row behind a click
  *  does not pay for the click, so the cut only applies above CAP + 1. */
 const ROWS_BEFORE_SHOW_ALL = 5;
 
@@ -376,17 +377,26 @@ function CappedRows<T>({ items, render }: { items: readonly T[]; render: (item: 
 }
 
 /** One labelled group on a tab: the small label (with its count, the guide's
- *  "word then a smaller number"), one grey line saying whose it is, then rows. */
-function Group({ label, count, hint, children }: { label: string; count?: number; hint?: React.ReactNode; children: React.ReactNode }) {
+ *  "word then a smaller number"), then cards.
+ *  WHY no sentence under the label, and why `Note` below exists (Destin, deck
+ *  round 1, T-3: "wayyyyyy too much copy and too many letters before we see any
+ *  card styling … i really hate bare text on the popup modal"): every word on
+ *  these tabs now sits inside a card, and a group with nothing in it says so as
+ *  a row, not as a loose paragraph. */
+function Group({ label, count, children }: { label: string; count?: number; children: React.ReactNode }) {
   return (
     <section>
-      <SectionLabel className="mb-1">
+      <SectionLabel className="mb-2">
         {label}{count !== undefined && count > 0 && <span className="ml-1.5 text-2xs font-normal">{count}</span>}
       </SectionLabel>
-      {hint && <p className="text-2xs text-fg-muted leading-snug mb-2">{hint}</p>}
       {children}
     </section>
   );
+}
+
+/** A group's "nothing here" or "not ours to show", as a row like its neighbours. */
+function Note({ title, description }: { title: string; description?: string }) {
+  return <SettingRow variant="item" title={title} description={description} />;
 }
 
 /** "3 skills", "1 tool" — and nothing at all for zero, so a summary line never
@@ -487,8 +497,8 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
             aria-label="What the assistant was given"
             tabs={[
               { id: 'overview', label: 'Overview' },
-              { id: 'global', label: 'Global' },
-              { id: 'project', label: 'Project' },
+              { id: 'global', label: 'Global context' },
+              { id: 'project', label: 'Project context' },
             ]}
             value={tab}
             onChange={(v) => setTab(v as TabId)}
@@ -505,9 +515,10 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
                 <p className="text-2xs text-fg-2 leading-relaxed">
                   {cc ? (
                     <>
-                      <span className="font-medium text-fg">Claude Code manages this chat.</span>{' '}
-                      It builds its own instructions, so YouCoded didn’t shorten anything. Below is
-                      what it can see from here.
+                      {/* Destin's wording (deck round 1, T-2), tidied only for grammar. */}
+                      <span className="font-medium text-fg">This chat is running on Claude Code,</span>{' '}
+                      which uses its own settings and instructions. This menu may not be 100% accurate:
+                      your assistant may have loaded tools, instructions or settings not listed here.
                     </>
                   ) : (
                     <>
@@ -557,8 +568,8 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
             {/* WHY an Engine group (Destin, 2026-11-12, #251: Overview should carry
                 "additional harness detail", because people will switch between
                 Claude Code, YouCoded's own engine and others). It names who runs
-                the chat and — for Claude Code — exactly what that hides from this
-                panel, in one place, instead of an apology on each tab. */}
+                the chat; what Claude Code hides from this panel is said once, in the
+                box at the top (deck round 1, T-2). */}
             <section>
               <SectionLabel className="mb-2">Engine</SectionLabel>
               <div className="space-y-1.5">
@@ -581,13 +592,6 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
                   // job is to be trusted.
                   value={context.contextWindowTokens ? `${windowLabel(context.contextWindowTokens)} tokens` : cc ? 'Set by Claude Code' : 'Unknown'}
                 />
-                {cc && (
-                  <SettingRow
-                    variant="item"
-                    title="Not shown here"
-                    description="Claude Code’s system instructions and tools — it doesn’t share them with YouCoded"
-                  />
-                )}
               </div>
             </section>
 
@@ -597,13 +601,13 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
               <div className="space-y-1.5">
                 <SettingRow
                   variant="item"
-                  title="Global"
+                  title="Global context"
                   description={globalGiven ? `The same in every project · ${globalGiven}` : 'The same in every project'}
                   onClick={() => setTab('global')}
                 />
                 <SettingRow
                   variant="item"
-                  title="Project"
+                  title="Project context"
                   description={projectGiven ? `Only in this project · ${projectGiven}` : 'Nothing is specific to this project'}
                   onClick={() => setTab('project')}
                 />
@@ -614,34 +618,29 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
 
         {tab === 'global' && (
           <>
-            {/* Yours first, the engine's after: the first two groups are the ones
-                you can change. Each hint line says whose the group is, because
-                "global" alone blurs what you wrote with what the engine supplies. */}
-            <Group label="Your rules" hint="Written by you, for every project.">
+            {/* Yours first, the engine's after (deck round 1, Q-1: one list). */}
+            <Group label="Your rules">
               {userRules ? (
                 <RulesCard
                   file={userRules}
                   kind="user"
-                  label="You, in every project"
+                  label="Read before every chat, in every project"
                   sessionId={sessionId}
                   openFile={openFile}
-                  assembledByClaudeCode={cc}
                 />
+              ) : cc ? (
+                <Note title="No every-project rules file" />
               ) : (
-                <p className="text-2xs text-fg-2 leading-relaxed">
-                  {cc
-                    ? 'You have no every-project rules file.'
-                    // True of the native engine today: it reads rules files from the
-                    // project's folder and the folders above it, and nothing else.
-                    : 'None in this chat. YouCoded’s engine reads rules files from the project’s folder and the folders above it, not an every-project file.'}
-                </p>
+                // True of the native engine today: it reads rules files from the
+                // project's folder up to the top of its repository, and nothing else.
+                <Note title="No every-project rules" description="YouCoded’s engine reads rules from the project’s folders only" />
               )}
             </Group>
 
-            <Group label="Your skills" count={globalSkills.length} hint="Step-by-step guides installed for every project. The assistant follows one when a task matches.">
+            <Group label="Your skills" count={globalSkills.length}>
               {globalSkills.length > 0 && skillsWarning}
               {globalSkills.length === 0 ? (
-                <p className="text-2xs text-fg-muted">No skills are installed.</p>
+                <Note title="No skills installed" />
               ) : (
                 <div className={skillsHidden ? 'mt-2' : ''}>
                   <CappedRows items={globalSkills} render={(sk) => <SkillCard key={sk.id} skill={sk} sessionId={sessionId} openFile={openFile} />} />
@@ -651,13 +650,11 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
 
             {/* Destin, review-5 G-2: BOTH the preset and the general instructions,
                 so what a model "loads in with" is all in one place. */}
-            <Group label="System instructions" count={sections.length} hint={`Written by ${engine}. What every chat starts with, before any of your rules.`}>
+            <Group label="System instructions" count={sections.length}>
               {sections.length === 0 ? (
-                <p className="text-2xs text-fg-2 leading-relaxed">
-                  {cc
-                    ? 'Claude Code writes its own system instructions for this chat, and doesn’t share them with YouCoded — so there is nothing here that would be true.'
-                    : 'Nothing was reported for this chat.'}
-                </p>
+                cc
+                  ? <Note title="Written by Claude Code" description="It doesn’t share them with YouCoded" />
+                  : <Note title="Nothing was reported for this chat" />
               ) : (
                 <div className="space-y-1.5">
                   {sections.map((s) => (
@@ -672,51 +669,55 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
               )}
             </Group>
 
-            <Group label="Built-in tools" count={builtIn.length} hint={`Actions ${engine} lets the assistant take. Open one to see what it does.`}>
+            {/* WHY one row for all built-in tools (Destin, deck round 1, T-4:
+                "a single collapsible row that defaults to listing all tools when
+                expanded, instead of … the separate show all 7 button"), and one
+                row per add-on beside it: the whole group is as many rows as there
+                are sources of tools, however many tools each brings. */}
+            <Group label="Tools" count={tools.length}>
               {tools.length === 0 ? (
-                <p className="text-2xs text-fg-2 leading-relaxed">
-                  {cc
-                    ? 'Claude Code chooses its own tools for this chat. YouCoded isn’t told which, so listing them here would be a guess.'
-                    : 'This chat has no tools — the assistant can only talk.'}
-                </p>
-              ) : builtIn.length === 0 ? (
-                <p className="text-2xs text-fg-muted">None — every tool in this chat comes from an add-on.</p>
+                cc
+                  ? <Note title="Chosen by Claude Code" description="YouCoded isn’t told which tools it picked" />
+                  : <Note title="No tools" description="The assistant can only talk in this chat" />
               ) : (
-                <CappedRows items={builtIn} render={(t) => (
-                  <ExpandRow key={t} title={t} body={<p className="text-2xs text-fg-2 leading-relaxed px-3">{toolBlurb(t)}</p>} />
-                )} />
+                <div className="space-y-1.5">
+                  {builtIn.length > 0 && (
+                    <FoldRow title={`Built into ${engine}`} description={countWord(builtIn.length, 'tool') ?? undefined}>
+                      <ul className="space-y-2">
+                        {builtIn.map((t) => (
+                          <li key={t}>
+                            <span className="block text-2xs font-medium text-fg">{t}</span>
+                            <span className="block text-2xs text-fg-muted leading-snug">{toolBlurb(t)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </FoldRow>
+                  )}
+                  {addOns.map((a) => (
+                    <FoldRow key={a.name} title={`${a.name} add-on`} description={countWord(a.tools.length, 'tool') ?? undefined}>
+                      <ul className="space-y-1">
+                        {a.tools.map((t) => <li key={t} className="text-2xs text-fg-2 break-words">{t}</li>)}
+                      </ul>
+                    </FoldRow>
+                  ))}
+                </div>
+              )}
+              {dropped.length > 0 && (
+                <div className="mt-1.5">
+                  <Callout tone="warning" title="Not attached">
+                    {dropped.join(', ')} — there was no room for {dropped.length === 1 ? 'its' : 'their'} tools, so the assistant can’t use them in this chat.
+                  </Callout>
+                </div>
               )}
             </Group>
-
-            {/* Only when there is something to say: an empty "Add-ons" heading on
-                every chat would be a group about nothing. */}
-            {(addOns.length > 0 || dropped.length > 0) && (
-              <Group label="Add-ons" count={addOns.length} hint="Extra tools from things you connected.">
-                <div className="space-y-1.5">
-                  {addOns.map((a) => (
-                    <ExpandRow
-                      key={a.name}
-                      title={a.name}
-                      description={countWord(a.tools.length, 'tool') ?? undefined}
-                      body={<p className="text-2xs text-fg-2 leading-relaxed px-3 pb-2 break-words">{a.tools.join(', ')}</p>}
-                    />
-                  ))}
-                  {dropped.length > 0 && (
-                    <Callout tone="warning" title="Not attached">
-                      {dropped.join(', ')} — there was no room for {dropped.length === 1 ? 'its' : 'their'} tools, so the assistant can’t use them in this chat.
-                    </Callout>
-                  )}
-                </div>
-              </Group>
-            )}
           </>
         )}
 
         {tab === 'project' && (
           <>
-            <Group label="Project rules" count={projectFiles.length} hint="Written for this project, and read when the chat started.">
+            <Group label="Project rules" count={projectFiles.length}>
               {projectFiles.length === 0 ? (
-                <p className="text-2xs text-fg-muted">There is no rules file for this project.</p>
+                <Note title="No rules file for this project" />
               ) : (
                 <div className="space-y-2">
                   {projectFiles.map((file, i) => (
@@ -728,17 +729,16 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
                       label={instructionLabel(file.path, i === projectFiles.length - 1)}
                       sessionId={sessionId}
                       openFile={openFile}
-                      assembledByClaudeCode={cc}
                     />
                   ))}
                 </div>
               )}
             </Group>
 
-            <Group label="Project skills" count={projectSkills.length} hint="Step-by-step guides kept in this project’s own folder.">
+            <Group label="Project skills" count={projectSkills.length}>
               {projectSkills.length > 0 && skillsWarning}
               {projectSkills.length === 0 ? (
-                <p className="text-2xs text-fg-muted">This project has no skills of its own.</p>
+                <Note title="No skills of its own" description="Skills kept in this project’s folder would show here" />
               ) : (
                 <div className={skillsHidden ? 'mt-2' : ''}>
                   <CappedRows items={projectSkills} render={(sk) => <SkillCard key={sk.id} skill={sk} sessionId={sessionId} openFile={openFile} />} />
