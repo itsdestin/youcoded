@@ -596,6 +596,8 @@ body.fade-d .topcta{display:none !important}
   background:transparent;border:1px solid transparent;
   transition:background .18s, color .18s}
 .dlchip svg{width:18px;height:18px;fill:currentColor}
+/* Phone-only pieces; the <=760px block turns them on. */
+.dlchip.dldemo,.dl-section{display:none}
 .dlchip:hover{background:rgba(var(--fg-rgb),.09)}
 .dlchip.primary{background:var(--accent);color:var(--on-accent);
   box-shadow:0 10px 26px -10px rgba(var(--accent-rgb),.65)}
@@ -1407,12 +1409,30 @@ body.cycler-static .lead-hold{display:none}
    wording still fits side-by-side at 1030 and wraps to two lines by 990, so the
    switch happens at 1020 -- below it the headline takes the whole line and all
    four chips sit under it as one group. */
+/* WHY this changed (Destin, 2026-11-12: "the robots are always to the
+   left/right of the keyword, including on mobile, even if we have to mess with
+   sizing/spacing a bit"). Below 1020 the four robots used to drop into a row
+   UNDER the headline. Now the headline is always exactly two lines -- "Make
+   Your Technology" on the first, the changing word alone on the second -- and
+   two robots stand either side of that word.
+   How: the word becomes its own centred line (display:block), and each robot
+   pair is pinned to the bottom line of the row, a fixed distance out from the
+   middle. That distance is the WIDEST of the three words (--kw-max, measured by
+   the word-cycler script), so the robots stand still while the words change.
+   --h1fs keeps the first line on one line down to a 320px screen. */
 @media(max-width:1020px){
-  .hero-flank .flankrow{flex-wrap:wrap;gap:16px}
-  .hero-flank .flankrow h1{flex:1 0 100%;order:1}
-  .hero-flank .mrow-l{order:2}
-  .hero-flank .mrow-r{order:3}
-  .hero-flank .mascot{width:54px;height:54px;border-radius:17px}
+  .hero-flank .flankrow{display:block;position:relative;
+    --h1fs:clamp(1.5rem,8.1vw,3.4rem);--h1lh:1.1;--kwgap:14px;--rob:54px}
+  body.h1-md .hero-flank .flankrow h1{font-size:var(--h1fs);line-height:var(--h1lh);white-space:nowrap}
+  /* The word's own line. The gap above it is the part of a robot that stands
+     taller than a line of type, so a robot never touches the first line. */
+  .hero-flank .flankrow .word-cycler{display:block;margin:var(--kwpad,10px) auto 0;white-space:normal}
+  .hero-flank .mrow{position:absolute;bottom:0;height:calc(var(--h1fs) * var(--h1lh));align-items:center}
+  .hero-flank .mrow-l{right:calc(50% + var(--kw-max,calc(var(--h1fs) * 3.6)) / 2 + var(--kwgap))}
+  .hero-flank .mrow-r{left:calc(50% + var(--kw-max,calc(var(--h1fs) * 3.6)) / 2 + var(--kwgap))}
+  .hero-flank .mascot{width:var(--rob);height:var(--rob);border-radius:17px}
+  /* The robots hang a little below the word's line; keep the tagline clear. */
+  .hero-flank .hero-sub{margin-top:20px}
 }
 /* ==========================================================================
    "What you get" — three alternatives to the original scrolling theater.
@@ -1793,10 +1813,13 @@ body.motion-on .m-rise.m-wait{opacity:0}
 
   /* ---- hero ------------------------------------------------------------ */
   .hero{padding-top:calc(var(--nav-h) + 10px)}
-  .hero-flank .flankrow{gap:12px}
-  .hero-flank .mascot{width:50px;height:50px;border-radius:15px}
-  .hero-flank .mrow{gap:10px}
-  .hero-sub{font-size:1.02rem;margin-top:12px}
+  /* Phone sizes for the robots-beside-the-word layout (see the 1020px block).
+     Two robots, the widest word and two more robots have to share ~324px on
+     the narrowest phones, so the robots and their gaps scale with the screen. */
+  .hero-flank .flankrow{--rob:clamp(38px,11.6vw,50px);--kwgap:clamp(6px,2.2vw,12px);--kwpad:12px}
+  .hero-flank .mascot{border-radius:14px}
+  .hero-flank .mrow{gap:clamp(4px,1.6vw,10px)}
+  .hero-sub{font-size:1.02rem}
   .kicker{font-size:.7rem;letter-spacing:.12em}
 
   /* ---- the download row -----------------------------------------------
@@ -1821,7 +1844,20 @@ body.motion-on .m-rise.m-wait{opacity:0}
      Linux, Android, iOS and must stay that way — the wide pill's width is
      pinned per theme and reordering it would move the pill sideways — so the
      phone reorders visually with `order` instead. */
-  .dlchip.primary{grid-column:1 / -1;order:-1}
+  /* WHY half width now (Destin, 2026-11-12): the Demo button takes the sixth
+     slot, so the visitor's own platform is first but no longer a full row --
+     six buttons make three even rows with Demo bottom right. */
+  .dlchip.primary{order:-1}
+  .dlchip.dldemo{display:flex;order:9;background:transparent;
+    border:1.5px solid rgba(var(--accent-rgb),.55);color:var(--fg)}
+  /* The card now lives in its own section under Features (see #download). */
+  .dl-section{display:block}
+  body.fade-a .dlfloat,body.fade-b .dlfloat,
+  body.fade-c .dlfloat,body.fade-d .dlfloat{margin-top:16px}
+  /* The live demo no longer sits in the header on a phone: squeezed to this
+     width its text was cut off and its start button covered the chat. It is
+     one tap away on its own page (the Demo button in the download card). */
+  .hero-app{display:none}
   /* HIDDEN on a phone, not restyled. It does exactly what "Start the demo" on
      the picture right above it does, and since the demo now waits for a tap
      that button is the obvious one. The action is not lost -- that is the whole
@@ -2480,6 +2516,10 @@ Contract: mascots/README.md (from the repo root)
         <a data-dl="dl-linux" class="dlchip" href="https://github.com/itsdestin/youcoded/releases"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19,16C19,17.72 18.37,19.3 17.34,20.5C17.75,20.89 18,21.41 18,22H6C6,21.41 6.25,20.89 6.66,20.5C5.63,19.3 5,17.72 5,16H3C3,14.75 3.57,13.64 4.46,12.91L4.47,12.89C6,11.81 7,10 7,8V7A5,5 0 0,1 12,2A5,5 0 0,1 17,7V8C17,10 18,11.81 19.53,12.89L19.54,12.91C20.43,13.64 21,14.75 21,16H19M16,16A4,4 0 0,0 12,12A4,4 0 0,0 8,16A4,4 0 0,0 12,20A4,4 0 0,0 16,16Z"/></svg><span>Linux</span></a>
         <a data-dl="dl-android" class="dlchip" href="https://github.com/itsdestin/youcoded/releases"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.44 5.56c-.68 1.16-1.36 2.33-2.03 3.5-.04-.02-.08-.03-.11-.04-1.83-.7-3.49-.8-4.42-.79-1.86.02-3.36.46-4.26.82-.09-.15-1.76-3.02-2.03-3.49a1.15 1.15 0 0 0-.14-.19c-.33-.36-.9-.49-1.38-.2-.47.28-.71.94-.39 1.5 1.95 3.37-.1-.22 1.95 3.36.02.03-.5.26-1.4 1.02C2.9 12.18.45 14.77 0 18.99h24c-.12-1.11-.37-2.1-.75-3.07-.74-1.91-1.84-3.29-2.74-4.18a12.1 12.1 0 0 0-2.13-1.69c.66-1.12 1.31-2.25 1.96-3.38.21-.36.19-.8-.01-1.12a1.1 1.1 0 0 0-.85-.53c-.52-.05-.94.31-1.05.54z"/></svg><span>Android</span></a>
         <a data-dl="dl-ios" class="dlchip" href="#"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg><span>iOS<sup>*</sup></span></a>
+        <!-- WHY (Destin, 2026-11-12): on phones the squeezed-in live demo is gone;
+             this opens it on a page of its own instead. Hidden on wide screens,
+             where the demo is still on the page itself. -->
+        <a class="dlchip dldemo" href="demo.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.14v13.72a1 1 0 0 0 1.5.86l11.2-6.86a1 1 0 0 0 0-1.72L9.5 4.28A1 1 0 0 0 8 5.14z"/></svg>Demo</a>
 <script>
 // Highlight the visitor's own platform as the primary download, on both the
 // docked pill (.dlbtn) and the footer chips (.dlchip). The old page did this
@@ -2653,6 +2693,12 @@ Contract: mascots/README.md (from the repo root)
 <!-- integrations grid hidden 2026-10-21 (Destin): kept for later, not deleted -->
 <!-- WHY loading="lazy" on every icon below: this section is hidden, and a lazy image in a hidden
      section is never downloaded. They were 16 requests on every visit for pictures nobody sees. -->
+<!-- WHY (Destin, 2026-11-12: "the download card should also move down below
+     features on mobile"). Empty on wide screens. On a phone the script moves
+     the one download card out of the header into here (seatDownloads), so
+     there is still only a single copy of the buttons to keep right. -->
+<section id="download" class="dl-section"><div class="wrap" id="dl-slot"></div></section>
+
 <section id="integrations" hidden><div class="wrap">
   <p class="eyebrow">Integrations</p><h2>Connect your services.</h2>
   <div class="panel integrations">
@@ -3243,6 +3289,21 @@ var phoneMQ = matchMedia('(max-width: 760px)');
 // same height, which stops being true the moment this page single-columns any of
 // them -- and it already does that at 1000.
 var narrowMQ = matchMedia('(max-width: 1000px)');
+// WHY: on a phone the download card belongs under Features, not in the header
+// (Destin, 2026-11-12). Moving the one card -- instead of keeping a second copy
+// -- means the highlighted platform, the links and the click counts cannot
+// drift apart. Runs before the intro reveals the page, so nothing is seen to jump.
+var dlSlot = document.getElementById('dl-slot'), dlHome = dlFloat && dlFloat.parentNode;
+function seatDownloads(){
+  if (!dlFloat || !dlSlot || !dlHome) return;
+  var want = phoneMQ.matches ? dlSlot : dlHome;
+  if (dlFloat.parentNode !== want) want.appendChild(dlFloat);
+}
+seatDownloads();
+if (phoneMQ.addEventListener) phoneMQ.addEventListener('change', function(){ seatDownloads(); placeFloat(); });
+// The demo page opens in the look the visitor has picked here.
+var demoChip = document.querySelector('.dldemo');
+if (demoChip) demoChip.addEventListener('click', function(){ demoChip.href = 'demo.html#t=' + currentTheme; });
 function placeFloat(){
   if (!dlFloat || !heroApp || getComputedStyle(dlFloat).display === 'none') return;
   if (!wideMQ.matches) { dlFloat.classList.remove('docked', 'hidden'); return; }
@@ -3772,9 +3833,39 @@ function ctaPass(){
   var y = scrollY;
   if (y < lastY - 6) { ctaUp = true; lastY = y; }        // reading back up
   else if (y > lastY + 6) { ctaUp = false; lastY = y; }  // reading on down
-  document.getElementById('topcta').classList.toggle('show',
-    y > innerHeight * 0.9 && !nearFoot && ctaUp);
+  var cta = document.getElementById('topcta');
+  // WHY (Destin, 2026-11-12: "update the floater button accordingly"). On a
+  // phone the download card now sits under Features, so this button no longer
+  // means "back to the top": it takes you to the card, wherever that is.
+  //  - Card still BELOW you: arrow points down. Shown at the very top of the
+  //    page (it is the only download control on the first screen) and whenever
+  //    you scroll back up; it steps aside while you read down, as before.
+  //  - Card ABOVE you: arrow points up, shown when you scroll back up.
+  //  - Card on screen, or the footer's own links on screen: hidden.
+  // Wider than a phone nothing changes: the buttons are in the header there.
+  if (phoneMQ.matches && dlFloat) {
+    var r = dlFloat.getBoundingClientRect();
+    var below = r.top > innerHeight - 60, above = r.bottom < 90;
+    // The arrow only changes while the card is off screen, so the label never
+    // flips in the middle of fading out.
+    var arrow = below ? '\u2193' : above ? '\u2191' : (cta.dataset.arrow || '\u2193');
+    if (cta.dataset.arrow !== arrow) { cta.dataset.arrow = arrow; cta.textContent = arrow + ' Download'; }
+    // Found while checking this button (2026-11-12): the old 40px allowance let
+    // it show on top of the footer card's first 40px. On a phone it now hides
+    // as soon as any of the footer is on screen.
+    var footOn = !!f && f.getBoundingClientRect().top < innerHeight;
+    cta.classList.toggle('show', !footOn && ((below && (y < 40 || ctaUp)) || (above && ctaUp)));
+    return;
+  }
+  if (cta.dataset.arrow !== '\u2191') { cta.dataset.arrow = '\u2191'; cta.textContent = '\u2191 Download'; }
+  cta.classList.toggle('show', y > innerHeight * 0.9 && !nearFoot && ctaUp);
 }
+// WHY also run it without a scroll: the button used to appear only after the
+// first scroll event, so on a phone -- where it is now the first screen's only
+// way to the downloads -- it would have been missing until the page moved.
+ctaPass();
+document.addEventListener('yc:intro-end', ctaPass);
+addEventListener('resize', onCtaScroll);
 addEventListener('scroll', onCtaScroll, { passive: true });
 
 // --- THEATER (original): the step nearest the middle of the window wins.
@@ -4127,7 +4218,14 @@ document.querySelectorAll('.integration-tag').forEach(function(tag){
     desc.classList.add('visible');
   });
 });
-document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behavior: 'smooth' }); };
+document.getElementById('topcta').onclick = function(){
+  // On a phone: to the download card, centred. Elsewhere: back to the header.
+  if (phoneMQ.matches && dlFloat) {
+    var r = dlFloat.getBoundingClientRect();
+    scrollTo({ top: Math.max(0, scrollY + r.top + r.height / 2 - innerHeight / 2), behavior: 'smooth' });
+  } else scrollTo({ top: 0, behavior: 'smooth' });
+  this.classList.remove('show');
+};
 
 
 // --- Latest release download links ---
@@ -4801,6 +4899,15 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 
   // One entry per slot: its measured word widths and its beat-to-word map.
   var slots = cyclers.map(function(h){ return { el: h, w: measure(h), steps: stepsOf(h) }; });
+  // WHY: on narrow screens the robots are pinned either side of the word's
+  // line (see the 1020px block in the stylesheet). They stand clear of the
+  // WIDEST word, so they do not shuffle as the words change.
+  function setKwMax(){
+    if (!flank || !slots[0]) return;
+    flank.style.setProperty('--kw-max', Math.ceil(Math.max.apply(null, slots[0].w)) + 'px');
+  }
+  setKwMax();
+  addEventListener('resize', function(){ slots.forEach(function(sl){ sl.w = measure(sl.el); }); setKwMax(); applyStep(typeof curStep === 'number' ? curStep : 2); });
   function applyStep(i){
     slots.forEach(function(sl){
       var wide = 0;
@@ -4829,6 +4936,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // Re-measure once the real font has landed and re-apply the current beat.
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(function(){
     slots.forEach(function(sl){ sl.w = measure(sl.el); });
+    setKwMax();
     applyStep(curStep);
   });
   // WHY a start gate (Destin 2026-09-11: "on fresh site loads the first-run
@@ -4864,6 +4972,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       if (introEnded) return;          // a mascot click already took over
       // Measure in the real font and re-centre before anything moves.
       slots.forEach(function(sl){ sl.w = measure(sl.el); });
+      setKwMax();
       // WHY this check (measured 2026-11-12 on a
       // 430px-wide phone): closed, "Make Your Technology" fitted on ONE line,
       // and the moment "Useful." opened its slot the headline re-wrapped to
@@ -4871,6 +4980,10 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       // safe when opening the slot cannot change how many lines the headline
       // takes; where it would, the space is held open from the start instead.
       // Transitions are off for the test so the widths apply at once.
+      // WHY (2026-11-12): at 1020px and below the word sits on its own centred
+      // line with the robots pinned beside it, so there is no slot to open --
+      // the space is simply there from the start and nothing has to move.
+      if (slots[0] && getComputedStyle(slots[0].el).display === 'block') { CLOSED = false; curStep = 0; }
       if (CLOSED) {
         var h1 = flank && flank.querySelector('h1');
         var tall = function(step){
