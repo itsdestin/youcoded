@@ -30,6 +30,7 @@ import { SlotPins, slotField } from './slot-pins';
 import { contextLengthFor } from '../models/fit-estimator';
 import { readManifest, removeManifest, markManifestComplete, isManifestComplete, installedDirFor } from '../models/download-manifest';
 import { GgufHeaderCache, readLocalGgufHeader, localHeaderStamp } from '../models/gguf-header';
+import { MtpFallback } from './mtp-fallback';
 import { ManifestBackfill, defaultBackfillLookups, isStaleBackfillMiss } from '../models/manifest-backfill';
 import type { BackfillCandidate, BackfillLookups } from '../models/manifest-backfill';
 import { scanGgufCache, scanLocalDownloads, isComplete, visionModelIdsOnDisk } from './cache-scan';
@@ -1277,11 +1278,19 @@ export class EngineManager extends EventEmitter {
    *  means no MTP for that model. */
   private mtpModelIds = new Set<string>();
   private mtpHeaderCache: GgufHeaderCache | null = null;
+  /** A model MTP stops from loading is loaded once more without it, and that is remembered (mtp-fallback.ts). */
+  private mtpFallback = new MtpFallback({
+    hasMtp: (id) => this.mtpModelIds.has(id) && this.spawnConfig().speed?.speculative !== false,
+    reloadWithoutMtp: async (id) => { await this.refreshModels(); await this.loadModel(id); },
+    remember: async (id) => { await updateModelSettings(this.home, id, { noMtp: true }); },
+    restore: () => this.refreshModels(),
+  });
   private async refreshMtpModels(): Promise<void> {
-    const cacheDir = readEngineConfig(this.home).cacheDir;
+    const { cacheDir, models } = readEngineConfig(this.home);
     this.mtpHeaderCache ??= new GgufHeaderCache(this.userDataDir);
     const next = new Set<string>();
     for (const { id } of scanGgufCache(cacheDir)) {
+      if (models[id]?.noMtp || this.mtpFallback.excluded(id)) continue;   // MTP stopped it loading here
       const filePath = path.join(installedDirFor(cacheDir, id), `${id}.gguf`);
       try {
         const stamp = localHeaderStamp((await fs.promises.stat(filePath)).mtimeMs);
@@ -1335,6 +1344,7 @@ export class EngineManager extends EventEmitter {
     });
     // The other source: a load that the router itself answered with an error.
     this.supervisor.on('model-load-result', (e: { modelId: string; ok: boolean; status: number | null; body: string }) => {
+      if (this.mtpFallback.onLoadResult(e.modelId, e.ok, e.status !== null)) return;   // being retried without MTP
       const message = e.ok ? null
         : e.status === null
           // The request could not be made — say that, not a guess at why.

@@ -14,7 +14,7 @@ import {
 } from '../src/main/engine/engine-manager';
 import { EngineAcquisition } from '../src/main/engine/engine-acquisition';
 import { ENGINE_VERSION } from '../src/main/engine/engine-pin';
-import { updateEngineConfig, readEngineConfig } from '../src/main/engine/engine-config';
+import { updateEngineConfig, readEngineConfig, updateModelSettings } from '../src/main/engine/engine-config';
 import { presetFilePath } from '../src/main/engine/model-presets';
 import { T, buildGguf } from './helpers/gguf-fixture';
 
@@ -208,6 +208,16 @@ describe('EngineManager — on a temp home', () => {
       expect(file).not.toMatch(/\[gemma-plain-Q8_0\]/);
       expect(file).not.toMatch(/\[qwen-moe-heads-Q6_K\]/);
       expect((mgr as any).spawnConfig().mtpModelIds).toEqual(['qwen-heads-Q8_0']);
+    });
+
+    it('writes no MTP for a model it was remembered to stop from loading on this computer', async () => {
+      await plantFiles();
+      await updateModelSettings(home, 'qwen-heads-Q8_0', { noMtp: true });
+      const mgr = new EngineManager(home, userData, 9999, {});
+      await (mgr as any).refreshMtpModels();
+      (mgr as any).writeModelPresets();
+      expect(presetText()).not.toMatch(/spec-type/);
+      expect(presetText()).not.toMatch(/noMtp|no-mtp/i);   // the memory never reaches the engine's file
     });
 
     it('writes no MTP when Speculative decoding is switched off', async () => {

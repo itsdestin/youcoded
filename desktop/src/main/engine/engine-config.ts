@@ -131,6 +131,7 @@ export function modelSettingsFor(
   // An empty string is treated as no error: it would render an empty "why it
   // failed" line in the dialog, which reads as a bug rather than as silence.
   if (typeof e?.lastLoadError === 'string' && e.lastLoadError.trim()) out.lastLoadError = e.lastLoadError;
+  if (e?.noMtp === true) out.noMtp = true;
   return out;
 }
 
@@ -231,6 +232,7 @@ export async function updateModelSettings(
     // / `null` so the file says only what is true of this model.
     if (merged.pendingApply !== true) delete merged.pendingApply;
     if (typeof merged.lastLoadError !== 'string' || !merged.lastLoadError.trim()) delete merged.lastLoadError;
+    if (merged.noMtp !== true) delete merged.noMtp;
     // A COMPUTED key, never `models[modelId] = …` on a fresh literal: model ids
     // are filenames, so `__proto__` is an id a user can create.
     const nextModels = { ...models, [modelId]: merged };
