@@ -17,17 +17,23 @@ import { ScreenMark } from '../../shoot-mode';
 import { automationsBridge, publishAutomations, refreshAutomations, useAutomations } from './use-automations';
 import { OUTCOME, scheduleWords } from './automation-words';
 import { AutomationDetails, JobGlyph, blankAutomation, type DetailsTab } from './AutomationDetails';
+import type { AddStep } from './AutomationPermissions';
 
-type Open = { job: AutomationSummary; isNew: boolean; tab: DetailsTab; atEnd?: boolean; openFirst?: boolean } | null;
-type Pending = 'new' | { id: string; tab: DetailsTab; addMenu: boolean; atEnd?: boolean; openFirst?: boolean } | null;
+type Extra = { atEnd?: boolean; openFirst?: boolean; addStep?: AddStep; deleting?: boolean };
+type Open = ({ job: AutomationSummary; isNew: boolean; tab: DetailsTab } & Extra) | null;
+type Pending = 'new' | ({ id: string; tab: DetailsTab; addMenu: boolean } & Extra) | null;
 
 // Photo-only (`shoot`): PageHost owns the screen names (this view mounts only once the page
 // opens), so it leaves what to open here; a view already showing picks it up at once.
 let startAt: Pending = null;
 let jump: ((v: Pending) => void) | null = null;
-export function openAutomationsAt(v: 'details' | 'runs' | 'subscription' | 'add-menu' | 'new' | 'lower' | 'lower-open'): void {
+export type AutomationsPhoto = 'details' | 'runs' | 'subscription' | 'add-menu' | 'new' | 'lower' | 'lower-open' | 'add-folder' | 'add-command' | 'describe' | 'describe-result' | 'cap' | 'delete' | 'commands';
+const PHOTO_STEP: Partial<Record<AutomationsPhoto, AddStep>> = { 'add-folder': 'folder', 'add-command': 'command', describe: 'describe', 'describe-result': 'describe-result' };
+export function openAutomationsAt(v: AutomationsPhoto): void {
+  const lower = v === 'lower' || v === 'lower-open';
+  const id = v === 'subscription' || lower ? 'job-weekly' : v === 'runs' ? 'job-money' : v === 'cap' ? 'job-shopping' : v === 'commands' || v === 'delete' || PHOTO_STEP[v] ? 'job-tidy' : 'job-email';
   const to: Pending = v === 'new' ? 'new'
-    : { id: v === 'subscription' || v === 'lower' || v === 'lower-open' ? 'job-weekly' : v === 'runs' ? 'job-money' : 'job-email', tab: v === 'runs' ? 'runs' : 'settings', addMenu: v === 'add-menu', atEnd: v === 'lower' || v === 'lower-open', openFirst: v === 'lower-open' };
+    : { id, tab: v === 'runs' ? 'runs' : 'settings', addMenu: v === 'add-menu', atEnd: lower, openFirst: v === 'lower-open', addStep: PHOTO_STEP[v] ?? null, deleting: v === 'delete' };
   if (jump) jump(to); else startAt = to;
 }
 
@@ -46,7 +52,7 @@ export function AutomationsView({ visible }: { visible: boolean }) {
     else {
       const job = jobs.find((j) => j.id === pending.id);
       setAddMenu(pending.addMenu);
-      if (job) setOpen({ job, isNew: false, tab: pending.tab, atEnd: pending.atEnd, openFirst: pending.openFirst });
+      if (job) setOpen({ job, isNew: false, tab: pending.tab, atEnd: pending.atEnd, openFirst: pending.openFirst, addStep: pending.addStep, deleting: pending.deleting });
     }
     setPending(null);
   }, [pending, loaded, jobs]);
@@ -84,7 +90,7 @@ export function AutomationsView({ visible }: { visible: boolean }) {
         {on.length > 0 && <Group label="On" jobs={on} onOpen={openJob} />}
         {paused.length > 0 && <Group label="Paused" jobs={paused} onOpen={openJob} />}
       </div>
-      <AutomationDetails job={shown} isNew={open?.isNew ?? false} tab={open?.tab ?? 'settings'} atEnd={open?.atEnd ?? false} openFirst={open?.openFirst ?? false} addMenuOpen={addMenu} onAddMenu={setAddMenu}
+      <AutomationDetails job={shown} isNew={open?.isNew ?? false} tab={open?.tab ?? 'settings'} atEnd={open?.atEnd ?? false} openFirst={open?.openFirst ?? false} addStep={open?.addStep ?? null} deleting={open?.deleting ?? false} addMenuOpen={addMenu} onAddMenu={setAddMenu}
         onTab={(tab) => setOpen((o) => (o ? { ...o, tab } : o))} onClose={() => { setOpen(null); setAddMenu(false); }} />
     </div>
   );

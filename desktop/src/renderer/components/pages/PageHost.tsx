@@ -56,7 +56,9 @@ import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageFileEncoding, PageFilesRequest, PageFilesResult, PageHome, PageLoadFailure, PageProgramResult, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PAGE_PROGRAM_INPUT, MAX_PAGE_SESSION_PROMPT, MAX_PINNED_PAGES, OFFICE_PAGE_ID, PAGE_CHATS_REFUSED, PAGE_PROGRAM_REFUSED, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
 import { OfficeView } from '../office/OfficeView';
-import { AutomationsView, openAutomationsAt } from '../automations/AutomationsView';
+import { AutomationsView, openAutomationsAt, type AutomationsPhoto } from '../automations/AutomationsView';
+/** The photo-only states of the automation popup (`?autoView=`, screens/pages.ts). */
+const AUTOMATION_PHOTOS: AutomationsPhoto[] = ['runs', 'subscription', 'add-menu', 'new', 'lower', 'lower-open', 'add-folder', 'add-command', 'describe', 'describe-result', 'cap', 'delete', 'commands'];
 import { useAutomationsWaiting } from '../automations/use-automations';
 import { AUTOMATIONS_PAGE_ID } from '../../../shared/automation-types';
 import { HOME_TAB, officeDocFor, previewOfficeComments, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
@@ -254,7 +256,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // One popup screen; its states (`#runs`, `#new`…) pass `autoView` (screens/pages.ts).
   useScreenOpen('automations/details', () => {
     const v = new URLSearchParams(location.search).get('autoView');
-    openAutomationsAt(v === 'runs' || v === 'subscription' || v === 'add-menu' || v === 'new' || v === 'lower' || v === 'lower-open' ? v : 'details');
+    openAutomationsAt(AUTOMATION_PHOTOS.includes(v as AutomationsPhoto) ? (v as AutomationsPhoto) : 'details');
     dispatch({ type: 'PAGE_OPENED', pageId: AUTOMATIONS_PAGE_ID, focus: automationsFocus() });
   });
   useScreenOpen('office/versions', () => { void previewOfficeTabs(0, true); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });

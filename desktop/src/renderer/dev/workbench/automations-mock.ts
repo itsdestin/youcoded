@@ -30,7 +30,7 @@ function seedJobs(): AutomationSummary[] {
       usage: { dollars: 1.84, tokens: 612_000 },
       lastRun: { id: 'r-e1', when: 'Today at 9:12', outcome: 'waiting', summary: 'Labelled it "Plans" and drafted a reply to Sam Lee.', dollars: 0.02, tokens: 6_400, seconds: 14 },
       waiting: {
-        runId: 'r-e1', action: 'Send a reply to Sam Lee',
+        runId: 'r-e1', toolId: 't-send', action: 'Send a reply to Sam Lee',
         detail: 'Hi Sam, Thursday at 3 works for me. See you then. Destin',
         asked: 'Asked 2 h ago', until: 'If you don’t answer by 9:12 tonight, it leaves the draft unsent.',
       },
@@ -54,7 +54,7 @@ function seedJobs(): AutomationSummary[] {
       id: 'job-shopping', name: 'Shopping list',
       instruction: 'Read this week’s meals on this page and write one shopping list, grouped by aisle, leaving out what’s already in the pantry list.',
       links: [{ kind: 'page', id: 'page-recipes', name: 'Recipe notes', icon: 'notes' }],
-      start: { kind: 'button', label: 'Make this week’s shopping list' },
+      start: { kind: 'button', label: 'Make this week’s shopping list' }, maxRunsPerDay: 20,
       model: 'Claude Haiku', subscription: true,
       tools: [
         { id: 't-rread', label: 'Read this page’s information', source: 'Recipe notes', mode: 'allow' },
@@ -86,7 +86,7 @@ function seedJobs(): AutomationSummary[] {
       links: [], start: { kind: 'schedule', every: 'hour', hours: 3 },
       model: 'Gemini Flash', subscription: false,
       tools: [
-        { id: 't-visit', label: 'Visit one website', source: 'Internet', mode: 'allow', exact: 'bestbuy.com' },
+        { id: 't-visit', kind: 'site', label: 'Visit a website', source: 'Internet', mode: 'allow', exact: 'bestbuy.com' },
       ],
       whenAsk: 'skip', waitHours: null, noAnswer: 'skip', late: 'skip',
       notify: { needs: true, news: true, fails: false }, limit: 5, enabled: false, overlap: 'skip-new', unlisted: { sites: 'never', commands: 'never' }, devices: DEVICES,
@@ -99,9 +99,9 @@ function seedJobs(): AutomationSummary[] {
       links: [], start: { kind: 'schedule', every: 'day', at: '2:00' },
       model: 'Claude Haiku', subscription: true,
       tools: [
-        { id: 't-list', label: 'See the files in a folder', source: 'Your computer', mode: 'allow', exact: '~/Downloads' },
-        { id: 't-move', label: 'Move files within a folder', source: 'Your computer', mode: 'ask', exact: '~/Downloads' },
-        { id: 't-cmd', label: 'Run one command', source: 'Your computer', mode: 'allow', exact: 'du -sh ~/Downloads' },
+        { id: 't-list', kind: 'folder', label: 'See the files in a folder', source: 'Your computer', mode: 'allow', exact: '~/Downloads' },
+        { id: 't-move', kind: 'folder', label: 'Change the files in a folder', source: 'Your computer', mode: 'ask', exact: '~/Downloads' },
+        { id: 't-cmd', kind: 'command', label: 'Measure how big Downloads is', source: 'Your computer', mode: 'allow', exact: 'du -sh ~/Downloads' },
       ],
       whenAsk: 'skip', waitHours: null, noAnswer: 'skip', late: 'fallback', lateFallback: 'Only sort files older than a day, and tell me it ran late.',
       notify: { needs: true, news: false, fails: true }, enabled: true, overlap: 'skip-new', unlisted: { sites: 'never', commands: 'never' }, devices: DEVICES,
@@ -136,9 +136,11 @@ export function createAutomationsMock(scenario: string): AutomationsBridge {
       jobs = jobs.map((j) => (j.id === id ? { ...j, lastRun: { id: `${id}-now`, when: 'Just now', outcome: 'running', summary: 'Running…', tokens: 0, seconds: 0 } } : j));
       return copy();
     },
-    answer: async (id, allow, _note) => {
+    remove: async (id) => { jobs = jobs.filter((j) => j.id !== id); return copy(); },
+    answer: async (id, allow, _note, fromNowOn) => {
       jobs = jobs.map((j) => (j.id !== id ? j : {
         ...j, waiting: undefined,
+        tools: allow && fromNowOn ? j.tools.map((t) => (t.id === j.waiting?.toolId ? { ...t, mode: 'allow' as const } : t)) : j.tools,
         lastRun: j.lastRun && { ...j.lastRun, outcome: allow ? 'done' : 'skipped', summary: allow ? 'Sent the reply to Sam Lee.' : 'Left the draft unsent, as you asked.' },
       }));
       return copy();

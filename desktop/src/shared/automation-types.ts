@@ -27,8 +27,11 @@ export interface AutomationTool {
   /** Where it comes from, shown small: "Gmail", "This page", "Your computer". */
   source: string;
   mode: 'allow' | 'ask';
-  /** An exact command or address, when the tool is that narrow. */
+  /** What it matches, when the tool has a detail: a folder, a website, or a command (where `*` stands for
+   *  any part that changes). One kind of command permission, as narrow or wide as the job needs (2026-11-12). */
   exact?: string;
+  /** What sort of permission it is; absent on the earlier sample jobs. Folder, site and command can be edited. */
+  kind?: 'page-read' | 'page-write' | 'folder' | 'site' | 'command' | 'service';
 }
 
 /** What a waiting job does when nobody answered in time (Q-wait-long: "set ways to proceed"). */
@@ -91,6 +94,9 @@ export interface AutomationSummary {
   devices: AutomationDevice[];
   /** Q-tell: three kinds, each on or off per job. */
   notify: { needs: boolean; news: boolean; fails: boolean };
+  /** The most runs in one day, for a job a button or an event starts (review deck Q-cap: only where it makes
+   *  sense, so never on a schedule). null = any number. */
+  maxRunsPerDay?: number | null;
   /** Monthly limit in dollars (Q-limit: $5 to start, changeable). Absent on a subscription job. */
   limit?: number;
   enabled: boolean;
@@ -125,6 +131,8 @@ interface AutomationWaiting {
   action: string;
   /** The detail it would send or run, shown so the yes is an informed one. */
   detail?: string;
+  /** The permission the step falls under, which "Allow from now on" turns to Always allowed. */
+  toolId?: string;
   /** Already worded: "Asked 2 h ago". */
   asked: string;
   /** Already worded: "Skips it at 7:00 tomorrow if you don't answer". */
@@ -140,7 +148,9 @@ export interface AutomationsBridge {
   runNow(id: string): Promise<AutomationSummary[]>;
   /** Plan deck S-answer: an answer may carry a note for the assistant; Don't allow needs one, so
    *  the run knows what to do instead rather than trying again. */
-  answer(id: string, allow: boolean, note?: string): Promise<AutomationSummary[]>;
+  answer(id: string, allow: boolean, note?: string, fromNowOn?: boolean): Promise<AutomationSummary[]>;
+  /** Delete an automation with its settings and saved runs (review deck S-delete). */
+  remove(id: string): Promise<AutomationSummary[]>;
 }
 
 /** The built-in Automations page (Q-home note: "the main area could probably be a built-in

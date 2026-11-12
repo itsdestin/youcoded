@@ -139,6 +139,14 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('automations/details#lower-open', 'automations'), params: { autoView: 'lower-open' } },
   { ...pg('automations/details#add-menu', 'automations'), params: { autoView: 'add-menu' } },
   { ...pg('automations/details#new', 'automations'), params: { autoView: 'new' } },
+  // 2026-11-12 round: adding a permission by hand, Describe it…, the runs-per-day cap, Delete.
+  { ...pg('automations/details#commands', 'automations'), params: { autoView: 'commands' }, newIn: 'after' },
+  { ...pg('automations/details#add-folder', 'automations'), params: { autoView: 'add-folder' }, newIn: 'after' },
+  { ...pg('automations/details#add-command', 'automations'), params: { autoView: 'add-command' }, newIn: 'after' },
+  { ...pg('automations/details#describe', 'automations'), params: { autoView: 'describe' }, newIn: 'after' },
+  { ...pg('automations/details#describe-result', 'automations'), params: { autoView: 'describe-result' }, newIn: 'after' },
+  { ...pg('automations/details#cap', 'automations'), params: { autoView: 'cap' }, newIn: 'after' },
+  { ...pg('automations/details#delete', 'automations'), params: { autoView: 'delete' }, newIn: 'after' },
   { ...pg('automations#phone', 'view', 'automations', 'narrow'), viewport: PHONE, mark: 'automations' },
   { ...pg('automations/details#phone', 'automations', 'narrow'), viewport: PHONE },
   // A page's own automations, in its Page settings (the Money page has the morning check).

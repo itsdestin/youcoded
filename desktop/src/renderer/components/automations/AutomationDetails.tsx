@@ -12,14 +12,16 @@
 //   - No explanations of how it works on the screens (A-runs): that is the (i) on the page title.
 // Settings save as you change them (guide "Popups"); a new automation is kept apart until Create.
 import React, { useEffect, useState } from 'react';
-import type { AutomationDevice, AutomationLink, AutomationRun, AutomationStart, AutomationSummary, AutomationTool } from '../../../shared/automation-types';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, Chip, FoldRow, LoadingState, Menu, MenuItem, MenuNote, MenuRadioItem, Pill, PillButton, Radio, RadioGroup, SectionLabel, SegmentedTabs, Select, SettingRow, Textarea, TextInput, Toggle, Tooltip } from '../ui';
+import type { AutomationDevice, AutomationLink, AutomationRun, AutomationStart, AutomationSummary } from '../../../shared/automation-types';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, Chip, LoadingState, Menu, MenuItem, MenuNote, Pill, SectionLabel, SegmentedTabs, Select, SettingRow, Textarea, TextInput, Toggle, Tooltip } from '../ui';
 import { Dialog } from '../ui/Dialog';
 import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 import { ChipRow } from '../marketplace/FactChips';
 import { PageGlyph } from '../pages/page-icons';
 import { automationsBridge, publishAutomations } from './use-automations';
 import { OUTCOME, dollarWords, scheduleWords, tokenWords } from './automation-words';
+import { PermissionsField, type AddStep } from './AutomationPermissions';
+import { AdvancedSettings } from './AutomationAdvanced';
 
 export type DetailsTab = 'settings' | 'runs';
 
@@ -55,9 +57,11 @@ const LINKABLE: { group: string; items: AutomationLink[] }[] = [
   { group: 'Projects', items: [{ kind: 'project', id: 'proj-youcoded', name: 'youcoded-dev' }] },
 ];
 
-export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = false, onTab, onClose, addMenuOpen, onAddMenu }: {
+export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = false, addStep = null, deleting = false, onTab, onClose, addMenuOpen, onAddMenu }: {
   job: AutomationSummary | null; isNew: boolean; tab: DetailsTab; atEnd?: boolean; openFirst?: boolean; onTab: (t: DetailsTab) => void; onClose: () => void;
   addMenuOpen: boolean; onAddMenu: (open: boolean) => void;
+  /** Photo-only: the add-a-permission form, or the delete question, a picture opens on. */
+  addStep?: AddStep; deleting?: boolean;
 }) {
   const [draft, setDraft] = useState<AutomationSummary | null>(job);
   useEffect(() => { setDraft(job); }, [job]);
@@ -70,6 +74,11 @@ export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = 
   const create = async () => {
     const b = automationsBridge();
     if (b && draft) publishAutomations(await b.save({ ...draft, name: draft.name.trim() || 'New automation' }));
+    onClose();
+  };
+  const remove = async () => {
+    const b = automationsBridge();
+    if (b && draft) publishAutomations(await b.remove(draft.id));
     onClose();
   };
   return (
@@ -89,9 +98,19 @@ export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = 
                 <Group label="Instruction">
                   <Textarea rows={4} value={draft.instruction} placeholder="Check yesterday's spending and tell me if anything looks unusual." onChange={(e) => change({ instruction: e.target.value })} aria-label="Instruction" />
                 </Group>
-                <Group label="Schedule"><StartField start={draft.start} onChange={(start) => change({ start })} /></Group>
+                <Group label="Schedule">
+                  <StartField start={draft.start} onChange={(start) => change({ start, maxRunsPerDay: start.kind === 'schedule' ? undefined : draft.maxRunsPerDay ?? 20 })} />
+                  {/* WHY only here (Destin, review deck Q-cap: "only … where it makes sense. a job set to only run every 12h
+                      doesnt need a runs per day cap"): a schedule already says how often it runs; a button or an event
+                      can fire any number of times. */}
+                  {draft.start.kind !== 'schedule' && (
+                    <SettingRow variant="item" title="Most runs in a day"
+                      control={<TextInput className="w-16" inputMode="numeric" value={draft.maxRunsPerDay == null ? '' : String(draft.maxRunsPerDay)} placeholder="Any"
+                        onChange={(e) => { const n = Number(e.target.value); change({ maxRunsPerDay: e.target.value.trim() && Number.isFinite(n) && n > 0 ? Math.floor(n) : null }); }} aria-label="Most runs in a day" />} />
+                  )}
+                </Group>
                 <Group label="Permissions">
-                  <ToolsField tools={draft.tools} unlisted={draft.unlisted} onChange={(tools) => change({ tools })} onUnlisted={(unlisted) => change({ unlisted })} menuOpen={addMenuOpen} onMenu={onAddMenu} />
+                  <PermissionsField tools={draft.tools} unlisted={draft.unlisted} onChange={(tools) => change({ tools })} onUnlisted={(unlisted) => change({ unlisted })} menuOpen={addMenuOpen} onMenu={onAddMenu} startStep={addStep} />
                 </Group>
               </div>
               <div className="flex flex-col gap-4">
@@ -104,66 +123,15 @@ export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = 
                 </Group>
                 {/* A new job on a plan has nothing used yet and no limit, so the card would say nothing. */}
                 {!(isNew && draft.subscription) && <Group label={draft.subscription ? 'Usage' : 'Spending'}><SpendField job={draft} onLimit={(limit) => change({ limit })} /></Group>}
-                {/* WHY "Advanced settings" as fold-out cards, all closed (plan deck round 3 C-rules: "rules
-                    should become Advanced Settings. each … an expandable card … all should start collapsed.
-                    each should explain in plain, concise terms what the option does with pros/cons. the
-                    titles … more clear/concise/statement-like"). Each closed card's title says what the job
-                    does now, so the list reads without opening anything; opening one shows a sentence on
-                    what it covers and its choices, each with a pro and a con. */}
-                <Group label="Advanced settings">
-                  <OptionFold defaultOpen={openFirst} title={draft.whenAsk === 'skip' ? 'Skips steps that need your OK' : `Waits ${waitWords(draft.waitHours)} for your OK`}
-                    about="What a run does when it reaches something set to Asks first."
-                    value={draft.whenAsk} onChange={(v) => change({ whenAsk: v })}
-                    options={[
-                      ['wait', 'Wait for me', 'Nothing on the Asks first list happens without you.', 'The run sits paused until you answer.'],
-                      ['skip', 'Skip it and carry on', 'Runs never stall.', 'Those steps only happen when you run it yourself.'],
-                    ]}>
-                    {draft.whenAsk === 'wait' && <ChoiceRow title="Wait up to" value={draft.waitHours === null ? 'next' : String(draft.waitHours)} onChange={(v) => change({ waitHours: v === 'next' ? null : Number(v) })}
-                      choices={[['next', 'Its next run'], ['1', '1 hour'], ['4', '4 hours'], ['12', '12 hours'], ['24', '24 hours']]} />}
-                  </OptionFold>
-                  {draft.whenAsk === 'wait' && (
-                    <OptionFold title={({ skip: 'Skips that step if you don\'t answer', stop: 'Stops the run if you don\'t answer', fallback: 'Does something else if you don\'t answer' } as const)[draft.noAnswer]}
-                      about="What happens when the wait runs out with no answer."
-                      value={draft.noAnswer} onChange={(v) => change({ noAnswer: v })}
-                      options={[
-                        ['skip', 'Skip that step', 'The rest of the run still gets done.', 'The skipped step is only noted in its run.'],
-                        ['stop', 'Stop the run', 'Nothing half-finished carries on.', 'Everything after that step is lost for this run.'],
-                        ['fallback', 'Do this instead', 'You choose a safe stand-in, like saving a draft.', 'One more thing to write.'],
-                      ]}>
-                      {draft.noAnswer === 'fallback' && <Textarea value={draft.fallback ?? ''} placeholder="Save the reply as a draft." onChange={(e) => change({ fallback: e.target.value })} aria-label="Do this instead" />}
-                    </OptionFold>
-                  )}
-                  {draft.start.kind !== 'button' && (<>
-                    {/* Plan deck S-start note: another time, or other instructions (which can also change what it makes). */}
-                    <OptionFold title={({ run: 'Runs once on wake after a missed run', later: `Runs a missed run at ${draft.lateAt ?? '18:00'}`, fallback: 'Runs a missed run with other instructions', skip: 'Skips missed runs' } as const)[draft.late]}
-                      about="What happens when a run was due while the computer was off or YouCoded was closed."
-                      value={draft.late} onChange={(v) => change({ late: v })}
-                      options={[
-                        ['run', 'Run once on wake', 'You still get it, a bit late.', 'It may run at a busy moment.'],
-                        ['later', 'Run at another time', 'It waits for a time that suits you.', 'You wait longer for it.'],
-                        ['fallback', 'Run with other instructions', 'A late run can do something different, like a shorter summary.', 'One more thing to write.'],
-                        ['skip', 'Skip it', 'Nothing runs late.', 'That run never happens.'],
-                      ]}>
-                      {draft.late === 'later' && <TextInput className="w-24" value={draft.lateAt ?? '18:00'} onChange={(e) => change({ lateAt: e.target.value })} aria-label="Run at" />}
-                      {draft.late === 'fallback' && <Textarea value={draft.lateFallback ?? ''} placeholder="Only look at today, and save a summary instead of emailing me." onChange={(e) => change({ lateFallback: e.target.value })} aria-label="Other instructions" />}
-                    </OptionFold>
-                    {/* Plan deck Q-overlap: "this should depend on the specific job". */}
-                    <OptionFold title={({ 'skip-new': 'Skips a new run while one is still going', 'stop-old': 'Stops the old run when a new one is due', both: 'Runs both when a new one is due early' } as const)[draft.overlap]}
-                      about="What happens when its next run is due and the last one hasn't finished."
-                      value={draft.overlap} onChange={(v) => change({ overlap: v })}
-                      options={[
-                        ['skip-new', 'Skip the new run', 'Never two at once.', 'That turn is missed.'],
-                        ['stop-old', 'Stop the old run', 'You always get the newest run.', 'The old run\'s work is cut short.'],
-                        ['both', 'Run both', 'Nothing is missed.', 'Two runs may do the same thing twice.'],
-                      ]} />
-                  </>)}
-                </Group>
                 <Group label="Runs on"><DevicesField devices={draft.devices} onChange={(devices) => change({ devices })} /></Group>
+                {/* Last in the column, as the settings least often changed; how they look: AutomationAdvanced.tsx. */}
+                <Group label="Advanced settings"><AdvancedSettings job={draft} onChange={change} openFirst={openFirst} /></Group>
                 {atEnd && <ScrollHere />}
                 {/* No Notifications card: plan deck Q-notify-menu — "all system notifications will be built
                     together later … current notification building should just be limited to the orange
                     light". The job keeps its notify field for that later work. */}
               </div>
+              {!isNew && <div className="md:col-span-2"><DeleteRow name={draft.name} startOpen={deleting} onDelete={() => void remove()} /></div>}
             </div>
           )}
         </div>
@@ -179,9 +147,11 @@ function TopCard({ job, isNew, onChange }: { job: AutomationSummary; isNew: bool
   // model … maybe require the steer as input for dont allow", so a refused run knows what to do
   // instead and doesn't just try again.
   const [note, setNote] = useState('');
-  const answer = async (allow: boolean) => {
+  // WHY "Allow from now on" (plan-d Q-fromnow): the answer also turns that one permission to Always allowed for
+  // this automation, so the same step never stops a later run.
+  const answer = async (allow: boolean, fromNowOn = false) => {
     const b = automationsBridge();
-    if (b) publishAutomations(await b.answer(job.id, allow, note.trim() || undefined));
+    if (b) publishAutomations(await b.answer(job.id, allow, note.trim() || undefined, fromNowOn));
     setNote('');
   };
   const runNow = async () => {
@@ -213,6 +183,7 @@ function TopCard({ job, isNew, onChange }: { job: AutomationSummary; isNew: bool
             <Tooltip text={note.trim() ? '' : 'Say what to do instead'} placement="bottom">
               <span><Button variant="secondary" size="sm" disabled={!note.trim()} onClick={() => void answer(false)}>Don&rsquo;t allow</Button></span>
             </Tooltip>
+            <Button variant="secondary" size="sm" onClick={() => void answer(true, true)}>Allow from now on</Button>
             <Button variant="primary" size="sm" onClick={() => void answer(true)}>Allow</Button>
           </>}>
           <div className="flex flex-col gap-2">
@@ -233,6 +204,21 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
       <SectionLabel>{label}</SectionLabel>
       <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>{children}</div>
     </section>
+  );
+}
+
+/** Delete, at the foot of the settings (Destin, review deck S-delete). The question opens in place, in the
+ *  red-edged box a destructive step gets, and names what goes with it. */
+function DeleteRow({ name, startOpen, onDelete }: { name: string; startOpen: boolean; onDelete: () => void }) {
+  const [asking, setAsking] = useState(startOpen);
+  const ref = React.useRef<HTMLDivElement>(null);
+  useEffect(() => { if (startOpen) ref.current?.scrollIntoView({ block: 'end' }); }, [startOpen]);
+  if (!asking) return <div ref={ref} className="flex justify-end"><Button variant="danger-outline" size="sm" onClick={() => setAsking(true)}>Delete automation</Button></div>;
+  return (
+    <div ref={ref}><Callout tone="danger" actionsPlacement="below" data-automation-delete
+      actions={<><Button variant="secondary" size="sm" onClick={() => setAsking(false)}>Keep it</Button><Button variant="danger" size="sm" onClick={onDelete}>Delete</Button></>}>
+      Delete &ldquo;{name}&rdquo;? Its settings and its saved runs are removed. This can&rsquo;t be undone.
+    </Callout></div>
   );
 }
 
@@ -266,116 +252,6 @@ function StartField({ start, onChange }: { start: AutomationStart; onChange: (s:
       <Field label="Button text"><TextInput value={start.label} onChange={(e) => onChange({ kind: 'button', label: e.target.value })} aria-label="Button text" /></Field>
     )}
   </>);
-}
-
-// The Add menu, grouped by where a permission comes from (step 4 review Q-add, drawn this round:
-// "hard to visualize what you're asking"). Only connected services are listed.
-const ADDABLE: { group: string; items: { label: string; source: string; exact?: string }[] }[] = [
-  { group: 'This page', items: [{ label: 'Read its information', source: 'This page' }, { label: 'Change its information', source: 'This page' }] },
-  { group: 'Gmail', items: [{ label: 'Read your email', source: 'Gmail' }, { label: 'Write a draft reply', source: 'Gmail' }, { label: 'Send an email', source: 'Gmail' }] },
-  { group: 'Your computer', items: [{ label: 'See the files in a folder…', source: 'Your computer' }, { label: 'Move files within a folder…', source: 'Your computer' }, { label: 'Run one command…', source: 'Your computer' }] },
-  { group: 'Internet', items: [{ label: 'Visit one website…', source: 'Internet' }, { label: 'Send you a notification', source: 'YouCoded' }] },
-];
-
-/** Each permission is its own box (one container per thing), with its two-way switch and its bin. */
-function ToolsField({ tools, unlisted, onChange, onUnlisted, menuOpen, onMenu }: {
-  tools: AutomationTool[]; unlisted: AutomationSummary['unlisted']; onChange: (t: AutomationTool[]) => void;
-  onUnlisted: (u: AutomationSummary['unlisted']) => void; menuOpen: boolean; onMenu: (o: boolean) => void;
-}) {
-  const add = (label: string, source: string) => onChange([...tools, { id: `t-${Date.now()}`, label, source, mode: 'ask' }]);
-  // Photo-only state opens with the menu open; bring it into view so its picture shows the menu.
-  const menuRef = React.useRef<HTMLDivElement>(null);
-  useEffect(() => { if (menuOpen) menuRef.current?.scrollIntoView({ block: 'center' }); }, []); // eslint-disable-line react-hooks/exhaustive-deps -- on open only
-  return (<>
-    {tools.map((t) => (
-      <div key={t.id} className={`${CARD_LEVEL_2} flex items-center gap-2 px-3 py-2`} data-automation-tool={t.id}>
-        <div className="min-w-0 flex-1">
-          <div className="text-sm text-fg truncate">{t.label}</div>
-          <div className="text-2xs text-fg-muted truncate">{t.exact ?? t.source}</div>
-        </div>
-        <ModeMenu mode={t.mode} name={t.label}
-          onMode={(m) => onChange(tools.map((x) => (x.id === t.id ? { ...x, mode: m } : x)))}
-          onRemove={() => onChange(tools.filter((x) => x.id !== t.id))} />
-      </div>
-    ))}
-    <div ref={menuRef}><Menu open={menuOpen} onOpenChange={onMenu} label="Add a permission" className="min-w-72"
-      trigger={<Button variant="secondary" className="w-full" onClick={() => onMenu(!menuOpen)}>Add a permission</Button>}>
-      {ADDABLE.map((g) => (
-        <React.Fragment key={g.group}>
-          <MenuNote><span className="text-2xs text-fg-muted">{g.group}</span></MenuNote>
-          {g.items.map((i) => <MenuItem key={i.label} onSelect={() => add(i.label.replace(/…$/, ''), i.source)}>{i.label}</MenuItem>)}
-        </React.Fragment>
-      ))}
-    </Menu></div>
-    <SettingRow variant="item" title="Other websites" control={<UnlistedMenu value={unlisted.sites} name="Other websites" onChange={(sites) => onUnlisted({ ...unlisted, sites })} />} />
-    <SettingRow variant="item" title="Other commands and files" control={<UnlistedMenu value={unlisted.commands} name="Other commands and files" onChange={(commands) => onUnlisted({ ...unlisted, commands })} />} />
-  </>);
-}
-
-/** Round 2 B-add ("these allow/ask toggles … don't seem to match the styling used for similar elements
- *  elsewhere"): a state you change is the shared status pill that opens a small menu (`PillButton` +
- *  `Menu`, guide "Lists and menus": a few choices dropping from a pill), with Remove as its last row. */
-function ModeMenu({ mode, name, onMode, onRemove }: { mode: 'allow' | 'ask'; name: string; onMode: (m: 'allow' | 'ask') => void; onRemove: () => void }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Menu open={open} onOpenChange={setOpen} align="right" label={name}
-      trigger={<PillButton tone={mode === 'allow' ? 'ok' : 'warning'} open={open} onClick={() => setOpen((o) => !o)} aria-label={`${name}: ${mode === 'allow' ? 'Always allowed' : 'Asks first'}`}>{mode === 'allow' ? 'Always allowed' : 'Asks first'}</PillButton>}>
-      <MenuRadioItem checked={mode === 'allow'} onSelect={() => onMode('allow')}>Always allowed</MenuRadioItem>
-      <MenuRadioItem checked={mode === 'ask'} onSelect={() => onMode('ask')}>Asks first</MenuRadioItem>
-      <MenuItem onSelect={onRemove}>Remove</MenuItem>
-    </Menu>
-  );
-}
-
-function UnlistedMenu({ value, name, onChange }: { value: 'never' | 'ask'; name: string; onChange: (v: 'never' | 'ask') => void }) {
-  return <ChoicePill name={name} value={value} onChange={onChange} choices={[['never', 'Never'], ['ask', 'Asks first']]} />;
-}
-
-/** A value you change: the shared pill that opens a small menu of its choices (guide "Lists and
- *  menus"), the same control as a permission's mode. */
-function ChoicePill<T extends string>({ name, value, choices, onChange }: { name: string; value: T; choices: [T, string][]; onChange: (v: T) => void }) {
-  const [open, setOpen] = useState(false);
-  const word = choices.find(([v]) => v === value)?.[1] ?? value;
-  return (
-    <Menu open={open} onOpenChange={setOpen} align="right" label={name}
-      trigger={<PillButton open={open} onClick={() => setOpen((o) => !o)} aria-label={`${name}: ${word}`}>{word}</PillButton>}>
-      {choices.map(([v, w]) => <MenuRadioItem key={v} checked={v === value} onSelect={() => onChange(v)}>{w}</MenuRadioItem>)}
-    </Menu>
-  );
-}
-
-/** One advanced setting as a fold-out card (closed by default): the title states what the job does
- *  now; open, a sentence on what it covers, then its choices, each with one pro and one con, and any
- *  follow-up field for the chosen one under the list. */
-function OptionFold<T extends string>({ title, about, value, onChange, options, defaultOpen = false, children }: {
-  title: string; about: string; value: T; onChange: (v: T) => void;
-  options: [T, string, string, string][]; defaultOpen?: boolean; children?: React.ReactNode;
-}) {
-  return (
-    <FoldRow title={title} defaultOpen={defaultOpen}>
-      <div className="flex flex-col gap-2">
-        <div className="text-xs text-fg-muted">{about}</div>
-        <RadioGroup options={options.map(([v]) => v)} value={value} onChange={(v) => onChange(v as T)} aria-label={title} className="flex flex-col gap-1.5">
-          {options.map(([v, label, pro, con]) => (
-            <button key={v} type="button" onClick={() => onChange(v)} className="flex items-start gap-2 text-left rounded-md px-1 -mx-1 state-layer">
-              <Radio checked={value === v} onChange={() => onChange(v)} className="mt-0.5" />
-              <span className="flex flex-col">
-                <span className="text-sm text-fg">{label}</span>
-                <span className="text-2xs text-fg-muted">+ {pro} − {con}</span>
-              </span>
-            </button>
-          ))}
-        </RadioGroup>
-        {children}
-      </div>
-    </FoldRow>
-  );
-}
-
-function waitWords(h: number | null): string { return h === null ? 'until its next run' : `up to ${h} hour${h === 1 ? '' : 's'}`; }
-
-function ChoiceRow<T extends string>({ title, ...pill }: { title: string; value: T; choices: [T, string][]; onChange: (v: T) => void }) {
-  return <SettingRow variant="item" title={title} control={<ChoicePill name={title} {...pill} />} />;
 }
 
 /** One box per link (one container per thing), each with Remove; Add a link lists pages and projects. */
