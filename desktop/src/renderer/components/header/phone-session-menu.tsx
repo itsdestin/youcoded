@@ -63,19 +63,21 @@ export function PhoneCount({ n }: { n: number }) {
  *  panel keeps its literal class list, which tests/float-chrome-pops.test.ts
  *  and the float chrome's `.session-menu` styling read. */
 export function phoneMenuStyle(shape: PhoneShape, trigger: DOMRect | undefined): React.CSSProperties {
-  // The on-screen keyboard shrinks the visible area; --vvp-offset is the app's
-  // own measure of it (hooks/useVisualViewport.ts), as the today branch uses.
-  const avail = 'calc(100vh - var(--vvp-offset, 0px))';
+  // The on-screen keyboard shrinks the visible area. WHY --kb-offset, not --vvp-offset (rebase onto
+  // master, 2026-11-11): master split the two (card #213). --vvp-offset now moves only when the keyboard
+  // types into the chat's own message box; --kb-offset follows ANY keyboard, and menus and popups keep
+  // clear of it (hooks/useVisualViewport.ts), as the today branch of SessionStrip now does.
+  const avail = 'calc(100vh - var(--kb-offset, 0px))';
   const none = 0;
   switch (shape) {
     case 'dropdown': {
       const top = (trigger?.bottom ?? 40) + 4;
-      const below = `calc(100vh - ${top + 8}px - var(--vvp-offset, 0px))`;
+      const below = `calc(100vh - ${top + 8}px - var(--kb-offset, 0px))`;
       return { top, left: 8, right: 8, width: 'auto', maxHeight: below, '--session-menu-available-height': below, animation: 'dropdown-in 120ms var(--ease-out) both' } as React.CSSProperties;
     }
     case 'sheet':
       return {
-        left: 0, right: 0, bottom: 'var(--vvp-offset, 0px)', width: 'auto',
+        left: 0, right: 0, bottom: 'var(--kb-offset, 0px)', width: 'auto',
         borderLeftWidth: none, borderRightWidth: none, borderBottomWidth: none,
         borderRadius: '1rem 1rem 0 0',
         maxHeight: `calc(${avail} * 0.85)`, '--session-menu-available-height': `calc(${avail} * 0.85)`,
@@ -83,7 +85,7 @@ export function phoneMenuStyle(shape: PhoneShape, trigger: DOMRect | undefined):
       } as React.CSSProperties;
     case 'full':
       return {
-        top: 0, left: 0, right: 0, bottom: 'var(--vvp-offset, 0px)', width: 'auto',
+        top: 0, left: 0, right: 0, bottom: 'var(--kb-offset, 0px)', width: 'auto',
         borderWidth: none, borderRadius: 0,
         '--session-menu-available-height': avail,
         animation: 'dropdown-in 120ms var(--ease-out) both',

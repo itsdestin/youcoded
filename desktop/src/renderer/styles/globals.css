@@ -1961,10 +1961,13 @@ pre.yc-code code {
 .status-row-uniform .border,
 .status-pencil-uniform {
   /* Round 4 (Destin: "the spacing is very weird … compared to the
-     journal/inbox/etc chips"): the shortcut chips' own measures — h-6,
-     rounded-md, px-2.5 (QuickChips.tsx) — so the two rows line up. */
-  height: 1.5rem;
-  min-width: 1.5rem;
+     journal/inbox/etc chips"): the shortcut chips' own measures — rounded-md,
+     px-2.5 (QuickChips.tsx) — so the two rows line up. WHY 2rem, not 1.5rem
+     (rebase onto master, 2026-11-11): master made the chips finger-sized (h-8)
+     on every touch screen AND every narrow window (device.ts fingerSized()), and
+     this row only exists in a narrow window, so the chips there are always h-8. */
+  height: 2rem;
+  min-width: 2rem;
   border-radius: var(--radius-md, 12px);
   padding: 0 0.625rem;
   display: inline-flex;
