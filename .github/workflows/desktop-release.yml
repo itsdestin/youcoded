@@ -23,7 +23,11 @@ jobs:
           - os: macos-latest
             artifact: desktop/release/*.dmg
             name: macos
-          - os: ubuntu-latest
+          # WHY pinned (card #247, 2026-11-11): GitHub moved ubuntu-latest from 24.04 to 26.04 on
+          # 2026-11-10, and the rpm built on 26.04 failed its unpack check. The four Linux package
+          # checks in desktop-ci.yml were pinned to 24.04, so the release must build on the same
+          # system the checks prove, not on one nothing has verified. Unpin both together.
+          - os: ubuntu-24.04
             artifact: |
               desktop/release/*.AppImage
               desktop/release/*.deb
