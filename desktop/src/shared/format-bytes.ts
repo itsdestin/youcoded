@@ -8,9 +8,9 @@
 // NOT covered, on purpose: memory arithmetic that decides whether a model fits (GiB constants in main/models) — those compare
 // bytes with bytes and never show a unit — and fixed "limit" sentences written as round numbers ("25 MB").
 
-export const KB = 1_000;
+const KB = 1_000;
 export const MB = 1_000_000;
-export const GB = 1_000_000_000;
+const GB = 1_000_000_000;
 
 export interface FormatBytesOptions {
   /** Digits after the point for KB. Default 1 ("12.3 KB"); 0 gives "12 KB". */

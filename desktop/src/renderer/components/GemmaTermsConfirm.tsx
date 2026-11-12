@@ -12,7 +12,7 @@ import { gemmaNoticeFor, type GemmaNotice } from '../../shared/gemma-terms';
 // states what the model's own page says (see shared/gemma-terms.ts for the sources); any other Gemma build says
 // plainly that its terms were not checked.
 
-export function GemmaTermsDialog({ notice, onCancel, onDownload }: { notice: GemmaNotice; onCancel: () => void; onDownload: () => void }) {
+function GemmaTermsDialog({ notice, onCancel, onDownload }: { notice: GemmaNotice; onCancel: () => void; onDownload: () => void }) {
   const open = (url: string) => { void (window as any).claude?.shell?.openExternal?.(url); };
   return (
     <Dialog open onClose={onCancel} title={notice.kind === 'apache' ? 'Download Gemma 4?' : 'Download this Gemma model?'} size="panel" layer={3} screen="settings/assistant/local/gemma-terms">

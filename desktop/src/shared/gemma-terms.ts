@@ -14,7 +14,7 @@ export type GemmaNotice =
   | { kind: 'apache'; licenceUrl: string }   // confirmed above
   | { kind: 'unchecked' };                    // a Gemma build whose terms were not checked
 
-export const GEMMA_4_LICENCE_URL = 'https://ai.google.dev/gemma/docs/gemma_4_license';
+const GEMMA_4_LICENCE_URL = 'https://ai.google.dev/gemma/docs/gemma_4_license';
 
 /** The notice for a model repo id (e.g. "unsloth/gemma-4-E4B-it-GGUF"), or null when it is not a Gemma build. */
 export function gemmaNoticeFor(repo: string): GemmaNotice | null {
