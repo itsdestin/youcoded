@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // ChatView — the chat pane, rendered against a quiescent session.
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, fireEvent, cleanup, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, fireEvent, cleanup, screen, waitFor } from '@testing-library/react';
 
 // A quiescent session — every field ChatView reads, at its empty value.
 const mocks = vi.hoisted(() => ({
@@ -237,18 +237,60 @@ describe('ChatView expanded drawer', () => {
 // a background conversation stopped following its newest message because the
 // user scrolled a different one.
 describe('ChatView window keys reach only the chat on screen', () => {
-  // jsdom has no Element.scrollBy; the arrow handler calls it after releaseStick.
-  beforeEach(() => { (HTMLElement.prototype as any).scrollBy ??= function scrollBy() {}; });
-
-  it('ArrowUp un-pins the chat on screen (shows Jump to bottom)', () => {
-    render(<ChatView sessionId="s1" visible sessionActive />);
-    fireEvent.keyDown(window, { key: 'ArrowUp' });
-    expect(screen.queryByText('Jump to bottom')).not.toBeNull();
+  // jsdom neither lays out nor scrolls. The Jump-to-bottom button only appears
+  // once the chat has REALLY moved away from the bottom (an un-pin that moves
+  // nothing must not flash it), so give the scroller a scrollable geometry and a
+  // scrollBy that moves it and fires the scroll event, as a browser does.
+  const proto = HTMLElement.prototype as any;
+  const saved: Record<string, PropertyDescriptor | undefined> = {};
+  beforeEach(() => {
+    for (const k of ['scrollBy', 'scrollHeight', 'clientHeight', 'scrollTop']) saved[k] = Object.getOwnPropertyDescriptor(proto, k);
+    const tops = new WeakMap<HTMLElement, number>();
+    Object.defineProperty(proto, 'scrollHeight', { configurable: true, get() { return 2000; } });
+    Object.defineProperty(proto, 'clientHeight', { configurable: true, get() { return 500; } });
+    Object.defineProperty(proto, 'scrollTop', {
+      configurable: true,
+      get() { return tops.get(this) ?? 1500; },
+      set(v: number) {
+        const next = Math.max(0, Math.min(v, 1500));
+        if (next === (tops.get(this) ?? 1500)) return;
+        tops.set(this, next);
+        this.dispatchEvent(new Event('scroll'));
+      },
+    });
+    proto.scrollBy = function scrollBy(o: { top?: number }) { this.scrollTop += o.top ?? 0; };
+  });
+  afterEach(() => {
+    for (const [k, d] of Object.entries(saved)) {
+      if (d) Object.defineProperty(proto, k, d); else delete proto[k];
+    }
   });
 
-  it('ArrowUp leaves a hidden chat pinned to its newest message', () => {
+  it('ArrowUp un-pins the chat on screen (shows Jump to bottom)', async () => {
+    render(<ChatView sessionId="s1" visible sessionActive />);
+    // Held key: 20 + 40 + 60 px. One 20px tap stays inside the re-arm distance.
+    for (let i = 0; i < 3; i++) fireEvent.keyDown(window, { key: 'ArrowUp' });
+    await waitFor(() => expect(screen.queryByText('Jump to bottom')).not.toBeNull());
+  });
+
+  it('after a quote-chip jump, End back to the bottom follows new messages again', async () => {
+    const view = render(<ChatView sessionId="s1" visible sessionActive />);
+    const scroller = view.container.querySelector('.chat-scroll') as HTMLElement;
+    // The chip's jump: holds the place (the button shows at once) and scrolls a little way up.
+    fireEvent(window, new CustomEvent('youcoded:jump-to-ref', { detail: { ref: { kind: 'chat' } } }));
+    scroller.scrollTop = 1490;
+    await waitFor(() => expect(screen.queryByText('Jump to bottom')).not.toBeNull());
+    // End scrolls natively (no wheel): ChatView must report it as a hand scroll.
+    fireEvent.keyDown(window, { key: 'End' });
+    scroller.scrollTop = 1500;
+    await waitFor(() => expect(screen.queryByText('Jump to bottom')).toBeNull());
+  });
+
+  it('ArrowUp leaves a hidden chat pinned to its newest message', async () => {
     render(<ChatView sessionId="s1" visible={false} sessionActive={false} />);
-    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    for (let i = 0; i < 3; i++) fireEvent.keyDown(window, { key: 'ArrowUp' });
+    // settle: the visible-chat test above shows the button within a frame.
+    await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByText('Jump to bottom')).toBeNull();
   });
 

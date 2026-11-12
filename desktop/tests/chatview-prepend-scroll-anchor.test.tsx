@@ -42,6 +42,8 @@ vi.mock('../src/renderer/hooks/use-stick-to-bottom', () => ({
     stickToBottom: mocks.stickToBottom,
     jumpToBottom: vi.fn(),
     releaseStick: vi.fn(),
+    holdPosition: vi.fn(),
+    noteUserScroll: vi.fn(),
   }),
 }));
 
@@ -152,6 +154,23 @@ describe('prepending older history does not disturb the reader', () => {
     rerender(<ChatView sessionId="s1" visible={true} sessionActive={true} />);
 
     expect(mocks.stickToBottom).toHaveBeenCalled();
+  });
+
+  it('does not re-arm when the transcript confirms a message already on screen in the same batch as another entry', () => {
+    // The reducer rebuilds the pending bubble as confirmed (same `message`) and moves it to the tail; an entry
+    // landing in the same batch changes the length. That is not a new send: a reader who scrolled up (or jumped
+    // to a quote) since sending must stay where they are.
+    const message = { id: 'just-sent', role: 'user', content: 'just-sent', timestamp: 1 };
+    const older = userEntry('a');
+    mocks.state = baseState([older, { kind: 'user', message, pending: true }]);
+    const { rerender } = render(<ChatView sessionId="s1" visible={true} sessionActive={true} />);
+    mocks.stickToBottom.mockClear();
+
+    const marker = { kind: 'system-marker', marker: { id: 'm1', kind: 'model-switch', text: 'x', timestamp: 2 } };
+    mocks.state = baseState([older, marker, { kind: 'user', message, pending: false, uuid: 'u1' }]);
+    rerender(<ChatView sessionId="s1" visible={true} sessionActive={true} />);
+
+    expect(mocks.stickToBottom).not.toHaveBeenCalled();
   });
 
   // --- the reader's own scrolling is never undone (freeze hunt 2026-10-23, item 1) ----------------
