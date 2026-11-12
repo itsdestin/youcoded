@@ -337,3 +337,43 @@ describe('a Word file that never finishes converting cannot hang the viewer or f
     expect(onPage).not.toHaveBeenCalled();                 // red on the old test: a real conversion was left running
   });
 });
+
+// ---------- Excel: the same 60-second limit as Word (card #161) ----------
+import { XlsxParseTimeoutError, XLSX_PARSE_TIME_LIMIT_MS } from '../src/renderer/components/artifact-views/xlsx-parse-jobs';
+
+describe('a spreadsheet that never finishes reading cannot hang the viewer', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('after the time limit the worker is stopped and the job fails with a timeout', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const worker = new SilentWorker();
+    const job = parseXlsx(new Uint8Array([1, 2, 3]), () => worker as any);
+    const outcome = job.promise.then(() => 'resolved', (e) => e);
+    await vi.advanceTimersByTimeAsync(XLSX_PARSE_TIME_LIMIT_MS - 1);
+    expect(worker.terminated).toBe(false);                 // still within the limit: left alone
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toBeInstanceOf(XlsxParseTimeoutError);
+    expect(worker.terminated).toBe(true);
+  });
+
+  it('a spreadsheet that opens in time never trips the limit', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const bytes = await workbookBytes(FIXTURES['hidden sheets are skipped, visible kept in order']);
+    const sheets = await parseXlsx(bytes, () => new (makeFakeWorker('xlsx') as any)()).promise;
+    expect(sheets.map((s) => s.name)).toEqual(['Data', 'Second']);
+    expect(vi.getTimerCount()).toBe(0);                    // the limit's timer was cleared
+  });
+
+  it('XlsxView says the spreadsheet took too long when the time limit passes', async () => {
+    (globalThis as any).__officeBytes = { '/t/slow.xlsx': new Uint8Array([1, 2, 3]) };
+    vi.stubGlobal('Worker', SilentWorker);
+    vi.doMock('../src/renderer/components/artifact-views/xlsx-parse.worker?worker', () => ({ default: SilentWorker }));
+    vi.resetModules();
+    const { XlsxView } = await import('../src/renderer/components/artifact-views/XlsxView');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { container } = render(<XlsxView path="slow.xlsx" absolutePath="/t/slow.xlsx" content="" isEditable={false} />);
+    expect(container.textContent).toContain('Loading spreadsheet');
+    await act(async () => { await vi.advanceTimersByTimeAsync(XLSX_PARSE_TIME_LIMIT_MS); });
+    expect(container.textContent).toContain('Couldn’t open this spreadsheet. This spreadsheet took too long to open.');
+  });
+});
