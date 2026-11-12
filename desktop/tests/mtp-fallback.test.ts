@@ -23,6 +23,7 @@ describe('MtpFallback', () => {
   it('remembers when the retry loads, and reports that result normally', async () => {
     const { deps, fb } = make();
     fb.onLoadResult('m', false, true);
+    await tick();
     expect(fb.onLoadResult('m', true, true)).toBe(false);
     expect(fb.excluded('m')).toBe(true);   // until the memory is written
     await tick();
@@ -33,6 +34,7 @@ describe('MtpFallback', () => {
   it('puts MTP back and reports the failure when the retry fails too', async () => {
     const { deps, fb } = make();
     fb.onLoadResult('m', false, true);
+    await tick();
     expect(fb.onLoadResult('m', false, true)).toBe(false);
     await tick();
     expect(deps.restore).toHaveBeenCalledWith('m');
@@ -46,11 +48,25 @@ describe('MtpFallback', () => {
     expect(unreachable.fb.onLoadResult('m', false, false)).toBe(false);
     expect(unreachable.deps.reloadWithoutMtp).not.toHaveBeenCalled();
   });
-  it('stops excluding when the retry could not even be started', async () => {
+  it('puts MTP back and reports the held-back failure when the retry could not even be started', async () => {
     const { deps, fb } = make();
+    const report = vi.fn();
     deps.reloadWithoutMtp.mockRejectedValueOnce(new Error('engine gone'));
-    fb.onLoadResult('m', false, true);
+    expect(fb.onLoadResult('m', false, true, report)).toBe(true);
     await tick();
     expect(fb.excluded('m')).toBe(false);
+    expect(deps.restore).toHaveBeenCalledWith('m');
+    expect(report).toHaveBeenCalledTimes(1);
+  });
+  it('a second failure from an overlapping older load does not end the retry', async () => {
+    const { deps, fb } = make();
+    expect(fb.onLoadResult('m', false, true)).toBe(true);    // first failure: retry begins
+    expect(fb.onLoadResult('m', false, true)).toBe(true);    // the other load's failure: swallowed too
+    expect(deps.reloadWithoutMtp).toHaveBeenCalledTimes(1);
+    await tick();
+    expect(fb.onLoadResult('m', true, true)).toBe(false);    // the retry itself loads
+    await tick();
+    expect(deps.remember).toHaveBeenCalledWith('m');
+    expect(deps.restore).not.toHaveBeenCalled();
   });
 });

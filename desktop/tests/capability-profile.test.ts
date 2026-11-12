@@ -156,6 +156,14 @@ describe('capability profile — injection sizing (M3 item 5)', () => {
     expect(p.injectionBudgetTokens).toBeLessThan(10_000);
     expect(resolveProfile(local('some-35b', 65_536)).exposeSkillCatalog).toBe(false);   // on the default: small
   });
+  // Final review F2 (2026-11-12): the 64k default must not demote someone who chose their own size.
+  it('an unknown local model is small on the untouched 64k default and up to 32k, but not on a size the user chose above 32k', () => {
+    expect(resolveProfile(local('mystery', 65_536)).promptVariant).toBe('local-small');   // the default
+    expect(resolveProfile(local('mystery', 32_768)).promptVariant).toBe('local-small');
+    expect(resolveProfile(local('mystery', 40_000)).promptVariant).toBe('default');       // was full before, stays full
+    expect(resolveProfile(local('mystery', 48_000)).promptVariant).toBe('default');
+    expect(resolveProfile(local('mystery', 80_000)).promptVariant).toBe('default');
+  });
 
   it('an UNMEASURED local window is treated as small — never assume room', () => {
     const p = resolveProfile(local('mystery', null));

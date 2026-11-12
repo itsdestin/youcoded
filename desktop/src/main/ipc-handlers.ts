@@ -1751,19 +1751,18 @@ export function registerIpcHandlers(
   // A native session's model changed (the picker, from any screen): the label on every screen.
   nativeHost.on('model-changed', (e: { sessionId: string; model: string }) => {
     publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'model', model: e.model });
-    pushCurrentModelState(e.sessionId, e.model);
-    warmLocalModel(e.sessionId);   // a switch to a local model gets the same head start as opening on one
+    warmLocalModel(e.sessionId, e.model);   // a switch to a local model gets the same head start as opening on one; a cloud model clears the strip
   });
   // Load a local chat's model as it opens (like LM Studio), so the loading bar appears at once rather than
   // after the first message, then read the chat's opening in the background (prewarmLocal) so the first
   // reply starts in seconds. Fire-and-forget; the model poll drives the UI.
   // WHY local only: a cloud model id sent here booted the local engine and logged a bogus load error.
-  function warmLocalModel(sessionId: string): void {
+  function warmLocalModel(sessionId: string, switchedTo?: string): void {
     void nativeHost.localModelForSession(sessionId)
       .then((id) => (id ? engineManager.loadModel(id).then(() => {
-        pushCurrentModelState(sessionId, id);
+        pushCurrentModelState(sessionId, id, true);
         return nativeHost.prewarmLocal(sessionId);
-      }) : undefined))
+      }) : switchedTo ? pushCurrentModelState(sessionId, switchedTo) : undefined))
       .catch(() => { /* engine not installed / boot failed — the first send surfaces it */ });
   }
   nativeHost.on('permission-mode', (e: { sessionId: string; mode: NativePermissionMode }) => {
@@ -1807,8 +1806,13 @@ export function registerIpcHandlers(
   });
   // WHY: a chat opening on (or switching to) a model whose state is not changing got no push, so when
   // it later slept the strip said "Loading…" forever. A model the engine doesn't list (cloud) clears it.
-  function pushCurrentModelState(sessionId: string, modelId: string): void {
+  // WHY `local` (final review F4): a LOCAL model the engine has not listed yet (engine just started,
+  // first poll not in) is NOT loaded. Saying so hid the loading strip and marked the chat as "has been
+  // loaded", so the real first load then looked like a model that had gone to sleep. Its true state
+  // arrives with the next models-changed, a moment later.
+  function pushCurrentModelState(sessionId: string, modelId: string, local = false): void {
     const m = engineManager.latestModels()?.find((x) => x.id === modelId);
+    if (!m && local) return;
     pushModelState(sessionId, m ?? { id: modelId, state: 'loaded', sizeBytes: null, loadedBytes: undefined });
   }
   // Download progress fans out to every window + remotes on one push channel,

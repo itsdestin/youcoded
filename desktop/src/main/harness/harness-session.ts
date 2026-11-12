@@ -742,6 +742,10 @@ export class HarnessSession extends EventEmitter {
   private history: ModelMessage[] = [];
   private abort: AbortController | null = null;
   private interrupted = false;
+  /** The engine REFUSED the last request as too long while our own estimate said it fit (measured: ~22.6k of 32k).
+   *  WHY kept: Summarise pressed on that card must still be able to fall back to the app's own note (standInSummary);
+   *  judging only by our estimate left exactly that chat a dead end (final review F1). Cleared by the next turn or summary. */
+  private windowRefused = false;
   private _currentUsageProgress: TranscriptEvent | null = null;
   private lastUsageProgressTimestamp = 0;
   /** Latest in-flight root-turn progress event for a late-attaching host window.
@@ -1960,7 +1964,7 @@ export class HarnessSession extends EventEmitter {
     let generated: { text: string; usage?: StepUsage; threw?: boolean } = { text: '' };
     this.summaryInputCannotFit = false;
     generated = await this.summaryWithRetry(model, span, aiTools);
-    const summary = summaryOrStandIn(generated.text, s => this.compactionCandidateFits(s, keep), span, plan.replyCap <= 0 && !generated.threw && !this.interrupted && this.abort?.signal.aborted !== true);
+    const summary = summaryOrStandIn(generated.text, s => this.compactionCandidateFits(s, keep), span, (force || plan.replyCap <= 0) && !generated.threw && !this.interrupted && this.abort?.signal.aborted !== true);   // force = the engine itself refused the request
     if (!summary.trim() || !this.compactionCandidateFits(summary, keep)) {
       this.failedCompactionRevision = this.capture.revision;
       return false;
@@ -2213,7 +2217,7 @@ export class HarnessSession extends EventEmitter {
     if (this.abort == null) return;
     // Proof of life FIRST, before any throttling — a throttled-away report must
     // still reset the stall clock, or the throttle itself could cause a stall.
-    this.rearmStallWatchdog?.();
+    this.rearmStallWatchdog?.(); this.rearmSummaryWatchdog?.();   // a summary request still READING is alive too (final review F6)
     // Same local-only gate as the opening estimate below — one rule for the
     // whole affordance, so a hosted provider that ever started reporting
     // progress still can't put a prefill readout on a cloud session. Deliberately
@@ -2301,6 +2305,7 @@ export class HarnessSession extends EventEmitter {
     // Idle here (abort was null), so no turn owns this flag; a leftover from the
     // last turn's Stop must not make this summary read as stopped.
     this.interrupted = false;
+    const refused = this.windowRefused; this.windowRefused = false;
     try {
       const contextUsedBefore = this._contextUsedTokens;
       const cut = this.compactionCut(true, focus, targetContextLength);
@@ -2314,6 +2319,7 @@ export class HarnessSession extends EventEmitter {
       try {
         const model = await this.modelFactory(this.binding, {
           serialToolCalls: this.profile.constrainToolArgs && !this.profile.supportsParallelToolCalls,
+          onPrefillProgress: () => this.rearmSummaryWatchdog?.(),   // a slow local read must not be timed out while it is progressing
           cacheKey: this.opts.sessionId, helper: this.opts.isSpecialistChild === true,
         });
         // The same tool set a turn would carry, so the summary request's
@@ -2323,7 +2329,7 @@ export class HarnessSession extends EventEmitter {
         generated = { text: '', threw: true };
       }
       const summary = summaryOrStandIn(generated.text, s => this.compactionCandidateFits(s, keep, focus, targetContextLength), span,
-        !this.interrupted && !generated.threw && targetContextLength === undefined && this.planNow().plan.replyCap <= 0);
+        !this.interrupted && !generated.threw && targetContextLength === undefined && (refused || this.planNow().plan.replyCap <= 0));
       // WHY: Stop is not a model failure; say so, so the user is not told to
       // retry. `interrupted`, not the abort signal: the stall timeout aborts too.
       if (this.interrupted) return { ok: false, reason: 'interrupted' };
@@ -2753,7 +2759,7 @@ export class HarnessSession extends EventEmitter {
     if (this.abort) {
       throw new Error('HarnessSession: a turn is already in flight — callers must serialize send()/runSkill() per session.');
     }
-    this.interrupted = false;
+    this.interrupted = false; this.windowRefused = false;
     this._currentUsageProgress = null;
     this.bashOutputReadsThisTurn = 0;   // G-1 (D7): the cap is per TURN, notice turns included
     if (text !== null) this.acceptUserMessage(text, attachments, emit, appGenerated);
@@ -2982,8 +2988,8 @@ export class HarnessSession extends EventEmitter {
               turnUsage.expectedRebuild = true;
               continue;
             }
-            if (overflowRetried || !replayable || !isContextOverflow(err, this.binding.providerId, this.profile.providerType)
-              || !await this.maybeCompact(model, aiTools, true)) throw err;
+            const overflow = isContextOverflow(err, this.binding.providerId, this.profile.providerType);
+            if (overflowRetried || !replayable || !overflow || !await this.maybeCompact(model, aiTools, true)) { this.windowRefused = overflow; throw err; }
             overflowRetried = true;
             this.prefixMoved = true;
             turnUsage.expectedRebuild = true;

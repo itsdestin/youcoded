@@ -411,7 +411,11 @@ function localFallback(ctx: number | null): BehavioralProfile {
   // with 32k would have silently promoted every unknown model on defaults to
   // the full prompt and tool set — a bigger opening for exactly the models
   // that cope with it worst.
-  const small = ctx == null || ctx <= DEFAULT_CONTEXT_SIZE;
+  // WHY not `<= DEFAULT_CONTEXT_SIZE` (final review F2): that also demoted someone who had
+  // deliberately set 40k or 48k and had the full set before. Only what was small before
+  // (up to 32k) and the untouched default are small; an explicit 64k is the one value that
+  // cannot be told apart from the default and is treated as small too.
+  const small = ctx == null || ctx <= 32_768 || ctx === DEFAULT_CONTEXT_SIZE;
   return {
     maxToolPresentation: small ? 'simplified' : 'full',
     promptVariant: small ? 'local-small' : 'default',

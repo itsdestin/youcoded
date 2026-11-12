@@ -420,6 +420,7 @@ export function isJunkSummary(text: string, spanChars: number): boolean {
 /** Most of the stand-in's room goes to the user's own earlier requests. */
 const STAND_IN_ASK_CHARS = 240;
 const STAND_IN_TOTAL_CHARS = 1_500;
+const STAND_IN_LIST_HEADING = 'What the user asked for in the removed part, oldest first:';
 
 /** A summary the APP writes when the model cannot (review deck 2 Q-3, Destin 2026-11-12: "a chat can
  *  always continue").
@@ -437,9 +438,17 @@ export function standInSummary(span: ModelMessage[]): string {
   let used = 0;
   for (let i = span.length - 1; i >= 0 && used < STAND_IN_TOTAL_CHARS; i--) {
     const m = span[i];
-    if (m.role !== 'user' || isAppGenerated(m)) continue;
+    if (m.role !== 'user') continue;
     const text = typeof m.content === 'string' ? m.content
       : m.content.map(part => part.type === 'text' ? part.text : '').join(' ');
+    if (isAppGenerated(m)) {
+      // An EARLIER stand-in in this span: carry its list over, or a chat that needs a second one
+      // would forget everything the first had kept (final review).
+      const at = text.indexOf(STAND_IN_LIST_HEADING);
+      const old = at < 0 ? [] : text.slice(at + STAND_IN_LIST_HEADING.length).split('\n').filter(l => l.startsWith('- '));
+      for (let j = old.length - 1; j >= 0 && used < STAND_IN_TOTAL_CHARS; j--) { asks.unshift(old[j]); used += old[j].length; }
+      continue;
+    }
     const flat = text.replace(/\s+/g, ' ').trim();
     if (!flat) continue;
     const line = flat.length > STAND_IN_ASK_CHARS ? `${flat.slice(0, STAND_IN_ASK_CHARS)}…` : flat;
@@ -449,7 +458,7 @@ export function standInSummary(span: ModelMessage[]): string {
   return 'The app wrote this note, not the model. The earlier part of this conversation was removed to make room, '
     + 'and no summary of it could be written, so details from before this point are lost. '
     + 'If something from earlier is needed, ask the user or look at the files again.'
-    + (asks.length ? `\n\nWhat the user asked for in the removed part, oldest first:\n${asks.join('\n')}` : '');
+    + (asks.length ? `\n\n${STAND_IN_LIST_HEADING}\n${asks.join('\n')}` : '');
 }
 
 /** The model's summary when it is usable and fits, otherwise the app's stand-in — but only where

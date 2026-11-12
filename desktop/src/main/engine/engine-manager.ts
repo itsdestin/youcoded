@@ -1344,13 +1344,14 @@ export class EngineManager extends EventEmitter {
     });
     // The other source: a load that the router itself answered with an error.
     this.supervisor.on('model-load-result', (e: { modelId: string; ok: boolean; status: number | null; body: string }) => {
-      if (this.mtpFallback.onLoadResult(e.modelId, e.ok, e.status !== null)) return;   // being retried without MTP
       const message = e.ok ? null
         : e.status === null
           // The request could not be made — say that, not a guess at why.
           ? (e.body || 'the engine could not be reached')
           : routerErrorText(e.status, e.body);
-      void this.noteLoadError(e.modelId, message);
+      const report = () => { void this.noteLoadError(e.modelId, message); };
+      if (this.mtpFallback.onLoadResult(e.modelId, e.ok, e.status !== null, report)) return;   // being retried without MTP
+      report();
     });
     this.supervisor.on('crashed', (info) => this.emit('crashed', info));
     this.supervisor.on('load-timed', (e: { modelId: string; sizeBytes: number | null; ms: number }) => {

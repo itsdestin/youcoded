@@ -80,7 +80,8 @@ describe('junk summaries are refused', () => {
   const MARKUP = '<tool_call>\n<function=Read>\n<parameter=file_path>\n/x\n</parameter>\n</function>\n</tool_call>';
   const GOOD = '## Goal\nThe user asked about the old goal and its large file contents. '.repeat(4);
 
-  async function run(steps: any[]) {
+  // `force` = the engine itself refused the request as too long (the only caller that forces).
+  async function run(steps: any[], force = true) {
     const calls: any[] = []; const events: any[] = [];
     const model = spy(scriptModel(steps), calls);
     const session = makeSession({ contextLength: 8192, model, tools: [], onEvent: e => events.push(e) });
@@ -88,16 +89,20 @@ describe('junk summaries are refused', () => {
     const before = (session as any).history.slice();
     (session as any).abort = new AbortController();
     let result: boolean;
-    try { result = await (session as any).maybeCompact(model, {}, true); } finally { (session as any).abort = null; }
+    try { result = await (session as any).maybeCompact(model, {}, force); } finally { (session as any).abort = null; }
     return { calls, events, session, before, result };
   }
 
-  it('junk twice: one retry, history untouched, no compaction marker', async () => {
+  // WHY this changed (final review F1, 2026-11-12): this is the fault as it was logged — the ENGINE
+  // refused the chat as too long while our own estimate said it fit, and the model then answered the
+  // summary with tool-call markup twice. Keeping history left that chat a dead end.
+  it('the engine refused the chat and the model answers junk twice: one retry, then the app-written note', async () => {
     const r = await run([{ text: MARKUP }, { text: MARKUP }]);
-    expect(r.result).toBe(false);
     expect(r.calls).toHaveLength(2);
-    expect((r.session as any).history).toEqual(r.before);
-    expect(r.events.filter(e => e.type === 'compact-summary')).toHaveLength(0);
+    expect(r.result).toBe(true);
+    expect((r.session as any).history[0].content).toContain('The app wrote this note, not the model.');
+    expect((r.session as any).history[0].content).toContain('- old goal xxx');
+    expect(r.events.filter(e => e.type === 'compact-summary')).toHaveLength(1);
   });
   it('junk then a real summary: the retry is committed', async () => {
     const r = await run([{ text: MARKUP }, { text: GOOD }]);
@@ -144,6 +149,14 @@ describe('junk summaries are refused', () => {
     expect(r.result).toBe(false);
     expect((r.session as any).history).toEqual(r.before);
     expect(r.events.filter(e => e.type === 'compact-summary')).toHaveLength(0);
+  });
+  it('Summarise pressed after the engine refused the chat falls back to the app-written note', async () => {
+    const session = makeSession({ contextLength: 8192, model: scriptModel([{ text: MARKUP }, { text: MARKUP }]), tools: [] });
+    session.seedHistory(seed.slice());
+    (session as any).windowRefused = true;   // what a turn ending in the engine's too-long refusal leaves behind
+    expect((await session.compactNow()).ok).toBe(true);
+    expect((session as any).history[0].content).toContain('The app wrote this note, not the model.');
+    expect((session as any).windowRefused).toBe(false);
   });
   it('manual compact with junk twice reports summary-failed and keeps history', async () => {
     const calls: any[] = [];

@@ -29,6 +29,19 @@ describe('standInSummary', () => {
   });
 });
 
+describe('standInSummary — a second stand-in', () => {
+  it('carries over what an earlier stand-in had kept', () => {
+    const first = standInSummary([{ role: 'user', content: 'build the report' }] as any);
+    const text = standInSummary([
+      markAppGenerated({ role: 'user', content: `[Earlier conversation summary]\n${first}` } as any),
+      { role: 'user', content: 'now add a chart' },
+    ] as any);
+    expect(text).toContain('- build the report');
+    expect(text.indexOf('build the report')).toBeLessThan(text.indexOf('now add a chart'));
+    expect(text.match(/The app wrote this note/g)).toHaveLength(1);
+  });
+});
+
 describe('summaryOrStandIn', () => {
   const fits = (s: string) => s.length < 5_000;
   it('uses the model summary when it is usable and fits', () => {

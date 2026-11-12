@@ -33,7 +33,9 @@ export class SlotPins {
     // the engine confirming the default must not drop every chat's slot.
     if ((this.counts.get(modelId) ?? DEFAULT_SLOTS) === n) { this.counts.set(modelId, n); return; }
     this.counts.set(modelId, n);
-    this.pins.delete(modelId); // slot numbers from the old count may not exist
+    // slot numbers from the old count may not exist; their helper marks go with them
+    for (const k of this.pins.get(modelId)?.keys() ?? []) this.helpers.delete(k);
+    this.pins.delete(modelId);
   }
 
   /** Keys that belong to helper agents (specialist children), not to a chat

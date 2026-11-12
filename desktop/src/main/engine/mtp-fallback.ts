@@ -31,17 +31,28 @@ export interface MtpFallbackDeps {
 }
 
 export class MtpFallback {
-  private retrying = new Set<string>();
+  /** 'preparing' = the settings are being rewritten and the retry has not been asked yet;
+   *  'loading' = the retry's load is on its way, so the next result is its own.
+   *  WHY two steps (final review F3): two loads of one model can overlap (a chat's own
+   *  request and the come-back reload). Their second failure used to be read as the
+   *  RETRY failing: MTP was put back, an error shown for a model that then loaded, and
+   *  nothing was remembered. A failure that arrives while still preparing is the old
+   *  load's, and is swallowed like the first. */
+  private retrying = new Map<string, 'preparing' | 'loading'>();
   constructor(private deps: MtpFallbackDeps) {}
 
   /** Models that must be left out of MTP while their retry is running. */
   excluded(modelId: string): boolean { return this.retrying.has(modelId); }
 
   /** Called with every load result. Returns true when the result was TAKEN
-   *  OVER (a retry without MTP has started), so the caller must not record it
-   *  as the model's error. `answered` = the engine itself replied. */
-  onLoadResult(modelId: string, ok: boolean, answered: boolean): boolean {
-    if (this.retrying.has(modelId)) {
+   *  OVER (a retry without MTP is under way), so the caller must not record it
+   *  as the model's error. `answered` = the engine itself replied. `report`
+   *  records this failure the ordinary way; it is called later if the retry
+   *  could not even be started, so a swallowed failure is never lost. */
+  onLoadResult(modelId: string, ok: boolean, answered: boolean, report: () => void = () => {}): boolean {
+    const phase = this.retrying.get(modelId);
+    if (phase === 'preparing') return !ok;   // an older load's result; a success is reported as usual
+    if (phase === 'loading') {
       // The retry's own result. Whatever it was, the caller reports it.
       const done = () => { this.retrying.delete(modelId); };
       // Remember BEFORE the exclusion ends, or a settings rewrite in between
@@ -51,11 +62,18 @@ export class MtpFallback {
       return false;
     }
     if (ok || !answered || !this.deps.hasMtp(modelId)) return false;
-    this.retrying.add(modelId);
-    void this.deps.reloadWithoutMtp(modelId).catch(() => {
-      // The retry could not even be started: stop excluding, MTP stays as it was.
-      this.retrying.delete(modelId);
-    });
+    this.retrying.set(modelId, 'preparing');
+    void this.deps.reloadWithoutMtp(modelId).then(
+      () => { if (this.retrying.get(modelId) === 'preparing') this.retrying.set(modelId, 'loading'); },
+      () => {
+        // The retry could not even be started. The settings file may already have been
+        // rewritten without MTP, so put it back (final review F5), and report the
+        // failure that was held back.
+        this.retrying.delete(modelId);
+        void this.deps.restore(modelId).catch(() => {});
+        report();
+      },
+    );
     return true;
   }
 }
