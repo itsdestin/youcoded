@@ -77,6 +77,14 @@ interface StickToBottom {
   jumpToBottom: () => void;
   /** The user scrolled up: stop following new content. Safe to call repeatedly. */
   releaseStick: () => void;
+  /**
+   * The APP is about to scroll somewhere on the reader's behalf (a quote chip,
+   * Find): stop following AND do not re-arm on arrival near the bottom until the
+   * user scrolls by hand again. Shows the Jump-to-bottom button at once.
+   */
+  holdPosition: () => void;
+  /** A hand scroll the hook cannot see itself (ArrowDown): lets a held position re-arm. */
+  noteUserScroll: () => void;
 }
 
 export function useStickToBottom(
@@ -84,13 +92,40 @@ export function useStickToBottom(
 ): StickToBottom {
   const stickRef = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
+  // WHY (Destin, 2026-11-12: "jump to bottom" flickered when dragging down in an
+  // empty chat): an upward wheel / touch / ArrowUp un-pins at once — it has to,
+  // see the header — but that alone used to show the button too. When the chat
+  // cannot scroll (empty, or short) nothing moves, and the idle re-check hid the
+  // button again 90 ms later: a flash. Now the button waits until the container
+  // has REALLY moved away from the bottom (measured in the frame after a scroll
+  // event, or by the idle re-check). Not moving = no button, ever.
+  const revealPendingRef = useRef(false);
+  const revealRafRef = useRef(0);
+  // WHY (Destin, 2026-11-12: clicking a quote chip in a message just sent "gets
+  // stuck to the bottom and pulls itself back down"): the chip scrolls to the
+  // quoted words, which are usually the reply just above. That scroll often ends
+  // within 32 px of the bottom (the browser cannot centre text that close to the
+  // end), the idle re-check read that as "the user came back down" and re-pinned,
+  // and the reply streaming in below then dragged the view away from the quote.
+  // An app-made scroll is not the user returning: hold until a hand scroll.
+  const holdRef = useRef(false);
+
+  const cancelReveal = useCallback(() => {
+    if (revealRafRef.current) cancelAnimationFrame(revealRafRef.current);
+    revealRafRef.current = 0;
+  }, []);
 
   const setStick = useCallback((next: boolean) => {
     stickRef.current = next;
+    if (next) {
+      holdRef.current = false;
+      revealPendingRef.current = false;
+      cancelReveal();
+    }
     // Only the button reads this; bail out when unchanged so a wheel burst
     // doesn't re-render the whole ChatView on every event.
     setAtBottom((prev) => (prev === next ? prev : next));
-  }, []);
+  }, [cancelReveal]);
 
   // scrollTop = scrollHeight (over-scroll, clamped by the browser) rather than
   // sentinel.scrollIntoView: the sentinel sits ABOVE .chat-scroll's
@@ -116,8 +151,20 @@ export function useStickToBottom(
   const releaseStick = useCallback(() => {
     // The user took the wheel back: stop the glide so it can't fight their scroll.
     cancelJump();
-    if (stickRef.current) setStick(false);
-  }, [setStick, cancelJump]);
+    if (!stickRef.current) return;
+    // Un-pin NOW (the growth pin must see it this frame) but leave the button to
+    // the reveal check — see revealPendingRef.
+    stickRef.current = false;
+    revealPendingRef.current = true;
+  }, [cancelJump]);
+
+  const holdPosition = useCallback(() => {
+    cancelJump();
+    holdRef.current = true;
+    revealPendingRef.current = false;
+    cancelReveal();
+    setStick(false);
+  }, [cancelJump, cancelReveal, setStick]);
 
   // WHY a hand-rolled glide instead of scrollTo({behavior:'smooth'}): the native
   // smooth scroll aims at the scrollHeight read at click time. While a turn is
@@ -157,13 +204,21 @@ export function useStickToBottom(
   }, [containerRef, setStick, cancelJump]);
 
   useEffect(() => cancelJump, [cancelJump]);
+  useEffect(() => cancelReveal, [cancelReveal]);
+
+  // Set by the listener effect below; the hand-scroll signal for keys the hook
+  // does not listen to itself (ChatView's ArrowDown).
+  const userScrollRef = useRef<() => void>(() => {});
+  const noteUserScroll = useCallback(() => userScrollRef.current(), []);
 
   useEffect(() => {
     const c = containerRef.current;
     if (!c) return;
 
     // Re-arm on arrival at the bottom. No "was this scroll ours?" bookkeeping is
-    // needed: our own pins land at distance 0, where the flag is already true.
+    // needed for our own PINS: they land at distance 0, where the flag is
+    // already true. The one app-made scroll that is not a pin (a quote chip,
+    // Find) sets holdRef, and only a hand scroll lifts it.
     //
     // PERF (this is load-bearing, don't inline the check back into onScroll):
     // isAtBottom() reads scrollTop/scrollHeight/clientHeight, and reading those
@@ -172,20 +227,48 @@ export function useStickToBottom(
     // re-parses its markdown — so each read is a FULL forced reflow of a large
     // transcript, not a cached lookup. Doing that once per scroll event made
     // scrolling visibly janky while the model was generating (first dogfood
-    // pass, 2026-07-28). Two guards keep it off the hot path:
+    // pass, 2026-07-28). Three guards keep it off the hot path:
     //   1. While pinned we return before reading anything at all.
     //   2. While unstuck we only measure once the scroll has gone quiet, so a
     //      gesture costs one reflow instead of one per frame.
+    //   3. The button's reveal measures at most once per frame, and only until
+    //      the button is up (normally the first frame: one wheel notch is >32px).
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     const checkRearm = () => {
       idleTimer = undefined;
-      if (!stickRef.current && isAtBottom(c)) setStick(true);
-    };
-    const onScroll = () => {
       if (stickRef.current) return;
+      if (!holdRef.current && isAtBottom(c)) { setStick(true); return; }
+      // Still away from the bottom (or held): the button belongs up. This also
+      // covers content that grew below a reader whose own scroll never moved
+      // the container (a wheel over a code block mid-reply).
+      revealPendingRef.current = false;
+      cancelReveal();
+      setAtBottom(false);
+    };
+    const scheduleCheck = () => {
       if (idleTimer !== undefined) clearTimeout(idleTimer);
       idleTimer = setTimeout(checkRearm, REARM_IDLE_MS);
     };
+    const reveal = () => {
+      revealRafRef.current = 0;
+      if (stickRef.current || !revealPendingRef.current) return;
+      if (distanceFromBottom(c) > RESTICK_THRESHOLD_PX) {
+        revealPendingRef.current = false;
+        setAtBottom(false);
+      }
+    };
+    const onScroll = () => {
+      if (stickRef.current) return;
+      if (revealPendingRef.current && !revealRafRef.current) revealRafRef.current = requestAnimationFrame(reveal);
+      scheduleCheck();
+    };
+    // A hand scroll in any direction: it lifts a hold, and re-checks once quiet.
+    // Downward input still never UN-sticks (see onWheel).
+    const userScroll = () => {
+      holdRef.current = false;
+      if (!stickRef.current) scheduleCheck();
+    };
+    userScrollRef.current = userScroll;
 
     // Upward wheel intent. Passive on purpose — it only reads the delta; the
     // scrolling itself is the browser's own (ChatView has no wheel handler, see
@@ -195,16 +278,13 @@ export function useStickToBottom(
     //
     // WHY it also schedules a re-check: an upward wheel over a short chat, or
     // over a code block / tool card that scrolls on its own, releases the stick
-    // but never moves THIS container — so no scroll event follows and the
-    // Jump-to-bottom button stayed up while you were already at the bottom. The
-    // idle re-check re-arms in that case; after a real scroll away it measures
-    // >32px and changes nothing.
+    // but never moves THIS container — so no scroll event follows. The idle
+    // re-check re-arms in that case (and the button never showed, see
+    // revealPendingRef); after a real scroll away it measures >32px and leaves
+    // the button up.
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) {
-        releaseStick();
-        if (idleTimer !== undefined) clearTimeout(idleTimer);
-        idleTimer = setTimeout(checkRearm, REARM_IDLE_MS);
-      }
+      if (e.deltaY < 0) releaseStick();
+      if (e.deltaY !== 0) userScroll();
     };
 
     // Touch (Android / phone over remote): a finger moving DOWN scrolls the
@@ -215,11 +295,8 @@ export function useStickToBottom(
     };
     const onTouchMove = (e: TouchEvent) => {
       const y = e.touches[0]?.clientY ?? 0;
-      if (y > lastTouchY + 2) {
-        releaseStick();
-        if (idleTimer !== undefined) clearTimeout(idleTimer);
-        idleTimer = setTimeout(checkRearm, REARM_IDLE_MS);
-      }
+      if (y > lastTouchY + 2) releaseStick();
+      if (Math.abs(y - lastTouchY) > 2) userScroll();
       lastTouchY = y;
     };
 
@@ -227,7 +304,7 @@ export function useStickToBottom(
     // its own signal. A click in the gutter targets the scroll container itself
     // (not a message), and its offsetX lands past the content box.
     const onPointerDown = (e: PointerEvent) => {
-      if (e.target === c && e.offsetX >= c.clientWidth) releaseStick();
+      if (e.target === c && e.offsetX >= c.clientWidth) { releaseStick(); userScroll(); }
     };
 
     c.addEventListener('scroll', onScroll, { passive: true });
@@ -237,13 +314,17 @@ export function useStickToBottom(
     c.addEventListener('pointerdown', onPointerDown);
     return () => {
       if (idleTimer !== undefined) clearTimeout(idleTimer);
+      cancelReveal();
+      userScrollRef.current = () => {};
       c.removeEventListener('scroll', onScroll);
       c.removeEventListener('wheel', onWheel);
       c.removeEventListener('touchstart', onTouchStart);
       c.removeEventListener('touchmove', onTouchMove);
       c.removeEventListener('pointerdown', onPointerDown);
     };
-  }, [containerRef, setStick, releaseStick]);
+  }, [containerRef, setStick, releaseStick, cancelReveal]);
 
-  return { atBottom, stickRef, scrollToBottom, stickToBottom, jumpToBottom, releaseStick };
+  return {
+    atBottom, stickRef, scrollToBottom, stickToBottom, jumpToBottom, releaseStick, holdPosition, noteUserScroll,
+  };
 }

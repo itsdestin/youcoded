@@ -19,16 +19,19 @@ const MAX_SCROLL = CONTENT_H - VIEW_H; // 1500
 // forced reflow of the whole transcript — see the PERF note in the hook.
 let layoutReads = 0;
 
-function makeContainer(): HTMLDivElement {
+// A chat that does not fill the viewport (the empty "Start a conversation" chat):
+// pass contentH <= VIEW_H, and the container cannot scroll at all.
+function makeContainer(contentH = CONTENT_H): HTMLDivElement {
   const el = document.createElement('div');
   let top = 0;
-  Object.defineProperty(el, 'scrollHeight', { get: () => { layoutReads++; return CONTENT_H; } });
+  const maxScroll = () => Math.max(0, contentH - VIEW_H);
+  Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => { layoutReads++; return Math.max(contentH, VIEW_H); } });
   Object.defineProperty(el, 'clientHeight', { get: () => { layoutReads++; return VIEW_H; } });
   Object.defineProperty(el, 'clientWidth', { get: () => 800 });
   Object.defineProperty(el, 'scrollTop', {
     get: () => top,
     set: (v: number) => {
-      const next = Math.max(0, Math.min(v, MAX_SCROLL));
+      const next = Math.max(0, Math.min(v, maxScroll()));
       if (next === top) return;
       top = next;
       el.dispatchEvent(new Event('scroll'));
@@ -69,6 +72,8 @@ describe('useStickToBottom', () => {
 
   // Re-arming is debounced, so every test drives timers explicitly.
   const settle = () => act(() => { vi.advanceTimersByTime(REARM_IDLE_MS + 1); });
+  // One animation frame: the button's reveal check runs in the frame after a scroll.
+  const frame = () => act(() => { vi.advanceTimersByTime(17); });
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -106,6 +111,8 @@ describe('useStickToBottom', () => {
     // Read the ref, not the state: a growth handler firing later in this same
     // frame is what has to see the unstick.
     expect(result.current.stickRef.current).toBe(false);
+    // The button follows one frame later, once the container has really moved.
+    frame();
     expect(result.current.atBottom).toBe(false);
 
     // A streaming delta arriving now must NOT drag the user back down.
@@ -175,6 +182,7 @@ describe('useStickToBottom', () => {
       const { result } = renderHook(() => useStickToBottom(ref));
       act(() => { result.current.scrollToBottom(); });
       act(() => { wheel(el, -400); });
+      frame(); // the button's one reveal measurement
 
       layoutReads = 0;
       act(() => {
@@ -272,9 +280,115 @@ describe('useStickToBottom', () => {
     // Wheel over a nested scroller: the event bubbles here, but THIS container
     // does not move, so no scroll event follows.
     act(() => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true })); });
-    expect(result.current.atBottom).toBe(false);
+    expect(result.current.stickRef.current).toBe(false);
+    // The button never shows: nothing moved (no flash, see the next test).
+    expect(result.current.atBottom).toBe(true);
     settle();
     expect(result.current.atBottom).toBe(true);
     expect(result.current.stickRef.current).toBe(true);
+  });
+
+  it('dragging in a chat that cannot scroll never flashes the Jump-to-bottom button', () => {
+    // The empty "Start a conversation" chat: content fits, so scrollTop stays 0
+    // and no scroll event ever fires. Every render's atBottom is recorded.
+    el.remove();
+    el = makeContainer(200);
+    (ref as any).current = el;
+    const seen: boolean[] = [];
+    const { result } = renderHook(() => { const r = useStickToBottom(ref); seen.push(r.atBottom); return r; });
+    const touch = (type: string, y: number) =>
+      el.dispatchEvent(new TouchEvent(type, { touches: [{ clientY: y } as Touch], bubbles: true }));
+    act(() => { touch('touchstart', 100); });
+    for (const y of [130, 170, 220, 260]) { act(() => { touch('touchmove', y); }); frame(); }
+    act(() => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true })); });
+    frame();
+    settle();
+    expect(seen.every(Boolean)).toBe(true);
+    expect(result.current.stickRef.current).toBe(true);
+  });
+
+  it('a short upward nudge that stays near the bottom re-arms without showing the button', () => {
+    const seen: boolean[] = [];
+    const { result } = renderHook(() => { const r = useStickToBottom(ref); seen.push(r.atBottom); return r; });
+    act(() => { result.current.scrollToBottom(); });
+    act(() => { wheel(el, -10); });
+    frame();
+    settle();
+    expect(seen.every(Boolean)).toBe(true);
+    expect(result.current.stickRef.current).toBe(true);
+  });
+
+  it('shows the button when content grows away below a reader whose wheel never moved the chat', () => {
+    // Wheel over a code block mid-reply: this container does not scroll, but the
+    // reply keeps growing below, so by the idle check the reader is far from the end.
+    let contentH = CONTENT_H;
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => contentH });
+    const { result } = renderHook(() => useStickToBottom(ref));
+    act(() => { result.current.scrollToBottom(); });
+    act(() => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true })); });
+    contentH += 400;
+    settle();
+    expect(result.current.stickRef.current).toBe(false);
+    expect(result.current.atBottom).toBe(false);
+  });
+
+  describe('holdPosition (an app-made scroll: a quote chip, Find)', () => {
+    it('does not re-arm when the jump lands near the bottom, so a growing reply cannot drag the view away', () => {
+      const { result } = renderHook(() => useStickToBottom(ref));
+      act(() => { result.current.scrollToBottom(); });
+      act(() => { result.current.holdPosition(); });
+      expect(result.current.stickRef.current).toBe(false);
+      expect(result.current.atBottom).toBe(false); // the button is up at once
+      // The quoted words sit just above the end: the browser clamps the scroll
+      // within the re-arm distance.
+      act(() => { el.scrollTop = MAX_SCROLL - 10; });
+      settle();
+      expect(result.current.stickRef.current).toBe(false);
+      // A streamed delta arrives: the growth pin must not move the reader.
+      act(() => { if (result.current.stickRef.current) result.current.scrollToBottom(); });
+      expect(el.scrollTop).toBe(MAX_SCROLL - 10);
+    });
+
+    it('a hand scroll back to the bottom lifts the hold and re-arms following', () => {
+      const { result } = renderHook(() => useStickToBottom(ref));
+      act(() => { result.current.scrollToBottom(); });
+      act(() => { result.current.holdPosition(); });
+      act(() => { el.scrollTop = MAX_SCROLL - 300; });
+      settle();
+      act(() => { wheel(el, 300); });
+      settle();
+      expect(result.current.stickRef.current).toBe(true);
+      expect(result.current.atBottom).toBe(true);
+    });
+
+    it('a downward wheel at the clamped bottom (no scroll event) still re-arms', () => {
+      const { result } = renderHook(() => useStickToBottom(ref));
+      act(() => { result.current.scrollToBottom(); });
+      act(() => { result.current.holdPosition(); });
+      settle();
+      expect(result.current.stickRef.current).toBe(false);
+      act(() => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true })); });
+      settle();
+      expect(result.current.stickRef.current).toBe(true);
+    });
+
+    it('noteUserScroll (ArrowDown) lifts the hold', () => {
+      const { result } = renderHook(() => useStickToBottom(ref));
+      act(() => { result.current.scrollToBottom(); });
+      act(() => { result.current.holdPosition(); });
+      act(() => { result.current.noteUserScroll(); });
+      settle();
+      expect(result.current.stickRef.current).toBe(true);
+    });
+
+    it('Jump to bottom clears the hold', () => {
+      const { result } = renderHook(() => useStickToBottom(ref));
+      act(() => { result.current.holdPosition(); });
+      act(() => { result.current.jumpToBottom(); });
+      act(() => { vi.advanceTimersByTime(JUMP_GLIDE_MS + 50); });
+      act(() => { wheel(el, -10); }); // a tiny nudge afterwards re-arms normally
+      settle();
+      expect(result.current.stickRef.current).toBe(true);
+    });
   });
 });
