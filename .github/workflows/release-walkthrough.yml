@@ -45,6 +45,8 @@ jobs:
         # WHY the keyring: a normal Linux desktop has one, and the app stores keys in it. Without it the app
         # (correctly) refuses to save the key — seen on the first run, 2026-11-01.
         run: |
+          # WHY update first (2026-11-12): the machine's package list was stale and the install 404'd before the app ever opened.
+          sudo apt-get update -qq > /dev/null
           sudo apt-get install -y -qq gnome-keyring dbus-x11 > /dev/null
           # The Chrome sandbox helper must be owned by root with the setuid bit — exactly what the .deb installer does.
           sudo chown root:root app/chrome-sandbox && sudo chmod 4755 app/chrome-sandbox
