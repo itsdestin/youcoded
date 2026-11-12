@@ -1322,7 +1322,13 @@ body.iv2 .cycler-word-3{animation-delay:calc(var(--lead) + var(--beat) * 2)}
    little longer and softer than the snap used between words, because it
    travels about four times as far. */
 body.iv2-first .cycler-stage{clip-path:inset(0 -5px 0 0)}
-body.iv2-first .word-cycler{transition:width .6s cubic-bezier(.25,.8,.3,1)}
+body.iv2-first .word-cycler{transition:width .5s cubic-bezier(.22,.9,.32,1)}
+/* The tint now lives inside each wallpaper layer (see flip() in applyTheme). */
+body.iv2 .bd-scrim{display:none}
+/* During the intro the wallpaper lands a little sooner after its word (.5s,
+   not .65s): with 0.7s between words the old fade had barely finished before
+   the next one began, so the background never came to rest. */
+body.iv2.intro-mode .bd-layer{transition:opacity .5s ease}
 /* "Robots start" option (Destin, round 5: "start the empty 'make your
    technology...' state with the icons slightly further to the left/right of
    the text ... that way they maybe have to move just a bit less to fit the
@@ -1335,7 +1341,7 @@ body.iv2-first .word-cycler{transition:width .6s cubic-bezier(.25,.8,.3,1)}
   /* WHY :not(.iv2-shut): the transition must exist only on the way OUT. With it
      on always, the robots visibly slid apart during the headline's entrance
      (traced 2026-11-12) instead of simply starting apart. */
-  body.iv2:not(.iv2-shut) .hero-flank .flankrow h1{transition:margin .6s cubic-bezier(.25,.8,.3,1)}
+  body.iv2:not(.iv2-shut) .hero-flank .flankrow h1{transition:margin .5s cubic-bezier(.22,.9,.32,1)}
   body.iv2-shut .hero-flank .flankrow h1{margin:0 var(--iv2-spread,0px)}
 }
 /* The switcher shrinks to its first and last buttons on a phone-width window,
@@ -2168,8 +2174,8 @@ html{-webkit-tap-highlight-color:transparent}
   if (!today) {
     document.body.classList.add('iv2', 'iv2-' + start, 'iv2-' + motion);
     document.body.style.setProperty('--beat', beat + 'ms');
-    document.body.style.setProperty('--lead', '680ms');
-    window.IV2_BEAT = beat; window.IV2_LEAD = 680; window.IV2_SPREAD = spread / 2;
+    document.body.style.setProperty('--lead', '620ms');
+    window.IV2_BEAT = beat; window.IV2_LEAD = 620; window.IV2_SPREAD = spread / 2;
   }
   document.addEventListener('DOMContentLoaded', function(){
     var bar = document.createElement('div'); bar.className = 'iv2-bar';
@@ -2189,6 +2195,7 @@ html{-webkit-tap-highlight-color:transparent}
       link('Rising up', start, 'rise', beat, !today && motion === 'rise');
     html += '<span>Beat</span>' +
       link('Quick', start, motion, 650, !today && beat === 650) +
+      link('Tight', start, motion, 720, !today && beat === 720) +
       link('Steady', start, motion, 780, !today && beat === 780) +
       link('Relaxed', start, motion, 900, !today && beat === 900);
     html += '<span></span><a href="' + location.search + '">Replay</a>';
@@ -2883,7 +2890,16 @@ function applyTheme(slug){
     if (ticket !== fadeTicket) return;
     fadeTicket++;                      // the cap and the decode both call this; first one wins
     var next = useA ? bdB : bdA, cur = useA ? bdA : bdB;
-    next.style.background = backdropCss(t);
+    // PROTOTYPE (body.iv2), traced 2026-11-12: the tint over the wallpaper
+    // (.bd-scrim) is a gradient built from a colour variable, and browsers do
+    // not fade gradients -- so on every theme change the whole window's tint
+    // SNAPPED to the new theme in one frame while the wallpaper under it took
+    // .65s to follow (light-purple picture under a near-black tint, and back).
+    // Painting the tint INTO each wallpaper layer makes it part of the same
+    // opacity crossfade, which the graphics card does without redrawing.
+    next.style.background = document.body.classList.contains('iv2')
+      ? 'linear-gradient(rgba(' + rgb(t.canvas) + ',.30), rgba(' + rgb(t.canvas) + ',.62) 55%, rgba(' + rgb(t.canvas) + ',.86)), ' + backdropCss(t)
+      : backdropCss(t);
     next.style.backgroundSize = 'cover'; next.style.backgroundPosition = 'center';
     next.style.opacity = 1; cur.style.opacity = 0; useA = !useA;
   };
@@ -2920,10 +2936,25 @@ function applyTheme(slug){
   requestAnimationFrame(function(){ setTimeout(function(){
     if (syncTicket === embedSyncTicket) syncEmbedTheme();
   }, 0); });
+  // PROTOTYPE (body.iv2), measured 2026-11-12: during the intro the demo
+  // window is invisible, yet every word swapped its still picture (a decode of
+  // a large image nobody can see) and re-measured its rounded mask, which
+  // forces the browser to restyle the whole page on the spot -- 14-45ms of
+  // stall at the exact moment each word's slide begins. Both now wait for the
+  // intro's end (the listener just below), when the demo is about to appear.
+  if (document.body.classList.contains('iv2') && document.body.classList.contains('intro-mode')) {
+    rethemeClips(slug);
+    return;
+  }
   setEmbedPoster();
   rethemeClips(slug);
   if (typeof maskEmbed === 'function') maskEmbed();
 }
+document.addEventListener('yc:intro-end', function(){
+  if (!document.body.classList.contains('iv2')) return;
+  setEmbedPoster();
+  if (typeof maskEmbed === 'function') maskEmbed();
+});
 // --- Per-theme clips (2026-10-21): media/<name>--<theme>.webm for each of the four site themes.
 var CLIP_THEMES = ['youcoded', 'meadow-mist', 'halftone-dimension', 'golden-sunbreak'];
 // WHY rewritten (2026-11-11, site speed pass). Every theme change used to reload
@@ -4847,7 +4878,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // PROTOTYPE: see body.iv2 in the stylesheet.
   var IV2 = document.body.classList.contains('iv2');
   var BEAT = window.IV2_BEAT || 780;
-  var LEAD = window.IV2_LEAD || 680;
+  var LEAD = window.IV2_LEAD || 620;
   var SPREAD = window.IV2_SPREAD || 0;         // "Robots start" option, 0..1   // headline's arrival -> first word
   // "Closed up" start: the word slot begins at zero width, so the headline
   // arrives as a centred, complete-looking phrase instead of one with a hole
@@ -4943,7 +4974,18 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
     return Promise.all(waits);
   }
   if (window.Promise) {
-    introReady().then(beginSequence);
+    // PROTOTYPE (body.iv2), measured 2026-11-12: the moment the fonts and
+    // wallpapers land is also when the browser re-lays-out the whole page in
+    // the new fonts and decodes the pictures -- one 0.1-0.25s burst of work.
+    // The entrance used to start INSIDE that burst, so its first frames were
+    // simply never drawn and it popped rather than rose. Now it also waits for
+    // every font (not only the headline's), then lets two frames go by so the
+    // burst is over before anything moves. Still under the same 700ms cap.
+    introReady().then(function(){
+      if (!IV2) return beginSequence();
+      var all = (document.fonts && document.fonts.ready) || Promise.resolve();
+      all.then(function(){ requestAnimationFrame(function(){ requestAnimationFrame(beginSequence); }); });
+    });
     setTimeout(beginSequence, START_CAP_MS);
   } else {
     beginSequence();
