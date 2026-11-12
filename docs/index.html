@@ -2674,7 +2674,7 @@ var THEMES = {"youcoded": {"name":"YouCoded Light","dark":false,"canvas":"#F7F0F
 var order = Object.keys(THEMES);
 var bdA = document.getElementById('bd-a'), bdB = document.getElementById('bd-b'), useA = true;
 var fontLinks = {};
-var embedSyncTimer = 0;
+var embedSyncTicket = 0;
 // --- Pictures a theme needs, fetched ahead of the click (2026-11-11) -----------
 // keep[] holds every preloaded Image so the browser keeps it in memory: a picture
 // that is only in the disk cache still costs a round trip to the server to check.
@@ -2792,10 +2792,19 @@ function applyTheme(slug){
   // running in this page's own thread, and re-theming it took 25-90ms -- spent
   // INSIDE the click, before the page could show any response, and again as a
   // stall in the middle of the page's own half-second colour fade. The page now
-  // changes first; the demo follows as that fade ends. A second click inside
-  // the wait replaces the first, so fast clicking re-themes the demo once.
-  clearTimeout(embedSyncTimer);
-  embedSyncTimer = setTimeout(syncEmbedTheme, embedLive ? 520 : 0);
+  // changes first and the demo follows on the very next frame.
+  // WHY one frame and not longer (Destin, 2026-11-11: "still a noticeable delay
+  // between clicking a new theme chip and the embedded demo/image changing").
+  // The first version waited 520ms, until the page's fade had finished; that
+  // read as the demo lagging behind. Waiting for one painted frame keeps the
+  // click's own response instant and puts the demo a few hundredths of a second
+  // behind it -- the cost is a brief stall early in the page's colour fade.
+  // The timer inside the frame callback is what guarantees the page has
+  // painted first. A second click before then replaces the first.
+  var syncTicket = ++embedSyncTicket;
+  requestAnimationFrame(function(){ setTimeout(function(){
+    if (syncTicket === embedSyncTicket) syncEmbedTheme();
+  }, 0); });
   setEmbedPoster();
   rethemeClips(slug);
   if (typeof maskEmbed === 'function') maskEmbed();
