@@ -15,7 +15,7 @@ import { guardDownload } from './download-guard';
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow, ContextCannotFitError } from '../providers/context-overflow';
-import { capResultToRoom } from './tool-result-room';
+import { capResultAndSave } from './tool-result-room';
 import { imageTooLarge, manyImageEdgeLimit } from '../providers/image-too-large';
 import { classifyFailure, abortableDelay, retryWaitMs, logTurnFailure, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
 import { truncationRecovery, CONTINUE_TURN_TEXT } from './truncation-recovery';
@@ -2034,14 +2034,14 @@ export class HarnessSession extends EventEmitter {
 
   /** Cut a tool result to the room the next request has left (tool-result-room.ts). `gathered` is the
    *  results already collected for this step, which are not in history yet. */
-  private capToolText(toolName: string, text: string, gathered: any[]): string {
+  private capToolText(toolName: string, text: string, gathered: any[]): Promise<string> {
     const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
       maxTokens: this.maxOutputTokens });
     const used = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
       revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens
       + (gathered.length ? messageTokens({ role: 'tool', content: gathered } as ModelMessage) : 0);
-    return capResultToRoom(text, plan.trigger - used, FIT_MORE_HINT[toolName]);
+    return capResultAndSave(this.opts.sessionId, toolName, text, plan.trigger - used, FIT_MORE_HINT[toolName]);
   }
 
   /** Ask for a summary; a junk answer (empty, tool-call markup, implausibly short — isJunkSummary) is
@@ -3301,7 +3301,7 @@ export class HarnessSession extends EventEmitter {
           // the same (cut) text, and the call/result pairing is untouched (same part, shorter text).
           // Room = what the next request can still hold below the compaction trigger, counting the
           // results already gathered for this step. A big window never bites in practice.
-          const delivered = this.resolveToolImages({ ...payload, text: this.capToolText(call.toolName, payload.text, resultParts) }, imageBudget, call.toolCallId);
+          const delivered = this.resolveToolImages({ ...payload, text: await this.capToolText(call.toolName, payload.text, resultParts) }, imageBudget, call.toolCallId);
           // WHY: the tool-result event is also the visible persisted transcript,
           // so it carries exactly the (possibly room-capped) text the model got —
           // never a second, different trim here.
