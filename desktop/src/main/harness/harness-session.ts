@@ -367,10 +367,9 @@ export interface HarnessSessionOpts {
 // parallel_tool_calls:false; cloud factories ignore it. `cacheKey` is this
 // session's id: the ChatGPT-plan factory sends it as the endpoint's
 // prompt_cache_key so every step of one session shares a cached prefix
-// (chatgpt backend design §4.2); every other factory ignores it.
+// (chatgpt backend design §4.2); every other factory ignores it. `helper`: a helper agent — the local engine never gives it a chat's slot (slot-pins.ts).
 export type ModelFactory = (
   binding: ModelBinding,
-  // `helper`: this session is a helper agent, so the local engine never gives it a chat's slot (slot-pins.ts).
   opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string; helper?: boolean },
 ) => Promise<LanguageModel>;
 
