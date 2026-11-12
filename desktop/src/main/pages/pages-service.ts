@@ -450,7 +450,7 @@ class PagesService {
    * phone's own browser — it must open on the phone, not on this computer).
    */
   async openWebsite(id: string, url: string, remember: boolean, open: boolean): Promise<PageOpenResult> {
-    const decision = decidePageOpen(url, [], []);
+    const decision = decidePageOpen(url, [], [], false);
     const pageKey = await this.store.approvalKeyFor(id);
     if (decision.action === 'refuse' || !pageKey) {
       return { ok: false, message: pageKey ? 'The app does not open that kind of address.' : 'This page is no longer in your library.', pages: await this.listAndWatch() };

@@ -7,6 +7,9 @@
 //   - an approved public / key / YouCoded / GitHub connection whose address IS the
 //     link's host (the page can already send there, so opening adds nothing), or
 //   - a site the person told this page not to ask about again.
+// And only when the person just pressed something in the page (`pressed`): a page
+// could otherwise open tab after tab on a timer for a site it is allowed (2026-11-10
+// review, finding 4; Destin: "opening a tab will need a real click"). No press → ask.
 // Never silent for a whole-internet page (it "reaches" everything, but nobody chose
 // THIS address), a home device or a bank. A mailto: link always asks and has no
 // site to remember. Anything that is not http(s) or mailto is refused.
@@ -32,7 +35,7 @@ function siteOf(hostname: string): string {
   return hostname.trim().replace(/\.$/, '').toLowerCase();
 }
 
-export function decidePageOpen(raw: unknown, connections: readonly PageConnectionStatus[], openSites: readonly string[]): PageOpenDecision {
+export function decidePageOpen(raw: unknown, connections: readonly PageConnectionStatus[], openSites: readonly string[], pressed: boolean): PageOpenDecision {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_PAGE_OPEN_URL) return { action: 'refuse' };
   let url: URL;
   try { url = new URL(raw); } catch { return { action: 'refuse' }; }
@@ -43,5 +46,5 @@ export function decidePageOpen(raw: unknown, connections: readonly PageConnectio
   const site = siteOf(url.hostname);
   const known = openSites.includes(site) || connections.some((c) => c.approved && SILENT_KINDS.has(c.kind)
     && (c.kind === 'public' || c.kind === 'key' ? c.address === site : FIXED_HOST[c.kind] === site));
-  return { action: known ? 'open' : 'ask', url: url.toString(), site };
+  return { action: known && pressed ? 'open' : 'ask', url: url.toString(), site };
 }

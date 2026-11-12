@@ -145,7 +145,10 @@ export class PageVersions {
         await this.write(pageId, { label: nowLabel, at: stamp, files: now });
         await this.prune(pageId, [{ label: nowLabel, at: stamp, files: now }, ...all]);
       }
-      for (const f of VERSION_FILES) {
+      // WHY this order (2026-11-10 review, finding 5): page.html last. Its change is what reloads the open page, and
+      // by then the information and notes on disk are already the version's — the page never loads new code over
+      // old information.
+      for (const f of ['data.json', 'page.json', 'page.md', 'page.html'] as const) {
         const file = path.join(pageDir, f);
         const want = target.files[f];
         // WHY never noteOwnWrite here: that hides a data save from the open page (so a page saving its own data

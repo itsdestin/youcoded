@@ -26,11 +26,18 @@ describe('opening a website for a page', () => {
   ];
   for (const [name, url, connections, sites, action] of cases) {
     it(`${action}s ${name}`, () => {
-      expect(decidePageOpen(url, connections, sites).action).toBe(action);
+      expect(decidePageOpen(url, connections, sites, true).action).toBe(action);
     });
   }
 
   it('offers no site to remember for an email', () => {
-    expect(decidePageOpen('mailto:a@example.com', [], [])).toMatchObject({ action: 'ask', site: null });
+    expect(decidePageOpen('mailto:a@example.com', [], [], true)).toMatchObject({ action: 'ask', site: null });
+  });
+
+  // 2026-11-10 review, finding 4: a page could open tab after tab on a timer for a site it is allowed.
+  it('asks, even for an allowed or remembered site, when the person did not just press something in the page', () => {
+    expect(decidePageOpen('https://hnrss.org/newest', [feed], [], false).action).toBe('ask');
+    expect(decidePageOpen('https://news.example.com/', [], ['news.example.com'], false).action).toBe('ask');
+    expect(decidePageOpen('javascript:alert(1)', [feed], [], false).action).toBe('refuse');
   });
 });

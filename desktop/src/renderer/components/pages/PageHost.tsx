@@ -40,13 +40,14 @@
 // it back with the page still open.
 // First-run refinement (2026-09-23): keep the quoted decision above for pages
 // that exist; with none, the frame carries the former Manage pages welcome card.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { isWorkbenchDocument, isWorkbenchMode, workbenchPageChat, workbenchScreenFrame } from '../../workbench-mode';
 import { ChatIcon } from '../Icons';
 import { PageChatPane } from './PageChatPane';
+import { createPageSaveQueue, type PageSaveQueue } from './page-save-queue';
 import { usePageAssistant } from './use-page-assistant';
 import { Button, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
@@ -274,7 +275,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   const requestOpenRef = useRef<(raw: unknown) => void>(() => {});
   requestOpenRef.current = (raw) => {
     if (!summary || !pageId) return;
-    const decision = decidePageOpen(raw, summary.connections ?? [], summary.openSites ?? []);
+    // WHY read here (same test as start-session below): the frame's own activation cannot be read, but a press
+    // inside it activates this window and leaves the frame focused. A timer in the page has neither.
+    const ua = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
+    const pressed = !!ua?.isActive && document.activeElement === frameRef.current;
+    const decision = decidePageOpen(raw, summary.connections ?? [], summary.openSites ?? [], pressed);
     if (decision.action === 'refuse') return;
     if (decision.action === 'open' && getCapabilities().openExternal) {
       void pagesBridge()?.openWebsite?.(pageId, decision.url, false, true).then((r) => publishPages(r.pages)).catch(() => {});
@@ -339,6 +344,25 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // (round 4 testing). Disk is stale until the save lands, so nothing is
   // posted in until then.
   const savingRef = useRef(false);
+  // Put back, as one step (2026-11-10 review, finding 5; Destin approved "it will happen as one step"):
+  //   before — what the page still has waiting to save is written, so the version kept as "what you had" is whole,
+  //            and from then on the old page's saves are refused;
+  //   after  — the page is loaded afresh from what was put back, whichever of its files changed.
+  // Without this the page's half-second-late save landed on top of the version just put back.
+  const saveQueueRef = useRef<PageSaveQueue | null>(null);
+  const putBackRunningRef = useRef(false);
+  const [reloadTick, setReloadTick] = useState(0);
+  const beforePutBack = useCallback(async () => {
+    putBackRunningRef.current = true;
+    const q = saveQueueRef.current;
+    q?.hold();
+    await q?.flushNow().catch(() => { /* a failed save must not block Put back */ });
+  }, []);
+  const afterPutBack = useCallback((changed: boolean) => {
+    putBackRunningRef.current = false;
+    saveQueueRef.current?.release();
+    if (changed) setReloadTick((n) => n + 1);
+  }, []);
   // Read by the frame's message handler without re-registering it (which would
   // flush a pending save): the page document the gate also reads, and App's
   // latest start-session callback.
@@ -390,7 +414,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       if (!cancelled) setLoad({ state: 'failed', failure: { kind: 'unreadable', message: 'The page could not be read.' } });
     });
     return () => { cancelled = true; };
-  }, [open, pageId, htmlStamp, connSig]);
+  }, [open, pageId, htmlStamp, connSig, reloadTick]);
 
   // Everything the page says to the host. Only THIS frame is heard: every
   // sandboxed frame in the app has origin 'null' (HtmlView's artifact previews
@@ -404,18 +428,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   //             and only the four known fields are passed on.
   useEffect(() => {
     if (load.state !== 'ready' || pageId === null) return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let pending: unknown = undefined;
-    const flush = () => {
-      timer = null;
-      if (pending === undefined) return;
-      const data = pending; pending = undefined;
-      const write = pagesBridge()?.setData(pageId, data);
-      if (!write) { savingRef.current = false; return; }
-      // A newer save arriving while this one is written keeps the flag up.
-      write.then(() => { if (timer === null && pending === undefined) savingRef.current = false; },
-        () => { if (timer === null && pending === undefined) savingRef.current = false; });
-    };
+    // The grouping of saves, and Put back's hold on them: page-save-queue.ts.
+    const saves = createPageSaveQueue({
+      write: (data) => pagesBridge()?.setData(pageId, data),
+      setSaving: (saving) => { savingRef.current = saving; },
+    });
+    // WHY carried over: a Put back that is still running when this handler is rebuilt must keep refusing saves.
+    if (putBackRunningRef.current) saves.hold();
+    saveQueueRef.current = saves;
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow) return;
       const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown; as?: unknown; socket?: unknown; request?: unknown; top?: unknown; bottom?: unknown } | null;
@@ -616,13 +636,13 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       let json = '';
       try { json = JSON.stringify(d.data ?? null); } catch { return; }
       if (json.length > MAX_PAGE_DATA_BYTES) return; // main refuses it too; no point posting
+      // Put back is running: this save comes from the page being replaced, and is dropped (the queue refuses it too).
+      if (putBackRunningRef.current) return;
       frameDataRef.current = json;
-      savingRef.current = true;
-      pending = d.data ?? null;
-      if (timer === null) timer = setTimeout(flush, 500);
+      saves.push(d.data ?? null);
     };
     window.addEventListener('message', onMessage);
-    return () => { window.removeEventListener('message', onMessage); if (timer !== null) { clearTimeout(timer); flush(); } };
+    return () => { window.removeEventListener('message', onMessage); saves.dispose(); if (saveQueueRef.current === saves) saveQueueRef.current = null; };
   }, [load.state, pageId, dismissTop]);
 
   // A page's data can change under it — the same page open in another window,
@@ -944,6 +964,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               chats={assistant.chats} onListChats={assistant.refreshChats} onOpenChat={assistant.openChat}
               onNewChat={assistant.startNew} onRetry={assistant.open}
               onHide={() => setChatOpen(false)}
+              beforePutBack={beforePutBack} afterPutBack={afterPutBack}
               className={`screen-pane screen-pane--panel page-chat-floating absolute right-3 bottom-3 z-10 rounded-xl bg-canvas${seeThrough ? ' panel-glass' : ''}`}
               style={narrow ? { left: 12, height: '62%' } : { width: PAGE_CHAT_FLOAT_WIDTH, height: 'min(75%, 560px)' }} />
           )}

@@ -37,6 +37,10 @@ interface PageChatPaneProps {
   onRetry: () => void;
   /** Hides the pane; the chat keeps its place and carries on (Destin: an X "reads as end chat permanently"). */
   onHide: () => void;
+  /** Put back as one step (PageHost): the open page's waiting save is written and its saves stop before the
+   *  version's files are written; afterwards the page is loaded afresh when something was put back. */
+  beforePutBack?: () => Promise<void>;
+  afterPutBack?: (changed: boolean) => void;
   className?: string;
   /** Size and place, from the host. */
   style?: React.CSSProperties;
@@ -44,7 +48,7 @@ interface PageChatPaneProps {
 
 type Popover = 'chats' | 'versions' | null;
 
-export function PageChatPane({ page, sessionId, sessionName, status, error, chats, onListChats, onOpenChat, onNewChat, onRetry, onHide, className = '', style }: PageChatPaneProps) {
+export function PageChatPane({ page, sessionId, sessionName, status, error, chats, onListChats, onOpenChat, onNewChat, onRetry, onHide, beforePutBack, afterPutBack, className = '', style }: PageChatPaneProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [popover, setPopover] = useState<Popover>(() => (workbenchPageVersionsOpen() ? 'versions' : null));
@@ -102,7 +106,7 @@ export function PageChatPane({ page, sessionId, sessionName, status, error, chat
             </Button>
           </Tooltip>
         </div>
-        {popover === 'versions' && <PageVersionsList page={page} onClose={closePopover} />}
+        {popover === 'versions' && <PageVersionsList page={page} onClose={closePopover} beforePutBack={beforePutBack} afterPutBack={afterPutBack} />}
         {popover === 'chats' && (
           <PageChatsList page={page} chats={chats} current={sessionId}
             onPick={(c) => { setPopover(null); onOpenChat(c); }} onClose={closePopover} />
@@ -164,7 +168,7 @@ function pagesBridge(): PagesBridge | undefined {
  *  (Destin, Undo round K-which: "it should just work like any other typical version history menu and let me resume
  *  from any of the checkpoints"): putting one back first saves what is there, so the page you had stays in the list.
  *  Versions that equal the page as it is now are left out: putting one back would change nothing. */
-function PageVersionsList({ page, onClose }: { page: PageSummary; onClose: () => void }) {
+function PageVersionsList({ page, onClose, beforePutBack, afterPutBack }: { page: PageSummary; onClose: () => void; beforePutBack?: () => Promise<void>; afterPutBack?: (changed: boolean) => void }) {
   // WHY on the app's Escape stack: it sits over the chat, so one Esc closes the list and leaves the chat open
   // (shoot's Escape check caught the list and the whole page closing together).
   useEscClose(true, onClose);
@@ -179,7 +183,10 @@ function PageVersionsList({ page, onClose }: { page: PageSummary; onClose: () =>
   useEffect(() => { void load(); }, [load]);
   const putBack = async (at: number) => {
     setBusy(at);
+    await beforePutBack?.();
     const r = await pagesBridge()?.restoreVersion?.(page.id, at).catch((e: unknown) => ({ ok: false as const, message: e instanceof Error ? e.message : String(e) }));
+    // WHY always called, even on failure: it lets the page save again.
+    afterPutBack?.(!!r?.ok);
     setBusy(null);
     if (!r) setState({ kind: 'failed', message: 'Versions are not available here.' });
     else setState(r.ok ? { kind: 'ready', versions: r.versions } : { kind: 'failed', message: r.message });
