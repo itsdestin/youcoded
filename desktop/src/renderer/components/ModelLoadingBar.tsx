@@ -5,6 +5,7 @@ import BrailleSpinner from './BrailleSpinner';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import { useSecondsTick } from '../hooks/useSecondsTick';
+import { formatGbNumber } from '../../shared/format-bytes';
 
 // Centered status strip that floats just ABOVE the input area for a NATIVE
 // (local-model) session. States (2026-07-14 memory-lifecycle UX):
@@ -45,7 +46,7 @@ function friendlyName(modelId: string): string {
 }
 
 function gbNum(bytes: number | null | undefined): string {
-  return ((bytes ?? 0) / 1024 ** 3).toFixed(1);
+  return formatGbNumber(bytes ?? 0); // 1000-based like Hugging Face (card #143)
 }
 
 // Fraction of the file that must be resident before we consider the RAM read

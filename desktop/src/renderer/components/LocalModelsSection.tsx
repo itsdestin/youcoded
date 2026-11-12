@@ -28,18 +28,20 @@ import { useScreenOpen } from '../shoot-mode';
 import { useGemmaTermsGate } from './GemmaTermsConfirm';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
+import { formatGb, formatGbNumber } from '../../shared/format-bytes';
 
 // quants() decorates every option with a GPU-aware fit label.
 type QuantWithFit = QuantOption & { fit: FitEstimate };
 
-// Bytes → GB with one decimal (binary GiB, consistent with EngineCard's MB).
+// Bytes → GB with one decimal. WHY 1000-based (card #143, Destin 2026-11-12): the same number Hugging Face shows
+// (it was binary GiB, so a model read 74.2 GB here and 79.7 GB on its page). Shared with EngineCard.
 function gb(bytes: number): string {
-  return `${(bytes / 1073741824).toFixed(1)} GB`;
+  return formatGb(bytes);
 }
 
 // The number alone, for "74.2 of 113.0 GB" — one unit at the end of the phrase.
 function gbNum(bytes: number): string {
-  return (bytes / 1073741824).toFixed(1);
+  return formatGbNumber(bytes);
 }
 
 // Fit → a status color. These are theme-independent status colors (the app's

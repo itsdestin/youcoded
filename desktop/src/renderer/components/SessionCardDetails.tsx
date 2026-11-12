@@ -11,6 +11,7 @@ import { TagChip, TagStack } from './tags/TagChip';
 import { ModelIcon } from './model/ModelPicker';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
+import { formatBytes } from '../../shared/format-bytes';
 
 export function formatRelativeTime(epochMs: number): string {
   const diff = Date.now() - epochMs;
@@ -41,10 +42,7 @@ export function SessionCardTitle({ title }: { title: string }) {
 }
 
 function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  const kb = Math.round(bytes / 1024);
-  if (kb < 1024) return `${kb}KB`;
-  return `${(kb / 1024).toFixed(1)}MB`;
+  return formatBytes(bytes, { kbDecimals: 0, compact: true }); // 1000-based (card #143, Destin 2026-11-12)
 }
 
 // Claude Code model ids carry a release date — `claude-sonnet-4-5-20250929`.

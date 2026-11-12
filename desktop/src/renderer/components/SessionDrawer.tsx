@@ -56,6 +56,7 @@ import './ui/Dialog.css';
 import { ScreenMark, useScreenOpen } from '../shoot-mode';
 import { officeHeaderAction, useOfficeEditScreen } from './office/use-office-edit-screen';
 import { PanelIcon as Ic, PanelIconButton as IconBtn } from './panel-icon-button';
+import { formatBytes } from '../../shared/format-bytes';
 
 // 'type' removed 2026-07-23 — the Type FILTER supersedes sorting by type.
 type SortKey = 'recent' | 'name';
@@ -1598,8 +1599,6 @@ function extOf(fileName: string): string {
 // 8.4 MB. Measuring the string would state the wrong size with total confidence.
 function formatSize(content: string, sizeBytes?: number): string {
   const bytes = sizeBytes ?? new Blob([content]).size;
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return formatBytes(bytes); // 1000-based (card #143, Destin 2026-11-12)
 }
 

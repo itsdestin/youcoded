@@ -1,9 +1,10 @@
 import { getCapabilities } from '../../platform';
 import { Button } from '../ui';
 import { EDIT_MAX_BYTES, FULL_READ_MAX_BYTES } from '../../../shared/artifacts/editable-path-policy';
+import { MB } from '../../../shared/format-bytes';
 
 function mb(bytes: number): string {
-  return (bytes / (1024 * 1024)).toFixed(1);
+  return (bytes / MB).toFixed(1); // 1000-based like every other size in the app (card #143, Destin 2026-11-12)
 }
 
 /**

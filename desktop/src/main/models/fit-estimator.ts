@@ -30,6 +30,7 @@ import { execFileSync } from 'child_process';
 import type { GgufHeader } from './gguf-header';
 import type { EngineModelState } from '../../shared/engine-types';
 import type { FitEstimate } from '../../shared/model-manager-types';
+import { formatGbNumber } from '../../shared/format-bytes';
 
 const GB = 1024 ** 3;
 const MIB = 1024 ** 2;
@@ -556,7 +557,7 @@ export function checkMemoryForLoad(input: MemoryCheckInputs): MemoryVerdict {
   const vision = input.visionBytes ?? 0;
   const need = input.modelBytes + vision + input.kvBytes + WORKING_HEADROOM_BYTES;
   const fit = estimateFit(input);
-  const g = (n: number) => (n / GB).toFixed(1);
+  const g = (n: number) => formatGbNumber(n); // shown sizes are 1000-based like Hugging Face (card #143); the memory MATH above still uses GiB
   const ctxK = Math.round(input.contextLength / 1024);
   // R28: model + its context memory + what is already loaded, on ONE line. The
   // vision file only appears for a model that has one, so a text-only model's
@@ -610,7 +611,7 @@ export function checkMemoryForLoad(input: MemoryCheckInputs): MemoryVerdict {
 export function checkDiskSpace(downloadBytes: number, freeBytes: number, alreadyOnDiskBytes = 0): string | null {
   const needBytes = Math.max(0, downloadBytes - alreadyOnDiskBytes);
   if (freeBytes >= needBytes * 1.05) return null;
-  const needGb = (needBytes / GB).toFixed(1);
-  const freeGb = (freeBytes / GB).toFixed(1);
+  const needGb = formatGbNumber(needBytes);
+  const freeGb = formatGbNumber(freeBytes);
   return `Not enough free space: this download needs about ${needGb} GB but only ${freeGb} GB is free.`;
 }
