@@ -93,11 +93,9 @@ function TerminalView({ sessionId, visible }: Props) {
   // mount effect (with the shared retry-cap counter).
   const attachWebglRef = useRef<((mayTakeHiddenLayer: boolean) => boolean) | null>(null);
   // WHY (card 106): the window's WebGL layers stay within the browser's limit of 16 —
-  // see terminal-webgl.ts. The visibility layout effect calls showWebgl; releaseLayer
-  // is what the pool calls to take this terminal's layer back. Both live in the mount
-  // effect so they share its retry counter.
+  // see terminal-webgl.ts. The visibility layout effect calls showWebgl, which lives in the
+  // mount effect so it shares the retry counter there.
   const showWebglRef = useRef<(() => boolean) | null>(null);
-  const releaseLayerRef = useRef<(() => void) | null>(null);
   // Set by the visibility layout effect: did THIS show build a brand-new WebGL layer?
   // The glyph-atlas heal below skips a show that did (see the WHY there).
   const freshLayerOnShowRef = useRef(false);
@@ -362,7 +360,6 @@ function TerminalView({ sessionId, visible }: Props) {
       if (built) noteWebglShown(holder);
       return built;
     };
-    releaseLayerRef.current = releaseLayer;
 
     // Clipboard keys (Ctrl+C copy / Ctrl+V paste) — extracted to
     // terminal-key-handler.ts. The Ctrl+V branch preventDefaults the keydown
@@ -718,7 +715,6 @@ function TerminalView({ sessionId, visible }: Props) {
       // the disposed terminal between unmount and remount.
       attachWebglRef.current = null;
       showWebglRef.current = null;
-      releaseLayerRef.current = null;
       // The layer's context is taken now; the layer itself goes with the terminal below.
       const closingGl = webglRef.current ? webglContextOf(webglRef.current) : null;
       webglRef.current = null;   // first, so a late loss event for this layer is ignored

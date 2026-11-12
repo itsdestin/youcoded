@@ -264,11 +264,9 @@ describe('glyph-atlas heal', () => {
   });
 
   describe('TerminalView glyph-atlas heal — visibility', () => {
-    // A show that builds a brand-new WebGL layer skips the heal (fresh context, fresh texture —
-    // pinned in 'the WebGL layer pool' below). These run with WebGL unavailable, so no show here
-    // builds one: the heal path on its own, as on a terminal kept on DOM drawing.
-    beforeEach(() => { webglUnavailable = true; });
-
+    // The common case: each terminal here keeps the WebGL layer it built at mount (16 chats or
+    // fewer). A show that builds a brand-new layer skips the heal — pinned in 'the WebGL layer
+    // pool' below.
     it('clears the texture atlas when the terminal becomes visible', () => {
       const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
       expect(clearTextureAtlasSpy).not.toHaveBeenCalled();
@@ -311,6 +309,15 @@ describe('glyph-atlas heal', () => {
       rerender(<TerminalView sessionId="s1" visible={false} />);
       rerender(<TerminalView sessionId="s1" visible={true} />);
       expect(clearTextureAtlasSpy.mock.calls.length).toBeGreaterThan(afterFirst);
+    });
+
+    // A machine with no WebGL draws every terminal with DOM; the heal is then only a repaint,
+    // and it still runs on every return (xterm's clearTextureAtlas skips the atlas itself).
+    it('on a machine without WebGL, a terminal shown again still heals', () => {
+      webglUnavailable = true;
+      const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
+      rerender(<TerminalView sessionId="s1" visible={true} />);
+      expect(clearTextureAtlasSpy).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -356,10 +363,6 @@ describe('glyph-atlas heal', () => {
   // the counter moves without a clear, it over-reports. Both sites are pinned to move
   // in lockstep with the clearTextureAtlas spy.
   describe('TerminalView glyph-atlas heal — rig counter', () => {
-    // A visibility heal is skipped on a show that built a fresh WebGL layer (see the
-    // visibility section above), so these run with no layer ever built.
-    beforeEach(() => { webglUnavailable = true; });
-
     it('counts every visibility heal, one for one with clearTextureAtlas', () => {
       const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
       const clears0 = getAtlasClears();
