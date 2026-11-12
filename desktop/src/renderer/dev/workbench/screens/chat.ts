@@ -23,9 +23,15 @@ export const CHAT: readonly ScreenEntry[] = [
   // on a narrow computer window and on a phone browser (where the Remote chip leads the row).
   { ...chat('chat#narrow-pills-compact', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowPills: 'compact' }, newIn: 'after' as const },
   { ...chat('chat#phone-pills-compact', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', narrowPills: 'compact' }, newIn: 'after' as const },
+  // Branch review (2026-11-11): today's pill row on the same phone browser, so the compact row has a fair "before".
+  { ...chat('chat#phone-pills-today', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote' }, newIn: 'after' as const },
+  // Branch review (2026-11-11): the whole decided layout in a narrow COMPUTER window (width decides, so it gets it too),
+  // to see the lights bar beside the window's own buttons, which the phone pictures never had.
+  { ...chat('chat#window-today', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: {}, newIn: 'after' as const },
+  { ...chat('chat#window-decided', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'lights', narrowPills: 'compact' }, newIn: 'after' as const },
   // Phone layout round (2026-11-05): the three proposed phone top bars, and the
   // session list in each proposed shape (youcoded-dev docs/active/design/2026-11-04-narrow-screens/).
-  { ...chat('chat#top-today', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { platform: 'android' }, newIn: 'after' as const },
+  { ...chat('chat#top-today', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { platform: 'android' }, newIn: 'after' as const, sameAs: { name: 'chat#phone', why: "today's phone top bar, kept under its own name beside the proposed bars" } },
   { ...chat('chat#top-name', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'name' , platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat#top-drawer', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'drawer' , platform: 'android' }, newIn: 'after' as const },
   { ...chat('chat#top-pair', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { narrowTop: 'pair' , platform: 'android' }, newIn: 'after' as const },
