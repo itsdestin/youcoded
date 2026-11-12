@@ -1515,7 +1515,7 @@ export class HarnessSession extends EventEmitter {
     // allowlist decides what the model is TOLD about, and a request for anything
     // outside it can't arrive because it was never advertised.
     return allow
-      ? { list: () => catalog.list().filter((s) => allow.includes(s.id)), load: (id) => catalog.load(id) }
+      ? { list: () => catalog.list().filter((s) => allow.includes(s.id)), load: (id) => catalog.load(id), scopeOf: catalog.scopeOf ? (id) => catalog.scopeOf?.(id) : undefined }
       : catalog;
   }
 
@@ -1530,7 +1530,7 @@ export class HarnessSession extends EventEmitter {
    *  and reading either without it would report the pre-sync state on a session
    *  that has not taken a turn yet. It is the same call every turn makes, and the
    *  syncs are idempotent. */
-  contextInventory(): { toolNames: string[]; droppedMcpServers: string[]; skills: Array<{ id: string; description: string }>; skillsOffered: boolean; promptParts: Array<{ id: string; label: string; text: string }>; systemPrompt: string; presetName: string; injectionBudgetTokens: number } {
+  contextInventory(): { toolNames: string[]; droppedMcpServers: string[]; skills: Array<{ id: string; description: string; scope?: 'global' | 'project' }>; skillsOffered: boolean; promptParts: Array<{ id: string; label: string; text: string }>; systemPrompt: string; presetName: string; injectionBudgetTokens: number } {
     this.buildAiTools();
     return {
       promptParts: this.opts.promptParts ?? [],
@@ -1539,7 +1539,7 @@ export class HarnessSession extends EventEmitter {
       injectionBudgetTokens: this.profile.injectionBudgetTokens,
       toolNames: [...this.toolByName.keys()],
       droppedMcpServers: [...this._droppedMcpServers],
-      skills: this.scopedSkillCatalog().list(),
+      skills: ((c) => c.list().map((sk) => ({ ...sk, scope: c.scopeOf?.(sk.id) })))(this.scopedSkillCatalog()), // scope: the panel's Global/Project tabs sort on it (#251)
       // The whole point of the panel on a small model: below the catalog
       // threshold the Skill tool is never attached, so the model is never told a
       // single skill exists. The user can still run one with /name — which is
