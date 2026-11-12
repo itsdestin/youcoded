@@ -450,6 +450,18 @@ footer{padding:0 0 46px}
    wallpaper themes). Radius stays for the border + shadow shape; the matching
    content rounding is injected INSIDE the iframe (see bootEmbed). */
 .frame.embed{overflow:visible;background:transparent}
+/* WHY the outline is drawn on top (Destin, 2026-11-11: "the corners of the
+   embedded demo seem to get cut off a bit"). The demo inside is a square-cornered
+   box and this frame cannot clip it (see HERO FADE: a clip smears the app's
+   blur), so on the curved part of each corner the app painted OVER the frame's
+   own hairline and the rounding mask then cut the app's square corner away --
+   leaving an outline on the straight edges that simply stopped at every corner.
+   The real border keeps its width (layout is unchanged) but goes clear, and the
+   same hairline is drawn by this layer above the demo, so it follows the curve.
+   It is inside the mask, so it dissolves with the bottom of the window as before. */
+.frame.embed{border-color:transparent}
+.frame.embed::after{content:'';position:absolute;inset:-1px;border:1px solid var(--hair);
+  border-radius:inherit;pointer-events:none;z-index:7}
 .embed-stage{position:relative;aspect-ratio:16/10}
 .embed-poster,.embed-iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .embed-poster{object-fit:cover;border-radius:var(--radius)}
@@ -3082,8 +3094,9 @@ var DOCK_GAP = 34;
 // WHY: the bottom-edge anchor kept the demo blended after its top was leaving
 // the viewport. Start before the top reaches the viewport and finish the 180px
 // reveal while the complete window remains visible, without rebuilding its mask.
-var FADE_REVEAL_START = 240;
-var FADE_REVEAL_SPAN = 180;
+// FADE_REVEAL_END: the window's distance from the top of the screen at which the
+// dissolve is fully gone (unchanged: the old 240px start minus its 180px span).
+var FADE_REVEAL_END = 60;
 var demoRevealed = false, lastFz = null;
 // Below 820px the pill is not a floating object at all -- it sits in the flow
 // under the demo. The docked rule is `body.fade-d .dlfloat.docked`, which
@@ -3121,8 +3134,19 @@ function placeFloat(){
   // --- Heal the dissolve before the complete demo starts leaving the viewport.
   if (!demoRevealed && embed && maskRest < 1) {
     var er = embed.getBoundingClientRect();
-    var k = Math.max(0, Math.min(1, ((FADE_REVEAL_START - er.top) / FADE_REVEAL_SPAN)));
-    k = k * k * (3 - 2 * k);                                // ease in AND out
+    // WHY linear, from the window's resting spot (Destin, 2026-11-11: "a slightly
+    // odd/finicky acceleration ... compared to the actual scroll speed"). This
+    // used to ignore the first ~55px of scrolling, then run an ease-in-and-out
+    // curve over the next 180px -- measured, the dissolve's edge sat still, sped
+    // up to about 3.4px per pixel scrolled, then slowed again, so it visibly
+    // moved on its own clock. Now it starts with the first pixel of scroll and
+    // moves the same amount for every pixel (about 1.7px per pixel at 1600 wide),
+    // finishing at the same place as before. restTop is where the window sits
+    // with the page at the top; the 120px floor only matters on a window so
+    // short that the demo already starts near the top bar.
+    var restTop = er.top + scrollY;
+    var span = Math.max(120, restTop - FADE_REVEAL_END);
+    var k = Math.max(0, Math.min(1, (FADE_REVEAL_END + span - er.top) / span));
     var fz = maskRest + (1 - maskRest) * k;
     // Quantised only enough to skip sub-pixel writes. The old 0.012 step moved
     // the gradient's start by 8px at a time on a 672px window, which is what
