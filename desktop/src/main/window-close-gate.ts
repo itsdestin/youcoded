@@ -1,4 +1,4 @@
-// What happens when a window's X is pressed (its `close` event), in order: the last window's
+// What happens when a window's X is pressed (its `close` event), in order: a window's own
 // unsaved files are listed instead of closing (unsaved-quit.ts), then a window that still owns chat
 // sessions asks the person (the in-app "close these sessions?" prompt), then the window goes.
 //
@@ -34,8 +34,8 @@ export interface CloseGateDeps<Answer> {
   buddy: boolean;
   /** Whole-app quit already saved and settled everything; the window just goes. */
   shuttingDown(): boolean;
-  /** The LAST window has unsaved edits (a text editor, a parked draft, an Office document): it was
-   *  just shown their list instead of closing (fix round 11). */
+  /** This window has unsaved edits (a text editor, a parked draft, an Office document): it was just
+   *  shown their list instead of closing (fix round 11; every window since card #34). */
   refuseForUnsaved?(): boolean;
   /** Office (Task 8 fix round 1): this window's editors send their newest edits to the recovery
    *  journal before it closes. null when it has no Office documents; capped by the caller. */
@@ -91,11 +91,10 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
         return;
       }
       lastCloseAt = t;
-      // Unsaved edits in the last window: say so before anything else (fix round 11).
-      // WHY only the last window: closing it ends the app, and a parked draft (no editor on
-      // screen, so no unload veto) would go with it unasked. Another window's text editor still
-      // vetoes that window's unload; its Office documents start their save as it closes (below,
-      // syncJournals) and are in their recovery journals should that save not land.
+      // Unsaved edits in this window: say so before anything else (fix round 11).
+      // WHY every window (card #34, Destin's wave-2 deck Q-5): it used to be only the last one, so a second window
+      // closed at once and a parked draft (no editor on screen, so no unload veto) went with it unasked. Asking
+      // here also keeps the chats running: nothing is ended until the window has really closed (onClosed).
       if (d.refuseForUnsaved?.()) {
         ev.preventDefault();
         // Even on the close re-issued after the sessions prompt: that answer must not be carried

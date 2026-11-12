@@ -1,4 +1,4 @@
-// A window's X: the last window's unsaved files first, then the sessions prompt, then the window
+// A window's X: the window's own unsaved files first, then the sessions prompt, then the window
 // goes. The sessions answer is carried out only on the close that goes through; a close the page
 // vetoed asks again; a hung window can be closed anyway. (Task 8 removed the Office save step.)
 import { describe, expect, it, vi } from 'vitest';
@@ -90,7 +90,7 @@ describe('the window close gate', () => {
     expect(deps.close).toHaveBeenCalledTimes(1);
   });
 
-  it("the last window's unsaved files are asked about before anything else", async () => {
+  it("the window's unsaved files are asked about before anything else", async () => {
     const { g, deps, state, ev } = gate();
     state.refuse = true;
     const e = ev();

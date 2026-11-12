@@ -929,7 +929,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     // about to tear down every session anyway — a close event reaching here
     // once shuttingDown is set must ask nothing and let the window close.
     shuttingDown: () => !!shuttingDown,
-    refuseForUnsaved: () => refuseCloseForUnsaved(win, (w) => !!buddyManagerRef?.isBuddyWindow(w as never)),
+    refuseForUnsaved: () => refuseCloseForUnsaved(win),
     syncJournals: () => (getOfficeSessions()?.hasFor(win.webContents.id) ? syncJournals(win.webContents) : null), // Office edits to the recovery journal first (≤1.5 s, Task 8 fix round 1)
     sessionIds: () => windowRegistry.sessionsForWindow(wid),
     ask: async (count) => {

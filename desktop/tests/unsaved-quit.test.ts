@@ -80,18 +80,17 @@ describe('quitting while a file has unsaved changes', () => {
     t.sender.emit('destroyed');
   });
 
-  it("the last window's close is refused while it has unsaved changes; Discard closes it; another window's is not", () => {
+  it("a window's close is refused while it has unsaved changes, last window or not (card #34); Discard closes it", () => {
     const t = editing(27);
     t.report(['notes.md']);
-    const other = editing(28);
-    const floater = editing(29);
-    const isFloater = (w: unknown) => w === floater.win;
-    expect(refuseCloseForUnsaved(t.win, isFloater, { ipc: t.ipc as never, windows: [t.win, other.win, floater.win], hung: notHung })).toBe(false);
-    expect(refuseCloseForUnsaved(t.win, isFloater, { ipc: t.ipc as never, windows: [t.win, floater.win], hung: notHung })).toBe(true);
+    const other = editing(28); // a second window is open: this one used to close without asking
+    expect(refuseCloseForUnsaved(t.win, { ipc: t.ipc as never, hung: notHung })).toBe(true);
     expect(t.pushes).toEqual([{ mode: 'close', afterTeardown: false, restartDropped: false }]);
     t.ipc.emit(OFFICE_PROCEED, { sender: { id: 27 } }); // Discard and close
     expect(t.win.close).toHaveBeenCalledTimes(1);
-    [t, other, floater].forEach((x) => x.sender.emit('destroyed'));
+    // …and a window with nothing unsaved closes freely.
+    expect(refuseCloseForUnsaved(other.win, { ipc: other.ipc as never, hung: notHung })).toBe(false);
+    [t, other].forEach((x) => x.sender.emit('destroyed'));
   });
 
   it('a dismissed refusal is forgotten: a later proceed does not quit', () => {
@@ -105,12 +104,12 @@ describe('quitting while a file has unsaved changes', () => {
     t.sender.emit('destroyed');
   });
 
-  it('a hung last window is not asked about its changes (the hang question must be reachable)', () => {
+  it('a hung window is not asked about its changes (the hang question must be reachable)', () => {
     const t = editing(30);
     t.report(true);
-    expect(refuseCloseForUnsaved(t.win, () => false, { ipc: t.ipc as never, windows: [t.win], hung: () => true })).toBe(false);
+    expect(refuseCloseForUnsaved(t.win, { ipc: t.ipc as never, hung: () => true })).toBe(false);
     expect(t.pushes).toEqual([]);
-    expect(refuseCloseForUnsaved(t.win, () => false, { ipc: t.ipc as never, windows: [t.win], hung: notHung })).toBe(true);
+    expect(refuseCloseForUnsaved(t.win, { ipc: t.ipc as never, hung: notHung })).toBe(true);
     t.sender.emit('destroyed');
   });
 
