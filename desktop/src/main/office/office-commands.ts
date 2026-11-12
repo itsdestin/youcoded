@@ -328,7 +328,9 @@ const hashFile = async (file: string) => createHash('sha256').update(await fsp.r
 export function createOfficeCommands(deps: {
   root: string;
   sessions: ReturnType<typeof createSessions>;
-  onSaved?(s: OfficeSession, beforeBytes: Buffer | null): Promise<void>;
+  /** `changedOutside`: the file on disk was not what this editor last saw or wrote, so the bytes about to be
+   *  overwritten are someone else's work and must be kept no matter how recently a version was kept (card #34). */
+  onSaved?(s: OfficeSession, beforeBytes: Buffer | null, changedOutside?: boolean): Promise<void>;
   onOpened?(s: OfficeSession): Promise<void>;
   /** Whether onSaved will keep a version this time; the file as it was is read only then. */
   wantsBefore?(s: OfficeSession): boolean;
@@ -370,6 +372,9 @@ export function createOfficeCommands(deps: {
       throw e;
     });
     if (info.size > OFFICE_MAX_BYTES) throw userError(MSG.tooLarge);
+    // WHY taken BEFORE the file is read (card #34): a change landing while it is read then shows up as "changed
+    // outside" at the next save, which only ever costs one extra kept copy.
+    s.knownStamp = { size: info.size, mtimeMs: info.mtimeMs };
     // WHY check readability here: x2t reports an unreadable file only as a bare exit code;
     // checking first gives a real EACCES, which the boundary turns into a permission message.
     await fsp.access(s.path, fsc.R_OK);
@@ -456,8 +461,12 @@ export function createOfficeCommands(deps: {
     await sweepStaleSaveDirs(dir, base);
     // WHY only when someone will use it: the previous bytes are for Task 7's version history;
     // reading up to 200 MB on every autosave for nobody would be pure waste.
+    // WHY (card #34, Destin's deck answer Q-6): when the assistant or another program changed this file while it was
+    // open here, this save writes over their work. Keep what is being overwritten as a version, always and without
+    // asking, whatever the usual one-copy-per-10-minutes pace says.
+    const changedOutside = !!orig && !!s.knownStamp && (orig.size !== s.knownStamp.size || orig.mtimeMs !== s.knownStamp.mtimeMs);
     let before: Buffer | null = null;
-    if (deps.onSaved && (deps.wantsBefore?.(s) ?? true)) {
+    if (deps.onSaved && (changedOutside || (deps.wantsBefore?.(s) ?? true))) {
       before = await fsp.readFile(s.path).catch((e: NodeJS.ErrnoException) => {
         if (e.code === 'ENOENT') return null;
         throw e;
@@ -492,6 +501,9 @@ export function createOfficeCommands(deps: {
       // WHY the abort check (fix round 2): on Windows a busy rename is retried for a moment;
       // if quit gives up on this save meanwhile, it must stop rather than land late.
       await renameReplacing(tmp, s.path, process.platform, () => isClosing(s));
+      // What we just wrote is what we know: the next save only counts a DIFFERENT file as an outside change.
+      const written = await fsp.stat(s.path).catch(() => null);
+      s.knownStamp = written ? { size: written.size, mtimeMs: written.mtimeMs } : undefined;
       // The file now holds every edit the translated Editor.bin did: nothing of them to recover.
       markRecoverySaved(s, binRev.get(s) ?? 0);
     } catch (e) {
@@ -507,7 +519,7 @@ export function createOfficeCommands(deps: {
       // WHY awaited inside the queue, before the reply (accepted cost): the kept copy of the
       // previous state must land before the next save replaces the file again. So a save on
       // which a version is due (at most one per 10 minutes) waits for one full copy write.
-      await deps.onSaved(s, before).catch((e) => log('WARN', 'Office', 'onSaved failed', { error: String(e) }));
+      await deps.onSaved(s, before, changedOutside).catch((e) => log('WARN', 'Office', 'onSaved failed', { error: String(e) }));
     }
     return 'ok';
   }

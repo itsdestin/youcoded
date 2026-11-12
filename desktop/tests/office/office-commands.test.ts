@@ -275,15 +275,17 @@ describe.skipIf(!HAS_ADDON)('office commands with the bundled x2t', () => {
     const before = await readFile(s.path);
     const onSaved = vi.fn(async () => {});
     const run = createOfficeCommands({ root: ROOT, sessions, onSaved });
-    const b64 = (await run(s.token, 'open_file', {})) as string;
+    // WHY the old date is set BEFORE the open (card #34): a file whose date changes after the open now counts as
+    // "changed outside", which has its own test below.
     const old = new Date('2020-01-01T00:00:00Z');
     await utimes(s.path, old, old);
+    const b64 = (await run(s.token, 'open_file', {})) as string;
     await run(s.token, 'write_editor_bin', { data: b64 });
     expect(await run(s.token, 'save_file', {})).toBe('ok');
     expect((await stat(s.path)).mtimeMs).not.toBe(old.getTime());
     expect(noteOwnWrite).toHaveBeenCalledWith(s.path);
     expect(await tmpsBeside(s.path)).toEqual([]);
-    expect(onSaved).toHaveBeenCalledWith(s, before);
+    expect(onSaved).toHaveBeenCalledWith(s, before, false);
     expect(typeof (await run(s.token, 'open_file', {}))).toBe('string');
   });
 
