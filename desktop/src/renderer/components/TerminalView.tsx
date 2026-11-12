@@ -91,8 +91,11 @@ function TerminalView({ sessionId, visible }: Props) {
   // WHY (card 106): the WebGL layer exists only while the terminal is shown — see
   // terminal-webgl.ts. The visibility layout effect calls these two; they live in
   // the mount effect so they share its retry counter.
-  const showWebglRef = useRef<(() => void) | null>(null);
+  const showWebglRef = useRef<(() => boolean) | null>(null);
   const hideWebglRef = useRef<(() => void) | null>(null);
+  // Set by the visibility layout effect: did THIS show build a brand-new WebGL layer?
+  // The glyph-atlas heal below skips a show that did (see the WHY there).
+  const freshLayerOnShowRef = useRef(false);
   // WHY: pauses this terminal's DRAWING (never its buffer) while hidden — see
   // xterm-render-pause.ts. Null when the installed xterm lacks the hook.
   const renderPauseRef = useRef<RenderPause | null>(null);
@@ -273,9 +276,10 @@ function TerminalView({ sessionId, visible }: Props) {
     const RETRY_RESET_MS = 30 * 60 * 1000;
     let webglContextLossRetries = 0;
     let lastContextLossAt = 0;
-    const attachWebgl = () => {
+    /** True when a new layer was built and loaded by this call. */
+    const attachWebgl = (): boolean => {
       const term = terminalRef.current ?? terminal;
-      if (!term || webglRef.current) return;   // one layer at a time
+      if (!term || webglRef.current) return false;   // one layer at a time
       try {
         const webgl = new WebglAddon();
         webgl.onContextLoss(() => {
@@ -303,8 +307,10 @@ function TerminalView({ sessionId, visible }: Props) {
         });
         term.loadAddon(webgl);
         webglRef.current = webgl;
+        return true;
       } catch {
         // Falls back to DOM renderer if WebGL unavailable
+        return false;
       }
     };
     // WHY only when shown (card 106): the browser allows a page 16 WebGL contexts and
@@ -319,8 +325,8 @@ function TerminalView({ sessionId, visible }: Props) {
     showWebglRef.current = () => {
       // After three losses in a row the terminal stays on DOM drawing (the rule
       // above); showing it again must not start a fourth attempt inside that window.
-      if (webglContextLossRetries >= 3 && Date.now() - lastContextLossAt <= RETRY_RESET_MS) return;
-      attachWebgl();
+      if (webglContextLossRetries >= 3 && Date.now() - lastContextLossAt <= RETRY_RESET_MS) return false;
+      return attachWebgl();
     };
     hideWebglRef.current = () => {
       const webgl = webglRef.current;
@@ -680,9 +686,16 @@ function TerminalView({ sessionId, visible }: Props) {
     // WHY the order (card 106): shown → build the WebGL layer BEFORE drawing resumes, so the one
     // repaint setHidden(false) queues is drawn by it, in this same frame; hidden → pause drawing
     // FIRST, so xterm's DOM fallback created by the release never draws while hidden.
-    if (visible) showWebglRef.current?.();
+    freshLayerOnShowRef.current = visible ? (showWebglRef.current?.() ?? false) : false;
     renderPauseRef.current?.setHidden(!visible);
-    if (!visible) hideWebglRef.current?.();
+    if (!visible) {
+      // WHY a microtask, not now: a chat switch hides one terminal and shows another in the same
+      // commit, in tree order. Every terminal's layer shares ONE rasterised glyph sheet, which is
+      // thrown away when its last user lets go. Releasing after this commit's layout effects lets
+      // the terminal being shown join the warm sheet first instead of re-drawing every letter
+      // shape from scratch. Re-checked: a terminal shown again before then keeps its layer.
+      queueMicrotask(() => { if (!visibleRef.current) hideWebglRef.current?.(); });
+    }
     // Shown again: write whatever the hidden-terminal allowance held back, so it is current at once.
     if (visible) {
       // SWITCH MARKS: how much the hidden backlog held, so the hitch recorder can report it, and a way to be told when xterm has
@@ -744,7 +757,12 @@ function TerminalView({ sessionId, visible }: Props) {
       // mount would wipe it for every already-open terminal — turning "open a
       // new session" into a re-rasterize for all of them. A brand-new
       // terminal has nothing to heal anyway.
-      if (wasVisible === false) {
+      // WHY not after a fresh layer (card 106): a terminal's WebGL layer is now built new
+      // each time it is shown, with a brand-new context and texture — the bad long-lived
+      // texture this heals cannot exist yet, and clearing would only make every glyph be
+      // drawn twice on the switch. A show
+      // that kept its old layer, or is on DOM drawing, still heals exactly as before.
+      if (wasVisible === false && !freshLayerOnShowRef.current) {
         terminalRef.current.clearTextureAtlas();
         // WHY: rig instrument; the heal costs every open terminal a
         // re-rasterize, so the rig counts clears per switch (terminal-registry).

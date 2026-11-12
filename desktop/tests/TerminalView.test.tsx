@@ -82,8 +82,11 @@ vi.mock('@xterm/addon-unicode11', () => ({
 // Every WebGL layer built, newest last, each with its own fake graphics context so a
 // test can see the context handed back (loseContext) when the layer is released.
 const webglInstances: any[] = [];
+// True = this machine has no WebGL: building a layer throws and the terminal stays on DOM drawing.
+let webglUnavailable = false;
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn(function (this: any) {
+    if (webglUnavailable) throw new Error('WebGL2 not supported');
     webglInstances.push(this);
     this.onContextLoss = vi.fn();
     this.dispose = vi.fn();
@@ -169,6 +172,7 @@ beforeEach(() => {
   termGrid = { rows: 24 };
   proposedDims = { cols: 80, rows: 24 };
   mockActiveTheme = null;
+  webglUnavailable = false;
   // WHY getPlatform (2026-11-10): the terminal asks device.ts phoneTerminalLayout(), which reads the device kind.
   vi.mocked(platform.getPlatform).mockReturnValue('electron');
 });
@@ -226,6 +230,19 @@ describe('glyph-atlas heal', () => {
   });
 
   describe('TerminalView glyph-atlas heal — visibility', () => {
+    // A show normally builds a brand-new WebGL layer (fresh context, fresh texture — nothing to
+    // heal; see the next test). The heal is for a show that did NOT: here WebGL cannot be built,
+    // the same path as a terminal kept on DOM drawing after repeated context losses.
+    beforeEach(() => { webglUnavailable = true; });
+
+    it('a show that built a fresh WebGL layer does not clear the shared atlas', () => {
+      webglUnavailable = false;
+      const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
+      rerender(<TerminalView sessionId="s1" visible={true} />);
+      expect(webglInstances.length).toBeGreaterThan(0);
+      expect(clearTextureAtlasSpy).not.toHaveBeenCalled();
+    });
+
     it('clears the texture atlas when the terminal becomes visible', () => {
       const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
       expect(clearTextureAtlasSpy).not.toHaveBeenCalled();
@@ -313,6 +330,10 @@ describe('glyph-atlas heal', () => {
   // the counter moves without a clear, it over-reports. Both sites are pinned to move
   // in lockstep with the clearTextureAtlas spy.
   describe('TerminalView glyph-atlas heal — rig counter', () => {
+    // A visibility heal happens only on a show that built no fresh WebGL layer (see the
+    // visibility section above), so these run on that path.
+    beforeEach(() => { webglUnavailable = true; });
+
     it('counts every visibility heal, one for one with clearTextureAtlas', () => {
       const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
       const clears0 = getAtlasClears();
@@ -1044,10 +1065,11 @@ describe('the WebGL layer follows visibility', () => {
     expect(terminalInstances.at(-1).loadAddon).toHaveBeenCalledWith(webglInstances[0]);
   });
 
-  it('hiding it disposes the layer and hands its context back; showing again builds a fresh one', () => {
+  it('hiding it disposes the layer and hands its context back; showing again builds a fresh one', async () => {
     const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
     const first = webglInstances[0];
     rerender(<TerminalView sessionId="s1" visible={false} />);
+    await Promise.resolve();   // the release runs right after the commit (see the switch test below)
     expect(first.dispose).toHaveBeenCalledTimes(1);
     expect(first.loseContext).toHaveBeenCalledTimes(1);
     rerender(<TerminalView sessionId="s1" visible={true} />);
@@ -1091,12 +1113,43 @@ describe('the WebGL layer follows visibility', () => {
     expect(webglInstances).toHaveLength(4);
   });
 
-  it('a loss event from a layer already released while hidden is ignored', () => {
+  it('a loss event from a layer already released while hidden is ignored', async () => {
     const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
     const first = webglInstances[0];
     rerender(<TerminalView sessionId="s1" visible={false} />);
+    await Promise.resolve();
     lossHandler(first)();
     expect(webglInstances).toHaveLength(1);       // nothing rebuilt for a hidden terminal
     expect(first.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  // A chat switch hides one terminal and shows another in one commit. All layers share one
+  // rasterised glyph sheet, dropped when its last user lets go — so the shown terminal must take
+  // its layer BEFORE the hidden one releases, or every letter shape is drawn again from scratch.
+  it('on a switch, the terminal being shown builds its layer before the hidden one releases', async () => {
+    const order: string[] = [];
+    const Pair = ({ active }: { active: 'a' | 'b' }) => (
+      <>
+        <TerminalView sessionId="a" visible={active === 'a'} />
+        <TerminalView sessionId="b" visible={active === 'b'} />
+      </>
+    );
+    const { rerender } = render(<Pair active="a" />);
+    const a = webglInstances[0];
+    a.dispose.mockImplementation(() => order.push('a released'));
+    const built = webglInstances.length;
+    rerender(<Pair active="b" />);
+    if (webglInstances.length > built) order.push('b built');
+    await Promise.resolve();
+    expect(order).toEqual(['b built', 'a released']);
+  });
+
+  it('a terminal shown again before the release keeps its layer (no rebuild)', async () => {
+    const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
+    rerender(<TerminalView sessionId="s1" visible={false} />);
+    rerender(<TerminalView sessionId="s1" visible={true} />);
+    await Promise.resolve();
+    expect(webglInstances).toHaveLength(1);
+    expect(webglInstances[0].dispose).not.toHaveBeenCalled();
   });
 });
