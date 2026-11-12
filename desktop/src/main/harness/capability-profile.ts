@@ -5,6 +5,7 @@ import { outputCapFor } from '../providers/output-cap';
 import { KNOWN_MODELS, matchKnownModel, type KnownModelEntry } from './known-models';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS } from './specialists/limits';
 import { UNKNOWN_CLOUD_WINDOW, UNKNOWN_LOCAL_WINDOW } from './compaction';
+import { DEFAULT_CONTEXT_SIZE } from '../engine/engine-config';
 // Type-only: the app-wide list of provider kinds, used below ONLY to check that
 // this file's own copy of that list has not fallen behind it.
 import type { ProviderType } from '../../shared/provider-types';
@@ -404,7 +405,13 @@ function localSlotCap(totalSlots: number | null | undefined): number {
 }
 
 function localFallback(ctx: number | null): BehavioralProfile {
-  const small = ctx == null || ctx <= SMALL_LOCAL_CONTEXT;
+  // WHY the engine's DEFAULT and not 32k (2026-11-12): this guess is for a model
+  // the app knows nothing about, and reads "the user never raised the context"
+  // as "treat it as a small model". When the default went 32k → 64k, comparing
+  // with 32k would have silently promoted every unknown model on defaults to
+  // the full prompt and tool set — a bigger opening for exactly the models
+  // that cope with it worst.
+  const small = ctx == null || ctx <= DEFAULT_CONTEXT_SIZE;
   return {
     maxToolPresentation: small ? 'simplified' : 'full',
     promptVariant: small ? 'local-small' : 'default',

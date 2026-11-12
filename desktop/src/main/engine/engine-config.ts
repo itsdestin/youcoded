@@ -33,10 +33,17 @@ export interface EngineConfig {
   models: Record<string, StoredModelSettings>;
 }
 
-// 32768 sits well above llama-server's 4096 default (the silent-truncation trap
-// ADR 007 calls out in Ollama) without allocating the monster KV cache a
-// 128k+ default would. User-tunable in Plan C's Local Models panel.
-export const DEFAULT_CONTEXT_SIZE = 32768;
+// WHY 65536 (2026-11-12, Destin, review deck Q-2 — it was 32768): every native
+// chat opens with 13-19k tokens of instructions and tool descriptions, so at
+// 32k about half the window was gone before the user typed, one large file
+// filled the rest, and summaries ran constantly (the five desktop faults of
+// 2026-11-08). 64k leaves real working room and still avoids the monster KV
+// cache a 128k+ default would allocate. It applies to every install that never
+// set its own value — an existing user's models use more memory after the
+// update; the Local models fit verdicts are computed from this same number, so
+// they show it. Choosing the size from each machine's hardware is a separate
+// follow-up. User-tunable in the Local Models panel, engine-wide and per model.
+export const DEFAULT_CONTEXT_SIZE = 65536;
 
 // Both speed features are ON by default (contract R4: "visible switches under
 // Advanced on the engine card, both on by default"). A machine that cannot use

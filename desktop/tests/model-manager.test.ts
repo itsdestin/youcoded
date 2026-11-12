@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { NativeHome } from '../src/main/native-home';
 import { EngineManager } from '../src/main/engine/engine-manager';
-import { updateEngineConfig } from '../src/main/engine/engine-config';
+import { updateEngineConfig, DEFAULT_CONTEXT_SIZE } from '../src/main/engine/engine-config';
 import { ENGINE_VERSION } from '../src/main/engine/engine-pin';
 import { ModelManager } from '../src/main/models/model-manager';
 import type { DownloadProgress } from '../src/shared/model-manager-types';
@@ -375,13 +375,13 @@ async function writeModelSettings(modelId: string, entry: unknown): Promise<void
 const dismissedAt = (contextLength: number) => ({ at: 1_757_000_000_000, contextLength });
 
 describe('ModelManager.memoryCheck — the remembered warning', () => {
-  it('a dismissal made at 32k silences the warning at 32k', async () => {
+  it('a dismissal made at the default context silences the warning at the default', async () => {
     plantModel('M-Q4_K_M');
     // Before: this machine really does warn about this model. Without this
     // line the test below would pass on a fixture that never warned at all.
     expect((await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M')).verdict).toBe('tight');
 
-    await writeModelSettings('M-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
+    await writeModelSettings('M-Q4_K_M', { memoryWarningDismissed: dismissedAt(DEFAULT_CONTEXT_SIZE) });
     const after = await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M');
     expect(after.verdict).toBe('ok');
     // A silenced warning draws nothing — the row is hidden, not emptied of text.
@@ -395,7 +395,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
     // for exactly the model that now needs four times the memory.
     plantModel('M-Q4_K_M');
     await writeModelSettings('M-Q4_K_M', {
-      contextLength: null, memoryWarningDismissed: dismissedAt(32768),
+      contextLength: null, memoryWarningDismissed: dismissedAt(DEFAULT_CONTEXT_SIZE),
     });
     expect((await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M')).verdict).toBe('ok');
 
@@ -426,7 +426,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
   it('a dismissal belongs to ONE model and does not answer for another', async () => {
     plantModel('A-Q4_K_M');
     plantModel('B-Q4_K_M');
-    await writeModelSettings('A-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
+    await writeModelSettings('A-Q4_K_M', { memoryWarningDismissed: dismissedAt(DEFAULT_CONTEXT_SIZE) });
     const mm = warnMachine(['A-Q4_K_M', 'B-Q4_K_M']);
     expect((await mm.memoryCheck('A-Q4_K_M')).verdict).toBe('ok');
     expect((await mm.memoryCheck('B-Q4_K_M')).verdict).toBe('tight');
@@ -438,7 +438,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
     // clamp does not rescue it either. RuntimeBinding refuses to create the
     // session on this verdict, so a dismissal must not be able to reach it.
     plantModel('H-Q4_K_M');
-    await writeModelSettings('H-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
+    await writeModelSettings('H-Q4_K_M', { memoryWarningDismissed: dismissedAt(DEFAULT_CONTEXT_SIZE) });
     const userData = path.join(root, 'userData');
     plantEngine(userData);
     const engine = new EngineManager(home, userData, 9999);
@@ -472,7 +472,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
     // The positive control: the SAME fixture with a well-formed record does go
     // quiet. Without it, every line above would pass on a dismissal path that
     // was wired to nothing at all.
-    await writeModelSettings('M-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
+    await writeModelSettings('M-Q4_K_M', { memoryWarningDismissed: dismissedAt(DEFAULT_CONTEXT_SIZE) });
     expect((await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M')).verdict).toBe('ok');
   });
 });

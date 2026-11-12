@@ -148,9 +148,13 @@ describe('capability profile — injection sizing (M3 item 5)', () => {
   });
 
   it('a mid local window gets the catalog but a tighter injection budget', () => {
-    const p = resolveProfile(local('some-35b', 64_000));
+    // WHY 80k, not 64k (2026-11-12): 64k became the engine's DEFAULT, and an unknown model left on the
+    // default is treated as small (capability-profile.ts localFallback). "Mid" now means a window the
+    // user raised above the default.
+    const p = resolveProfile(local('some-35b', 80_000));
     expect(p.exposeSkillCatalog).toBe(true);
     expect(p.injectionBudgetTokens).toBeLessThan(10_000);
+    expect(resolveProfile(local('some-35b', 65_536)).exposeSkillCatalog).toBe(false);   // on the default: small
   });
 
   it('an UNMEASURED local window is treated as small — never assume room', () => {
