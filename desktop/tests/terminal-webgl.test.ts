@@ -8,7 +8,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import {
-  releaseWebgl, claimWebglSlot, releaseWebglSlot, noteWebglShown, webglSlotFree, webglLayerCount,
+  releaseWebgl, claimWebglSlot, releaseWebglSlot, noteWebglShown, webglSlotFree, webglLayerCount, trimWebglPool,
   WEBGL_LAYER_LIMIT, type WebglHolder,
 } from '../src/renderer/components/terminal-webgl';
 
@@ -47,6 +47,41 @@ describe('the WebGL layer pool', () => {
     expect((hs[3] as any).evicted).toBe(1);
     expect(hs.filter((h: any) => h.evicted).length).toBe(1);
     expect(webglLayerCount()).toBe(WEBGL_LAYER_LIMIT);
+  });
+
+  it('a holder that took its slot while hidden (a chat opened in the background) ranks as least recently shown', () => {
+    const shown = Array.from({ length: WEBGL_LAYER_LIMIT - 1 }, () => holder());
+    shown.forEach(claimWebglSlot);
+    shown.forEach(noteWebglShown);            // each shown in turn, then hidden again
+    const background = holder();
+    claimWebglSlot(background);               // never shown
+    claimWebglSlot(holder(true));
+    expect((background as any).evicted).toBe(1);
+    expect(shown.every((h: any) => h.evicted === 0)).toBe(true);
+  });
+
+  it('a holder that took its slot while on screen ranks as just shown', () => {
+    const hs = Array.from({ length: WEBGL_LAYER_LIMIT - 1 }, () => holder());
+    hs.forEach(claimWebglSlot);
+    hs.forEach(noteWebglShown);
+    const onScreen = holder(true);
+    claimWebglSlot(onScreen);                 // mounted visible: claimed before any "shown" note
+    (onScreen as any).visible = false;
+    claimWebglSlot(holder(true));
+    expect((onScreen as any).evicted).toBe(0);
+    expect((hs[0] as any).evicted).toBe(1);
+  });
+
+  it('past the limit (more than 16 on screen at once), the pool shrinks back as soon as one is hidden', () => {
+    const hs = Array.from({ length: WEBGL_LAYER_LIMIT + 1 }, () => holder(true));
+    hs.forEach(claimWebglSlot);
+    expect(webglLayerCount()).toBe(WEBGL_LAYER_LIMIT + 1);
+    (hs[5] as any).visible = false;
+    trimWebglPool();
+    expect((hs[5] as any).evicted).toBe(1);
+    expect(webglLayerCount()).toBe(WEBGL_LAYER_LIMIT);
+    trimWebglPool();                          // at the limit: nothing more is taken
+    expect(hs.filter((h: any) => h.evicted).length).toBe(1);
   });
 
   it('a visible holder is never evicted; with no hidden one the claim goes through anyway', () => {

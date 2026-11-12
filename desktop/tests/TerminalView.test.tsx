@@ -1131,6 +1131,15 @@ describe('the WebGL layer pool', () => {
     expect(webglInstances.every((w) => !w.dispose.mock.calls.length)).toBe(true);
   });
 
+  it('after more than 16 were on screen at once, hiding one brings the pool back to 16', () => {
+    const ids = Array.from({ length: WEBGL_LAYER_LIMIT + 1 }, (_, i) => `v${i}`);
+    const { rerender } = render(<>{ids.map((id) => <TerminalView key={id} sessionId={id} visible={true} />)}</>);
+    expect(webglLayerCount()).toBe(WEBGL_LAYER_LIMIT + 1);
+    rerender(<>{ids.map((id) => <TerminalView key={id} sessionId={id} visible={id !== 'v3'} />)}</>);
+    expect(webglLayerCount()).toBe(WEBGL_LAYER_LIMIT);
+    expect(webglInstances[3].loseContext).toHaveBeenCalledTimes(1);
+  });
+
   it('closing a chat hands its context back and frees its slot', () => {
     const { unmount } = render(<TerminalView sessionId="s1" visible={true} />);
     unmount();

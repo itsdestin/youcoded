@@ -33,7 +33,14 @@ export interface WebglHolder {
   evict(): void;
 }
 
-const holders = new Map<WebglHolder, number>();   // holder → when it was last shown
+// WHY 16 (and not fewer on Android): 16 is Chromium desktop's per-page limit. Android's WebView may allow fewer;
+// if so, a phone with 9-16 terminals behaves as before the pool (the oldest contexts are lost and TerminalView's
+// context-loss recovery rebuilds them). Unverified on a real phone, so the limit is not lowered there.
+const holders = new Set<WebglHolder>();
+// WHY separate from the pool (card 106 review): when each terminal was last shown, kept even while it holds no
+// layer. A terminal never shown (a chat opened in the background) has no entry and ranks as least recently shown;
+// before, it was stamped as if shown just now and could keep its layer over genuinely recent ones.
+const lastShown = new WeakMap<WebglHolder, number>();
 let clock = 0;
 
 /** Room for one more layer without taking one? (a terminal mounted hidden builds only then) */
@@ -41,21 +48,42 @@ export function webglSlotFree(): boolean {
   return holders.size < WEBGL_LAYER_LIMIT;
 }
 
-/** Take a slot for `holder`, first taking back the least recently shown hidden layer if the pool is full. */
+/** Take back the layer of the hidden holder shown least recently; false when every holder is on screen. */
+function evictOldestHidden(): boolean {
+  let oldest: WebglHolder | null = null;
+  let oldestAt = Infinity;
+  for (const h of holders) {
+    const at = lastShown.get(h) ?? 0;
+    if (!h.isVisible() && at < oldestAt) { oldest = h; oldestAt = at; }
+  }
+  if (!oldest) return false;
+  oldest.evict();
+  holders.delete(oldest);   // evict() releases its slot; this only guarantees the loops below end
+  return true;
+}
+
+/** Take a slot for `holder`, first taking back the least recently shown hidden layer(s) if the pool is full. */
 export function claimWebglSlot(holder: WebglHolder): void {
   if (holders.has(holder)) return;
-  if (holders.size >= WEBGL_LAYER_LIMIT) {
-    let oldest: WebglHolder | null = null;
-    let oldestAt = Infinity;
-    for (const [h, at] of holders) if (!h.isVisible() && at < oldestAt) { oldest = h; oldestAt = at; }
-    oldest?.evict();
-  }
-  holders.set(holder, clock);
+  // A terminal mounted on screen claims before it is ever noted as shown (React runs the mount effect after the
+  // visibility layout effect): it IS being shown, so it ranks as the most recent.
+  if (holder.isVisible()) lastShown.set(holder, ++clock);
+  while (holders.size >= WEBGL_LAYER_LIMIT && evictOldestHidden()) { /* make room */ }
+  holders.add(holder);
 }
 
 /** The terminal was just shown: it is now the most recently used. */
 export function noteWebglShown(holder: WebglHolder): void {
-  if (holders.has(holder)) holders.set(holder, ++clock);
+  lastShown.set(holder, ++clock);
+}
+
+/**
+ * A terminal was just hidden: if more than 16 layers exist (only when more than 16 terminals were on screen at
+ * once, every one of them keeping its layer), give hidden ones back until the pool is at its limit again.
+ * WHY (card 106 review): otherwise the pool stayed over the browser's limit until a chat closed.
+ */
+export function trimWebglPool(): void {
+  while (holders.size > WEBGL_LAYER_LIMIT && evictOldestHidden()) { /* back to the limit */ }
 }
 
 /** The holder no longer has a layer (released, lost, or the terminal closed). */

@@ -7,7 +7,7 @@ import { applyClaudeCodeWidths } from '../../shared/terminal-widths';
 import { WebglAddon } from '@xterm/addon-webgl';
 import {
   releaseWebgl, claimWebglSlot, releaseWebglSlot, noteWebglShown, webglSlotFree, type WebglHolder,
-  webglContextOf, loseWebglContext,
+  webglContextOf, loseWebglContext, trimWebglPool,
   noteWebglWorks, webglWorksHere, rememberWebglCell, webglCellFor,
 } from './terminal-webgl';
 import '@xterm/xterm/css/xterm.css';
@@ -743,8 +743,10 @@ function TerminalView({ sessionId, visible }: Props) {
     // WHY first (card 106): a shown terminal that has no WebGL layer (the window was at its limit)
     // gets one BEFORE drawing resumes, so the one repaint setHidden(false) queues is drawn by it,
     // in this same frame. A terminal that kept its layer only becomes the most recently shown.
-    // Hiding never releases a layer: only the pool does, when the limit forces it.
+    // Hiding never releases a layer: only the pool does, when the limit forces it — trimWebglPool gives one back
+    // only if more than 16 exist (after more than 16 terminals were on screen at once).
     freshLayerOnShowRef.current = visible ? (showWebglRef.current?.() ?? false) : false;
+    if (!visible) trimWebglPool();
     renderPauseRef.current?.setHidden(!visible);
     // Shown again: write whatever the hidden-terminal allowance held back, so it is current at once.
     if (visible) {
