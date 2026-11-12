@@ -269,6 +269,33 @@ describe('a launch edit refused for the lock is retried once, later, with a long
     expect(d.log).toHaveBeenCalledWith('WARN', expect.stringMatching(/still not written/), expect.anything());
   });
 
+  // The retry runs from a timer after the window is up, where the main process
+  // must never block (performance rule 1). At launch, a lock refusal comes AFTER
+  // the scripts were staged and BEFORE the CLAUDE.md step, both of which ran
+  // anyway (neither needs the lock), so the retry redoes only the locked write.
+  it('the retry rewrites only the hook entries: no staging, no CLAUDE.md step, no copying', async () => {
+    const ih = createRequire(__filename)(path.join(__dirname, '..', 'scripts', 'install-hooks.js'));
+    await runInstallHooksChore(BUILD);                  // the launch attempt: stages, writes, CLAUDE.md
+    fs.writeFileSync(settingsFile(), '{}');             // as if its settings write had been refused
+    __resetSettingsMemo();
+    const stage = vi.spyOn(ih, 'stageHookScripts');
+    const autoTitle = vi.spyOn(ih, 'deployAutoTitleInstruction');
+    const cp = vi.spyOn(fs, 'cpSync');
+    const append = vi.spyOn(fs, 'appendFileSync');
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const { startLaunchSettingsRetry, SETTINGS_RETRY_DELAY_MS } = await import('../src/main/launch-settings-chores');
+    const log = vi.fn();
+    startLaunchSettingsRetry({ installLocked: true, choresLocked: false }, log);
+    await vi.advanceTimersByTimeAsync(SETTINGS_RETRY_DELAY_MS);
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('INFO', 'Settings chores written on the second try', {}));
+    expect(log).toHaveBeenCalledWith('INFO', 'Hook entries written on the second try', {});
+    expect(readSettings().hooks.Stop[0].hooks[0].command).toBe(`node ${JSON.stringify(path.join(stableDir(), 'relay.js'))}`);
+    expect(stage).not.toHaveBeenCalled();
+    expect(autoTitle).not.toHaveBeenCalled();
+    expect(cp).not.toHaveBeenCalled();
+    expect(append).not.toHaveBeenCalled();
+  });
+
   // A real held lock, real 10 ms polls, and a faked clock so "3 s" and "10 s"
   // pass instantly. Polls are counted on the lock folder so each clock jump
   // happens only once the writer is provably waiting.

@@ -56,10 +56,27 @@ export async function runInstallHooksChore(build: { version: string; packaged: b
   const ih = loadInstallHooks();
   if (ih.isWorktreeSource()) return { written: false, copied: false, repaired: 0, skippedWorktree: true };
   const { hookDir, copied } = ih.stageHookScripts({ stamp: `${build.version}|${build.packaged ? 'packaged' : 'dev'}` });
+  launchHookDir = hookDir;
   let repaired = 0;
   const { repaired: repairedFile, ...r } = await mutateSettings((settings) => { repaired = ih.applyAppHooks(settings, hookDir).repaired; }, opts);
   ih.deployAutoTitleInstruction();
   return { ...r, copied, repaired, ...(repairedFile ? { repairedFile } : {}) };
+}
+
+// Where this launch staged the hook scripts, for the background retry below.
+let launchHookDir: string | undefined;
+
+/** The background retry's half of install-hooks: ONLY the locked settings.json
+ *  write. WHY: at launch, staging (stageHookScripts) and the CLAUDE.md step
+ *  (deployAutoTitleInstruction) run whether or not the lock is free, so a lock
+ *  refusal leaves only this write undone — and both of those use blocking file
+ *  calls, which a timer after the window is up must never reach (performance
+ *  rule 1). The write itself is async (mutateSettings). */
+async function retryAppHookEntries(opts: { lockWaitMs: number }): Promise<{ refused?: 'locked' }> {
+  const hookDir = launchHookDir;
+  if (!hookDir) return {};   // launch never staged (dev worktree): it wrote nothing to retry
+  const ih = loadInstallHooks();
+  return mutateSettings((settings) => { ih.applyAppHooks(settings, hookDir); }, opts);
 }
 
 export interface SettingsChoresResult extends MutateSettingsResult {
@@ -104,7 +121,8 @@ export async function runSettingsChores({ phone = false, lockWaitMs }: { phone?:
 // hold the window back by that much. So the launch attempt is unchanged, and
 // when it is refused for the lock, ONE background retry starts a few seconds
 // later (after the window is up) and waits up to ~10 s for this file only.
-// Order is the launch order: install-hooks first, then the three chores —
+// Order is the launch order: install-hooks first (its settings write only,
+// see retryAppHookEntries), then the three chores —
 // re-run as well after a late install-hooks, since they only write a change.
 // Nothing is shown on screen (that wording is the owner's call); it is logged.
 export const SETTINGS_RETRY_DELAY_MS = 5_000;
@@ -143,10 +161,10 @@ export function scheduleLockedSettingsRetry(
 
 /** The launch wiring (main.ts, headless-boot.ts): the retry with the real
  *  chores. Fire-and-forget — it must never hold launch back. */
-export function startLaunchSettingsRetry(build: { version: string; packaged: boolean },
-  launch: { installLocked: boolean; choresLocked: boolean }, log: LockedSettingsRetryDeps['log'], phone = false): void {
+export function startLaunchSettingsRetry(launch: { installLocked: boolean; choresLocked: boolean },
+  log: LockedSettingsRetryDeps['log'], phone = false): void {
   void scheduleLockedSettingsRetry(launch, {
-    runInstallHooks: (o) => runInstallHooksChore(build, o),
+    runInstallHooks: retryAppHookEntries,
     // WHY phone is carried through (merge with the Android work, 2026-11-11): the phone's launch
     // chores also set Claude Code's fullscreen default; a retry without it would skip that one.
     runChores: (o) => runSettingsChores({ ...o, phone }),

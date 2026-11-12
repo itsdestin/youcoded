@@ -1493,7 +1493,7 @@ void app.whenReady().then(async () => {
   try {
     const { runSettingsChores, startLaunchSettingsRetry } = require('./launch-settings-chores');
     const r = await runSettingsChores();
-    startLaunchSettingsRetry({ version: app.getVersion(), packaged: app.isPackaged }, { installLocked, choresLocked: r.refused === 'locked' }, (level: 'INFO' | 'WARN', msg: string, data?: Record<string, unknown>) => log(level, 'Main', msg, data));
+    startLaunchSettingsRetry({ installLocked, choresLocked: r.refused === 'locked' }, (level: 'INFO' | 'WARN', msg: string, data?: Record<string, unknown>) => log(level, 'Main', msg, data));
     log('INFO', 'Main', 'Plugin hooks reconciled', r.hooks);
     if (r.promptSuggestion.changed) log('INFO', 'Main', 'Prompt suggestion force-disabled', { prior: r.promptSuggestion.prior });
     if (r.retention.changed) log('INFO', 'Main', 'Seeded cleanupPeriodDays default', { effective: r.retention.effective });

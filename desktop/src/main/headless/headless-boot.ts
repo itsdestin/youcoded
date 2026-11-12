@@ -163,7 +163,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
     const { runSettingsChores, startLaunchSettingsRetry } = require('../launch-settings-chores');
     // phone: also start Claude Code in fullscreen when no display mode is set (tui-fullscreen-default.ts).
     const r = await runSettingsChores({ phone: true });
-    startLaunchSettingsRetry({ version: app.getVersion(), packaged: true }, { installLocked, choresLocked: r.refused === 'locked' }, (level: 'INFO' | 'WARN', msg: string, data?: Record<string, unknown>) => log(level, 'Headless', msg, data), true);
+    startLaunchSettingsRetry({ installLocked, choresLocked: r.refused === 'locked' }, (level: 'INFO' | 'WARN', msg: string, data?: Record<string, unknown>) => log(level, 'Headless', msg, data), true);
   } catch (e) {
     log('ERROR', 'Headless', 'Failed to run settings chores', { error: String(e) });
   }
