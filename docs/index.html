@@ -1301,11 +1301,11 @@ body.intro-mode > footer{transform:translateY(34px)}
    .flankrow's transform is the intro's centring lift (above). */
 body.iv2:not(.intro-go):not(.cycler-static) .nav,
 body.iv2:not(.intro-go):not(.cycler-static) .flankrow{opacity:0}
-body.iv2.intro-go .nav{animation:iv2-fade .5s ease backwards}
+body.iv2.intro-go .nav{animation:iv2-fade .45s ease backwards}
 body.iv2-fade.intro-go .flankrow{animation:iv2-fade .5s ease backwards}
-body.iv2-rise.intro-go .flankrow{animation:iv2-rise .6s cubic-bezier(.22,1,.36,1) backwards}
+body.iv2-rise.intro-go .flankrow{animation:iv2-rise .45s cubic-bezier(.22,1,.36,1) backwards}
 @keyframes iv2-fade{from{opacity:0}}
-@keyframes iv2-rise{from{opacity:0;translate:0 40px}}
+@keyframes iv2-rise{from{opacity:0;translate:0 26px}}
 /* One beat between every step. The word's own animation keeps the shipped
    proportions (.82s long on a .78s beat), so each exit still lands exactly on
    the next word's entry whatever the beat is. */
@@ -1317,6 +1317,12 @@ body.iv2 .cycler-word{animation-duration:calc(var(--beat) * 1.0513)}
 body.iv2 .cycler-word-1{animation-delay:var(--lead)}
 body.iv2 .cycler-word-2{animation-delay:calc(var(--lead) + var(--beat))}
 body.iv2 .cycler-word-3{animation-delay:calc(var(--lead) + var(--beat) * 2)}
+/* First word from a closed-up start: the word is clipped to its slot so the
+   opening reveals it (see the sequence script), and the opening itself is a
+   little longer and softer than the snap used between words, because it
+   travels about four times as far. */
+body.iv2-first .cycler-stage{clip-path:inset(0 -5px 0 0)}
+body.iv2-first .word-cycler{transition:width .6s cubic-bezier(.25,.8,.3,1)}
 /* The switcher shrinks to its first and last buttons on a phone-width window,
    where the full box covered the headline it is there to show. */
 @media(max-width:700px){.iv2-bar{width:auto;flex-direction:row;padding:6px}
@@ -2146,8 +2152,8 @@ html{-webkit-tap-highlight-color:transparent}
   if (!today) {
     document.body.classList.add('iv2', 'iv2-' + start, 'iv2-' + motion);
     document.body.style.setProperty('--beat', beat + 'ms');
-    document.body.style.setProperty('--lead', '520ms');
-    window.IV2_BEAT = beat; window.IV2_LEAD = 520;
+    document.body.style.setProperty('--lead', '680ms');
+    window.IV2_BEAT = beat; window.IV2_LEAD = 680;
   }
   document.addEventListener('DOMContentLoaded', function(){
     var bar = document.createElement('div'); bar.className = 'iv2-bar';
@@ -4733,6 +4739,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   }
   function cancel(){
     timers.forEach(clearTimeout); timers = [];
+    document.body.classList.remove('iv2-first');   // PROTOTYPE: its removal timer was just cleared
     // Taken over before the words were released: they would stay paused and the
     // slot empty, so show the resting word the way the static path does.
     if (!document.body.classList.contains('intro-go')) {
@@ -4820,7 +4827,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // PROTOTYPE: see body.iv2 in the stylesheet.
   var IV2 = document.body.classList.contains('iv2');
   var BEAT = window.IV2_BEAT || 780;
-  var LEAD = window.IV2_LEAD || 520;   // headline's arrival -> first word
+  var LEAD = window.IV2_LEAD || 680;   // headline's arrival -> first word
   // "Closed up" start: the word slot begins at zero width, so the headline
   // arrives as a centred, complete-looking phrase instead of one with a hole
   // at the end; step -1 means "no word yet".
@@ -4856,22 +4863,30 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       applyStep(curStep);
       setLift();
       document.body.classList.add('intro-go');
+      if (IV2 && CLOSED) {
+        document.body.classList.add('iv2-first');
+        // Off again just before the second word's own changes begin.
+        timers.push(setTimeout(function(){ document.body.classList.remove('iv2-first'); }, LEAD + BEAT - 150));
+      }
       HERO_SEQUENCE.forEach(function(step, i){
         // PROTOTYPE (body.iv2): every step sits on one even beat, counted from
         // the moment the headline arrives. Each theme still leads its word by
         // the shipped 100ms so the colour change finishes as the word settles.
         var at = IV2 ? LEAD + BEAT * i - 100 : step.at;
-        // WHY the slot opens early on the first word (Destin, round 3: "the
-        // first move just seems a little too aggressive like the icons barely
-        // make it out of the way"). From closed, the line has to slide a whole
-        // word's width apart, and the word used to bump in 100ms into that
-        // slide -- on top of the robots that had not moved yet. The slide now
-        // starts 280ms ahead, so it is nearly finished when the word lands.
-        var openEarly = IV2 && CLOSED && i === 0;
-        if (openEarly) timers.push(setTimeout(function(){ curStep = 0; applyStep(0); }, LEAD - 280));
+        // WHY the first word is different (rounds 2-4, frame-traced 2026-11-12).
+        // From closed, the line has to open a whole word's width (194px on a
+        // desktop, against ~50px between later words). Round 2 opened it 100ms
+        // ahead like the other beats and the word landed while the robots were
+        // still in its way ("the icons barely make it out of the way"); round 3
+        // opened it 280ms ahead and the empty gap sliding open on its own read
+        // as a separate, odd move, with the background changing on a third
+        // clock. Now ONE thing happens: background and opening start together,
+        // a touch earlier than on later beats, and until the next beat the word
+        // is clipped to its slot (body.iv2-first), so it is revealed BY the
+        // opening instead of racing the robots across it.
+        if (IV2 && CLOSED && i === 0) at = LEAD - 140;
         timers.push(setTimeout(function(){
           applyTheme(step.theme);
-          if (openEarly) return;
           curStep = i;
           applyStep(i);
         }, at));
