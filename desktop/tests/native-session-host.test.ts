@@ -1080,7 +1080,8 @@ describe('NativeSessionHost', () => {
         expect(h.send(id, 'storage recovered')).toMatchObject({ status: 'sent' });
         await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
         await h.drain(id);
-        expect(model).toHaveBeenCalledTimes(2); // one explicit user turn, one report
+        // Card #148: the report is now supplied (history-only) before the user's turn, so one request carries both.
+        expect(model).toHaveBeenCalledTimes(1);
       } finally { finish(); vi.restoreAllMocks(); await h.destroyAll(); }
     });
 
@@ -2459,7 +2460,8 @@ describe('NativeSessionHost', () => {
         let release!: () => void;
         const started = new Promise<void>((r) => { entered = r; });
         const gate = new Promise<void>((r) => { release = r; });
-        const notice = vi.spyOn(entry.session, 'runNotice').mockImplementation(async () => { entered(); await gate; });
+        // WHY: busy results now splice at a response boundary; idle results run a notice turn.
+        const notice = vi.spyOn(h as any, 'deliverNotice').mockImplementation(async () => { entered(); await gate; });
         const seen: string[] = [];
         h.on('transcript-event', (e: any) => { if (e.type === 'user-message') seen.push(e.data.text); });
         if (start === 'user turn tail') h.send(sid, 'opening');
@@ -2628,7 +2630,8 @@ describe('NativeSessionHost', () => {
       let release!: () => void;
       const started = new Promise<void>((r) => { entered = r; });
       const gate = new Promise<void>((r) => { release = r; });
-      vi.spyOn(entry.session, 'runNotice').mockImplementation(async () => { entered(); await gate; throw new Error('notice failed'); });
+      // WHY: keep the failure present on both idle and safe-boundary delivery paths.
+      vi.spyOn(host as any, 'deliverNotice').mockImplementation(async () => { entered(); await gate; throw new Error('notice failed'); });
       (host as any).queueHostNotice(id, 'notice', { kind: 'shell', runs: [] }, 'test');
       await started;
       const sent = host.send(id, 'survivor');
@@ -4446,6 +4449,93 @@ describe('NativeSessionHost', () => {
     // and asserts the OUTCOME: run 2's own report text actually reaches the
     // parent's conversation as a second injected notice, not that a field was
     // merely set.
+    it('a resumed interrupted task delivers its report before it disappears from the task list', async () => {
+      const home = new NativeHome(root);
+      const store = new SessionStore(home);
+      let releaseReport!: () => void;
+      let signalReportStarted!: () => void;
+      let releaseNotice!: () => void;
+      let signalNoticeStarted!: () => void;
+      const reportGate = new Promise<void>((resolve) => { releaseReport = resolve; });
+      const reportStarted = new Promise<void>((resolve) => { signalReportStarted = resolve; });
+      const noticeGate = new Promise<void>((resolve) => { releaseNotice = resolve; });
+      const noticeStarted = new Promise<void>((resolve) => { signalNoticeStarted = resolve; });
+      let calls = 0;
+      const model = new MockLanguageModelV4({
+        doStream: async () => {
+          calls += 1;
+          if (calls === 1) {
+            signalReportStarted();
+            await reportGate;
+            return { stream: simulateReadableStream({ chunks: stream(...textChunks('t', 'RESUMED REPORT'), finishChunk('stop')) }) };
+          }
+          signalNoticeStarted();
+          await noticeGate;
+          return { stream: simulateReadableStream({ chunks: stream(...textChunks('t', 'notice acknowledged'), finishChunk('stop')) }) };
+        },
+      });
+      const h = new NativeSessionHost(
+        store, async () => model as any, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined, undefined, home,
+      );
+      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+
+      // Build the same durable, interrupted child state task_id resume reads;
+      // use a real child header and ledger rather than a fake resume service.
+      const { childId } = await h.createChild('root-1', {
+        specialist: EXPLORER, prompt: 'first brief', workDir: root, parentToolCallId: 'tc-1',
+      });
+      await h.destroy(childId);
+      await (h as any).ledger.recordStart(root, 'root-1', {
+        childId, parentToolCallId: 'tc-1', agentType: EXPLORER.id, title: 'Resumed Explorer',
+        workDir: root, description: 'investigate the issue', background: true,
+        status: 'interrupted', startedAt: Date.now() - 1_000, endedAt: Date.now(),
+        delivered: false, owner: OWNER, missedSteers: [],
+      });
+
+      const events: any[] = [];
+      h.on('transcript-event', (event) => events.push(event));
+      const task = (h as any).live.get('root-1').session.toolByName.get('Task');
+      const services = (h as any).live.get('root-1').session.opts.toolServices;
+      const listTasks = () => task.execute({ list: true }, {
+        sessionId: 'root-1', cwd: root, signal: new AbortController().signal,
+        readRegistry: new Map(), todos: [], services,
+      });
+      const reservation = h.reserveSpecialist('root-1', { writer: false });
+      if (!reservation.ok) throw new Error('unreachable — no capacity/writer conflict in this test');
+      const outcome = await h.resumeSpecialist('root-1', {
+        childId, prompt: 'continue the investigation', background: true,
+        parentToolCallId: 'tc-2', reservation: reservation.token,
+      });
+      expect(outcome.status).toBe('ok-background');
+
+      // While the resumed model is held open, the Task list must reflect the
+      // live run. The transcript event is emitted before runNotice starts its
+      // model request; keep that request gated to test the report-pending state
+      // until the turn has actually completed.
+      await reportStarted;
+      expect((await listTasks()).text).toContain('Resumed Explorer (explorer): running');
+      releaseReport();
+      await vi.waitFor(() => {
+        expect(events.some((event) => event.type === 'user-message'
+          && event.data?.injected === 'specialist-report'
+          && event.data?.text.includes('RESUMED REPORT'))).toBe(true);
+      });
+      await noticeStarted;
+      // runNotice emits the injected transcript event before the model turn
+      // finishes and before confirmDelivered's ledger write. Pin this boundary;
+      // this scripted test does not establish the cause of the reported incident.
+      expect((await listTasks()).text).toContain('report delivery pending');
+      releaseNotice();
+      await vi.waitFor(() => {
+        const record = (h as any).ledger.listFor(root, 'root-1').find((row: any) => row.childId === childId);
+        expect(record?.delivered).toBe(true);
+      });
+      await (h as any).live.get('root-1')?.running;
+      expect((await listTasks()).text).toBe('No specialists or background commands are running or awaiting delivery in this conversation.');
+      await h.destroyAll();
+    });
+
     it('a SECOND background run after a resume still gets delivered, carrying its OWN report (regression — stale injectionAttempted)', async () => {
       const home = new NativeHome(root);
       const store = new SessionStore(home);
@@ -4524,6 +4614,7 @@ describe('NativeSessionHost', () => {
       });
       const recAfterRun2 = (h as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === childId);
       expect(recAfterRun2.rawReport).toContain('SECOND REPORT');
+      expect(recAfterRun2.runNumber).toBe(2); // the row keeps its original card id; the run number says which run
 
       // WHY await the parent's delivery pass first: injecting run 2's report
       // runs a turn that still appends to the session file under
@@ -6460,10 +6551,12 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
   it.skipIf(!posix)('a mark whose run finished while it waited is dropped at delivery; the finished notice still goes out', async () => {
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => { release = r; });
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
     let first = true;
     const factory2 = async () => new MockLanguageModelV4({
       doStream: async () => {
-        if (first) { first = false; await gate; }
+        if (first) { first = false; entered(); await gate; }
         return { stream: simulateReadableStream({ chunks: stream(...textChunks('t', 'ok'), finishChunk('stop')) }) };
       },
     }) as any;
@@ -6472,7 +6565,8 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     await host.create({ sessionId: 'p3', cwd: root, binding });
     const injected: string[] = [];
     host.on('transcript-event', (e: any) => { if (e.type === 'user-message' && e.data.injected) injected.push(e.data.injected); });
-    host.send('p3', 'busy');                                  // parent held mid-turn
+    host.send('p3', 'busy');
+    await started; // WHY: inFlight may only be scheduled; prove the response actually started.
     const run = startIn('p3', 'echo a', 'ta');
     reg('p3').emit('long-running', run, 5 * 60_000);          // mark queued behind the busy turn
     await run.exited;                                         // ...then the run finishes (completion queued after it)

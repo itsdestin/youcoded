@@ -2561,10 +2561,32 @@ export class HarnessSession extends EventEmitter {
    *  already accepts: the retired per-turn `<specialists-status>` block ran it
    *  in production for weeks, and `<project-rule>` injections still do.
    *  Same idle-only precondition as runNotice: never mid-turn. */
+  // Card #148: a helper's or background command's finished report used to wait for the turn to END
+  // (or for the next human message), so the assistant could sit idle with a report pending. The host
+  // now hands it over at the driver's own safe gaps: after a completed response, after the first empty
+  // response, after a complete tool batch. Never during a stream, a tool run or a compaction.
+  private deliveryBoundary?: () => Promise<void>;
+  private atDeliveryBoundary = false;
+
+  /** Host-owned drain; only the serialized driver invokes it, after accepted groups. */
+  setDeliveryBoundary(drain: () => Promise<void>): void { this.deliveryBoundary = drain; }
+
+  /** True when the drain added anything to history (the caller then runs another step). */
+  private async absorbBackgroundResults(): Promise<boolean> {
+    if (!this.deliveryBoundary || this.interrupted || this.abort?.signal.aborted) return false;
+    const before = this.history.length;
+    // WHY: allow history-only splicing in this narrow gap; never a reentrant send, never a split
+    // tool-call/result group, never a reset of the human-approval step counter.
+    this.atDeliveryBoundary = true;
+    try { await this.deliveryBoundary(); }
+    finally { this.atDeliveryBoundary = false; }
+    return this.history.length !== before;
+  }
+
   async spliceNotice(text: string, meta?: InjectedMeta): Promise<void> {
     // WHY: a quiet history mutation must obey the same startup gate as a model turn.
     this.opts.assertReady?.();
-    if (this.abort) {
+    if (this.abort && !this.atDeliveryBoundary) {
       throw new Error('HarnessSession: spliceNotice called while a turn is in flight — callers must only splice at an idle boundary.');
     }
     const injected = injectedLabel(meta);
@@ -3063,6 +3085,8 @@ export class HarnessSession extends EventEmitter {
         const orderlyFinish = step.finishReason === undefined
           || ORDERLY_EMPTY_FINISHES.has(step.finishReason);
         if (isEmptyStep && orderlyFinish) {
+          const background = await this.absorbBackgroundResults();
+          if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
           consecutiveEmptySteps++;
           if (consecutiveEmptySteps === 1) {
             // Withdraw any preparing card the dead step left on screen — the
@@ -3092,8 +3116,8 @@ export class HarnessSession extends EventEmitter {
             });
             continue turnLoop;
           }
-          // WHY: second empty is a final boundary; new input re-arms recovery.
-          if (absorbReadyMessage()) {
+          // WHY: second empty is a final boundary; new input (or a delivered report) re-arms recovery.
+          if (absorbReadyMessage() || background) {
             consecutiveEmptySteps = 0;
             continue turnLoop;
           }
@@ -3103,8 +3127,9 @@ export class HarnessSession extends EventEmitter {
         consecutiveEmptySteps = 0;   // any real step re-arms the single retry
 
         if (step.toolCalls.length === 0) {
-          // WHY: no await before completion; late heads use the host drain.
-          if (absorbReadyMessage()) continue turnLoop;
+          const background = await this.absorbBackgroundResults();
+          if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
+          if (absorbReadyMessage() || background) continue turnLoop;
           // Cut off at the output limit: continue / ask to split, inside the turn (truncation-recovery.ts).
           if (step.finishReason === 'length' && this.recoverTruncation(step, truncationRecoveries)) { truncationRecoveries++; continue turnLoop; }
           // Natural stop; mapStopReason handles truncated output as max_tokens.
@@ -3175,6 +3200,8 @@ export class HarnessSession extends EventEmitter {
                 this.emitEvent('user-interrupt', abandonedTurnUsage());
                 return;
               }
+              await this.absorbBackgroundResults();
+              if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
               absorbReadyMessage(); // ready human correction precedes replan
               continue turnLoop;
             }
@@ -3258,6 +3285,8 @@ export class HarnessSession extends EventEmitter {
         // AFTER the tool results so the model reads the rule alongside what it
         // just learned, and before it decides the next step.
         this.injectPathTriggers(step.toolCalls);
+        await this.absorbBackgroundResults();
+        if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
 
         // WHY (Destin, 2026-09-28 PR-review deck Q-1): a message sent mid-task is
         // read once the whole batch of actions the assistant already chose has
