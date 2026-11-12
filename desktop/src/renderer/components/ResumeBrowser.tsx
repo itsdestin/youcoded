@@ -354,7 +354,7 @@ const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, pro
     // screen from the hidden ones (see onPreviewScroll).
     <div className="absolute inset-0 flex flex-col" data-preview-id={id} style={{ visibility: visible ? 'visible' : 'hidden' }}>
       {visible && <ScreenMark name="chat/resume/preview" />}
-      <SessionPreviewPane provider={provider} id={id} title={title} projectSlug={projectSlug} onSettled={onSettled} backdrop={false} topInset={topInset} onTopReserved={onReserved} />
+      <SessionPreviewPane provider={provider} id={id} title={title} projectSlug={projectSlug} onSettled={onSettled} backdrop={false} topInset={topInset} onTopReserved={onReserved} active={visible} />
     </div>
   );
 });

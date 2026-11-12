@@ -942,6 +942,8 @@ describe('preview panel', () => {
       const proto = HTMLElement.prototype as any;
       const saved: Record<string, PropertyDescriptor | undefined> = {};
       let roCallbacks: ResizeObserverCallback[] = [];
+      // What each live observer watches, so a test can say which layer is observed.
+      let roLive: Array<{ observed: Element[]; live: boolean }> = [];
       let savedRO: typeof ResizeObserver;
       beforeEach(() => {
         layout.natural = 300; layout.client = 600; layout.card = 64;
@@ -953,11 +955,12 @@ describe('preview panel', () => {
           return Math.max(layout.client, layout.natural + (this.style.paddingTop ? layout.card : 0));
         } });
         // A recording observer, so a test can say "the content changed size".
-        roCallbacks = [];
+        roCallbacks = []; roLive = [];
         savedRO = window.ResizeObserver;
         window.ResizeObserver = class {
-          constructor(cb: ResizeObserverCallback) { roCallbacks.push(cb); }
-          observe() {} unobserve() {} disconnect() {}
+          private rec = { observed: [] as Element[], live: true };
+          constructor(cb: ResizeObserverCallback) { roCallbacks.push(cb); roLive.push(this.rec); }
+          observe(el: Element) { this.rec.observed.push(el); } unobserve() {} disconnect() { this.rec.live = false; }
         } as unknown as typeof ResizeObserver;
       });
       afterEach(() => {
@@ -1021,6 +1024,22 @@ describe('preview panel', () => {
         layout.client = 900;
         act(() => { for (const cb of roCallbacks) cb([], {} as ResizeObserver); });
         expect(scroller).toHaveAttribute('data-top-reserved');
+      });
+
+      it('a conversation kept loaded behind the one on screen is not observed for resizes', async () => {
+        setViewport(false);
+        const other = row({ sessionId: 'b4e3bbbb-2222-4222-8222-222222222222', name: 'Other chat' });
+        mockClaude([row(), other]);
+        const { scroller } = await pick();
+        const watched = (el: Element) => roLive.some((o) => o.live && o.observed.includes(el));
+        await waitFor(() => expect(watched(scroller)).toBe(true));
+        fireEvent.click(await screen.findByText('Other chat'));
+        await waitFor(() => expect(document.querySelector(`[data-preview-id="${other.sessionId}"] .overflow-y-auto`)).not.toBeNull());
+        const shown = document.querySelector(`[data-preview-id="${other.sessionId}"] .overflow-y-auto`)!;
+        await waitFor(() => expect(watched(shown)).toBe(true));
+        // The first conversation is still built (hidden), but nothing watches it.
+        expect(scroller.isConnected).toBe(true);
+        expect(watched(scroller)).toBe(false);
       });
     });
 

@@ -33,7 +33,7 @@ function previewReducer(state: ChatState, action: ChatAction | typeof RESET): Ch
   return action.type === RESET.type ? new Map() : chatReducer(state, action as ChatAction);
 }
 
-export default function SessionPreviewPane({ provider, id, title, onSettled, projectSlug, backdrop = true, topInset = 0, onTopReserved }: {
+export default function SessionPreviewPane({ provider, id, title, onSettled, projectSlug, backdrop = true, topInset = 0, onTopReserved, active = true }: {
   provider: ChatsearchProvider;
   id: string;
   title: string;
@@ -60,6 +60,10 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
   /** Told whenever the room under the floating card is reserved or released,
    *  so the host can hold the card in place while it is. */
   onTopReserved?: (reserved: boolean) => void;
+  /** False while the host keeps this pane mounted but hidden (the Resume
+   *  browser's other loaded conversations): no resize observer and no layout
+   *  reads for the room above (performance.md rule 2); it fits once when shown. */
+  active?: boolean;
 }) {
   const key = previewSessionKey(id);
   const [chat, dispatch] = useReducer(previewReducer, undefined, () => new Map() as ChatState);
@@ -210,10 +214,15 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
   topInsetRef.current = topInset;
   const onTopReservedRef = useRef(onTopReserved);
   onTopReservedRef.current = onTopReserved;
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const fitTopInset = useCallback(() => {
     const el = scrollRef.current;
-    if (!el) return;
     const inset = topInsetRef.current;
+    // WHY these early returns: the drawer and Projects never float a card (no
+    // inset, nothing applied) and a hidden layer is idle, so neither may force
+    // a layout read on every page or phase change.
+    if (!el || !activeRef.current || (inset <= 0 && appliedInset.current === 0)) return;
     const natural = el.scrollHeight - appliedInset.current;
     const next = inset > 0 && natural <= el.clientHeight ? inset : 0;
     if (next === appliedInset.current) return;
@@ -223,13 +232,20 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
     el.toggleAttribute('data-top-reserved', next > 0);
     const wasReserved = appliedInset.current > 0;
     appliedInset.current = next;
-    el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - fromBottom);
+    // WHY top when reserving: the room is only taken when the content fits, so
+    // there is no reading place to hold — but the room itself lets the pane
+    // scroll by up to the card's height, and holding the bottom distance
+    // scrolled the caption and first message back under the card (a window
+    // shrunk until the chat no longer fit, then grown back). Releasing still
+    // holds the bottom distance, as the prepend does (performance.md rule 12).
+    el.scrollTop = next ? 0 : Math.max(0, el.scrollHeight - el.clientHeight - fromBottom);
     if (wasReserved !== next > 0) onTopReservedRef.current?.(next > 0);
   }, []);
   // Content or size changes the layout effects below do not see (a window
   // resize, a tool card expanded) are caught here. Only when a host floats
-  // something: the drawer and Projects pass no inset and get no observer.
-  const reserveOn = topInset > 0;
+  // something, and only while shown: the drawer and Projects pass no inset and
+  // a hidden Resume layer is idle, so neither gets an observer.
+  const reserveOn = topInset > 0 && active;
   useEffect(() => {
     const el = scrollRef.current;
     if (!reserveOn || !el || typeof ResizeObserver === 'undefined') return;
@@ -252,7 +268,7 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
       el.scrollTop = el.scrollHeight - keepFromBottom.current;
       keepFromBottom.current = null;
     }
-  }, [chat, phase, topInset, fitTopInset]);
+  }, [chat, phase, topInset, active, fitTopInset]);
 
   return (
     <div className={`relative flex h-full min-h-0 w-full min-w-0 flex-col${backdrop ? ' preview-backdrop' : ''}`}>
