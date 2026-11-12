@@ -22,7 +22,7 @@ vi.mock('child_process', async (importActual) => {
 });
 import { ReadTool, readSizeError, MAX_READ_BYTES } from '../src/main/harness/tools/read';
 import { WriteTool } from '../src/main/harness/tools/write';
-import { EditTool } from '../src/main/harness/tools/edit';
+import { EditTool, MAX_FOLD_CHARS } from '../src/main/harness/tools/edit';
 import { BashTool, rebaseReportedCwd } from '../src/main/harness/tools/bash';
 import { GlobTool } from '../src/main/harness/tools/glob';
 import { GrepTool, resolveRgPath } from '../src/main/harness/tools/grep';
@@ -571,6 +571,20 @@ describe('Edit', () => {
       expect(r.isError).toBeFalsy();
       expect(after).toBe('a\r\nX\r\nY\r\nc\r\n');
       expect(r.text).toMatch(NORMALISED);
+    });
+
+    it('skips the fallback for a file over the size limit: plain "not found", the file untouched', async () => {
+      // Just over the limit; the one curly-quoted line would match after folding.
+      const filler = 'plain filler line of text\n'.repeat(Math.ceil(MAX_FOLD_CHARS / 26));
+      const content = filler + 'say “hi”\n';
+      expect(content.length).toBeGreaterThan(MAX_FOLD_CHARS);
+      const { r, after } = await edit(content, 'say "hi"', 'say "bye"');
+      expect(r.isError).toBe(true);
+      expect(r.text).toBe('Edit failed: old_string not found. Re-Read the file and copy the exact text, including whitespace.');
+      expect(after).toBe(content);
+      // Under the limit the same edit is found, so the refusal above is the gate, not the match.
+      const small = await edit('x\nsay “hi”\n', 'say "hi"', 'say "bye"');
+      expect(small.r.isError).toBeFalsy();
     });
   });
 });

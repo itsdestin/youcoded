@@ -500,7 +500,8 @@ Shipped as youcoded PRs #352, #353, #354, #355. What is now true, and why:
   one normalised retry folds curly quotes, Unicode dashes and non-breaking spaces to plain
   and ignores spaces at line ends; it is accepted only if it finds ONE place, replaces exactly
   that original span, inserts `new_string` unchanged, and the result says the match was
-  normalised (`findNormalisedSpan`, card #66 c). The description still says "exact" on purpose.
+  normalised (`findNormalisedSpan`, card #66 c). Skipped above `MAX_FOLD_CHARS` (2 M characters,
+  plain "not found" as before): the fold runs on the main process, ~5 ms per MB. The description still says "exact" on purpose.
 - **Bash** — the description no longer suggests re-running "piped through head/tail" (no
   `pipefail`: `cmd | tail` masks the exit code); it says Read the saved file, or redirect and
   `echo exit=$?`. The same sentence was fixed in the per-call spill notice and the static

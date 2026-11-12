@@ -50,35 +50,54 @@ const FOLD: Record<string, string> = {
   '‐': '-', '‑': '-', '‒': '-', '–': '-', '—': '-', '―': '-', '−': '-',
   ' ': ' ', ' ': ' ', ' ': ' ',
 };
-const isLineSpace = (c: string) => c === ' ' || c === '\t' || c === ' ' || c === ' ' || c === ' ';
+/** Above this many characters (~2 MB of text) the fallback is skipped and Edit
+ *  answers a plain "not found", exactly as before the fallback existed. WHY: the
+ *  fold runs on the main process once per failed Edit; measured ~5 ms per MB
+ *  (the first version's per-character arrays took ~60 ms per MB, ~440 ms at
+ *  10 MB), so the cap keeps the worst case near 10-15 ms. Files this big are
+ *  generated, minified or logs, where a typed-quote mismatch is not the likely miss. */
+export const MAX_FOLD_CHARS = 2_000_000;
+const isLineSpace = (c: number) => c === 0x20 || c === 0x09 || c === 0xa0 || c === 0x2007 || c === 0x202f;
 
 /** Folds `text` and records, for each folded character, its index in `text`.
  *  Spaces/tabs immediately before a newline are dropped; at the very end of
  *  the text only when `dropAtEnd` (the file's last line ends there, but the
- *  END of an old_string is mid-line as often as not, so its spaces are kept). */
-function foldForMatch(text: string, dropAtEnd: boolean): { text: string; at: number[] } {
-  const out: string[] = [];
-  const at: number[] = [];
+ *  END of an old_string is mid-line as often as not, so its spaces are kept).
+ *  WHY slices and a typed array: unchanged stretches are copied whole and the
+ *  index map is one allocation, not a growing per-character array. */
+function foldForMatch(text: string, dropAtEnd: boolean): { text: string; at: Int32Array } {
+  const n = text.length;
+  const at = new Int32Array(n);
+  const parts: string[] = [];
+  let kept = 0;       // folded characters so far
+  let from = 0;       // start of the unchanged stretch not yet copied
+  const cut = (end: number) => { if (end > from) parts.push(text.slice(from, end)); };
+  const keep = (k: number) => {   // every FOLD key is >= U+00A0, and one character folds to one
+    const r = text.charCodeAt(k) >= 0xa0 ? FOLD[text[k]] : undefined;
+    if (r !== undefined) { cut(k); parts.push(r); from = k + 1; }
+    at[kept++] = k;
+  };
   let i = 0;
-  while (i < text.length) {
-    if (isLineSpace(text[i])) {
+  while (i < n) {
+    if (isLineSpace(text.charCodeAt(i))) {
       let j = i;
-      while (j < text.length && isLineSpace(text[j])) j++;
-      const atLineEnd = j < text.length ? text[j] === '\n' : dropAtEnd;
-      if (!atLineEnd) for (let k = i; k < j; k++) { out.push(FOLD[text[k]] ?? text[k]); at.push(k); }
+      while (j < n && isLineSpace(text.charCodeAt(j))) j++;
+      const atLineEnd = j < n ? text.charCodeAt(j) === 0x0a : dropAtEnd;
+      if (atLineEnd) { cut(i); from = j; } else for (let k = i; k < j; k++) keep(k);
       i = j;
       continue;
     }
-    out.push(FOLD[text[i]] ?? text[i]);
-    at.push(i);
-    i++;
+    keep(i++);
   }
-  return { text: out.join(''), at };
+  cut(n);
+  return { text: parts.join(''), at: at.subarray(0, kept) };
 }
 
 /** The original [start, end) of the ONE place `oldString` matches `body` after
- *  folding, or null when it matches nowhere or in more than one place. */
+ *  folding, or null when it matches nowhere, in more than one place, or the
+ *  file is over MAX_FOLD_CHARS. */
 function findNormalisedSpan(body: string, oldString: string): { start: number; end: number } | null {
+  if (body.length > MAX_FOLD_CHARS) return null;
   const needle = foldForMatch(oldString, false).text;
   if (!needle) return null;
   const hay = foldForMatch(body, true);
