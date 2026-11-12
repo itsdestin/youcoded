@@ -7,7 +7,7 @@ import { useMarketplace } from "../../state/marketplace-context";
 import { useEscClose } from "../../hooks/use-esc-close";
 import { ScreenBand } from "../ScreenBand";
 import { LibraryIcon, MarketplaceIcon } from "../screen-icons";
-import { Button, EmptyState, ScreenError, LoadingState, SegmentedTabs, SegmentedTabLabel, PluginIcon, PaletteIcon } from "../ui";
+import { Button, EmptyState, ErrorState, ScreenError, LoadingState, SegmentedTabs, SegmentedTabLabel, PluginIcon, PaletteIcon } from "../ui";
 import MarketplaceCard from "../marketplace/MarketplaceCard";
 import WallpaperBackdrop from "../WallpaperBackdrop";
 import MarketplaceGrid from "../marketplace/MarketplaceGrid";
@@ -265,6 +265,16 @@ export default function LibraryScreen({
       </div>
 
       <div className="px-4 flex flex-col gap-8 pb-12 pt-4">
+
+        {/* WHY (error inventory 2026-09-10, Marketplace row 10): when the update check could not be
+            read, every Update badge disappears, which looks like "all up to date". Say so instead. */}
+        {mp.packagesError && !mp.loading && (
+          <ErrorState
+            variant="inline"
+            message={`Couldn't check for updates: ${plainMessage(mp.packagesError)}`}
+            onRetry={() => { void mp.refresh(); }}
+          />
+        )}
 
         {/* Skills tab — starred favorites first, then the rest. Each skill
              card carries a plugin-name badge that jumps to the parent
