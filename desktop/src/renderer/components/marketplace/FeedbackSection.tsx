@@ -10,7 +10,8 @@ import { useAccount } from '../../state/account-context';
 import { useMarketplaceStats } from '../../state/marketplace-stats-context';
 import { forgetHeldComments, readHeldComments, rememberHeldComment, type HeldComment } from '../../state/held-comments';
 import type { CommentEntry } from '../../state/marketplace-api-client';
-import { Button, FieldError, InputGroup } from '../ui';
+import { Button, ErrorState, FieldError, InputGroup } from '../ui';
+import { plainMessage } from '../../utils/ipc-error';
 import CommentList from './CommentList';
 import SignInPromptModal from './SignInPromptModal';
 import { Tooltip } from '../ui';
@@ -256,11 +257,14 @@ export default function FeedbackSection({ pluginId, installed, part = 'all' }: {
 
   // The vote line's words: the percentage and the count, or plain words under
   // MIN_VOTES_FOR_PCT (a percentage of one vote lies — G-19 below that).
+  // WHY (error inventory 2026-09-10, Marketplace row 14): when the totals could not be read, "No votes yet"
+  // was false. Nothing is claimed in that spot; the failure is shown under the row with Try again.
+  const statsFailed = !!stats.error && !s && !localTotals;
   const voteSummary = lowCountLabel
     ? <span className="text-fg-2">{lowCountLabel}</span>
     : summary
       ? <span className="text-fg-2"><span className="font-medium text-fg">{summary.pct}%</span> found it helpful <span className="text-fg-muted">· {summary.total.toLocaleString()} votes</span></span>
-      : <span className="text-fg-dim">No votes yet</span>;
+      : statsFailed ? null : <span className="text-fg-dim">No votes yet</span>;
 
   const voteButtons = (
     // Both `secondary sm` — the page's one filled button is Install (G-4).
@@ -285,12 +289,17 @@ export default function FeedbackSection({ pluginId, installed, part = 'all' }: {
   // Text left, buttons right, on one line when they fit (guide "Buttons" → text and
   // buttons in one box; decisions NB-2).
   const votes = (
-    <div className="flex items-center justify-between gap-x-3 gap-y-2 flex-wrap">
-      <div className="min-w-0 text-sm">
-        {voteSummary}
-        {reasonLine}
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-x-3 gap-y-2 flex-wrap">
+        <div className="min-w-0 text-sm">
+          {voteSummary}
+          {reasonLine}
+        </div>
+        {voteButtons}
       </div>
-      {voteButtons}
+      {statsFailed && (
+        <ErrorState variant="inline" message={`Couldn't load the votes: ${plainMessage(stats.error)}`} onRetry={() => { void stats.refresh(); }} />
+      )}
     </div>
   );
 
