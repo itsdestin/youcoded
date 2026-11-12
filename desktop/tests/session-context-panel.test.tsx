@@ -155,6 +155,16 @@ describe('skills and tools are sorted by where they come from', () => {
     expect(screen.getByText('skill-11')).toBeInTheDocument();
   });
 
+  it('a model never told about its skills is warned on each tab that has skills, and Overview leads there', () => {
+    // #251 code review F2: the warning used to live on the one Skills tab.
+    show({ ...mixed, skillsOffered: false });
+    fireEvent.click(screen.getByText('Your skills'));
+    expect(screen.getByRole('tab', { name: 'Global context' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('The assistant wasn’t told about these')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Project context' }));
+    expect(screen.getByText('The assistant wasn’t told about these')).toBeInTheDocument();
+  });
+
   it('a project with nothing of its own says so instead of showing a blank tab', () => {
     show({ assembledBy: 'youcoded', skills: [], tools: ['Read'], contextWindowTokens: 8000 });
     expect(screen.getByText('Nothing is specific to this project')).toBeInTheDocument();

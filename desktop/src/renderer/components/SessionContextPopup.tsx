@@ -99,8 +99,7 @@ const linesLabel = (n: number) => `${n} line${n === 1 ? '' : 's'}`;
  *  the wire: a tool's description is a constant of the tool, not a fact about
  *  this chat, and the descriptions in the tool registry are written FOR THE MODEL
  *  ("Load a named skill's instructions and follow them") rather than for someone
- *  deciding whether their assistant can do what they need. An MCP tool has no
- *  entry and falls back to naming the add-on it came from. */
+ *  deciding whether their assistant can do what they need. */
 const TOOL_BLURBS: Record<string, string> = {
   Read: 'Opens a file and reads what is in it.',
   Write: 'Creates a new file, or replaces one that already exists.',
@@ -116,14 +115,8 @@ const TOOL_BLURBS: Record<string, string> = {
   AskUserQuestion: 'Stops and asks you a question when it needs a decision.',
 };
 
-function toolBlurb(name: string): string {
-  const known = TOOL_BLURBS[name];
-  if (known) return known;
-  const parts = name.split('__');
-  return parts.length >= 3 && parts[0] === 'mcp'
-    ? `Part of the ${parts[1]} add-on. Only that add-on knows what it does.`
-    : 'An action the assistant can take in this chat.';
-}
+// Built-in tools only: an add-on's tools are listed by name under the add-on's own row.
+const toolBlurb = (name: string): string => TOOL_BLURBS[name] ?? 'An action the assistant can take in this chat.';
 
 const MD_SCALE = `text-2xs text-fg-2
   [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-2xs [&_h4]:text-2xs
