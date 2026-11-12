@@ -21,7 +21,7 @@ import { ContextIntroBanner } from '../ContextIntroBanner';
 // Plain-text load-timing label — shared with ContextEditorOverlay
 // (context-labels.ts); spelled out in words, never a glyph.
 import { timingLabel } from '../context-labels';
-import { CARD_LEVEL_1 } from '../../ui';
+import { CARD_LEVEL_1, ErrorState } from '../../ui';
 import { TabHeading } from '../TabHeading';
 import { useScrollFade } from '../../../hooks/useScrollFade';
 
@@ -30,6 +30,9 @@ interface ContextTabProps {
   groups: ContextGroup[] | null;
   onEditFile: (file: ContextFile) => void;
   onOpenInfo: (scope: ContextScope) => void;
+  /** Why the list could not be read, or null. An empty list with this set is NOT "no context files". */
+  loadError?: string | null;
+  onRetry?: () => void;
 }
 
 // Per-scope teaching copy. Descriptions are EXACT and intentionally have NO
@@ -97,7 +100,7 @@ function ContextTabShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) {
+export function ContextTab({ groups, onEditFile, onOpenInfo, loadError, onRetry }: ContextTabProps) {
   // Photo-only build: `shoot` opens the first context file's editor, or the explainer.
   useScreenOpen('projects/context/editor', () => { const f = groups?.flatMap((g) => g.files)[0]; if (f) onEditFile(f); });
   useScreenOpen('projects/context/how', () => onOpenInfo('project'));
@@ -106,6 +109,16 @@ export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) 
       <ContextTabShell>
         <ContextIntroBanner />
         <p className="text-sm text-fg-muted">Loading…</p>
+      </ContextTabShell>
+    );
+  }
+
+  if (groups.length === 0 && loadError && onRetry) {
+    // WHY (error inventory 2026-09-10, Projects row 8): a failed read is not "no context files".
+    return (
+      <ContextTabShell>
+        <ContextIntroBanner />
+        <ErrorState variant="inline" message={`Couldn't load this project's context files: ${loadError}`} onRetry={onRetry} />
       </ContextTabShell>
     );
   }
