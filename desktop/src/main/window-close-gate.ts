@@ -44,7 +44,7 @@ export interface CloseGateDeps<Answer> {
   sessionIds(): string[];
   /** Ask the person (resolves with their answer; concurrent asks share one prompt). */
   ask(count: number): Promise<Answer>;
-  /** Carry out the answer for these sessions; true when the window should close. */
+  /** Carry out the answer for these sessions (called once the window has actually closed). */
   apply(answer: Answer, sessionIds: string[]): boolean;
   /** Whether the answer lets the window close (Cancel does not). Default: `answer.close`. */
   closes?(answer: Answer): boolean;
@@ -69,6 +69,10 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
   let askingHung = false;
   let asking = false; // the sessions prompt is up: a second press waits on it, never asks again
   let journalsSynced = false; // the close this gate re-issued after its editors journaled
+  // WHY a second stage (card #34): the answer used to be carried out inside the `close` event, i.e. BEFORE the
+  // page's own unload guard (an unsaved text file) could still veto the close. A vetoed close left the window open
+  // with its chats already ended. Now the answer is only carried out once the window has really closed (onClosed).
+  let goingThrough: Remembered<Answer> | null = null;
   return {
     async onClose(ev: CloseEvent): Promise<void> {
       if (d.buddy) return;
@@ -118,7 +122,7 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
       if (r) {
         // Sessions owned at confirm time AND still here (one dragged away meanwhile is not ended).
         const owned = d.sessionIds();
-        if (!d.apply(r.answer, r.sessionIds.filter((id) => owned.includes(id)))) ev.preventDefault();
+        goingThrough = { answer: r.answer, sessionIds: r.sessionIds.filter((id) => owned.includes(id)) };
         return;
       }
       const ids = d.sessionIds();
@@ -137,6 +141,13 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
     /** The page vetoed its unload (Electron `will-prevent-unload`): the close did not happen. */
     onUnloadPrevented(): void {
       confirmed = null;
+      goingThrough = null; // the window stays: its chats must stay running
+    },
+    /** The window has really closed (Electron `closed`): only now are the confirmed chats ended. */
+    onClosed(): void {
+      const r = goingThrough;
+      goingThrough = null;
+      if (r) d.apply(r.answer, r.sessionIds);
     },
   };
 }

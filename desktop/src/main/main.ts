@@ -856,6 +856,9 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // (the registry ignores buddies) — while someone is on the phone nothing is focused.
   win.on('focus', () => windowRegistry.noteFocused(wid));
   win.on('closed', () => {
+    // WHY first, while the registry still knows this window: ends the chats the person agreed to end, only now that the
+    // window is really gone (card #34: a close that a page guard vetoed used to end them anyway).
+    closeGate.onClosed();
     cancelWindowHandoffs(wid);
     // Drop attention reports contributed by this window so stale session
     // states from a closed window don't persist in the aggregated summary.
