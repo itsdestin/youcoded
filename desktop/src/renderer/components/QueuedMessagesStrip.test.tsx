@@ -92,4 +92,23 @@ describe('QueuedMessagesStrip (Task 12)', () => {
     fireEvent.click(cancelButtons[1]);
     expect(onCancel).toHaveBeenCalledWith('q-2');
   });
+
+  // Card #62: a waiting message with files shows names (never full paths); extras fold into "+N more".
+  it('shows file-name chips for attachments, not full paths, and folds extras', () => {
+    render(
+      <QueuedMessagesStrip
+        queuedMessages={[{ queueId: 'q-f', content: 'see these', timestamp: 1, status: 'waiting',
+          attachments: ['/home/me/a.pdf', 'C:\\Users\\me\\b.png', '/x/c.txt', '/x/d.txt', '/x/e.txt'] }]}
+      />,
+    );
+    expect(screen.getByText('a.pdf')).toBeInTheDocument();
+    expect(screen.getByText('b.png')).toBeInTheDocument();
+    expect(screen.queryByText(/home\/me/)).toBeNull();
+    expect(screen.getByText('+2 more')).toBeInTheDocument();
+  });
+
+  it('draws no chip row when nothing is attached', () => {
+    render(<QueuedMessagesStrip queuedMessages={[{ queueId: 'q-n', content: 'plain', timestamp: 1 }]} />);
+    expect(screen.queryByTestId('queued-file-chips')).toBeNull();
+  });
 });

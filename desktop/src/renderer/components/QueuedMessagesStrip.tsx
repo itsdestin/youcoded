@@ -2,6 +2,9 @@ import React from 'react';
 import { Button } from './ui';
 import { workbenchQueuePreview } from '../workbench-mode';
 import { EditPencilButton } from './EditPencilButton';
+import { Chip } from './ui/Chip';
+import { FileKindIcon } from './project-view/icons';
+import { fileKind } from '../../shared/artifacts/categorization';
 
 // Task 12: renders messages the native host FIFO'd behind an in-flight turn
 // (SessionChatState.queuedMessages) docked at the bottom of the chat area —
@@ -85,9 +88,19 @@ interface QueuedMessage {
   paused?: boolean;
   status?: 'waiting' | 'delivering' | 'uncertain';
   editing?: boolean;
+  /** Full paths of files waiting with this message (the host keeps them; the strip shows names only). */
+  attachments?: string[];
   /** The host's one sentence about this message (why it waits, or why it was not sent). */
   notice?: string;
 }
+
+/** Just the file name of a path, either slash style (Destin 2026-11-12 wave-2 deck: names, never full paths). */
+function fileNameOf(path: string): string {
+  return path.replace(/\\/g, '/').split('/').pop() || path;
+}
+
+/** How many name chips one waiting message shows before the rest fold into "+N more". */
+const MAX_NAME_CHIPS = 3;
 
 interface Props {
   queuedMessages: QueuedMessage[];
@@ -129,6 +142,8 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
   } else if (preview) {
     queuedMessages = preview === 'idle-after' || preview === 'blocked-after' || dismissed ? [] : [{
       queueId: 'review-only', content: 'Please check the release notes.', timestamp: 0,
+      // Review pictures only: the attached-files case (card #62).
+      ...(preview.startsWith('waiting') ? { attachments: ['/home/me/Documents/release-notes.pdf', '/home/me/Pictures/screenshot.png'] } : {}),
       status: preview.startsWith('idle') ? 'delivering' : preview.startsWith('waiting') ? 'waiting' : 'uncertain',
     }];
   }
@@ -154,6 +169,20 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
           </div>
           <div className="flex-1 min-w-0">
             <div className="truncate text-sm text-fg-2">{q.content}</div>
+            {/* WHY (card #62, Destin 2026-11-12): a waiting message with files used to look like plain text only,
+                so you could not tell the files were riding along. Names only (not full paths); more than
+                MAX_NAME_CHIPS fold into one "+N more" chip so the strip stays one short row. */}
+            {q.attachments && q.attachments.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1 pt-1" data-testid="queued-file-chips">
+                {q.attachments.slice(0, MAX_NAME_CHIPS).map((p, i) => (
+                  <Chip key={`${p}-${i}`} className="max-w-[14rem] min-w-0" title={fileNameOf(p)}>
+                    <FileKindIcon kind={fileKind(p)} size={12} />
+                    <span className="truncate">{fileNameOf(p)}</span>
+                  </Chip>
+                ))}
+                {q.attachments.length > MAX_NAME_CHIPS && <Chip>+{q.attachments.length - MAX_NAME_CHIPS} more</Chip>}
+              </div>
+            )}
             {/* WHY (2026-10-22, "no real way to recover"): say what is known and what Dismiss does, on this row only. */}
             {(q.notice || q.status === 'uncertain') && (
               <div className="text-3xs text-fg-muted">
