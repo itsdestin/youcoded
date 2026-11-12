@@ -176,6 +176,25 @@ no usable preset file:
     105 / 94 / 94 / 95 s, and `-ctk q8_0 -ctv q8_0` on the shared pool 92 / 96 / 96 / 96 s.
     Neither is adopted: the first quadruples context memory, the second is the fatal
     `-fa off` case below and wants measuring on the smaller models first.
+  - **Kept readings share ONE pool the size of the context (2026-11-12).** Three chats,
+    each opening ~14k tokens, slots 0-2 pinned by `id_slot`. At `-c 32768` two chats keep
+    their readings (follow-ups read ~300 new tokens); opening the third logs
+    `try_clear_id: purging slot N` and from then on EVERY switch re-reads the whole chat.
+    At `-c 65536` all three keep theirs, including after one grew by 8k tokens; no purge.
+    It fails once the open chats together exceed the pool. Measured with Qwen3-0.6B on the
+    Z13; the 9B at 64k on the RTX 4070 SUPER was started and not finished (the PC stopped
+    accepting logins mid-run, cause unknown). Hence `DEFAULT_CONTEXT_SIZE = 65536`
+    (`engine-config.ts`, was 32768; Destin, review deck Q-2).
+  - **Helper agents never take a chat's slot (2026-11-12, `SlotPins.slotFor(…, helper)`).**
+    A helper (specialist child) has its own session id and used to count as a chat, so one
+    chat that started two helpers pushed the user's other chats off their slots. A helper
+    now uses a free slot or another helper's, else the shared spare; a chat that needs a
+    slot takes a helper's before another chat's.
+  - **Memory and speed of the default on a 12 GB card (2026-11-12, RTX 4070 SUPER, Vulkan
+    build, Qwen3.5-9B-UD-Q4_K_XL, `--spec-default -ctk q8_0`, no projector).** `-c 65536`:
+    8.2 GB of 12.3 GB after load (8.6 after replies); `-c 32768`: 7.4 GB (7.8). Ordinary
+    reply 54-65 tokens a second at either size; a whole-file rewrite 530-570 (the n-gram
+    guesser accepted 2,279-2,301 of 2,304 drafted tokens).
 - **Speed flags (2026-09-04), both measured on b10665, Qwen3.5-9B Q8_0, Z13 Vulkan;
   guard: `test-engine/probe-speed.mjs` (flags reach the model child AND the drafter fires).
   Both are now user switches (`engine.speed` in config.json, `engine:set-config`) and
@@ -204,7 +223,17 @@ no usable preset file:
       slower — not worth it, so `expert_count > 0` gets no MTP.
     - **A model WITHOUT the heads must never get it:** Qwen3.5-9B-Q8_0 with `draft-mtp`
       → `failed to create MTP context`, every request 500 "failed to load". Hence per
-      model, from the file, never by name.
+      model, from the file, never by name. Same on NVIDIA (2026-11-12, RTX 4070 SUPER,
+      Qwen3.5-9B-UD-Q4_K_XL forced with `--spec-type draft-mtp`): `context type MTP
+      requested but model doesn't contain MTP layers`, the server exits with code 1.
+    - **Safety net (2026-11-12, `engine/mtp-fallback.ts`).** MTP was measured on one
+      machine and its second context is not in the fit estimate. The first failed load
+      of a model that has MTP on is not reported: the preset is rewritten without MTP for
+      it, the router re-reads (`?reload=1`) and the load is asked again. Loads → `noMtp`
+      is saved in that model's settings on this computer and it never gets MTP again.
+      Fails too → MTP is put back and the failure is reported as before. A load that
+      could not be asked at all is not retried. **MTP's speed on NVIDIA is still
+      unmeasured** — no dense model with heads fits the 12 GB card that was available.
     - `--spec-draft-type-k q8_0` (compressing MTP's own cache) changed nothing
       measurable; not used. The "Speculative decoding" switch off removes MTP too; a
       user's own `spec-*` extra option wins over ours.
