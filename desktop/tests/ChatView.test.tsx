@@ -273,6 +273,19 @@ describe('ChatView window keys reach only the chat on screen', () => {
     await waitFor(() => expect(screen.queryByText('Jump to bottom')).not.toBeNull());
   });
 
+  it('after a quote-chip jump, End back to the bottom follows new messages again', async () => {
+    const view = render(<ChatView sessionId="s1" visible sessionActive />);
+    const scroller = view.container.querySelector('.chat-scroll') as HTMLElement;
+    // The chip's jump: holds the place (the button shows at once) and scrolls a little way up.
+    fireEvent(window, new CustomEvent('youcoded:jump-to-ref', { detail: { ref: { kind: 'chat' } } }));
+    scroller.scrollTop = 1490;
+    await waitFor(() => expect(screen.queryByText('Jump to bottom')).not.toBeNull());
+    // End scrolls natively (no wheel): ChatView must report it as a hand scroll.
+    fireEvent.keyDown(window, { key: 'End' });
+    scroller.scrollTop = 1500;
+    await waitFor(() => expect(screen.queryByText('Jump to bottom')).toBeNull());
+  });
+
   it('ArrowUp leaves a hidden chat pinned to its newest message', async () => {
     render(<ChatView sessionId="s1" visible={false} sessionActive={false} />);
     for (let i = 0; i < 3; i++) fireEvent.keyDown(window, { key: 'ArrowUp' });

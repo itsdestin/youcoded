@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { createRef } from 'react';
 import {
-  useStickToBottom, isAtBottom, distanceFromBottom, RESTICK_THRESHOLD_PX, REARM_IDLE_MS, JUMP_GLIDE_MS,
+  useStickToBottom, isAtBottom, distanceFromBottom, RESTICK_THRESHOLD_PX, REARM_IDLE_MS, JUMP_GLIDE_MS, HOLD_COAST_MS,
 } from '../src/renderer/hooks/use-stick-to-bottom';
 
 // jsdom doesn't lay out, so scrollHeight/clientHeight are always 0 and scrollTop
@@ -307,6 +307,23 @@ describe('useStickToBottom', () => {
     expect(result.current.stickRef.current).toBe(true);
   });
 
+  it('an un-pin that moves nothing (ArrowUp in an empty chat) still gets its re-check', () => {
+    // ChatView's ArrowUp calls releaseStick() and scrollBy(); in a chat that cannot
+    // scroll no scroll event follows. Without the re-check the chat would stay
+    // un-pinned with no button while a reply grew below.
+    let contentH = CONTENT_H;
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => contentH });
+    const { result } = renderHook(() => useStickToBottom(ref));
+    act(() => { result.current.scrollToBottom(); });
+    act(() => { result.current.releaseStick(); });
+    settle();
+    expect(result.current.stickRef.current).toBe(true); // nothing moved: following again
+    act(() => { result.current.releaseStick(); });
+    contentH += 400; // a reply grows below before the check
+    settle();
+    expect(result.current.atBottom).toBe(false); // the button is there to get back
+  });
+
   it('a short upward nudge that stays near the bottom re-arms without showing the button', () => {
     const seen: boolean[] = [];
     const { result } = renderHook(() => { const r = useStickToBottom(ref); seen.push(r.atBottom); return r; });
@@ -354,7 +371,7 @@ describe('useStickToBottom', () => {
       act(() => { result.current.scrollToBottom(); });
       act(() => { result.current.holdPosition(); });
       act(() => { el.scrollTop = MAX_SCROLL - 300; });
-      settle();
+      act(() => { vi.advanceTimersByTime(HOLD_COAST_MS); }); // reading the quote
       act(() => { wheel(el, 300); });
       settle();
       expect(result.current.stickRef.current).toBe(true);
@@ -365,9 +382,25 @@ describe('useStickToBottom', () => {
       const { result } = renderHook(() => useStickToBottom(ref));
       act(() => { result.current.scrollToBottom(); });
       act(() => { result.current.holdPosition(); });
-      settle();
+      act(() => { vi.advanceTimersByTime(HOLD_COAST_MS); });
       expect(result.current.stickRef.current).toBe(false);
       act(() => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true })); });
+      settle();
+      expect(result.current.stickRef.current).toBe(true);
+    });
+
+    it('a trackpad coast arriving right after the jump does not lift the hold', () => {
+      const { result } = renderHook(() => useStickToBottom(ref));
+      act(() => { result.current.scrollToBottom(); });
+      act(() => { result.current.holdPosition(); });
+      act(() => { el.scrollTop = MAX_SCROLL - 10; });
+      // Leftover momentum from the gesture before the click: downward wheel events.
+      act(() => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: 30, bubbles: true })); });
+      settle();
+      expect(result.current.stickRef.current).toBe(false);
+      // A real wheel once the coast window has passed does lift it.
+      act(() => { vi.advanceTimersByTime(HOLD_COAST_MS); });
+      act(() => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: 30, bubbles: true })); });
       settle();
       expect(result.current.stickRef.current).toBe(true);
     });

@@ -49,6 +49,9 @@ export const RESTICK_THRESHOLD_PX = 32;
  */
 export const REARM_IDLE_MS = 90;
 
+/** Wheel events this soon after a quote-chip / Find jump are a trackpad's coast, not a new hand scroll. */
+export const HOLD_COAST_MS = 300;
+
 /** Length of the Jump-to-bottom glide. */
 export const JUMP_GLIDE_MS = 260;
 
@@ -148,6 +151,11 @@ export function useStickToBottom(
     jumpRafRef.current = 0;
   }, []);
 
+  // Set by the listener effect below: (re)starts the idle re-check.
+  const scheduleCheckRef = useRef<() => void>(() => {});
+  // When the last hold began — see the wheel handler's coast guard.
+  const holdAtRef = useRef(0);
+
   const releaseStick = useCallback(() => {
     // The user took the wheel back: stop the glide so it can't fight their scroll.
     cancelJump();
@@ -156,11 +164,17 @@ export function useStickToBottom(
     // the reveal check — see revealPendingRef.
     stickRef.current = false;
     revealPendingRef.current = true;
+    // WHY always schedule the idle re-check here (review, 2026-11-12): an un-pin
+    // that moves nothing (ArrowUp in an empty chat) fires no scroll event, so
+    // without it nothing would ever re-arm OR show the button, and a reply
+    // could then grow off-screen below with no way back but a send.
+    scheduleCheckRef.current();
   }, [cancelJump]);
 
   const holdPosition = useCallback(() => {
     cancelJump();
     holdRef.current = true;
+    holdAtRef.current = performance.now();
     revealPendingRef.current = false;
     cancelReveal();
     setStick(false);
@@ -269,6 +283,7 @@ export function useStickToBottom(
       if (!stickRef.current) scheduleCheck();
     };
     userScrollRef.current = userScroll;
+    scheduleCheckRef.current = scheduleCheck;
 
     // Upward wheel intent. Passive on purpose — it only reads the delta; the
     // scrolling itself is the browser's own (ChatView has no wheel handler, see
@@ -282,9 +297,15 @@ export function useStickToBottom(
     // re-check re-arms in that case (and the button never showed, see
     // revealPendingRef); after a real scroll away it measures >32px and leaves
     // the button up.
+    //
+    // WHY the coast guard: a trackpad keeps delivering wheel events for a second
+    // or more after the fingers lift. Those arriving just after a quote-chip
+    // click are the old gesture, not a new one, and must not lift the hold.
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY < 0) releaseStick();
-      if (e.deltaY !== 0) userScroll();
+      if (e.deltaY === 0) return;
+      if (holdRef.current && performance.now() - holdAtRef.current < HOLD_COAST_MS) return;
+      userScroll();
     };
 
     // Touch (Android / phone over remote): a finger moving DOWN scrolls the
@@ -316,6 +337,7 @@ export function useStickToBottom(
       if (idleTimer !== undefined) clearTimeout(idleTimer);
       cancelReveal();
       userScrollRef.current = () => {};
+      scheduleCheckRef.current = () => {};
       c.removeEventListener('scroll', onScroll);
       c.removeEventListener('wheel', onWheel);
       c.removeEventListener('touchstart', onTouchStart);

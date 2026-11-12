@@ -44,6 +44,8 @@ import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 
 // Matches the .jump-to-bottom exit transition in globals.css.
 const JUMP_FADE_MS = 180;
+/** Keys the browser scrolls the chat with by itself (ChatView only listens to note them). */
+const NATIVE_SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', ' ']);
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
@@ -733,6 +735,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // its own side — the yield has to happen here.
       if (document.activeElement?.closest('[data-game-keys]')) return;
       if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      // PageUp/PageDown/Home/End/Space scroll natively (no wheel, touch or arrow),
+      // so say so: they lift a quote-chip / Find hold, so reaching the bottom with
+      // End re-arms following. The upward ones also un-pin, like ArrowUp.
+      if (NATIVE_SCROLL_KEYS.has(e.key)) {
+        if (e.key === 'PageUp' || e.key === 'Home') releaseStick();
+        noteUserScroll();
+        return;
+      }
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
 
       e.preventDefault();
