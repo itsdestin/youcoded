@@ -58,7 +58,9 @@ describe('rules are sorted by where they apply', () => {
     expect(screen.getByText('Shortened · AGENTS.md')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'Project context' }));
     // Folder names, not long absolute paths; a same-folder file that was not used is named.
-    expect(screen.getByText('From the “workspace” folder · Outlined parent · CLAUDE.md here not used')).toBeInTheDocument();
+    // The engine's note ("Outlined parent") is written for the model and is not shown (deck round 2, R2-6).
+    expect(screen.getByText('From the “workspace” folder · Shortened to fit this model · CLAUDE.md here not used')).toBeInTheDocument();
+    expect(screen.queryByText(/Outlined parent/)).toBeNull();
     expect(screen.getByText('Read before every chat in this project')).toBeInTheDocument();
   });
 

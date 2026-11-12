@@ -249,9 +249,15 @@ function RulesCard({ file, kind, label, sessionId, openFile, id }: {
   sessionId?: string;
   openFile: (p: string) => void | Promise<void>;
 }) {
+  // WHY the engine's own note is not shown (Destin, deck round 2, R2-6: "still dont
+  // like the '3 of 13 sections ....' just confusing"): that note is written FOR THE
+  // MODEL ("3 of 12 sections above are shown as heading + first line(s)"). A person
+  // needs one fact — it was shortened — and the "What was cut" switch right below
+  // shows exactly what. A shortened file's line says only that, plus which folder
+  // it came from when it is not the project's own.
   const description = [
-    label,
-    file.truncated ? (file.note ?? 'Shortened to fit') : null,
+    file.truncated && label.startsWith('Read before') ? null : label,
+    file.truncated ? 'Shortened to fit this model' : null,
     // Only one file per folder is used; name the one that was not.
     file.notUsed ? `${file.notUsed} here not used` : null,
   ].filter(Boolean).join(' · ');
