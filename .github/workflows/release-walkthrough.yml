@@ -3,6 +3,10 @@
 # Linux tests the nightly build; Windows and Mac install the real installers silently and walk the same steps.
 name: Release walk-through
 on:
+  # TEMPORARY (2026-11-12): one re-run on current master's installers; removed in the next commit.
+  push:
+    branches: [session/test-suite-rethink]
+    paths: ['.github/workflows/release-walkthrough.yml']
   workflow_dispatch:
     inputs:
       run:
@@ -66,7 +70,7 @@ jobs:
         with: { node-version: '22' }
       - name: Get the real installer and install it silently, as a user's double-click would
         shell: pwsh
-        env: { GH_TOKEN: '${{ github.token }}', RUN: '${{ inputs.installers }}' }
+        env: { GH_TOKEN: '${{ github.token }}', RUN: '${{ inputs.installers || 43184154341 }}' }
         run: |
           if ($env:RUN) { gh run download $env:RUN -R $env:GITHUB_REPOSITORY -n youcoded-desktop-windows -D inst; "Installer from Desktop Test Build run $env:RUN" >> $env:GITHUB_STEP_SUMMARY }
           else { gh release download -R $env:GITHUB_REPOSITORY -p 'YouCoded-Installer-*.exe' -D inst; "Installer from the latest published release" >> $env:GITHUB_STEP_SUMMARY }
@@ -99,7 +103,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with: { node-version: '22' }
       - name: Get the real installer and drag the app into Applications, as a user would
-        env: { GH_TOKEN: '${{ github.token }}', RUN: '${{ inputs.installers }}' }
+        env: { GH_TOKEN: '${{ github.token }}', RUN: '${{ inputs.installers || 43184154341 }}' }
         run: |
           if [ -n "$RUN" ]; then gh run download "$RUN" -R "$GITHUB_REPOSITORY" -n youcoded-desktop-macos -D inst; echo "Installer from Desktop Test Build run $RUN" >> "$GITHUB_STEP_SUMMARY"
           else gh release download -R "$GITHUB_REPOSITORY" -p 'YouCoded-Installer-*-arm64.dmg' -D inst; echo "Installer from the latest published release" >> "$GITHUB_STEP_SUMMARY"; fi
