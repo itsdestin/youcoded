@@ -21,5 +21,6 @@ export function Chip({ children, className = '', title, ...rest }: { children: R
   const chip = <span className={`${CHIP} ${className}`.trim()} data-chip {...rest}>{children}</span>;
   // WHY: a chip's `title` used to be the browser's own hover bubble (card #135); the app's hint
   // follows the theme. Tooltip clones the span, so layout is unchanged.
-  return title ? <Tooltip text={title}>{chip}</Tooltip> : chip;
+  // Always wrapped (empty text = no hint) so a title that comes and goes never rebuilds the chip.
+  return <Tooltip text={title ?? ''}>{chip}</Tooltip>;
 }

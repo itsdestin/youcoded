@@ -263,5 +263,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
   // WHY: a `title` on a shared Button used to reach the DOM as the browser's own grey hover
   // bubble, which no theme can style (card #135, design guide: hints are the app's own).
   // Tooltip clones the button, so the DOM and layout are unchanged; no title means no wrapper.
-  return title ? <Tooltip text={title}>{button}</Tooltip> : button;
+  // Always wrapped, with empty text meaning no hint: a title that appears or disappears (a disabled
+  // button's reason) must not swap the element type, or React would rebuild the button mid-use.
+  return <Tooltip text={title ?? ''}>{button}</Tooltip>;
 });

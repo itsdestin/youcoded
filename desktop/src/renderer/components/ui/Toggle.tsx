@@ -95,5 +95,6 @@ export const Toggle = React.forwardRef<HTMLButtonElement, ToggleProps>(function 
       />
     </button>
   );
-  return title ? <Tooltip text={title}>{control}</Tooltip> : control;
+  // Always wrapped (empty text = no hint) so a title that comes and goes never rebuilds the switch.
+  return <Tooltip text={title ?? ''}>{control}</Tooltip>;
 });
