@@ -1743,7 +1743,7 @@ export function registerIpcHandlers(
   // WHY: seedMode/setPermissionMode publish to every window and phone, not just
   // the caller; early reads may precede seeding and otherwise leave stale chips.
   // One-core R5-4a: the messages waiting behind a running turn, as the host holds them, so EVERY screen draws (and can cancel) the same strip.
-  nativeHost.on('queue-changed', (e: { sessionId: string; queue: { queueId: string; content: string; timestamp: number }[] }) => {
+  nativeHost.on('queue-changed', (e: { sessionId: string; queue: { queueId: string; content: string; timestamp: number; attachments?: string[] }[] }) => {
     publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'queue', queue: e.queue });
   });
   // Startup readiness is a retained host fact, so every window/phone gates the same unsent draft.

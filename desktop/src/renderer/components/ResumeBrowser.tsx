@@ -335,7 +335,7 @@ const RowMemo = React.memo(
 // it on screen is a paint, and hidden text is out of tab order and
 // find-in-page. Addressed by primitives so a keystroke in the search box
 // re-renders no layer — and so re-reads nothing.
-const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, projectSlug, visible, onSettled, onGone }: {
+const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, projectSlug, visible, onSettled, onGone, topInset, onTopReserved }: {
   id: string;
   provider: ChatsearchProvider;
   title: string;
@@ -343,14 +343,18 @@ const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, pro
   visible: boolean;
   onSettled: (id: string) => void;
   onGone: (id: string) => void;
+  /** The floating card's measured height (card #190, see SessionPreviewPane). */
+  topInset: number;
+  onTopReserved: (id: string, reserved: boolean) => void;
 }) {
   useEffect(() => () => onGone(id), [id, onGone]);
+  const onReserved = useCallback((reserved: boolean) => onTopReserved(id, reserved), [id, onTopReserved]);
   return (
     // data-preview-id: lets the header card's scroll handler tell the layer on
     // screen from the hidden ones (see onPreviewScroll).
     <div className="absolute inset-0 flex flex-col" data-preview-id={id} style={{ visibility: visible ? 'visible' : 'hidden' }}>
       {visible && <ScreenMark name="chat/resume/preview" />}
-      <SessionPreviewPane provider={provider} id={id} title={title} projectSlug={projectSlug} onSettled={onSettled} backdrop={false} />
+      <SessionPreviewPane provider={provider} id={id} title={title} projectSlug={projectSlug} onSettled={onSettled} backdrop={false} topInset={topInset} onTopReserved={onReserved} active={visible} />
     </div>
   );
 });
@@ -525,6 +529,10 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   const onPreviewScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.target;
     if (!(el instanceof HTMLElement)) return;
+    // Card #190: a conversation too short to scroll has room reserved under the
+    // card instead (SessionPreviewPane fitTopInset), so the card stays put —
+    // sliding it away would only leave that room empty.
+    if (el.hasAttribute('data-top-reserved')) return;
     // Only the conversation on screen counts. A hidden layer jumps itself to
     // its newest message when its read lands, and that is not the reader moving.
     if (el.closest('[data-preview-id]')?.getAttribute('data-preview-id') !== shownIdRef.current) return;
@@ -545,6 +553,28 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
     if (cloneOrganizeId) return;
     setHeaderTucked(moved < 0);
   };
+  // ── The card's real height, for the room a short conversation reserves ──
+  // (card #190). Measured, never hard-coded: the card grows with tags, a note,
+  // a long title. A callback ref: read when the card mounts (during commit, so
+  // before paint) and again whenever it resizes; 0 while there is no card.
+  const [headerHeight, setHeaderHeight] = useState(0);
+  const headerRo = useRef<ResizeObserver | null>(null);
+  const headerStripRef = useCallback((el: HTMLDivElement | null) => {
+    headerRo.current?.disconnect();
+    headerRo.current = null;
+    setHeaderHeight(el ? el.offsetHeight : 0);
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    headerRo.current = new ResizeObserver(() => setHeaderHeight(el.offsetHeight));
+    headerRo.current.observe(el);
+  }, []);
+  // A layer that has just reserved room is the one on screen: bring its card
+  // back if it was tucked (a resize can turn a scrolled-up conversation into
+  // one that fits, and a tucked card over reserved room would leave a gap).
+  const onTopReserved = useCallback((id: string, reserved: boolean) => {
+    if (!reserved || id !== shownIdRef.current) return;
+    setHeaderTucked(false);
+    tuckMark.current.el = null;
+  }, []);
   // Closing the browser unmounts every layer. Keep only the one that was on
   // screen, so reopening re-reads one conversation rather than four. The card
   // comes back with it rather than reopening tucked away.
@@ -1974,6 +2004,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
                         conversation is simply there, not sliding in under the
                         arrival. The open tags/note sheet holds it on screen. */}
                     <div
+                      ref={headerStripRef}
                       className="preview-header-slide absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none"
                       data-tucked={headerTucked && !cloneOrganizeId ? '' : undefined}
                       data-still={arrival === 'staged' ? '' : undefined}
@@ -2003,6 +2034,8 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
                         visible={id === shownId}
                         onSettled={onPreviewSettled}
                         onGone={onPreviewGone}
+                        topInset={headerHeight}
+                        onTopReserved={onTopReserved}
                       />
                     ) : null;
                   })}

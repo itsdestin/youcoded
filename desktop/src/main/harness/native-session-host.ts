@@ -2267,9 +2267,9 @@ export class NativeSessionHost extends EventEmitter {
   }
 
   /** The waiting messages themselves, oldest first: what the docked strip draws on EVERY screen (one-core R5-4a). `content` is the text
-   *  exactly as it was sent, which is also what the strip showed when only the sending screen drew it. */
-  queuedMessagesFor(sessionId: string): { queueId: string; content: string; timestamp: number }[] {
-    const item = (q: { id: string; text: string; at?: number }) => ({ queueId: q.id, content: q.text, timestamp: q.at ?? 0 });
+   *  as sent. WHY `attachments` (#62c): `content` has the paths in front of the words, so Edit gives back words + chips from this list; the same paths the Claude Code queue lists to every screen, never model copies, absent when none. */
+  queuedMessagesFor(sessionId: string): { queueId: string; content: string; timestamp: number; attachments?: string[] }[] {
+    const item = (q: { id: string; text: string; attachments: string[]; at?: number }) => ({ queueId: q.id, content: q.text, timestamp: q.at ?? 0, ...(q.attachments.length ? { attachments: [...q.attachments] } : {}) });
     return (this.live.get(sessionId)?.queue ?? []).map(item);
   }
 

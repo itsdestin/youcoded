@@ -642,6 +642,15 @@ describe('InputBar — InputBarHandle hasDraft/fillDraft (Task 11)', () => {
     expect(textarea.value).toBe('the edited queued message');
     expect(ref.current!.hasDraft()).toBe(true);
   });
+
+  it('fillDraft() with files puts the words in the box and the files back as chips', () => {
+    const ref = renderWithRef();
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    act(() => { ref.current!.fillDraft('compare these', ['/home/u/report.pdf']); });
+    expect(textarea.value).toBe('compare these');
+    expect(ref.current!.readDraftPayload()).toEqual({ text: 'compare these', attachments: ['/home/u/report.pdf'] });
+    expect(screen.getByText('report.pdf')).toBeTruthy();
+  });
 });
 
 // A 'queued' native ack writes neither a timeline bubble nor a strip row from this screen: the computer announces its queue (QUEUE_SYNCED).

@@ -81,3 +81,15 @@ export function sendChatMessage(
   if (sendId) window.claude.session.sendInput(sessionId, ptyText + '\r', undefined, sendId);
   else window.claude.session.sendInput(sessionId, ptyText + '\r');
 }
+
+/** The undo of the native join above, for Edit on a waiting message: the host's queue keeps the joined text
+ *  (`paths… words`) and lists the paths beside it. WHY (card #62 fault c): Edit used to put that joined text, paths
+ *  and all, into the box and drop the files. When the text does not start with exactly those paths (an older
+ *  computer lists none), it comes back whole with no files — what Edit always did. */
+export function nativeQueuedDraft(content: string, paths: readonly string[] | undefined): { text: string; paths: string[] } {
+  const prefix = (paths ?? []).join(' ');
+  if (!prefix || !content.startsWith(prefix)) return { text: content, paths: [] };
+  const rest = content.slice(prefix.length);
+  if (rest && !rest.startsWith(' ')) return { text: content, paths: [] };
+  return { text: rest.slice(1), paths: [...paths!] };
+}

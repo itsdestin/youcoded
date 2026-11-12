@@ -44,7 +44,7 @@ export interface NativeLive {
   /** True only when the host can affirm nothing is in flight (never guessed). */
   idle(): boolean;
   /** The messages waiting behind the running turn (R5-4a): a fresh screen starts from the host's truth, an empty list included. */
-  queue(): Array<{ queueId: string; content: string; timestamp: number }>;
+  queue(): Array<{ queueId: string; content: string; timestamp: number; attachments?: string[] }>;
   /** The session's permission mode, so a screen that connects later shows the real one (the push is not replayed). */
   permissionMode(): string | null;
 }

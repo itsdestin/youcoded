@@ -1191,10 +1191,9 @@ export class HarnessSession extends EventEmitter {
     if (changed) this.seededContinuationBinding = undefined;
     if (contextLength !== undefined) this.opts.contextLength = contextLength;
     if (profile) this.profile = profile;
-    // WHY: a history that fit the old provider must never reach a stricter one.
-    // Re-applying the gate here (not only on the error path) means the first
-    // request after a switch already carries the note, not the picture.
-    if (profile) this.enforceImageLimits();
+    // WHY: a history that fit the old provider must never reach a stricter one. Card #66 f3: only MARKED here (a sync gate noted shrinkable
+    // pictures); the next request's maybeCompact SHRINKS (async, resize worker) inside its own turn — no race with a send, the switch stays instant.
+    if (profile) this.imagesRefitPending = true;
     // Same applied-only-when-provided shape as contextLength: a swap to a
     // model with no published price must be able to CLEAR a price the old
     // model had, so `null` is a real value here and only `undefined` skips.
@@ -1933,8 +1932,8 @@ export class HarnessSession extends EventEmitter {
   /** Automatic selection retires complete groups into one summary. A failed
    * candidate leaves accepted history intact and fences this exact revision. */
   private async maybeCompact(model: LanguageModel, aiTools: Record<string, any>, force = false): Promise<boolean> {
-    // Neither the summariser nor the kept tail may carry an over-limit picture (2026-10-07).
-    this.enforceImageLimits();
+    // Neither the summariser nor the kept tail may carry an over-limit picture (2026-10-07); after a switch, shrink first (setBinding, f3).
+    if (this.imagesRefitPending) { this.imagesRefitPending = false; await this.fitImagesToLimits(); } else this.enforceImageLimits();
     const estimatedInput = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
       revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
     const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
@@ -2073,8 +2072,19 @@ export class HarnessSession extends EventEmitter {
    *  cleared like commitPrune does, so a later Read re-delivers — prepared. */
   private collapseOversizedImages(limits: ImageLimits): boolean { return this.adoptImageRewrite(collapseOversizedImageParts(this.history, limits)); }
 
-  /** enforceImageLimits, but SHRINKING over-limit pictures first (fitHistoryToImageLimits). */
-  private async fitImagesToLimits(): Promise<boolean> { return this.adoptImageRewrite(await fitHistoryToImageLimits(this.history, this.imageLimits, this.opts.toolServices?.images, this.abort?.signal)); }
+  private imagesRefitPending = false;   // set by a model switch; see setBinding's WHY (card #66 f3)
+  /** enforceImageLimits, but SHRINKING over-limit pictures first. WHY the checks after the await: a switch landing mid-shrink
+   *  rewrites history (its strip drops private parts, rebuilds historyOrigins); adopting a result built from the OLD array
+   *  would revive them and misalign origins. So: discard, fit once more against the newest limits, then the non-shrinking
+   *  gate (never loops). A Stop discards and re-marks, so the next request shrinks rather than leaving the note. */
+  private async fitImagesToLimits(again = true): Promise<boolean> {
+    const from = this.history, length = from.length, signal = this.abort?.signal;
+    const next = await fitHistoryToImageLimits(from, this.imageLimits, this.opts.toolServices?.images, signal);
+    if (signal?.aborted) { this.imagesRefitPending = true; return false; }
+    if (this.history === from && from.length === length) return this.adoptImageRewrite(next);
+    this.imagesRefitPending = false;
+    return again ? this.fitImagesToLimits(false) : this.enforceImageLimits();
+  }
 
   /** A step stopped at the output limit: queue the continue / split message and
    *  withdraw any cut-off tool card. False = recovery spent; end the turn as before. */

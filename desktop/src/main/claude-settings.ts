@@ -115,7 +115,9 @@ function backupPathFor(p: string): string {
  * result differs from what was read or when it was repaired, atomically
  * (tmp + fsync + rename, via cas-write).
  */
-export async function mutateSettings(mutate: (settings: Settings) => void): Promise<MutateSettingsResult> {
+export async function mutateSettings(mutate: (settings: Settings) => void,
+  // `lockWaitMs`: only the launch-edit retry passes it (launch-settings-chores.ts, card #11 b).
+  opts: { lockWaitMs?: number } = {}): Promise<MutateSettingsResult> {
   const p = settingsPath();
   let repaired: MutateSettingsResult['repaired'];
   let written = false;
@@ -143,7 +145,7 @@ export async function mutateSettings(mutate: (settings: Settings) => void): Prom
     if (!repaired && onDisk !== null && before === after) return null;
     written = true;
     return JSON.stringify(settings, null, 2);
-  });
+  }, undefined, { maxWaitMs: opts.lockWaitMs });
   if (!locked) {
     log('WARN', 'ClaudeSettings', 'settings.json is locked by another process — write skipped', { path: p });
     return { written: false, refused: 'locked' };

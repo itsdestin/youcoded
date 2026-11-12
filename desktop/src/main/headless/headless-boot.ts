@@ -145,9 +145,11 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   }
 
   // Hooks: Claude Code reaches this backend through the relay scripts it is told about in its settings.
+  let installLocked = false; // card #11 b: a locked settings.json is retried once in the background (startLaunchSettingsRetry)
   try {
     const { runInstallHooksChore } = require('../launch-settings-chores');
     const r = await runInstallHooksChore({ version: app.getVersion(), packaged: true });
+    installLocked = r.refused === 'locked';
     log('INFO', 'Headless', 'Hooks installed', { copied: r.copied, written: r.written, refused: r.refused });
   } catch (e) {
     log('ERROR', 'Headless', 'Failed to install hooks', { error: String(e) });
@@ -158,9 +160,10 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
     sessionManager.setPipeName('');
   }
   try {
-    const { runSettingsChores } = require('../launch-settings-chores');
+    const { runSettingsChores, startLaunchSettingsRetry } = require('../launch-settings-chores');
     // phone: also start Claude Code in fullscreen when no display mode is set (tui-fullscreen-default.ts).
-    await runSettingsChores({ phone: true });
+    const r = await runSettingsChores({ phone: true });
+    startLaunchSettingsRetry({ installLocked, choresLocked: r.refused === 'locked' }, (level: 'INFO' | 'WARN', msg: string, data?: Record<string, unknown>) => log(level, 'Headless', msg, data), true);
   } catch (e) {
     log('ERROR', 'Headless', 'Failed to run settings chores', { error: String(e) });
   }
