@@ -2349,6 +2349,18 @@ describe('NativeSessionHost', () => {
       expect(host.queuedMessagesFor(id)).toEqual([]);
     });
 
+    // Edit on a waiting message must give back its files as files, so the queue lists them (as the Claude Code queue already does);
+    // a message with no files lists none, so its row is exactly what it was.
+    it('lists a waiting message\'s attached files, and none for a message without files', () => {
+      host.send(id, 'first');
+      host.send(id, '/home/u/a.png /home/u/b c.pdf look at these', ['/home/u/a.png', '/home/u/b c.pdf']);
+      host.send(id, 'plain words');
+      const [withFiles, plain] = host.queuedMessagesFor(id);
+      expect(withFiles.content).toBe('/home/u/a.png /home/u/b c.pdf look at these');
+      expect(withFiles.attachments).toEqual(['/home/u/a.png', '/home/u/b c.pdf']);
+      expect(plain).not.toHaveProperty('attachments');
+    });
+
     it('a repeat with the same waiting messages is not announced again', () => {
       const seen: unknown[] = [];
       host.on('queue-changed', (e: any) => seen.push(e));

@@ -45,6 +45,8 @@ import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 
 // Matches the .jump-to-bottom exit transition in globals.css.
 const JUMP_FADE_MS = 180;
+/** Keys the browser scrolls the chat with by itself (ChatView only listens to note them). */
+const NATIVE_SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', ' ']);
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
@@ -231,7 +233,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // intent-driven instead of observer-driven — the old IntersectionObserver
   // could not see a scroll that a streaming delta undid in the same frame.
   const {
-    atBottom, stickRef, scrollToBottom, stickToBottom, jumpToBottom, releaseStick,
+    atBottom, stickRef, scrollToBottom, stickToBottom, jumpToBottom, releaseStick, holdPosition, noteUserScroll,
   } = useStickToBottom(scrollContainerRef);
   useEffect(() => {
     if (!atBottom) { setJumpMounted(true); return; }
@@ -414,9 +416,16 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // the very same object (the reducer spreads the existing tail). Without this
     // identity check, loading older history yanked the view to the bottom whenever
     // the newest entry happened to be the user's — a jump, not a re-arm.
+    const prev = lastEntryRef.current as { kind?: string; pending?: boolean; message?: unknown } | undefined;
     const isNewBottomEntry = last !== lastEntryRef.current;
     lastEntryRef.current = last;
-    if (isNewBottomEntry && (last as { kind?: string } | undefined)?.kind === 'user') stickToBottom();
+    const tail = last as { kind?: string; message?: unknown } | undefined;
+    // WHY: the transcript's echo of a message already on screen REBUILDS that bubble (pending → confirmed, same
+    // `message` object, chat-reducer TRANSCRIPT_USER_MESSAGE). When another entry lands in the same batch the length
+    // changes too, and this used to read the echo as a fresh send and re-pin — yanking a reader who had scrolled up
+    // (or jumped to a quote) since sending back to the bottom. Only a genuinely new message re-arms.
+    const isEcho = prev?.kind === 'user' && prev.pending === true && tail?.message === prev.message;
+    if (isNewBottomEntry && tail?.kind === 'user' && !isEcho) stickToBottom();
     // state.timeline is intentionally not a dep — only its length matters here,
     // and the array identity changes on every reducer dispatch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -742,6 +751,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // its own side — the yield has to happen here.
       if (document.activeElement?.closest('[data-game-keys]')) return;
       if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      // PageUp/PageDown/Home/End/Space scroll natively (no wheel, touch or arrow),
+      // so say so: they lift a quote-chip / Find hold, so reaching the bottom with
+      // End re-arms following. The upward ones also un-pin, like ArrowUp.
+      if (NATIVE_SCROLL_KEYS.has(e.key)) {
+        if (e.key === 'PageUp' || e.key === 'Home') releaseStick();
+        noteUserScroll();
+        return;
+      }
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
 
       e.preventDefault();
@@ -758,6 +775,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // doesn't unstick: when already pinned it cannot move the container, so
       // no scroll event would fire to re-arm.
       if (direction < 0) releaseStick();
+      // ArrowDown is a hand scroll the hook cannot hear: it lifts a quote-chip /
+      // Find hold so arriving at the bottom re-arms following.
+      else noteUserScroll();
       container.scrollBy({ top: direction * scrollSpeed.current, behavior: 'auto' });
     };
 
@@ -776,7 +796,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // visit at the accelerated speed.
       scrollSpeed.current = 0;
     };
-  }, [visible, releaseStick]);
+  }, [visible, releaseStick, noteUserScroll]);
 
   // Ctrl/Cmd+F opens the chat-history find bar. Only the visible ChatView
   // responds (one per session is mounted). Defers to the artifact drawer's own
@@ -805,11 +825,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   useEffect(() => {
     if (!visible) return;
     const onJump = (e: Event) => {
-      if ((e as CustomEvent<{ ref?: { kind?: string } }>).detail?.ref?.kind === 'chat') releaseStick();
+      // holdPosition, not releaseStick (Destin, 2026-11-12: a chip in a message just sent "gets stuck to the bottom
+      // and pulls itself back down"): the quoted words are usually the reply right above, so the jump ends near the
+      // bottom, and a plain release re-armed there 90 ms later and followed the new reply away from the quote.
+      if ((e as CustomEvent<{ ref?: { kind?: string } }>).detail?.ref?.kind === 'chat') holdPosition();
     };
     window.addEventListener('youcoded:jump-to-ref', onJump);
     return () => window.removeEventListener('youcoded:jump-to-ref', onJump);
-  }, [visible, releaseStick]);
+  }, [visible, holdPosition]);
 
   // The on-screen keyboard (Destin, 2026-11-02: "when keyboard is up, i can no longer see the very latest messages"): the
   // page no longer shrinks for it, so nothing above re-pins — the scroller's padding grows by the keyboard instead.
@@ -1120,7 +1143,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               getEntryEl={getEntryEl}
               revealAndPin={folding.revealAndPin}
               unfoldNearViewport={folding.unfoldNearViewport}
-              releaseStick={releaseStick}
+              // WHY holdPosition, not releaseStick: a hit near the bottom must not
+              // re-pin the chat and let a streaming reply drag it away (same as
+              // the quote chip below; use-stick-to-bottom.ts holdRef).
+              releaseStick={holdPosition}
               onClose={() => setFindOpen(false)}
             />
           )}

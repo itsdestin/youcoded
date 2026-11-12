@@ -224,3 +224,124 @@ describe('the three settings chores after install-hooks', () => {
     expect(rename).toHaveBeenCalledTimes(2); // the corrupt-file backup and the fresh write (both async now)
   });
 });
+
+// Card #11 (b): another program holding settings.json's lock for more than the
+// shared 3 s used to make the launch edits skip silently. The launch attempt is
+// unchanged (it runs before the window appears); one background retry later
+// waits up to ~10 s for THIS file only.
+describe('a launch edit refused for the lock is retried once, later, with a longer wait', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  const deps = (order: string[], install: { refused?: 'locked' } = {}, chores: { refused?: 'locked' } = {}) => ({
+    runInstallHooks: vi.fn(async (o: { lockWaitMs: number }) => { order.push(`install:${o.lockWaitMs}`); return install; }),
+    runChores: vi.fn(async (o: { lockWaitMs: number }) => { order.push(`chores:${o.lockWaitMs}`); return chores; }),
+    log: vi.fn(),
+  });
+
+  it('schedules nothing when the launch edits went through', async () => {
+    const { scheduleLockedSettingsRetry } = await import('../src/main/launch-settings-chores');
+    expect(scheduleLockedSettingsRetry({ installLocked: false, choresLocked: false }, deps([]))).toBeNull();
+  });
+
+  it('waits before retrying, then runs install-hooks before the chores, each allowed the longer wait', async () => {
+    vi.useFakeTimers();
+    const { scheduleLockedSettingsRetry, SETTINGS_RETRY_DELAY_MS, SETTINGS_RETRY_LOCK_WAIT_MS } = await import('../src/main/launch-settings-chores');
+    const order: string[] = [];
+    const d = deps(order);
+    const done = scheduleLockedSettingsRetry({ installLocked: true, choresLocked: false }, d)!;
+    await vi.advanceTimersByTimeAsync(SETTINGS_RETRY_DELAY_MS - 1);
+    expect(order).toEqual([]);                      // nothing happens at launch itself
+    await vi.advanceTimersByTimeAsync(1);
+    await done;
+    expect(SETTINGS_RETRY_LOCK_WAIT_MS).toBe(10_000);
+    expect(order).toEqual(['install:10000', 'chores:10000']);
+  });
+
+  it('stops after install-hooks if the lock is still held, and logs it', async () => {
+    vi.useFakeTimers();
+    const { scheduleLockedSettingsRetry, SETTINGS_RETRY_DELAY_MS } = await import('../src/main/launch-settings-chores');
+    const order: string[] = [];
+    const d = deps(order, { refused: 'locked' });
+    const done = scheduleLockedSettingsRetry({ installLocked: true, choresLocked: true }, d)!;
+    await vi.advanceTimersByTimeAsync(SETTINGS_RETRY_DELAY_MS);
+    await done;
+    expect(order).toEqual(['install:10000']);
+    expect(d.log).toHaveBeenCalledWith('WARN', expect.stringMatching(/still not written/), expect.anything());
+  });
+
+  // The retry runs from a timer after the window is up, where the main process
+  // must never block (performance rule 1). At launch, a lock refusal comes AFTER
+  // the scripts were staged and BEFORE the CLAUDE.md step, both of which ran
+  // anyway (neither needs the lock), so the retry redoes only the locked write.
+  it('the retry rewrites only the hook entries: no staging, no CLAUDE.md step, no copying', async () => {
+    const ih = createRequire(__filename)(path.join(__dirname, '..', 'scripts', 'install-hooks.js'));
+    await runInstallHooksChore(BUILD);                  // the launch attempt: stages, writes, CLAUDE.md
+    fs.writeFileSync(settingsFile(), '{}');             // as if its settings write had been refused
+    __resetSettingsMemo();
+    const stage = vi.spyOn(ih, 'stageHookScripts');
+    const autoTitle = vi.spyOn(ih, 'deployAutoTitleInstruction');
+    const cp = vi.spyOn(fs, 'cpSync');
+    const append = vi.spyOn(fs, 'appendFileSync');
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const { startLaunchSettingsRetry, SETTINGS_RETRY_DELAY_MS } = await import('../src/main/launch-settings-chores');
+    const log = vi.fn();
+    startLaunchSettingsRetry({ installLocked: true, choresLocked: false }, log);
+    await vi.advanceTimersByTimeAsync(SETTINGS_RETRY_DELAY_MS);
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('INFO', 'Settings chores written on the second try', {}));
+    expect(log).toHaveBeenCalledWith('INFO', 'Hook entries written on the second try', {});
+    expect(readSettings().hooks.Stop[0].hooks[0].command).toBe(`node ${JSON.stringify(path.join(stableDir(), 'relay.js'))}`);
+    expect(stage).not.toHaveBeenCalled();
+    expect(autoTitle).not.toHaveBeenCalled();
+    expect(cp).not.toHaveBeenCalled();
+    expect(append).not.toHaveBeenCalled();
+  });
+
+  // A real held lock, real 10 ms polls, and a faked clock so "3 s" and "10 s"
+  // pass instantly. Polls are counted on the lock folder so each clock jump
+  // happens only once the writer is provably waiting.
+  describe('with another program holding the lock', () => {
+    const lockDir = () => settingsFile() + '.lock';
+    let polls = 0;
+    beforeEach(() => {
+      fs.mkdirSync(lockDir(), { recursive: true });
+      polls = 0;
+      const realMkdir = fs.promises.mkdir.bind(fs.promises);
+      vi.spyOn(fs.promises, 'mkdir').mockImplementation(((p: any, o?: any) => {
+        if (p === lockDir()) polls++;
+        return realMkdir(p, o);
+      }) as any);
+      vi.useFakeTimers({ toFake: ['Date'] });
+    });
+    const waitForPolls = async (n: number) => { const target = polls + n; await vi.waitFor(() => expect(polls).toBeGreaterThanOrEqual(target)); };
+
+    it('the ordinary launch attempt still gives up just past 3 s', async () => {
+      const pending = runSettingsChores();
+      await waitForPolls(2);
+      vi.setSystemTime(Date.now() + 3_100);
+      expect((await pending).refused).toBe('locked');
+    });
+
+    it('the retry keeps waiting past 3 s and writes once the holder lets go', async () => {
+      const { SETTINGS_RETRY_LOCK_WAIT_MS } = await import('../src/main/launch-settings-chores');
+      let settled = false;
+      const pending = runSettingsChores({ lockWaitMs: SETTINGS_RETRY_LOCK_WAIT_MS }).finally(() => { settled = true; });
+      await waitForPolls(2);
+      vi.setSystemTime(Date.now() + 5_000);
+      await waitForPolls(3);                          // still polling 5 s in
+      expect(settled).toBe(false);
+      fs.rmSync(lockDir(), { recursive: true, force: true });
+      const r = await pending;
+      expect(r.refused).toBeUndefined();
+      expect(r.promptSuggestion.changed).toBe(true);
+      expect(readSettings().promptSuggestionEnabled).toBe(false);
+    });
+
+    it('the retry gives up too, just past 10 s', async () => {
+      const { SETTINGS_RETRY_LOCK_WAIT_MS } = await import('../src/main/launch-settings-chores');
+      const pending = runSettingsChores({ lockWaitMs: SETTINGS_RETRY_LOCK_WAIT_MS });
+      await waitForPolls(2);
+      vi.setSystemTime(Date.now() + 10_100);
+      expect((await pending).refused).toBe('locked');
+    });
+  });
+});

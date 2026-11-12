@@ -362,6 +362,11 @@ const CONTEXT_TEXT: {
         '/home/destin/.claude/skills/chatsearch/SKILL.md',
         '# chatsearch\n\nSearch your past conversations.\n\nStart with find, then show one.',
       ),
+      // A skill kept in the project's own folder (#251), so the Project tab has one to open.
+      'release-notes': whole(
+        '/home/destin/youcoded-dev/wecoded-themes/.claude/skills/release-notes/SKILL.md',
+        '# release-notes\n\nWrite this project’s release notes from its merged changes.\n\n- One line per change, in plain words.\n- Newest first.',
+      ),
     },
   };
 })();

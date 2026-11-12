@@ -4,6 +4,7 @@ import type { ToastAction } from '../components/ui/Toast';
 import { createQueuedEditActions } from './queued-edit-actions';
 import { queueEditStorage } from './queue-transfer-storage';
 import { RESTORE_UNSENT_EVENT } from './submit-outgoing';
+import { nativeQueuedDraft } from '../components/native-send';
 interface Options {
  provider(id: string): string | undefined;
  composer(): InputBarHandle | null;
@@ -32,7 +33,10 @@ export function createConversationQueueActions(o: Options) {
   edit: async (sid: string,id: string,text: string) => {
    if(o.provider(sid)==='native'){
     if(o.composer()?.hasDraft()){o.toast('Finish or clear your current draft first.');return;}
-    const ok=await window.claude.native.queueRemove(sid,id);o.dispatch({type:'QUEUED_MESSAGE_REMOVED',sessionId:sid,queueId:id});if(ok)o.composer()?.fillDraft(text);else o.toast('Already sending — too late to edit.');return;
+    // WHY (card #62 fault c): the strip's text has the file paths joined in front of the words; split them back so the box gets the words and the files return as chips. A message with no files fills exactly as before.
+    const draft=nativeQueuedDraft(text,o.session(sid)?.queuedMessages.find(q=>q.queueId===id)?.attachments);
+    const ok=await window.claude.native.queueRemove(sid,id);o.dispatch({type:'QUEUED_MESSAGE_REMOVED',sessionId:sid,queueId:id});if(!ok){o.toast('Already sending — too late to edit.');return;}
+    if(draft.paths.length)o.composer()?.fillDraft(draft.text,draft.paths);else o.composer()?.fillDraft(text);return;
    }
    const item=o.session(sid)?.queuedMessages.find(q=>q.queueId===id);
    const epoch=(item as {sendEpoch?:string}|undefined)?.sendEpoch;

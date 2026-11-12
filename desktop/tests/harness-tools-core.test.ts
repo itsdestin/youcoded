@@ -22,7 +22,7 @@ vi.mock('child_process', async (importActual) => {
 });
 import { ReadTool, readSizeError, MAX_READ_BYTES } from '../src/main/harness/tools/read';
 import { WriteTool } from '../src/main/harness/tools/write';
-import { EditTool } from '../src/main/harness/tools/edit';
+import { EditTool, MAX_FOLD_CHARS } from '../src/main/harness/tools/edit';
 import { BashTool, rebaseReportedCwd } from '../src/main/harness/tools/bash';
 import { GlobTool } from '../src/main/harness/tools/glob';
 import { GrepTool, resolveRgPath } from '../src/main/harness/tools/grep';
@@ -492,6 +492,100 @@ describe('Edit', () => {
     expect(r.structuredPatch).toEqual([]);
     // The file's bytes are untouched -- no pointless rewrite of identical content.
     expect(fs.readFileSync(p, 'utf8')).toBe('shared token\n');
+  });
+
+  // Small models loop on "old_string not found" when the file holds curly
+  // quotes, Unicode dashes, non-breaking spaces or trailing spaces where they
+  // typed plain ones (or the reverse). Only on the not-found path, one
+  // normalised comparison is tried; it must find exactly ONE place, replace
+  // exactly that original span, and say so.
+  describe('normalised fallback when old_string is not found exactly', () => {
+    const NORMALISED = /after treating curly quotes, Unicode dashes and non-breaking spaces as plain/i;
+    const edit = async (content: string, old_string: string, new_string: string, extra: { replace_all?: boolean } = {}) => {
+      const p = path.join(dir, 'n.txt');
+      fs.writeFileSync(p, content);
+      await ReadTool.execute({ file_path: 'n.txt' }, ctx);
+      const r = await EditTool.execute({ file_path: 'n.txt', old_string, new_string, ...extra }, ctx);
+      return { r, after: fs.readFileSync(p, 'utf8') };
+    };
+
+    it('matches curly single and double quotes typed as straight ones, and inserts new_string exactly as given', async () => {
+      const { r, after } = await edit('a\nsay “hi” and it’s fine\nz\n', 'say "hi" and it\'s fine', 'say "bye"');
+      expect(r.isError).toBeFalsy();
+      expect(after).toBe('a\nsay "bye"\nz\n');
+      expect(r.text).toMatch(NORMALISED);
+    });
+
+    it('matches straight quotes in the file when the model typed curly ones', async () => {
+      const { r, after } = await edit('x = "on"\n', 'x = “on”', 'x = "off"');
+      expect(r.isError).toBeFalsy();
+      expect(after).toBe('x = "off"\n');
+    });
+
+    it('matches en dash, em dash and minus sign typed as a hyphen', async () => {
+      const { r, after } = await edit('2020–2021 — a − b\n', '2020-2021 - a - b', 'done');
+      expect(r.isError).toBeFalsy();
+      expect(after).toBe('done\n');
+    });
+
+    it('matches a non-breaking space typed as a plain space', async () => {
+      const { r, after } = await edit('10 km away\n', '10 km away', '5 km');
+      expect(r.isError).toBeFalsy();
+      expect(after).toBe('5 km\n');
+    });
+
+    it('ignores trailing spaces at line ends on either side, keeping the rest of the file byte-for-byte', async () => {
+      const { r, after } = await edit('keep  \nfoo   \nbar\nkeep2\t\n', 'foo\nbar', 'X');
+      expect(r.isError).toBeFalsy();
+      expect(after).toBe('keep  \nX\nkeep2\t\n');
+      const back = await edit('alpha\nbeta\n', 'alpha  \nbeta', 'Y');
+      expect(back.r.isError).toBeFalsy();
+      expect(back.after).toBe('Y\n');
+    });
+
+    it('refuses as before when the normalised text matches in more than one place', async () => {
+      const content = 'it’s one\nit’s one\n';
+      const { r, after } = await edit(content, "it's one", 'two');
+      expect(r.isError).toBe(true);
+      expect(r.text).toBe('Edit failed: old_string not found. Re-Read the file and copy the exact text, including whitespace.');
+      expect(after).toBe(content);
+    });
+
+    it('does not use the fallback for replace_all', async () => {
+      const content = 'it’s\n';
+      const { r, after } = await edit(content, "it's", 'x', { replace_all: true });
+      expect(r.isError).toBe(true);
+      expect(after).toBe(content);
+    });
+
+    it('leaves an exact match exactly as before: plain result text, no normalising of the rest of the file', async () => {
+      const content = 'one “q” \ntwo  \nthree\n';
+      const { r, after } = await edit(content, 'three', '3');
+      expect(r.isError).toBeFalsy();
+      expect(r.text).toBe('Edited n.txt.');
+      expect(after).toBe('one “q” \ntwo  \n3\n');
+    });
+
+    it('keeps a CRLF file CRLF through a normalised match', async () => {
+      const { r, after } = await edit('a\r\nit’s  \r\nb\r\nc\r\n', "it's\nb", 'X\nY');
+      expect(r.isError).toBeFalsy();
+      expect(after).toBe('a\r\nX\r\nY\r\nc\r\n');
+      expect(r.text).toMatch(NORMALISED);
+    });
+
+    it('skips the fallback for a file over the size limit: plain "not found", the file untouched', async () => {
+      // Just over the limit; the one curly-quoted line would match after folding.
+      const filler = 'plain filler line of text\n'.repeat(Math.ceil(MAX_FOLD_CHARS / 26));
+      const content = filler + 'say “hi”\n';
+      expect(content.length).toBeGreaterThan(MAX_FOLD_CHARS);
+      const { r, after } = await edit(content, 'say "hi"', 'say "bye"');
+      expect(r.isError).toBe(true);
+      expect(r.text).toBe('Edit failed: old_string not found. Re-Read the file and copy the exact text, including whitespace.');
+      expect(after).toBe(content);
+      // Under the limit the same edit is found, so the refusal above is the gate, not the match.
+      const small = await edit('x\nsay “hi”\n', 'say "hi"', 'say "bye"');
+      expect(small.r.isError).toBeFalsy();
+    });
   });
 });
 

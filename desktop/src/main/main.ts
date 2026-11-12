@@ -1426,10 +1426,12 @@ void app.whenReady().then(async () => {
   // to parse the file a second time just to log a stale-path warning — the
   // diagnostic for the "stuck on Initializing" symptom after a removed dev
   // worktree.
+  let installLocked = false; // card #11 b: a locked settings.json is retried once in the background (startLaunchSettingsRetry), never by waiting longer here
   if (!process.env.YOUCODED_PROFILE) {
     try {
       const { runInstallHooksChore } = require('./launch-settings-chores');
       const r = await runInstallHooksChore({ version: app.getVersion(), packaged: app.isPackaged });
+      installLocked = r.refused === 'locked';
       if (r.skippedWorktree) log('WARN', 'Main', 'Hook scripts live inside a dev worktree — install-hooks skipped (set YOUCODED_PROFILE when running dev)');
       else {
         if (r.repaired > 0) log('WARN', 'Main', 'Stale hook commands repaired', { count: r.repaired });
@@ -1489,8 +1491,9 @@ void app.whenReady().then(async () => {
   // The prompt-suggestion and retention-default marks below stay for the perf
   // rig's chore table; they now measure nothing of their own.
   try {
-    const { runSettingsChores } = require('./launch-settings-chores');
+    const { runSettingsChores, startLaunchSettingsRetry } = require('./launch-settings-chores');
     const r = await runSettingsChores();
+    startLaunchSettingsRetry({ installLocked, choresLocked: r.refused === 'locked' }, (level: 'INFO' | 'WARN', msg: string, data?: Record<string, unknown>) => log(level, 'Main', msg, data));
     log('INFO', 'Main', 'Plugin hooks reconciled', r.hooks);
     if (r.promptSuggestion.changed) log('INFO', 'Main', 'Prompt suggestion force-disabled', { prior: r.promptSuggestion.prior });
     if (r.retention.changed) log('INFO', 'Main', 'Seeded cleanupPeriodDays default', { effective: r.retention.effective });

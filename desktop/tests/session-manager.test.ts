@@ -1096,3 +1096,24 @@ describe('shell sessions', () => {
     });
   });
 });
+
+// A session created through session.create without a name used to carry
+// `name: undefined` to every screen, where the header's hint crashed the whole
+// window. The New session button always sends "New Session"; every other door
+// (API callers, remote clients, the Android backend) now gets the same default.
+describe('a session created without a name', () => {
+  it('gets the normal default name, on both the terminal and the native branch', () => {
+    const manager = new SessionManager();
+    const pty = manager.createSession({ cwd: tmpDir, skipPermissions: false } as any);
+    expect(pty.name).toBe('New Session');
+    const native = manager.createSession({ cwd: tmpDir, skipPermissions: false,
+      provider: 'native', binding: { providerId: 'openrouter', modelId: 'test' } } as any);
+    expect(native.name).toBe('New Session');
+    expect(manager.createSession({ name: '  ', cwd: tmpDir, skipPermissions: false } as any).name).toBe('New Session');
+  });
+
+  it('keeps a name it was given exactly as it was', () => {
+    const manager = new SessionManager();
+    expect(manager.createSession({ name: ' My chat ', cwd: tmpDir, skipPermissions: false }).name).toBe(' My chat ');
+  });
+});
