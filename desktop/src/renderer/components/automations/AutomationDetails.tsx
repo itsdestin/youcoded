@@ -13,7 +13,7 @@
 // Settings save as you change them (guide "Popups"); a new automation is kept apart until Create.
 import React, { useEffect, useState } from 'react';
 import type { AutomationDevice, AutomationLink, AutomationRun, AutomationStart, AutomationSummary } from '../../../shared/automation-types';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, Chip, LoadingState, Menu, MenuItem, MenuNote, Pill, SectionLabel, SegmentedTabs, Select, SettingRow, Textarea, TextInput, Toggle, Tooltip } from '../ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, Chip, LoadingState, Menu, MenuItem, MenuNote, Pill, SectionLabel, SegmentedTabs, Select, SettingRow, Textarea, TextInput, Toggle, Tooltip, TypeableSelect } from '../ui';
 import { Dialog } from '../ui/Dialog';
 import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 import { ChipRow } from '../marketplace/FactChips';
@@ -24,6 +24,9 @@ import { PermissionsField, type AddStep } from './AutomationPermissions';
 import { AdvancedSettings } from './AutomationAdvanced';
 
 export type DetailsTab = 'settings' | 'runs';
+
+/** The most runs in one day: a few usual numbers, or type your own (the Step guard's control). */
+const RUN_CAPS = [{ value: '', label: 'No limit' }, ...[5, 10, 20, 50, 100].map((n) => ({ value: String(n), label: `${n} runs` }))];
 
 export function blankAutomation(): AutomationSummary {
   return {
@@ -100,15 +103,18 @@ export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = 
                 </Group>
                 <Group label="Schedule">
                   <StartField start={draft.start} onChange={(start) => change({ start, maxRunsPerDay: start.kind === 'schedule' ? undefined : draft.maxRunsPerDay ?? 20 })} />
-                  {/* WHY only here (Destin, review deck Q-cap: "only … where it makes sense. a job set to only run every 12h
-                      doesnt need a runs per day cap"): a schedule already says how often it runs; a button or an event
-                      can fire any number of times. */}
-                  {draft.start.kind !== 'schedule' && (
-                    <SettingRow variant="item" title="Most runs in a day"
-                      control={<TextInput className="w-16" inputMode="numeric" value={draft.maxRunsPerDay == null ? '' : String(draft.maxRunsPerDay)} placeholder="Any"
-                        onChange={(e) => { const n = Number(e.target.value); change({ maxRunsPerDay: e.target.value.trim() && Number.isFinite(n) && n > 0 ? Math.floor(n) : null }); }} aria-label="Most runs in a day" />} />
-                  )}
                 </Group>
+                {/* WHY only for these (Destin, review deck Q-cap: "only … where it makes sense. a job set to only run every 12h
+                    doesnt need a runs per day cap"): a schedule already says how often it runs; a button or an event can
+                    fire any number of times. WHY its own box and the Step guard's control (round 4 D-cap: inside Schedule it
+                    "looks like a sub-element of 'button text'"; "the number should be like a dropdown that also allows a
+                    custom entry, there should be a precedent"): Assistant settings → Step guard is that precedent. */}
+                {draft.start.kind !== 'schedule' && (
+                  <Group label="Runs per day">
+                    <TypeableSelect aria-label="Runs per day" options={RUN_CAPS} value={draft.maxRunsPerDay == null ? '' : String(draft.maxRunsPerDay)}
+                      onCommit={(raw) => { if (raw === '') { change({ maxRunsPerDay: null }); return true; } if (!/^\d+$/.test(raw.trim()) || Number(raw) < 1) return false; change({ maxRunsPerDay: Number(raw) }); return true; }} />
+                  </Group>
+                )}
                 <Group label="Permissions">
                   <PermissionsField tools={draft.tools} unlisted={draft.unlisted} onChange={(tools) => change({ tools })} onUnlisted={(unlisted) => change({ unlisted })} menuOpen={addMenuOpen} onMenu={onAddMenu} startStep={addStep} />
                 </Group>

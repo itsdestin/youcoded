@@ -27,8 +27,8 @@ type Pending = 'new' | ({ id: string; tab: DetailsTab; addMenu: boolean } & Extr
 // opens), so it leaves what to open here; a view already showing picks it up at once.
 let startAt: Pending = null;
 let jump: ((v: Pending) => void) | null = null;
-export type AutomationsPhoto = 'details' | 'runs' | 'subscription' | 'add-menu' | 'new' | 'lower' | 'lower-open' | 'add-folder' | 'add-command' | 'describe' | 'describe-result' | 'cap' | 'delete' | 'commands';
-const PHOTO_STEP: Partial<Record<AutomationsPhoto, AddStep>> = { 'add-folder': 'folder', 'add-command': 'command', describe: 'describe', 'describe-result': 'describe-result' };
+export type AutomationsPhoto = 'details' | 'runs' | 'subscription' | 'add-menu' | 'new' | 'lower' | 'lower-open' | 'add-folder' | 'add-command' | 'add-site' | 'describe' | 'describe-result' | 'cap' | 'delete' | 'commands';
+const PHOTO_STEP: Partial<Record<AutomationsPhoto, AddStep>> = { 'add-folder': 'folder-read', 'add-command': 'command', 'add-site': 'site', describe: 'describe', 'describe-result': 'describe-result' };
 export function openAutomationsAt(v: AutomationsPhoto): void {
   const lower = v === 'lower' || v === 'lower-open';
   const id = v === 'subscription' || lower ? 'job-weekly' : v === 'runs' ? 'job-money' : v === 'cap' ? 'job-shopping' : v === 'commands' || v === 'delete' || PHOTO_STEP[v] ? 'job-tidy' : 'job-email';

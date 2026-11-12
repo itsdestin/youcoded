@@ -58,7 +58,7 @@ import { MAX_PAGE_DATA_BYTES, MAX_PAGE_PROGRAM_INPUT, MAX_PAGE_SESSION_PROMPT, M
 import { OfficeView } from '../office/OfficeView';
 import { AutomationsView, openAutomationsAt, type AutomationsPhoto } from '../automations/AutomationsView';
 /** The photo-only states of the automation popup (`?autoView=`, screens/pages.ts). */
-const AUTOMATION_PHOTOS: AutomationsPhoto[] = ['runs', 'subscription', 'add-menu', 'new', 'lower', 'lower-open', 'add-folder', 'add-command', 'describe', 'describe-result', 'cap', 'delete', 'commands'];
+const AUTOMATION_PHOTOS: AutomationsPhoto[] = ['runs', 'subscription', 'add-menu', 'new', 'lower', 'lower-open', 'add-folder', 'add-command', 'add-site', 'describe', 'describe-result', 'cap', 'delete', 'commands'];
 import { useAutomationsWaiting } from '../automations/use-automations';
 import { AUTOMATIONS_PAGE_ID } from '../../../shared/automation-types';
 import { HOME_TAB, officeDocFor, previewOfficeComments, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';

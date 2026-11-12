@@ -143,6 +143,7 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('automations/details#commands', 'automations'), params: { autoView: 'commands' }, newIn: 'after' },
   { ...pg('automations/details#add-folder', 'automations'), params: { autoView: 'add-folder' }, newIn: 'after' },
   { ...pg('automations/details#add-command', 'automations'), params: { autoView: 'add-command' }, newIn: 'after' },
+  { ...pg('automations/details#add-site', 'automations'), params: { autoView: 'add-site' }, newIn: 'after' },
   { ...pg('automations/details#describe', 'automations'), params: { autoView: 'describe' }, newIn: 'after' },
   { ...pg('automations/details#describe-result', 'automations'), params: { autoView: 'describe-result' }, newIn: 'after' },
   { ...pg('automations/details#cap', 'automations'), params: { autoView: 'cap' }, newIn: 'after' },
