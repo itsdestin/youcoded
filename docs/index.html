@@ -456,12 +456,21 @@ footer{padding:0 0 46px}
    blur), so on the curved part of each corner the app painted OVER the frame's
    own hairline and the rounding mask then cut the app's square corner away --
    leaving an outline on the straight edges that simply stopped at every corner.
-   The real border keeps its width (layout is unchanged) but goes clear, and the
-   same hairline is drawn by this layer above the demo, so it follows the curve.
-   It is inside the mask, so it dissolves with the bottom of the window as before. */
-.frame.embed{border-color:transparent}
+   This layer sits above the demo and redraws the same hairline, so it follows
+   the curve. It is inside the frame's mask, so it dissolves with the bottom of
+   the window as before.
+   WHY corners ONLY (Destin, same day: "the left/right outlines look slightly more
+   inconsistent now"). The first version drew the whole outline here and cleared
+   the real border. A layer above the iframe is composited separately from the
+   frame, so its straight edges could land a fraction of a pixel off where the
+   real border used to. The real border is back, untouched; this layer is
+   trimmed by 1px on every side, which removes exactly the strip the real
+   border already draws in and leaves only the parts of the curve that fall
+   under the demo -- so nothing is drawn twice and the straight edges are the
+   original ones. (clip-path here is safe: it is on this empty layer, not on
+   anything that contains the iframe.) */
 .frame.embed::after{content:'';position:absolute;inset:-1px;border:1px solid var(--hair);
-  border-radius:inherit;pointer-events:none;z-index:7}
+  border-radius:inherit;pointer-events:none;z-index:7;clip-path:inset(1px)}
 .embed-stage{position:relative;aspect-ratio:16/10}
 .embed-poster,.embed-iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .embed-poster{object-fit:cover;border-radius:var(--radius)}
