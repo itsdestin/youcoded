@@ -49,18 +49,20 @@ describe('PageHost navigation', () => {
     return { store, pick };
   }
 
-  it('focuses a phone selection, returns to the list through Pages, switches pages and preserves Back to chat', async () => {
+  // WHY (owner, 2026-11-01): on a phone the list and the page are two full-width screens that slide; picking a page
+  // slides the list away (it stays mounted but inert), and the toggle buttons bring it back.
+  it('slides between the list and the page on a phone and keeps Back to chat', async () => {
     const { store, pick } = navigation(true);
+    const list = () => document.querySelector('.screen-pane--panel') as HTMLElement;
+    expect(list().style.transform).toBe('translateX(0)');
     pick('Home');
-    expect(store.getState()).toMatchObject({ pageViewOpen: true, pageFocus: true, openPageId: 'personal:Home' });
-    expect(document.querySelector('.screen-pane--panel')).not.toBeInTheDocument();
-    await waitFor(() => expect(document.querySelector('iframe')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'Open pages' }));
     expect(store.getState()).toMatchObject({ pageViewOpen: true, pageFocus: false, openPageId: 'personal:Home' });
-    expect(document.querySelector('.screen-pane--panel')).toBeInTheDocument();
+    expect(list().style.transform).toContain('calc(-100%');
+    await waitFor(() => expect(document.querySelector('iframe')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Show the page list' }));
+    expect(list().style.transform).toBe('translateX(0)');
     pick('Finance');
-    expect(store.getState()).toMatchObject({ pageViewOpen: true, pageFocus: true, openPageId: 'personal:Finance' });
-    expect(document.querySelector('.screen-pane--panel')).not.toBeInTheDocument();
+    expect(list().style.transform).toContain('calc(-100%');
     await waitFor(() => expect(document.querySelector('iframe')?.title).toBe('Finance'));
     fireEvent.click(screen.getByRole('button', { name: 'Back to chat' }));
     expect(store.getState()).toMatchObject({ pageViewOpen: false, pageFocus: false, openPageId: null });

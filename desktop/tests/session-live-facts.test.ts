@@ -293,6 +293,30 @@ describe('permission mode, read once from real Claude Code 2.1.281 terminal capt
     expect(n.sent).toEqual([]);
   });
 
+  it('reads the footer when cursor moves stand in for the spaces (as Claude Code draws it on the phone)', () => {
+    // Bytes read off the phone, 2026-11-01.
+    const phone = '\x1b[3G\x1b[38;5;220m⏵⏵\x1b[6Gauto\x1b[11Gmode\x1b[16Gon\x1b[38;5;246m (shift+tab\x1b[30Gto\x1b[33Gcycle)';
+    expect(detectPermissionMode(phone)).toBe('auto');
+    const h = host();
+    h.live.noteOutput(S, phone);
+    expect(h.sent.filter((m) => m.type === 'session:permission-mode').map((m) => m.payload.mode)).toEqual(['auto']);
+  });
+
+  it('a footer split across two terminal reads is still read (the phone reads in smaller pieces)', () => {
+    const h = host();
+    const footer = '\x1b[38;2;175;135;255m⏵⏵ auto mode on\x1b[39m\x1b[2m (shift+tab to cycle) · ←…\x1b[22m';
+    for (const cut of [4, 9, 14, 17]) {
+      const one = host();
+      one.live.noteOutput(S, footer.slice(0, footer.indexOf('auto') + cut - 4 + 4));
+      one.live.noteOutput(S, footer.slice(footer.indexOf('auto') + cut - 4 + 4));
+      expect(one.sent.filter((m) => m.type === 'session:permission-mode').map((m) => m.payload.mode)).toEqual(['auto']);
+    }
+    // A phrase that sat wholly in the previous piece is not counted again from the carried tail: the fresh "off" wins.
+    h.live.noteOutput(S, '⏸ plan mode on');
+    h.live.noteOutput(S, ' ⏸ plan mode off');
+    expect(h.sent.filter((m) => m.type === 'session:permission-mode').map((m) => m.payload.mode)).toEqual(['plan', 'normal']);
+  });
+
   it('a screen that opens later is handed the mode (record.liveFill), not the launch mode', () => {
     const h = host();
     h.live.noteOutput(S, '\x1b[2m⏵⏵ bypass permissions on\x1b[22m (shift+tab to cycle)');

@@ -98,7 +98,7 @@ const TOOL_BLURBS: Record<string, string> = {
   Read: 'Opens a file and reads what is in it.',
   Write: 'Creates a new file, or replaces one that already exists.',
   Edit: 'Changes part of a file and leaves the rest alone.',
-  Bash: 'Runs a command on your computer, the way a terminal does.',
+  Bash: 'Runs a command on your device, the way a terminal does.',
   Glob: 'Finds files by name — every file ending in .md, say.',
   Grep: 'Searches inside files for a word or phrase.',
   TodoWrite: 'Keeps a checklist of what it is working on.',

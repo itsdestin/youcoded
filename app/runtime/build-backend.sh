@@ -63,5 +63,26 @@ rm -rf "$NM"/@vscode/ripgrep/bin 2>/dev/null || true
 find "$NM" \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' \) -type f -delete
 
 python3 -I "$HERE/preserve-npm-legal.py" --mark-retained "$NM" "$STAGE/legal"
-tar czf "$OUT/backend.tgz" -C "$STAGE" .
+
+# --- pack --- (test_backend_licenses.py runs the trim section above this line on a fake tree)
+# WHY a fingerprint first and the dependencies last (2026-11-01 phone test: "Unpacking…" took ~11 s after every update):
+# node_modules + legal are ~15,400 of the backend's ~17,000 files and only change when the dependencies do. The phone
+# (RuntimeInstaller.installBackend) reads ./.deps-stamp first; when it matches the copy it already has, it keeps that
+# copy and stops reading the archive at the first dependency entry, so an ordinary update writes only the app's own
+# ~1,600 files. The order is: stamp, then everything else, then ./legal and ./node_modules — keep it that way.
+STAMP="$( (cd "$STAGE" && find node_modules legal -type f -print0 | LC_ALL=C sort -z \
+  | xargs -0 sha256sum; cd "$STAGE" && find node_modules legal -type l -printf '%p -> %l\n' | LC_ALL=C sort) | sha256sum | cut -c1-64)"
+printf '%s\n' "$STAMP" > "$STAGE/.deps-stamp"
+TAR="$OUT/backend.tar"
+rm -f "$TAR"
+tar cf "$TAR" -C "$STAGE" ./.deps-stamp
+OWN=()
+for e in "$STAGE"/* "$STAGE"/.[!.]*; do
+  n="$(basename "$e")"
+  case "$n" in node_modules|legal|.deps-stamp|'.[!.]*'|'*') ;; *) [ -e "$e" ] && OWN+=("./$n") ;; esac
+done
+tar rf "$TAR" -C "$STAGE" "${OWN[@]}"
+tar rf "$TAR" -C "$STAGE" ./legal ./node_modules
+gzip -n -c "$TAR" > "$OUT/backend.tgz"
+rm -f "$TAR"
 say "done: $(du -h "$OUT/backend.tgz" | cut -f1) packed ($(du -sh "$STAGE" | cut -f1) unpacked)"

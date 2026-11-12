@@ -20,11 +20,12 @@ import { IPC } from '../../shared/backend-contract';
 import type { ApiResult } from '../../shared/account-types';
 import type { MarketplaceAuthStore } from '../marketplace-auth-store';
 import { MarketplaceApiError, type createMarketplaceApiClient } from '../../renderer/state/marketplace-api-client';
-import { wrap, makeClearSessionOn401 } from '../handler-utils';
+import { wrap, makeClearSessionOn401, clearSessionAfter401 } from '../handler-utils';
 import { notifySignedOut } from '../social-handlers';
 import { clearArcadeCache } from '../arcade-handlers';
 import { reconcileInstalls, type InstalledSkillSource } from '../install-reconcile';
 import { defineChannel, type MainChannelDef } from './channel-def';
+import { returnToApp } from '../headless/host-bridge';
 import { startSigninListener, type SigninListener } from '../signin-loopback';
 
 type Client = ReturnType<typeof createMarketplaceApiClient>;
@@ -70,7 +71,10 @@ export const accountChannels: MainChannelDef[] = [
     handler: () => wrap(async () => {
       const { client } = need();
       closeAllSigninListeners();
-      const listener = await startSigninListener();
+      // WHY returnToApp (Destin, final review Q-12): on the phone, bring YouCoded back when the browser finishes
+      // the YouCoded sign-in. It does nothing unless the Android app started this backend, so computers and
+      // remote browsers are untouched.
+      const listener = await startSigninListener(undefined, returnToApp);
       let out;
       try {
         out = await client.authStart(listener.port);
@@ -138,7 +142,7 @@ export const accountChannels: MainChannelDef[] = [
         return stored;
       } catch (e) {
         // 401 = the token is dead server-side: clear the local session so the UI flips to signed-out.
-        if (e instanceof MarketplaceApiError && e.status === 401) store.signOut();
+        if (e instanceof MarketplaceApiError && e.status === 401) clearSessionAfter401(store, 'account:user', e.message); // logs + raises the "signed out" notice (card #216)
         return null;
       }
     },
@@ -158,7 +162,7 @@ export const accountChannels: MainChannelDef[] = [
       } catch (e) {
         // 401 = dead session. Any OTHER failure keeps the token and cached profile: a network
         // blip must not blank a signed-in UI.
-        if (e instanceof MarketplaceApiError && e.status === 401) { store.signOut(); return null; }
+        if (e instanceof MarketplaceApiError && e.status === 401) { clearSessionAfter401(store, 'account:refresh', e.message); return null; } // logs + notice (card #216)
         return store.getUser();
       }
     },
@@ -247,7 +251,7 @@ export const accountChannels: MainChannelDef[] = [
         return { path: filePath };
       } catch (e) {
         if (e instanceof MarketplaceApiError) {
-          if (e.status === 401) store.signOut(); // dead session: flip UI signed-out
+          if (e.status === 401) clearSessionAfter401(store, 'account:export', e.message); // dead session: flip UI signed-out, log it, raise the notice (card #216)
           return { ok: false as const, status: e.status, error: e.message };
         }
         return { ok: false as const, status: 0, error: e instanceof Error ? e.message : String(e) };

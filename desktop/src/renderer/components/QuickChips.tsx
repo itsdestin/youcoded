@@ -1,6 +1,6 @@
+import { fingerSized } from '../device';
 import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { isAndroid } from '../platform';
 import { useSkills } from '../state/skill-context';
 import type { ChipConfig } from '../../shared/types';
 import { Button, CARD_LEVEL_1, Dialog, FieldError, InputGroup, SectionLabel, SettingRow, TextInput, Textarea, Toggle, Tooltip } from './ui';
@@ -43,7 +43,7 @@ export default function QuickChips({ onChipTap }: Props) {
   const handleEditorClose = useCallback(() => setEditorOpen(false), [setEditorOpen]);
   useEscClose(editorOpen, handleEditorClose);
 
-  const android = isAndroid();
+  const android = fingerSized();
   const chipHeight = android ? 'h-8' : 'h-6';
 
   return (

@@ -13,6 +13,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from '../../state/theme-context';
 import { isTypingTarget } from '../../utils/is-typing-target';
+import { prefersTouchInput } from '../../utils/touch-input';
+import { swipeDirection } from './swipe';
 import { Button, Pill } from '../ui';
 import type { SoloGameProps } from './game-registry';
 import RunOverCard from './RunOverCard';
@@ -73,6 +75,7 @@ export default function TwentyFortyEightGame({ onEnd, best, onExit }: SoloGamePr
   const [game, setGame] = useState<Game>(() => createGame(rng));
   const boardRef = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState(false);
+  const swipeStart = useRef<{ x: number; y: number; id: number } | null>(null);
   const [boardPx, setBoardPx] = useState(0);
   // The run's score is reported exactly once, however many times React
   // re-renders after the board dies.
@@ -169,17 +172,31 @@ export default function TwentyFortyEightGame({ onEnd, best, onExit }: SoloGamePr
         ref={boardRef}
         tabIndex={0}
         role="application"
-        aria-label="2048 board. Arrow keys or W A S D to slide the tiles."
+        aria-label="2048 board. Swipe, arrow keys or W A S D to slide the tiles."
         // Marker for the app's window-level arrow handler (ChatView scrolls the
         // transcript on Up/Down from anywhere that is not a text field). While
         // this board holds focus its keys are the game's, and that handler can
         // bail on this attribute in one line without knowing what 2048 is.
         data-game-keys="arrows"
         onKeyDown={onKeyDown}
+        // WHY: on a phone there is no keyboard — a finger swipe across the board
+        // slides the tiles (2026-11-01 phone test). `touch-action: none` stops the
+        // page scrolling under the swipe.
+        onPointerDown={(e) => {
+          swipeStart.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
+        }}
+        onPointerUp={(e) => {
+          const s = swipeStart.current;
+          swipeStart.current = null;
+          if (!s || s.id !== e.pointerId) return;
+          const dir = swipeDirection(e.clientX - s.x, e.clientY - s.y);
+          if (dir) setGame((g) => (g.over ? g : move(g, dir, rng).game));
+        }}
+        onPointerCancel={() => { swipeStart.current = null; }}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         className={[
-          'relative w-full aspect-square rounded-lg border outline-none select-none',
+          'relative w-full aspect-square rounded-lg border outline-none select-none touch-none',
           // The board frame is the neutral end of the tile ramp, so a low tile
           // reads as "barely off the board" and a high one as "all accent".
           'bg-inset',
@@ -251,7 +268,9 @@ export default function TwentyFortyEightGame({ onEnd, best, onExit }: SoloGamePr
       {/* Says which input is live right now. Without it a player whose board has
           lost focus presses an arrow, the chat scrolls, and nothing explains why. */}
       <p className="text-2xs text-fg-muted leading-relaxed">
-        {focused
+        {prefersTouchInput()
+          ? 'Swipe on the board to slide the tiles. Nothing here is timed — leave it as long as you like.'
+          : focused
           ? 'Arrow keys or W A S D to slide. Nothing here is timed — leave it as long as you like.'
           : 'Click the board (or Tab to it) to play with the keyboard.'}
       </p>

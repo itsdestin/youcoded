@@ -65,13 +65,17 @@ async function mount() {
   // The frame can be in the document a beat before the host's listener effect
   // has run (the page loaded outside act); flush effects before the page asks.
   await act(async () => {});
-  const frame = document.querySelector('iframe') as HTMLIFrameElement;
-  // The click that asked was inside the page, so the page holds the focus.
-  frame.focus();
   const answers: unknown[] = [];
-  (frame.contentWindow as Window).postMessage = ((m: unknown) => { answers.push(m); }) as Window['postMessage'];
-  const ask = (data: Record<string, unknown>, source: unknown = frame.contentWindow) => {
-    act(() => { window.dispatchEvent(new MessageEvent('message', { data: { type: 'youcoded:session:start', id: 'q1', ...data }, source: source as Window })); });
+  // WHY the frame is looked up, focused and hooked at the moment of asking, not once at mount (2026-11-09): in a
+  // full run on a busy machine this test failed with the session never opened, and passed alone. The host refuses a
+  // request unless the focus is in the page's frame at that moment, and it can draw the frame again while the page
+  // loads — a frame focused at mount is then no longer the one on screen. The click being acted out happens when
+  // the page asks, so that is when the focus is put there.
+  const ask = (data: Record<string, unknown>, source?: unknown, clickedInPage = true) => {
+    const frame = document.querySelector('iframe') as HTMLIFrameElement;
+    if (clickedInPage) frame.focus();
+    (frame.contentWindow as Window).postMessage = ((m: unknown) => { answers.push(m); }) as Window['postMessage'];
+    act(() => { window.dispatchEvent(new MessageEvent('message', { data: { type: 'youcoded:session:start', id: 'q1', ...data }, source: (source === undefined ? frame.contentWindow : source) as Window })); });
   };
   return { view, answers, ask };
 }
@@ -160,7 +164,7 @@ describe('a page asking to open a new conversation', () => {
     Object.defineProperty(window.navigator, 'userActivation', { value: { isActive: true }, configurable: true });
     // The click was on the app (e.g. Cancel), and focus is no longer in the page.
     (document.activeElement as HTMLElement | null)?.blur();
-    ask({ prompt: 'after cancel', id: 'b' });
+    ask({ prompt: 'after cancel', id: 'b' }, undefined, false);
     await waitFor(() => expect(answers).toHaveLength(2));
     for (const a of answers) expect(a).toMatchObject({ result: { ok: false, reason: expect.stringMatching(/click/) } });
     expect(onStartSession).not.toHaveBeenCalled();

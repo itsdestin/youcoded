@@ -153,3 +153,28 @@ describe('presence-connect while incognito', () => {
     expect(h.sock.setDesired).toHaveBeenLastCalledWith(true);
   });
 });
+
+// WHY (2026-11-01 phone: Games stuck on "Connecting…"): startSocial builds a fresh socket that starts with desired=off. A connect
+// the renderer already made must carry over to it, or the new socket sits idle until the page happens to ask again.
+describe('a rebuilt social service keeps the renderer\'s wish to be connected', () => {
+  afterEach(() => { destroySocialHandlers(); });
+
+  it('re-applies a visible connect to the new socket', async () => {
+    startSocial({ getToken: () => 'tok' } as never);
+    await getSocialOps()!.presenceConnect({ hidden: false });
+    h.sock.setDesired.mockClear();
+    startSocial({ getToken: () => 'tok' } as never); // the rebuild
+    await Promise.resolve();
+    expect(h.sock.setDesired).toHaveBeenCalledWith(true);
+  });
+
+  it('does not connect a rebuilt socket after the renderer disconnected', async () => {
+    startSocial({ getToken: () => 'tok' } as never);
+    await getSocialOps()!.presenceConnect({ hidden: false });
+    getSocialOps()!.presenceDisconnect();
+    h.sock.setDesired.mockClear();
+    startSocial({ getToken: () => 'tok' } as never);
+    await Promise.resolve();
+    expect(h.sock.setDesired).not.toHaveBeenCalledWith(true);
+  });
+});

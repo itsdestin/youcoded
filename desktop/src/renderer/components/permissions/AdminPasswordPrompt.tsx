@@ -1,8 +1,8 @@
+import { fingerSized } from '../../device';
 import React, { useEffect, useRef, useState } from 'react';
 import type { PasswordAsk } from '../../../shared/types';
 import { Button, Callout, InputGroup } from '../ui';
 import { EyeIcon, EyeOffIcon } from '../Icons';
-import { isAndroid } from '../../platform';
 
 /**
  * The admin password card (design 2026-09-25, docs/active/design/2026-09-25-admin-password/).
@@ -66,7 +66,7 @@ export function AdminPasswordPrompt({ ask, onSubmit }: {
   };
 
   const wrong = typeof ask.triesLeft === 'number';
-  const pad = isAndroid() ? 'py-1.5' : 'py-0.5';
+  const pad = fingerSized() ? 'py-1.5' : 'py-0.5';
 
   return (
     <form className="px-3 py-2 space-y-2 border-t border-edge bg-inset/30" data-testid="admin-password-prompt" onSubmit={submit}>

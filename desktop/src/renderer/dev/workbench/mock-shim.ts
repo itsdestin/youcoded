@@ -543,6 +543,7 @@ import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
 import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
 import type { PagesBridge, PageDocument, PageSocketEvent, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 import { sameEndpoint } from '../../../shared/endpoint-address';
+import { FIXTURE_BASE } from './fixtures/clock';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
  *
@@ -1165,7 +1166,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         permissionMode: opts.skipPermissions ? 'bypass' : 'normal',
         skipPermissions: !!opts.skipPermissions,
         status: 'active',
-        createdAt: 1_753_800_000_000,
+        createdAt: FIXTURE_BASE,
         provider: opts.provider ?? 'claude',
         harnessId: (opts as any).harnessId,
         model: opts.model,
@@ -2937,9 +2938,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       outgoing: [{ id: 'req-lee', to: { id: 'lee', display_name: 'Lee', handle: 'lee', avatar_url: null }, created_at: jakeNowSec }],
     }
     : { incoming: [], outgoing: [] };
-  // Holds the one onPresenceEvent callback the app registers (usePresence.ts
-  // subscribes exactly once) so presenceConnect can push events into it.
-  let presenceListener: ((ev: { type: string; [k: string]: unknown }) => void) | null = null;
+  // Holds the onPresenceEvent callbacks the app registers so presenceConnect can push events into them.
+  // WHY a set (card #216): usePresence AND the account context (the "signed out by the app" notice) now
+  // both subscribe, like the real channel allows; one slot let the second subscriber silence the first.
+  type PresenceCb = (ev: { type: string; [k: string]: unknown }) => void;
+  const presenceCallbacks = new Set<PresenceCb>();
+  const presenceListener = (ev: Parameters<PresenceCb>[0]) => { for (const cb of presenceCallbacks) cb(ev); };
   let presenceLive = false;
   const social: Ns<'social'> = {
     lookupHandle: async () => ({ ok: false, status: 404, message: 'No one has that handle' }),
@@ -2969,16 +2973,16 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // "connected fires before anyone is listening" bug if one existed.
       setTimeout(() => {
         if (!presenceLive) return; // disconnected again before this fired
-        presenceListener?.({ type: 'connected' });
+        presenceListener({ type: 'connected' });
         // §6.6's degraded case, taken through the REAL path: an `error` frame
         // is what a genuine outage sends, so the picker's "can't reach the game
         // server" line comes from the reducer rather than from a fixture that
         // no server would ever have produced. Solo tiles are untouched (§4.2).
         if (arcadeVersusIsDown(arcadeScenario)) {
-          presenceListener?.({ type: 'error', message: "Can't reach the game server" });
+          presenceListener({ type: 'error', message: "Can't reach the game server" });
           return;
         }
-        presenceListener?.({ type: 'presence', users: presenceUsers });
+        presenceListener({ type: 'presence', users: presenceUsers });
       }, 150);
       return { ok: true };
     },
@@ -2986,7 +2990,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       presenceLive = false;
       // No `code` → the reducer's silent "deliberate teardown" path, matching
       // what a real incognito toggle / sign-out looks like to usePresence.ts.
-      presenceListener?.({ type: 'disconnected' });
+      presenceListener({ type: 'disconnected' });
       return { ok: true };
     },
     // Challenge/accept round-tripping isn't implemented — GameLobby.tsx's
@@ -3009,7 +3013,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         const before = arcadeRecordsFor(arcadeScenario, msg.game).value[0];
         const bump = msg.outcome === 'win' ? 'wins' : msg.outcome === 'loss' ? 'losses' : 'draws';
         setTimeout(() => {
-          presenceListener?.({
+          presenceListener({
             type: 'game-record',
             game: msg.game!,
             opponent: msg.opponent,
@@ -3023,8 +3027,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return { ok: true };
     },
     onPresenceEvent: (cb) => {
-      presenceListener = cb;
-      return () => { if (presenceListener === cb) presenceListener = null; };
+      presenceCallbacks.add(cb);
+      return () => { presenceCallbacks.delete(cb); };
     },
   };
 
@@ -3771,10 +3775,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // Parallel Agents", the marketplace publisher) from the drawer: the skills
   // drawer opens on camera in the marketplace beat.
   const DEVELOPER_BUNDLES = ['superpowers', 'wecoded-marketplace-publisher'];
+  // Plugin off-switch: the turned-off practice plugin (Tab Tidy) appears only under ?turnedOff=1,
+  // so every other Library picture stays exactly as it was (its screens: screens/marketplace.ts).
+  const turnedOffSwitch = typeof location !== 'undefined' && new URLSearchParams(location.search).get('turnedOff') === '1';
   let installedSkills: Record<string, unknown>[] = INSTALLED_SKILLS
     .filter((s) => !studentSwitch || !DEVELOPER_BUNDLES.includes(s.pluginName))
+    .filter((s) => turnedOffSwitch || !('blocked' in s))
     .map((s) => ({ ...s }));
   const installedPackages: Record<string, any> = JSON.parse(JSON.stringify(INSTALLED_PACKAGES));
+  if (!turnedOffSwitch) delete installedPackages['tab-tidy'];
   // Quick chips are a STATEFUL mock, not a canned read: the editor writes
   // through setChips on every add/remove/reorder/edit, so a read-only fixture
   // would make every mutation appear to do nothing. Mirrors the real store's

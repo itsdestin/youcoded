@@ -299,6 +299,15 @@ describe('a click or tap does not leave the hint behind', () => {
     expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
+  it('nor does the focus a tap gives it AFTER the finger lifts (the browser replays mouse events late)', () => {
+    render(<Tooltip text="Hint"><button>x</button></Tooltip>);
+    const b = screen.getByRole('button');
+    fireEvent.pointerDown(b, finger);
+    fireEvent.pointerUp(b, finger);
+    fireEvent.focus(b);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
   it('focus from the keyboard still opens it', () => {
     render(<Tooltip text="Hint"><button>x</button></Tooltip>);
     fireEvent.focus(screen.getByRole('button'));

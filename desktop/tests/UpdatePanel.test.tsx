@@ -597,4 +597,13 @@ describe('UpdatePanel — what it promises and how a failed Restart is worded', 
     await screen.findByRole('button', { name: /launch installer|restart to update/i });
     expect((window as any).claude.update.restartToUpdate).not.toHaveBeenCalled();
   });
+
+  it('a copy owned by another package (AUR youcoded-bin) gets a notice and no Update button (card #186)', async () => {
+    mountApi({ supported: true, enabled: true });
+    const status = { current: '1.3.2', latest: '1.3.3', update_available: true, download_url: 'http://x', managed_by_other_package: true } as never;
+    render(<UpdatePanel open onClose={() => {}} updateStatus={status} />);
+    expect(await screen.findByText("This copy of YouCoded was installed from another package, so it can't update itself. Update it with your package manager.")).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /update now/i })).not.toBeInTheDocument();
+    expect((window as any).claude.update.download).not.toHaveBeenCalled();
+  });
 });

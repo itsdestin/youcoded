@@ -8,8 +8,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 // WHY mocked: the real watcher module pulls in chokidar and the artifact store; this test only
 // needs to know the save told it "this write was ours".
 vi.mock('../../src/main/artifacts/project-watcher', () => ({ noteOwnWrite: vi.fn() }));
+// WHY: lets the js_log test read exactly what would reach desktop.log.
+vi.mock('../../src/main/logger', () => ({ log: vi.fn() }));
 
 import { noteOwnWrite } from '../../src/main/artifacts/project-watcher';
+import { log } from '../../src/main/logger';
 import { awaitIdle, CLOSE_DRAIN_MS, createOfficeCommands, drainSession, OFFICE_COMMANDS } from '../../src/main/office/office-commands';
 import { X2T_TIMEOUT_MS } from '../../src/main/office/x2t';
 import { createSessions, type OfficeSession } from '../../src/main/office/office-sessions';
@@ -69,6 +72,44 @@ describe('office commands without the translator', () => {
         'save_dialog', 'save_file_as', 'print_document', 'recovery_accept_held', 'recovery_discard_held', 'save_editor_settings',
       ].sort(),
     );
+  });
+
+  // WHY: the editor's log text can contain the person's document words, and desktop.log goes into bug reports.
+  it('js_log never writes the editor text to the app log, only safe facts', async () => {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    const secret = 'Maria Salary 85,000 confidential';
+    await run(s.token, 'js_log', { msg: `TypeError: failed to read ${secret}\n at f (office://abc/web/sdk-all.js:12:34)` });
+    const written = JSON.stringify(vi.mocked(log).mock.calls);
+    expect(written).not.toContain('Maria');
+    expect(written).not.toContain('85,000');
+    expect(written).toContain('TypeError');
+    expect(written).toContain('sdk-all.js:12:34');
+    expect(written).toContain('editor reported a fault');
+  });
+
+  // WHY: a document word shaped like a script position must not be logged; only the editor's own scripts are.
+  it('js_log drops a document word shaped like a script position', async () => {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    await run(s.token, 'js_log', { msg: 'Error: Maria-Salary-85000.js:1:2 and (office://abc/web/sdk-all.js:5:6)' });
+    const written = JSON.stringify(vi.mocked(log).mock.calls);
+    expect(written).not.toContain('Maria');
+    expect(written).not.toContain('85000');
+    expect(written).toContain('sdk-all.js:5:6');
+  });
+
+  // WHY: only the first 4000 characters are scanned, but the real length is still reported.
+  it('js_log scans a very large message only in part and still reports its length', async () => {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    const msg = `Error ${'x'.repeat(5000)} TypeError at sdk-all.js:1:2` + 'y'.repeat(1_000_000);
+    vi.mocked(log).mockClear();
+    await run(s.token, 'js_log', { msg });
+    const written = JSON.stringify(vi.mocked(log).mock.calls);
+    expect(written).toContain(`"length":${msg.length}`);
+    expect(written).not.toContain('TypeError');
+    expect(written).not.toContain('sdk-all.js:1:2');
   });
 
   it('refuses an unknown command and an unknown token', async () => {

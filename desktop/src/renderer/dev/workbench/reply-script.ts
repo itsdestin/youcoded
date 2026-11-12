@@ -16,6 +16,7 @@
 // No Date.now(): timestamps are a counter so a replay is byte-identical.
 
 import type { TranscriptEvent, TranscriptEventType, DataOf, EventOf } from '../../../shared/types';
+import { FIXTURE_BASE } from './fixtures/clock';
 
 export type ReplyLine =
   | { type: 'assistant_text'; text: string; delay?: number; model?: string }
@@ -57,7 +58,7 @@ export function resolvePermission(requestId: string): boolean {
 
 let counter = 0;
 const uid = () => `wb-ev-${++counter}`;
-const stamp = () => 1_753_800_000_000 + counter * 1000;
+const stamp = () => FIXTURE_BASE + counter * 1000;
 
 /** One scripted event, typed: `type` and `data` must belong together, exactly as
  *  the real producers' emitEvent<T> demands (M5). The cast is the one place a

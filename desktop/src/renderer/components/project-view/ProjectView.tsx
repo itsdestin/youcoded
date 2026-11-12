@@ -88,6 +88,7 @@ function readStoredFileView(): FileViewMode {
 }
 import { Button, SearchFilterPill } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
+import { readStoredShowHidden, storeShowHidden } from './hidden-files';
 import { getCapabilities } from '../../platform';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
@@ -234,6 +235,10 @@ export function ProjectView(props: ProjectViewProps) {
   // Multi-select type filter; EMPTY set = all types (Destin, 2026-07-23).
   const [types, setTypes] = useState<ReadonlySet<FileTypeGroup>>(() => new Set());
   const [fileSort, setFileSort] = useState<FileSortKey>('name');
+  // Files filter menu: "Show hidden files". Remembered on this device (hidden-files.ts), and unlike the type
+  // filter it is not reset when the project changes: it is a preference, not a description of one project.
+  const [showHidden, setShowHidden] = useState(readStoredShowHidden);
+  useEffect(() => { storeShowHidden(showHidden); }, [showHidden]);
   // Grid vs. list for the Files tab. Remembered app-wide, NOT per project
   // (design deck 2026-09-03, Q-4a): one answer to "what view am I in" is
   // predictable; a view that changes as you switch projects reads as a glitch.
@@ -253,12 +258,22 @@ export function ProjectView(props: ProjectViewProps) {
   useEffect(() => {
     if (!filterOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (filterWrapRef.current && !filterWrapRef.current.contains(e.target as Node)) {
+      // The popover is drawn on <body> (FileFilterPopover `anchorRef`), outside this wrapper: a tap in it is inside too.
+      if (filterWrapRef.current && !filterWrapRef.current.contains(e.target as Node) && !(e.target as Element).closest?.('[data-file-filter]')) {
         setFilterOpen(false);
       }
     };
+    // WHY (Destin, 2026-11-07: "if i start scrolling the page behind while the menu is open, it should just close"):
+    // the menu is drawn on <body> and stays put, so scrolling anything but the menu itself closes it.
+    const onScroll = (e: Event) => {
+      if (!(e.target instanceof Element && e.target.closest('[data-file-filter]'))) setFilterOpen(false);
+    };
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('scroll', onScroll, { capture: true });
+    };
   }, [filterOpen]);
   // Close the popover when the active tab changes — its trigger belongs to the
   // file tabs, and leaving it open across a tab switch would strand it.
@@ -1016,6 +1031,9 @@ export function ProjectView(props: ProjectViewProps) {
                            content and there is no Artifacts tab left for it to
                            belong to. */
                         showDeletedAvailable={false}
+                        showHidden={showHidden}
+                        onShowHidden={setShowHidden}
+                        anchorRef={filterWrapRef}
                         onClose={() => setFilterOpen(false)}
                       />
                     )}
@@ -1062,7 +1080,7 @@ export function ProjectView(props: ProjectViewProps) {
                 conditional. Side benefit: the folder you were browsing and the
                 file you had open are still there when you come back. */}
             {activeProject && (
-              <FilesTab hidden={tab !== 'files'} project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={onFilesMutated} onClearSearch={onFilesClearSearch} onCurrentDirChange={setCurrentRelDir} pvActiveId={pvActiveId} artifactDispatch={dispatch} />
+              <FilesTab hidden={tab !== 'files'} project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} showHidden={showHidden} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={onFilesMutated} onClearSearch={onFilesClearSearch} onCurrentDirChange={setCurrentRelDir} pvActiveId={pvActiveId} artifactDispatch={dispatch} />
             )}
             {/* Keyed by project so a switch starts a fresh 50-card window at the
                 top, instead of keeping the last project's scroll depth. */}

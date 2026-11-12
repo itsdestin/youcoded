@@ -36,4 +36,11 @@ export const APP: readonly ScreenEntry[] = [
   ...(['lost', 'password'] as const).map((t) => ({
     name: `dev/toast#${t}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: t }, newIn: 'after' as const,
   })),
+  // Plugin off-switch heads-up: the app's own toast with its "Show" button, at desktop and phone width.
+  { name: 'dev/toast#turned-off', tags: ['dev'], session: 'wb-1', params: { toast: 'turned-off' }, newIn: 'after' as const },
+  // Card #216: the "signed out of your YouCoded account" heads-up with its "Sign in again" button.
+  // The same screen with nothing shown: what the app looked like before the notice existed (the deck's Before picture).
+  { name: 'dev/toast#none', tags: ['dev'], session: 'wb-1', params: { toast: 'none' }, newIn: 'after' as const, sameAs: { name: 'chat#queue-idle-after', why: 'The same chat with no notice raised (the Before picture for the signed-out notice).' } },
+  { name: 'dev/toast#signed-out', tags: ['dev'], session: 'wb-1', params: { toast: 'signed-out' }, newIn: 'after' as const },
+  { name: 'dev/toast#turned-off-phone', tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: 'turned-off' }, newIn: 'after' as const },
 ];

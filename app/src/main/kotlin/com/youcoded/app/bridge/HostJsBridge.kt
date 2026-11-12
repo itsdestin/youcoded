@@ -36,6 +36,8 @@ class HostJsBridge(
         fun scanQr(done: (String?) -> Unit)
         /** Ask for the microphone if needed; call [done] with whether it may be used (null: nobody could ask). */
         fun ensureMicPermission(done: (Boolean?) -> Unit)
+        /** Show the system file picker (several files, any type); call [done] with the chosen content URIs (empty: cancelled). */
+        fun pickFiles(done: (List<android.net.Uri>) -> Unit)
         /** Whether the page has an overlay open (the back button closes it) or not (back leaves the app). */
         fun setBackStackEmpty(empty: Boolean)
     }
@@ -87,7 +89,47 @@ class HostJsBridge(
                 PairedDeviceStore.prefs(context).edit().putString(DEVICES, kept.toString()).apply()
                 reply(id, true)
             }
+            // WHY the app answers (Destin, 2026-11-10): the backend's Tailscale check looks for a computer program the phone
+            // does not have and always said "not connected". `on` is null when the phone would not say.
+            "android:tailscale-status" -> reply(id, JSONObject().put("on", com.youcoded.app.ui.TailscaleProbe.isOn() ?: JSONObject.NULL))
+            // The warning's button: the Tailscale app if it is installed, else its Play Store page. `opened` false: neither worked.
+            "android:open-tailscale" -> {
+                val flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                val app = context.packageManager.getLaunchIntentForPackage("com.tailscale.ipn")?.addFlags(flags)
+                val store = android.content.Intent(android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("https://play.google.com/store/apps/details?id=com.tailscale.ipn")).addFlags(flags)
+                val opened = listOfNotNull(app, store).any { intent -> runCatching { context.startActivity(intent) }.isSuccess }
+                reply(id, JSONObject().put("opened", opened))
+            }
             "android:scan-qr" -> main.post { ui.scanQr { url -> reply(id, JSONObject().put("url", url ?: JSONObject.NULL)) } }
+            // WHY (2026-11-01 phone test): the paperclip asked the headless backend for a file dialog, which has no
+            // screen and always answered "cancelled". The system picker lives here, so the phone's paperclip asks
+            // the app; picked files are copied into a folder the backend can read and their paths returned.
+            "android:pick-files" -> main.post {
+                ui.pickFiles { uris ->
+                    io.launch {
+                        // WHY (2026-11-09 final review, Q-15): yesterday's copies go first so the folder cannot grow
+                        // without limit; each file then succeeds or fails on its own, and every file left out is
+                        // named on screen (one bad file used to drop the whole pick, silently).
+                        AttachmentStore.sweep(java.io.File(context.filesDir, "tmp/attachments"))
+                        val paths = JSONArray()
+                        val refused = mutableListOf<String>()
+                        for (uri in uris) {
+                            try { paths.put(copyForBackend(uri)) }
+                            catch (e: AttachmentStore.Refused) { refused += e.message ?: "A file could not be attached." }
+                        }
+                        if (refused.isNotEmpty()) main.post {
+                            android.widget.Toast.makeText(context, refused.joinToString("\n"), android.widget.Toast.LENGTH_LONG).show()
+                        }
+                        reply(id, JSONObject().put("paths", paths))
+                    }
+                }
+            }
+            // A tapped "needs you" alert: the page asks once for the session to open (and the phone forgets it).
+            "android:take-pending-session" -> {
+                val sid = pendingSession; pendingSession = null
+                reply(id, JSONObject().put("sessionId", sid ?: JSONObject.NULL))
+            }
             "system:notify-stack-state" -> { main.post { ui.setBackStackEmpty(p.optBoolean("empty", true)) }; reply(id, null) }
             "voice:status" -> reply(id, voiceReadiness())
             // Android listens itself: nothing to download.
@@ -122,6 +164,15 @@ class HostJsBridge(
         }
     }
 
+    /** Session whose "needs you" alert was tapped, until the page collects it. */
+    @Volatile private var pendingSession: String? = null
+
+    /** An alert was tapped: remember the session and nudge the page (which may not be loaded yet, hence the memory). */
+    fun openSession(sessionId: String) {
+        pendingSession = sessionId
+        push("system:open-session", JSONObject())
+    }
+
     /** A hardware back press, for the page's overlay stack. */
     fun pressBack() = push("system:back", JSONObject())
 
@@ -133,6 +184,31 @@ class HostJsBridge(
         micDenied && context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED ->
             JSONObject().put("state", "unavailable").put("reason", "Microphone permission was not granted.")
         else -> JSONObject().put("state", "ready").put("engine", "your phone's speech recognition")
+    }
+
+    /**
+     * Copy a picked content:// file into files/tmp/attachments (the backend cannot open content:// links); returns its path.
+     * WHY (2026-11-09 final review, Q-15): throws AttachmentStore.Refused with a sentence to show when the file is
+     * too large or unreadable, instead of returning nothing (which looked exactly like cancelling).
+     */
+    private fun copyForBackend(uri: android.net.Uri): String {
+        val resolver = context.contentResolver
+        var name = resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+            if (it.moveToFirst()) it.getString(0) else null
+        } ?: uri.lastPathSegment ?: "attachment"
+        // Keep the name readable but safe: no folders, no odd characters.
+        name = name.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._ -]"), "_").take(100).ifBlank { "attachment" }
+        val root = java.io.File(context.filesDir, "tmp/attachments")
+        val input = runCatching { resolver.openInputStream(uri) }.getOrNull()
+            ?: throw AttachmentStore.Refused("The phone could not open $name, so it was not attached.")
+        return try {
+            AttachmentStore.save(root, name, input).path
+        } catch (e: AttachmentStore.Refused) {
+            throw e
+        } catch (e: Exception) {
+            // The cause is unknown here (storage full, the file's app withdrew access…), so the sentence does not guess.
+            throw AttachmentStore.Refused("The phone could not copy $name, so it was not attached.")
+        }
     }
 
     private fun readDevices(): JSONArray =
@@ -164,8 +240,9 @@ class HostJsBridge(
         /** Every type [invoke] answers. Pinned against the shim by desktop/tests/android-host-channels.test.ts. */
         val TYPES = listOf(
             "android:get-tier", "android:set-tier", "android:get-about", "android:get-paired-devices",
-            "android:save-paired-device", "android:remove-paired-device", "android:scan-qr",
-            "system:notify-stack-state", "voice:status", "voice:download", "voice:start", "voice:stop", "voice:cancel",
+            "android:save-paired-device", "android:remove-paired-device", "android:scan-qr", "android:pick-files",
+            "android:tailscale-status", "android:open-tailscale",
+            "android:take-pending-session", "system:notify-stack-state", "voice:status", "voice:download", "voice:start", "voice:stop", "voice:cancel",
         )
     }
 }

@@ -1,6 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import { CLAUDE_CONTROL_PLUGIN_SOURCE } from '../src/main/claude-control-plugin';
 
+// What Claude Code 2.1.322's box shows for text over 10,000 characters (test-conpty/probe-composer-long.mjs).
+function shortenLikeClaudeCode(text: string, n: number, always = false) {
+  if (text.length <= 10_000 && !always) return text;
+  const middle = text.slice(500, -500); const breaks = (middle.match(/\r\n|\r|\n/g) || []).length;
+  return text.slice(0, 500) + `[...Truncated text #${n} +${breaks} lines...]` + text.slice(-500);
+}
+const longText = (lines: number) => Array.from({ length: lines }, (_, i) => `report line ${i} `.padEnd(60, '.')).join('\n');
+
 function harness(durable = new Map<string, any>()) {
   const hooks = new Map<string, Function[]>(); const scheduled: (() => unknown)[] = []; const events: any[] = [];
   let box = ''; let value: any; let version = 0; let command: any = { kind: 'idle' }; let finishFence!: () => void;
@@ -210,6 +218,62 @@ describe('single-module native queue admission', () => {
     await h.pollCommand({ kind: 'revoke', lease });
     expect(h.events).toContainEqual(expect.objectContaining({ kind: 'revoked', beforeInvocation: true, composerSafe: true }));
     h.release(); await pending;
+  });
+  it('sends a message over 10,000 characters whose box Claude Code shows shortened', async () => {
+    const h = harness(); h.$.prompt.fill.mockImplementation(async ({ text }: any) => { h.setBox(shortenLikeClaudeCode(text, 1)); return { isFilled: true }; });
+    const wire = longText(170); const { pending, lease } = await h.arm(wire);
+    expect(h.box().length).toBeLessThan(1100);
+    expect(h.events).toContainEqual(expect.objectContaining({ kind: 'staged', attemptId: lease.attemptId }));
+    // Enter submits the whole text the shortened box stands for; the exact wire reaches the model.
+    const next = vi.fn(async (e: any) => e);
+    expect(await h.emit('prompt.submit', { text: wire, turnId: 'turn' }, next)).toMatchObject({ text: wire });
+    expect(next).toHaveBeenCalledTimes(1);
+    h.release(); await pending;
+  });
+  it('sends a long message with Windows line endings whose shortened box counts plain line breaks', async () => {
+    const h = harness(); h.$.prompt.fill.mockImplementation(async ({ text }: any) => { h.setBox(shortenLikeClaudeCode(text.replace(/\r\n?/g, '\n'), 2)); return { isFilled: true }; });
+    const wire = longText(170).replace(/\n/g, '\r\n'); const { pending, lease } = await h.arm(wire);
+    expect(h.events).toContainEqual(expect.objectContaining({ kind: 'staged', attemptId: lease.attemptId }));
+    const next = vi.fn(async (e: any) => e);
+    expect(await h.emit('prompt.submit', { text: wire.replace(/\r\n/g, '\n'), turnId: 'turn' }, next)).toMatchObject({ text: wire });
+    h.release(); await pending;
+  });
+  it('does not take a shortened box whose visible text differs from ours, and leaves it in place', async () => {
+    for (const change of [(s: string) => 'X' + s.slice(1), (s: string) => s.slice(0, -1) + 'X', (s: string) => s.replace(/\+(\d+) lines/, (_, n) => '+' + (Number(n) + 1) + ' lines')]) {
+      const h = harness(); h.$.prompt.fill.mockImplementation(async ({ text }: any) => { h.setBox(change(shortenLikeClaudeCode(text, 1))); return { isFilled: true }; });
+      const { pending, lease } = await h.arm(longText(170));
+      expect(h.events.some(e => e.kind === 'staged')).toBe(false);
+      expect(h.events.at(-1)).toMatchObject({ kind: 'revoked', attemptId: lease.attemptId, composerSafe: false });
+      expect(h.box()).not.toBe('');
+      h.release(); await pending;
+    }
+  });
+  it('does not take a shortened-looking box for a message of 10,000 characters or fewer', async () => {
+    const h = harness(); h.$.prompt.fill.mockImplementation(async ({ text }: any) => { h.setBox(shortenLikeClaudeCode(text, 1, true)); return { isFilled: true }; });
+    const { pending } = await h.arm('z'.repeat(10_000));
+    expect(h.events.some(e => e.kind === 'staged')).toBe(false);
+    h.release(); await pending;
+  });
+  it('clears its own shortened box when a staged long message is revoked, even after the marker is renumbered', async () => {
+    const h = harness(); h.$.prompt.fill.mockImplementation(async ({ text }: any) => { h.setBox(text === '' ? '' : shortenLikeClaudeCode(text, 1)); return { isFilled: true }; });
+    const wire = longText(170); const { pending, lease } = await h.arm(wire);
+    h.setBox(shortenLikeClaudeCode(wire, 7));
+    h.revokeState(); await h.pollCommand({ kind: 'revoke', lease });
+    expect(h.box()).toBe('');
+    expect(h.events.at(-1)).toMatchObject({ kind: 'revoked', composerSafe: true });
+    h.release(); await pending;
+  });
+  it('clears its own shortened box on dismissal but keeps a shortened box the person changed', async () => {
+    for (const changed of [false, true]) {
+      const h = harness(); h.$.prompt.fill.mockImplementation(async ({ text }: any) => { h.setBox(text === '' ? '' : shortenLikeClaudeCode(text, 1)); return { isFilled: true }; });
+      const wire = longText(170); const { pending, lease } = await h.arm(wire);
+      const left = shortenLikeClaudeCode(wire, 4); h.setBox(changed ? left + ' and more' : left);
+      await h.pollCommand({ kind: 'abandon', attempt: lease });
+      expect(h.events.at(-1)).toMatchObject({ kind: 'abandoned', attemptId: lease.attemptId });
+      // A leftover copy would hold the next queued message back and could be sent a second time by hand.
+      expect(h.box()).toBe(changed ? left + ' and more' : '');
+      h.release(); await pending;
+    }
   });
   it('ignores nested-agent batches without creating a fence', async () => {
     const h = harness(); const next = vi.fn(async () => ({})); await h.emit('classic.PostToolBatch', { agent_id: 'worker' }, next);

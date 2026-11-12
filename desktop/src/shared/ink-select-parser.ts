@@ -1,8 +1,9 @@
+import { readInputFocus } from './cc-input-focus';
+
 const ANSI_ESCAPE = /\u001b\[[0-9;]*[a-zA-Z]/g;
 
-// Canonical title the parser assigns to CC's folder-trust prompt. Exported so
-// TrustGate can exact-match against it — a substring match on 'trust' there
-// once hijacked any prompt whose title contained the word.
+// Canonical title the parser assigns to CC's folder-trust prompt. It is an
+// ordinary prompt card (no special screen) since 2026-11-01.
 export const TRUST_PROMPT_TITLE = 'Trust This Folder?';
 
 // Every key here is matched as a bare substring against the ~10 lines of
@@ -115,6 +116,10 @@ export interface ParsedMenu {
    *  cancel") sits under the options: a live dialog, not text that merely
    *  looks like a list. */
   dialog?: boolean;
+  /** True for an unnumbered menu read WITHOUT Claude Code's footer under it (see parseUnnumbered): everything else
+   *  about it was certain, the footer was just not there. Only a session that is still starting may show it as a
+   *  card, and only when Claude Code's message box is off the screen (prompt-card-rules.ts cardTitleFor). */
+  loose?: boolean;
   /** Identity of the option set (labels in order, not the cursor). What a
    *  verified-navigation answer re-checks before every keystroke. */
   signature?: string;
@@ -227,6 +232,13 @@ function isOptionLine(line: string, referenceIndent: number): boolean {
 export function parseInkSelect(screenText: string): ParsedMenu | null {
   const clean = stripAnsi(screenText);
   const lines = clean.split('\n');
+
+  // WHY these two run first (2026-11-01, Android UX test): Claude Code's FIRST-RUN screens (theme picker, security notes) match none of the
+  // shapes below — the theme list is unnumbered with a "✔" in front of the cursor label and no "Enter to confirm" footer, and the security
+  // notes have no cursor at all — so a fresh install sat on "Initializing session…" while Claude Code waited on them. Each reader is strict
+  // and returns null when unsure, so a screen it does not recognise still falls through to the old readers and the old fallback.
+  const firstRun = parseThemePicker(lines) ?? parseSecurityNotes(lines);
+  if (firstRun) return firstRun;
 
   // Find the line with the ❯ selector (search bottom-up for the most recent)
   let selectorIdx = -1;
@@ -350,6 +362,142 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
     heading: readHeading(lines, promptTop, firstOptionLine, 0),
     dialog: hasFooterBelow(lines, lastOptionLine),
     signature: signatureOf(options),
+  };
+}
+
+export const THEME_PICKER_TITLE = 'Choose a Theme';
+const SECURITY_NOTES_TITLE = 'Security notes';
+
+/**
+ * Claude Code's theme picker ("Choose the text style that looks best with your terminal", CC 2.1.286+). Options are unnumbered; the row with the
+ * cursor reads "❯ ✔ Dark mode" (✔ = the current theme, which may sit on another row), every other row is indented to the same LABEL column.
+ * A code-diff preview and "Syntax theme: …" sit under the list. Both first run and /theme draw it.
+ * Refuses (null) when: the heading is not directly above the list, fewer than 3 rows, no dark+light mode rows (a truncated or wrapped list), a
+ * row below the list is a wrapped continuation, the cursor is on "New custom theme…" (a sub-flow we do not model), or Claude Code's message box
+ * (a "─" rule followed by a "❯" row) sits under the list — then it is only a quoted menu in the conversation.
+ */
+function parseThemePicker(lines: string[]): ParsedMenu | null {
+  const plain = lines.map((l) => stripAnsi(l).replace(/\s+$/, ''));
+  let cursor = -1;
+  for (let i = 0; i < plain.length; i++) {
+    // The cursor row, with the optional "✔ " current-theme mark before the label.
+    if (/^\s*[❯>]\s+(?:[✔✓]\s+)?\S/.test(plain[i]) && /(dark|light) mode|auto \(match terminal\)/i.test(plain[i])) { cursor = i; break; }
+  }
+  if (cursor < 0) return null;
+  const labelColOf = (l: string): number => {
+    const m = /^(\s*)(?:[❯>]\s+)?(?:[✔✓]\s+)?(?=\S)/.exec(l.replace(/^(\s*)[❯>]/, (_, sp) => sp + ' '));
+    return m ? m[0].length : -1;
+  };
+  const labelCol = labelColOf(plain[cursor]);
+  if (labelCol < 0) return null;
+  // A row of the list: its label starts at labelCol (a "✔ " mark sits in the two columns before it).
+  const rowLabel = (l: string): string | null => {
+    if (!l.trim() || /^\s*[╌─]+$/.test(l.trim())) return null;
+    const m = /^(\s*)([✔✓]\s+)?(\S.*)$/.exec(l.replace(/^(\s*)[❯>]/, (_, sp) => sp + ' '));
+    if (!m) return null;
+    return m[1].length + (m[2] ? m[2].length : 0) === labelCol ? m[3].trim() : null;
+  };
+  let first = cursor;
+  while (first - 1 >= 0 && rowLabel(plain[first - 1]) !== null && !/^\s*[❯>]/.test(plain[first - 1])) first--;
+  let last = cursor;
+  while (last + 1 < plain.length && rowLabel(plain[last + 1]) !== null && !/^\s*[❯>]/.test(plain[last + 1])) last++;
+
+  const labels: string[] = [];
+  for (let i = first; i <= last; i++) labels.push(rowLabel(plain[i])!);
+  if (labels.length < 3 || !labels.some((o) => /^dark mode/i.test(o)) || !labels.some((o) => /^light mode/i.test(o))) return null;
+  // The heading, which may wrap on a phone-width terminal: the few rows above the list, joined.
+  const above = plain.slice(Math.max(0, first - 5), first).join(' ').replace(/\s+/g, ' ').toLowerCase();
+  if (!above.includes('text style that looks best')) return null;
+  // A wrapped continuation of the last label (deeper indent, no rule) would mean a label was cut short.
+  const next = plain[last + 1];
+  if (next && next.trim() && !/^[╌─\s]+$/.test(next) && indentOf(next) > labelCol) return null;
+  // A live message box under the list = a quoted menu, not this dialog.
+  let sawRule = false;
+  for (let i = last + 1; i < plain.length; i++) {
+    const t = plain[i].trim();
+    if (PROMPT_BOUNDARY.test(t) && !/^[╌]+$/.test(t)) sawRule = true;
+    else if (sawRule && /^[❯>]/.test(t)) return null;
+  }
+  // "New custom theme…" opens a naming flow; it is not offered as a button, and a cursor parked on it is not readable.
+  const options = labels.filter((o) => !/^new custom theme/i.test(o));
+  const selectedIndex = cursor - first;
+  if (/^new custom theme/i.test(labels[selectedIndex])) return null;
+  if (options.length !== labels.length && !/^new custom theme/i.test(labels[labels.length - 1])) return null;
+  return {
+    id: 'menu_' + options.map((o) => o.slice(0, 10)).join('_').toLowerCase().replace(/[^a-z0-9_]/g, ''),
+    title: THEME_PICKER_TITLE,
+    options,
+    selectedIndex,
+    optionNumbers: options.map(() => null),
+    promptLines: [],
+    heading: 'Choose the text style that looks best with your terminal',
+    dialog: true,
+    signature: signatureOf(options),
+  };
+}
+
+/**
+ * Claude Code's first-run "Security notes:" screen ("1. Claude can make mistakes … 2. Due to prompt injection risks, only use it with code you
+ * trust … Press Enter to continue…"). No cursor and no options: Enter is the only answer, so it reads as a one-option menu "Continue" (the
+ * verified-answer driver then sends Enter alone). Needs BOTH the "Security notes" heading and the "Press Enter to continue" line as the last
+ * thing on screen; anything else is null.
+ */
+function parseSecurityNotes(lines: string[]): ParsedMenu | null {
+  const plain = lines.map((l) => stripAnsi(l).replace(/\s+$/, ''));
+  let end = plain.length - 1;
+  while (end >= 0 && !plain[end].trim()) end--;
+  // The prompt may wrap on a narrow terminal ("Press Enter to" / "continue…"): look at the last two rows.
+  const tail = plain.slice(Math.max(0, end - 1), end + 1).join(' ').replace(/\s+/g, ' ');
+  if (!/press enter to continue/i.test(tail)) return null;
+  let head = -1;
+  for (let i = end; i >= Math.max(0, end - 30); i--) {
+    if (/^\s*security notes:?\s*$/i.test(plain[i])) { head = i; break; }
+  }
+  if (head < 0) return null;
+  // Body = everything between the heading and the Enter line. WHY rows, not blank-separated blocks (2026-11-01 phone test): newer Claude Code
+  // draws the notes with NO blank row between them, so block splitting fused note 2 into note 1 and glued "Learn more:" onto "trust". Now a
+  // numbered row always starts a note; the rows after it (until the next number) are its grey sub-line; a "Learn more / For more details" row
+  // plus its URL is its own line. Claude Code's wording is kept, only re-flowed.
+  const body: string[] = [];
+  let note: { head: string; sub: string[] } | null = null;
+  let link: string[] = [];
+  const flushNote = () => {
+    if (note) body.push(note.sub.length ? note.head + '\n' + note.sub.join(' ') : note.head);
+    note = null;
+  };
+  const flushLink = () => {
+    if (!link.length) return;
+    // "For more details see:" / "Learn more:" then the address: one line, "Learn more: <url>".
+    const url = link.find((t) => /https?:\/\//i.test(t))?.match(/https?:\/\/\S+/i)?.[0];
+    const text = link.join(' ').replace(/\s+/g, ' ').trim();
+    body.push(url ? 'Learn more: ' + url : text);
+    link = [];
+  };
+  for (let i = head + 1; i <= end; i++) {
+    const t = plain[i].trim();
+    if (/press enter to/i.test(t) || /^continue…?$/i.test(t)) break;
+    if (!t) continue;
+    if (/^\d+\.\s/.test(t)) { flushLink(); flushNote(); note = { head: t, sub: [] }; continue; }
+    if (link.length || /^(learn more|for more details)\b/i.test(t) || /^https?:\/\//i.test(t)) { flushNote(); link.push(t); continue; }
+    // A row with a URL inside its text ("... Learn more: https://...") still ends the sub-line there.
+    const inline = t.match(/^(.*?)\s*((?:learn more|for more details)\b.*)$/i);
+    if (inline && note) { if (inline[1]) (note as { sub: string[] }).sub.push(inline[1]); flushNote(); link.push(inline[2]); continue; }
+    if (note) (note as { sub: string[] }).sub.push(t); else body.push(t);
+  }
+  flushLink();
+  flushNote();
+  if (body.length === 0) return null;
+  return {
+    id: 'menu_securitynotes',
+    title: SECURITY_NOTES_TITLE,
+    options: ['Continue'],
+    selectedIndex: 0,
+    description: body.join('\n'),
+    optionNumbers: [null],
+    promptLines: [],
+    heading: 'Security notes:',
+    dialog: true,
+    signature: signatureOf(['Continue']),
   };
 }
 
@@ -482,7 +630,27 @@ function parseUnnumbered(lines: string[], selectorIdx: number): ParsedMenu | nul
   if (options.length < 2 || selectedIndex < 0) return null;
   if (options.some((o) => o.length > 200)) return null;
   if (options.some((o) => CHECKBOX_ROW.test(o))) return null;
-  if (!hasFooterBelow(lines, last)) return null;
+  // WHY a footerless menu is still read (Destin, 2026-11-09 final review F-2: the terminal is "an absolute last
+  // resort", and first-run screens must be sturdy against Claude Code changing them): the theme picker already had no
+  // footer and needed its own reader; the next new screen would have hung on "Initializing session…" the same way.
+  // Every other proof above still holds (box rule, exact column, certain wrapping, no checkboxes). Without the
+  // footer two more are asked: the menu sits at the bottom of the screen (at most 6 non-empty rows under it), and no
+  // option reads like a sentence of the conversation (ends in a full stop and is long).
+  const dialog = hasFooterBelow(lines, last);
+  if (!dialog) {
+    let below = 0;
+    for (let i = last + 1; i < lines.length; i++) if (stripAnsi(lines[i]).trim()) below++;
+    if (below > 6) return null;
+    if (options.some((o) => o.length > 90 && /\.$/.test(o))) return null;
+    // Three more, found by an independent review (2026-11-10) that fed it ordinary terminal text:
+    //  - Claude Code's message box is on screen: this is a multi-line DRAFT in that box, not a menu;
+    //  - the options start straight under the box rule, with no heading: that is a quoted message from the
+    //    conversation ("> please do these:" over indented lines), where a real dialog always says what it asks;
+    //  - a reply marker (● or ⎿) under the options: the conversation is on screen.
+    if (readInputFocus(lines.join('\n')).kind !== 'popup') return null;
+    if (!readHeading(lines, top, first, width)) return null;
+    for (let i = last + 1; i < lines.length; i++) if (/^\s*[●⎿]/.test(stripAnsi(lines[i]))) return null;
+  }
 
   const firstOptionLine = first;
   const title = extractTitle(lines, firstOptionLine, options, top, true);
@@ -499,7 +667,8 @@ function parseUnnumbered(lines: string[], selectorIdx: number): ParsedMenu | nul
     optionNumbers: options.map(() => null),
     promptLines,
     heading: readHeading(lines, top, firstOptionLine, width),
-    dialog: true,
+    dialog,
+    ...(dialog ? {} : { loose: true }),
     signature: signatureOf(options),
   };
 }
@@ -510,9 +679,13 @@ function parseUnnumbered(lines: string[], selectorIdx: number): ParsedMenu | nul
  * new session is waiting on a dialog this parser cannot turn into buttons (a
  * multi-select, a layout nobody has seen yet), the app must say so at once
  * rather than sit on "Initializing session…". Returns the dialog's heading, or
- * null when no dialog footer is on screen.
+ * null when nothing on screen looks like a question.
+ *
+ * `unsure` (F-2, the last safety net): there is NO footer, but Claude Code's message box is not on screen and its
+ * last rows hold a cursor row, a checkbox row or "press Enter". That is also true for a moment while Claude Code is
+ * still drawing, so the caller shows it only once the screen has stopped changing (usePromptDetector).
  */
-export function readStartupDialog(screenText: string): { heading: string } | null {
+export function readStartupDialog(screenText: string): { heading: string; unsure?: boolean } | null {
   const lines = stripAnsi(screenText).split('\n');
   // A full-screen read (Android's, or a buffer with blank rows below the
   // dialog) ends in empty rows; the footer is near the last NON-empty one.
@@ -522,7 +695,7 @@ export function readStartupDialog(screenText: string): { heading: string } | nul
     const t = lines[i].trim();
     if (DIALOG_FOOTER.test(t) && t.length < 100) { footer = i; break; }
   }
-  if (footer < 0) return null;
+  if (footer < 0) return readFooterlessQuestion(lines, screenText);
   let top = Math.max(0, footer - 40);
   let width = 0;
   for (let i = footer - 1; i >= Math.max(0, footer - 40); i--) {
@@ -530,6 +703,27 @@ export function readStartupDialog(screenText: string): { heading: string } | nul
     if (PROMPT_BOUNDARY.test(t)) { top = i + 1; width = t.length; break; }
   }
   return { heading: readHeading(lines, top, footer, width) ?? '' };
+}
+
+const ASKS_FOR_A_KEY = /\b(press|hit)\s+(enter|return|any key|space)\b|\benter to continue\b/i;
+
+function readFooterlessQuestion(lines: string[], screenText: string): { heading: string; unsure: true } | null {
+  if (readInputFocus(screenText).kind !== 'popup') return null;
+  // A reply marker near the bottom means the conversation is on screen (a quoted "> …" line is not a question).
+  if (lines.slice(-15).some((l) => /^\s*[●⎿]/.test(l))) return null;
+  let asks = -1;
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 15); i--) {
+    const t = lines[i].trim();
+    if (/^[❯>]\s+\S/.test(t) || CHECKBOX_ROW.test(t) || (ASKS_FOR_A_KEY.test(t) && t.length < 100)) { asks = i; break; }
+  }
+  if (asks < 0) return null;
+  let top = Math.max(0, asks - 40);
+  let width = 0;
+  for (let i = asks - 1; i >= Math.max(0, asks - 40); i--) {
+    const t = lines[i].trim();
+    if (PROMPT_BOUNDARY.test(t)) { top = i + 1; width = t.length; break; }
+  }
+  return { heading: readHeading(lines, top, asks, width) ?? '', unsure: true };
 }
 
 /**
@@ -608,22 +802,43 @@ function extractDescription(
   title: string,
   bodyStart = Math.max(0, firstOptionLine - 15),
 ): string | undefined {
+  // WHY line breaks (2026-11-01 phone test): every row used to be joined with a space, so the trust
+  // card read as one run-on block ("…/Trust two Quick safety check: Is this…"). Claude Code's own
+  // paragraphs are kept: a blank row starts a new paragraph — but on a narrow (phone) terminal Claude
+  // Code draws NO blank rows (recorded: tests/fixtures/startup-dialogs/*-50x30), so a row also starts
+  // a new line when the one before ended a sentence or a label (. ? ! ) :) and it starts with a
+  // capital, and a folder path keeps its own line (its wrapped lowercase tail stays with it).
+  // Anything else is a wrapped continuation, joined with a space as before. The card draws "\n".
   const descLines: string[] = [];
+  let breakNext = false;
+  let prev = '';
+  let inPath = false;
 
   for (let i = bodyStart; i < firstOptionLine; i++) {
     const clean = stripAnsi(lines[i]).trim();
-    if (!clean) continue;
+    if (!clean) { if (descLines.length) breakNext = true; continue; }
     // Skip side borders and short decorative runs inside the box
     if (/^[─┌┐└┘│╭╮╯╰┬┴├┤┼╔╗╚╝║═━]+$/.test(clean)) continue;
     // Skip the line that became the title (avoid duplication)
     if (clean.replace(/[:?]$/, '').trim() === title.replace(/[:?]$/, '').trim()) continue;
     // Skip footer instructions (e.g., "Enter to confirm - Esc to cancel")
     if (/enter to confirm/i.test(clean)) continue;
+    const isPathStart = /^(\/|~\/|[A-Za-z]:\\)/.test(clean);
+    const startsCapital = /^[A-Z]/.test(clean);
+    let sep = ' ';
+    if (breakNext) sep = '\n\n';
+    else if (/:$/.test(prev) || isPathStart) sep = '\n';
+    else if (inPath) sep = startsCapital ? '\n' : ' ';
+    else if (/[.?!):]$/.test(prev) && startsCapital) sep = '\n';
+    if (descLines.length) descLines.push(sep);
     descLines.push(clean);
+    inPath = isPathStart || (inPath && sep === ' ');
+    prev = clean;
+    breakNext = false;
   }
 
   if (descLines.length === 0) return undefined;
-  return descLines.join(' ');
+  return descLines.join('');
 }
 
 /**

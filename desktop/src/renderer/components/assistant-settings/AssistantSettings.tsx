@@ -6,6 +6,7 @@ import { AnchorTip, Dialog, SettingRow } from '../ui';
 import { PAGES, type AssistantDefaults, type DefaultsUpdate, type PageDef, type PageId } from './pages';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 import { browserSupported } from '../../state/browser-store';
+import { deviceNoun } from '../../platform';
 
 // Every page id, for `shoot` (see useScreenOpen below).
 const PAGE_IDS: readonly PageId[] = PAGES.map((p) => p.id);
@@ -163,7 +164,7 @@ export default function AssistantSettingsRow({
   // The Browser page's own gate: the computer's own window only.
   const hasBrowser = browserSupported();
   const pages = useMemo(
-    () => PAGES.filter((p) => (!p.needsNative || nativeSupported) && (!p.needsBrowser || hasBrowser)),
+    () => PAGES.filter((p) => (!p.needsNative || nativeSupported) && (!p.needsBrowser || hasBrowser) && !(p.hiddenOnPhone && deviceNoun() === 'phone')),
     [nativeSupported, hasBrowser],
   );
 

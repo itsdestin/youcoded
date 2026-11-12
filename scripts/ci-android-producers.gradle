@@ -12,12 +12,12 @@ gradle.taskGraph.whenReady { graph ->
         }
         visited
     }
-    def variants = ['ReleaseTest', 'Release', 'Debug']
+    def variants = ['Release', 'Debug']
     def selectedLint = graph.allTasks.findAll {
         it.project.path == ':app' && it.name.toLowerCase().contains('lint')
     }
     def namedVariant = { task ->
-        // Longest first: ReleaseTest must never also require Release's payload.
+        // Longest first (harmless with two variants; keeps a future longer variant name from matching a shorter one).
         variants.find { task.name.toLowerCase().contains(it.toLowerCase()) }
     }
     for (def task : selectedLint) {

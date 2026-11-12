@@ -47,6 +47,28 @@ describe('detectLinuxInstallKind', () => {
     });
   }
 
+  // Card #186: the official `youcoded` package and the AUR `youcoded-bin` both make pacman say
+  // "I own it". Only the owning package's NAME tells them apart.
+  const pacmanNamed = (name: string) => (cmd: string, args: string[]) => {
+    if (cmd === 'pacman') { expect(args[0]).toBe('-Qoq'); return { status: 0, stdout: `${name}\n` }; }
+    return cmd === 'dpkg' || cmd === 'rpm' ? 1 : null;
+  };
+  it('the official package (youcoded) stays pacman', () => {
+    expect(detect({ run: pacmanNamed('youcoded') })).toBe('pacman');
+  });
+  it('youcoded-bin (or any other owner) is pacman-other', () => {
+    expect(detect({ run: pacmanNamed('youcoded-bin') })).toBe('pacman-other');
+    expect(detect({ run: pacmanNamed('youcoded-git') })).toBe('pacman-other');
+  });
+  it('pacman owns it but prints nothing readable: keep the old answer, do not lock anyone out', () => {
+    expect(detect({ run: pacmanNamed('') })).toBe('pacman');
+  });
+  it('the async twin reads the name the same way', async () => {
+    const { detectLinuxInstallKindAsync } = await import('../src/main/linux-install-kind');
+    const run = async (cmd: string) => (cmd === 'pacman' ? { status: 0, stdout: 'youcoded-bin\n' } : 1);
+    expect(await detectLinuxInstallKindAsync({ platform: 'linux', execPath: EXEC, exists: () => true, envAppImage: '', run })).toBe('pacman-other');
+  });
+
   it('reports unknown when nothing owns the binary — a dev checkout or a tarball', () => {
     expect(detect({ run: owner(null) })).toBe('unknown');
   });

@@ -1,0 +1,38 @@
+name: Security watch
+
+# Daily: is anything YouCoded bundles known to be vulnerable? (scripts/security-watch.mjs)
+#
+# WHY: Dependabot only reads package-lock.json and Gradle files. It cannot see the phone app's
+# Alpine programs (Node.js, git, musl, curl...), Electron's built-in Chrome fixes, or the Node /
+# GitHub CLI / Git for Windows versions the desktop installer downloads. This job checks those
+# against public security databases and keeps one GitHub issue per problem (label
+# `security-watch`), closing it automatically once the problem is gone. New High/Critical items
+# also ping Destin's phone when the NTFY_TOPIC secret is set (message carries no details).
+on:
+  schedule:
+    # 07:23 UTC daily, off the hour on purpose (GitHub delays :00 cron under load).
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: security-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+      - name: Check bundled components against security databases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: node scripts/security-watch.mjs

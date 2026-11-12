@@ -1,4 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef } from 'react';
+import { hiddenTerminalSize, savedTerminalBottomInset, saveTerminalBottomInset, saveProgramSize } from './terminal-hidden-size';
+import { keepProgramSize, gridOverflow, type SizeBasis } from './terminal-size-lock';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { applyClaudeCodeWidths } from '../../shared/terminal-widths';
@@ -13,10 +15,12 @@ import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { attachRenderPause, type RenderPause } from './xterm-render-pause';
 import { useTheme } from '../state/theme-context';
-import { getCapabilities, isTouchDevice } from '../platform';
+import { getCapabilities } from '../platform';
+import { phoneTerminalLayout } from '../device';
 import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } from '../workbench-mode';
 import { computeTerminalSurface } from '../themes/theme-engine';
 import { ScreenMark } from '../shoot-mode';
+import { swipeAction } from './terminal-swipe';
 
 // Photo-only build flag (vite.config.ts `define`); see shoot-mode.tsx.
 declare const __SHOOT__: boolean;
@@ -166,7 +170,8 @@ function TerminalView({ sessionId, visible }: Props) {
     // xterm's hidden textarea (which would summon the soft keyboard and
     // expose the historical xterm.js mobile IME issues). disableStdin
     // suppresses xterm's input handling entirely.
-    const touch = isTouchDevice();
+    // WHY phoneTerminalLayout (2026-11-10): the same one rule as the message box and the size lock (device.ts).
+    const touch = phoneTerminalLayout();
     const terminal = new Terminal({
       allowProposedApi: true,
       cursorBlink: true,
@@ -364,6 +369,9 @@ function TerminalView({ sessionId, visible }: Props) {
       lastCols = pendingCols;
       lastRows = pendingRows;
       window.claude.session.resize(sessionId, pendingCols, pendingRows);
+      // Remembered so the NEXT new session starts at this size (terminal-hidden-size.ts — why). Phone layout only
+      // (review, 2026-11-10): the computer terminal never uses it, and this wrote to storage on every window-drag step.
+      if (holdRowsOnTouch) saveProgramSize(pendingCols, pendingRows);
       // Fix: make resizing actually clear a corrupt glyph atlas. Resizing is
       // the first thing a user tries when text looks wrong, and until now it
       // did nothing for this failure mode (the repaint re-samples the same
@@ -384,16 +392,60 @@ function TerminalView({ sessionId, visible }: Props) {
       }
       hasFlushedResize = true;
     };
-    const fitAndSync = () => {
-      try {
-        const el = containerRef.current;
-        if (!el || el.clientWidth === 0 || el.clientHeight === 0) return;
-        fitAddon.fit();
-        writeWorkbenchScreenOnce();
-        // Container height changed → thumb proportions need to recompute.
-        updateThumb();
-        const dims = fitAddon.proposeDimensions();
-        if (!dims || !dims.cols || !dims.rows) return;
+    // WHY a hidden terminal still tells the program its size (Destin, 2026-11-03, a phone screenshot: Claude Code's
+    // banner and first reply printed twice). A terminal not on screen is collapsed to 0×0 (globals.css
+    // .terminal-hidden), so it never fitted: a new session's program ran at the spawn default (80×24 — the phone's
+    // log: "pty spawn size 80 24", then "resize 48 42" only when terminal view was first opened, 31 s later), drew
+    // its screen at 80 columns, and drew it all again at 48 when the terminal finally fitted. Now the size it will
+    // have is worked out from the box it will fill (terminal-hidden-size.ts, FitAddon's own arithmetic) and sent at
+    // once, so showing it later changes nothing. The terminal view's own bottom inset is remembered from the last time
+    // it was on screen: on a phone its input bar is not chat view's.
+    // WHY a size basis (terminal-size-lock.ts — the measurements): on a touch screen the program's size follows the
+    // WINDOW, not the chrome over the terminal. A hidden terminal's guess below, or the first fit, decides it; after
+    // that a fit with the same window, character size and column count keeps the rows and only slides the grid (see
+    // fitAndSync). Desktop (Electron) is unchanged: its terminal is not covered by a floating box, so it always fits.
+    const holdRowsOnTouch = phoneTerminalLayout();   // device.ts; keyboard.css's [data-term-lift] rule must agree
+    let basis: SizeBasis | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FitAddon reads the same private field
+    const cellSize = (): { width: number; height: number } | undefined => (terminal as any)._core?._renderService?.dimensions?.css?.cell;
+    const basisFor = (cols: number): SizeBasis => {
+      const cell = cellSize();
+      return { winW: window.innerWidth, winH: window.innerHeight, cellW: cell?.width ?? 0, cellH: cell?.height ?? 0, cols };
+    };
+    /** Slide the grid up by however much its rows overhang its box (0 when they fit). keyboard.css adds it to the lift. */
+    let liftPx = -1;
+    const setGridLift = (el: HTMLElement) => {
+      if (!holdRowsOnTouch) return;
+      const xs = terminal.element ? getComputedStyle(terminal.element) : null;
+      const padY = xs ? (parseFloat(xs.paddingTop) || 0) + (parseFloat(xs.paddingBottom) || 0) : 0;
+      const px = gridOverflow(terminal.rows, cellSize()?.height ?? 0, padY, el.clientHeight);
+      if (px === liftPx) return;   // performance rule 6: skip an unchanged write
+      liftPx = px;
+      el.style.setProperty('--term-grid-lift', `${px}px`);
+    };
+    const proposeHidden = (el: HTMLElement) => {
+      const host = el.parentElement?.parentElement;
+      const cell = cellSize();
+      if (!host || !terminal.element || !cell) return;
+      const cs = getComputedStyle(el);
+      const xs = getComputedStyle(terminal.element);
+      const px = (v: string) => parseFloat(v) || 0;
+      const size = hiddenTerminalSize({
+        hostWidth: host.clientWidth, hostHeight: host.clientHeight,
+        top: px(cs.top), bottom: savedTerminalBottomInset() ?? px(cs.bottom), left: px(cs.left), right: px(cs.right),
+        padTop: px(xs.paddingTop), padBottom: px(xs.paddingBottom), padLeft: px(xs.paddingLeft), padRight: px(xs.paddingRight),
+        scrollbarWidth: terminal.options.scrollback === 0 ? 0 : (terminal.options.overviewRuler?.width || 14),
+        cellWidth: cell.width, cellHeight: cell.height,
+      });
+      if (!size) return;
+      // Same window and columns as the size already decided: keep it. The guess uses a remembered (or chat view's)
+      // bottom inset, so it can be a row or two off the real fit; that is not worth a redraw.
+      if (keepProgramSize(basis, basisFor(size.cols))) return;
+      if (terminal.cols !== size.cols || terminal.rows !== size.rows) terminal.resize(size.cols, size.rows);
+      basis = basisFor(size.cols);
+      queueSize(size.cols, size.rows);
+    };
+    const queueSize = (cols: number, rows: number) => {
         // Dedup target: if a resize is already queued, compare against the
         // queued value (so re-proposing the same queued size is a no-op).
         // Otherwise compare against the last value actually sent to the PTY.
@@ -401,11 +453,43 @@ function TerminalView({ sessionId, visible }: Props) {
         // would skip the A update and let the stale B get flushed.
         const targetCols = debounceTimer !== null ? pendingCols : lastCols;
         const targetRows = debounceTimer !== null ? pendingRows : lastRows;
-        if (dims.cols === targetCols && dims.rows === targetRows) return;
-        pendingCols = dims.cols;
-        pendingRows = dims.rows;
+        if (cols === targetCols && rows === targetRows) return;
+        pendingCols = cols;
+        pendingRows = rows;
         if (debounceTimer !== null) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(flushResize, 120);
+    };
+    const fitAndSync = () => {
+      try {
+        const el = containerRef.current;
+        if (!el) return;
+        // WHY phone layout only (2026-11-09): sizing a hidden terminal was built for the phone's doubled banner and
+        // reached the computer app by accident (this line had no device check). There it could resize a session
+        // another window or a phone was showing, with none of the phone's keep-the-size guard. The computer app is
+        // back to the released behaviour: a hidden terminal does nothing (458c1356a, the 0x0 "bunched text" fix).
+        if (el.clientWidth === 0 || el.clientHeight === 0) { if (holdRowsOnTouch) proposeHidden(el); return; }
+        if (holdRowsOnTouch && visibleRef.current) saveTerminalBottomInset(parseFloat(getComputedStyle(el).bottom) || 0);
+        // Touch screen, same window, same columns: only the chrome over the terminal moved (a second line in the
+        // message box, the first show after a hidden guess). Keep the program's size — a resize would make Claude Code
+        // print lines twice — and slide the grid so its last rows stay above the box (terminal-size-lock.ts).
+        const proposed = holdRowsOnTouch ? fitAddon.proposeDimensions() : undefined;
+        if (proposed?.cols && keepProgramSize(basis, basisFor(proposed.cols))) {
+          // WHY here too: a phone terminal that was sized while hidden takes this early exit on its first show, so the
+          // practice screen was never written and the phone terminal pictures came out empty (2026-11-09).
+          writeWorkbenchScreenOnce();
+          setGridLift(el);
+          updateThumb();
+          return;
+        }
+        fitAddon.fit();
+        writeWorkbenchScreenOnce();
+        // Container height changed → thumb proportions need to recompute.
+        updateThumb();
+        const dims = fitAddon.proposeDimensions();
+        if (!dims || !dims.cols || !dims.rows) return;
+        basis = basisFor(dims.cols);
+        setGridLift(el);
+        queueSize(dims.cols, dims.rows);
       } catch {
         // Ignore fit errors during teardown
       }
@@ -474,7 +558,15 @@ function TerminalView({ sessionId, visible }: Props) {
         const deltaPx = lastY - currentY + remainder;
         const lines = (deltaPx / PX_PER_LINE) | 0; // truncate toward zero
         if (lines !== 0) {
-          terminal.scrollLines(lines);
+          // Claude Code's fullscreen mode keeps its own history, so there the swipe becomes wheel
+          // reports to the program (terminal-swipe.ts — why; Destin 2026-11-08 "okay").
+          const action = swipeAction(lines, {
+            alternate: terminal.buffer.active.type === 'alternate',
+            mouseTracking: terminal.modes.mouseTrackingMode !== 'none',
+            cols: terminal.cols, rows: terminal.rows,
+          });
+          if (action.kind === 'send') window.claude.session.sendInput(sessionId, action.data);
+          else terminal.scrollLines(action.lines);
           remainder = deltaPx - lines * PX_PER_LINE;
         } else {
           remainder = deltaPx;
@@ -778,15 +870,40 @@ function TerminalView({ sessionId, visible }: Props) {
           continuous surface. Solid themes need nothing (the strip already shows
           --canvas); wallpaper themes are covered by the full-bleed terminalBg.
           Workbench mock-ups pin the variant's own opacity so the gap matches. */}
-      {seeThrough && !terminalBg && (
+      {/* WHY also under a wallpaper when the grid is FILLED (Destin, 2026-11-03: "no weird hard edges in all chrome
+          modes"): since P-20.2 the grid container is a tinted panel sheet under a wallpaper, so the header gap above
+          it showed the bare wallpaper and the tint began in a hard line at the header's bottom edge — measured on a
+          Z Flip7, where the header is see-through. The strip repeats the sheet over the gap so it reads as one. */}
+      {seeThrough && (!terminalBg || fillContainer) && (
         <div
           aria-hidden
+          data-term-lift=""
           style={{
             position: 'absolute',
             top: 0,
             left: 0,
             right: 0,
             height: 'var(--terminal-top-inset, 0px)',
+            backgroundColor: backingColor,
+            opacity: backingStyle ? backingStyle.xtermOpacity : 'var(--terminal-xterm-opacity, 0.6)',
+          }}
+        />
+      )}
+      {/* The same strip at the BOTTOM, under the input bar and the keyboard (Destin, 2026-11-03: "theres a hard edge
+          at the bottom now tho where the terminal meets the input bar"): on a touch screen the bar floats over the
+          terminal and the grid stops above it (--terminal-bottom-inset, globals.css), so the gap below the grid
+          repeats the sheet too. On desktop it is the 10px under the frame's bottom edge. */}
+      {seeThrough && (!terminalBg || fillContainer) && (
+        <div
+          aria-hidden
+          data-terminal-gap="bottom"
+          data-term-lift=""
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: 'var(--terminal-bottom-inset, 0px)',
             backgroundColor: backingColor,
             opacity: backingStyle ? backingStyle.xtermOpacity : 'var(--terminal-xterm-opacity, 0.6)',
           }}
@@ -800,6 +917,8 @@ function TerminalView({ sessionId, visible }: Props) {
       <div
         ref={containerRef}
         data-term-backing={workbenchBacking}
+        // Rides up with the keyboard on a touch screen rather than shrinking (globals.css, [data-term-lift] — why).
+        data-term-lift=""
         style={{
           position: 'absolute',
           // Content (the xterm grid) starts BELOW the header. Claude Code wipes
@@ -846,7 +965,11 @@ function TerminalView({ sessionId, visible }: Props) {
           // surface. Re-point it at the variant's token so a `scrim` shot on a
           // wallpaper theme doesn't show a panel-coloured strip under a canvas
           // grid. Never set in the app (backingStyle is null there).
-          ...(backingStyle ? { '--terminal-backing': backingColor } as React.CSSProperties : null),
+          // WHY always, not only for mock-ups (Destin, 2026-11-10, a laptop-browser picture: "the terminal cuts off
+          // before the bottom of the frame"): on remote access the page is styled with no wallpaper, so the engine's
+          // --terminal-backing is the flat colour while this terminal still paints its wallpaper sheet. The strip
+          // under the last row then showed in a different colour from the rows. Same colour as the fill above, always.
+          ...({ '--terminal-backing': backingColor } as React.CSSProperties),
         }}
       />
     </div>

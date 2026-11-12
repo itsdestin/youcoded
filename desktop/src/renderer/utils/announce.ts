@@ -13,9 +13,13 @@ export interface AppNoticeDetail {
   message: string;
   /** Longer for a message with more to read; the toast's default is 3 s. */
   durationMs?: number;
+  /** One button beside the words (the toast's existing action slot). WHY an optional third
+   *  argument and not a new event: the plugin off-switch heads-up needs "Show", and every
+   *  plain announcement stays exactly as it was. */
+  action?: { label: string; onClick: () => void };
 }
 
-export function announce(message: string, durationMs?: number): void {
+export function announce(message: string, durationMs?: number, action?: AppNoticeDetail['action']): void {
   if (typeof window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent<AppNoticeDetail>(APP_NOTICE_EVENT, { detail: { message, durationMs } }));
+  window.dispatchEvent(new CustomEvent<AppNoticeDetail>(APP_NOTICE_EVENT, { detail: { message, durationMs, action } }));
 }

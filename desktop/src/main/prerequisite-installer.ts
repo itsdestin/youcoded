@@ -114,16 +114,18 @@ const NODE_TARBALL_SHA256: Record<string, string> = {
 // installer depend on the GitHub API being reachable and unauthenticated.
 // Bump deliberately; the only constraint is that the release still publishes
 // the macOS .zip / Linux .tar.gz assets this installer expects.
-const GH_VERSION = '2.96.0';
+const GH_VERSION = '2.103.3';
 // WHY (2026-10 security audit SC-7): the gh archive used to be unpacked on TLS alone. These are
 // the SHA-256 values from the release's own gh_<ver>_checksums.txt
-// (https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_checksums.txt). The linux-amd64
+// (https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_checksums.txt). The linux-amd64
 // and macOS-arm64 values were also re-checked by hashing the downloaded archives. Bump with GH_VERSION.
+// WHY (security watch, 2026-11): 2.96.0 had three published low-severity flaws (fixed in 2.97.0);
+// moved to the newest release, whose archives keep the same gh_<ver>_<plat>_<arch>/bin/gh layout.
 export const GH_ARCHIVE_SHA256: Record<string, string> = {
-  'gh_2.96.0_linux_amd64.tar.gz': '83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60',
-  'gh_2.96.0_linux_arm64.tar.gz': '06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909',
-  'gh_2.96.0_macOS_amd64.zip': '4bd449df9ad639391bc62b8032546f0fe9edcd8526e06682a4f88abd8c5d163c',
-  'gh_2.96.0_macOS_arm64.zip': 'f23a0c37d963aacc3bed703ccbd59b41c5ca22101fab7f00eb2b7cad23aba463',
+  'gh_2.103.3_linux_amd64.tar.gz': '4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d',
+  'gh_2.103.3_linux_arm64.tar.gz': 'ee32df2323c8847f5fac6cb6b4b69ca75828e9329a8f22f677021f7b3306ce63',
+  'gh_2.103.3_macOS_amd64.zip': 'a2f86418f4350ae6e9ec60d5000bdf7665728436946a97fc27fe50e6ae752682',
+  'gh_2.103.3_macOS_arm64.zip': 'd700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062',
 };
 const PATH_MARKER = '# Added by YouCoded first-run installer';
 

@@ -8,8 +8,10 @@ export function pendingQueueSend(sessionId:string,text?:string,files?:string[],i
  const requests:Request[]=[];
  for(let n=0;n<storage.length;n++){
   const k=storage.key(n);if(!k?.startsWith(prefix(sessionId)))continue;
-  const r=JSON.parse(storage.getItem(k)!) as Request;
-  if(r.kind!=='enqueue'||typeof r.queueId!=='string'||typeof r.payload?.sendEpoch!=='string'||typeof r.payload.sendId!=='string'||typeof r.payload.originalText!=='string'||!Array.isArray(r.payload.attachments))throw Error('Saved queue request could not be read. It has not been resent.');
+  let r:Request|undefined;try{r=JSON.parse(storage.getItem(k)!) as Request;}catch{r=undefined;}
+  // WHY skip, not throw (2026-11-07): one unreadable saved send refused EVERY later message in the conversation, for good.
+  // It cannot be resent or put back (its words are unreadable), so it is only ever skipped; the rest of the list still counts.
+  if(!r||r.kind!=='enqueue'||typeof r.queueId!=='string'||typeof r.payload?.sendEpoch!=='string'||typeof r.payload.sendId!=='string'||typeof r.payload.originalText!=='string'||!Array.isArray(r.payload.attachments))continue;
   // WHY: an acknowledgement still in flight belongs to a distinct user intent, not a retryable lost reply.
   if(!inFlight?.has(r.payload.sendId))requests.push(r);
  }

@@ -20,6 +20,11 @@ import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
 import { useEntryFolding } from '../hooks/use-entry-folding';
 import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
+import { messageTimeMarks } from '../state/message-time-marks';
+import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { prefersTouchInput } from '../utils/touch-input';
+import { KEYBOARD_OFFSET_EVENT } from '../hooks/keyboard-live-lift';   // its own home: the scroll-listener check reads the name there
+import { keyboardContentLift } from '../state/keyboard-lift';
 import { SessionContextBanner } from './SessionContextBanner';
 import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
@@ -306,6 +311,16 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // With no boundary the projection preserves the original timeline reference.
   const presentation = useMemo(() => projectTimeline(state.timeline, state.assistantTurns), [state.timeline, state.assistantTurns]);
   const archiveBoundary = useMemo(() => findArchiveBoundary(presentation.timeline), [presentation.timeline]);
+  // Phone only: which messages keep their time (state/message-time-marks.ts). Null on a computer, so no row's props
+  // change there when a new message arrives.
+  // WHY touch as well as narrow (final review: a narrow COMPUTER window gets the phone's spacing, nothing else):
+  // width alone hid message times for a mouse user in a half-screen window.
+  const narrowView = useNarrowViewport() && prefersTouchInput();
+  // Keyed on the reducer's timeline, NOT the turns (performance.md rule 4): the turns change with every streamed word,
+  // the set of messages and their times only when a message arrives, and this walks the whole conversation.
+  const timeMarks = useMemo(() => (narrowView ? messageTimeMarks(presentation.timeline, presentation.assistantTurns) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above: deliberately not per streamed word
+    [narrowView, state.timeline]);
   const streamingTurnId = state.currentTurnId ? presentation.tailTurnIds.get(state.currentTurnId) ?? state.currentTurnId : null;
 
   // PTY-buffer classifier drives the attention banner. Replaces the old
@@ -792,6 +807,42 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     return () => window.removeEventListener('youcoded:jump-to-ref', onJump);
   }, [visible, releaseStick]);
 
+  // The on-screen keyboard (Destin, 2026-11-02: "when keyboard is up, i can no longer see the very latest messages"): the
+  // page no longer shrinks for it, so nothing above re-pins — the scroller's padding grows by the keyboard instead.
+  // While the Android keyboard glides, the padding is not touched (that would re-check the whole page each step,
+  // useVisualViewport.ts): the messages ride up by transform (`lift`); when it settles the padding takes the new
+  // value and the view re-pins, in the same frame the transform is removed.
+  useEffect(() => {
+    if (!visible) return;
+    // The scroller as the glide began (height of everything, visible height, position): the messages move only as far
+    // as the re-pin at the end will really scroll. WHY (Destin, 2026-11-02: "the 'started with' banner at the top is
+    // jumping around strangely"): a short conversation does not scroll at all, so moving it by the keyboard's full
+    // height lifted it, then dropped it back when the glide settled.
+    let start: { contentHeight: number; visibleHeight: number; scrollTop: number } | null = null;
+    const onKeyboard = (e: Event) => {
+      const content = contentRef.current;
+      const scroller = scrollContainerRef.current;
+      const lift = (e as CustomEvent<{ lift?: number }>).detail?.lift ?? 0;
+      if (lift !== 0) {
+        if (!content || !scroller || !stickRef.current) return;
+        // The real height of everything in the scroller (state/keyboard-lift.ts says why not scrollHeight).
+        if (!start) {
+          const cs = getComputedStyle(scroller);
+          const contentHeight = content.offsetHeight + parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+          start = { contentHeight, visibleHeight: scroller.clientHeight, scrollTop: scroller.scrollTop };
+        }
+        const willScroll = keyboardContentLift(start, lift);
+        content.style.transform = willScroll ? `translateY(${-willScroll}px)` : '';
+        return;
+      }
+      start = null;
+      if (content) content.style.transform = '';
+      if (stickRef.current) scrollToBottom();
+    };
+    window.addEventListener(KEYBOARD_OFFSET_EVENT, onKeyboard);
+    return () => window.removeEventListener(KEYBOARD_OFFSET_EVENT, onKeyboard);
+  }, [visible, scrollToBottom, stickRef]);
+
   // The find row changes the scroll container's height (it takes its own row
   // above the messages). Shrinking a container does not fire a scroll event
   // and none of the ResizeObservers above watch the container itself, so a
@@ -1041,7 +1092,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             <div
               // select-none: a hint, not content. Ctrl+A must not paint it
               // (Destin, 2026-09-10).
-              className="absolute inset-x-0 flex items-center justify-center text-fg-muted text-sm pointer-events-none select-none"
+              className="empty-chat-hint absolute inset-x-0 flex items-center justify-center text-fg-muted text-sm pointer-events-none select-none"
               style={{ top: 'var(--top-chrome-bottom, 3rem)', bottom: 'var(--bottom-chrome-height, 5rem)' }}
             >
               Start a conversation with {assistantName(provider)}
@@ -1150,6 +1201,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     sessionId={sessionId}
                     provider={provider}
                     showTimestamps={showTimestamps}
+                    keepTime={timeMarks ? timeMarks.has(key) : undefined}
                     // WHY currentTurnId: the reducer clears it when a turn ends for ANY reason
                     // (complete, Stop, error), and history replay never sets it — so it is exactly
                     // "the model is writing this turn now". Lets a long open code fence be drawn in

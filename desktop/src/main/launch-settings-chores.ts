@@ -4,6 +4,7 @@ import { mutateSettings, type MutateSettingsResult } from './claude-settings';
 import { reconcileHooksInto, type ReconcileHooksResult } from './hook-reconciler';
 import { applyPromptSuggestionDisabled, type EnforcePromptSuggestionResult } from './disable-prompt-suggestion';
 import { seedCleanupPeriodInto, type SeedRetentionResult } from './retention-default';
+import { seedTuiFullscreenInto, type SeedTuiResult } from './tui-fullscreen-default';
 
 // The launch chores that edit ~/.claude/settings.json, composed for main.ts.
 //
@@ -64,18 +65,23 @@ export interface SettingsChoresResult extends MutateSettingsResult {
   hooks: ReconcileHooksResult;
   promptSuggestion: EnforcePromptSuggestionResult;
   retention: SeedRetentionResult;
+  /** Phone only: fullscreen display mode seeded when absent (tui-fullscreen-default.ts). */
+  tui: SeedTuiResult;
 }
 
 /** Plugin-hook reconcile, prompt-suggestion off, retention default: three
  *  callbacks, one locked cycle, in that order. */
-export async function runSettingsChores(): Promise<SettingsChoresResult> {
+export async function runSettingsChores({ phone = false }: { phone?: boolean } = {}): Promise<SettingsChoresResult> {
   let hooks: ReconcileHooksResult = { added: 0, updatedPath: 0, updatedTimeout: 0, pruned: 0, manifestCount: 0 };
   let promptSuggestion: EnforcePromptSuggestionResult = { changed: false, prior: undefined };
   let retention: SeedRetentionResult = { changed: false, effective: undefined };
+  let tui: SeedTuiResult = { changed: false, effective: undefined };
   const r = await mutateSettings((settings) => {
     hooks = reconcileHooksInto(settings);
     promptSuggestion = applyPromptSuggestionDisabled(settings);
     retention = seedCleanupPeriodInto(settings);
+    // Phone only, in the same locked write: see tui-fullscreen-default.ts.
+    if (phone) tui = seedTuiFullscreenInto(settings);
   });
   if (r.refused) {
     // The lock could not be taken, so nothing landed; report each chore as
@@ -86,6 +92,7 @@ export async function runSettingsChores(): Promise<SettingsChoresResult> {
     hooks = { added: 0, updatedPath: 0, updatedTimeout: 0, pruned: 0, manifestCount: hooks.manifestCount };
     promptSuggestion = { changed: false, prior: promptSuggestion.prior };
     retention = { changed: false, effective: undefined };
+    tui = { changed: false, effective: undefined };
   }
-  return { ...r, hooks, promptSuggestion, retention };
+  return { ...r, hooks, promptSuggestion, retention, tui };
 }
