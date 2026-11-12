@@ -1722,8 +1722,10 @@ describe('background execution + idle-boundary delivery', () => {
     let enteredNotice = false;
     let releaseGate: () => void = () => {};
     const gate = new Promise<void>((res) => { releaseGate = res; });
-    // WHY: direct user dispatch now splices pending results before its request.
-    vi.spyOn(host as any, 'deliverNotice').mockImplementation(async () => { enteredNotice = true; await gate; });
+    // WHY: a direct user dispatch now splices pending results (spliceNotice) before its request; idle passes use runNotice. Stub both.
+    const hold = async () => { enteredNotice = true; await gate; };
+    entry.session.runNotice = vi.fn(hold);
+    entry.session.spliceNotice = vi.fn(hold);
 
     // Drive runTurns directly (not via queueDelivery) so its returned promise
     // is the one this test awaits — the same delivery-loop code path, just

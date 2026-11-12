@@ -2537,8 +2537,11 @@ export class HarnessSession extends EventEmitter {
    *  not a status update, it is new information the parent must act on.
    *  Callers (NativeSessionHost.runTurns) are responsible for only calling
    *  this at an idle boundary — beginTurn's own re-entrancy guard would throw
-   *  if it were called mid-turn, by design (never splice into a running turn:
-   *  role alternation + the local prompt cache both depend on it). */
+   *  if it were called mid-turn, by design. A report that finishes while a turn
+   *  runs is NOT turned into a second turn: the driver splices it history-only
+   *  at its own safe gaps (spliceNotice, appended at the tail, never inside a
+   *  stream, tool run or call/result group — role alternation and the local
+   *  prompt cache prefix depend on that). */
   async runNotice(text: string, meta?: InjectedMeta): Promise<void> {
     // G-1: the discriminant tells the renderer which card folds this turn —
     // a Task card (specialist report) or a Bash card (shell-complete).
@@ -2566,6 +2569,12 @@ export class HarnessSession extends EventEmitter {
   // now hands it over at the driver's own safe gaps: after a completed response, after the first empty
   // response, after a complete tool batch. Never during a stream, a tool run or a compaction.
   private deliveryBoundary?: () => Promise<void>;
+  // WARNING for future callers: this is a SESSION-WIDE flag, true for the whole await of the host's drain, not a
+  // permission handed to one call. While it is true, ANY spliceNotice on this session skips the "turn in flight"
+  // refusal. That is safe only because the driver is serialized and parked at its gap while the drain runs, and
+  // the host's drain is the only caller. Never call spliceNotice from elsewhere during that window, and never await
+  // anything slow or unrelated inside the drain callback. (Narrowing it to a per-call token would need the token
+  // threaded through the host's drainDeliveries/deliverNotice; not done.)
   private atDeliveryBoundary = false;
 
   /** Host-owned drain; only the serialized driver invokes it, after accepted groups. */
@@ -3129,9 +3138,12 @@ export class HarnessSession extends EventEmitter {
         if (step.toolCalls.length === 0) {
           const background = await this.absorbBackgroundResults();
           if (this.interrupted || this.abort.signal.aborted) { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
-          if (absorbReadyMessage() || background) continue turnLoop;
-          // Cut off at the output limit: continue / ask to split, inside the turn (truncation-recovery.ts).
+          // WHY truncation first: a delivered report also makes `background` true, and continuing on that alone
+          // would skip the continue/split request for a reply cut off at the output limit (truncation-recovery.ts).
+          // The report is already in history, so the continuation request carries both.
+          if (absorbReadyMessage()) continue turnLoop;   // a ready human message still wins, as before
           if (step.finishReason === 'length' && this.recoverTruncation(step, truncationRecoveries)) { truncationRecoveries++; continue turnLoop; }
+          if (background) continue turnLoop;
           // Natural stop; mapStopReason handles truncated output as max_tokens.
           stopReason = mapStopReason(step.finishReason);
           break;

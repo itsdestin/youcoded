@@ -1673,9 +1673,10 @@ export class NativeSessionHost extends EventEmitter {
    *  is going to reach runTurns' own post-drain tail on its own in that case).
    *  When the parent is mid-turn, this only records the pending flag — that
    *  same tail (reached from the real, in-flight turn once it finishes) is
-   *  what actually drains it; delivery happens ONLY at an idle boundary,
-   *  never spliced mid-turn (role alternation + the local prompt cache both
-   *  depend on it).
+   *  what actually drains it. Delivery happens at an idle boundary, or (card #148) at the
+   *  running driver's own safe gaps (after a completed response / tool batch), where it is
+   *  appended at the history TAIL only: never inside a stream, a tool run or a call/result
+   *  group, so role alternation and the local prompt cache's prefix stay intact.
    *
    *  `entry.inFlight = true` claims the idle slot SYNCHRONOUSLY, in the same
    *  tick as the isIdle() check — mirroring send()'s own dispatch — so a
@@ -4564,9 +4565,10 @@ export class NativeSessionHost extends EventEmitter {
       }
       if (notices.length === 0 && this.pendingHostNotices.get(sessionId) === notices) this.pendingHostNotices.delete(sessionId);
     }
-    // WHY (spec §3, Task 4): background completions inject as a synthetic
-    // user-role turn at an idle boundary — never spliced mid-turn (role
-    // alternation + local prompt cache). A claim is a LEASE: delivered flips
+    // WHY (spec §3, Task 4; card #148): background completions inject as a synthetic user-role
+    // turn at an idle boundary, or are spliced history-only at the driver's safe gaps (appended at
+    // the tail, never inside a stream, tool run or call/result group: role alternation + the local
+    // prompt cache prefix both depend on that). A claim is a LEASE: delivered flips
     // only after the injected turn has run. A crash between claim and
     // injection leaves a dead-owner lease that Task 9's reconcile releases —
     // the report is re-delivered after restart, never lost. Guarded on
@@ -4811,11 +4813,10 @@ export class NativeSessionHost extends EventEmitter {
           // has no live ledger row in a deliverable state to attach it to (see
           // this lane's own WHY, right above); the correct path is still what
           // lands in THIS injection's footer either way.
-          await this.deliverNotice(entry, mode, this.formatDelivery(sessionId, entry.cwd, fallback.rec, concurrentReporters).text, {
-            childId: fallback.childId, parentToolCallId: fallback.rec.parentToolCallId, runNumber: fallback.rec.runNumber ?? 1,
-            title: fallback.rec.title, agentType: fallback.rec.agentType,
-            description: fallback.rec.description, status: fallback.rec.status === 'failed' ? 'failed' : 'completed',
-          });
+          // WHY no meta (as before card #148): passing it would make the chat draw this report as the helper-report
+          // card instead of plain text — a visible change. This lane takes the only copy before injecting, so it
+          // needs no injection witness of its own.
+          await this.deliverNotice(entry, mode, this.formatDelivery(sessionId, entry.cwd, fallback.rec, concurrentReporters).text);
           if (this.live.get(sessionId) !== entry) {
             // destroy() landed mid-notice: runNotice on a torn-down session
             // resolves normally without showing the report to anyone (same

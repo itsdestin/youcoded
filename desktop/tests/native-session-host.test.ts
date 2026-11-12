@@ -2460,8 +2460,11 @@ describe('NativeSessionHost', () => {
         let release!: () => void;
         const started = new Promise<void>((r) => { entered = r; });
         const gate = new Promise<void>((r) => { release = r; });
-        // WHY: busy results now splice at a response boundary; idle results run a notice turn.
-        const notice = vi.spyOn(h as any, 'deliverNotice').mockImplementation(async () => { entered(); await gate; });
+        // WHY: idle results run a notice turn (runNotice); busy ones splice at a boundary (spliceNotice). Stub both
+        // real session methods so the host's own deliverNotice routing stays exercised.
+        const hold = async () => { entered(); await gate; };
+        const runNotice = vi.spyOn(entry.session, 'runNotice').mockImplementation(hold);
+        const spliceNotice = vi.spyOn(entry.session, 'spliceNotice').mockImplementation(hold);
         const seen: string[] = [];
         h.on('transcript-event', (e: any) => { if (e.type === 'user-message') seen.push(e.data.text); });
         if (start === 'user turn tail') h.send(sid, 'opening');
@@ -2475,7 +2478,7 @@ describe('NativeSessionHost', () => {
         await entry.running;
         expect(entry.queue).toHaveLength(0);
         expect(h.isIdle(sid)).toBe(true);
-        expect(notice).toHaveBeenCalledTimes(1);
+        expect(runNotice.mock.calls.length + spliceNotice.mock.calls.length).toBe(1); // exactly one delivery, by whichever route the start allows
       } finally { await h.destroyAll(); }
     });
 
@@ -2630,8 +2633,10 @@ describe('NativeSessionHost', () => {
       let release!: () => void;
       const started = new Promise<void>((r) => { entered = r; });
       const gate = new Promise<void>((r) => { release = r; });
-      // WHY: keep the failure present on both idle and safe-boundary delivery paths.
-      vi.spyOn(host as any, 'deliverNotice').mockImplementation(async () => { entered(); await gate; throw new Error('notice failed'); });
+      // WHY: keep the failure present on both idle (runNotice) and safe-boundary (spliceNotice) paths, through the real routing.
+      const failing = async () => { entered(); await gate; throw new Error('notice failed'); };
+      vi.spyOn(entry.session, 'runNotice').mockImplementation(failing);
+      vi.spyOn(entry.session, 'spliceNotice').mockImplementation(failing);
       (host as any).queueHostNotice(id, 'notice', { kind: 'shell', runs: [] }, 'test');
       await started;
       const sent = host.send(id, 'survivor');

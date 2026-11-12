@@ -3939,6 +3939,21 @@ describe('HarnessSession recovers from a reply cut off at the output limit', () 
     expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('end_turn');
   });
 
+  it('a helper report arriving with a cut-off reply does not stop the continuation request', async () => {
+    // The driver's delivery gap must not swallow truncation recovery: the report is spliced AND the model is asked to continue.
+    const prompts: any[] = [];
+    const model = playing(prompts, stream(...textChunks('a', 'Here is the first half'), finishChunk('length')), stream(...textChunks('b', ' and the rest.'), finishChunk('stop')));
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000 }), async () => model as any);
+    let spliced = false;
+    session.setDeliveryBoundary(async () => { if (!spliced) { spliced = true; await session.spliceNotice('REPORT-TOKEN'); } });
+    const events = collect(session);
+    await session.send('write it');
+    expect(prompts).toHaveLength(2);
+    expect(JSON.stringify(prompts[1].prompt)).toContain('REPORT-TOKEN');
+    expect(lastUserText(prompts[1])).toContain('Continue exactly where you stopped');
+    expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('end_turn');
+  });
+
   it('a tool call cut off mid-arguments is NEVER run; the model is told to split it, and the turn carries on', async () => {
     const prompts: any[] = [];
     const write = fakeTool('Write', { schema: z.object({ file_path: z.string(), content: z.string() }) });
