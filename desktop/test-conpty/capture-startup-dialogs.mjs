@@ -47,7 +47,7 @@ import {
   resolveClaude, ccVersionOf, makeIsolatedRoot, isolatedEnv, copyAccessTokenOnly, sleep,
   removeTempTree,
 } from './cc-capture-lib.mjs';
-import { readDialogShape, shapeSummary, normalizeVolatile } from './startup-dialog-shape.mjs';
+import { readDialogShape, readScreenShape, shapeSummary, normalizeVolatile } from './startup-dialog-shape.mjs';
 import { SCENARIOS, DEFAULT_COLS, DEFAULT_ROWS, scenarioKey } from './startup-scenarios.mjs';
 
 const require = createRequire(import.meta.url);
@@ -93,7 +93,9 @@ export async function runScenario(s, { claudeBin, ccVersion, print = false }) {
 
   // Onboarding (theme picker, sign-in) is its own flow; these scenarios start
   // where a YouCoded user starts — past it.
-  const claudeJson = { hasCompletedOnboarding: true, theme: 'dark' };
+  // WHY `fresh`: the first-install scenarios must see the theme picker and the
+  // sign-in screen, so they get NO onboarding/theme keys at all.
+  const claudeJson = s.fresh ? {} : { hasCompletedOnboarding: true, theme: 'dark' };
   if (s.trusted) claudeJson.projects = { [cwd.replace(/\\/g, '/')]: { hasTrustDialogAccepted: true } };
   fs.writeFileSync(path.join(iso.configDir, '.claude.json'), JSON.stringify(claudeJson, null, 2));
 
@@ -116,6 +118,7 @@ export async function runScenario(s, { claudeBin, ccVersion, print = false }) {
   const marks = [];
   const dialogs = [];
   const outcome = { steps: [] };
+  let lastScreenKey = null;
   const mark = (label, data) => {
     marks.push({ t: Date.now() - t0, label, chunkIndex: chunks.length, ...(data !== undefined ? { data } : {}) });
   };
@@ -159,6 +162,30 @@ export async function runScenario(s, { claudeBin, ccVersion, print = false }) {
     return null;
   }
 
+  /**
+   * A first-install screen that has stopped changing. Only the question and its
+   * options are compared (the logo above animates, so the whole screen never
+   * holds still), and it must differ from the screen before (`notKey`) so a
+   * slow redraw after our keys is never mistaken for the next screen.
+   */
+  async function waitStableScreen(notKey) {
+    const end = Date.now() + T.appear;
+    let key = null;
+    let since = 0;
+    while (Date.now() < end && exitCode === null) {
+      const sh = readScreenShape(viewport(term));
+      const k = sh.present ? JSON.stringify([sh.heading, sh.options, sh.cursorIndex]) : null;
+      if (k && k !== notKey && k === key) {
+        if (Date.now() - since >= T.stable) return { sh, key: k };
+      } else {
+        key = k;
+        since = Date.now();
+      }
+      await sleep(80);
+    }
+    return null;
+  }
+
   /** Arrows one per write, each confirmed on screen; then Enter alone. */
   async function pick(shown, label) {
     const target = shown.options.findIndex((o) => o.label === label);
@@ -181,6 +208,17 @@ export async function runScenario(s, { claudeBin, ccVersion, print = false }) {
   try {
     for (let n = 1; n <= s.steps.length; n++) {
       const step = s.steps[n - 1];
+      if (step.screen) {
+        const got = await waitStableScreen(lastScreenKey);
+        if (!got) throw new Error(`screen ${n} never appeared`);
+        lastScreenKey = got.key;
+        mark(`dialog-${n}-visible`);
+        dialogs.push(shapeSummary(got.sh));
+        if (print) console.log(`--- ${scenarioKey(s)} screen ${n}\n${viewport(term).join('\n').replace(/\n{3,}/g, '\n\n')}`);
+        if (step.keys !== undefined) send(step.keys);
+        outcome.steps.push({ dialog: n, screen: true, answered: step.keys === undefined ? null : JSON.stringify(step.keys) });
+        continue;
+      }
       const sh = await waitStableDialog();
       if (!sh) throw new Error(`dialog ${n} never appeared`);
       mark(`dialog-${n}-visible`);
@@ -248,6 +286,8 @@ export async function runScenario(s, { claudeBin, ccVersion, print = false }) {
     outcome.bypassAccepted = !!saved.bypassPermissionsModeAccepted || !!userSettings.skipDangerousModePermissionPrompt;
     outcome.userSettingsKeys = Object.keys(userSettings).sort();
   } catch { /* no config written */ }
+  // WHY: proof the first-install capture never signed in — no credential file appeared.
+  outcome.credentialsWritten = fs.existsSync(path.join(iso.configDir, '.credentials.json'));
   outcome.sessionStartHookAt = fs.existsSync(hookLog)
     ? fs.readFileSync(hookLog, 'utf8').trim().split('\n').filter(Boolean).map((x) => Number(x) - t0)
     : [];

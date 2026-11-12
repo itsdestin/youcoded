@@ -126,6 +126,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/assistant/browser#no-browser', 'dialog', 'browser'), params: { browser: 'no-browser' } },
   { ...settings('settings/assistant/browser#downloading', 'dialog', 'browser'), params: { browser: 'downloading' } },
   settings('settings/sync', 'dialog', 'error-state'),
+  // Card #213 (density-review D-4): on a phone Additional backups folds into one row; this is it opened.
+  { ...settings('settings/sync#phone-additional-open', 'dialog', 'narrow'), viewport: { width: 390, height: 844 }, open: ['Additional backups…'], newIn: 'after' as const },
   { ...settings('settings/sync#log-open', 'dialog', 'fold'), params: { sync: 'ok' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Sync log', { do: 'scroll', dir: 'down', times: 8 }] },
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
   { ...settings('settings/sync#auth-error', 'dialog', 'error-state'), params: { sync: 'auth-error' } },
@@ -142,6 +144,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#backup-timeout', 'dialog', 'error-state'), params: { syncWarn: 'timeout' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   // Removed projects and their GitHub backups (project switcher round 2, backlog row 10).
   { ...settings('settings/sync#removed', 'dialog'), params: { sync: 'removed' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
+  // The same, folded open (Removed projects became a closed fold-out row, card #213).
+  { ...settings('settings/sync#removed-open', 'dialog', 'fold'), params: { sync: 'removed' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Removed projects 2 projects, with their GitHub backups', { do: 'scroll', dir: 'down', times: 8 }] },
   // The (i) explainer: what Backup & sync copies, and what it does not (small-fixes-1).
   { ...settings('settings/sync#explainer', 'dialog'), open: ['What is this?'] },
   // The add-a-backup wizard's two failures (small-fixes-1): the helper tool's install, and making
@@ -159,7 +163,9 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/sync/remove-backend', 'dialog'),
   settings('settings/remote', 'dialog'),
   // Set up, with a paired phone and a paired tablet last used a while ago (the "Last used" line; 90-day sign-out).
-  { ...settings('settings/remote#devices', 'dialog'), params: { remotePreview: 'ready' } },
+  { ...settings('settings/remote#devices', 'dialog'), params: { remotePreview: 'ready' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
+  // Card #216: the same list with a phone signed out after 90 unused days, kept as a quiet row with Remove.
+  { ...settings('settings/remote#devices-expired', 'dialog'), params: { remotePreview: 'ready-expired' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   settings('settings/help', 'dialog'),
   // Scrolled to its last group, where Get beta builds and (#183) Install updates automatically sit.
   { ...settings('settings/help#updates', 'dialog'), open: [{ do: 'scroll', target: { role: 'button', labelStarts: 'Contribute to YouCoded' }, dir: 'down', times: 3 }] },

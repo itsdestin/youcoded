@@ -17,7 +17,7 @@ import { Button } from './ui';
 // (3) SESSION_PROCESS_EXITED would flash a competing "session died" banner. The
 // gate's ONLY interactions are Exit / Resume, so none of those can happen.
 //
-// Modeled on TrustGate: a full-cover content-area gate at z-10 (BELOW the
+// A full-cover content-area gate at z-10 (BELOW the
 // glassmorphism chrome at z-20) so the header session strip + settings stay
 // reachable — the user can switch to another session or resume/exit here.
 

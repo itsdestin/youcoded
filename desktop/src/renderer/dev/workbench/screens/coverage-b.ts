@@ -95,7 +95,7 @@ const OFFICE: readonly ScreenEntry[] = [
 
 // WHY: the terminal on a phone (the touch keys and the message box docked under it), and the games' play states.
 const TERMINAL: readonly ScreenEntry[] = [
-  ph({ ...chat('chat/terminal#phone', 'view'), mark: 'chat/terminal', params: { platform: 'android' } }),
+  // chat/terminal#phone: master's chat.ts lists the same screen (plus its two chrome styles); a name may appear once.
 ];
 const ARCADE: readonly ScreenEntry[] = [
   // Flappy left alone: the bird falls and the run-over card appears.

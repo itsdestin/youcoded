@@ -19,7 +19,7 @@ import * as path from 'path';
 import { stampSubagent } from '../../shared/types';
 import type { TranscriptEvent, EventOf, StampableEvent, NativeSendResult, NativeSwitchResult, NativeSwitchFailure, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
 import { readPersistedShells, ShellSidecar } from './shell-sidecar';
-import { ShellRegistry, persistedRunViews, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
+import { ShellRegistry, persistedRunViews, formatFinishedNotice, formatLongRunningNotice, shellListLines, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
 import type { AcceptedHistoryStore } from './accepted-history-store';
@@ -2949,10 +2949,8 @@ export class NativeSessionHost extends EventEmitter {
             // Background commands too (Destin, 2026-09-09): one list for
             // everything the model may be waiting on, same line shape as
             // BashOutput's own listing so the two never disagree.
-            const shells = (this.shellRegistries.get(parentId)?.list() ?? []).map((r) => {
-              const cmd = r.command.length > 60 ? `${r.command.slice(0, 55)}…` : r.command;
-              return `${r.shellId} · ${stateText(r)} · ${cmd}`;
-            });
+            // WHY restored too (card #220): same list as BashOutput's — commands from before a restart included.
+            const shells = shellListLines(this.shellRegistries.get(parentId));
             if (!specialists && shells.length === 0) return null;
             return [
               specialists ? `Specialists:\n${specialists}` : null,

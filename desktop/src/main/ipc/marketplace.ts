@@ -1,4 +1,4 @@
-// marketplace.ts — the marketplace's packages, per-entry config, file viewer and its signed-in
+// marketplace.ts — the marketplace's packages, file viewer and its signed-in
 // write endpoints (install report, ratings, votes, comments, reports), one body for both doors.
 //
 // WHY (2026-09-30 one-core R3-3): the first five were hand-written in ipc-handlers.ts and the last
@@ -14,7 +14,6 @@
 // The token, the API client and the skill source come from the account family's bindAccountDeps
 // (built by registerMarketplaceApiHandlers), the provider from bindSkillsDeps.
 import { IPC, type MarketplaceThumbs } from '../../shared/backend-contract';
-import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from '../marketplace-config-store';
 import { readComponent } from '../marketplace-file-reader';
 import { reconcileInstalls } from '../install-reconcile';
 import { wrap } from '../handler-utils';
@@ -29,12 +28,6 @@ const thumbs = (r: MarketplaceThumbs): MarketplaceThumbs => ({ vote: r.vote, thu
 export const marketplaceChannels: MainChannelDef[] = [
   // Which versions are installed (update detection) and the on-disk component paths (uninstall cascade).
   defineChannel({ name: IPC.MARKETPLACE_GET_PACKAGES, kind: 'handle', handler: () => skillsDeps().skillProvider.configStore.getPackages() }),
-  // Per-entry config: ~/.claude/youcoded-config/<id>.json, only for entries that declare a configSchema.
-  defineChannel({ name: IPC.MARKETPLACE_GET_CONFIG, kind: 'handle', remoteAllowed: false, handler: ({ id }) => getMarketplaceConfig(id) }),
-  defineChannel({
-    name: IPC.MARKETPLACE_SET_CONFIG, kind: 'handle', remoteAllowed: false,
-    handler: ({ id, values }) => { setMarketplaceConfig(id, values); return { ok: true as const }; },
-  }),
   // User-initiated cache bust: the next fetchIndex/getFeatured refetches.
   defineChannel({ name: IPC.MARKETPLACE_INVALIDATE_CACHE, kind: 'handle', remoteAllowed: false, handler: async () => { await skillsDeps().skillProvider.invalidateCache(); } }),
   // In-app file viewer: a plugin's SKILL.md / command / agent file, local copy first, else GitHub.

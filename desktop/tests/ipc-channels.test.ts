@@ -143,7 +143,7 @@ const FAMILIES: Record<string, Family> = {
   'specialists:*': { req: ['specialists:list', 'specialists:delegated-get', 'specialists:delegated-set', 'specialists:steer', 'specialists:interrupt'], push: ['specialists:event'], table: 'specialists' },
   'fs:read-head': { req: ['fs:read-head'], table: 'files' },
   'marketplace feedback': { req: ['marketplace:thumb', 'marketplace:thumb:get', 'marketplace:comment'], table: 'marketplace' },
-  'arcade:*': { req: ['arcade:status', 'arcade:leaderboard', 'arcade:submit-score', 'arcade:records'], table: 'game' },
+  'arcade:*': { req: ['arcade:status', 'arcade:leaderboard', 'arcade:submit-score', 'arcade:records', 'arcade:room-ticket'], table: 'game' },
   'buddy helper': { req: ['buddy:helper-status', 'buddy:install-helper', 'buddy:remove-helper'], contract: true },
   'pages phase 2': { req: ['pages:approve', 'pages:remove-connection', 'pages:refresh', 'pages:saved-keys', 'pages:delete-saved-key', 'pages:fetch'], contract: true, table: 'pages' },
 };

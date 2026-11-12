@@ -11,11 +11,15 @@
 //         'page' → must answer at all, below 500 (sign-in pages may refuse robots with 403; that's fine —
 //                  what we're catching is the address vanishing or the site being down)
 //         'json' → 2xx and parses as JSON (a file the app parses)
+// mustMatchBody (optional, with 'page'): the answer's text must also match. WHY: the games rooms moved from hosted PartyKit
+// (shut down 2026-10-23) into our server on 2026-11-01 (party-client.ts); a websocket-only room answers a plain GET with
+// 404 "Not implemented", and any other 404 (server without the rooms deployed) is also under 500, so status alone can't tell them apart.
+// Same probe as desktop/test-engine/services-watch.mjs.
 
 const CHECKS = [
   // Our own services
   { name: 'YouCoded server (sign-in, marketplace, friends, sync between devices)', url: 'https://api.youcoded.ai/health', expect: 'ok' },
-  { name: 'Online games with friends (Connect 4, Chess)', url: 'https://youcoded-games.itsdestin.partykit.dev/', expect: 'page' },
+  { name: 'Online games with friends (Connect 4, Chess)', url: 'https://api.youcoded.ai/parties/connectfour/health-check', expect: 'page', mustMatchBody: /Not implemented/ },
   { name: 'Marketplace list of skills', url: 'https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/master/index.json', expect: 'json' },
   { name: 'Marketplace list of themes', url: 'https://raw.githubusercontent.com/itsdestin/wecoded-themes/main/registry/theme-registry.json', expect: 'json' },
   { name: 'Update check', url: 'https://api.github.com/repos/itsdestin/youcoded/releases/latest', expect: 'json' },
@@ -34,12 +38,16 @@ const CHECKS = [
   { name: 'Local model downloads', url: 'https://huggingface.co/api/models?limit=1', expect: 'json' },
 ];
 
-async function probe({ url, expect }) {
+async function probe({ url, expect, mustMatchBody }) {
   const started = Date.now();
   try {
     const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(20_000),
       headers: { 'user-agent': 'YouCoded-service-check (+https://github.com/itsdestin/youcoded)' } });
     const ms = Date.now() - started;
+    if (expect === 'page' && mustMatchBody) {
+      const body = await res.text();
+      return mustMatchBody.test(body) ? { ok: true, why: `answered ${res.status}`, ms } : { ok: false, why: `answered ${res.status} but not as the game rooms`, ms };
+    }
     if (expect === 'page') return res.status < 500 ? { ok: true, why: `answered ${res.status}`, ms } : { ok: false, why: `server error ${res.status}`, ms };
     if (!res.ok) return { ok: false, why: `answered ${res.status}`, ms };
     if (expect === 'json') { try { JSON.parse(await res.text()); } catch { return { ok: false, why: 'answer is not readable data', ms }; } }

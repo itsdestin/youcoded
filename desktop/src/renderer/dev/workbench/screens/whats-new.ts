@@ -52,4 +52,10 @@ export const WHATS_NEW: Readonly<Record<string, string>> = {
   'dev/gate#login-expired': 'The browser sign-in when a saved sign-in timed out after 90 days unused.',
   'dev/gate#tailscale': 'The phone app refusing a computer that is not on Tailscale: its own message.',
   'dev/toast#lost': 'The notice when a message you sent did not reach the assistant.',
+  // WHY these five: master's (card #213/#216) new pictures merged in; each needs its plain sentence (a test keeps newIn and this list in step).
+  'dev/toast#turned-off': 'The heads-up shown after a plugin is switched off, with a Show button.',
+  'dev/toast#turned-off-phone': 'The same plugin-switched-off heads-up on a phone.',
+  'dev/toast#signed-out': 'The notice that you were signed out of your YouCoded account, with a button to sign in again.',
+  'dev/toast#none': 'The same chat with no notice raised: how it looked before the signed-out notice existed.',
+  'settings/sync#phone-additional-open': 'On a phone, the Additional backups row opened into its own list.',
 };

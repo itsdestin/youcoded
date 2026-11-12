@@ -16,6 +16,7 @@ let turnUserUuid = null;
 let openingUserUuid = null;
 let observation = 0;
 let observationPending = false;
+let observationRetries = 0;
 let serial = Promise.resolve();
 let queued = 0;
 
@@ -43,8 +44,19 @@ async function observe($) {
     const model = await $.session.model();
     // WHY: an asynchronous getter must not publish a stale main-turn snapshot over a newer one.
     if (version !== observation || !endpoint || !secret) return;
-    await post($, 'state', { state: { claudeSessionId, model, turnId: observedTurn, turnUserUuid: observedUserUuid } });
-  } catch (_) { /* Observations are best effort, never part of the model hook's critical path. */ }
+    // WHY only real text (2026-11-07): the host refuses the WHOLE report when any field is empty or not text, and the
+    // conversation id in it is what links the chat to its queue — a chat never linked could never send.
+    const state = { turnId: observedTurn, turnUserUuid: observedUserUuid };
+    if (typeof claudeSessionId === 'string' && claudeSessionId) state.claudeSessionId = claudeSessionId;
+    if (typeof model === 'string' && model) state.model = model;
+    await post($, 'state', { state });
+    observationRetries = 0;
+  } catch (error) {
+    // Observations stay off the model hook's critical path, but one lost report must not leave the host without the
+    // conversation id until the next turn (which may never come): try again a few times, a few seconds apart.
+    // A refusal (this helper was replaced, or the chat closed) is final: retrying it would only knock again.
+    if (running && observationRetries < 5 && ![401, 409, 410].includes(error && error.status)) { observationRetries++; $.clock.after(3000, () => scheduleObservation($)); }
+  }
 }
 
 function scheduleObservation($) {
@@ -175,8 +187,10 @@ function onTurnComplete($, e, next) {
 function onEnd($, e, next) {
   queueGeneration++;
   // WHY: clear/resume end a conversation, not this loaded module. session.start does not fire again for them.
-  if (e.reason === 'clear' || e.reason === 'resume') { turnId = null; turnUserUuid = null; openingUserUuid = null; scheduleObservation($); }
-  else running = false;
+  // WHY never stop the loops here (2026-11-07): this used to switch the helper off for every other reason, and since
+  // session.start never fires again nothing switched it back on — if Claude Code carried on, every later send in the chat
+  // failed with "Queue identity is not ready". A Claude Code that is really exiting takes the loops with it anyway.
+  turnId = null; turnUserUuid = null; openingUserUuid = null; scheduleObservation($);
   return next(e);
 }
 ${CLAUDE_QUEUE_PLUGIN_SOURCE}

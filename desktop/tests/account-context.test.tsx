@@ -210,3 +210,64 @@ describe("AccountProvider", () => {
     });
   });
 });
+
+// The "signed out by itself" notice (card #216): the main process sends a presence event of type "session-lost".
+describe("AccountProvider — signed out by the app", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { cleanup(); vi.useRealTimers(); });
+
+  function mountWith(openExternal: boolean) {
+    let push: (ev: { type: string }) => void = () => {};
+    // WHY an inline mock: this branch's file keeps one shared mount() helper; this case needs the presence socket too.
+    const mock = { account: {
+      signedIn: vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false),
+      user: vi.fn().mockResolvedValueOnce(USER).mockResolvedValue(null),
+      refresh: vi.fn().mockResolvedValue(null), signOut: vi.fn(), updateProfile: vi.fn(), setHandle: vi.fn(), deleteAccount: vi.fn(),
+      start: vi.fn().mockResolvedValue(START_OK), poll: vi.fn().mockResolvedValue({ ok: true, value: { status: "pending" } }),
+    } };
+    (globalThis.window as any).claude = {
+      ...mock,
+      capabilities: { openExternal },
+      social: { onPresenceEvent: (cb: typeof push) => { push = cb; return () => {}; } },
+    };
+    const notices: Array<{ message: string; action?: { label: string; onClick: () => void } }> = [];
+    const onNotice = (e: Event) => notices.push((e as CustomEvent).detail);
+    window.addEventListener("youcoded:notice", onNotice);
+    const view = render(<AccountProvider pollIntervalMs={10}><Probe /></AccountProvider>);
+    return { push: (ev: { type: string }) => push(ev), notices, mock, view, off: () => window.removeEventListener("youcoded:notice", onNotice) };
+  }
+
+  it("flips to signed-out and raises one notice whose button starts sign-in again", async () => {
+    const t = mountWith(true);
+    await advance(STEP_MS);
+    expect(t.view.getByTestId("state").textContent).toBe("in");
+    await act(async () => { t.push({ type: "session-lost" }); });
+    await advance(STEP_MS);
+    expect(t.view.getByTestId("state").textContent).toBe("out");
+    expect(t.notices).toHaveLength(1);
+    // Wording is not pinned (Destin, 2026-11-01): the facts are that it says something and offers a button.
+    expect(t.notices[0].message).toBeTruthy();
+    expect(t.notices[0].action).toBeTruthy();
+    await act(async () => { t.notices[0].action!.onClick(); });
+    await advance(STEP_MS);
+    expect(t.mock.account.start).toHaveBeenCalledTimes(1);
+    t.off();
+  });
+
+  it("ignores other presence events", async () => {
+    const t = mountWith(true);
+    await advance(STEP_MS);
+    await act(async () => { t.push({ type: "connected" }); });
+    expect(t.notices).toHaveLength(0);
+    t.off();
+  });
+
+  it("gives a phone browser (which cannot sign in) no notice", async () => {
+    const t = mountWith(false);
+    await advance(STEP_MS);
+    await act(async () => { t.push({ type: "session-lost" }); });
+    await advance(STEP_MS);
+    expect(t.notices).toHaveLength(0);
+    t.off();
+  });
+});

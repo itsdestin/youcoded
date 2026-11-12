@@ -1,4 +1,5 @@
 import type { SessionInfo } from '../../../../shared/types';
+import { FIXTURE_BASE, at } from './clock';
 
 // Two live sessions: one Claude Code, one native. `provider` + `harnessId` are
 // what mark a native session (shared/types.ts:67-87) — the transcript carries
@@ -23,7 +24,7 @@ export function sessions(): SessionInfo[] {
       permissionMode: 'normal',
       skipPermissions: false,
       status: 'active',
-      createdAt: 1_753_800_000_000,
+      createdAt: FIXTURE_BASE,
       provider: 'claude',
       model: 'claude-sonnet-4-6',
     },
@@ -34,7 +35,7 @@ export function sessions(): SessionInfo[] {
       permissionMode: 'normal',
       skipPermissions: false,
       status: 'idle',
-      createdAt: 1_753_790_000_000,
+      createdAt: at(-10000000),
       provider: 'native',
       harnessId: 'coder',
       model: 'qwen2.5-coder:14b',
@@ -51,7 +52,7 @@ export function sessions(): SessionInfo[] {
       permissionMode: 'normal',
       skipPermissions: false,
       status: 'idle',
-      createdAt: 1_753_785_000_000,
+      createdAt: at(-15000000),
       provider: 'native',
       harnessId: 'coder',
       // Sign in with ChatGPT (design 2026-09-04): this session is bound to the
@@ -67,7 +68,7 @@ export function sessions(): SessionInfo[] {
       permissionMode: 'normal',
       skipPermissions: false,
       status: 'idle',
-      createdAt: 1_753_780_000_000,
+      createdAt: at(-20000000),
       provider: 'native',
       harnessId: 'coder',
       model: 'google/gemini-2.5-flash',
@@ -79,7 +80,7 @@ export function sessions(): SessionInfo[] {
       permissionMode: 'normal',
       skipPermissions: false,
       status: 'idle',
-      createdAt: 1_753_775_000_000,
+      createdAt: at(-25000000),
       provider: 'native',
       harnessId: 'coder',
       model: 'anthropic/claude-sonnet-4-6',
@@ -91,7 +92,7 @@ export function sessions(): SessionInfo[] {
       permissionMode: 'normal',
       skipPermissions: false,
       status: 'idle',
-      createdAt: 1_753_770_000_000,
+      createdAt: at(-30000000),
       provider: 'native',
       harnessId: 'coder',
       model: 'x-ai/grok-3',
@@ -103,7 +104,7 @@ export function sessions(): SessionInfo[] {
       permissionMode: 'normal',
       skipPermissions: false,
       status: 'idle',
-      createdAt: 1_753_765_000_000,
+      createdAt: at(-35000000),
       provider: 'native',
       harnessId: 'coder',
       model: 'moonshot/kimi-k1.5',
@@ -115,7 +116,7 @@ export function sessions(): SessionInfo[] {
       permissionMode: 'normal',
       skipPermissions: false,
       status: 'idle',
-      createdAt: 1_753_760_000_000,
+      createdAt: at(-40000000),
       provider: 'native',
       harnessId: 'coder',
       model: 'deepseek/deepseek-r1',
@@ -127,7 +128,7 @@ export function sessions(): SessionInfo[] {
       permissionMode: 'normal',
       skipPermissions: false,
       status: 'idle',
-      createdAt: 1_753_755_000_000,
+      createdAt: at(-45000000),
       provider: 'native',
       harnessId: 'coder',
       model: 'meta-llama/llama-3.3-70b-instruct',
@@ -139,7 +140,7 @@ export function sessions(): SessionInfo[] {
       permissionMode: 'normal',
       skipPermissions: false,
       status: 'idle',
-      createdAt: 1_753_750_000_000,
+      createdAt: at(-50000000),
       provider: 'native',
       harnessId: 'coder',
       model: 'mistralai/codestral-2501',
@@ -153,7 +154,7 @@ export function sessions(): SessionInfo[] {
       permissionMode: 'normal',
       skipPermissions: false,
       status: 'active',
-      createdAt: 1_753_795_000_000,
+      createdAt: at(-5000000),
       provider: 'native',
       harnessId: 'coder',
       model: 'qwen3.6-35b-a3b'
@@ -173,7 +174,7 @@ export function siteSessions(): SessionInfo[] {
       permissionMode: 'normal',
       skipPermissions: false,
       status: 'idle',
-      createdAt: 1_753_790_000_000,
+      createdAt: at(-10000000),
       provider: 'native',
       harnessId: 'coder',
       model: 'qwen3-coder-30b-a3b-instruct',
@@ -197,9 +198,9 @@ export function studentSessions(): SessionInfo[] {
   });
   return [
     planMyWeek,
-    student('site-2', 'econ study guide', '/home/you/School/Econ 201', 1_753_789_000_000, 'qwen3-coder-30b-a3b-instruct'),
-    student('site-3', 'club newsletter', '/home/you/Robotics Club', 1_753_788_000_000, 'anthropic/claude-sonnet-4-6'),
-    student('site-4', 'compare two laptops', '/home/you/Documents', 1_753_787_000_000, 'qwen3-coder-30b-a3b-instruct'),
-    student('site-5', 'cover letter', '/home/you/Job hunt', 1_753_786_000_000, 'openai/gpt-5.6-sol'),
+    student('site-2', 'econ study guide', '/home/you/School/Econ 201', at(-11000000), 'qwen3-coder-30b-a3b-instruct'),
+    student('site-3', 'club newsletter', '/home/you/Robotics Club', at(-12000000), 'anthropic/claude-sonnet-4-6'),
+    student('site-4', 'compare two laptops', '/home/you/Documents', at(-13000000), 'qwen3-coder-30b-a3b-instruct'),
+    student('site-5', 'cover letter', '/home/you/Job hunt', at(-14000000), 'openai/gpt-5.6-sol'),
   ];
 }

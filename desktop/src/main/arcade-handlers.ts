@@ -36,6 +36,7 @@ export interface ArcadeOps {
   leaderboard(game: string): Promise<ApiResult<BoardResult>>;
   submitScore(game: string, score: number): Promise<ApiResult<{ ok: true; best: number; best_at: number; runs: number; is_best: boolean }>>;
   records(game?: string): Promise<ApiResult<HeadToHead[]>>;
+  roomTicket(game: string, room: string): Promise<ApiResult<{ ticket: string; username: string; expires_in: number }>>;
   clearCache(): void;
 }
 
@@ -114,6 +115,11 @@ export function createArcadeOps(store: MarketplaceAuthStore): ArcadeOps {
     // happened, and the caller shows only opponents still on its friends list.
     records: (game?: string) =>
       wrap(() => client.gameRecords(game)).then(clearSessionOn401),
+
+    // A one-time pass for a two-player room (see gameRoomTicket). Never cached or reused: each connection,
+    // including every reconnection, needs its own.
+    roomTicket: (game: string, room: string) =>
+      wrap(() => client.gameRoomTicket(game, room)).then(clearSessionOn401),
 
     clearCache: () => boardCache.clear(),
   };

@@ -100,7 +100,7 @@ const PHONE_APP: readonly ScreenEntry[] = [
   ph({ ...chat('chat/files#phone', 'pane'), mark: 'chat/files' }),
   ph({ name: 'library#phone', tags: ['view', 'marketplace'], mark: 'library' }),
   ph({ name: 'welcome#phone', tags: ['view'], scenario: 'empty', mark: 'welcome' }),
-  ph({ ...chat('chat#phone', 'view'), mark: 'chat' }),
+  // chat#phone: master's chat.ts (2026-11-02) lists the same screen; a name may appear once.
   ...['DETECT_PREREQUISITES', 'INSTALL_PREREQUISITES', 'AUTHENTICATE'].map((st) => ph({ name: `first-run#${st.toLowerCase().replace(/_/g, '-')}-phone`, tags: ['first-run', 'view'], params: { firstRun: st } })),
   ph(fr('first-run#signin-plan-phone', { params: { signInPick: 'plan' } })),
   ph(fr('first-run#local-model-setup-phone', { params: { signInPick: 'local' }, open: ['Use a local model'] })),

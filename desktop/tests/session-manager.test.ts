@@ -377,6 +377,18 @@ describe('SessionManager', () => {
     expect(sessions).toHaveLength(0);
   });
 
+  it('gives each Claude Code session its own messaging socket only when a folder is configured (the phone)', () => {
+    manager.createSession({ name: 'plain', cwd: tmpDir, skipPermissions: false });
+    expect(mockWorker.send.mock.calls[0][0].args).not.toContain('--messaging-socket-path');
+    const phone = new SessionManager({ claudeMessagingSocketDir: '/data/app/tmp' });
+    const info = phone.createSession({ name: 'phone', cwd: tmpDir, skipPermissions: false });
+    const args: string[] = mockWorker.send.mock.calls.at(-1)![0].args;
+    const at = args.indexOf('--messaging-socket-path');
+    expect(at).toBeGreaterThan(-1);
+    expect(args[at + 1]).toBe(path.join('/data/app/tmp', `ccmsg-${info.id.slice(0, 8)}.sock`));
+    phone.destroySession(info.id);
+  });
+
   it('sends spawn with --dangerously-skip-permissions when requested', () => {
     manager.createSession({ name: 'skip', cwd: tmpDir, skipPermissions: true });
 

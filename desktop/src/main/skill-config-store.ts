@@ -37,9 +37,11 @@ function offerNewBuiltinThemes(config: UserSkillConfig): boolean {
 const DEFAULT_CHIPS: ChipConfig[] = [
   { skillId: 'journaling-assistant', label: 'Journal', prompt: "let's journal" },
   { skillId: 'claudes-inbox', label: 'Inbox', prompt: 'check my inbox' },
-  { label: 'Git Status', prompt: "run git status and summarize what's changed" },
-  { label: 'Review PR', prompt: 'review the latest PR on this repo' },
-  { label: 'Fix Tests', prompt: 'run the tests and fix any failures' },
+  // WHY everyday chips (2026-11-01 phone test): "Git Status / Review PR / Fix Tests" read as developer jargon to the
+  // app's general audience. Only NEW configs get these — saved chip lists are never rewritten.
+  { label: 'Summarize', prompt: 'summarize this for me: ' },
+  { label: 'Plan my day', prompt: 'help me plan my day' },
+  { label: 'Explain this', prompt: 'explain this in simple terms: ' },
   { skillId: 'encyclopedia-librarian', label: 'Briefing', prompt: 'brief me on ' },
   { label: 'Draft Text', prompt: 'help me draft a text to ' },
 ];
@@ -349,6 +351,15 @@ export class SkillConfigStore {
     if (!pkg) return;
     pkg.version = newVersion;
     if (commit) pkg.commit = commit;
+    this.save();
+  }
+
+  /** Plugin off-switch: mark or clear "turned off as unsafe". Touches nothing else in the record. */
+  setPackageTurnedOff(id: string, off: boolean): void {
+    const config = this.load();
+    const pkg = config.packages?.[id];
+    if (!pkg || Boolean(pkg.turnedOff) === off) return;
+    if (off) pkg.turnedOff = true; else delete pkg.turnedOff;
     this.save();
   }
 

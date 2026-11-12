@@ -4,9 +4,7 @@
 // shows them. Each is the REAL component given plain practice data; nothing here is drawn by hand.
 // Photo-only build only (index.tsx; guarded by tests/shoot-build-guard.test.ts). Never ships.
 import { useEffect, useState } from 'react';
-import { ChatProvider, useChatDispatch } from '../../state/chat-context';
 import MovedGate from '../../components/MovedGate';
-import TrustGate from '../../components/TrustGate';
 import { InitializingCover } from '../../components/InitializingCover';
 import PendingHandoffView from '../../components/PendingHandoffView';
 import RemoteUnsupportedNotice from '../../components/RemoteUnsupportedNotice';
@@ -22,7 +20,6 @@ import ErrorBoundary from '../../components/ErrorBoundary';
 import { EscCloseProvider } from '../../hooks/use-esc-close';
 import type { VoiceNotice } from '../../hooks/useVoiceInput';
 import { REMOTE_UNSUPPORTED_EVENT } from '../../remote-unsupported';
-import { TRUST_PROMPT_TITLE } from '../../../shared/ink-select-parser';
 import type { UsageSnapshot } from '../../state/chat-types';
 import { ScreenMark, useScreenOpen } from '../../shoot-mode';
 
@@ -39,20 +36,6 @@ const usage = (over: Partial<UsageSnapshot> = {}): UsageSnapshot => ({
   linesAdded: 210, linesRemoved: 45, fiveHourUtilization: 42, fiveHourResetsAt: '2030-01-01T18:00:00Z',
   sevenDayUtilization: 18, sevenDayResetsAt: '2030-01-05T09:00:00Z', ...over,
 });
-
-// The trust prompt arrives through the same action the app dispatches when it reads Claude Code's menu.
-function TrustDemo() {
-  const dispatch = useChatDispatch();
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    dispatch({
-      type: 'SHOW_PROMPT', sessionId: 'sandbox', promptId: 'trust', title: TRUST_PROMPT_TITLE,
-      buttons: [{ label: 'Yes, I trust this folder', input: '1' }, { label: 'No, exit', input: '2' }],
-    } as never);
-    setReady(true);
-  }, [dispatch]);
-  return ready ? <TrustGate sessionId="sandbox" /> : null;
-}
 
 // A chat card sits in a column like the chat's, so its width and corners read as they do in a conversation.
 const Column = ({ children }: { children: React.ReactNode }) => (
@@ -81,7 +64,6 @@ function Piece({ which }: { which: string }) {
     case 'crash-root': return <RootErrorBoundary><Boom /></RootErrorBoundary>;
     case 'crash-panel': return <Column><ErrorBoundary name="Files"><Boom /></ErrorBoundary></Column>;
     case 'moved': return <MovedGate device="Home PC" onExit={noop} onResume={noop} />;
-    case 'trust': return <ChatProvider><TrustDemo /></ChatProvider>;
     case 'initializing':
       return <InitializingCover sessionId="sandbox" onOpenTerminal={noop}>
         <p className="text-sm text-fg-dim font-medium select-none">Initializing session...</p>

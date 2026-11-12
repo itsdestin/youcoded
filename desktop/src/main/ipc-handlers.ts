@@ -24,6 +24,7 @@ import { RemoteConfig } from './remote-config';
 import { RemoteServer } from './remote-server';
 import { TranscriptWatcher } from './transcript-watcher';
 import { readTranscriptPage } from './transcript-page';
+import { mergeWithLastKnown } from './last-known';
 import { nativeStoreSlug, ccProjectSlug } from './slug-encoding';
 // Native runtime (platform roadmap Phase 1 Plan A) — the first-party harness
 // stack: provider CRUD + key management, model catalog, and the live-session
@@ -105,7 +106,6 @@ import { deriveSelfLastSyncEpochSec } from './sync-spaces/self-sync-status';
 // createGithubConnect is the stateful orchestrator that owns the in-flight flow.
 import { createGithubConnect, setGithubConnect } from './github-connect';
 import { getGithubClient } from './github-client';
-import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { log } from './logger';
 import { attachStartupDialogLog } from './startup-dialog-log';
@@ -429,6 +429,8 @@ export function registerIpcHandlers(
   const liveFacts = new SessionLiveFacts({
     publish,
     records: runtime.records,
+    currentMode: (id) => sessionManager.getSession(id)?.permissionMode,
+    onModeRead: (id, mode) => { const info = sessionManager.getSession(id); if (info) info.permissionMode = mode; }, // WHY: see session-live.ts onModeRead
     // A Claude Code session: not native (its host says these things itself) and not a plain shell.
     isClaude: (id) => { const p = sessionManager.getSession(id)?.provider; return p !== 'native' && p !== 'shell' && !!sessionManager.getSession(id); },
   });
@@ -630,7 +632,7 @@ export function registerIpcHandlers(
     // Snapshot BEFORE spawn (a fallback page can otherwise include new turns); then a resume naming no model reopens on the conversation's own, for every screen and both doors (resume-model.ts).
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
       ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
-    opts = await withResumeModel(opts, resumeBoundary?.jsonlPath); checkWindow();
+    opts = await withResumeModel(opts, resumeBoundary?.jsonlPath); await sessionManager.primeStartMode?.(opts.cwd); checkWindow(); // primeStartMode: the folder's own default permission mode, read before the start
     const info = sessionManager.createSession(opts);
     if (resumeBoundary) resumePageBoundaries.set(info.id, resumeBoundary);
     // WHY: a holder takeover can arrive during the FIRST native await or before
@@ -1199,41 +1201,26 @@ export function registerIpcHandlers(
     // browsers via broadcastStatusData (no reshape). Empty when the hub is down.
     const lastSyncByDevice = getLastSyncByDevice();
 
-    // Read per-session context remaining % (written by statusline.sh)
-    const contextMap: Record<string, number> = {};
-    for (const { desktopId, context: raw } of perSession) {
-      if (raw != null) {
-        const num = parseInt(raw, 10);
-        if (!isNaN(num)) {
-          contextMap[desktopId] = num;
-          lastContextByDesktopId[desktopId] = num;
-        }
-      } else if (desktopId in lastContextByDesktopId) {
-        contextMap[desktopId] = lastContextByDesktopId[desktopId];
-      }
-    }
-
-    // Read per-session git branch (written by statusline.sh, same pattern as context %)
-    const gitBranchMap: Record<string, string> = {};
-    for (const { desktopId, branch: raw } of perSession) {
-      if (raw) {
-        gitBranchMap[desktopId] = raw;
-        lastGitBranchByDesktopId[desktopId] = raw;
-      } else if (desktopId in lastGitBranchByDesktopId) {
-        gitBranchMap[desktopId] = lastGitBranchByDesktopId[desktopId];
-      }
-    }
-
-    // Read per-session stats (cost, tokens, code changes — written by statusline.sh)
-    const sessionStatsMap: Record<string, any> = {};
-    for (const { desktopId, stats } of perSession) {
-      if (stats) {
-        sessionStatsMap[desktopId] = stats;
-        lastSessionStatsByDesktopId[desktopId] = stats;
-      } else if (desktopId in lastSessionStatsByDesktopId) {
-        sessionStatsMap[desktopId] = lastSessionStatsByDesktopId[desktopId];
-      }
-    }
+    // Read per-session context remaining % (written by statusline.sh), git branch and stats
+    // (same writer). WHY one helper: the three loops were identical apart from parsing; see
+    // last-known.ts. Context % uses `!= null` (an empty read still counts) and drops
+    // non-numeric text without falling back, exactly as the inline loop did.
+    const contextMap: Record<string, number> = mergeWithLastKnown(
+      perSession.map((p) => ({ desktopId: p.desktopId, raw: p.context })),
+      lastContextByDesktopId,
+      {
+        present: (raw) => raw != null,
+        parse: (raw) => { const n = parseInt(raw as string, 10); return isNaN(n) ? undefined : n; },
+      },
+    );
+    const gitBranchMap: Record<string, string> = mergeWithLastKnown(
+      perSession.map((p) => ({ desktopId: p.desktopId, raw: p.branch })),
+      lastGitBranchByDesktopId,
+    );
+    const sessionStatsMap: Record<string, any> = mergeWithLastKnown(
+      perSession.map((p) => ({ desktopId: p.desktopId, raw: p.stats })),
+      lastSessionStatsByDesktopId,
+    );
 
     // Per-session attention state populated by the `remote:attention-changed`
     // IPC listener. Remote browsers diff this on receipt to update StatusDot

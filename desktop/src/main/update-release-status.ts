@@ -41,6 +41,9 @@ export interface UpdateStatus {
   needs_password?: boolean;
   /** #183: no in-app install here (unpackaged; Mac bundle misnamed/translocated; AppImage folder read-only). */
   install_refused?: boolean;
+  /** #186: pacman owns this copy but under another package name (AUR youcoded-bin). The app does not
+   *  download or install for it; the popup tells the person to use their package manager. */
+  managed_by_other_package?: boolean;
   /** #183: a person's quit WOULD install it (everything but the switch): staged, not refused, under the failure limit. */
   installs_on_quit?: boolean;
 }
@@ -49,6 +52,9 @@ export interface UpdateStatus {
 const LINUX_ASSET_SUFFIX: Record<LinuxInstallKind, string> = {
   appimage: '.AppImage',
   pacman: '.pacman',
+  // Never downloaded (the install is refused), but the release still has to be recognised as
+  // "an update exists" so the person is told; the portable file is what stands in.
+  'pacman-other': '.AppImage',
   deb: '.deb',
   rpm: '.rpm',
   // A dev checkout, a tarball, Nix: nothing owns the binary, so the portable

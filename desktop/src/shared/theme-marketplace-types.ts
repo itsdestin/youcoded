@@ -3,7 +3,6 @@
  * Used by both the main process (provider) and renderer (UI).
  */
 
-import type { ConfigSchema } from './types';
 
 export interface ThemeRegistryEntry {
   slug: string;
@@ -34,8 +33,10 @@ export interface ThemeRegistryEntry {
   manifestUrl: string;
   /** Map of relative asset path → download URL */
   assetUrls?: Record<string, string>;
-  /** Phase 3c: optional config schema for the settings form */
-  configSchema?: ConfigSchema;
+  // SHA-256 (hex) of every downloadable file, keyed like assetUrls plus "manifest.json". Written by
+  // wecoded-themes' build-registry.py; the installer refuses a file that does not match (2026-11).
+  // Absent on registries built before then, which install as before.
+  fileHashes?: Record<string, string>;
   /**
    * sha256:<hex> of the theme's manifest + assets (excluding preview.png and
    * ephemeral fields). Used to detect drift between a published registry entry

@@ -84,6 +84,9 @@ interface UpdateStatus {
   /** #183: installing asks for a password (Linux package, non-administrator Mac), so
    *  quitting does not install it — only Restart to update does. */
   needs_password?: boolean;
+  /** #186: this copy came from a package other than the official one (AUR youcoded-bin), so the app
+   *  neither downloads nor installs for it; the footer says to update with the package manager. */
+  managed_by_other_package?: boolean;
   /** #183 F5: a quit really would install it (staged, not refused, under the failure limit); the switch is separate. */
   installs_on_quit?: boolean;
 }
@@ -500,7 +503,14 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         // notes with no fade and drew a full-width line above its footer (guide: no full-width
         // line in a popup; the content fades at the hidden edge). The footer slot keeps Update
         // in view and the notes fade see-through under it.
-        footer={updateStatus.update_available ? (
+        footer={updateStatus.update_available && updateStatus.managed_by_other_package ? (
+          // WHY a plain card and no button (card #186): the official download would conflict with the
+          // package this copy came from, so there is nothing for Update now to do. Not an error box:
+          // nothing failed. Same first-level card the release notes above use.
+          <div className={`${CARD_LEVEL_1} p-3 text-sm text-fg`} role="status">
+            This copy of YouCoded was installed from another package, so it can't update itself. Update it with your package manager.
+          </div>
+        ) : updateStatus.update_available ? (
           // WHY full width (Destin, close-session-4#CS4-1: "the button should be full width as
           // well"; guide: a lone button is full width): it hugged its label at the right.
           <div className="flex flex-col">

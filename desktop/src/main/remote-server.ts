@@ -668,7 +668,7 @@ export class RemoteServer {
   getDeviceList(): RemoteDeviceView[] {
     const online = new Set<string>();
     for (const c of this.clients) online.add(c.deviceId);
-    this.devices.expireStale(Date.now(), online); // a stale device never shows in Settings; a connected one is never stale
+    this.devices.expireStale(Date.now(), online); // a stale device is signed out here (and shows as a muted 'signed out' row); a connected one is never stale
     return this.devices.list(online);
   }
 
@@ -682,6 +682,8 @@ export class RemoteServer {
    * list that keeps offline devices.
    */
   unpairDevice(deviceId: string): boolean {
+    // WHY first: an expired phone is already signed out, so "Remove" on its muted row only clears the row.
+    if (this.devices.dismissExpired(deviceId)) return true;
     const revoked = this.devices.revoke(deviceId);
     if (!revoked) return false;
     // Contract R10 (batch 3): removing a device also ends its right to download.

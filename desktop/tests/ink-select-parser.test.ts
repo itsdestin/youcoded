@@ -371,3 +371,63 @@ describe('parseInkSelect — fullscreen renderer menus', () => {
     expect(menu.title).not.toMatch(/auto mode/i);
   });
 });
+
+describe('prompt card description keeps Claude Code\'s paragraphs', () => {
+  // The trust dialog as a phone-width terminal draws it: blank rows between paragraphs, the folder path wrapped.
+  const NARROW_TRUST = [
+    '─'.repeat(40),
+    ' Accessing workspace:',
+    '',
+    ' /data/data/com.youcoded.app/files/home/Tr',
+    ' ust test',
+    '',
+    ' Quick safety check: Is this a project you',
+    ' created or one you trust?',
+    '',
+    ' Security guide',
+    '',
+    ' ❯ No, exit',
+    '   Yes, I trust this folder',
+    '',
+    ' Enter to confirm · Esc to cancel',
+  ].join('\n');
+
+  it('starts a new paragraph at each blank row and joins only wrapped rows', () => {
+    const menu = parseInkSelect(NARROW_TRUST)!;
+    expect(menu.description).toBe(
+      'Accessing workspace:\n\n/data/data/com.youcoded.app/files/home/Tr ust test\n\n'
+      + 'Quick safety check: Is this a project you created or one you trust?\n\nSecurity guide',
+    );
+  });
+});
+
+describe('prompt card description on a narrow terminal (no blank rows)', () => {
+  // As Claude Code draws the trust dialog at 50 columns (fixture cc-2.1.281-untrusted-50x30): no blank rows at all.
+  const NARROW_NO_BLANKS = [
+    '─'.repeat(50),
+    ' Accessing workspace:',
+    ' /data/data/com.youcoded.app/files/Projects/Trust',
+    ' two',
+    ' Quick safety check: Is this a project you',
+    ' created or one you trust? (Like your own code, a',
+    ' well-known open source project, or work from',
+    ' your team). If not, take a moment to review',
+    " what's in this folder first.",
+    " Claude Code'll be able to read, edit, and",
+    ' execute files here.',
+    ' Security guide',
+    ' ❯ No, exit',
+    '   Yes, I trust this folder',
+    ' Enter to confirm · Esc to cancel',
+  ].join('\n');
+
+  it('puts the path, each paragraph and the guide link on their own lines', () => {
+    expect(parseInkSelect(NARROW_NO_BLANKS)!.description).toBe([
+      'Accessing workspace:',
+      '/data/data/com.youcoded.app/files/Projects/Trust two',
+      'Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what\'s in this folder first.',
+      "Claude Code'll be able to read, edit, and execute files here.",
+      'Security guide',
+    ].join('\n'));
+  });
+});

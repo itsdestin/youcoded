@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- WHY (Destin, 2026-11-01: loading screens in the brand style): the window's own background is what shows for the
+         moment before the first frame (and behind Android 12+'s launch splash), so it is the brand canvas, not the
+         platform's dark grey: launch goes straight to lavender, then the brand loading screen (ui/BrandLoading.kt). -->
+    <color name="brand_canvas">#F4ECF8</color>
+    <style name="Theme.YouCoded" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/brand_canvas</item>
+    </style>
+</resources>

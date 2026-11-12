@@ -177,8 +177,6 @@ const IPC = {
   THEME_MARKETPLACE_REFRESH_REGISTRY: 'theme-marketplace:refresh-registry',
   MARKETPLACE_GET_PACKAGES: 'marketplace:get-packages',
   SKILLS_UPDATE: 'skills:update',
-  MARKETPLACE_GET_CONFIG: 'marketplace:get-config',
-  MARKETPLACE_SET_CONFIG: 'marketplace:set-config',
   MARKETPLACE_INVALIDATE_CACHE: 'marketplace:invalidate-cache',
   MARKETPLACE_READ_COMPONENT: 'marketplace:read-component',
   FIRST_RUN_STATE: 'first-run:state',
@@ -504,6 +502,7 @@ const IPC = {
   ANALYTICS_SET_OPT_IN: 'analytics:set-opt-in',
   ARCADE_LEADERBOARD: 'arcade:leaderboard',
   ARCADE_RECORDS: 'arcade:records',
+  ARCADE_ROOM_TICKET: 'arcade:room-ticket',
   ARCADE_STATUS: 'arcade:status',
   ARCADE_SUBMIT_SCORE: 'arcade:submit-score',
   ARTIFACTS_APPEND_VERSION: 'artifacts:append-version',
@@ -1357,9 +1356,6 @@ contextBridge.exposeInMainWorld('claude', {
   // Phase 3: unified marketplace APIs (packages map, per-entry config)
   marketplace: {
     getPackages: (): Promise<Record<string, any>> => ipcRenderer.invoke(IPC.MARKETPLACE_GET_PACKAGES),
-    getConfig: (id: string): Promise<Record<string, any>> => ipcRenderer.invoke(IPC.MARKETPLACE_GET_CONFIG, { id }),
-    setConfig: (id: string, values: Record<string, any>): Promise<void> =>
-      ipcRenderer.invoke(IPC.MARKETPLACE_SET_CONFIG, { id, values }),
     // Phase 4 — user-initiated cache bust.
     invalidateCache: (): Promise<void> => ipcRenderer.invoke(IPC.MARKETPLACE_INVALIDATE_CACHE),
     // In-app file viewer — returns { content, source, path } or { error }.
@@ -2269,6 +2265,8 @@ contextBridge.exposeInMainWorld('claude', {
     submitScore: (game: string, score: number) => ipcRenderer.invoke('arcade:submit-score', { game, score }),
     // Head-to-head records. `game` is optional — omitted means every game.
     records: (game?: string) => ipcRenderer.invoke('arcade:records', { game }),
+    // A one-time pass to join a two-player room (2026-11-09 final review F-3).
+    roomTicket: (game: string, room: string) => ipcRenderer.invoke('arcade:room-ticket', { game, room }),
   },
   permissions: {
     list: () => ipcRenderer.invoke('permissions:list'),

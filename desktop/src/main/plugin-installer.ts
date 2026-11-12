@@ -66,6 +66,11 @@ function getMarketplaceRepo(sourceMarketplace?: string): string {
   return MARKETPLACE_REPO;
 }
 
+/** Our own marketplace repo (exempt from per-install pinning; built-ins pin via bundled-plugin-pins). */
+function isOwnMarketplace(sourceMarketplace?: string): boolean {
+  return sourceMarketplace === 'youcoded' || sourceMarketplace === 'youcoded-core';
+}
+
 function getCacheRepoName(sourceMarketplace?: string): string {
   if (sourceMarketplace === 'youcoded' || sourceMarketplace === 'youcoded-core') {
     return 'wecoded-marketplace';
@@ -245,6 +250,13 @@ export function removeEscapingSymlinks(dir: string): number {
  */
 const UNVERIFIABLE_PLUGIN_ERROR = "Can't verify this plugin right now, try again later.";
 function needsPinButHasNone(entry: MarketplaceEntry): boolean {
+  // WHY (security apparatus, 2026-11): `local` entries from someone else's marketplace repo (the
+  // official Anthropic collection) are third-party code too. They used to install from that
+  // repo's branch head, not the scanned commit, so they need a commit like any git plugin.
+  if (entry.sourceType === 'local') {
+    if (isBundledPlugin(entry.id) || isOwnMarketplace(entry.sourceMarketplace)) return false;
+    return !entry.sourceCommit;
+  }
   if (entry.sourceType !== 'url' && entry.sourceType !== 'git-subdir') return false;
   if (entry.sourceMarketplace === 'youcoded') return false;
   return !entry.sourceCommit;
@@ -338,7 +350,7 @@ const readCachedPluginVersion = readPluginVersion;
  * used. When the commit is already on disk (an earlier launch) nothing is downloaded, so a
  * launch with no internet still works. Any failure leaves the cache folder untouched.
  */
-export async function materializePinnedSource(cacheRepo: string, commit: string, sourceRef: string): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function materializePinnedSource(cacheRepo: string, commit: string, sourceRef: string, sourceMarketplace = 'youcoded'): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!/^[0-9a-f]{40}$/.test(commit)) return { ok: false, error: 'Invalid pinned commit' };
   const sourceDir = path.join(cacheRepo, sourceRef);
   if (!isContainedIn(sourceDir, cacheRepo) || path.resolve(sourceDir) === path.resolve(cacheRepo)) {
@@ -348,8 +360,12 @@ export async function materializePinnedSource(cacheRepo: string, commit: string,
   const cacheExists = await fs.promises.access(cacheRepo).then(() => true, () => false);
   if (!cacheExists) {
     await fs.promises.mkdir(CACHE_DIR, { recursive: true });
-    const cloned = await runGit('clone', '--depth', '1', '--branch', marketplaceBranch, getMarketplaceRepo('youcoded'), cacheRepo);
-    if (!cloned.ok) return { ok: false, error: `could not download the built-in plugin version this app needs: ${cloned.output.slice(0, 200)}` };
+    // WHY: our repo's branch is `master` (or the test override); someone else's repo is cloned at its
+    // own default branch (the Anthropic collection's is `main`). Either way the pin below decides.
+    const cloned = isOwnMarketplace(sourceMarketplace)
+      ? await runGit('clone', '--depth', '1', '--branch', marketplaceBranch, getMarketplaceRepo(sourceMarketplace), cacheRepo)
+      : await runGit('clone', '--depth', '1', getMarketplaceRepo(sourceMarketplace), cacheRepo);
+    if (!cloned.ok) return { ok: false, error: `could not download the plugin version this app needs: ${cloned.output.slice(0, 200)}` };
     setCacheTimestamp(cacheRepo);
   }
   const isThatCommit = async () => {
@@ -358,7 +374,7 @@ export async function materializePinnedSource(cacheRepo: string, commit: string,
   };
   if (!(await isThatCommit())) {
     const fetched = await runGit('-C', cacheRepo, 'fetch', '--depth', '1', 'origin', commit);
-    if (!fetched.ok) return { ok: false, error: `could not download the built-in plugin version this app needs: ${fetched.output.slice(0, 200)}` };
+    if (!fetched.ok) return { ok: false, error: `could not download the plugin version this app needs: ${fetched.output.slice(0, 200)}` };
     if (!(await isThatCommit())) return { ok: false, error: 'the downloaded version is not the one this app expects, so it was not used' };
   }
   // Clear first: a path checkout restores files but never deletes ones the pinned commit lacks.
@@ -378,7 +394,7 @@ export async function readPinMarker(dir: string): Promise<string | null> {
   try { return (await fs.promises.readFile(path.join(dir, PIN_MARKER_FILE), 'utf8')).trim() || null; } catch { return null; }
 }
 
-async function installFromLocal(id: string, sourceRef: string, sourceMarketplace?: string, expectedVersion?: string): Promise<InstallResult> {
+async function installFromLocal(id: string, sourceRef: string, sourceMarketplace?: string, expectedVersion?: string, commit?: string): Promise<InstallResult> {
   // Phase 3a: source-aware repo selection — YouCoded entries clone from
   // itsdestin/wecoded-marketplace, not the Anthropic upstream repo.
   // YOUCODED_MARKETPLACE_BRANCH overrides the branch for test harnesses
@@ -390,6 +406,16 @@ async function installFromLocal(id: string, sourceRef: string, sourceMarketplace
   if (pin) { sourceRef = pin.sourceRef; sourceMarketplace = 'youcoded'; }
   const cacheRepo = path.join(CACHE_DIR, getCacheRepoName(sourceMarketplace));
   const repoUrl = getMarketplaceRepo(sourceMarketplace);
+  // WHY (security apparatus, 2026-11): a plugin from someone else's marketplace repo installs the
+  // exact commit the catalog scanned, never that repo's branch head. This also fixes those installs
+  // outright: the old path asked the Anthropic repo for a `master` branch it does not have.
+  const thirdPartyPin = !pin && !isOwnMarketplace(sourceMarketplace);
+  if (thirdPartyPin) {
+    if (!commit) return { status: 'failed', error: UNVERIFIABLE_PLUGIN_ERROR };
+    const m = await materializePinnedSource(cacheRepo, commit, sourceRef, sourceMarketplace);
+    if (!m.ok) return { status: 'failed', error: m.error };
+    return copyLocalSource(id, cacheRepo, sourceRef, commit);
+  }
 
   // Ensure marketplace repo is cloned, or refresh it if:
   //   (a) it's been >1h since the last pull (time-based refresh), OR
@@ -433,6 +459,14 @@ async function installFromLocal(id: string, sourceRef: string, sourceMarketplace
     const m = await materializePinnedSource(cacheRepo, pin.commit, pin.sourceRef);
     if (!m.ok) return { status: 'failed', error: m.error };
   }
+  const copied = await copyLocalSource(id, cacheRepo, sourceRef);
+  if (copied.status === 'installed' && pin) await writePinMarker(path.join(PLUGINS_DIR, id), pin.commit);
+  return copied;
+}
+
+/** Copy one plugin folder out of a marketplace cache clone into the plugins dir. `commit`, when
+ * given, is reported back so the marketplace's Update check can compare it with the catalog's. */
+async function copyLocalSource(id: string, cacheRepo: string, sourceRef: string, commit?: string): Promise<InstallResult> {
   const sourceDir = path.join(cacheRepo, sourceRef);
   // Security: prevent sourceRef from escaping the cache directory (e.g. "../../.ssh")
   if (!isContainedIn(sourceDir, cacheRepo)) {
@@ -445,8 +479,7 @@ async function installFromLocal(id: string, sourceRef: string, sourceMarketplace
   const targetDir = path.join(PLUGINS_DIR, id);
   if (fs.existsSync(targetDir)) fs.rmSync(targetDir, { recursive: true, force: true });
   copyDirSync(sourceDir, targetDir);
-  if (pin) await writePinMarker(targetDir, pin.commit);
-  return { status: 'installed' };
+  return commit ? { status: 'installed', commit } : { status: 'installed' };
 }
 
 /**
@@ -539,15 +572,21 @@ export async function upgradePluginFromGit(entry: MarketplaceEntry): Promise<Ins
   return { status: 'installed', commit: fetched.commit };
 }
 
-export async function upgradePluginFromLocal(id: string, sourceRef: string, sourceMarketplace?: string): Promise<InstallResult> {
+export async function upgradePluginFromLocal(id: string, sourceRef: string, sourceMarketplace?: string, commit?: string): Promise<InstallResult> {
   if (!SAFE_ID_RE.test(id)) return { status: 'failed', error: 'Invalid plugin id' };
   // WHY (audit item 24): built-in plugins only ever move to the commit this app was built with.
   const pin = isBundledPlugin(id) ? getBundledPin(id) : undefined;
   if (isBundledPlugin(id) && !pin) return { status: 'failed', error: 'This app build has no pinned version for this built-in plugin.' };
   if (pin) { sourceRef = pin.sourceRef; sourceMarketplace = 'youcoded'; }
   const cacheRepo = path.join(CACHE_DIR, getCacheRepoName(sourceMarketplace));
-  if (pin) {
-    const m = await materializePinnedSource(cacheRepo, pin.commit, pin.sourceRef);
+  // WHY (security apparatus, 2026-11): third-party `local` plugins update to the catalog's scanned
+  // commit only (see installFromLocal); no commit means no update rather than an unscanned one.
+  const thirdPartyPin = !pin && !isOwnMarketplace(sourceMarketplace);
+  if (thirdPartyPin && !commit) return { status: 'failed', error: UNVERIFIABLE_PLUGIN_ERROR };
+  const pinned = pin ? { commit: pin.commit, sourceRef: pin.sourceRef, from: 'youcoded' }
+    : thirdPartyPin ? { commit: commit!, sourceRef, from: sourceMarketplace } : null;
+  if (pinned) {
+    const m = await materializePinnedSource(cacheRepo, pinned.commit, pinned.sourceRef, pinned.from);
     if (!m.ok) return { status: 'failed', error: m.error };
   }
   const sourceDir = path.join(cacheRepo, sourceRef);
@@ -598,7 +637,8 @@ export async function upgradePluginFromLocal(id: string, sourceRef: string, sour
   } catch (err: any) {
     return { status: 'failed', error: `Registry write failed: ${err?.message || String(err)}` };
   }
-  return { status: 'installed' };
+  // A third-party pin reports the commit it landed on so the Update badge clears (see skill-provider).
+  return thirdPartyPin ? { status: 'installed', commit } : { status: 'installed' };
 }
 
 /**
@@ -748,7 +788,7 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
       case 'local':
         // Phase 3a: pass sourceMarketplace so the installer clones the right repo.
         // Pass entry.version so the cache refreshes when a package bumped mid-TTL.
-        result = await installFromLocal(id, sourceRef, entry.sourceMarketplace, entry.version);
+        result = await installFromLocal(id, sourceRef, entry.sourceMarketplace, entry.version, entry.sourceCommit);
         break;
       case 'url':
         result = await installFromUrl(id, sourceRef, entry.sourceCommit);

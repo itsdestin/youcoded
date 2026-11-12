@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  deriveSettingsRowState, deriveSyncState, deriveWarningSeverity,
+  deriveSettingsRowState, deriveSyncState, deriveWarningSeverity, isSyncAlarm,
   type DeriveSyncStateInput, type SpacesRowInput,
 } from '../src/renderer/state/sync-display-state';
 import type { SyncWarning } from '../src/main/sync-state';
@@ -114,5 +114,15 @@ describe('deriveSettingsRowState', () => {
   it('recency comes from sync-spaces (ms → s) and goes stale past 24h', () => {
     expect(deriveSettingsRowState(NO_LEGACY, spaces('synced', Date.now() - 5 * 60_000)).kind).toBe('synced');
     expect(deriveSettingsRowState(NO_LEGACY, spaces('synced', Date.now() - 48 * 3600_000)).kind).toBe('stale');
+  });
+});
+
+// Destin, 2026-11-07 ("Grey, no dot"): never having set up sync is not an alarm, so it gets no red and no Settings dot;
+// a real failure still does. (Ported from master's copy of the old src/renderer/state/sync-display-state.test.ts.)
+describe('isSyncAlarm', () => {
+  it('treats "no sync configured" as calm and a real danger warning as an alarm', () => {
+    expect(isSyncAlarm({ level: 'danger', code: 'PERSONAL_NOT_CONFIGURED' })).toBe(false);
+    expect(isSyncAlarm({ level: 'danger', code: 'AUTH_FAILED' })).toBe(true);
+    expect(isSyncAlarm({ level: 'warn', code: 'PERSONAL_STALE' })).toBe(false);
   });
 });

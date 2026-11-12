@@ -20,7 +20,7 @@ export interface RemoteAccessView {
   check?: { listening: boolean; address: string | null; reason: string | null };
   prerequisite?: 'not-installed' | 'sign-in-required' | 'ready';
   notice?: string;
-  devices: { id: string; name: string; online: boolean; lastSeenAt?: number }[];
+  devices: { id: string; name: string; online: boolean; lastSeenAt?: number; expired?: boolean }[];
   /** Whether the optional browser-encryption level is on. Off is the default and is a
    *  complete, working, encrypted setup — not a half-finished one. */
   browserEncryption?: 'off' | 'on';

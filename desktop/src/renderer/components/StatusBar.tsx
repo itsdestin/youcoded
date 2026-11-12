@@ -1,4 +1,5 @@
 import { gitChipLabel } from '../state/git-chip-label';
+import { versionPillTooltip } from './version-pill-tooltip';
 import { useState, useCallback, useEffect, useSyncExternalStore, memo } from 'react';
 import { useChatStore } from '../state/chat-context';
 import { useEscClose } from '../hooks/use-esc-close';
@@ -60,6 +61,8 @@ interface StatusData {
     downloaded?: boolean;
     /** #183: installing it asks for a password (a Linux package, a non-administrator Mac). */
     needs_password?: boolean;
+    /** #186: another pacman package owns this copy (AUR youcoded-bin); the popup says so instead of offering an update. */
+    managed_by_other_package?: boolean;
   } | null;
   announcement: { message: string; expires?: string | null } | null;
   contextPercent: number | null;
@@ -481,6 +484,8 @@ interface Props {
 const warnStyles = {
   danger: 'bg-red-400/15 text-fg-2 border-red-400/40',
   warn: 'bg-amber-500/15 text-fg-2 border-amber-500/40',
+  // Sync never set up (isSyncAlarm): a plain grey chip, not an alarm (Destin, 2026-11-07).
+  neutral: 'bg-panel text-fg-2 border-edge-dim',
 };
 
 // --- Widget visibility system ---
@@ -1555,10 +1560,13 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         const severity = deriveWarningSeverity(syncWarnings ?? []);
         if (severity === null) return null;
         const isFailing = severity === 'failing';
-        const label = isFailing ? 'Sync failing' : 'Sync warning';
-        const styleClass = isFailing ? warnStyles.danger : warnStyles.warn;
+        // WHY (2026-11-01 phone test): a user who never turned sync on was told "Sync failing" —
+        // nothing failed. When the only alarm is "No sync configured", say what is true.
+        const notSetUp = isFailing && (syncWarnings ?? []).every((w) => w.level !== 'danger' || w.code === 'PERSONAL_NOT_CONFIGURED');
+        const label = notSetUp ? 'Sync off' : isFailing ? 'Sync failing' : 'Sync warning';
+        const styleClass = notSetUp ? warnStyles.neutral : isFailing ? warnStyles.danger : warnStyles.warn;
         return (
-          <Tooltip text={isFailing ? 'Sync is failing — click for details' : 'Sync warnings — click for details'}>
+          <Tooltip text={notSetUp ? 'Nothing is backed up yet — click to set up sync' : isFailing ? 'Sync is failing — click for details' : 'Sync warnings — click for details'}>
           <button
             onClick={handler}
             className={`px-1.5 py-0.5 rounded-sm border text-4xs sm:text-3xs ${styleClass} ${handler ? 'cursor-pointer hover:brightness-125 transition-all' : ''}`}
@@ -1609,11 +1617,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {show('version') && updateStatus && (
         <Tooltip text={
             (devLabel ? `Dev instance: ${devLabel} — ` : '') +
-            (updateStatus.update_available && updateStatus.downloaded
-              ? `v${updateStatus.latest} is downloaded — click to restart and update`
-              : updateStatus.update_available
-              ? `Update available: v${updateStatus.latest} — click to download`
-              : `YouCoded v${updateStatus.current}`)
+            versionPillTooltip(updateStatus)
           }>
         <button
           onClick={() => setUpdatePanelOpen(true)}

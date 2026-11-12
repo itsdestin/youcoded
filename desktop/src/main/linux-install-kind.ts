@@ -16,14 +16,15 @@ import fs from 'fs';
 
 export type LinuxInstallKind =
   | 'appimage'  // running from an AppImage — can self-replace
-  | 'pacman'    // Arch package, installed to /opt
+  | 'pacman'    // the official Arch package (`youcoded`), installed to /opt
+  | 'pacman-other' // pacman owns the binary but it is NOT the official package (e.g. AUR `youcoded-bin`)
   | 'deb'       // Debian/Ubuntu package
   | 'rpm'       // Fedora/openSUSE package
   | 'unknown';  // dev checkout, tarball, Nix, a container… treat as portable
 
 /** The package managers we can ask "do you own this file?", in query order. */
 const OWNERS: ReadonlyArray<{ kind: LinuxInstallKind; cmd: string; args: (p: string) => string[] }> = [
-  { kind: 'pacman', cmd: 'pacman', args: (p) => ['-Qo', p] },
+  { kind: 'pacman', cmd: 'pacman', args: (p) => ['-Qoq', p] },
   { kind: 'deb', cmd: 'dpkg', args: (p) => ['-S', p] },
   { kind: 'rpm', cmd: 'rpm', args: (p) => ['-qf', p] },
 ];
@@ -33,17 +34,35 @@ export interface LinuxInstallKindDeps {
   execPath?: string;
   envAppImage?: string;
   exists?: (p: string) => boolean;
-  /** Returns the child's exit status; null/non-zero both mean "not this one". */
-  run?: (cmd: string, args: string[]) => number | null;
+  /** Returns the child's exit status; null/non-zero both mean "not this one". A package manager
+   *  may instead answer `{ status, stdout }` so the owning package's name can be read. */
+  run?: (cmd: string, args: string[]) => RunResult | number | null;
 }
 
-function defaultRun(cmd: string, args: string[]): number | null {
+/** What a package-manager query reports: exit status plus what it printed. */
+export interface RunResult { status: number | null; stdout: string }
+const asResult = (r: RunResult | number | null): RunResult =>
+  r !== null && typeof r === 'object' ? r : { status: r, stdout: '' };
+
+/** WHY (card #186): `pacman -Qo` used to be judged by exit code alone, so the official `youcoded`
+ *  package and the AUR-style `youcoded-bin` looked identical. Updating the second with the
+ *  official .pacman fails (youcoded-bin declares conflicts=('youcoded')). The name is what tells
+ *  them apart. `-q` makes pacman print ONLY the package name — nothing to parse, and no
+ *  translated "is owned by" sentence to trip over on a non-English system. If the name cannot be
+ *  read we keep the old answer ('pacman') rather than lock a working install out of updating. */
+function classify(kind: LinuxInstallKind, out: RunResult): LinuxInstallKind {
+  if (kind !== 'pacman') return kind;
+  const name = out.stdout.trim().split(/\r?\n/)[0]?.trim().split(/\s+/)[0] ?? '';
+  return name && name !== 'youcoded' ? 'pacman-other' : 'pacman';
+}
+
+function defaultRun(cmd: string, args: string[]): RunResult | null {
   // A missing package manager throws ENOENT into `error`, not a status — both
   // read as "not the owner". Two seconds is far beyond a local database query,
   // and the timeout keeps a wedged tool from hanging the update check.
-  const res = spawnSync(cmd, args, { stdio: 'ignore', timeout: 2000 });
+  const res = spawnSync(cmd, args, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000, encoding: 'utf8' });
   if (res.error) return null;
-  return res.status;
+  return { status: res.status, stdout: res.stdout ?? '' };
 }
 
 export function detectLinuxInstallKind(deps: LinuxInstallKindDeps = {}): LinuxInstallKind {
@@ -59,7 +78,8 @@ export function detectLinuxInstallKind(deps: LinuxInstallKindDeps = {}): LinuxIn
   const run = deps.run ?? defaultRun;
   const execPath = deps.execPath ?? process.execPath;
   for (const owner of OWNERS) {
-    if (run(owner.cmd, owner.args(execPath)) === 0) return owner.kind;
+    const out = asResult(run(owner.cmd, owner.args(execPath)));
+    if (out.status === 0) return classify(owner.kind, out);
   }
   return 'unknown';
 }
@@ -69,22 +89,26 @@ export function detectLinuxInstallKind(deps: LinuxInstallKindDeps = {}): LinuxIn
 // freeze on every launch (pacman here), and up to 2 s per manager on a machine
 // where one is slow. The update check now awaits primeLinuxInstallKind() before
 // it reads the answer, so the blocking path below is only a fallback.
-function defaultRunAsync(cmd: string, args: string[]): Promise<number | null> {
+function defaultRunAsync(cmd: string, args: string[]): Promise<RunResult | null> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
-    try { child = spawn(cmd, args, { stdio: 'ignore' }); } catch { resolve(null); return; }
+    try { child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'ignore'] }); } catch { resolve(null); return; }
+    let stdout = '';
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (d: string) => { if (stdout.length < 4096) stdout += d; });
     // Same 2 s budget as defaultRun; a killed child exits with a null status,
     // which reads as "not the owner" exactly like spawnSync's timeout did.
     const timer = setTimeout(() => child.kill(), 2000);
     child.on('error', () => { clearTimeout(timer); resolve(null); });
-    child.on('exit', (code) => { clearTimeout(timer); resolve(code); });
+    // 'close' (not 'exit'): stdout is fully read by then.
+    child.on('close', (code) => { clearTimeout(timer); resolve({ status: code, stdout }); });
   });
 }
 
 export async function detectLinuxInstallKindAsync(
   deps: Omit<LinuxInstallKindDeps, 'run' | 'exists'> & {
     exists?: (p: string) => boolean | Promise<boolean>;
-    run?: (cmd: string, args: string[]) => Promise<number | null>;
+    run?: (cmd: string, args: string[]) => Promise<RunResult | number | null>;
   } = {},
 ): Promise<LinuxInstallKind> {
   const platform = deps.platform ?? process.platform;
@@ -96,7 +120,8 @@ export async function detectLinuxInstallKindAsync(
   const execPath = deps.execPath ?? process.execPath;
   // In order, one at a time — same precedence as the sync version.
   for (const owner of OWNERS) {
-    if ((await run(owner.cmd, owner.args(execPath))) === 0) return owner.kind;
+    const out = asResult(await run(owner.cmd, owner.args(execPath)));
+    if (out.status === 0) return classify(owner.kind, out);
   }
   return 'unknown';
 }

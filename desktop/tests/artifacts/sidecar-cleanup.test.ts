@@ -262,7 +262,9 @@ describe('surveyProject — what the disk says', () => {
     const p = await surveyProject(root, recs);
     expect(p.get('present')).toMatchObject({ exists: true });
     expect(p.get('missing')).toMatchObject({ exists: false, errorCode: 'ENOENT', ancestor: { path: root, sameDevice: true, readable: true } });
-    expect(p.get('underfile')).toMatchObject({ exists: false, errorCode: 'ENOTDIR', ancestor: { path: root } });
+    // Windows reports a file-where-a-folder-should-be as ENOENT (POSIX says ENOTDIR); the app treats both
+    // as "missing" and still finds the right ancestor, so only the code differs by OS.
+    expect(p.get('underfile')).toMatchObject({ exists: false, errorCode: process.platform === 'win32' ? 'ENOENT' : 'ENOTDIR', ancestor: { path: root } });
     expect(p.get('rel')).toMatchObject({ target: null, exists: false });
   });
 

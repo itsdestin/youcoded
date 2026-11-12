@@ -186,7 +186,7 @@ export function isPromotion(fen: string, from: string, to: string): boolean {
  *  or **null if the move is illegal**.
  *
  *  Both clients run this on every move — the one they make and the one that
- *  arrives over the socket. The PartyKit room is a relay (`chess-room.ts`), so
+ *  arrives over the socket. The PartyKit room is a relay (the Worker's `relay-room.ts`), so
  *  a peer sending a bogus move must be rejected here or it corrupts the board.
  *  Never trust the wire. */
 export function applyMove(

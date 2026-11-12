@@ -8,7 +8,9 @@ const piece = (which: string, extra: Partial<ScreenEntry> = {}): ScreenEntry =>
 
 export const OVERLAYS: readonly ScreenEntry[] = [
   { name: 'dev/overlay', tags: ['dev', 'overlay'] },
-  ...['trust', 'initializing', 'handoff-waiting', 'handoff-incomplete', 'remote-unsupported', 'compacting', 'copy-picker',
+  // WHY no 'trust' piece: master (2026-11-01) removed the full-screen TrustGate; the folder-trust question is now an ordinary
+  // chat card, pictured by chat#trust-phone.
+  ...['initializing', 'handoff-waiting', 'handoff-incomplete', 'remote-unsupported', 'compacting', 'copy-picker',
     'usage', 'usage-chatgpt', 'thinking-stalled', 'thinking-prefill', 'model-loading', 'model-reload',
     'specialist-report', 'specialist-failed'].map((w) => piece(w)),
   // The two crash screens (coverage batch C): the whole app failing to start, and one part of it stopping.

@@ -7,9 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       collect_sources:
-        description: 'Exercise exact runtime source/notice collection on the R8 test build'
+        description: 'Exercise exact runtime source/notice collection on the R8-shrunk debug build'
         type: boolean
         default: false
+
+# WHY (code scanning, 2026-11): read-only unless a job asks for more. Jobs that write
+# (publishing, signing, check runs) declare their own permissions, which override this.
+permissions:
+  contents: read
 
 jobs:
   # WHY: JVM validation has no packaging/native prerequisites; neither APK
@@ -39,9 +44,15 @@ jobs:
       - name: Test runtime redistribution fixtures
         run: python3 -m unittest discover -s app/runtime -p 'test_*.py' -v
       - name: Verify all variant lint producer graphs
-        run: ./gradlew lintDebug lintReleaseTest lintRelease --dry-run $CI_GRADLE_FLAGS
+        run: ./gradlew lintDebug lintRelease --dry-run $CI_GRADLE_FLAGS
       - name: Run unit tests
         run: ./gradlew test $CI_GRADLE_FLAGS
+      # WHY (final review, 2026-11-10): the Dev copy is debuggable, so its R8 pass may skip optimisations the real
+      # release applies, and the removed releaseTest build was the only place the release's own pass ran before a
+      # tag. This runs that exact pass (shrink, rename, optimise the non-debuggable release code) without packaging,
+      # signing or the bundled programs, so a release-only R8 failure shows on a pull request, not at tag time.
+      - name: Shrink the release code (R8, as the release does)
+        run: ./gradlew minifyReleaseWithR8 $CI_GRADLE_FLAGS
       - name: Verify current JVM inputs and outputs
         run: node scripts/ci-inputs.mjs jvm
       - name: Upload JVM input evidence
@@ -59,7 +70,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scope: [debug, releaseTest]
+        scope: [debug]
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       # WHY: only modeled APK compiler outputs may be restored; JVM tests and
@@ -104,8 +115,9 @@ jobs:
       # attempt and variant; custom Exec producers are not task-cacheable.
       - name: Configure run-local native cache
         run: echo "YOUCODED_COMMON_NATIVE_CACHE=$RUNNER_TEMP/ci-native-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${CI_ANDROID_SCOPE}" >> "$GITHUB_ENV"
-      # WHY: fixed mapping, not arbitrary task input. ReleaseTest still requests
-      # R8 with debug signing; FROM-CACHE is restoration, not fresh execution.
+      # WHY: fixed mapping, not arbitrary task input. The debug build is itself
+      # R8-shrunk (releaseTest was removed 2026-11-10); FROM-CACHE is restoration,
+      # not fresh execution.
       - name: Build scoped APK
         shell: bash
         run: |
@@ -113,7 +125,6 @@ jobs:
           umask 077
           case "$CI_ANDROID_SCOPE" in
             debug) task=assembleDebug ;;
-            releaseTest) task=assembleReleaseTest ;;
             *) echo "Unknown Android scope: $CI_ANDROID_SCOPE" >&2; exit 1 ;;
           esac
           ./gradlew "$task" $CI_GRADLE_FLAGS --console=plain 2>&1 | tee "$RUNNER_TEMP/android-gradle-${CI_ANDROID_SCOPE}.log"
@@ -148,16 +159,6 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
-      - name: Upload releaseTest APK
-        if: matrix.scope == 'releaseTest'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
-        with:
-          name: youcoded-releasetest
-          path: app/build/outputs/apk/releaseTest/*.apk
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-
   source-preflight:
     if: inputs.collect_sources
     name: Android source preflight
@@ -222,34 +223,24 @@ jobs:
       - name: Run unit tests
         run: ./gradlew test --no-build-cache
 
+      # WHY: the debug build itself is R8-shrunk with the release's rules now (Destin, 2026-11-10: one
+      # test build), so building it on every push is what catches the PluginInstaller-reflection class of bug
+      # (912f5ca7) that once shipped because every CI build skipped R8. This is also the build that collects
+      # the runtime source archive when the manual source-preflight is requested.
       - name: Build debug APK
-        run: ./gradlew assembleDebug --no-build-cache
-
-      # ReleaseTest: same R8 minification + shrinker + proguard rules as
-      # the production release flavor, but signed with the debug keystore
-      # so it can run without the release-keystore secrets.
-      #
-      # Why this lives in dev CI (not just release): debug builds skip R8
-      # entirely, hiding any bug whose trigger involves R8 obfuscation,
-      # shrinking, or inlining. The PluginInstaller reflection footgun
-      # (912f5ca7) shipped silently from 2026-03-25 through v1.2.2
-      # because every dev/CI build was debug — pre-release verification
-      # never ran the same code path the user would. Building releaseTest
-      # on every push catches that whole bug class at PR time.
-      - name: Build releaseTest APK (R8 minified, debug-signed)
         env:
           YOUCODED_COLLECT_SOURCES: ${{ inputs.collect_sources && '1' || '0' }}
-        run: ./gradlew assembleReleaseTest --no-build-cache
+        run: ./gradlew assembleDebug --no-build-cache
 
       - name: Verify packaged runtime and source archive
         if: inputs.collect_sources
         run: |
           python3 -I app/runtime/runtime-redistribution.py bind_backend \
-            app/build/runtime/releaseTest/sources app/build/backend-assets/backend.tgz
+            app/build/runtime/debug/sources app/build/backend-assets/backend.tgz
           python3 -I app/runtime/runtime-redistribution.py release \
-            app/build/runtime/releaseTest app/build/runtime/releaseTest/sources \
+            app/build/runtime/debug app/build/runtime/debug/sources \
             app/build/outputs/android-source-preflight.tar.xz \
-            app/build/outputs/apk/releaseTest/*.apk
+            app/build/outputs/apk/debug/*.apk
 
       - name: Upload inspected source preflight archive
         if: inputs.collect_sources
@@ -270,8 +261,8 @@ jobs:
         with:
           name: android-source-preflight
           path: |
-            app/build/runtime/releaseTest/evidence
-            app/build/runtime/releaseTest/sources
+            app/build/runtime/debug/evidence
+            app/build/runtime/debug/sources
           if-no-files-found: warn
           retention-days: 7
 
@@ -291,15 +282,6 @@ jobs:
         with:
           name: youcoded-debug
           path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-
-      - name: Upload releaseTest APK
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
-        with:
-          name: youcoded-releasetest
-          path: app/build/outputs/apk/releaseTest/*.apk
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

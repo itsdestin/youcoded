@@ -1,4 +1,5 @@
 import fs from 'fs';
+import crypto from 'crypto';
 import path from 'path';
 import os from 'os';
 import type {
@@ -11,8 +12,11 @@ import { THEMES_DIR, listUserThemes, userThemeManifest } from './theme-watcher';
 import { synthesizeLocalThemeEntries, type LocalThemeRecord } from './local-theme-synthesizer';
 import { generateThemePreview } from './theme-preview-generator';
 import { SkillConfigStore } from './skill-config-store';
+import { themeFingerprint } from '../shared/theme-fingerprint';
 
 // Registry is fetched from this URL (GitHub Pages or raw GitHub)
+// Every theme file the installer downloads must come from here (see fileProblem).
+const THEME_FILES_ORIGIN = 'https://raw.githubusercontent.com/itsdestin/wecoded-themes/';
 const REGISTRY_URL =
   'https://raw.githubusercontent.com/itsdestin/wecoded-themes/main/registry/theme-registry.json';
 
@@ -145,6 +149,19 @@ export class ThemeMarketplaceProvider {
   }
 
   /**
+   * WHY (security apparatus, 2026-11): theme files are only ever downloaded from our own theme
+   * repo, and when the registry carries fingerprints each file must match its fingerprint. The
+   * registry pins file URLs to the exact reviewed commit; this check makes a swapped or corrupted
+   * download fail instead of being written to disk and drawn into the app.
+   */
+  static fileProblem(url: string, bytes: Buffer, expected: string | undefined, label: string): string | null {
+    if (!url.startsWith(THEME_FILES_ORIGIN)) return `Theme file ${label} is not hosted by the theme store`;
+    if (expected === undefined) return null;
+    const actual = crypto.createHash('sha256').update(bytes).digest('hex');
+    return actual === expected.toLowerCase() ? null : `Theme file ${label} did not match the reviewed version`;
+  }
+
+  /**
    * Install a theme from the marketplace.
    * Downloads manifest.json + assets, validates, sanitizes CSS, writes to disk.
    */
@@ -167,7 +184,10 @@ export class ThemeMarketplaceProvider {
       if (!manifestRes.ok) {
         return { status: 'failed', error: `Failed to download manifest: ${manifestRes.status}` };
       }
-      const manifestText = await manifestRes.text();
+      const manifestBytes = Buffer.from(await manifestRes.arrayBuffer());
+      const manifestProblem = ThemeMarketplaceProvider.fileProblem(entry.manifestUrl, manifestBytes, entry.fileHashes?.['manifest.json'], 'manifest.json');
+      if (manifestProblem) return { status: 'failed', error: manifestProblem };
+      const manifestText = manifestBytes.toString('utf-8');
 
       // Validate + sanitize (imports sanitizeCSS for community themes)
       const { validateCommunityTheme } = await import('../renderer/themes/theme-validator');
@@ -176,13 +196,13 @@ export class ThemeMarketplaceProvider {
       // Inject source: 'community' into the manifest
       const manifestWithSource = { ...theme, source: 'community' };
 
-      // Create theme directory
       const themeDir = path.join(THEMES_DIR, slug);
-      const assetsDir = path.join(themeDir, 'assets');
-      await fs.promises.mkdir(assetsDir, { recursive: true });
-
-      // Download assets (with size tracking)
+      // WHY (security apparatus, 2026-11): download and check EVERY file before writing any. A file
+      // that fails its check (or the size limit) used to arrive after earlier files were already
+      // written over the installed copy, so a failed update left a half-replaced theme; now the
+      // installed theme stays exactly as it was unless the whole new set passed.
       let totalBytes = Buffer.byteLength(JSON.stringify(manifestWithSource));
+      const downloads: Array<{ resolved: string; buffer: Buffer }> = [];
 
       if (entry.assetUrls) {
         for (const [relativePath, url] of Object.entries(entry.assetUrls)) {
@@ -198,18 +218,20 @@ export class ThemeMarketplaceProvider {
           }
 
           const buffer = Buffer.from(await assetRes.arrayBuffer());
+          const assetProblem = ThemeMarketplaceProvider.fileProblem(url, buffer, entry.fileHashes?.[relativePath], relativePath);
+          if (assetProblem) return { status: 'failed', error: assetProblem };
           totalBytes += buffer.length;
-
           if (totalBytes > MAX_THEME_SIZE_BYTES) {
-            // Cleanup partial download
-            await fs.promises.rm(themeDir, { recursive: true, force: true });
             return { status: 'failed', error: 'Theme exceeds 10MB size limit' };
           }
-
-          // Ensure subdirectory exists
-          await fs.promises.mkdir(path.dirname(resolved), { recursive: true });
-          await fs.promises.writeFile(resolved, buffer);
+          downloads.push({ resolved, buffer });
         }
+      }
+
+      await fs.promises.mkdir(path.join(themeDir, 'assets'), { recursive: true });
+      for (const { resolved, buffer } of downloads) {
+        await fs.promises.mkdir(path.dirname(resolved), { recursive: true });
+        await fs.promises.writeFile(resolved, buffer);
       }
 
       // Write manifest last (theme-watcher triggers on manifest.json presence)
@@ -230,6 +252,9 @@ export class ThemeMarketplaceProvider {
             source: 'marketplace',
             installedAt: new Date().toISOString(),
             removable: true,
+            // WHY: remember which file list we just installed so a later in-place edit (same
+            // version number) is noticed. Undefined when the store listed no hashes -> stays quiet.
+            themeFingerprint: themeFingerprint(entry),
             components: [{
               type: 'theme',
               path: themeDir,

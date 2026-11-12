@@ -22,12 +22,16 @@ export function createRemoteAccessPreview(raw: string): RemoteAccessPreview {
     // remember paired devices, and showing both at once told two different stories.
     devices: ['ready', 'disabled', 'checking', 'encrypted', 'consent'].includes(raw)
       ? [{ id: 'phone', name: 'My phone', online: true }, { id: 'tablet', name: 'My tablet', online: false, lastSeenAt: Date.UTC(2026, 9, 12) }]
-      : [],
+      // WHY (card #216): `ready-expired` = the same list plus a phone signed out after 90 unused days.
+      : raw === 'ready-expired'
+        ? [{ id: 'phone', name: 'My phone', online: true }, { id: 'tablet', name: 'My tablet', online: false, lastSeenAt: Date.UTC(2026, 9, 12) },
+          { id: 'old-phone', name: 'Old phone', online: false, lastSeenAt: Date.UTC(2026, 6, 20), expired: true }]
+        : [],
     browserEncryption: raw === 'encrypted' ? 'on' : 'off',
   };
   const listeners = new Set<() => void>();
   let generation = 0;
-  let approved = ['ready', 'disabled', 'checking', 'encrypted', 'consent'].includes(raw);
+  let approved = ['ready', 'ready-expired', 'disabled', 'checking', 'encrypted', 'consent'].includes(raw);
   const update = (changes: Partial<RemoteAccessView>) => { view = { ...view, ...changes }; listeners.forEach(fn => fn()); };
   return {
     getView: () => view,

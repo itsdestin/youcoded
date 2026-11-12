@@ -101,8 +101,10 @@ export function DevicesTab({ devices, onRename, onRemove, syncInProgress, lastSy
         const right = plat ? `${plat} · ${activity}` : activity;
         return (
           <li key={d.id}>
-            <div className="flex items-center justify-between gap-2 px-1 py-1">{/* bare row inside the shared level-2 list */}
-              <div className="min-w-0 flex items-center gap-1.5">
+            {/* WHY max-sm column (2026-11-01 phone test): on a phone the details took the row and every name shrank to "Des…", so
+                two devices could not be told apart. At phone width the name gets its own line and the details sit under it. */}
+            <div className="flex items-center justify-between gap-2 px-1 py-1 max-sm:flex-col max-sm:items-start max-sm:gap-0">{/* bare row inside the shared level-2 list */}
+              <div className="min-w-0 flex items-center gap-1.5 max-sm:w-full">
                 {editingId === d.id ? (
                   /* Shared FIELD surface (spec change 20) — `sm` because this is an
                      inline edit inside a compact list row. min-w-0 stays: it lets the

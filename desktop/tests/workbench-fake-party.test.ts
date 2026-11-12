@@ -1,5 +1,5 @@
 // Task 7c. Pins the fake Connect Four opponent's protocol against the real
-// message shapes the PartyKit room uses (partykit/src/connect-four-room.ts:
+// message shapes the PartyKit room uses (wecoded-marketplace worker/src/games/relay-room.ts:
 // `{type:'player-joined', username}`, `{type:'move', username, column}`) and
 // against the real client-side rules (src/renderer/game/connect-four.ts), so
 // a drift in either the real room or the real rules would break these tests

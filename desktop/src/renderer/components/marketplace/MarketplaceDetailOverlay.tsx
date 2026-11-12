@@ -260,7 +260,17 @@ function SkillDetail({
   // Checked AFTER `installed` on purpose (Task 21): an installed item is described by
   // the locally scanned entry, which has no sourceType, and must keep its Uninstall.
   let actions: React.ReactNode = null;
-  if (isInstalling) {
+  // Plugin off-switch: the notice REPLACES the buttons it stands in for (guide "Status and
+  // notices": a failed action replaces the buttons it came from). No Install, Update or
+  // enable control — nothing here can switch it back on; Remove is its one action, filled.
+  const turnedOff = installed && !!entry.blocked;
+  if (turnedOff) {
+    actions = (
+      <Callout tone="danger" actions={<Button size="sm" onClick={onUninstall}>Remove</Button>}>
+        YouCoded turned this plugin off because it was found to be unsafe. Your settings for it are kept.
+      </Callout>
+    );
+  } else if (isInstalling) {
     actions = <DetailActions><InstallingButton /></DetailActions>;
   } else if (installed) {
     actions = (
@@ -298,7 +308,7 @@ function SkillDetail({
   const identity = (
     <DetailIdentity
       name={entry.displayName}
-      status={installed ? <Pill tone="ok">Installed</Pill> : undefined}
+      status={turnedOff ? <Pill tone="danger">Turned off</Pill> : installed ? <Pill tone="ok">Installed</Pill> : undefined}
       quickActions={
         // Favourite drives the command drawer's starred list, and the share sheet needs
         // local files — so both stay gated on installed, as before.

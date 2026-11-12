@@ -40,7 +40,7 @@ describe('the complete list of what a phone may call', () => {
     for (const name of [...OPENED_IN_R6_1, ...OPENED_IN_R6_3, 'native:startup-action']) expect(live, name).toContain(name);
     const stillRefused = [
       'theme-marketplace:refresh-registry', 'theme-marketplace:generate-preview',
-      'marketplace:get-config', 'marketplace:set-config', 'marketplace:invalidate-cache', 'marketplace:read-component',
+      'marketplace:invalidate-cache', 'marketplace:read-component',
       'chatgpt:sign-in', 'openrouter:sign-in', 'dialog:open-folder',
     ];
     for (const name of stillRefused) expect(live, name).not.toContain(name);

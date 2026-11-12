@@ -20,7 +20,7 @@ import UpdateButton from "./UpdateButton";
 import { ScanBadge, AuthorBadge } from "./TrustBadges";
 import { capabilityLine } from "./CapabilityList";
 import { ChipRow, CountChip, ThumbsChip } from "./FactChips";
-import { Chip } from "../ui";
+import { Button, Callout, Chip, Pill } from "../ui";
 import { THEME_PREVIEW_FRAME } from "../appearance/ThemeCard";
 import { CATALOG_TYPE_LABEL, isInstallableSource } from "../../../shared/catalog-types";
 
@@ -139,7 +139,12 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
   // The corner offers Update whenever one is available — except on integrations
   // (they supply their own statusBadge) and local themes, which have no
   // marketplace copy to update from.
-  const showUpdateAction = !!updateAvailable && !statusBadge && !isLocalTheme;
+  // Plugin off-switch: an installed plugin YouCoded turned off because it was found unsafe.
+  // WHY it is derived here and not passed in: the flag rides on the entry itself, so every
+  // place that draws this card (Library, Updates tab) says it the same way.
+  const turnedOff = item.kind === "skill" && !!item.entry.blocked;
+  // WHY no Update for a turned-off plugin: updating it would not switch it back on.
+  const showUpdateAction = !!updateAvailable && !statusBadge && !isLocalTheme && !turnedOff;
   const pluginStats = item.kind === "skill" ? stats.plugins[item.entry.id] : undefined;
   const themeStats = item.kind === "theme" ? stats.themes[item.entry.slug] : undefined;
   // Task 22: a theme's downloads live under themes[slug], not plugins[] — the
@@ -187,6 +192,23 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
   const hasFactChips = !!(catalog || author || typeLabel || peekChip || pluginStats || installs > 0 || likes > 0);
 
   const title = item.kind === "skill" ? item.entry.displayName : item.entry.name;
+  // The notice sits INSIDE the card it is about (design guide, "Status and notices"): one slim
+  // box at the foot, its Remove button inside at the right. The click must not also open details.
+  const turnedOffNotice = turnedOff ? (
+    <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <Callout
+        tone="danger"
+        compact
+        actions={
+          <Button size="sm" onClick={() => { if (item.kind === "skill") mp.uninstallSkill(item.entry.pluginName ?? item.entry.id).catch(() => {}); }}>
+            Remove
+          </Button>
+        }
+      >
+        Turned off because it was found to be unsafe.
+      </Callout>
+    </div>
+  ) : null;
   const themePreviewUrl = item.kind === "theme" && !themePreviewFailed ? item.entry.preview : undefined;
   // Fallback for a preview that would not load: the theme's own colours. Not a
   // screenshot, but it identifies the theme and the card stops looking broken.
@@ -231,7 +253,9 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
     // is that they're not in the marketplace.
     // Task 1: the "Update" pill is gone from this list — an available update is
     // now a real button (rendered below), not a label that did nothing.
-    const compactStatus: { text: string; tone: 'ok' | 'warn' | 'err' | 'neutral' | 'locked' } | null = statusBadge
+    const compactStatus: { text: string; tone: 'ok' | 'warn' | 'err' | 'neutral' | 'locked' } | null = turnedOff
+      ? { text: 'Turned off', tone: 'err' }
+      : statusBadge
       ? statusBadge
       : isLocalTheme
         ? { text: 'Local', tone: 'neutral' }
@@ -277,7 +301,8 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
         <div className="flex-1 min-w-0 flex flex-col gap-1">
           <div className="flex items-center gap-2 min-w-0">
             <h3 className="font-medium text-fg truncate">{title}</h3>
-            {!showUpdateAction && compactStatus && (
+            {turnedOff && <Pill tone="danger">Turned off</Pill>}
+            {!turnedOff && !showUpdateAction && compactStatus && (
               <span className={`shrink-0 text-3xs px-2 py-0.5 rounded-full ${STATUS_TONE_CLASS[compactStatus.tone]}`}>
                 {compactStatus.text}
               </span>
@@ -285,6 +310,7 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
           </div>
           {hasFactChips && <ChipRow>{factChips}</ChipRow>}
           {blurb && <p className="text-xs text-fg-2 line-clamp-2">{blurb}</p>}
+          {turnedOffNotice}
         </div>
 
         {/* Right column: status pill + inline install button. The install
@@ -414,7 +440,10 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
             vocabulary so labels like "Connected" / "Needs auth" / "Coming
             soon" can surface instead of just "Installed". */}
         <div className="flex items-center gap-1 shrink-0">
-        {statusBadge ? (
+        {turnedOff ? (
+          // Same pill as every other status label (guide "Status and notices"), in the danger tone.
+          <Pill tone="danger" className="relative z-10">Turned off</Pill>
+        ) : statusBadge ? (
           <span
             className={`relative z-10 text-3xs shrink-0 px-2 py-0.5 rounded-full ${STATUS_TONE_CLASS[statusBadge.tone]}`}
           >
@@ -468,6 +497,7 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
           only when there are any; the sentences are on the detail page. The
           numbers and contents that shared this foot are chips now (U-1). */}
       {capLine && <p className="mt-auto hidden sm:block text-2xs text-fg-dim truncate" title={capLine}>{capLine}</p>}
+      {turnedOffNotice && <div className="mt-auto">{turnedOffNotice}</div>}
       </div>
     </div>
   );

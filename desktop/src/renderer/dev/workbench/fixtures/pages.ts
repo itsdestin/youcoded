@@ -98,7 +98,7 @@ const PAINT_HTML = `<!doctype html>
   document.getElementById('opacity').oninput = function(e){ alpha = e.target.value/100; document.getElementById('opv').textContent = e.target.value+'%'; dot(); };
   document.querySelectorAll('[data-tool]').forEach(function(b){ b.onclick = function(){ setTool(b.dataset.tool); }; });
   function setTool(t){ tool = t; document.querySelectorAll('[data-tool]').forEach(function(b){ b.classList.toggle('yc-tool--on', b.dataset.tool===t); }); }
-  function fit(){ var r = paper.getBoundingClientRect(); [c,p].forEach(function(k){ k.width = r.width*devicePixelRatio; k.height = r.height*devicePixelRatio; k.getContext('2d').setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0); }); redraw(); }
+  function fit(){ if (seeded) applySeed(); var r = paper.getBoundingClientRect(); [c,p].forEach(function(k){ k.width = r.width*devicePixelRatio; k.height = r.height*devicePixelRatio; k.getContext('2d').setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0); }); redraw(); }
   function pt(e){ var r = c.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
   function draw(ctx, o){
     ctx.save(); ctx.globalAlpha = o.a; ctx.lineWidth = o.w; ctx.lineCap = ctx.lineJoin = 'round';
@@ -114,10 +114,10 @@ const PAINT_HTML = `<!doctype html>
   function redraw(){ x.clearRect(0,0,c.width,c.height); ops.forEach(function(o){ draw(x,o); }); document.getElementById('count').textContent = ops.length; document.getElementById('undo').disabled = !ops.length; document.getElementById('redo').disabled = !redo.length; }
   c.onpointerdown = function(e){ cur = { t: tool, c: color, w: size, a: alpha, p: [pt(e)] }; c.setPointerCapture(e.pointerId); };
   c.onpointermove = function(e){ if(!cur) return; cur.p.push(pt(e)); px.clearRect(0,0,p.width,p.height); draw(px, cur); };
-  c.onpointerup = c.onpointercancel = function(){ if(!cur) return; ops.push(cur); redo = []; cur = null; px.clearRect(0,0,p.width,p.height); redraw(); persist(); };
-  document.getElementById('undo').onclick = function(){ if (ops.length) { redo.push(ops.pop()); redraw(); persist(); } };
-  document.getElementById('redo').onclick = function(){ if (redo.length) { ops.push(redo.pop()); redraw(); persist(); } };
-  document.getElementById('clear').onclick = function(){ if (!ops.length) return; redo = ops.slice().reverse(); ops = []; redraw(); persist(); };
+  c.onpointerup = c.onpointercancel = function(){ if(!cur) return; seeded = false; ops.push(cur); redo = []; cur = null; px.clearRect(0,0,p.width,p.height); redraw(); persist(); };
+  document.getElementById('undo').onclick = function(){ if (ops.length) { seeded = false; redo.push(ops.pop()); redraw(); persist(); } };
+  document.getElementById('redo').onclick = function(){ if (redo.length) { seeded = false; ops.push(redo.pop()); redraw(); persist(); } };
+  document.getElementById('clear').onclick = function(){ if (!ops.length) return; seeded = false; redo = ops.slice().reverse(); ops = []; redraw(); persist(); };
   document.getElementById('save').onclick = function(){ var b = document.getElementById('save'); b.textContent = 'Saved'; setTimeout(function(){ b.textContent = 'Save as picture'; }, 1200); };
   window.addEventListener('keydown', function(e){
     if (e.target.tagName === 'INPUT') return;
@@ -125,16 +125,37 @@ const PAINT_HTML = `<!doctype html>
     var k = { b:'brush', e:'eraser', l:'line', r:'rect', o:'ellipse' }[e.key.toLowerCase()]; if (k) setTool(k);
   });
   // A little something on the paper the first time, so the studio does not open blank.
-  ops = (savedPaint && savedPaint.ops) ? savedPaint.ops : [
-    { t:'brush', c:'#3070d6', w:10, a:1, p:[[180,420],[220,300],[300,240],[400,260],[470,340],[520,440]] },
-    { t:'ellipse', c:'#e5a13a', w:8, a:1, p:[[560,140],[700,280]] },
-    { t:'rect', c:'#2f9e5b', w:6, a:.8, p:[[760,380],[960,520]] },
-    { t:'line', c:'#d63a3a', w:4, a:1, p:[[140,600],[980,600]] }
+  // WHY a scene, not four outline shapes (card #175): this is also the picture on the website's ideas wall, and a
+  // sun over green hills with a blossom tree reads as "a painting" at a glance. Fixed coordinates, no randomness,
+  // so every screenshot is identical. Drawn back to front on an 1100x700 paper: sky, sun, cloud, hills, tree.
+  function dab(c, w, x0, y0, a){ return { t:'brush', c:c, w:w, a:a||1, p:[[x0,y0]] }; }
+  function band(c, w, y){ return { t:'brush', c:c, w:w, a:1, p:[[-40,y],[1140,y]] }; }
+  var SEED = [
+    band('#bfe3f7',70,35), band('#bfe3f7',70,100), band('#cfeafa',70,165), band('#e3f4fc',70,230), band('#f1f9fd',70,295), band('#f7fbfe',70,360), band('#f7fbfe',70,425),
+    { t:'line', c:'#f2d34b', w:8, a:1, p:[[880,40],[880,70]] }, { t:'line', c:'#f2d34b', w:8, a:1, p:[[880,270],[880,300]] },
+    { t:'line', c:'#f2d34b', w:8, a:1, p:[[740,170],[770,170]] }, { t:'line', c:'#f2d34b', w:8, a:1, p:[[990,170],[1020,170]] },
+    dab('#f2b84b',150,880,170), dab('#f7dc5a',116,880,170),
+    dab('#ffffff',64,190,120,.95), dab('#ffffff',80,250,100,.95), dab('#ffffff',64,315,122,.95), dab('#ffffff',52,260,132,.95),
+    { t:'brush', c:'#7cc57f', w:110, a:1, p:[[-40,470],[200,420],[420,410],[640,450],[860,430],[1140,410]] },
+    band('#7cc57f',110,520), band('#7cc57f',110,590), band('#7cc57f',110,680),
+    { t:'brush', c:'#2f9e5b', w:120, a:1, p:[[-40,610],[250,550],[520,570],[800,530],[1140,560]] },
+    band('#2f9e5b',100,690),
+    { t:'brush', c:'#8a5a3c', w:26, a:1, p:[[330,610],[330,440]] },
+    dab('#1f7a45',130,330,390), dab('#1f7a45',110,268,440), dab('#1f7a45',110,392,440), dab('#2f9e5b',90,330,420),
+    dab('#e55d9c',16,300,380), dab('#e55d9c',16,360,400), dab('#e55d9c',16,270,440), dab('#e55d9c',16,395,445), dab('#e55d9c',16,330,350),
+    dab('#d63a3a',22,640,640), dab('#f2d34b',22,720,655), dab('#ffffff',20,800,638), dab('#e55d9c',20,880,660), dab('#f2d34b',22,970,640)
   ];
-  // The seed was drawn for an 1100-wide paper; scale it to whatever width the
-  // paper actually got (a narrower window, the rail open) so nothing is cut off.
-  (function(){ if (savedPaint && savedPaint.ops) return; var k = paper.getBoundingClientRect().width / 1100; if (k > 0 && k !== 1) ops.forEach(function(o){ o.w = Math.max(2, o.w * k); o.p = o.p.map(function(q){ return [q[0]*k, q[1]*k]; }); }); })();
+  var seeded = !(savedPaint && savedPaint.ops);
+  ops = seeded ? SEED : savedPaint.ops;
+  // The seed was drawn for an 1100-wide paper; scale it to whatever width the paper actually has (a narrower window, the rail open)
+  // so nothing is cut off. WHY re-done on every fit() until the first edit (card #175): it used to scale once at load, from whatever
+  // width the paper had at that instant, so two shots of the same page differed by a few percent. Now the size always follows the final box.
+  function applySeed(){ var k = paper.getBoundingClientRect().width / 1100; if (!(k > 0)) return; ops = SEED.map(function(o){ return { t:o.t, c:o.c, a:o.a, w:Math.max(2, o.w * k), p:o.p.map(function(q){ return [q[0]*k, q[1]*k]; }) }; }); }
+  // WHY a ResizeObserver as well as onresize: one site-picture run (card #175) was photographed with the strokes counted ("34 strokes")
+  // but the canvas still blank, because the paper took its real size after the first fit() and no window resize followed. The observer
+  // refits whenever the paper's own box changes, so the painting is always drawn at the size it is shown.
   window.onresize = fit; dot(); fit();
+  if (typeof ResizeObserver === 'function') new ResizeObserver(function(){ fit(); }).observe(paper);
 </script>
 </body></html>`;
 

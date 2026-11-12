@@ -25,6 +25,7 @@ import { useProjectWatch } from '../../../hooks/useProjectWatch';
 import { dedupeContentHits, groupContentHits, capGroups, MAX_CONTENT_ROWS, type RankableHit } from '../../../utils/content-search-ranking';
 import type { CentralIndexProject, ArtifactRecord } from '../../../../shared/artifacts/types';
 import { FOLDER_PAGE_SIZE, type FolderPage, type FolderSummary } from '../../../../shared/artifacts/folder-page';
+import { isHiddenPath } from '../hidden-files';
 import { ActiveArtifactView } from '../../artifact-views/ActiveArtifactView';
 import type { ActiveArtifactHandle, CommentsHeaderState } from '../../artifact-views/ActiveArtifactView';
 import { useArtifactContent } from '../../artifact-views/useArtifactContent';
@@ -201,9 +202,12 @@ function FilesTabImpl({
   onCurrentDirChange,
   onClearSearch,
   hidden,
+  showHidden = false,
   pvActiveId,
   artifactDispatch: dispatch,
 }: {
+  // Files filter menu's "Show hidden files" (hidden-files.ts): off, dot-named files and folders are left out.
+  showHidden?: boolean;
   project: CentralIndexProject;
   search: string;     // lifted to ProjectView — lives on the shared seg-row now
   // Multi-select type filter; EMPTY set = all types (filter popover).
@@ -468,6 +472,7 @@ function FilesTabImpl({
   // NAME only — a query matching a folder name should not surface every file
   // inside that folder. An empty `types` set means all types.
   const matchesFilters = (a: ArtifactRecord) => {
+    if (!showHidden && isHiddenPath(a.path)) return false;
     const filename = a.path.split('/').pop() ?? a.path;
     if (search && !filename.toLowerCase().includes(search.toLowerCase())) return false;
     if (types.size > 0 && !types.has(fileTypeGroup(a.path))) return false;
@@ -476,7 +481,7 @@ function FilesTabImpl({
   const filtered = useMemo(
     () => artifacts.filter(matchesFilters),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [artifacts, search, types],
+    [artifacts, search, types, showHidden],
   );
   // Re-read what is on screen: the folder (keeping as many entries as are
   // loaded) and, once a search has fetched it, the whole-project list.
@@ -642,10 +647,11 @@ function FilesTabImpl({
   // page once everything that arrived is drawn. The key is the FOLDER, never
   // the sort: re-sorting re-reads in place and must not throw the reader back
   // to the top (a regression the flat reveal once shipped).
+  // Hidden files are left out here, after paging: the listing's offsets still count every entry on disk.
   const folderEntries = useMemo<FolderEntry[]>(() => [
-    ...folderFiles.map((file) => ({ kind: 'file' as const, file })),
-    ...folderDirs.map((dir) => ({ kind: 'dir' as const, dir })),
-  ], [folderFiles, folderDirs]);
+    ...folderFiles.filter((file) => showHidden || !isHiddenPath(file.path)).map((file) => ({ kind: 'file' as const, file })),
+    ...folderDirs.filter((dir) => showHidden || !isHiddenPath(dir.name)).map((dir) => ({ kind: 'dir' as const, dir })),
+  ], [folderFiles, folderDirs, showHidden]);
   const { visible: folderVisible, hasMore: folderRevealMore, sentinelRef: folderSentinelRef } = useChunkedReveal(folderEntries, {
     resetKey: JSON.stringify(['folder', project.id, currentDir]),
     // List view scrolls INSIDE its rounded box (ListBox), not the column.
@@ -899,7 +905,7 @@ function FilesTabImpl({
       onRetry={() => loadMoreRef.current()}
     />
   );
-  const emptyHere = !flat && !folderLoading && folderError === null && loadedCount === 0 && !folderHasMore;
+  const emptyHere = !flat && !folderLoading && folderError === null && folderEntries.length === 0 && !folderHasMore;
   // Which request the loading line and the load error belong to right now.
   const loading = flat ? allLoading : folderLoading;
 

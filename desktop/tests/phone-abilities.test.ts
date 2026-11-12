@@ -114,7 +114,7 @@ describe('rate, vote, comment, report and the install count from a phone, as the
     expect(client.postReport).toHaveBeenCalledWith({ rating_user_id: 'u', rating_plugin_id: 'p', reason: 'spam' });
     expect(await phone('marketplace:install', { pluginId: 'p' })).toMatchObject({ reply: true });
     expect(client.postInstall).toHaveBeenCalledWith('p');
-    for (const name of ['marketplace:get-config', 'marketplace:set-config', 'marketplace:invalidate-cache', 'marketplace:read-component']) {
+    for (const name of ['marketplace:invalidate-cache', 'marketplace:read-component']) {
       expect(await phone(name, {}), name).toEqual(refusalOf(name));
     }
   });

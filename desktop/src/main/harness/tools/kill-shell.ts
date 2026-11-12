@@ -3,7 +3,7 @@
 // a run the model stopped itself (see NativeSessionHost.onShellExit).
 import { z } from 'zod';
 import { defineTool } from './registry';
-import { formatElapsed, stateText } from '../shell-registry';
+import { formatElapsed, stateText, restoredStateText } from '../shell-registry';
 
 export const KillShellTool = defineTool({
   name: 'KillShell',
@@ -17,8 +17,29 @@ export const KillShellTool = defineTool({
   async execute(args, ctx) {
     const reg = ctx.shells;
     const run = reg?.get(args.shell_id);
+    // WHY (card #220): a command from before an app restart is not in `get()` but is a
+    // real command — say its true state, and stop it if it is verifiably still alive.
+    const old = !run ? reg?.getRestored(args.shell_id) : undefined;
+    if (reg && old) {
+      // WHY its own wording (card #220): a command we only know may still be alive must not read
+      // "is not running" — the model would take that as "done". It is never signalled either.
+      if (old.maybeStillRunning) return { text: `${old.shellId} cannot be stopped from here — ${restoredStateText(old)}.`, isError: true };
+      if (old.status !== 'running') return { text: `${old.shellId} is not running — ${restoredStateText(old)}.`, isError: true };
+      const res = await reg.kill(old.shellId, 'assistant');
+      const after = reg.getRestored(old.shellId);
+      // WHY check the result: the registry refuses (ok: false) when it cannot prove the process
+      // is still the same one; saying "Stopped" then would be a lie, so report the true state.
+      if (!res.ok) return { text: `${old.shellId} ${after && after.status !== 'running' ? 'is not running' : 'could not be stopped'} — ${restoredStateText(after ?? old)}.`, isError: true };
+      const head = after && after.status !== 'running'
+        ? `Stopped ${old.shellId} (was: ${old.command}).`
+        : `Sent the stop signal to ${old.shellId} (was: ${old.command}), but it had not exited after 5 s — it should be gone shortly.`;
+      return { text: `${head} It started before the app was restarted, so its output was not being captured.${old.logPath ? ` Full log: ${old.logPath}` : ''}` };
+    }
     if (!reg || !run) {
-      const running = reg?.list().filter((r) => r.status === 'running').map((r) => r.shellId) ?? [];
+      const running = [
+        ...(reg?.list().filter((r) => r.status === 'running').map((r) => r.shellId) ?? []),
+        ...(reg?.restoredViews().filter((r) => r.status === 'running').map((r) => r.shellId) ?? []),
+      ];
       return { text: `No background command ${args.shell_id}. Running: ${running.length ? running.join(', ') : 'none'}.`, isError: true };
     }
     if (run.status !== 'running') {
