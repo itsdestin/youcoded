@@ -5,7 +5,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { applyClaudeCodeWidths } from '../../shared/terminal-widths';
 import { WebglAddon } from '@xterm/addon-webgl';
-import { releaseWebgl } from './terminal-webgl';
+import { releaseWebgl, claimWebglSlot, releaseWebglSlot, noteWebglShown, webglSlotFree, type WebglHolder } from './terminal-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { usePtyOutput } from '../hooks/useIpc';
 import { usePtyRawBytes } from '../hooks/usePtyRawBytes';
@@ -87,12 +87,13 @@ function TerminalView({ sessionId, visible }: Props) {
   // Re-attach helper exposed across effects so the theme effect can recover
   // WebGL using the same construction + onContextLoss handler shape as the
   // mount effect (with the shared retry-cap counter).
-  const attachWebglRef = useRef<(() => void) | null>(null);
-  // WHY (card 106): the WebGL layer exists only while the terminal is shown — see
-  // terminal-webgl.ts. The visibility layout effect calls these two; they live in
-  // the mount effect so they share its retry counter.
+  const attachWebglRef = useRef<((mayTakeHiddenLayer: boolean) => boolean) | null>(null);
+  // WHY (card 106): the window's WebGL layers stay within the browser's limit of 16 —
+  // see terminal-webgl.ts. The visibility layout effect calls showWebgl; releaseLayer
+  // is what the pool calls to take this terminal's layer back. Both live in the mount
+  // effect so they share its retry counter.
   const showWebglRef = useRef<(() => boolean) | null>(null);
-  const hideWebglRef = useRef<(() => void) | null>(null);
+  const releaseLayerRef = useRef<(() => void) | null>(null);
   // Set by the visibility layout effect: did THIS show build a brand-new WebGL layer?
   // The glyph-atlas heal below skips a show that did (see the WHY there).
   const freshLayerOnShowRef = useRef(false);
@@ -165,10 +166,10 @@ function TerminalView({ sessionId, visible }: Props) {
       // Ensure WebGL is attached (may have been disposed by a previous version
       // or by a prior context loss). Delegates to attachWebgl from the mount
       // effect so we share the same onContextLoss recovery + retry cap.
-      // WHY only while shown (card 106): a hidden terminal holds no WebGL context;
-      // it gets one, with the new colours, when it is shown.
-      if (!webglRef.current && visibleRef.current) {
-        attachWebglRef.current?.();
+      // WHY the argument (card 106): a shown terminal may take a hidden one's layer if the
+      // window is at its WebGL limit; a hidden one rebuilds only into a free slot.
+      if (!webglRef.current) {
+        attachWebglRef.current?.(visibleRef.current);
       }
     });
   }, [activeTheme, xtermBackground]);
@@ -276,17 +277,39 @@ function TerminalView({ sessionId, visible }: Props) {
     const RETRY_RESET_MS = 30 * 60 * 1000;
     let webglContextLossRetries = 0;
     let lastContextLossAt = 0;
-    /** True when a new layer was built and loaded by this call. */
-    const attachWebgl = (): boolean => {
+    // WHY a holder (card 106): this terminal's place in the window's WebGL pool
+    // (terminal-webgl.ts). The pool asks it whether it is on screen and, when the
+    // window is at its limit and another terminal is being shown, takes its layer back.
+    const holder: WebglHolder = {
+      isVisible: () => visibleRef.current,
+      evict: () => releaseLayer(),
+    };
+    /** Give this terminal's layer back now (pool eviction, or the terminal closing). */
+    const releaseLayer = () => {
+      const webgl = webglRef.current;
+      releaseWebglSlot(holder);
+      if (!webgl) return;
+      webglRef.current = null;   // first, so a late loss event for this layer is ignored
+      releaseWebgl(webgl);
+    };
+    /**
+     * Build a WebGL layer; true when one was built by this call.
+     * `mayTakeHiddenLayer`: at the window's limit, take the least recently shown hidden
+     * terminal's layer (only for a terminal being shown); otherwise build only into a free slot.
+     */
+    const attachWebgl = (mayTakeHiddenLayer: boolean): boolean => {
       const term = terminalRef.current ?? terminal;
       if (!term || webglRef.current) return false;   // one layer at a time
+      if (!mayTakeHiddenLayer && !webglSlotFree()) return false;
+      claimWebglSlot(holder);
       try {
         const webgl = new WebglAddon();
         webgl.onContextLoss(() => {
-          // A layer this terminal already let go of (hidden — releaseWebgl) is not a loss to recover from.
+          // A layer this terminal already gave back (releaseLayer) is not a loss to recover from.
           if (webglRef.current !== webgl) return;
           webgl.dispose();
           webglRef.current = null;
+          releaseWebglSlot(holder);   // a lost context no longer counts against the limit
           const now = Date.now();
           if (now - lastContextLossAt > RETRY_RESET_MS) {
             webglContextLossRetries = 0;
@@ -298,8 +321,8 @@ function TerminalView({ sessionId, visible }: Props) {
             return;
           }
           webglContextLossRetries += 1;
-          // A terminal hidden while its loss was pending gets a fresh layer when it is shown, not now.
-          if (visibleRef.current) attachWebgl();
+          // As before, rebuilt at once — a hidden terminal only into a free slot (card 106).
+          attachWebgl(visibleRef.current);
           // Repaint visible cells from the buffer so corrupted glyphs from
           // the disposed atlas are replaced immediately (don't wait for the
           // next resize/scroll).
@@ -310,30 +333,30 @@ function TerminalView({ sessionId, visible }: Props) {
         return true;
       } catch {
         // Falls back to DOM renderer if WebGL unavailable
+        releaseWebglSlot(holder);
         return false;
       }
     };
-    // WHY only when shown (card 106): the browser allows a page 16 WebGL contexts and
-    // kills the oldest past that, so a hidden terminal — every chat in chat view, every
-    // other chat in terminal view — holds none. Its xterm, text buffer, size and
-    // write/acknowledge path are untouched (the prompt detector, attention classifier
-    // and menu drivers read that buffer); only the drawing layer comes and goes.
-    // A hidden terminal falls back to xterm's DOM drawing, which the render pause
-    // keeps idle.
-    if (visibleRef.current) attachWebgl();
+    // WHY the pool (card 106): the browser allows a page 16 WebGL contexts and kills the
+    // oldest past that. Below the limit this is exactly the old behaviour — a layer built
+    // at mount and kept while hidden. At the limit, a terminal mounted hidden starts
+    // without one (DOM drawing, kept idle by the render pause) and gets one when shown,
+    // taking it from the hidden terminal shown least recently. The xterm, its buffer,
+    // size and write/acknowledge path never change (the prompt detector, attention
+    // classifier and menu drivers read that buffer); only the drawing layer moves.
+    attachWebgl(visibleRef.current);
     attachWebglRef.current = attachWebgl;
     showWebglRef.current = () => {
+      noteWebglShown(holder);
+      if (webglRef.current) return false;   // kept its layer: the usual case
       // After three losses in a row the terminal stays on DOM drawing (the rule
       // above); showing it again must not start a fourth attempt inside that window.
       if (webglContextLossRetries >= 3 && Date.now() - lastContextLossAt <= RETRY_RESET_MS) return false;
-      return attachWebgl();
+      const built = attachWebgl(true);
+      if (built) noteWebglShown(holder);
+      return built;
     };
-    hideWebglRef.current = () => {
-      const webgl = webglRef.current;
-      if (!webgl) return;
-      webglRef.current = null;   // first, so a late loss event for this layer is ignored
-      releaseWebgl(webgl);
-    };
+    releaseLayerRef.current = releaseLayer;
 
     // Clipboard keys (Ctrl+C copy / Ctrl+V paste) — extracted to
     // terminal-key-handler.ts. The Ctrl+V branch preventDefaults the keydown
@@ -662,10 +685,11 @@ function TerminalView({ sessionId, visible }: Props) {
       // the disposed terminal between unmount and remount.
       attachWebglRef.current = null;
       // WHY release, not just drop the ref: a closed chat's context goes back to the
-      // browser now, not whenever garbage collection frees its canvas (card 106).
-      hideWebglRef.current?.();
+      // browser now, not whenever garbage collection frees its canvas, and its pool
+      // slot is freed (card 106).
+      releaseLayer();
       showWebglRef.current = null;
-      hideWebglRef.current = null;
+      releaseLayerRef.current = null;
       webglRef.current = null;
       renderPause?.dispose();
       renderPauseRef.current = null;
@@ -683,19 +707,12 @@ function TerminalView({ sessionId, visible }: Props) {
   // sees the screen as it was when the pane was hidden. The buffer is never
   // paused — writes below keep landing in it, which the prompt detector reads.
   useLayoutEffect(() => {
-    // WHY the order (card 106): shown → build the WebGL layer BEFORE drawing resumes, so the one
-    // repaint setHidden(false) queues is drawn by it, in this same frame; hidden → pause drawing
-    // FIRST, so xterm's DOM fallback created by the release never draws while hidden.
+    // WHY first (card 106): a shown terminal that has no WebGL layer (the window was at its limit)
+    // gets one BEFORE drawing resumes, so the one repaint setHidden(false) queues is drawn by it,
+    // in this same frame. A terminal that kept its layer only becomes the most recently shown.
+    // Hiding never releases a layer: only the pool does, when the limit forces it.
     freshLayerOnShowRef.current = visible ? (showWebglRef.current?.() ?? false) : false;
     renderPauseRef.current?.setHidden(!visible);
-    if (!visible) {
-      // WHY a microtask, not now: a chat switch hides one terminal and shows another in the same
-      // commit, in tree order. Every terminal's layer shares ONE rasterised glyph sheet, which is
-      // thrown away when its last user lets go. Releasing after this commit's layout effects lets
-      // the terminal being shown join the warm sheet first instead of re-drawing every letter
-      // shape from scratch. Re-checked: a terminal shown again before then keeps its layer.
-      queueMicrotask(() => { if (!visibleRef.current) hideWebglRef.current?.(); });
-    }
     // Shown again: write whatever the hidden-terminal allowance held back, so it is current at once.
     if (visible) {
       // SWITCH MARKS: how much the hidden backlog held, so the hitch recorder can report it, and a way to be told when xterm has
@@ -757,11 +774,11 @@ function TerminalView({ sessionId, visible }: Props) {
       // mount would wipe it for every already-open terminal — turning "open a
       // new session" into a re-rasterize for all of them. A brand-new
       // terminal has nothing to heal anyway.
-      // WHY not after a fresh layer (card 106): a terminal's WebGL layer is now built new
-      // each time it is shown, with a brand-new context and texture — the bad long-lived
-      // texture this heals cannot exist yet, and clearing would only make every glyph be
-      // drawn twice on the switch. A show
-      // that kept its old layer, or is on DOM drawing, still heals exactly as before.
+      // WHY not after a fresh layer (card 106): above 16 chats a terminal shown after giving
+      // its layer back builds a new one, with a brand-new context and texture — the bad
+      // long-lived texture this heals cannot exist yet, and clearing would only make every
+      // glyph be drawn twice on that switch. A show that kept its layer (always, at 16 chats
+      // or fewer), or is on DOM drawing, heals exactly as before.
       if (wasVisible === false && !freshLayerOnShowRef.current) {
         terminalRef.current.clearTextureAtlas();
         // WHY: rig instrument; the heal costs every open terminal a

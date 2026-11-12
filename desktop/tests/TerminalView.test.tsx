@@ -148,6 +148,7 @@ import * as platform from '../src/renderer/platform';
 import { usePtyOutput } from '../src/renderer/hooks/useIpc';
 import { usePtyRawBytes } from '../src/renderer/hooks/usePtyRawBytes';
 import { getAtlasClears } from '../src/renderer/hooks/terminal-registry';
+import { webglLayerCount, WEBGL_LAYER_LIMIT } from '../src/renderer/components/terminal-webgl';
 import { renderTerminalScreen } from '../src/renderer/dev/workbench/fixtures/terminal-screen';
 import { applyThemeToDom } from '../src/renderer/themes/theme-engine';
 import type { ThemeDefinition } from '../src/renderer/themes/theme-types';
@@ -230,18 +231,10 @@ describe('glyph-atlas heal', () => {
   });
 
   describe('TerminalView glyph-atlas heal — visibility', () => {
-    // A show normally builds a brand-new WebGL layer (fresh context, fresh texture — nothing to
-    // heal; see the next test). The heal is for a show that did NOT: here WebGL cannot be built,
-    // the same path as a terminal kept on DOM drawing after repeated context losses.
+    // A show that builds a brand-new WebGL layer skips the heal (fresh context, fresh texture —
+    // pinned in 'the WebGL layer pool' below). These run with WebGL unavailable, so no show here
+    // builds one: the heal path on its own, as on a terminal kept on DOM drawing.
     beforeEach(() => { webglUnavailable = true; });
-
-    it('a show that built a fresh WebGL layer does not clear the shared atlas', () => {
-      webglUnavailable = false;
-      const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
-      rerender(<TerminalView sessionId="s1" visible={true} />);
-      expect(webglInstances.length).toBeGreaterThan(0);
-      expect(clearTextureAtlasSpy).not.toHaveBeenCalled();
-    });
 
     it('clears the texture atlas when the terminal becomes visible', () => {
       const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
@@ -330,8 +323,8 @@ describe('glyph-atlas heal', () => {
   // the counter moves without a clear, it over-reports. Both sites are pinned to move
   // in lockstep with the clearTextureAtlas spy.
   describe('TerminalView glyph-atlas heal — rig counter', () => {
-    // A visibility heal happens only on a show that built no fresh WebGL layer (see the
-    // visibility section above), so these run on that path.
+    // A visibility heal is skipped on a show that built a fresh WebGL layer (see the
+    // visibility section above), so these run with no layer ever built.
     beforeEach(() => { webglUnavailable = true; });
 
     it('counts every visibility heal, one for one with clearTextureAtlas', () => {
@@ -1025,14 +1018,17 @@ describe('program size when the chrome over the terminal changes', () => {
   });
 });
 
-// The browser allows a page 16 WebGL contexts and kills the oldest past that, so a terminal
-// holds its WebGL layer only while shown (terminal-webgl.ts — why). Its xterm and buffer are
-// never rebuilt: only the drawing layer comes and goes.
-describe('the WebGL layer follows visibility', () => {
+
+// The browser allows a page 16 WebGL contexts and kills the oldest past that. The window's
+// terminals share a pool of 16 layers (terminal-webgl.ts — why): below the limit nothing
+// changes; at the limit a terminal being shown takes the layer of the hidden terminal shown
+// least recently. The xterm and its buffer are never rebuilt: only the drawing layer moves.
+describe('the WebGL layer pool', () => {
   beforeEach(() => {
     webglInstances.length = 0;
     terminalInstances.length = 0;
     writeSpy.mockReset();
+    clearTextureAtlasSpy.mockReset();
     vi.mocked(usePtyOutput).mockReset();
     (globalThis as any).window.claude = {
       session: { signalReady: vi.fn(), sendInput: vi.fn(), resize: vi.fn() },
@@ -1040,59 +1036,81 @@ describe('the WebGL layer follows visibility', () => {
   });
   afterEach(() => {
     cleanup();
-    vi.useRealTimers();
     delete (globalThis as any).window.claude;
   });
   const lossHandler = (webgl: any) => webgl.onContextLoss.mock.calls[0][0] as () => void;
+  /** Mount `n` hidden terminals (sessions f0, f1, …), each taking a layer while there is room. */
+  const fillHidden = (n: number) => render(<>{Array.from({ length: n }, (_, i) => <TerminalView key={i} sessionId={`f${i}`} visible={false} />)}</>);
 
-  it('a terminal mounted hidden builds no WebGL layer', () => {
-    render(<TerminalView sessionId="s1" visible={false} />);
-    expect(webglInstances).toHaveLength(0);
-  });
-
-  it('a terminal mounted visible builds exactly one, as before', () => {
-    const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
-    rerender(<TerminalView sessionId="s1" visible={true} />);
-    expect(webglInstances).toHaveLength(1);
-    expect(terminalInstances.at(-1).loadAddon).toHaveBeenCalledWith(webglInstances[0]);
-  });
-
-  it('showing a hidden terminal attaches one layer, once', () => {
+  it('below the limit, a terminal mounted hidden builds its layer at mount and keeps it while hidden (as before)', () => {
     const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
-    rerender(<TerminalView sessionId="s1" visible={true} />);
-    rerender(<TerminalView sessionId="s1" visible={true} />);
     expect(webglInstances).toHaveLength(1);
-    expect(terminalInstances.at(-1).loadAddon).toHaveBeenCalledWith(webglInstances[0]);
-  });
-
-  it('hiding it disposes the layer and hands its context back; showing again builds a fresh one', async () => {
-    const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
-    const first = webglInstances[0];
-    rerender(<TerminalView sessionId="s1" visible={false} />);
-    await Promise.resolve();   // the release runs right after the commit (see the switch test below)
-    expect(first.dispose).toHaveBeenCalledTimes(1);
-    expect(first.loseContext).toHaveBeenCalledTimes(1);
     rerender(<TerminalView sessionId="s1" visible={true} />);
-    expect(webglInstances).toHaveLength(2);
-    expect(webglInstances[1].dispose).not.toHaveBeenCalled();
-    // The xterm itself was never rebuilt: same instance, same buffer, same scrollback.
-    expect(terminalInstances).toHaveLength(1);
+    rerender(<TerminalView sessionId="s1" visible={false} />);
+    expect(webglInstances).toHaveLength(1);
+    expect(webglInstances[0].dispose).not.toHaveBeenCalled();
+    expect(webglLayerCount()).toBe(1);
   });
 
-  it('closing the chat hands the context back too', () => {
+  it('never holds more than 16 layers: the 17th chat mounted hidden starts without one', () => {
+    fillHidden(WEBGL_LAYER_LIMIT);
+    render(<TerminalView sessionId="extra" visible={false} />);
+    expect(webglInstances).toHaveLength(WEBGL_LAYER_LIMIT);
+    expect(webglLayerCount()).toBe(WEBGL_LAYER_LIMIT);
+  });
+
+  it('showing a terminal without a layer takes the one of the hidden terminal shown least recently', () => {
+    const fill = fillHidden(WEBGL_LAYER_LIMIT);
+    // f0 was shown longest ago once f1..f15 have each been shown since.
+    const order = Array.from({ length: WEBGL_LAYER_LIMIT }, (_, i) => i);
+    const show = (active: number | null) => fill.rerender(<>{order.map((i) => <TerminalView key={i} sessionId={`f${i}`} visible={i === active} />)}</>);
+    for (const i of order) show(i);
+    show(null);
+    const { rerender } = render(<TerminalView sessionId="extra" visible={false} />);
+    rerender(<TerminalView sessionId="extra" visible={true} />);
+    const f0 = webglInstances[0];
+    expect(f0.dispose).toHaveBeenCalledTimes(1);
+    expect(f0.loseContext).toHaveBeenCalledTimes(1);       // handed back to the browser at once
+    expect(webglInstances.slice(1, WEBGL_LAYER_LIMIT).every((w) => !w.dispose.mock.calls.length)).toBe(true);
+    expect(webglInstances).toHaveLength(WEBGL_LAYER_LIMIT + 1);
+    expect(terminalInstances.at(-1).loadAddon).toHaveBeenCalledWith(webglInstances.at(-1));
+    expect(webglLayerCount()).toBe(WEBGL_LAYER_LIMIT);
+  });
+
+  it('a show that built a fresh layer skips the atlas heal; one that kept its layer heals as before', () => {
+    fillHidden(WEBGL_LAYER_LIMIT);
+    const { rerender } = render(<TerminalView sessionId="extra" visible={false} />);
+    rerender(<TerminalView sessionId="extra" visible={true} />);      // fresh layer, fresh texture
+    expect(clearTextureAtlasSpy).not.toHaveBeenCalled();
+    rerender(<TerminalView sessionId="extra" visible={false} />);
+    rerender(<TerminalView sessionId="extra" visible={true} />);      // kept its layer
+    expect(clearTextureAtlasSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a visible terminal\'s layer is never taken: past the limit a new one is built anyway, as before', () => {
+    render(<>{Array.from({ length: WEBGL_LAYER_LIMIT }, (_, i) => <TerminalView key={i} sessionId={`v${i}`} visible={true} />)}</>);
+    const { rerender } = render(<TerminalView sessionId="extra" visible={false} />);
+    rerender(<TerminalView sessionId="extra" visible={true} />);
+    expect(webglInstances).toHaveLength(WEBGL_LAYER_LIMIT + 1);
+    expect(webglInstances.every((w) => !w.dispose.mock.calls.length)).toBe(true);
+  });
+
+  it('closing a chat hands its context back and frees its slot', () => {
     const { unmount } = render(<TerminalView sessionId="s1" visible={true} />);
     unmount();
     expect(webglInstances[0].loseContext).toHaveBeenCalledTimes(1);
+    expect(webglLayerCount()).toBe(0);
   });
 
-  it('PTY output written while hidden still lands in the buffer, with no layer built', () => {
-    render(<TerminalView sessionId="s1" visible={false} />);
+  it('PTY output written to a terminal with no layer still lands in its buffer', () => {
+    fillHidden(WEBGL_LAYER_LIMIT);
+    render(<TerminalView sessionId="extra" visible={false} />);
     (vi.mocked(usePtyOutput).mock.calls.at(-1)![1] as (d: string) => void)('Do you trust the files in this folder?');
     expect(writeSpy).toHaveBeenCalledWith('Do you trust the files in this folder?', expect.any(Function));
-    expect(webglInstances).toHaveLength(0);
+    expect(webglInstances).toHaveLength(WEBGL_LAYER_LIMIT);
   });
 
-  it('a lost context while shown is rebuilt and the screen repainted (the recovery path is unchanged)', () => {
+  it('a lost context is rebuilt and the screen repainted (the recovery path is unchanged)', () => {
     render(<TerminalView sessionId="s1" visible={true} />);
     const term = terminalInstances.at(-1);
     term.refresh.mockClear();
@@ -1100,6 +1118,7 @@ describe('the WebGL layer follows visibility', () => {
     expect(webglInstances[0].dispose).toHaveBeenCalled();
     expect(webglInstances).toHaveLength(2);
     expect(term.refresh).toHaveBeenCalledWith(0, 23);
+    expect(webglLayerCount()).toBe(1);
   });
 
   it('after three losses in a row it stays on plain drawing, and showing it again does not retry', () => {
@@ -1108,48 +1127,20 @@ describe('the WebGL layer follows visibility', () => {
     expect(webglInstances).toHaveLength(4);       // the first plus three retries
     lossHandler(webglInstances.at(-1))();          // a fourth loss: give up
     expect(webglInstances).toHaveLength(4);
+    expect(webglLayerCount()).toBe(0);
     rerender(<TerminalView sessionId="s1" visible={false} />);
     rerender(<TerminalView sessionId="s1" visible={true} />);
     expect(webglInstances).toHaveLength(4);
   });
 
-  it('a loss event from a layer already released while hidden is ignored', async () => {
-    const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
-    const first = webglInstances[0];
-    rerender(<TerminalView sessionId="s1" visible={false} />);
-    await Promise.resolve();
-    lossHandler(first)();
-    expect(webglInstances).toHaveLength(1);       // nothing rebuilt for a hidden terminal
-    expect(first.dispose).toHaveBeenCalledTimes(1);
-  });
-
-  // A chat switch hides one terminal and shows another in one commit. All layers share one
-  // rasterised glyph sheet, dropped when its last user lets go — so the shown terminal must take
-  // its layer BEFORE the hidden one releases, or every letter shape is drawn again from scratch.
-  it('on a switch, the terminal being shown builds its layer before the hidden one releases', async () => {
-    const order: string[] = [];
-    const Pair = ({ active }: { active: 'a' | 'b' }) => (
-      <>
-        <TerminalView sessionId="a" visible={active === 'a'} />
-        <TerminalView sessionId="b" visible={active === 'b'} />
-      </>
-    );
-    const { rerender } = render(<Pair active="a" />);
-    const a = webglInstances[0];
-    a.dispose.mockImplementation(() => order.push('a released'));
-    const built = webglInstances.length;
-    rerender(<Pair active="b" />);
-    if (webglInstances.length > built) order.push('b built');
-    await Promise.resolve();
-    expect(order).toEqual(['b built', 'a released']);
-  });
-
-  it('a terminal shown again before the release keeps its layer (no rebuild)', async () => {
-    const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
-    rerender(<TerminalView sessionId="s1" visible={false} />);
-    rerender(<TerminalView sessionId="s1" visible={true} />);
-    await Promise.resolve();
-    expect(webglInstances).toHaveLength(1);
-    expect(webglInstances[0].dispose).not.toHaveBeenCalled();
+  it('a loss event from a layer the pool already took back is ignored', () => {
+    const fill = fillHidden(WEBGL_LAYER_LIMIT);
+    const f0 = webglInstances[0];
+    const { rerender } = render(<TerminalView sessionId="extra" visible={false} />);
+    rerender(<TerminalView sessionId="extra" visible={true} />);    // takes a hidden layer (all equally old: f0 first)
+    expect(f0.dispose).toHaveBeenCalledTimes(1);
+    lossHandler(f0)();
+    expect(webglInstances).toHaveLength(WEBGL_LAYER_LIMIT + 1);   // nothing rebuilt for the hidden terminal
+    fill.unmount();
   });
 });

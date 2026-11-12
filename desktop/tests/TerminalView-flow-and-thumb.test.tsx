@@ -108,13 +108,17 @@ describe('TerminalView acknowledges what xterm drew', () => {
     expect(ackSpy.mock.calls).toEqual([['s1', 5], ['s1', 7]]);
   });
 
-  // A hidden terminal holds no WebGL layer (terminal-webgl.ts — the 16-context limit), but its xterm
-  // still parses every write, so the program's brake keeps getting answers from it.
-  it('a hidden terminal, which holds no WebGL layer, still acknowledges what it parsed', async () => {
+  // Past 16 chats a hidden terminal can be left with no WebGL layer (terminal-webgl.ts — the browser's
+  // limit), but its xterm still parses every write, so the program's brake keeps getting answers from it.
+  it('a hidden terminal with no WebGL layer still acknowledges what it parsed', async () => {
     writeSpy.mockImplementation((_d: string, cb?: () => void) => { cb?.(); });
     const { WebglAddon } = await import('@xterm/addon-webgl');
     vi.mocked(WebglAddon).mockClear();
+    const pool = await import('../src/renderer/components/terminal-webgl');
+    // The window is at its limit: a terminal mounted hidden starts without a layer.
+    const full = vi.spyOn(pool, 'webglSlotFree').mockReturnValue(false);
     render(<TerminalView sessionId="s1" visible={false} />);
+    full.mockRestore();
     onOutput!('hello');
     await vi.waitFor(() => expect(ackSpy.mock.calls).toEqual([['s1', 5]]));
     expect(writeSpy).toHaveBeenCalledWith('hello', expect.any(Function));
