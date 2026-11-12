@@ -4,6 +4,7 @@
  */
 
 // Type-only, plus table-error-flag (one tiny value; imported from backend-contract it would pull the whole contract into the Android bundle — WHY 2026-09-30 one-core R3-3).
+import { rememberAttachmentPreview } from './utils/remote-attachment-previews';
 import type { VoiceReadiness } from '../shared/voice-types';
 import { isAndroidAppPage } from './android-page';
 import { isConnectionAllowed, TAILSCALE_ONLY_MESSAGE } from '../shared/cleartext-hosts';
@@ -2149,7 +2150,11 @@ async function pickAndUploadFiles(): Promise<string[]> {
         size: file.size,
       });
       // WHY (2026-10-01 one-core R3-SEC): a refusal (file over the size cap) now comes back as a sentence; show it instead of dropping the file silently.
-      if (result?.path) paths.push(result.path); else if (typeof result?.error === 'string') announce(result.error, 5000);
+      if (result?.path) {
+        paths.push(result.path);
+        // Card #194: keep the browser's own copy of a picture so the attachment card can preview it (see utils/remote-attachment-previews.ts).
+        if (file.type.startsWith('image/')) rememberAttachmentPreview(result.path, file);
+      } else if (typeof result?.error === 'string') announce(result.error, 5000);
     } catch (err) {
       console.error('Failed to upload file:', file.name, err);
     }
