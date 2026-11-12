@@ -5,7 +5,10 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { applyClaudeCodeWidths } from '../../shared/terminal-widths';
 import { WebglAddon } from '@xterm/addon-webgl';
-import { releaseWebgl, claimWebglSlot, releaseWebglSlot, noteWebglShown, webglSlotFree, type WebglHolder } from './terminal-webgl';
+import {
+  releaseWebgl, claimWebglSlot, releaseWebglSlot, noteWebglShown, webglSlotFree, type WebglHolder,
+  noteWebglWorks, webglWorksHere, rememberWebglCell, webglCellFor,
+} from './terminal-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { usePtyOutput } from '../hooks/useIpc';
 import { usePtyRawBytes } from '../hooks/usePtyRawBytes';
@@ -330,6 +333,7 @@ function TerminalView({ sessionId, visible }: Props) {
         });
         term.loadAddon(webgl);
         webglRef.current = webgl;
+        noteWebglWorks();   // a terminal without a layer in this window will get one when shown (sizingCell — why)
         return true;
       } catch {
         // Falls back to DOM renderer if WebGL unavailable
@@ -346,12 +350,13 @@ function TerminalView({ sessionId, visible }: Props) {
     // classifier and menu drivers read that buffer); only the drawing layer moves.
     attachWebgl(visibleRef.current);
     attachWebglRef.current = attachWebgl;
+    // After three losses in a row the terminal stays on DOM drawing (the rule above).
+    const gaveUpWebgl = () => webglContextLossRetries >= 3 && Date.now() - lastContextLossAt <= RETRY_RESET_MS;
     showWebglRef.current = () => {
       noteWebglShown(holder);
       if (webglRef.current) return false;   // kept its layer: the usual case
-      // After three losses in a row the terminal stays on DOM drawing (the rule
-      // above); showing it again must not start a fourth attempt inside that window.
-      if (webglContextLossRetries >= 3 && Date.now() - lastContextLossAt <= RETRY_RESET_MS) return false;
+      // Showing it again must not start a fourth attempt inside that window.
+      if (gaveUpWebgl()) return false;
       const built = attachWebgl(true);
       if (built) noteWebglShown(holder);
       return built;
@@ -467,8 +472,33 @@ function TerminalView({ sessionId, visible }: Props) {
     let basis: SizeBasis | null = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FitAddon reads the same private field
     const cellSize = (): { width: number; height: number } | undefined => (terminal as any)._core?._renderService?.dimensions?.css?.cell;
-    const basisFor = (cols: number): SizeBasis => {
+    /** The character measure and zoom a cell size depends on (key for the remembered WebGL cell). */
+    const cellKey = (): string | null => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- xterm's private char measure (kept in its minified build)
+      const ch = (terminal as any)._core?._charSizeService;
+      return ch?.width > 0 && ch?.height > 0 ? `${ch.width}x${ch.height}@${window.devicePixelRatio || 1}` : null;
+    };
+    /**
+     * The cell to size a HIDDEN phone terminal's program by: the one its drawing will measure once shown.
+     * WHY (card 106 review): past 16 chats a hidden terminal can be without a WebGL layer, and DOM drawing measures a
+     * slightly wider cell than the layer it gets back when shown (terminal-webgl.ts, rememberWebglCell — why). With a
+     * layer this is the live cell, and it is remembered for the others. Without one, it is the remembered WebGL cell —
+     * or nothing (no hidden sizing, the program keeps its size) when none was measured at this font and zoom yet.
+     * DOM's own cell is used only where DOM is what the terminal will show with: no WebGL in this window at all, or
+     * this terminal gave up on it after repeated context losses.
+     */
+    const sizingCell = (): { width: number; height: number } | undefined => {
       const cell = cellSize();
+      if (webglRef.current) {
+        const key = cellKey();
+        if (key && cell) rememberWebglCell(key, cell);
+        return cell;
+      }
+      if (!webglWorksHere() || gaveUpWebgl()) return cell;
+      const key = cellKey();
+      return key ? webglCellFor(key) : undefined;
+    };
+    const basisFor = (cols: number, cell = cellSize()): SizeBasis => {
       return { winW: window.innerWidth, winH: window.innerHeight, cellW: cell?.width ?? 0, cellH: cell?.height ?? 0, cols };
     };
     /** Slide the grid up by however much its rows overhang its box (0 when they fit). keyboard.css adds it to the lift. */
@@ -484,7 +514,7 @@ function TerminalView({ sessionId, visible }: Props) {
     };
     const proposeHidden = (el: HTMLElement) => {
       const host = el.parentElement?.parentElement;
-      const cell = cellSize();
+      const cell = sizingCell();
       if (!host || !terminal.element || !cell) return;
       const cs = getComputedStyle(el);
       const xs = getComputedStyle(terminal.element);
@@ -499,9 +529,9 @@ function TerminalView({ sessionId, visible }: Props) {
       if (!size) return;
       // Same window and columns as the size already decided: keep it. The guess uses a remembered (or chat view's)
       // bottom inset, so it can be a row or two off the real fit; that is not worth a redraw.
-      if (keepProgramSize(basis, basisFor(size.cols))) return;
+      if (keepProgramSize(basis, basisFor(size.cols, cell))) return;
       if (terminal.cols !== size.cols || terminal.rows !== size.rows) terminal.resize(size.cols, size.rows);
-      basis = basisFor(size.cols);
+      basis = basisFor(size.cols, cell);
       queueSize(size.cols, size.rows);
     };
     const queueSize = (cols: number, rows: number) => {
@@ -531,6 +561,8 @@ function TerminalView({ sessionId, visible }: Props) {
         // Touch screen, same window, same columns: only the chrome over the terminal moved (a second line in the
         // message box, the first show after a hidden guess). Keep the program's size — a resize would make Claude Code
         // print lines twice — and slide the grid so its last rows stay above the box (terminal-size-lock.ts).
+        // A shown phone terminal (it has its layer) remembers the WebGL cell for hidden ones without (sizingCell).
+        if (holdRowsOnTouch) sizingCell();
         const proposed = holdRowsOnTouch ? fitAddon.proposeDimensions() : undefined;
         if (proposed?.cols && keepProgramSize(basis, basisFor(proposed.cols))) {
           // WHY here too: a phone terminal that was sized while hidden takes this early exit on its first show, so the

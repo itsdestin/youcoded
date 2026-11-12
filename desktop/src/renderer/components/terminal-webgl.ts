@@ -63,6 +63,40 @@ export function releaseWebglSlot(holder: WebglHolder): void {
   holders.delete(holder);
 }
 
+/**
+ * The character cell a WebGL layer measures, remembered for terminals that have no layer right now.
+ *
+ * WHY (card 106 review): the WebGL layer rounds a cell's width down to whole device pixels; plain DOM drawing keeps
+ * it exact (WebglRenderer / DomRenderer `_updateDimensions` in @xterm), so the two give a different column count.
+ * On a phone a HIDDEN terminal tells its program the size it will have when shown (terminal-hidden-size.ts), and the
+ * size lock keeps that size only while the cell is unchanged (terminal-size-lock.ts). A hidden terminal left without a
+ * layer by the pool would size its program by the DOM cell, then again by the WebGL cell when shown — Claude Code then
+ * prints its screen twice (the 2026-11-03 bug). So a terminal without a layer sizes itself by this remembered WebGL
+ * cell instead. One per window: every terminal in a window uses the same font. `key` is the character measure and
+ * the device pixel ratio, so a font, font-size or zoom change makes the old measure unusable until a layer measures
+ * again.
+ */
+let webglCell: { key: string; width: number; height: number } | null = null;
+let webglWorks = false;
+
+/** A WebGL layer was built in this window (so a terminal without one will get one when shown). */
+export function noteWebglWorks(): void {
+  webglWorks = true;
+}
+/** Has any WebGL layer been built in this window? If never, every terminal draws (and measures) with DOM. */
+export function webglWorksHere(): boolean {
+  return webglWorks;
+}
+/** Remember the cell a terminal WITH a layer measures, for the character measure + zoom `key`. */
+export function rememberWebglCell(key: string, cell: { width: number; height: number }): void {
+  if (webglCell?.key === key && webglCell.width === cell.width && webglCell.height === cell.height) return;
+  webglCell = { key, width: cell.width, height: cell.height };
+}
+/** The cell a WebGL layer measured for `key`; undefined when none has been measured at this font and zoom. */
+export function webglCellFor(key: string): { width: number; height: number } | undefined {
+  return webglCell?.key === key ? { width: webglCell.width, height: webglCell.height } : undefined;
+}
+
 /** How many layers the pool counts — rig/test instrument. */
 export function webglLayerCount(): number {
   return holders.size;
