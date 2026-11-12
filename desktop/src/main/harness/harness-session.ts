@@ -221,7 +221,7 @@ import { retainedRuleMessages } from './injection/retained-rule-visibility';
 import { mcpToolsFor, estimateToolSchemaTokens } from './mcp/mcp-tools';
 import type { ReadyServer } from './mcp/mcp-manager';
 import {
-  costForUsage, providerCostFromMetadata, costDisagreement,
+  costForUsage, providerCostFromMetadata, servedByFromMetadata, costDisagreement,
   COST_DISAGREEMENT_THRESHOLD, addComparableTurn, sessionCostDisagreement, modelCostDisagreements,
   NO_SESSION_COST_TOTALS, COST_GAP_RELOG_FACTOR,
   type ModelPricing, type SessionCostTotals,
@@ -406,6 +406,7 @@ interface StepResult {
    *  that is the fixed transcript token shape, and this is a dollar figure
    *  from a different source. */
   providerCostUsd?: number;
+  servedBy?: string; // card #69: company OpenRouter says served this request; diagnostic only
   /** Milliseconds from this step's FIRST real output chunk to the end of its
    *  stream — i.e. time actually spent generating. Excludes prefill (before the
    *  first chunk) and everything outside the stream (tool execution, permission
@@ -2760,6 +2761,7 @@ export class HarnessSession extends EventEmitter {
     let turnProviderCostUsd: number | undefined;
     let stepsCounted = 0;
     let stepsWithProviderCost = 0;
+    const turnServedBy: string[] = []; // card #69: distinct serving companies this turn
     // Time spent GENERATING, summed over the turn's steps. Not wall-clock: a turn
     // includes prefill, tool execution and permission waits, and dividing output
     // tokens by all of that reports a decode speed several times slower than the
@@ -2941,6 +2943,7 @@ export class HarnessSession extends EventEmitter {
           stepsWithProviderCost++;
           turnProviderCostUsd = (turnProviderCostUsd ?? 0) + step.providerCostUsd;
         }
+        if (step.servedBy && !turnServedBy.includes(step.servedBy)) turnServedBy.push(step.servedBy);
         generationMs += step.generationMs;
 
         // WHY: after a silent step, retain measured counters but withdraw the
@@ -3398,6 +3401,7 @@ export class HarnessSession extends EventEmitter {
           // prevent — and it would be wrong for every non-OpenRouter provider,
           // which is most of them.
           ...(providerCostUsd === undefined ? {} : { providerCostUsd }),
+          ...(turnServedBy.length ? { servedBy: turnServedBy } : {}),
         },
       });
     } catch (err: any) {
@@ -3959,6 +3963,7 @@ export class HarnessSession extends EventEmitter {
     // for THIS request when the provider reported one; undefined otherwise.
     const providerMetadata = await result.providerMetadata;
     const providerCostUsd = providerCostFromMetadata(providerMetadata);
+    const servedBy = servedByFromMetadata(providerMetadata);
     const finishReason = await result.finishReason;
     const reasoningTokens = usage?.outputTokenDetails?.reasoningTokens;
     // Acceptance is fenced separately from dispatch. If auth ownership moved
@@ -4019,6 +4024,7 @@ export class HarnessSession extends EventEmitter {
       // rather than present-and-undefined — the turn accumulator counts
       // reporting steps, and "present but undefined" would muddy that.
       ...(providerCostUsd === undefined ? {} : { providerCostUsd }),
+      ...(servedBy === undefined ? {} : { servedBy }),
       generationMs: firstChunkAt ? Date.now() - firstChunkAt : 0,
       attempt,
     };

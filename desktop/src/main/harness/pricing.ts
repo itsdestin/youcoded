@@ -140,11 +140,12 @@ function readCost(parsed: unknown): number | undefined {
  *  providerMetadata — which streamText resolves as `result.providerMetadata`. */
 export const openRouterCostExtractor = {
   async extractMetadata({ parsedBody }: { parsedBody: unknown }) {
-    return openRouterMetadata(readCost(parsedBody), readCacheWrite(parsedBody));
+    return openRouterMetadata(readCost(parsedBody), readCacheWrite(parsedBody), readServedBy(parsedBody));
   },
   createStreamExtractor() {
     let cost: number | undefined;
     let cacheWrite: number | undefined;
+    let servedBy: string | undefined;
     return {
       processChunk(parsedChunk: unknown) {
         const c = readCost(parsedChunk);
@@ -153,10 +154,12 @@ export const openRouterCostExtractor = {
         if (c !== undefined) cost = c;
         const w = readCacheWrite(parsedChunk);
         if (w !== undefined) cacheWrite = w;
+        const p = readServedBy(parsedChunk);
+        if (p !== undefined) servedBy = p;
       },
       buildMetadata() {
         // undefined, not { costUsd: 0 } — see the section header.
-        return openRouterMetadata(cost, cacheWrite);
+        return openRouterMetadata(cost, cacheWrite, servedBy);
       },
     };
   },
@@ -172,14 +175,35 @@ function readCacheWrite(parsed: unknown): number | undefined {
   const w = (parsed as any)?.usage?.prompt_tokens_details?.cache_write_tokens;
   return typeof w === 'number' && Number.isFinite(w) ? w : undefined;
 }
-function openRouterMetadata(cost: number | undefined, cacheWrite: number | undefined) {
-  if (cost === undefined && cacheWrite === undefined) return undefined;
+/** Card #69 (2026-11-12): which company OpenRouter routed this request to.
+ *  WHY: OpenRouter's response body (every streamed chunk and the plain body) carries a
+ *  top-level `provider` string such as "DeepInfra". Cache misses can only be matched to a
+ *  change of serving company if we keep it. Read from the response we already receive: no
+ *  extra request. Diagnostic only; the UI never reads it. Bounded and stripped of control
+ *  characters because it is third-party text headed for the transcript. */
+function readServedBy(parsed: unknown): string | undefined {
+  const p = (parsed as any)?.provider;
+  if (typeof p !== 'string') return undefined;
+  const clean = p.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 64);
+  return clean ? clean : undefined;
+}
+function openRouterMetadata(cost: number | undefined, cacheWrite: number | undefined, servedBy?: string) {
+  if (cost === undefined && cacheWrite === undefined && servedBy === undefined) return undefined;
   return {
     [OPENROUTER_METADATA_KEY]: {
       ...(cost === undefined ? {} : { costUsd: cost }),
       ...(cacheWrite === undefined ? {} : { cacheWriteTokens: cacheWrite }),
+      ...(servedBy === undefined ? {} : { servedBy }),
     },
   };
+}
+
+/** The serving company OpenRouter reported for one step, or undefined (every other provider). */
+export function servedByFromMetadata(
+  meta: Record<string, Record<string, unknown>> | undefined | null,
+): string | undefined {
+  const v = meta?.[OPENROUTER_METADATA_KEY]?.servedBy;
+  return typeof v === 'string' && v ? v : undefined;
 }
 
 /** The `metadataExtractor` for the LOCAL llama.cpp branch (cache follow-ups
