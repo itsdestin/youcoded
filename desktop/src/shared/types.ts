@@ -756,6 +756,13 @@ export interface SessionContextSkill {
   label: string;
   /** The one-liner the model itself is given. */
   description?: string;
+  /** Where the skill is installed: 'project' = this project's own `.claude/skills`
+   *  folder, 'global' = installed for every project.
+   *  WHY (Destin, 2026-11-12, work item #251): the panel sorts what the assistant
+   *  was given into Global and Project tabs. Both scanners always knew this and
+   *  dropped it on the way out. Absent on a record written before this field
+   *  existed; the panel files those under Global, where every skill used to be. */
+  scope?: 'global' | 'project';
 }
 
 export interface SessionContext {

@@ -85,7 +85,17 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/quick-chips/add#empty', 'dialog'), open: ['Add'] },
   chat('chat/session-context', 'dialog'),
   // A skill's fold, opened and pointed at — now the shared FoldRow (submit-ticket-5).
-  { ...chat('chat/session-context#skill-open-hover', 'dialog', 'fold'), open: [{ do: 'click', target: { role: 'tab', label: 'Skills' } }, 'theme-builder Build, preview and publish a community theme', { do: 'hover', target: { role: 'button', label: 'theme-builder Build, preview and publish a community theme' } }] },
+  // The three tabs (#251): Global and Project each get a picture, on both engines
+  // (wb-2 is the native chat, wb-1 the Claude Code one — whose Global tab is mostly
+  // "Claude Code doesn't share this", which is exactly what needs looking at).
+  { ...chat('chat/session-context#global', 'dialog'), session: 'wb-2', open: [{ do: 'click', target: { role: 'tab', label: 'Global context' } }], newIn: 'after' },
+  // The lower half of Global — the engine's own system instructions, tools and add-ons — which sits below the fold.
+  { ...chat('chat/session-context#global-engine', 'dialog'), session: 'wb-2', open: [{ do: 'click', target: { role: 'tab', label: 'Global context' } }, { do: 'scroll', dir: 'down', times: 3 }], newIn: 'after' },
+  { ...chat('chat/session-context#project', 'dialog'), session: 'wb-2', open: [{ do: 'click', target: { role: 'tab', label: 'Project context' } }], newIn: 'after' },
+  // The plain name above opens the Claude Code chat; this is Overview on YouCoded's own engine.
+  { ...chat('chat/session-context#native', 'dialog'), session: 'wb-2' },
+  { ...chat('chat/session-context#claude-code-global', 'dialog'), session: 'wb-1', open: [{ do: 'click', target: { role: 'tab', label: 'Global context' } }], newIn: 'after' },
+  { ...chat('chat/session-context#skill-open-hover', 'dialog', 'fold'), open: [{ do: 'click', target: { role: 'tab', label: 'Global context' } }, 'theme-builder Build, preview and publish a community theme', { do: 'hover', target: { role: 'button', label: 'theme-builder Build, preview and publish a community theme' } }] },
   { ...chat('chat/session-context#ancestors', 'dialog'), session: 'wb-2', params: { contextChain: '1' } },
   chat('chat/quit-sessions', 'dialog'),
   // Restart to update with chats open (#183 Q-busy): the same prompt, in restart words.
