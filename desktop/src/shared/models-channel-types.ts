@@ -72,5 +72,7 @@ export interface ModelsChannelTypes {
   'models:set-settings': { request: { modelId: string; patch?: ModelSettingsWrite }; response: StoredModelSettings | null };
   'models:add-vision': { request: { modelId: string }; response: { downloadId: string } | null };
   'models:memory-check': { request: { modelId: string }; response: Answer<'modelManager', 'memoryCheck'> };
-  'models:load': { request: { modelId: string }; response: true };
+  // `sessionId` (optional, 2026-11-12): the chat the user came back to. Main then also re-reads that
+  // chat in the background (hooks/use-return-warm.ts). An older screen sends none and only loads.
+  'models:load': { request: { modelId: string; sessionId?: string }; response: true };
 }

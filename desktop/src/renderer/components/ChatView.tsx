@@ -18,6 +18,7 @@ import { browserSupported } from '../state/browser-store';
 import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
+import { useReturnWarm } from '../hooks/use-return-warm';
 import { useEntryFolding } from '../hooks/use-entry-folding';
 import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
 import { messageTimeMarks } from '../state/message-time-marks';
@@ -243,6 +244,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   const chatRootRef = useRef<HTMLDivElement>(null);
   const queuedStripRef = useRef<HTMLDivElement>(null);
   const modelStatusRef = useRef<HTMLDivElement>(null);
+  // Coming back after the model went to sleep: load it and re-read this chat in the background (review deck Q-6).
+  useReturnWarm({ rootRef: chatRootRef, sessionId, visible, modelId: state.modelInfo?.modelId, modelState: state.modelState,
+    everResident: state.modelEverResident, isThinking: state.isThinking, load: (modelId, sid) => { void window.claude.models.load(modelId, sid); } });
   // Ctrl+F find-over-chat-history. Searches the message timeline (contentRef)
   // via the same CSS-Highlight ContentFindBar the artifact viewer uses.
   const [findOpen, setFindOpen] = useState(false);
@@ -1365,7 +1369,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               ? MODEL_LOADING_DEMOS[demoLoading] ?? MODEL_LOADING_DEMOS['1']
               : { modelState: state.modelState, modelInfo: state.modelInfo, loadedBytes: state.modelLoadedBytes,
                 loadExpectedMs: state.modelLoadExpectedMs, everResident: state.modelEverResident, isThinking: state.isThinking })}
-            onReload={(modelId) => { void window.claude.models.load(modelId); }}
+            onReload={(modelId) => { void window.claude.models.load(modelId, sessionId); }}
           />
         </div>
         {/* Right frame edge / divider + Session Drawer — only shown when open.
