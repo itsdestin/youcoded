@@ -748,6 +748,7 @@ export const IPC = {
   DEFAULTS_SET: 'defaults:set',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
+  SETTINGS_REPAIR_NOTICE: 'settings:repair-notice',
   MODES_GET: 'modes:get',
   MODES_SET: 'modes:set',
   ACCOUNT_START: 'account:start',
@@ -973,6 +974,8 @@ export interface ChannelTypes extends ConversationQueueChannelTypes, BrowserChan
   'defaults:set': { request: Partial<SessionDefaults>; response: SessionDefaults | null };
   'settings:get': { request: { field: string }; response: unknown };
   'settings:set': { request: { field: string; value: unknown }; response: boolean };
+  /** Card #11 a: the damaged-settings-file notice, handed out once (null = nothing to say). */
+  'settings:repair-notice': { request: void; response: { backupPath: string } | null };
   'modes:get': { request: void; response: ModelModes };
   'modes:set': { request: Partial<ModelModes>; response: ModelModes | null };
   'analytics:get-opt-in': { request: void; response: boolean };

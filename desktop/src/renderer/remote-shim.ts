@@ -2746,6 +2746,8 @@ export function installShim(): void {
     settings: {
       get: (field: string) => invoke('settings:get', { field }),
       set: (field: string, value: unknown) => invoke('settings:set', { field, value }),
+      // Desktop-only channel (phones cannot reach it): resolves null instead of throwing, so a phone just sees no notice.
+      takeRepairNotice: (): Promise<{ backupPath: string } | null> => invoke('settings:repair-notice').catch(() => null),
     },
     modes: {
       get: () => invoke('modes:get'),

@@ -25,6 +25,7 @@ import { useAppScreens } from './shoot-app-screens';
 import { ScreenMark } from './shoot-mode';
 import { OPEN_LIBRARY_EVENT } from './utils/plugin-off-notice';
 import PluginTurnedOffNotice from './components/PluginTurnedOffNotice';
+import SettingsRepairNotice from './components/SettingsRepairNotice';
 import { DevWindowLabel } from './components/DevWindowLabel';
 
 import ErrorBoundary from './components/ErrorBoundary';
@@ -4405,6 +4406,7 @@ function AppInner() {
           calls came out of this file — every one of them was a chance to leak a
           timer past unmount. */}
       <PluginTurnedOffNotice />
+      <SettingsRepairNotice />
       {toast && (
         <Toast
           message={typeof toast === 'string' ? toast : toast.message}
