@@ -316,7 +316,7 @@ export class ProviderRegistry {
    *  models) and openai (prompt_cache_key) — see prompt-cache.ts. A caller without one gets none of them. */
   async languageModel(
     binding: ModelBinding,
-    opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string },
+    opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string; helper?: boolean },
   ): Promise<LanguageModel> {
     // WHY wrap only with a cacheKey: the registry's structural tests reach the
     // inner SDK model's `config` (metadataExtractor, transformRequestBody) on
@@ -367,7 +367,8 @@ export class ProviderRegistry {
         const engine = this.localEngine;
         // Each chat keeps its own engine slot, so chats stop re-reading each
         // other's openings (engine/slot-pins.ts); no key = the shared spare slot.
-        const slot = engine.slotFor?.(binding.modelId, opts?.cacheKey);
+        // `helper`: a helper agent never takes a chat's slot (slot-pins.ts).
+        const slot = engine.slotFor?.(binding.modelId, opts?.cacheKey, opts?.helper);
         const localFetch = withPrefillProgress(
           engine.fetchImpl(),
           opts?.onPrefillProgress,

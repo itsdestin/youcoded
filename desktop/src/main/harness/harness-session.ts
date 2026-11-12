@@ -370,7 +370,8 @@ export interface HarnessSessionOpts {
 // (chatgpt backend design §4.2); every other factory ignores it.
 export type ModelFactory = (
   binding: ModelBinding,
-  opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string },
+  // `helper`: this session is a helper agent, so the local engine never gives it a chat's slot (slot-pins.ts).
+  opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string; helper?: boolean },
 ) => Promise<LanguageModel>;
 
 // One collected tool-call from a step's stream (input already PARSED to an
@@ -2180,7 +2181,7 @@ export class HarnessSession extends EventEmitter {
       const model = await this.modelFactory(binding, {
         serialToolCalls: this.profile.constrainToolArgs && !this.profile.supportsParallelToolCalls,
         onPrefillProgress: (p) => { this.warmupLast = p; if (this.warmupWaiting) this.emitPrefillProgress(p); },
-        cacheKey: this.opts.sessionId,
+        cacheKey: this.opts.sessionId, helper: this.opts.isSpecialistChild === true,
       });
       const prefix = [...this.history];
       const tools = this.buildAiTools();
@@ -2299,7 +2300,7 @@ export class HarnessSession extends EventEmitter {
       try {
         const model = await this.modelFactory(this.binding, {
           serialToolCalls: this.profile.constrainToolArgs && !this.profile.supportsParallelToolCalls,
-          cacheKey: this.opts.sessionId,
+          cacheKey: this.opts.sessionId, helper: this.opts.isSpecialistChild === true,
         });
         // The same tool set a turn would carry, so the summary request's
         // prefix matches the conversation's (see generateSummary).
@@ -2869,7 +2870,7 @@ export class HarnessSession extends EventEmitter {
         // already drives, so the UI upgrades from "reading N tokens" to a real
         // percentage and countdown without a second event type.
         onPrefillProgress: (p) => this.emitPrefillProgress(p),
-        cacheKey: this.opts.sessionId,
+        cacheKey: this.opts.sessionId, helper: this.opts.isSpecialistChild === true,
       });
       const modelContinuationBinding = openAIContinuationBinding(model);
       if (modelContinuationBinding !== this.continuationBinding) {

@@ -366,7 +366,7 @@ describe('ProviderRegistry', () => {
       await reg.init();
       const model = await reg.languageModel({ providerId: 'local', modelId: 'm' }, { cacheKey: 'chat-a' });
       expect((model as any).config.transformRequestBody({ model: 'm' })).toEqual({ model: 'm', id_slot: 1 });
-      expect(slotFor).toHaveBeenCalledWith('m', 'chat-a');
+      expect(slotFor).toHaveBeenCalledWith('m', 'chat-a', undefined)   // third argument: not a helper agent (slot-pins.ts);
     });
 
     // T19: the fetch handed to the SDK for a local send must report the finished

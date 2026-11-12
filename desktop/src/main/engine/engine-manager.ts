@@ -62,7 +62,7 @@ export interface LocalEngineHook {
    *  standing under a newer one. Feeds the engine card's fact line. */
   recordReply(timings: ReplyTimings | null): void;
   /** The engine slot for a request: a chat's own (its session id), or the shared spare (slot-pins.ts). */
-  slotFor?(modelId: string, key?: string): number | undefined;
+  slotFor?(modelId: string, key?: string, helper?: boolean): number | undefined;
 }
 
 /** Pick the asset to install: the preferred backend if it ships an asset for
@@ -1470,7 +1470,7 @@ export class EngineManager extends EventEmitter {
       },
       ensureServable: async (modelId: string) => this.ensureServable(modelId),
       recordReply: (timings) => this.recordReply(timings),
-      slotFor: (modelId, key) => this.slotPins.slotFor(modelId, key),
+      slotFor: (modelId, key, helper) => this.slotPins.slotFor(modelId, key, helper),
       // Bound lazily: the supervisor may not exist yet when the registry is
       // constructed; by the time the AI SDK fetches, ensureRunning built it.
       fetchImpl: () => (input: any, init?: any) => {

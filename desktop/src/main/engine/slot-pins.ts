@@ -36,9 +36,22 @@ export class SlotPins {
     this.pins.delete(modelId); // slot numbers from the old count may not exist
   }
 
+  /** Keys that belong to helper agents (specialist children), not to a chat
+   *  the user opened. */
+  private helpers = new Set<string>();
+
   /** The slot a request should use, or undefined to let the engine choose
-   *  (a single-slot engine has nothing to protect). No key = not a chat. */
-  slotFor(modelId: string, key?: string): number | undefined {
+   *  (a single-slot engine has nothing to protect). No key = not a chat.
+   *
+   *  WHY `helper` (2026-11-12, review deck Q-8): a helper agent has its own
+   *  session id, so it used to count as a chat — one chat that started two
+   *  helpers pushed the user's other two chats off their slots, and going back
+   *  to either re-read everything for no reason the user could see. A helper
+   *  may use a FREE slot or take another helper's, but never a chat's: with
+   *  every slot held by chats it uses the shared spare instead (unpinned, so
+   *  it re-reads more — the helper is slower, the user's chats are not). A
+   *  chat that needs a slot takes a helper's before another chat's. */
+  slotFor(modelId: string, key?: string, helper = false): number | undefined {
     const n = this.counts.get(modelId) ?? DEFAULT_SLOTS;
     if (n < 2) return undefined;
     const spare = n - 1;
@@ -55,12 +68,20 @@ export class SlotPins {
     let slot = -1;
     for (let s = 0; s < spare; s++) if (!used.has(s)) { slot = s; break; }
     if (slot < 0) {
-      // Every chat slot taken: the chat used longest ago gives up its slot.
-      const [oldKey, oldSlot] = m.entries().next().value!;
-      m.delete(oldKey);
-      slot = oldSlot;
+      // Every chat slot taken. A helper's slot goes first (oldest helper);
+      // only a CHAT may then take the chat used longest ago.
+      let victim: string | undefined;
+      for (const k of m.keys()) if (this.helpers.has(k)) { victim = k; break; }
+      if (victim === undefined) {
+        if (helper) return spare;
+        victim = m.keys().next().value!;
+      }
+      slot = m.get(victim)!;
+      m.delete(victim);
+      this.helpers.delete(victim);
     }
     m.set(key, slot);
+    if (helper) this.helpers.add(key); else this.helpers.delete(key);
     return slot;
   }
 }

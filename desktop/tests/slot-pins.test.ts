@@ -53,3 +53,44 @@ describe('SlotPins', () => {
     expect(slotField(2)).toEqual({ id_slot: 2 });
   });
 });
+
+// WHY (2026-11-12, review deck Q-8): a helper agent has its own session id and
+// used to count as a chat, so one chat that started two helpers pushed the
+// user's other chats off their slots.
+describe('SlotPins — helper agents never take a chat\'s slot', () => {
+  it('a helper uses a free slot when there is one', () => {
+    const p = new SlotPins();
+    p.setSlotCount('m', 4);
+    p.slotFor('m', 'chat-a');
+    expect(p.slotFor('m', 'helper-1', true)).toBe(1);
+  });
+
+  it('with every slot held by chats, a helper gets the shared spare and no chat moves', () => {
+    const p = new SlotPins();
+    p.setSlotCount('m', 4);
+    const chats = ['a', 'b', 'c'].map((k) => p.slotFor('m', k));
+    expect(p.slotFor('m', 'helper-1', true)).toBe(3);
+    expect(['a', 'b', 'c'].map((k) => p.slotFor('m', k))).toEqual(chats);
+  });
+
+  it('a second helper takes the first helper\'s slot, not a chat\'s', () => {
+    const p = new SlotPins();
+    p.setSlotCount('m', 4);
+    const a = p.slotFor('m', 'a');
+    const b = p.slotFor('m', 'b');
+    const h1 = p.slotFor('m', 'helper-1', true);
+    expect(p.slotFor('m', 'helper-2', true)).toBe(h1);
+    expect(p.slotFor('m', 'a')).toBe(a);
+    expect(p.slotFor('m', 'b')).toBe(b);
+  });
+
+  it('a new chat takes a helper\'s slot before the oldest chat\'s', () => {
+    const p = new SlotPins();
+    p.setSlotCount('m', 4);
+    const a = p.slotFor('m', 'a');   // the oldest chat
+    p.slotFor('m', 'b');
+    const h = p.slotFor('m', 'helper-1', true);
+    expect(p.slotFor('m', 'c')).toBe(h);
+    expect(p.slotFor('m', 'a')).toBe(a);
+  });
+});
