@@ -59,6 +59,7 @@ export interface AppChannelTypes {
   'arcade:status': { request: void; response: Answer<ArcadeOps['status']> | ArcadeUnavailable };
   'arcade:leaderboard': { request: { game: string }; response: Answer<ArcadeOps['leaderboard']> | ArcadeUnavailable };
   'arcade:submit-score': { request: { game: string; score: number }; response: Answer<ArcadeOps['submitScore']> | ArcadeUnavailable };
+  'arcade:room-ticket': { request: { game: string; room: string }; response: Answer<ArcadeOps['roomTicket']> | ArcadeUnavailable };
   'arcade:records': { request: { game?: string }; response: Answer<ArcadeOps['records']> | ArcadeUnavailable };
 
   // ── Zoom (the computer's window; a phone paired to it may drive it too, as before) ──

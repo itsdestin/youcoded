@@ -501,6 +501,17 @@ describe('ChatGptAuth: saved credential recovery', () => {
 });
 
 describe('ChatGptAuth: the sign-in round', () => {
+  // WHY: on the phone a finished sign-in must bring YouCoded back in front of the browser (onSignedIn -> app).
+  it('calls onSignedIn once when a sign-in succeeds, and never when it does not', async () => {
+    const onSignedIn = vi.fn();
+    const auth = h.build({ onSignedIn });
+    expect(await auth.signIn()).toBe(true);
+    expect(onSignedIn).not.toHaveBeenCalled();
+    await completeSignIn(auth);
+    await auth.waitForSignIn();
+    expect(onSignedIn).toHaveBeenCalledTimes(1);
+  });
+
   it('signIn opens the authorize URL, reads as waiting, and a good callback signs in — nothing token-shaped touches the account file', async () => {
     const auth = h.build();
     expect(auth.status()).toEqual({ state: 'signed-out' });

@@ -450,6 +450,27 @@ footer{padding:0 0 46px}
    wallpaper themes). Radius stays for the border + shadow shape; the matching
    content rounding is injected INSIDE the iframe (see bootEmbed). */
 .frame.embed{overflow:visible;background:transparent}
+/* WHY the outline is drawn on top (Destin, 2026-11-11: "the corners of the
+   embedded demo seem to get cut off a bit"). The demo inside is a square-cornered
+   box and this frame cannot clip it (see HERO FADE: a clip smears the app's
+   blur), so on the curved part of each corner the app painted OVER the frame's
+   own hairline and the rounding mask then cut the app's square corner away --
+   leaving an outline on the straight edges that simply stopped at every corner.
+   This layer sits above the demo and redraws the same hairline, so it follows
+   the curve. It is inside the frame's mask, so it dissolves with the bottom of
+   the window as before.
+   WHY corners ONLY (Destin, same day: "the left/right outlines look slightly more
+   inconsistent now"). The first version drew the whole outline here and cleared
+   the real border. A layer above the iframe is composited separately from the
+   frame, so its straight edges could land a fraction of a pixel off where the
+   real border used to. The real border is back, untouched; this layer is
+   trimmed by 1px on every side, which removes exactly the strip the real
+   border already draws in and leaves only the parts of the curve that fall
+   under the demo -- so nothing is drawn twice and the straight edges are the
+   original ones. (clip-path here is safe: it is on this empty layer, not on
+   anything that contains the iframe.) */
+.frame.embed::after{content:'';position:absolute;inset:-1px;border:1px solid var(--hair);
+  border-radius:inherit;pointer-events:none;z-index:7;clip-path:inset(1px)}
 .embed-stage{position:relative;aspect-ratio:16/10}
 .embed-poster,.embed-iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .embed-poster{object-fit:cover;border-radius:var(--radius)}
@@ -592,10 +613,16 @@ body.fade-d .topcta{display:none !important}
   box-shadow:inset 0 1px 0 var(--glass-hi), 0 22px 50px -18px var(--ink);
   transition:transform .18s, border-color .18s}
 .trypill:hover{transform:scale(1.05);border-color:var(--accent)}
-.trypill .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);
-  box-shadow:0 0 0 0 rgba(var(--accent-rgb),.55);animation:trydot 2.6s ease-out infinite}
-@keyframes trydot{0%{box-shadow:0 0 0 0 rgba(var(--accent-rgb),.55)}
-                  70%,100%{box-shadow:0 0 0 9px rgba(var(--accent-rgb),0)}}
+/* WHY the pulse is a scaled, fading disc and not an animated box-shadow
+   (2026-11-11, site speed pass): a box-shadow animation makes the browser
+   repaint on every frame for as long as the page is open, and this one never
+   stops. A disc growing from the dot's own 7px to 25px (7 + 2 x 9) while it
+   fades is the same picture, done entirely by the graphics card. */
+.trypill .dot{position:relative;width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.trypill .dot::after{content:'';position:absolute;inset:0;border-radius:50%;
+  background:rgba(var(--accent-rgb),.55);animation:trydot 2.6s ease-out infinite}
+@keyframes trydot{0%{transform:scale(1);opacity:1}
+                  70%,100%{transform:scale(3.5714);opacity:0}}
 
 /* The whole-embed "Click to try it" overlay keeps its click target, but its
    label lives at 62% — inside the dissolve, where it would be half-erased and
@@ -610,7 +637,7 @@ body.fade-b .hero>.wrap>.dlrow,
 body.fade-c .hero>.wrap>.dlrow,
 body.fade-d .hero>.wrap>.dlrow{display:none}
 
-@media (prefers-reduced-motion:reduce){.trypill .dot{animation:none}}
+@media (prefers-reduced-motion:reduce){.trypill .dot::after{animation:none;opacity:0}}
 /* NARROW: the row stops being a floating object and sits in the flow under the
    demo. The selectors have to carry the body class -- `body.fade-d .dlfloat`
    sets position:absolute at specificity (0,2,0) and outranked a bare `.dlfloat`
@@ -833,22 +860,31 @@ body:has(.hero-themefirst) .nav .swatches{display:none}
    further (1.14 > 1.06), so the chip never feels unresponsive. */
 .mascot.on{transform:scale(1.06)}
 .mascot.on:hover{transform:scale(1.14)}
-.mascot.on .m-chip{border-color:var(--a);animation:mascot-breathe 3.8s ease-in-out infinite}
-.mascot.on .m-art{animation:mascot-lean 3.8s ease-in-out infinite}
+/* WHY the halo is a separate layer that fades (2026-11-11, site speed pass): it
+   used to be an animated box-shadow on the chip, which the browser has to
+   repaint on every frame for as long as the page is open. The same glow drawn
+   once on ::before and faded with opacity costs nothing per frame. The ring and
+   the drop shadow that never changed are now simply static. */
+.mascot.on .m-chip{border-color:var(--a);box-shadow:0 0 0 2px var(--a), 0 16px 30px -14px rgba(0,0,0,.55)}
+.m-chip::before{content:'';position:absolute;inset:-1px;border-radius:inherit;pointer-events:none;
+  box-shadow:0 0 13px 3px var(--a);opacity:0}
+.mascot.on .m-chip::before{animation:mascot-halo 3.8s ease-in-out infinite}
+@keyframes mascot-halo{0%,100%{opacity:0}50%{opacity:1}}
+/* The lean itself now runs on .m-fig, alongside the idle: see "LAYER 1" in RIGGED MASCOTS. */
 /* The pulse runs on the chip's INNER accent wash as well as the outer halo.
    The outer halo alone was near-invisible for cotton candy: its accent is
    purple and it sits on a purple sky, so the glow had nothing to read against.
    The inner wash is over the chip's own glass, which every theme controls. */
 .mascot.on .m-chip::after{animation:mascot-wash 3.8s ease-in-out infinite}
-@keyframes mascot-breathe{
-  0%,100%{box-shadow:0 0 0 2px var(--a), 0 0 0 0 transparent, 0 16px 30px -14px rgba(0,0,0,.55)}
-  50%    {box-shadow:0 0 0 2px var(--a), 0 0 13px 3px var(--a), 0 16px 30px -14px rgba(0,0,0,.55)}}
 @keyframes mascot-wash{0%,100%{opacity:.26}50%{opacity:.44}}
 /* A hair of rotation on the robot itself. Any bigger and it reads as broken;
    this much only registers as "that one is alive". */
-@keyframes mascot-lean{0%,100%{transform:rotate(-1.1deg)}50%{transform:rotate(1.1deg)}}
+/* WHY the `rotate` property, not transform: the robot's idle (RIGGED MASCOTS, below)
+   animates `transform` on the same box (.m-fig), and one element can only run one
+   animation per property. The two compose exactly as the old nesting did. */
+@keyframes mascot-lean{0%,100%{rotate:-1.1deg}50%{rotate:1.1deg}}
 @media (prefers-reduced-motion:reduce){
-  .mascot.on .m-chip,.mascot.on .m-art,.mascot.on .m-chip::after{animation:none}
+  .mascot.on .m-chip,.mascot.on .m-chip::after,.mascot.on .m-chip::before{animation:none}
   .mascot.on .m-chip{box-shadow:0 0 0 2px var(--a),0 0 10px 2px var(--a),0 16px 30px -14px rgba(0,0,0,.55)}
   .mascot.on .m-chip::after{opacity:.36}}
 .mascot:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
@@ -875,6 +911,12 @@ body:has(.hero-themefirst) .nav .swatches{display:none}
    the picker was tuned at, with the padding living outside the box. */
 .m-rig{width:72.5%;height:72.5%}
 .mascot.m-lg .m-rig{width:70%;height:70%}
+/* .m-fig is a plain box around the drawing (2026-11-11, site speed pass). It
+   takes over the drawing's size and carries the idle motion: see the WHY at
+   "LAYER 1" below. The drawing just fills it. */
+.m-fig{position:relative;display:block;width:72.5%;height:72.5%}
+.mascot.m-lg .m-fig{width:70%;height:70%}
+.mascot .m-fig>.m-rig,.mascot.m-lg .m-fig>.m-rig{display:block;width:100%;height:100%}
 /* Rotations hinge where the rig contract says they do. Limbs are drawn HANGING
    DOWN from their data-pivot, and every pivot is the top-centre of that limb's
    own box (arms 2.5/21.5 at y9, legs 8.95/15.05 at y17) -- so fill-box + 50% 0%
@@ -904,19 +946,49 @@ body:has(.hero-themefirst) .nav .swatches{display:none}
    This is what makes a chip feel alive between poses, and it rides on
    .rig-idle so a pose can play straight THROUGH it -- an element can only run
    one CSS animation per property, so the two layers have to be two elements. */
-.mascot[data-idle="float"]   .rig-idle{animation:m-float   3.6s ease-in-out infinite}
-.mascot[data-idle="breathe"] .rig-idle{animation:m-breathe 5.2s ease-in-out infinite}
-.mascot[data-idle="scan"]    .rig-idle{animation:m-scan    5.4s ease-in-out infinite}
-.mascot[data-idle="bob"]     .rig-idle{animation:m-bob     2.6s cubic-bezier(.3,.7,.4,1) infinite}
+/* WHY the idle runs on .m-fig, the box AROUND the drawing, and not on the
+   .rig-idle group inside it (2026-11-11, site speed pass). A transform animated
+   on anything that is part of an SVG -- a group inside it, or the <svg> element
+   itself -- cannot be left to the graphics card: the browser re-styled,
+   re-measured and re-painted every shape of all four robots on every frame,
+   forever. Measured at a quarter of the page's whole frame budget while idle,
+   and it is what scrolling, theme clicks and the FAQ folds were colliding with.
+   The same motion on a plain box around the drawing is a layer move with no
+   per-frame page work. The numbers are the old ones converted, so the motion is
+   identical:
+     * 1 viewBox unit = 1/30 of the box = 3.3333%  (viewBox is 30 wide)
+     * the group scaled/rotated about viewBox (0,0), which is 10% / 16.667% into
+       the box; the translate(-40%,-33.333%) ... translate(40%,33.333%) pair
+       moves the pivot there from the box centre.
+   The centre pivot is kept for the selected chip's lean (mascot-lean), which is
+   on the separate `rotate` property so the two can run on one element.
+   .rig-idle stays in the markup: the pose script still reads its children. */
+.mascot[data-idle="float"]   .m-fig{animation:m-float   3.6s ease-in-out infinite}
+.mascot[data-idle="breathe"] .m-fig{animation:m-breathe 5.2s ease-in-out infinite}
+.mascot[data-idle="scan"]    .m-fig{animation:m-scan    5.4s ease-in-out infinite}
+.mascot[data-idle="bob"]     .m-fig{animation:m-bob     2.6s cubic-bezier(.3,.7,.4,1) infinite}
+/* The selected chip runs its lean (rotate property) alongside its idle. */
+.mascot.on[data-idle="float"]   .m-fig{animation:m-float   3.6s ease-in-out infinite, mascot-lean 3.8s ease-in-out infinite}
+.mascot.on[data-idle="breathe"] .m-fig{animation:m-breathe 5.2s ease-in-out infinite, mascot-lean 3.8s ease-in-out infinite}
+.mascot.on[data-idle="scan"]    .m-fig{animation:m-scan    5.4s ease-in-out infinite, mascot-lean 3.8s ease-in-out infinite}
+.mascot.on[data-idle="bob"]     .m-fig{animation:m-bob     2.6s cubic-bezier(.3,.7,.4,1) infinite, mascot-lean 3.8s ease-in-out infinite}
+/* Nothing idles while the row is off screen or the tab is hidden (the script
+   sets .mascots-off): four robots nobody can see were still costing frames.
+   !important: the selected chip's rule is more specific and its shorthand resets the play state. */
+.mascots-off .mascot .m-fig,.mascots-off .mascot .m-chip::before,.mascots-off .mascot .m-chip::after{animation-play-state:paused !important}
 /* Cotton Candy hovers -- it never quite settles. */
-@keyframes m-float{0%,100%{transform:translateY(.5px)}50%{transform:translateY(-1.7px)}}
+@keyframes m-float{0%,100%{transform:translateY(1.6667%)}50%{transform:translateY(-5.6667%)}}
 /* Meadow Mist breathes. Widest and slowest of the four, deliberately: a green
    meadow theme that fidgets is selling the wrong feeling. */
-@keyframes m-breathe{0%,100%{transform:scale(1.015,.985)}50%{transform:scale(.975,1.05) translateY(-.6px)}}
+@keyframes m-breathe{0%,100%{transform:translate(-40%,-33.333%) scale(1.015,.985) translateY(0) translate(40%,33.333%)}
+  50%{transform:translate(-40%,-33.333%) scale(.975,1.05) translateY(-2%) translate(40%,33.333%)}}
 /* Halftone slides side to side like something scanning. */
-@keyframes m-scan{0%,100%{transform:translateX(-1.6px) rotate(-2deg)}50%{transform:translateX(1.6px) rotate(2deg)}}
+@keyframes m-scan{0%,100%{transform:translate(-40%,-33.333%) translateX(-5.3333%) rotate(-2deg) translate(40%,33.333%)}
+  50%{transform:translate(-40%,-33.333%) translateX(5.3333%) rotate(2deg) translate(40%,33.333%)}}
 /* Golden can't hold still -- a springy double-beat, up fast, down slow. */
-@keyframes m-bob{0%,58%,100%{transform:translateY(0) scale(1,1)}22%{transform:translateY(-2.1px) scale(.97,1.04)}76%{transform:translateY(-.8px) scale(.99,1.01)}}
+@keyframes m-bob{0%,58%,100%{transform:translate(-40%,-33.333%) translateY(0) scale(1,1) translate(40%,33.333%)}
+  22%{transform:translate(-40%,-33.333%) translateY(-7%) scale(.97,1.04) translate(40%,33.333%)}
+  76%{transform:translate(-40%,-33.333%) translateY(-2.6667%) scale(.99,1.01) translate(40%,33.333%)}}
 
 /* --- LAYER 2: the minor poses. One-shot, on .rig-root and the limbs, two per
    character, taken in ROTATION by the script so both actually get seen. The
@@ -1063,7 +1135,7 @@ body:has(.hero-themefirst) .nav .swatches{display:none}
 
 /* Motion is decoration here — the picker still works entirely by clicking. */
 @media (prefers-reduced-motion:reduce){
-  .m-rig *{animation:none !important}}
+  .m-fig,.m-rig *{animation:none !important}}
 
 
 /* ---- M1 FLANK: two either side of the headline ---- */
@@ -1426,7 +1498,16 @@ body.cycler-static .lead-hold{display:none}
 /* No transition here on purpose: --d is driven straight off scroll position,
    so every frame is already the right value. A transition would only make the
    card lag behind the scroll, which is exactly the jank this replaced. */
+/* WHY registered and NOT inherited (2026-11-11, site speed pass): --d is written
+   on every card on every scrolled frame. An ordinary custom property is
+   inherited, so each write re-styled every element INSIDE all ten cards (clips,
+   text, the 40-key keyboard drawing); only the card itself reads it. */
+@property --d{syntax:'<number>';inherits:false;initial-value:0}
 .deck-fade .step{transition:none}
+/* A card that has fully dissolved (opacity 0 from d = 1/.85) stops being drawn at
+   all. It was invisible already, but the browser was still blurring the page
+   behind each of up to nine stacked, see-through cards on every frame. */
+.deck-fade .step.gone{visibility:hidden}
 .deck-fade .step.buried{
   transform:scale(calc(1 - var(--d,0) * 0.03));
   opacity:calc(1 - var(--d,0) * 0.85);      /* gone a little past one card-length */
@@ -1958,7 +2039,8 @@ html{-webkit-tap-highlight-color:transparent}
 .devdemo .k.q{font-size:1.8cqw}
 .devdemo .k.e{background:var(--accent);color:var(--oa)}
 .devdemo .k .ic{width:3cqw;height:3cqw}
-.devdemo .l{animation:dvLit 7s var(--d) infinite}
+/* --kd, not --d: --d is the deck's registered scroll number (see @property --d). */
+.devdemo .l{animation:dvLit 7s var(--kd) infinite}
 .devdemo .tr{left:0;top:0;width:100%;height:100%;overflow:visible;pointer-events:none;filter:drop-shadow(0 0 .7cqw var(--accent))}
 .devdemo .tr path{fill:none;stroke:var(--accent);stroke-linecap:round;stroke-linejoin:round}
 .devdemo .trail{stroke-width:11;stroke-dasharray:100 100;stroke-dashoffset:100;opacity:0;animation:dvTrail 7s linear infinite}
@@ -1978,6 +2060,14 @@ html{-webkit-tap-highlight-color:transparent}
 @keyframes dvGen{0%,49.9%{opacity:.6}52%,91%{opacity:0}95%,100%{opacity:.6}}
 @keyframes dvGuess{0%,49.9%{opacity:0}52%,91%{opacity:1}95%,100%{opacity:0}}
 @keyframes dvBlink{50%{opacity:0}}
+/* WHY (2026-11-11, site speed pass): this drawing runs ~50 looping animations
+   (every lit key, the trail, the typed word) and they kept running for the whole
+   visit, wherever the page was scrolled -- re-styling the keyboard on every frame
+   behind whatever the visitor was actually doing. The deck script sets .dv-idle
+   whenever this card is not one of the ones playing (the same list that pauses
+   the video clips); clearing it restarts the loop from its first frame. */
+.devdemo.dv-idle *{animation:none!important}
+.devdemo.dv-idle,.devdemo.dv-idle *{transition:none!important}
 @media (prefers-reduced-motion:reduce){
  .devdemo *{animation:none!important}
  .devdemo .warm{opacity:.05}
@@ -2010,7 +2100,7 @@ html{-webkit-tap-highlight-color:transparent}
       <div class="mrow mrow-l">
 <button class="mascot" data-theme="youcoded" data-idle="float" data-acts="wave cheer" data-face="welcome"
   aria-label="Use the YouCoded Light look" style="--a:#8B47B8"><span class="m-chip"></span>
-<svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<span class="m-fig"><svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 <defs>
 <clipPath id="c-body-youcoded"><path d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z"/></clipPath>
 <radialGradient id="g-halo-youcoded" cx="50%" cy="55%" r="50%">
@@ -2057,10 +2147,10 @@ and feet (deck glass-buddy-2 GB2-1). -->
 </g>
 <g id="slot-hat-youcoded"/>
 </g></g>
-</svg><span class="m-name">YouCoded Light</span></button>
+</svg></span><span class="m-name">YouCoded Light</span></button>
 <button class="mascot" data-theme="meadow-mist" data-idle="breathe" data-acts="shrug nod" data-face="welcome"
   aria-label="Use the Meadow Mist look" style="--a:#2F7D55"><span class="m-chip"></span>
-<svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<span class="m-fig"><svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 <!-- Sprout — meadow-mist's buddy. Generated by the theme-builder's build-mascot.mjs from
 this theme's palette, then decorated; the body, limbs and eight faces are the shared
 contract and never move. Approved 2026-09-06.
@@ -2104,7 +2194,7 @@ Contract: mascots/README.md (from the repo root) -->
 </g>
 <g id="slot-hat-meadow-mist"><path d="M12 4 L12 1.4" stroke="#2F7D55" stroke-width="0.45" stroke-linecap="round"/><path d="M12 2.4 Q9.4 2.2 9.6 0.2 Q11.9 0.4 12 2.4 Z" fill="#3F9A69"/><path d="M12 2 Q14.6 1.6 14.8 -0.4 Q12.2 -0.1 12 2 Z" fill="#2F7D55"/></g>
 </g></g>
-</svg><span class="m-name">Meadow Mist</span></button>
+</svg></span><span class="m-name">Meadow Mist</span></button>
 </div>
       <h1>Make Your Technology <span class="word-cycler" aria-label="Useful., Fun., Yours.">
         <!-- WHY: a zero-width space preserves the text baseline without invisible
@@ -2119,7 +2209,7 @@ Contract: mascots/README.md (from the repo root) -->
       <div class="mrow mrow-r">
 <button class="mascot" data-theme="halftone-dimension" data-idle="scan" data-acts="think startle" data-face="welcome"
   aria-label="Use the Halftone Dimension look" style="--a:#E51F48"><span class="m-chip"></span>
-<svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<span class="m-fig"><svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 <!--
 Example rig: Halftone Dimension — the theme's shipped capsule buddy rebuilt to the rig
 contract. 2.5D-soft shading stack on the theme's ink-navy body, with the identity kept
@@ -2202,10 +2292,10 @@ Contract: mascots/README.md (from the repo root)
 </g>
 <g id="slot-hat-halftone-dimension"/>
 </g></g>
-</svg><span class="m-name">Halftone Dimension</span></button>
+</svg></span><span class="m-name">Halftone Dimension</span></button>
 <button class="mascot" data-theme="golden-sunbreak" data-idle="bob" data-acts="tada armwave" data-face="welcome"
   aria-label="Use the Golden Sunbreak look" style="--a:#ffc030"><span class="m-chip"></span>
-<svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<span class="m-fig"><svg class="m-art m-rig" viewBox="-3 -5 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 <!--
 Example rig: Golden Sunbreak — the theme's shipped capsule buddy rebuilt to the rig
 contract in the 2.5D-soft skin (the skin's demo palette IS this theme's amber).
@@ -2279,7 +2369,7 @@ Contract: mascots/README.md (from the repo root)
 </g>
 <g id="slot-hat-golden-sunbreak"/>
 </g></g>
-</svg><span class="m-name">Golden Sunbreak</span></button>
+</svg></span><span class="m-name">Golden Sunbreak</span></button>
 </div>
     </div>
     <p class="hero-sub">A fully customizable AI assistant and open-source everything app.</p>
@@ -2334,7 +2424,7 @@ Contract: mascots/README.md (from the repo root)
 
 <!-- repositioning 2026-10-21 -->
 <section id="about"><div class="wrap">
-  <p class="eyebrow">What is this?</p><h2>One app. Whatever you want it to be.</h2>
+  <p class="eyebrow">What is this?</p><h2>Whatever you want it to be.</h2>
   <div class="panel prose">
     <p class="big">YouCoded is an AI assistant that does what you want, the way you want, with the screens and features you want. Hand it your files, your research and your writing. Ask it for a control panel for your house, a page for your money, or a game for a slow afternoon. Ask it to change its own look, give itself new features, or handle your requests in different ways. What exactly is YouCoded? That&rsquo;s for you to decide.</p>
     <div class="cols">
@@ -2475,26 +2565,28 @@ Contract: mascots/README.md (from the repo root)
      tag list, every description, the icons and the note are the originals;
      only the styling is new. Sits after the feature tour, before the story. -->
 <!-- integrations grid hidden 2026-10-21 (Destin): kept for later, not deleted -->
+<!-- WHY loading="lazy" on every icon below: this section is hidden, and a lazy image in a hidden
+     section is never downloaded. They were 16 requests on every visit for pictures nobody sees. -->
 <section id="integrations" hidden><div class="wrap">
   <p class="eyebrow">Integrations</p><h2>Connect your services.</h2>
   <div class="panel integrations">
     <p class="integrations-intro">With skills from the YouCoded marketplace, YouCoded can link with all of the following services:</p>
     <div class="integrations-tags">
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can automatically back up your journal entries, Encyclopedia, and system files to Google Drive — keeping everything safe and synced across sessions."><img class="tag-icon" src="icons/google-drive.svg" alt="">Google Drive</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can create, read, and edit documents — drafting cover letters, memos, reports, and more directly in Google Docs."><img class="tag-icon" src="icons/google-docs.svg" alt="">Google Docs</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can create and analyze spreadsheets — building trackers, organizing data, and working with structured information in Google Sheets."><img class="tag-icon" src="icons/google-sheets.svg" alt="">Google Sheets</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can create and edit slide decks and visual presentations in Google Slides."><img class="tag-icon" src="icons/google-slides.svg" alt="">Google Slides</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read and create events on your Google Calendar. Mention an appointment in conversation or screenshot a flyer, and it can get scheduled automatically."><img class="tag-icon" src="icons/google-calendar.svg" alt="">Google Calendar</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can search your inbox, read threads, and compose replies in Gmail — all without leaving the app."><img class="tag-icon" src="icons/gmail.svg" alt="">Gmail</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read your SMS and RCS conversations and send texts on your behalf through Google Messages."><img class="tag-icon" src="icons/google-messages.svg" alt="">Google Messages</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can access your Apple Messages conversations and send texts through iMessage."><img class="tag-icon" src="icons/imessage.svg" alt="">iMessage</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can automatically back up your journal entries, Encyclopedia, and system files to iCloud Drive — keeping everything safe and synced across sessions."><img class="tag-icon" src="icons/icloud.svg" alt="">iCloud</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read your existing Apple Notes and create new ones for quick reference and capture."><img class="tag-icon" src="icons/apple-notes.svg" alt="">Apple Notes</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can add items to your Apple Reminders lists and help you keep track of things to do."><img class="tag-icon" src="icons/apple-reminders.svg" alt="">Apple Reminders</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read and create events on your Apple Calendar. Mention an appointment in conversation or screenshot a flyer, and it can get scheduled automatically."><img class="tag-icon" src="icons/apple-calendar.svg" alt="">Apple Calendar</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can search your inbox, read threads, and compose replies through Apple Mail."><img class="tag-icon" src="icons/apple-mail.svg" alt="">Apple Mail</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can manage your task list, process inbox items captured from your phone, create tasks from conversations, and help you stay on top of priorities."><img class="tag-icon" src="icons/todoist.svg" alt="">Todoist</button>
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can receive marketplace updates and sync your configuration through GitHub, keeping your installation current with the latest features and fixes."><img class="tag-icon" src="icons/github.svg" alt="">GitHub</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can automatically back up your journal entries, Encyclopedia, and system files to Google Drive — keeping everything safe and synced across sessions."><img class="tag-icon" loading="lazy" src="icons/google-drive.svg" alt="">Google Drive</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can create, read, and edit documents — drafting cover letters, memos, reports, and more directly in Google Docs."><img class="tag-icon" loading="lazy" src="icons/google-docs.svg" alt="">Google Docs</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can create and analyze spreadsheets — building trackers, organizing data, and working with structured information in Google Sheets."><img class="tag-icon" loading="lazy" src="icons/google-sheets.svg" alt="">Google Sheets</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can create and edit slide decks and visual presentations in Google Slides."><img class="tag-icon" loading="lazy" src="icons/google-slides.svg" alt="">Google Slides</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read and create events on your Google Calendar. Mention an appointment in conversation or screenshot a flyer, and it can get scheduled automatically."><img class="tag-icon" loading="lazy" src="icons/google-calendar.svg" alt="">Google Calendar</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can search your inbox, read threads, and compose replies in Gmail — all without leaving the app."><img class="tag-icon" loading="lazy" src="icons/gmail.svg" alt="">Gmail</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read your SMS and RCS conversations and send texts on your behalf through Google Messages."><img class="tag-icon" loading="lazy" src="icons/google-messages.svg" alt="">Google Messages</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can access your Apple Messages conversations and send texts through iMessage."><img class="tag-icon" loading="lazy" src="icons/imessage.svg" alt="">iMessage</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can automatically back up your journal entries, Encyclopedia, and system files to iCloud Drive — keeping everything safe and synced across sessions."><img class="tag-icon" loading="lazy" src="icons/icloud.svg" alt="">iCloud</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read your existing Apple Notes and create new ones for quick reference and capture."><img class="tag-icon" loading="lazy" src="icons/apple-notes.svg" alt="">Apple Notes</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can add items to your Apple Reminders lists and help you keep track of things to do."><img class="tag-icon" loading="lazy" src="icons/apple-reminders.svg" alt="">Apple Reminders</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can read and create events on your Apple Calendar. Mention an appointment in conversation or screenshot a flyer, and it can get scheduled automatically."><img class="tag-icon" loading="lazy" src="icons/apple-calendar.svg" alt="">Apple Calendar</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can search your inbox, read threads, and compose replies through Apple Mail."><img class="tag-icon" loading="lazy" src="icons/apple-mail.svg" alt="">Apple Mail</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can manage your task list, process inbox items captured from your phone, create tasks from conversations, and help you stay on top of priorities."><img class="tag-icon" loading="lazy" src="icons/todoist.svg" alt="">Todoist</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can receive marketplace updates and sync your configuration through GitHub, keeping your installation current with the latest features and fixes."><img class="tag-icon" loading="lazy" src="icons/github.svg" alt="">GitHub</button>
     <!-- Chrome and Safari chips REMOVED 2026-09-03: both claimed "navigate websites,
          fill out forms, take screenshots". Nothing in the registry does browser
          automation -- measured: 0 hits for safari across the whole marketplace repo,
@@ -2502,7 +2594,7 @@ Contract: mascots/README.md (from the repo root)
          Control / Windows Control integrations, which drive the whole desktop, are
          permission-gated and are one-platform-each. Do not restore either chip
          without an integration behind it. -->
-    <button class="integration-tag" tabindex="0" data-desc="YouCoded can generate graphics, edit presentations, and work with visual content directly in Canva."><img class="tag-icon" src="icons/canva.svg" alt="">Canva</button>
+    <button class="integration-tag" tabindex="0" data-desc="YouCoded can generate graphics, edit presentations, and work with visual content directly in Canva."><img class="tag-icon" loading="lazy" src="icons/canva.svg" alt="">Canva</button>
     <span class="integration-tag soon">More coming soon...</span>
     </div>
     <div class="integration-desc" id="integration-desc"></div>
@@ -2582,6 +2674,20 @@ var THEMES = {"youcoded": {"name":"YouCoded Light","dark":false,"canvas":"#F7F0F
 var order = Object.keys(THEMES);
 var bdA = document.getElementById('bd-a'), bdB = document.getElementById('bd-b'), useA = true;
 var fontLinks = {};
+var embedSyncTicket = 0;
+// --- Pictures a theme needs, fetched ahead of the click (2026-11-11) -----------
+// keep[] holds every preloaded Image so the browser keeps it in memory: a picture
+// that is only in the disk cache still costs a round trip to the server to check.
+var keep = [], wallJobs = {}, wallDone = {}, fadeTicket = 0;
+function wallReady(src){
+  if (!wallJobs[src]) {
+    var img = new Image(); img.decoding = 'async'; img.src = src; keep.push(img);
+    var done = function(){ wallDone[src] = 1; };
+    wallJobs[src] = (img.decode ? img.decode() : new Promise(function(ok){ img.onload = img.onerror = ok; }))
+      .then(done, done);
+  }
+  return wallJobs[src];
+}
 function backdropCss(t){
   if (t.gradient) return t.gradient;
   if (t.wall) return 'url("' + t.wall + '")';
@@ -2651,10 +2757,24 @@ function applyTheme(slug){
   }
   r.setProperty('--font-theme', t.font || "'DM Sans', system-ui, sans-serif");
   // Crossfade the wallpaper between two stacked layers so it never flashes.
-  var next = useA ? bdB : bdA, cur = useA ? bdA : bdB;
-  next.style.background = backdropCss(t);
-  next.style.backgroundSize = 'cover'; next.style.backgroundPosition = 'center';
-  next.style.opacity = 1; cur.style.opacity = 0; useA = !useA;
+  // WHY the wait (2026-11-11, site speed pass): the fade used to start at once,
+  // so a wallpaper that was still downloading or decoding faded in as a blank
+  // layer and then drew itself in strips. Now the picture is fetched and decoded
+  // first (normally already done by warmThemes(), below) and the fade starts on
+  // a finished image. The cap keeps a slow connection from holding the old
+  // wallpaper for long; `fadeTicket` drops a fade that a newer click replaced.
+  var ticket = ++fadeTicket;
+  var flip = function(){
+    if (ticket !== fadeTicket) return;
+    fadeTicket++;                      // the cap and the decode both call this; first one wins
+    var next = useA ? bdB : bdA, cur = useA ? bdA : bdB;
+    next.style.background = backdropCss(t);
+    next.style.backgroundSize = 'cover'; next.style.backgroundPosition = 'center';
+    next.style.opacity = 1; cur.style.opacity = 0; useA = !useA;
+  };
+  var ready = t.wall && !t.gradient ? wallReady(t.wall) : null;
+  if (ready && !wallDone[t.wall]) { ready.then(flip); setTimeout(flip, 450); }
+  else flip();
   // '.mascot' is the 2026-08-30 mascot picker; '.sw' the older colour swatches.
   document.querySelectorAll('[data-now]').forEach(function(n){ n.textContent = t.name; });
   document.querySelectorAll('.sw, .mascot').forEach(function(s){
@@ -2668,23 +2788,109 @@ function applyTheme(slug){
   // key (same origin, so we share storage): set it before boot, sync it after.
   currentTheme = slug;
   try { localStorage.setItem('youcoded-theme', slug); } catch(e){}
-  syncEmbedTheme();
+  // WHY deferred (2026-11-11, site speed pass): the live demo is the whole app
+  // running in this page's own thread, and re-theming it took 25-90ms -- spent
+  // INSIDE the click, before the page could show any response, and again as a
+  // stall in the middle of the page's own half-second colour fade. The page now
+  // changes first and the demo follows on the very next frame.
+  // WHY one frame and not longer (Destin, 2026-11-11: "still a noticeable delay
+  // between clicking a new theme chip and the embedded demo/image changing").
+  // The first version waited 520ms, until the page's fade had finished; that
+  // read as the demo lagging behind. Waiting for one painted frame keeps the
+  // click's own response instant and puts the demo a few hundredths of a second
+  // behind it -- the cost is a brief stall early in the page's colour fade.
+  // The timer inside the frame callback is what guarantees the page has
+  // painted first. A second click before then replaces the first.
+  var syncTicket = ++embedSyncTicket;
+  requestAnimationFrame(function(){ setTimeout(function(){
+    if (syncTicket === embedSyncTicket) syncEmbedTheme();
+  }, 0); });
   setEmbedPoster();
   rethemeClips(slug);
   if (typeof maskEmbed === 'function') maskEmbed();
 }
 // --- Per-theme clips (2026-10-21): media/<name>--<theme>.webm for each of the four site themes.
 var CLIP_THEMES = ['youcoded', 'meadow-mist', 'halftone-dimension', 'golden-sunbreak'];
+// WHY rewritten (2026-11-11, site speed pass). Every theme change used to reload
+// all ten clips on the spot -- ten pictures and up to ten video files requested
+// at the moment of the click, three times over during the opening intro alone
+// (measured: 74 media requests before the visitor had touched anything). Now:
+//   * during the intro nothing is touched: the clips are far below the fold and
+//     the intro ends on the theme the markup already carries;
+//   * a theme change swaps every clip's still picture (already in memory, see
+//     warmThemes) and reloads only the clips that are PLAYING;
+//   * every other clip goes back to "not fetched" and picks up the new theme's
+//     file through warm(), the same door it always used, when it comes near.
+var clipTheme = CLIP_THEMES[0];
+function clipBase(v){ return 'media/' + v.dataset.clip + '--' + clipTheme; }
 function rethemeClips(slug){
-  var theme = CLIP_THEMES.indexOf(slug) >= 0 ? slug : CLIP_THEMES[0];
+  clipTheme = CLIP_THEMES.indexOf(slug) >= 0 ? slug : CLIP_THEMES[0];
+  if (document.body.classList.contains('intro-mode')) return;   // re-run at yc:intro-end
+  var cooled = false;
   document.querySelectorAll('video[data-clip]').forEach(function(v){
-    var base = 'media/' + v.dataset.clip + '--' + theme;
-    var s = v.querySelector('source'); if (!s || s.getAttribute('src') === base + '.webm') return;
+    var base = clipBase(v);
+    var s = v.querySelector('source'); if (!s) return;
+    if (v.getAttribute('poster') !== base + '.webp') v.setAttribute('poster', base + '.webp');
+    if (s.getAttribute('src') === base + '.webm') return;
     var running = !v.paused && !v.ended;
-    v.setAttribute('poster', base + '.webp'); s.setAttribute('src', base + '.webm');
-    v.load(); if (running) v.play().catch(function(){});
+    if (running) { s.setAttribute('src', base + '.webm'); v.load(); v.play().catch(function(){}); return; }
+    if (v.dataset.warm) {
+      // Fetched for the old theme but not playing: forget it. load() with
+      // preload="none" drops the old file and downloads nothing.
+      delete v.dataset.warm; v.preload = 'none';
+      s.setAttribute('src', base + '.webm'); v.load(); cooled = true;
+    }
+    // Never fetched: leave its <source> alone. warm() points it at the right
+    // file at the moment it would have started downloading anyway.
   });
+  // Let the deck re-warm whichever cooled clips are near the window right now.
+  if (cooled) setTimeout(function(){ dispatchEvent(new Event('scroll')); }, 0);
 }
+document.addEventListener('yc:intro-end', function(){ rethemeClips(currentTheme); });
+
+// --- Background fetch of the other themes' pictures (2026-11-11) ---------------
+// Destin: "things being loaded in the background instead of on click". Once the
+// intro is over and the browser is idle, fetch what a mascot click would need:
+// each picker theme's wallpaper, logo, demo still and clip stills. One at a time
+// and at low priority so it never competes with what the visitor is looking at.
+// Skipped on a data-saver or 2g/3g connection, where a click loads on demand as before.
+function warmThemes(){
+  var c = navigator.connection || {};
+  if (c.saveData || /(^|-)(2g|3g)$/.test(c.effectiveType || '')) return;
+  // On mobile data fetch only the small, certain-to-be-seen pictures (wallpaper,
+  // logo, demo still); the thirty clip stills (~1.5MB) load on demand as before.
+  var lean = c.type === 'cellular';
+  var first = [], later = [];
+  var layout = posterPhoneMQ.matches ? 'phone' : 'desktop';
+  [].slice.call(document.querySelectorAll('.mascot')).forEach(function(m){
+    var slug = m.dataset.theme, t = THEMES[slug], b = BRAND[slug];
+    // The theme on show is included on purpose: its pictures are already
+    // downloaded, and holding them here keeps them in memory for the click BACK.
+    if (!t) return;
+    if (t.wall && !t.gradient) first.push({ wall: t.wall });
+    if (b) { first.push('brand/' + b.icon + '-128.png'); first.push('brand/' + b.icon + '-32.png'); }
+    if (POSTER_THEMES.indexOf(slug) >= 0) first.push('media/embed-' + layout + '-' + slug + '.webp');
+    if (!lean && CLIP_THEMES.indexOf(slug) >= 0) document.querySelectorAll('video[data-clip]').forEach(function(v){
+      later.push('media/' + v.dataset.clip + '--' + slug + '.webp');
+    });
+  });
+  var queue = first.concat(later), seen = {};
+  (function next(){
+    var item = queue.shift(); if (!item) return;
+    if (item.wall) { wallReady(item.wall).then(next); return; }
+    if (seen[item]) return next(); seen[item] = 1;
+    var img = new Image(); img.decoding = 'async';
+    try { img.fetchPriority = 'low'; } catch (e) {}
+    img.onload = img.onerror = function(){ setTimeout(next, 0); };
+    img.src = item; keep.push(img);
+  })();
+}
+document.addEventListener('yc:intro-end', function(){
+  var go = function(){ (window.requestIdleCallback || setTimeout)(warmThemes, { timeout: 2500 }); };
+  // After the intro's own motion (0.62s exit) and never before the page's load event.
+  var arm = function(){ setTimeout(go, 1200); };
+  if (document.readyState === 'complete') arm(); else addEventListener('load', arm, { once: true });
+}, { once: true });
 
 
 // The still in the demo window is a picture of the app IN THE THEME THE PAGE IS
@@ -2906,8 +3112,9 @@ var DOCK_GAP = 34;
 // WHY: the bottom-edge anchor kept the demo blended after its top was leaving
 // the viewport. Start before the top reaches the viewport and finish the 180px
 // reveal while the complete window remains visible, without rebuilding its mask.
-var FADE_REVEAL_START = 240;
-var FADE_REVEAL_SPAN = 180;
+// FADE_REVEAL_END: the window's distance from the top of the screen at which the
+// dissolve is fully gone (unchanged: the old 240px start minus its 180px span).
+var FADE_REVEAL_END = 60;
 var demoRevealed = false, lastFz = null;
 // Below 820px the pill is not a floating object at all -- it sits in the flow
 // under the demo. The docked rule is `body.fade-d .dlfloat.docked`, which
@@ -2945,8 +3152,19 @@ function placeFloat(){
   // --- Heal the dissolve before the complete demo starts leaving the viewport.
   if (!demoRevealed && embed && maskRest < 1) {
     var er = embed.getBoundingClientRect();
-    var k = Math.max(0, Math.min(1, ((FADE_REVEAL_START - er.top) / FADE_REVEAL_SPAN)));
-    k = k * k * (3 - 2 * k);                                // ease in AND out
+    // WHY linear, from the window's resting spot (Destin, 2026-11-11: "a slightly
+    // odd/finicky acceleration ... compared to the actual scroll speed"). This
+    // used to ignore the first ~55px of scrolling, then run an ease-in-and-out
+    // curve over the next 180px -- measured, the dissolve's edge sat still, sped
+    // up to about 3.4px per pixel scrolled, then slowed again, so it visibly
+    // moved on its own clock. Now it starts with the first pixel of scroll and
+    // moves the same amount for every pixel (about 1.7px per pixel at 1600 wide),
+    // finishing at the same place as before. restTop is where the window sits
+    // with the page at the top; the 120px floor only matters on a window so
+    // short that the demo already starts near the top bar.
+    var restTop = er.top + scrollY;
+    var span = Math.max(120, restTop - FADE_REVEAL_END);
+    var k = Math.max(0, Math.min(1, (FADE_REVEAL_END + span - er.top) / span));
     var fz = maskRest + (1 - maskRest) * k;
     // Quantised only enough to skip sub-pixel writes. The old 0.012 step moved
     // the gradient's start by 8px at a time on a 672px window, which is what
@@ -3248,12 +3466,20 @@ applyTheme("youcoded");
   // Nothing runs while the row is off screen or the tab is in the background.
   if (typeof IntersectionObserver === 'function') {
     new IntersectionObserver(function(entries){
-      visible = entries.some(function(en){ return en.isIntersecting; });
+      rowSeen = entries.some(function(en){ return en.isIntersecting; });
+      visible = rowSeen && !document.hidden;
+      idleGate();
       schedule();
     }, { threshold: 0 }).observe(chips[0].closest('.flankrow') || chips[0]);
   }
+  // WHY: the timers above only stop the POSES. The long idle is a CSS animation
+  // and kept running off screen; this class pauses it (see .mascots-off).
+  var rowSeen = true;
+  function idleGate(){ document.documentElement.classList.toggle('mascots-off', !visible || document.hidden); }
   document.addEventListener('visibilitychange', function(){
-    visible = !document.hidden; schedule();
+    // WHY rowSeen: coming back to the tab used to mark the row visible even when
+    // it was scrolled away, restarting the poses nobody could see.
+    visible = !document.hidden && rowSeen; idleGate(); schedule();
   });
   if (reduced.addEventListener) reduced.addEventListener('change', schedule);
   schedule();
@@ -3315,7 +3541,8 @@ function playSlides(list, hidden){
   if (list.length === playing.length && list.every(function(n, i){ return n === playing[i]; })) return;
   var was = playing; playing = list;
   slides.forEach(function(s, n){
-    if (s.tagName !== 'VIDEO') return;
+    // WHY: the drawn keyboard demo is a slide too; it idles exactly when a clip would pause.
+    if (s.tagName !== 'VIDEO') { if (s.__idle) s.__idle(list.indexOf(n) < 0); return; }
     if (list.indexOf(n) < 0) {
       s.pause();
       // WHY: a clip paused mid-story and rewound later, while its card is on
@@ -3379,6 +3606,16 @@ function warm(v){
   // file once for warm() and a second time for play(). Measured 2026-09-03
   // over the whole page: 7,381KB of video for 3,700KB of clips, every one of
   // the nine downloaded twice, both full 200s. Costs a phone 3.7MB.
+  // WHY: a clip that was never fetched still carries whatever theme its markup
+  // or an earlier theme change gave it (see rethemeClips). Fix that here, the
+  // one place a download starts. load() is needed only when the file changes --
+  // and nothing is in flight yet, so it cannot cause the double fetch above.
+  var s = v.dataset.clip && v.querySelector('source');
+  if (s && s.getAttribute('src') !== clipBase(v) + '.webm') {
+    v.setAttribute('poster', clipBase(v) + '.webp');
+    s.setAttribute('src', clipBase(v) + '.webm');
+    v.preload = 'auto'; v.load(); return;
+  }
   v.preload = 'auto';
 }
 function show(i){
@@ -3524,7 +3761,7 @@ if (document.querySelector('.demo-deck')) {
     if (!narrowStyled) {
       // Clear whatever the desktop driver last wrote, in case the window was
       // resized (or rotated) across the breakpoint mid-scroll.
-      steps.forEach(function(s){ s.style.removeProperty('--d'); s.classList.remove('buried'); });
+      steps.forEach(function(s){ s.style.removeProperty('--d'); s.__d = null; s.classList.remove('buried'); s.classList.remove('gone'); });
       narrowStyled = true;
     }
     var mid = innerHeight / 2, best = -1, bd = 1e9;
@@ -3599,12 +3836,22 @@ if (document.querySelector('.demo-deck')) {
       if (d >= 1 || y - scrollY > innerHeight) hiddenClips.push(n);
       // Warm two screens ahead so frame 0 is decoded before the clip starts and
       // the poster-to-video swap happens off screen, not under the reader.
-      if (y - scrollY < innerHeight * 2 && slides[n]) warm(slides[n]);
+      // WHY the second test (2026-11-11): a theme change now un-fetches the clips
+      // that are not playing, and without a floor every card already scrolled
+      // PAST counted as "near" and downloaded the new theme's file for nothing.
+      if (y - scrollY < innerHeight * 2 && y + stride - scrollY > -innerHeight && slides[n]) warm(slides[n]);
     });
     // ---- writes ----
     for (var w = 0; w < writes.length; w += 2) {
-      writes[w].style.setProperty('--d', writes[w + 1].toFixed(3));
+      // WHY the cache: most cards sit at a clamped 0 or 2.2 for most of the page;
+      // re-writing an unchanged value still cost a style pass per card per frame.
+      var dv = writes[w + 1].toFixed(3);
+      if (writes[w].__d === dv) continue;
+      writes[w].__d = dv;
+      writes[w].style.setProperty('--d', dv);
       writes[w].classList.toggle('buried', writes[w + 1] > 0.002);
+      // 1.18 = just past 1/.85, where the card's opacity has reached 0 (see .gone).
+      writes[w].classList.toggle('gone', writes[w + 1] >= 1.18);
     }
     show(best);
     // Once the whole deck is behind you, nothing should still be looping.
@@ -4507,10 +4754,9 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
     HERO_SEQUENCE.forEach(function(step){
       var t = THEMES[step.theme];
       if (!t || !t.wall) return;       // a gradient theme has no file to wait for
-      var img = new Image();
-      img.src = t.wall;
-      waits.push(img.decode ? img.decode().catch(function(){})
-        : new Promise(function(done){ img.onload = img.onerror = done; }));
+      // WHY wallReady: one shared fetch-and-decode per wallpaper, so applyTheme()
+      // knows this picture is finished and starts its fade without waiting again.
+      waits.push(wallReady(t.wall));
     });
     return Promise.all(waits);
   }
@@ -4532,7 +4778,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 R.forEach(function(row,i){var r=document.createElement('div');r.className='kr'+(i==1?' ix':'');
  row.split('').forEach(function(c){var k=document.createElement('div'),cl='k';
   if('^<#>'.indexOf(c)>-1)cl+=' w f';if(c==','||c=='.'||c=='#')cl+=' f';if(c=='>')cl=cl.replace(' f',' e');if(c==' ')cl+=' sp';if(c=='#')cl+=' q';
-  if(lit[c]!=null){cl+=' l';k.style.setProperty('--d',lit[c]+'s')}
+  if(lit[c]!=null){cl+=' l';k.style.setProperty('--kd',lit[c]+'s')}
   k.className=cl;
   var g={'^':'d-sh','<':'d-bk','>':'d-rt'}[c];
   if(g)k.innerHTML='<svg class="ic"><use href="#'+g+'"/></svg>';else k.textContent=c=='#'?'?123':c==' '?'space':c;
@@ -4542,7 +4788,12 @@ if(matchMedia('(prefers-reduced-motion:reduce)').matches){d.classList.add('is-da
 var w=d.querySelector('.warm'),a,b;
 function go(){clearTimeout(a);clearTimeout(b);d.classList.remove('is-dark');
  a=setTimeout(function(){d.classList.add('is-dark')},800);b=setTimeout(function(){d.classList.remove('is-dark')},6400)}
-w.addEventListener('animationstart',go);w.addEventListener('animationiteration',go)})();
+w.addEventListener('animationstart',go);w.addEventListener('animationiteration',go);
+/* WHY: going idle (see .dv-idle; the deck calls this) also cancels the pending dark-mode
+   flip -- left alone it fired later and ran a half-second colour fade across the whole
+   hidden drawing. Start idle unless the deck already counts this card as playing. */
+d.__idle=function(off){d.classList.toggle('dv-idle',off);if(off){clearTimeout(a);clearTimeout(b);d.classList.remove('is-dark')}};
+try{d.__idle(playing.indexOf(slides.indexOf(d))<0)}catch(e){}})();
 </script>
 <script>
 // --- Tips over the live demo (2026-10-21). Chips hang under the demo's own toolbar buttons,
@@ -4644,6 +4895,11 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
   }
   var items = [], built = '';
   function render(force){
+    // WHY the early exit (2026-11-11, site speed pass): tips exist only once the
+    // visitor has clicked into the demo, but this ran on every change inside the
+    // demo regardless, and detect() measures buttons -- forcing the demo to be
+    // re-laid-out mid-frame (20ms+ on each theme click) to draw nothing.
+    if (!embed.classList.contains('interactive')) { layer.classList.remove('on', 'off'); built = ''; return; }
     var d = doc(); mode = detect(d);
     var live = mode && mode !== 'page' && embed.classList.contains('interactive'), show = live && !hidden;
     layer.classList.toggle('on', show); layer.classList.toggle('off', live && hidden);

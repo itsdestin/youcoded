@@ -2,6 +2,7 @@
 // Electron main process, no PTY and no remote server. See
 // docs/active/specs/2026-07-29-ui-workbench-design.md.
 
+import { markTerminalLayout } from '../../device';
 import { createStore } from './mock-store';
 import { createMockShim } from './mock-shim';
 import { SCENARIO_IDS, type ScenarioId } from './scenarios';
@@ -90,7 +91,10 @@ function declarePlatform(): void {
   // toggleOnLeft) still see 'electron' — film the phone NARROW (390 wide), where
   // the narrow layout hides that toggle anyway.
   // `typeof location` guard: workbench-install-mock.test.ts runs this in Node.
-  if (!w.__PLATFORM__ && typeof location !== 'undefined' && new URLSearchParams(location.search).get('platform') === 'android') w.__PLATFORM__ = 'android';
+  // WHY 'desktop' too (2026-11-09): that is what a computer tells a MOUSE laptop's browser it is (remote-server.ts
+  // authOkMessage), and nothing could picture that device: its terminal is half computer, half phone.
+  const wantPlatform = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('platform') : null;
+  if (!w.__PLATFORM__ && (wantPlatform === 'android' || wantPlatform === 'desktop')) w.__PLATFORM__ = wantPlatform;
   // `?connection=remote` renders the app as a PHONE BROWSER paired to a desktop: the
   // platform a remote shim reports ('browser') and the connection mode it declares on
   // auth ('remote'). This is what every isRemoteMode() branch keys on — the theme
@@ -105,6 +109,9 @@ function declarePlatform(): void {
   if (typeof document !== 'undefined' && !document.documentElement.dataset.platform) {
     document.documentElement.dataset.platform = w.__PLATFORM__;
   }
+  // WHY: device.ts labelled the terminal layout when it loaded, before the lines above chose a device; the real
+  // app re-labels after its handshake (remote-shim), so the practice app must too or styles and script disagree.
+  markTerminalLayout();
 }
 
 export function installMock(): void {

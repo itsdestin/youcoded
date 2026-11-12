@@ -95,15 +95,25 @@ and **2048** are solo and never touch the network to be playable.
   "31 pipes" and "12,480" are the registry's words. Guarded by
   `tests/arcade-authority.test.ts` and the `arcade-*` ast-grep rules
   (`scripts/ast-grep/rules/` in the workspace).
-- **PartyKit server:** `partykit/` — `connectfour` → `src/connect-four-room.ts`,
-  `chess` → `src/chess-room.ts`. Both are **relays that know no rules**; each
-  client re-validates every incoming move (chess.js lives in the renderer, not in
-  the party). Those two are the ONLY parties any client connects to
+- **Game rooms live in the marketplace Worker** (moved 2026-11-01 — hosted
+  PartyKit shut down 2026-10-23 and deleted its projects; `desktop/partykit/` is
+  gone). `wecoded-marketplace/worker/src/games/relay-room.ts` holds `ConnectFourRoom`
+  and `ChessRoom` (Durable Objects built with the `partyserver` package). Both are
+  **relays that know no rules**; each client re-validates every incoming move
+  (chess.js lives in the renderer). They are the ONLY parties any client connects to
   (`party: 'connectfour'` / `party: 'chess'`).
-  - `src/lobby-room.ts` is still `main` in `partykit.json` but **nothing in the
-    app connects to it** — presence and challenges moved to the marketplace
-    Worker's presence Durable Object. Treat it as legacy, not as the lobby.
-  - Deploy: `cd partykit && npx partykit deploy` · Dev: `npx partykit dev` (:1999)
+  - URL: `wss://api.youcoded.ai/parties/<connectfour|chess>/<room>?ticket=…` — a one-time pass from
+    `POST /games/ticket` (signed in), fetched per connection through `arcade:room-ticket`; the room names the
+    player from the pass and closes itself after 6 hours or 30 idle minutes (2026-11-09)
+    (`party-client.ts` `PARTYKIT_HOST`, overridable with `VITE_PARTYKIT_HOST`;
+    partysocket's default `/parties/` prefix matches the Worker). The party name
+    comes from the Worker binding name (`CONNECTFOUR` → `connectfour`) — renaming a
+    binding breaks every client.
+  - A plain GET to a room answers 404 "Not implemented" (websocket-only);
+    `test-engine/services-watch.mjs` treats exactly that as healthy.
+  - Deploy: automatic with the Worker (marketplace repo master). **Builds older
+    than this change still point at the dead `youcoded-games.itsdestin.partykit.dev`
+    host — online matches stay broken there until the user updates.**
 - **Presence, challenges and head-to-head:** `src/renderer/hooks/usePresence.ts`
   against the Worker's `presence-room.ts` DO. (`usePartyLobby.ts` is deleted.)
   A match becomes a permanent record only when BOTH players report and agree —
@@ -134,7 +144,7 @@ The app uses a semantic CSS token system for theming. All colors are CSS custom 
 - **Persistence:** the source of truth is `~/.claude/youcoded-appearance.json` (`appearance:get`/`appearance:set` in `ipc-handlers.ts`; `persistAppearance()` in `theme-context.tsx`) — active theme slug, theme cycle, `lookOverrides` (the user's GLOBAL layout / glass / bubble / roundness choices laid over every theme; a chosen layout also brings its matching message box — `themes/look-overrides.ts`; absent field = the theme's own; the old per-theme `glassOverrides` were retired 2026-09-24 and are no longer read), display toggles. `localStorage` keys (`youcoded-theme`, …) are only a mirror for the pre-React anti-flash read. Community and user themes live at `~/.claude/wecoded-themes/<slug>/manifest.json` with assets beside it. Anything outside the app that must follow the applied theme reads the JSON file, not localStorage.
 - **Status bar pill:** Cycles through user-configured subset of themes (configurable in appearance popup)
 - **highlight.js:** Dynamically swaps between `github-dark.css` and `github.css` via inline `?inline` CSS imports managed in ThemeProvider
-- **xterm.js:** Reads `--canvas` and `--fg` CSS variables for terminal colors, syncs reactively on theme change. WebGL renderer is always loaded for performance. When a wallpaper, gradient, or glassmorphism background is active, the terminal container uses `opacity: 0.88` to let the background peek through (xterm itself stays opaque — WebGL requires it).
+- **xterm.js:** Reads `--canvas` and `--fg` CSS variables for terminal colors, syncs reactively on theme change. Every terminal gets the WebGL renderer, within a per-window pool of 16 layers (the browser's limit per page, `components/terminal-webgl.ts`): at 16 chats or fewer nothing changes; past that, a terminal being shown takes the layer of the hidden terminal shown least recently, which falls back to idle DOM drawing and keeps its xterm and buffer. When a wallpaper, gradient, or glassmorphism background is active, the terminal container uses `opacity: 0.88` to let the background peek through (xterm itself stays opaque — WebGL requires it).
 - **Anti-FOUC:** Theme + font applied before React mounts in `index.tsx`
 
 **Key rule:** Status colors (green, red, amber, blue, orange) are theme-independent and stay hardcoded. Only surface/text/border colors use semantic tokens.

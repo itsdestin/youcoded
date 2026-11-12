@@ -931,6 +931,118 @@ describe('preview panel', () => {
       expect(strip).not.toHaveAttribute('data-tucked');
     });
 
+    // Card #190: in a conversation too short to scroll, the reader can never
+    // slide the card away, so its caption and first message stayed under it.
+    // jsdom lays nothing out: the card's height, the pane's visible height and
+    // its content height are driven by hand. Reserved room counts toward the
+    // scroll height exactly as real padding would.
+    describe('room under the card for a conversation too short to scroll', () => {
+      const layout = { natural: 300, client: 600, card: 64 };
+      const isScroller = (el: Element) => el.matches('[data-preview-id] .overflow-y-auto');
+      const proto = HTMLElement.prototype as any;
+      const saved: Record<string, PropertyDescriptor | undefined> = {};
+      let roCallbacks: ResizeObserverCallback[] = [];
+      // What each live observer watches, so a test can say which layer is observed.
+      let roLive: Array<{ observed: Element[]; live: boolean }> = [];
+      let savedRO: typeof ResizeObserver;
+      beforeEach(() => {
+        layout.natural = 300; layout.client = 600; layout.card = 64;
+        for (const k of ['offsetHeight', 'clientHeight', 'scrollHeight']) saved[k] = Object.getOwnPropertyDescriptor(proto, k);
+        Object.defineProperty(proto, 'offsetHeight', { configurable: true, get(this: HTMLElement) { return this.classList.contains('preview-header-slide') ? layout.card : 0; } });
+        Object.defineProperty(proto, 'clientHeight', { configurable: true, get(this: HTMLElement) { return isScroller(this) ? layout.client : 0; } });
+        Object.defineProperty(proto, 'scrollHeight', { configurable: true, get(this: HTMLElement) {
+          if (!isScroller(this)) return 0;
+          return Math.max(layout.client, layout.natural + (this.style.paddingTop ? layout.card : 0));
+        } });
+        // A recording observer, so a test can say "the content changed size".
+        roCallbacks = []; roLive = [];
+        savedRO = window.ResizeObserver;
+        window.ResizeObserver = class {
+          private rec = { observed: [] as Element[], live: true };
+          constructor(cb: ResizeObserverCallback) { roCallbacks.push(cb); roLive.push(this.rec); }
+          observe(el: Element) { this.rec.observed.push(el); } unobserve() {} disconnect() { this.rec.live = false; }
+        } as unknown as typeof ResizeObserver;
+      });
+      afterEach(() => {
+        for (const [k, d] of Object.entries(saved)) {
+          if (d) Object.defineProperty(proto, k, d); else delete proto[k];
+        }
+        window.ResizeObserver = savedRO;
+      });
+      const pick = async () => {
+        const { container } = open();
+        fireEvent.click(await screen.findByText('Permission ask timeout'));
+        await waitFor(() => expect(screen.getByText(/why did the ask time out/)).toBeInTheDocument());
+        await waitFor(() => expect(container.querySelector('.preview-header-slide')).not.toBeNull());
+        const strip = container.querySelector('.preview-header-slide')!;
+        const scroller = container.querySelector(`[data-preview-id="${row().sessionId}"] .overflow-y-auto`) as HTMLElement;
+        return { strip, scroller };
+      };
+
+      it('reserves the card\'s measured height above a short conversation and holds the card in place', async () => {
+        setViewport(false);
+        mockClaude([row()]);
+        const { strip, scroller } = await pick();
+        // The card's measured 64px on top of the pane's own 0.75rem (the
+        // browser may write the two terms in either order).
+        await waitFor(() => expect(scroller.style.paddingTop).toMatch(/^calc\((0\.75rem \+ 64px|64px \+ 0\.75rem)\)$/));
+        expect(scroller).toHaveAttribute('data-top-reserved');
+        // Scrolling cannot slide the card away from the room kept for it.
+        // (A 50px move up is well past the tuck threshold.)
+        let top = 50;
+        Object.defineProperty(scroller, 'scrollTop', { configurable: true, get: () => top, set: () => {} });
+        fireEvent.scroll(scroller);
+        top = 0;
+        fireEvent.scroll(scroller);
+        expect(strip).not.toHaveAttribute('data-tucked');
+      });
+
+      it('reserves nothing for a conversation long enough to scroll', async () => {
+        setViewport(false);
+        mockClaude([row()]);
+        layout.natural = 3000;
+        const { scroller } = await pick();
+        // settle: the layout effects have run once the conversation is drawn.
+        expect(scroller.style.paddingTop).toBe('');
+        expect(scroller).not.toHaveAttribute('data-top-reserved');
+      });
+
+      it('releases the room when the content grows past the visible height, and takes it again when it fits', async () => {
+        setViewport(false);
+        mockClaude([row()]);
+        const { scroller } = await pick();
+        await waitFor(() => expect(scroller).toHaveAttribute('data-top-reserved'));
+        // Exactly the visible height still fits (cannot scroll).
+        layout.natural = 600;
+        act(() => { for (const cb of roCallbacks) cb([], {} as ResizeObserver); });
+        expect(scroller).toHaveAttribute('data-top-reserved');
+        layout.natural = 601;
+        act(() => { for (const cb of roCallbacks) cb([], {} as ResizeObserver); });
+        expect(scroller.style.paddingTop).toBe('');
+        expect(scroller).not.toHaveAttribute('data-top-reserved');
+        // A taller window: it fits again.
+        layout.client = 900;
+        act(() => { for (const cb of roCallbacks) cb([], {} as ResizeObserver); });
+        expect(scroller).toHaveAttribute('data-top-reserved');
+      });
+
+      it('a conversation kept loaded behind the one on screen is not observed for resizes', async () => {
+        setViewport(false);
+        const other = row({ sessionId: 'b4e3bbbb-2222-4222-8222-222222222222', name: 'Other chat' });
+        mockClaude([row(), other]);
+        const { scroller } = await pick();
+        const watched = (el: Element) => roLive.some((o) => o.live && o.observed.includes(el));
+        await waitFor(() => expect(watched(scroller)).toBe(true));
+        fireEvent.click(await screen.findByText('Other chat'));
+        await waitFor(() => expect(document.querySelector(`[data-preview-id="${other.sessionId}"] .overflow-y-auto`)).not.toBeNull());
+        const shown = document.querySelector(`[data-preview-id="${other.sessionId}"] .overflow-y-auto`)!;
+        await waitFor(() => expect(watched(shown)).toBe(true));
+        // The first conversation is still built (hidden), but nothing watches it.
+        expect(scroller.isConnected).toBe(true);
+        expect(watched(scroller)).toBe(false);
+      });
+    });
+
     it('reads the conversation ONCE per row, not on every keystroke in the search box', async () => {
       setViewport(false);
       mockClaude([row()]);

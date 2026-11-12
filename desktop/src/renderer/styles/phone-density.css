@@ -1,0 +1,83 @@
+/* Phone-width chat density (card #213).
+
+   WHY (Destin, 2026-11-01 phone retest): "reduce space between lines, space between bubbles,
+   left/right margins, etc to get more text on each page, kinda like what we've done for the buddy
+   floater but better." Measured on a 390px-wide phone before this: an assistant bubble was 270px
+   wide with 230px of text — 59% of the screen — because the computer's row gutters (16px), width
+   caps (85% / 80%) and bubble padding (20px a side) all applied unchanged.
+
+   These are the buddy floater's rules (buddy.css → "Side gutters", "Bubbles use nearly the full
+   row") brought to the phone, with a little more room than the buddy's 320px window needs.
+
+   Scope: only below the app's one narrow breakpoint (639.98px — use-narrow-viewport.ts and
+   Tailwind's max-sm, the same number), and never in the buddy's own windows, which are narrower
+   still and keep their own rules. Unlayered on purpose: it must beat the row's Tailwind classes. */
+
+@media (max-width: 639.98px) {
+  /* 1. Side gutters 16px → 8px on every chat row. */
+  html:not([data-mode^="buddy"]) .timeline-entry > .px-4,
+  html:not([data-mode^="buddy"]) .chat-scroll .in-view.px-4 {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  /* 2. The space above and below your own messages 8px → 4px, matching Claude's. */
+  html:not([data-mode^="buddy"]) .timeline-entry > .py-2 {
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+  /* 3. Bubbles use nearly the whole row: the computer's caps left a dead column on the right. */
+  html:not([data-mode^="buddy"]) .assistant-bubble { max-width: 96%; }
+  html:not([data-mode^="buddy"]) .user-bubble { max-width: 88%; }
+  /* 4. Padding inside a bubble 20px → 14px a side, 12-16px → 10px top and bottom. */
+  html:not([data-mode^="buddy"]) .assistant-bubble,
+  html:not([data-mode^="buddy"]) .user-bubble {
+    padding: 10px 14px;
+  }
+  /* 5. Line spacing 1.625 → 1.5 and the gap between paragraphs 12px → 8px. */
+  html:not([data-mode^="buddy"]) .assistant-bubble p,
+  html:not([data-mode^="buddy"]) .assistant-bubble li {
+    line-height: 1.5;
+  }
+  html:not([data-mode^="buddy"]) .assistant-bubble p:not(:last-child) {
+    margin-bottom: 8px;
+  }
+}
+
+/* 6. Message times (density-review D-5, Destin: "a smarter/smoother way to hide times on old messages while allowing
+   users to see them when needed"): only the newest message and the first after a 30-minute break keep their time
+   (state/message-time-marks.ts → data-time-mark); a tap on any other message shows its time (ChatTimelineRow →
+   data-time-shown). Only ChatView marks rows, and only on a phone, so previews and the computer keep every time. */
+@media (max-width: 639.98px) {
+  html:not([data-mode^="buddy"]) .timeline-entry[data-time-mark="tap"]:not([data-time-shown]) .bubble-timestamp {
+    display: none;
+  }
+}
+
+/* 7. No scrollbar in the chat on a phone (Destin, 2026-11-02: the scrollbar "popping in/out of the chat window when it
+   shrinks makes all of the text and such on screen shift"; then, of a reserved 4px lane: "it looks odd and messages
+   and such look off center"). A phone scrolls by touch, the way phone chat apps do with no bar; the jump-to-newest
+   button still shows when you have scrolled up.
+   WHY touch only (Destin, final review: a narrow COMPUTER window gets the phone's "spacing yes, rest no"): this used
+   to key on width alone, so a mouse user who snapped the window to half a screen lost the chat's scroll bar. */
+@media (max-width: 639.98px) and (pointer: coarse), (max-width: 639.98px) and (hover: none) {
+  html:not([data-mode^="buddy"]) .chat-scroll {
+    scrollbar-width: none;
+  }
+  html:not([data-mode^="buddy"]) .chat-scroll::-webkit-scrollbar {
+    display: none;
+  }
+}
+/* The phone app itself, whatever its WebView reports about its pointer. */
+@media (max-width: 639.98px) {
+  html[data-platform="android"]:not([data-mode^="buddy"]) .chat-scroll { scrollbar-width: none; }
+  html[data-platform="android"]:not([data-mode^="buddy"]) .chat-scroll::-webkit-scrollbar { display: none; }
+}
+
+/* WHY nearer the edge without a frame (Destin, 2026-11-03: "in floating themes the terminal should go to the left/right
+   edge of the phone because there is no frame"): the 12px left space (globals.css, "2026-11-01 phone test") only clears the frame's outline. Floating styles have
+   none, so the text starts where the chat's messages do. */
+@media (max-width: 639.98px) {
+  body:is([data-chrome-style="floating"], [data-chrome-style="float"], [data-input-style="floating"]) .terminal-overlay-scroll .xterm {
+    padding-left: 6px;
+  }
+}

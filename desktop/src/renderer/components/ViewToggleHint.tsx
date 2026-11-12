@@ -1,3 +1,4 @@
+import { prefersTouchInput } from '../utils/touch-input';
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { OverlayPanel, CONTENT_Z } from './overlays/Overlay';
@@ -142,7 +143,8 @@ export default function ViewToggleHint({ onDismiss }: Props) {
         }}
       >
         <span className="text-2xs font-medium leading-snug whitespace-nowrap">
-          Click here to switch back to chat view
+          {/* WHY: "Click" on a phone read as keyboard-and-mouse wording (2026-11-01 phone test). */}
+          {prefersTouchInput() ? 'Tap here to switch back to chat view' : 'Click here to switch back to chat view'}
         </span>
         <CloseButton
           label="Dismiss hint"

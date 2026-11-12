@@ -12,7 +12,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { readFolders, writeFolders, pathKey, type SavedFolder } from './saved-folders';
+import { readFolders, writeFolders, homeIsAppPrivate, withoutPrivateHome, pathKey, type SavedFolder } from './saved-folders';
 import { getManagedRoots, isRemovedProject } from './sync-spaces/service';
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 
@@ -42,10 +42,12 @@ export function isRemovedFromLists(folderPath: string, saved: SavedFolder[]): bo
 /** Saved folders (seeded with Home on first use), then every synced project not already saved. */
 export function listPickerFolders(file?: string): PickerFolder[] {
   let folders = readFolders(file);
-  if (folders.length === 0) {
+  if (folders.length === 0 && !homeIsAppPrivate()) {
     folders = [{ path: os.homedir(), nickname: 'Home', addedAt: Date.now() }];
     writeFolders(folders, file);
   }
+  // The phone never lists its app-private home (saved-folders.ts → homeIsAppPrivate).
+  folders = withoutPrivateHome(folders);
   // A synced project removed on any device leaves this list too (backlog row 10) — saved
   // entries for it (the import flow writes one) and its synthesized row below.
   const saved = folders;

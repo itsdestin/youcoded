@@ -27,7 +27,7 @@ const PERFORMANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
         "wallpapers and blur effects, and the chat history scrolls smoothly. " +
         "On a laptop with a discrete GPU, that work belongs on the discrete " +
         "card — it has its own memory and cooling and won't compete with " +
-        "everything else your computer is doing.",
+        "everything else your device is doing.",
       ],
     },
     {

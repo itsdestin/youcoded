@@ -1,8 +1,15 @@
 import React, { useEffect, useLayoutEffect, useRef } from 'react';
+import { hiddenTerminalSize, savedTerminalBottomInset, saveTerminalBottomInset, saveProgramSize } from './terminal-hidden-size';
+import { keepProgramSize, gridOverflow, type SizeBasis } from './terminal-size-lock';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { applyClaudeCodeWidths } from '../../shared/terminal-widths';
 import { WebglAddon } from '@xterm/addon-webgl';
+import {
+  releaseWebgl, claimWebglSlot, releaseWebglSlot, noteWebglShown, webglSlotFree, type WebglHolder,
+  webglContextOf, loseWebglContext, trimWebglPool,
+  noteWebglWorks, webglWorksHere, rememberWebglCell, webglCellFor,
+} from './terminal-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { usePtyOutput } from '../hooks/useIpc';
 import { usePtyRawBytes } from '../hooks/usePtyRawBytes';
@@ -13,10 +20,12 @@ import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { attachRenderPause, type RenderPause } from './xterm-render-pause';
 import { useTheme } from '../state/theme-context';
-import { getCapabilities, isTouchDevice } from '../platform';
+import { getCapabilities } from '../platform';
+import { phoneTerminalLayout } from '../device';
 import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } from '../workbench-mode';
 import { computeTerminalSurface } from '../themes/theme-engine';
 import { ScreenMark } from '../shoot-mode';
+import { swipeAction } from './terminal-swipe';
 
 // Photo-only build flag (vite.config.ts `define`); see shoot-mode.tsx.
 declare const __SHOOT__: boolean;
@@ -82,7 +91,14 @@ function TerminalView({ sessionId, visible }: Props) {
   // Re-attach helper exposed across effects so the theme effect can recover
   // WebGL using the same construction + onContextLoss handler shape as the
   // mount effect (with the shared retry-cap counter).
-  const attachWebglRef = useRef<(() => void) | null>(null);
+  const attachWebglRef = useRef<((mayTakeHiddenLayer: boolean) => boolean) | null>(null);
+  // WHY (card 106): the window's WebGL layers stay within the browser's limit of 16 —
+  // see terminal-webgl.ts. The visibility layout effect calls showWebgl, which lives in the
+  // mount effect so it shares the retry counter there.
+  const showWebglRef = useRef<(() => boolean) | null>(null);
+  // Set by the visibility layout effect: did THIS show build a brand-new WebGL layer?
+  // The glyph-atlas heal below skips a show that did (see the WHY there).
+  const freshLayerOnShowRef = useRef(false);
   // WHY: pauses this terminal's DRAWING (never its buffer) while hidden — see
   // xterm-render-pause.ts. Null when the installed xterm lacks the hook.
   const renderPauseRef = useRef<RenderPause | null>(null);
@@ -152,8 +168,10 @@ function TerminalView({ sessionId, visible }: Props) {
       // Ensure WebGL is attached (may have been disposed by a previous version
       // or by a prior context loss). Delegates to attachWebgl from the mount
       // effect so we share the same onContextLoss recovery + retry cap.
+      // WHY the argument (card 106): a shown terminal may take a hidden one's layer if the
+      // window is at its WebGL limit; a hidden one rebuilds only into a free slot.
       if (!webglRef.current) {
-        attachWebglRef.current?.();
+        attachWebglRef.current?.(visibleRef.current);
       }
     });
   }, [activeTheme, xtermBackground]);
@@ -166,7 +184,8 @@ function TerminalView({ sessionId, visible }: Props) {
     // xterm's hidden textarea (which would summon the soft keyboard and
     // expose the historical xterm.js mobile IME issues). disableStdin
     // suppresses xterm's input handling entirely.
-    const touch = isTouchDevice();
+    // WHY phoneTerminalLayout (2026-11-10): the same one rule as the message box and the size lock (device.ts).
+    const touch = phoneTerminalLayout();
     const terminal = new Terminal({
       allowProposedApi: true,
       cursorBlink: true,
@@ -260,14 +279,39 @@ function TerminalView({ sessionId, visible }: Props) {
     const RETRY_RESET_MS = 30 * 60 * 1000;
     let webglContextLossRetries = 0;
     let lastContextLossAt = 0;
-    const attachWebgl = () => {
+    // WHY a holder (card 106): this terminal's place in the window's WebGL pool
+    // (terminal-webgl.ts). The pool asks it whether it is on screen and, when the
+    // window is at its limit and another terminal is being shown, takes its layer back.
+    const holder: WebglHolder = {
+      isVisible: () => visibleRef.current,
+      evict: () => releaseLayer(),
+    };
+    /** Give this terminal's layer back now (pool eviction; closing the terminal releases in its cleanup). */
+    const releaseLayer = () => {
+      const webgl = webglRef.current;
+      releaseWebglSlot(holder);
+      if (!webgl) return;
+      webglRef.current = null;   // first, so a late loss event for this layer is ignored
+      releaseWebgl(webgl);
+    };
+    /**
+     * Build a WebGL layer; true when one was built by this call.
+     * `mayTakeHiddenLayer`: at the window's limit, take the least recently shown hidden
+     * terminal's layer (only for a terminal being shown); otherwise build only into a free slot.
+     */
+    const attachWebgl = (mayTakeHiddenLayer: boolean): boolean => {
       const term = terminalRef.current ?? terminal;
-      if (!term) return;
+      if (!term || webglRef.current) return false;   // one layer at a time
+      if (!mayTakeHiddenLayer && !webglSlotFree()) return false;
+      claimWebglSlot(holder);
       try {
         const webgl = new WebglAddon();
         webgl.onContextLoss(() => {
+          // A layer this terminal already gave back (releaseLayer) is not a loss to recover from.
+          if (webglRef.current !== webgl) return;
           webgl.dispose();
           webglRef.current = null;
+          releaseWebglSlot(holder);   // a lost context no longer counts against the limit
           const now = Date.now();
           if (now - lastContextLossAt > RETRY_RESET_MS) {
             webglContextLossRetries = 0;
@@ -279,7 +323,8 @@ function TerminalView({ sessionId, visible }: Props) {
             return;
           }
           webglContextLossRetries += 1;
-          attachWebgl();
+          // As before, rebuilt at once — a hidden terminal only into a free slot (card 106).
+          attachWebgl(visibleRef.current);
           // Repaint visible cells from the buffer so corrupted glyphs from
           // the disposed atlas are replaced immediately (don't wait for the
           // next resize/scroll).
@@ -287,12 +332,34 @@ function TerminalView({ sessionId, visible }: Props) {
         });
         term.loadAddon(webgl);
         webglRef.current = webgl;
+        noteWebglWorks();   // a terminal without a layer in this window will get one when shown (sizingCell — why)
+        return true;
       } catch {
         // Falls back to DOM renderer if WebGL unavailable
+        releaseWebglSlot(holder);
+        return false;
       }
     };
-    attachWebgl();
+    // WHY the pool (card 106): the browser allows a page 16 WebGL contexts and kills the
+    // oldest past that. Below the limit this is exactly the old behaviour — a layer built
+    // at mount and kept while hidden. At the limit, a terminal mounted hidden starts
+    // without one (DOM drawing, kept idle by the render pause) and gets one when shown,
+    // taking it from the hidden terminal shown least recently. The xterm, its buffer,
+    // size and write/acknowledge path never change (the prompt detector, attention
+    // classifier and menu drivers read that buffer); only the drawing layer moves.
+    attachWebgl(visibleRef.current);
     attachWebglRef.current = attachWebgl;
+    // After three losses in a row the terminal stays on DOM drawing (the rule above).
+    const gaveUpWebgl = () => webglContextLossRetries >= 3 && Date.now() - lastContextLossAt <= RETRY_RESET_MS;
+    showWebglRef.current = () => {
+      noteWebglShown(holder);
+      if (webglRef.current) return false;   // kept its layer: the usual case
+      // Showing it again must not start a fourth attempt inside that window.
+      if (gaveUpWebgl()) return false;
+      const built = attachWebgl(true);
+      if (built) noteWebglShown(holder);
+      return built;
+    };
 
     // Clipboard keys (Ctrl+C copy / Ctrl+V paste) — extracted to
     // terminal-key-handler.ts. The Ctrl+V branch preventDefaults the keydown
@@ -364,6 +431,9 @@ function TerminalView({ sessionId, visible }: Props) {
       lastCols = pendingCols;
       lastRows = pendingRows;
       window.claude.session.resize(sessionId, pendingCols, pendingRows);
+      // Remembered so the NEXT new session starts at this size (terminal-hidden-size.ts — why). Phone layout only
+      // (review, 2026-11-10): the computer terminal never uses it, and this wrote to storage on every window-drag step.
+      if (holdRowsOnTouch) saveProgramSize(pendingCols, pendingRows);
       // Fix: make resizing actually clear a corrupt glyph atlas. Resizing is
       // the first thing a user tries when text looks wrong, and until now it
       // did nothing for this failure mode (the repaint re-samples the same
@@ -384,16 +454,85 @@ function TerminalView({ sessionId, visible }: Props) {
       }
       hasFlushedResize = true;
     };
-    const fitAndSync = () => {
-      try {
-        const el = containerRef.current;
-        if (!el || el.clientWidth === 0 || el.clientHeight === 0) return;
-        fitAddon.fit();
-        writeWorkbenchScreenOnce();
-        // Container height changed → thumb proportions need to recompute.
-        updateThumb();
-        const dims = fitAddon.proposeDimensions();
-        if (!dims || !dims.cols || !dims.rows) return;
+    // WHY a hidden terminal still tells the program its size (Destin, 2026-11-03, a phone screenshot: Claude Code's
+    // banner and first reply printed twice). A terminal not on screen is collapsed to 0×0 (globals.css
+    // .terminal-hidden), so it never fitted: a new session's program ran at the spawn default (80×24 — the phone's
+    // log: "pty spawn size 80 24", then "resize 48 42" only when terminal view was first opened, 31 s later), drew
+    // its screen at 80 columns, and drew it all again at 48 when the terminal finally fitted. Now the size it will
+    // have is worked out from the box it will fill (terminal-hidden-size.ts, FitAddon's own arithmetic) and sent at
+    // once, so showing it later changes nothing. The terminal view's own bottom inset is remembered from the last time
+    // it was on screen: on a phone its input bar is not chat view's.
+    // WHY a size basis (terminal-size-lock.ts — the measurements): on a touch screen the program's size follows the
+    // WINDOW, not the chrome over the terminal. A hidden terminal's guess below, or the first fit, decides it; after
+    // that a fit with the same window, character size and column count keeps the rows and only slides the grid (see
+    // fitAndSync). Desktop (Electron) is unchanged: its terminal is not covered by a floating box, so it always fits.
+    const holdRowsOnTouch = phoneTerminalLayout();   // device.ts; keyboard.css's [data-term-lift] rule must agree
+    let basis: SizeBasis | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- FitAddon reads the same private field
+    const cellSize = (): { width: number; height: number } | undefined => (terminal as any)._core?._renderService?.dimensions?.css?.cell;
+    /** The character measure and zoom a cell size depends on (key for the remembered WebGL cell). */
+    const cellKey = (): string | null => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- xterm's private char measure (kept in its minified build)
+      const ch = (terminal as any)._core?._charSizeService;
+      return ch?.width > 0 && ch?.height > 0 ? `${ch.width}x${ch.height}@${window.devicePixelRatio || 1}` : null;
+    };
+    /**
+     * The cell to size a HIDDEN phone terminal's program by: the one its drawing will measure once shown.
+     * WHY (card 106 review): past 16 chats a hidden terminal can be without a WebGL layer, and DOM drawing measures a
+     * slightly wider cell than the layer it gets back when shown (terminal-webgl.ts, rememberWebglCell — why). With a
+     * layer this is the live cell, and it is remembered for the others. Without one, it is the remembered WebGL cell —
+     * or nothing (no hidden sizing, the program keeps its size) when none was measured at this font and zoom yet.
+     * DOM's own cell is used only where DOM is what the terminal will show with: no WebGL in this window at all, or
+     * this terminal gave up on it after repeated context losses.
+     */
+    const sizingCell = (): { width: number; height: number } | undefined => {
+      const cell = cellSize();
+      if (webglRef.current) {
+        const key = cellKey();
+        if (key && cell) rememberWebglCell(key, cell);
+        return cell;
+      }
+      if (!webglWorksHere() || gaveUpWebgl()) return cell;
+      const key = cellKey();
+      return key ? webglCellFor(key) : undefined;
+    };
+    const basisFor = (cols: number, cell = cellSize()): SizeBasis => {
+      return { winW: window.innerWidth, winH: window.innerHeight, cellW: cell?.width ?? 0, cellH: cell?.height ?? 0, cols };
+    };
+    /** Slide the grid up by however much its rows overhang its box (0 when they fit). keyboard.css adds it to the lift. */
+    let liftPx = -1;
+    const setGridLift = (el: HTMLElement) => {
+      if (!holdRowsOnTouch) return;
+      const xs = terminal.element ? getComputedStyle(terminal.element) : null;
+      const padY = xs ? (parseFloat(xs.paddingTop) || 0) + (parseFloat(xs.paddingBottom) || 0) : 0;
+      const px = gridOverflow(terminal.rows, cellSize()?.height ?? 0, padY, el.clientHeight);
+      if (px === liftPx) return;   // performance rule 6: skip an unchanged write
+      liftPx = px;
+      el.style.setProperty('--term-grid-lift', `${px}px`);
+    };
+    const proposeHidden = (el: HTMLElement) => {
+      const host = el.parentElement?.parentElement;
+      const cell = sizingCell();
+      if (!host || !terminal.element || !cell) return;
+      const cs = getComputedStyle(el);
+      const xs = getComputedStyle(terminal.element);
+      const px = (v: string) => parseFloat(v) || 0;
+      const size = hiddenTerminalSize({
+        hostWidth: host.clientWidth, hostHeight: host.clientHeight,
+        top: px(cs.top), bottom: savedTerminalBottomInset() ?? px(cs.bottom), left: px(cs.left), right: px(cs.right),
+        padTop: px(xs.paddingTop), padBottom: px(xs.paddingBottom), padLeft: px(xs.paddingLeft), padRight: px(xs.paddingRight),
+        scrollbarWidth: terminal.options.scrollback === 0 ? 0 : (terminal.options.overviewRuler?.width || 14),
+        cellWidth: cell.width, cellHeight: cell.height,
+      });
+      if (!size) return;
+      // Same window and columns as the size already decided: keep it. The guess uses a remembered (or chat view's)
+      // bottom inset, so it can be a row or two off the real fit; that is not worth a redraw.
+      if (keepProgramSize(basis, basisFor(size.cols, cell))) return;
+      if (terminal.cols !== size.cols || terminal.rows !== size.rows) terminal.resize(size.cols, size.rows);
+      basis = basisFor(size.cols, cell);
+      queueSize(size.cols, size.rows);
+    };
+    const queueSize = (cols: number, rows: number) => {
         // Dedup target: if a resize is already queued, compare against the
         // queued value (so re-proposing the same queued size is a no-op).
         // Otherwise compare against the last value actually sent to the PTY.
@@ -401,11 +540,45 @@ function TerminalView({ sessionId, visible }: Props) {
         // would skip the A update and let the stale B get flushed.
         const targetCols = debounceTimer !== null ? pendingCols : lastCols;
         const targetRows = debounceTimer !== null ? pendingRows : lastRows;
-        if (dims.cols === targetCols && dims.rows === targetRows) return;
-        pendingCols = dims.cols;
-        pendingRows = dims.rows;
+        if (cols === targetCols && rows === targetRows) return;
+        pendingCols = cols;
+        pendingRows = rows;
         if (debounceTimer !== null) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(flushResize, 120);
+    };
+    const fitAndSync = () => {
+      try {
+        const el = containerRef.current;
+        if (!el) return;
+        // WHY phone layout only (2026-11-09): sizing a hidden terminal was built for the phone's doubled banner and
+        // reached the computer app by accident (this line had no device check). There it could resize a session
+        // another window or a phone was showing, with none of the phone's keep-the-size guard. The computer app is
+        // back to the released behaviour: a hidden terminal does nothing (458c1356a, the 0x0 "bunched text" fix).
+        if (el.clientWidth === 0 || el.clientHeight === 0) { if (holdRowsOnTouch) proposeHidden(el); return; }
+        if (holdRowsOnTouch && visibleRef.current) saveTerminalBottomInset(parseFloat(getComputedStyle(el).bottom) || 0);
+        // Touch screen, same window, same columns: only the chrome over the terminal moved (a second line in the
+        // message box, the first show after a hidden guess). Keep the program's size — a resize would make Claude Code
+        // print lines twice — and slide the grid so its last rows stay above the box (terminal-size-lock.ts).
+        // A shown phone terminal (it has its layer) remembers the WebGL cell for hidden ones without (sizingCell).
+        if (holdRowsOnTouch) sizingCell();
+        const proposed = holdRowsOnTouch ? fitAddon.proposeDimensions() : undefined;
+        if (proposed?.cols && keepProgramSize(basis, basisFor(proposed.cols))) {
+          // WHY here too: a phone terminal that was sized while hidden takes this early exit on its first show, so the
+          // practice screen was never written and the phone terminal pictures came out empty (2026-11-09).
+          writeWorkbenchScreenOnce();
+          setGridLift(el);
+          updateThumb();
+          return;
+        }
+        fitAddon.fit();
+        writeWorkbenchScreenOnce();
+        // Container height changed → thumb proportions need to recompute.
+        updateThumb();
+        const dims = fitAddon.proposeDimensions();
+        if (!dims || !dims.cols || !dims.rows) return;
+        basis = basisFor(dims.cols);
+        setGridLift(el);
+        queueSize(dims.cols, dims.rows);
       } catch {
         // Ignore fit errors during teardown
       }
@@ -474,7 +647,15 @@ function TerminalView({ sessionId, visible }: Props) {
         const deltaPx = lastY - currentY + remainder;
         const lines = (deltaPx / PX_PER_LINE) | 0; // truncate toward zero
         if (lines !== 0) {
-          terminal.scrollLines(lines);
+          // Claude Code's fullscreen mode keeps its own history, so there the swipe becomes wheel
+          // reports to the program (terminal-swipe.ts — why; Destin 2026-11-08 "okay").
+          const action = swipeAction(lines, {
+            alternate: terminal.buffer.active.type === 'alternate',
+            mouseTracking: terminal.modes.mouseTrackingMode !== 'none',
+            cols: terminal.cols, rows: terminal.rows,
+          });
+          if (action.kind === 'send') window.claude.session.sendInput(sessionId, action.data);
+          else terminal.scrollLines(action.lines);
           remainder = deltaPx - lines * PX_PER_LINE;
         } else {
           remainder = deltaPx;
@@ -533,12 +714,21 @@ function TerminalView({ sessionId, visible }: Props) {
       // Clear the cross-effect helper so the theme effect can't call into
       // the disposed terminal between unmount and remount.
       attachWebglRef.current = null;
-      webglRef.current = null;
+      showWebglRef.current = null;
+      // The layer's context is taken now; the layer itself goes with the terminal below.
+      const closingGl = webglRef.current ? webglContextOf(webglRef.current) : null;
+      webglRef.current = null;   // first, so a late loss event for this layer is ignored
       renderPause?.dispose();
       renderPauseRef.current = null;
       disposed = true;
       terminalRef.current = null;   // a feeder still holding this terminal sees it is gone (isAlive)
+      // WHY the terminal first (card 106 review): disposing the terminal disposes its WebGL layer too, and a layer
+      // disposed while its terminal is still alive builds a replacement DOM renderer for it (a layout read), only for
+      // it to be thrown away at once — on every chat close. Then, as the pool requires: the closed chat's context goes
+      // back to the browser now, not whenever garbage collection frees its canvas, and its pool slot is freed.
       terminal.dispose();
+      loseWebglContext(closingGl);
+      releaseWebglSlot(holder);
     };
     // WHY only sessionId: see xtermBackgroundRef — a backing change recolours
     // in place via the theme effect, it must not rebuild the terminal.
@@ -550,6 +740,13 @@ function TerminalView({ sessionId, visible }: Props) {
   // sees the screen as it was when the pane was hidden. The buffer is never
   // paused — writes below keep landing in it, which the prompt detector reads.
   useLayoutEffect(() => {
+    // WHY first (card 106): a shown terminal that has no WebGL layer (the window was at its limit)
+    // gets one BEFORE drawing resumes, so the one repaint setHidden(false) queues is drawn by it,
+    // in this same frame. A terminal that kept its layer only becomes the most recently shown.
+    // Hiding never releases a layer: only the pool does, when the limit forces it — trimWebglPool gives one back
+    // only if more than 16 exist (after more than 16 terminals were on screen at once).
+    freshLayerOnShowRef.current = visible ? (showWebglRef.current?.() ?? false) : false;
+    if (!visible) trimWebglPool();
     renderPauseRef.current?.setHidden(!visible);
     // Shown again: write whatever the hidden-terminal allowance held back, so it is current at once.
     if (visible) {
@@ -612,7 +809,12 @@ function TerminalView({ sessionId, visible }: Props) {
       // mount would wipe it for every already-open terminal — turning "open a
       // new session" into a re-rasterize for all of them. A brand-new
       // terminal has nothing to heal anyway.
-      if (wasVisible === false) {
+      // WHY not after a fresh layer (card 106): above 16 chats a terminal shown after giving
+      // its layer back builds a new one, with a brand-new context and texture — the bad
+      // long-lived texture this heals cannot exist yet, and clearing would only make every
+      // glyph be drawn twice on that switch. A show that kept its layer (always, at 16 chats
+      // or fewer), or is on DOM drawing, heals exactly as before.
+      if (wasVisible === false && !freshLayerOnShowRef.current) {
         terminalRef.current.clearTextureAtlas();
         // WHY: rig instrument; the heal costs every open terminal a
         // re-rasterize, so the rig counts clears per switch (terminal-registry).
@@ -778,15 +980,40 @@ function TerminalView({ sessionId, visible }: Props) {
           continuous surface. Solid themes need nothing (the strip already shows
           --canvas); wallpaper themes are covered by the full-bleed terminalBg.
           Workbench mock-ups pin the variant's own opacity so the gap matches. */}
-      {seeThrough && !terminalBg && (
+      {/* WHY also under a wallpaper when the grid is FILLED (Destin, 2026-11-03: "no weird hard edges in all chrome
+          modes"): since P-20.2 the grid container is a tinted panel sheet under a wallpaper, so the header gap above
+          it showed the bare wallpaper and the tint began in a hard line at the header's bottom edge — measured on a
+          Z Flip7, where the header is see-through. The strip repeats the sheet over the gap so it reads as one. */}
+      {seeThrough && (!terminalBg || fillContainer) && (
         <div
           aria-hidden
+          data-term-lift=""
           style={{
             position: 'absolute',
             top: 0,
             left: 0,
             right: 0,
             height: 'var(--terminal-top-inset, 0px)',
+            backgroundColor: backingColor,
+            opacity: backingStyle ? backingStyle.xtermOpacity : 'var(--terminal-xterm-opacity, 0.6)',
+          }}
+        />
+      )}
+      {/* The same strip at the BOTTOM, under the input bar and the keyboard (Destin, 2026-11-03: "theres a hard edge
+          at the bottom now tho where the terminal meets the input bar"): on a touch screen the bar floats over the
+          terminal and the grid stops above it (--terminal-bottom-inset, globals.css), so the gap below the grid
+          repeats the sheet too. On desktop it is the 10px under the frame's bottom edge. */}
+      {seeThrough && (!terminalBg || fillContainer) && (
+        <div
+          aria-hidden
+          data-terminal-gap="bottom"
+          data-term-lift=""
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: 'var(--terminal-bottom-inset, 0px)',
             backgroundColor: backingColor,
             opacity: backingStyle ? backingStyle.xtermOpacity : 'var(--terminal-xterm-opacity, 0.6)',
           }}
@@ -800,6 +1027,8 @@ function TerminalView({ sessionId, visible }: Props) {
       <div
         ref={containerRef}
         data-term-backing={workbenchBacking}
+        // Rides up with the keyboard on a touch screen rather than shrinking (globals.css, [data-term-lift] — why).
+        data-term-lift=""
         style={{
           position: 'absolute',
           // Content (the xterm grid) starts BELOW the header. Claude Code wipes
@@ -846,7 +1075,11 @@ function TerminalView({ sessionId, visible }: Props) {
           // surface. Re-point it at the variant's token so a `scrim` shot on a
           // wallpaper theme doesn't show a panel-coloured strip under a canvas
           // grid. Never set in the app (backingStyle is null there).
-          ...(backingStyle ? { '--terminal-backing': backingColor } as React.CSSProperties : null),
+          // WHY always, not only for mock-ups (Destin, 2026-11-10, a laptop-browser picture: "the terminal cuts off
+          // before the bottom of the frame"): on remote access the page is styled with no wallpaper, so the engine's
+          // --terminal-backing is the flat colour while this terminal still paints its wallpaper sheet. The strip
+          // under the last row then showed in a different colour from the rows. Same colour as the fill above, always.
+          ...({ '--terminal-backing': backingColor } as React.CSSProperties),
         }}
       />
     </div>

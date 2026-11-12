@@ -109,7 +109,7 @@ If you add friends, the YouCoded server stores:
 
 ### 3.5 Games
 
-**Playing a live game (Connect 4, chess).** Your in-game name (your YouCoded display name, or your GitHub username if you have not set one) and your moves and in-game chat are relayed through a game room hosted on PartyKit (which runs on Cloudflare) to the other player. The room is discarded when the game ends. We do not save moves or chat.
+**Playing a live game (Connect 4, chess).** Your in-game name (your YouCoded display name, or your GitHub username if you have not set one) and your moves and in-game chat are relayed through a game room on YouCoded's own server (hosted by Cloudflare) to the other player. The room is discarded when the game ends. We do not save moves or chat.
 
 **What IS saved (only if signed in).**
 
@@ -195,11 +195,10 @@ Anyone can stop their own browser from being counted by opening `https://youcode
 
 Each has its own policy for what it does with the data it receives:
 
-- **Cloudflare** hosts YouCoded's server, database, the live connections (online status, sync signals), the daily count store, the safety check on reviews, and the game rooms (through PartyKit). It sees every request, including your internet address, and keeps request logs. Cloudflare keeps YouCoded's server logs for 3 days. [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/).
+- **Cloudflare** hosts YouCoded's server, database, the live connections (online status, sync signals), the daily count store, the safety check on reviews, and the game rooms. It sees every request, including your internet address, and keeps request logs. Cloudflare keeps YouCoded's server logs for 3 days. [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/).
 - **GitHub** hosts the app's source code and releases, the marketplace and theme lists, and the sign-in; and it holds your private sync repositories and any bug report you send. [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 - **Anthropic**, **OpenAI**, **Google**, **OpenRouter** (and the models behind it) and other AI providers you choose receive your prompts. [Anthropic](https://www.anthropic.com/privacy), [OpenAI](https://openai.com/consumer-privacy/), [OpenRouter data collection](https://openrouter.ai/docs/guides/privacy/data-collection).
 - **Google (Drive, Fonts)**, **Apple (iCloud)** if you choose them.
-- **PartyKit** runs the live game rooms.
 - **Hugging Face, npm, Node.js, Termux**: download sources for optional components.
 - **Exa, Tavily, DuckDuckGo, Plaid** and any MCP servers or integrations you connect.
 

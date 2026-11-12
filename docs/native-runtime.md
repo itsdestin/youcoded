@@ -496,7 +496,12 @@ Shipped as youcoded PRs #352, #353, #354, #355. What is now true, and why:
   content. Overwrites also preserve CRLF/BOM via Edit's exported `preserveFormat`.
 - **Edit** — every parameter described; `old_string` says: exactly once, never include Read's
   `%6d\t` line-number prefix, keep to 1–3 lines. The read-gate refusal names session resume
-  as a cause (`readRegistry` resets on resume).
+  as a cause (`readRegistry` resets on resume). On "not found" only (never `replace_all`),
+  one normalised retry folds curly quotes, Unicode dashes and non-breaking spaces to plain
+  and ignores spaces at line ends; it is accepted only if it finds ONE place, replaces exactly
+  that original span, inserts `new_string` unchanged, and the result says the match was
+  normalised (`findNormalisedSpan`, card #66 c). Skipped above `MAX_FOLD_CHARS` (2 M characters,
+  plain "not found" as before): the fold runs on the main process, ~5 ms per MB. The description still says "exact" on purpose.
 - **Bash** — the description no longer suggests re-running "piped through head/tail" (no
   `pipefail`: `cmd | tail` masks the exit code); it says Read the saved file, or redirect and
   `echo exit=$?`. The same sentence was fixed in the per-call spill notice and the static
@@ -1242,8 +1247,16 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   The built worker runs from inside `app.asar` with no unpacking (smoke-tested 2026-10-07).
   <!-- verify: {"path": "youcoded/desktop/src/main/create-runtime.ts", "contains": "'image-cache'"} -->
 - **Enforcement** (`HarnessSession.enforceImageLimits`): the gate is re-applied to in-memory
-  history on every provider/profile change (`setBinding`) and before any compaction or summary
-  (`maybeCompact`, `compactNow`). The history rewrite itself lives in `harness/image-history.ts`.
+  history before any compaction or summary (`maybeCompact`, `compactNow`). A provider/profile
+  change (`setBinding`) only marks `imagesRefitPending`; the next model request's `maybeCompact`,
+  inside its turn, runs `fitImagesToLimits` in place of that gate, which SHRINKS an over-limit picture where
+  the resize worker can and falls back to the note where it cannot (card #66 f3). The result is
+  adopted only if history is still the array it started from: a switch landing mid-shrink (its
+  strip rewrites history and origins) discards it and fits once more against the newest limits,
+  then the non-shrinking gate; a Stop mid-shrink discards it and re-marks the refit. Same in-memory
+  rewrite and checkpoint trade-off as the many-image recovery below. A `/compact` run between the
+  switch and the next send still uses the non-shrinking gate. The history rewrite itself lives
+  in `harness/image-history.ts`.
 - **Recovery** (`providers/image-too-large.ts`, `collapseOversizedImages`): on that exact 400 —
   accepted in `error.message`, `detail` or a top-level `message`; the live object was never
   captured — with no output started, image parts over the reported limit collapse to the note,
@@ -1259,8 +1272,9 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
 
 - **The image cache is never swept.** Deleting it is safe: a missing derivative becomes a
   "no longer available" / "could not be read" note on reopen.
-- **After a switch to stricter limits, a derivative that no longer fits is COLLAPSED to the note,
-  not re-prepared** — a fresh Read of the original prepares a copy for the new provider.
+- **After a switch to stricter limits, a derivative that no longer fits is shrunk in memory, or
+  COLLAPSED to the note when it cannot be shrunk, not re-prepared from its file** — a fresh Read
+  of the original prepares a copy for the new provider.
 - **A user-message picture collapsed in memory is labelled `image`** until a reopen relabels it by
   basename (the rebuild knows the path).
 - **A picture whose preparation failed** is told to the model with the preparer's reason live; on

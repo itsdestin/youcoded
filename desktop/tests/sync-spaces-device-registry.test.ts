@@ -43,6 +43,27 @@ describe('device registry store — I/O', () => {
     expect(readDevices(personal)[0].name).toBe(os.hostname());
   });
 
+  it('a phone registers under the name the Android app hands it, not the bundled Linux "localhost"', async () => {
+    vi.stubEnv('YOUCODED_DEVICE_NAME', 'Galaxy Z Flip7');
+    try {
+      await upsertSelf(personal, { id: 'dev-3', platform: 'android' });
+      expect(readDevices(personal)[0]).toMatchObject({ name: 'Galaxy Z Flip7', platform: 'android' });
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it('a phone row still called "localhost" takes the real name once; a name a person chose is kept', async () => {
+    vi.stubEnv('YOUCODED_DEVICE_NAME', 'Galaxy Z Flip7');
+    try {
+      write('dev-1.json', E({ name: 'localhost', platform: 'linux', updatedAt: 5 }));
+      await upsertSelf(personal, { id: 'dev-1', platform: 'android' });
+      expect(readDevices(personal)[0]).toMatchObject({ name: 'Galaxy Z Flip7', platform: 'android' });
+
+      write('dev-1.json', E({ name: 'My phone', platform: 'android', updatedAt: 5 }));
+      await upsertSelf(personal, { id: 'dev-1', platform: 'android' });
+      expect(readDevices(personal)[0].name).toBe('My phone');
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('returns [] when the Devices dir does not exist', () => {
     expect(readDevices(personal)).toEqual([]);
   });

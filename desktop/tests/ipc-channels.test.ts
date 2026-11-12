@@ -1525,7 +1525,7 @@ describe('marketplace feedback channel parity', () => {
 // same way `social:*` lives in `social-handlers.ts`: every call needs the
 // account bearer token, so it sits beside the other token-bound namespaces.
 describe('arcade:* channel parity', () => {
-  const TYPES = ['arcade:status', 'arcade:leaderboard', 'arcade:submit-score', 'arcade:records'];
+  const TYPES = ['arcade:status', 'arcade:leaderboard', 'arcade:submit-score', 'arcade:records', 'arcade:room-ticket'];
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('exposed in preload.ts', () => {

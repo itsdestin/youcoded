@@ -115,7 +115,9 @@ function backupPathFor(p: string): string {
  * result differs from what was read or when it was repaired, atomically
  * (tmp + fsync + rename, via cas-write).
  */
-export async function mutateSettings(mutate: (settings: Settings) => void): Promise<MutateSettingsResult> {
+export async function mutateSettings(mutate: (settings: Settings) => void,
+  // `lockWaitMs`: only the launch-edit retry passes it (launch-settings-chores.ts, card #11 b).
+  opts: { lockWaitMs?: number } = {}): Promise<MutateSettingsResult> {
   const p = settingsPath();
   let repaired: MutateSettingsResult['repaired'];
   let written = false;
@@ -143,7 +145,7 @@ export async function mutateSettings(mutate: (settings: Settings) => void): Prom
     if (!repaired && onDisk !== null && before === after) return null;
     written = true;
     return JSON.stringify(settings, null, 2);
-  });
+  }, undefined, { maxWaitMs: opts.lockWaitMs });
   if (!locked) {
     log('WARN', 'ClaudeSettings', 'settings.json is locked by another process — write skipped', { path: p });
     return { written: false, refused: 'locked' };
@@ -160,6 +162,21 @@ export async function mutateSettings(mutate: (settings: Settings) => void): Prom
  *  segment (`__proto__` …), exactly as getJsonPath does. */
 export async function getField(field: string): Promise<unknown> {
   return getJsonPath(await readSettings(), field);
+}
+
+/**
+ * permissions.defaultMode set for ONE FOLDER (its .claude/settings.local.json, then .claude/settings.json), or
+ * undefined. Read-only and never memoised: these are the project's files, not the person's own settings file above.
+ * WHY here: this file is the one place allowed to read a Claude settings file (tests/claude-settings.test.ts).
+ */
+export async function readProjectDefaultMode(cwd: string): Promise<unknown> {
+  for (const name of ['settings.local.json', 'settings.json']) {
+    try {
+      const mode = JSON.parse(await fs.promises.readFile(path.join(cwd, '.claude', name), 'utf8'))?.permissions?.defaultMode;
+      if (typeof mode === 'string') return mode;
+    } catch { /* missing or malformed: not set here */ }
+  }
+  return undefined;
 }
 
 /** Set (or, with null/undefined, delete) one dot-path field under the lock.

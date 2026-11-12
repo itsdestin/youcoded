@@ -19,7 +19,12 @@
 // Electron-free and injected, like publish.ts: tests drive it with a record and a fake publish.
 import type { Publish } from './publish';
 import type { SessionRecords } from './session-record';
-import { detectPermissionMode } from '../shared/permission-mode-detect';
+import { detectPermissionMode, detectAutoRefused } from '../shared/permission-mode-detect';
+import type { PermissionMode } from '../shared/types';
+/** How much of the previous terminal piece is kept: the footer line (glyph + phrase + escapes) fits well inside it. */
+const OUTPUT_TAIL_CHARS = 200;
+/** How long after a session's first output Claude Code's "auto is not available" notice is believed. */
+const AUTO_REFUSAL_WINDOW_MS = 30_000;
 import { claudeAliasForModelId, isPlaceholderModelId } from '../shared/model-ids';
 import { IPC } from '../shared/backend-contract';
 import { clearDividerId } from '../shared/divider-ids';
@@ -59,6 +64,12 @@ export interface SessionLiveDeps {
   /** Timers are injectable so a test does not wait three minutes. */
   setTimer?: (fn: () => void, ms: number) => { unref?: () => void } | unknown;
   clearTimer?: (handle: unknown) => void;
+  /** The mode just read from the footer. WHY (2026-11-01 phone test): the session's own info kept the launch guess 'normal', and a
+   *  screen that reloads its session list (the phone at start-up or after a reconnect) re-seeded NORMAL from it while Claude Code
+   *  said auto; the footer is not redrawn until the next turn, so it stayed wrong. The caller writes the mode back into the info. */
+  onModeRead?: (sessionId: string, mode: PermissionMode) => void;
+  /** The mode the session's own info holds now: the mode it was started in, then each one read here (onModeRead writes it back). */
+  currentMode?: (sessionId: string) => string | undefined;
 }
 
 export class SessionLiveFacts {
@@ -75,6 +86,9 @@ export class SessionLiveFacts {
   private readonly pendingModel = new Map<string, { alias: string; prev: string | null; at: number; turnStarted: boolean; popup: boolean; confirmed: boolean }>();
   private ids = 0;
   private readonly directReceipts = new Map<string, Set<string>>();
+  /** The end of each Claude Code session's last terminal piece (see noteOutput). */
+  private readonly outputTails = new Map<string, string>();
+  private readonly firstOutputAt = new Map<string, number>();
   private readonly stopTargets = new Map<string, { sessionId: string; epoch: string; userUuid: string; accepted?: boolean }>();
 
   constructor(private readonly deps: SessionLiveDeps) {
@@ -98,11 +112,25 @@ export class SessionLiveFacts {
    */
   noteOutput(sessionId: string, data: string): void {
     if (!this.deps.isClaude(sessionId)) return;
-    const mode = detectPermissionMode(data);
+    // The last bit of the previous piece rides along, so a footer split across two reads is still seen (permission-mode-detect.ts).
+    const tail = this.outputTails.get(sessionId) ?? '';
+    const joined = tail + data;
+    this.outputTails.set(sessionId, joined.slice(-OUTPUT_TAIL_CHARS));
+    let mode = detectPermissionMode(joined, tail.length);
+    // No footer in this piece, the session is believed to be in auto, and Claude Code just said auto is not
+    // available: it has fallen back to its plain mode, which draws no footer (permission-mode-detect.ts).
+    // WHY only in a session's first AUTO_REFUSAL_WINDOW_MS (review, 2026-11-10): Claude Code prints the notice as it
+    // starts. The same words later are a chat ABOUT auto mode, a quoted file or a test run, and they turned a
+    // correct AUTO badge into NORMAL.
+    const startedAt = this.firstOutputAt.get(sessionId) ?? this.now();
+    this.firstOutputAt.set(sessionId, startedAt);
+    const starting = this.now() - startedAt <= AUTO_REFUSAL_WINDOW_MS;
+    if (!mode && starting && this.deps.currentMode?.(sessionId) === 'auto' && detectAutoRefused(joined, tail.length)) mode = 'normal';
     if (!mode) return;
     const known = this.deps.records.facts(sessionId)?.permissionMode ?? null;
     if (known === mode) return;
     this.deps.publish(sessionId, IPC.SESSION_PERMISSION_MODE, { sessionId, mode });
+    try { this.deps.onModeRead?.(sessionId, mode); } catch { /* bookkeeping only */ }
   }
 
   /**
@@ -367,6 +395,8 @@ export class SessionLiveFacts {
   /** The session ended: nothing left to watch. */
   forget(sessionId: string): void {
     this.directReceipts.delete(sessionId);
+    this.outputTails.delete(sessionId);
+    this.firstOutputAt.delete(sessionId);
     for (const [id, target] of this.stopTargets) if (target.sessionId === sessionId) this.stopTargets.delete(id);
     this.disarm(sessionId);
     const w = this.clearTimers.get(sessionId);

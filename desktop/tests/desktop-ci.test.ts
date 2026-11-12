@@ -110,14 +110,16 @@ describe('Desktop CI selected coverage', () => {
     expect(jvm.steps.find((item: any) => isAction(item, 'actions/setup-node')).with).toEqual({ 'node-version': 22 });
     expect(JSON.stringify(jvm)).not.toMatch(/npm|docker|clang|lld|YOUCODED_COMMON_NATIVE_CACHE|actions\/cache/);
     expect(step(jvm, 'Test runtime redistribution fixtures').run).toBe("python3 -m unittest discover -s app/runtime -p 'test_*.py' -v");
-    expect(step(jvm, 'Verify all variant lint producer graphs').run).toBe('./gradlew lintDebug lintReleaseTest lintRelease --dry-run $CI_GRADLE_FLAGS');
+    expect(step(jvm, 'Verify all variant lint producer graphs').run).toBe('./gradlew lintDebug lintRelease --dry-run $CI_GRADLE_FLAGS');
     expect(step(jvm, 'Run unit tests').run).toBe('./gradlew test $CI_GRADLE_FLAGS');
+    // The release's own R8 pass runs on every change (the debuggable Dev copy may skip some of it).
+    expect(step(jvm, 'Shrink the release code (R8, as the release does)').run).toBe('./gradlew minifyReleaseWithR8 $CI_GRADLE_FLAGS');
     expect(step(jvm, 'Verify current JVM inputs and outputs').run).toBe('node scripts/ci-inputs.mjs jvm');
-    ordered(jvm, ['Record current Android input identity', 'Test runtime redistribution fixtures', 'Verify all variant lint producer graphs', 'Run unit tests', 'Verify current JVM inputs and outputs', 'Upload JVM input evidence']);
+    ordered(jvm, ['Record current Android input identity', 'Test runtime redistribution fixtures', 'Verify all variant lint producer graphs', 'Run unit tests', 'Shrink the release code (R8, as the release does)', 'Verify current JVM inputs and outputs', 'Upload JVM input evidence']);
     for (const name of ['Verify all variant lint producer graphs', 'Run unit tests', 'Verify current JVM inputs and outputs']) expect(step(jvm, name).if).toBeUndefined();
     expect(jvm.steps.indexOf(step(jvm, 'Run unit tests'))).toBeLessThan(jvm.steps.indexOf(step(jvm, 'Verify current JVM inputs and outputs')));
     expect(step(jvm, 'Upload JVM input evidence').with).toEqual({ name: 'android-scope-jvm', path: 'ci-android-evidence.json', 'if-no-files-found': 'error', 'retention-days': 7 });
-    expect(apk.strategy).toEqual({ 'fail-fast': false, matrix: { scope: ['debug', 'releaseTest'] } });
+    expect(apk.strategy).toEqual({ 'fail-fast': false, matrix: { scope: ['debug'] } });
     expect(apk.env.ELECTRON_SKIP_BINARY_DOWNLOAD).toBe('1');
     expect(apk.env.CI_ANDROID_SCOPE).toBe('${{ matrix.scope }}');
     expect(step(apk, 'Configure run-local native cache').run).toBe('echo "YOUCODED_COMMON_NATIVE_CACHE=$RUNNER_TEMP/ci-native-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${CI_ANDROID_SCOPE}" >> "$GITHUB_ENV"');
@@ -127,7 +129,7 @@ describe('Desktop CI selected coverage', () => {
     ordered(apk, ['Record current Android input identity', 'Configure run-local native cache', 'Build scoped APK', 'Verify current scoped Android inputs and outputs', 'Upload scoped Android input evidence']);
     for (const name of ['Build scoped APK', 'Verify current scoped Android inputs and outputs']) expect(step(apk, name).if).toBeUndefined();
     const assemble = step(apk, 'Build scoped APK');
-    expect(assemble.run).toBe('set -euo pipefail\numask 077\ncase "$CI_ANDROID_SCOPE" in\n  debug) task=assembleDebug ;;\n  releaseTest) task=assembleReleaseTest ;;\n  *) echo "Unknown Android scope: $CI_ANDROID_SCOPE" >&2; exit 1 ;;\nesac\n./gradlew "$task" $CI_GRADLE_FLAGS --console=plain 2>&1 | tee "$RUNNER_TEMP/android-gradle-${CI_ANDROID_SCOPE}.log"\n');
+    expect(assemble.run).toBe('set -euo pipefail\numask 077\ncase "$CI_ANDROID_SCOPE" in\n  debug) task=assembleDebug ;;\n  *) echo "Unknown Android scope: $CI_ANDROID_SCOPE" >&2; exit 1 ;;\nesac\n./gradlew "$task" $CI_GRADLE_FLAGS --console=plain 2>&1 | tee "$RUNNER_TEMP/android-gradle-${CI_ANDROID_SCOPE}.log"\n');
     expect(assemble.shell).toBe('bash');
     expect(assemble['continue-on-error']).toBeUndefined();
     expect(step(apk, 'Setup Gradle').with).toEqual({ 'cache-read-only': "${{ github.event.pull_request.head.repo.fork == true }}" });
@@ -142,7 +144,8 @@ describe('Desktop CI selected coverage', () => {
     expect(step(apk, 'Verify current scoped Android inputs and outputs').run).toBe('node scripts/ci-inputs.mjs "$CI_ANDROID_SCOPE"');
     expect(apk.steps.indexOf(assemble)).toBeLessThan(apk.steps.indexOf(step(apk, 'Verify current scoped Android inputs and outputs')));
     expect(step(apk, 'Upload scoped Android input evidence').with).toEqual({ name: 'android-scope-${{ matrix.scope }}', path: 'ci-android-evidence.json', 'if-no-files-found': 'error', 'retention-days': 7 });
-    for (const [name, artifact, scope] of [['Upload debug APK', 'youcoded-debug', 'debug'], ['Upload releaseTest APK', 'youcoded-releasetest', 'releaseTest']]) {
+    // WHY: releaseTest was removed (2026-11-10); debug is the only APK scope and is itself R8-shrunk.
+    for (const [name, artifact, scope] of [['Upload debug APK', 'youcoded-debug', 'debug']]) {
       expect(step(apk, name).if).toBe(`matrix.scope == '${scope}'`);
       expect(step(apk, name).with).toEqual({ name: artifact, path: `app/build/outputs/apk/${scope}/*.apk`, 'if-no-files-found': 'error', 'compression-level': 0, 'retention-days': 14 });
     }
@@ -171,7 +174,7 @@ describe('Desktop CI selected coverage', () => {
       // WHY: execute the actual YAML shell, replacing only Gradle with a fixture;
       // a textual pipefail assertion alone cannot prove failure propagation.
       writeFileSync(join(dir, 'gradlew'), '#!/bin/bash\nprintf "%s\\n" "$@" > "$RUNNER_TEMP/argv"\necho "BUILD FAILED in 1s"\nexit 23\n', { mode: 0o700 });
-      for (const [scope, task] of [['debug', 'assembleDebug'], ['releaseTest', 'assembleReleaseTest']]) {
+      for (const [scope, task] of [['debug', 'assembleDebug']]) {
         const result = spawnSync('bash', ['-c', step(apk, 'Build scoped APK').run], { cwd: dir, env: { ...process.env, RUNNER_TEMP: dir, CI_ANDROID_SCOPE: scope, CI_GRADLE_FLAGS: apk.env.CI_GRADLE_FLAGS }, encoding: 'utf8' });
         expect(result.status).toBe(23);
         expect(readFileSync(join(dir, 'argv'), 'utf8').replace(/\r/g, '').trim().split('\n')).toEqual([task, '-PciPackagingDependencies=true', '--init-script', 'scripts/ci-android-producers.gradle', '-Dorg.gradle.jvmargs=-Xmx2g', '--build-cache', '--console=plain']);
@@ -218,27 +221,27 @@ describe('Desktop CI selected coverage', () => {
     expect(step(build, 'Retain source preflight evidence').if).toBe('always() && inputs.collect_sources && failure()');
     expect(JSON.stringify(workflow())).not.toContain('ELECTRON_SKIP_BINARY_DOWNLOAD');
     expect(build.steps.filter((item: any) => isAction(item, 'actions/checkout')).map((item: any) => item.with.ref)).toEqual(['${{ github.sha }}']);
-    for (const name of ['Upload debug APK', 'Upload releaseTest APK']) {
+    for (const name of ['Upload debug APK']) {
       expect(step(build, name).with['compression-level']).toBe(0);
       expect(step(build, name).with['if-no-files-found']).toBe('error');
     }
     expect(step(build, 'Verify packaged runtime and source archive').run).toContain('python3 -I app/runtime/runtime-redistribution.py bind_backend');
     expect(step(build, 'Verify packaged runtime and source archive').run).toContain('app/build/backend-assets/backend.tgz');
     expect(step(build, 'Verify packaged runtime and source archive').run).toContain('python3 -I app/runtime/runtime-redistribution.py release');
-    expect(step(build, 'Verify packaged runtime and source archive').run).toContain('app/build/outputs/apk/releaseTest/*.apk');
+    expect(step(build, 'Verify packaged runtime and source archive').run).toContain('app/build/outputs/apk/debug/*.apk');
     expect(step(build, 'Upload inspected source preflight archive').with).toEqual({ name: 'android-source-preflight-archive', path: 'app/build/outputs/android-source-preflight.tar.xz\napp/build/outputs/android-source-preflight.tar.xz.sha256\n', 'if-no-files-found': 'error', 'retention-days': 7 });
-    expect(step(build, 'Retain source preflight evidence').with).toEqual({ name: 'android-source-preflight', path: 'app/build/runtime/releaseTest/evidence\napp/build/runtime/releaseTest/sources\n', 'if-no-files-found': 'warn', 'retention-days': 7 });
+    expect(step(build, 'Retain source preflight evidence').with).toEqual({ name: 'android-source-preflight', path: 'app/build/runtime/debug/evidence\napp/build/runtime/debug/sources\n', 'if-no-files-found': 'warn', 'retention-days': 7 });
     expect(step(build, 'Record current Android input identity').run).toBe('node scripts/ci-inputs.mjs start');
     expect(step(build, 'Verify current Android inputs and outputs').run).toBe('node scripts/ci-inputs.mjs android');
     expect(step(build, 'Setup Gradle').with).toBeUndefined();
     expect(JSON.stringify(build)).not.toMatch(/--build-cache|--configuration-cache/);
     expect(step(build, 'Run unit tests').run).toBe('./gradlew test --no-build-cache');
     expect(step(build, 'Build debug APK').run).toBe('./gradlew assembleDebug --no-build-cache');
-    expect(step(build, 'Build releaseTest APK (R8 minified, debug-signed)').run).toBe('./gradlew assembleReleaseTest --no-build-cache');
-    expect(step(build, 'Build releaseTest APK (R8 minified, debug-signed)').env.YOUCODED_COLLECT_SOURCES).toContain('inputs.collect_sources');
+    // WHY: source collection now rides on the debug build, the only Android test build.
+    expect(step(build, 'Build debug APK').env.YOUCODED_COLLECT_SOURCES).toContain('inputs.collect_sources');
     expect(step(build, 'Upload Android input evidence').with).toEqual({ name: 'android-current-inputs', path: 'ci-android-evidence.json', 'if-no-files-found': 'error', 'retention-days': 7 });
-    for (const [name, artifact, variant] of [['Upload debug APK', 'youcoded-debug', 'debug'], ['Upload releaseTest APK', 'youcoded-releasetest', 'releaseTest']]) expect(step(build, name).with).toEqual({ name: artifact, path: `app/build/outputs/apk/${variant}/*.apk`, 'if-no-files-found': 'error', 'compression-level': 0, 'retention-days': 14 });
-    for (const name of ['Verify packaged runtime and source archive', 'Upload inspected source preflight archive', 'Retain source preflight evidence', 'Upload debug APK', 'Upload releaseTest APK']) expect(step(build, name)).toBeTruthy();
+    for (const [name, artifact, variant] of [['Upload debug APK', 'youcoded-debug', 'debug']]) expect(step(build, name).with).toEqual({ name: artifact, path: `app/build/outputs/apk/${variant}/*.apk`, 'if-no-files-found': 'error', 'compression-level': 0, 'retention-days': 14 });
+    for (const name of ['Verify packaged runtime and source archive', 'Upload inspected source preflight archive', 'Retain source preflight evidence', 'Upload debug APK']) expect(step(build, name)).toBeTruthy();
   });
 });
 

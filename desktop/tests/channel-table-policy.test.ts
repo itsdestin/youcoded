@@ -56,13 +56,13 @@ describe('which of the last channels a phone may call: exactly what it could bef
     // traffic-light icon get-id get-directory answer-close open-detached focus-and-switch) + detach:claim-pending + 8 detach/drag
     // + 16 buddy (buddy:mascot-hit joined with the taskbar-icon buddy, 2026-10-02; the buddy rebuild 2026-10-26 removed
     // subscribe/unsubscribe and added toggle-chat-size) + 6 integrations + 12 remote admin + 9 voice (two desktop-only vocabulary channels) + 14 social
-    expect(entries.length).toBe(128);
+    expect(entries.length).toBe(129);
   });
 
   it('exactly these are open to a phone; everything else is refused from the table', () => {
     expect(entries.filter(phoneOpen).map((d) => d.name).sort()).toEqual([
       'appearance:broadcast', 'appearance:get', 'appearance:get-favorite-themes', 'appearance:set',
-      'arcade:leaderboard', 'arcade:records', 'arcade:status', 'arcade:submit-score',
+      'arcade:leaderboard', 'arcade:records', 'arcade:room-ticket', 'arcade:status', 'arcade:submit-score',
       'commands:list',
       'docComments:add', 'docComments:delete', 'docComments:delete-reply', 'docComments:edit', 'docComments:edit-reply', 'docComments:list',
       'docComments:move', 'docComments:reopen', 'docComments:reply', 'docComments:resolve', 'docComments:unwatch', 'docComments:watch',

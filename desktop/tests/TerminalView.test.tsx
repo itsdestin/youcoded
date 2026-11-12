@@ -23,6 +23,10 @@ const terminalInstances: any[] = [];
 // pause switch attachRenderPause drives (real-xterm pin: xterm-render-pause.test.ts).
 const handleIntersectionSpy = vi.fn();
 let termGrid: { cols?: number; rows: number } = { rows: 24 };
+// Null = the fake xterm reports no character cell (most sections). Set = it reports the cell each drawing mode
+// measures, as the real one does: the WebGL layer rounds the width down to whole device pixels, plain DOM drawing
+// keeps it exact (WebglRenderer / DomRenderer _updateDimensions), so the two differ.
+let fakeCells: { webgl: { width: number; height: number }; dom: { width: number; height: number }; char: { width: number; height: number } } | null = null;
 
 // Mock factories use `function` (not arrow) so they're invokable as
 // constructors with `new` — vitest's `vi.fn().mockImplementation(() => ...)`
@@ -34,7 +38,20 @@ vi.mock('@xterm/xterm', () => {
       terminalCtorArgs.push(opts);
       terminalInstances.push(this);
       this._core = { _renderService: { _isPaused: false, _handleIntersectionChange: handleIntersectionSpy } };
-      this.loadAddon = vi.fn();
+      if (fakeCells) {
+        this._core._renderService.dimensions = { css: { cell: fakeCells.dom } };
+        this._core._charSizeService = fakeCells.char;
+        this.element = document.createElement('div');
+        this.resize = vi.fn((cols: number, rows: number) => { this.cols = cols; this.rows = rows; });
+      }
+      // A loaded WebGL layer takes over the drawing (and its cell measure) until it is disposed.
+      this._addons = [];
+      this.loadAddon = vi.fn((addon: any) => {
+        this._addons.push(addon);
+        if (!webglInstances.includes(addon)) return;
+        addon.__term = this;
+        if (fakeCells) this._core._renderService.dimensions = { css: { cell: fakeCells.webgl } };
+      });
       this.open = vi.fn();
       this.unicode = { activeVersion: '11', register: vi.fn() };
       this.attachCustomKeyEventHandler = vi.fn();
@@ -45,7 +62,11 @@ vi.mock('@xterm/xterm', () => {
       this.refresh = vi.fn();
       this.focus = vi.fn();
       this.blur = vi.fn();
-      this.dispose = vi.fn();
+      // Like xterm's public Terminal: its core is disposed first, then its loaded addons.
+      this.dispose = vi.fn(() => {
+        this._disposed = true;
+        for (const addon of this._addons) addon.dispose?.();
+      });
       // Lives on the CORE Terminal (not the addon), which is why TerminalView
       // can call it unguarded even on the DOM renderer. Every render-path
       // terminal must expose it: TerminalView calls it on hidden → visible and
@@ -79,10 +100,31 @@ vi.mock('@xterm/addon-unicode11', () => ({
   Unicode11Addon: vi.fn(function (this: any) { this.activate = (t: any) => t.unicode.register({ version: '11', wcwidth: () => 1, charProperties: () => 2 }); }),
 }));
 
+// Every WebGL layer built, newest last, each with its own fake graphics context so a
+// test can see the context handed back (loseContext) when the layer is released.
+const webglInstances: any[] = [];
+// True = this machine has no WebGL: building a layer throws and the terminal stays on DOM drawing.
+let webglUnavailable = false;
+// How many replacement DOM renderers a disposed WebGL layer built (see the fake's dispose).
+let fallbackRenderersBuilt = 0;
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn(function (this: any) {
+    if (webglUnavailable) throw new Error('WebGL2 not supported');
+    webglInstances.push(this);
     this.onContextLoss = vi.fn();
-    this.dispose = vi.fn();
+    // Like the real addon (WebglAddon.ts): disposing it builds a replacement DOM renderer for the terminal (a
+    // layout read) — unless the terminal itself is already disposed. A second dispose does nothing (AddonManager).
+    this.dispose = vi.fn(() => {
+      if (this.__disposed) return;
+      this.__disposed = true;
+      const term = this.__term;
+      if (!term || term._disposed) return;
+      fallbackRenderersBuilt++;
+      if (fakeCells) term._core._renderService.dimensions = { css: { cell: fakeCells.dom } };
+    });
+    this.loseContext = vi.fn();
+    const lose = { loseContext: this.loseContext };
+    this._renderer = { _gl: { getExtension: (name: string) => (name === 'WEBGL_lose_context' ? lose : null) } };
   }),
 }));
 
@@ -92,7 +134,6 @@ vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 // before render.
 vi.mock('../src/renderer/platform', () => ({
   isAndroid: vi.fn().mockReturnValue(false),
-  isTouchDevice: vi.fn().mockReturnValue(false),
   isRemoteMode: vi.fn().mockReturnValue(false),
   getPlatform: vi.fn().mockReturnValue('electron'),
   // The terminal reads which stream the host sends from the screen's capabilities (R4-1), not from the platform name.
@@ -139,6 +180,7 @@ import * as platform from '../src/renderer/platform';
 import { usePtyOutput } from '../src/renderer/hooks/useIpc';
 import { usePtyRawBytes } from '../src/renderer/hooks/usePtyRawBytes';
 import { getAtlasClears } from '../src/renderer/hooks/terminal-registry';
+import { webglLayerCount, WEBGL_LAYER_LIMIT } from '../src/renderer/components/terminal-webgl';
 import { renderTerminalScreen } from '../src/renderer/dev/workbench/fixtures/terminal-screen';
 import { applyThemeToDom } from '../src/renderer/themes/theme-engine';
 import type { ThemeDefinition } from '../src/renderer/themes/theme-types';
@@ -163,7 +205,10 @@ beforeEach(() => {
   termGrid = { rows: 24 };
   proposedDims = { cols: 80, rows: 24 };
   mockActiveTheme = null;
-  vi.mocked(platform.isTouchDevice).mockReturnValue(false);
+  webglUnavailable = false;
+  fakeCells = null;
+  // WHY getPlatform (2026-11-10): the terminal asks device.ts phoneTerminalLayout(), which reads the device kind.
+  vi.mocked(platform.getPlatform).mockReturnValue('electron');
 });
 
 // Pins the WebGL glyph-atlas heal in TerminalView.
@@ -219,6 +264,9 @@ describe('glyph-atlas heal', () => {
   });
 
   describe('TerminalView glyph-atlas heal — visibility', () => {
+    // The common case: each terminal here keeps the WebGL layer it built at mount (16 chats or
+    // fewer). A show that builds a brand-new layer skips the heal — pinned in 'the WebGL layer
+    // pool' below.
     it('clears the texture atlas when the terminal becomes visible', () => {
       const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
       expect(clearTextureAtlasSpy).not.toHaveBeenCalled();
@@ -261,6 +309,15 @@ describe('glyph-atlas heal', () => {
       rerender(<TerminalView sessionId="s1" visible={false} />);
       rerender(<TerminalView sessionId="s1" visible={true} />);
       expect(clearTextureAtlasSpy.mock.calls.length).toBeGreaterThan(afterFirst);
+    });
+
+    // A machine with no WebGL draws every terminal with DOM; the heal is then only a repaint,
+    // and it still runs on every return (xterm's clearTextureAtlas skips the atlas itself).
+    it('on a machine without WebGL, a terminal shown again still heals', () => {
+      webglUnavailable = true;
+      const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
+      rerender(<TerminalView sessionId="s1" visible={true} />);
+      expect(clearTextureAtlasSpy).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -383,7 +440,7 @@ describe('mount logic', () => {
 
   describe('TerminalView mount logic — touch platform', () => {
     beforeEach(() => {
-      vi.mocked(platform.isTouchDevice).mockReturnValue(true);
+      vi.mocked(platform.getPlatform).mockReturnValue('browser');
     });
 
     it('passes disableStdin: true to the Terminal constructor', () => {
@@ -443,7 +500,16 @@ describe('mount logic', () => {
 
   describe('TerminalView mount logic — desktop', () => {
     beforeEach(() => {
-      vi.mocked(platform.isTouchDevice).mockReturnValue(false);
+      vi.mocked(platform.getPlatform).mockReturnValue('electron');
+    });
+
+    // Destin, 2026-11-10: a mouse laptop on remote access ('desktop') gets the computer terminal, typed into directly.
+    it('a mouse laptop\'s browser takes typing and the computer font size', () => {
+      vi.mocked(platform.getPlatform).mockReturnValue('desktop' as any);
+      render(<TerminalView sessionId="s1" visible={true} />);
+      const opts = terminalCtorArgs[0];
+      expect(opts.disableStdin).toBeFalsy();
+      expect(opts.fontSize).toBe(14);
     });
 
     it('does not pass disableStdin (or passes false)', () => {
@@ -460,6 +526,20 @@ describe('mount logic', () => {
     it('uses 14px font size', () => {
       render(<TerminalView sessionId="s1" visible={true} />);
       expect(terminalCtorArgs[0]).toMatchObject({ fontSize: 14 });
+    });
+
+    // The terminal library listens for paste even while its terminal is hidden, so a paste into the chat's message
+    // box used to reach Claude Code a second time, raw. Only the terminal on screen may send.
+    it('sends what is typed or pasted only while the terminal is the one on screen', () => {
+      const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
+      const typed = onDataSpy.mock.calls[0][0] as (data: string) => void;
+      const send = (window as any).claude.session.sendInput;
+      typed('pasted while hidden');
+      expect(send).not.toHaveBeenCalled();
+      rerender(<TerminalView sessionId="s1" visible={true} />);
+      typed('typed while shown');
+      expect(send).toHaveBeenCalledWith('s1', 'typed while shown');
+      expect(send).toHaveBeenCalledTimes(1);
     });
 
     it('passes sessionId to usePtyOutput and null to usePtyRawBytes', () => {
@@ -636,7 +716,9 @@ describe('workbench screen and terminal surface', () => {
       expect(container().style.backgroundColor).toBe('var(--panel)');
       expect(terminalCtorArgs[0].theme.background).toBe(PANEL_FALLBACK);
       // No variant → the engine's --terminal-backing is left alone.
-      expect(container().style.getPropertyValue('--terminal-backing')).toBe('');
+      // The strip under the last row uses the same colour the grid is filled with, on every screen: on remote access
+      // the page's own value is the flat colour, and the strip showed as a band (a laptop-browser picture).
+      expect(container().style.getPropertyValue('--terminal-backing')).toBe('var(--panel)');
     });
 
     it('`legacy` reproduces the pre-decision surface for Before shots: --canvas xterm at a literal 0.6, even on a wallpaper theme', () => {
@@ -747,6 +829,13 @@ describe('workbench screen and terminal surface', () => {
       // when transparent — see workbench-mode.ts).
       expect(terminalCtorArgs[0].allowTransparency).toBeUndefined();
       expect(terminalCtorArgs[0].theme.background).toBe(THEME_PANEL);
+      // The gap above the grid (behind the header) repeats the same panel sheet, so the tint does not start in a
+      // hard line at the header's bottom edge — the wallpaper picture layer alone left it bare.
+      expect(container().parentElement!.querySelector('.terminal-wallpaper')).not.toBeNull();
+      const gap = [...container().parentElement!.querySelectorAll<HTMLElement>('div[aria-hidden]')]
+        .find((d) => d.style.height === 'var(--terminal-top-inset, 0px)');
+      expect(gap?.style.backgroundColor).toBe('var(--panel)');
+      expect(gap?.style.opacity).toBe('var(--terminal-xterm-opacity, 0.6)');
     });
 
     it('a pack declaring terminal-opacity 0.4 under a wallpaper is floored to 0.8', () => {
@@ -884,5 +973,300 @@ describe('hidden terminals and theme switches', () => {
       // The theme effect recolours on the next frame, to the --panel backing.
       await waitFor(() => expect(term.options.theme?.background).toBe('#141726'));
     });
+  });
+});
+
+// Claude Code redraws its screen on every new size, and when its conversation is taller than the screen the redraw
+// prints lines twice or loses them (measured with the phone's Claude Code 2.1.300; terminal-size-lock.ts). On a touch
+// screen the terminal's box shrinks whenever the message box floating over it grows a line — that must NOT resize the
+// program; only a change of the window or of the column count may. Desktop (Electron) keeps fitting every change.
+describe('program size when the chrome over the terminal changes', () => {
+  let boxHeight = 600;
+  let restores: Array<() => void> = [];
+  const stubBox = () => {
+    for (const [prop, get] of [['clientWidth', () => 360], ['clientHeight', () => boxHeight]] as const) {
+      const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, prop);
+      Object.defineProperty(HTMLElement.prototype, prop, { configurable: true, get });
+      restores.push(() => { if (original) Object.defineProperty(HTMLElement.prototype, prop, original); else delete (HTMLElement.prototype as any)[prop]; });
+    }
+  };
+  const setWindow = (w: number, h: number) => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: w });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: h });
+  };
+  /** The shown terminal is re-fitted (as its ResizeObserver or a window resize would do), then the debounce passes. */
+  const refit = () => { window.dispatchEvent(new Event('resize')); vi.advanceTimersByTime(120); };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    boxHeight = 600;
+    stubBox();
+    setWindow(360, 788);
+    (globalThis as any).window.claude = { session: { signalReady: vi.fn(), sendInput: vi.fn(), resize: vi.fn() } };
+  });
+  afterEach(() => {
+    cleanup();
+    restores.forEach((r) => r()); restores = [];
+    vi.useRealTimers();
+    vi.mocked(platform.getPlatform).mockReturnValue('electron');
+    delete (globalThis as any).window.claude;
+  });
+
+  it('on a phone, a taller message box keeps the program at its size', () => {
+    vi.mocked(platform.getPlatform).mockReturnValue('android');
+    proposedDims = { cols: 47, rows: 35 };
+    render(<TerminalView sessionId="s1" visible={true} />);
+    vi.advanceTimersByTime(100 + 120);
+    expect(window.claude.session.resize).toHaveBeenCalledTimes(1);
+    expect(window.claude.session.resize).toHaveBeenLastCalledWith('s1', 47, 35);
+
+    // A second line in the message box: the box over the terminal grows, the grid's box shrinks by two rows.
+    boxHeight = 570;
+    proposedDims = { cols: 47, rows: 33 };
+    refit();
+    // And back to one line.
+    boxHeight = 600;
+    proposedDims = { cols: 47, rows: 35 };
+    refit();
+    expect(window.claude.session.resize).toHaveBeenCalledTimes(1);
+  });
+
+  it('on a phone, turning or folding it (a new window size) still resizes the program', () => {
+    vi.mocked(platform.getPlatform).mockReturnValue('android');
+    proposedDims = { cols: 47, rows: 35 };
+    render(<TerminalView sessionId="s1" visible={true} />);
+    vi.advanceTimersByTime(100 + 120);
+
+    setWindow(788, 360);
+    proposedDims = { cols: 110, rows: 12 };
+    refit();
+    expect(window.claude.session.resize).toHaveBeenLastCalledWith('s1', 110, 12);
+  });
+
+  it('on desktop, every new fit still resizes the program', () => {
+    vi.mocked(platform.getPlatform).mockReturnValue('electron');
+    proposedDims = { cols: 100, rows: 35 };
+    render(<TerminalView sessionId="s1" visible={true} />);
+    vi.advanceTimersByTime(100 + 120);
+    proposedDims = { cols: 100, rows: 33 };
+    refit();
+    expect(window.claude.session.resize).toHaveBeenLastCalledWith('s1', 100, 33);
+  });
+});
+
+
+// The browser allows a page 16 WebGL contexts and kills the oldest past that. The window's
+// terminals share a pool of 16 layers (terminal-webgl.ts — why): below the limit nothing
+// changes; at the limit a terminal being shown takes the layer of the hidden terminal shown
+// least recently. The xterm and its buffer are never rebuilt: only the drawing layer moves.
+describe('the WebGL layer pool', () => {
+  beforeEach(() => {
+    webglInstances.length = 0;
+    terminalInstances.length = 0;
+    writeSpy.mockReset();
+    clearTextureAtlasSpy.mockReset();
+    vi.mocked(usePtyOutput).mockReset();
+    (globalThis as any).window.claude = {
+      session: { signalReady: vi.fn(), sendInput: vi.fn(), resize: vi.fn() },
+    };
+  });
+  afterEach(() => {
+    cleanup();
+    delete (globalThis as any).window.claude;
+  });
+  const lossHandler = (webgl: any) => webgl.onContextLoss.mock.calls[0][0] as () => void;
+  /** Mount `n` hidden terminals (sessions f0, f1, …), each taking a layer while there is room. */
+  const fillHidden = (n: number) => render(<>{Array.from({ length: n }, (_, i) => <TerminalView key={i} sessionId={`f${i}`} visible={false} />)}</>);
+
+  it('below the limit, a terminal mounted hidden builds its layer at mount and keeps it while hidden (as before)', () => {
+    const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
+    expect(webglInstances).toHaveLength(1);
+    rerender(<TerminalView sessionId="s1" visible={true} />);
+    rerender(<TerminalView sessionId="s1" visible={false} />);
+    expect(webglInstances).toHaveLength(1);
+    expect(webglInstances[0].dispose).not.toHaveBeenCalled();
+    expect(webglLayerCount()).toBe(1);
+  });
+
+  it('never holds more than 16 layers: the 17th chat mounted hidden starts without one', () => {
+    fillHidden(WEBGL_LAYER_LIMIT);
+    render(<TerminalView sessionId="extra" visible={false} />);
+    expect(webglInstances).toHaveLength(WEBGL_LAYER_LIMIT);
+    expect(webglLayerCount()).toBe(WEBGL_LAYER_LIMIT);
+  });
+
+  it('showing a terminal without a layer takes the one of the hidden terminal shown least recently', () => {
+    const fill = fillHidden(WEBGL_LAYER_LIMIT);
+    // f0 was shown longest ago once f1..f15 have each been shown since.
+    const order = Array.from({ length: WEBGL_LAYER_LIMIT }, (_, i) => i);
+    const show = (active: number | null) => fill.rerender(<>{order.map((i) => <TerminalView key={i} sessionId={`f${i}`} visible={i === active} />)}</>);
+    for (const i of order) show(i);
+    show(null);
+    const { rerender } = render(<TerminalView sessionId="extra" visible={false} />);
+    rerender(<TerminalView sessionId="extra" visible={true} />);
+    const f0 = webglInstances[0];
+    expect(f0.dispose).toHaveBeenCalledTimes(1);
+    expect(f0.loseContext).toHaveBeenCalledTimes(1);       // handed back to the browser at once
+    expect(webglInstances.slice(1, WEBGL_LAYER_LIMIT).every((w) => !w.dispose.mock.calls.length)).toBe(true);
+    expect(webglInstances).toHaveLength(WEBGL_LAYER_LIMIT + 1);
+    expect(terminalInstances.at(-1).loadAddon).toHaveBeenCalledWith(webglInstances.at(-1));
+    expect(webglLayerCount()).toBe(WEBGL_LAYER_LIMIT);
+  });
+
+  it('a show that built a fresh layer skips the atlas heal; one that kept its layer heals as before', () => {
+    fillHidden(WEBGL_LAYER_LIMIT);
+    const { rerender } = render(<TerminalView sessionId="extra" visible={false} />);
+    rerender(<TerminalView sessionId="extra" visible={true} />);      // fresh layer, fresh texture
+    expect(clearTextureAtlasSpy).not.toHaveBeenCalled();
+    rerender(<TerminalView sessionId="extra" visible={false} />);
+    rerender(<TerminalView sessionId="extra" visible={true} />);      // kept its layer
+    expect(clearTextureAtlasSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a visible terminal\'s layer is never taken: past the limit a new one is built anyway, as before', () => {
+    render(<>{Array.from({ length: WEBGL_LAYER_LIMIT }, (_, i) => <TerminalView key={i} sessionId={`v${i}`} visible={true} />)}</>);
+    const { rerender } = render(<TerminalView sessionId="extra" visible={false} />);
+    rerender(<TerminalView sessionId="extra" visible={true} />);
+    expect(webglInstances).toHaveLength(WEBGL_LAYER_LIMIT + 1);
+    expect(webglInstances.every((w) => !w.dispose.mock.calls.length)).toBe(true);
+  });
+
+  it('after more than 16 were on screen at once, hiding one brings the pool back to 16', () => {
+    const ids = Array.from({ length: WEBGL_LAYER_LIMIT + 1 }, (_, i) => `v${i}`);
+    const { rerender } = render(<>{ids.map((id) => <TerminalView key={id} sessionId={id} visible={true} />)}</>);
+    expect(webglLayerCount()).toBe(WEBGL_LAYER_LIMIT + 1);
+    rerender(<>{ids.map((id) => <TerminalView key={id} sessionId={id} visible={id !== 'v3'} />)}</>);
+    expect(webglLayerCount()).toBe(WEBGL_LAYER_LIMIT);
+    expect(webglInstances[3].loseContext).toHaveBeenCalledTimes(1);
+  });
+
+  it('closing a chat hands its context back and frees its slot', () => {
+    const { unmount } = render(<TerminalView sessionId="s1" visible={true} />);
+    unmount();
+    expect(webglInstances[0].loseContext).toHaveBeenCalledTimes(1);
+    expect(webglLayerCount()).toBe(0);
+  });
+
+  // The terminal is disposed BEFORE its layer, as before the pool: a layer disposed first builds a replacement
+  // DOM renderer (and reads layout) for a terminal about to be thrown away — on every chat close.
+  it('closing a chat builds no replacement drawing for the terminal it throws away', () => {
+    fallbackRenderersBuilt = 0;
+    const { unmount } = render(<>{['a', 'b', 'c'].map((id) => <TerminalView key={id} sessionId={id} visible={id === 'a'} />)}</>);
+    unmount();
+    expect(fallbackRenderersBuilt).toBe(0);
+    expect(webglInstances.every((w) => w.dispose.mock.calls.length >= 1 && w.loseContext.mock.calls.length === 1)).toBe(true);
+    expect(webglLayerCount()).toBe(0);
+  });
+
+  it('PTY output written to a terminal with no layer still lands in its buffer', () => {
+    fillHidden(WEBGL_LAYER_LIMIT);
+    render(<TerminalView sessionId="extra" visible={false} />);
+    (vi.mocked(usePtyOutput).mock.calls.at(-1)![1] as (d: string) => void)('Do you trust the files in this folder?');
+    expect(writeSpy).toHaveBeenCalledWith('Do you trust the files in this folder?', expect.any(Function));
+    expect(webglInstances).toHaveLength(WEBGL_LAYER_LIMIT);
+  });
+
+  it('a lost context is rebuilt and the screen repainted (the recovery path is unchanged)', () => {
+    render(<TerminalView sessionId="s1" visible={true} />);
+    const term = terminalInstances.at(-1);
+    term.refresh.mockClear();
+    lossHandler(webglInstances[0])();
+    expect(webglInstances[0].dispose).toHaveBeenCalled();
+    expect(webglInstances).toHaveLength(2);
+    expect(term.refresh).toHaveBeenCalledWith(0, 23);
+    expect(webglLayerCount()).toBe(1);
+  });
+
+  it('after three losses in a row it stays on plain drawing, and showing it again does not retry', () => {
+    const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
+    for (let i = 0; i < 3; i++) lossHandler(webglInstances.at(-1))();
+    expect(webglInstances).toHaveLength(4);       // the first plus three retries
+    lossHandler(webglInstances.at(-1))();          // a fourth loss: give up
+    expect(webglInstances).toHaveLength(4);
+    expect(webglLayerCount()).toBe(0);
+    rerender(<TerminalView sessionId="s1" visible={false} />);
+    rerender(<TerminalView sessionId="s1" visible={true} />);
+    expect(webglInstances).toHaveLength(4);
+  });
+
+  it('a loss event from a layer the pool already took back is ignored', () => {
+    const fill = fillHidden(WEBGL_LAYER_LIMIT);
+    const f0 = webglInstances[0];
+    const { rerender } = render(<TerminalView sessionId="extra" visible={false} />);
+    rerender(<TerminalView sessionId="extra" visible={true} />);    // takes a hidden layer (all equally old: f0 first)
+    expect(f0.dispose).toHaveBeenCalledTimes(1);
+    lossHandler(f0)();
+    expect(webglInstances).toHaveLength(WEBGL_LAYER_LIMIT + 1);   // nothing rebuilt for the hidden terminal
+    fill.unmount();
+  });
+});
+
+// A phone (or a remote browser) sizes its HIDDEN terminals too, so their program is already at the size it will have
+// when shown (terminal-hidden-size.ts — the doubled banner of 2026-11-03). Past 16 chats a hidden terminal can be left
+// without a WebGL layer, and plain DOM drawing measures a character cell slightly wider than the WebGL layer does. A
+// terminal without a layer must still propose exactly the size it would with one, or its program is resized while
+// hidden and again when shown — and Claude Code prints its screen twice.
+describe('hidden phone terminals without a WebGL layer', () => {
+  let restores: Array<() => void> = [];
+  const resizeCalls = (id: string) => vi.mocked(window.claude.session.resize).mock.calls.filter((c) => c[0] === id).map((c) => [c[1], c[2]]);
+  const fillHidden = (n: number) => render(<>{Array.from({ length: n }, (_, i) => <TerminalView key={i} sessionId={`f${i}`} visible={false} />)}</>);
+  const settle = () => vi.advanceTimersByTime(100 + 120);   // the mount fit, then the resize debounce
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    webglInstances.length = 0;
+    try { localStorage.clear(); } catch { /* no storage */ }
+    fakeCells = { webgl: { width: 7, height: 15 }, dom: { width: 7.2, height: 15.1 }, char: { width: 7.2, height: 15 } };
+    vi.mocked(platform.getPlatform).mockReturnValue('android');
+    // Every terminal's grid box is collapsed to 0×0 (hidden); the box it would fill when shown is 360×600.
+    for (const [prop, size] of [['clientWidth', 360], ['clientHeight', 600]] as const) {
+      const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, prop);
+      Object.defineProperty(HTMLElement.prototype, prop, {
+        configurable: true,
+        get(this: HTMLElement) { return this.hasAttribute('data-term-backing') ? 0 : size; },
+      });
+      restores.push(() => { if (original) Object.defineProperty(HTMLElement.prototype, prop, original); else delete (HTMLElement.prototype as any)[prop]; });
+    }
+    (globalThis as any).window.claude = { session: { signalReady: vi.fn(), sendInput: vi.fn(), resize: vi.fn() } };
+  });
+  afterEach(() => {
+    cleanup();
+    restores.forEach((r) => r()); restores = [];
+    vi.useRealTimers();
+    delete (globalThis as any).window.claude;
+  });
+
+  it('a hidden terminal without a layer proposes the same size as one with a layer', () => {
+    fillHidden(WEBGL_LAYER_LIMIT);
+    render(<TerminalView sessionId="extra" visible={false} />);
+    settle();
+    expect(webglInstances).toHaveLength(WEBGL_LAYER_LIMIT);     // "extra" has no layer
+    expect(resizeCalls('f0')).toEqual([[49, 40]]);              // (360 - 14 scrollbar) / 7 wide, 600 / 15 tall
+    expect(resizeCalls('extra')).toEqual(resizeCalls('f0'));
+  });
+
+  it('a hidden terminal whose layer was taken is not resized by a window re-fit, and the one shown is not resized twice', () => {
+    fillHidden(WEBGL_LAYER_LIMIT);
+    const { rerender } = render(<TerminalView sessionId="extra" visible={false} />);
+    settle();
+    rerender(<TerminalView sessionId="extra" visible={true} />);  // takes f0's layer: f0 is now on plain drawing
+    expect(webglInstances[0].dispose).toHaveBeenCalledTimes(1);
+    settle();
+    // A soft keyboard opening or closing re-fits every terminal without changing the window.
+    window.dispatchEvent(new Event('resize'));
+    vi.advanceTimersByTime(120);
+    expect(resizeCalls('f0')).toEqual([[49, 40]]);              // only its first sizing, nothing since
+    expect(resizeCalls('extra')).toEqual([[49, 40]]);           // sized once while hidden, kept when shown
+  });
+
+  it('a chat opened in the background with no WebGL measurement for this zoom keeps its program size', () => {
+    fillHidden(WEBGL_LAYER_LIMIT);
+    settle();
+    const dpr = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+    restores.push(() => { if (dpr) Object.defineProperty(window, 'devicePixelRatio', dpr); else delete (window as any).devicePixelRatio; });
+    render(<TerminalView sessionId="extra" visible={false} />);
+    settle();
+    expect(resizeCalls('extra')).toEqual([]);
   });
 });

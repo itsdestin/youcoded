@@ -299,9 +299,29 @@ describe('a click or tap does not leave the hint behind', () => {
     expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
+  it('nor does the focus a tap gives it AFTER the finger lifts (the browser replays mouse events late)', () => {
+    render(<Tooltip text="Hint"><button>x</button></Tooltip>);
+    const b = screen.getByRole('button');
+    fireEvent.pointerDown(b, finger);
+    fireEvent.pointerUp(b, finger);
+    fireEvent.focus(b);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
   it('focus from the keyboard still opens it', () => {
     render(<Tooltip text="Hint"><button>x</button></Tooltip>);
     fireEvent.focus(screen.getByRole('button'));
     expect(screen.getByRole('tooltip').textContent).toBe('Hint');
+  });
+});
+
+// A session created without a name (session.create from an API caller) reached
+// the header with `name: undefined`, and this hint's empty-text check threw —
+// "YouCoded failed to start — Cannot read properties of undefined (reading
+// 'trim')". A missing hint is the same as an empty one: render the control, no bubble.
+describe('a missing hint text', () => {
+  it('renders the control and never throws when the text is undefined', () => {
+    expect(() => render(<Tooltip text={undefined as unknown as string}><button>pill</button></Tooltip>)).not.toThrow();
+    expect(screen.getByRole('button', { name: 'pill' })).toBeTruthy();
   });
 });

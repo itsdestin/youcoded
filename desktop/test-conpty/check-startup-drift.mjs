@@ -59,6 +59,8 @@ function effect(fx) {
     folderTrusted: !!o.folderTrusted,
     bypassAccepted: !!o.bypassAccepted,
     exited: o.exitCode !== null && o.exitCode !== undefined,
+    // WHY: a first-install scenario must never sign in; a change here means a capture did something it must not.
+    signedIn: !!o.credentialsWritten,
     digitIgnored: (o.steps || []).find((s) => 'stayed' in s)?.stayed ?? null,
   };
 }
@@ -68,6 +70,7 @@ const EFFECT_WORDS = {
   folderTrusted: 'the folder being remembered as trusted',
   bypassAccepted: 'bypass mode being remembered as accepted',
   exited: 'Claude Code exiting',
+  signedIn: 'a sign-in credential being written',
   digitIgnored: 'a typed digit being ignored',
 };
 
@@ -121,6 +124,13 @@ async function main() {
   if (has('app')) {
     say('');
     say('Replaying the fresh captures through the app\'s own parser (tests/startup-dialogs.test.ts)…');
+    // WHY: with --only, the fresh folder holds just the chosen scenarios, but the replay test's
+    // answering cases and "every capture is covered" check need the whole set. Fill in the rest
+    // from the saved captures (fresh ones win), so a partial run replays cleanly.
+    const have = new Set(fs.readdirSync(outDir).map((f) => f.replace(/^cc-[^-]+-/, '')));
+    for (const [, b] of saved) {
+      if (!have.has(b.file.replace(/^cc-[^-]+-/, ''))) fs.copyFileSync(path.join(SAVED_DIR, b.file), path.join(outDir, b.file));
+    }
     const r = spawnSync('npx', ['vitest', 'run', 'tests/startup-dialogs.test.ts'], {
       cwd: desktop, stdio: 'inherit', env: { ...process.env, STARTUP_FIXTURE_DIR: outDir }, shell: process.platform === 'win32',
     });

@@ -5,7 +5,7 @@ import QuickChips, { QuickChip } from './QuickChips';
 import { createQueueDraft } from '../state/queue-draft';
 import { readQueueTransferDraft, saveQueueTransferDraft, updateQueueTransferDraft } from '../state/queue-transfer-storage';
 import { pendingQueueSend } from '../state/pending-queue-send';
-import TerminalToolbar from './TerminalToolbar';
+import TerminalToolbar, { consumeCtrlLetter } from './TerminalToolbar';
 import { Button } from './ui';
 import { AttachmentChip } from './AttachmentChip';
 // Round 2 (Destin): reference tokens ride INSIDE the draft as invisible
@@ -72,8 +72,8 @@ export interface InputBarHandle {
   readDraftPayload: (sessionId?: string) => { text: string; attachments: string[] };
   /** Carry text and attachments to an admitted session without submitting either. */
   transferDraft: (fromId: string, toId: string) => void;
-  /** Replace and focus; caller must check hasDraft() first. */
-  fillDraft: (text: string) => void;
+  /** Replace and focus; caller must check hasDraft() first. `files` (sent-form text then) come back as chips. */
+  fillDraft: (text: string, files?: string[]) => void;
 }
 
 interface Props {
@@ -456,8 +456,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     // Mirrors the initialInput prefill effect above (setText + focus + caret
     // at the end) so an edited queued message gets the same "ready to review/
     // send" placement.
-    fillDraft: (draftText: string) => {
+    fillDraft: (sentText: string, paths?: string[]) => {
+      // WHY (card #62 fault c): a native queued message with files comes back as words + chips; its words are in sent form, so reference markers
+      // become chips again as in the Claude Code edit (fillQueuedDraftIfCurrent). Files already in the box are kept, the restored ones added after.
+      const draftText = paths?.length ? tokenizeComposeRefs(sentText) : sentText;
       setText(draftText);
+      if (paths?.length) setAttachments((cur) => [...cur, ...paths.filter((p) => !cur.some((a) => a.path === p))
+        .map((path) => ({ path, name: fileNameFromPath(path), isImage: isImagePath(path) }))]);
       requestAnimationFrame(() => {
         if (inputRef.current) {
           inputRef.current.focus();
@@ -1228,6 +1233,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             }}
             onChange={(e) => {
               const val = e.target.value;
+              if (minimal && sessionId && consumeCtrlLetter(sessionId, text, val)) return;   // a held Ctrl: sent as Ctrl+letter
               // Typing while the mic is open ends dictation, and EVERYTHING in the
               // box stays — including the grey, still-being-reconsidered words.
               //

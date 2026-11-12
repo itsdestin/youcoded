@@ -119,6 +119,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/assistant/browser#no-browser', 'dialog', 'browser'), params: { browser: 'no-browser' } },
   { ...settings('settings/assistant/browser#downloading', 'dialog', 'browser'), params: { browser: 'downloading' } },
   settings('settings/sync', 'dialog', 'error-state'),
+  // Card #213 (density-review D-4): on a phone Additional backups folds into one row; this is it opened.
+  { ...settings('settings/sync#phone-additional-open', 'dialog', 'narrow'), viewport: { width: 390, height: 844 }, open: ['Additional backups…'], newIn: 'after' as const },
   { ...settings('settings/sync#log-open', 'dialog', 'fold'), params: { sync: 'ok' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Sync log', { do: 'scroll', dir: 'down', times: 8 }] },
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
   { ...settings('settings/sync#auth-error', 'dialog', 'error-state'), params: { sync: 'auth-error' } },
@@ -132,6 +134,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#backup-timeout', 'dialog', 'error-state'), params: { syncWarn: 'timeout' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   // Removed projects and their GitHub backups (project switcher round 2, backlog row 10).
   { ...settings('settings/sync#removed', 'dialog'), params: { sync: 'removed' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
+  // The same, folded open (Removed projects became a closed fold-out row, card #213).
+  { ...settings('settings/sync#removed-open', 'dialog', 'fold'), params: { sync: 'removed' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Removed projects 2 projects, with their GitHub backups', { do: 'scroll', dir: 'down', times: 8 }] },
   // The (i) explainer: what Backup & sync copies, and what it does not (small-fixes-1).
   { ...settings('settings/sync#explainer', 'dialog'), open: ['What is this?'] },
   // The add-a-backup wizard's two failures (small-fixes-1): the helper tool's install, and making
