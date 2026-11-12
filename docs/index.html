@@ -1283,55 +1283,44 @@ body.intro-mode > footer{transform:translateY(34px)}
   body.intro-mode .flankrow{transform:none}}
 
 
-/* ==== PROTOTYPE 2026-11-12: intro entrance options (body.iv2) ===============
+/* ==== PROTOTYPE 2026-11-12, round 2: intro entrance options (body.iv2) =======
    WHY: Destin, 2026-11-12 -- every load sat frozen on "Make Your Technology ___"
    with an empty slot (up to 0.7s waiting for the font and wallpapers, then
-   another 0.62s before "Useful." bumped in). These options instead hold a plain
-   purple screen for that wait, then bring the headline in COMPLETE, with
-   "Useful." already in its slot, and only then start the word cycle.
-   Switched on by ?intro=<style>[-page] (script right after <body>). Nothing
-   here applies without body.iv2, so the page as shipped is unchanged. Once he
-   picks, the chosen option becomes the default and the rest is deleted.
+   another 0.62s before "Useful." bumped in). Round 1 brought the headline in
+   with "Useful." already showing; he rejected it: "it feels like it *starts*
+   with useful, then just does a 2-item cycle. i want it to feel like it starts
+   purple, then move through all 3 items ... the timing/beat needs to feel
+   satisfying and consistent".
+   So: nothing shows until the font and wallpapers are ready, then the headline
+   arrives ON THE PURPLE THEME, and all three words bump in on one even beat
+   (--beat): "Useful." one beat after the headline, "Fun." two, "Yours." three.
+   Switched on by ?intro=<start>-<motion>-<beat ms> (script right after <body>).
+   Nothing here applies without body.iv2, so the page as shipped is unchanged.
 
-   The entrance uses the separate `translate` / `scale` properties, never
-   `transform`: .flankrow's transform is the intro's centring lift (above). */
+   The entrance uses the separate `translate` property, never `transform`:
+   .flankrow's transform is the intro's centring lift (above). */
 body.iv2:not(.intro-go):not(.cycler-static) .nav,
 body.iv2:not(.intro-go):not(.cycler-static) .flankrow{opacity:0}
-body.iv2.intro-go .nav{animation:iv2-fade .6s ease backwards}
-body.iv2-fade.intro-go .flankrow{animation:iv2-fade .6s ease backwards}
-body.iv2-rise.intro-go .flankrow{animation:iv2-rise .75s cubic-bezier(.22,1,.36,1) backwards}
-body.iv2-zoom.intro-go .flankrow{animation:iv2-zoom .75s cubic-bezier(.22,1,.36,1) backwards}
+body.iv2.intro-go .nav{animation:iv2-fade .5s ease backwards}
+body.iv2-fade.intro-go .flankrow{animation:iv2-fade .5s ease backwards}
+body.iv2-rise.intro-go .flankrow{animation:iv2-rise .6s cubic-bezier(.22,1,.36,1) backwards}
 @keyframes iv2-fade{from{opacity:0}}
-@keyframes iv2-rise{from{opacity:0;translate:0 48px}}
-@keyframes iv2-zoom{from{opacity:0;scale:.93;filter:blur(8px)}}
-/* "Useful." is there from the start, so it only needs its EXIT: the last 15%
-   of the old .82s bump (starting at .62s + 85% of .82s = 1.317s), which lands
-   on "Fun."'s entry exactly as before. Words two and three are untouched. */
-body.iv2 .cycler-word-1{opacity:1;transform:none;
-  animation-name:iv2-leave;animation-delay:1.317s;animation-duration:.123s}
-@keyframes iv2-leave{0%{transform:translateY(0);opacity:1} 47%{transform:translateY(4%);opacity:1}
-  100%{transform:translateY(-110%);opacity:0}}
-/* "-page" options: the whole page arrives WITH the headline instead of after
-   the last word. The headline starts in its real place (no centring lift), and
-   the page's own existing .55s fade/rise carries everything in. body.intro-mode
-   stays on until the last word so the scripts that wait for the intro's end
-   (the live demo's boot, the clips) behave exactly as they do today. */
-body.iv2-full.intro-mode .flankrow{transform:none}
-body.iv2-full.intro-mode :is(.kicker,.hero-sub,.dlrow,.hero-app,.dlfloat),
-body.iv2-full.intro-mode > :is(section,footer){opacity:1;pointer-events:auto;transform:none}
-body.iv2-full.intro-mode:not(.intro-go):not(.cycler-static) :is(.kicker,.hero-sub,.dlrow,.hero-app,.dlfloat),
-body.iv2-full.intro-mode:not(.intro-go):not(.cycler-static) > :is(section,footer){opacity:0;pointer-events:none}
-body.iv2-full.iv2-rise.intro-mode:not(.intro-go):not(.cycler-static) :is(.hero-sub,.dlrow,.hero-app),
-body.iv2-full.iv2-rise.intro-mode:not(.intro-go):not(.cycler-static) > :is(section,footer){transform:translateY(48px)}
-/* The prototype's own switcher bar; never present without ?intro=. */
-/* WHY bottom-left and stacked: centred, it sat on top of the page's own
-   floating download pill. */
+@keyframes iv2-rise{from{opacity:0;translate:0 40px}}
+/* One beat between every step. The word's own animation keeps the shipped
+   proportions (.82s long on a .78s beat), so each exit still lands exactly on
+   the next word's entry whatever the beat is. */
+body.iv2 .cycler-word{animation-duration:calc(var(--beat) * 1.0513)}
+body.iv2 .cycler-word-1{animation-delay:var(--beat)}
+body.iv2 .cycler-word-2{animation-delay:calc(var(--beat) * 2)}
+body.iv2 .cycler-word-3{animation-delay:calc(var(--beat) * 3)}
+/* The prototype's own switcher box; never present without ?intro=.
+   WHY bottom-left and stacked: centred, it sat on the page's download pill. */
 .iv2-bar{position:fixed;left:12px;bottom:12px;z-index:9999;display:flex;flex-direction:column;
-  gap:5px;align-items:stretch;text-align:center;width:150px;padding:8px 10px;border-radius:14px;
+  gap:5px;align-items:stretch;text-align:center;width:170px;padding:8px 10px;border-radius:14px;
   background:rgba(20,14,28,.92);color:#fff;font:500 13px/1.2 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35)}
 .iv2-bar a{color:#fff;text-decoration:none;padding:6px 10px;border-radius:9px;background:rgba(255,255,255,.12)}
 .iv2-bar a.on{background:#B77BE0;color:#1a0f24}
-.iv2-bar span{opacity:.65;padding:0 2px 0 6px}
+.iv2-bar span{opacity:.65;padding-top:3px}
 
 /* ---- Headline size classes for the wording variants (2026-08-31) ----------
    The headline sits BETWEEN two mascot groups in a centred flex row, so its
@@ -2136,27 +2125,37 @@ html{-webkit-tap-highlight-color:transparent}
 /* PROTOTYPE 2026-11-12 (intro entrance options; see body.iv2 in the stylesheet).
    WHY here, first thing in <body>: the classes must be on before the first
    paint, or the old half-empty headline flashes before the option takes over.
-   ?intro=today shows the shipped behaviour with the switcher bar, for comparing. */
+   ?intro=today shows the shipped behaviour with the switcher box, for comparing.
+   start:  closed = "Make Your Technology" arrives centred with no gap, and the
+                    slot opens as "Useful." bumps in;
+           held   = the space for the word is kept open from the start (as today).
+   motion: fade | rise.   beat: milliseconds between steps. */
 (function(){
-  var m = /[?&]intro=(today|fade|rise|zoom)(-page)?/.exec(location.search);
+  var m = /[?&]intro=(today|(closed|held)-(fade|rise)-(\d{3,4}))/.exec(location.search);
   if (!m) return;
-  var style = m[1], full = !!m[2];
-  if (style !== 'today') {
-    document.body.classList.add('iv2', 'iv2-' + style);
-    if (full) document.body.classList.add('iv2-full');
+  var today = m[1] === 'today';
+  var start = m[2] || 'closed', motion = m[3] || 'fade', beat = parseInt(m[4] || '780', 10);
+  if (!today) {
+    document.body.classList.add('iv2', 'iv2-' + start, 'iv2-' + motion);
+    document.body.style.setProperty('--beat', beat + 'ms');
+    window.IV2_BEAT = beat;
   }
   document.addEventListener('DOMContentLoaded', function(){
     var bar = document.createElement('div'); bar.className = 'iv2-bar';
-    var html = '<span>Entrance</span>';
-    [['today','Today'],['fade','Fade in'],['rise','Rise up'],['zoom','Zoom in']].forEach(function(o){
-      var href = '?intro=' + o[0] + (full && o[0] !== 'today' ? '-page' : '');
-      html += '<a href="' + href + '"' + (o[0] === style ? ' class="on"' : '') + '>' + o[1] + '</a>';
-    });
-    if (style !== 'today') {
-      html += '<span>Rest of page</span>' +
-        '<a href="?intro=' + style + '"' + (full ? '' : ' class="on"') + '>After the words</a>' +
-        '<a href="?intro=' + style + '-page"' + (full ? ' class="on"' : '') + '>With the headline</a>';
+    function link(label, s, mo, b, on){
+      return '<a href="?intro=' + s + '-' + mo + '-' + b + '"' + (on ? ' class="on"' : '') + '>' + label + '</a>';
     }
+    var html = '<a href="?intro=today"' + (today ? ' class="on"' : '') + '>Today (live site)</a>';
+    html += '<span>Headline starts</span>' +
+      link('Closed up', 'closed', motion, beat, !today && start === 'closed') +
+      link('Space held open', 'held', motion, beat, !today && start === 'held');
+    html += '<span>Arrives by</span>' +
+      link('Fading in', start, 'fade', beat, !today && motion === 'fade') +
+      link('Rising up', start, 'rise', beat, !today && motion === 'rise');
+    html += '<span>Beat</span>' +
+      link('Quick', start, motion, 650, !today && beat === 650) +
+      link('Steady', start, motion, 780, !today && beat === 780) +
+      link('Relaxed', start, motion, 900, !today && beat === 900);
     html += '<span></span><a href="' + location.search + '">Replay</a>';
     bar.innerHTML = html;
     document.body.appendChild(bar);
@@ -4758,6 +4757,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   function applyStep(i){
     slots.forEach(function(sl){
       var wide = 0;
+      if (i < 0) { setWidth(sl.el, 0); return; }   // PROTOTYPE: closed-up start
       sl.steps[i].forEach(function(idx){ if (idx >= 0 && sl.w[idx] > wide) wide = sl.w[idx]; });
       setWidth(sl.el, wide);
     });
@@ -4775,8 +4775,9 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // ends the line -- there is nothing after it to shove -- but mid-sentence it
   // drags the rest of the headline (and both mascot groups, since the row is
   // centred) left and right on every beat.
-  var curStep = 0;
-  applyStep(0);
+  // (CLOSED is assigned further down; `var` would still be undefined here.)
+  var curStep = document.body.classList.contains('iv2-closed') ? -1 : 0;
+  applyStep(curStep);
   // Widths measured before the web font arrives are the FALLBACK font's, and it
   // is wider -- that is where 42px of dead space after the final word came from.
   // Re-measure once the real font has landed and re-apply the current beat.
@@ -4801,7 +4802,13 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // On a simulated 3 Mbit/s link with 70ms latency everything was ready in
   // ~110ms; 700ms is headroom above that, and the most a bad link can add.
   var START_CAP_MS = 700;
-  var IV2 = document.body.classList.contains('iv2');   // PROTOTYPE: see body.iv2 in the stylesheet
+  // PROTOTYPE: see body.iv2 in the stylesheet.
+  var IV2 = document.body.classList.contains('iv2');
+  var BEAT = window.IV2_BEAT || 780;
+  // "Closed up" start: the word slot begins at zero width, so the headline
+  // arrives as a centred, complete-looking phrase instead of one with a hole
+  // at the end; step -1 means "no word yet".
+  var CLOSED = document.body.classList.contains('iv2-closed');
   var started = false;
   function beginSequence(){
     if (started) return;
@@ -4810,24 +4817,25 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       if (introEnded) return;          // a mascot click already took over
       // Measure in the real font and re-centre before anything moves.
       slots.forEach(function(sl){ sl.w = measure(sl.el); });
-      applyStep(0);
+      applyStep(curStep);
       setLift();
       document.body.classList.add('intro-go');
       HERO_SEQUENCE.forEach(function(step, i){
-        // PROTOTYPE (body.iv2): "Useful." is already in its slot when the
-        // headline arrives, so its theme comes in with the entrance itself
-        // rather than half a second later.
-        if (IV2 && i === 0) { applyTheme(step.theme); return; }
+        // PROTOTYPE (body.iv2): every step sits on one even beat, counted from
+        // the moment the headline arrives. Each theme still leads its word by
+        // the shipped 100ms so the colour change finishes as the word settles.
+        var at = IV2 ? BEAT * (i + 1) - 100 : step.at;
         timers.push(setTimeout(function(){
           applyTheme(step.theme);
           curStep = i;
           applyStep(i);
-        }, step.at));
+        }, at));
       });
       // 'Yours.' starts at 2180 and settles ~2344 (its bump is done at 20% of
       // 820ms). The rise fires right on that settle now -- the pause that used to
       // sit between them is what read as a slow tail.
-      timers.push(setTimeout(endIntro, 2360));
+      // PROTOTYPE: same 180ms after the last word as shipped (2360 - 2180).
+      timers.push(setTimeout(endIntro, IV2 ? BEAT * 3 + 180 : 2360));
     });
   }
   function introReady(){
@@ -4847,12 +4855,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
     return Promise.all(waits);
   }
   if (window.Promise) {
-    // PROTOTYPE (body.iv2): hold the plain purple screen for at least a beat.
-    // WHY: on a refresh everything is cached and "ready" within a few
-    // milliseconds, so without a floor the purple moment Destin asked for
-    // would not exist; 250ms reads as deliberate without feeling like a wait.
-    var purpleLeft = IV2 ? Math.max(0, 250 - performance.now()) : 0;
-    introReady().then(function(){ setTimeout(beginSequence, purpleLeft); });
+    introReady().then(beginSequence);
     setTimeout(beginSequence, START_CAP_MS);
   } else {
     beginSequence();
