@@ -1323,6 +1323,21 @@ body.iv2 .cycler-word-3{animation-delay:calc(var(--lead) + var(--beat) * 2)}
    travels about four times as far. */
 body.iv2-first .cycler-stage{clip-path:inset(0 -5px 0 0)}
 body.iv2-first .word-cycler{transition:width .6s cubic-bezier(.25,.8,.3,1)}
+/* "Robots start" option (Destin, round 5: "start the empty 'make your
+   technology...' state with the icons slightly further to the left/right of
+   the text ... that way they maybe have to move just a bit less to fit the
+   first 'useful'"). While the headline is still closed (body.iv2-shut) it
+   carries extra room on both sides, a share of the first word's width set by
+   the script; that room is handed back, on the same curve, as the slot opens,
+   so the robots travel only what is left. Wide layout only: at 1020px and
+   below the robots sit UNDER the headline and there is nothing to spread. */
+@media(min-width:1021px){
+  /* WHY :not(.iv2-shut): the transition must exist only on the way OUT. With it
+     on always, the robots visibly slid apart during the headline's entrance
+     (traced 2026-11-12) instead of simply starting apart. */
+  body.iv2:not(.iv2-shut) .hero-flank .flankrow h1{transition:margin .6s cubic-bezier(.25,.8,.3,1)}
+  body.iv2-shut .hero-flank .flankrow h1{margin:0 var(--iv2-spread,0px)}
+}
 /* The switcher shrinks to its first and last buttons on a phone-width window,
    where the full box covered the headline it is there to show. */
 @media(max-width:700px){.iv2-bar{width:auto;flex-direction:row;padding:6px}
@@ -2145,25 +2160,30 @@ html{-webkit-tap-highlight-color:transparent}
            held   = the space for the word is kept open from the start (as today).
    motion: fade | rise.   beat: milliseconds between steps. */
 (function(){
-  var m = /[?&]intro=(today|(closed|held)-(fade|rise)-(\d{3,4}))/.exec(location.search);
+  var m = /[?&]intro=(today|(closed|held)-(fade|rise)-(\d{3,4})(?:-s([012]))?)/.exec(location.search);
   if (!m) return;
   var today = m[1] === 'today';
   var start = m[2] || 'closed', motion = m[3] || 'fade', beat = parseInt(m[4] || '780', 10);
+  var spread = parseInt(m[5] || '0', 10);   // 0 tight, 1 halfway, 2 robots already in their final spot
   if (!today) {
     document.body.classList.add('iv2', 'iv2-' + start, 'iv2-' + motion);
     document.body.style.setProperty('--beat', beat + 'ms');
     document.body.style.setProperty('--lead', '680ms');
-    window.IV2_BEAT = beat; window.IV2_LEAD = 680;
+    window.IV2_BEAT = beat; window.IV2_LEAD = 680; window.IV2_SPREAD = spread / 2;
   }
   document.addEventListener('DOMContentLoaded', function(){
     var bar = document.createElement('div'); bar.className = 'iv2-bar';
-    function link(label, s, mo, b, on){
-      return '<a href="?intro=' + s + '-' + mo + '-' + b + '"' + (on ? ' class="on"' : '') + '>' + label + '</a>';
+    function link(label, s, mo, b, on, sp){
+      return '<a href="?intro=' + s + '-' + mo + '-' + b + '-s' + (sp == null ? spread : sp) + '"' + (on ? ' class="on"' : '') + '>' + label + '</a>';
     }
     var html = '<a href="?intro=today"' + (today ? ' class="on"' : '') + '>Today (live site)</a>';
     html += '<span>Headline starts</span>' +
       link('Closed up', 'closed', motion, beat, !today && start === 'closed') +
       link('Space held open', 'held', motion, beat, !today && start === 'held');
+    if (today || start === 'closed') html += '<span>Robots start</span>' +
+      link('Tight to the text', 'closed', motion, beat, !today && spread === 0, 0) +
+      link('A little apart', 'closed', motion, beat, !today && spread === 1, 1) +
+      link('Where they end up', 'closed', motion, beat, !today && spread === 2, 2);
     html += '<span>Arrives by</span>' +
       link('Fading in', start, 'fade', beat, !today && motion === 'fade') +
       link('Rising up', start, 'rise', beat, !today && motion === 'rise');
@@ -4739,7 +4759,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   }
   function cancel(){
     timers.forEach(clearTimeout); timers = [];
-    document.body.classList.remove('iv2-first');   // PROTOTYPE: its removal timer was just cleared
+    document.body.classList.remove('iv2-first', 'iv2-shut');   // PROTOTYPE: their removal timers were just cleared
     // Taken over before the words were released: they would stay paused and the
     // slot empty, so show the resting word the way the static path does.
     if (!document.body.classList.contains('intro-go')) {
@@ -4827,7 +4847,8 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // PROTOTYPE: see body.iv2 in the stylesheet.
   var IV2 = document.body.classList.contains('iv2');
   var BEAT = window.IV2_BEAT || 780;
-  var LEAD = window.IV2_LEAD || 680;   // headline's arrival -> first word
+  var LEAD = window.IV2_LEAD || 680;
+  var SPREAD = window.IV2_SPREAD || 0;         // "Robots start" option, 0..1   // headline's arrival -> first word
   // "Closed up" start: the word slot begins at zero width, so the headline
   // arrives as a centred, complete-looking phrase instead of one with a hole
   // at the end; step -1 means "no word yet".
@@ -4856,6 +4877,12 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
         };
         var shut = tall(-1), open = Math.max(tall(0), tall(1), tall(2));
         if (Math.abs(open - shut) > 1) { CLOSED = false; curStep = 0; }
+        // "Robots start": extra room each side while closed, as a share of
+        // half the first word's width (1 = the robots never move for it).
+        if (CLOSED && SPREAD && slots[0]) {
+          flank.style.setProperty('--iv2-spread', Math.round(SPREAD * (slots[0].w[0] + 4) / 2) + 'px');
+          document.body.classList.add('iv2-shut');
+        }
         applyStep(curStep);
         if (h1) h1.getBoundingClientRect();          // settle before transitions return
         slots.forEach(function(sl){ sl.el.style.transition = ''; });
@@ -4889,6 +4916,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
           applyTheme(step.theme);
           curStep = i;
           applyStep(i);
+          document.body.classList.remove('iv2-shut');   // hand the spare room back as the slot opens
         }, at));
       });
       // 'Yours.' starts at 2180 and settles ~2344 (its bump is done at 20% of
