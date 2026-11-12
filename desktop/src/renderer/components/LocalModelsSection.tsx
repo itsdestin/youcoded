@@ -170,15 +170,27 @@ export function LocalModelBrowser() {
   const [curated, setCurated] = useState<CuratedModel[] | null>(null);
   const [installed, setInstalled] = useState<InstalledLocalModel[] | null>(null);
 
+  // WHY the two reads' failures are kept (error inventory 2026-09-10, Settings rows 59 and 96): a failed
+  // read became an empty list, so "Installed" and "Recommended" silently vanished and downloaded models
+  // looked gone. Lists already on screen stay (they are real); the failure is shown above them.
+  const [installedError, setInstalledError] = useState<string | null>(null);
+  const [curatedError, setCuratedError] = useState<string | null>(null);
+
   const refreshInstalled = useCallback(async () => {
-    try { setInstalled(await window.claude.models.installed() as InstalledLocalModel[]); }
-    catch { setInstalled([]); }
+    try { setInstalled(await window.claude.models.installed() as InstalledLocalModel[]); setInstalledError(null); }
+    catch (e) { setInstalled((prev) => prev ?? []); setInstalledError(plainMessage(e, 'The list did not come back.')); }
+  }, []);
+
+  const loadCurated = useCallback(() => {
+    window.claude.models.curated()
+      .then((c: any) => { setCurated(c); setCuratedError(null); })
+      .catch((e: unknown) => { setCurated((prev) => prev ?? []); setCuratedError(plainMessage(e, 'The list did not come back.')); });
   }, []);
 
   useEffect(() => {
     if (!supported) return;
     // Curated + installed load once; downloads stay live via the subscription.
-    void window.claude.models.curated().then((c: any) => setCurated(c)).catch(() => setCurated([]));
+    loadCurated();
     void refreshInstalled();
     const seen = new Set<string>();
     const off = window.claude.models.onDownloadProgress((p: DownloadProgress) => {
@@ -193,9 +205,11 @@ export function LocalModelBrowser() {
       }
     });
     return off;
-  }, [supported, refreshInstalled]);
+  }, [supported, refreshInstalled, loadCurated]);
 
   if (!supported) return null;
+
+  const loadError = installedError ?? curatedError;
 
   return (
     <ModelBrowser
@@ -204,6 +218,8 @@ export function LocalModelBrowser() {
       downloads={downloads}
       quantOptsByKeyRef={quantOptsByKeyRef}
       onRefreshInstalled={refreshInstalled}
+      loadError={loadError}
+      onRetryLoad={() => { if (installedError) void refreshInstalled(); if (curatedError) loadCurated(); }}
     />
   );
 }
@@ -249,13 +265,16 @@ function DownloadProgressRow({ dl }: { dl: DownloadProgress }) {
 // ── Model browser (recommended + installed + search, one filterable list) ────
 
 function ModelBrowser({
-  curated, installed, downloads, quantOptsByKeyRef, onRefreshInstalled,
+  curated, installed, downloads, quantOptsByKeyRef, onRefreshInstalled, loadError, onRetryLoad,
 }: {
   curated: CuratedModel[] | null;
   installed: InstalledLocalModel[] | null;
   downloads: Record<string, DownloadProgress>;
   quantOptsByKeyRef: React.MutableRefObject<Record<string, QuantWithFit>>;
   onRefreshInstalled: () => Promise<void>;
+  /** Why the installed or recommended list could not be read, or null. */
+  loadError?: string | null;
+  onRetryLoad?: () => void;
 }) {
   const [query, setQuery] = useState('');
   // Hugging Face results for the current query (null = not searched this query).
@@ -354,6 +373,9 @@ function ModelBrowser({
         <p className="text-2xs text-fg-muted px-1">Loading…</p>
       ) : (
         <div className="space-y-3">
+          {loadError && onRetryLoad && (
+            <ErrorState variant="inline" message={`Couldn't load the model list: ${loadError}`} onRetry={onRetryLoad} />
+          )}
           {/* Installed (+ in-progress) */}
           {installedFiltered.length > 0 && (
             <div className="space-y-2">
@@ -412,7 +434,7 @@ function ModelBrowser({
             </div>
           )}
 
-          {nothing && <p className="text-2xs text-fg-muted px-1">No models match “{query}”.</p>}
+          {nothing && !loadError && <p className="text-2xs text-fg-muted px-1">No models match “{query}”.</p>}
         </div>
       )}
     </div>
