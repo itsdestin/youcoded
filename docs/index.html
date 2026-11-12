@@ -1344,6 +1344,48 @@ body.iv2.intro-mode .bd-layer{transition:opacity .5s ease}
   body.iv2:not(.iv2-shut) .hero-flank .flankrow h1{transition:margin .5s cubic-bezier(.22,.9,.32,1)}
   body.iv2-shut .hero-flank .flankrow h1{margin:0 var(--iv2-spread,0px)}
 }
+/* ---- First word, left-to-right options (body.iv2-u) -------------------------
+   The word no longer rides the shared bump. Three small animations instead:
+     iv2-show    switches it on, already in place, as its reveal begins;
+     iv2-reveal-* the left-to-right reveal itself (one per option);
+     iv2-leave   the same bump-out exit as before, on the same clock, so
+                 "Fun." still lands exactly as "Useful." leaves.
+   ON THE BEAT: a bumped word is readable ~80ms after its beat and settled by
+   ~160ms. The reveal therefore starts 100ms BEFORE the beat and ends 140ms
+   after it, so its middle -- the moment the word reads -- sits where the
+   bump's does. Frame-traced against the opening slot so the word's leading
+   edge never gets ahead of the room being made for it. */
+body.iv2-u .cycler-word-1{
+  animation-name:iv2-show,iv2-leave,iv2-reveal-wipe;
+  animation-duration:1ms,calc(var(--beat) * .1577),240ms;
+  animation-delay:calc(var(--lead) - 100ms),calc(var(--lead) + var(--beat) * .8936),calc(var(--lead) - 100ms);
+  animation-timing-function:linear,linear,cubic-bezier(.3,.6,.35,1);
+  animation-fill-mode:forwards,forwards,both}
+@keyframes iv2-show{to{opacity:1;transform:none}}
+@keyframes iv2-leave{0%{transform:translateY(0);opacity:1} 47%{transform:translateY(4%);opacity:1}
+  100%{transform:translateY(-110%);opacity:0}}
+/* The reveal runs on its own clock, so the slot must not also clip the word. */
+body.iv2-u.iv2-first .cycler-stage{clip-path:inset(0 -50vw 0 0)}
+@keyframes iv2-reveal-wipe{from{clip-path:inset(-20% 100% -20% 0)} to{clip-path:inset(-20% -6px -20% 0)}}
+body.iv2-u-soft .cycler-word-1{animation-name:iv2-show,iv2-leave,iv2-reveal-soft;
+  -webkit-mask-image:linear-gradient(90deg,#000 0 40%,transparent 60% 100%);mask-image:linear-gradient(90deg,#000 0 40%,transparent 60% 100%);
+  -webkit-mask-size:300% 100%;mask-size:300% 100%;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat}
+@keyframes iv2-reveal-soft{from{-webkit-mask-position:100% 0;mask-position:100% 0} to{-webkit-mask-position:0 0;mask-position:0 0}}
+/* Sliding out: the word travels right from fully behind the end of
+   "Technology"; the clip keeps whatever is still behind it hidden. */
+body.iv2-u-slide .cycler-word-1{animation-name:iv2-show,iv2-leave,iv2-reveal-slide}
+@keyframes iv2-reveal-slide{from{translate:-100% 0;clip-path:inset(-20% -6px -20% 100%)}
+  to{translate:0 0;clip-path:inset(-20% -6px -20% 0)}}
+/* Letter by letter: the word itself is simply on; each letter (split by the
+   script) pops up 24ms after the one before, the last landing ~170ms after
+   the beat. */
+body.iv2-u-letters .cycler-word-1{animation-name:iv2-show,iv2-leave,none}
+body.iv2-u-letters .cycler-word-1 b{display:inline-block;font:inherit;opacity:0;
+  animation:iv2-letter 140ms cubic-bezier(.3,.6,.35,1) both;
+  animation-delay:calc(var(--lead) - 110ms + var(--i) * 24ms)}
+body.iv2-u-letters:not(.intro-go) .cycler-word-1 b{animation-play-state:paused}
+@keyframes iv2-letter{from{opacity:0;transform:translateY(38%)} to{opacity:1;transform:none}}
+body.cycler-static .cycler-word-1 b{animation:none}
 /* The switcher shrinks to its first and last buttons on a phone-width window,
    where the full box covered the headline it is there to show. */
 @media(max-width:700px){.iv2-bar{width:auto;flex-direction:row;padding:6px}
@@ -2157,47 +2199,33 @@ html{-webkit-tap-highlight-color:transparent}
 </style></head>
 <body class="intro-mode fade-d pill-accent legend-on h1-md">
 <script>
-/* PROTOTYPE 2026-11-12 (intro entrance options; see body.iv2 in the stylesheet).
+/* PROTOTYPE 2026-11-12 (intro entrance; see body.iv2 in the stylesheet).
    WHY here, first thing in <body>: the classes must be on before the first
-   paint, or the old half-empty headline flashes before the option takes over.
-   ?intro=today shows the shipped behaviour with the switcher box, for comparing.
-   start:  closed = "Make Your Technology" arrives centred with no gap, and the
-                    slot opens as "Useful." bumps in;
-           held   = the space for the word is kept open from the start (as today).
-   motion: fade | rise.   beat: milliseconds between steps. */
+   paint, or the old half-empty headline flashes before the new intro starts.
+   LOCKED by Destin (rounds 2-6): headline starts closed up, rises in, robots
+   start a little apart, 720ms between words. The one thing still open is how
+   the FIRST word arrives (round 7: "having useful kinda slide out/unveil
+   left-to-right instead of sliding up"):
+     up      bumps up from below, like the other two words
+     wipe    uncovered left to right, hard edge
+     soft    uncovered left to right, feathered edge
+     slide   slides out to the right from behind "Technology"
+     letters its letters pop in one after another, left to right */
 (function(){
-  var m = /[?&]intro=(today|(closed|held)-(fade|rise)-(\d{3,4})(?:-s([012]))?)/.exec(location.search);
+  var m = /[?&]intro=(up|wipe|soft|slide|letters)\b/.exec(location.search);
   if (!m) return;
-  var today = m[1] === 'today';
-  var start = m[2] || 'closed', motion = m[3] || 'fade', beat = parseInt(m[4] || '780', 10);
-  var spread = parseInt(m[5] || '0', 10);   // 0 tight, 1 halfway, 2 robots already in their final spot
-  if (!today) {
-    document.body.classList.add('iv2', 'iv2-' + start, 'iv2-' + motion);
-    document.body.style.setProperty('--beat', beat + 'ms');
-    document.body.style.setProperty('--lead', '620ms');
-    window.IV2_BEAT = beat; window.IV2_LEAD = 620; window.IV2_SPREAD = spread / 2;
-  }
+  var first = m[1];
+  document.body.classList.add('iv2', 'iv2-closed', 'iv2-rise');
+  if (first !== 'up') document.body.classList.add('iv2-u', 'iv2-u-' + first);
+  document.body.style.setProperty('--beat', '720ms');
+  document.body.style.setProperty('--lead', '620ms');
+  window.IV2_BEAT = 720; window.IV2_LEAD = 620; window.IV2_SPREAD = 0.5;
   document.addEventListener('DOMContentLoaded', function(){
     var bar = document.createElement('div'); bar.className = 'iv2-bar';
-    function link(label, s, mo, b, on, sp){
-      return '<a href="?intro=' + s + '-' + mo + '-' + b + '-s' + (sp == null ? spread : sp) + '"' + (on ? ' class="on"' : '') + '>' + label + '</a>';
-    }
-    var html = '<a href="?intro=today"' + (today ? ' class="on"' : '') + '>Today (live site)</a>';
-    html += '<span>Headline starts</span>' +
-      link('Closed up', 'closed', motion, beat, !today && start === 'closed') +
-      link('Space held open', 'held', motion, beat, !today && start === 'held');
-    if (today || start === 'closed') html += '<span>Robots start</span>' +
-      link('Tight to the text', 'closed', motion, beat, !today && spread === 0, 0) +
-      link('A little apart', 'closed', motion, beat, !today && spread === 1, 1) +
-      link('Where they end up', 'closed', motion, beat, !today && spread === 2, 2);
-    html += '<span>Arrives by</span>' +
-      link('Fading in', start, 'fade', beat, !today && motion === 'fade') +
-      link('Rising up', start, 'rise', beat, !today && motion === 'rise');
-    html += '<span>Beat</span>' +
-      link('Quick', start, motion, 650, !today && beat === 650) +
-      link('Tight', start, motion, 720, !today && beat === 720) +
-      link('Steady', start, motion, 780, !today && beat === 780) +
-      link('Relaxed', start, motion, 900, !today && beat === 900);
+    var html = '<span>"Useful." arrives by</span>';
+    [['up','Sliding up (as now)'],['wipe','Wipe'],['soft','Soft wipe'],['slide','Sliding out'],['letters','Letter by letter']].forEach(function(o){
+      html += '<a href="?intro=' + o[0] + '"' + (o[0] === first ? ' class="on"' : '') + '>' + o[1] + '</a>';
+    });
     html += '<span></span><a href="' + location.search + '">Replay</a>';
     bar.innerHTML = html;
     document.body.appendChild(bar);
@@ -4735,6 +4763,15 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 (function(){
   var cyclers = [].slice.call(document.querySelectorAll('.word-cycler'));
   if (!cyclers.length) return;
+  // PROTOTYPE ("Letter by letter"): wrap each letter of the first word so it
+  // can arrive on its own. Done before anything is measured.
+  if (document.body.classList.contains('iv2-u-letters')) {
+    var w1 = document.querySelector('.cycler-word-1'), txt = w1.textContent;
+    w1.textContent = '';
+    txt.split('').forEach(function(ch, i){
+      var b = document.createElement('b'); b.textContent = ch; b.style.setProperty('--i', i); w1.appendChild(b);
+    });
+  }
 
   var HERO_SEQUENCE = [
     // 100ms ahead of each word's CSS delay (.62 / 1.40 / 2.18s) so the 0.5s
