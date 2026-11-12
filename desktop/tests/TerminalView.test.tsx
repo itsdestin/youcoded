@@ -45,7 +45,9 @@ vi.mock('@xterm/xterm', () => {
         this.resize = vi.fn((cols: number, rows: number) => { this.cols = cols; this.rows = rows; });
       }
       // A loaded WebGL layer takes over the drawing (and its cell measure) until it is disposed.
+      this._addons = [];
       this.loadAddon = vi.fn((addon: any) => {
+        this._addons.push(addon);
         if (!webglInstances.includes(addon)) return;
         addon.__term = this;
         if (fakeCells) this._core._renderService.dimensions = { css: { cell: fakeCells.webgl } };
@@ -60,7 +62,11 @@ vi.mock('@xterm/xterm', () => {
       this.refresh = vi.fn();
       this.focus = vi.fn();
       this.blur = vi.fn();
-      this.dispose = vi.fn();
+      // Like xterm's public Terminal: its core is disposed first, then its loaded addons.
+      this.dispose = vi.fn(() => {
+        this._disposed = true;
+        for (const addon of this._addons) addon.dispose?.();
+      });
       // Lives on the CORE Terminal (not the addon), which is why TerminalView
       // can call it unguarded even on the DOM renderer. Every render-path
       // terminal must expose it: TerminalView calls it on hidden → visible and
@@ -99,14 +105,22 @@ vi.mock('@xterm/addon-unicode11', () => ({
 const webglInstances: any[] = [];
 // True = this machine has no WebGL: building a layer throws and the terminal stays on DOM drawing.
 let webglUnavailable = false;
+// How many replacement DOM renderers a disposed WebGL layer built (see the fake's dispose).
+let fallbackRenderersBuilt = 0;
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn(function (this: any) {
     if (webglUnavailable) throw new Error('WebGL2 not supported');
     webglInstances.push(this);
     this.onContextLoss = vi.fn();
-    // Like the real addon: disposing it hands the terminal back to plain DOM drawing.
+    // Like the real addon (WebglAddon.ts): disposing it builds a replacement DOM renderer for the terminal (a
+    // layout read) — unless the terminal itself is already disposed. A second dispose does nothing (AddonManager).
     this.dispose = vi.fn(() => {
-      if (fakeCells && this.__term) this.__term._core._renderService.dimensions = { css: { cell: fakeCells.dom } };
+      if (this.__disposed) return;
+      this.__disposed = true;
+      const term = this.__term;
+      if (!term || term._disposed) return;
+      fallbackRenderersBuilt++;
+      if (fakeCells) term._core._renderService.dimensions = { css: { cell: fakeCells.dom } };
     });
     this.loseContext = vi.fn();
     const lose = { loseContext: this.loseContext };
@@ -1118,6 +1132,17 @@ describe('the WebGL layer pool', () => {
     const { unmount } = render(<TerminalView sessionId="s1" visible={true} />);
     unmount();
     expect(webglInstances[0].loseContext).toHaveBeenCalledTimes(1);
+    expect(webglLayerCount()).toBe(0);
+  });
+
+  // The terminal is disposed BEFORE its layer, as before the pool: a layer disposed first builds a replacement
+  // DOM renderer (and reads layout) for a terminal about to be thrown away — on every chat close.
+  it('closing a chat builds no replacement drawing for the terminal it throws away', () => {
+    fallbackRenderersBuilt = 0;
+    const { unmount } = render(<>{['a', 'b', 'c'].map((id) => <TerminalView key={id} sessionId={id} visible={id === 'a'} />)}</>);
+    unmount();
+    expect(fallbackRenderersBuilt).toBe(0);
+    expect(webglInstances.every((w) => w.dispose.mock.calls.length >= 1 && w.loseContext.mock.calls.length === 1)).toBe(true);
     expect(webglLayerCount()).toBe(0);
   });
 

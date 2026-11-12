@@ -120,7 +120,17 @@ export function webglLayerCount(): number {
  * the real package so the bump cannot silently lose the release.
  */
 export function releaseWebgl(addon: WebglAddon): void {
-  const gl = (addon as unknown as { _renderer?: { _gl?: WebGL2RenderingContext | null } })._renderer?._gl;
+  const gl = webglContextOf(addon);
   try { addon.dispose(); } catch { /* already disposed or never activated */ }
+  loseWebglContext(gl);
+}
+
+/** The layer's graphics context, read BEFORE the layer is disposed (see releaseWebgl for the private member). */
+export function webglContextOf(addon: WebglAddon): WebGL2RenderingContext | null {
+  return (addon as unknown as { _renderer?: { _gl?: WebGL2RenderingContext | null } })._renderer?._gl ?? null;
+}
+
+/** Hand a context back to the browser now (call after its layer is disposed, so no loss handler sees it). */
+export function loseWebglContext(gl: WebGL2RenderingContext | null): void {
   try { gl?.getExtension('WEBGL_lose_context')?.loseContext(); } catch { /* context already gone */ }
 }

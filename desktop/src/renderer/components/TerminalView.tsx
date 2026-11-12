@@ -7,6 +7,7 @@ import { applyClaudeCodeWidths } from '../../shared/terminal-widths';
 import { WebglAddon } from '@xterm/addon-webgl';
 import {
   releaseWebgl, claimWebglSlot, releaseWebglSlot, noteWebglShown, webglSlotFree, type WebglHolder,
+  webglContextOf, loseWebglContext,
   noteWebglWorks, webglWorksHere, rememberWebglCell, webglCellFor,
 } from './terminal-webgl';
 import '@xterm/xterm/css/xterm.css';
@@ -287,7 +288,7 @@ function TerminalView({ sessionId, visible }: Props) {
       isVisible: () => visibleRef.current,
       evict: () => releaseLayer(),
     };
-    /** Give this terminal's layer back now (pool eviction, or the terminal closing). */
+    /** Give this terminal's layer back now (pool eviction; closing the terminal releases in its cleanup). */
     const releaseLayer = () => {
       const webgl = webglRef.current;
       releaseWebglSlot(holder);
@@ -716,18 +717,22 @@ function TerminalView({ sessionId, visible }: Props) {
       // Clear the cross-effect helper so the theme effect can't call into
       // the disposed terminal between unmount and remount.
       attachWebglRef.current = null;
-      // WHY release, not just drop the ref: a closed chat's context goes back to the
-      // browser now, not whenever garbage collection frees its canvas, and its pool
-      // slot is freed (card 106).
-      releaseLayer();
       showWebglRef.current = null;
       releaseLayerRef.current = null;
-      webglRef.current = null;
+      // The layer's context is taken now; the layer itself goes with the terminal below.
+      const closingGl = webglRef.current ? webglContextOf(webglRef.current) : null;
+      webglRef.current = null;   // first, so a late loss event for this layer is ignored
       renderPause?.dispose();
       renderPauseRef.current = null;
       disposed = true;
       terminalRef.current = null;   // a feeder still holding this terminal sees it is gone (isAlive)
+      // WHY the terminal first (card 106 review): disposing the terminal disposes its WebGL layer too, and a layer
+      // disposed while its terminal is still alive builds a replacement DOM renderer for it (a layout read), only for
+      // it to be thrown away at once — on every chat close. Then, as the pool requires: the closed chat's context goes
+      // back to the browser now, not whenever garbage collection frees its canvas, and its pool slot is freed.
       terminal.dispose();
+      loseWebglContext(closingGl);
+      releaseWebglSlot(holder);
     };
     // WHY only sessionId: see xtermBackgroundRef — a backing change recolours
     // in place via the theme effect, it must not rebuild the terminal.
