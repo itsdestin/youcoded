@@ -27,6 +27,8 @@ export const CHAT: readonly ScreenEntry[] = [
   // compact prompt-card review.
   { ...chat('chat#trust-phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { seed: 'bubbles-trust-cc', platform: 'android' } },
   { ...chat('chat#phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { platform: 'android' } },
+  // The Browser's approval card on a phone (card #205): the card the computer publishes, drawn like every other approval card.
+  ...['site', 'final', 'handoff'].map((b) => ({ ...chat(`chat#phone-browser-${b}`, 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', platform: 'android', phoneBrowser: b }, newIn: 'after' as const })),
   { ...chat('chat#permission-phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { seed: 'bubbles-approval-cc', platform: 'android' } },
   // Model switch in the chat (2026-10-22 review): the same conversation as each runtime drew a switch before (a "/model …" bubble on
   // Claude Code, nothing on native) and after (the "Model switched to …" divider). Both sides come from this checkout's fixtures.

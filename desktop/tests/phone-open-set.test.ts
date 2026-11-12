@@ -37,7 +37,7 @@ describe('the complete list of what a phone may call', () => {
 
   it('includes every channel opened on request, and none of the neighbours that were not approved', () => {
     // WHY: Destin explicitly approved both recovery choices on paired phones and remote browsers.
-    for (const name of [...OPENED_IN_R6_1, ...OPENED_IN_R6_3, 'native:startup-action']) expect(live, name).toContain(name);
+    for (const name of [...OPENED_IN_R6_1, ...OPENED_IN_R6_3, 'native:startup-action', 'browser:answer']) expect(live, name).toContain(name);
     const stillRefused = [
       'theme-marketplace:refresh-registry', 'theme-marketplace:generate-preview',
       'marketplace:invalidate-cache', 'marketplace:read-component',
