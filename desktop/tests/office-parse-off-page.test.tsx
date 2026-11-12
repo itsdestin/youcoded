@@ -321,11 +321,19 @@ describe('a Word file that never finishes converting cannot hang the viewer or f
   it('DocxView says the document took too long when the time limit passes', async () => {
     (globalThis as any).__officeBytes = { '/t/slow.docx': await docxBytes(1) };
     silentDocxWorker.on = true;
+    // WHY (CI failure on PR #737, found 2026-11-12): without a global Worker (the afterEach above un-stubs it) the
+    // viewer takes the no-worker path and converts the file FOR REAL on the page. The silent worker above was never
+    // used, and that real conversion was still running when the test environment was torn down, which threw
+    // "Cannot read properties of undefined (reading 'uint8array')" out of Mammoth's unzip as an unhandled error,
+    // only when the machine was busy (reproduced 1 run in ~30 with 4 cores shared by 24 runs).
+    vi.stubGlobal('Worker', makeFakeWorker('docx'));
+    const onPage = vi.spyOn(mammoth, 'convertToHtml');
     const { DocxView } = await import('../src/renderer/components/artifact-views/DocxView');
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const { container } = render(<DocxView path="slow.docx" absolutePath="/t/slow.docx" content="" isEditable={false} />);
     expect(container.textContent).toContain('Loading document');
     await act(async () => { await vi.advanceTimersByTimeAsync(DOCX_CONVERT_TIME_LIMIT_MS); });
     expect(container.textContent).toContain('Couldn’t open this document. This document took too long to open.');
+    expect(onPage).not.toHaveBeenCalled();                 // red on the old test: a real conversion was left running
   });
 });
