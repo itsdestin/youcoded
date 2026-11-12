@@ -85,6 +85,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/assistant/local/engine-advanced#check-failed', 'dialog', 'error-state'), params: { fail: 'engine.prereqs' }, open: ['Set up'] },
   { ...settings('settings/assistant/local#download-failed', 'dialog', 'error-state'), params: { fail: 'models.download' }, open: ['Download'] },
   // The one installed model with a load-failure state (mock-shim switch by model id).
+  // Card #45: the "before you download" popup a Gemma model's Download opens (Cancel / Download).
+  { ...settings('settings/assistant/local/gemma-terms', 'dialog'), newIn: 'after' as const },
   settings('settings/assistant/local/model-settings', 'dialog'),
   settings('settings/assistant/cloud/claude-code/sign-out', 'dialog'),
   settings('settings/assistant/cloud/openrouter/key', 'dialog'),

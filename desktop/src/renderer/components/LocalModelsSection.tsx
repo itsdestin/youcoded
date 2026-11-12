@@ -25,6 +25,7 @@ import { matchesQuery } from '../../shared/text-match';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import { useScreenOpen } from '../shoot-mode';
+import { useGemmaTermsGate } from './GemmaTermsConfirm';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 
@@ -473,7 +474,10 @@ export function RepoCard({
     : undefined;
   const dl = chosen ? activeDownload(downloads, repo, chosen.quant) : undefined;
 
-  const startDefault = async () => {
+  // Card #45: a Gemma model asks first (Cancel / Download); everything else starts at once.
+  const gemmaGate = useGemmaTermsGate(repo, true);
+  const startDefault = () => gemmaGate.ask(() => void startDefaultNow());
+  const startDefaultNow = async () => {
     if (!chosen) return;
     setDlError(null);
     try { await window.claude.models.download(repo, chosen); }
@@ -543,6 +547,7 @@ export function RepoCard({
           </Button>
         )}
       </div>
+      {gemmaGate.dialog}
       {dl && <DownloadProgressRow dl={dl} />}
       {/* WHY ErrorState (small-fixes-1): this was a red box with nothing to press. The guide's
           rule is that a failed action's notice takes the place of the button it came from and
@@ -1298,7 +1303,10 @@ function QuantDownloadRow({ repo, q, downloads }: { repo: string; q: QuantWithFi
   // must reach the user instead of vanishing into an unhandledrejection.
   const [dlError, setDlError] = useState<string | null>(null);
 
-  const startDownload = async () => {
+  // Card #45: a Gemma model asks first (Cancel / Download); everything else starts at once.
+  const gemmaGate = useGemmaTermsGate(repo);
+  const startDownload = () => gemmaGate.ask(() => void startDownloadNow());
+  const startDownloadNow = async () => {
     setDlError(null); // clear any prior failure before retrying
     try {
       await window.claude.models.download(repo, q);
@@ -1326,6 +1334,7 @@ function QuantDownloadRow({ repo, q, downloads }: { repo: string; q: QuantWithFi
           </Button>
         )}
       </div>
+      {gemmaGate.dialog}
       {dl && <DownloadProgressRow dl={dl} />}
       {/* Same as the repo card's own failed start above (small-fixes-1): the notice carries
           Try again in place of the hidden Download button. */}
