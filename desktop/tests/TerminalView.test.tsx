@@ -79,10 +79,17 @@ vi.mock('@xterm/addon-unicode11', () => ({
   Unicode11Addon: vi.fn(function (this: any) { this.activate = (t: any) => t.unicode.register({ version: '11', wcwidth: () => 1, charProperties: () => 2 }); }),
 }));
 
+// Every WebGL layer built, newest last, each with its own fake graphics context so a
+// test can see the context handed back (loseContext) when the layer is released.
+const webglInstances: any[] = [];
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn(function (this: any) {
+    webglInstances.push(this);
     this.onContextLoss = vi.fn();
     this.dispose = vi.fn();
+    this.loseContext = vi.fn();
+    const lose = { loseContext: this.loseContext };
+    this._renderer = { _gl: { getExtension: (name: string) => (name === 'WEBGL_lose_context' ? lose : null) } };
   }),
 }));
 
@@ -994,5 +1001,102 @@ describe('program size when the chrome over the terminal changes', () => {
     proposedDims = { cols: 100, rows: 33 };
     refit();
     expect(window.claude.session.resize).toHaveBeenLastCalledWith('s1', 100, 33);
+  });
+});
+
+// The browser allows a page 16 WebGL contexts and kills the oldest past that, so a terminal
+// holds its WebGL layer only while shown (terminal-webgl.ts — why). Its xterm and buffer are
+// never rebuilt: only the drawing layer comes and goes.
+describe('the WebGL layer follows visibility', () => {
+  beforeEach(() => {
+    webglInstances.length = 0;
+    terminalInstances.length = 0;
+    writeSpy.mockReset();
+    vi.mocked(usePtyOutput).mockReset();
+    (globalThis as any).window.claude = {
+      session: { signalReady: vi.fn(), sendInput: vi.fn(), resize: vi.fn() },
+    };
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    delete (globalThis as any).window.claude;
+  });
+  const lossHandler = (webgl: any) => webgl.onContextLoss.mock.calls[0][0] as () => void;
+
+  it('a terminal mounted hidden builds no WebGL layer', () => {
+    render(<TerminalView sessionId="s1" visible={false} />);
+    expect(webglInstances).toHaveLength(0);
+  });
+
+  it('a terminal mounted visible builds exactly one, as before', () => {
+    const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
+    rerender(<TerminalView sessionId="s1" visible={true} />);
+    expect(webglInstances).toHaveLength(1);
+    expect(terminalInstances.at(-1).loadAddon).toHaveBeenCalledWith(webglInstances[0]);
+  });
+
+  it('showing a hidden terminal attaches one layer, once', () => {
+    const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
+    rerender(<TerminalView sessionId="s1" visible={true} />);
+    rerender(<TerminalView sessionId="s1" visible={true} />);
+    expect(webglInstances).toHaveLength(1);
+    expect(terminalInstances.at(-1).loadAddon).toHaveBeenCalledWith(webglInstances[0]);
+  });
+
+  it('hiding it disposes the layer and hands its context back; showing again builds a fresh one', () => {
+    const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
+    const first = webglInstances[0];
+    rerender(<TerminalView sessionId="s1" visible={false} />);
+    expect(first.dispose).toHaveBeenCalledTimes(1);
+    expect(first.loseContext).toHaveBeenCalledTimes(1);
+    rerender(<TerminalView sessionId="s1" visible={true} />);
+    expect(webglInstances).toHaveLength(2);
+    expect(webglInstances[1].dispose).not.toHaveBeenCalled();
+    // The xterm itself was never rebuilt: same instance, same buffer, same scrollback.
+    expect(terminalInstances).toHaveLength(1);
+  });
+
+  it('closing the chat hands the context back too', () => {
+    const { unmount } = render(<TerminalView sessionId="s1" visible={true} />);
+    unmount();
+    expect(webglInstances[0].loseContext).toHaveBeenCalledTimes(1);
+  });
+
+  it('PTY output written while hidden still lands in the buffer, with no layer built', () => {
+    render(<TerminalView sessionId="s1" visible={false} />);
+    (vi.mocked(usePtyOutput).mock.calls.at(-1)![1] as (d: string) => void)('Do you trust the files in this folder?');
+    expect(writeSpy).toHaveBeenCalledWith('Do you trust the files in this folder?', expect.any(Function));
+    expect(webglInstances).toHaveLength(0);
+  });
+
+  it('a lost context while shown is rebuilt and the screen repainted (the recovery path is unchanged)', () => {
+    render(<TerminalView sessionId="s1" visible={true} />);
+    const term = terminalInstances.at(-1);
+    term.refresh.mockClear();
+    lossHandler(webglInstances[0])();
+    expect(webglInstances[0].dispose).toHaveBeenCalled();
+    expect(webglInstances).toHaveLength(2);
+    expect(term.refresh).toHaveBeenCalledWith(0, 23);
+  });
+
+  it('after three losses in a row it stays on plain drawing, and showing it again does not retry', () => {
+    const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
+    for (let i = 0; i < 3; i++) lossHandler(webglInstances.at(-1))();
+    expect(webglInstances).toHaveLength(4);       // the first plus three retries
+    lossHandler(webglInstances.at(-1))();          // a fourth loss: give up
+    expect(webglInstances).toHaveLength(4);
+    rerender(<TerminalView sessionId="s1" visible={false} />);
+    rerender(<TerminalView sessionId="s1" visible={true} />);
+    expect(webglInstances).toHaveLength(4);
+  });
+
+  it('a loss event from a layer already released while hidden is ignored', () => {
+    const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
+    const first = webglInstances[0];
+    rerender(<TerminalView sessionId="s1" visible={false} />);
+    lossHandler(first)();
+    expect(webglInstances).toHaveLength(1);       // nothing rebuilt for a hidden terminal
+    expect(first.dispose).toHaveBeenCalledTimes(1);
   });
 });

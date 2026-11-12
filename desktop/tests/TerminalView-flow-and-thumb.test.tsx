@@ -108,6 +108,19 @@ describe('TerminalView acknowledges what xterm drew', () => {
     expect(ackSpy.mock.calls).toEqual([['s1', 5], ['s1', 7]]);
   });
 
+  // A hidden terminal holds no WebGL layer (terminal-webgl.ts — the 16-context limit), but its xterm
+  // still parses every write, so the program's brake keeps getting answers from it.
+  it('a hidden terminal, which holds no WebGL layer, still acknowledges what it parsed', async () => {
+    writeSpy.mockImplementation((_d: string, cb?: () => void) => { cb?.(); });
+    const { WebglAddon } = await import('@xterm/addon-webgl');
+    vi.mocked(WebglAddon).mockClear();
+    render(<TerminalView sessionId="s1" visible={false} />);
+    onOutput!('hello');
+    await vi.waitFor(() => expect(ackSpy.mock.calls).toEqual([['s1', 5]]));
+    expect(writeSpy).toHaveBeenCalledWith('hello', expect.any(Function));
+    expect(WebglAddon).not.toHaveBeenCalled();
+  });
+
   it('does not acknowledge a write xterm has not finished', () => {
     writeSpy.mockImplementation(() => { /* callback never fires */ });
     render(<TerminalView sessionId="s1" visible={true} />);
