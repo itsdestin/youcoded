@@ -67,6 +67,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/account/connections', 'dialog'),
   { ...settings('settings/assistant', 'dialog'), sameAs: { name: 'settings/assistant/general', why: 'the panel opens on its General page' } },
   settings('settings/assistant/general', 'dialog'),
+  // Card #134 batch 2: the web-search options read refused (the block sits at the foot of General).
+  { ...settings('settings/assistant/general#search-failed', 'dialog', 'error-state'), params: { fail: 'search.list' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   settings('settings/assistant/cloud', 'dialog'),
   // Custom providers (2026-10-20): Add provider — empty, searching, a service picked,
   // a typed address, then the rows it closes onto (checked OK, and a refused key).
@@ -79,6 +81,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/assistant/cloud/add-provider#added', 'dialog'), newIn: 'after', mark: 'settings/assistant/cloud', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }, { do: 'scroll', target: { role: 'textbox', label: 'Name' }, dir: 'down', times: 2 }, { do: 'type', target: { role: 'textbox', label: 'API key' }, text: 'sk-inception-123' }, { do: 'click', target: { role: 'button', label: 'Add provider' } }] },
   { ...settings('settings/assistant/cloud/add-provider#refused', 'dialog', 'error-state'), newIn: 'after', mark: 'settings/assistant/cloud', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }, { do: 'scroll', target: { role: 'textbox', label: 'Name' }, dir: 'down', times: 2 }, { do: 'type', target: { role: 'textbox', label: 'API key' }, text: 'sk-fake-key' }, { do: 'click', target: { role: 'button', label: 'Add provider' } }] },
   settings('settings/assistant/local', 'dialog'),
+  // Card #134 batch 2: the installed-models read refused — the list says so instead of dropping the group.
+  { ...settings('settings/assistant/local#list-failed', 'dialog', 'error-state'), params: { fail: 'models.installed' } },
   settings('settings/assistant/local/engine-advanced', 'dialog'),
   // Failures with their Try again (small-fixes-1): the engine's set-up check, and a model download
   // that could not start — each was a red box with nothing to press.

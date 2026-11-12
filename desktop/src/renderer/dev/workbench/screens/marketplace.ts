@@ -58,6 +58,8 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   mp('library/themes', 'view'),
   { ...mp('library#empty', 'view', 'empty-state'), params: { marketplace: 'empty' } },
   { ...mp('library#load-failed', 'view', 'error-state'), params: { fail: 'skills.list' } },
+  // Card #134 batch 2: the update check refused — the Library says so instead of every Update badge vanishing.
+  { ...mp('library#update-check-failed', 'view', 'error-state'), params: { fail: 'marketplace.getPackages' } },
   // Nothing loaded at all: the full-screen error (gt-r1#B-3).
   { ...mp('marketplace#load-failed', 'view', 'error-state'), params: { marketplace: 'empty', fail: 'skills.list' } },
   { ...mp('library/themes#load-failed', 'view', 'error-state'), params: { fail: 'theme.marketplace.list' } },
