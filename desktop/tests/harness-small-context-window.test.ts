@@ -110,6 +110,41 @@ describe('junk summaries are refused', () => {
     expect(r.result).toBe(true);
     expect(r.calls).toHaveLength(1);
   });
+  // Review deck 2 Q-3 (Destin, 2026-11-12): a chat always continues. `full` cannot be sent in an 8k
+  // window at all, so a model that answers nonsense twice no longer leaves it stuck.
+  const full = [{ role: 'user', content: 'old goal: check the big file' },
+    { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'big', toolName: 'Read', input: {} }] },
+    { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'big', toolName: 'Read', output: { type: 'text', value: 'y'.repeat(40_000) } }] },
+    { role: 'assistant', content: 'read it' }, { role: 'user', content: 'latest' }] as any;
+  async function runFull(model: any) {
+    const events: any[] = [];
+    const session = makeSession({ contextLength: 8192, model, tools: [], onEvent: e => events.push(e) });
+    session.seedHistory(full.slice());
+    const before = (session as any).history.slice();
+    (session as any).abort = new AbortController();
+    let result: boolean;
+    try { result = await (session as any).maybeCompact(model, {}, false); } finally { (session as any).abort = null; }
+    return { events, session, before, result };
+  }
+  it('a chat too full to send continues on the app-written note when the model answers junk twice', async () => {
+    const calls: any[] = [];
+    const r = await runFull(spy(scriptModel([{ text: MARKUP }, { text: MARKUP }]), calls));
+    expect(calls).toHaveLength(2);
+    expect(r.result).toBe(true);
+    const history = (r.session as any).history as any[];
+    expect(history[0].content).toContain('The app wrote this note, not the model.');
+    expect(history[0].content).toContain('- old goal: check the big file');
+    expect(JSON.stringify(history)).not.toContain('yyyyyyyyyy');
+    expect(history[history.length - 1]).toEqual({ role: 'user', content: 'latest' });
+    expect(r.events.filter(e => e.type === 'compact-summary')).toHaveLength(1);
+  });
+  it('a summary request that FAILS (engine down, no network) never drops history, even in a full chat', async () => {
+    const throwing = new MockLanguageModelV4({ doStream: async () => { throw new Error('engine is not running'); } });
+    const r = await runFull(throwing);
+    expect(r.result).toBe(false);
+    expect((r.session as any).history).toEqual(r.before);
+    expect(r.events.filter(e => e.type === 'compact-summary')).toHaveLength(0);
+  });
   it('manual compact with junk twice reports summary-failed and keeps history', async () => {
     const calls: any[] = [];
     const model = spy(scriptModel([{ text: MARKUP }, { text: MARKUP }]), calls);

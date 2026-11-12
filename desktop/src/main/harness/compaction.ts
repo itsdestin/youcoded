@@ -416,3 +416,51 @@ export function isJunkSummary(text: string, spanChars: number): boolean {
   const prose = text.replace(TOOL_MARKUP, '').trim();
   return prose.length < minSummaryChars(spanChars);
 }
+
+/** Most of the stand-in's room goes to the user's own earlier requests. */
+const STAND_IN_ASK_CHARS = 240;
+const STAND_IN_TOTAL_CHARS = 1_500;
+
+/** A summary the APP writes when the model cannot (review deck 2 Q-3, Destin 2026-11-12: "a chat can
+ *  always continue").
+ *
+ *  WHY: a small local model sometimes answers the summary request with tool-call markup or a few
+ *  words, twice. The chat then stayed full: every message failed with the too-long card and
+ *  Summarise failed the same way — a dead end. This needs nothing from the model: it says plainly
+ *  that the earlier part was removed and lists what the user asked for there (their own words, most
+ *  recent kept first, each shortened), so the assistant still knows the thread of the work. Tool
+ *  results and the assistant's own replies in the removed part are gone; the chat on screen is not.
+ *  It is committed exactly like a model summary (one compact-summary line, the same group-safe cut),
+ *  so pairing and reopen behave the same. Hermes writes a static fallback the same way. */
+export function standInSummary(span: ModelMessage[]): string {
+  const asks: string[] = [];
+  let used = 0;
+  for (let i = span.length - 1; i >= 0 && used < STAND_IN_TOTAL_CHARS; i--) {
+    const m = span[i];
+    if (m.role !== 'user' || isAppGenerated(m)) continue;
+    const text = typeof m.content === 'string' ? m.content
+      : m.content.map(part => part.type === 'text' ? part.text : '').join(' ');
+    const flat = text.replace(/\s+/g, ' ').trim();
+    if (!flat) continue;
+    const line = flat.length > STAND_IN_ASK_CHARS ? `${flat.slice(0, STAND_IN_ASK_CHARS)}…` : flat;
+    asks.unshift(`- ${line}`);
+    used += line.length;
+  }
+  return 'The app wrote this note, not the model. The earlier part of this conversation was removed to make room, '
+    + 'and no summary of it could be written, so details from before this point are lost. '
+    + 'If something from earlier is needed, ask the user or look at the files again.'
+    + (asks.length ? `\n\nWhat the user asked for in the removed part, oldest first:\n${asks.join('\n')}` : '');
+}
+
+/** The model's summary when it is usable and fits, otherwise the app's stand-in — but only where
+ *  the caller allows one. Not allowed → '' and history stays untouched, as before.
+ *
+ *  WHY it is not always allowed: the stand-in loses detail a real summary keeps, so it is the LAST
+ *  resort. The automatic path allows it only when the next request could not be sent at all (no
+ *  room left for a reply) — a chat that is over the summarise line but still sendable keeps its whole
+ *  history and tries again later. The manual Summarise allows it because the user asked for room.
+ *  Neither allows it after Stop. */
+export function summaryOrStandIn(text: string, fits: (summary: string) => boolean, span: ModelMessage[], standInAllowed: boolean): string {
+  if (text.trim() && fits(text)) return text;
+  return standInAllowed ? standInSummary(span) : '';
+}

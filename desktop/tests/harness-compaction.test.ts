@@ -200,13 +200,37 @@ describe('driver compaction', () => {
     expect(history[2].content[0].output.value).toHaveLength(28_000);
     expect((session as any).history.at(-1)).toBe(history[4]);
   });
-  it('refuses an oversized retired prefix instead of silently trimming its original request or tool group', async () => {
+  // WHY this changed (review deck 2 Q-3, Destin 2026-11-12): this exact chat used to be refused
+  // forever — too full to send, and too big for the summary request itself — which was a dead end.
+  // The app now writes its own stand-in note for the removed part, so the chat always continues.
+  it('a chat too full to send, whose old part cannot be summarised, continues on an app-written note', async () => {
     const events: any[] = [];
     const session = makeSession({ contextLength: 4096, onEvent: e => events.push(e), model: scriptModel([{ text: SHORT_FAKE_SUMMARY }]) });
     const original = [
       { role: 'user', content: 'ORIGINAL REQUEST ' + 'x'.repeat(16000) },
       { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'a', toolName: 'Read', input: {} }] },
       { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'a', toolName: 'Read', output: { type: 'text', value: 'result' } }] },
+      { role: 'user', content: 'new request' },
+    ] as any;
+    session.seedHistory(original);
+    expect((await session.compactNow()).ok).toBe(true);
+    const history = (session as any).history as any[];
+    expect(history[0].content).toContain('The app wrote this note, not the model.');
+    expect(history[0].content).toContain('- ORIGINAL REQUEST xxx');   // the user's own words survive, shortened
+    expect(history[0].content.length).toBeLessThan(1000);
+    expect(history[history.length - 1]).toEqual({ role: 'user', content: 'new request' });
+    // Pairing holds: every kept tool result still follows its call.
+    const calls = history.flatMap(m => Array.isArray(m.content) ? m.content.filter((p: any) => p.type === 'tool-call').map((p: any) => p.toolCallId) : []);
+    const results = history.flatMap(m => Array.isArray(m.content) ? m.content.filter((p: any) => p.type === 'tool-result').map((p: any) => p.toolCallId) : []);
+    expect(results).toEqual(calls);
+    expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(1);
+  });
+  it('a chat that can still be sent keeps its whole history when the summary fails', async () => {
+    const events: any[] = [];
+    const session = makeSession({ contextLength: 32768, onEvent: e => events.push(e), model: scriptModel([{ text: '' }, { text: '' }]) });
+    const original = [
+      { role: 'user', content: 'first request ' + 'x'.repeat(4000) },
+      { role: 'assistant', content: 'done' },
       { role: 'user', content: 'new request' },
     ] as any;
     session.seedHistory(original);

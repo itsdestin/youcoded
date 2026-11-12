@@ -204,7 +204,7 @@ import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile, type ImageLimits } from './capability-profile';
 import { adaptForWire, encodeImagesForWire } from './wire-adapter';
 import { LocalPrewarm } from './local-prewarm';
-import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, isJunkSummary, summaryProvenanceNote, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
+import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, isJunkSummary, summaryOrStandIn, summaryProvenanceNote, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
 import { toReport, type PrefillProgress } from '../providers/prefill-progress';
 import { messageTokens, messagesTokens, requestOccupancy, requestFixedTokens, type UsageAnchor, APPROX_CHARS_PER_TOKEN } from './message-size';
 import { createSkillTool } from './tools/skill';
@@ -1938,11 +1938,7 @@ export class HarnessSession extends EventEmitter {
   private async maybeCompact(model: LanguageModel, aiTools: Record<string, any>, force = false): Promise<boolean> {
     // Neither the summariser nor the kept tail may carry an over-limit picture (2026-10-07).
     this.enforceImageLimits();
-    const estimatedInput = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
-      revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
-    const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
-      fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.maxOutputTokens, estimatedInput });
+    const { plan } = this.planNow();
     if (!force && plan.status === 'fits') return false;
     if (this.failedCompactionRevision === this.capture.revision) return false;
     // Routine compaction summarizes; legacy prune transforms remain available
@@ -1962,10 +1958,10 @@ export class HarnessSession extends EventEmitter {
     // differ (provenance labels for app-generated user-role messages).
     const keep = this.history.slice(cut);
     const sourceRevision = this.capture.revision;
-    let generated: { text: string; usage?: StepUsage } = { text: '' };
+    let generated: { text: string; usage?: StepUsage; threw?: boolean } = { text: '' };
     this.summaryInputCannotFit = false;
     generated = await this.summaryWithRetry(model, span, aiTools);
-    const summary = generated.text;
+    const summary = summaryOrStandIn(generated.text, s => this.compactionCandidateFits(s, keep), span, plan.replyCap <= 0 && !generated.threw && !this.interrupted && this.abort?.signal.aborted !== true);
     if (!summary.trim() || !this.compactionCandidateFits(summary, keep)) {
       this.failedCompactionRevision = this.capture.revision;
       return false;
@@ -2035,30 +2031,39 @@ export class HarnessSession extends EventEmitter {
   /** Cut a tool result to the room the next request has left (tool-result-room.ts). `gathered` is the
    *  results already collected for this step, which are not in history yet. */
   private capToolText(toolName: string, text: string, gathered: any[]): Promise<string> {
-    const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
-      fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.maxOutputTokens });
+    const { plan, used } = this.planNow();
+    const room = plan.trigger - used - (gathered.length ? messageTokens({ role: 'tool', content: gathered } as ModelMessage) : 0);
+    return capResultAndSave(this.opts.sessionId, toolName, text, room, FIT_MORE_HINT[toolName]);
+  }
+
+  /** The budget plan for the history as it stands, and the tokens that history occupies. Shared by the
+   *  automatic summary, the tool-result cut and the stand-in summary so all three judge one number. */
+  private planNow() {
     const used = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
-      revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens
-      + (gathered.length ? messageTokens({ role: 'tool', content: gathered } as ModelMessage) : 0);
-    return capResultAndSave(this.opts.sessionId, toolName, text, plan.trigger - used, FIT_MORE_HINT[toolName]);
+      revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
+    return { used, plan: planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
+      fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
+      maxTokens: this.maxOutputTokens, estimatedInput: used }) };
   }
 
   /** Ask for a summary; a junk answer (empty, tool-call markup, implausibly short — isJunkSummary) is
    *  asked for ONCE more with a plain-prose reminder. Returns '' when both are junk, so the caller
    *  keeps history untouched (fault 2). A thrown request counts as junk. */
-  private async summaryWithRetry(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>, focus?: string): Promise<{ text: string; usage?: StepUsage }> {
+  private async summaryWithRetry(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>, focus?: string): Promise<{ text: string; usage?: StepUsage; threw?: boolean }> {
     // WHY tokens x 4, not JSON length: the span's real size as the budget sees it. Opaque reasoning ciphertext
     // makes the JSON ~100k characters for a few hundred tokens, which would demand an impossibly long summary.
     const spanChars = messagesTokens(span) * APPROX_CHARS_PER_TOKEN;
     this.summaryInputCannotFit = false;   // per-request flag; a stale true from an earlier call must not skip this one
+    // WHY `threw`: a request that FAILED (engine down, no network, timeout) may work in a minute, so
+    // it must never be answered by dropping history — only a model that answered uselessly is.
+    let threw = false;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (this.interrupted || this.abort?.signal.aborted || this.summaryInputCannotFit) break;   // retrying cannot help these
-      let generated: { text: string; usage?: StepUsage } = { text: '' };
-      try { generated = await this.generateSummary(model, span, aiTools, focus, attempt > 0); } catch { /* counts as junk */ }
+      let generated: { text: string; usage?: StepUsage; threw?: boolean } = { text: '' };
+      try { generated = await this.generateSummary(model, span, aiTools, focus, attempt > 0); threw = generated.threw === true; } catch { threw = true; }
       if (!isJunkSummary(generated.text, spanChars)) return generated;
     }
-    return { text: '' };
+    return { text: '', threw };
   }
 
   /** Adopt a pruned history and its bookkeeping consequences. */
@@ -2295,7 +2300,7 @@ export class HarnessSession extends EventEmitter {
       const span = this.history.slice(0, cut);
       if (span.length === 0) return { ok: false, reason: 'nothing-to-compact' };
       const sourceRevision = this.capture.revision;
-      let generated: { text: string; usage?: StepUsage } = { text: '' };
+      let generated: { text: string; usage?: StepUsage; threw?: boolean } = { text: '' };
       try {
         const model = await this.modelFactory(this.binding, {
           serialToolCalls: this.profile.constrainToolArgs && !this.profile.supportsParallelToolCalls,
@@ -2305,9 +2310,10 @@ export class HarnessSession extends EventEmitter {
         // prefix matches the conversation's (see generateSummary).
         generated = await this.summaryWithRetry(model, span, this.buildAiTools(), focus);
       } catch {
-        generated = { text: '' };
+        generated = { text: '', threw: true };
       }
-      const summary = generated.text;
+      const summary = summaryOrStandIn(generated.text, s => this.compactionCandidateFits(s, keep, focus, targetContextLength), span,
+        !this.interrupted && !generated.threw && targetContextLength === undefined && this.planNow().plan.replyCap <= 0);
       // WHY: Stop is not a model failure; say so, so the user is not told to
       // retry. `interrupted`, not the abort signal: the stall timeout aborts too.
       if (this.interrupted) return { ok: false, reason: 'interrupted' };
@@ -2427,7 +2433,7 @@ export class HarnessSession extends EventEmitter {
   /** Model-generated summary of the retired span. Only the summarizer's tool
    * output copy may be shortened; the accepted history is never front-trimmed.
    * WHY: incomplete streams and failed fits must leave history untouched. */
-  private async generateSummary(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>, focus?: string, plainProseNudge = false): Promise<{ text: string; usage?: StepUsage }> {
+  private async generateSummary(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>, focus?: string, plainProseNudge = false): Promise<{ text: string; usage?: StepUsage; threw?: boolean }> {
     // Preserve the whole retired prefix. The old hard trim removed messages
     // from the front of this span, potentially losing the original request or
     // a paired tool batch before the model could summarize either.
@@ -2538,7 +2544,7 @@ export class HarnessSession extends EventEmitter {
       complete = finishReason === 'stop' && text.trim().length > 0;
       usage = { inputTokens: u?.inputTokens ?? 0, outputTokens: u?.outputTokens ?? 0, ...cacheTokensForStep(u, meta) };
     }
-    return { text: complete && !stopped ? text.trim() : '', usage };
+    return { text: complete && !stopped ? text.trim() : '', usage, ...(settled === 'stop' ? { threw: true } : {}) };   // 'stop' here = the request failed, timed out or was stopped: not an answer
     } finally {
       clearTimeout(stopTimer);
       abortSignal.removeEventListener('abort', resolveStop);
