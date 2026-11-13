@@ -505,8 +505,25 @@ reading, which is exactly where ROCm falls behind.
   Both engines ran the identical configuration (`flash_attn` on, `kv_unified = true`,
   4 slots). The research found no upstream issue for this exact symptom; the nearest
   is ggml-org/llama.cpp#19523 (masked-block skipping in flash attention, fixed for
-  Vulkan in #19582). Not tried: `-np 1` on ROCm, installing hipBLASLt
-  (`ROCBLAS_USE_HIPBLASLT=1`), a `GGML_HIP_ROCWMMA_FATTN` build.
+  Vulkan in #19582). Not tried: `-np 1` on ROCm.
+- **The two "overlooked ROCm settings" do not fix it (measured 2026-11-13, same Z13):**
+  - `GGML_HIP_ROCWMMA_FATTN` no longer exists at b10665; WMMA flash attention is compiled
+    in for RDNA3/RDNA4 (`AMD_WMMA_AVAILABLE`, `ggml-cuda/common.cuh`). Nothing to switch on.
+  - `ROCBLAS_USE_HIPBLASLT=1` is a no-op with Arch/CachyOS system ROCm 7.2.4: that
+    `librocblas.so` is built without hipBLASLt (the variable name is not even in it).
+    Tested instead on lemonade-sdk/llamacpp-rocm b1374 (self-contained, bundles
+    hipBLASLt; build 12341), variable 1 vs 0, 23.6k-token read: 27B fresh 93.6 vs
+    94.6 s, after three short requests 131.7 vs 128.2 s; 0.6B fresh 7.7 vs 8.3 s, after
+    27.8 vs 28.8 s. Vulkan b10665 in the same session: 27B 128.4 → 129.4 s, 0.6B
+    10.3 → 11.5 s. So the fade is still there on a two-month-newer engine with AMD's
+    full libraries, and the variable is worth 0-8%.
+- **Slot save/restore to disk (`--slot-save-path`, measured 2026-11-13, Vulkan b10665,
+  `-np 4 --kv-unified`, restart between save and restore):** Qwen3-0.6B, 27.5k tokens:
+  3.0 GB file, save 4.4 s, restore 0.55 s, re-send read 1 token (cold read 54 s).
+  Qwen3.8-27B: restore reports success but the re-send re-reads everything ("forcing
+  full prompt re-processing due to lack of cache data (likely due to SWA or
+  hybrid/recurrent memory…)") — the slot file does not carry that model family's context
+  checkpoints. Always check `prompt_n` after a restore; never trust the 200.
 - **Writing:** now within a few percent on the 27B (Vulkan 6.19-6.73, ROCm 5.99-6.67
   t/s), and equal on the 9B and 2B; the September 24-46% gap below did not reproduce.
 - **Small models:** the 2B's 31.6k read after three short requests took 22-27 s on
