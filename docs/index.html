@@ -2343,6 +2343,25 @@ body.intro-mode .hero-flank ~ section,body.intro-mode .hero-flank ~ footer{font-
 
 </style></head>
 <body class="intro-mode fade-d pill-accent legend-on h1-md iv2">
+<script>
+// WHY (Destin, 2026-11-13: after the intro the page "starts partway down").
+// On a reload the browser puts the page back where it was scrolled to, but the
+// intro plays as if from the top -- so it ended with the page already part-way
+// down. A reload now starts at the top, like a first visit. A link to a place
+// on the page (#faq) and the Back button are left alone.
+(function(){
+  try {
+    var n = performance.getEntriesByType('navigation')[0];
+    if (n && n.type === 'reload' && !location.hash) {
+      history.scrollRestoration = 'manual';
+      // Said again once the page has been read in and once it has been laid out:
+      // at this point the page is still empty, and the browser can move it after.
+      var top = function(){ scrollTo({ top: 0, behavior: 'instant' }); };
+      top(); document.addEventListener('DOMContentLoaded', top); addEventListener('load', top);
+    }
+  } catch (e) {}
+})();
+</script>
 
 <div class="backdrop" id="backdrop"><div class="bd-layer" id="bd-a"></div><div class="bd-layer" id="bd-b"></div><div class="bd-scrim"></div></div>
 
