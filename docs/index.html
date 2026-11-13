@@ -307,8 +307,10 @@ footer{padding:0 0 46px}
   .stage{height:auto;aspect-ratio:16/10}
   .step{min-height:auto;opacity:1;padding:18px 0}
   .cols,.acctgrid{grid-template-columns:1fr}
-  .nav-links{display:none}
 }
+/* WHY 760 (Destin, 2026-11-13: in-between windows should be "desktop scaled down"):
+   the links used to vanish at 1000px, so a zoomed-in desktop lost its menu. */
+@media(max-width:760px){.nav-links{display:none}}
 
 /* The hero no longer carries its own screenshot — the live demo below is the
    page's first look at the app, so pull it up under the buttons. */
@@ -655,7 +657,7 @@ body.fade-d .hero>.wrap>.dlrow{display:none}
    sets position:absolute at specificity (0,2,0) and outranked a bare `.dlfloat`
    here, so on a phone-width window the row stayed absolutely positioned and
    then went FIXED the moment you scrolled (same shape as landmine 14). */
-@media(max-width:820px), (max-height:480px){
+@media(max-width:1020px), (max-height:480px){
   body.fade-a .dlfloat,body.fade-b .dlfloat,body.fade-c .dlfloat,body.fade-d .dlfloat,
   body.fade-a .dlfloat.docked,body.fade-b .dlfloat.docked,
   body.fade-c .dlfloat.docked,body.fade-d .dlfloat.docked{
@@ -1344,9 +1346,9 @@ body.iv2.intro-mode .bd-layer{transition:opacity .5s ease}
    first 'useful'"). While the headline is still closed (body.iv2-shut) it
    carries extra room on both sides, half of what the first word needs, set by
    the script; that room is handed back, on the same curve, as the slot opens,
-   so the robots travel only the other half. Wide layout only: at 1020px and
-   below the robots sit UNDER the headline and there is nothing to spread. */
-@media(min-width:1021px){
+   so the robots travel only the other half. Not on phones: there the robots
+   sit in their own bar under the headline and there is nothing to spread. */
+@media(min-width:761px){
   /* WHY :not(.iv2-shut): the transition must exist only on the way OUT. With it
      on always, the robots visibly slid apart during the headline's entrance
      (traced 2026-11-12) instead of simply starting apart. */
@@ -1419,31 +1421,26 @@ body.cycler-static .lead-hold{display:none}
    wording still fits side-by-side at 1030 and wraps to two lines by 990, so the
    switch happens at 1020 -- below it the headline takes the whole line and all
    four chips sit under it as one group. */
-/* WHY this changed (Destin, 2026-11-12: "the robots are always to the
-   left/right of the keyword, including on mobile, even if we have to mess with
-   sizing/spacing a bit"). Below 1020 the four robots used to drop into a row
-   UNDER the headline. Now the headline is always exactly two lines -- "Make
-   Your Technology" on the first, the changing word alone on the second -- and
-   two robots stand either side of that word.
-   How: the word becomes its own centred line (display:block), and each robot
-   pair is pinned to the bottom line of the row, a fixed distance out from the
-   middle. That distance is the WIDEST of the three words (--kw-max, measured by
-   the word-cycler script), so the robots stand still while the words change.
-   --h1fs keeps the first line on one line down to a 320px screen. */
-/* Phones (760px and below) have their own layout: PHONE FIRST SCREEN. */
-@media(min-width:761px) and (max-width:1020px){
-  .hero-flank .flankrow{display:block;position:relative;
-    --h1fs:clamp(1.5rem,8.1vw,3.4rem);--h1lh:1.1;--kwgap:14px;--rob:54px}
-  body.h1-md .hero-flank .flankrow h1{font-size:var(--h1fs);line-height:var(--h1lh);white-space:nowrap}
-  /* The word's own line. The gap above it is the part of a robot that stands
-     taller than a line of type, so a robot never touches the first line. */
-  .hero-flank .flankrow .word-cycler{display:block;margin:var(--kwpad,10px) auto 0;white-space:normal}
-  .hero-flank .mrow{position:absolute;bottom:0;height:calc(var(--h1fs) * var(--h1lh));align-items:center}
-  .hero-flank .mrow-l{right:calc(50% + var(--kw-max,calc(var(--h1fs) * 3.6)) / 2 + var(--kwgap))}
-  .hero-flank .mrow-r{left:calc(50% + var(--kw-max,calc(var(--h1fs) * 3.6)) / 2 + var(--kwgap))}
-  .hero-flank .mascot{width:var(--rob);height:var(--rob);border-radius:17px}
-  /* The robots hang a little below the word's line; keep the tagline clear. */
-  .hero-flank .hero-sub{margin-top:20px}
+/* ---- In-between windows: the desktop page, scaled down (Destin, 2026-11-13) ----
+   WHY: between phone width and a full desktop the page used to be a third,
+   improvised layout -- a two-line headline, no menu, a bar running edge to
+   edge. Zooming a desktop browser in lands exactly there, and he said it
+   "becomes an entirely different page ... spacing and styling is broken". His
+   call: "desktop scaled down basically, but with the mobile/android download
+   bar. narrow". So from 761px up the headline is always ONE line with two
+   robots each side, exactly like desktop, and it shrinks to fit:
+     --rob  the robots' size, 42-62px with the window;
+     the headline's size is whatever is left after four robots, the gaps and
+     the page margins, divided by its own width in ems (12.4 with the widest
+     word). At 1340px and up every number here equals the desktop's own.
+   This also ends the old flip between one and two lines at ~1030-1100px. */
+@media(min-width:761px) and (max-width:1340px){
+  .nav{padding:0 16px}
+  .hero-flank .flankrow{--rob:clamp(42px,5.6vw,62px);gap:clamp(14px,2.54vw,34px)}
+  .hero-flank .mascot{width:var(--rob);height:var(--rob);border-radius:calc(var(--rob) * .3)}
+  .hero-flank .mrow{gap:clamp(8px,1.05vw,14px)}
+  body.h1-md .hero-flank .flankrow h1{white-space:nowrap;
+    font-size:min(4.3rem,calc((100vw - 4 * var(--rob) - 176px) / 12.4))}
 }
 /* ==========================================================================
    "What you get" — three alternatives to the original scrolling theater.
@@ -1986,6 +1983,26 @@ body.motion-on .m-rise.m-wait{opacity:0}
   /* A press squeezes the robot a touch, so a tap feels like it landed. */
   .hero-flank .robocap .mascot:active{transform:scale(.9)}
 
+  /* The download dock's own styles are in the next block: it is shared with
+     in-between windows up to 1020px. */
+
+  /* ---- arrival: the robot bar rises in just after the headline settles ---- */
+  .robocap{transition:opacity .55s cubic-bezier(.22,1,.36,1) .42s, transform .55s cubic-bezier(.22,1,.36,1) .42s}
+  body.intro-mode .robocap{opacity:0;transform:translateY(34px);pointer-events:none}
+}
+@media(max-width:760px) and (prefers-reduced-motion:reduce){
+  body.intro-mode .robocap{opacity:1;transform:none;pointer-events:auto}
+}
+/* ==========================================================================
+   THE DOWNLOAD DOCK -- phones AND in-between windows (up to 1020px)
+   ==========================================================================
+   WHY up to 1020 (Destin, 2026-11-13: "desktop scaled down basically, but with
+   the mobile/android download bar. narrow"). The desktop's five-platform pill
+   needs about 760px of width and used to either float over the demo or drop
+   under it depending on a 60px difference in window width. Below 1021px the
+   page now always uses this bar: the visitor's own platform, Demo, and a
+   chevron that opens the other four. */
+@media(max-width:1020px){
   /* ---- the download dock ---- */
   body.fade-d .hero .dlfloat{position:fixed;left:12px;right:12px;top:auto;
     bottom:calc(12px + env(safe-area-inset-bottom,0px));transform:none;margin:0;width:auto;
@@ -2035,17 +2052,20 @@ body.motion-on .m-rise.m-wait{opacity:0}
   /* Room under the last of the page, so the dock never sits on the footer. */
   body{padding-bottom:calc(88px + env(safe-area-inset-bottom, 0px))}
   /* The dock is always on screen, so the old floating "Download" button that
-     led back to the buttons has nothing left to do on a phone. */
+     led back to the buttons has nothing left to do here. */
   body.fade-d .topcta{display:none !important}
 
-  /* ---- arrival: the robot bar rises in just after the headline settles ---- */
-  .robocap{transition:opacity .55s cubic-bezier(.22,1,.36,1) .42s, transform .55s cubic-bezier(.22,1,.36,1) .42s}
-  body.intro-mode .robocap{opacity:0;transform:translateY(34px);pointer-events:none}
+  .trypill{display:none}   /* the bar's own Demo button does its job here */
 }
-@media(max-width:760px) and (prefers-reduced-motion:reduce){
+/* In-between windows: the same bar, narrow and centred instead of edge to edge. */
+@media(min-width:761px) and (max-width:1020px){
+  body.fade-d .hero .dlfloat{left:50%;right:auto;width:min(440px,calc(100vw - 24px));transform:translateX(-50%)}
+  body.fade-d .hero .dlfloat.p-away{transform:translateX(-50%) translateY(18px)}
+  body.fade-d .hero .dlfloat::before{left:calc(220px - 50vw);right:calc(220px - 50vw)}
+}
+@media(max-width:1020px) and (prefers-reduced-motion:reduce){
   .dlmore svg{transition:none}
   .hero .dlfloat.open .dlpill .dlchip{animation:none}
-  body.intro-mode .robocap{opacity:1;transform:none;pointer-events:auto}
 }
 
 
@@ -3397,7 +3417,11 @@ var demoRevealed = false, lastFz = null;
 // two fifths of the window and page text scrolled visibly through it (found
 // 2026-09-03). 520px of height is the floor -- every laptop clears it, no
 // landscape phone does.
-var wideMQ = matchMedia('(min-width: 821px) and (min-height: 480px)');
+var wideMQ = matchMedia('(min-width: 1021px) and (min-height: 480px)');
+// WHY 1021 (2026-11-13): below that the downloads are the bottom dock (see THE
+// DOWNLOAD DOCK in the stylesheet), so the wide pill's docking, width lock and
+// dissolve all stand down. dockMQ is where the dock is in use.
+var dockMQ = matchMedia('(max-width: 1020px)');
 // The phone layout (see the <=760px block in the stylesheet). Anything
 // scroll-driven, anything that boots a megabyte, and anything that measures
 // a pill nobody can see is gated on this.
@@ -3455,7 +3479,12 @@ seatPhone();
 if (phoneMQ.addEventListener) phoneMQ.addEventListener('change', function(){ seatPhone(); placeFloat(); });
 // The demo page opens in the look the visitor has picked here.
 var demoChip = document.querySelector('.dldemo');
-if (demoChip) demoChip.addEventListener('click', function(){ demoChip.href = 'demo.html#t=' + currentTheme; });
+if (demoChip) demoChip.addEventListener('click', function(e){
+  // On a phone the demo opens on its own page. On an in-between window the demo
+  // is on this page (the desktop layout), so the same button starts it here.
+  if (!phoneMQ.matches) { e.preventDefault(); activateDemo(); return; }
+  demoChip.href = 'demo.html#t=' + currentTheme;
+});
 // --- PHONE DOCK: the chevron opens the dock into a
 // card with every platform; the dock steps aside while the footer shows.
 (function(){
@@ -3474,13 +3503,13 @@ if (demoChip) demoChip.addEventListener('click', function(){ demoChip.href = 'de
     document.addEventListener('keydown', function(e){ if (e.key === 'Escape') setOpen(false); });
     // The demo page's "Download" link points at #download; on a phone that
     // section is gone, so open the dock instead.
-    if (phoneMQ.matches && location.hash === '#download') setOpen(true);
+    if (dockMQ.matches && location.hash === '#download') setOpen(true);
   }
   var foot = document.querySelector('footer'), queued = false;
   function dockPass(){
     queued = false;
     if (!dlFloat) return;
-    var away = phoneMQ.matches && !!foot && foot.getBoundingClientRect().top < innerHeight;
+    var away = dockMQ.matches && !!foot && foot.getBoundingClientRect().top < innerHeight;
     dlFloat.classList.toggle('p-away', away);
     if (away) setOpen(false);
   }
@@ -3613,7 +3642,7 @@ function activateDemo(){
   // WHY: after a visitor chooses the app, the decorative dissolve must not hide
   // any part of the surface they are about to use.
   embedFade = 1; setFadeStop(1); placeFloat();
-  if (!wideMQ.matches || demoActivated) return;
+  if (phoneMQ.matches || demoActivated) return;
   demoActivated = true;
   var er = embed.getBoundingClientRect();
   scrollTo({
@@ -5075,15 +5104,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 
   // One entry per slot: its measured word widths and its beat-to-word map.
   var slots = cyclers.map(function(h){ return { el: h, w: measure(h), steps: stepsOf(h) }; });
-  // WHY: on narrow screens the robots are pinned either side of the word's
-  // line (see the 1020px block in the stylesheet). They stand clear of the
-  // WIDEST word, so they do not shuffle as the words change.
-  function setKwMax(){
-    if (!flank || !slots[0]) return;
-    flank.style.setProperty('--kw-max', Math.ceil(Math.max.apply(null, slots[0].w)) + 'px');
-  }
-  setKwMax();
-  addEventListener('resize', function(){ slots.forEach(function(sl){ sl.w = measure(sl.el); }); setKwMax(); applyStep(typeof curStep === 'number' ? curStep : 2); });
+  addEventListener('resize', function(){ slots.forEach(function(sl){ sl.w = measure(sl.el); }); applyStep(typeof curStep === 'number' ? curStep : 2); });
   function applyStep(i){
     slots.forEach(function(sl){
       var wide = 0;
@@ -5112,7 +5133,6 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   // Re-measure once the real font has landed and re-apply the current beat.
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(function(){
     slots.forEach(function(sl){ sl.w = measure(sl.el); });
-    setKwMax();
     applyStep(curStep);
   });
   // WHY a start gate (Destin 2026-09-11: "on fresh site loads the first-run
@@ -5148,7 +5168,6 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       if (introEnded) return;          // a mascot click already took over
       // Measure in the real font and re-centre before anything moves.
       slots.forEach(function(sl){ sl.w = measure(sl.el); });
-      setKwMax();
       // WHY this check (measured 2026-11-12 on a
       // 430px-wide phone): closed, "Make Your Technology" fitted on ONE line,
       // and the moment "Useful." opened its slot the headline re-wrapped to
@@ -5156,9 +5175,8 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       // safe when opening the slot cannot change how many lines the headline
       // takes; where it would, the space is held open from the start instead.
       // Transitions are off for the test so the widths apply at once.
-      // WHY (2026-11-12): at 1020px and below the word sits on its own centred
-      // line with the robots pinned beside it, so there is no slot to open --
-      // the space is simply there from the start and nothing has to move.
+      // On a phone the word is its own line (display:block): there is no slot to
+      // open, so the space is simply there from the start and nothing has to move.
       if (slots[0] && getComputedStyle(slots[0].el).display === 'block') { CLOSED = false; curStep = 0; }
       if (CLOSED) {
         var h1 = flank && flank.querySelector('h1');
