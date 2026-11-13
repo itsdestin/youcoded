@@ -59,7 +59,8 @@ test('default poster, wallpaper and mascot are generated assets for YouCoded Lig
 // kinds of rule keyed on <body>'s intro class. Both made the browser re-style
 // hundreds of invisible elements in the instant the page content starts to rise.
 test('ending the intro does not re-style the whole page', () => {
-  const css = site.slice(site.indexOf('<style'), site.lastIndexOf('</style>'));
+  // Comments are dropped first: several of them quote the old rules.
+  const css = site.slice(site.indexOf('<style'), site.lastIndexOf('</style>')).replace(/\/\*[\s\S]*?\*\//g, '');
   const rules = css.match(/[^{}]*body\.intro-mode[^{}]*\{[^{}]*\}/g) || [];
   assert.ok(rules.length > 5, 'the intro rules were found');
   for (const rule of rules) {
