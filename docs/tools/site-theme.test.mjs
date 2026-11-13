@@ -21,7 +21,10 @@ test('website default uses the actual lavender YouCoded Light theme, not the leg
   assert.equal(actual.opacity, theme.background['panels-opacity']);
   assert.match(site, /var currentTheme = 'youcoded';/);
   assert.match(site, /applyTheme\("youcoded"\);/);
-  assert.match(site, /theme: 'youcoded',\s+at: 2080/);
+  // WHY changed (2026-11-12): the intro's steps no longer carry their own
+  // times (they sit on one even beat now), so the old "at: 2080" text is gone.
+  // What this guards is unchanged: the intro's LAST step rests on YouCoded Light.
+  assert.match(site, /\{ theme: 'youcoded' \}[^\n]*\n\s*\];/);
   assert.match(site, /applyTheme\('youcoded'\);/);
 });
 

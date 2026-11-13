@@ -23,7 +23,7 @@ import { CAS_REPLACE_ANY, casWrite, renameReplacing, type CasExpectation } from 
 import { noteOwnWrite } from '../artifacts/project-watcher';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
-import { finishCopy, SAVE_DIR_MARK } from './office-commands';
+import { finishCopy, SAVE_DIR_MARK, sweepStaleSaveDirsSoon } from './office-commands';
 
 // ── The owner's pruning rules, "tiered-30" (R11) ──
 const KEEP_ALL_MS = 24 * 60 * 60 * 1000;
@@ -324,6 +324,10 @@ async function writeBack(target: string, bytes: Buffer): Promise<void> {
   // A read-only file stays read-only: Office reports it instead of replacing it anyway.
   if (orig) await fsp.access(target, fsc.W_OK);
   const base = path.basename(target);
+  // WHY: a restore cut short by a crash leaves the same hidden folder a save does; clean up any
+  // such leftover over an hour old beside this file now. Started, never awaited, errors swallowed
+  // (office-commands.ts sweepStaleSaveDirsSoon), so it can neither slow nor fail the restore.
+  sweepStaleSaveDirsSoon(path.dirname(target), base);
   const priv = await fsp.mkdtemp(path.join(path.dirname(target), `.${base}${SAVE_DIR_MARK}`));
   try {
     const tmp = path.join(priv, base);

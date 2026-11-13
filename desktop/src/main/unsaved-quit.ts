@@ -1,5 +1,5 @@
 // "A file has unsaved changes" — the one quit prompt (renderer UnsavedBeforeQuit.tsx). A quit, or
-// the last window's close, is refused while a responding window holds unsaved edits: a text file
+// any window's close, is refused while a responding window holds unsaved edits: a text file
 // open for editing, a draft parked after its editor went away, or an Office document with changes
 // not saved to its file yet (the editor's own "modified" flag; renderer state/unsaved-editors.ts).
 //
@@ -82,20 +82,19 @@ export function refuseQuitForUnsaved(
 }
 
 /**
- * The last window closing while it has unsaved edits (fix round 11): the same list, before it
- * closes; discarding closes it (and so quits). `isFloater` names windows that don't count against
- * "the last" — the buddy floaters. Returns whether it refused.
+ * A window closing while it has unsaved edits (fix round 11; every window since card #34): the same list,
+ * before it closes; discarding closes it (and so quits, if it was the last). Returns whether it refused.
+ * WHY every window, not only the last (Destin, wave-2 deck Q-5, 2026-11-12): a second window's X used to close it
+ * at once, and a parked draft (no editor on screen, so no unload veto) went with it unasked.
  */
 export function refuseCloseForUnsaved(
-  win: PromptWindow, isFloater: (w: PromptWindow) => boolean,
-  opts: { ipc?: UnsavedIpc; windows?: PromptWindow[]; hung?: (w: PromptWindow) => boolean } = {},
+  win: PromptWindow,
+  opts: { ipc?: UnsavedIpc; hung?: (w: PromptWindow) => boolean } = {},
 ): boolean {
   if (win.isDestroyed() || !unsaved.has(win.webContents.id)) return false;
   // A hung window is not asked (fix round 12): it could not show the list, and a refusal would only
   // hold its close — the close gate's "not responding, close it anyway?" question must be reachable.
   if ((opts.hung ?? ((w: PromptWindow) => isUnresponsive(w as unknown as BrowserWindow)))(win)) return false;
-  const all = opts.windows ?? (BrowserWindow.getAllWindows() as unknown as PromptWindow[]);
-  if (all.some((w) => w !== win && !w.isDestroyed() && !isFloater(w))) return false;
   return refuseIn(win, 'close', () => { if (!win.isDestroyed()) win.close(); }, { ipc: opts.ipc });
 }
 
