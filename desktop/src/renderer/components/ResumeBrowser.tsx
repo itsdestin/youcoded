@@ -34,6 +34,7 @@ import './ResumeBrowser.css';
 import { resolveNativeBinding } from '../state/welcome-back';
 import { ScreenMark, useScreenOpen } from '../shoot-mode';
 import { prefersTouchInput } from '../utils/touch-input';
+import { Tooltip } from './ui';
 
 // ── The conversation preview panel (2026-09-10) ─────────────────────────────
 // Every decision below is an answered review-deck step, not a default. Five
@@ -1469,7 +1470,9 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
       {/* Pinned: the pin sits with the card's corner icons, as it sits by the status
           pill in the sessions menu (pick-menus-4#PM4-3) — no longer an amber tag. */}
       {s.flags?.priority && (
-        <span className="px-1 py-2 flex items-center" title="Pinned to top"><PinIcon className="w-3 h-3 text-fg-2" /></span>
+        <Tooltip text="Pinned to top">
+          <span className="px-1 py-2 flex items-center"><PinIcon className="w-3 h-3 text-fg-2" /></span>
+        </Tooltip>
       )}
       {/* Tags and note. Always visible rather than hover-revealed — a
           hover-only affordance is invisible on touch and undiscoverable on
@@ -1604,7 +1607,9 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
                       className={MENU_ROW}
                     >
                       <CheckboxMark checked={checked} />
-                      <span className="flex-1 truncate" title={p.path}>{p.label}</span>
+                      <Tooltip text={p.path}>
+                        <span className="flex-1 truncate">{p.label}</span>
+                      </Tooltip>
                       <span className="text-2xs text-fg-muted shrink-0 tabular-nums">{p.count}</span>
                     </button>
                   );

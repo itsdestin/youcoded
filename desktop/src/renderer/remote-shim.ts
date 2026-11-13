@@ -4,6 +4,7 @@
  */
 
 // Type-only, plus table-error-flag (one tiny value; imported from backend-contract it would pull the whole contract into the Android bundle — WHY 2026-09-30 one-core R3-3).
+import { rememberAttachmentPreview } from './utils/remote-attachment-previews';
 import type { VoiceReadiness } from '../shared/voice-types';
 import { isAndroidAppPage } from './android-page';
 import { isConnectionAllowed, TAILSCALE_ONLY_MESSAGE } from '../shared/cleartext-hosts';
@@ -2149,7 +2150,7 @@ async function pickAndUploadFiles(): Promise<string[]> {
         size: file.size,
       });
       // WHY (2026-10-01 one-core R3-SEC): a refusal (file over the size cap) now comes back as a sentence; show it instead of dropping the file silently.
-      if (result?.path) paths.push(result.path); else if (typeof result?.error === 'string') announce(result.error, 5000);
+      if (result?.path) { paths.push(result.path); rememberAttachmentPreview(result.path, file); /* card #194: the browser's own copy, for the card's picture */ } else if (typeof result?.error === 'string') announce(result.error, 5000);
     } catch (err) {
       console.error('Failed to upload file:', file.name, err);
     }
@@ -2746,6 +2747,7 @@ export function installShim(): void {
     settings: {
       get: (field: string) => invoke('settings:get', { field }),
       set: (field: string, value: unknown) => invoke('settings:set', { field, value }),
+      takeRepairNotice: (): Promise<{ backupPath: string } | null> => invoke('settings:repair-notice').catch(() => null), // desktop-only channel: a phone gets null, never an error
     },
     modes: {
       get: () => invoke('modes:get'),
@@ -3364,8 +3366,9 @@ export function installShim(): void {
         return response?.text ?? '';
       },
     },
-    // The Browser — mirrors preload.ts. Every channel is desktopOnly on the host, which answers { unsupported:true },
-    // so a call from here rejects (screens gate on capabilities.assistantBrowser, false here).
+    // The Browser — mirrors preload.ts. Every channel but `answer` is desktopOnly on the host, which answers { unsupported:true },
+    // so a call from here rejects (screens gate on capabilities.assistantBrowser, false here). `answer` works: a phone answers the
+    // Browser's card the computer publishes (PhoneBrowserAskCard, card #205).
     // No pushes reach a phone, so the listeners never fire.
     browser: {
       state: (sessionId: string) => invoke('browser:state', { sessionId }),

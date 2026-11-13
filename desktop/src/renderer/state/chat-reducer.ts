@@ -26,6 +26,7 @@ import { ccCommandFromLaunch, nativeCommandFromRun, putCommand, settleCommands }
 import { answerStep, reannounced, reconcileAnswers } from './permission-answer';
 import { updatePendingSendEntry } from './pending-send-entry';
 import { interruptedAssistantTurns } from './interrupted-turn';
+import { applyBrowserAsk } from './browser-ask-fact';
 import { touchTurnTime } from './turn-time';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
@@ -946,6 +947,8 @@ function spinnerWithNoTurn(session: SessionChatState): Partial<SessionChatState>
 }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
+  const browserAsk = applyBrowserAsk(state, action); // browser-ask-fact.ts (card #205)
+  if (browserAsk) return browserAsk;
   let next = chatReducerCases(state, action);
   const id = (action as { sessionId?: string }).sessionId;
   if (next === state || !id) return next;

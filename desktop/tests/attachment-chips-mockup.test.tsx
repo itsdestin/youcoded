@@ -48,7 +48,9 @@ describe('attachment chips mock-up', () => {
       // Each chip carries the full name in its title (the on-screen text may
       // be truncated by CSS) and an always-present remove button.
       for (const att of SAMPLE_ATTACHMENTS) {
-        expect(within(section).getAllByTitle(att.name)).toHaveLength(2);
+        // WHY both attributes: sections A and B draw their own chips (browser title), section C renders
+        // the real AttachmentChip, whose hover hint is the app's own and sits on the chip as data-hint.
+        expect(section.querySelectorAll(`[title="${att.name}"], [data-hint="${att.name}"]`)).toHaveLength(2);
         expect(within(section).getAllByLabelText(`Remove ${att.name}`)).toHaveLength(2);
       }
     }

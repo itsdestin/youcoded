@@ -108,7 +108,7 @@ describe('CSV viewer draws only what can be seen', () => {
   it('a long cell still shows its full text on hover, and wide columns widen to fit as the old table did', () => {
     const long = 'x'.repeat(120);
     const { container } = render(<CsvView {...csvProps(`${long},b\n1,2`)} />);
-    expect(container.querySelector('td[data-r="0"][data-c="0"]')?.getAttribute('title')).toBe(long);
+    expect(container.querySelector('td[data-r="0"][data-c="0"]')?.getAttribute('data-hint')).toBe(long);
     expect(csvColumnWidths([[long, 'b']], 3)).toEqual([300, 110, 110]); // capped at 300, floor 110
   });
 });

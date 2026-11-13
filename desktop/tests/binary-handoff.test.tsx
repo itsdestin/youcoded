@@ -35,7 +35,7 @@ describe('handoff copy', () => {
     render(<BinaryFallback path="raw.bin" absolutePath="/root/raw.bin"
                            content={null} isEditable={false}
                            contentInfo={{ sizeBytes: 214 * 1024 * 1024, binary: true }} />);
-    expect(screen.getByText(/214\.0 MB — larger than YouCoded can display/)).toBeInTheDocument();
+    expect(screen.getByText(/224\.4 MB — larger than YouCoded can display/)).toBeInTheDocument();
   });
 
   it('does not blame size for a file that is merely an unsupported format', () => {

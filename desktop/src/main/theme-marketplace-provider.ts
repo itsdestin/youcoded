@@ -13,6 +13,7 @@ import { synthesizeLocalThemeEntries, type LocalThemeRecord } from './local-them
 import { generateThemePreview } from './theme-preview-generator';
 import { SkillConfigStore } from './skill-config-store';
 import { themeFingerprint } from '../shared/theme-fingerprint';
+import { formatBytes } from '../shared/format-bytes';
 
 // Registry is fetched from this URL (GitHub Pages or raw GitHub)
 // Every theme file the installer downloads must come from here (see fileProblem).
@@ -442,7 +443,7 @@ export class ThemeMarketplaceProvider {
       }
     }
     if (oversized.length > 0) {
-      const fmt = (b: number) => `${(b / 1024 / 1024).toFixed(1)} MB`;
+      const fmt = (b: number) => formatBytes(b); // 1000-based (card #143)
       const list = oversized.map(f => `  • ${f.repoPath} (${fmt(f.bytes)})`).join('\n');
       throw new Error(
         `Cannot publish — the following files exceed the 10 MB registry limit:\n${list}\n\nResize or recompress them, then try again.`

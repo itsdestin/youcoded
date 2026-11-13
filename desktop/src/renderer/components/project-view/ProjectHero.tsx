@@ -99,6 +99,7 @@ import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 // languages for one status was the wrong call. PROJECT_DESCRIPTION_MAX keeps
 // the input's cap in lockstep with the shared type instead of re-typing 200.
 import { PROJECT_DESCRIPTION_MAX } from '../../../shared/artifacts/types';
+import { Tooltip } from '../ui';
 
 const MENU_WIDTH = 240;
 const SYNC_POPOVER_WIDTH = 288;
@@ -339,53 +340,56 @@ export function ProjectHero({
             onBlur={() => void commitRename()}
           />
         ) : (
-          <button
-            type="button"
-            onClick={onOpenSwitcher}
-            className="group flex items-start gap-2 text-left rounded-md -ml-1 px-1 py-0.5 hover:bg-inset transition-colors"
-            title="Switch project"
-          >
-            <span className="text-2xl font-semibold text-fg leading-tight whitespace-normal break-words">
-              {shownName}
-            </span>
-            <span className="text-fg-muted group-hover:text-fg shrink-0 mt-1.5">
-              <ChevronDown size={18} />
-            </span>
-          </button>
+          <Tooltip text="Switch project">
+            <button
+              type="button"
+              onClick={onOpenSwitcher}
+              className="group flex items-start gap-2 text-left rounded-md -ml-1 px-1 py-0.5 hover:bg-inset transition-colors"
+            >
+              <span className="text-2xl font-semibold text-fg leading-tight whitespace-normal break-words">
+                {shownName}
+              </span>
+              <span className="text-fg-muted group-hover:text-fg shrink-0 mt-1.5">
+                <ChevronDown size={18} />
+              </span>
+            </button>
+          </Tooltip>
         )}
 
         {/* Path + optional owner/name repo slug — both double as click targets
             (Open in File Explorer / Open on GitHub), replacing the old
             standalone buttons this row now subsumes. */}
         <div className="flex items-center gap-2 mt-1.5 min-w-0">
-          <button
-            type="button"
-            onClick={canOpenInOs ? () => void (window.claude as any).shell.openPath(project.path) : undefined}
-            disabled={!canOpenInOs}
-            className="inline-flex items-center gap-1 min-w-0 text-fg-muted hover:text-fg-2 transition-colors disabled:cursor-default"
-            title={canOpenInOs ? 'Open in File Explorer' : project.path}
-          >
-            <FolderIcon size={13} />
-            <span
-              className={`font-mono text-xs truncate ${canOpenInOs ? 'underline decoration-dotted underline-offset-2 decoration-fg-faint hover:decoration-fg-muted' : ''}`}
+          <Tooltip text={canOpenInOs ? 'Open in File Explorer' : project.path}>
+            <button
+              type="button"
+              onClick={canOpenInOs ? () => void (window.claude as any).shell.openPath(project.path) : undefined}
+              disabled={!canOpenInOs}
+              className="inline-flex items-center gap-1 min-w-0 text-fg-muted hover:text-fg-2 transition-colors disabled:cursor-default"
             >
-              {project.path}
-            </span>
-          </button>
+              <FolderIcon size={13} />
+              <span
+                className={`font-mono text-xs truncate ${canOpenInOs ? 'underline decoration-dotted underline-offset-2 decoration-fg-faint hover:decoration-fg-muted' : ''}`}
+              >
+                {project.path}
+              </span>
+            </button>
+          </Tooltip>
           {showRepoSlug && (
             <>
               <span className="text-fg-faint shrink-0">·</span>
-              <button
-                type="button"
-                onClick={() => window.claude.shell.openExternal(repo!.webUrl!)}
-                className="inline-flex items-center gap-1 text-xs text-fg-dim hover:text-fg-2 shrink-0 transition-colors"
-                title={`Open ${repo!.owner}/${repo!.name} on GitHub`}
-              >
-                <GitHubIcon size={13} />
-                <span className="underline decoration-dotted underline-offset-2 decoration-fg-faint hover:decoration-fg-muted">
-                  {repo!.owner}/{repo!.name}
-                </span>
-              </button>
+              <Tooltip text={`Open ${repo!.owner}/${repo!.name} on GitHub`}>
+                <button
+                  type="button"
+                  onClick={() => window.claude.shell.openExternal(repo!.webUrl!)}
+                  className="inline-flex items-center gap-1 text-xs text-fg-dim hover:text-fg-2 shrink-0 transition-colors"
+                >
+                  <GitHubIcon size={13} />
+                  <span className="underline decoration-dotted underline-offset-2 decoration-fg-faint hover:decoration-fg-muted">
+                    {repo!.owner}/{repo!.name}
+                  </span>
+                </button>
+              </Tooltip>
             </>
           )}
         </div>
@@ -431,18 +435,19 @@ export function ProjectHero({
             onBlur={() => void commitDescription()}
           />
         ) : description ? (
-          <button
-            type="button"
-            onClick={() => setEditingDesc(true)}
-            // The saved description hangs into the card's margin so its WORDS line up with the
-            // name above (the read state, kept as approved). The box you type in no longer
-            // copies that (above), so a click now moves the words in by the box's padding —
-            // the same as Session details' note since close-session-2.
-            className="mt-1.5 block text-left rounded-lg border border-transparent -ml-2.5 px-2.5 py-1.5 hover:bg-inset transition-colors max-w-[46rem]"
-            title="Edit description"
-          >
-            <span className="text-sm italic text-fg-dim">“{description}”</span>
-          </button>
+          <Tooltip text="Edit description">
+            <button
+              type="button"
+              onClick={() => setEditingDesc(true)}
+              // The saved description hangs into the card's margin so its WORDS line up with the
+              // name above (the read state, kept as approved). The box you type in no longer
+              // copies that (above), so a click now moves the words in by the box's padding —
+              // the same as Session details' note since close-session-2.
+              className="mt-1.5 block text-left rounded-lg border border-transparent -ml-2.5 px-2.5 py-1.5 hover:bg-inset transition-colors max-w-[46rem]"
+            >
+              <span className="text-sm italic text-fg-dim">“{description}”</span>
+            </button>
+          </Tooltip>
         ) : (
           // Dashed-outline add affordance, matching QuickChips' "+ Add Chip" and
           // ModelPicker's freeform row. Bare hover-only text read as a label,
@@ -489,20 +494,21 @@ export function ProjectHero({
         {/* Narrow-only cog, now top-right of the card (it used to sit beside
             New conversation, which moved to the bottom). */}
         {narrow && (
-          <button
-            ref={menu.anchorRef}
-            type="button"
-            onClick={menu.toggle}
-            className={`coarse-hit shrink-0 p-2 rounded-md border border-edge transition-colors ${
-              menu.open ? 'bg-inset text-fg' : 'text-fg-muted hover:text-fg hover:bg-inset'
-            }`}
-            title="Project settings"
-            aria-label="Project settings"
-            aria-haspopup="menu"
-            aria-expanded={menu.open}
-          >
-            <CogIcon size={16} />
-          </button>
+          <Tooltip text="Project settings">
+            <button
+              ref={menu.anchorRef}
+              type="button"
+              onClick={menu.toggle}
+              className={`coarse-hit shrink-0 p-2 rounded-md border border-edge transition-colors ${
+                menu.open ? 'bg-inset text-fg' : 'text-fg-muted hover:text-fg hover:bg-inset'
+              }`}
+              aria-label="Project settings"
+              aria-haspopup="menu"
+              aria-expanded={menu.open}
+            >
+              <CogIcon size={16} />
+            </button>
+          </Tooltip>
         )}
       </div>
 

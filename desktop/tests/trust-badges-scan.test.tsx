@@ -27,7 +27,7 @@ describe('ScanBadge', () => {
   it('puts the explanation on hover, keyed to the status', () => {
     const { container } = render(<ScanBadge scan={{ status: 'unchecked' }} />);
     const badge = container.querySelector('[data-scan="unchecked"]')!;
-    expect(badge.getAttribute('title')).toBe(scanExplainer({ status: 'unchecked' }));
+    expect(badge.getAttribute('data-hint')).toBe(scanExplainer({ status: 'unchecked' }));
     expect(screen.getByText('Not checked')).toBeInTheDocument();
   });
 

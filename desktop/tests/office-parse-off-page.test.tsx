@@ -15,6 +15,10 @@ import JSZip from 'jszip';
 // A stand-in for the bundler's worker constructor that runs the REAL worker module's handler, in-process, with the
 // reply passed through structuredClone (what postMessage does), so the test sees exactly what the page would get.
 const spawned: Array<{ kind: string }> = [];
+// WHY: the viewers build their worker from the mocked module below, not from the global Worker, so a test that
+// needs a Word worker that never answers flips this instead of stubbing the global (which left a real conversion
+// running after the test ended and threw into the run).
+const silentDocxWorker = { on: false };
 // Each worker module installs its handler as the global `onmessage` when it loads; both do, so remember each one's own.
 const handlers: Partial<Record<'xlsx' | 'docx', (e: any) => Promise<void>>> = {};
 async function handlerFor(kind: 'xlsx' | 'docx') {
@@ -32,6 +36,7 @@ function makeFakeWorker(kind: 'xlsx' | 'docx') {
     constructor() { spawned.push({ kind }); }
     terminate() { this.terminated = true; }
     postMessage(data: { bytes: ArrayBuffer }) {
+      if (kind === 'docx' && silentDocxWorker.on) return; // never replies
       void (async () => {
         const scope = globalThis as any;
         const prev = scope.postMessage;
@@ -254,4 +259,121 @@ describe('the viewers read the file off the page when a Worker exists', () => {
     const link = container.querySelector('a[href="https://example.com"]');
     expect(link?.getAttribute('rel')).toBe('noopener noreferrer'); // sanitizeDocHtml still ran on the worker's output
   }, 60_000);
+});
+
+// ---------- Word: a hostile file can never hang the viewer or freeze the page (card #161) ----------
+// @ts-ignore mammoth.browser lacks type declarations
+import mammoth from 'mammoth/mammoth.browser';
+import { act } from '@testing-library/react';
+import { DocxConvertTimeoutError, DOCX_CONVERT_TIME_LIMIT_MS } from '../src/renderer/components/artifact-views/docx-convert-jobs';
+
+/** A worker that takes the file and never answers — what a converter stuck on a crafted file looks like. */
+class SilentWorker {
+  onmessage: ((e: MessageEvent) => void) | null = null;
+  onerror: ((e: any) => void) | null = null;
+  terminated = false;
+  constructor() { spawned.push({ kind: 'docx' }); }
+  terminate() { this.terminated = true; }
+  postMessage() { /* never replies */ }
+}
+/** A worker that crashes with an uncaught error after it has the file. */
+class CrashingWorker extends SilentWorker {
+  postMessage() { queueMicrotask(() => this.onerror?.({ preventDefault() {}, message: 'boom' })); }
+}
+
+describe('a Word file that never finishes converting cannot hang the viewer or freeze the page', () => {
+  afterEach(() => { vi.useRealTimers(); silentDocxWorker.on = false; });
+
+  it('after the time limit the worker is stopped and the job fails with a timeout', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const worker = new SilentWorker();
+    const job = convertDocx(await docxBytes(1), () => worker as any);
+    const outcome = job.promise.then(() => 'resolved', (e) => e);
+    await vi.advanceTimersByTimeAsync(DOCX_CONVERT_TIME_LIMIT_MS - 1);
+    expect(worker.terminated).toBe(false);                 // still within the limit: left alone
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toBeInstanceOf(DocxConvertTimeoutError);
+    expect(worker.terminated).toBe(true);
+  });
+
+  it('a worker that crashes mid-conversion fails the job and does NOT re-run the file on the page', async () => {
+    const onPage = vi.spyOn(mammoth, 'convertToHtml');
+    const worker = new CrashingWorker();
+    await expect(convertDocx(await docxBytes(1), () => worker as any).promise).rejects.toThrow('stopped unexpectedly');
+    expect(worker.terminated).toBe(true);
+    expect(onPage).not.toHaveBeenCalled();                 // red on the old code: it fell back to converting on the page
+  });
+
+  it('a worker that cannot be created still falls back to converting on the page', async () => {
+    const html = await convertDocx(await docxBytes(1), () => { throw new Error('no workers here'); }).promise;
+    expect(html).toContain('<h1>Title</h1>');
+  });
+
+  it('the file’s own embedded style map is ignored on the page and in the worker', async () => {
+    const calls = vi.spyOn(mammoth, 'convertToHtml');
+    const bytes = await docxBytes(1);
+    await convertDocx(bytes, null).promise;
+    await convertDocx(bytes, () => new (makeFakeWorker('docx') as any)()).promise;
+    expect(calls).toHaveBeenCalledTimes(2);
+    for (const [, options] of calls.mock.calls) expect(options).toMatchObject({ includeEmbeddedStyleMap: false });
+  }, 60_000);
+
+  it('DocxView says the document took too long when the time limit passes', async () => {
+    (globalThis as any).__officeBytes = { '/t/slow.docx': await docxBytes(1) };
+    silentDocxWorker.on = true;
+    // WHY (CI failure on PR #737, found 2026-11-12): without a global Worker (the afterEach above un-stubs it) the
+    // viewer takes the no-worker path and converts the file FOR REAL on the page. The silent worker above was never
+    // used, and that real conversion was still running when the test environment was torn down, which threw
+    // "Cannot read properties of undefined (reading 'uint8array')" out of Mammoth's unzip as an unhandled error,
+    // only when the machine was busy (reproduced 1 run in ~30 with 4 cores shared by 24 runs).
+    vi.stubGlobal('Worker', makeFakeWorker('docx'));
+    const onPage = vi.spyOn(mammoth, 'convertToHtml');
+    const { DocxView } = await import('../src/renderer/components/artifact-views/DocxView');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { container } = render(<DocxView path="slow.docx" absolutePath="/t/slow.docx" content="" isEditable={false} />);
+    expect(container.textContent).toContain('Loading document');
+    await act(async () => { await vi.advanceTimersByTimeAsync(DOCX_CONVERT_TIME_LIMIT_MS); });
+    expect(container.textContent).toContain('Couldn’t open this document. This document took too long to open.');
+    expect(onPage).not.toHaveBeenCalled();                 // red on the old test: a real conversion was left running
+  });
+});
+
+// ---------- Excel: the same 60-second limit as Word (card #161) ----------
+import { XlsxParseTimeoutError, XLSX_PARSE_TIME_LIMIT_MS } from '../src/renderer/components/artifact-views/xlsx-parse-jobs';
+
+describe('a spreadsheet that never finishes reading cannot hang the viewer', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('after the time limit the worker is stopped and the job fails with a timeout', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const worker = new SilentWorker();
+    const job = parseXlsx(new Uint8Array([1, 2, 3]), () => worker as any);
+    const outcome = job.promise.then(() => 'resolved', (e) => e);
+    await vi.advanceTimersByTimeAsync(XLSX_PARSE_TIME_LIMIT_MS - 1);
+    expect(worker.terminated).toBe(false);                 // still within the limit: left alone
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toBeInstanceOf(XlsxParseTimeoutError);
+    expect(worker.terminated).toBe(true);
+  });
+
+  it('a spreadsheet that opens in time never trips the limit', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const bytes = await workbookBytes(FIXTURES['hidden sheets are skipped, visible kept in order']);
+    const sheets = await parseXlsx(bytes, () => new (makeFakeWorker('xlsx') as any)()).promise;
+    expect(sheets.map((s) => s.name)).toEqual(['Data', 'Second']);
+    expect(vi.getTimerCount()).toBe(0);                    // the limit's timer was cleared
+  });
+
+  it('XlsxView says the spreadsheet took too long when the time limit passes', async () => {
+    (globalThis as any).__officeBytes = { '/t/slow.xlsx': new Uint8Array([1, 2, 3]) };
+    vi.stubGlobal('Worker', SilentWorker);
+    vi.doMock('../src/renderer/components/artifact-views/xlsx-parse.worker?worker', () => ({ default: SilentWorker }));
+    vi.resetModules();
+    const { XlsxView } = await import('../src/renderer/components/artifact-views/XlsxView');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { container } = render(<XlsxView path="slow.xlsx" absolutePath="/t/slow.xlsx" content="" isEditable={false} />);
+    expect(container.textContent).toContain('Loading spreadsheet');
+    await act(async () => { await vi.advanceTimersByTimeAsync(XLSX_PARSE_TIME_LIMIT_MS); });
+    expect(container.textContent).toContain('Couldn’t open this spreadsheet. This spreadsheet took too long to open.');
+  });
 });

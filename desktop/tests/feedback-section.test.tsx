@@ -260,7 +260,7 @@ describe('ThumbsSummary (the card)', () => {
 
   it('explains the low-count form in its tooltip, in words', () => {
     const { container } = render(<ThumbsSummary up={2} down={1} />);
-    expect(container.querySelector('[data-thumbs]')?.getAttribute('title'))
+    expect(container.querySelector('[data-thumbs]')?.getAttribute('data-hint'))
       .toBe('2 of 3 people who installed this found it helpful');
   });
 

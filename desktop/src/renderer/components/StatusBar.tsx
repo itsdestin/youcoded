@@ -837,15 +837,16 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                             const inCycle = cycleList.includes(t.slug);
                             const isOnly = inCycle && cycleList.length === 1;
                             return (
-                              <button key={t.slug} type="button" onClick={() => toggleCycle(t.slug)} disabled={isOnly}
-                                title={isOnly ? 'At least one theme must stay in the cycle' : undefined}
-                                className={`flex items-center gap-2 w-full px-2 py-1 rounded-sm text-left text-2xs transition-colors ${isOnly ? 'cursor-not-allowed' : 'hover:bg-inset'}`}>
-                                {/* WHY no colour dot before the name (final-review#CH-17, Destin:
-                                    "remove the weird color dots next to the themes"): the tick and
-                                    the theme's name are the whole row. */}
-                                <CheckboxMark checked={inCycle} />
-                                <span className="text-fg truncate">{t.name}</span>
-                              </button>
+                              <Tooltip key={t.slug} text={(isOnly ? 'At least one theme must stay in the cycle' : undefined) ?? ''}>
+                                <button type="button" onClick={() => toggleCycle(t.slug)} disabled={isOnly}
+                                  className={`flex items-center gap-2 w-full px-2 py-1 rounded-sm text-left text-2xs transition-colors ${isOnly ? 'cursor-not-allowed' : 'hover:bg-inset'}`}>
+                                  {/* WHY no colour dot before the name (final-review#CH-17, Destin:
+                                      "remove the weird color dots next to the themes"): the tick and
+                                      the theme's name are the whole row. */}
+                                  <CheckboxMark checked={inCycle} />
+                                  <span className="text-fg truncate">{t.name}</span>
+                                </button>
+                              </Tooltip>
                             );
                           })}
                         </div>

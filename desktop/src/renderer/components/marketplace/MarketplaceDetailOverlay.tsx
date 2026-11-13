@@ -31,6 +31,7 @@ import MarkdownContent from "../MarkdownContent";
 import { DetailActions, DetailIdentity, DetailPage, InstallFailed, type DetailSection } from "./DetailPage";
 import { CountChip, ThumbsChip } from "./FactChips";
 import { workbenchThemeLiked } from "../../workbench-mode";
+import { Tooltip } from '../ui';
 
 export type DetailTarget =
   | { kind: "skill"; id: string }
@@ -630,7 +631,9 @@ function ThemeDetail({
   const swatches = entry.previewTokens ? (
     <div className="flex gap-2 flex-wrap" aria-label="Theme colours">
       {Object.entries(entry.previewTokens).map(([name, color]) => (
-        <span key={name} title={name} className="inline-block w-8 h-8 rounded-md border border-edge-card" style={{ background: color as string }} />
+        <Tooltip key={name} text={name}>
+          <span className="inline-block w-8 h-8 rounded-md border border-edge-card" style={{ background: color as string }} />
+        </Tooltip>
       ))}
     </div>
   ) : null;

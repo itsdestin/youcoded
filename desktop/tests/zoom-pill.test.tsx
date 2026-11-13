@@ -37,13 +37,13 @@ describe('ZoomPill', () => {
     const inn = screen.getByRole('button', { name: /zoom in/i });
     expect(out.hasAttribute('disabled')).toBe(true);
     expect(inn.hasAttribute('disabled')).toBe(true);
-    expect(out.getAttribute('title')).toMatch(/already fitted/i);
-    expect(inn.getAttribute('title')).toMatch(/can’t be drawn any larger/i);
+    expect(out.getAttribute('data-hint')).toMatch(/already fitted/i);
+    expect(inn.getAttribute('data-hint')).toMatch(/can’t be drawn any larger/i);
   });
 
   it('falls back to a generic reason when the caller gives none', () => {
     render(<ZoomPill {...base} canZoomIn={false} />);
-    expect(screen.getByRole('button', { name: /zoom in/i }).getAttribute('title'))
+    expect(screen.getByRole('button', { name: /zoom in/i }).getAttribute('data-hint'))
       .toMatch(/largest size/i);
   });
 

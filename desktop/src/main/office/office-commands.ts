@@ -213,6 +213,25 @@ export function editorLogFacts(msg: string): Record<string, unknown> {
   return { source: 'editor', length: msg.length, errorKinds: kinds, where };
 }
 
+// WHY (privacy, the same rule as editorLogFacts): the converter's error output names file paths
+// and can quote the document it was reading, and desktop.log is attached to bug reports. So the
+// text is never written; only its exit code or signal (x2t's own number, or our fixed words such
+// as 'timeout'), its length, and which of these fixed markers it contained. The list comes from
+// the messages built into the bundled x2t 8.2 and its libraries (read from the binaries) plus
+// the usage text it prints when called wrongly. Only the marker itself is logged, never what
+// follows it. The raw text stays on the X2tError in memory; nothing shows it to anyone.
+const CONVERTER_MARKERS = [
+  'out of memory', 'terminate called', 'std::bad_alloc', 'std::exception', 'Uncaught', 'TypeError', 'ReferenceError',
+  'RangeError', 'SyntaxError', 'System error', 'validity error', 'stream corrupt', 'Failed to parse', 'USAGE:',
+];
+export function converterLogFacts(e: X2tError): Record<string, unknown> {
+  // WHY the first and last 4000 characters only: the output can be up to 64 MB, and a fatal
+  // message usually comes last; a fixed bound keeps the scan from ever stalling the app.
+  const t = e.stderr;
+  const scan = t.length > 2 * LOG_SCAN_CHARS ? `${t.slice(0, LOG_SCAN_CHARS)}\n${t.slice(-LOG_SCAN_CHARS)}` : t;
+  return { exit: e.code, outputLength: t.length, markers: CONVERTER_MARKERS.filter((m) => scan.includes(m)) };
+}
+
 // WHY map at the boundary (fix round 1; docs/error-message-standards.md): a specific message
 // only where the cause is known for certain, otherwise a general one that guesses nothing. The
 // raw error (with its paths and x2t's stderr) goes to the log, never to the editor frame.
@@ -225,7 +244,8 @@ function toEditorError(e: unknown, cmd: string, filePath: string): Error {
   log('ERROR', 'Office', `${cmd} failed`, {
     error: String(e),
     code: err?.code ?? null,
-    stderr: e instanceof X2tError ? e.stderr.slice(0, 4000) : undefined,
+    // WHY facts, not the converter's own text (privacy): see converterLogFacts.
+    converter: e instanceof X2tError ? converterLogFacts(e) : undefined,
   });
   const verb = cmd === 'open_file' ? 'open' : cmd === 'save_file' || cmd === 'save_copy' || cmd === 'save_file_as' ? 'save' : null;
   if (e instanceof X2tError) {
@@ -301,12 +321,16 @@ const copyStateOf = (s: OfficeSession) => {
 // temp, so closing the document removes it too.
 const keptMedia = new WeakMap<OfficeSession, string>();
 let keptMediaSeq = 0;
+// The names office-pictures.ts gives a picture the person inserts (store(): picture-<16 hex>.ext).
+const INSERTED_PICTURE = /^picture-[0-9a-f]{16}\.[a-z0-9]{1,5}$/;
 const hashFile = async (file: string) => createHash('sha256').update(await fsp.readFile(file)).digest('hex');
 
 export function createOfficeCommands(deps: {
   root: string;
   sessions: ReturnType<typeof createSessions>;
-  onSaved?(s: OfficeSession, beforeBytes: Buffer | null): Promise<void>;
+  /** `changedOutside`: the file on disk was not what this editor last saw or wrote, so the bytes about to be
+   *  overwritten are someone else's work and must be kept no matter how recently a version was kept (card #34). */
+  onSaved?(s: OfficeSession, beforeBytes: Buffer | null, changedOutside?: boolean): Promise<void>;
   onOpened?(s: OfficeSession): Promise<void>;
   /** Whether onSaved will keep a version this time; the file as it was is read only then. */
   wantsBefore?(s: OfficeSession): boolean;
@@ -348,9 +372,15 @@ export function createOfficeCommands(deps: {
       throw e;
     });
     if (info.size > OFFICE_MAX_BYTES) throw userError(MSG.tooLarge);
+    // WHY taken BEFORE the file is read (card #34): a change landing while it is read then shows up as "changed
+    // outside" at the next save, which only ever costs one extra kept copy.
+    s.knownStamp = { size: info.size, mtimeMs: info.mtimeMs };
     // WHY check readability here: x2t reports an unreadable file only as a bare exit code;
     // checking first gives a real EACCES, which the boundary turns into a permission message.
     await fsp.access(s.path, fsc.R_OK);
+    // Hidden leftovers of a save a crash cut short, beside this file (see sweepStaleSaveDirsSoon).
+    // WHY safe here: this runs in the document's queue, so none of its own saves is in progress.
+    sweepStaleSaveDirsSoon(path.dirname(s.path), path.basename(s.path));
     // WHY clear first: x2t writes the document's pictures to a media/ folder beside its output
     // (verified 2026-09-28), which is <session temp>/media — exactly what office:// serves as
     // asc/docmedia/media/. A re-open must not keep a previous translation's pictures there.
@@ -398,6 +428,8 @@ export function createOfficeCommands(deps: {
   // point instead of the file — the editor then replays the edits the file never got.
   async function recover(s: OfficeSession, id: unknown): Promise<unknown> {
     await authorize(s);
+    // A crash-recovery open is exactly when a cut-short save may have left a hidden folder.
+    sweepStaleSaveDirsSoon(path.dirname(s.path), path.basename(s.path));
     const r = await loadRecovery(s, id, binMax);
     // Nothing to recover after all (discarded meanwhile, or unreadable): bridge.js opens the file.
     if (!r) throw userError(MSG.refused, true);
@@ -429,8 +461,12 @@ export function createOfficeCommands(deps: {
     await sweepStaleSaveDirs(dir, base);
     // WHY only when someone will use it: the previous bytes are for Task 7's version history;
     // reading up to 200 MB on every autosave for nobody would be pure waste.
+    // WHY (card #34, Destin's deck answer Q-6): when the assistant or another program changed this file while it was
+    // open here, this save writes over their work. Keep what is being overwritten as a version, always and without
+    // asking, whatever the usual one-copy-per-10-minutes pace says.
+    const changedOutside = !!orig && !!s.knownStamp && (orig.size !== s.knownStamp.size || orig.mtimeMs !== s.knownStamp.mtimeMs);
     let before: Buffer | null = null;
-    if (deps.onSaved && (deps.wantsBefore?.(s) ?? true)) {
+    if (deps.onSaved && (changedOutside || (deps.wantsBefore?.(s) ?? true))) {
       before = await fsp.readFile(s.path).catch((e: NodeJS.ErrnoException) => {
         if (e.code === 'ENOENT') return null;
         throw e;
@@ -465,6 +501,9 @@ export function createOfficeCommands(deps: {
       // WHY the abort check (fix round 2): on Windows a busy rename is retried for a moment;
       // if quit gives up on this save meanwhile, it must stop rather than land late.
       await renameReplacing(tmp, s.path, process.platform, () => isClosing(s));
+      // What we just wrote is what we know: the next save only counts a DIFFERENT file as an outside change.
+      const written = await fsp.stat(s.path).catch(() => null);
+      s.knownStamp = written ? { size: written.size, mtimeMs: written.mtimeMs } : undefined;
       // The file now holds every edit the translated Editor.bin did: nothing of them to recover.
       markRecoverySaved(s, binRev.get(s) ?? 0);
     } catch (e) {
@@ -480,7 +519,7 @@ export function createOfficeCommands(deps: {
       // WHY awaited inside the queue, before the reply (accepted cost): the kept copy of the
       // previous state must land before the next save replaces the file again. So a save on
       // which a version is due (at most one per 10 minutes) waits for one full copy write.
-      await deps.onSaved(s, before).catch((e) => log('WARN', 'Office', 'onSaved failed', { error: String(e) }));
+      await deps.onSaved(s, before, changedOutside).catch((e) => log('WARN', 'Office', 'onSaved failed', { error: String(e) }));
     }
     return 'ok';
   }
@@ -606,10 +645,25 @@ export function createOfficeCommands(deps: {
       // WHY media beside it (fix round 3): x2t finds a document's pictures in media/ next to the
       // Editor.bin it translates. The kept editor's pictures are the set put aside at the restore
       // (keepMedia) — the reloaded editor has rebuilt <temp>/media for the restored file since.
-      const media = keptMedia.get(s) ?? path.join(s.temp, 'media');
-      await fsp.cp(media, path.join(dir, 'media'), { recursive: true }).catch((e: NodeJS.ErrnoException) => {
+      const live = path.join(s.temp, 'media');
+      const kept = keptMedia.get(s);
+      const noMedia = (e: NodeJS.ErrnoException) => {
         if (e.code !== 'ENOENT') throw e; // a document without pictures has no media folder
-      });
+      };
+      await fsp.cp(kept ?? live, path.join(dir, 'media'), { recursive: true }).catch(noMedia);
+      // WHY both sources for a kept editor: the set put aside at the restore has its pictures up
+      // to then, but a picture it inserts AFTER the restore is stored in the live media/ folder
+      // (office-pictures.ts), which the set never sees — the copy used to miss it. Only inserted
+      // pictures are taken from the live folder (they are always named picture-<random>.ext); the
+      // rest of it belongs to the restored file. On a clash of names the put-aside picture wins,
+      // because it is the one the kept editor's document points at (force: false = never replace).
+      if (kept) {
+        const inserted = (await fsp.readdir(live).catch(() => [] as string[])).filter((n) => INSERTED_PICTURE.test(n));
+        if (inserted.length > 0) await fsp.mkdir(path.join(dir, 'media'), { recursive: true });
+        for (const n of inserted) {
+          await fsp.cp(path.join(live, n), path.join(dir, 'media', n), { force: false, errorOnExist: false }).catch(noMedia);
+        }
+      }
       return await work(file);
     } finally {
       await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -634,6 +688,9 @@ export function createOfficeCommands(deps: {
     if (deps.sessions.inUse(auth.realPath)) throw userError(MSG.copyOpen);
     const dir = path.dirname(target);
     const base = path.basename(target);
+    // Leftovers of an earlier copy or export to this same name that a crash cut short — the only
+    // moment anything looks beside an exported file again (see sweepStaleSaveDirsSoon).
+    sweepStaleSaveDirsSoon(dir, base);
     const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
     const tmp = path.join(priv, base);
     try {
@@ -688,10 +745,19 @@ export function createOfficeCommands(deps: {
     },
     async releaseKeptMedia(token: string): Promise<void> {
       const s = deps.sessions.get(token);
-      const dir = s && keptMedia.get(s);
-      if (!s || !dir) return;
-      keptMedia.delete(s);
-      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+      if (!s || !keptMedia.get(s)) return;
+      // WHY in the document's queue (like the copy that reads the folder): a release asked for
+      // while a copy is running or waiting its turn must not delete the pictures that copy is
+      // about to use — the copy would then take the restored file's pictures instead (wrong
+      // ones). Queued, it runs after every copy already asked for. Plain enqueue, not
+      // enqueueOther: it is not an edit, so it must not change how waiting saves are joined.
+      // Nobody waits on the answer (EditorFrame sends it and moves on), so the wait shows nowhere.
+      await enqueue(s, async () => {
+        const dir = keptMedia.get(s);
+        if (!dir) return;
+        keptMedia.delete(s);
+        await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+      }).catch(() => { /* the document is closing: its temp folder, set included, goes with it */ });
     },
     async exclusive<T>(token: string, work: () => Promise<T>, replacesFile: (result: T) => boolean): Promise<T> {
       const s = deps.sessions.get(token);
@@ -791,6 +857,24 @@ export const SAVE_DIR_MARK = '.office-save-';
 // Same rule as cas-write's stale-tmp sweep: an hour is far longer than any real save, so a
 // folder that old was left by a crash and a live save's folder is never touched.
 const STALE_SAVE_DIR_MS = 60 * 60 * 1000;
+
+// WHY started, not awaited (the leftover-folder cleanup on open, copy, export and restore): a
+// crash leaves a hidden folder holding the document's content beside the file — and beside an
+// exported PDF/CSV, which is never saved again, it used to stay forever. So the same sweep also
+// runs when a document opens and before a copy, an export or a restore writes beside a file. It
+// runs alongside that work rather than before it, so it can never slow it down, and it swallows
+// every error, so it can never fail it. The one-hour rule is unchanged: a folder of a save still
+// in progress is minutes old at most (each x2t run is stopped after X2T_TIMEOUT_MS).
+const pendingSweeps = new Set<Promise<void>>();
+export function sweepStaleSaveDirsSoon(dir: string, base: string): void {
+  const p = sweepStaleSaveDirs(dir, base).catch(() => {});
+  pendingSweeps.add(p);
+  void p.finally(() => pendingSweeps.delete(p));
+}
+/** Test seam: resolves once every cleanup started by sweepStaleSaveDirsSoon has finished. */
+export async function awaitSaveDirSweeps(): Promise<void> {
+  while (pendingSweeps.size > 0) await Promise.allSettled([...pendingSweeps]);
+}
 
 // WHY (fix round 2): a crash mid-save leaves its private folder, holding a copy of the
 // document, beside the user's file. Best-effort, like sweepStaleTmp: it must never fail a save.

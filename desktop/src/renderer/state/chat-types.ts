@@ -507,6 +507,8 @@ export interface SessionChatState {
   /** The "Background" chip's list: every background command / watcher of this
    *  session, independent of which cards are loaded. See state/background-commands.ts. */
   backgroundCommands: import('./background-commands').BackgroundCommands;
+  /** The Browser's open approval card for this conversation (host's `session:live browser-ask`); a phone draws its card from this. Absent = none. */
+  browserAsk?: import('../../shared/browser-types').BrowserPrompt | null;
 }
 
 export function createSessionChatState(): SessionChatState {
@@ -635,6 +637,8 @@ export type ChatAction =
       sessionId: string;
       queueId: string;
     }
+  /** The host's `session:live browser-ask`: the Browser's card for this conversation, or null once it closes. */
+  | { type: 'BROWSER_ASK_CHANGED'; sessionId: string; prompt: import('../../shared/browser-types').BrowserPrompt | null }
   | {
       type: 'SHOW_PROMPT';
       sessionId: string;
@@ -1274,6 +1278,7 @@ export interface SerializedSessionChatState {
   // Optional so a pre-field snapshot from an older host still deserializes.
   ccBackgroundOutcomes?: Record<string, import('../../shared/types').CcBackgroundRun>;
   backgroundCommands?: import('./background-commands').BackgroundCommands;
+  browserAsk?: import("../../shared/browser-types").BrowserPrompt | null;
 }
 
 export interface SerializedChatState {
@@ -1318,6 +1323,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         sessionContext: s.sessionContext,
         ccBackgroundOutcomes: s.ccBackgroundOutcomes,
         backgroundCommands: s.backgroundCommands,
+        browserAsk: s.browserAsk ?? null,
       },
     ]);
   }
@@ -1352,6 +1358,8 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       stallWarning: ser.stallWarning ?? null,
       // Older hosts predate stalledSince — default null so a pre-field snapshot hydrates.
       stalledSince: ser.stalledSince ?? null,
+      // Older hosts predate browserAsk — absent means no card (card #205).
+      browserAsk: ser.browserAsk ?? null,
       // Deliberately NOT serialized: prefill is an in-flight condition of THIS
       // client's stream. A hydrating client (remote reconnect, window restore) is
       // not mid-prefill, and restoring a stale "Reading your prompt…" would be a

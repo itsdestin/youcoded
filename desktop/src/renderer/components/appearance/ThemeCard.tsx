@@ -11,6 +11,7 @@
 import { useState, type KeyboardEvent } from 'react';
 import type { LoadedTheme } from '../../themes/theme-types';
 import { themePreviewSrc } from '../../themes/builtin/previews';
+import { Tooltip } from '../ui';
 
 type Props = {
   theme: LoadedTheme;
@@ -51,20 +52,23 @@ function CardIcons({ favorite, onToggleFavorite, onShare, name }: {
   return (
     <div className="flex items-center shrink-0">
       {onShare && (
-        <button type="button" onClick={(e) => { e.stopPropagation(); onShare(); }} aria-label={`Publish ${name} to the marketplace`} title="Publish to Marketplace" className={`${btn} ${tone}`}>
-          <ShareGlyph />
-        </button>
+        <Tooltip text="Publish to Marketplace">
+          <button type="button" onClick={(e) => { e.stopPropagation(); onShare(); }} aria-label={`Publish ${name} to the marketplace`} className={`${btn} ${tone}`}>
+            <ShareGlyph />
+          </button>
+        </Tooltip>
       )}
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
-        aria-label={favorite ? `Remove ${name} from favorites` : `Add ${name} to favorites`}
-        aria-pressed={favorite}
-        title={favorite ? 'Remove from favorites' : 'Add to favorites'}
-        className={`${btn} ${favorite ? 'text-accent' : tone}`}
-      >
-        <StarGlyph filled={favorite} />
-      </button>
+      <Tooltip text={favorite ? 'Remove from favorites' : 'Add to favorites'}>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
+          aria-label={favorite ? `Remove ${name} from favorites` : `Add ${name} to favorites`}
+          aria-pressed={favorite}
+          className={`${btn} ${favorite ? 'text-accent' : tone}`}
+        >
+          <StarGlyph filled={favorite} />
+        </button>
+      </Tooltip>
     </div>
   );
 }

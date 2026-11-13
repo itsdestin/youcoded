@@ -29,6 +29,7 @@ import type { EditorFrameHandle } from './EditorFrame';
 import { ScreenMark } from '../../shoot-mode';
 import { BugReportPopup } from '../development/BugReportPopup';
 import type { ReportContext } from '../development/ReportDesign';
+import { Tooltip } from '../ui';
 
 function officeBridge(): OfficeBridge | undefined {
   return window.claude?.office;
@@ -157,7 +158,9 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
                 the document tabs beside it; the whole sentence stays on hover. */}
             {/* Edits kept for a file that changed since: the person chooses (Task 8 fix round 1). */}
             <OfficeRecoverOffer path={front.file.path} frame={frontFrame} className="max-w-xl" />
-            {saveState.phase !== 'failed' && saveState.note && <span className="text-2xs text-fg-muted truncate max-w-xs" title={saveState.note} role="status">{saveState.note}</span>}
+            {saveState.phase !== 'failed' && saveState.note && <Tooltip text={saveState.note}>
+              <span className="text-2xs text-fg-muted truncate max-w-xs" role="status">{saveState.note}</span>
+            </Tooltip>}
             {/* Saving is automatic (Q-save), so this only confirms it happened — or, when a save
                 failed, says main's own reason with Retry (design §4; error-message-standards). */}
             {saveState.phase === 'failed'

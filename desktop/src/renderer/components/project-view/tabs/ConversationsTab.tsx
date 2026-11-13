@@ -20,15 +20,19 @@ import { useNarrowViewport } from '../../../hooks/use-narrow-viewport';
 // through it rather than a bare muted paragraph. No action here on purpose —
 // this tab has no "new conversation" callback (ProjectView passes only the
 // list and the preview opener; New conversation lives on the hero above).
-import { EmptyState } from '../../ui';
+import { EmptyState, ErrorState } from '../../ui';
 import { TabHeading } from '../TabHeading';
 import { useScrollFade } from '../../../hooks/useScrollFade';
 import { useScreenOpen } from '../../../shoot-mode';
+import { Tooltip } from '../../ui';
 
 interface ConversationsTabProps {
   // Lifted, cached list from ProjectView. null = still loading for this project.
   conversations: PastSession[] | null;
   onOpenPreview: (session: PastSession) => void;
+  /** Why the list could not be read, or null. An empty list with this set is NOT "no conversations". */
+  loadError?: string | null;
+  onRetry?: () => void;
 }
 
 // WHY (render-cost consolidation 2026-09-18): this tab drew every conversation
@@ -45,24 +49,25 @@ const ConversationRow = React.memo(function ConversationRow({ session: c, tagsBy
     // The Resume card's surface (SessionCardDetails.tsx; ResumeBrowser.tsx
     // explains why not .layer-surface). shrink-0 so the scroll container
     // doesn't compress rows and clip their text.
-    <button
-      type="button"
-      title={title}
-      onClick={() => onOpenPreview(c)}
-      className={`w-full text-left shrink-0 ${SESSION_CARD_SURFACE} px-3 pt-2 pb-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
-    >
-      <SessionCardTitle title={title} />
-      <SessionCardTags session={c} tagsById={tagsById} />
-      {/* No project in the trail: this whole page is one project. */}
-      <SessionCardMeta session={c} showProject={false} />
-    </button>
+    <Tooltip text={title}>
+      <button
+        type="button"
+        onClick={() => onOpenPreview(c)}
+        className={`w-full text-left shrink-0 ${SESSION_CARD_SURFACE} px-3 pt-2 pb-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+      >
+        <SessionCardTitle title={title} />
+        <SessionCardTags session={c} tagsById={tagsById} />
+        {/* No project in the trail: this whole page is one project. */}
+        <SessionCardMeta session={c} showProject={false} />
+      </button>
+    </Tooltip>
   );
 }, (a, b) => a.session === b.session && a.onOpenPreview === b.onOpenPreview
   // Only the tags THIS row shows matter; a registry change for other tags
   // (or a fresh, equal Map when the list first arrives) must not redraw 50 cards.
   && (a.session.tags ?? []).every((id) => a.tagsById.get(id) === b.tagsById.get(id)));
 
-function ConversationsTabImpl({ conversations, onOpenPreview }: ConversationsTabProps) {
+function ConversationsTabImpl({ conversations, onOpenPreview, loadError, onRetry }: ConversationsTabProps) {
   const loading = conversations === null;
   const rows = conversations ?? [];
   // Photo-only build: `shoot` opens the first conversation's preview.
@@ -104,6 +109,9 @@ function ConversationsTabImpl({ conversations, onOpenPreview }: ConversationsTab
       <TabHeading>Recent conversations</TabHeading>
       {loading ? (
         <p className="text-sm text-fg-muted">Loading…</p>
+      ) : rows.length === 0 && loadError && onRetry ? (
+        // WHY (error inventory 2026-09-10, Projects row 8): a failed read is not "no conversations".
+        <ErrorState variant="inline" message={`Couldn't load this project's conversations: ${loadError}`} onRetry={onRetry} />
       ) : rows.length === 0 ? (
         <EmptyState message="No conversations in this project yet." />
       ) : (

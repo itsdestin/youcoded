@@ -403,6 +403,7 @@ import {
   isCategoryEnabled, setCategoryEnabled,
   type SoundCategory,
 } from '../utils/sounds';
+import { Tooltip } from './ui';
 
 /** Preset selector — stock sounds + custom sound file option.
  *
@@ -2146,12 +2147,13 @@ function RemoteButton(props: RemoteButtonProps) {
                             variant="item"
                             title="Address"
                             value={tailscale.url
-                              ? <button
-                                  type="button"
-                                  onClick={onCopyLink}
-                                  className="font-mono text-3xs text-fg-2 hover:text-fg underline decoration-dotted underline-offset-2"
-                                  title="Copy this address"
-                                >{copied ? 'Copied' : tailscale.url}</button>
+                              ? <Tooltip text="Copy this address">
+                                <button
+                                    type="button"
+                                    onClick={onCopyLink}
+                                    className="font-mono text-3xs text-fg-2 hover:text-fg underline decoration-dotted underline-offset-2"
+                                  >{copied ? 'Copied' : tailscale.url}</button>
+                              </Tooltip>
                               : tailscale.ip ?? '—'}
                           />
                         </div>

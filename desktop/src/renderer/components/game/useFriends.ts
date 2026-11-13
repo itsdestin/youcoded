@@ -38,13 +38,21 @@ export function useFriends() {
   const [pendingRows, setPendingRows] = useState<Set<string>>(new Set());
 
   // Fetch both lists in parallel; called on mount and after every mutation.
+  // WHY the two failures are kept (error inventory 2026-09-10, Marketplace rows 18/21): a failed friends
+  // read left the list "Loading your friends…" for ever, and a failed requests read read as "no
+  // requests" / "No friends yet". Lists already on screen stay; the reason is reported.
+  const [friendsError, setFriendsError] = useState<string | null>(null);
+  const [requestsError, setRequestsError] = useState<string | null>(null);
   const refresh = useCallback(async () => {
+    const asMessage = (e: unknown) => (e instanceof Error && e.message ? e.message : 'no answer came back');
     const [fr, rq] = await Promise.all([
-      window.claude.social.listFriends(),
-      window.claude.social.listRequests(),
+      Promise.resolve(window.claude.social.listFriends()).catch((e: unknown) => ({ ok: false as const, status: 0, message: asMessage(e) })),
+      Promise.resolve(window.claude.social.listRequests()).catch((e: unknown) => ({ ok: false as const, status: 0, message: asMessage(e) })),
     ]);
-    if (fr.ok) setFriends(fr.value);
-    if (rq.ok) setRequests(rq.value);
+    if (fr.ok) { setFriends(fr.value as FriendRow[]); setFriendsError(null); }
+    else setFriendsError(fr.message || 'the server did not say why');
+    if (rq.ok) { setRequests(rq.value as RequestsPayload); setRequestsError(null); }
+    else setRequestsError(rq.message || 'the server did not say why');
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
@@ -93,6 +101,8 @@ export function useFriends() {
     incoming: requests?.incoming ?? [],
     outgoing: requests?.outgoing ?? [],
     loaded: friends !== null,
+    friendsError,
+    requestsError,
     refresh,
     runMutation,
     pendingRows,

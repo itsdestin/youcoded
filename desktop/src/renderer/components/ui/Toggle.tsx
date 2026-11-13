@@ -1,5 +1,6 @@
 import React from 'react';
 import { FOCUS_RING } from './Button';
+import { Tooltip } from './Tooltip';
 
 /**
  * The one toggle (change 15, §1.2).
@@ -64,14 +65,16 @@ export type ToggleProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'o
 };
 
 export const Toggle = React.forwardRef<HTMLButtonElement, ToggleProps>(function Toggle(
-  { checked, onChange, tone = 'default', className = '', disabled, ...rest },
+  { checked, onChange, tone = 'default', className = '', disabled, title, ...rest },
   ref,
 ) {
   const track = checked
     ? `${TRACK_ON[tone]} border-transparent`
     : 'bg-inset border-edge-dim';
 
-  return (
+  // WHY title is pulled out and shown through <Tooltip>: the browser's own hover bubble can't
+  // follow the theme (card #135). Tooltip clones the switch, so nothing moves.
+  const control = (
     <button
       ref={ref}
       type="button"
@@ -92,4 +95,6 @@ export const Toggle = React.forwardRef<HTMLButtonElement, ToggleProps>(function 
       />
     </button>
   );
+  // Always wrapped (empty text = no hint) so a title that comes and goes never rebuilds the switch.
+  return <Tooltip text={title ?? ''}>{control}</Tooltip>;
 });

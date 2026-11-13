@@ -48,6 +48,19 @@ export function settingsPath(): string {
   return path.join(os.homedir(), '.claude', 'settings.json');
 }
 
+// WHY (card #11 a, Destin 2026-11-12): the repair above used to be silent. The first repair this run is kept
+// here, once, until a window asks for it (take...), so the app can tell the person ONE time. Memory only: a
+// notice nobody was around to see at launch is still shown to the first window that opens, and a relaunch
+// (when the file is already healthy) never repeats it.
+let pendingRepairNotice: { backupPath: string } | null = null;
+
+/** The one-time "your settings file was replaced" fact, handed out once; null when nothing was repaired or it was already taken. */
+export function takeSettingsRepairNotice(): { backupPath: string } | null {
+  const n = pendingRepairNotice;
+  pendingRepairNotice = null;
+  return n;
+}
+
 let memo: { path: string; mtimeMs: number; size: number; parsed: Settings } | null = null;
 
 function isPlainObject(v: unknown): v is Settings {
@@ -152,6 +165,7 @@ export async function mutateSettings(mutate: (settings: Settings) => void,
   }
   if (written) memo = null;
   if (repaired) {
+    pendingRepairNotice = pendingRepairNotice ?? { backupPath: repaired.backupPath };
     log('WARN', 'ClaudeSettings', 'settings.json did not parse — backed it up and wrote a fresh file', { path: p, backupPath: repaired.backupPath });
     return { written, repaired };
   }

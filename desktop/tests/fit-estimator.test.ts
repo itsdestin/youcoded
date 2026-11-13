@@ -471,7 +471,7 @@ describe('checkMemoryForLoad (create-time guard)', () => {
     }));
     expect(v.verdict).toBe('tight');
     expect(v.headline).toBe(
-      '9.0 GB model + 1.0 GB vision file + 4.0 GB for 32k context, with 5.0 GB already loaded.',
+      '9.7 GB model + 1.1 GB vision file + 4.3 GB for 32k context, with 5.4 GB already loaded.',
     );
   });
 
@@ -479,7 +479,7 @@ describe('checkMemoryForLoad (create-time guard)', () => {
     const v = checkMemoryForLoad(inputs({
       modelBytes: 9 * GB, kvBytes: 4 * GB, kvIsUpperBound: true, availableBytes: 6 * GB, poolBytes: 80 * GB,
     }));
-    expect(v.headline).toContain('up to 4.0 GB for 32k context');
+    expect(v.headline).toContain('up to 4.3 GB for 32k context');
   });
 
   it('a text-only model gets no vision row in the line', () => {
@@ -501,7 +501,7 @@ describe('checkMemoryForLoad (create-time guard)', () => {
       modelBytes: 9 * GB, kvBytes: 0.5 * GB, loadedBytes: 20 * GB, availableBytes: 8 * GB, poolBytes: 80 * GB,
     }));
     expect(v.verdict).toBe('tight');
-    expect(v.detail).toContain('8.0 GB this computer has free');
+    expect(v.detail).toContain('8.6 GB this computer has free');
   });
 
   it('a dismissal silences the warning only at the SAME context length', () => {
@@ -536,7 +536,7 @@ describe('checkDiskSpace', () => {
   });
 
   it('still refuses when even the remaining bytes do not fit', () => {
-    expect(checkDiskSpace(100 * GB, 5 * GB, 80 * GB)).toMatch(/needs about 20\.0 GB/);
+    expect(checkDiskSpace(100 * GB, 5 * GB, 80 * GB)).toMatch(/needs about 21\.5 GB/);
   });
 });
 
