@@ -907,6 +907,9 @@ export interface SpecialistInjectedMeta {
   status: 'completed' | 'failed';
   steps?: number;
   parentToolCallId?: string;
+  /** Which run of this helper the report is for (1 = the original hire, +1 per resume). Bookkeeping only:
+   *  lets the host tell run 2's report from run 1's when matching durable receipts. */
+  runNumber?: number;
 }
 
 /** Companion to `injected: 'shell-complete'` (G-1): the background commands

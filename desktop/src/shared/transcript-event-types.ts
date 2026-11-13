@@ -63,6 +63,11 @@ export interface TranscriptUsage {
    *  honestly. Diagnostic: main compares them and logs a gap; nothing in
    *  the UI reads this. */
   providerCostUsd?: number;
+  /** Native runtime, OpenRouter only (card #69): the distinct companies OpenRouter reported
+   *  serving this turn's requests, in order (normally one). Recorded so cache misses can be
+   *  matched to a change of serving company. Absent for every other provider. Diagnostic:
+   *  nothing in the UI reads it, and it holds no chat content. */
+  servedBy?: string[];
 }
 
 /** A portable compaction checkpoint (see `compact-summary`): references cite persisted parts, never copied text. */
