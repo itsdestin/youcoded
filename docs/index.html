@@ -5427,13 +5427,47 @@ try{d.__idle(playing.indexOf(slides.indexOf(d))<0)}catch(e){}})();
 (function(){ var d = document.querySelector('.storyfold'); if (d && matchMedia('(max-width: 760px)').matches) d.removeAttribute('open'); })();
 // Animated folds: the FAQ cards and the story card.
 // WHY this shape (Destin, 2026-10-21, three rounds): a height transition on the answer stuttered;
-// a clip reveal cut the card's own bottom edge, so its border vanished until the fold ended. Now
-// the CARD's height is animated, so its border, corners and shadow travel with the edge, the
-// content is clipped by the card itself, and the blocks below follow through normal layout.
-// Profiled headless on the machine's GPU at 2x: 27 frames per 420 ms, worst 17 ms.
+// a clip reveal cut the card's own bottom edge, so its border vanished until the fold ended. So
+// the CARD's height is what animates: its border, corners and shadow travel with the edge and
+// the content is clipped by the card itself.
+// WHY the rest of the page no longer follows through layout (Destin, 2026-11-13, on a phone:
+// "i can literally almost count the frames"). The card used to push everything under it down
+// a little on every frame, so the browser re-placed and re-drew the rest of the page -- the
+// other frosted cards, the ideas pictures, the footer -- thirty times per fold. Measured with
+// the processor slowed 6x (a mid-range phone): half the frames were dropped. Now:
+//   1. the page jumps to its FINAL layout at once, invisibly: while the card's height
+//      animates, its bottom margin makes up the difference, so nothing under it is re-placed;
+//   2. everything under the card is SLID into place instead (a transform, which the graphics
+//      card does without re-drawing anything);
+//   3. one clock drives both, so the card's edge and the things below it cannot drift apart.
 (function(){
   var reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var DUR = 340, EASE = 'cubic-bezier(.2,.8,.2,1)';
+  var DUR = 340;
+  // The same curve as before, cubic-bezier(.2,.8,.2,1), solved for y at a given time.
+  function ease(t){
+    var x1 = .2, y1 = .8, x2 = .2, y2 = 1, u = t, i, x, dx;
+    for (i = 0; i < 6; i++) {
+      x = 3 * (1 - u) * (1 - u) * u * x1 + 3 * (1 - u) * u * u * x2 + u * u * u - t;
+      dx = 3 * (1 - u) * (1 - u) * x1 + 6 * (1 - u) * u * (x2 - x1) + 3 * u * u * (1 - x2);
+      if (Math.abs(dx) < 1e-6) break;
+      u = Math.max(0, Math.min(1, u - x / dx));
+    }
+    return 3 * (1 - u) * (1 - u) * u * y1 + 3 * (1 - u) * u * u * y2 + u * u * u;
+  }
+  // Everything that sits under the card: its later siblings, then its parents' later siblings,
+  // up to the page. Things pinned to the screen (the download bar, pop-ups) are left alone.
+  function below(d){
+    var out = [], n, sib, cs;
+    for (n = d; n && n !== document.body; n = n.parentElement) {
+      for (sib = n.nextElementSibling; sib; sib = sib.nextElementSibling) {
+        if (sib.tagName === 'SCRIPT' || sib.tagName === 'STYLE') continue;
+        cs = getComputedStyle(sib);
+        if (cs.display === 'none' || cs.position === 'fixed') continue;
+        out.push(sib);
+      }
+    }
+    return out;
+  }
   document.querySelectorAll('.faq details, details.storyfold').forEach(function(d){
     var s = d.querySelector('summary'), a = d.querySelector('.a'); if (!s || !a) return;
     if (d.open) d.classList.add('is-open');
@@ -5448,13 +5482,30 @@ try{d.__idle(playing.indexOf(slides.indexOf(d))<0)}catch(e){}})();
       else { d.classList.remove('is-open'); h1 = d.getBoundingClientRect().height; d.classList.add('is-open'); }
       if (Math.abs(h1 - h0) < 1) { if (!opening) { d.classList.remove('is-open'); d.open = false; } busy = false; return; }
       d.classList.add('folding');
-      var anims = [ d.animate([{ height: h0 + 'px' }, { height: h1 + 'px' }], { duration: DUR, easing: EASE, fill: 'both' }),
-                    a.animate([{ opacity: opening ? 0 : 1 }, { opacity: opening ? 1 : 0 }], { duration: DUR * .7, delay: opening ? DUR * .15 : 0, easing: 'ease', fill: 'both' }) ];
-      Promise.all(anims.map(function(an){ return an.finished.catch(function(){}); })).then(function(){
+      var rest = below(d);
+      // Slide, don't re-place: each thing below gets its own layer for the length of the fold,
+      // and any transition of its own is paused so it cannot lag behind the clock here.
+      rest.forEach(function(el){ el.style.transition = 'none'; el.style.willChange = 'transform'; });
+      var fade = a.animate([{ opacity: opening ? 0 : 1 }, { opacity: opening ? 1 : 0 }],
+        { duration: DUR * .7, delay: opening ? DUR * .15 : 0, easing: 'ease', fill: 'both' });
+      var t0 = 0;
+      function frame(now){
+        if (!t0) t0 = now;
+        var k = Math.min(1, (now - t0) / DUR), h = h0 + (h1 - h0) * ease(k);
+        d.style.height = h + 'px';
+        d.style.marginBottom = (h1 - h) + 'px';              // the card's footprint is already final
+        var shift = 'translateY(' + (h - h1) + 'px)';
+        for (var i = 0; i < rest.length; i++) rest[i].style.transform = shift;
+        if (k < 1) { requestAnimationFrame(frame); return; }
         if (!opening) { d.classList.remove('is-open'); d.open = false; }
-        anims.forEach(function(an){ an.cancel(); });
-        d.classList.remove('folding'); busy = false;
-      });
+        fade.cancel();
+        d.style.height = ''; d.style.marginBottom = '';
+        rest.forEach(function(el){ el.style.transform = ''; el.style.willChange = ''; });
+        d.classList.remove('folding');
+        // Transitions come back a frame later, once the cleared transform has been applied.
+        requestAnimationFrame(function(){ rest.forEach(function(el){ el.style.transition = ''; }); busy = false; });
+      }
+      frame(performance.now());
     });
   });
 })();
