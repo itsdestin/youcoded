@@ -2110,7 +2110,15 @@ html{-webkit-tap-highlight-color:transparent}
 .faq details.is-open summary{border-radius:var(--radius) var(--radius) 0 0}
 .faq summary:active,.storyfold>summary:active{transform:none;background:transparent}
 .faq summary::after{transition:transform .34s cubic-bezier(.2,.8,.2,1)}
-.faq details[open] summary::after{content:'+'}
+/* WHY the + is drawn, not typed (Destin, 2026-11-13: "happen in-place instead of swinging
+   right a bit"). A typed "+" does not sit in the middle of its own text box, so turning the
+   box 45 degrees swung the mark sideways. This is two bars centred in a box exactly one line
+   tall, so the box's middle IS the mark's middle and it turns on the spot. Same size, colour
+   and place as the typed one. */
+.faq summary::after,.faq details[open] summary::after{content:'';flex:none;width:13px;height:1.6em;
+  font-size:inherit;line-height:inherit;
+  background:linear-gradient(var(--accent),var(--accent)) center/13px 2px no-repeat,
+             linear-gradient(var(--accent),var(--accent)) center/2px 13px no-repeat}
 .faq details.is-open summary::after{transform:rotate(45deg)}
 .storyfold>summary{list-style:none;display:none}
 .storyfold>summary::-webkit-details-marker{display:none}
