@@ -2119,7 +2119,12 @@ html{-webkit-tap-highlight-color:transparent}
   font-size:inherit;line-height:inherit;
   background:linear-gradient(var(--accent),var(--accent)) center/13px 2px no-repeat,
              linear-gradient(var(--accent),var(--accent)) center/2px 13px no-repeat}
-.faq details.is-open summary::after{transform:rotate(45deg)}
+/* WHY :not(.closing) (Destin, 2026-11-13: "it waits till close is complete instead of
+   animating on click"). The card keeps is-open until its fold has finished, because the answer
+   must stay visible while it shrinks -- so the x used to turn back into a + only AFTER the card
+   had shut. The script marks the card .closing on the click itself, and the mark turns back
+   right then, together with the fold. */
+.faq details.is-open:not(.closing) summary::after{transform:rotate(45deg)}
 .storyfold>summary{list-style:none;display:none}
 .storyfold>summary::-webkit-details-marker{display:none}
 @media (prefers-reduced-motion:reduce){.faq summary,.faq summary::after{transition:none}}
@@ -5490,6 +5495,7 @@ try{d.__idle(playing.indexOf(slides.indexOf(d))<0)}catch(e){}})();
       else { d.classList.remove('is-open'); h1 = d.getBoundingClientRect().height; d.classList.add('is-open'); }
       if (Math.abs(h1 - h0) < 1) { if (!opening) { d.classList.remove('is-open'); d.open = false; } busy = false; return; }
       d.classList.add('folding');
+      if (!opening) d.classList.add('closing');     // the x starts turning back now, not when the fold ends
       var rest = below(d);
       // Slide, don't re-place: each thing below gets its own layer for the length of the fold,
       // and any transition of its own is paused so it cannot lag behind the clock here.
@@ -5509,7 +5515,7 @@ try{d.__idle(playing.indexOf(slides.indexOf(d))<0)}catch(e){}})();
         fade.cancel();
         d.style.height = ''; d.style.marginBottom = '';
         rest.forEach(function(el){ el.style.transform = ''; el.style.willChange = ''; });
-        d.classList.remove('folding');
+        d.classList.remove('folding'); d.classList.remove('closing');
         // Transitions come back a frame later, once the cleared transform has been applied.
         requestAnimationFrame(function(){ rest.forEach(function(el){ el.style.transition = ''; }); busy = false; });
       }
