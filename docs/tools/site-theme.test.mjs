@@ -54,3 +54,27 @@ test('default poster, wallpaper and mascot are generated assets for YouCoded Lig
   assert.ok(themes.youcoded.wall);
   readFileSync(fileURLToPath(new URL(`../${themes.youcoded.wall}`, import.meta.url)));
 });
+
+// WHY (2026-11-13, traced): the end of the opening intro hitched because of two
+// kinds of rule keyed on <body>'s intro class. Both made the browser re-style
+// hundreds of invisible elements in the instant the page content starts to rise.
+test('ending the intro does not re-style the whole page', () => {
+  const css = site.slice(site.indexOf('<style'), site.lastIndexOf('</style>'));
+  const rules = css.match(/[^{}]*body\.intro-mode[^{}]*\{[^{}]*\}/g) || [];
+  assert.ok(rules.length > 5, 'the intro rules were found');
+  for (const rule of rules) {
+    const [selectors, body] = rule.split('{');
+    // 1. A selector ending in `*` under body.intro-mode re-checks every element.
+    for (const sel of selectors.split(',')) {
+      if (!/body\.intro-mode/.test(sel)) continue;
+      assert.doesNotMatch(sel.trim(), /\*\s*$/, `no "body.intro-mode ... *" rule: ${sel.trim()}`);
+      // 2. pointer-events is inherited: on a big section it re-styles everything inside.
+      if (/>\s*(section|footer)\s*$/.test(sel.trim())) {
+        assert.doesNotMatch(body, /pointer-events:\s*none/, `no pointer-events:none on the hidden sections: ${sel.trim()}`);
+      }
+    }
+  }
+  // The intro's word steps colour only what is on screen, not the page's root.
+  assert.match(site, /else applyTheme\(step\.theme, true\);/);
+  assert.match(site, /querySelectorAll\('\.nav, \.flankrow > \*'\)/);
+});
