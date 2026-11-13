@@ -111,4 +111,15 @@ describe('QueuedMessagesStrip (Task 12)', () => {
     render(<QueuedMessagesStrip queuedMessages={[{ queueId: 'q-n', content: 'plain', timestamp: 1 }]} />);
     expect(screen.queryByTestId('queued-file-chips')).toBeNull();
   });
+
+  // Card #62 (Destin 2026-11-12): chips sit in the same row as the words, after them, and a long message does not hide them.
+  it('puts the file chips in the same row as the message words, after them', () => {
+    render(<QueuedMessagesStrip queuedMessages={[{ queueId: 'q-i', content: 'a very long message '.repeat(20), timestamp: 1, status: 'waiting', attachments: ['/x/a.pdf'] }]} />);
+    const row = screen.getByTestId('queued-row-text');
+    const chips = screen.getByTestId('queued-file-chips');
+    expect(chips.parentElement).toBe(row);
+    expect(row.firstElementChild).not.toBe(chips);          // words first, chips after
+    expect(row.firstElementChild).toHaveClass('truncate');  // the words give way, the chips stay
+    expect(chips).toHaveClass('shrink-0');
+  });
 });

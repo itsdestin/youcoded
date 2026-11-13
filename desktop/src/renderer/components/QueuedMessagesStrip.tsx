@@ -143,6 +143,7 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
     queuedMessages = preview === 'idle-after' || preview === 'blocked-after' || dismissed ? [] : [{
       queueId: 'review-only', content: 'Please check the release notes.', timestamp: 0,
       // Review pictures only: the attached-files case (card #62).
+      ...(preview === 'waiting-long-after' ? { content: 'Please check the release notes against the changelog, then compare the version numbers in every package file, and tell me anything that does not match before we ship tonight.' } : {}),
       ...(preview.startsWith('waiting') ? { attachments: ['/home/me/Documents/release-notes.pdf', '/home/me/Pictures/screenshot.png'] } : {}),
       status: preview.startsWith('idle') ? 'delivering' : preview.startsWith('waiting') ? 'waiting' : 'uncertain',
     }];
@@ -168,21 +169,26 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
             {q.editing ? 'Editing' : q.status === 'uncertain' ? 'Unconfirmed' : q.status === 'delivering' ? 'Sending' : q.paused ? 'Paused' : 'Queued'}
           </div>
           <div className="flex-1 min-w-0">
-            <div className="truncate text-sm text-fg-2">{q.content}</div>
-            {/* WHY (card #62, Destin 2026-11-12): a waiting message with files used to look like plain text only,
-                so you could not tell the files were riding along. Names only (not full paths); more than
-                MAX_NAME_CHIPS fold into one "+N more" chip so the strip stays one short row. */}
-            {q.attachments && q.attachments.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1 pt-1" data-testid="queued-file-chips">
-                {q.attachments.slice(0, MAX_NAME_CHIPS).map((p, i) => (
-                  <Chip key={`${p}-${i}`} className="max-w-[14rem] min-w-0" title={fileNameOf(p)}>
-                    <FileKindIcon kind={fileKind(p)} size={12} />
-                    <span className="truncate">{fileNameOf(p)}</span>
-                  </Chip>
-                ))}
-                {q.attachments.length > MAX_NAME_CHIPS && <Chip>+{q.attachments.length - MAX_NAME_CHIPS} more</Chip>}
-              </div>
-            )}
+            {/* WHY inline (card #62, Destin 2026-11-12 after seeing the picture: "the chips should just be in-line
+                after the text"): the file chips sit on the SAME line as the words, directly after them. A long
+                message is what gives way: its words truncate with "…" so the chips always stay visible (computer
+                width: one line, never wraps). On a phone, where words plus chips cannot share the line, the row may
+                wrap, so the chips drop under the words instead of squeezing them to nothing (min 6rem kept). Names only, never full paths; more than MAX_NAME_CHIPS fold into
+                one "+N more" chip. */}
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-x-1.5 gap-y-1" data-testid="queued-row-text">
+              <div className="truncate text-sm text-fg-2 min-w-[6rem] max-w-full shrink sm:min-w-0">{q.content}</div>
+              {q.attachments && q.attachments.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1 shrink-0 max-w-full" data-testid="queued-file-chips">
+                  {q.attachments.slice(0, MAX_NAME_CHIPS).map((p, i) => (
+                    <Chip key={`${p}-${i}`} className="max-w-[10rem] min-w-0" title={fileNameOf(p)}>
+                      <FileKindIcon kind={fileKind(p)} size={12} />
+                      <span className="truncate">{fileNameOf(p)}</span>
+                    </Chip>
+                  ))}
+                  {q.attachments.length > MAX_NAME_CHIPS && <Chip>+{q.attachments.length - MAX_NAME_CHIPS} more</Chip>}
+                </div>
+              )}
+            </div>
             {/* WHY (2026-10-22, "no real way to recover"): say what is known and what Dismiss does, on this row only. */}
             {(q.notice || q.status === 'uncertain') && (
               <div className="text-3xs text-fg-muted">
