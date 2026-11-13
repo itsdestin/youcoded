@@ -236,6 +236,16 @@ export function buildHydratePayload(): SerializedChatState {
     }
   }
 
+  // `?phoneBrowser=site|final|handoff` (card #205): the Browser's open card as the computer publishes it to a phone (session:live `browser-ask`).
+  // A phone has no Browser of its own, so this fact is the only thing that draws the card there.
+  const phoneBrowser = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('phoneBrowser');
+  const phonePrompts: Record<string, import('../../../shared/browser-types').BrowserPrompt> = {
+    site: { kind: 'site', id: 'p1', host: 'reddit.com', allowAlways: true, message: 'Let the assistant click and type on reddit.com?' },
+    final: { kind: 'final', id: 'p2', host: 'reddit.com', message: 'The assistant wants to click "Post reply" on reddit.com.' },
+    handoff: { kind: 'handoff', id: 'p4', message: 'Please sign in to your Reddit account, then press I\'m done.' },
+  };
+  if (phoneBrowser && phonePrompts[phoneBrowser]) state = chatReducer(state, { type: 'BROWSER_ASK_CHANGED', sessionId: 'wb-1', prompt: phonePrompts[phoneBrowser] });
+
   const override = STATUSBAR_TOTALS_OVERRIDE[currentScenario() ?? 'default'];
   if (override) {
     const existing = state.get(override.sessionId);
