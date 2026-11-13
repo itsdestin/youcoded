@@ -115,7 +115,7 @@ describe('EngineCard — the live hardware fact line', () => {
       deviceName: 'AMD Radeon 8060S Graphics',
       loadedModelsBytes: 9_527_502_048,
       lastReply: { promptPerSecond: 84.05715886803026, generatePerSecond: 37.821109441135555 },
-    }))).toContain('8.9 GB loaded · last reply 84 read / 38 write per second');
+    }))).toContain('9.5 GB loaded · last reply 84 read / 38 write per second');
   });
 
   it('shows the write rate alone when the prompt came out of the cache', async () => {

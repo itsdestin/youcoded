@@ -28,6 +28,7 @@
 import { randomBytes } from 'crypto';
 import type { SessionSummary } from '../shared/session-summary-types';
 import type { SessionLive } from '../shared/session-live-types';
+import type { BrowserPrompt } from '../shared/browser-types';
 import type { InputBlock } from '../shared/cc-input-focus';
 import { isNativeStartupState, type NativeStartupState } from '../shared/native-startup';
 import { isSendId, type SendOutcome } from '../shared/send-outcome-types';
@@ -194,6 +195,8 @@ interface Rec {
    *  on a screen that missed the "free" event is cleared. */
   inputBlock: InputBlock | null;
   inputBlockSeen: boolean;
+  /** The Browser's open card for this conversation (a session-live `browser-ask`), or null. A phone that opens the conversation is handed it. */
+  browserAsk: BrowserPrompt | null;
   queueSnapshot?: import('../shared/session-live-types').SessionLiveBody & {kind:'queue'};
   /** The "Started with …" record as last published (native:session-context). WHY: a Claude Code session has no host to ask, so a fill
    *  (whose SESSION_FILL_RESET clears the screen's copy) could only get it back from here — without this the banner vanished on open. */
@@ -332,7 +335,7 @@ export class SessionRecords {
       epoch: randomBytes(8).toString('hex'),
       headSeq: 0, ring: [], ringBytes: 0, tail: [], tailBytes: 0, pty: { chunks: [], length: 0, base: 0 }, oversize: 0,
       asks: new Map(), passwordAsks: new Set(), prompts: new Map(), promptAt: new Map(), terminalMode: null, compacting: null,
-      runningTools: new Set(), started: false, stuck: false, inputBlock: null, inputBlockSeen: false, modelEverLoaded: false,
+      runningTools: new Set(), started: false, stuck: false, inputBlock: null, inputBlockSeen: false, browserAsk: null, modelEverLoaded: false,
       facts: {
         working: false, attention: 'ok', reportedAttention: null, hasHistory: false,
         lastActivityAt: this.now(), permissionMode: null, model: null, modelState: null,
@@ -661,6 +664,9 @@ export class SessionRecords {
   }
 
   /** The cards open now, with when each was raised: what the host checks against the terminal and against later activity. */
+  /** The Browser card open for this conversation, or null (session-live.ts publishes only a change). */
+  browserAskOf(sessionId: string): BrowserPrompt | null { return this.records.get(sessionId)?.browserAsk ?? null; }
+
   openPrompts(sessionId: string): Array<{ promptId: string; title: string; at: number }> {
     const rec = this.records.get(sessionId);
     return rec ? [...rec.prompts.values()].map((p) => ({ promptId: p.promptId, title: p.title, at: rec.promptAt.get(p.promptId) ?? 0 })) : [];
@@ -699,6 +705,8 @@ export class SessionRecords {
     if (rec.stuck) out.push({ type: 'session:live', payload: { sessionId, kind: 'attention', state: 'stuck' } });
     // What holds the keyboard now (a phone opened while a "Switch model?" confirmation is up must refuse a send; one opened after it closed must not).
     if (rec.queueSnapshot) out.push({type:'session:live',payload:{sessionId,...rec.queueSnapshot}});
+    // A Browser card still waiting: a phone that opens the conversation now must see it (card #205).
+    if (rec.browserAsk) out.push({ type: 'session:live', payload: { sessionId, kind: 'browser-ask', prompt: rec.browserAsk } });
     if (rec.inputBlockSeen) out.push({ type: 'session:live', payload: { sessionId, kind: 'input-block', block: rec.inputBlock } });
     return out;
   }
@@ -924,6 +932,9 @@ export class SessionRecords {
       case 'input-block':
         rec.inputBlock = live.block && typeof live.block === 'object' ? (live.block as InputBlock) : null;
         rec.inputBlockSeen = true;
+        return;
+      case 'browser-ask':
+        rec.browserAsk = live.prompt && typeof live.prompt === 'object' && typeof live.prompt.id === 'string' ? (live.prompt as BrowserPrompt) : null;
         return;
       default:
         return;

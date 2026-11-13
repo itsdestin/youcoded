@@ -341,6 +341,13 @@ describe('pictures into a document', () => {
         ['::127.0.0.1', 'loopback'], ['::10.0.0.1', 'private'], ['::a00:1', 'private'], ['::93.184.216.34', null],
       ];
       for (const [ip, why] of wrapped) expect(nonPublicReason(ip), ip).toBe(why);
+      // WHY (card #35): a Teredo address hides an IPv4 address in scrambled form — this one is
+      // 127.0.0.1 — and used to pass as public. The whole Teredo range is refused; its
+      // neighbours (2001:1::, and ordinary 2001:4860:: style addresses) stay public.
+      expect(nonPublicReason('2001:0:4136:e378:8000:63bf:80ff:fffe')).toBe('Teredo tunnel');
+      expect(nonPublicReason('2001::1')).toBe('Teredo tunnel');
+      expect(nonPublicReason('2001:1::1')).toBeNull();
+      expect(nonPublicReason('2001:4860:4860::8888')).toBeNull();
       // the edges just outside the ranges stay public
       expect(nonPublicReason('100.128.0.1')).toBeNull();
       expect(nonPublicReason('172.32.0.1')).toBeNull();

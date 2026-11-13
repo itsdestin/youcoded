@@ -14,6 +14,10 @@ export const CHAT: readonly ScreenEntry[] = [
   // Spacing review: two stacked queued cards over the chat, wide and phone.
   { ...chat('chat#queue-stack', 'view'), session: 'wb-1', params: { queuePreview: 'stack' } },
   { ...chat('chat#queue-stack-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'stack' }, viewport: { width: 390, height: 844 } },
+  // Card #62: a waiting message with files attached shows file-name chips (names only).
+  { ...chat('chat#queue-waiting-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'waiting-after' }, viewport: { width: 390, height: 844 }, newIn: 'after' as const },
+  { ...chat('chat#queue-waiting-long', 'view'), session: 'wb-1', params: { queuePreview: 'waiting-long-after' }, newIn: 'after' as const },
+  { ...chat('chat#queue-waiting-long-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'waiting-long-after' }, viewport: { width: 390, height: 844 }, newIn: 'after' as const, sameAs: { name: 'chat#queue-waiting-phone', why: 'On a phone the words already truncate at the column edge, so a longer message draws the same row.' } },
   { ...chat('chat#queue-uncertain-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'uncertain-after' }, viewport: { width: 390, height: 844 } },
   // Phone connection strips (phone-reliability review deck, 2026-10-22). The Android app, since "Use this phone only" is its button;
   // before master the same state reads the old words and has no button.
@@ -27,6 +31,8 @@ export const CHAT: readonly ScreenEntry[] = [
   // compact prompt-card review.
   { ...chat('chat#trust-phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { seed: 'bubbles-trust-cc', platform: 'android' } },
   { ...chat('chat#phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { platform: 'android' } },
+  // The Browser's approval card on a phone (card #205): the card the computer publishes, drawn like every other approval card.
+  ...['site', 'final', 'handoff'].map((b) => ({ ...chat(`chat#phone-browser-${b}`, 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', platform: 'android', phoneBrowser: b }, newIn: 'after' as const })),
   { ...chat('chat#permission-phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { seed: 'bubbles-approval-cc', platform: 'android' } },
   // Model switch in the chat (2026-10-22 review): the same conversation as each runtime drew a switch before (a "/model …" bubble on
   // Claude Code, nothing on native) and after (the "Model switched to …" divider). Both sides come from this checkout's fixtures.
@@ -85,7 +91,17 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/quick-chips/add#empty', 'dialog'), open: ['Add'] },
   chat('chat/session-context', 'dialog'),
   // A skill's fold, opened and pointed at — now the shared FoldRow (submit-ticket-5).
-  { ...chat('chat/session-context#skill-open-hover', 'dialog', 'fold'), open: [{ do: 'click', target: { role: 'tab', label: 'Skills' } }, 'theme-builder Build, preview and publish a community theme', { do: 'hover', target: { role: 'button', label: 'theme-builder Build, preview and publish a community theme' } }] },
+  // The three tabs (#251): Global and Project each get a picture, on both engines
+  // (wb-2 is the native chat, wb-1 the Claude Code one — whose Global tab is mostly
+  // "Claude Code doesn't share this", which is exactly what needs looking at).
+  { ...chat('chat/session-context#global', 'dialog'), session: 'wb-2', open: [{ do: 'click', target: { role: 'tab', label: 'Global context' } }], newIn: 'after' },
+  // The lower half of Global — the engine's own system instructions, tools and add-ons — which sits below the fold.
+  { ...chat('chat/session-context#global-engine', 'dialog'), session: 'wb-2', open: [{ do: 'click', target: { role: 'tab', label: 'Global context' } }, { do: 'scroll', dir: 'down', times: 3 }], newIn: 'after' },
+  { ...chat('chat/session-context#project', 'dialog'), session: 'wb-2', open: [{ do: 'click', target: { role: 'tab', label: 'Project context' } }], newIn: 'after' },
+  // The plain name above opens the Claude Code chat; this is Overview on YouCoded's own engine.
+  { ...chat('chat/session-context#native', 'dialog'), session: 'wb-2' },
+  { ...chat('chat/session-context#claude-code-global', 'dialog'), session: 'wb-1', open: [{ do: 'click', target: { role: 'tab', label: 'Global context' } }], newIn: 'after' },
+  { ...chat('chat/session-context#skill-open-hover', 'dialog', 'fold'), open: [{ do: 'click', target: { role: 'tab', label: 'Global context' } }, 'theme-builder Build, preview and publish a community theme', { do: 'hover', target: { role: 'button', label: 'theme-builder Build, preview and publish a community theme' } }] },
   { ...chat('chat/session-context#ancestors', 'dialog'), session: 'wb-2', params: { contextChain: '1' } },
   chat('chat/quit-sessions', 'dialog'),
   // Restart to update with chats open (#183 Q-busy): the same prompt, in restart words.

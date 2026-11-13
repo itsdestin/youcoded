@@ -6,7 +6,7 @@
 // same, so they are one entry each now. A paired phone reaches this: the prototype-pollution
 // refusal lives in getJsonPath/setJsonPath, NOT here, so no door can skip it.
 import { IPC } from '../../shared/backend-contract';
-import { getField, setField } from '../claude-settings';
+import { getField, setField, takeSettingsRepairNotice } from '../claude-settings';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
 export const settingsChannels: MainChannelDef[] = [
@@ -21,5 +21,10 @@ export const settingsChannels: MainChannelDef[] = [
     name: IPC.SETTINGS_SET, kind: 'handle',
     // setField answers false (never throws) for an unsafe path or a locked file.
     handler: (payload) => setField(payload?.field ?? '', payload?.value),
+  }),
+  // Card #11 a. desktopOnly: telling a phone would widen what a phone may call (tests/phone-open-set.test.ts is Destin's decision).
+  defineChannel({
+    name: IPC.SETTINGS_REPAIR_NOTICE, kind: 'handle', desktopOnly: true,
+    handler: () => takeSettingsRepairNotice(),
   }),
 ];

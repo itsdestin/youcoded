@@ -16,7 +16,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { CompleteToggle } from '../SessionCardDetails';
-import { formatRelativeTime } from '../../utils/format-time';
+import { formatRelativeTime, formatFullDateTime } from '../../utils/format-time';
+import { Tooltip } from '../ui/Tooltip';
 import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
 import { ErrorState } from '../ui/states';
 import { placeBubble } from '../ui/anchor-position';
@@ -249,7 +250,10 @@ function Entry({ author, createdAt, text, clamp, trailing, editing, onSaveEdit, 
             the edit box need — the same fix CommentCard's header got. */}
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="font-medium text-fg truncate">{authorName(author)}</span>
-          <span className="text-2xs text-fg-muted shrink-0">{formatRelativeTime(createdAt)}</span>
+          {/* WHY the hint (card #39): the exact date and time behind "5h ago", same as CommentCard's header. */}
+          <Tooltip text={formatFullDateTime(createdAt)}>
+            <span className="text-2xs text-fg-muted shrink-0">{formatRelativeTime(createdAt)}</span>
+          </Tooltip>
           {trailing && <div className="ml-auto shrink-0">{trailing}</div>}
         </div>
         {editing && onSaveEdit && onCancelEdit ? (

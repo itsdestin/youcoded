@@ -50,6 +50,7 @@ import { isOfficeEditable } from '../office/office-files';
 import { useOfficeAvailable } from '../office/office-availability';
 import { flushOffice } from '../office/office-store';
 import { holdUnsavedEditor } from '../../state/unsaved-editors';
+import { formatBytes } from '../../../shared/format-bytes';
 // Office files edit in the Euro-Office editor (design stage, 2026-09-28) — lazy,
 // so the editor code loads only when someone presses Edit on one.
 const OfficeInlineEditor = lazy(() => import('../office/OfficeInlineEditor').then((m) => ({ default: m.OfficeInlineEditor })));
@@ -517,7 +518,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     if (!canEditArtifact(contentInfo, content, tier)) {
       // Never a silent no-op: the button would otherwise do nothing at all.
       // Specific and accurate — this is the ONE reason this branch fires.
-      setSaveError(`YouCoded is only showing part of this file (it is over ${(EDIT_MAX_BYTES / (1024 * 1024)).toFixed(1)} MB), so saving would overwrite the rest. Copy your changes out before closing.`);
+      setSaveError(`YouCoded is only showing part of this file (it is over ${formatBytes(EDIT_MAX_BYTES)}), so saving would overwrite the rest. Copy your changes out before closing.`);
       return false;
     }
     // WHY a save never goes out without a token (error inventory 2026-09-10, false

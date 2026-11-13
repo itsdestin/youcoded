@@ -94,6 +94,18 @@ describe('mutateSettings', () => {
     expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8'))).toEqual({ x: 1 });
   });
 
+  // Card #11 a: the repair is told to the person once. The module keeps the backup path until a window takes it.
+  it('remembers a repair for the one-time notice, hands it out once, and says nothing for a healthy file', async () => {
+    mod.takeSettingsRepairNotice(); // clear anything an earlier case left
+    write('{"ok":true}');
+    await mutateSettings((s) => { s.a = 1; });
+    expect(mod.takeSettingsRepairNotice()).toBeNull();
+    write('{ broken');
+    const r = await mutateSettings(() => {});
+    expect(mod.takeSettingsRepairNotice()).toEqual({ backupPath: r.repaired!.backupPath });
+    expect(mod.takeSettingsRepairNotice()).toBeNull();
+  });
+
   it('a repaired file is written even when the mutator changes nothing, and is not backed up twice', async () => {
     write('[]'); // valid JSON, not a settings object — corrupt for our purposes
     const first = await mutateSettings(() => {});

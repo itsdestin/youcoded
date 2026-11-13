@@ -25,6 +25,7 @@ import { READ_HEAD_DEFAULT_BYTES, type ReadHeadResult } from '../../shared/read-
 import { MarkdownHeadPreview, MonoHeadPreview } from './HeadPreview';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 import { Tooltip } from './ui';
+import { attachmentPreviewFor } from '../utils/remote-attachment-previews';
 
 // ── Head cache ───────────────────────────────────────────────────────────────
 // Keyed by path; holds the in-flight promise so two chips for the same file
@@ -111,7 +112,8 @@ function Preview({ path, imageSrc }: { path: string; imageSrc?: string }) {
   if (kind === 'image' && !imgFailed) {
     return (
       <img
-        src={imageSrc ?? fileUrl(path)}
+        // Card #194: a picture a phone browser picked shows from the browser's own copy (file:// cannot be followed there).
+        src={imageSrc ?? attachmentPreviewFor(path) ?? fileUrl(path)}
         alt=""
         loading="lazy"
         className="w-full h-full object-cover"

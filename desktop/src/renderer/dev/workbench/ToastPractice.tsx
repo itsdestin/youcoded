@@ -7,6 +7,7 @@ import { announce } from '../../utils/announce';
 import { LOST_SEND_NOTICE } from '../../state/submit-outgoing';
 import { savedPasswordRefusedNotice } from '../../remote-gate';
 import { announcePluginTurnedOff } from '../../utils/plugin-off-notice';
+import { announceSettingsRepaired } from '../../utils/settings-repair-notice';
 import { announceSessionLost } from '../../utils/session-lost-notice';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
@@ -16,6 +17,7 @@ export default function ToastPractice() {
     const which = new URLSearchParams(location.search).get('toast');
     if (which === 'turned-off') announcePluginTurnedOff(60_000);
     else if (which === 'none') { /* the same screen with no notice: the "Before" picture for card #216 */ }
+    else if (which === 'settings-repaired') announceSettingsRepaired('/home/me/.claude/settings.json.corrupt-2026-11-12T04-30-00-000Z', 60_000); // card #11 a
     else if (which === 'signed-out') announceSessionLost(() => {}, 60_000); // card #216
     else announce(which === 'password' ? savedPasswordRefusedNotice('Home PC') : LOST_SEND_NOTICE, 60_000);
     setShown(true);

@@ -26,6 +26,7 @@ import { defineTool } from './registry';
 import { guardedFetch, readBodyCapped, NetGuardError, type GuardedFetchOpts, type HostDecision } from './net-guard';
 import type { ToolResultPayload } from './types';
 import { siteKeyFor } from '../../../shared/site-key';
+import { formatBytes } from '../../../shared/format-bytes';
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
@@ -936,7 +937,7 @@ export const WebFetchTool = defineTool<z.infer<typeof inputSchema>>({
     // Claim 9 — every other tool in this harness names a concrete alternative
     // when it truncates; this is WebFetch's equivalent for a total miss).
     const jsNote = jsRendered
-      ? `\n\n[This page is a JavaScript-rendered app${extractedIsThin ? ', and extraction found no readable content at all' : ''}. The server sent ${(strippedRaw.length / 1024).toFixed(1)} KB of text; content that loads in a browser is not included. ${
+      ? `\n\n[This page is a JavaScript-rendered app${extractedIsThin ? ', and extraction found no readable content at all' : ''}. The server sent ${formatBytes(strippedRaw.length)} of text; content that loads in a browser is not included. ${
           extractedIsThin
             ? 'This tool cannot run that JavaScript, so there is nothing more to extract from this URL — try WebSearch for this topic, or look for an API endpoint or a server-rendered mirror of the page.'
             : 'If a section you expected is absent, it is likely rendered client-side.'
@@ -954,7 +955,7 @@ export const WebFetchTool = defineTool<z.infer<typeof inputSchema>>({
         // The raw page measurably carried real text (title, nav, whatever) that
         // never made it into the extraction, and the JS-render heuristic didn't
         // fire — so the honest answer is "unclear", never a guessed cause.
-        ? `\n\n[Extraction returned almost no content (${trimmedMarkdown.length} characters), even though the page's raw HTML carried about ${Math.round(strippedRaw.length / 1024)} KB of text overall. It isn't clear why — this page doesn't show the signs of client-rendered content this tool checks for, so don't assume that's the cause. Try WebSearch for this topic, or refetch with a specific #section if the page has one.]`
+        ? `\n\n[Extraction returned almost no content (${trimmedMarkdown.length} characters), even though the page's raw HTML carried about ${formatBytes(strippedRaw.length, { kbDecimals: 0 })} of text overall. It isn't clear why — this page doesn't show the signs of client-rendered content this tool checks for, so don't assume that's the cause. Try WebSearch for this topic, or refetch with a specific #section if the page has one.]`
         // Both the extraction AND the raw page itself are small — genuinely
         // little was ever there to find.
         : `\n\n[This page's extracted content is short (${trimmedMarkdown.length} characters), and the page's raw HTML did not contain much more text either (${strippedRaw.length} characters total) — this looks like a genuinely short or mostly-empty page, not a fetch problem.]`;
