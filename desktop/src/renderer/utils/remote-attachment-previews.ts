@@ -24,7 +24,11 @@ export function rememberAttachmentPreview(computerPath: string, file: Blob): voi
 }
 
 export function attachmentPreviewFor(computerPath: string): string | undefined {
-  return previews.get(computerPath);
+  const url = previews.get(computerPath);
+  // WHY: this value becomes an <img src>. Only an address this browser minted for its own copy (blob:) may pass, so
+  // nothing else can ever reach the picture slot, whatever ends up in the map (GitHub's security scan flagged the
+  // unchecked hand-over on PR #747).
+  return url !== undefined && /^blob:/.test(url) ? url : undefined;
 }
 
 /** Tests only. */
