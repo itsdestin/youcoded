@@ -107,7 +107,17 @@ html[data-dark="0"]{ --glass-hi:rgba(255,255,255,.55); --ink:rgba(255,255,255,.3
 html{scroll-behavior:smooth}
 
 body{font-family:var(--font-theme);color:var(--fg);line-height:1.6;-webkit-font-smoothing:antialiased;
-  overflow-x:hidden;background:var(--canvas);transition:color .5s}
+  overflow-x:hidden;background:var(--canvas)}
+/* WHY the colour fade is NOT on body any more (2026-11-13, speed pass). Text
+   colour is inherited, so fading it on body made the browser re-style every
+   element on the page -- about 970 of them, including the robots' drawings --
+   on every frame for half a second after each look change. The intro changes
+   look three times, so it spent ~40% of its whole length doing that (measured:
+   864 of 2311ms with the processor slowed 4x), which is the "count the frames"
+   stutter. The fade only ever showed on text sitting directly on the
+   wallpaper; text inside glass cards changes together with its card, which
+   was always instant. So the fade now lives on just that text. */
+.hero h1,.kicker,.hero-sub,section>.wrap>h2,section>.wrap>.eyebrow{transition:color .5s}
 img,video{display:block;max-width:100%}
 a{color:inherit}
 .wrap{max-width:var(--wide);margin:0 auto;padding:0 30px}
@@ -1340,7 +1350,7 @@ body.iv2.intro-mode .bd-layer{transition:opacity .5s ease}
   /* WHY :not(.iv2-shut): the transition must exist only on the way OUT. With it
      on always, the robots visibly slid apart during the headline's entrance
      (traced 2026-11-12) instead of simply starting apart. */
-  body.iv2:not(.iv2-shut) .hero-flank .flankrow h1{transition:margin .5s cubic-bezier(.22,.9,.32,1)}
+  body.iv2:not(.iv2-shut) .hero-flank .flankrow h1{transition:margin .5s cubic-bezier(.22,.9,.32,1), color .5s}
   body.iv2-shut .hero-flank .flankrow h1{margin:0 var(--iv2-spread,0px)}
 }
 /* ---- The first word arrives letter by letter --------------------------------
@@ -2187,6 +2197,16 @@ html{-webkit-tap-highlight-color:transparent}
   --gl:rgba(31,19,41,.8);--tk:#2B1B39;--kf:#2B1B39;--kn:#352345;--kb:#45305A;--knob:#F3EAF9;--fn:rgba(243,234,249,.3);--sh:rgba(0,0,0,.45)}
 .devdemo *{box-sizing:border-box}
 .devdemo,.devdemo *{transition:background-color .5s,color .5s,border-color .5s,box-shadow .5s}
+/* WHY (2026-11-13, speed pass): this drawing is 179 pieces that each fade four
+   colours whenever the look goes light<->dark. The intro does that twice while
+   the drawing is still invisible, so all of it was animating for nobody. */
+body.intro-mode .devdemo,body.intro-mode .devdemo *{transition:none}
+/* WHY (same pass): each look brings its own font, so every word of the intro
+   re-flowed the whole hidden page in a new font. Until the intro ends the
+   hidden sections stay in the resting look's font (Outfit, YouCoded Light's:
+   keep in step with THEMES.youcoded.font) -- the font the intro finishes on,
+   so nothing has to be re-flowed when they appear. */
+body.intro-mode .hero-flank ~ section,body.intro-mode .hero-flank ~ footer{font-family:'Outfit', system-ui, sans-serif}
 .devdemo .abs{position:absolute}
 
 .devdemo .p1{left:0;top:0;width:42%;height:100%;overflow:hidden}
@@ -3178,7 +3198,11 @@ addEventListener('resize', setEmbedPoster);
   }
   gal.addEventListener('scroll', fade, { passive: true });
   addEventListener('resize', fade);
-  fade();
+  // WHY not straight away (2026-11-13, speed pass): measuring the scroller here
+  // made the browser lay the whole page out on the spot, in the middle of
+  // loading (53ms with the processor slowed 4x), for a strip that is far below
+  // the first screen and hidden under the intro. It waits for a quiet moment.
+  (window.requestIdleCallback || function(f){ setTimeout(f, 300); })(fade);
   // The screenshots are lazy-loaded, so scrollWidth is wrong until they land.
   gal.querySelectorAll('img').forEach(function(i){ i.addEventListener('load', fade); });
 })();
@@ -3538,14 +3562,25 @@ function lockPillWidth(){
   // Narrow layout wraps the chips onto several lines, so a pinned width there
   // would fight the wrap instead of steadying anything.
   if (!wideMQ.matches) { boxes.forEach(function(b){ b.style.width = ''; }); return; }
-  var root = document.documentElement, saved = root.style.getPropertyValue('--font-theme');
+  // WHY measured on hidden COPIES (2026-11-13, speed pass). This used to switch
+  // the whole page's font four times and measure after each, so the browser
+  // re-styled and re-flowed the entire page four times in a row (measured: 200ms
+  // with the processor slowed 4x). It runs when the web fonts finish arriving,
+  // which on a slow connection is in the middle of the intro. The copies sit off
+  // screen inside the pill's own row, so only they are re-flowed.
+  var rig = document.createElement('div');
+  rig.setAttribute('aria-hidden', 'true');
+  rig.style.cssText = 'position:absolute;left:-9999px;top:0;display:flex;visibility:hidden;pointer-events:none';
+  var copies = boxes.map(function(b){ var c = b.cloneNode(true); c.style.width = ''; c.removeAttribute('id'); rig.appendChild(c); return c; });
+  dlFloat.appendChild(rig);
   var max = boxes.map(function(){ return 0; });
   PICKER_SLUGS.forEach(function(slug){
     var t = THEMES[slug]; if (!t) return;
-    root.style.setProperty('--font-theme', t.font || "'DM Sans', system-ui, sans-serif");
-    boxes.forEach(function(b, i){ var w = b.getBoundingClientRect().width; if (w > max[i]) max[i] = w; });
+    rig.style.setProperty('--font-theme', t.font || "'DM Sans', system-ui, sans-serif");
+    rig.style.fontFamily = 'var(--font-theme)';
+    copies.forEach(function(c, i){ var w = c.getBoundingClientRect().width; if (w > max[i]) max[i] = w; });
   });
-  if (saved) root.style.setProperty('--font-theme', saved); else root.style.removeProperty('--font-theme');
+  dlFloat.removeChild(rig);
   boxes.forEach(function(b, i){
     if (max[i] > 0) { b.style.width = Math.ceil(max[i]) + 'px'; b.style.justifyContent = 'center'; }
   });
@@ -3606,15 +3641,33 @@ if (embed) {
     // just short at rest), so D1's demo sat on its dark poster until the
     // visitor scrolled. Fire instead when any part of it reaches the middle
     // band of the window.
+    // WHY the demo now starts when the pointer first reaches it, not on its own
+    // (2026-11-13, speed pass). The demo is the whole app, and it runs in this
+    // page's own thread: starting it froze the page for 650ms plus three more
+    // stalls of 90-140ms (measured with the processor slowed 4x), about a
+    // second after the intro -- right when a visitor starts to scroll or click.
+    // Every desktop visitor paid that, and a 3MB download, whether or not they
+    // ever tried the demo. Until it starts, the window shows its still picture,
+    // which is a photograph of the same app in the same look, so the page looks
+    // the same. Moving the pointer onto the window or onto "Try Demo" starts
+    // it; so does a click or keyboard focus, as before.
     var armAutoBoot = function(){
-      new IntersectionObserver(function(es){ es.forEach(function(e){ if (e.isIntersecting) bootEmbed(); }); }, { rootMargin: '-20' + String.fromCharCode(37) + ' 0px -20' + String.fromCharCode(37) + ' 0px', threshold: 0 }).observe(embed);
+      var hosts = [document.querySelector('.hero-app'), tryPill].filter(Boolean);
+      var go = function(){
+        hosts.forEach(function(h){ h.removeEventListener('pointerenter', go); h.removeEventListener('focusin', go); });
+        bootEmbed();
+      };
+      hosts.forEach(function(h){ h.addEventListener('pointerenter', go); h.addEventListener('focusin', go); });
     };
-    // WHY wait for the intro (2026-09-11): the embed sits in that middle band
-    // while it is still invisible under the intro, so the whole app booted at
-    // once -- measured 175-215ms freezes just before "Useful.", 60ms ones on
-    // "Fun." and "Yours.", and its script competing with the intro's wallpapers
-    // for the connection. It now boots once the page has risen into place (the
-    // rise is a .1s delay plus .62s). "Try Demo" still boots it immediately.
+    // The big "Try the demo" button in the middle of the picture is for the
+    // layouts where the demo waits for a tap. Here "Try Demo" in the bar below
+    // does that job, and the button used to vanish 0.8s after the intro anyway.
+    embed.querySelector('.embed-start').hidden = true;
+    // A click on the still picture itself (touch screens have no hover) starts and opens the demo.
+    embed.querySelector('.embed-poster').addEventListener('click', activateDemo);
+    // WHY wait for the intro (2026-09-11): the demo window is still invisible
+    // under the intro, and a pointer resting where it will appear must not
+    // start the app in the middle of the opening animation.
     if (document.body.classList.contains('intro-mode')) {
       document.addEventListener('yc:intro-end', function(){ setTimeout(armAutoBoot, 800); }, { once: true });
     } else {
