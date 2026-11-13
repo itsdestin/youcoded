@@ -1,4 +1,4 @@
-// What happens when a window's X is pressed (its `close` event), in order: the last window's
+// What happens when a window's X is pressed (its `close` event), in order: a window's own
 // unsaved files are listed instead of closing (unsaved-quit.ts), then a window that still owns chat
 // sessions asks the person (the in-app "close these sessions?" prompt), then the window goes.
 //
@@ -34,8 +34,8 @@ export interface CloseGateDeps<Answer> {
   buddy: boolean;
   /** Whole-app quit already saved and settled everything; the window just goes. */
   shuttingDown(): boolean;
-  /** The LAST window has unsaved edits (a text editor, a parked draft, an Office document): it was
-   *  just shown their list instead of closing (fix round 11). */
+  /** This window has unsaved edits (a text editor, a parked draft, an Office document): it was just
+   *  shown their list instead of closing (fix round 11; every window since card #34). */
   refuseForUnsaved?(): boolean;
   /** Office (Task 8 fix round 1): this window's editors send their newest edits to the recovery
    *  journal before it closes. null when it has no Office documents; capped by the caller. */
@@ -44,7 +44,7 @@ export interface CloseGateDeps<Answer> {
   sessionIds(): string[];
   /** Ask the person (resolves with their answer; concurrent asks share one prompt). */
   ask(count: number): Promise<Answer>;
-  /** Carry out the answer for these sessions; true when the window should close. */
+  /** Carry out the answer for these sessions (called once the window has actually closed). */
   apply(answer: Answer, sessionIds: string[]): boolean;
   /** Whether the answer lets the window close (Cancel does not). Default: `answer.close`. */
   closes?(answer: Answer): boolean;
@@ -69,6 +69,10 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
   let askingHung = false;
   let asking = false; // the sessions prompt is up: a second press waits on it, never asks again
   let journalsSynced = false; // the close this gate re-issued after its editors journaled
+  // WHY a second stage (card #34): the answer used to be carried out inside the `close` event, i.e. BEFORE the
+  // page's own unload guard (an unsaved text file) could still veto the close. A vetoed close left the window open
+  // with its chats already ended. Now the answer is only carried out once the window has really closed (onClosed).
+  let goingThrough: Remembered<Answer> | null = null;
   return {
     async onClose(ev: CloseEvent): Promise<void> {
       if (d.buddy) return;
@@ -87,11 +91,10 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
         return;
       }
       lastCloseAt = t;
-      // Unsaved edits in the last window: say so before anything else (fix round 11).
-      // WHY only the last window: closing it ends the app, and a parked draft (no editor on
-      // screen, so no unload veto) would go with it unasked. Another window's text editor still
-      // vetoes that window's unload; its Office documents start their save as it closes (below,
-      // syncJournals) and are in their recovery journals should that save not land.
+      // Unsaved edits in this window: say so before anything else (fix round 11).
+      // WHY every window (card #34, Destin's wave-2 deck Q-5): it used to be only the last one, so a second window
+      // closed at once and a parked draft (no editor on screen, so no unload veto) went with it unasked. Asking
+      // here also keeps the chats running: nothing is ended until the window has really closed (onClosed).
       if (d.refuseForUnsaved?.()) {
         ev.preventDefault();
         // Even on the close re-issued after the sessions prompt: that answer must not be carried
@@ -118,7 +121,7 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
       if (r) {
         // Sessions owned at confirm time AND still here (one dragged away meanwhile is not ended).
         const owned = d.sessionIds();
-        if (!d.apply(r.answer, r.sessionIds.filter((id) => owned.includes(id)))) ev.preventDefault();
+        goingThrough = { answer: r.answer, sessionIds: r.sessionIds.filter((id) => owned.includes(id)) };
         return;
       }
       const ids = d.sessionIds();
@@ -137,6 +140,13 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
     /** The page vetoed its unload (Electron `will-prevent-unload`): the close did not happen. */
     onUnloadPrevented(): void {
       confirmed = null;
+      goingThrough = null; // the window stays: its chats must stay running
+    },
+    /** The window has really closed (Electron `closed`): only now are the confirmed chats ended. */
+    onClosed(): void {
+      const r = goingThrough;
+      goingThrough = null;
+      if (r) d.apply(r.answer, r.sessionIds);
     },
   };
 }

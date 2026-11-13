@@ -38,9 +38,15 @@ describe('skill catalog', () => {
       fs.mkdirSync(skillDir, { recursive: true });
       fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: Wrap up\n---\nImprove the workspace.');
 
-      expect(createSkillCatalog(undefined, project).load('wrap-up')).toMatchObject({
+      const catalog = createSkillCatalog(undefined, project);
+      expect(catalog.load('wrap-up')).toMatchObject({
         id: 'wrap-up', body: 'Improve the workspace.', file: path.join(skillDir, 'SKILL.md'),
       });
+      // WHY pinned (#251 code review F1): the "What the assistant was given" pop-up files a
+      // skill under Project context only when this says 'project'; everything else is Global.
+      expect(catalog.scopeOf?.('wrap-up')).toBe('project');
+      for (const s of catalog.list().filter((x) => x.id !== 'wrap-up')) expect(catalog.scopeOf?.(s.id)).toBe('global');
+      expect(catalog.scopeOf?.('no-such-skill')).toBeUndefined();
     } finally {
       fs.rmSync(project, { recursive: true, force: true });
     }

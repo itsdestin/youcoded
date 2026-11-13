@@ -847,6 +847,32 @@ describe('office versions and restore', () => {
     expect(list[0].bytes).toBe(doc('second').length);
   });
 
+  // Card #34 (Destin, deck answer Q-6): another program (or the assistant) changes the file while it is open here;
+  // the next autosave used to write over it, and only kept it if 10 minutes had passed since the last kept copy.
+  it('keeps the file as another program left it, at once, when an autosave is about to write over it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const t0 = new Date(2026, 8, 28, 9, 0).getTime();
+    vi.setSystemTime(t0);
+    const { file, token } = await openedIn(win1);
+    await saveAs(win1, token, doc('first'));
+    vi.setSystemTime(t0 + 60_000);                        // well inside the 10 minutes
+    await writeFile(file, doc('their change from outside, longer than ours'));
+    await saveAs(win1, token, doc('second'));
+    const list = (await call('office:versions', win1, file)) as { reason: string; bytes: number }[];
+    expect(list.map((v) => v.reason)).toEqual(['autosave', 'opened']);   // red before the fix: only 'opened'
+    expect(list[0].bytes).toBe(doc('their change from outside, longer than ours').length);
+  });
+
+  it('keeps nothing extra when the file is still the one this editor last wrote', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 8, 28, 9, 0).getTime());
+    const { file, token } = await openedIn(win1);
+    await saveAs(win1, token, doc('first'));
+    await saveAs(win1, token, doc('second'));
+    await saveAs(win1, token, doc('third'));
+    expect(((await call('office:versions', win1, file)) as unknown[]).length).toBe(1);
+  });
+
   it('shows the same versions for a file named through a link', async () => {
     const { file } = await openedIn(win1);
     const link = path.join(dir, 'link.docx');
