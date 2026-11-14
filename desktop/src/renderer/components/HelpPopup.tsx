@@ -119,7 +119,9 @@ export function HelpPopup({ open, onClose, onShowMeAround, onOpenBug, onOpenCont
               icon={<ClipboardListIcon />}
               title="Known issues"
               description="Browse open issues on GitHub"
-              onClick={() => { window.open(KNOWN_ISSUES_URL, '_blank'); onClose(); }}
+              // WHY no onClose (card #142, Destin overnight deck C-9, 2026-11-13: "keep Help open behind"): the page opens in the browser,
+              // and a Help window that vanished made the click look like it did nothing when the browser opened out of sight.
+              onClick={() => { window.open(KNOWN_ISSUES_URL, '_blank'); }}
             />
             {/* WHY noopener: a public page, opened the way Development opened it. */}
             <SettingRow
