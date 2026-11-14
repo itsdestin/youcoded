@@ -31,9 +31,9 @@ export interface ConnectionStripProps {
  *  WHY the two numbers: the page first calls the computer "slow" after 5 s of silence, so 15 s more is ~20 s of silence in all;
  *  a "reconnecting" strip (a dropped connection, or the phone going offline) starts from a silence of unknown length, so it waits
  *  the full 20 s before guessing. The words are the person's, exactly. */
-export const UNREACHABLE_MESSAGE = "Can't reach your computer. It may be asleep or off. YouCoded will keep trying.";
-export const UNREACHABLE_AFTER_SLOW_MS = 15_000;
-export const UNREACHABLE_AFTER_RECONNECTING_MS = 20_000;
+const UNREACHABLE_MESSAGE = "Can't reach your computer. It may be asleep or off. YouCoded will keep trying.";
+const UNREACHABLE_AFTER_SLOW_MS = 15_000;
+const UNREACHABLE_AFTER_RECONNECTING_MS = 20_000;
 
 export function ConnectionStrip({ sessionId, conversationStatus, waitingForComputer, filling, onRefresh, onUsePhoneOnly }: ConnectionStripProps) {
   // The live status, plus a 2.5 s "Up to date" after a refresh so the person can see it worked (tester U9). An initial

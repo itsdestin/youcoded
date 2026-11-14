@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 import { clipboard, ClipboardItem, dialog, nativeImage, net, type BrowserWindow } from 'electron';
 
 /** A picture larger than this is refused rather than held in memory (no chat picture is near it). */
-export const MAX_PICTURE_BYTES = 50 * 1024 * 1024;
+const MAX_PICTURE_BYTES = 50 * 1024 * 1024;
 
 export type PictureAction = 'copy' | 'save';
 export interface PictureResult { ok: boolean; canceled?: boolean; reason?: string }
