@@ -41,7 +41,7 @@ import { BuddyStyleRow, readBuddyStyle, saveBuddyStyle, trayPlaceName } from './
 import { Button, CARD_LEVEL_1, CloseButton, Slider, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
 import { plainMessage } from '../utils/ipc-error';
 import { announceFailed } from '../utils/announce';
-import { useSaveNotice } from '../hooks/useSaveNotice';
+import { useRemoteSaves, usePasswordFailed } from '../hooks/useRemoteSaves';
 import { useDefaultsSaver } from '../hooks/useDefaultsSaver';
 import { useGuideReset } from './guide/guide-events';
 
@@ -1536,7 +1536,6 @@ interface RemoteButtonProps {
   /** Why the server refused to start, shown under the Enabled toggle. */
   enableError: string;
   onSetKeepAwake: (hours: number) => void;
-  /** Card #134 round 4: "Couldn't save …" notices for the Enabled toggle, Keep awake and Set password (undefined = none showing). */
   saveNotices?: { enabled?: React.ReactNode; keepAwake?: React.ReactNode; password?: React.ReactNode };
   onRunSetup: () => void;
   onConfirmSetup: () => void;
@@ -2694,9 +2693,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
   }, []);
 
   const handleSetTier = useCallback(async (newTier: string) => {
-    // Card #134 round 4: the tier only changes on screen after the save answers (it already did), but a failed save said nothing, so
-    // the picker just closed with the old tier still showing. Now a real failure (rejected, or an answer of false / { ok:false })
-    // says so in a toast and the old tier stays shown.
+    // Card #134 r4: a real failure (rejected, false or { ok:false }) now says so in a toast; the old tier stays shown.
     try {
       const result = await claude.android?.setTier?.(newTier);
       if (result === false || (result && typeof result === 'object' && result.ok === false)) { announceFailed('change the plan tier', result?.error); return; }
@@ -2707,7 +2704,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
     } catch (e) { announceFailed('change the plan tier', e); }
   }, []);
 
-  // Card #134 round 4: a failed save used to leave the page showing a value that was never stored (see useDefaultsSaver).
+  // Card #134 r4: see useDefaultsSaver.
   const handleDefaultsChange = useDefaultsSaver(defaults, setDefaults, (updates) => claude.defaults?.set?.(updates));
 
   if (loading) {
@@ -2861,12 +2858,8 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const [setupCheck, setSetupCheck] = useState<SetupCheck | null>(null);
   // Populated when IPC.REMOTE_SET_CONFIG reports the server failed to bind.
   const [enableError, setEnableError] = useState('');
-  // Card #134 round 4: failed saves of the Enabled toggle / Keep awake / password, said beside the control. `config` only changes
-  // after a save ANSWERS, so the controls already show the last value really saved; the hook adds the lifecycle (no notice for a
-  // slow save, a late or superseded answer is ignored, cleared on success / Try again / closing the panel).
-  const { run: runSave, notice: saveNotice } = useSaveNotice(open);
-  const [passwordFailed, setPasswordFailed] = useState(false);
-  useEffect(() => { setPasswordFailed(false); }, [open]);
+  const { toggleEnabled: handleToggleEnabled, setKeepAwake: handleSetKeepAwake, enabledNotice, keepAwakeNotice } = useRemoteSaves(open, config, setConfig, setEnableError);
+  const [passwordFailed, setPasswordFailed] = usePasswordFailed(open);
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
@@ -2949,31 +2942,11 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       setPasswordStatus('saved');
       setTimeout(() => setPasswordStatus('idle'), 2000);
     } catch (e) {
-      // The typed password stays in the box, so pressing Set again is the retry. (Used to reset silently.)
       console.warn('[remote] setting the password failed:', e);
       setPasswordStatus('idle');
       setPasswordFailed(true);
     }
   }, [newPassword]);
-
-  const handleToggleEnabled = useCallback(async () => {
-    if (!config) return;
-    setEnableError('');
-    void runSave('enabled', 'the remote access setting', async () => {
-      const updated = await (window as any).claude.remote.setConfig({ enabled: !config.enabled });
-      // Main rolls `enabled` back to false when the server can't bind and returns
-      // the OS error; spreading `updated` therefore also un-sticks the toggle.
-      if (updated?.error) setEnableError(String(updated.error));
-      setConfig(prev => prev ? { ...prev, ...updated } : prev);
-    }, () => { /* config only changes after an answer: the switch already shows the last saved value */ }, () => { void handleToggleEnabled(); });
-  }, [config, runSave]);
-
-  const handleSetKeepAwake = useCallback(async (hours: number) => {
-    await runSave('keepAwake', 'the keep awake setting', async () => {
-      const updated = await (window as any).claude.remote.setConfig({ keepAwakeHours: hours });
-      setConfig(prev => prev ? { ...prev, ...updated } : prev);
-    }, () => { /* the control shows config, which did not change */ }, () => { void handleSetKeepAwake(hours); });
-  }, [runSave]);
 
   const handleRunSetup = useCallback(() => {
     setSetupStatus('confirm');
@@ -3150,11 +3123,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onToggleEnabled={handleToggleEnabled}
           enableError={enableError}
           onSetKeepAwake={handleSetKeepAwake}
-          saveNotices={{
-            enabled: saveNotice('enabled', 'mt-1'),
-            keepAwake: saveNotice('keepAwake', 'mt-2'),
-            password: passwordFailed ? <FieldError as="p">Couldn't set the password.</FieldError> : null,
-          }}
+          saveNotices={{ enabled: enabledNotice, keepAwake: keepAwakeNotice, password: passwordFailed ? <FieldError as="p">Couldn't set the password.</FieldError> : null }}
           onRunSetup={handleRunSetup}
           onConfirmSetup={handleConfirmSetup}
           onCancelSetup={handleCancelSetup}
