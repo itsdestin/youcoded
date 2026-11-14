@@ -4,7 +4,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMe
 import { useChatState, useChatDispatch } from '../state/chat-context';
 import { shouldRenderAssistantTurn, type AssistantTurn } from '../state/chat-types';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
-import { workbenchQueuePreview } from '../workbench-mode';
+import { workbenchQueuePreview, workbenchModelLoading } from '../workbench-mode';
 import ToolCard from './ToolCard';
 import type { PromptCardButton } from './PromptCard';
 import ChatTimelineRow, { type TimelineRowActions } from './ChatTimelineRow';
@@ -18,6 +18,7 @@ import { browserSupported } from '../state/browser-store';
 import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
+import { useReturnWarm } from '../hooks/use-return-warm';
 import { useEntryFolding } from '../hooks/use-entry-folding';
 import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
 import { messageTimeMarks } from '../state/message-time-marks';
@@ -130,7 +131,19 @@ interface Props {
 }
 
 // Memoised at the bottom of the file — see the WHY there.
+// The loading strip's workbench review states. 29.3 GB is the Z13's 27B model.
+const DEMO_INFO = { modelId: 'Qwen3.8-27B-UD-Q8_K_XL', sizeBytes: 29.3 * 1024 ** 3 };
+const DEMO_BASE = { modelState: 'loading' as const, modelInfo: DEMO_INFO, loadedBytes: null, loadExpectedMs: null, everResident: false, isThinking: false };
+const MODEL_LOADING_DEMOS: Record<string, Omit<React.ComponentProps<typeof ModelLoadingBar>, 'onReload' | 'ref'>> = {
+  '1': { ...DEMO_BASE, modelInfo: { modelId: 'Qwen3-8B-Q4_K_M.gguf', sizeBytes: 8 * 1024 ** 3 } },
+  reading: { ...DEMO_BASE, loadedBytes: 11.4 * 1024 ** 3 },
+  finishing: { ...DEMO_BASE, loadedBytes: 29.3 * 1024 ** 3 },
+  timed: { ...DEMO_BASE, loadExpectedMs: 14_000 },
+  unloaded: { ...DEMO_BASE, modelState: 'sleeping', everResident: true },
+};
+
 function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, filling, modelLoadingDemo, model, providerType, compact }: Props) {
+  const demoLoading = modelLoadingDemo ? workbenchModelLoading() : null; // workbench review only
   // Paused while hidden: an unstamped session's lookup registers a listener and reads
   // the provider lists, and a hidden tab does no work (performance.md rule 2).
   // Guard: use-provider-type.test.tsx "a paused caller…".
@@ -235,6 +248,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   const chatRootRef = useRef<HTMLDivElement>(null);
   const queuedStripRef = useRef<HTMLDivElement>(null);
   const modelStatusRef = useRef<HTMLDivElement>(null);
+  // Coming back after the model went to sleep: load it and re-read this chat in the background (review deck Q-6).
+  useReturnWarm({ rootRef: chatRootRef, sessionId, visible, modelId: state.modelInfo?.modelId, modelState: state.modelState,
+    everResident: state.modelEverResident, isThinking: state.isThinking, load: (modelId, sid) => { void window.claude.models.load(modelId, sid); } });
   // Ctrl+F find-over-chat-history. Searches the message timeline (contentRef)
   // via the same CSS-Highlight ContentFindBar the artifact viewer uses.
   const [findOpen, setFindOpen] = useState(false);
@@ -1027,7 +1043,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     observer.observe(el);
     update();
     return () => observer.disconnect();
-  }, [state.modelState, state.modelInfo, state.modelLoadedBytes, state.modelEverResident, state.isThinking]);
+  }, [state.modelState, state.modelInfo, state.modelLoadedBytes, state.modelLoadExpectedMs, state.modelEverResident, state.isThinking]);
 
   return (
     // WHY: every open session's ChatView stays mounted, and waiting cards listen
@@ -1378,13 +1394,12 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               Games opens, outer-root centering would span the drawer as well. */}
           <ModelLoadingBar
             ref={modelStatusRef}
-            // Workbench-only sample; the normal model state still comes from chat.
-            modelState={modelLoadingDemo ? 'loading' : state.modelState}
-            modelInfo={modelLoadingDemo ? { modelId: 'Qwen3-8B-Q4_K_M.gguf', sizeBytes: 8 * 1024 ** 3 } : state.modelInfo}
-            loadedBytes={state.modelLoadedBytes}
-            everResident={state.modelEverResident}
-            isThinking={state.isThinking}
-            onReload={(modelId) => { void window.claude.models.load(modelId); }}
+            // Workbench-only samples (?modelLoading=…); the normal state still comes from chat.
+            {...(demoLoading
+              ? MODEL_LOADING_DEMOS[demoLoading] ?? MODEL_LOADING_DEMOS['1']
+              : { modelState: state.modelState, modelInfo: state.modelInfo, loadedBytes: state.modelLoadedBytes,
+                loadExpectedMs: state.modelLoadExpectedMs, everResident: state.modelEverResident, isThinking: state.isThinking })}
+            onReload={(modelId) => { void window.claude.models.load(modelId, sessionId); }}
           />
         </div>
         {/* Right frame edge / divider + Session Drawer — only shown when open.

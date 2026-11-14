@@ -98,6 +98,7 @@ Exact router-mode arg list (no `-m`), b10665 / 2026-09-05:
 ```
 --host 127.0.0.1 --port <ENGINE_PORT> --no-webui --jinja
 --models-dir <cacheDir> --models-max 2
+--no-cache-idle-slots       # 2026-11-07: keep each chat's reading (see below)
 [--spec-default]            # unless engine.speed.speculative === false
 [--cache-type-k q8_0]       # unless engine.speed.compressCache === false
 --models-preset <NativeHome.root>/engine/models.ini
@@ -139,6 +140,61 @@ no usable preset file:
   preset writer reads it. **`engine-supervisor.test.ts` now pins the flag's ABSENCE from
   the command line** — it only reappears on the recovery boot that has no usable preset.
   (Raised 5→15 min and 10→25 min on 2026-09-07 per Destin.)
+- **"Busy" means a request whose answer is still unread (fixed 2026-11-09).**
+  `trackedFetch` counts a request as running (`inFlight`, read by `busy()`) until its
+  body is read, cancelled, or its signal aborts. The model-load "hi"
+  (`EngineSupervisor.loadModel`) and the model check (`EngineManager.probeModelLoad`)
+  read the body only on failure, so every SUCCESSFUL load left the engine busy forever:
+  on the desktop (1.3.3) a context change waited the full 10-minute apply limit
+  (`CONFIG_APPLY_MAX_WAIT_MS`) and idle shutdown never fired. Every caller now reads or
+  cancels its body, success too (rule: `.claude/rules/engine-local-models.md`). Guards:
+  `engine-supervisor.test.ts` "abandoned bodies do not leak inFlight",
+  `engine-manager.test.ts` "a successful model load's answer is read to the end".
+- **Keeping each chat's reading (2026-11-07, b10665, Qwen3.8-27B — a hybrid `qwen35`
+  model — Z13 Vulkan; scripts and numbers in the local-model-hardening session).**
+  - **`--no-cache-idle-slots` is on the command line.** The default (with the unified KV
+    cache b10665 turns on when `--parallel` is not given) clears EVERY idle slot whenever
+    any slot starts a task and parks it in the `--cache-ram` copy — which never came
+    back for this hybrid model: chat A, then chat B, then A again re-read all 4,890
+    tokens (35.6 s); with the flag, 13 tokens (0.8 s). Overfilled on purpose (8k
+    context, three 6.4k prompts): the engine logs `try_clear_id: purging slot N`, frees
+    an idle slot, retries, and every request still answers 200.
+  - **`id_slot` pins a request to a slot** (`selected slot by id (N)`); a number past
+    the last slot is IGNORED, not refused. `engine/slot-pins.ts` gives each chat key its
+    own slot and every key-less request (model-load "hi", the model check, titles) the
+    LAST slot. Without it the engine picked the slot whose reading looked most similar —
+    and every chat's opening shares the same instructions, so chats took each other's.
+  - **`POST /models/load {model}` exists in router mode** (answers `{"success":true}` at
+    once). Unused for now — the load "hi" keeps its error text for `lastLoadError`.
+  - **What kept readings cost a NEW chat, at real sizes (2026-11-08, Vulkan, 64k shared
+    pool, four ~15,400-token openings placed on slots 0-3 in turn).** Reading the Nth
+    opening while N−1 others are kept: Qwen3.8-27B 111 / 106 / 99 / 100 s (no cost);
+    Qwen3.6-35B-A3B 19.7 / 20.3 / 20.6 / 20.9 s (+6%). An earlier run that showed +60%
+    (9B, 89 → 144 s) used ~31k-token prompts and ran while the machine was loaded
+    (load average 24-57); it does not reproduce at chat sizes. Two alternatives were
+    measured on the 27B: separate per-slot memory (`-np 4 -no-kvu`, `ctx-size` ×4)
+    105 / 94 / 94 / 95 s, and `-ctk q8_0 -ctv q8_0` on the shared pool 92 / 96 / 96 / 96 s.
+    Neither is adopted: the first quadruples context memory, the second is the fatal
+    `-fa off` case below and wants measuring on the smaller models first.
+  - **Kept readings share ONE pool the size of the context (2026-11-12).** Three chats,
+    each opening ~14k tokens, slots 0-2 pinned by `id_slot`. At `-c 32768` two chats keep
+    their readings (follow-ups read ~300 new tokens); opening the third logs
+    `try_clear_id: purging slot N` and from then on EVERY switch re-reads the whole chat.
+    At `-c 65536` all three keep theirs, including after one grew by 8k tokens; no purge.
+    It fails once the open chats together exceed the pool. Measured with Qwen3-0.6B on the
+    Z13; the 9B at 64k on the RTX 4070 SUPER was started and not finished (the PC stopped
+    accepting logins mid-run, cause unknown). Hence `DEFAULT_CONTEXT_SIZE = 65536`
+    (`engine-config.ts`, was 32768; Destin, review deck Q-2).
+  - **Helper agents never take a chat's slot (2026-11-12, `SlotPins.slotFor(…, helper)`).**
+    A helper (specialist child) has its own session id and used to count as a chat, so one
+    chat that started two helpers pushed the user's other chats off their slots. A helper
+    now uses a free slot or another helper's, else the shared spare; a chat that needs a
+    slot takes a helper's before another chat's.
+  - **Memory and speed of the default on a 12 GB card (2026-11-12, RTX 4070 SUPER, Vulkan
+    build, Qwen3.5-9B-UD-Q4_K_XL, `--spec-default -ctk q8_0`, no projector).** `-c 65536`:
+    8.2 GB of 12.3 GB after load (8.6 after replies); `-c 32768`: 7.4 GB (7.8). Ordinary
+    reply 54-65 tokens a second at either size; a whole-file rewrite 530-570 (the n-gram
+    guesser accepted 2,279-2,301 of 2,304 drafted tokens).
 - **Speed flags (2026-09-04), both measured on b10665, Qwen3.5-9B Q8_0, Z13 Vulkan;
   guard: `test-engine/probe-speed.mjs` (flags reach the model child AND the drafter fires).
   Both are now user switches (`engine.speed` in config.json, `engine:set-config`) and
@@ -151,6 +207,38 @@ no usable preset file:
     a 700-token essay was 9.0 → 9.3 tok/s with `draft_n` absent — the drafter simply
     never fires on novel prose, so no measured penalty. This is the shape of every
     Edit/Write tool call. The router forwards it to each model child (probe-pinned).
+  - **MTP drafting — ON per model since 2026-11-09, for DENSE models whose file has the
+    heads (`model-presets.ts` `MTP_ENTRIES`, chosen in `EngineManager.refreshMtpModels`).**
+    Recent Qwen GGUFs carry their own next-token heads (`blk.N.nextn.*`,
+    `<arch>.nextn_predict_layers`). The section gets `spec-type = draft-mtp` and
+    `spec-draft-n-max = 3`; the command line keeps `--spec-default`, and the child gets
+    both (probed: `--spec-default --spec-draft-n-max 3 --spec-type draft-mtp`), so file
+    rewrites keep the n-gram win. Measured b10665, Vulkan, Strix Halo, `-ctk q8_0`, 4 slots,
+    ~15k opening, two passes each:
+    - Qwen3.8-27B (dense): replies 6.5-6.7 → 11.0-12.0 t/s; a 700-token file rewrite
+      42 → 57 t/s; the opening read 91.5-91.8 s → 95-96 s (~4%; earlier gaps were a busy
+      machine). With its `mmproj` loaded, an image question answered the same at
+      6.95 → 12.96 t/s.
+    - Qwen3.6-35B-A3B (mixture of experts): replies 47-48 → 50-52 t/s, reading 5-15%
+      slower — not worth it, so `expert_count > 0` gets no MTP.
+    - **A model WITHOUT the heads must never get it:** Qwen3.5-9B-Q8_0 with `draft-mtp`
+      → `failed to create MTP context`, every request 500 "failed to load". Hence per
+      model, from the file, never by name. Same on NVIDIA (2026-11-12, RTX 4070 SUPER,
+      Qwen3.5-9B-UD-Q4_K_XL forced with `--spec-type draft-mtp`): `context type MTP
+      requested but model doesn't contain MTP layers`, the server exits with code 1.
+    - **Safety net (2026-11-12, `engine/mtp-fallback.ts`).** MTP was measured on one
+      machine and its second context is not in the fit estimate. The first failed load
+      of a model that has MTP on is not reported: the preset is rewritten without MTP for
+      it, the router re-reads (`?reload=1`) and the load is asked again. Loads → `noMtp`
+      is saved in that model's settings on this computer and it never gets MTP again.
+      Fails too → MTP is put back and the failure is reported as before. A load that
+      could not be asked at all is not retried. **MTP's speed on NVIDIA is still
+      unmeasured** — no dense model with heads fits the 12 GB card that was available.
+    - `--spec-draft-type-k q8_0` (compressing MTP's own cache) changed nothing
+      measurable; not used. The "Speculative decoding" switch off removes MTP too; a
+      user's own `spec-*` extra option wins over ours.
+    - History: found 2026-07-14 (+25% on the 35B without `--spec-default`), lost when
+      `knowledge-debt.md` was deleted on 2026-07-15 before it reached the roadmap.
   - **`--cache-type-k q8_0`** — 8-bit KEY cache. `llama-bench` at 16,384 tokens of
     depth: generation 11.4 → 16.2 tok/s, prompt 281 → 452 tok/s, half the K memory.
   - **V cache is deliberately left f16.** `-ctv q8_0` measured a further prompt-speed
@@ -403,7 +491,51 @@ context window.
 
 #### ROCm vs Vulkan, measured
 
-**ROCm is not simply faster than Vulkan. It is a trade, and on the one machine we
+**Current verdict (re-measured 2026-11-08, same Z13, b10665, ROCm 7.2.4 system
+libraries, the app's spawn shape with `--no-cache-idle-slots --spec-default`):
+ROCm stays an optional build and must NOT be chosen automatically.** It reads
+faster only on a freshly started engine, and the app now keeps each chat's
+reading, which is exactly where ROCm falls behind.
+
+- **Fresh engine, 31.6k-token read:** ROCm 66 s vs Vulkan 89 s (Qwen3.5-9B), 75 s vs
+  94 s (Qwen3.6-35B-A3B) — ROCm 20-25% faster. Qwen3.8-27B: 205-217 s vs 244-265 s.
+- **Same read after three short requests stayed in other slots:** 9B ROCm 173 s vs
+  Vulkan 144 s; 35B ROCm over 300 s (client timeout) vs Vulkan 114 s. Short reads on
+  ROCm fade request by request (9B 453 → 326 → 269 t/s) while Vulkan stays flat.
+  Both engines ran the identical configuration (`flash_attn` on, `kv_unified = true`,
+  4 slots). The research found no upstream issue for this exact symptom; the nearest
+  is ggml-org/llama.cpp#19523 (masked-block skipping in flash attention, fixed for
+  Vulkan in #19582). Not tried: `-np 1` on ROCm.
+- **The two "overlooked ROCm settings" do not fix it (measured 2026-11-13, same Z13):**
+  - `GGML_HIP_ROCWMMA_FATTN` no longer exists at b10665; WMMA flash attention is compiled
+    in for RDNA3/RDNA4 (`AMD_WMMA_AVAILABLE`, `ggml-cuda/common.cuh`). Nothing to switch on.
+  - `ROCBLAS_USE_HIPBLASLT=1` is a no-op with Arch/CachyOS system ROCm 7.2.4: that
+    `librocblas.so` is built without hipBLASLt (the variable name is not even in it).
+    Tested instead on lemonade-sdk/llamacpp-rocm b1374 (self-contained, bundles
+    hipBLASLt; build 12341), variable 1 vs 0, 23.6k-token read: 27B fresh 93.6 vs
+    94.6 s, after three short requests 131.7 vs 128.2 s; 0.6B fresh 7.7 vs 8.3 s, after
+    27.8 vs 28.8 s. Vulkan b10665 in the same session: 27B 128.4 → 129.4 s, 0.6B
+    10.3 → 11.5 s. So the fade is still there on a two-month-newer engine with AMD's
+    full libraries, and the variable is worth 0-8%.
+- **Slot save/restore to disk (`--slot-save-path`, measured 2026-11-13, Vulkan b10665,
+  `-np 4 --kv-unified`, restart between save and restore):** Qwen3-0.6B, 27.5k tokens:
+  3.0 GB file, save 4.4 s, restore 0.55 s, re-send read 1 token (cold read 54 s).
+  Qwen3.8-27B: restore reports success but the re-send re-reads everything ("forcing
+  full prompt re-processing due to lack of cache data (likely due to SWA or
+  hybrid/recurrent memory…)") — the slot file does not carry that model family's context
+  checkpoints. Always check `prompt_n` after a restore; never trust the 200.
+- **Rerun any of the above** with the workspace's `scripts/engine-bench/run.sh` (separate engine
+  copy on port 9990; never the live app's 9920).
+- **Writing:** now within a few percent on the 27B (Vulkan 6.19-6.73, ROCm 5.99-6.67
+  t/s), and equal on the 9B and 2B; the September 24-46% gap below did not reproduce.
+- **Small models:** the 2B's 31.6k read after three short requests took 22-27 s on
+  ROCm vs 12.5-13 s on Vulkan (no fresh-engine run of the 2B was made).
+- **Label (changed 2026-11-09):** `BACKEND_LABELS.rocm` was "reads faster, writes
+  slower"; it now reads "Try ROCm (AMD) — usually slower in real use" (verify anchor below).
+
+The September record follows, kept as history.
+
+**(2026-09-05) ROCm is not simply faster than Vulkan. It is a trade, and on the one machine we
 have measured it loses the half a user actually watches.** The UI shipped
 `Switch to ROCm (faster on AMD)` from 2026-09-05 to 2026-09-06; that claim was
 never measured. When it was, it was wrong.
@@ -438,7 +570,7 @@ build rather than recommended — see `OPTIONAL_BACKENDS` in `EngineCard.tsx` an
 Radeon cards, about CDNA parts, about Windows ROCm, or about a later engine
 build. Re-measuring on a different part, or on a newer build, is how this changes
 — not an assumption that upstream fixed it.
-<!-- verify: {"path": "youcoded/desktop/src/main/models/gpu-detector.ts", "contains": "reads faster, writes slower"} -->
+<!-- verify: {"path": "youcoded/desktop/src/main/models/gpu-detector.ts", "contains": "usually slower in real use"} -->
 
 ### CLI alias table (`ARG_ALIASES` in engine-pin.ts, generated by generate-engine-pin.mjs)
 

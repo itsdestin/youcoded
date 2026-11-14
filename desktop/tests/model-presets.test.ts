@@ -556,3 +556,45 @@ describe('model-presets — the message the user is shown', () => {
     expect(engineErrorLine('', 1)).toBe('The local engine rejected this setting and exited with code 1.');
   });
 });
+
+describe('model-presets — MTP drafting for models whose file carries the heads', () => {
+  const mtp = new Set(['qwen-mtp']);
+
+  it('turns MTP on in the section of a model that has the heads, and only that model', () => {
+    const file = renderPresetFile({ ...base, modelIds: ['qwen-mtp', 'gemma-plain'], mtpModelIds: mtp, speculative: true });
+    expect(section(file, 'qwen-mtp')).toEqual(['spec-type = draft-mtp', 'spec-draft-n-max = 3']);
+    // A model without the heads refuses to LOAD with spec-type draft-mtp, so it
+    // must get no MTP line — and, on all defaults, no section at all.
+    expect(section(file, 'gemma-plain')).toBeNull();
+    expect(file).not.toMatch(/^\[\*\][^[]*spec-/m);
+  });
+
+  it('adds nothing when the Speculative decoding switch is off', () => {
+    const file = renderPresetFile({ ...base, modelIds: ['qwen-mtp'], mtpModelIds: mtp, speculative: false });
+    expect(section(file, 'qwen-mtp')).toBeNull();
+  });
+
+  it("keeps the user's own spec option instead of adding ours", () => {
+    const file = renderPresetFile({
+      ...base, modelIds: ['qwen-mtp'], mtpModelIds: mtp, speculative: true,
+      settings: { 'qwen-mtp': { ...DEFAULTS, extraFlags: '--spec-type ngram-mod' } },
+    });
+    expect(section(file, 'qwen-mtp')).toEqual(['spec-type = ngram-mod']);
+  });
+
+  it('sits beside the model\'s own settings', () => {
+    const file = renderPresetFile({
+      ...base, modelIds: ['qwen-mtp'], mtpModelIds: mtp, speculative: true,
+      settings: { 'qwen-mtp': { ...DEFAULTS, contextLength: 65536 } },
+    });
+    expect(section(file, 'qwen-mtp')).toEqual(['ctx-size = 65536', 'spec-type = draft-mtp', 'spec-draft-n-max = 3']);
+  });
+
+  it('leaves a held section exactly as the running engine read it', () => {
+    const file = renderPresetFile({
+      ...base, modelIds: ['qwen-mtp'], mtpModelIds: mtp, speculative: true,
+      preserve: new Map([['qwen-mtp', ['ctx-size = 8192']]]),
+    });
+    expect(section(file, 'qwen-mtp')).toEqual(['ctx-size = 8192']);
+  });
+});

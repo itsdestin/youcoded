@@ -1279,21 +1279,27 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       const loadedBytes = action.loadedBytes ?? null;
+      const loadExpectedMs = action.loadExpectedMs ?? null;
       // Latches true the first time the model reaches 'loaded'. The Reload prompt
       // keys on this so a fresh session's initial 'unloaded'/'loading' (before its
       // eager load completes) shows the loading bar, not a spurious Reload button.
-      const everResident = session.modelEverResident || action.state === 'loaded';
+      // Per MODEL: after a switch, the old model having loaded says nothing about
+      // the new one — carrying it over offered "Reload" for a model never loaded.
+      const sameModel = session.modelInfo?.modelId === action.modelId;
+      const everResident = (sameModel && session.modelEverResident) || action.state === 'loaded';
       // No-op unless state, model, load-progress bytes, OR the ever-resident latch
       // changed (bytes climb while state stays 'loading', and must re-render).
       if (session.modelState === action.state
           && session.modelInfo?.modelId === action.modelId
           && session.modelLoadedBytes === loadedBytes
+          && session.modelLoadExpectedMs === loadExpectedMs
           && session.modelEverResident === everResident) return state;
       next.set(action.sessionId, {
         ...session,
         modelState: action.state,
         modelInfo: { modelId: action.modelId, sizeBytes: action.sizeBytes },
         modelLoadedBytes: loadedBytes,
+        modelLoadExpectedMs: loadExpectedMs,
         modelEverResident: everResident,
       });
       return next;

@@ -155,6 +155,10 @@ export interface EngineModel {
    *  model child's VmRSS, monotonic + clamped to sizeBytes) — drives the "N GB /
    *  M GB" progress bar. Undefined off Linux or when not loading. */
   loadedBytes?: number;
+  /** While loading with NO byte measurement: how long past loads of this model
+   *  took on this machine, in ms — the bar then fills by time and says "about".
+   *  Undefined when bytes are measured, or there is no history yet. */
+  loadExpectedMs?: number;
   /** What kinds of input the ROUTER says this model accepts, straight off
    *  `GET /models`'s `architecture.input_modalities` (design §E5). `['text']`
    *  for an ordinary model; `['text','image']` once llama-server paired an

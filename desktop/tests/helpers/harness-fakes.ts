@@ -278,3 +278,14 @@ export function makeSession(over: MakeSessionOver = {}): HarnessSession {
 export async function drainTurn(session: HarnessSession, text: string): Promise<void> {
   await session.send(text);
 }
+
+/** A believable compaction summary. WHY: the app now refuses junk summaries (empty, tool-call markup,
+ *  or implausibly short for what they replace — compaction.ts isJunkSummary), so a fixture summary
+ *  like "SUMMARY." no longer stands in for a real one. ~700 characters of plain prose. */
+export const FAKE_SUMMARY = '## Goal\nThe user is working through a task and asked the assistant for help.\n## Progress\n'
+  + 'The assistant read the relevant files, ran the requested searches and reported what it found. '.repeat(6)
+  + '\n## Next\nContinue from the most recent user request.';
+/** The same idea for small windows, where a 700-character summary would not fit. */
+export const SHORT_FAKE_SUMMARY = '## Goal\nThe user asked for help with a task.\n## Progress\nThe assistant gathered what it needed and reported back to the user.\n## Next\nContinue from the latest request, keeping answers short.';
+/** For histories of a few words, where any longer summary would be bigger than what it replaces. */
+export const TINY_FAKE_SUMMARY = 'Earlier: the user and assistant chatted ok.';

@@ -1,2 +1,4 @@
 # Deliberate test fake: a download test that must refuse "curl -u me:pw" (always-allow-download-host.test.ts)
 1c78d05bc43331f5ccd34f60a4e3e39ade5bd3e2:desktop/tests/always-allow-download-host.test.ts:curl-auth-user:37
+# Not a secret: a model settings name in a test ('qwen35moe.expert_count'). Destin OK'd this exception 2026-11-10 (wave-1 deck Q-19)
+efaa9558d2f11b4c08fa0b51b458316ee069ed53:desktop/tests/engine-manager.test.ts:generic-api-key:191

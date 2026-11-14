@@ -2358,7 +2358,7 @@ contextBridge.exposeInMainWorld('claude', {
     setBackend: (backend: string) => ipcRenderer.invoke(IPC.ENGINE_SET_BACKEND, { backend }),
     // Create-time / swap memory guard + [Reload Model] (2026-07-14).
     memoryCheck: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_MEMORY_CHECK, { modelId }),
-    load: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_LOAD, { modelId }),
+    load: (modelId: string, sessionId?: string) => ipcRenderer.invoke(IPC.MODELS_LOAD, { modelId, sessionId }),
     onDownloadProgress: (cb: (p: unknown) => void) => {
       const listener = (_e: unknown, p: unknown) => cb(p);
       ipcRenderer.on(IPC.MODELS_DOWNLOAD_PROGRESS, listener);
