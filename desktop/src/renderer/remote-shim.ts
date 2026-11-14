@@ -2632,6 +2632,8 @@ export function installShim(): void {
       // No-op on remote/Android — a browser can't reveal a file in the host's
       // file manager. The artifact panel hides the button on touch anyway.
       showItemInFolder: async () => {},
+      // A phone's browser cannot read the computer's clipboard or pick a save place on it; the picture menu does its own copy there.
+      pictureAction: async () => ({ ok: false, reason: 'not-on-this-device' }),
       // No-op on remote/Android — a browser can't launch the host's default app
       // for a local path. The "Open externally" button is desktop-gated, so this
       // only exists to keep the window.claude shape symmetric.

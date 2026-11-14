@@ -88,6 +88,7 @@ export interface AppChannelTypes {
   'shell:open-changelog': { request: void; response: Nothing };
   'shell:open-external': { request: { url: string }; response: Nothing };
   'shell:show-item-in-folder': { request: { filePath: string }; response: Nothing };
+  'shell:picture-action': { request: { action: 'copy' | 'save'; src: string }; response: { ok: boolean; canceled?: boolean; reason?: string } };
   'shell:open-path': { request: { filePath: string }; response: string };
   'dialog:open-file': { request: void; response: string[] };
   'dialog:open-sound': { request: void; response: string | null };

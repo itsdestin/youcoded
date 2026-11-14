@@ -138,6 +138,8 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/menu/composer', 'menu'),
   chat('chat/menu/code', 'menu'),
   chat('chat/menu/file', 'menu'),
+  // Card #143 a: right-click on a picture in a chat.
+  { ...chat('chat/menu/image', 'menu'), session: 'wb-2', params: { seed: 'bubbles-picture' } },
   chat('chat/voice/vocabulary', 'dialog'),
   { ...chat('chat/voice/vocabulary#empty', 'dialog'), params: { vocabulary: 'empty' } },
   { ...chat('chat/voice/vocabulary#stress', 'dialog', 'stress'), scenario: 'stress', params: { vocabulary: 'stress' } },

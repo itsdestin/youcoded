@@ -37,6 +37,8 @@ export function ContextMenuHost() {
     if (!el || !entries) {
       // Code and file links live inside tool output: Ctrl+O expands it, and `shoot`
       // presses open again once it has drawn.
+      // A website picture waits behind its Show button (ChatImage); the photo-only build taps it, and `shoot` opens again once it has drawn.
+      if (screen === 'chat/menu/image') [...document.querySelectorAll<HTMLButtonElement>('.chat-scroll button')].find((b) => /Image from/.test(b.textContent ?? ''))?.click();
       if (expand) document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', code: 'KeyO', ctrlKey: true, bubbles: true }));
       return;
     }
@@ -47,6 +49,7 @@ export function ContextMenuHost() {
   useScreenOpen('chat/menu/user', () => openOn('.user-bubble', 'chat/menu/user'));
   useScreenOpen('chat/menu/composer', () => openOn('.input-bar-textarea', 'chat/menu/composer'));
   useScreenOpen('chat/menu/code', () => openOn('.chat-scroll pre', 'chat/menu/code', true));
+  useScreenOpen('chat/menu/image', () => openOn('.chat-scroll img', 'chat/menu/image'));
   useScreenOpen('chat/menu/file', () => openOn('.chat-scroll [data-file-path]', 'chat/menu/file', true));
 
   if (!menu) return null;

@@ -107,6 +107,7 @@ const IPC = {
   UPDATE_RESTART_TO_UPDATE: 'update:restart-to-update',
   OPEN_EXTERNAL: 'shell:open-external',
   SHOW_ITEM_IN_FOLDER: 'shell:show-item-in-folder',
+  PICTURE_ACTION: 'shell:picture-action',
   OPEN_PATH: 'shell:open-path',
   PERMISSION_RESPOND: 'permission:respond',
   REMOTE_GET_CONFIG: 'remote:get-config',
@@ -1514,6 +1515,9 @@ contextBridge.exposeInMainWorld('claude', {
     // Reveal a file in the OS file manager (Finder / Explorer / Files).
     showItemInFolder: (filePath: string): Promise<void> =>
       ipcRenderer.invoke(IPC.SHOW_ITEM_IN_FOLDER, { filePath }),
+    // Copy a chat picture to the clipboard, or save it where the person picks (card #143 a). The computer fetches the bytes.
+    pictureAction: (action: 'copy' | 'save', src: string): Promise<{ ok: boolean; canceled?: boolean; reason?: string }> =>
+      ipcRenderer.invoke(IPC.PICTURE_ACTION, { action, src }),
     // Open a local file with the OS default app (HTML→browser, .docx→Word, …).
     // Returns the empty string on success, or an error message on failure.
     openPath: (filePath: string): Promise<string> =>

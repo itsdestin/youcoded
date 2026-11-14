@@ -10,6 +10,7 @@ import path from 'path';
 import { clipboard, dialog, nativeImage, shell, type BrowserWindow } from 'electron';
 import { safeOpenExternal, openPathSafely } from '../safe-open';
 import { IPC } from '../../shared/backend-contract';
+import { runPictureAction } from '../picture-actions';
 import { privateTempDirOrFresh } from '../private-temp-dir';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
@@ -134,6 +135,12 @@ export const shellChannels: MainChannelDef[] = [
   defineChannel({
     name: IPC.SHOW_ITEM_IN_FOLDER, kind: 'handle', desktopOnly: true,
     handler: async ({ filePath }) => { if (typeof filePath === 'string' && filePath.length > 0) shell.showItemInFolder(filePath); },
+  }),
+
+  // Copy or save a picture from a chat (card #143 a). desktopOnly: it uses the computer's clipboard and save window.
+  defineChannel({
+    name: IPC.PICTURE_ACTION, kind: 'handle', desktopOnly: true,
+    handler: async (payload) => runPictureAction(payload?.action === 'save' ? 'save' : 'copy', payload?.src, getMainWindow()),
   }),
 
   // Open a local file with the OS default app (HTML to browser, .docx to Word, ...). Resolves with '' on success or an
