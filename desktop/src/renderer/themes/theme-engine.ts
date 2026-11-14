@@ -430,7 +430,8 @@ export function computeBrandTokens(
   // cannot measure leaves the fixed colours as they are, which is exactly what happened before this adjustment existed.
   const surface = (c: unknown): string | null => {
     if (typeof c !== 'string') return null;
-    const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c.trim());
+    // #RRGGBBAA (8 digits) is read by its first six: the surface's own colour, ignoring transparency.
+    const m = /^#([0-9a-f]{3}|[0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(c.trim());
     if (!m) return null;
     const h = m[1].length === 3 ? m[1].replace(/./g, (d) => d + d) : m[1];
     return '#' + h.toUpperCase();

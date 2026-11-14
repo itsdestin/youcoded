@@ -603,7 +603,9 @@ export class SessionManager extends EventEmitter {
           if (!this.sessions.has(id)) return;
           const exitingSession = this.sessions.get(id)!;
           exitingSession.info.status = 'destroyed';
-          this.emit('session-exit', id, deliberate ? 0 : msg.exitCode);
+          // WHY `stoppedAtExit`: if the process 'exit' event came first, the handoff entry is already gone, but a signal code from the
+          // deliberately stopped PTY (e.g. 143) must still read as a clean stop, not as a crash.
+          this.emit('session-exit', id, deliberate || stoppedAtExit ? 0 : msg.exitCode);
           this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
           break;
       }
@@ -611,6 +613,8 @@ export class SessionManager extends EventEmitter {
 
     // Set while the worker's process has exited but its message channel may still hold unread frames (see 'exit' below).
     let settling = false;
+    // Whether a handoff stop was in progress when the process 'exit' event arrived (the handoff entry is cleared at that moment).
+    let stoppedAtExit = false;
     let channelClosed: (() => void) | null = null;
     worker.on('disconnect', () => {
       workerGone = true;
@@ -630,6 +634,7 @@ export class SessionManager extends EventEmitter {
       // would show "ended unexpectedly" after a clean /exit. So the decision waits until the channel has closed (every
       // frame delivered before 'disconnect') or a short settle passes, and a real exit message that arrives meanwhile wins.
       const deliberateStop = this.handoffStops.has(id) || this.handoffStopping.has(id);
+      stoppedAtExit = deliberateStop;
       this.handoffStops.get(id)?.finish({ status: 'unknown' });
       this.handoffStopping.delete(id);
       clearTimeout(commandFallbackTimer);
@@ -646,6 +651,7 @@ export class SessionManager extends EventEmitter {
       };
       channelClosed = decide;
       timer = setTimeout(decide, EXIT_SETTLE_MS);
+      (timer as { unref?: () => void }).unref?.(); // never keep the app alive for this (some environments' timers have no unref)
       if (!worker.connected) decide(); // channel already closed: nothing more can arrive
     });
 

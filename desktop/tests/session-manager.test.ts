@@ -640,6 +640,18 @@ describe('SessionManager', () => {
       expect(codes).toEqual([0]);                              // exactly one answer, and it is the clean one
     });
 
+    it('keeps a deliberate handoff stop clean (0) when the exit event comes first and the frame carries a signal code', () => {
+      const info = manager.createSession({ name: 'handoff', cwd: tmpDir, skipPermissions: false });
+      const codes: number[] = [];
+      manager.on('session-exit', (_id: string, code: number) => codes.push(code));
+      void manager.stopSessionForHandoff(info.id);
+      lastHandler('exit')();                                       // process exit event first (handoff entry cleared here)
+      lastHandler('message')({ type: 'exit', exitCode: 143 });     // then the frame, carrying SIGTERM's code
+      lastHandler('disconnect')();
+      vi.advanceTimersByTime(1000);
+      expect(codes).toEqual([0]);
+    });
+
     it('reports a worker that died without any exit message as an unexpected exit (1), once the channel has closed', () => {
       manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
       const codes: number[] = [];

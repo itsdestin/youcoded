@@ -62,12 +62,14 @@ describe('brand colour adjustment', () => {
 
   it('never throws on missing, invalid or 3-digit surface colours', () => {
     const base = BRAND_BASE.light;
-    for (const bad of [undefined, null, '', 'red', 'rgb(1,2,3)', '#12', '#GGGGGG', 42, '#12345678']) {
+    for (const bad of [undefined, null, '', 'red', 'rgb(1,2,3)', '#12', '#GGGGGG', 42, '#1234567', '#123456789']) {
       const out = computeBrandTokens({ canvas: bad as any, panel: '#D4C5E6' }, false);
       expect(out['--brand-claude']).toBe(base.claude);
       expect(() => computeBrandTokens({ canvas: '#FFFFFF', panel: bad as any }, false)).not.toThrow();
     }
     expect(() => computeBrandTokens(undefined as any, true)).not.toThrow();
+    // An 8-digit #RRGGBBAA surface is read by its first six digits.
+    expect(computeBrandTokens({ canvas: '#FFFFFF', panel: '#D4C5E680' }, false)).toEqual(computeBrandTokens({ canvas: '#FFFFFF', panel: '#D4C5E6' }, false));
     // A 3-digit hex is understood, not rejected: "#dcf" is the same pale panel as "#DDCCFF".
     expect(computeBrandTokens({ canvas: '#fff', panel: '#dcf' }, false)).toEqual(computeBrandTokens({ canvas: '#FFFFFF', panel: '#DDCCFF' }, false));
   });
