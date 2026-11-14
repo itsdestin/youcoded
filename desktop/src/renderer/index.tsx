@@ -149,6 +149,13 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
   // viewport width, so useNarrowViewport() sees a real narrow viewport. The
   // outer document renders the toolbar frame around it.
   const isChild = new URLSearchParams(location.search).get('child') === '1';
+  // WHY (Destin, review deck Q-9, 2026-11-14: "block them from the website"): the landing page's demo is this same build with
+  // VITE_WORKBENCH=1, so every developer practice page below used to be reachable from a web address there. They now exist ONLY in
+  // the dev workbench (import.meta.env.DEV) and the photo-only `shoot` build (__SHOOT__). In the site build both are literal
+  // `false`, so each guarded branch folds away and its chunk is never emitted — left OUT of the bundle, not hidden at run time.
+  // The demo itself (`?mode=workbench&child=1&scenario=site`) is unaffected. Guard: tests/shoot-build-guard.test.ts.
+  // @ts-ignore TS1343 — import.meta is intercepted by Vite at build time
+  const __devPages = import.meta.env.DEV || (typeof __SHOOT__ !== 'undefined' && __SHOOT__);
   import('./dev/workbench/install-mock').then(async ({ installMock }) => {
     // The mock installs in BOTH documents: the child needs it to run the app,
     // and the parent frame would otherwise fall through to Root's login path if
@@ -158,7 +165,7 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
     // alternative style systems. `?proposal=<name>` (or VITE_STYLE_PROPOSAL for
     // a whole screenshot sweep) layers dev/workbench/proposals/<name>.css over
     // the real renderer. Workbench-only: this branch never ships in the app.
-    const __proposal = new URLSearchParams(location.search).get('proposal')
+    const __proposal = !__devPages ? undefined : new URLSearchParams(location.search).get('proposal')
       // @ts-ignore TS1343 — import.meta is intercepted by Vite at build time
       ?? (import.meta.env.VITE_STYLE_PROPOSAL as string | undefined);
     if (__proposal) {
@@ -181,135 +188,138 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
         document.head.prepend(style);
       }
     }
-    if (isChild) {
+    // In the site build there is no toolbar page either: any address opens the demo app itself.
+    if (isChild || !__devPages) {
       // The tool gallery is a separate surface, not part of the app shell, so it
       // renders in place of <App/> rather than inside it. It DOES get a real
       // ThemeProvider — the ?mode=tool-sandbox route it replaces rendered
       // outside the provider tree and so was never themed.
-      const __view = new URLSearchParams(location.search).get('view');
-      if (__view === 'tools') {
-        const [{ ToolGallery }, { ThemeProvider }] = await Promise.all([
-          import('./dev/workbench/ToolGallery'),
-          import('./state/theme-context'),
-        ]);
-        __mount.render(<ThemeProvider><ToolGallery /></ThemeProvider>);
-        return;
-      }
-      // Comparison view — same deal as the tool gallery: its own surface, not
-      // part of the app shell, so it replaces <App/> rather than mounting
-      // inside it. ChatProvider rides along because a candidate may isolate a
-      // chat-side component (ToolCard calls useChatDispatch and would crash
-      // outside it); it costs nothing for candidates that don't.
-      if (__view === 'compare') {
-        const [{ CompareView }, { ThemeProvider }, { ChatProvider }] = await Promise.all([
-          import('./dev/workbench/CompareView'),
-          import('./state/theme-context'),
-          import('./state/chat-context'),
-        ]);
-        __mount.render(<ThemeProvider><ChatProvider><CompareView /></ChatProvider></ThemeProvider>);
-        return;
-      }
-      // ONE candidate from the compare registry, alone and chrome-free — what a review
-      // deck embeds as a live pane (?view=live&surface=…&round=…&candidate=…), and with no
-      // ?surface an index of every candidate there is. Both providers for the same reason
-      // view=compare documents: a candidate may borrow a real chat component and would
-      // crash outside ChatProvider.
-      if (__view === 'live') {
-        // WHY: real popup candidates use the app's centralized Escape stack;
-        // without its provider the hook soft-fails and a live pane falsely
-        // reports that Escape cannot dismiss either popup.
-        const [{ LiveCandidate }, { ThemeProvider }, { ChatProvider }, { EscCloseProvider }] = await Promise.all([
-          import('./dev/workbench/LiveCandidate'),
-          import('./state/theme-context'),
-          import('./state/chat-context'),
-          import('./hooks/use-esc-close'),
-        ]);
-        __mount.render(<ThemeProvider><ChatProvider><EscCloseProvider><LiveCandidate /></EscCloseProvider></ChatProvider></ThemeProvider>);
-        return;
-      }
-      // Attachment-chip page (dev/workbench/mockups/AttachmentChips.tsx) — the
-      // two unpicked mock-ups (A, B) beside the SHIPPING card (C, the real
-      // AttachmentChip) over the same sample files, so the page can't drift
-      // from the composer. Own surface like the two above; ThemeProvider so it
-      // reads correctly in all six themes, no ChatProvider because nothing in
-      // it touches chat state.
-      if (__view === 'attachments') {
-        const [{ AttachmentChipsMockup }, { ThemeProvider }] = await Promise.all([
-          import('./dev/workbench/mockups/AttachmentChips'),
-          import('./state/theme-context'),
-        ]);
-        __mount.render(<ThemeProvider><AttachmentChipsMockup /></ThemeProvider>);
-        return;
-      }
-      // Card #182 review: the 20-second strip with and without the draft line (dev/workbench/mockups/UnreachableStripDemo.tsx).
-      if (__view === 'unreachable-strip') {
-        const [{ UnreachableStripDemo }, { ThemeProvider }] = await Promise.all([
-          import('./dev/workbench/mockups/UnreachableStripDemo'),
-          import('./state/theme-context'),
-        ]);
-        __mount.render(<ThemeProvider><UnreachableStripDemo /></ThemeProvider>);
-        return;
-      }
-      // Session status-pill page (dev/workbench/mockups/SessionStatusPills.tsx)
-      // — the five states of the All Sessions menu's pill and what each means,
-      // rendering the shipping pill so the words cannot drift from the menu.
-      if (__view === 'session-pills') {
-        const [{ SessionStatusPillsMockup }, { ThemeProvider }] = await Promise.all([
-          import('./dev/workbench/mockups/SessionStatusPills'),
-          import('./state/theme-context'),
-        ]);
-        __mount.render(<ThemeProvider><SessionStatusPillsMockup /></ThemeProvider>);
-        return;
-      }
-      // The buddy floater's empty screen (dev/workbench/mockups/BuddySessionScreens.tsx)
-      // — its New session form and Resume list at the floater's real 320x480, so
-      // both panes can be operated in every theme without launching a dev
-      // Electron instance. ThemeProvider so the themes are the real ones; no
-      // ChatProvider because nothing on that screen touches chat state.
-      // The buddy's chat window with a conversation in it (dev/workbench/mockups/BuddyChatScreen.tsx) — the buddy
-      // rebuild's review screen. It brings its own providers, as the real buddy window does.
-      // The whole buddy group on a desktop (dev/workbench/mockups/BuddyGroupScreen.tsx) — where its actions live.
-      if (__view === 'buddy-group') {
-        const [{ BuddyGroupScreen }, { ThemeProvider }] = await Promise.all([
-          import('./dev/workbench/mockups/BuddyGroupScreen'),
-          import('./state/theme-context'),
-        ]);
-        __mount.render(<ThemeProvider><BuddyGroupScreen /></ThemeProvider>);
-        return;
-      }
-      if (__view === 'buddy-chat') {
-        const { BuddyChatScreen } = await import('./dev/workbench/mockups/BuddyChatScreen');
-        __mount.render(<BuddyChatScreen />);
-        return;
-      }
-      if (__view === 'buddy-session') {
-        const [{ BuddySessionScreensMockup }, { ThemeProvider }] = await Promise.all([
-          import('./dev/workbench/mockups/BuddySessionScreens'),
-          import('./state/theme-context'),
-        ]);
-        __mount.render(<ThemeProvider><BuddySessionScreensMockup /></ThemeProvider>);
-        return;
-      }
-      // Photo-only build (`shoot`): install the driver that opens named screens
-      // directly. `__SHOOT__` is false in every other build, so this import and the
-      // screen list never ship in the app or the landing page's demo.
-      if (typeof __SHOOT__ !== 'undefined' && __SHOOT__) {
-        const [{ installScreenDriver }, { SCREENS }, { default: IconSheet }, { default: PillSheet }, { default: OpenTasksPractice }, { default: GatePractice }, { default: ToastPractice }] = await Promise.all([
-          import('./shoot-mode'),
-          import('./dev/workbench/screens'),
-          // The icon sheet (`dev/icons`) sits beside the app only in the photo-only build.
-          import('./dev/workbench/IconSheet'),
-          // So does the status-tag sheet (`dev/pills`, submit-ticket-5 tint check).
-          import('./dev/workbench/PillSheet'),
-          // And the Open tasks popup over practice tasks (`dev/open-tasks`, submit-ticket-5).
-          import('./dev/workbench/OpenTasksPractice'),
-          // And the phone's start-up screens and two new notices (`dev/gate`, `dev/toast`; phone-reliability deck).
-          import('./dev/workbench/GatePractice'),
-          import('./dev/workbench/ToastPractice'),
-        ]);
-        installScreenDriver(SCREENS);
-        __mount.render(<><App /><IconSheet /><PillSheet /><OpenTasksPractice /><GatePractice /><ToastPractice /></>);
-        return;
+      if (__devPages) {
+        const __view = new URLSearchParams(location.search).get('view');
+        if (__view === 'tools') {
+          const [{ ToolGallery }, { ThemeProvider }] = await Promise.all([
+            import('./dev/workbench/ToolGallery'),
+            import('./state/theme-context'),
+          ]);
+          __mount.render(<ThemeProvider><ToolGallery /></ThemeProvider>);
+          return;
+        }
+        // Comparison view — same deal as the tool gallery: its own surface, not
+        // part of the app shell, so it replaces <App/> rather than mounting
+        // inside it. ChatProvider rides along because a candidate may isolate a
+        // chat-side component (ToolCard calls useChatDispatch and would crash
+        // outside it); it costs nothing for candidates that don't.
+        if (__view === 'compare') {
+          const [{ CompareView }, { ThemeProvider }, { ChatProvider }] = await Promise.all([
+            import('./dev/workbench/CompareView'),
+            import('./state/theme-context'),
+            import('./state/chat-context'),
+          ]);
+          __mount.render(<ThemeProvider><ChatProvider><CompareView /></ChatProvider></ThemeProvider>);
+          return;
+        }
+        // ONE candidate from the compare registry, alone and chrome-free — what a review
+        // deck embeds as a live pane (?view=live&surface=…&round=…&candidate=…), and with no
+        // ?surface an index of every candidate there is. Both providers for the same reason
+        // view=compare documents: a candidate may borrow a real chat component and would
+        // crash outside ChatProvider.
+        if (__view === 'live') {
+          // WHY: real popup candidates use the app's centralized Escape stack;
+          // without its provider the hook soft-fails and a live pane falsely
+          // reports that Escape cannot dismiss either popup.
+          const [{ LiveCandidate }, { ThemeProvider }, { ChatProvider }, { EscCloseProvider }] = await Promise.all([
+            import('./dev/workbench/LiveCandidate'),
+            import('./state/theme-context'),
+            import('./state/chat-context'),
+            import('./hooks/use-esc-close'),
+          ]);
+          __mount.render(<ThemeProvider><ChatProvider><EscCloseProvider><LiveCandidate /></EscCloseProvider></ChatProvider></ThemeProvider>);
+          return;
+        }
+        // Attachment-chip page (dev/workbench/mockups/AttachmentChips.tsx) — the
+        // two unpicked mock-ups (A, B) beside the SHIPPING card (C, the real
+        // AttachmentChip) over the same sample files, so the page can't drift
+        // from the composer. Own surface like the two above; ThemeProvider so it
+        // reads correctly in all six themes, no ChatProvider because nothing in
+        // it touches chat state.
+        if (__view === 'attachments') {
+          const [{ AttachmentChipsMockup }, { ThemeProvider }] = await Promise.all([
+            import('./dev/workbench/mockups/AttachmentChips'),
+            import('./state/theme-context'),
+          ]);
+          __mount.render(<ThemeProvider><AttachmentChipsMockup /></ThemeProvider>);
+          return;
+        }
+        // Card #182 review: the 20-second strip with and without the draft line (dev/workbench/mockups/UnreachableStripDemo.tsx).
+        if (__view === 'unreachable-strip') {
+          const [{ UnreachableStripDemo }, { ThemeProvider }] = await Promise.all([
+            import('./dev/workbench/mockups/UnreachableStripDemo'),
+            import('./state/theme-context'),
+          ]);
+          __mount.render(<ThemeProvider><UnreachableStripDemo /></ThemeProvider>);
+          return;
+        }
+        // Session status-pill page (dev/workbench/mockups/SessionStatusPills.tsx)
+        // — the five states of the All Sessions menu's pill and what each means,
+        // rendering the shipping pill so the words cannot drift from the menu.
+        if (__view === 'session-pills') {
+          const [{ SessionStatusPillsMockup }, { ThemeProvider }] = await Promise.all([
+            import('./dev/workbench/mockups/SessionStatusPills'),
+            import('./state/theme-context'),
+          ]);
+          __mount.render(<ThemeProvider><SessionStatusPillsMockup /></ThemeProvider>);
+          return;
+        }
+        // The buddy floater's empty screen (dev/workbench/mockups/BuddySessionScreens.tsx)
+        // — its New session form and Resume list at the floater's real 320x480, so
+        // both panes can be operated in every theme without launching a dev
+        // Electron instance. ThemeProvider so the themes are the real ones; no
+        // ChatProvider because nothing on that screen touches chat state.
+        // The buddy's chat window with a conversation in it (dev/workbench/mockups/BuddyChatScreen.tsx) — the buddy
+        // rebuild's review screen. It brings its own providers, as the real buddy window does.
+        // The whole buddy group on a desktop (dev/workbench/mockups/BuddyGroupScreen.tsx) — where its actions live.
+        if (__view === 'buddy-group') {
+          const [{ BuddyGroupScreen }, { ThemeProvider }] = await Promise.all([
+            import('./dev/workbench/mockups/BuddyGroupScreen'),
+            import('./state/theme-context'),
+          ]);
+          __mount.render(<ThemeProvider><BuddyGroupScreen /></ThemeProvider>);
+          return;
+        }
+        if (__view === 'buddy-chat') {
+          const { BuddyChatScreen } = await import('./dev/workbench/mockups/BuddyChatScreen');
+          __mount.render(<BuddyChatScreen />);
+          return;
+        }
+        if (__view === 'buddy-session') {
+          const [{ BuddySessionScreensMockup }, { ThemeProvider }] = await Promise.all([
+            import('./dev/workbench/mockups/BuddySessionScreens'),
+            import('./state/theme-context'),
+          ]);
+          __mount.render(<ThemeProvider><BuddySessionScreensMockup /></ThemeProvider>);
+          return;
+        }
+        // Photo-only build (`shoot`): install the driver that opens named screens
+        // directly. `__SHOOT__` is false in every other build, so this import and the
+        // screen list never ship in the app or the landing page's demo.
+        if (typeof __SHOOT__ !== 'undefined' && __SHOOT__) {
+          const [{ installScreenDriver }, { SCREENS }, { default: IconSheet }, { default: PillSheet }, { default: OpenTasksPractice }, { default: GatePractice }, { default: ToastPractice }] = await Promise.all([
+            import('./shoot-mode'),
+            import('./dev/workbench/screens'),
+            // The icon sheet (`dev/icons`) sits beside the app only in the photo-only build.
+            import('./dev/workbench/IconSheet'),
+            // So does the status-tag sheet (`dev/pills`, submit-ticket-5 tint check).
+            import('./dev/workbench/PillSheet'),
+            // And the Open tasks popup over practice tasks (`dev/open-tasks`, submit-ticket-5).
+            import('./dev/workbench/OpenTasksPractice'),
+            // And the phone's start-up screens and two new notices (`dev/gate`, `dev/toast`; phone-reliability deck).
+            import('./dev/workbench/GatePractice'),
+            import('./dev/workbench/ToastPractice'),
+          ]);
+          installScreenDriver(SCREENS);
+          __mount.render(<><App /><IconSheet /><PillSheet /><OpenTasksPractice /><GatePractice /><ToastPractice /></>);
+          return;
+        }
       }
       // App is already statically imported above (Root renders it).
       __mount.render(<App />);
