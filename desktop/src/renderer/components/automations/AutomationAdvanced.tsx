@@ -48,7 +48,7 @@ export function AdvancedSettings({ job, onChange, openFirst = false }: { job: Au
         value={job.late} onChange={(v) => onChange({ late: v })}
         options={[
           { value: 'run', label: 'Run once on wake', short: 'Runs once on wake', pro: 'You still get it, a bit late.', con: 'It may run at a busy moment.' },
-          { value: 'later', label: 'Run at another time', short: `Runs at ${job.lateAt ?? '18:00'}`, pro: 'It waits for a time that suits you.', con: 'You wait longer for it.' },
+          { value: 'later', label: 'Run at another time', short: `Runs at ${job.lateAt ?? '18:00'}`, pro: 'It runs at the time you pick.', con: 'You wait longer for it.' },
           { value: 'fallback', label: 'Run with other instructions', short: 'Runs with other instructions', pro: 'A late run can do something different, like a shorter summary.', con: 'One more thing to write.' },
           { value: 'skip', label: 'Skip it', short: 'Skips it', pro: 'Nothing runs late.', con: 'That run never happens.' },
         ]}>
@@ -81,18 +81,22 @@ function OptionFold<T extends string>({ subject, about, value, onChange, options
         <div className="text-xs text-fg-muted">{about}</div>
         <RadioGroup options={options.map((o) => o.value)} value={value} onChange={(v) => onChange(v as T)} aria-label={subject} className="flex flex-col gap-1.5">
           {options.map((o) => (
-            <button key={o.value} type="button" onClick={() => onChange(o.value)}
+            <React.Fragment key={o.value}>
+            <button type="button" onClick={() => onChange(o.value)}
               className={`${CARD_LEVEL_2} flex items-start gap-2 text-left px-3 py-2 state-layer${value === o.value ? ' border-accent' : ''}`}>
-              <Radio checked={value === o.value} onChange={() => onChange(o.value)} className="mt-0.5" />
+              <Radio checked={value === o.value} onChange={() => onChange(o.value)} className="mt-0.5" aria-label={o.label} />
               <span className="flex flex-col gap-0.5 min-w-0">
                 <span className="text-sm text-fg">{o.label}</span>
                 <span className="text-2xs text-fg-2 flex gap-1.5"><span aria-hidden="true" className="w-2 shrink-0 text-center">+</span><span>{o.pro}</span></span>
                 <span className="text-2xs text-fg-muted flex gap-1.5"><span aria-hidden="true" className="w-2 shrink-0 text-center">−</span><span>{o.con}</span></span>
               </span>
             </button>
+            {/* WHY here (UX review U8): the chosen option's own field (a time, other instructions) sat under ALL the
+                options, far from the one it belongs to. */}
+            {value === o.value && children}
+            </React.Fragment>
           ))}
         </RadioGroup>
-        {children}
       </div>
     </FoldRow>
   );

@@ -168,7 +168,9 @@ const UNLISTED: ['never' | 'ask', string][] = [['never', 'Never'], ['ask', 'Asks
 function ModeMenu({ mode, name, onMode, onEdit, onRemove }: { mode: 'allow' | 'ask'; name: string; onMode: (m: 'allow' | 'ask') => void; onEdit?: () => void; onRemove: () => void }) {
   const [open, setOpen] = useState(false);
   return (
-    <Menu open={open} onOpenChange={setOpen} align="right" label={name}
+    // WHY w-max (UX review U3): hung from a short pill, the menu was only as wide as the pill and wrapped
+    // "Always allowed" onto two lines.
+    <Menu open={open} onOpenChange={setOpen} align="right" label={name} className="w-max"
       trigger={<PillButton tone={mode === 'allow' ? 'ok' : 'warning'} open={open} onClick={() => setOpen((o) => !o)} aria-label={`${name}: ${mode === 'allow' ? 'Always allowed' : 'Asks first'}`}>{mode === 'allow' ? 'Always allowed' : 'Asks first'}</PillButton>}>
       <MenuRadioItem checked={mode === 'allow'} onSelect={() => onMode('allow')}>Always allowed</MenuRadioItem>
       <MenuRadioItem checked={mode === 'ask'} onSelect={() => onMode('ask')}>Asks first</MenuRadioItem>
@@ -184,7 +186,7 @@ export function ChoicePill<T extends string>({ name, value, choices, onChange }:
   const [open, setOpen] = useState(false);
   const word = choices.find(([v]) => v === value)?.[1] ?? value;
   return (
-    <Menu open={open} onOpenChange={setOpen} align="right" label={name}
+    <Menu open={open} onOpenChange={setOpen} align="right" label={name} className="w-max"
       trigger={<PillButton open={open} onClick={() => setOpen((o) => !o)} aria-label={`${name}: ${word}`}>{word}</PillButton>}>
       {choices.map(([v, w]) => <MenuRadioItem key={v} checked={v === value} onSelect={() => onChange(v)}>{w}</MenuRadioItem>)}
     </Menu>

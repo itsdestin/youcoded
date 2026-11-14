@@ -49,7 +49,7 @@ export const MAX_RUNS_KEPT = 50;
 const pad = (n: number): string => String(n).padStart(2, '0');
 /** WHY local time: the daily limit says "It can run again tomorrow", which means this device's midnight
  *  (design-review ruling 5). */
-export const dayKey = (at: number): string => { const d = new Date(at); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+const dayKey = (at: number): string => { const d = new Date(at); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const monthKey = (at: number): string => dayKey(at).slice(0, 7);
 
 /** WHY checked: ids become folder names, so one with a slash or dots could reach outside the runs folder. */

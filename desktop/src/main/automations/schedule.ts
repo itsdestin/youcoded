@@ -44,7 +44,7 @@ export function nextDue(start: Schedule, after: number): number {
 }
 
 /** How late a run may start and still count as on time (a due check happens every 30 seconds). */
-export const ON_TIME_MS = 5 * 60_000;
+const ON_TIME_MS = 5 * 60_000;
 
 /** What the due check found for one schedule since it last looked.
  *  - 'none'   nothing came due

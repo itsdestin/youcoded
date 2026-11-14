@@ -31,6 +31,21 @@ const MENU = 'layer-surface absolute top-full mt-1 rounded-md p-1.5 text-xs shad
 const ITEM = 'w-full text-left px-2 py-1.5 rounded text-fg-2 hover:text-fg hover:bg-inset focus:outline-none focus-visible:text-fg focus-visible:bg-inset disabled:opacity-40 transition-colors';
 const ITEMS = '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)';
 
+/** A menu opened near the foot of a scrolling popup hung past its edge, so its last rows were cut off (UX
+ *  review U4). This scrolls that popup just far enough to show the whole menu.
+ *  WHY not `scrollIntoView`: it also shifts ancestors that hide their overflow (the app shell), which never
+ *  scroll back. Only the nearest area the person can scroll themselves is moved. Runs once per open. */
+function revealInScroller(menu: HTMLElement | null): void {
+  if (!menu || typeof getComputedStyle !== 'function') return;
+  for (let el = menu.parentElement; el; el = el.parentElement) {
+    const flow = getComputedStyle(el).overflowY;
+    if (flow !== 'auto' && flow !== 'scroll') continue;
+    const over = menu.getBoundingClientRect().bottom - el.getBoundingClientRect().bottom;
+    if (over > 0) el.scrollTop += over + 8;
+    return;
+  }
+}
+
 /** Closes the menu after an item's own action (and gives focus back to the trigger). */
 const ChooseContext = createContext<(fn: () => void) => void>((fn) => fn());
 
@@ -80,8 +95,9 @@ export function Menu({ open, onOpenChange, trigger, align = 'left', label, class
       const t = trig();
       if (t && document.activeElement === t) {
         const all = items();
-        (all.find((el) => el.getAttribute('aria-checked') === 'true') ?? all[0])?.focus();
+        (all.find((el) => el.getAttribute('aria-checked') === 'true') ?? all[0])?.focus({ preventScroll: true });
       }
+      revealInScroller(menuRef.current);
     }
     wasOpen.current = open;
   }, [open]);

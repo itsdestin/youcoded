@@ -229,7 +229,9 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
 function DeleteRow({ name, startOpen, onDelete }: { name: string; startOpen: boolean; onDelete: () => void }) {
   const [asking, setAsking] = useState(startOpen);
   const ref = React.useRef<HTMLDivElement>(null);
-  useEffect(() => { if (startOpen) ref.current?.scrollIntoView({ block: 'end' }); }, [startOpen]);
+  // WHY on every open, not only the photo's (UX review U2): the question is taller than the button it replaces,
+  // so it opened below the visible part of the popup and the press looked like it did nothing.
+  useEffect(() => { if (asking) ref.current?.scrollIntoView?.({ block: 'end' }); }, [asking]);
   if (!asking) return <div ref={ref} className="flex justify-end"><Button variant="danger-outline" size="sm" onClick={() => setAsking(true)}>Delete automation</Button></div>;
   return (
     <div ref={ref}><Callout tone="danger" actionsPlacement="below" data-automation-delete
