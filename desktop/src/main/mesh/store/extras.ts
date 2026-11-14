@@ -72,9 +72,11 @@ export class Extras {
    */
   async read(hash: string): Promise<Buffer | null> {
     const p = this.path(hash);
+    // the record is loaded (and rebuilt from the folder when it lost something) on the FIRST read of a run, whether or not this blob is there
+    const recorded = await this.manifest();
     const b = await this.fs.readFile(p);
     if (!b) {
-      if ((await this.manifest()).has(hash)) throw new StoreError('corrupt', `extra ${hash.slice(0, 8)} was stored but its file is gone`);
+      if (recorded.has(hash)) throw new StoreError('corrupt', `extra ${hash.slice(0, 8)} was stored but its file is gone`);
       return null;
     }
     if (sha(b) !== hash) { await this.quarantine(p, hash); throw new StoreError('corrupt', `extra ${hash.slice(0, 8)} did not match its hash and was set aside`); }

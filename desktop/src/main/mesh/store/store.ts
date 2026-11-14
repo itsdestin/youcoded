@@ -1,23 +1,29 @@
 // Seam S2: the chat store. On disk under a caller-supplied root; pure library, called by nothing yet.
 //
-// THE ONE INVARIANT (review 3, class fix). Every acknowledged line is either served byte-identical, or reported as damaged/evicted with its
-// bytes still present somewhere under the root; never silently absent, never served wrong. No single-file fault (any one bit or byte in ANY
-// file under the root, or any one file missing, truncated or zero-length) and no single crash point may break this. No destructive action
-// (unlink, truncate, overwrite of a body or of the only copy of anything acknowledged) is ever taken on the say-so of a file that is not
-// integrity-checked and cross-checked against an independent record.
-// Two honest limits: (1) a fault that destroys the ONLY copy of some bytes (a body chunk, a control log, an extra, a kept tail) destroys them; the store
-// then never serves them wrong and always reports it (a chain mismatch, `damagedFromLine`, `controlDamage`, a typed error) so a peer's copy can heal it.
-// (2) Two faults are not promised, except that the store repairs every second copy it finds damaged AS IT LOADS (meta, checkpoint), so a fault found at
-// open and a later fault in the other copy are again one fault at a time. Enforced by faults.test.ts, fuzz.test.ts (random crash points x one fault in a
-// random file of the real folder x reopen, invariant checked every time; opt-in long run by environment variable), inventory.test.ts (no file outside the
-// table below; every unlink/truncate/rename/overwrite carries a DESTRUCTIVE-OK(<why>) reason) and the mutation table in the review-3 fix notes.
+// THE ONE INVARIANT (review 3, class fix; extended by review 4). Every acknowledged line is either served byte-identical, or reported as damaged/evicted with its
+// bytes still present somewhere under the root; never silently absent, never served wrong. No single-file fault and no single crash point may break this, where a
+// file fault is ANY of: rotted bytes, an OLDER valid copy of the file put back, a valid copy that belongs to ANOTHER chat or version put in its place, the file
+// missing, or the file cut short at a clean boundary (a record, a slot, a line) so that nothing in it fails a checksum. Review 4 found that the first of these (rot)
+// was the only one the earlier rounds attacked; the other four are the "valid but WRONG file" class, which checksums cannot see. inventory.ts answers all five for every
+// file; the mechanisms are IDENTITY (version tags in the index header, the checkpoint slots and every small file), FRESHNESS (what must be current, the eviction state,
+// lives only in the checkpoint) and ANCHORS (the control log and the extras have a second record of what was acknowledged). No destructive action (unlink, truncate,
+// overwrite of a body or of the only copy of anything acknowledged) is ever taken on the say-so of a marker that was merely true once: a body is unlinked only inside
+// evictBody under a proof that was just verified (load never unlinks a body), and surplus body bytes are cut only after the index was checked against the checkpoint and
+// copied to torn/ first. A missing, short or cut body chunk costs exactly the lines it held (reported, a resend writes them back); it never hides the other lines.
+// Honest limits (inventory.ts): (1) a fault that destroys the ONLY copy of some bytes (a body chunk, a control log, an extra, a kept tail) destroys them; the store then
+// never serves them wrong and always reports it (a chain mismatch, `damagedFromLine`, `controlDamage`, a typed error) so a peer's copy can heal it. (2) After a successful
+// eviction the chain values of the evicted lines exist only in index.bin and its kept copies; a fault there that no kept copy covers quarantines the version. (3) Parked
+// appends are provisional. (4) Two faults are not promised, except that the store repairs every second copy it finds damaged AS IT LOADS (meta, checkpoint, control anchor).
+// Enforced by faults.test.ts, fuzz.test.ts (random crash points x one fault of EVERY kind in a random file of the real folder x reopen, invariant checked every time; opt-in
+// long run by environment variable), matrix.test.ts (every file x every fault, deterministic), inventory.test.ts (no file outside the table; five answers per row; every
+// unlink/truncate/rename/overwrite carries a DESTRUCTIVE-OK(<why>) reason) and the mutation table in the review-4 fix notes.
 //
 // EVERY FILE THE STORE WRITES, how a damaged copy is detected and what a damaged or missing one means (always non-destructive): inventory.ts.
 //
 // Layout (all names computed from validated ids, never from peer strings):
 //   <root>/FORMAT, <root>/LOCK
 //   <root>/versions/<vhex>/   one directory per version (vhex = hex of the opaque version id): the files above, plus
-//       index.bin             16-byte header (incl. classifier stamp) + one fixed-width record per line (records.ts)
+//       index.bin             36-byte header (classifier stamp, version tag, checksum) + one fixed-width record per line (records.ts)
 //       body-<startByte>.bin  raw line bytes, chunked; the index says where each line is
 //   <root>/aside/<vhex>-<n>/ and <vhex>-q<n>/   a copy found damaged and recopied / a QUARANTINED copy: index AND bodies moved aside intact
 //   <root>/extras/, <root>/extras-bad/, <root>/control/<sha256(chat)>/
@@ -36,9 +42,11 @@
 //    NOT adopted from their own bytes (review 3, F3: that is how rot in a crashed batch forked the head). If the checkpoint says they were
 //    acknowledged the index is re-derived from the body and CONFIRMED against the checkpoint's chain value; if it says they were not, they are kept
 //    in torn/ and cut; with neither (tail damaged and no checkpoint) they are kept AND reported (partial.json, damagedFromLine = the head).
-//  - a bad record followed by a valid one, a missing/short index, a bad header or a changed classifier stamp: rebuilt from the body keeping every valid
-//    old record, so a rotted line is reported alone and every later line is still served (F2). Nothing vouching at all: quarantine.
-//  - anything else (body shorter than the index or the checkpoint, a missing middle chunk, an unresolvable disagreement): the whole version (index AND
+//  - a bad record followed by a valid one, a missing/short index, a bad header, an index that belongs to another version or a changed classifier stamp: rebuilt from
+//    the body keeping every valid old record of THIS version, so a rotted line is reported alone and every later line is still served (F2). Nothing vouching at all: quarantine.
+//  - body files that are missing, short or cut (review 4, F3/F4): the lines whose bytes are not wholly inside a chunk file are reported damaged (the first one is
+//    `damagedFromLine`), every other line is served, new appends start a fresh chunk at the head, and a correct resend writes the lines back. Never "evicted".
+//  - only an unresolvable disagreement (a rebuild that cannot confirm anything, an index whose evicted-prefix records exist nowhere): the whole version (index AND
 //    bodies) is moved to aside/<vhex>-q<n>/, reports a typed `damaged` error and serves nothing until setAsideDamaged() clears it.
 // A full disk (N5) is one typed `disk-full` refusal; reads never write anything that can fail (a copy-then-cut a read could not do is postponed to the
 // next write, and a full keep-area is a typed `limit` for new writes only), and a failed append cuts back what it added.
@@ -379,7 +387,7 @@ export class ChatStore {
       convCount: last ? last.convCount : 0, bodyEnd,
       rs: last ? { cand: last.candN === NONE ? null : { n: last.candN, id: last.candId } } : initialReplyState(),
       evictedLines: ev.lines, evictedBytes: ev.bytes,
-      chunks, replyEndsCache: null, summarySavedAt: 0,
+      chunks, tailShort: layout.chunks.length > 0 && layout.phys < bodyEnd, replyEndsCache: null, summarySavedAt: 0,
       summary: { title: null, model: null, cwd: null, lastAppendMs: null, lines: 0 },
       badLine, scrubMark: 0, passEnd: 0, ck: ckState, deferred, summaryDirty: false, indexNeedsInit: !!ix.needsInit,
       partial, staleConv,
@@ -745,6 +753,12 @@ export class ChatStore {
       // WHY then compare the stored BYTES (H3): the chain check above only proves the index agrees with the
       // incoming line. If the body bytes on disk differ, answering `ok` would leave the damage in place.
       await this.repairBodies(st, fromLine, lines.slice(0, overlap), st.evictedLines);
+      // WHY (review 4): `ok` for lines that are already stored is an ACKNOWLEDGEMENT, and the checkpoint is the record of what was acknowledged. Lines can sit beyond it: an append
+      // that failed on a full disk wrote them but not its statement, and the reload could not repair that (a read never fails for lack of space). The statement is written now,
+      // before the answer; if that fails the caller gets the error, not an `ok`.
+      if (!st.ck.ck || st.ck.ck.count < fromLine + overlap) {
+        await appendCheckpoint(this.fs, st.dir, st.ck, { count: st.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: st.evictedLines, evBytes: st.evictedBytes, h: st.h, c: st.c });
+      }
     }
     const fresh = lines.slice(overlap);
     if (fresh.length) await this.writeNew(st, fresh);
@@ -761,7 +775,8 @@ export class ChatStore {
   private async repairBodies(st: VState, from: number, good: Buffer[], floor: number): Promise<void> {
     const lo = Math.max(from, floor); const hiLine = from + good.length;
     let run: { offset: number; parts: Buffer[]; len: number } | null = null;
-    const flush = async (): Promise<void> => { if (run) { const r = run; run = null; await this.writeAt(st, r.offset, Buffer.concat(r.parts)); } };
+    let wrote = false;
+    const flush = async (): Promise<void> => { if (run) { const r = run; run = null; wrote = true; await this.writeAt(st, r.offset, Buffer.concat(r.parts)); } };
     const isMissing = (e: unknown): boolean => (e instanceof StoreError && e.code === 'corrupt') || (e as { code?: string } | null)?.code === 'ENOENT';
     for (let a = lo; a < hiLine;) {
       const b = Math.min(hiLine, a + 256);
@@ -786,7 +801,7 @@ export class ChatStore {
           // DESTRUCTIVE-OK(kept-copy-first): the bad bytes are saved under a NEW name (never reused) before they are overwritten below
           await writeFileAtomic(this.fs, nodePath.join(hd, await nextNumbered(this.fs, hd, `line-${line}-`, '.bin', 1)), have);
           // DESTRUCTIVE-OK(verified-record): `want` hashes to the index record's chain value (checked by the caller) and the bytes replaced were saved to healed/ above
-          await this.writeAt(st, r.offset, want);
+          wrote = true; await this.writeAt(st, r.offset, want);
         } else if (run && run.offset + run.len === r.offset && !st.chunks.some((c) => c > run!.offset && c <= r.offset)) { run.parts.push(want); run.len += want.length; }
         else { await flush(); run = { offset: r.offset, parts: [want], len: want.length }; }
         if (st.scrubMark > line) st.scrubMark = line; // re-check from the healed line
@@ -794,6 +809,7 @@ export class ChatStore {
       a = b;
     }
     await flush();
+    if (!wrote) return;                                                // a resend that found everything in place changes nothing (and costs no directory scan)
     // the first line that is still not readable may now be a later one (or none)
     if (st.badLine !== null && st.badLine >= lo && st.badLine < hiLine) st.badLine = null;
     const gb = await this.gapBadLine(st);
@@ -843,7 +859,9 @@ export class ChatStore {
     if (active < 0 || st.bodyEnd - active >= this.chunkBytes) { chunkStart = st.bodyEnd; created = !st.chunks.includes(chunkStart); }
     // WHY (review 4, F3): an active chunk that is SHORTER than the index says lost its tail to a fault. New lines must not be written at a position past its end (that would
     // zero-fill the hole and the guard below would refuse every append): they start a NEW chunk at the head. The hole stays reported and a correct resend fills it.
-    else if ((await this.tools.fileSize(this.chunkPath(st, active))) < st.bodyEnd - active) { chunkStart = st.bodyEnd; created = !st.chunks.includes(chunkStart); }
+    else if (st.tailShort) {
+      if ((await this.tools.fileSize(this.chunkPath(st, active))) < st.bodyEnd - active) { chunkStart = st.bodyEnd; created = !st.chunks.includes(chunkStart); } else st.tailShort = false;
+    }
     try {
       const bf = await this.fs.open(this.chunkPath(st, chunkStart), { create: true });
       try {
@@ -872,6 +890,7 @@ export class ChatStore {
     await appendCheckpoint(this.fs, st.dir, st.ck, { count: bs.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: st.evictedLines, evBytes: st.evictedBytes, h: bs.h, c: bs.c });
     // acknowledged: now update memory
     if (created) st.chunks.push(chunkStart);
+    st.tailShort = false;                                       // the chunk just written to ends exactly at the new body end
     st.count = bs.count; st.h = bs.h; st.c = bs.c; st.convCount = bs.convCount; st.bodyEnd = bs.off; st.rs = bs.rs;
     if (st.replyEndsCache) st.replyEndsCache.push(...confirmedNow);
     const changed = sum.title !== st.summary.title || sum.model !== st.summary.model || sum.cwd !== st.summary.cwd;
@@ -977,7 +996,7 @@ export class ChatStore {
         if (!lines) { if (await this.moveAway(st, path, name)) progressed = true; else skip.add(name); continue; }
         const res = await this.applyLines(st, from, lines);
         if (res === 'not-a-prefix') { if (await this.moveAway(st, path, name)) progressed = true; else skip.add(name); }
-        // DESTRUCTIVE-OK(verified-record): the file passed its CRC when read above and applyLines returned `ok` (lines compared with the chain, fresh ones fsynced), so every line in it is in the version
+        // DESTRUCTIVE-OK(verified-record): the file passed its CRC and carried THIS version's identity tag when read above and applyLines returned `ok` (lines compared with the chain, fresh ones fsynced), so every line in it is in the version
         else { await this.fs.unlink(path); await this.fs.fsyncDir(dir); this.forgetParked(st, name); progressed = true; }
       }
       if (!progressed) return;
@@ -1117,7 +1136,10 @@ export class ChatStore {
           if (!this.mustRec(buf, i * REC).fact) continue;
           if (n + i < st.evictedLines) continue; // body gone: the fact stays as last saved
           // WHY unverified read: a summary is a convenience; one damaged line must not make the whole version unloadable
-          const info = analyseLine(st.meta.runtime, (await this.readRange(st, n + i, n + i + 1, false))[0]);
+          // WHY the catch (review 4): a line whose body is not on disk (a hole in the chunk files) leaves its fact as last saved; it must not make the version unloadable
+          let body: Buffer;
+          try { body = (await this.readRange(st, n + i, n + i + 1, false))[0]; } catch (e) { if (e instanceof StoreError && e.code === 'corrupt') continue; throw e; }
+          const info = analyseLine(st.meta.runtime, body);
           if (info.title !== undefined) sum.title = info.title;
           if (info.model !== undefined) sum.model = info.model;
           if (info.cwd !== undefined && sum.cwd === null) sum.cwd = info.cwd;
@@ -1138,7 +1160,7 @@ export class ChatStore {
     return this.exclusive(async () => {
       const out = [];
       for (const key of (await this.fs.readdir(nodePath.join(this.root, 'versions'))).sort()) {
-        if (!/^[0-9a-f]{2,256}$/.test(key) || key.length % 2) continue;
+        if (!/^[0-9a-f]{2,128}$/.test(key) || key.length % 2) continue;
         let base: { version: Buffer; chatId: string | null; runtime: RuntimeKind | null; parent: Buffer | null } = { version: unhex(key), chatId: null, runtime: null, parent: null };
         try {
           const meta = await this.readMetaIfPresent(this.vdir(key)); // registration may never have finished
@@ -1429,7 +1451,7 @@ export class ChatStore {
     let freed = 0; const keep: number[] = [];
     for (let i = 0; i < st.chunks.length; i++) {
       const end = i + 1 < st.chunks.length ? st.chunks[i + 1] : st.bodyEnd;
-      // DESTRUCTIVE-OK(verified-record): the holders' proof was accepted by the verifier, bound to this chain value, and the bytes were just re-hashed against the index (firstBadBody)
+      // DESTRUCTIVE-OK(verified-record): the CALLER'S proof (this very call: evictBody, or a later proof that finishes an interrupted eviction) was accepted by the verifier and bound to this chain value; load never reaches here, so no marker that was merely true once can unlink a body
       if (end <= upTo) { freed += end - st.chunks[i]; await this.fs.unlink(this.chunkPath(st, st.chunks[i])); } else keep.push(st.chunks[i]);
     }
     if (keep.length !== st.chunks.length) await this.fs.fsyncDir(st.dir);

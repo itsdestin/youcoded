@@ -17,6 +17,8 @@ export interface VState {
   evictedLines: number;
   evictedBytes: number;
   chunks: number[];             // start offsets of body chunk files, ascending
+  /** The last chunk file ends before the body end the index describes (a fault cut its tail): the next append checks the file's size once and starts a new chunk instead of writing past its end. */
+  tailShort: boolean;
   replyEndsCache: number[] | null;
   /** Line count when summary.json was last written; bounds how much open() has to catch up. */
   summarySavedAt: number;

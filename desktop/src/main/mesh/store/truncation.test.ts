@@ -103,13 +103,15 @@ describe('truncate at every byte offset of the last record', () => {
           fs.truncateSync(path.join(vdir(t.dir), 'index.bin'), ic);
           const bf = path.join(vdir(t.dir), 'body-0000000000000000.bin');
           fs.truncateSync(bf, fs.statSync(bf).size - drop);
-          // The last line was acknowledged (and checkpointed). Whole body: it is kept whatever the index lost. Part of it cut: an
-          // acknowledged line is missing, so the version is quarantined intact (never silently dropped, never served short).
+          // The last line was acknowledged (and checkpointed). Whole body: it is kept whatever the index lost. Part of it cut (two faults at once): the lines before
+          // it are served, the cut line is REPORTED (the checkpoint vouched for it; its old statement is kept in torn/), the chat is not hidden, and a resend heals it.
           if (drop === 0) await expectRecovered(t.dir, (n) => n === conv.length);
           else {
             const s = await ChatStore.open(t.dir);
-            await expect(s.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
-            await s.setAsideDamaged(V(1));
+            const h = await s.head(V(1));
+            expect(h.damagedFromLine).not.toBeNull();
+            expect(h.damagedFromLine).toBeGreaterThanOrEqual(conv.length - 1);
+            expect(((await s.read(V(1), 0, 0, 1)) as Buffer[])[0].equals(conv[0])).toBe(true);
             expect(await s.append(V(1), 0, 0, conv)).toBe('ok');
             expect((await s.verify(V(1))).ok).toBe(true);
             await s.close();

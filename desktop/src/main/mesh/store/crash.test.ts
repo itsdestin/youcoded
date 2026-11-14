@@ -63,7 +63,7 @@ async function sweep(sc: Scenario): Promise<{ ops: number; runs: number }> {
       try {
         await sc.setup?.(t.dir);
         const shadowDir = v.shadow ? fs.mkdtempSync(path.join(path.dirname(t.dir), 'shadow-')) : undefined;
-        const ffs = new FaultFs(k, { tear: v.tear, powerLoss: v.powerLoss, shadowDir, revertOverwrites: v.revert });
+        const ffs = new FaultFs(k, { tear: v.tear, powerLoss: v.powerLoss, shadowDir, revertOverwrites: v.revert, revertInPlace: v.revert });
         const progress = { acked: 0 };
         let crashed = false;
         try {

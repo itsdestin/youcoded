@@ -9,6 +9,8 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ChatStore } from './store';
 import { V, CHAT, tmpRoot } from './testkit';
+import { readCheckpoint } from './checkpoint';
+import { realFs, type Fs, type FileLike } from './fsio';
 import { nl } from './fixtures';
 
 const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
@@ -303,5 +305,94 @@ describe('F9 version id length is limited and documented', () => {
     expect(await s.append(id, 0, 0, lines(3))).toBe('ok');
     expect((await s.setAsideDamaged(id)).asideName).toMatch(/-2$/);   // a plain set-aside takes the next number
     await s.close(); await t.cleanup();
+  });
+});
+
+describe('what the fuzz of the fourth round found while the fixes were being built', () => {
+  it('a second loss in the control log cannot hide behind the first: entries acknowledged after a reported loss are still protected', async () => {
+    const t = await tmpRoot('r4c3-'); const root = t.dir; const chat = 'chat-d';
+    let s = await ChatStore.open(root, opts);
+    const mkc = (i: number) => { const body = Buffer.from(`entry-${i}-${'z'.repeat(20)}`); return { id: sha(body), chat, seen: [] as string[], body }; };
+    await s.appendControl(mkc(0)); await s.appendControl(mkc(1)); await s.close();
+    const dir = path.join(root, 'control', sha(Buffer.from(chat))); const lp = path.join(dir, 'log.bin');
+    const oneEntry = fs.readFileSync(lp).subarray(0, fs.readFileSync(lp).length / 2);
+    const b = fs.readFileSync(lp); b[b.length - 6] ^= 1; fs.writeFileSync(lp, b);          // fault 1: the second record rots (reported)
+    s = await ChatStore.open(root, opts);
+    expect((await s.controlDamage(chat)).length).toBeGreaterThan(0);
+    for (let i = 2; i < 5; i++) await s.appendControl(mkc(i));                               // three more are acknowledged while the loss stands
+    await s.close();
+    fs.writeFileSync(lp, oneEntry);                                                          // fault 2: the log is rolled back to one entry
+    s = await ChatStore.open(root, opts);
+    expect((await s.controlLog(chat)).length).toBe(1);
+    expect((await s.controlDamage(chat)).length).toBeGreaterThan(0);                         // still REPORTED
+    await s.close(); await t.cleanup();
+  });
+
+  it('a resend of lines that are stored beyond the checkpoint writes the checkpoint before it answers ok', async () => {
+    const { t, s, ls, root } = await fresh(12);
+    await s.close();
+    const cp = path.join(vdir(root), 'checkpoint.bin');
+    // an older statement (count 6): what a full disk leaves behind when an append wrote its lines but not its statement
+    const s0 = await ChatStore.open(root, opts); await s0.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' });
+    const { writeCheckpoint } = await import('./checkpoint');
+    const cur = (await readCheckpoint(realFs, vdir(root)))!;
+    const h6 = (await s0.hashAt(V(1), 0, 6))!;
+    await s0.close();
+    await writeCheckpoint(realFs, vdir(root), { ...cur, count: 6, h: Buffer.from(h6, 'hex') });
+    // a load on a full disk cannot repair the lag (a read never fails for lack of space)
+    let full = true;
+    const wrap = (f: FileLike): FileLike => ({ write: (b, p) => (full ? Promise.reject(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' })) : f.write(b, p)), read: (p, l) => f.read(p, l), size: () => f.size(), truncate: (l) => f.truncate(l), sync: () => f.sync(), close: () => f.close() });
+    const tog: Fs = { ...realFs, open: async (p, o) => { if (full && o.create && !(await realFs.exists(p))) throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }); return wrap(await realFs.open(p, o)); }, mkdir: async (p) => { if (full) throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }); return realFs.mkdir(p); } };
+    const s1 = await ChatStore.open(root, { ...opts, fs: tog }); await s1.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' });
+    expect((await s1.head(V(1))).lines).toBe(12);
+    expect((await readCheckpoint(realFs, vdir(root)))!.count).toBe(6);                       // not repaired yet
+    full = false;
+    expect(await s1.append(V(1), 0, 8, ls.slice(8, 12))).toBe('ok');                        // the resend acknowledges lines 8..11
+    expect((await readCheckpoint(realFs, vdir(root)))!.count).toBe(12);                      // so the statement had to be written first
+    expect(fs.existsSync(cp)).toBe(true);
+    await s1.close(); await t.cleanup();
+  });
+
+  it('an older checkpoint taken before a cut (it claims lines the cut removed) does not hide the chat: it is lowered, the claimed lines are reported', async () => {
+    const { t, s, root } = await fresh(30);
+    const cp = path.join(vdir(root), 'checkpoint.bin');
+    const before = fs.readFileSync(cp);
+    await s.setAsideTail('abcdef012345', V(1), 12);
+    await s.close();
+    fs.writeFileSync(cp, before);                                                            // the older statement: 30 lines
+    const s2 = await reopen(root);
+    const h = await s2.head(V(1));
+    expect(h.lines).toBe(12);
+    expect(h.damagedFromLine).not.toBeNull();                                                // the lines it vouched for are reported as set aside
+    expect(asideCount(root)).toBe(0);
+    expect((await s2.tail('abcdef012345'))!.lines.length).toBe(18);                          // and they are kept in the tail file
+    await s2.close(); await t.cleanup();
+  });
+
+  it('an older checkpoint that still records an eviction that a restore has since undone does not quarantine the chat', async () => {
+    const { t, s, ls, root } = await fresh(30);
+    await evict(s, 20);
+    const cp = path.join(vdir(root), 'checkpoint.bin'); const evicted = fs.readFileSync(cp);
+    await s.restoreBody(V(1), ls);
+    await s.setAsideTail('abcdef012345', V(1), 9);
+    await s.close();
+    fs.writeFileSync(cp, evicted);                                                           // the older statement: 30 lines, 20 of them evicted
+    const s2 = await reopen(root);
+    const h = await s2.head(V(1));
+    expect(h.lines).toBeGreaterThanOrEqual(9);
+    expect(asideCount(root)).toBe(0);
+    expect((await readAll(s2, ls.slice(0, 9))).slice(0, 9)).toMatch(/^[.E]+$/);
+    await s2.close(); await t.cleanup();
+  });
+
+  it('a body chunk that is too long (extra bytes past the next chunk) is harmless to a rebuild: the bytes past the next chunk\'s start are never read', async () => {
+    const { t, s, ls, root } = await fresh(30);
+    await s.close();
+    const files = bodies(root); fs.appendFileSync(path.join(vdir(root), files[0]), Buffer.from('trailing junk that is not a line'));
+    fs.rmSync(path.join(vdir(root), 'index.bin'));                                            // forces a rebuild from the bodies
+    const s2 = await reopen(root);
+    expect((await s2.head(V(1))).lines).toBe(30);
+    expect(await readAll(s2, ls)).toBe('.'.repeat(30));
+    await s2.close(); await t.cleanup();
   });
 });

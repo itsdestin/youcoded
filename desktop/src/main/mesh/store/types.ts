@@ -3,6 +3,7 @@ import type { Fs } from './fsio';
 import type { ChainSeedFn, RuntimeKind } from './chain';
 import type { ReplyEndOptions } from './classify';
 
+/** Opaque version id: 1 to 64 bytes (documented limit: the id becomes folder names in hex, and the longest name the store makes is `<hex>-q<n>`; `registerVersion` and every call refuse a longer id with `bad-argument`). Real ids are 32 bytes. */
 export type VersionId = Uint8Array;
 
 /**

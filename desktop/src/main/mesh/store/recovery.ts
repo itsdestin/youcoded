@@ -58,20 +58,6 @@ export class BodyTools {
     return chunks.sort((a, b) => a - b);
   }
 
-  /** Chunk files must meet end to end and the first must not start past the evicted bytes. */
-  async checkChunks(dir: string, ev: { bytes: number }): Promise<{ chunks: number[]; sizes: number[]; phys: number }> {
-    const chunks = await this.listChunks(dir);
-    const sizes: number[] = [];
-    for (const c of chunks) sizes.push(await this.fileSize(chunkPathOf(dir, c)));
-    if (!chunks.length) return { chunks, sizes, phys: ev.bytes };
-    for (let i = 0; i + 1 < chunks.length; i++) {
-      if (chunks[i] + sizes[i] !== chunks[i + 1]) throw new Damaged(`body chunk ${chunks[i].toString(16)} does not meet the next (a chunk is missing or the wrong length)`);
-    }
-    if (chunks[0] > ev.bytes) throw new Damaged('the first body chunk is missing');
-    const i = chunks.length - 1;
-    return { chunks, sizes, phys: chunks[i] + sizes[i] };
-  }
-
   /**
    * The body chunk files as they are, WITHOUT demanding that they form one gapless run (review 4, F3): `chunks` are the start offsets in order, `sizes` the
    * file sizes, `phys` the end of the last one. A missing, short or cut chunk is a hole in the byte space, found by `gapStart`; it must never hide the lines
@@ -239,11 +225,15 @@ export class BodyTools {
    * Nothing vouching at all (no valid record, no checkpoint) for a body with whole lines is refused as damaged (quarantine, bytes kept).
    */
   async rebuildIndex(dir: string, runtime: RuntimeKind, seeds: ChainSeeds, evIn: { hint: { lines: number; bytes: number } | null }, stamp: number, opts: { convStale?: boolean } = {}): Promise<RebuildResult> {
-    const layout = await this.checkChunks(dir, { bytes: evIn.hint?.bytes ?? 0 });
+    // WHY the lenient layout (review 4): a crash in the middle of a cut leaves a truncated chunk next to chunk files that were about to be removed, a hole beyond the
+    // lines the rebuild needs. Only a hole INSIDE the lines it has to read matters, and the cursor below reports exactly that (Damaged); the strict check refused the whole version.
+    const layout = await this.layout(dir);
     // eviction: the CHECKPOINT's record of it (hint) is the only candidate, and only when a prefix of valid records ends exactly there. WHY not "the first chunk file's
     // start" any more (review 4, F4): a deleted first chunk looks exactly like an eviction, and must be reported as damage, never relabelled as one.
     const candidates: { lines: number | null; bytes: number }[] = [];
     if (evIn.hint && evIn.hint.bytes > 0) candidates.push(evIn.hint);
+    // The checkpoint's record can be STALE (an older copy, written before a restore): when the bodies it says are gone are in fact there (a chunk file starts at 0), the
+    // prefix records can be derived from them like any others, so a prefix nothing else supplies is not a reason to quarantine.
     let ev: { lines: number | null; bytes: number } = { lines: 0, bytes: 0 };
     const oldPath = nodePath.join(dir, 'index.bin');
     const tmpPath = nodePath.join(dir, 'index.rebuild');
@@ -288,6 +278,8 @@ export class BodyTools {
         const buf = await r.f.read(recPos(first), Math.min(1024, r.slots - first) * REC);
         for (let i = Math.min(1024, r.slots - first) - 1; i >= 0; i--) if (decodeRecord(buf, i * REC)) { lastValid = Math.max(lastValid, first + i); break; }
       }
+      // WHY before the scratch file exists: refusing needs no free space, so a version nothing can vouch for is quarantined (typed `damaged`) even on a full disk
+      if (lastValid < 0 && !ckpt && !evIn.hint && (await this.countWholeLines(dir, 0)) > 0) throw new Damaged('nothing stored vouches for the body (no valid index record and no checkpoint): refusing to accept it');
       const nf = await open(tmpPath, true);
       // DESTRUCTIVE-OK(scratch): index.rebuild is a scratch file derived from the body and the old index; it is never the only copy of anything
       await nf.truncate(0);
@@ -313,13 +305,17 @@ export class BodyTools {
           }
           if (src) break;
         }
-        if (!src || !prefixBuf) throw new Damaged('the index records of the evicted lines are damaged and no other copy of them exists');
-        staleOut = src.mode === 'changed';
-        await nf.write(prefixBuf, recPos(0));
-        const lr = decodeRecord(prefixBuf, (evLines - 1) * REC)!;
-        start = { count: evLines, h: lr.h, c: lr.c, convCount: lr.convCount, off: lr.offset + lr.len, rs: { cand: lr.candN === NONE ? null : { n: lr.candN, id: lr.candId } } };
+        if (!src || !prefixBuf) {
+          if (!(layout.chunks.length > 0 && layout.chunks[0] === 0)) throw new Damaged('the index records of the evicted lines are damaged and no other copy of them exists');
+          ev = { lines: 0, bytes: 0 }; evLines = 0;   // derived from the bodies below; the rebuilt checkpoint forgets the stale eviction record
+        } else {
+          staleOut = src.mode === 'changed';
+          await nf.write(prefixBuf, recPos(0));
+          const lr = decodeRecord(prefixBuf, (evLines - 1) * REC)!;
+          start = { count: evLines, h: lr.h, c: lr.c, convCount: lr.convCount, off: lr.offset + lr.len, rs: { cand: lr.candN === NONE ? null : { n: lr.candN, id: lr.candId } } };
+        }
       }
-      const include = Math.max(lastValid + 1, ckpt ? ckpt.count : 0, evLines);
+      let include = Math.max(lastValid + 1, ckpt ? ckpt.count : 0, evLines);
       const cursor = new BodyCursor(this.fs, dir, layout, handles);
       const s: BatchState = { ...start };
       const sum: SumFacts = { title: null, model: null, cwd: null };
@@ -337,10 +333,21 @@ export class BodyTools {
         if (o) {
           if (o.rec.offset !== pos) { if (gapStart >= 0) { ambiguous = true; stopAt = gapStart; break; } throw new Damaged(`record ${i} says its line starts at byte ${o.rec.offset}, the body is at ${pos}`); }
           line = await cursor.take(pos, o.rec.len);
-          if (!line) throw new Damaged(`record ${i} survives but the body has no line for it`);
+          if (!line) {
+            // WHY not Damaged past the checkpoint (review 4): a record the checkpoint never vouched for and whose body is not there is not an acknowledged line. It comes from an
+            // OLDER index copy (replaced-index/ after a cut, an older index.bin) whose lines were cut away since. The rebuild ends before it; the lines before it are untouched.
+            if (ckpt && i >= ckpt.count && i >= evLines && gapStart < 0) { include = i; stopAt = i; break; }
+            throw new Damaged(`record ${i} survives but the body has no line for it`);
+          }
         } else {
           line = await cursor.takeLine(pos);
-          if (!line) throw new Damaged(`the body holds no line ${i}, but the index or the checkpoint vouches for it`);
+          if (!line) {
+            // WHY not Damaged when ONLY the checkpoint vouches for this line and every line before it has a valid record (review 4): the body holds exactly what the index
+            // holds, so the checkpoint is the file that is ahead of everything (an older copy taken before a cut, which setAsideTail makes legitimate). The lines the
+            // checkpoint claimed are reported as set aside (partial.json) and the old statement is kept in torn/ before it is lowered; the chat is not hidden.
+            if (i > lastValid && gapStart < 0) { ambiguous = true; stopAt = i; break; }
+            throw new Damaged(`the body holds no line ${i}, but the index or the checkpoint vouches for it`);
+          }
         }
         const sb = { ...s };
         const { recs } = this.encodeBatch(runtime, s, [line], sum);
@@ -527,14 +534,16 @@ class BodyCursor {
   private cache: { chunk: number; start: number; buf: Buffer } | null = null;
   private readonly files = new Map<number, FileLike>();
   constructor(private readonly fs: Fs, private readonly dir: string, private readonly layout: { chunks: number[]; sizes: number[] }, private readonly handles: FileLike[]) {}
-  private chunkIdx(pos: number): number { for (let i = 0; i < this.layout.chunks.length; i++) if (pos >= this.layout.chunks[i] && pos < this.layout.chunks[i] + this.layout.sizes[i]) return i; return -1; }
+  /** A chunk covers [start, min(start + size, next chunk's start)): bytes it holds past the next start are never read (a doubled or too-long file stays harmless). */
+  private endOf(i: number): number { return Math.min(this.layout.chunks[i] + this.layout.sizes[i], i + 1 < this.layout.chunks.length ? this.layout.chunks[i + 1] : Infinity); }
+  private chunkIdx(pos: number): number { for (let i = 0; i < this.layout.chunks.length; i++) if (pos >= this.layout.chunks[i] && pos < this.endOf(i)) return i; return -1; }
   private async file(i: number): Promise<FileLike> {
     let f = this.files.get(i);
     if (!f) { f = await this.fs.open(chunkPathOf(this.dir, this.layout.chunks[i]), { create: false }); this.handles.push(f); this.files.set(i, f); }
     return f;
   }
   private async load(i: number, pos: number, want: number): Promise<Buffer> {
-    const cend = this.layout.chunks[i] + this.layout.sizes[i];
+    const cend = this.endOf(i);
     const n = Math.min(Math.max(want, 4 * MIB), cend - pos);
     const b = await (await this.file(i)).read(pos - this.layout.chunks[i], n);
     this.cache = { chunk: i, start: pos, buf: b };
@@ -543,7 +552,7 @@ class BodyCursor {
   /** `len` bytes at `pos`, or null when they do not lie wholly inside one chunk. */
   async take(pos: number, len: number): Promise<Buffer | null> {
     const i = this.chunkIdx(pos);
-    if (i < 0 || pos + len > this.layout.chunks[i] + this.layout.sizes[i]) return null;
+    if (i < 0 || pos + len > this.endOf(i)) return null;
     let c = this.cache;
     if (!c || c.chunk !== i || pos < c.start || pos + len > c.start + c.buf.length) { await this.load(i, pos, len); c = this.cache!; }
     return c.buf.length >= pos - c.start + len ? c.buf.subarray(pos - c.start, pos - c.start + len) : null;
@@ -552,7 +561,7 @@ class BodyCursor {
   async takeLine(pos: number): Promise<Buffer | null> {
     const i = this.chunkIdx(pos);
     if (i < 0) return null;
-    const cend = this.layout.chunks[i] + this.layout.sizes[i];
+    const cend = this.endOf(i);
     let want = 4 * MIB;
     for (;;) {
       let c = this.cache;

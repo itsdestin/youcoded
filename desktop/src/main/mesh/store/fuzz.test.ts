@@ -6,6 +6,16 @@
 // is dealt to a random file chosen from EVERYTHING under the root (no exclusions): one flipped bit, one overwritten byte,
 // a truncation, a zero-length file or a deleted file. Then the store is reopened and the invariant in store.ts is checked.
 //
+// Review 4 widened this to the class "a file that is internally VALID but is the WRONG one" (the checksums cannot see it): besides bad bytes the fault set now has
+//   older    the file is replaced by its own copy from an earlier moment of the same run (a restored backup, a rollback)
+//   foreign  the file is replaced by the same file of ANOTHER chat (a second version and a second control log live in every folder)
+//   truncrec the file is cut at a CLEAN boundary (a record, a slot, a line), so nothing in it fails a checksum
+//   zerorange a range of the same size is zeroed
+// for EVERY file of the real folder (control log, extras and the small state files included), and nothing is excused except "the only copy of those bytes was
+// destroyed, and the store REPORTED it". The oracle also refuses: lines called evicted that no evict ever covered, a control entry or a set-aside tail or an extra
+// that is gone without a report, one fault that makes a whole version unreadable (outside the documented limits in inventory.ts), and a fault in the other chat's
+// files that changes this chat in any way.
+//
 //   fast slice (normal suite): fixed seeds, incl. every seed review 3 listed for F3 and F4
 //   long run (opt-in):  MESH_STORE_FUZZ=from-to  (e.g. 0-50000)  MESH_STORE_FUZZ_OUT=<file>  MESH_STORE_FUZZ_BIG=<every n-th seed uses a 10,000+ line chat>
 //                       MESH_STORE_FUZZ_SEEDS=1,2,3 runs exactly those seeds
@@ -45,8 +55,14 @@ function makeCanon(r: () => number, seed: number, big: boolean): Buffer[] {
   return out;
 }
 
-/** Files whose bytes exist nowhere else: a fault in one DESTROYS those bytes (the store can only report it). */
-const SINGLE_COPY = /(^|\/)(body-[0-9a-f]{16}\.bin|torn\/\d{6}-body|healed\/|tails\/|parked\/|rejected\/|extras\/|extras-bad\/|control\/)/;
+/**
+ * Files whose bytes exist nowhere else: a fault in one DESTROYS those bytes. Review 4: the control log and the extras are NOT in this list any more. Their loss is
+ * reported too (an independent record: control anchor, extras manifest), so a silent loss there is a failure of the run like any other.
+ * (Parked appends are provisional by definition: the caller keeps ownership of those lines until the head passes them.)
+ */
+const SINGLE_COPY = /(^|\/)(body-[0-9a-f]{16}\.bin|torn\/\d{6}-body|healed\/|tails\/|parked\/|rejected\/|extras-bad\/)/;
+const CHAT2 = 'synthetic:chat-2';
+const key2 = V(2).toString('hex');
 
 interface FuzzResult { seed: number; violations: { kind: string; detail: unknown; log: string[] }[]; events: Record<string, number> }
 
@@ -55,6 +71,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
   const r = rng(seed * 7919 + 13);
   const canon = makeCanon(r, seed, big);
   const ref = refChains(canon);
+  const canon2 = legacy ? [] : makeCanon(rng(seed * 31 + 5), seed + 7777, false).slice(0, 80);   // the OTHER chat (review 4): the donor of every foreign file
   const t = await tmpRoot(`fz${seed}-`);
   const root = t.dir;
   const viol: FuzzResult['violations'] = [];
@@ -66,9 +83,14 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     checkpointEvery: [32, 32, 8][Math.floor(r() * 3)],
   };
   let ackedMax = 0, exemptFrom = Infinity, rotted = false, lossy = false;
+  let ack2Max = 0; let faultsSinceClean = 0; let faultNote = ''; let faultOnIndexAfterEviction = false;
+  const snaps: Map<string, Buffer>[] = [];
+  const tailsAcked: { id: string; from: number }[] = [];
+  const tailFaults = new Map<string, number>();   // faults per set-aside id: a tail and its `.done` mark are one pair, and two faults on one pair are not promised
+  const extraReportedBad = new Set<string>();   // a rotted extra is reported (`corrupt`) ONCE and then reads as absent until a peer's copy is put: that is a report, not a silent loss
   const parkedAcked: { from: number; n: number }[] = [];
-  const ctlAcked: Buffer[] = []; const extraAcked: Buffer[] = [];
-  let evictedAny = false; let evictedMax = 0; let controlHit = false; let extrasHit = false;
+  const ctlAcked: { chat: string; body: Buffer }[] = []; const extraAcked: Buffer[] = [];
+  let evictedAny = false; let evictedMax = 0;
   const verifier = () => true;
   const open = async (fsx?: any) => {
     const s = await ChatStore.open(root, { chunkBytes: O.chunkBytes, proofVerifier: verifier, fs: fsx });
@@ -79,9 +101,11 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       if (e?.code === 'corrupt' && ackedMax === 0 && ctlAcked.length === 0 && parkedAcked.length === 0) { await s.setAsideDamaged(V(1)); await s.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' }); ev('registration-unreadable-before-any-data'); return s; }
       await s.close().catch(() => undefined); throw e;
     }
+    // the other chat; its own faults are its own business (a fault in its files must never change THIS chat: checked below)
+    if (!legacy) { try { await s.registerVersion(V(2), { chatId: CHAT2, runtime: 'claude-code' }); } catch { ev('v2-register-failed'); } }
     return s;
   };
-  const bad = (kind: string, detail: unknown) => { viol.push({ kind, detail: { seed, ...(detail as object), O }, log: log.slice(-14) }); };
+  const bad = (kind: string, detail: unknown) => { viol.push({ kind, detail: { seed, ...(detail as object), O }, log: log.slice(-(Number(process.env.MESH_STORE_FUZZ_LOG) || 14)) }); };
   // WHY: a fault in a single-copy file can destroy the bytes of a line. The line is then allowed to be absent, but only when reported.
   const present = (needle: Buffer, files: Buffer[]): boolean => {
     if (files.some((f) => f.includes(needle))) return true;
@@ -108,15 +132,18 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
   }
 
   async function check(tag: string): Promise<void> {
+    if (process.env.MESH_STORE_FUZZ_SNAPDIR) fs.cpSync(root, path.join(process.env.MESH_STORE_FUZZ_SNAPDIR, `seed-${seed}-${tag.replace(/\W+/g, '_')}`), { recursive: true });   // post-mortems: the folder as the store is about to see it
     const s = await reopen(); if (!s) return;
     const rel = walk(root).map((p) => path.relative(root, p));
     for (const f of rel) if (!inventoryRow(f)) bad('file-not-in-inventory', { tag, file: f });
     const files = walk(root).map((p) => fs.readFileSync(p));
-    let head: any = null; let state = 'ok';
+    let head: any = null; let state = 'ok'; let verifyOk = true; const nBad0 = viol.length;
     try { head = await s.head(V(1)); } catch (e: any) { state = e?.code ?? 'error'; ev('head-' + state); log.push(`head threw ${state}`); }
     if (head) {
       if (head.hash !== ref.raw[head.lines]) bad('head-diverged-from-canonical', { tag, lines: head.lines, damagedFromLine: head.damagedFromLine });
       const flagged: number | null = head.damagedFromLine;
+      // review 4 (F1, F4, F5): a line may only read as evicted when an evictBody call covered it. A deleted chunk, an older marker, a foreign file must never do it.
+      if (head.evictedLines > evictedMax) bad('evicted-without-proof', { tag, evictedLines: head.evictedLines, evictedMax, fault: faultNote });
       if (!rotted && !lossy && flagged !== null) bad('false-alarm-without-any-fault', { tag, flagged });
       for (let i = 0; i < ackedMax; i++) {
         if (i < evictedMax) { ev('evict-exempt'); continue; }
@@ -138,24 +165,48 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
         }
       }
       if (head.lines >= ackedMax) exemptFrom = Infinity;
-      try { const v = await s.verify(V(1)); if (!v.ok) ev('verify-notok'); } catch { ev('verify-threw'); }
+      try { const v = await s.verify(V(1)); if (!v.ok) { ev('verify-notok'); verifyOk = false; } } catch { ev('verify-threw'); verifyOk = false; }
     } else {
       for (let i = evictedMax; i < ackedMax; i++) if (!present(canon[i], files)) { if (lossy) { ev('destroyed-version-unreadable'); break; } bad('line-absent-everywhere(version-unreadable)', { tag, line: i, state, rotted }); break; }
+      // review 4: ONE fault must never make a whole version unreadable, except in the documented limits of inventory.ts (the evicted lines' chain values live only in the index)
+      if (faultsSinceClean === 1 && !lossy && !faultOnIndexAfterEviction && !/aside\.intent/.test(faultNote) && state !== 'ok') bad('single-fault-version-unavailable', { tag, state, fault: faultNote });
       if (state === 'damaged') { try { await s.setAsideDamaged(V(1)); ev('setaside-after-damaged'); exemptFrom = 0; } catch (e: any) { bad('setAsideDamaged-failed', { tag, code: e?.code }); } }
       else if (state === 'corrupt' && !(rotted || lossy)) bad('unreadable-without-any-fault', { tag, state });
       else ev('unreadable-' + state);
     }
     for (const p of parkedAcked) for (let k = 0; k < p.n; k++) if (p.from + k >= evictedMax && p.from + k >= (head?.lines ?? 0) && !present(canon[p.from + k], files)) { if (!lossy) bad('parked-line-absent', { tag, line: p.from + k }); break; }
-    // control log and extras
-    try {
-      const got = await s.controlLog(CHAT); const dmg = await s.controlDamage(CHAT);
-      const have = new Set(got.map((e) => e.id));
-      for (const b of ctlAcked) if (!have.has(sha(b))) { if (dmg.length === 0 && !controlHit) bad('control-entry-missing-no-damage-report', { tag, id: sha(b).slice(0, 8) }); else ev('control-entry-damaged-reported'); }
-    } catch (e: any) { ev('control-throw-' + e?.code); if (e?.code !== 'damaged') bad('control-threw', { tag, code: e?.code, msg: String(e?.message).slice(0, 120) }); }
-    for (const b of extraAcked) {
-      try { const g = await s.readExtra(sha(b)); if (g === null) { if (!extrasHit) bad('extra-absent', { tag }); } else if (!g.equals(b)) bad('WRONG-EXTRA-SERVED', { tag }); }
-      catch (e: any) { ev('extra-throw-' + e?.code); if (e?.code !== 'corrupt') bad('extra-threw-other', { tag, code: e?.code }); }
+    // control log and extras: NO excused losses (review 4, F2): a lost acknowledged entry must be REPORTED, a lost extra must throw
+    for (const chat of new Set(ctlAcked.map((c) => c.chat))) {
+      try {
+        const got = await s.controlLog(chat); const dmg = await s.controlDamage(chat);
+        const have = new Set(got.map((e) => e.id));
+        for (const c of ctlAcked) if (c.chat === chat && !have.has(sha(c.body))) { if (dmg.length === 0) bad('control-entry-missing-no-damage-report', { tag, id: sha(c.body).slice(0, 8), fault: faultNote }); else ev('control-entry-damaged-reported'); }
+        for (const e of got) { const a = ctlAcked.find((c) => sha(c.body) === e.id); if (a && !Buffer.from(e.body).equals(a.body)) bad('control-WRONG-BYTES', { tag }); if (a && a.chat !== chat) bad('control-entry-served-for-the-wrong-chat', { tag }); }
+      } catch (e: any) { ev('control-throw-' + e?.code); if (e?.code !== 'damaged') bad('control-threw', { tag, code: e?.code, msg: String(e?.message).slice(0, 120) }); }
     }
+    for (const b of extraAcked) {
+      try { const g = await s.readExtra(sha(b)); if (g === null) { if (!extraReportedBad.has(sha(b))) bad('extra-absent-without-report', { tag, fault: faultNote }); } else if (!g.equals(b)) bad('WRONG-EXTRA-SERVED', { tag }); }
+      catch (e: any) { ev('extra-throw-' + e?.code); if (e?.code !== 'corrupt') bad('extra-threw-other', { tag, code: e?.code }); else extraReportedBad.add(sha(b)); }
+    }
+    // set-aside tails: the only copy of the cut lines. Either every line is right or the read throws `corrupt`; never null, never wrong, never fewer without a throw
+    for (const ta of tailsAcked) {
+      try {
+        const t = await s.tail(ta.id);
+        if (t === null) { if ((tailFaults.get(ta.id) ?? 0) <= 1) bad('tail-vanished-without-report', { tag, id: ta.id, fault: faultNote }); }
+        else { for (let i = 0; i < t.lines.length; i++) if (!t.lines[i].equals(canon[t.fromLine + i])) bad('tail-WRONG-BYTES', { tag, i }); ev('tail-served'); }
+      } catch (e: any) { ev('tail-throw-' + e?.code); if (e?.code !== 'corrupt') bad('tail-threw-other', { tag, code: e?.code }); }
+    }
+    // the OTHER chat: never wrong bytes, only typed errors, whatever was done to the files
+    if (!legacy && ack2Max > 0) {
+      try {
+        const h2 = await s.head(V(2));
+        for (let i = 0; i < Math.min(ack2Max, h2.lines); i++) {
+          try { const g = await s.read(V(2), 0, i, i + 1); if (g !== 'evicted' && !(g as Buffer[])[0].equals(canon2[i])) bad('WRONG-BYTES-SERVED(other chat)', { tag, i }); }
+          catch (e: any) { if (!['corrupt', 'evicted', 'damaged'].includes(e?.code)) bad('other-chat-read-threw-other', { tag, code: e?.code }); }
+        }
+      } catch (e: any) { if (!['corrupt', 'damaged', 'unknown-version', 'store-locked'].includes(e?.code)) bad('other-chat-head-threw-other', { tag, code: e?.code }); }
+    }
+    if (head && head.damagedFromLine === null && verifyOk && viol.length === nBad0) faultsSinceClean = 0;   // a clean check: the next fault is a first fault again
     await s.close().catch((e) => { bad('close-failed', { tag, msg: String(e?.message).slice(0, 150) }); });
   }
 
@@ -164,7 +215,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     const failAt = 1 + Math.floor(r() * 60);
     const shadow = crash && r() < 0.4 ? (await tmpRoot(`fzs${seed}-`)) : undefined;
     const full = !legacy && !crash && r() < 0.1;       // a full disk instead of a crash
-    const ffs = crash ? new FaultFs(failAt, { tear: r() < 0.6, powerLoss: r() < 0.6, shadowDir: shadow?.dir, revertOverwrites: r() < 0.5 })
+    const ffs = crash ? new FaultFs(failAt, { tear: r() < 0.6, powerLoss: r() < 0.6, shadowDir: shadow?.dir, revertOverwrites: r() < 0.5, revertInPlace: r() < 0.5 })
       : full ? new FaultFs(0, { tear: r() < 0.5, enospcFrom: 1 + Math.floor(r() * 40) }) : undefined;
     let s: ChatStore | null = null; let crashed = false;
     try {
@@ -175,14 +226,17 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
         const hd = await s.head(V(1)).catch(() => null);
         const head = hd?.lines ?? 0;
         try {
-          if (op < 0.5) {
+          if (!legacy && op >= 0.5 && op < 0.54) {
+            const h2 = await s.head(V(2)).catch(() => null); const n2 = h2?.lines ?? 0; const c2 = 1 + Math.floor(r() * 12);
+            if (n2 + c2 <= canon2.length) { log.push(`ep${n} append2 ${n2}+${c2}`); try { const res2 = await s.append(V(2), 0, n2, canon2.slice(n2, n2 + c2)); if (res2 === 'ok') ack2Max = Math.max(ack2Max, n2 + c2); } catch (e2: any) { if (e2 instanceof InjectedCrash || !['unknown-version', 'damaged', 'corrupt', 'disk-full', 'limit', 'parked-full'].includes(e2?.code)) throw e2; ev('other-chat-append-' + e2?.code); } }
+          } else if (op < 0.5) {
             const back = r() < 0.2 ? Math.min(head, Math.floor(r() * 5)) : 0;
             const from = head - back; const cnt = 1 + Math.floor(r() * (big ? 1500 : 40));
             if (from + cnt > canon.length) continue;
             log.push(`ep${n} append ${from}+${cnt}`);
             const res = await s.append(V(1), 0, from, canon.slice(from, from + cnt));
             if (res === 'ok') ackedMax = Math.max(ackedMax, from + cnt); else if (res === 'not-a-prefix') { ev('not-a-prefix'); bad('append-not-a-prefix', { from, head, damagedFromLine: hd?.damagedFromLine }); }
-          } else if (op < 0.62) {
+          } else if (op < 0.62 && op >= 0.54) {
             const from = head + 2 + Math.floor(r() * 8); const cnt = 1 + Math.floor(r() * 5);
             if (from + cnt > canon.length) continue;
             log.push(`ep${n} park ${from}+${cnt}`);
@@ -193,7 +247,8 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             const from = Math.floor(r() * head);
             log.push(`ep${n} setAsideTail ${from}`);
             exemptFrom = Math.min(exemptFrom, from);
-            await s.setAsideTail(r().toString(16).slice(2, 14).padEnd(12, 'a'), V(1), from);
+            const tid = r().toString(16).slice(2, 14).padEnd(12, 'a');
+            await s.setAsideTail(tid, V(1), from); tailsAcked.push({ id: tid, from });
           } else if (op < 0.78) {
             if (head < 3 || !hd) continue;
             const through = 1 + Math.floor(r() * head);
@@ -206,11 +261,13 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
             log.push(`ep${n} restore`);
             const ee = hd?.evictedLines ?? 0; if (ee) await s.restoreBody(V(1), canon.slice(0, ee));
           } else if (op < 0.92) {
+            const cchat = !legacy && r() < 0.3 ? CHAT2 : CHAT;
+            const mine = ctlAcked.filter((c) => c.chat === cchat);
             const body = Buffer.from(`ctl-${seed}-${ctlAcked.length}-${Math.floor(r() * 1e9)}-${'q'.repeat(30 + Math.floor(r() * 80))}`);
-            const seen = ctlAcked.length && r() < 0.8 ? [sha(ctlAcked[ctlAcked.length - 1])] : [];
+            const seen = mine.length && r() < 0.8 ? [sha(mine[mine.length - 1].body)] : [];
             log.push(`ep${n} control`);
-            const res = await s.appendControl({ id: sha(body), chat: CHAT, seen, body });
-            if (res === 'ok') ctlAcked.push(body);
+            const res = await s.appendControl({ id: sha(body), chat: cchat, seen, body });
+            if (res === 'ok') ctlAcked.push({ chat: cchat, body });
           } else if (op < 0.96) {
             const b = Buffer.from(`extra-${seed}-${extraAcked.length}-${'e'.repeat(40 + Math.floor(r() * 60))}`);
             log.push(`ep${n} extra`);
@@ -219,6 +276,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
           else if (!legacy) { log.push(`ep${n} setAsideDamaged`); exemptFrom = 0; await s.setAsideDamaged(V(1)); }
           // reads must keep working on a full disk (F7): a read that writes something that can fail is a bug. (Repairing a DAMAGED version needs space, so only a version nothing has damaged must always be readable.)
           if (full && ffs?.allocs && ffs.allocs >= 1) { try { await s.head(V(1)); if ((hd?.lines ?? 0) > 0) await s.read(V(1), 0, 0, 1); } catch (e: any) { if (e?.code === 'disk-full' && !rotted && !lossy) bad('read-failed-with-disk-full', { op }); } }
+          if (process.env.MESH_STORE_FUZZ_TRACE) { const vd = path.join(root, 'versions', key); log.push('   files: ' + (fs.existsSync(vd) ? fs.readdirSync(vd).filter((x) => /^(body|index|checkpoint)/.test(x)).map((x) => `${x.replace(/body-0*/, 'b')}=${fs.statSync(path.join(vd, x)).size}`).join(' ') : '-')); }
         } catch (e: any) {
           if (e instanceof InjectedCrash) throw e;
           ev('op-throw-' + e?.code); log.push(`op threw ${e?.code}`);
@@ -238,27 +296,69 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
       ev('crash');
     } else if (s) { await s.close().catch((e: any) => { ev('episode-close-failed-' + e?.code); log.push('CLOSEFAIL ' + String(e?.message).slice(0, 160)); if (!full || e?.code !== 'disk-full') bad('close-threw', { code: e?.code, msg: String(e?.message).slice(0, 150) }); }); }
     if (shadow) await shadow.cleanup();
+    // A snapshot of the whole folder as it is NOW (before any fault of this episode): the source of "older copy" faults in later episodes
+    const snapshotRoot = (): Map<string, Buffer> => { const m = new Map<string, Buffer>(); for (const p of walk(root)) { const rel = path.relative(root, p); if (!/^LOCK/.test(rel)) m.set(rel, fs.readFileSync(p)); } return m; };
+    // (taken BEFORE this episode's fault, so an "older copy" is a true earlier state; the newest one equals the present and is skipped)
+    if (!legacy && r() < 0.6) { snaps.push(snapshotRoot()); if (snaps.length > 3) snaps.shift(); }
     // ONE FAULT in a random file of the whole folder
     if (r() < 0.4) {
       const all = walk(root).filter((p) => fs.statSync(p).size > 0 || !legacy);
       const pool = legacy ? all.filter((p) => !p.endsWith('LOCK') && !/(^|\/)(FORMAT|meta\.json|evicted\.json)$/.test(p) && fs.statSync(p).size > 0) : all;
       if (pool.length) {
-        const crit = pool.filter((p) => /index\.bin$|body-|checkpoint\.bin|log\.bin|extras\//.test(p));
+        const crit = pool.filter((p) => /index\.bin$|body-|checkpoint\.bin|log\.bin|anchor\.json|manifest\.bin|extras\/|tails\/|evicted\.json|damaged\.json|aside\.intent/.test(p));
         const from = r() < 0.7 && crit.length ? crit : pool;
         const f = from[Math.floor(r() * from.length)];
         const rel = path.relative(root, f);
         const b = fs.readFileSync(f); const pos = Math.floor(r() * Math.max(1, b.length));
-        const kind = legacy || b.length === 0 ? 'flip' : ['flip', 'flip', 'overwrite', 'truncate', 'zero', 'delete'][Math.floor(r() * 6)];
+        const KINDS = ['flip', 'flip', 'overwrite', 'truncate', 'truncrec', 'zero', 'zerorange', 'delete', 'older', 'older', 'foreign', 'foreign', 'dup'];
+        let kind = legacy || b.length === 0 ? 'flip' : KINDS[Math.floor(r() * KINDS.length)];
+        // clean boundaries of a file: the places a cut leaves every remaining record whole
+        const boundaries = (): number[] => {
+          const out: number[] = [];
+          if (/index\.bin$/.test(rel)) { for (let o = 36; o < b.length; o += 116) out.push(o); }
+          else if (/checkpoint\.bin$/.test(rel)) { for (let o = 128; o < b.length; o += 128) out.push(o); }
+          else if (/log\.bin$/.test(rel)) { let o = 0; while (o + 16 <= b.length) { out.push(o); o += 16 + b.readUInt32BE(o + 4); if (o > b.length) break; } }
+          else if (/manifest\.bin$/.test(rel)) { for (let o = 37; o < b.length; o += 37) out.push(o); }
+          else { for (let i = b.indexOf(0x0a); i !== -1; i = b.indexOf(0x0a, i + 1)) out.push(i + 1); }
+          return out.filter((o) => o < b.length);
+        };
+        /** The same file of ANOTHER chat (second version, second control log, another extra's bytes), or null when there is none */
+        const donorOf = (): string | null => {
+          const alt = (needle: string, repl: string): string | null => { if (!rel.includes(needle)) return null; const d = path.join(root, rel.replace(needle, repl)); return fs.existsSync(d) && d !== f ? d : null; };
+          const v = alt(`versions/${key}/`, `versions/${key2}/`) ?? alt(`versions/${key2}/`, `versions/${key}/`);
+          if (v) return v;
+          const ctl = /^control\/([0-9a-f]{64})\//.exec(rel);
+          if (ctl) { const others = fs.readdirSync(path.join(root, 'control')).filter((d) => d !== ctl[1]); for (const o of others) { const d = path.join(root, rel.replace(ctl[1], o)); if (fs.existsSync(d)) return d; } return null; }
+          if (/^extras\/[0-9a-f]{2}\/[0-9a-f]{64}$/.test(rel)) { const o = pool.filter((p) => p !== f && /^extras\/[0-9a-f]{2}\/[0-9a-f]{64}$/.test(path.relative(root, p))); return o.length ? o[Math.floor(r() * o.length)] : null; }
+          return null;
+        };
+        let done = true;
         if (kind === 'flip' && b.length) { b[pos] ^= 1 << Math.floor(r() * 8); fs.writeFileSync(f, b); }
         else if (kind === 'overwrite' && b.length) { b[pos] = (b[pos] + 1 + Math.floor(r() * 255)) & 0xff; fs.writeFileSync(f, b); }
         else if (kind === 'truncate' && b.length > 1) fs.truncateSync(f, Math.floor(r() * (b.length - 1)) + 1 - (pos % 2));
+        else if (kind === 'truncrec') { const bs = boundaries(); if (bs.length) fs.truncateSync(f, bs[Math.floor(r() * bs.length)]); else done = false; }
         else if (kind === 'zero') fs.truncateSync(f, 0);
+        else if (kind === 'zerorange' && b.length) { const a0 = pos; b.fill(0, a0, Math.min(b.length, a0 + 1 + Math.floor(r() * 300))); fs.writeFileSync(f, b); }
         else if (kind === 'delete') fs.unlinkSync(f);
-        const destroys = kind === 'truncate' || kind === 'zero' || kind === 'delete';
-        rotted = true; if (destroys && SINGLE_COPY.test(rel)) lossy = true;
-        if (/control\//.test(rel)) controlHit = true; if (/extras/.test(rel)) extrasHit = true;
-        if (/aside\/|torn\/|healed\/|replaced-index\//.test(rel)) ev('rot-in-kept-copy');
-        log.push(`FAULT ${kind} ${rel}@${pos}`); ev('rot'); ev('rot-' + kind);
+        else if (kind === 'older') {
+          const sn = snaps.length ? snaps[Math.floor(r() * snaps.length)] : null; const ob = sn ? sn.get(rel) : undefined;
+          if (!sn) done = false; else if (ob === undefined) fs.unlinkSync(f); else if (ob.equals(b)) done = false; else fs.writeFileSync(f, ob);
+        }
+        else if (kind === 'foreign') { const d = donorOf(); if (d && !fs.readFileSync(d).equals(b)) fs.copyFileSync(d, f); else done = false; }
+        else if (kind === 'dup' && b.length) fs.writeFileSync(f, Buffer.concat([b, b.subarray(0, Math.min(b.length, 40))]));
+        else done = false;
+        if (done) {
+          // flip/overwrite/dup leave most bytes in place; every other kind can destroy the only copy of bytes
+          const destroys = !['flip', 'overwrite', 'dup'].includes(kind);
+          // a fault in the OTHER chat's own files is not a fault of THIS chat: it must change nothing here, so it does not set the flags that excuse anything
+          const otherChat = !legacy && (rel.includes(`versions/${key2}/`) || rel.includes(`aside/${key2}-`));
+          if (!otherChat) { rotted = true; if (destroys && SINGLE_COPY.test(rel)) lossy = true; faultsSinceClean++; faultNote = `${kind} ${rel}`; }
+          else ev('fault-in-other-chat');
+          const tm = /tails\/([0-9a-f]+)\.(tail|done)$/.exec(rel); if (tm) tailFaults.set(tm[1], (tailFaults.get(tm[1]) ?? 0) + 1);
+          if (/versions\/[0-9a-f]+\/(index\.bin|replaced-index\/)/.test(rel) && evictedMax > 0) faultOnIndexAfterEviction = true;   // (an evict that crashed may still have recorded itself)
+          if (/aside\/|torn\/|healed\/|replaced-index\//.test(rel)) ev('rot-in-kept-copy');
+          log.push(`FAULT ${kind} ${rel}@${pos}`); ev('rot'); ev('rot-' + kind);
+        }
       }
     }
     await check(`after ep${n}`);
@@ -268,6 +368,7 @@ async function runSequence(seed: number, o: { legacy?: boolean; big?: boolean } 
     const eps = 3 + Math.floor(r() * 5);
     for (let n = 0; n < eps; n++) await episode(n);
   } catch (e: any) { bad('harness-error', { stack: String(e?.stack).slice(0, 500) }); }
+  if (viol.length && process.env.MESH_STORE_FUZZ_KEEP) fs.cpSync(root, path.join(process.env.MESH_STORE_FUZZ_KEEP, `seed-${seed}`), { recursive: true });   // for post-mortems
   await t.cleanup();
   return { seed, violations: viol, events };
 }

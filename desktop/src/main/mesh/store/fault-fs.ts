@@ -24,6 +24,9 @@
 //    directory) every such operation fails with code ENOSPC until the shim is discarded ("space freed");
 //    with `tear` a failing write first lands half its bytes, like a real full disk. Reads, unlinks, renames,
 //    truncates and fsyncs keep working, as they do on a full disk.
+//  - UNSYNCED IN-PLACE OVERWRITE (review 4, `revertInPlace`): a write that lands inside bytes that were already durable (the checkpoint slot, a healed body line)
+//    is not durable until that file is fsynced. On power loss the OLD bytes come back. Without this the shim could not tell whether the acknowledgement itself
+//    (the checkpoint slot) was made durable, so a store that forgot its fsync passed every test.
 //  - OPEN HANDLES: `openHandles` counts opened-minus-closed files, so a test can prove no path leaks one (N10).
 //  NOT modelled (unverified): reordering of unsynced writes between files, and file systems that lie about fsync.
 import * as fsp from 'node:fs/promises';
@@ -55,7 +58,9 @@ export class FaultFs implements Fs {
   private pendingUnlinks: PendingShadow[] = [];
   private pendingOverwrites: PendingShadow[] = [];
   private shadowN = 0;
-  constructor(private readonly failAt: number, private readonly opts: { tear?: boolean; powerLoss?: boolean; enospcFrom?: number; shadowDir?: string; revertOverwrites?: boolean } = {}, private readonly inner: Fs = realFs) {}
+  /** Pre-images of in-place overwrites since the file's last fsync (see `revertInPlace`). */
+  private undo: { path: string; pos: number; old: Buffer }[] = [];
+  constructor(private readonly failAt: number, private readonly opts: { tear?: boolean; powerLoss?: boolean; enospcFrom?: number; shadowDir?: string; revertOverwrites?: boolean; revertInPlace?: boolean } = {}, private readonly inner: Fs = realFs) {}
 
   /** Count a space-allocating operation; true when the (simulated) disk is full for it. */
   private full(): boolean {
@@ -88,6 +93,10 @@ export class FaultFs implements Fs {
       async write(buf, pos) {
         if (self.crashed) throw new InjectedCrash(self.ops, 'after-crash:write');
         self.ops++;
+        if (self.opts.revertInPlace) {
+          const dur = self.synced.get(path) ?? 0;
+          if (pos < dur) self.undo.push({ path, pos, old: await f.read(pos, Math.min(buf.length, dur - pos)) });
+        }
         if (self.ops === self.failAt) {
           self.crashed = true;
           if (self.opts.tear && buf.length > 1) await f.write(buf.subarray(0, buf.length >> 1), pos);
@@ -103,7 +112,7 @@ export class FaultFs implements Fs {
       read: (p, l) => f.read(p, l),
       size: () => f.size(),
       async truncate(len) { self.tick('truncate ' + path); self.touched.add(path); await f.truncate(len); },
-      async sync() { self.tick('fsync ' + path); await f.sync(); self.synced.set(path, await f.size()); self.touched.delete(path); },
+      async sync() { self.tick('fsync ' + path); await f.sync(); self.synced.set(path, await f.size()); self.touched.delete(path); self.undo = self.undo.filter((u) => u.path !== path); },
       async close() { if (!closed) { closed = true; self.openHandles--; } await f.close(); },
     };
     return guard;
@@ -129,6 +138,7 @@ export class FaultFs implements Fs {
     await this.inner.rename(a, b);
     const s = this.synced.get(a);
     if (s !== undefined) { this.synced.set(b, s); this.synced.delete(a); }
+    for (const u of this.undo) if (u.path === a) u.path = b;
     if (this.touched.delete(a)) this.touched.add(b);
     if (overwrote) { this.pendingCreates.delete(a); return; }
     if (this.pendingCreates.delete(a)) this.pendingCreates.add(b); // still a not-yet-durable creation, under its new name
@@ -156,6 +166,13 @@ export class FaultFs implements Fs {
   /** Apply the power-loss model after a crash (see the header for exactly what is modelled). */
   async applyPowerLoss(): Promise<void> {
     if (!this.opts.powerLoss) return;
+    // unsynced in-place overwrites: the old bytes come back (newest first, so overlapping writes unwind correctly)
+    for (const u of [...this.undo].reverse()) {
+      if (!(await this.inner.exists(u.path))) continue;
+      const f = await this.inner.open(u.path, { create: false });
+      await f.write(u.old, u.pos); await f.close();
+    }
+    this.undo = [];
     for (const p of this.touched) {
       if (!(await this.inner.exists(p))) continue;
       const f = await this.inner.open(p, { create: false });
