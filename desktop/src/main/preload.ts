@@ -461,6 +461,7 @@ const IPC = {
   DEFAULTS_SET: 'defaults:set',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
+  SETTINGS_REPAIR_NOTICE: 'settings:repair-notice',
   MODES_GET: 'modes:get',
   MODES_SET: 'modes:set',
   ACCOUNT_START: 'account:start',
@@ -1615,6 +1616,8 @@ contextBridge.exposeInMainWorld('claude', {
   settings: {
     get: (field: string): Promise<unknown> => ipcRenderer.invoke(IPC.SETTINGS_GET, { field }),
     set: (field: string, value: unknown): Promise<boolean> => ipcRenderer.invoke(IPC.SETTINGS_SET, { field, value }),
+    // Card #11 a: asked once at start-up; answers the backup's path the first time after a repair, then null.
+    takeRepairNotice: (): Promise<{ backupPath: string } | null> => ipcRenderer.invoke(IPC.SETTINGS_REPAIR_NOTICE),
   },
   // Fast mode + effort level — local-only state for /fast and /effort UI.
   modes: {

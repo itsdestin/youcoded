@@ -92,4 +92,34 @@ describe('QueuedMessagesStrip (Task 12)', () => {
     fireEvent.click(cancelButtons[1]);
     expect(onCancel).toHaveBeenCalledWith('q-2');
   });
+
+  // Card #62: a waiting message with files shows names (never full paths); extras fold into "+N more".
+  it('shows file-name chips for attachments, not full paths, and folds extras', () => {
+    render(
+      <QueuedMessagesStrip
+        queuedMessages={[{ queueId: 'q-f', content: 'see these', timestamp: 1, status: 'waiting',
+          attachments: ['/home/me/a.pdf', 'C:\\Users\\me\\b.png', '/x/c.txt', '/x/d.txt', '/x/e.txt'] }]}
+      />,
+    );
+    expect(screen.getByText('a.pdf')).toBeInTheDocument();
+    expect(screen.getByText('b.png')).toBeInTheDocument();
+    expect(screen.queryByText(/home\/me/)).toBeNull();
+    expect(screen.getByText('+2 more')).toBeInTheDocument();
+  });
+
+  it('draws no chip row when nothing is attached', () => {
+    render(<QueuedMessagesStrip queuedMessages={[{ queueId: 'q-n', content: 'plain', timestamp: 1 }]} />);
+    expect(screen.queryByTestId('queued-file-chips')).toBeNull();
+  });
+
+  // Card #62 (Destin 2026-11-12): chips sit in the same row as the words, after them, and a long message does not hide them.
+  it('puts the file chips in the same row as the message words, after them', () => {
+    render(<QueuedMessagesStrip queuedMessages={[{ queueId: 'q-i', content: 'a very long message '.repeat(20), timestamp: 1, status: 'waiting', attachments: ['/x/a.pdf'] }]} />);
+    const row = screen.getByTestId('queued-row-text');
+    const chips = screen.getByTestId('queued-file-chips');
+    expect(chips.parentElement).toBe(row);
+    expect(row.firstElementChild).not.toBe(chips);          // words first, chips after
+    expect(row.firstElementChild).toHaveClass('truncate');  // the words give way, the chips stay
+    expect(chips).toHaveClass('shrink-0');
+  });
 });

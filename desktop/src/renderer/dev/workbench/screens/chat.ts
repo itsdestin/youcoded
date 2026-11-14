@@ -14,6 +14,10 @@ export const CHAT: readonly ScreenEntry[] = [
   // Spacing review: two stacked queued cards over the chat, wide and phone.
   { ...chat('chat#queue-stack', 'view'), session: 'wb-1', params: { queuePreview: 'stack' } },
   { ...chat('chat#queue-stack-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'stack' }, viewport: { width: 390, height: 844 } },
+  // Card #62: a waiting message with files attached shows file-name chips (names only).
+  { ...chat('chat#queue-waiting-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'waiting-after' }, viewport: { width: 390, height: 844 }, newIn: 'after' as const },
+  { ...chat('chat#queue-waiting-long', 'view'), session: 'wb-1', params: { queuePreview: 'waiting-long-after' }, newIn: 'after' as const },
+  { ...chat('chat#queue-waiting-long-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'waiting-long-after' }, viewport: { width: 390, height: 844 }, newIn: 'after' as const, sameAs: { name: 'chat#queue-waiting-phone', why: 'On a phone the words already truncate at the column edge, so a longer message draws the same row.' } },
   { ...chat('chat#queue-uncertain-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'uncertain-after' }, viewport: { width: 390, height: 844 } },
   // Phone connection strips (phone-reliability review deck, 2026-10-22). The Android app, since "Use this phone only" is its button;
   // before master the same state reads the old words and has no button.
