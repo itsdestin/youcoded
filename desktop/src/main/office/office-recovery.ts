@@ -304,18 +304,37 @@ export async function discardRecoveryFor(file: string): Promise<void> {
  *  is left alone (nothing is merged). The file must not be open (the caller checked). */
 export async function moveRecovery(oldFile: string, newFile: string): Promise<void> {
   if (!root) return;
+  const writePath = async (dir: string, file: string) => {
+    const infoFile = path.join(dir, 'info.json');
+    const info = JSON.parse(await fsp.readFile(infoFile, 'utf8'));
+    info.path = file;
+    await fsp.writeFile(`${infoFile}.part`, JSON.stringify(info));
+    await fsp.rename(`${infoFile}.part`, infoFile); // whole or not at all, like writeInfo
+  };
   for (const [from, to] of [
     [path.join(root, keyOf(oldFile)), path.join(root, keyOf(newFile))],
     [heldDir(oldFile), heldDir(newFile)],
   ]) {
     try {
-      if (!(await exists(from)) || (await exists(to))) continue;
-      await fsp.rename(from, to);
-      const infoFile = path.join(to, 'info.json');
-      const info = JSON.parse(await fsp.readFile(infoFile, 'utf8'));
-      info.path = newFile;
-      await fsp.writeFile(`${infoFile}.part`, JSON.stringify(info));
-      await fsp.rename(`${infoFile}.part`, infoFile); // whole or not at all, like writeInfo
+      if (!(await exists(from))) continue;
+      // WHY the path is rewritten BEFORE the folder moves: a journal must never sit under the new
+      // key still naming the old path (offerRecovery would refuse it and startup would sweep it).
+      // If the rewrite fails nothing has moved and the journal stays whole under the old key.
+      await writePath(from, newFile);
+      // WHY set aside, not skipped: a journal already under the new key belongs to some other file
+      // that once had this name. Skipping would leave this one to be swept as "file gone"; instead
+      // the other is renamed out of the way (pruneRecovery removes it after 30 quiet days).
+      const aside = `${to}.stale-${Date.now()}`;
+      const hadTarget = await exists(to);
+      if (hadTarget) await fsp.rename(to, aside);
+      try {
+        await fsp.rename(from, to);
+      } catch (e) {
+        // Undo, so nothing is left half-moved.
+        if (hadTarget) await fsp.rename(aside, to).catch(() => {});
+        await writePath(from, oldFile).catch(() => {});
+        throw e;
+      }
     } catch (e) {
       log('WARN', 'Office', 'a recovery journal could not follow a rename', { code: (e as NodeJS.ErrnoException)?.code ?? null });
     }

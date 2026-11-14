@@ -1,4 +1,4 @@
-import { link, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, link, lstat, mkdtemp, readlink, stat, symlink, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
@@ -67,6 +67,29 @@ describe('renameNoClobber races and case', () => {
     await writeFile(path.join(dir, 'a.docx'), 'A');
     await link(path.join(dir, 'a.docx'), path.join(dir, 'A.docx'));
     await expect(renameNoClobber(path.join(dir, 'a.docx'), path.join(dir, 'A.docx'))).resolves.toBeUndefined();
+    // rename(2) between two names of one file does nothing, so the old name must be removed too.
+    expect(await readdir(dir)).toEqual(['A.docx']);
+  });
+  it('says "taken" (not a crash) when the name is a dangling symlink', async () => {
+    await writeFile(path.join(dir, 'a.docx'), 'A');
+    await symlink(path.join(dir, 'nowhere.docx'), path.join(dir, 'b.docx'));
+    await expect(renameNoClobber(path.join(dir, 'a.docx'), path.join(dir, 'b.docx'))).rejects.toBeInstanceOf(NameTaken);
+    expect(await readFile(path.join(dir, 'a.docx'), 'utf8')).toBe('A');
+  });
+  it('treats a vanished source as "taken" rather than crashing in the same-file check', async () => {
+    await writeFile(path.join(dir, 'b.docx'), 'B');
+    await expect(renameNoClobber(path.join(dir, 'gone.docx'), path.join(dir, 'b.docx'))).rejects.toBeInstanceOf(NameTaken);
+  });
+  it('moves a symlink itself, leaving its target alone, and never over another link to the same target', async () => {
+    await writeFile(path.join(dir, 'target.docx'), 'T');
+    await symlink(path.join(dir, 'target.docx'), path.join(dir, 'one.docx'));
+    await symlink(path.join(dir, 'target.docx'), path.join(dir, 'two.docx'));
+    await expect(renameNoClobber(path.join(dir, 'one.docx'), path.join(dir, 'two.docx'))).rejects.toBeInstanceOf(NameTaken);
+    await renameNoClobber(path.join(dir, 'one.docx'), path.join(dir, 'three.docx'));
+    expect((await lstat(path.join(dir, 'three.docx'))).isSymbolicLink()).toBe(true);
+    expect(await readlink(path.join(dir, 'three.docx'))).toBe(path.join(dir, 'target.docx'));
+    expect(await readFile(path.join(dir, 'target.docx'), 'utf8')).toBe('T');
+    expect((await readdir(dir)).sort()).toEqual(['target.docx', 'three.docx', 'two.docx']);
   });
 });
 
@@ -85,6 +108,20 @@ describe('copyBeside', () => {
     await writeFile(path.join(dir, 'a.docx'), 'A');
     for (let n = 1; n <= MAX_COPIES; n++) await writeFile(path.join(dir, copyName('a.docx', n)), 'x');
     await expect(copyBeside(path.join(dir, 'a.docx'), allow)).rejects.toBeInstanceOf(NameTaken);
+  });
+  it('makes the copy of a read-only file writable by its owner', async () => {
+    await writeFile(path.join(dir, 'a.docx'), 'A');
+    await chmod(path.join(dir, 'a.docx'), 0o444);
+    const made = await copyBeside(path.join(dir, 'a.docx'), allow);
+    expect((await stat(made)).mode & 0o200).toBe(0o200);
+  });
+  it('copies a symlink\'s bytes into a regular file named after the link', async () => {
+    await writeFile(path.join(dir, 'target.docx'), 'T');
+    await symlink(path.join(dir, 'target.docx'), path.join(dir, 'report.docx'));
+    const made = await copyBeside(path.join(dir, 'report.docx'), allow);
+    expect(path.basename(made)).toBe('report (copy).docx');
+    expect((await lstat(made)).isSymbolicLink()).toBe(false);
+    expect(await readFile(made, 'utf8')).toBe('T');
   });
   it('writes nothing when the folder check refuses', async () => {
     await writeFile(path.join(dir, 'a.docx'), 'A');

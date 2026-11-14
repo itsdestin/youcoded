@@ -282,6 +282,26 @@ export function replaceDoc(oldPath: string, file: OfficeFile): void {
   forgetSaveState(oldPath);
 }
 
+/** Where a file's tab sits right now, so it can be put back exactly (see putDocBack). */
+export interface TabPlace { index: number; active: string; asleep: boolean }
+export function tabPlace(path: string): TabPlace | null {
+  const index = state.docs.findIndex((d) => d.file.path === path);
+  return index < 0 ? null : { index, active: state.active, asleep: state.docs[index].asleep };
+}
+
+/** Bring a tab back (after Rename closed it) in its ORIGINAL spot in the strip, with the tab that was
+ *  in front before still in front. WHY not openDoc: that appends the tab at the end and makes it the
+ *  front tab, so a rename started from Home would visibly shuffle the strip and jump away from Home.
+ *  `oldPath` is the path the tab had; `file` is what it shows now (the renamed file, or the original
+ *  when the rename was refused). If the tab is already back (the person reopened it), nothing changes. */
+export function putDocBack(oldPath: string, file: OfficeFile, place: TabPlace): void {
+  if (state.docs.some((d) => d.file.path === file.path)) return;
+  const docs = [...state.docs];
+  docs.splice(Math.min(place.index, docs.length), 0, { file, asleep: place.asleep });
+  const wanted = place.active === oldPath ? file.path : place.active;
+  set({ ...state, docs, active: wanted === HOME_TAB || docs.some((d) => d.file.path === wanted) ? wanted : HOME_TAB });
+}
+
 /** Resolves true once `path` has no tab at all (a closing tab counts until finishClose removes
  *  it), or false after `ms` if it is still there (the close failed and the tab came back).
  *  WHY: Rename must not start while main still counts the file as open. */

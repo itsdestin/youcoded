@@ -352,7 +352,8 @@ export async function pruneAll(userData: string, now: Date = new Date(), maxTota
   const names = await fsp.readdir(base).catch(() => [] as string[]);
   const perDir: { dir: string; filePath: string; versions: Entry[] }[] = [];
   for (const name of names) {
-    if (!/^[0-9a-f]{40}$/.test(name)) continue;
+    // WHY `.stale-` too: histories set aside by a rename (moveVersions) are tidied and finally removed like any other.
+    if (!/^[0-9a-f]{40}(\.stale-\d+)?$/.test(name)) continue;
     const dir = path.join(base, name);
     try {
       const kept = await locked(dir, async () => {
@@ -441,8 +442,20 @@ export async function moveVersions(userData: string, oldPath: string, newPath: s
   try {
     return await locked(from, () => locked(to, async () => {
       if (!(await fsp.stat(from).then(() => true, () => false))) return false;
-      if (await fsp.stat(to).then(() => true, () => false)) return false;
-      await fsp.rename(from, to);
+      // WHY set aside, not skipped and not merged: a folder already at the new key is the history of
+      // some OTHER file that once had this name (deleted since). Handing its stale versions to the
+      // renamed file would be wrong, and leaving the renamed file's own history stranded under the
+      // old key would lose it. The stale folder is only renamed (never deleted here); pruneAll
+      // recognises `.stale-` folders and ages them out by the normal rules.
+      const aside = `${to}.stale-${Date.now()}`;
+      const hadTarget = await fsp.stat(to).then(() => true, () => false);
+      if (hadTarget) await fsp.rename(to, aside);
+      try {
+        await fsp.rename(from, to);
+      } catch (e) {
+        if (hadTarget) await fsp.rename(aside, to).catch(() => {});
+        throw e;
+      }
       // The index's `path` is for a person looking at the folder; keep it truthful.
       await updateIndex(to, newPath, (list) => list);
       return true;

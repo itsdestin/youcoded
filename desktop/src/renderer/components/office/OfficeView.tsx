@@ -22,7 +22,7 @@ import { isWorkbenchDocument } from '../../workbench-mode';
 import type { DocumentTab } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeKind, OfficeStatus, OfficeVersion } from '../../../shared/office-types';
 import { HistoryGlyph, HomeGlyph, KIND_LABEL, OfficeKindGlyph } from './office-icons';
-import { HOME_TAB, officeCommentsPreview, cancelClose, closeDoc, finishClose, flushOffice, markCopied, noteCloseFailedWhileHidden, officeDocFor, openDoc, replaceDoc, selectTab, showVersions, useCopying, useOfficeTabs, useSaveState, whenDocGone } from './office-store';
+import { HOME_TAB, officeCommentsPreview, cancelClose, closeDoc, finishClose, flushOffice, markCopied, noteCloseFailedWhileHidden, openDoc, putDocBack, replaceDoc, selectTab, showVersions, tabPlace, useCopying, useOfficeTabs, useSaveState, whenDocGone } from './office-store';
 import { officeFileFor } from './office-files';
 import type { OfficeSaveState } from './office-store';
 import { OfficeSaveFailed } from './OfficeSaveFailed';
@@ -361,22 +361,24 @@ function useRowActions(onOpen: (f: OfficeFile) => void, onChanged: () => void, s
     try {
       // WHY the tab is closed first (main refuses to rename a file Office has open — an editor
       // would keep saving to the old name): save it, close it, wait until it is fully gone, rename,
-      // then open the renamed file so the tab comes back under its new name.
-      const hadTab = officeDocFor(f.path) !== null;
-      if (hadTab) {
+      // then put the tab back. It returns to its ORIGINAL spot with the same tab in front (never
+      // openDoc, which would append it and jump to it), under the new name — or, if the rename
+      // was refused or failed, under the old one.
+      const place = tabPlace(f.path);
+      if (place) {
         const saved = await flushOffice(f.path);
         if (!saved.ok) return "Your latest changes couldn't be saved, so the file wasn't renamed.";
         closeDoc(f.path);
         await whenDocGone(f.path);
       }
-      const r = await officeBridge()?.rename?.(f.path, newName);
-      if (!r) { if (hadTab) openDoc(f); return "Office couldn't rename this file."; }
-      if (!r.ok) {
-        // The rename did not happen: put the tab back where it was.
-        if (hadTab) openDoc(f);
-        return r.message;
+      let result: Awaited<ReturnType<NonNullable<OfficeBridge['rename']>>> | undefined;
+      try {
+        result = await officeBridge()?.rename?.(f.path, newName);
+      } finally {
+        if (place) putDocBack(f.path, result?.ok ? result.file : f, place);
       }
-      if (hadTab) openDoc(r.file);
+      if (!result) return "Office couldn't rename this file.";
+      if (!result.ok) return result.message;
       onChanged();
       return null;
     } catch {

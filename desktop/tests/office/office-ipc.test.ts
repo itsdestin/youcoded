@@ -29,7 +29,7 @@ import { startWalk } from '../../src/main/office/office-home';
 import { idle as recentIdle } from '../../src/main/office/recent';
 import { readEditorSettings } from '../../src/main/office/editor-settings';
 import { createSessions } from '../../src/main/office/office-sessions';
-import { snapshot, versionsDir } from '../../src/main/office/versions';
+import { pruneAll, snapshot, versionsDir } from '../../src/main/office/versions';
 
 const MEMO = fileURLToPath(new URL('./fixtures/memo.docx', import.meta.url));
 const PICTURE = fileURLToPath(new URL('./fixtures/picture.docx', import.meta.url));
@@ -1133,6 +1133,85 @@ describe('Home row actions', () => {
     const info = JSON.parse(await readFile(path.join(root, key(next) + '.held', 'info.json'), 'utf8'));
     expect(info.path).toBe(next);
     expect(existsSync(path.join(root, key(file) + '.held'))).toBe(false);
+  });
+
+  it('refuses to rename a file that is not an Office file', async () => {
+    await writeFile(path.join(dir, 'notes.txt'), 'x');
+    await expect(call('office:rename', win1, path.join(dir, 'notes.txt'), 'other.txt')).resolves.toEqual({ ok: false, message: "Office can't find this file." });
+    expect(existsSync(path.join(dir, 'notes.txt'))).toBe(true);
+  });
+
+  it('refuses to rename a link whose target is not an Office file', async () => {
+    await writeFile(path.join(dir, 'notes.txt'), 'x');
+    await symlink(path.join(dir, 'notes.txt'), path.join(dir, 'report.docx'));
+    await expect(call('office:rename', win1, path.join(dir, 'report.docx'), 'other.docx')).resolves.toEqual({ ok: false, message: "Office can't find this file." });
+    expect((await fsp.lstat(path.join(dir, 'report.docx'))).isSymbolicLink()).toBe(true);
+  });
+
+  it('renames a symbolic link, not the file it points to, and history stays with the real file', async () => {
+    const real = await openedAndClosed('q3.docx');
+    const link = path.join(dir, 'report.docx');
+    await symlink(real, link);
+    const before = (await call('office:versions', win1, real)) as unknown[];
+    const r = (await call('office:rename', win1, link, 'Q3 report.docx')) as { ok: boolean; file: OfficeFile };
+    expect(r).toMatchObject({ ok: true, file: { name: 'Q3 report.docx', path: path.join(dir, 'Q3 report.docx') } });
+    expect(existsSync(real)).toBe(true);
+    expect(existsSync(link)).toBe(false);
+    expect((await fsp.lstat(path.join(dir, 'Q3 report.docx'))).isSymbolicLink()).toBe(true);
+    // Recent is keyed by the real file, which did not change.
+    expect((await recentOf()).map((f) => f.name)).toEqual(['q3.docx']);
+    expect(((await call('office:versions', win1, path.join(dir, 'Q3 report.docx'))) as unknown[]).length).toBe(before.length);
+  });
+
+  it('will not rename a link while its real file is open in Office', async () => {
+    const real = await aDocx('q3.docx');
+    await symlink(real, path.join(dir, 'report.docx'));
+    await call('office:open', win1, real);
+    await expect(call('office:rename', win1, path.join(dir, 'report.docx'), 'x.docx')).resolves.toEqual({ ok: false, message: 'Close this file in Office first, then rename it.' });
+  });
+
+  it('copies a link as a regular file beside the link, named after it', async () => {
+    const real = await aDocx('q3.docx');
+    await symlink(real, path.join(dir, 'report.docx'));
+    const r = (await call('office:duplicate', win1, path.join(dir, 'report.docx'))) as { ok: true; file: OfficeFile };
+    expect(r.file.name).toBe('report (copy).docx');
+    expect((await fsp.lstat(r.file.path)).isSymbolicLink()).toBe(false);
+    expect((await readFile(r.file.path)).equals(await readFile(real))).toBe(true);
+  });
+
+  it('keeps the renamed file\'s history when a stale history already sits at the new name, and ages the stale one out', async () => {
+    const userData = path.join(dir, 'userData');
+    const file = await openedAndClosed();
+    const newPath = path.join(dir, 'Plan.docx');
+    await snapshot(userData, newPath, 'opened', Buffer.from('PK\x03\x04 stale history of a deleted file'));
+    const before = ((await call('office:versions', win1, file)) as { id: string }[]).map((v) => v.id);
+    await call('office:rename', win1, file, 'Plan.docx');
+    expect(((await call('office:versions', win1, newPath)) as { id: string }[]).map((v) => v.id)).toEqual(before);
+    const stale = (await readdir(path.join(userData, 'office-versions'))).filter((n) => n.includes('.stale-'));
+    expect(stale).toHaveLength(1);
+    // The normal tidy-up removes it once its versions are old enough.
+    await pruneAll(userData, new Date(Date.now() + 90 * 86_400_000));
+    expect((await readdir(path.join(userData, 'office-versions'))).filter((n) => n.includes('.stale-'))).toEqual([]);
+  });
+
+  it('moves a recovery journal aside-safely: the path is rewritten, and one already at the new name is kept aside', async () => {
+    const { keepRecoveryIn } = await import('../../src/main/office/office-recovery');
+    const { createHash } = await import('node:crypto');
+    const key = (f: string) => createHash('sha256').update(f).digest('hex').slice(0, 32);
+    const file = await openedAndClosed();
+    const next = path.join(dir, 'Plan.docx');
+    const root = path.join(dir, 'userData', 'office-recovery');
+    keepRecoveryIn(path.join(dir, 'userData'));
+    for (const [f, tag] of [[file, 'mine'], [next, 'other']] as const) {
+      await mkdir(path.join(root, key(f)), { recursive: true });
+      await writeFile(path.join(root, key(f), 'info.json'), JSON.stringify({ path: f, tag }));
+    }
+    await call('office:rename', win1, file, 'Plan.docx');
+    const info = JSON.parse(await readFile(path.join(root, key(next), 'info.json'), 'utf8'));
+    expect(info).toMatchObject({ path: next, tag: 'mine' });
+    const aside = (await readdir(root)).filter((n) => n.includes('.stale-'));
+    expect(aside).toHaveLength(1);
+    expect(JSON.parse(await readFile(path.join(root, aside[0], 'info.json'), 'utf8')).tag).toBe('other');
   });
 
   it('makes copies beside the file: (copy), (copy 2), (copy 3), never over an existing file', async () => {

@@ -683,6 +683,16 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
 
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+  /** The path Home's row means: the file itself, or — when the row is a symbolic link — the link,
+   *  with its folder resolved (so it compares with real paths). WHY (the owner's decision: the
+   *  person renames what they see): a link `~/Docs/report.docx` to `~/Dropbox/q3.docx` is renamed
+   *  or copied as `report.docx`; the Dropbox file keeps its name and the link keeps working. */
+  async function rowPath(given: string, realTarget: string): Promise<{ at: string; isLink: boolean }> {
+    const isLink = await fsp.lstat(given).then((i) => i.isSymbolicLink(), () => false);
+    if (!isLink) return { at: realTarget, isLink };
+    return { at: path.join(await fsp.realpath(path.dirname(given)), path.basename(given)), isLink };
+  }
+
   async function renameFile(filePath: unknown, newName: unknown): Promise<{ ok: true; file: OfficeFile } | { ok: false; message: string }> {
     const reg = await isReady();
     if (!reg) return { ok: false, message: MSG.unavailable };
@@ -691,13 +701,18 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
       const old = await authorizeChange(filePath);
       if (!old.ok) return { ok: false, message: old.missing ? MSG.cantFind : old.message };
       const realOld = old.realPath;
-      if (!(await fsp.stat(realOld)).isFile()) return { ok: false, message: MSG.cantFind };
-      const problem = nameProblem(newName, path.basename(realOld));
+      // WHY the kind is checked: Home only lists Office files, but the channel is callable with any
+      // path, and Rename must not become a way to rename arbitrary files. Same refusal as a copy.
+      if (!(await fsp.stat(realOld)).isFile() || kindFor(realOld) === null) return { ok: false, message: MSG.cantFind };
+      // `shown` is what the row is called: the link's own path for a symbolic link, else the file's.
+      const { at: shown, isLink } = await rowPath(filePath, realOld);
+      if (kindFor(shown) === null) return { ok: false, message: MSG.cantFind };
+      const problem = nameProblem(newName, path.basename(shown));
       if (problem) return { ok: false, message: problem };
       const name = newName as string;
       // The same name: nothing to do, and not an error.
-      if (name === path.basename(realOld)) return { ok: true, file: await describeNow(realOld) };
-      const realNew = path.join(path.dirname(realOld), name);
+      if (name === path.basename(shown)) return { ok: true, file: await describeNow(shown) };
+      const realNew = path.join(path.dirname(shown), name);
       // WHY the new path is authorized too: a protected folder must not receive a file by rename
       // either (the folder is the same, but the NAME can match a protected pattern, e.g. ".env").
       const dest = await authorizeChange(realNew);
@@ -715,11 +730,16 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
       // step.) The history moves inside the hold so it is in place before anything reads it.
       const done = await reg.holdWhile(realOld, async () => {
         try {
-          await renameNoClobber(realOld, realNew);
+          await renameNoClobber(shown, realNew);
         } catch (e) {
           if (e instanceof NameTaken) return { ok: false as const, message: MSG.nameTaken };
           return { ok: false as const, message: fsSentence(e, 'rename') };
         }
+        // WHY nothing else moves for a link: Recent, kept versions and recovery are keyed by the
+        // REAL file, which a renamed link does not change. Recent therefore keeps listing the
+        // target under its own name, history stays with the target, and opening the renamed link
+        // (it resolves to the same target) reaches both.
+        if (isLink) return { ok: true as const };
         // The file's history follows it. Best effort: the rename has happened and must not be
         // reported as failed because a kept copy could not move (each logs its own problem).
         if (await versions.moveVersions(deps.userData, realOld, realNew)) pruner?.request();
@@ -728,10 +748,13 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
       });
       if (!done.ok) return done;
       const file = await describeNow(realNew);
-      // Same place in Recent, new name. Matches the real path and the path as given.
-      await recent.replaceEntry(deps.userData, [...new Set([realOld, filePath])], file)
-        .catch((e) => log('WARN', 'Office', 'Recent could not follow a rename', errorKind(e)));
-      folderChanged(path.dirname(filePath), path.dirname(realOld));
+      // Same place in Recent, new name. Matches the real path and the path as given. (A renamed
+      // link changed no real path, so there is nothing to replace.)
+      if (!isLink) {
+        await recent.replaceEntry(deps.userData, [...new Set([realOld, filePath])], file)
+          .catch((e) => log('WARN', 'Office', 'Recent could not follow a rename', errorKind(e)));
+      }
+      folderChanged(path.dirname(filePath), path.dirname(shown));
       return { ok: true, file };
     } catch (e) {
       return { ok: false, message: fsSentence(e, 'rename') };
@@ -749,12 +772,16 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
       if (!(await fsp.stat(realOld)).isFile() || kindFor(realOld) === null) return { ok: false, message: MSG.cantFind };
       // WHY the copy is of what is on disk: a file open in Office may hold edits not yet saved;
       // those are not in the copy (autosave keeps the disk file close behind).
-      const target = await copyBeside(realOld, async (candidate) => {
+      // WHY named after the link when the row is one: the copy is a new regular file holding the
+      // target's bytes, beside the link and named after it (what the person sees in the row).
+      const { at: shown } = await rowPath(filePath, realOld);
+      if (kindFor(shown) === null) return { ok: false, message: MSG.cantFind };
+      const target = await copyBeside(shown, async (candidate) => {
         const a = await authorizeChange(candidate);
         if (!a.ok) throw new Refused(a.missing ? MSG.cantFind : a.message);
         return candidate;
       });
-      folderChanged(path.dirname(filePath), path.dirname(realOld));
+      folderChanged(path.dirname(filePath), path.dirname(shown));
       return { ok: true, file: await describeNow(target) };
     } catch (e) {
       if (e instanceof NameTaken) return { ok: false, message: MSG.tooManyCopies };
