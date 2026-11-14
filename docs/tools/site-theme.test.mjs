@@ -79,3 +79,32 @@ test('ending the intro does not re-style the whole page', () => {
   assert.match(site, /else applyTheme\(step\.theme, true\);/);
   assert.match(site, /querySelectorAll\('\.nav, \.flankrow > \*'\)/);
 });
+
+// WHY: the phone demo page (demo.html) paints its top strip in the visitor's
+// look before anything else loads, so it carries its own small copy of each
+// look's colours. This keeps that copy equal to the landing page's tables.
+test('the demo page wears the same colours as the landing page, look for look', () => {
+  const demo = readFileSync(new URL('../demo.html', import.meta.url), 'utf8');
+  const looksSource = demo.match(/var LOOKS = (\{[^\n]+\});/);
+  assert.ok(looksSource, 'the demo page has its table of looks');
+  const looks = JSON.parse(looksSource[1]);
+  const brandSource = site.match(/var BRAND = (\{[\s\S]*?\n\});/);
+  assert.ok(brandSource);
+  const brand = vm.runInNewContext(`(${brandSource[1]})`);
+  assert.deepEqual(Object.keys(looks).sort(), Object.keys(themes).sort(), 'every look the page offers is known to the demo page');
+  for (const [slug, t] of Object.entries(themes)) {
+    const look = looks[slug], b = brand[slug] || brand.youcoded;
+    for (const key of ['canvas', 'panel', 'fg', 'dim', 'edge']) assert.equal(look[key], t[key], `${slug} ${key}`);
+    assert.equal(look.you, b.a, `${slug} wordmark colour`);
+    assert.equal(look.ink, t.dark ? t.fg : (b.ink || t.fg), `${slug} wordmark ink`);
+    assert.equal(look.wall, t.wall && !t.gradient ? `url("${t.wall}")` : 'none', `${slug} wallpaper`);
+  }
+  // Destin's trimmed design (2026-11-13): arrow + wordmark is the way back, a
+  // "Demo" tag on the right, no download button and no app icon in the strip.
+  assert.match(demo, /<a class="back" href="\.\/"[^>]*>[\s\S]*?<span class="wm"><i>you<\/i>coded<\/span><\/a>/);
+  assert.match(demo, /<span class="tag">Demo<\/span>/);
+  assert.doesNotMatch(demo, /#download|<img/);
+  // The live app's box must never be clipped or rounded (Chrome smears its glass).
+  const stage = demo.match(/\.stage\{[^}]*\}/)[0].replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.doesNotMatch(stage, /overflow|border-radius|clip-path/);
+});
