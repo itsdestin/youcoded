@@ -463,4 +463,22 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
     expect(fs.existsSync(path.join(vdir(root), 'damaged.json'))).toBe(true);
     await s2.close(); await t.cleanup();
   });
+
+  it('the control log\'s independent record has two copies: losing one of them after a loss was reported does not silence the report', async () => {
+    const t = await tmpRoot('r4c4-'); const root = t.dir; const chat = 'chat-e';
+    let s = await ChatStore.open(root, opts);
+    const mkc = (i: number) => { const body = Buffer.from(`entry-${i}-${'z'.repeat(20)}`); return { id: sha(body), chat, seen: [] as string[], body }; };
+    for (let i = 0; i < 4; i++) await s.appendControl(mkc(i));
+    await s.close();
+    const dir = path.join(root, 'control', sha(Buffer.from(chat))); const lp = path.join(dir, 'log.bin');
+    fs.writeFileSync(lp, fs.readFileSync(lp).subarray(0, fs.readFileSync(lp).length / 4 + 1));      // the log is cut (a loss)
+    s = await ChatStore.open(root, opts);
+    expect((await s.controlDamage(chat)).length).toBeGreaterThan(0);
+    await s.close();
+    fs.rmSync(path.join(dir, 'anchor.json'));                                                        // then one copy of the record is lost
+    s = await ChatStore.open(root, opts);
+    expect((await s.controlDamage(chat)).length).toBeGreaterThan(0);                                 // still reported, from the other copy
+    expect(fs.existsSync(path.join(dir, 'anchor.json'))).toBe(true);                                 // and the lost copy is rewritten
+    await s.close(); await t.cleanup();
+  });
 });
