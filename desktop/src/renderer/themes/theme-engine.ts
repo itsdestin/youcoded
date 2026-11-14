@@ -387,6 +387,61 @@ function deriveLink(base: string, canvas: string, panel: string, inset: string):
   return target;
 }
 
+/**
+ * Provider brand colours (the model chip's "Claude" orange etc.), as hex.
+ * WHY a copy of globals.css's two [data-theme-mode] blocks: the engine needs the
+ * numbers to measure contrast, and CSS custom properties cannot be read back
+ * without forcing a style recalculation on every theme switch. tests/
+ * brand-colour-adjust.test.ts pins these tables equal to globals.css, so the two
+ * cannot drift. --brand-grok is not here: it is `var(--fg-2)` and follows the theme.
+ */
+export const BRAND_BASE: Record<'light' | 'dark', Record<string, string>> = {
+  light: {
+    claude: '#C2410C', openai: '#047857', google: '#1D4ED8', qwen: '#6D28D9', kimi: '#0E7490',
+    deepseek: '#1D4ED8', meta: '#0064E0', mistral: '#C2410C', cohere: '#9F1239', perplexity: '#0F766E',
+  },
+  dark: {
+    claude: '#FB923C', openai: '#10A37F', google: '#60A5FA', qwen: '#A78BFA', kimi: '#22D3EE',
+    deepseek: '#60A5FA', meta: '#38BDF8', mistral: '#FB923C', cohere: '#F59E0B', perplexity: '#2DD4BF',
+  },
+};
+
+/**
+ * Derive the provider brand colours as painted on THIS theme (card #135, deck C-8,
+ * Destin: "adjust each brand colour to the theme it sits on").
+ *
+ * WHY: the two fixed sets were tuned against the built-in Light/Dark panels. On a pale
+ * tinted panel (Kuromi Dreamer's #D4C5E6) Claude's orange measured 3.19:1 — 27
+ * combinations on five light community themes were under the 4.5:1 reading mark.
+ * Same shape as deriveLink / deriveWarningFg: mix toward black (light themes) or white
+ * (dark themes) in 2% steps until the colour clears 4.5:1 on the WORSE of canvas and
+ * panel (the surfaces the chip is checked on), and return it unchanged when it already
+ * passes — so Light, Creme, Dark, Midnight and every theme that already reads fine see
+ * no change at all. Mixing toward black/white keeps the hue, so Claude stays orange.
+ * Inset is deliberately NOT a surface here: on the built-in Light theme it would move
+ * colours Destin was told would not change.
+ */
+export function computeBrandTokens(
+  tokens: Pick<ThemeTokens, 'canvas' | 'panel'>,
+  dark: boolean,
+): Record<string, string> {
+  const worst = (c: string) => Math.min(contrastRatio(c, tokens.canvas), contrastRatio(c, tokens.panel));
+  const target = dark ? '#FFFFFF' : '#000000';
+  const out: Record<string, string> = {};
+  for (const [name, base] of Object.entries(BRAND_BASE[dark ? 'dark' : 'light'])) {
+    let color = base;
+    if (worst(base) < 4.5) {
+      color = target;
+      for (let t = 0.02; t <= 1.0001; t += 0.02) {
+        const candidate = mixHex(base, target, t);
+        if (worst(candidate) >= 4.5) { color = candidate; break; }
+      }
+    }
+    out[`--brand-${name}`] = color;
+  }
+  return out;
+}
+
 /** Computes overlay CSS custom properties from existing theme tokens.
  *  After the glassmorphism refactor, overlay surfaces consume --panels-blur /
  *  --panels-opacity directly (set globally in applyThemeToDom), so this helper
@@ -672,6 +727,20 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
   //     Uses concrete rgba() values (not color-mix) for Android WebView compatibility.
   for (const [prop, value] of Object.entries(computeOverlayTokens(theme.tokens, theme.background, theme.overlay, reducedEffects))) {
     root.style.setProperty(prop, value);
+  }
+
+  // 4c. Provider brand colours, made readable on this theme's surfaces (card #135, C-8).
+  //     Always written (equal to the CSS value when already readable) so switching
+  //     from an adjusted theme never leaves a stale colour behind.
+  //     Built-in themes ('youcoded-core') are skipped on purpose: Destin was told on the
+  //     2026-08-31 review that Light and Creme would not move, and the adjustment WOULD
+  //     move them (Creme's Claude orange 4.1:1). Their inline overrides are cleared so
+  //     the CSS values win, including when switching back from an adjusted theme.
+  const isBuiltin = (theme as { source?: string }).source === 'youcoded-core';
+  const brand = computeBrandTokens(theme.tokens, theme.dark);
+  for (const [prop, value] of Object.entries(brand)) {
+    if (isBuiltin) root.style.removeProperty(prop);
+    else root.style.setProperty(prop, value);
   }
 
   // 5. Background wallpaper — [data-wallpaper] gates app-shell transparency and glass treatment.
