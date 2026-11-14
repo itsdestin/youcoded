@@ -44,5 +44,7 @@ export const APP: readonly ScreenEntry[] = [
   { name: 'dev/toast#signed-out', tags: ['dev'], session: 'wb-1', params: { toast: 'signed-out' }, newIn: 'after' as const },
   // Card #11 a: the one-time "damaged Claude Code settings file replaced" heads-up with its "Show old copy" button (the Before is dev/toast#none).
   { name: 'dev/toast#settings-repaired', tags: ['dev'], session: 'wb-1', params: { toast: 'settings-repaired' }, newIn: 'after' as const },
+  // Review 2026-11-13: the same notice over the terminal view, whose message bar is inert and zero-size (the notice must not move off screen).
+  { name: 'dev/toast#settings-repaired-terminal', tags: ['dev'], session: 'wb-1', params: { toast: 'settings-repaired' }, open: ['Terminal'], newIn: 'after' as const },
   { name: 'dev/toast#turned-off-phone', tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: 'turned-off' }, newIn: 'after' as const },
 ];
