@@ -412,6 +412,24 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect((read as any).calls).toHaveLength(1);
   });
 
+  it('records which company OpenRouter says served each step on the turn-complete usage, and nothing when none is named', async () => {
+    // Card #69: lets a later study match cache misses to a change of serving company.
+    const read = fakeTool('Read');
+    const first = stream(...textChunks('a', 'reading'), toolCallChunk('c1', 'Read', { file_path: 'x.ts' }),
+      { ...finishChunk('tool-calls', 10, 2), providerMetadata: { openrouter: { servedBy: 'DeepInfra' } } });
+    const second = stream(...textChunks('b', 'done'),
+      { ...finishChunk('stop', 20, 3), providerMetadata: { openrouter: { servedBy: 'Fireworks' } } });
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW }), async () => scriptedModel([first, second]) as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(events.find((e) => e.type === 'turn-complete')!.data.usage).toMatchObject({ servedBy: ['DeepInfra', 'Fireworks'] });
+    // A provider that names no company leaves the key absent.
+    const plain = new HarnessSession(makeOpts({}), async () => scriptedModel([stream(...textChunks('b', 'hi'), finishChunk('stop', 5, 1))]) as any);
+    const plainEvents = collect(plain);
+    await plain.send('go');
+    expect(plainEvents.find((e) => e.type === 'turn-complete')!.data.usage).not.toHaveProperty('servedBy');
+  });
+
   it('emits cumulative measured usage during a root turn', async () => {
     const read = fakeTool('Read');
     const first = stream(...textChunks('a', 'reading'), toolCallChunk('c1', 'Read', { file_path: 'x.ts' }),
@@ -3917,6 +3935,21 @@ describe('HarnessSession recovers from a reply cut off at the output limit', () 
     const events = collect(session);
     await session.send('write it');
     expect(prompts).toHaveLength(2);
+    expect(lastUserText(prompts[1])).toContain('Continue exactly where you stopped');
+    expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('end_turn');
+  });
+
+  it('a helper report arriving with a cut-off reply does not stop the continuation request', async () => {
+    // The driver's delivery gap must not swallow truncation recovery: the report is spliced AND the model is asked to continue.
+    const prompts: any[] = [];
+    const model = playing(prompts, stream(...textChunks('a', 'Here is the first half'), finishChunk('length')), stream(...textChunks('b', ' and the rest.'), finishChunk('stop')));
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000 }), async () => model as any);
+    let spliced = false;
+    session.setDeliveryBoundary(async () => { if (!spliced) { spliced = true; await session.spliceNotice('REPORT-TOKEN'); } });
+    const events = collect(session);
+    await session.send('write it');
+    expect(prompts).toHaveLength(2);
+    expect(JSON.stringify(prompts[1].prompt)).toContain('REPORT-TOKEN');
     expect(lastUserText(prompts[1])).toContain('Continue exactly where you stopped');
     expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('end_turn');
   });
