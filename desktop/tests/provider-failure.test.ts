@@ -114,4 +114,21 @@ describe('logTurnFailure leaves a content-free trace of a turn that ended in a p
       expect(JSON.stringify(spy.mock.calls)).not.toContain('secret conversation text');
     } finally { spy.mockRestore(); }
   });
+
+  it('a too-long refusal also logs its token counts, and still none of its words', async () => {
+    const logger = await import('../src/main/logger');
+    const spy = vi.spyOn(logger, 'log').mockImplementation(() => {});
+    try {
+      const { logTurnFailure } = await import('../src/main/providers/provider-failure');
+      const { ContextCannotFitError } = await import('../src/main/providers/context-overflow');
+      const err = Object.assign(new ContextCannotFitError(), {
+        message: 'secret words: request (34100 tokens) exceeds the available context size (32768 tokens)',
+      });
+      logTurnFailure('s-2', err);
+      const fields = spy.mock.calls[0][3] as any;
+      expect(fields.kind).toBe('too-long');
+      expect(fields.tokenCounts).toEqual([34100, 32768]);
+      expect(JSON.stringify(spy.mock.calls)).not.toContain('secret words');
+    } finally { spy.mockRestore(); }
+  });
 });

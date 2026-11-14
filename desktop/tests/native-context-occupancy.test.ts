@@ -16,7 +16,7 @@ import { HarnessSession } from '../src/main/harness/harness-session';
 import type { TranscriptEvent } from '../src/shared/types';
 import type { PermissionDecision } from '../src/shared/permission-types';
 import { textChunks, toolCallChunk, finishChunk, stream, scriptedModel } from './helpers/scripted-model';
-import { makeOpts, fakeTool, makeSession, scriptModel } from './helpers/harness-fakes';
+import { makeOpts, fakeTool, makeSession, scriptModel, FAKE_SUMMARY } from './helpers/harness-fakes';
 
 const ALLOW: PermissionDecision = { action: 'allow', denyListed: false };
 
@@ -146,7 +146,7 @@ describe('occupancy after a history rewrite outside a turn', () => {
     const { session, events } = seeded({
       contextLength: 40_000,
       seedBulkHistoryTokens: 8000,
-      model: scriptModel([{ text: 'SUMMARY: they discussed X.' }]),
+      model: scriptModel([{ text: FAKE_SUMMARY }]),
     });
     // A real measured reading first — 20,000 prompt tokens is the thing the
     // re-based figure must be anchored to, rather than thrown away.

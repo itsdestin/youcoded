@@ -7,6 +7,7 @@ import { contextBudget, planContextBudget, selectCompactionCut, summarizePrompt,
 import { resolveProfile } from '../src/main/harness/capability-profile';
 import { messagesTokens } from '../src/main/harness/message-size';
 import { makeSession, scriptModel, drainTurn, HARNESS, type ScriptStep } from './helpers/harness-fakes';
+import { FAKE_SUMMARY } from './helpers/harness-fakes';
 
 // The production output reserve. HARNESS's 256 would make the old and new
 // arithmetic coincide and the driver tests below prove nothing.
@@ -123,7 +124,7 @@ describe('driver: compaction happens before any request trimming', () => {
         events.push(e);
         if (e.type === 'compact-summary') compactedHistory = [...(session as any).history];
       }, harness: PRODUCTION_RESERVE,
-      model: promptCapturingModel([{ text: 'SUMMARY.' }, { text: 'answer' }], prompts),
+      model: promptCapturingModel([{ text: FAKE_SUMMARY }, { text: 'answer' }], prompts),
     });
     const original = [...(session as any).history, { role: 'user', content: 'continue' }];
     const plan = planContextBudget({ contextLength, fixedCost: (session as any).requestFixedCost(),
@@ -142,7 +143,7 @@ describe('driver: compaction happens before any request trimming', () => {
     expect(messagesTokens(original.slice(cut))).toBeLessThanOrEqual(plan.tail);
     expect(request.length).toBeGreaterThan(2); // summary + retained history + current turn
     expect(compactedHistory.map((m) => m.content)).toEqual([
-      '[Earlier conversation summary]\nSUMMARY.', ...original.slice(cut).map((m) => m.content),
+      `[Earlier conversation summary]\n${FAKE_SUMMARY}`, ...original.slice(cut).map((m) => m.content),
     ]);
     expect(request.map((m) => m.content[0].text)).toEqual(compactedHistory.map((m) => m.content));
   });
@@ -155,7 +156,7 @@ describe('driver: compaction happens before any request trimming', () => {
     const currentTurn = `continue ${'x'.repeat(3200)}`;
     const session = makeSession({
       contextLength: 8192, seedBulkHistoryTokens: 4000, onEvent: (e) => events.push(e), harness: PRODUCTION_RESERVE,
-      model: promptCapturingModel([{ text: 'SUMMARY.' }, { text: 'answer' }], prompts),
+      model: promptCapturingModel([{ text: FAKE_SUMMARY }, { text: 'answer' }], prompts),
     });
     const original = [...(session as any).history, { role: 'user', content: currentTurn }];
     const budget = contextBudget({ contextLength: 8192, maxTokens: 16_000 });
@@ -175,7 +176,7 @@ describe('driver: compaction happens before any request trimming', () => {
     const events: any[] = []; const prompts: any[][] = [];
     const session = makeSession({ contextLength: 8192, harness: PRODUCTION_RESERVE,
       onEvent: e => events.push(e),
-      model: promptCapturingModel([{ text: 'SUMMARY.' }, { text: 'answer' }], prompts) });
+      model: promptCapturingModel([{ text: FAKE_SUMMARY }, { text: 'answer' }], prompts) });
     const output = 'y'.repeat(20_000);
     session.seedHistory([
       { role: 'user', content: 'read the file' },
@@ -188,7 +189,7 @@ describe('driver: compaction happens before any request trimming', () => {
     expect(JSON.stringify(prompts[0])).not.toContain(output); // shortened only for summarization
     const request = prompts[1].filter(m => m.role !== 'system');
     expect(request.map(m => m.content[0].text)).toEqual([
-      '[Earlier conversation summary]\nSUMMARY.', 'recap briefly', 'continue',
+      `[Earlier conversation summary]\n${FAKE_SUMMARY}`, 'recap briefly', 'continue',
     ]);
   });
 });
@@ -216,7 +217,7 @@ describe('a session with an unknown window budgets with its profile’s assumpti
     const events: any[] = []; const prompts: any[][] = [];
     const profile = resolveProfile({ providerType: 'openai-compatible', modelId: 'm', contextLength: null, onThisComputer });
     const session = makeSession({ profile, seedBulkHistoryTokens: 22_000, harness: PRODUCTION_RESERVE,
-      onEvent: (e) => events.push(e), model: promptCapturingModel([{ text: 'SUMMARY.' }, { text: 'answer' }], prompts) });
+      onEvent: (e) => events.push(e), model: promptCapturingModel([{ text: FAKE_SUMMARY }, { text: 'answer' }], prompts) });
     await drainTurn(session, 'continue');
     return { summaries: events.filter((e) => e.type === 'compact-summary').length, calls: prompts.length };
   };

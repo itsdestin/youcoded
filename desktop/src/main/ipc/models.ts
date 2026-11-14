@@ -36,5 +36,11 @@ export const modelsChannels: MainChannelDef[] = [
     name: IPC.MODELS_MEMORY_CHECK, kind: 'handle',
     handler: ({ modelId }, ctx) => ctx.runtime ? ctx.runtime.modelManager.memoryCheck(modelId) : { verdict: 'ok' as const, headline: '', detail: '' },
   }),
-  defineChannel({ name: IPC.MODELS_LOAD, kind: 'handle', handler: async ({ modelId }, ctx) => { await ctx.runtime?.engineManager.loadModel(modelId); return true as const; } }),
+  defineChannel({ name: IPC.MODELS_LOAD, kind: 'handle', handler: async ({ modelId, sessionId }, ctx) => {
+    await ctx.runtime?.engineManager.loadModel(modelId);
+    // WHY: a chat the user came back to is read again in the background, so its next reply does not
+    // wait for the whole chat to be re-read (review deck Q-6). Not awaited: the answer is "loading started".
+    if (typeof sessionId === 'string' && sessionId) void ctx.runtime?.nativeHost.prewarmLocal(sessionId).catch(() => {});
+    return true as const;
+  } }),
 ];

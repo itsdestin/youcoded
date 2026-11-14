@@ -91,6 +91,13 @@ export function isWorkbenchMode(): boolean {
  *  than 1. */
 export type TerminalBacking = 'today' | 'legacy' | 'scrim' | 'solid90' | 'solid100';
 
+/** The loading strip's review states (`?modelLoading=reading|finishing|timed|unloaded`, or `1` for the
+ *  plain sweep). Workbench only — the app never reads it. */
+export function workbenchModelLoading(): string | null {
+  if (!isWorkbenchMode()) return null;
+  return new URLSearchParams(location.search).get('modelLoading');
+}
+
 /** Queue review only: no delivery, journal mutation or native cleanup is simulated as proof. */
 export function workbenchQueuePreview(): string | null {
   if (!isWorkbenchMode()) return null;

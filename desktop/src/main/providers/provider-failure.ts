@@ -112,6 +112,9 @@ export function classifyFailure(error: unknown): ProviderFailure {
   if (!e || typeof e !== 'object') return { kind: 'unknown', code: 'unknown' };
   // Codes an earlier layer already decided (OpenRouter's ProviderAccountError,
   // ChatGPT sign-in) — those layers read the provider's real answer.
+  // The harness's own pre-send "cannot fit" refusal (context-overflow.ts) is the same kind and code as the
+  // engine's refusal below, so both show one card with Summarise (fault 5).
+  if (e.failureKind === 'too-long') return { kind: 'too-long', code: 'context-too-long' };
   if (typeof e.errorCode === 'string') return { kind: 'account', code: e.errorCode };
 
   const status: number | undefined = e.statusCode ?? e.status;
@@ -180,6 +183,14 @@ export function classifyFailure(error: unknown): ProviderFailure {
 export function logTurnFailure(sessionId: string, error: unknown): ProviderFailure {
   const failure = classifyFailure(error);
   const e: any = (error as any)?.lastError ?? error;
-  log('WARN', 'HarnessSession', 'turn ended with a provider error', { sessionId, kind: failure.kind, code: failure.code, status: e?.statusCode ?? e?.status });
+  // WHY the NUMBERS of a too-long refusal (2026-11-09): a local turn ended "too long" with
+  // ~22.6k of a 32k window used, and the log held only kind/code, so whether the engine
+  // counted the prompt, the reply allowance or something else could not be told. Only the
+  // digits are kept ("request (34100 tokens) exceeds … (32768 tokens)" → [34100, 32768]):
+  // the trace stays content-free, as the test for this function requires.
+  const tokenCounts = failure.kind === 'too-long'
+    ? (String(e?.responseBody ?? e?.message ?? '').match(/\d{3,7}/g) ?? []).slice(0, 4).map(Number)
+    : [];
+  log('WARN', 'HarnessSession', 'turn ended with a provider error', { sessionId, kind: failure.kind, code: failure.code, status: e?.statusCode ?? e?.status, ...(tokenCounts.length ? { tokenCounts } : {}) });
   return failure;
 }

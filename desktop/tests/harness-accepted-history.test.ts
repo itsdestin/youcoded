@@ -14,7 +14,7 @@ import { summaryProvenanceNote } from '../src/main/harness/compaction';
 import { looseData, type TranscriptEvent } from '../src/shared/types';
 import type { TriggerIndex } from '../src/main/harness/injection/path-triggers';
 import { bindOpenAIContinuationModel } from '../src/main/harness/openai-continuation';
-import { drainTurn, fakeTool, makeOpts, makeSession, scriptModel } from './helpers/harness-fakes';
+import { drainTurn, fakeTool, makeOpts, makeSession, scriptModel, FAKE_SUMMARY } from './helpers/harness-fakes';
 import { finishChunk, reasoningChunks, scriptedModel, stream, textChunks, toolCallChunk } from './helpers/scripted-model';
 import type { AskDecision } from '../src/main/harness/permission-broker';
 
@@ -257,7 +257,7 @@ describe('HarnessSession accepted history', () => {
     // and there is no transformation to record (see the no-op test below).
     const events: TranscriptEvent[] = [];
     const pruned = makeSession({ contextLength: 8192, onEvent: (e) => events.push(e),
-      model: scriptModel([{ text: 'SUMMARY: read big.txt; user asked for a recap.' }, { text: 'done' }]) });
+      model: scriptModel([{ text: FAKE_SUMMARY }, { text: 'done' }]) });
     pruned.seedHistory([
       { role: 'user', content: 'read the big file' },
       { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c0', toolName: 'Read', input: { file_path: 'big.txt' } }] },
@@ -272,13 +272,13 @@ describe('HarnessSession accepted history', () => {
     const summary = events.find(e => e.type === 'compact-summary')!;
     expect(summary).toBeDefined();
     expect(pruned.acceptedHistory().transformation).toEqual({ kind: 'summary', summaryEventUuid: summary.uuid });
-    expect(JSON.stringify(pruned.acceptedHistory().messages)).toContain('SUMMARY: read big.txt');
+    expect(JSON.stringify(pruned.acceptedHistory().messages)).toContain('## Goal');
     expect(JSON.stringify(pruned.acceptedHistory().messages)).not.toContain('y'.repeat(20_000));
 
     const noOpEvents: TranscriptEvent[] = [];
     const summarized = makeSession({
       contextLength: 8192, seedBulkHistoryTokens: 4000, onEvent: (e) => noOpEvents.push(e),
-      model: scriptModel([{ text: 'SUMMARY: user wants X; did Y.' }, { text: 'here is the answer' }]),
+      model: scriptModel([{ text: FAKE_SUMMARY }, { text: 'here is the answer' }]),
     });
     await drainTurn(summarized, 'continue');
     expect(noOpEvents.some((e) => e.type === 'compact-summary')).toBe(false);
@@ -586,7 +586,7 @@ describe('HarnessSession accepted history', () => {
     const autoEvents: TranscriptEvent[] = [];
     const summarized = makeSession({
       contextLength: 8192, onEvent: (e) => autoEvents.push(e),
-      model: scriptModel([{ text: 'SUMMARY: user wants X; did Y.' }, { text: 'here is the answer' }]),
+      model: scriptModel([{ text: FAKE_SUMMARY }, { text: 'here is the answer' }]),
     });
     summarized.seedHistory([
       { role: 'user', content: 'read the file' },

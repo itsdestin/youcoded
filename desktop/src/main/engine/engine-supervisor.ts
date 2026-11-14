@@ -23,7 +23,7 @@
 // command line, because llama-server merges the router's own command line OVER
 // every preset: a `-c` left on the command line silently outranks — and so
 // defeats — every per-model context length.
-import { spawn, ChildProcess, execFileSync } from 'child_process';
+import { spawn, ChildProcess, execFile } from 'child_process';
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import { EventEmitter } from 'events';
@@ -32,6 +32,8 @@ import type { ModelSettings } from '../../shared/model-manager-types';
 import { scanGgufCache, scanGgufCacheAsync } from './cache-scan';
 import { isFollowerPart } from '../../shared/gguf-split';
 import { renderPresetFile, writePresetFile } from './model-presets';
+import { openEngineLog, type EngineLog } from './engine-log';
+import { slotField } from './slot-pins';
 
 /** Everything the spawn reads out of `~/.youcoded/config.json` — re-read at
  *  EVERY spawn (and at every idle check), never frozen into the constructor. */
@@ -42,6 +44,9 @@ export interface EngineSpawnConfig {
   /** The two speed switches (design §B). Both default ON — that is what shipped
    *  before they were switchable, so a config file without them behaves as today. */
   speed?: { speculative?: boolean; compressCache?: boolean };
+  /** Models whose file carries MTP heads; their preset section turns MTP on
+   *  (model-presets.ts MTP_ENTRIES). Absent = none known yet. */
+  mtpModelIds?: readonly string[];
   /** `engine.models` — the per-model sections of the preset file. Keyed by model
    *  id, which is a FILENAME, so it is only ever read with an own-property check. */
   models?: Readonly<Record<string, Partial<ModelSettings>>> | null;
@@ -54,6 +59,10 @@ export interface EngineSupervisorOpts {
   readConfig: () => EngineSpawnConfig;
   /** Absolute path of the per-model settings file (`~/.youcoded/engine/models.ini`). */
   presetPath: string;
+  /** Awaited before each spawn reads its config — lets the owner refresh what
+   *  it can only learn asynchronously (which model files carry MTP heads).
+   *  A failure is ignored: the spawn goes ahead with what was known. */
+  beforeSpawn?: () => Promise<void>;
   env?: NodeJS.ProcessEnv;   // test override
   fetchImpl?: typeof fetch;  // test override
   readyDeadlineMs?: number;  // default 30_000 — first Vulkan init can be slow
@@ -62,11 +71,16 @@ export interface EngineSupervisorOpts {
   idleCheckMs?: number;      // default 60s
   modelPollMs?: number;      // /models state poll cadence when idle; default MODEL_POLL_IDLE_MS
   modelPollLoadingMs?: number; // faster cadence while a model is loading; default MODEL_POLL_LOADING_MS
+  /** How long this model's load is expected to take on this machine, from past
+   *  loads (load-times.ts), or null when there is no history. Unset = never. */
+  expectedLoadMs?: (modelId: string, sizeBytes: number | null) => number | null;
+  /** Where to keep the engine's own output (engine-log.ts). Unset = not kept. */
+  logPath?: string;
   /** Test seam: resolve the PID listening on `port` (Linux). Default: ss + /proc scan. */
-  pidOnPort?: (port: number) => number | null;
+  pidOnPort?: (port: number) => number | null | Promise<number | null>;
   /** Test seam: resolve a PID's executable path (for the stale-engine reaper).
    *  Default: readlink /proc/<pid>/exe. */
-  exeForPid?: (pid: number) => string | null;
+  exeForPid?: (pid: number) => string | null | Promise<string | null>;
   /** Test seams for the preset file. Default: the temp-file + rename writer in
    *  model-presets.ts, and a plain read back. */
   writePresetImpl?: (filePath: string, contents: string) => void;
@@ -117,15 +131,28 @@ export async function findModelChildRss(
   routerPid: number | undefined,
   knownPid: number | undefined,
   procFs: ProcFs,
-): Promise<{ pid: number; bytes: number } | undefined> {
+): Promise<{ pid: number; bytes: number; readBytes?: number } | undefined> {
   const needle = `/${modelId}.gguf`;
-  const tryPid = async (pid: number): Promise<{ pid: number; bytes: number } | undefined> => {
+  const tryPid = async (pid: number): Promise<{ pid: number; bytes: number; readBytes?: number } | undefined> => {
     try {
       const cmd = await procFs.readFile(`/proc/${pid}/cmdline`); // NUL-separated
       if (!cmd.includes('--model') || !cmd.includes(needle)) return undefined;
       const status = await procFs.readFile(`/proc/${pid}/status`);
       const m = /VmRSS:\s+(\d+)\s+kB/.exec(status);
-      return m ? { pid, bytes: parseInt(m[1], 10) * 1024 } : undefined;
+      if (!m) return undefined;
+      // WHY also `rchar` (bytes the process has read, cache hits included):
+      // on a GPU build the weights are read() straight into graphics memory, so
+      // VmRSS never climbs — measured on the Z13 (Vulkan, b10665): VmRSS sat at
+      // 0.16 GB for a whole 31 GB load while rchar rose smoothly to 30.9 GB,
+      // cold and warm alike. The bar read ~0% and then said "finishing up" for
+      // the entire load. Optional: a kernel that hides /proc/<pid>/io just
+      // leaves the old VmRSS reading.
+      let readBytes: number | undefined;
+      try {
+        const io = /rchar:\s+(\d+)/.exec(await procFs.readFile(`/proc/${pid}/io`));
+        if (io) readBytes = Number(io[1]);
+      } catch { /* unreadable — VmRSS only */ }
+      return { pid, bytes: parseInt(m[1], 10) * 1024, readBytes };
     } catch { return undefined; } // raced exit / not ours to read
   };
   if (knownPid !== undefined) {
@@ -186,24 +213,24 @@ const MODEL_POLL_LOADING_MS = 400;
 /** Resolve the PID of the process listening on a localhost port, cross-platform:
  *  Linux `ss` (+ /proc fallback), macOS `lsof`, Windows `netstat`. Returns null
  *  when the tool is missing/unparseable or no listener is found — callers treat
- *  null as "unknown", never "safe", so a non-answer never blocks startup. */
-function defaultPidOnPort(port: number): number | null {
+ *  null as "unknown", never "safe", so a non-answer never blocks startup.
+ *  ASYNC (2026-10-29): it runs on every engine start, and `netstat -ano` on a
+ *  busy Windows machine can take seconds — synchronously that froze every window. */
+async function defaultPidOnPort(port: number): Promise<number | null> {
   switch (process.platform) {
     case 'linux': {
-      try {
-        const out = execFileSync('ss', ['-ltnp'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
-        const pid = parseSsListenerPid(out, port);
-        if (pid != null) return pid;
-      } catch { /* ss missing/failed — fall through to the /proc scan */ }
-      return pidOnPortViaProc(port);
+      const out = await runTool('ss', ['-ltnp'], 3000);
+      const pid = out ? parseSsListenerPid(out, port) : null;
+      // ss missing/failed/no match — fall through to the /proc scan.
+      return pid ?? pidOnPortViaProc(port);
     }
     case 'darwin': {
       // -nP: no DNS/port-name lookups (fast); -sTCP:LISTEN: listeners only; -F p: PID-only output.
-      const out = runTool('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-F', 'p']);
+      const out = await runTool('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-F', 'p']);
       return out ? parseLsofPid(out) : null;
     }
     case 'win32': {
-      const out = runTool('netstat', ['-ano', '-p', 'tcp']);
+      const out = await runTool('netstat', ['-ano', '-p', 'tcp']);
       return out ? parseNetstatListenerPid(out, port) : null;
     }
     default:
@@ -211,12 +238,12 @@ function defaultPidOnPort(port: number): number | null {
   }
 }
 
-function runTool(file: string, args: string[]): string | null {
-  try {
-    return execFileSync(file, args, { encoding: 'utf8', timeout: 4000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-  } catch {
-    return null; // tool missing, non-zero exit, or timeout — all non-fatal (unknown).
-  }
+function runTool(file: string, args: string[], timeout = 4000): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(file, args, { encoding: 'utf8', timeout, windowsHide: true }, (err, stdout) => {
+      resolve(err ? null : stdout); // tool missing, non-zero exit, or timeout — all non-fatal (unknown).
+    });
+  });
 }
 
 // ---- pure parsers (unit-tested; no shell in tests) ----
@@ -349,29 +376,29 @@ export function parseNetstatListenerPid(stdout: string, port: number): number | 
 
 /** Linux /proc-only port→PID: find the socket inode for the LISTEN port in
  *  /proc/net/tcp(6), then the process whose fd links to that inode. */
-function pidOnPortViaProc(port: number): number | null {
+async function pidOnPortViaProc(port: number): Promise<number | null> {
   const hex = ':' + port.toString(16).toUpperCase().padStart(4, '0');
-  const inode = listenInodeForPort(hex);
+  const inode = await listenInodeForPort(hex);
   if (!inode) return null;
   let pids: string[];
-  try { pids = fs.readdirSync('/proc'); } catch { return null; }
+  try { pids = await fs.promises.readdir('/proc'); } catch { return null; }
   for (const pid of pids) {
     if (!/^\d+$/.test(pid)) continue;
     let fds: string[];
-    try { fds = fs.readdirSync(`/proc/${pid}/fd`); } catch { continue; } // perms / raced exit
+    try { fds = await fs.promises.readdir(`/proc/${pid}/fd`); } catch { continue; } // perms / raced exit
     for (const fd of fds) {
       try {
-        if (fs.readlinkSync(`/proc/${pid}/fd/${fd}`) === `socket:[${inode}]`) return parseInt(pid, 10);
+        if (await fs.promises.readlink(`/proc/${pid}/fd/${fd}`) === `socket:[${inode}]`) return parseInt(pid, 10);
       } catch { /* raced fd close */ }
     }
   }
   return null;
 }
 
-function listenInodeForPort(hexPort: string): string | null {
+async function listenInodeForPort(hexPort: string): Promise<string | null> {
   for (const f of ['/proc/net/tcp', '/proc/net/tcp6']) {
     let lines: string[];
-    try { lines = fs.readFileSync(f, 'utf8').split('\n'); } catch { continue; }
+    try { lines = (await fs.promises.readFile(f, 'utf8')).split('\n'); } catch { continue; }
     for (const line of lines.slice(1)) {
       const cols = line.trim().split(/\s+/);
       // cols[1]=local_address (hexIP:hexPort), cols[3]=state ('0A' = LISTEN), cols[9]=inode
@@ -385,18 +412,18 @@ function listenInodeForPort(hexPort: string): string | null {
  *  stale-engine reaper to confirm the squatter is actually llama-server before
  *  killing it. Returns null when undeterminable — callers treat null as
  *  "unknown", never "safe", so an unconfirmable process is never killed. */
-function defaultExeForPid(pid: number): string | null {
+async function defaultExeForPid(pid: number): Promise<string | null> {
   switch (process.platform) {
     case 'linux':
-      try { return fs.readlinkSync(`/proc/${pid}/exe`); } catch { return null; }
+      try { return await fs.promises.readlink(`/proc/${pid}/exe`); } catch { return null; }
     case 'darwin': {
-      const out = runTool('ps', ['-p', String(pid), '-o', 'comm=']);
+      const out = await runTool('ps', ['-p', String(pid), '-o', 'comm=']);
       const name = out?.split('\n')[0]?.trim();
       return name || null;
     }
     case 'win32': {
       // Image name only (llama-server.exe) — enough to confirm it's our engine.
-      const out = runTool('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH']);
+      const out = await runTool('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH']);
       const m = out && /^"([^"]+)"/.exec(out.trim());
       return m ? m[1] : null;
     }
@@ -431,9 +458,18 @@ export class EngineSupervisor extends EventEmitter {
   // than as zero (see loadedModelsBytes below); the idle check reads it as [].
   private lastPolledModels: EngineModel[] | null = null;
   private loadProgress = new Map<string, number>();      // modelId → max resident bytes seen while loading (monotonic)
+  /** modelId → when this load was first seen, for the 'load-timed' report. */
+  private loadSeenAt = new Map<string, number>();
   /** modelId → the pid last found loading it, so the next 400 ms tick reads two
    *  small files instead of searching again (see findModelChildRss). */
   private loadingPid = new Map<string, number>();
+  /** modelId → the last (pid, bytes-read) seen while it was loading, and pid →
+   *  the bytes-read count that pid had when its last load ENDED. WHY: a model
+   *  that auto-sleeps keeps its process, so on wake its read counter already
+   *  holds the whole first load; without the baseline the bar would leap to
+   *  full the instant it woke. */
+  private lastReadSeen = new Map<string, { pid: number; read: number }>();
+  private readBaselineByPid = new Map<number, number>();
   /** modelId → the resident-memory lookup already running. WHY single-flight:
    *  the timer poll and a user's load/unload nudge can overlap; they share one
    *  lookup instead of stacking /proc reads. */
@@ -465,7 +501,13 @@ export class EngineSupervisor extends EventEmitter {
    *  told only that something had gone wrong. */
   private presetProblemText: string | null = null;
 
-  constructor(private readonly opts: EngineSupervisorOpts) { super(); }
+  /** One per supervisor, kept across respawns so a crash and its restart share a file. */
+  private readonly engineLog: EngineLog | null;
+
+  constructor(private readonly opts: EngineSupervisorOpts) {
+    super();
+    this.engineLog = opts.logPath ? openEngineLog(opts.logPath) : null;
+  }
 
   /** Config as it is on disk RIGHT NOW. Never cached: the whole point of
    *  readConfig is that a settings change is picked up without rebuilding this
@@ -602,6 +644,9 @@ export class EngineSupervisor extends EventEmitter {
     this.apiKey = randomBytes(32).toString('hex');
     this.lastStartupOutput = '';
     this.emit('status-changed');
+    // WHY before config(): the preset written below needs to know which models
+    // can use MTP, and that is read from each model file's header (async).
+    try { await this.opts.beforeSpawn?.(); } catch { /* spawn with what is known */ }
     const cfg = this.config();
     const fetchImpl = this.authedFetch;
     const readyDeadlineMs = this.opts.readyDeadlineMs ?? 30_000;
@@ -632,7 +677,7 @@ export class EngineSupervisor extends EventEmitter {
     // If the listener is a llama-server that is NOT our live child, kill it so this
     // spawn gets the port. Where the port→PID tool is unavailable the reaper is a
     // no-op and the conflict simply surfaces as the child's startup exit (unchanged).
-    this.reapStaleEngineOnPort();
+    await this.reapStaleEngineOnPort();
 
     // The per-model settings file. Written fresh before EVERY spawn (the router
     // reads it once, at startup) and passed as --models-preset. `null` = it could
@@ -657,6 +702,17 @@ export class EngineSupervisor extends EventEmitter {
         // cache dir so a dropped GGUF and an -hf pull live side by side.
         '--models-dir', cfg.cacheDir,
         '--models-max', String(MODELS_MAX),
+        // Keep each idle chat's reading in its slot (2026-11-07, b10665). By default,
+        // with the shared ("unified") cache the engine uses, ANY new request clears
+        // every idle slot and parks it in a RAM copy — which never came back for the
+        // hybrid Qwen3.5/3.8 models: measured, a chat's next message after another
+        // chat (or a helper, or a title) re-read all 4,890 tokens (35.6 s) instead of
+        // 13 (0.8 s). Off, idle readings stay until the memory is actually needed;
+        // then the engine frees the idle slot used longest ago and carries on
+        // ("purging slot N", every request still answered — measured with the cache
+        // deliberately overfilled). Router children inherit it. Works with
+        // slot-pins.ts, which keeps each chat on its own slot.
+        '--no-cache-idle-slots',
         // Speed (2026-09-04, measured on b10665 — docs/engine-dependencies.md → "Speed flags"):
         // --spec-default = llama.cpp's draft-FREE speculative decoding (n-gram lookup
         // in the prompt itself, no second model). Edit/Write tool calls and rewrites
@@ -704,8 +760,10 @@ export class EngineSupervisor extends EventEmitter {
     // child once its OS pipe buffer fills. See docs/error-message-standards.md.
     const MAX_OUTPUT_TAIL = 4000;
     let outputTail = '';
+    this.engineLog?.begin(child.spawnargs ?? []);
     const collect = (buf: Buffer) => {
       outputTail = (outputTail + buf.toString('utf8')).slice(-MAX_OUTPUT_TAIL);
+      this.engineLog?.write(buf);
     };
     child.stdout?.on('data', collect);
     child.stderr?.on('data', collect);
@@ -725,7 +783,7 @@ export class EngineSupervisor extends EventEmitter {
         // the orphan — and later count ITS death as OUR crash (the false "engine
         // crashed repeatedly" strike-out). Only accept when the listener is our child
         // (or identity can't be determined on this platform — fall through as before).
-        if (res.ok && this.isOurChildOnPort(child)) {
+        if (res.ok && await this.isOurChildOnPort(child)) {
           this.state = 'running';
           this.touch();
           child.off('exit', startupExitListener);
@@ -791,6 +849,8 @@ export class EngineSupervisor extends EventEmitter {
         sleepIdleSeconds: cfg.sleepIdleSeconds ?? SLEEP_IDLE_SECONDS,
         modelIds,
         settings: cfg.models ?? null,
+        mtpModelIds: new Set(cfg.mtpModelIds ?? []),
+        speculative: cfg.speed?.speculative !== false,
       });
       write(filePath, contents);
       // Read back before betting the engine's startup on it. Deliberately NOT a
@@ -830,9 +890,9 @@ export class EngineSupervisor extends EventEmitter {
    *  missing/unparseable) so we never regress a platform we can't inspect — the
    *  guard only ever REJECTS a confidently-foreign listener; it never blocks an
    *  unknown one. This is what stops us adopting an orphaned engine on our port. */
-  private isOurChildOnPort(child: ChildProcess): boolean {
+  private async isOurChildOnPort(child: ChildProcess): Promise<boolean> {
     if (child.pid == null) return true;            // not assigned yet — can't disprove
-    const pid = (this.opts.pidOnPort ?? defaultPidOnPort)(this.opts.port);
+    const pid = await this.pidOnOurPort();
     if (pid == null) return true;                  // unknown — don't block on a non-answer
     return pid === child.pid;
   }
@@ -841,20 +901,28 @@ export class EngineSupervisor extends EventEmitter {
    *  orphan from a previous run). Best-effort; never throws, and never touches our
    *  own child or a process we can't confirm is llama-server. Runs before spawn so
    *  this instance can actually bind the fixed port instead of adopting the orphan. */
-  private reapStaleEngineOnPort(): void {
-    const pid = (this.opts.pidOnPort ?? defaultPidOnPort)(this.opts.port);
+  private async reapStaleEngineOnPort(): Promise<void> {
+    const pid = await this.pidOnOurPort();
     if (pid == null) return;                       // nothing (identifiably) on the port
     if (this.child && this.child.pid === pid) return; // our own live child — leave it
-    const exe = (this.opts.exeForPid ?? defaultExeForPid)(pid);
+    let exe: string | null = null;
+    try { exe = await (this.opts.exeForPid ?? defaultExeForPid)(pid); } catch { return; }
     if (exe == null || !exe.includes('llama-server')) return; // not confirmably our engine — never kill it
     try { process.kill(pid, 'SIGKILL'); } catch { /* already gone / not ours to kill */ }
+  }
+
+  /** Who listens on our port; null = unknown (a lookup that throws counts as unknown). */
+  private async pidOnOurPort(): Promise<number | null> {
+    try { return await (this.opts.pidOnPort ?? defaultPidOnPort)(this.opts.port); } catch { return null; }
   }
 
   private onExit(code: number | null): void {
     const wasRunning = this.state === 'running';
     this.child = null;
     this.disarmIdleTimer();
+    const lastModels = this.lastPolledModels;
     this.stopModelPoll();
+    this.emitAllUnloaded(lastModels);
     if (this.intentionalShutdown) { this.state = 'stopped'; this.emit('status-changed'); return; }
     if (!wasRunning) return;
     const now = Date.now();
@@ -880,7 +948,11 @@ export class EngineSupervisor extends EventEmitter {
 
   private async _stop(): Promise<void> {
     this.disarmIdleTimer();
+    // Taken before the poll is torn down (it clears the reading); onExit then
+    // sees null and does not announce twice.
+    const lastModels = this.lastPolledModels;
     this.stopModelPoll();
+    this.emitAllUnloaded(lastModels);
     if (!this.child) {
       if (this.state !== 'error') this.state = 'stopped';
       return;
@@ -992,6 +1064,13 @@ export class EngineSupervisor extends EventEmitter {
     // would wait for a moment that may never come (design §C2).
     const modelId = requestModelId(init);
     if (modelId) this.inFlightByModel.set(modelId, (this.inFlightByModel.get(modelId) ?? 0) + 1);
+    // A request to a model last seen NOT loaded is about to wake it: check at
+    // once so the loading strip shows now, not at the next 10 s idle poll (a
+    // short load could otherwise finish unseen). A beat later, so the router has
+    // received the request and already says 'loading'.
+    if (modelId && this.lastPolledModels?.find((m) => m.id === modelId)?.state !== 'loaded') {
+      setTimeout(() => { if (this.state === 'running') this.nudgeModelPoll(); }, 250).unref?.();
+    }
     const releaseModel = () => {
       if (!modelId) return;
       const next = (this.inFlightByModel.get(modelId) ?? 1) - 1;
@@ -1010,6 +1089,17 @@ export class EngineSupervisor extends EventEmitter {
     const release = () => {
       if (!released) { released = true; this.inFlight--; releaseModel(); this.touch(); }
     };
+    // WHY: safety net for any caller that abandons a body without cancelling it
+    // (e.g. a probe that checks res.ok and returns). The caller's own abort
+    // signal firing means it no longer wants the answer, so stop holding the
+    // engine busy. Deliberately NOT a timer or GC hook: a long prefill can send
+    // no bytes for minutes, so a timeout would let idle shutdown cut a live
+    // stream, and GC timing is unpredictable.
+    const sig: AbortSignal | undefined = init?.signal ?? (typeof Request !== 'undefined' && input instanceof Request ? input.signal : undefined);
+    if (sig) {
+      if (sig.aborted) release();
+      else sig.addEventListener('abort', release, { once: true });
+    }
     const reader = (res.body as ReadableStream<Uint8Array>).getReader();
     const self = this;
     const stream = new ReadableStream<Uint8Array>({
@@ -1287,7 +1377,10 @@ export class EngineSupervisor extends EventEmitter {
     this.lastModelSig = '';
 
     this.loadProgress.clear();
+    this.loadSeenAt.clear();
     this.loadingPid.clear();
+    this.lastReadSeen.clear();
+    this.readBaselineByPid.clear();
     this.pollGeneration += 1;
     // Back to "not asked yet". A stopped engine holds no model in memory, but
     // the reading it left behind describes a process that no longer exists.
@@ -1309,6 +1402,21 @@ export class EngineSupervisor extends EventEmitter {
   loadedModelsBytes(): number | undefined {
     if (this.lastPolledModels === null) return undefined;
     return sumLoadedModelBytes(this.lastPolledModels);
+  }
+
+  /** The latest /models reading (null = not asked yet / engine not running).
+   *  WHY public: a chat that opens on, or switches to, a model whose state is
+   *  NOT changing gets no 'models-changed' — the coordinator reads this to tell
+   *  it the current state at once (else it never learns the model is loaded). */
+  latestModels(): EngineModel[] | null { return this.lastPolledModels; }
+
+  /** Tell listeners every model is now unloaded. WHY: the poll only emits on a
+   *  change it SEES, and a stopped or crashed engine is never polled again — so
+   *  a chat whose last news was 'loading' kept a "Loading…" strip until the next
+   *  boot. Called with the reading taken just before the poll was torn down. */
+  private emitAllUnloaded(last: EngineModel[] | null): void {
+    if (!last?.length) return;
+    this.emit('models-changed', last.map((m) => ({ ...m, state: 'unloaded' as const, loaded: false, loadedBytes: undefined })));
   }
 
   /** Compute the live model set (with load progress) and emit if it changed. */
@@ -1336,9 +1444,27 @@ export class EngineSupervisor extends EventEmitter {
         const maxRss = Math.max(this.loadProgress.get(m.id) ?? 0, rss);
         this.loadProgress.set(m.id, maxRss);
         if (maxRss > 0) m.loadedBytes = m.sizeBytes ? Math.min(maxRss, m.sizeBytes) : maxRss;
+        if (!this.loadSeenAt.has(m.id)) this.loadSeenAt.set(m.id, Date.now());
+        // WHY (2026-10-29): with no measured bytes (Windows, macOS, or a Linux
+        // kernel that hides /proc), the bar had nothing to show but a sweep.
+        // Past loads of this model on this machine say roughly how long it takes.
+        if (maxRss <= 0) {
+          const expected = this.opts.expectedLoadMs?.(m.id, m.sizeBytes) ?? null;
+          if (expected) m.loadExpectedMs = expected;
+        }
       } else {
+        // A load just finished: report how long it took, for the next estimate.
+        const seenAt = this.loadSeenAt.get(m.id);
+        if (seenAt !== undefined) {
+          this.loadSeenAt.delete(m.id);
+          if (m.state === 'loaded') this.emit('load-timed', { modelId: m.id, sizeBytes: m.sizeBytes, ms: Date.now() - seenAt });
+        }
         this.loadProgress.delete(m.id); // load finished / not loading → drop tracker
         this.loadingPid.delete(m.id);
+        // Remember where this process's read counter stood, so its NEXT load
+        // (a wake from sleep, same pid) counts only new reads.
+        const seen = this.lastReadSeen.get(m.id);
+        if (seen) { this.readBaselineByPid.set(seen.pid, seen.read); this.lastReadSeen.delete(m.id); }
       }
     }
     // Recorded on EVERY poll, not only when the signature changed. The emit
@@ -1346,12 +1472,13 @@ export class EngineSupervisor extends EventEmitter {
     // readers above having a current answer — and the idle timer must not be
     // answered with a stale set just because this poll matched the last one.
     this.lastPolledModels = models;
-    const sig = models.map((m) => `${m.id}:${m.state}:${m.loadedBytes ?? ''}`).sort().join('|');
+    const sig = models.map((m) => `${m.id}:${m.state}:${m.loadedBytes ?? ''}:${m.loadExpectedMs ?? ''}`).sort().join('|');
     if (sig !== this.lastModelSig) { this.lastModelSig = sig; this.emit('models-changed', models); }
   }
 
-  /** Resident bytes of the router's child process serving `modelId` (its VmRSS,
-   *  which climbs toward the file size as the GGUF is read into RAM). Linux only
+  /** How much of `modelId` the router's child has brought in so far: the larger
+   *  of its VmRSS (climbs on a load into RAM) and the bytes it has read since
+   *  this load began (climbs on a load into graphics memory). Linux only
    *  (reads /proc); undefined elsewhere → the UI falls back to an elapsed-only,
    *  indeterminate bar. The child's cmdline carries `--model …/<id>.gguf`, which
    *  the router process (with `--models-dir`) does not, so the needle is unique.
@@ -1364,9 +1491,16 @@ export class EngineSupervisor extends EventEmitter {
     const lookup = findModelChildRss(
       modelId, this.child?.pid ?? undefined, this.loadingPid.get(modelId), this.opts.procFs ?? realProcFs,
     ).then((hit) => {
+      if (!hit) return undefined;
       // Remember the pid only for the run that found it (a stop clears the map).
-      if (hit && generation === this.pollGeneration) this.loadingPid.set(modelId, hit.pid);
-      return hit?.bytes;
+      if (generation === this.pollGeneration) {
+        this.loadingPid.set(modelId, hit.pid);
+        if (hit.readBytes !== undefined) this.lastReadSeen.set(modelId, { pid: hit.pid, read: hit.readBytes });
+      }
+      // Whichever measure has moved further: VmRSS for a load into ordinary
+      // memory (CPU, mmap), bytes read for one into graphics memory.
+      const read = hit.readBytes === undefined ? 0 : Math.max(0, hit.readBytes - (this.readBaselineByPid.get(hit.pid) ?? 0));
+      return Math.max(hit.bytes, read);
     }, () => undefined).finally(() => { this.rssInFlight.delete(modelId); });
     this.rssInFlight.set(modelId, lookup);
     return lookup;
@@ -1392,7 +1526,7 @@ export class EngineSupervisor extends EventEmitter {
    *  immediately; the model poll (fast while loading) then tracks 'loading' +
    *  resident bytes → the progress bar. Routed through trackedFetch so it counts
    *  as activity (never reaped mid-load). */
-  async loadModel(modelId: string): Promise<void> {
+  async loadModel(modelId: string, slot?: number): Promise<void> {
     const base = await this.ensureRunning(); // http://127.0.0.1:port/v1
     // The outcome is EMITTED rather than returned. This warm-up is deliberately
     // not awaited (the caller returns at once so the UI can show 'loading'), and
@@ -1403,12 +1537,17 @@ export class EngineSupervisor extends EventEmitter {
     void this.trackedFetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1, stream: false }),
+      body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1, stream: false, ...slotField(slot) }),
     }).then(async (res: Response) => {
       let body = '';
       // Read the body only on a failure, and never let a body that cannot be
       // read turn a real HTTP answer into a "could not be reached".
-      if (!res.ok) { try { body = await res.text(); } catch { body = ''; } }
+      // WHY always consume (not only on failure): trackedFetch holds inFlight until
+      // the body is fully read or cancelled. On success this body was left
+      // untouched, so inFlight stayed > 0 forever — busy() then made every engine
+      // settings change wait out its full 10-minute cap and blocked idle shutdown
+      // (fault 3, present since v1.3.3). A successful 'hi' reply is tiny.
+      try { const t = await res.text(); if (!res.ok) body = t; } catch { body = ''; }
       this.emit('model-load-result', { modelId, ok: res.ok, status: res.status, body });
     }).catch((e: any) => {
       // The request could not be made at all — report what happened, not a guess.

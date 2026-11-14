@@ -14,7 +14,9 @@ import {
 } from '../src/main/engine/engine-manager';
 import { EngineAcquisition } from '../src/main/engine/engine-acquisition';
 import { ENGINE_VERSION } from '../src/main/engine/engine-pin';
-import { updateEngineConfig, readEngineConfig } from '../src/main/engine/engine-config';
+import { updateEngineConfig, readEngineConfig, updateModelSettings } from '../src/main/engine/engine-config';
+import { presetFilePath } from '../src/main/engine/model-presets';
+import { T, buildGguf } from './helpers/gguf-fixture';
 
 // The ROCm prerequisite reading decides whether a faster-engine row is 'ready'
 // or 'needs-prereqs', and the real one asks THIS machine — so whether the
@@ -169,6 +171,64 @@ describe('EngineManager — on a temp home', () => {
     fs.writeFileSync(path.join(dir, '.complete'),
       JSON.stringify({ version: ENGINE_VERSION, backend, binaryRelPath: 'llama-server.exe' }));
   }
+
+  describe('EngineManager — MTP drafting is turned on per model, from the model file', () => {
+    // WHY from the file: `--spec-type draft-mtp` makes a model WITHOUT the heads
+    // refuse to load, and the same family ships with and without them.
+    async function plantFiles() {
+      const cacheDir = path.join(root, 'cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(path.join(cacheDir, 'qwen-heads-Q8_0.gguf'), buildGguf([
+        { key: 'general.architecture', type: T.string, value: 'qwen35' },
+        { key: 'qwen35.block_count', type: T.u32, value: 65 },
+        { key: 'qwen35.nextn_predict_layers', type: T.u32, value: 1 },
+      ]));
+      // Heads, but a mixture of experts: measured too small a gain to pay MTP's reading cost.
+      fs.writeFileSync(path.join(cacheDir, 'qwen-moe-heads-Q6_K.gguf'), buildGguf([
+        { key: 'general.architecture', type: T.string, value: 'qwen35moe' },
+        { key: 'qwen35moe.block_count', type: T.u32, value: 41 },
+        { key: 'qwen35moe.nextn_predict_layers', type: T.u32, value: 1 },
+        { key: 'qwen35moe.expert_count', type: T.u32, value: 256 },
+      ]));
+      fs.writeFileSync(path.join(cacheDir, 'gemma-plain-Q8_0.gguf'), buildGguf([
+        { key: 'general.architecture', type: T.string, value: 'gemma4' },
+        { key: 'gemma4.block_count', type: T.u32, value: 35 },
+      ]));
+      await updateEngineConfig(home, { cacheDir });
+    }
+    const presetText = () => fs.readFileSync(presetFilePath(home.root), 'utf8');
+
+    it('writes MTP into the section of a dense model with heads, and not for a plain or mixture-of-experts model', async () => {
+      await plantFiles();
+      const mgr = new EngineManager(home, userData, 9999, {});
+      await (mgr as any).refreshMtpModels();
+      (mgr as any).writeModelPresets();
+      const file = presetText();
+      expect(file).toMatch(/\[qwen-heads-Q8_0\]\nspec-type = draft-mtp\nspec-draft-n-max = 3/);
+      expect(file).not.toMatch(/\[gemma-plain-Q8_0\]/);
+      expect(file).not.toMatch(/\[qwen-moe-heads-Q6_K\]/);
+      expect((mgr as any).spawnConfig().mtpModelIds).toEqual(['qwen-heads-Q8_0']);
+    });
+
+    it('writes no MTP for a model it was remembered to stop from loading on this computer', async () => {
+      await plantFiles();
+      await updateModelSettings(home, 'qwen-heads-Q8_0', { noMtp: true });
+      const mgr = new EngineManager(home, userData, 9999, {});
+      await (mgr as any).refreshMtpModels();
+      (mgr as any).writeModelPresets();
+      expect(presetText()).not.toMatch(/spec-type/);
+      expect(presetText()).not.toMatch(/noMtp|no-mtp/i);   // the memory never reaches the engine's file
+    });
+
+    it('writes no MTP when Speculative decoding is switched off', async () => {
+      await plantFiles();
+      const mgr = new EngineManager(home, userData, 9999, {});
+      await mgr.setConfig({ speed: { speculative: false } });
+      await (mgr as any).refreshMtpModels();
+      (mgr as any).writeModelPresets();
+      expect(presetText()).not.toMatch(/spec-type/);
+    });
+  });
 
   describe.skipIf(process.platform === 'win32')('EngineManager — the device-list backfill reaches the UI', () => {
     it('emits status-changed once acquisition fills in a pre-feature marker', async () => {
@@ -459,6 +519,33 @@ describe('EngineManager — on a temp home', () => {
       const mgr = new EngineManager(home, userData, 9999);
       await mgr.deleteModel('M-UD-Q4_K_XL-00001-of-00002');
       expect(fs.readdirSync(cacheDir)).toEqual([]);
+    });
+
+    it('deleteModel() waits for the engine to release a loaded model before removing its file', async () => {
+      // Windows cannot delete a file a process still holds open, and the unload
+      // call returns before the model's process has exited.
+      plantInstall();
+      const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
+      const file = path.join(cacheDir, 'M-Q4_K_M.gguf');
+      fs.writeFileSync(file, Buffer.alloc(1));
+      await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir } }));
+      const mgr = new EngineManager(home, userData, 9999, { fetchImpl: (async () => ({ ok: true, status: 200 })) as any });
+      let polls = 0;
+      const fileStillThereWhileLoaded: boolean[] = [];
+      (mgr as any).supervisor = {
+        status: () => 'running',
+        listModels: async () => {
+          polls += 1;
+          fileStillThereWhileLoaded.push(fs.existsSync(file));
+          return [{ id: 'M-Q4_K_M', state: polls < 3 ? 'loaded' : 'unloaded' }];
+        },
+        refreshModels: async () => {},
+      };
+      (mgr as any).refreshModels = async () => {};
+      await mgr.deleteModel('M-Q4_K_M');
+      expect(polls).toBe(3);
+      expect(fileStillThereWhileLoaded).toEqual([true, true, true]);
+      expect(fs.existsSync(file)).toBe(false);
     });
   });
 
@@ -974,6 +1061,31 @@ describe('EngineManager — on a temp home', () => {
       // reason to delete a working engine.
       expect(fs.existsSync(ROCM_DIR())).toBe(true);
       expect(readEngineConfig(home).backend).toBe('rocm');
+    });
+
+    it("a successful model load's answer is read to the end, so the engine is not left looking busy", async () => {
+      // The real fetch here is the supervisor's trackedFetch, which counts a request
+      // as running until its body is read or cancelled — an unread success body kept
+      // the engine "busy" forever (settings waited 10 minutes; idle shutdown never ran).
+      plantInstall('vulkan');
+      await plantModel();
+      let drained = false;
+      const fetchImpl = (async () => new Response(new ReadableStream({
+        start(c) { c.enqueue(new TextEncoder().encode('{"choices":[]}')); c.close(); },
+      }), { status: 200 }) as unknown as Response) as unknown as typeof fetch;
+      const mgr = new EngineManager(home, userData, 9999, {
+        fetchImpl: (async (u: any, i: any) => {
+          const res = await fetchImpl(u, i);
+          const text = res.text.bind(res);
+          (res as any).text = async () => { const t = await text(); drained = true; return t; };
+          return res;
+        }) as unknown as typeof fetch,
+      });
+      stubDownload(mgr, { devices: [ROCM_DEVICE] });
+      stubBoots(mgr);
+      await mgr.setBackend('rocm');
+      expect(readEngineConfig(home).backend).toBe('rocm');
+      expect(drained).toBe(true);
     });
 
     it('an install that was ALREADY on disk is never deleted, however the check fails', async () => {

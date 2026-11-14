@@ -50,32 +50,30 @@ export interface PrefillProgressReport extends PrefillProgress {
    *
    * DELIBERATELY COARSE and known to run OPTIMISTIC: prefill slows as context
    * grows (attention cost is not linear), so a rate measured over the first half
-   * under-predicts the second. Measured error against llama.cpp b9992 was ~7% at
-   * a third of the way through and ~22% at two thirds. Good enough for "about 10
+   * under-predicts the second. With the latest-batch rate (see toReport) it ran
+   * 14-19% short mid-prompt on b10665, and the engine's last few seconds after
+   * its final report are invisible to it. Good enough for "about 10
    * seconds left", not good enough to render a precise number — round it before
    * showing it to anyone.
    */
   etaMs: number | null;
 }
 
-export function toReport(p: PrefillProgress): PrefillProgressReport {
+/** `prev` (optional): the reading just before this one from the SAME stream.
+ *  With it, the ETA uses the latest batch's rate instead of the average since the
+ *  start — see the rate comment below. */
+export function toReport(p: PrefillProgress, prev?: PrefillProgress | null): PrefillProgressReport {
   // Measure THIS STEP'S work, not the whole prompt. `total` is every token in the
   // request; `cache` is the prefix llama.cpp reused for free. On turn 2+ the cache
   // is most of the prompt, so a percentage against `total` reads as "almost done"
   // before any real work has started (Destin, 2026-07-28).
   const newTotal = Math.max(0, p.total - p.cache);
 
-  // UNVERIFIED, and written to be correct either way: every progress capture we
-  // have is cache:0 (a cold prompt), so we have never observed whether `processed`
-  // counts from zero or from the cached position on a WARM prompt. If it counts
-  // from the cache, subtracting it gives the new work; if it already counts only
-  // new work, it is below `cache` and passes through. One warm capture would
-  // settle this — see tests/prefill-progress.test.ts.
-  //
-  // Residual ambiguity: when the new work processed so far EXCEEDS the cache size
-  // under the counts-from-zero reading, this under-reports by `cache`. Bounded,
-  // always in the conservative direction (progress looks behind, never ahead),
-  // and the renderer's monotonic clamp keeps it from reading as a regression.
+  // VERIFIED 2026-10-29 (b10665, Z13): on a warm prompt `processed` counts FROM
+  // ZERO, cached tokens included — the first reading of a re-sent 13,470-token
+  // prompt was {total:13470, cache:13466, processed:13466}. So subtracting the
+  // cache gives the new work. The `: p.processed` branch stays only as a guard
+  // for a build that ever changes this.
   const rawNew = p.processed >= p.cache ? p.processed - p.cache : p.processed;
   const newProcessed = Math.max(0, Math.min(newTotal, rawNew));
 
@@ -84,7 +82,17 @@ export function toReport(p: PrefillProgress): PrefillProgressReport {
   // Rate over the NEW work only. Counting cached tokens as processed would
   // inflate it wildly — 9,000 free tokens in a second is not 9,000 tok/s — and
   // promise a finish that cannot happen.
-  const rate = p.timeMs > 0 && newProcessed > 0 ? newProcessed / p.timeMs : null;
+  const avgRate = p.timeMs > 0 && newProcessed > 0 ? newProcessed / p.timeMs : null;
+  // WHY the latest batch, not the average (2026-10-29): each batch costs more
+  // than the last (attention grows with position) and the FIRST is cheapest, so
+  // the average since the start promised too early a finish. Measured on a
+  // 13,470-token prompt (27B, Z13): the average ran 23-42% short; the latest
+  // batch's rate 14-19% short mid-prompt. The SLOWER of the two is used, so one
+  // fast batch can never make the estimate more optimistic than before.
+  const sameStream = prev != null && prev.total === p.total && prev.cache === p.cache
+    && p.processed > prev.processed && p.timeMs > prev.timeMs;
+  const batchRate = sameStream ? (p.processed - prev!.processed) / (p.timeMs - prev!.timeMs) : null;
+  const rate = avgRate != null && batchRate != null ? Math.min(avgRate, batchRate) : avgRate;
   const remaining = Math.max(0, newTotal - newProcessed);
   return { ...p, newTotal, newProcessed, fraction, etaMs: rate ? Math.round(remaining / rate) : null };
 }
