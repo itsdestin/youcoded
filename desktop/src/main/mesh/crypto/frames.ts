@@ -22,16 +22,42 @@
 //     FrameSender is created once per process start and its counter starts at 0.
 //  3. A sender NEVER saves or restores its session or counter. This module exposes no way to set
 //     the counter, and refuses to build a second FrameSender for the same (device, session) in one
-//     process. A restored backup or VM snapshot that rewinds saved state therefore cannot cause
+//     process. Restoring SAVED state (a backup, a disk image, a rewound file) therefore cannot cause
 //     reuse: after a restart the sender has a NEW session, hence a NEW key.
+//     NOT GUARANTEED, and not provable from JavaScript: a snapshot of the RUNNING process (a VM or
+//     container checkpoint, a hibernation image) resumed more than once. Every copy holds the same
+//     session and counter, so two copies would encrypt different frames under one (key, nonce). The
+//     deployment must not resume one running sender twice; this is an accepted limit, not a property.
 //  4. The counter never restarts within a session and spans all generations/groups/kinds. At
 //     MAX_FRAMES_PER_SESSION (2^32) the sender refuses to seal; the caller starts a new session.
-//  5. Receivers DO persist: exportState()/importState() keep per-(sender, session) replay windows
-//     so a restart cannot re-accept an old frame. A previously seen session never starts fresh.
+//
+// ===== RECEIVER STATE CONTRACT (replay protection) =====
+// The relay STORES frames and may deliver them in any order, so a frame older than the newest one
+// seen is normal, not suspicious. The receiver therefore remembers EXACTLY which counters it has
+// accepted for each (sender, session), as a sorted list of closed intervals, and refuses only those.
+//  * What the CALLER must do: call exportState() after frames are applied and store the bytes
+//    durably BEFORE it tells the relay a frame was handled or deletes it; call importState() with the
+//    latest bytes at start. The state holds counters and device/session ids only, no secrets.
+//  * Bounded memory, stated honestly: at most `maxRangesPerSession` intervals per session (default
+//    4096) and `maxSessions` sessions (default 10,000). Over the interval limit the OLDEST gaps are
+//    closed (counters below the closed point are refused as 'out-of-window', never accepted again);
+//    recent gaps always stay fillable. Over the session limit the least recently active session is
+//    forgotten, which means a replay of that old session's frames would be accepted once more.
+//  * GUARANTEED: a counter recorded in the receiver's current state is refused; junk never enters the
+//    table (it is recorded only after the signature verified).
+//  * NOT GUARANTEED: protection against restoring OLDER receiver state. Frames applied after that
+//    older save are forgotten and would be accepted again. The module cannot see it. What it offers:
+//    every export carries a save number (`saveCounter`, increasing by one per export); the caller
+//    keeps the latest number in a separate place that does not roll back with the state file (the OS
+//    secret store entry that holds the device identity is the natural spot) and passes it as
+//    `importState(bytes, { minSaveCounter })`, which refuses an older file with 'stale-state'. After
+//    that refusal the caller must not carry on as if nothing happened: frames applied since will
+//    repeat, so every handler of repeatable frames must be idempotent (log entries are, by entry
+//    id) and the receiver should re-sync from the roster/log instead of trusting live frames.
 import { aeadOpen, aeadSeal } from './aead';
 import { LABEL, concat, ctEqual, random, toBuf, toHex, u32, u64, utf8, type Bytes } from './bytes';
 import { CborValue, asArray, asBytes, asMap, asText, asUint, decode, encode, onlyKeys } from './cbor';
-import { MeshCryptoError, guard } from './errors';
+import { MeshCryptoError, callerCall, guard } from './errors';
 import { deviceIdFor, signWith, verifySig, type DeviceIdentity } from './identity';
 import { frameKey } from './keys';
 
@@ -39,7 +65,8 @@ export const FRAME_VERSION = 1;
 export const MAX_FRAMES_PER_SESSION = 2 ** 32;
 /** Cap on one wire frame. Larger input is refused before any parsing work (design L-7). */
 export const MAX_FRAME_BYTES = 8 * 1024 * 1024;
-export const DEFAULT_REPLAY_WINDOW = 1024;
+export const DEFAULT_MAX_RANGES = 4096;
+export const DEFAULT_MAX_SESSIONS = 10_000;
 const MIN_PAD_BUCKET = 256;
 
 export const newSessionId = (): Buffer => random(16);
@@ -172,10 +199,51 @@ export class FrameSender {
   }
 }
 
-// ---- replay window, per (sender, session) ----
-interface Window {
-  high: number;
-  seen: Set<number>;
+// ---- exact replay tracking, per (sender, session) ----
+const MAX_COUNTER = MAX_FRAMES_PER_SESSION - 1;
+/**
+ * The counters accepted for one session: sorted, disjoint, non-adjacent closed intervals stored flat
+ * as [lo0, hi0, lo1, hi1, ...], plus `closedUpTo` (every counter at or below it is refused: the oldest
+ * gaps were closed to stay inside the memory bound). -1 means nothing closed.
+ */
+class SeenSet {
+  r: number[] = [];
+  closedUpTo = -1;
+  /** Index of the first interval whose hi >= c (binary search over the flat list). */
+  private find(c: number): number {
+    let lo = 0;
+    let hi = this.r.length / 2;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (this.r[2 * mid + 1] < c) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+  has(c: number): boolean {
+    const i = this.find(c);
+    return i < this.r.length / 2 && this.r[2 * i] <= c;
+  }
+  addRange(lo: number, hi: number): void {
+    // Intervals that overlap or touch [lo, hi] are merged into it.
+    let i = this.find(lo - 1);
+    let j = i;
+    let nlo = lo;
+    let nhi = hi;
+    while (j < this.r.length / 2 && this.r[2 * j] <= hi + 1) {
+      nlo = Math.min(nlo, this.r[2 * j]);
+      nhi = Math.max(nhi, this.r[2 * j + 1]);
+      j++;
+    }
+    this.r.splice(2 * i, 2 * (j - i), nlo, nhi);
+  }
+  /** Close the oldest gaps until at most `max` intervals remain. */
+  bound(max: number): void {
+    while (this.r.length / 2 > max) {
+      this.closedUpTo = Math.max(this.closedUpTo, this.r[3]); // everything up to the second interval's end is now "seen"
+      this.r.splice(0, 4, this.r[0], this.r[3]);
+    }
+  }
 }
 
 export interface OpenedFrame {
@@ -185,37 +253,58 @@ export interface OpenedFrame {
   signKey: Buffer;
 }
 
+const STATE_VERSION = 2;
+
 export class FrameReceiver {
-  private readonly windows = new Map<string, Window>();
-  private readonly size: number;
+  // Insertion order = recency of activity (oldest first), which is also the order persisted.
+  readonly #sessions = new Map<string, SeenSet>();
+  readonly #maxRanges: number;
+  readonly #maxSessions: number;
+  #saves = 0;
   constructor(
     private readonly o: {
       setId: Bytes;
       /** This device's id; frames addressed to someone else are refused. Omit to accept any `to`. */
       selfDeviceId?: Bytes;
       secretFor: (gen: number) => Bytes | undefined;
-      /** Roster lookup. Return undefined for an unknown device: the frame is refused with 'unknown-signer' (caller may PARK it). */
+      /**
+       * Roster lookup. Return undefined for an unknown device: the frame is refused with 'unknown-signer'
+       * (caller may PARK it). Whether a device that has been REMOVED still counts is the caller's rule:
+       * this module verifies against whatever key the callback returns (roster.ts has the facts).
+       */
       signKeyFor: (deviceId: Buffer) => Bytes | undefined;
-      windowSize?: number;
+      /** Intervals remembered per (sender, session) before the oldest gaps are closed. */
+      maxRangesPerSession?: number;
+      /** (sender, session) pairs remembered before the least recently active is forgotten. */
+      maxSessions?: number;
     },
   ) {
-    this.size = o.windowSize ?? DEFAULT_REPLAY_WINDOW;
-    if (!Number.isInteger(this.size) || this.size < 1) throw new MeshCryptoError('invalid-argument', 'window');
+    this.#maxRanges = o.maxRangesPerSession ?? DEFAULT_MAX_RANGES;
+    this.#maxSessions = o.maxSessions ?? DEFAULT_MAX_SESSIONS;
+    if (!Number.isInteger(this.#maxRanges) || this.#maxRanges < 1) throw new MeshCryptoError('invalid-argument', 'maxRangesPerSession');
+    if (!Number.isInteger(this.#maxSessions) || this.#maxSessions < 1) throw new MeshCryptoError('invalid-argument', 'maxSessions');
+  }
+
+  /** How many times exportState() has produced a save (and the highest imported): the caller's rollback tripwire. */
+  get saveCounter(): number {
+    return this.#saves;
   }
 
   private check(h: FrameHeader): void {
-    const w = this.windows.get(toHex(h.from) + '/' + toHex(h.session));
-    if (!w || h.counter > w.high) return;
-    if (h.counter <= w.high - this.size) throw new MeshCryptoError('out-of-window');
-    if (w.seen.has(h.counter)) throw new MeshCryptoError('replay');
+    const s = this.#sessions.get(toHex(h.from) + '/' + toHex(h.session));
+    if (!s) return;
+    if (h.counter <= s.closedUpTo) throw new MeshCryptoError('out-of-window');
+    if (s.has(h.counter)) throw new MeshCryptoError('replay');
   }
   private record(h: FrameHeader): void {
     const k = toHex(h.from) + '/' + toHex(h.session);
-    let w = this.windows.get(k);
-    if (!w) this.windows.set(k, (w = { high: h.counter, seen: new Set() }));
-    if (h.counter > w.high) w.high = h.counter;
-    w.seen.add(h.counter);
-    if (w.seen.size > 2 * this.size) for (const c of w.seen) if (c <= w.high - this.size) w.seen.delete(c);
+    let s = this.#sessions.get(k);
+    if (s) this.#sessions.delete(k); // re-inserted below so the map stays in recency order
+    else s = new SeenSet();
+    s.addRange(h.counter, h.counter);
+    s.bound(this.#maxRanges);
+    this.#sessions.set(k, s);
+    while (this.#sessions.size > this.#maxSessions) this.#sessions.delete(this.#sessions.keys().next().value as string);
   }
 
   /** Authenticate and decrypt one frame. Throws MeshCryptoError for every rejection; records the counter only AFTER everything verified. */
@@ -229,9 +318,9 @@ export class FrameReceiver {
       if (ct.length < 16) throw new MeshCryptoError('malformed', 'ciphertext');
       if (!ctEqual(h.set, toBuf(this.o.setId))) throw new MeshCryptoError('wrong-set');
       if (h.to && this.o.selfDeviceId && !ctEqual(h.to, toBuf(this.o.selfDeviceId))) throw new MeshCryptoError('not-addressed-to-me');
-      const secret = this.o.secretFor(h.gen);
+      const secret = callerCall(() => this.o.secretFor(h.gen));
       if (!secret) throw new MeshCryptoError('unknown-generation');
-      const signKey = this.o.signKeyFor(h.from);
+      const signKey = callerCall(() => this.o.signKeyFor(h.from));
       if (!signKey) throw new MeshCryptoError('unknown-signer');
       // WHY: the roster must agree the claimed id belongs to that key, or a lookup bug could attribute frames wrongly.
       if (!ctEqual(deviceIdFor(signKey), h.from)) throw new MeshCryptoError('unknown-signer');
@@ -256,37 +345,52 @@ export class FrameReceiver {
     });
   }
 
-  /** Replay windows as bytes, for the (later) storage layer. Contains counters only, no secrets. */
+  /** Receiver state as bytes, for the (later) storage layer. Counters and ids only, no secrets. See the contract above. */
   exportState(): Buffer {
-    const e = [...this.windows.entries()]
-      .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([k, w]) => {
-        const [f, s] = k.split('/');
-        return { f: Buffer.from(f, 'hex'), s: Buffer.from(s, 'hex'), h: w.high, c: [...w.seen].sort((x, y) => x - y) };
-      });
-    return encode({ v: 1, w: this.size, e });
+    this.#saves += 1;
+    const e = [...this.#sessions.entries()].map(([k, s]) => {
+      const [f, sess] = k.split('/');
+      return { f: Buffer.from(f, 'hex'), s: Buffer.from(sess, 'hex'), k: s.closedUpTo + 1, r: s.r };
+    });
+    return encode({ v: STATE_VERSION, n: this.#saves, e });
   }
-  importState(bytes: Uint8Array): void {
+  /** Merge saved state in. Never forgets what is already known. `minSaveCounter` makes an older file a 'stale-state' error. */
+  importState(bytes: Uint8Array, opts: { minSaveCounter?: number } = {}): void {
     guard(() => {
       const m = asMap(decode(bytes), 'receiver state');
-      onlyKeys(m, ['v', 'w', 'e'], 'receiver state');
-      if (asUint(m.v, 'state version') !== 1) throw new MeshCryptoError('unsupported-version');
-      const next = new Map<string, Window>();
+      if (asUint(m.v, 'state version') !== STATE_VERSION) throw new MeshCryptoError('unsupported-version');
+      onlyKeys(m, ['v', 'n', 'e'], 'receiver state');
+      const n = asUint(m.n, 'save counter');
+      if (opts.minSaveCounter !== undefined && n < opts.minSaveCounter) throw new MeshCryptoError('stale-state');
+      const next: [string, SeenSet][] = [];
       for (const raw of asArray(m.e, 'entries', 1_000_000)) {
         const en = asMap(raw, 'entry');
-        onlyKeys(en, ['f', 's', 'h', 'c'], 'entry');
-        const seen = new Set(asArray(en.c, 'counters', 2 * this.size + 1).map((c) => asUint(c, 'counter', MAX_FRAMES_PER_SESSION - 1)));
-        next.set(toHex(asBytes(en.f, 'from', 16)) + '/' + toHex(asBytes(en.s, 'session', 16)), { high: asUint(en.h, 'high', MAX_FRAMES_PER_SESSION - 1), seen });
-      }
-      // Merge: keep the stronger (higher) record when both exist, never weaken what we already know.
-      for (const [k, w] of next) {
-        const cur = this.windows.get(k);
-        if (!cur) this.windows.set(k, w);
-        else {
-          cur.high = Math.max(cur.high, w.high);
-          for (const c of w.seen) cur.seen.add(c);
+        onlyKeys(en, ['f', 's', 'k', 'r'], 'entry');
+        const flat = asArray(en.r, 'ranges', 2 * this.#maxRanges + 2).map((c) => asUint(c, 'counter', MAX_COUNTER));
+        if (flat.length % 2 !== 0) throw new MeshCryptoError('malformed', 'ranges');
+        // Canonical form only: lo <= hi, and each interval strictly after the previous with a real gap between.
+        for (let i = 0; i < flat.length; i += 2) {
+          if (flat[i] > flat[i + 1] || (i > 0 && flat[i] <= flat[i - 1] + 1)) throw new MeshCryptoError('malformed', 'ranges');
         }
+        const s = new SeenSet();
+        s.r = flat;
+        s.closedUpTo = asUint(en.k, 'closed', MAX_COUNTER + 1) - 1;
+        next.push([toHex(asBytes(en.f, 'from', 16)) + '/' + toHex(asBytes(en.s, 'session', 16)), s]);
       }
+      // Merge: union of intervals, higher closed point; an existing session keeps its recency unless the file is the newer word.
+      for (const [k, w] of next) {
+        const cur = this.#sessions.get(k);
+        if (!cur) this.#sessions.set(k, w);
+        else {
+          cur.closedUpTo = Math.max(cur.closedUpTo, w.closedUpTo);
+          for (let i = 0; i < w.r.length; i += 2) cur.addRange(w.r[i], w.r[i + 1]);
+          cur.bound(this.#maxRanges);
+        }
+        const s = this.#sessions.get(k) as SeenSet;
+        s.bound(this.#maxRanges);
+      }
+      while (this.#sessions.size > this.#maxSessions) this.#sessions.delete(this.#sessions.keys().next().value as string);
+      this.#saves = Math.max(this.#saves, n);
     });
   }
 }

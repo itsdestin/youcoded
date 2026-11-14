@@ -87,4 +87,9 @@ describe('relay auth', () => {
     for (let i = 0; i < 1100; i++) v.challenge();
     expect(v.verify(answerRelayChallenge(A, 'relay.example', room, first))).toEqual({ ok: false, why: 'stale-or-unknown-nonce' });
   });
+  it('an oversized nonce is refused as malformed before it is looked up or hex-encoded', () => {
+    const v = verifier();
+    const huge = Buffer.alloc(5_000_000, 1);
+    expect(v.verify({ room, nonce: huge, dev: A.deviceId, sig: Buffer.alloc(64) })).toEqual({ ok: false, why: 'malformed' });
+  });
 });

@@ -14,6 +14,7 @@ import { toBuf } from './bytes';
 export type CborValue = null | boolean | number | string | Uint8Array | CborValue[] | { [key: string]: CborValue | undefined };
 
 const MAX_DEPTH = 64;
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 const bad = (why: string): never => {
   throw new MeshCryptoError('malformed', 'cbor ' + why);
 };
@@ -47,12 +48,18 @@ function enc(v: CborValue | undefined, depth: number): Buffer {
   if (v === false) return Buffer.from([0xf4]);
   if (typeof v === 'number') return head(0, v);
   if (typeof v === 'string') {
+    // WHY: a lone surrogate is not valid text; Buffer.from would silently turn it into U+FFFD, so two
+    // different JS strings would share bytes (and an id). Refuse, like the decoder does for bad UTF-8.
+    if (LONE_SURROGATE.test(v)) throw new MeshCryptoError('invalid-argument', 'cbor text has a lone surrogate');
     const b = Buffer.from(v, 'utf8');
     return Buffer.concat([head(3, b.length), b]);
   }
   if (v instanceof Uint8Array) return Buffer.concat([head(2, v.length), toBuf(v)]);
   if (Array.isArray(v)) return Buffer.concat([head(4, v.length), ...v.map((x) => enc(x, depth + 1))]);
   if (typeof v === 'object' && v !== undefined) {
+    // WHY: a Date, Map or class instance has no enumerable own entries and would silently encode as {}.
+    const proto = Object.getPrototypeOf(v);
+    if (proto !== Object.prototype && proto !== null) throw new MeshCryptoError('invalid-argument', 'cbor only encodes plain objects');
     // undefined members are dropped so optional fields can simply be left unset.
     const ents = Object.entries(v)
       .filter(([, x]) => x !== undefined)

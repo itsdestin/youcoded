@@ -18,7 +18,8 @@ export type MeshCryptoErrorCode =
   | 'auth-failed' // AEAD tag did not verify (wrong key, tampered header or body)
   | 'bad-signature' // Ed25519 signature did not verify
   | 'replay' // (sender, session, counter) already seen
-  | 'out-of-window' // counter older than the replay window: cannot be told apart from a replay
+  | 'out-of-window' // counter falls in a gap the receiver closed to stay within its memory bound: cannot be told apart from a replay
+  | 'stale-state' // saved receiver state is older than the caller says it must be (a rollback)
   | 'counter-exhausted' // sender hit its per-session frame limit; start a new session
   | 'session-reused' // same (device, session) used by a second sender in this process
   | 'too-large' // frame or message exceeds the size cap
@@ -48,6 +49,22 @@ export function guard<T>(fn: () => T, code: MeshCryptoErrorCode = 'malformed'): 
     return fn();
   } catch (e) {
     if (e instanceof MeshCryptoError) throw e;
+    // WHY: an exception thrown by a CALLER-supplied callback is a bug in the caller, not hostile input.
+    // Relabelling it `malformed` hid programming errors (a lookup that throws looked like a bad frame).
+    if (e instanceof CallbackFailure) throw e.original;
     throw new MeshCryptoError(code);
+  }
+}
+
+/** Marks an exception that came out of a caller-supplied callback, so `guard` lets it through unchanged. */
+class CallbackFailure {
+  constructor(readonly original: unknown) {}
+}
+/** Run a caller-supplied callback; anything it throws surfaces to OUR caller as itself. */
+export function callerCall<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (e) {
+    throw new CallbackFailure(e);
   }
 }

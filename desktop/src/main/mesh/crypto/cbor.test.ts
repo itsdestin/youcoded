@@ -61,3 +61,15 @@ describe('typed readers', () => {
     for (const f of fns) expect(f).toThrowError(MeshCryptoError);
   });
 });
+
+describe('cbor encode refuses values with two spellings', () => {
+  it('class instances (a Date becomes {}) and lone surrogates are refused, plain objects and null-prototype maps are fine', () => {
+    class Thing { x = 1; }
+    for (const v of [new Date(0), new Thing(), new Map(), new Set(), /x/, () => 1, 1n, 1.5, -1, Number.NaN, undefined]) expect(() => encode(v as never), String(v)).toThrowError(MeshCryptoError);
+    for (const s of ['\ud800', 'a\udc00b', '\ud83dx']) expect(() => encode(s), JSON.stringify(s)).toThrowError(MeshCryptoError);
+    expect(() => encode({ ['\ud800']: 1 })).toThrowError(MeshCryptoError);
+    expect(hex(encode('\u{1F600}'))).toBe('64f09f9880');
+    expect(hex(encode(Object.assign(Object.create(null), { a: 1 })))).toBe('a1616101');
+    expect(hex(encode({ a: undefined, b: 2 }))).toBe('a1616202');
+  });
+});

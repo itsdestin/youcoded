@@ -58,11 +58,12 @@ export class RelayAuthVerifier {
   }
   verify(resp: RelayAuthResponse): RelayVerdict {
     if (!(resp?.nonce instanceof Uint8Array) || !(resp.room instanceof Uint8Array) || !(resp.dev instanceof Uint8Array) || !(resp.sig instanceof Uint8Array)) return { ok: false, why: 'malformed' };
+    // WHY first: the nonce is attacker-sized; check its length before any hex-encoding or map lookup.
+    if (resp.nonce.length !== 32 || resp.room.length !== 32 || resp.dev.length !== 16) return { ok: false, why: 'malformed' };
     const k = toHex(resp.nonce);
     const t = this.pending.get(k);
     this.pending.delete(k); // single use, even on failure
     if (t === undefined || this.now() - t > CHALLENGE_LIFETIME_MS) return { ok: false, why: 'stale-or-unknown-nonce' };
-    if (resp.room.length !== 32 || resp.dev.length !== 16) return { ok: false, why: 'malformed' };
     const signKey = this.lookup(Buffer.from(resp.room), Buffer.from(resp.dev));
     if (!signKey) return { ok: false, why: 'not-on-roster' };
     return verifySig(signKey, message(this.aud, resp.room, resp.nonce, resp.dev), resp.sig)

@@ -12,17 +12,53 @@ import { randomBytes } from 'node:crypto';
 import { LABEL, sha256, utf8, requireLen, type Bytes } from './bytes';
 import { asBytes, asMap, asUint, decode, encode, onlyKeys } from './cbor';
 import { MeshCryptoError, guard } from './errors';
-import { ed25519PublicFromSeed, ed25519Sign, ed25519Verify, x25519PublicFromSecret } from './curves';
+import { ed25519PublicFromSeed, ed25519Sign, ed25519Verify, x25519Dh, x25519PublicFromSecret } from './curves';
 
-export interface DeviceIdentity {
-  /** Ed25519 private seed (32 bytes). SECRET. */
-  readonly signSeed: Buffer;
+/** What node's util.inspect asks an object for; looked up by name so this file needs no node:util import. */
+export const INSPECT_CUSTOM = Symbol.for('nodejs.util.inspect.custom');
+
+/**
+ * One device's keys. WHY a class with #private fields (was a plain object with Buffer properties):
+ * a plain object printed its private seed under JSON.stringify and util.inspect, so one stray log
+ * line or error report would leak it. Private fields are invisible to JSON, inspect (even with
+ * showHidden), spreading, Object.keys and structured clone; the secrets are reachable only through
+ * the two getters, by name, on purpose. toJSON/inspect/toString show the public device id only.
+ */
+export class DeviceIdentity {
+  readonly #signSeed: Buffer;
+  readonly #agreeSecret: Buffer;
   readonly signKey: Buffer;
-  /** X25519 private key (32 bytes). SECRET. */
-  readonly agreeSecret: Buffer;
   readonly agreeKey: Buffer;
   /** 16 bytes, derived from signKey. */
   readonly deviceId: Buffer;
+  constructor(signSeed: Buffer, agreeSecret: Buffer) {
+    this.#signSeed = signSeed;
+    this.#agreeSecret = agreeSecret;
+    this.signKey = ed25519PublicFromSeed(signSeed);
+    this.agreeKey = x25519PublicFromSecret(agreeSecret);
+    this.deviceId = deviceIdFor(this.signKey);
+    Object.defineProperty(this, 'signKey', { enumerable: false });
+    Object.defineProperty(this, 'agreeKey', { enumerable: false });
+    Object.defineProperty(this, 'deviceId', { enumerable: false });
+    Object.freeze(this);
+  }
+  /** Ed25519 private seed (32 bytes). SECRET. */
+  get signSeed(): Buffer {
+    return this.#signSeed;
+  }
+  /** X25519 private key (32 bytes). SECRET. */
+  get agreeSecret(): Buffer {
+    return this.#agreeSecret;
+  }
+  toString(): string {
+    return `[DeviceIdentity ${this.deviceId.toString('hex')}]`;
+  }
+  toJSON(): string {
+    return this.toString();
+  }
+  [INSPECT_CUSTOM](): string {
+    return this.toString();
+  }
 }
 
 export const DEVICE_ID_LENGTH = 16;
@@ -38,14 +74,7 @@ export const fingerprintFor = (signKey: Bytes, agreeKey: Bytes): Buffer =>
 export function identityFromSecrets(signSeed: Bytes, agreeSecret: Bytes): DeviceIdentity {
   const seed = Buffer.from(requireLen(signSeed, 32, 'sign seed'));
   const agree = Buffer.from(requireLen(agreeSecret, 32, 'agree secret'));
-  const signKey = ed25519PublicFromSeed(seed);
-  return Object.freeze({
-    signSeed: seed,
-    signKey,
-    agreeSecret: agree,
-    agreeKey: x25519PublicFromSecret(agree),
-    deviceId: deviceIdFor(signKey),
-  });
+  return new DeviceIdentity(seed, agree);
 }
 
 /** Fresh identity from the OS random source. Held in memory only. */
@@ -67,3 +96,20 @@ export function parseIdentity(bytes: Uint8Array): DeviceIdentity {
 
 export const signWith = (id: DeviceIdentity, msg: Bytes): Buffer => ed25519Sign(id.signSeed, msg);
 export const verifySig = (signKey: Bytes, msg: Bytes, sig: Bytes): boolean => ed25519Verify(signKey, msg, sig);
+
+// A fixed throwaway scalar: any scalar sends a low-order point to the all-zero output, which
+// OpenSSL refuses, so one Diffie-Hellman against this scalar tells us whether a peer key is usable.
+const PROBE_SCALAR = Buffer.alloc(32, 1);
+/**
+ * A 32-byte X25519 public key that is safe to seal to. Throws MeshCryptoError('malformed') for the
+ * wrong size and ('low-order-point') for a weak key (all-zero, the small-order points).
+ */
+export function requireAgreeKey(b: unknown, what: string): Buffer {
+  const k = asBytes(b, what, 32);
+  try {
+    x25519Dh(PROBE_SCALAR, k);
+  } catch {
+    throw new MeshCryptoError('low-order-point', what);
+  }
+  return k;
+}

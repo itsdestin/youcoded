@@ -1,6 +1,7 @@
 // Signed entries and roster-log verification. Merge/decide rules are NOT tested here (another part owns them).
 import { describe, expect, it } from 'vitest';
-import { encodeEntry, entryToValue, makeAddEntry, makeGenesisEntry, makeRemoveEntry, makeRenameEntry, parseEntry, parseEntryValue, sanitizeDeviceName, signEntry, verifyEntry, verifyRosterLog, MAX_DEVICE_NAME, MAX_ROSTER_ENTRIES, type SignedEntry } from './roster';
+import { encodeEntry, entryToValue, makeAddEntry, makeGenesisEntry, makeRemoveEntry, makeRenameEntry, parseEntry, parseEntryValue, sanitizeDeviceName, sanitizePlatform, signEntry, verifyEntry, verifyRosterLog, rosterHeads, MAX_DEVICE_NAME, MAX_ROSTER_ENTRIES, MAX_SEEN, type SignedEntry } from './roster';
+import { decode, encode } from './cbor';
 import { generateIdentity, identityFromSecrets, setIdFor } from './identity';
 import { MeshCryptoError } from './errors';
 
@@ -132,4 +133,168 @@ describe('device names shown to people', () => {
     const g = makeGenesisEntry(A, 'Evil‮', 'linux', 1);
     expect((g.body as { name: string }).name).toBe('Evil');
   });
+});
+
+describe('an add can never overwrite a device that is already in the log', () => {
+  const A = generateIdentity();
+  const B = generateIdentity();
+  const C = generateIdentity();
+  const g = makeGenesisEntry(A, 'Desktop', 'linux', 1);
+  const addB = makeAddEntry(A, info(B), [g.id], 2);
+  const addC = makeAddEntry(B, info(C), [addB.id], 3);
+  it("member C re-adding A's signing key with C's agreement key is refused (the reviewer's attack)", () => {
+    const hijack = makeAddEntry(C, { name: 'Desktop', platform: 'linux', signKey: A.signKey, agreeKey: C.agreeKey }, [addC.id], 4);
+    expect(codeOf(() => verifyRosterLog([g, addB, addC, hijack]))).toBe('bad-roster');
+  });
+  it('a device re-adding itself (even with new keys of its own choosing, same signing key) is refused', () => {
+    const self = makeAddEntry(B, { name: 'B', platform: 'p', signKey: B.signKey, agreeKey: generateIdentity().agreeKey }, [addC.id], 4);
+    expect(codeOf(() => verifyRosterLog([g, addB, addC, self]))).toBe('bad-roster');
+  });
+  it('a removed device re-adding itself is refused by the verifier itself', () => {
+    const rem = makeRemoveEntry(A, B.deviceId, [addC.id], 4);
+    const readd = makeAddEntry(B, info(B), [addC.id], 5); // B has NOT seen its removal here: still refused, id already present
+    expect(codeOf(() => verifyRosterLog([g, addB, addC, rem, readd]))).toBe('bad-roster');
+  });
+  it('the agreement key of an existing device is unchanged by any accepted log', () => {
+    const r = verifyRosterLog([g, addB, addC]);
+    expect(hex(r.devices.get(hex(A.deviceId))!.agreeKey)).toBe(hex(A.agreeKey));
+  });
+});
+
+describe('every entry names the roster state it was made against, and the verifier exposes what that proves', () => {
+  const A = generateIdentity();
+  const B = generateIdentity();
+  const D = generateIdentity();
+  const g = makeGenesisEntry(A, 'Desktop', 'linux', 1);
+  const addB = makeAddEntry(A, info(B), [g.id], 2);
+  const remB = makeRemoveEntry(A, B.deviceId, [addB.id], 3);
+  it('a non-genesis entry with no reference to earlier state is refused; genesis must reference nothing', () => {
+    expect(codeOf(() => verifyRosterLog([g, signEntry(A, { kind: 'rename', body: { name: 'x' }, seen: [], at: 2 })]))).toBe('bad-roster');
+    expect(codeOf(() => verifyRosterLog([signEntry(A, { kind: 'add', body: { name: 'D', platform: 'l', signKey: A.signKey, agreeKey: A.agreeKey }, seen: [Buffer.alloc(32, 1)], at: 1 })]))).toBe('bad-roster');
+  });
+  it('a reference to an entry that is not in the log (or comes later) is refused; so are duplicate references', () => {
+    expect(codeOf(() => verifyRosterLog([g, makeRenameEntry(A, 'x', [Buffer.alloc(32, 9)], 2)]))).toBe('bad-roster');
+    expect(codeOf(() => verifyRosterLog([g, makeRenameEntry(A, 'x', [g.id, g.id], 2)]))).toBe('bad-roster');
+    const later = makeRenameEntry(A, 'y', [g.id], 5);
+    expect(codeOf(() => verifyRosterLog([g, makeRenameEntry(A, 'x', [later.id], 2), later]))).toBe('bad-roster');
+  });
+  it("an entry must have seen its signer's own previous entry (or the add that introduced it): no back-dating, no forked own history", () => {
+    // B's first entry cites only the genesis, not addB that introduced B.
+    expect(codeOf(() => verifyRosterLog([g, addB, makeRenameEntry(B, 'x', [g.id], 3)]))).toBe('bad-roster');
+    // A's second entry after addB cites only genesis: it skipped its own previous entry (addB).
+    expect(codeOf(() => verifyRosterLog([g, addB, makeRenameEntry(A, 'x', [g.id], 3)]))).toBe('bad-roster');
+  });
+  it('a removed device that has SEEN its removal cannot add, remove or rename: refused', () => {
+    for (const make of [
+      () => makeAddEntry(B, info(D), [addB.id, remB.id], 4),
+      () => makeRenameEntry(B, 'still here', [addB.id, remB.id], 4),
+      () => makeRemoveEntry(B, A.deviceId, [addB.id, remB.id], 4),
+    ]) expect(codeOf(() => verifyRosterLog([g, addB, remB, make()]))).toBe('bad-roster');
+  });
+  it('a removed device that did NOT cite its removal is accepted but flagged, so the decide layer can tell the cases apart', () => {
+    const early = makeRenameEntry(B, 'early', [addB.id], 2);
+    const late = makeRenameEntry(B, 'late', [early.id], 9); // never cites remB
+    const r = verifyRosterLog([g, addB, early, remB, late]);
+    const f = (e: SignedEntry) => r.facts.get(hex(e.id))!;
+    expect(f(early).signerRemovedEarlierInLog).toBe(false);
+    expect(f(early).signerKnewOwnRemoval).toBe(false);
+    expect(f(late).signerRemovedEarlierInLog).toBe(true);
+    expect(f(late).signerKnewOwnRemoval).toBe(false);
+    expect(r.happenedBefore(addB.id, remB.id)).toBe(true);
+    expect(r.happenedBefore(remB.id, addB.id)).toBe(false);
+    expect(r.happenedBefore(remB.id, late.id)).toBe(false); // late never saw the removal: concurrent as far as the signatures show
+    expect(r.happenedBefore(early.id, late.id)).toBe(true);
+    expect(r.happenedBefore(g.id, g.id)).toBe(false);
+  });
+  it('rosterHeads lists entries nobody cites yet, newest first', () => {
+    expect(rosterHeads([g, addB, remB]).map(hex)).toEqual([hex(remB.id)]);
+    const fork = makeRenameEntry(A, 'fork', [addB.id], 7);
+    expect(rosterHeads([g, addB, remB, fork]).map(hex)).toEqual([hex(fork.id), hex(remB.id)]);
+  });
+  it('seen is capped (parse and sign) so a roster entry can never be too large to parse back', () => {
+    expect(MAX_SEEN).toBeLessThanOrEqual(64);
+    expect(codeOf(() => signEntry(A, { kind: 'x', body: 1, seen: Array.from({ length: MAX_SEEN + 1 }, (_, i) => Buffer.alloc(32, i)), at: 1 }))).toBe('invalid-argument');
+    const v = entryToValue(signEntry(A, { kind: 'x', body: 1, seen: [], at: 1 })) as Record<string, unknown>;
+    expect(codeOf(() => parseEntryValue({ ...v, seen: Array.from({ length: MAX_SEEN + 1 }, () => Buffer.alloc(32)) }))).toBe('malformed');
+  });
+});
+
+describe('parsing nits', () => {
+  it('an entry with no body key is refused (a second spelling of the same entry)', () => {
+    const A = generateIdentity();
+    const v = { ...(entryToValue(signEntry(A, { kind: 'x', body: 1, seen: [], at: 1 })) as Record<string, unknown>) };
+    delete v.body;
+    expect(codeOf(() => parseEntryValue(v))).toBe('malformed');
+  });
+});
+
+describe('names and platforms are sanitised on every path', () => {
+  const A = generateIdentity();
+  const B = generateIdentity();
+  const g = makeGenesisEntry(A, 'Desktop', 'linux', 1);
+  const raw = (name: string, platform: string, signer = A, seen: Buffer[] = [g.id]) =>
+    signEntry(signer, { kind: 'add', body: { name, platform, signKey: B.signKey, agreeKey: B.agreeKey }, seen, at: 2 });
+  it('a verified roster never hands out a name with bidi or control characters, or a platform outside the allow-list', () => {
+    const r = verifyRosterLog([g, raw('‮evil\u0007', 'and‮roid\n')]);
+    const d = r.devices.get(hex(B.deviceId))!;
+    expect(d.name).toBe('evil');
+    expect(d.platform).toBe('android');
+  });
+  it('a rename arriving through a verified log is sanitised too', () => {
+    const add = raw('B', 'p');
+    const rename = signEntry(B, { kind: 'rename', body: { name: 'x‮y\u0000' }, seen: [add.id], at: 3 });
+    expect(verifyRosterLog([g, add, rename]).devices.get(hex(B.deviceId))!.name).toBe('xy');
+  });
+  it('invisible-only names (soft hyphen, hangul filler, braille blank, line separator, tag characters) become "Unnamed device"', () => {
+    for (const s of ['­', 'ㅤ', '⠀', '  ', '\u{E0041}\u{E0042}', ' ​ㅤ ', '͏']) expect(sanitizeDeviceName(s), JSON.stringify(s)).toBe('Unnamed device');
+    expect(sanitizeDeviceName('Dest­in  phone')).toBe('Destin phone');
+    expect(sanitizeDeviceName('line\nbreak')).toBe('linebreak');
+  });
+  it('a name that is only invisible in the roster of a verified log is replaced as well', () => {
+    expect(verifyRosterLog([g, raw('ㅤ⠀', 'p')]).devices.get(hex(B.deviceId))!.name).toBe('Unnamed device');
+  });
+  it('sanitizePlatform keeps letters, digits and a little punctuation, caps at 32, never empty', () => {
+    expect(sanitizePlatform('linux')).toBe('linux');
+    expect(sanitizePlatform('Win32 (x64)')).toBe('Win32 (x64)');
+    expect(sanitizePlatform('a‮b\u0007c')).toBe('abc');
+    expect(sanitizePlatform('x'.repeat(100)).length).toBe(32);
+    expect(sanitizePlatform('‮ㅤ')).toBe('unknown');
+  });
+});
+
+describe('weak agreement keys are refused when parsed, with the module typed error', () => {
+  const A = generateIdentity();
+  const g = makeGenesisEntry(A, 'Desktop', 'linux', 1);
+  it('an all-zero agreement key in an add is refused at verify time as low-order-point', () => {
+    const B = generateIdentity();
+    const bad = signEntry(A, { kind: 'add', body: { name: 'B', platform: 'p', signKey: B.signKey, agreeKey: Buffer.alloc(32) }, seen: [g.id], at: 2 });
+    expect(codeOf(() => verifyRosterLog([g, bad]))).toBe('low-order-point');
+  });
+  it('other small-order points are refused too (a few of the known ones)', () => {
+    const B = generateIdentity();
+    const lows = ['0100000000000000000000000000000000000000000000000000000000000000', 'e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800', '5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157'];
+    for (const h of lows) {
+      const bad = signEntry(A, { kind: 'add', body: { name: 'B', platform: 'p', signKey: B.signKey, agreeKey: Buffer.from(h, 'hex') }, seen: [g.id], at: 2 });
+      expect(codeOf(() => verifyRosterLog([g, bad])), h).toBe('low-order-point');
+    }
+  });
+  it('a genesis whose own agreement key is weak is refused', () => {
+    const bad = signEntry(A, { kind: 'add', body: { name: 'A', platform: 'p', signKey: A.signKey, agreeKey: Buffer.alloc(32) }, seen: [], at: 1 });
+    expect(codeOf(() => verifyRosterLog([bad]))).toBe('low-order-point');
+  });
+});
+
+describe('a 5,000-entry roster verifies and every entry parses back', () => {
+  it('verifies, with exact ancestry facts', () => {
+    const A = generateIdentity();
+    const entries: SignedEntry[] = [makeGenesisEntry(A, 'D', 'linux', 1)];
+    for (let i = 1; i < 5000; i++) entries.push(makeRenameEntry(A, 'n' + i, [entries[i - 1].id], i + 1));
+    const r = verifyRosterLog(entries);
+    expect(r.devices.size).toBe(1);
+    expect(r.happenedBefore(entries[0].id, entries[4999].id)).toBe(true);
+    expect(r.happenedBefore(entries[4999].id, entries[0].id)).toBe(false);
+    expect(rosterHeads(entries).map(hex)).toEqual([hex(entries[4999].id)]);
+    // every entry still parses back (the old 1024-id cap was the break)
+    for (const e of [entries[0], entries[2500], entries[4999]]) expect(() => parseEntryValue(decode(encode(entryToValue(e))))).not.toThrow();
+  }, 60_000);
 });

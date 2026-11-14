@@ -2,7 +2,7 @@
 // known answers, the replay window, and the nonce/persistence contract.
 import { createHash, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_REPLAY_WINDOW, FRAME_VERSION, FrameReceiver, FrameSender, MAX_FRAMES_PER_SESSION, MAX_FRAME_BYTES, newSessionId, peekHeader } from './frames';
+import { DEFAULT_MAX_RANGES, DEFAULT_MAX_SESSIONS, FRAME_VERSION, FrameReceiver, FrameSender, MAX_FRAMES_PER_SESSION, MAX_FRAME_BYTES, newSessionId, peekHeader } from './frames';
 import { encode, decode, type CborValue } from './cbor';
 import { MeshCryptoError, type MeshCryptoErrorCode } from './errors';
 import { deviceIdFor, generateIdentity, identityFromSecrets, setIdFor, type DeviceIdentity } from './identity';
@@ -104,7 +104,7 @@ describe('rejections (each path has a test)', () => {
   });
   it('a member (holds the set secret) cannot forge a frame in another device\'s name', () => {
     // B builds a frame whose header says it is from A, signed by B's key.
-    const forged = new FrameSender({ identity: { ...B, deviceId: A.deviceId }, setId }).seal({ secret: S1, gen: 1, group: 'chat:v1', kind: 'lines', body: { lines: ['evil'] } });
+    const forged = new FrameSender({ identity: { signSeed: B.signSeed, signKey: B.signKey, agreeSecret: B.agreeSecret, agreeKey: B.agreeKey, deviceId: A.deviceId } as unknown as DeviceIdentity, setId }).seal({ secret: S1, gen: 1, group: 'chat:v1', kind: 'lines', body: { lines: ['evil'] } });
     expect(codeOf(() => rx().open(forged))).toBe('bad-signature');
   });
   it('an unknown signer is refused as unknown-signer (the caller may park it), never accepted', () => {
@@ -164,8 +164,9 @@ describe('rejections (each path has a test)', () => {
 });
 
 describe('replay window', () => {
-  it('constants: window of 1024 and a 2^32 frame limit are the documented defaults', () => {
-    expect(DEFAULT_REPLAY_WINDOW).toBe(1024);
+  it('constants: the bounds and a 2^32 frame limit are the documented defaults', () => {
+    expect(DEFAULT_MAX_RANGES).toBe(4096);
+    expect(DEFAULT_MAX_SESSIONS).toBe(10_000);
     expect(MAX_FRAMES_PER_SESSION).toBe(2 ** 32);
   });
   it('a duplicate (sender, session, counter) is a replay', () => {
@@ -174,7 +175,7 @@ describe('replay window', () => {
     r.open(f);
     expect(codeOf(() => r.open(f))).toBe('replay');
   });
-  it('out-of-order within the window is accepted once, then replay', () => {
+  it('out-of-order delivery is accepted once, then replay', () => {
     const s = sender();
     const f = [0, 1, 2, 3].map(() => mk(s));
     const r = rx();
@@ -183,14 +184,6 @@ describe('replay window', () => {
     r.open(f[3]);
     r.open(f[1]);
     expect(codeOf(() => r.open(f[1]))).toBe('replay');
-  });
-  it('older than the window is out-of-window', () => {
-    const s = sender();
-    const f = Array.from({ length: 6 }, () => mk(s));
-    const r = rx({ windowSize: 3 });
-    r.open(f[5]);
-    expect(codeOf(() => r.open(f[2]))).toBe('out-of-window');
-    r.open(f[3]); // inside the window (high 5, size 3 -> counters 3..5)
   });
   it('the same counter under a different session is independent', () => {
     const r = rx();
@@ -212,8 +205,8 @@ describe('replay window', () => {
   });
   it('importState rejects malformed state and never weakens existing knowledge', () => {
     const r = rx();
-    expect(codeOf(() => r.importState(encode({ v: 2, w: 1, e: [] })))).toBe('unsupported-version');
-    for (const b of [Buffer.alloc(0), encode({ v: 1, w: 1, e: [{ f: Buffer.alloc(3) }] }), encode('x')]) expect(codeOf(() => r.importState(b))).toBe('malformed');
+    expect(codeOf(() => r.importState(encode({ v: 1, w: 1, e: [] })))).toBe('unsupported-version');
+    for (const b of [Buffer.alloc(0), encode({ v: 2, n: 0, e: [{ f: Buffer.alloc(3) }] }), encode('x')]) expect(codeOf(() => r.importState(b))).toBe('malformed');
     const s = sender();
     const f = mk(s);
     r.open(f);
@@ -290,5 +283,103 @@ describe('after a removal (keygen sealing)', () => {
     const f2 = sender().seal({ secret: S2, gen: 2, group: 'g', kind: 'k', body: { n: 1 } });
     expect(codeOf(() => rx().open(f2))).toBe('unknown-generation'); // the removed device's view
     expect(deviceIdFor(A.signKey).length).toBe(16);
+  });
+});
+
+describe('replay tracking for stored, reorderable frames', () => {
+  const frames = (n: number, s: FrameSender = sender(generateIdentity())) => Array.from({ length: n }, () => mk(s, { body: { n: 1 } }));
+  const shuffled = <T,>(a: T[]): T[] => {
+    const out = [...a];
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = randomBytes(4).readUInt32BE() % (i + 1);
+      [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+  };
+  const evenSigner = (id: DeviceIdentity) => (d: Buffer) => (hex(d) === hex(id.deviceId) ? id.signKey : undefined);
+  it('newest first, then every older frame: all accepted exactly once (the relay may deliver in any order)', () => {
+    const id = generateIdentity();
+    const f = frames(3000, sender(id));
+    const r = rx({ signKeyFor: evenSigner(id) });
+    r.open(f[2999]);
+    for (let i = 2998; i >= 0; i--) r.open(f[i]);
+    for (const i of [0, 1500, 2999]) expect(codeOf(() => r.open(f[i]))).toBe('replay');
+  });
+  it('a random order of a long backlog is accepted whole, then every frame is a replay', () => {
+    const id = generateIdentity();
+    const f = frames(1500, sender(id));
+    const order = shuffled(f.map((w, i) => i));
+    const r = rx({ signKeyFor: evenSigner(id) });
+    for (const i of order) r.open(f[i]);
+    for (const i of order.slice(0, 50)) expect(codeOf(() => r.open(f[i]))).toBe('replay');
+  });
+  it('the state stays bounded: only even counters arriving never grows past maxRangesPerSession, and recent gaps stay fillable', () => {
+    const id = generateIdentity();
+    const f = frames(400, sender(id));
+    const r = rx({ signKeyFor: evenSigner(id), maxRangesPerSession: 8 });
+    for (let i = 0; i < 400; i += 2) r.open(f[i]);
+    const st = decode(r.exportState()) as { e: { r: number[] }[] };
+    expect(st.e).toHaveLength(1);
+    expect(st.e[0].r.length).toBeLessThanOrEqual(16); // 8 ranges, two numbers each
+    r.open(f[399]); // a recent gap is still fillable
+    expect(codeOf(() => r.open(f[1]))).toBe('out-of-window'); // an old closed gap: refused, and never mistaken for fresh
+    expect(codeOf(() => r.open(f[398]))).toBe('replay');
+  });
+  it('the number of tracked sessions is bounded; the least recently active is forgotten first', () => {
+    const r = rx({ signKeyFor: (d: Buffer) => everyone.get(hex(d)), maxSessions: 3 });
+    const s = [0, 1, 2, 3].map(() => sender(A));
+    const f = s.map((x) => mk(x));
+    for (const w of f) r.open(w);
+    expect((decode(r.exportState()) as { e: unknown[] }).e).toHaveLength(3);
+    expect(codeOf(() => r.open(f[3]))).toBe('replay'); // newest sessions are remembered
+    expect(codeOf(() => r.open(f[2]))).toBe('replay');
+  });
+  it('state round-trips and a restored receiver still refuses what the saved one had applied', () => {
+    const id = generateIdentity();
+    const f = frames(40, sender(id));
+    const r1 = rx({ signKeyFor: evenSigner(id) });
+    for (const i of [39, 5, 6, 7, 20]) r1.open(f[i]);
+    const r2 = rx({ signKeyFor: evenSigner(id) });
+    r2.importState(r1.exportState());
+    for (const i of [39, 5, 6, 7, 20]) expect(codeOf(() => r2.open(f[i])), String(i)).toBe('replay');
+    r2.open(f[8]);
+    expect(Buffer.from(r1.exportState()).includes(S1)).toBe(false);
+  });
+  it('importing never forgets what the receiver already knows, and refuses non-canonical ranges', () => {
+    const id = generateIdentity();
+    const f = frames(10, sender(id));
+    const r = rx({ signKeyFor: evenSigner(id) });
+    r.open(f[3]);
+    r.importState(rx({ signKeyFor: evenSigner(id) }).exportState());
+    expect(codeOf(() => r.open(f[3]))).toBe('replay');
+    const ent = (rr: number[]) => encode({ v: 2, n: 1, e: [{ f: Buffer.alloc(16), s: Buffer.alloc(16), k: 0, r: rr }] });
+    for (const bad of [[5, 2], [1, 3, 2, 9], [1, 3, 4, 9], [1], [1, 2 ** 32]]) expect(codeOf(() => r.importState(ent(bad))), JSON.stringify(bad)).toBe('malformed');
+    expect(codeOf(() => r.importState(ent([1, 3, 5, 9])))).toBe('no-throw');
+  });
+  it('a restore of OLDER saved state is detected when the caller says how new the state must be', () => {
+    const id = generateIdentity();
+    const f = frames(4, sender(id));
+    const r = rx({ signKeyFor: evenSigner(id) });
+    r.open(f[0]);
+    const old = r.exportState();
+    expect(r.saveCounter).toBe(1);
+    r.open(f[1]);
+    const newer = r.exportState();
+    expect(r.saveCounter).toBe(2);
+    const fresh = rx({ signKeyFor: evenSigner(id) });
+    expect(codeOf(() => fresh.importState(old, { minSaveCounter: 2 }))).toBe('stale-state');
+    fresh.importState(newer, { minSaveCounter: 2 });
+    expect(codeOf(() => fresh.open(f[1]))).toBe('replay');
+    expect(fresh.saveCounter).toBe(2);
+  });
+});
+
+describe('caller callbacks', () => {
+  it('an exception thrown by secretFor or signKeyFor reaches the caller as itself, not as a malformed frame', () => {
+    const w = mk();
+    const boom = new TypeError('caller bug');
+    expect(() => rx({ secretFor: () => { throw boom; } }).open(w)).toThrow(boom);
+    expect(() => rx({ signKeyFor: () => { throw boom; } }).open(w)).toThrow(boom);
+    expect(codeOf(() => rx().open(Buffer.from('zz')))).toBe('malformed'); // hostile bytes still map to the typed error
   });
 });

@@ -4,13 +4,13 @@
 // timing runs are research output, not regression checks, and are not ported.
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { CODE_ALPHABET, CODE_LENGTH, Existing, INVITE_LIFETIME_MS, MAX_CONNECTIONS, MAX_FAILURES, MAX_MESSAGE_BYTES, MIN_ROOM_BYTES, NewDevice, PROMPT_LIFETIME_MS, generateCode, normalizeCode, shortAuthString, type AddPromptInfo, type ExistingState, type Invite, type PairingSuccess } from './pairing';
+import { CODE_ALPHABET, CODE_LENGTH, Existing, INVITE_LIFETIME_MS, MAX_CONNECTIONS, MAX_FAILURES, MAX_MESSAGE_BYTES, MIN_ROOM_BYTES, NewDevice, PROMPT_LIFETIME_MS, SAS_DIGITS, generateCode, normalizeCode, shortAuthString, type AddPromptInfo, type ExistingState, type Invite, type PairingSuccess } from './pairing';
 import { CPace } from './cpace';
 import { decode, encode } from './cbor';
 import { FrameReceiver, FrameSender } from './frames';
 import { generateIdentity, setIdFor, type DeviceIdentity } from './identity';
 import { LABEL, sha256, toHex } from './bytes';
-import { makeGenesisEntry } from './roster';
+import { MAX_SEEN, makeGenesisEntry, makeRenameEntry, verifyRosterLog } from './roster';
 import { newSetSecret } from './keys';
 import { MeshCryptoError } from './errors';
 
@@ -25,7 +25,7 @@ const tOf = (b: Uint8Array): string => {
 interface Item { dir: 'N2E' | 'E2N'; conn: string; bytes: Buffer }
 interface Adv { mangle?: (item: Item, ctx: { q: Item[] }) => Item[] }
 
-function makeSet(opts: { approve?: boolean | undefined; now?: () => number } = {}) {
+function makeSet(opts: { approve?: boolean | undefined; now?: () => number; revealNonce?: Buffer } = {}) {
   const id = generateIdentity();
   const setId = setIdFor(id.signKey);
   const state: ExistingState = { setId, secrets: new Map([[1, newSetSecret()]]), roster: [makeGenesisEntry(id, 'Desktop', 'linux', 1)] };
@@ -38,6 +38,7 @@ function makeSet(opts: { approve?: boolean | undefined; now?: () => number } = {
     },
     onAdded: (e) => added.push(e),
     now: opts.now,
+    testHooks: opts.revealNonce ? { revealNonce: opts.revealNonce } : undefined,
   });
   return { id, state, E, prompts, added };
 }
@@ -86,7 +87,7 @@ describe('typed code, honest devices, a recording pipe', () => {
     expect(N.result?.ok).toBe(true);
     if (!N.result?.ok) return;
     expect(N.result.sas).toBe(prompts[0].sas);
-    expect(N.result.sas).toMatch(/^\d{4}$/);
+    expect(N.result.sas).toMatch(new RegExp(`^\\d{${SAS_DIGITS}}$`));
   });
   it('key confirmation happens BEFORE "Add this device?"; the name appears only then', () => {
     expect(E.events).toEqual(['pake1', 'confirm-ok', 'prompt', 'welcome-sent']);
@@ -409,9 +410,154 @@ describe('code format helpers', () => {
       expect(() => normalizeCode(bad), bad).toThrowError(MeshCryptoError);
     }
   });
-  it('shortAuthString is stable, zero-padded and derived from the key (pinned)', () => {
-    expect(shortAuthString(Buffer.alloc(64, 1))).toBe('7547');
-    expect(shortAuthString(Buffer.alloc(64, 2), 6)).toBe('915064');
-    expect(shortAuthString(Buffer.alloc(64, 1))).not.toBe(shortAuthString(Buffer.alloc(64, 3)));
+});
+
+// Regression pin of this implementation (a new function with no external vectors).
+const PINNED_SAS = '774914';
+
+describe('the matching number is commit-then-reveal', () => {
+  const part = (b: number) => ({ transcript: Buffer.alloc(32, b), nonceN: Buffer.alloc(16, b + 1), nonceE: Buffer.alloc(16, b + 2) });
+  it('is at least 6 digits, a fixed length, zero-padded, pinned, and changes with every input', () => {
+    expect(SAS_DIGITS).toBeGreaterThanOrEqual(6);
+    expect(shortAuthString(part(1))).toMatch(new RegExp(`^\\d{${SAS_DIGITS}}$`));
+    expect(shortAuthString(part(1))).toBe(PINNED_SAS);
+    const base = part(1);
+    for (const changed of [{ ...base, transcript: Buffer.alloc(32, 9) }, { ...base, nonceN: Buffer.alloc(16, 9) }, { ...base, nonceE: Buffer.alloc(16, 9) }]) expect(shortAuthString(changed)).not.toBe(shortAuthString(base));
+    expect(() => shortAuthString({ ...base, nonceN: Buffer.alloc(3) })).toThrowError(MeshCryptoError);
   });
+  it('an attacker who fixes its values first gets nothing better than 1 in 10^6 per try, however it grinds', () => {
+    // The attacker knows the code, so it controls the WHOLE transcript and its own nonce on the leg it
+    // runs, and may try 200 different choices. The honest side's nonce is random and unknown when the
+    // attacker's choices are fixed (it is only revealed afterwards), so each choice hits a target number
+    // with probability 10^-6. 200 choices x 1,000 honest nonces = 200,000 draws: expected hits 0.2.
+    const target = shortAuthString(part(77));
+    let hits = 0;
+    for (let c = 0; c < 200; c++) {
+      const transcript = randomBytes(32);
+      const nonceE = randomBytes(16);
+      for (let h = 0; h < 1000; h++) if (shortAuthString({ transcript, nonceN: randomBytes(16), nonceE }) === target) hits++;
+    }
+    expect(hits).toBeLessThanOrEqual(4);
+  });
+  it('a new device that reveals a different nonce than it committed to is dropped before any prompt', () => {
+    const { E, prompts } = makeSet();
+    const inv = E.openInvite('code');
+    const N = new NewDevice(generateIdentity(), { room: inv.room, secret: inv.secret }, 'code', { name: 'Phone', platform: 'android' }, { revealNonce: randomBytes(16) });
+    pipeRun(E, N);
+    expect(prompts).toHaveLength(0);
+    expect(E.events).not.toContain('prompt');
+    expect(E.events).not.toContain('welcome-sent');
+  });
+  it('an existing device that reveals a different nonce than it committed to makes the new device give up', () => {
+    const { E, prompts } = makeSet({ revealNonce: randomBytes(16) });
+    const inv = E.openInvite('code');
+    const N = newDev(inv, 'code');
+    pipeRun(E, N);
+    expect(N.result).toEqual({ ok: false, why: 'matching number commitment broken' });
+    expect(N.sas).toBeUndefined();
+    expect(prompts).toHaveLength(0);
+  });
+  it('a man in the middle that knows the code and runs both legs sees two different numbers; the code allows one confirmed leg, so it gets one try', () => {
+    let matches = 0;
+    const TRIALS = 150;
+    for (let i = 0; i < TRIALS; i++) {
+      const real = makeSet();
+      const inv = real.E.openInvite('code');
+      // The middle party's fake "existing device" faces the user's new device, using the code it learned.
+      const M = generateIdentity();
+      const mSas: string[] = [];
+      const X = new Existing(M, { setId: setIdFor(M.signKey), secrets: new Map([[1, newSetSecret() as Uint8Array]]), roster: [makeGenesisEntry(M, 'Fake', 'linux', 1)] }, { onAddPrompt: (p) => { mSas.push(p.sas); return true; }, newCode: () => inv.code as string });
+      X.openInvite('code', inv.room);
+      const N = newDev(inv, 'code');
+      const Y = newDev(inv, 'code', 'mitm');
+      pipeRun(real.E, Y); // leg 2 first: the real device's number is now fixed
+      pipeRun(X, N);
+      if (N.result?.ok && real.prompts.length === 1 && N.result.sas === real.prompts[0].sas) matches++;
+      if (i === 0) {
+        // One try: the real code is spent by the first confirmed connection, so further legs are refused.
+        for (let k = 0; k < 20; k++) {
+          const again = newDev(inv, 'code', 'mitm' + k);
+          pipeRun(real.E, again);
+          expect(again.result).toEqual({ ok: false, why: 'closed' });
+        }
+        expect(real.prompts).toHaveLength(1);
+      }
+    }
+    expect(matches).toBeLessThanOrEqual(1); // expected 150 x 10^-6; any real grinding would show up as many
+  }, 60_000);
+});
+
+describe('every failed attempt costs a try, whoever caused it', () => {
+  const pake1 = (inv: Invite, tag: string, E: Existing): void => {
+    const A = newDev(inv, 'code', 'x');
+    E.onMessage(tag, A.start());
+  };
+  it('garbage on a connection that has done pake1 but not confirmed costs one try; three burn the code', () => {
+    const { E } = makeSet();
+    const inv = E.openInvite('code');
+    for (let i = 0; i < MAX_FAILURES; i++) {
+      pake1(inv, 'g' + i, E);
+      expect(E.failureCount).toBe(i);
+      E.onMessage('g' + i, randomBytes(30));
+      expect(E.failureCount).toBe(i + 1);
+    }
+    expect(E.isBurned).toBe(true);
+  });
+  it('a confirmation of the wrong shape costs one try and is not evaluated', () => {
+    const { E } = makeSet();
+    const inv = E.openInvite('code');
+    pake1(inv, 'c', E);
+    E.onMessage('c', encode({ t: 'cN', mac: randomBytes(5) }));
+    expect(E.failureCount).toBe(1);
+    expect(E.evaluatedCount).toBe(0);
+  });
+  it('a malformed pake1 costs one try; an oversized or unknown-connection message still costs nothing', () => {
+    const { E } = makeSet();
+    E.openInvite('code');
+    E.onMessage('c', encode({ t: 'pake1', Y: randomBytes(5) }));
+    expect(E.failureCount).toBe(1);
+    E.onMessage('c', encode({ t: 'pake1', Y: randomBytes(32), extra: 1 }));
+    expect(E.failureCount).toBe(2);
+    E.onMessage('nobody', randomBytes(30));
+    E.onMessage('nobody', encode({ t: 'cN', mac: randomBytes(32) }));
+    expect(E.failureCount).toBe(2);
+  });
+});
+
+describe('what a new device may say about itself', () => {
+  it('a long or booby-trapped name and platform are cleaned by the sender and again by the receiver', () => {
+    const { E, prompts } = makeSet();
+    const inv = E.openInvite('code');
+    const N = new NewDevice(generateIdentity(), { room: inv.room, secret: inv.secret }, 'code', { name: 'x'.repeat(500) + '‮', platform: '‮linux\n' });
+    pipeRun(E, N);
+    expect(N.result?.ok).toBe(true);
+    expect(prompts[0].name).toBe('x'.repeat(40));
+    expect(prompts[0].platform).toBe('linux');
+  });
+  it('a weak (all-zero) agreement key in hello is refused with no prompt and no exception from onMessage', () => {
+    const { E, prompts } = makeSet();
+    const inv = E.openInvite('code');
+    const real = generateIdentity();
+    const weak = { signSeed: real.signSeed, signKey: real.signKey, agreeSecret: real.agreeSecret, agreeKey: Buffer.alloc(32), deviceId: real.deviceId } as unknown as DeviceIdentity;
+    const N = new NewDevice(weak, { room: inv.room, secret: inv.secret }, 'code', { name: 'p', platform: 'x' });
+    expect(() => pipeRun(E, N)).not.toThrow();
+    expect(prompts).toHaveLength(0);
+    expect(E.events).not.toContain('welcome-sent');
+  });
+});
+
+describe('a long roster pairs (5,000 entries)', () => {
+  it('E cites only the current heads, so the new entry stays small and the new device verifies the whole log', () => {
+    const { E, state, id } = makeSet();
+    for (let i = 1; i < 5000; i++) state.roster.push(makeRenameEntry(id, 'n' + i, [state.roster[i - 1].id], i + 1));
+    const inv = E.openInvite('code');
+    const N = newDev(inv, 'code');
+    pipeRun(E, N);
+    expect(N.result?.ok).toBe(true);
+    if (!N.result?.ok) return;
+    expect(N.result.roster).toHaveLength(5001);
+    const add = N.result.roster[5000];
+    expect(add.seen.length).toBeLessThanOrEqual(MAX_SEEN);
+    expect(verifyRosterLog(N.result.roster).devices.size).toBe(2);
+  }, 60_000);
 });

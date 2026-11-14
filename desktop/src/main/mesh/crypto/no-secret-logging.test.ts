@@ -3,12 +3,15 @@
 // module, or Math.random. (2) Errors carry only a fixed code and field name, never data.
 // Any of these needs a deliberate edit to THIS test, which is the point.
 import { readdirSync, readFileSync } from 'node:fs';
+import { inspect } from 'node:util';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FrameReceiver, FrameSender } from './frames';
 import { generateIdentity, parseIdentity, setIdFor } from './identity';
 import { newSetSecret } from './keys';
-import { Existing, NewDevice, normalizeCode } from './pairing';
+import { Existing, NewDevice, normalizeCode, type PairingSuccess } from './pairing';
+import { CPace } from './cpace';
 import { makeGenesisEntry } from './roster';
 import { MeshCryptoError } from './errors';
 import { hpkeOpenSealed } from './hpke';
@@ -99,5 +102,76 @@ describe('error text never carries secrets, codes or bodies', () => {
     expect(all).not.toContain(inv.code as string);
     expect(all).not.toContain(Buffer.from(S).toString('latin1'));
     expect(E.events.join(',')).not.toContain(inv.code as string);
+  });
+});
+
+describe('secret-bearing objects print nothing secret', () => {
+  const forms = (o: unknown): string[] => [
+    JSON.stringify(o),
+    inspect(o, { showHidden: true, depth: 10, getters: true }),
+    // customInspect:false + showHidden lists accessor NAMES (as "[signSeed]: [Getter]") but not their values; a caller
+    // that also passes getters:true is deliberately evaluating the accessors, exactly as if it called them.
+    inspect(o, { customInspect: false, showHidden: true, depth: 10 }),
+    String(o),
+    `${o as string}`,
+    JSON.stringify({ wrapped: [o] }),
+    inspect({ wrapped: [o] }, { depth: 10, showHidden: true }),
+  ];
+  // Every way a byte string could show up in text: hex, base64, base64url, utf8 text, and node's spaced byte dump.
+  const spellings = (b: Uint8Array): string[] => {
+    const buf = Buffer.from(b);
+    return [buf.toString('hex'), buf.toString('base64'), buf.toString('base64url'), buf.toString('latin1'), [...buf.subarray(0, 6)].map((x) => x.toString(16).padStart(2, '0')).join(' ')];
+  };
+  // JSON of a Buffer is {"type":"Buffer","data":[1,2,...]} and inspect of one lists decimals: look for the first 6 bytes as decimals too.
+  const decimals = (b: Uint8Array): RegExp => new RegExp([...Buffer.from(b).subarray(0, 6)].join('[,\\s]+'));
+  const expectClean = (o: unknown, secrets: Uint8Array[]): void => {
+    for (const text of forms(o)) for (const s of secrets) {
+      for (const sp of spellings(s)) expect(text).not.toContain(sp);
+      expect(text).not.toMatch(decimals(s));
+    }
+  };
+  it('a device identity: its seed and agreement secret never show through JSON, inspect, toString or a wrapping object', () => {
+    const id = generateIdentity();
+    expectClean(id, [id.signSeed, id.agreeSecret]);
+    expect(String(id)).toContain(id.deviceId.toString('hex')); // the public id is fine to show
+    expect(Object.keys(id)).toEqual([]);
+  });
+  it('a CPace party never prints its scalar or the code', () => {
+    const y = randomBytes(32);
+    const prs = Buffer.from('K7QD4M');
+    const cp = new CPace({ prs, ci: Buffer.from('ci'), sid: randomBytes(16), role: 'initiator', scalar: y });
+    expectClean(cp, [y, prs]);
+  });
+  it('an invite, the existing device and the new device never print the code, the QR secret or the set secret', () => {
+    const A = generateIdentity();
+    const S = newSetSecret();
+    const E = new Existing(A, { setId: setIdFor(A.signKey), secrets: new Map([[1, S as Uint8Array]]), roster: [makeGenesisEntry(A, 'D', 'linux', 1)] }, { onAddPrompt: () => true });
+    const qr = E.openInvite('qr');
+    const NI = generateIdentity();
+    const N = new NewDevice(NI, { room: qr.room, secret: qr.secret }, 'qr', { name: 'p', platform: 'x' });
+    N.start();
+    for (const o of [qr, E, N]) expectClean(o, [qr.secret, S, A.signSeed, A.agreeSecret, NI.signSeed, NI.agreeSecret]);
+    const code = E.openInvite('code');
+    expect(code.code).toMatch(/^[2-9A-Z]{6}$/); // the caller can still read it deliberately
+    for (const o of [code, E]) for (const text of forms(o)) expect(text).not.toContain(code.code as string);
+  });
+  it('a successful pairing result never prints the set secret or the new device secrets', () => {
+    const A = generateIdentity();
+    const S = newSetSecret();
+    const E = new Existing(A, { setId: setIdFor(A.signKey), secrets: new Map([[1, S as Uint8Array]]), roster: [makeGenesisEntry(A, 'D', 'linux', 1)] }, { onAddPrompt: () => true });
+    const inv = E.openInvite('code');
+    const NI = generateIdentity();
+    const N = new NewDevice(NI, { room: inv.room, secret: inv.secret }, 'code', { name: 'p', platform: 'x' });
+    let msgs: Buffer[] = [N.start()];
+    for (let i = 0; i < 12 && msgs.length; i++) {
+      const next: Buffer[] = [];
+      for (const m of msgs) for (const r of E.onMessage('c', m)) next.push(...N.onMessage(r));
+      msgs = next;
+    }
+    const res = N.result as PairingSuccess;
+    expect(res.ok).toBe(true);
+    expect(res.secrets.get(1)?.equals(Buffer.from(S))).toBe(true); // readable on purpose
+    expectClean(res, [S, NI.signSeed, NI.agreeSecret]);
+    expectClean(N, [S, NI.signSeed, NI.agreeSecret]);
   });
 });

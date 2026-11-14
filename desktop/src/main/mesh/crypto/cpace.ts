@@ -17,9 +17,12 @@
 // require() of an ES module that has no top-level await; esm-load.test.ts proves it on the real
 // tsc output.
 //
-// T5 gap G21 (accepted): noble's Elligator2 uses BigInt maths that is not constant time. It only
-// matters to a LOCAL attacker timing this device while the code is derived, and the code allows 3
-// guesses anyway.
+// T5 gap G21 (corrected after independent review): noble's Elligator2 uses BigInt maths that is not
+// constant time, and its input is derived from the code. That is only harmless if an attacker cannot
+// make this device repeat the computation and average its response time. So the generator is derived
+// ONCE per party (callers pass it in as `generator`; pairing's Existing derives it once when the
+// invite opens, never per incoming message), which removes the remote trigger. What remains is a
+// LOCAL timing observer during that single derivation, and the 3-guess limit bounds the rest.
 import { randomBytes } from 'node:crypto';
 import { x25519, _map_to_curve_elligator2_curve25519 } from '@noble/curves/ed25519.js';
 import { concat, sha512, utf8, toBuf, type Bytes } from './bytes';
@@ -110,28 +113,44 @@ export interface CPaceMessage {
 }
 
 /** One party. `scalar` is for the RFC vector test only; production always samples it. */
+// WHY #private fields: the scalar and the password must not show in JSON.stringify or util.inspect.
 export class CPace {
   readonly Y: Buffer;
-  private readonly y: Buffer;
-  private readonly ad: Buffer;
-  constructor(
-    private readonly o: { prs: Bytes; ci: Bytes; sid: Bytes; role: 'initiator' | 'responder'; ad?: Bytes; scalar?: Bytes },
-  ) {
-    this.ad = Buffer.from(o.ad ?? Buffer.alloc(0));
-    const g = calculateGenerator(o.prs, o.ci, o.sid);
-    this.y = Buffer.from(o.scalar ?? randomBytes(32));
-    this.Y = Buffer.from(x25519.scalarMult(this.y, g));
+  readonly #y: Buffer;
+  readonly #ad: Buffer;
+  readonly #o: { sid: Bytes; role: 'initiator' | 'responder' };
+  constructor(o: {
+    prs: Bytes;
+    ci: Bytes;
+    sid: Bytes;
+    role: 'initiator' | 'responder';
+    ad?: Bytes;
+    scalar?: Bytes;
+    /** calculateGenerator(prs, ci, sid) computed once by the caller; omitted = derived here. */
+    generator?: Bytes;
+  }) {
+    this.#ad = Buffer.from(o.ad ?? Buffer.alloc(0));
+    this.#o = { sid: Buffer.from(o.sid), role: o.role };
+    const g = o.generator ?? calculateGenerator(o.prs, o.ci, o.sid);
+    this.#y = Buffer.from(o.scalar ?? randomBytes(32));
+    this.Y = Buffer.from(x25519.scalarMult(this.#y, g));
+  }
+  toString(): string {
+    return '[CPace]';
+  }
+  toJSON(): string {
+    return '[CPace]';
   }
   message(): CPaceMessage {
-    return { Y: this.Y, AD: this.ad };
+    return { Y: this.Y, AD: this.#ad };
   }
   /** Feed the peer's message; returns the 64-byte ISK, or null when the peer sent a low-order point (abort). */
   finish(peer: { Y: Bytes; AD: Bytes }): Buffer | null {
     if (peer.Y.length !== 32) return null;
-    const K = scalarMultVfy(this.y, peer.Y);
+    const K = scalarMultVfy(this.#y, peer.Y);
     if (!K) return null;
-    const mine = { Y: this.Y, AD: this.ad };
-    const [a, b] = this.o.role === 'initiator' ? [mine, peer] : [peer, mine];
-    return sha512(lvCat(DSI_ISK, this.o.sid, K), transcriptIR(a.Y, a.AD, b.Y, b.AD));
+    const mine = { Y: this.Y, AD: this.#ad };
+    const [a, b] = this.#o.role === 'initiator' ? [mine, peer] : [peer, mine];
+    return sha512(lvCat(DSI_ISK, this.#o.sid, K), transcriptIR(a.Y, a.AD, b.Y, b.AD));
   }
 }
