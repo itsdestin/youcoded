@@ -3,7 +3,7 @@
 # Not a secret: a model settings name in a test ('qwen35moe.expert_count'). Destin OK'd this exception 2026-11-10 (wave-1 deck Q-19)
 efaa9558d2f11b4c08fa0b51b458316ee069ed53:desktop/tests/engine-manager.test.ts:generic-api-key:191
 # Not secrets: PUBLIC signature-checking keys in a known-answer test file shared by the app and the Worker (mesh roster vectors). Added 2026-11-14 by the mesh build session.
-32c7fb6a43edbb3c14b9304cc88b37b0c21f5565:jsonneric-api-key:3
-32c7fb6a43edbb3c14b9304cc88b37b0c21f5565:jsonneric-api-key:5
-32c7fb6a43edbb3c14b9304cc88b37b0c21f5565:jsonneric-api-key:14
-32c7fb6a43edbb3c14b9304cc88b37b0c21f5565:jsonneric-api-key:31
+32c7fb6a43edbb3c14b9304cc88b37b0c21f5565:desktop/tests/mesh/mesh-roster-vectors.json:generic-api-key:3
+32c7fb6a43edbb3c14b9304cc88b37b0c21f5565:desktop/tests/mesh/mesh-roster-vectors.json:generic-api-key:5
+32c7fb6a43edbb3c14b9304cc88b37b0c21f5565:desktop/tests/mesh/mesh-roster-vectors.json:generic-api-key:14
+32c7fb6a43edbb3c14b9304cc88b37b0c21f5565:desktop/tests/mesh/mesh-roster-vectors.json:generic-api-key:31
