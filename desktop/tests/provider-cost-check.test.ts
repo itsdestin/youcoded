@@ -19,7 +19,7 @@ import { SecretsStore } from '../src/main/providers/secrets-store';
 import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { ProviderRegistry } from '../src/main/providers/provider-registry';
 import {
-  providerCostFromMetadata, costDisagreement,
+  providerCostFromMetadata, servedByFromMetadata, costDisagreement,
   COST_DISAGREEMENT_THRESHOLD, COST_COMPARE_FLOOR_USD,
   addComparableTurn, sessionCostDisagreement, modelCostDisagreements, NO_SESSION_COST_TOTALS,
   COST_GAP_RELOG_FACTOR,
@@ -34,16 +34,19 @@ import {
 // does NOT establish that our dollar figure matches a real bill.
 function openRouterSse(
   usage: Record<string, unknown> | null,
-  opts: { thenASilentChunk?: boolean } = {},
+  opts: { thenASilentChunk?: boolean; provider?: unknown } = {},
 ): string {
+  // OpenRouter puts the serving company in a top-level `provider` string on every chunk
+  // (its documented streaming example shows "provider":"openai"); added only when asked.
+  const P = opts.provider === undefined ? {} : { provider: opts.provider };
   const lines = [
-    `data: ${JSON.stringify({ id: 'gen-1', object: 'chat.completion.chunk', model: 'openai/gpt-4o', choices: [{ index: 0, delta: { role: 'assistant', content: 'hi' }, finish_reason: null }] })}`,
-    `data: ${JSON.stringify({ id: 'gen-1', object: 'chat.completion.chunk', model: 'openai/gpt-4o', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}`,
+    `data: ${JSON.stringify({ id: 'gen-1', object: 'chat.completion.chunk', ...P, model: 'openai/gpt-4o', choices: [{ index: 0, delta: { role: 'assistant', content: 'hi' }, finish_reason: null }] })}`,
+    `data: ${JSON.stringify({ id: 'gen-1', object: 'chat.completion.chunk', ...P, model: 'openai/gpt-4o', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}`,
   ];
   if (usage) {
     // OpenRouter sends the usage block in its LAST SSE message, in a chunk with
     // an empty choices array — the case a naive extractor skips.
-    lines.push(`data: ${JSON.stringify({ id: 'gen-1', object: 'chat.completion.chunk', model: 'openai/gpt-4o', choices: [], usage })}`);
+    lines.push(`data: ${JSON.stringify({ id: 'gen-1', object: 'chat.completion.chunk', ...P, model: 'openai/gpt-4o', choices: [], usage })}`);
   }
   if (opts.thenASilentChunk) {
     // SYNTHETIC, said plainly so nobody over-trusts it: nobody here has seen
@@ -52,7 +55,7 @@ function openRouterSse(
     // guard — a figure an earlier chunk carried must survive a later chunk
     // that carries none. Every other fixture puts the usage in the final
     // chunk, so without this the guard is never exercised at all.
-    lines.push(`data: ${JSON.stringify({ id: 'gen-1', object: 'chat.completion.chunk', model: 'openai/gpt-4o', choices: [] })}`);
+    lines.push(`data: ${JSON.stringify({ id: 'gen-1', object: 'chat.completion.chunk', ...P, model: 'openai/gpt-4o', choices: [] })}`);
   }
   lines.push('data: [DONE]');
   return lines.map((l) => `${l}\n\n`).join('');
@@ -148,6 +151,21 @@ describe('reading the provider’s own cost off a recorded response', () => {
     // Not a body assertion by mistake: the turn really did happen and really
     // did carry a cost, so an empty/undefined body cannot pass this test.
     expect(sentBody.model).toBe('openai/gpt-4o');
+  });
+
+  // Card #69: which company OpenRouter routed to is recorded so cache misses can be matched to it.
+  it('surfaces the serving company OpenRouter names on its chunks, with no extra request', async () => {
+    const { meta } = await turnAgainst(openRouterSse(RECORDED_USAGE, { provider: 'DeepInfra' }));
+    expect(servedByFromMetadata(meta)).toBe('DeepInfra');
+    expect(providerCostFromMetadata(meta)).toBeCloseTo(0.95, 10); // cost reading unharmed
+  });
+
+  it('reports NO serving company when the response names none, and cleans odd values', async () => {
+    expect(servedByFromMetadata((await turnAgainst(openRouterSse(RECORDED_USAGE))).meta)).toBeUndefined();
+    expect(servedByFromMetadata((await turnAgainst(openRouterSse(RECORDED_USAGE, { provider: 42 }))).meta)).toBeUndefined();
+    const long = (await turnAgainst(openRouterSse(RECORDED_USAGE, { provider: ' Ac\nme' + 'x'.repeat(200) }))).meta;
+    expect(servedByFromMetadata(long)).toMatch(/^Acmexxx/);
+    expect(servedByFromMetadata(long)!.length).toBe(64);
   });
 });
 
