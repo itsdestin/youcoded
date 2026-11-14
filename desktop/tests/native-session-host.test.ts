@@ -1090,6 +1090,9 @@ describe('NativeSessionHost', () => {
         writes.mockRestore();
         expect(h.send(id, 'storage recovered')).toMatchObject({ status: 'sent' });
         await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
+        // WHY wait for the request itself (2026-11-13): on a busy machine drain() returned before the
+        // turn had asked for its model (0 calls at load ~60); the count is still checked after drain.
+        await vi.waitFor(() => expect(model).toHaveBeenCalledTimes(1));
         await h.drain(id);
         // Card #148: the report is now supplied (history-only) before the user's turn, so one request carries both.
         expect(model).toHaveBeenCalledTimes(1);

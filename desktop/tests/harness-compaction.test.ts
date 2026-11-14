@@ -159,7 +159,11 @@ describe('driver compaction', () => {
 
   it('only a committed manual summary retires reconstructed emergency fitting eligibility', async () => {
     const session = makeSession({ contextLength: 8192,
-      model: scriptModel([{ throwError: 'summary unavailable' }, { text: 'A concise handoff.' }]) });
+      // WHY two throws and a longer summary (2026-11-13 merge with local-model-hardening): a failed
+      // summary request is now tried once more, so one throw no longer fails compactNow; and an
+      // 18-character "summary" of a 4,000-character span is refused as junk (isJunkSummary).
+      model: scriptModel([{ throwError: 'summary unavailable' }, { throwError: 'summary unavailable' },
+        { text: 'A concise handoff: the goal was stated, the work is under way, and the latest request is next.' }]) });
     session.seedHistory([{ role: 'user', content: 'goal ' + 'x'.repeat(4000) },
       { role: 'assistant', content: 'working' }, { role: 'user', content: 'latest' }], {
       eventUuids: ['old', 'ack', 'latest'], messageOrigins: [['old'], ['ack'], ['latest']], restoreMode: 'reconstructed',
