@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { useTheme } from '../state/theme-context';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useSaveNotice } from '../hooks/useSaveNotice';
+import { announce } from '../utils/announce';
 import { Button, CARD_LEVEL_1, Dialog, Toggle, TextInput, Textarea, LoadingState, RadioGroup, SegmentedTabs, SectionLabel, SettingRow } from './ui';
 
 // Native replacement for Claude Code's /config TUI. Reads/writes fields in
@@ -77,7 +78,9 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
   // Load all fields in parallel when opening. Fields missing from settings.json
   // return undefined; we fall back to DEFAULTS so the UI always has values.
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
+    // A later load wins: a slow earlier one must not overwrite it (and a close-time write is waited for, so reopening reads what was just saved).
+    let cancelled = false;
     setLoaded(false);
     const api = (window.claude as any).settings;
     if (!api) {
@@ -85,14 +88,16 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
       setLoaded(true);
       return;
     }
-    Promise.all([
+    closing.current.then(() => (cancelled ? undefined : Promise.all([
       api.get('permissions.defaultMode'),
       api.get('editorMode'),
       api.get('showTurnDuration'),
       api.get('preferReducedMotion'),
       api.get('outputStyle'),
       api.get('systemPrompt'),
-    ]).then(([defaultMode, editorMode, showTurnDuration, preferReducedMotion, outputStyle, systemPrompt]) => {
+    ]))).then((vals) => {
+      if (!vals || cancelled) return;
+      const [defaultMode, editorMode, showTurnDuration, preferReducedMotion, outputStyle, systemPrompt] = vals as unknown[];
       const loadedPrefs: PrefsState = {
         defaultMode: (defaultMode as PermissionDefault) ?? DEFAULTS.defaultMode,
         editorMode: (editorMode as EditorMode) ?? DEFAULTS.editorMode,
@@ -106,10 +111,12 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
       setPrefs(loadedPrefs);
       setLoaded(true);
     }).catch(() => {
+      if (cancelled) return;
       latest.current = DEFAULTS;
       setPrefs(DEFAULTS);
       setLoaded(true);
     });
+    return () => { cancelled = true; };
   }, [open]);
 
   // Write-through: every change is persisted. No "save" button - matches Claude Code's own /config TUI behavior.
@@ -164,13 +171,35 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
     if (timers.current[key] === undefined) return;
     clearTimeout(timers.current[key]); delete timers.current[key]; persist(key);
   }, [persist]);
-  // Closing with a pause still pending sends it once, so a typed line is not lost; nothing is said about its result after the popup is gone.
-  useEffect(() => () => {
-    for (const k of Object.keys(timers.current) as (keyof PrefsState)[]) {
+  // Text with a pause still pending (typed, not yet sent). Written straight to settings, with no popup notice, by the three paths below.
+  const TEXT_FIELD: Record<string, string> = { outputStyle: 'outputStyle', systemPrompt: 'systemPrompt' };
+  const TEXT_WORDS: Record<string, string> = { outputStyle: 'your output style', systemPrompt: 'your system prompt' };
+  /** Send every pending text now. `report` says a failure in the app's toast (the popup is gone, so its own notice cannot). */
+  const writePending = useCallback((report: boolean): Promise<void> => {
+    const keys = Object.keys(timers.current) as (keyof PrefsState)[];
+    const api = (window.claude as any).settings;
+    return Promise.all(keys.map(async (k) => {
       clearTimeout(timers.current[k]); delete timers.current[k];
-      void (window.claude as any).settings?.set?.(({ outputStyle: 'outputStyle', systemPrompt: 'systemPrompt' } as Record<string, string>)[k] ?? k, latest.current[k])?.catch?.(() => {});
-    }
-  }, [open]);
+      let failed = false;
+      try {
+        const r = await api?.set?.(TEXT_FIELD[k] ?? k, latest.current[k]);
+        failed = r === false || (!!r && typeof r === 'object' && (r as { ok?: unknown }).ok === false);
+      } catch { failed = true; }
+      // No invented cause: only the plain fact that it did not save.
+      if (failed && report) announce(`Couldn't save ${TEXT_WORDS[k] ?? 'that setting'}.`);
+    })).then(() => undefined);
+  }, []);
+  /** The close-time write still running, so a reopening popup can wait for it before it reads the settings back. */
+  const closing = useRef<Promise<void>>(Promise.resolve());
+  // Closing (or unmounting) with a pause still pending sends it once, so a typed line is not lost; a failure is toasted.
+  useEffect(() => () => { if (Object.keys(timers.current).length) closing.current = writePending(true); }, [open, writePending]);
+  // The window going away inside the pause: the page is hidden, so fire the write (no toast possible, no waiting). Listens only while open.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onHide = () => { if (Object.keys(timers.current).length) void writePending(false); };
+    window.addEventListener('pagehide', onHide);
+    return () => window.removeEventListener('pagehide', onHide);
+  }, [open, writePending]);
 
   if (!open) return null;
 
