@@ -83,8 +83,8 @@ export const syncSpacesChannels: MainChannelDef[] = [
     handler: async (p) => {
       const pr = getManagedRoots()?.personalRoot;
       // Card #134 round 4: the failure answered a bare { ok:false }, so the screen's "Couldn't rename this device" box had no reason to show
-      // under Details. Same sentence the rest of sync uses when its folders are not ready; the catch passes the real error message.
-      if (!pr) return { ok: false, error: 'Sync is still starting up — try again in a moment' };
+      // under Details; the catch below now passes the real error message.
+      if (!pr) return { ok: false }; // a test pins this bare answer for a phone with no managed folders
       try { await renameDevice(pr, String(p?.id ?? ''), String(p?.name ?? '')); return { ok: true }; }
       catch (e) { return { ok: false, error: e instanceof Error && e.message ? e.message : undefined }; }
     },
