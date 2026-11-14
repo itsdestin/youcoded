@@ -13,7 +13,7 @@ import { ContextMenu } from '../context-menu/ContextMenu';
 import type { MenuEntry } from '../context-menu/build-menu';
 import { MenuIcon } from '../context-menu/menu-icons';
 import { genRefId } from '../context-menu/compose-ref';
-import { Button, Dialog, ErrorState, OneJobCard, OneJobHint, OneJobLabel, TextInput, Tooltip } from '../ui';
+import { Button, Dialog, ErrorState, OneJobCard, OneJobLabel, TextInput, Tooltip } from '../ui';
 import { OfficeKindGlyph } from './office-icons';
 
 /** What a row's actions do. One object for every row (OfficeHome keeps it stable), so a memoised
@@ -85,6 +85,16 @@ const BUTTONS_CLASS =
   'group-focus-within:opacity-100 group-focus-within:translate-x-0 group-focus-within:pointer-events-auto ' +
   'pointer-coarse:opacity-100 pointer-coarse:translate-x-0 pointer-coarse:pointer-events-auto motion-reduce:translate-x-0';
 
+/** The session switcher's rename pencil, drawn the same (SessionStrip.tsx). */
+function PencilGlyph() {
+  return (
+    <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
 function MoreGlyph() {
   return (
     <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -148,7 +158,21 @@ export const OfficeFileRow = memo(function OfficeFileRow({ f, verb, when, action
       >
         <OfficeKindGlyph kind={f.kind} className="w-4 h-4 shrink-0 text-fg-2" />
         <div className="min-w-0 flex-1">
-          <div className="text-sm text-fg truncate">{f.name}</div>
+          {/* WHY the pencil right after the name, always showing (Destin, review 2 R2-4): the same
+              icon and place as renaming a session in the switcher (SessionStrip.tsx) and the
+              Resume Browser, so "rename" looks the same everywhere. */}
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-sm text-fg truncate">{f.name}</span>
+            <button
+              type="button"
+              aria-label={`Rename ${f.name}`}
+              aria-haspopup="dialog"
+              className="shrink-0 text-fg-muted hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-sm coarse-hit cursor-pointer"
+              onClick={(e) => { e.stopPropagation(); setRenaming(true); }}
+            >
+              <PencilGlyph />
+            </button>
+          </div>
           <div className="text-2xs text-fg-muted truncate">{f.folder}</div>
         </div>
         {/* The time and the buttons share this one slot, right-aligned (see SLOT_FADE). */}
@@ -157,7 +181,6 @@ export const OfficeFileRow = memo(function OfficeFileRow({ f, verb, when, action
           <span className={`${TIME_CLASS} ${pointed ? '!opacity-0' : ''}`}>{verb} {when}</span>
           <div className={`${BUTTONS_CLASS} ${pointed ? '!opacity-100 !translate-x-0' : ''}`}>
             <RowButton label="Ask about this" onClick={() => askAbout(f)}><MenuIcon name="ask" /></RowButton>
-            <RowButton label="Rename" onClick={() => setRenaming(true)}><MenuIcon name="rename" /></RowButton>
             {inOs && <RowButton label="View in folder" onClick={() => viewInFolder(f)}><MenuIcon name="folder" /></RowButton>}
             <RowButton label="More" aria-haspopup="menu" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); openMenuAt(r.left, r.bottom + 4); }}><MoreGlyph /></RowButton>
           </div>
@@ -207,9 +230,19 @@ function RenameFileDialog({ f, actions, onClose }: { f: OfficeFile; actions: Off
         </>}>
           <div>
             <OneJobLabel htmlFor="office-file-name">File name</OneJobLabel>
-            <TextInput id="office-file-name" value={draft} disabled={saving} onChange={(e) => { setDraft(e.target.value); setError(null); }}
-              autoFocus onFocus={(e) => e.currentTarget.select()} maxLength={200} className="w-full" />
-            {ending && <OneJobHint>Keeps its {ending} ending, so it still opens in Office.</OneJobHint>}
+            {/* WHY a faint ending right after the typed name, not a line of explanation under it
+                (Destin, review 2 R2-3): the name reads as the whole file name, and the ending
+                visibly isn't part of what you type. A copy of the typed text, invisible, pushes it
+                into place; it uses the field's own size and padding (field.ts, md). */}
+            <div className="relative">
+              <TextInput id="office-file-name" value={draft} disabled={saving} onChange={(e) => { setDraft(e.target.value); setError(null); }}
+                autoFocus onFocus={(e) => e.currentTarget.select()} maxLength={200} className="w-full" />
+              {ending && (
+                <span aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center overflow-hidden whitespace-pre border border-transparent px-3 text-xs">
+                  <span className="invisible">{draft}</span><span className="text-fg-faint">{ending}</span>
+                </span>
+              )}
+            </div>
           </div>
         </OneJobCard>
       </form>
