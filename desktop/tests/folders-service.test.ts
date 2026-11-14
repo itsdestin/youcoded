@@ -23,7 +23,7 @@ beforeEach(() => {
   h.managed = null;
   h.removed = new Set();
 });
-afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { vi.useRealTimers(); fs.rmSync(dir, { recursive: true, force: true }); });
 
 describe('listPickerFolders — what the new-session picker shows, on every transport', () => {
   it('seeds Home on first use', () => {
@@ -191,13 +191,14 @@ describe('folder paths that differ only by letter case', () => {
 // Card #143 b (deck C-3): the one list is ordered by last use.
 describe('folder order by last use', () => {
   it('a folder a session just started in moves to the top; unused ones keep their old order', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
     const a = path.join(dir, 'a'); const b = path.join(dir, 'b'); const c = path.join(dir, 'c');
     fs.writeFileSync(file, JSON.stringify([{ path: a, nickname: 'a', addedAt: 3 }, { path: b, nickname: 'b', addedAt: 2 }, { path: c, nickname: 'c', addedAt: 1 }]));
     const { noteFolderUsed } = await import('../src/main/folders-service');
     expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['a', 'b', 'c']);
     noteFolderUsed(c, file);
     expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['c', 'a', 'b']);
-    await new Promise((r) => setTimeout(r, 5));
+    vi.setSystemTime(Date.now() + 10); // the clock moves on by itself, so a later use always stamps later (no real waiting)
     noteFolderUsed(b, file);
     expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['b', 'c', 'a']);
   });
@@ -235,11 +236,12 @@ describe('folder order: synced projects', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe(before); // never became a saved folder
   });
   it('a saved folder used later than a project goes above it, and the project keeps its row as a synced one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
     const { a, saved } = setup();
     const { noteFolderUsed, listPickerFolders, loadFolderUsage, flushFolderUsage } = await load();
     await loadFolderUsage(file);
     noteFolderUsed(a, file);
-    await new Promise((r) => setTimeout(r, 5));
+    vi.setSystemTime(Date.now() + 10); // the clock moves on by itself, so a later use always stamps later (no real waiting)
     noteFolderUsed(saved, file);
     const list = listPickerFolders(file);
     expect(list.map((f) => f.nickname)).toEqual(['saved', 'alpha', 'beta']);
