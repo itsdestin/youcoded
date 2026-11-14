@@ -67,7 +67,7 @@ export function Toast({
       className={[
         'flex items-center gap-2 px-4 py-2 text-sm text-fg pointer-events-none',
         variant === 'global'
-          ? 'fixed bottom-16 left-1/2 -translate-x-1/2'
+          ? 'fixed left-1/2 -translate-x-1/2'
           : 'absolute bottom-full right-0 mb-1 whitespace-nowrap',
       ].join(' ')}
       // A toast is a control-sized surface, not a panel, so it wants radius-lg
@@ -75,7 +75,14 @@ export function Toast({
       // class: .layer-surface's border-radius is unlayered CSS and Tailwind emits
       // utilities inside @layer utilities, so the class would lose and the toast
       // would silently keep the panel radius.
-      style={{ borderRadius: 'var(--radius-lg)' }}
+      style={{
+        borderRadius: 'var(--radius-lg)',
+        // WHY (card #11 a): the global toast sits above the message area (hooks/useToastClearance publishes where it
+        // starts); 4rem is the old fixed spot, kept where there is no message box.
+        // width: max-content + a max of the window less a margin each side: with left:50% alone a toast could only grow to
+        // half the window, so a long notice on a phone became a tall narrow column (seen on the settings-repaired picture).
+        ...(variant === 'global' ? { bottom: 'var(--toast-clearance, 4rem)', width: 'max-content', maxWidth: 'calc(100vw - 2rem)' } : null),
+      }}
     >
       {tone === 'error' && (
         // The state family's failure mark (§1.6) — same dot ErrorState uses.
