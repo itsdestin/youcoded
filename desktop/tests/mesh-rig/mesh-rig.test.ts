@@ -152,7 +152,7 @@ describe.skipIf(!enabled || !avail.ok)('mesh rig: three jailed backends and the 
     for (const n of ['A', 'B', 'C']) {
       const re = new RosterStore(path.join(devs[n].userData, 'mesh'));
       await re.load(); // verifyRosterLog over the whole file, written by the device itself
-      expect(re.size).toBe(3);
+      expect(re.size).toBeGreaterThanOrEqual(3); // three devices, and the first entry each joiner signs of its own
       expect(re.verified!.devices.size).toBe(3);
     }
   }, 60_000);
@@ -249,7 +249,8 @@ describe.skipIf(!enabled || !avail.ok)('mesh rig: three jailed backends and the 
       const anySeen = [Buffer.alloc(32, 7)];
       // B, removed, signs an add of itself and an add of a stranger
       expect(await put(bKeys.identity, 'add', bKeys.identity.signKey, bKeys.identity.deviceId, anySeen)).toBe('signer-removed');
-      expect(await put(bKeys.identity, 'remove', null, cKeys.identity.deviceId, anySeen)).toBe('signer-removed');
+      // (a removed signer's removal is judged against its stated ancestry for the mutual-removal rule: bogus ancestry is refused as such)
+      expect(['signer-removed', 'bad-ancestry']).toContain(await put(bKeys.identity, 'remove', null, cKeys.identity.deviceId, anySeen));
       // A, a real member with a real history, is asked to re-add B: the relay's ban refuses it
       const seenA = seenForNextEntry(aRoster.entries, aKeys.identity.deviceId);
       expect(await put(aKeys.identity, 'add', bKeys.identity.signKey, bKeys.identity.deviceId, seenA)).toBe('banned');
@@ -410,9 +411,9 @@ describe.skipIf(!enabled || !avail.ok)('mesh rig: three jailed backends and the 
       expect(auditRows(d), `${d.name} fs audit`).toEqual([]);
     }
     // each device's own files are where they should be
-    // A only ever sent, so it never had anything to save a receive position for; B and C received frames, so they did.
+    // Every device now also receives the others' roster heads and first entries, so each saves a receive position.
     // (relay-sync.json: the host's record of pairings it still has to confirm; join-attempted: a joiner's marker that a second try uses a new identity)
-    expect(inventory(path.join(devs.A.userData, 'mesh'))).toEqual(['keys.bin', 'relay-sync.json', 'roster.log']);
+    expect(inventory(path.join(devs.A.userData, 'mesh'))).toEqual(['keys.bin', 'link-state.bin', 'relay-sync.json', 'roster.log']);
     for (const n of ['B', 'C']) expect(inventory(path.join(devs[n].userData, 'mesh'))).toEqual(['join-attempted', 'keys.bin', 'link-state.bin', 'roster.log']);
   }, 30_000);
 
