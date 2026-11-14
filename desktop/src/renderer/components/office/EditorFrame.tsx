@@ -859,7 +859,11 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       // The editor needs scripts, workers and its own storage — on ITS origin,
       // never the app's (no top navigation, no access to window.claude).
       sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-modals"
-      className={`absolute border-0 ${slim ? '' : 'inset-0 w-full h-full'} ${phase === 'open' ? '' : 'invisible'}`}
+      // WHY select-none (Destin, 2026-11-14: "i can highlight the whole office window"): a
+      // select-all or drag-select on the app page around the editor counted the editor box as
+      // selected, and the browser tints a selected box solid blue. Selecting text INSIDE the
+      // document is the editor's own page and is unaffected by this.
+      className={`absolute border-0 select-none ${slim ? '' : 'inset-0 w-full h-full'} ${phase === 'open' ? '' : 'invisible'}`}
       style={slim ? SLIM_OVERSCAN : undefined}
       // Fix round 5: inert while a copy is written, so no click, key or focus reaches the
       // editor behind the overlay (the overlay alone left keyboard focus reachable by Tab).
