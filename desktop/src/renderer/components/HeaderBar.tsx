@@ -661,12 +661,12 @@ export default React.memo(function HeaderBar({
       // clickable"): the stack takes the click itself, so its padding and the gaps between dot,
       // name, arrow and lights all open the list. The name and arrow inside pass their clicks up
       // (SessionStrip, narrowTop === 'lights'); the arrow stays the keyboard's way in.
-      <div onClick={() => stripApi.current?.toggleList()} className={`session-name-stack relative cursor-pointer flex flex-col items-center justify-center min-w-0 max-w-full rounded-lg px-1 py-2 hover:bg-inset transition-colors`}>
+      <div onClick={() => stripApi.current?.toggleList()} className={`session-name-stack relative cursor-pointer flex flex-col items-center justify-center min-w-0 max-w-full rounded-lg px-1 ${windowButtonsBar ? 'pt-1.5 pb-2.5' /* round 9, Destin: "just a smidge higher … a bit low of center" (2px up) */ : 'py-2'} hover:bg-inset transition-colors`}>
       {sessionStrip}
       {/* Round 7: the name sits on the same line as the buttons beside it (equal padding above and
           below), and the lights hang in the bottom padding, centred under it, instead of pushing the
           name up by their own height. */}
-      {narrowTop === 'lights' && <span className="absolute bottom-1.5 left-1/2 -translate-x-1/2" /* round 8: "make status dots tighter below name" */><SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} /></span>}
+      {narrowTop === 'lights' && <span className={`absolute ${windowButtonsBar ? 'bottom-2' : 'bottom-1.5'} left-1/2 -translate-x-1/2`} /* round 8: "make status dots tighter below name"; round 9: rises with the name */><SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} /></span>}
       </div>
       ) : sessionStrip}
       </div>
