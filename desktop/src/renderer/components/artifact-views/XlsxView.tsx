@@ -6,7 +6,7 @@ import {
 } from './exceljs-cell';
 import { evalFormula, type CellValue } from './xlsx-formula';
 import { MAX_ROWS, MAX_COLS } from './xlsx-extract';
-import { parseXlsx } from './xlsx-parse-jobs';
+import { parseXlsx, XlsxParseTimeoutError } from './xlsx-parse-jobs';
 // Theme-tinted "paper" constants shared with CsvView — see sheet-theme.ts.
 // Doc comments (Destin, chat follow-up: Excel comments same as Word): cell
 // comments share the markdown/Word comment layout; each <td> carries its
@@ -343,6 +343,7 @@ function XlsxSheets({ bytes, path, projectRoot }: { bytes: Uint8Array; path: str
   const [active, setActive] = useState(0);
   const [sel, setSel] = useState<Selection | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [timedOut, setTimedOut] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -358,7 +359,9 @@ function XlsxSheets({ bytes, path, projectRoot }: { bytes: Uint8Array; path: str
       setSel(null);
       setParseError(built.length ? null : 'empty');
     }, (e: any) => {
-      if (!cancelled) setParseError(String(e?.message ?? e));
+      if (cancelled) return;
+      setParseError(String(e?.message ?? e));
+      setTimedOut(e instanceof XlsxParseTimeoutError);
     });
     return () => { cancelled = true; job.cancel(); };
   }, [bytes]);
@@ -429,7 +432,8 @@ function XlsxSheets({ bytes, path, projectRoot }: { bytes: Uint8Array; path: str
   }, [sheet]);
   const select = useCallback((r: number, c: number) => setSel({ r, c }), []);
 
-  if (parseError) return <Center>Couldn’t open this spreadsheet.</Center>;
+  // WHY the extra sentence (card #161): the 60-second limit is the one failure whose cause we know, so we say it.
+  if (parseError) return <Center>Couldn’t open this spreadsheet.{timedOut ? ' This spreadsheet took too long to open.' : ''}</Center>;
   // WHY CenterLoading: the shared LoadingState (guide "File viewers" known deviation, 2026-10-13).
   if (!sheets) return <CenterLoading what="spreadsheet" />;
 

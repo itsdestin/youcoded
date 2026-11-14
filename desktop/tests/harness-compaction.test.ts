@@ -79,7 +79,7 @@ describe('driver compaction', () => {
     expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(0);
   });
 
-  it('fits only the outgoing request on an old reopened history whose summary cannot fit', async () => {
+  it.each(['raw', 'portable'] as const)('fits only the outgoing request on a %s reconstructed history with production seed metadata', async mode => {
     const prompts: any[] = [];
     const inner = scriptModel([{ text: 'done' }]);
     const model = new MockLanguageModelV4({ doStream: async (options: any) => {
@@ -90,13 +90,112 @@ describe('driver compaction', () => {
       harness: { ...HARNESS, limits: { maxTokens: 16_000 } },
       model, onEvent: e => events.push(e) });
     session.seedHistory([{ role: 'user', content: 'old goal ' + 'x'.repeat(24_000) },
-      { role: 'assistant', content: 'ack' }, { role: 'user', content: 'recent question' }] as any);
+      { role: 'assistant', content: 'ack' },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'kept', toolName: 'Read', input: { file_path: 'kept' } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'kept', toolName: 'Read', output: { type: 'text', value: 'kept output' } }] },
+      { role: 'user', content: 'recent question' }] as any, {
+      eventUuids: ['old', 'ack', 'call', 'result', 'recent'],
+      messageOrigins: [['old'], ['ack'], ['call'], ['result'], ['recent']],
+      restoreMode: 'reconstructed',
+      ...(mode === 'portable' ? { transformation: { kind: 'summary', summaryEventUuid: 'old' } } : {}),
+    });
     await session.send('continue');
     expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(0);
     expect(prompts).toHaveLength(1); // no unsafe summary call
     expect(JSON.stringify(prompts[0])).not.toContain('x'.repeat(24_000));
+    expect(JSON.stringify(prompts[0])).toContain('continue');
+    const kept = prompts[0].filter((m: any) => m.role === 'tool' || (m.role === 'assistant' && Array.isArray(m.content) && m.content.some((p: any) => p.type === 'tool-call')));
+    expect(kept.map((m: any) => m.role)).toEqual(['assistant', 'tool']);
     expect(JSON.stringify(session.acceptedHistory().messages)).toContain('x'.repeat(24_000));
     expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+  });
+
+  it.each(['exact', 'live'] as const)('does not emergency-trim an unsummarizable %s accepted prefix', async mode => {
+    const prompts: any[] = [];
+    const inner = scriptModel([{ text: 'done' }]);
+    const model = new MockLanguageModelV4({ doStream: async (options: any) => {
+      prompts.push(options.prompt); return inner.doStream(options);
+    } });
+    const events: any[] = [];
+    const session = makeSession({ contextLength: 8192, tools: [],
+      harness: { ...HARNESS, limits: { maxTokens: 16_000 } },
+      model, onEvent: e => events.push(e) });
+    const history = [{ role: 'user', content: 'protected goal ' + 'x'.repeat(24_000) },
+      { role: 'assistant', content: 'ack' }, { role: 'user', content: 'recent question' }] as any;
+    if (mode === 'exact') session.seedHistory(history, {
+      eventUuids: ['old', 'ack', 'recent'], messageOrigins: [['old'], ['ack'], ['recent']], restoreMode: 'exact',
+    });
+    else (session as any).history = history;
+    await session.send('continue');
+    expect(prompts).toHaveLength(1);
+    expect(JSON.stringify(prompts[0])).toContain('x'.repeat(24_000));
+    expect(events.some(e => e.type === 'compact-summary')).toBe(false);
+    expect(JSON.stringify(session.acceptedHistory().messages)).toContain('x'.repeat(24_000));
+  });
+
+  it('clearing a reconstructed resume protects wholly live history from emergency trimming', async () => {
+    const prompts: any[] = [];
+    const inner = scriptModel([{ text: 'ack', usage: { inputTokens: 6000 } },
+      { text: 'ack again', usage: { inputTokens: 6000 } }, { text: 'done' }]);
+    const model = new MockLanguageModelV4({ doStream: async (options: any) => {
+      prompts.push(options.prompt); return inner.doStream(options);
+    } });
+    const session = makeSession({ contextLength: 8192, tools: [],
+      harness: { ...HARNESS, limits: { maxTokens: 16_000 } }, model });
+    session.seedHistory([{ role: 'user', content: 'reconstructed' }], {
+      eventUuids: ['old'], messageOrigins: [['old']], restoreMode: 'reconstructed',
+    });
+    expect(session.clearHistory()).toEqual({ ok: true });
+    const eligibleAfterClear = (session as any).legacyReopenFit;
+    await session.send('live goal ' + 'x'.repeat(24_000));
+    await session.send('recent question');
+    await session.send('continue');
+    expect(prompts).toHaveLength(3);
+    expect(JSON.stringify(prompts[2])).toContain('x'.repeat(24_000));
+    expect(JSON.stringify(prompts[2])).not.toContain('reconstructed');
+    expect(JSON.stringify(session.acceptedHistory().messages)).toContain('x'.repeat(24_000));
+    expect(eligibleAfterClear).toBe(false);
+  });
+
+  it('only a committed manual summary retires reconstructed emergency fitting eligibility', async () => {
+    const session = makeSession({ contextLength: 8192,
+      model: scriptModel([{ throwError: 'summary unavailable' }, { text: 'A concise handoff.' }]) });
+    session.seedHistory([{ role: 'user', content: 'goal ' + 'x'.repeat(4000) },
+      { role: 'assistant', content: 'working' }, { role: 'user', content: 'latest' }], {
+      eventUuids: ['old', 'ack', 'latest'], messageOrigins: [['old'], ['ack'], ['latest']], restoreMode: 'reconstructed',
+    });
+    expect(await session.compactNow()).toEqual({ ok: false, reason: 'summary-failed' });
+    expect((session as any).legacyReopenFit).toBe(true);
+    expect(await session.compactNow()).toEqual({ ok: true });
+    expect((session as any).legacyReopenFit).toBe(false);
+  });
+
+  it('a committed AUTOMATIC summary also retires reconstructed emergency fitting eligibility', async () => {
+    // WHY: the manual path is pinned above; the automatic path (maybeCompact) clears the
+    // same flag in a different place, so a regression there would go unnoticed.
+    const model = scriptModel([{ text: 'A concise handoff.' }]);
+    const session = makeSession({ contextLength: 8192, model });
+    session.seedHistory([{ role: 'user', content: 'old ' + 'x'.repeat(9000) },
+      { role: 'assistant', content: 'ack' }, { role: 'user', content: 'next' },
+      { role: 'assistant', content: 'ack' }, { role: 'user', content: 'latest' }] as any, {
+      eventUuids: ['a', 'b', 'c', 'd', 'e'], messageOrigins: [['a'], ['b'], ['c'], ['d'], ['e']],
+      restoreMode: 'reconstructed',
+    });
+    expect((session as any).legacyReopenFit).toBe(true);
+    (session as any).abort = new AbortController();
+    try { expect(await (session as any).maybeCompact(model, {}, true)).toBe(true); }
+    finally { (session as any).abort = null; }
+    expect((session as any).legacyReopenFit).toBe(false);
+  });
+
+  it('restoreMode defaults: no seed reconstructs, a seed without a mode is an exact prefix', () => {
+    // WHY: a caller that forgets restoreMode silently picks one of these; pin which.
+    const none = makeSession({ contextLength: 8192 });
+    none.seedHistory([{ role: 'user', content: 'a' }] as any);
+    expect((none as any).legacyReopenFit).toBe(true);
+    const seeded = makeSession({ contextLength: 8192 });
+    seeded.seedHistory([{ role: 'user', content: 'a' }] as any, { eventUuids: ['a'], messageOrigins: [['a']] });
+    expect((seeded as any).legacyReopenFit).toBe(false);
   });
 
   it('rejects a completed summary that leaves too little room for the next request', async () => {

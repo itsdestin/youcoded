@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- WHY this page exists (Destin, 2026-11-12): on a phone the live demo used to
+     be squeezed into the landing page's header, where its text was cut off and
+     its start button covered the chat. The landing page's download bar has a
+     "Demo" button that opens the same demo here, with the whole screen to
+     itself. It is the same built app the landing page embeds (site/), with the
+     same sample conversation -- nothing here is a separate copy to keep in step.
+
+     WHY it looks like this (Destin, 2026-11-13: the first version "feels hella
+     trashy"). It was a plain text bar in the device's own font on one fixed dark
+     purple, whatever look the visitor had picked, and it opened on the words
+     "Loading the demo". He chose, from four working designs side by side, the
+     website's own bar, then trimmed it: "drop the download button, just show
+     the 'demo' tag on the right side, drop the app icon, and just keep
+     'youcoded' with the back arrow", and "more of a strip ... instead of a
+     floating pill/bubble thing. but keep the glass/edge styles". So: a strip
+     across the top in the look's panel colour with its edge line, the
+     arrow and wordmark together are the way back, and the look's own wallpaper
+     fills the screen at once, so the app appears onto its own background. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Not a page to land on from a search: it is a room off the landing page. -->
+<meta name="robots" content="noindex">
+<title>YouCoded demo</title>
+<link rel="icon" href="favicon-light.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600&family=DM+Sans:opsz,wght@9..40,800&display=swap" rel="stylesheet">
+<style>
+  /* The colours below are YouCoded Light's; the script swaps in the visitor's look. */
+  :root{--sat:env(safe-area-inset-top,0px);--canvas:#F7F0FB;--panel:#EFE3F6;--fg:#21152C;--dim:#50415C;--edge:#C9B0DB;--you:#9D5BD0;--ink:#21152C;--wall:none}
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;overflow:hidden;background:var(--canvas);color:var(--fg);
+    font:800 15px/1.2 'DM Sans',system-ui,sans-serif;-webkit-tap-highlight-color:transparent}
+  /* A strip across the top, edge to edge (not a floating pill), in the look's
+     panel colour with its edge line underneath -- the website bar's material. */
+  .bar{position:fixed;top:0;left:0;right:0;height:calc(var(--sat) + 48px);padding:var(--sat) 14px 0 2px;z-index:2;
+    background:var(--panel);border-bottom:1px solid var(--edge);display:flex;align-items:center}
+  /* Arrow and wordmark are ONE link, so the whole left side is the way back. */
+  .back{display:flex;align-items:center;gap:4px;height:44px;padding:0 12px 0 8px;border-radius:999px;
+    color:var(--ink);text-decoration:none}
+  .back:active{opacity:.7}
+  .back svg{width:22px;height:22px;flex:none;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+  /* Same face, weight and spacing as the wordmark in the landing page's bar. */
+  .wm{font:600 22px/1 'Outfit',system-ui,sans-serif;letter-spacing:-.035em}
+  .wm i{font-style:normal;color:var(--you)}
+  .tag{margin-left:auto;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+    border:1px solid var(--edge);border-radius:999px;padding:4px 9px}
+  /* WHY the app's box is never rounded or clipped: a clipping box around the
+     live app makes Chrome smear the app's frosted glass (the conversation went
+     blank in the light look) -- the same trap the landing page documents. */
+  .stage{position:fixed;left:0;right:0;bottom:0;top:calc(var(--sat) + 48px);
+    /* WHY the wallpaper and not a picture of the app: the app's stills are one
+       fixed shape, so on a tall phone they left a blank band and the app then
+       jumped into a different layout over them. The wallpaper is what the app
+       itself draws first, at any size. */
+    background:var(--wall) center/cover var(--canvas)}
+  .stage iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+  .stage iframe{opacity:0;transition:opacity .3s}
+  .stage.live iframe{opacity:1}
+  .wait{position:absolute;left:16px;right:16px;top:40%;text-align:center;color:var(--fg);font-weight:800;display:none}
+  .stage.failed .wait{display:block}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a class="back" href="./" aria-label="Back to the YouCoded website"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span class="wm"><i>you</i>coded</span></a>
+  <span class="tag">Demo</span>
+</div>
+<div class="stage" id="stage">
+  <div class="wait" id="wait">The demo could not load. Check your connection and try again.</div>
+  <iframe id="app" title="YouCoded live demo"></iframe>
+</div>
+<script>
+// The bar's colours for each look. WHY a copy lives here: this page must paint
+// in the right look before anything else loads. It is checked against the
+// landing page's own tables by docs/tools/site-theme.test.mjs, so it cannot drift.
+var LOOKS = {"youcoded":{"canvas":"#F7F0FB","panel":"#EFE3F6","fg":"#21152C","dim":"#50415C","edge":"#C9B0DB","you":"#9D5BD0","ink":"#21152C","wall":"url(\"wall/youcoded.webp\")"},"cotton-candy-sky":{"canvas":"#FBF5FC","panel":"#ECDDF0","fg":"#21152C","dim":"#564463","edge":"#B597C6","you":"#9D5BD0","ink":"#21152C","wall":"url(\"wall/cotton-candy-sky.webp\")"},"devils-garden":{"canvas":"#140810","panel":"#221020","fg":"#FBE9C9","dim":"#BDA57C","edge":"#7A3048","you":"#B56049","ink":"#FBE9C9","wall":"url(\"wall/devils-garden.webp\")"},"golden-sunbreak":{"canvas":"#08080e","panel":"#140e1a","fg":"#F8E8C8","dim":"#B09060","edge":"#3C3223","you":"#72A559","ink":"#F8E8C8","wall":"url(\"wall/golden-sunbreak.webp\")"},"halftone-dimension":{"canvas":"#08060e","panel":"#100e1c","fg":"#F0E8F8","dim":"#A498C0","edge":"#372D56","you":"#C95A86","ink":"#F0E8F8","wall":"none"},"kuromi-dreamer":{"canvas":"#C9B8E0","panel":"#D4C5E6","fg":"#190E27","dim":"#543D6E","edge":"#8466A8","you":"#A658A4","ink":"#2A1748","wall":"url(\"wall/kuromi-dreamer.webp\")"},"meadow-mist":{"canvas":"#F6FAF5","panel":"#DDE9DA","fg":"#041008","dim":"#33493A","edge":"#8FB191","you":"#4D90B1","ink":"#0E3A24","wall":"url(\"wall/meadow-mist.webp\")"},"strawberry-kitty":{"canvas":"#F8D7DE","panel":"#FCE4E9","fg":"#3A1420","dim":"#7E3850","edge":"#E09AA8","you":"#AF4F52","ink":"#5A1428","wall":"url(\"wall/strawberry-kitty.webp\")"},"midnight":{"canvas":"#0D1117","panel":"#161B22","fg":"#E6EDF3","dim":"#8B949E","edge":"#30363D","you":"#9D5BD0","ink":"#E6EDF3","wall":"none"}};
+(function(){
+  var stage = document.getElementById('stage'), f = document.getElementById('app');
+  // The landing page passes the look the visitor picked as #t=<theme>; only
+  // looks this page knows are accepted, anything else falls back to the default.
+  var m = /^#t=([a-z0-9-]{1,40})$/.exec(location.hash || ''), theme = m && LOOKS[m[1]] ? m[1] : 'youcoded';
+  var look = LOOKS[theme], root = document.documentElement.style;
+  Object.keys(look).forEach(function(k){ root.setProperty('--' + k, look[k]); });
+  // "Back" returns to where the visitor was on the landing page (same scroll
+  // position) when they came from it; opened directly, it goes to the site.
+  document.querySelector('.back').addEventListener('click', function(e){
+    var ref = ''; try { ref = new URL(document.referrer).origin; } catch (_) {}
+    if (ref === location.origin && history.length > 1) { e.preventDefault(); history.back(); }
+  });
+  f.addEventListener('load', function(){
+    // The demo is the desktop app, so its title bar carries minimise / maximise
+    // / close buttons. On a web page they control nothing; hide them (the same
+    // thing the landing page's embed does on phones).
+    try {
+      var d = f.contentDocument, st = d.createElement('style');
+      st.textContent = '.caption-buttons{display:none !important}';
+      (d.head || d.documentElement).appendChild(st);
+    } catch (_) { /* leave the app as it is */ }
+    // Wait until the app has actually drawn its message box, not just loaded
+    // its script, so the visitor never sees a half-built window. Capped at 4s.
+    var t0 = Date.now();
+    (function poll(){
+      var ready = false;
+      try { ready = !!f.contentDocument.querySelector('.input-bar-container'); } catch (_) { ready = true; }
+      if (!ready && Date.now() - t0 <= 4000) { setTimeout(poll, 60); return; }
+      // Put the app in the visitor's chosen look BEFORE it is shown, the same
+      // way the landing page does it (the app's own appearance switch, no reload).
+      try { if (f.contentWindow.__workbenchAppearanceSync) f.contentWindow.__workbenchAppearanceSync({ theme: theme }); } catch (_) {}
+      setTimeout(function(){ stage.classList.add('live'); }, 120);
+    })();
+  });
+  f.addEventListener('error', function(){ stage.classList.add('failed'); });
+  f.src = 'site/index.html?mode=workbench&child=1&scenario=site&latency=0&reply=site#t=' + theme;
+})();
+</script>
+</body>
+</html>

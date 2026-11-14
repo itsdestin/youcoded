@@ -1167,7 +1167,7 @@ describe('background execution + idle-boundary delivery', () => {
     await (host as any).live.get('root-1')?.running;
   });
 
-  it('a background completion is injected as a user-role turn when the parent goes idle — never mid-turn', async () => {
+  it('a background completion joins history after the active response, before the next model request', async () => {
     // The PARENT's own turn is gated (manually resolved) so it stays
     // in-flight for as long as the test needs — long enough for an
     // independently-triggered background child to run to completion while
@@ -1229,12 +1229,14 @@ describe('background execution + idle-boundary delivery', () => {
     expect(injected.type).toBe('user-message');
     expect(injected.data.text).toContain('## Report from');
 
-    // Ordering: the parent's own turn-complete happened strictly BEFORE the
-    // injected notice — never spliced mid-turn.
+    // WHY: approved policy delivers at a completed RESPONSE boundary, not only
+    // after the whole turn (which may contain more requests/human corrections).
+    const parentTextIdx = events.findIndex(e => e.type === 'assistant-text' && e.data.text === 'parent turn done');
     const turnCompleteIdx = events.findIndex((e) => e.type === 'turn-complete' && !e.data?.agentId);
     const injectedIdx = events.indexOf(injected);
-    expect(turnCompleteIdx).toBeGreaterThanOrEqual(0);
-    expect(injectedIdx).toBeGreaterThan(turnCompleteIdx);
+    expect(parentTextIdx).toBeGreaterThanOrEqual(0);
+    expect(injectedIdx).toBeGreaterThan(parentTextIdx);
+    expect(injectedIdx).toBeLessThan(turnCompleteIdx);
   });
 
   it('the injected report is formatted at DELIVERY time with concurrentReporters = number of pending deliveries', async () => {
@@ -1720,7 +1722,10 @@ describe('background execution + idle-boundary delivery', () => {
     let enteredNotice = false;
     let releaseGate: () => void = () => {};
     const gate = new Promise<void>((res) => { releaseGate = res; });
-    entry.session.runNotice = vi.fn(async () => { enteredNotice = true; await gate; });
+    // WHY: a direct user dispatch now splices pending results (spliceNotice) before its request; idle passes use runNotice. Stub both.
+    const hold = async () => { enteredNotice = true; await gate; };
+    entry.session.runNotice = vi.fn(hold);
+    entry.session.spliceNotice = vi.fn(hold);
 
     // Drive runTurns directly (not via queueDelivery) so its returned promise
     // is the one this test awaits — the same delivery-loop code path, just

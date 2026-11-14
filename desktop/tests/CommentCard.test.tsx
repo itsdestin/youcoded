@@ -343,3 +343,30 @@ describe("CommentCard — a draft's send control (no bottom Delete button)", () 
     expect(onDelete).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('CommentCard — hovering a comment or reply time shows its full date and time', () => {
+  const COMMENT_AT = new Date(2026, 10, 9, 14, 34).getTime();
+  const REPLY_AT = new Date(2026, 10, 10, 9, 5).getTime();
+  const full = (ms: number) => new Date(ms).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  const withReply = (resolved: boolean) => baseComment({
+    createdAt: COMMENT_AT, resolved,
+    replies: [{ id: 'r-1', author: 'user', text: 'A reply.', createdAt: REPLY_AT }],
+  });
+
+  for (const resolved of [false, true]) {
+    it(`the ${resolved ? 'resolved' : 'open'} comment's time and its reply's time each carry their own full date and time`, () => {
+      const { container } = renderCard(withReply(resolved));
+      // Tooltip leaves its words on the control as data-hint (Tooltip.tsx), so the hint is readable without a hover.
+      const hints = [...container.querySelectorAll('[data-hint]')].map((el) => [el.textContent, el.getAttribute('data-hint')]);
+      expect(hints).toContainEqual([expect.stringMatching(/ago|\//), full(COMMENT_AT)]);
+      expect(hints).toContainEqual([expect.stringMatching(/ago|\//), full(REPLY_AT)]);
+      expect(full(COMMENT_AT)).toContain('2026');
+    });
+  }
+
+  it('a comment with no usable time shows no hint rather than "Invalid Date"', () => {
+    const { container } = renderCard(baseComment({ createdAt: NaN }));
+    expect(container.innerHTML).not.toContain('Invalid Date');
+    expect(container.querySelector('[data-hint=""]')).toBeNull();
+  });
+});

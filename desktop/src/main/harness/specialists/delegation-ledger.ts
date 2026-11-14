@@ -627,14 +627,26 @@ export class DelegationLedger {
    *  documented rather than silently accepted; it is markedly narrower than
    *  the exposure before this fix, where EVERY confirmDelivered failure
    *  risked a duplicate, not just this one compounding failure. */
-  async markInjectionAttempted(parentCwd: string, parentId: string, childId: string): Promise<void> {
-    await this.update(parentCwd, parentId, childId, { injectionAttempted: true });
+  async markInjectionAttempted(parentCwd: string, parentId: string, childId: string, runNumber?: number): Promise<void> {
+    if (runNumber !== undefined) await this.updateForRun(parentCwd, parentId, childId, runNumber, { injectionAttempted: true });
+    else await this.update(parentCwd, parentId, childId, { injectionAttempted: true });
   }
 
-  async confirmDelivered(parentCwd: string, parentId: string, childId: string): Promise<void> {
+  /** Card #148. A report-notice turn can resume the same child (a NEW run on the same row). The
+   *  claimed run is compared INSIDE the mutation lock, so old delivery bookkeeping can never mark
+   *  its replacement delivered. */
+  async updateForRun(parentCwd: string, parentId: string, childId: string, runNumber: number, patch: Partial<DelegationRecord>): Promise<void> {
+    await this.mutate(parentCwd, parentId, data => ({
+      v: FILE_VERSION,
+      delegations: data.delegations.map(d => d.childId === childId && (d.runNumber ?? 1) === runNumber ? { ...d, ...patch } : d),
+    }));
+  }
+
+  async confirmDelivered(parentCwd: string, parentId: string, childId: string, runNumber?: number): Promise<void> {
     // The injected turn has ACTUALLY run at this point — only now is it safe
-    // to say the report was delivered.
-    await this.update(parentCwd, parentId, childId, { delivered: true });
+    // to say the report was delivered, and (when known) only for the run that was injected.
+    if (runNumber !== undefined) await this.updateForRun(parentCwd, parentId, childId, runNumber, { delivered: true });
+    else await this.update(parentCwd, parentId, childId, { delivered: true });
   }
 
   /** Call ONLY before runNotice/spliceNotice: no model/history injection may have begun. */

@@ -120,6 +120,9 @@ export function routeSessionLive(live: SessionLive, deps: { batcher: Pick<Transc
         ? { type: 'ATTENTION_STATE_CHANGED', sessionId, state: 'ok', onlyFrom: 'stuck' }
         : { type: 'ATTENTION_STATE_CHANGED', sessionId, state: live.state });
       return;
+    case 'browser-ask':
+      deps.batcher.push({ type: 'BROWSER_ASK_CHANGED', sessionId, prompt: live.prompt });
+      return;
     case 'native-startup':
     case 'input-block':
       // Not conversation state: the send gates read it from state/screen-input-store.ts, written by applySessionLive.

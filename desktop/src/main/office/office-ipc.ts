@@ -221,9 +221,10 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
   // WHY asked before the save reads the file (M1): the file as it was is up to 200 MB, and is
   // only needed when a kept version is due — not on every autosave.
   const snapshotDue = (s: OfficeSession) => Date.now() - s.lastSnapshotAt > AUTOSAVE_SNAPSHOT_MS;
-  async function onSaved(s: OfficeSession, before: Buffer | null): Promise<void> {
+  async function onSaved(s: OfficeSession, before: Buffer | null, changedOutside = false): Promise<void> {
     // `before` is the file as it was just before this save — the state worth keeping.
-    if (!before || !snapshotDue(s)) return;
+    // WHY changedOutside skips the pace limit (card #34): that file is another program's or the assistant's work.
+    if (!before || (!changedOutside && !snapshotDue(s))) return;
     try {
       if (await versions.snapshot(deps.userData, s.path, 'autosave', before)) pruner?.request();
     } finally {
