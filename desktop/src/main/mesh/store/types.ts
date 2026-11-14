@@ -33,8 +33,6 @@ export interface StoreOptions {
   maxParkedControl?: number;
   /** Bytes of the rolling integrity scrub run when a version is first loaded; 0 turns it off (H3). */
   scrubOnOpenBytes?: number;
-  /** Write the checkpoint (checkpoint.ts) after an append once this many lines passed since the last one; always while the version is shorter than this. Default 32 (N1). */
-  checkpointEvery?: number;
   /** Total bytes of extras kept; a put past it is refused with `limit` (N11). Default 4 GiB. */
   maxExtrasBytes?: number;
   /** Bytes kept under a version's rejected/ folder; past it a rejected park stays in parked/ and counts toward its cap (N11). Default 256 MiB. */

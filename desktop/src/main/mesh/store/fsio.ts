@@ -54,6 +54,7 @@ class RealFile implements FileLike {
     return got === len ? b : b.subarray(0, got);
   }
   async size(): Promise<number> { return (await this.fh.stat()).size; }
+  // DESTRUCTIVE-OK(door): the Fs door itself; every caller carries its own reason
   truncate(len: number): Promise<void> { return this.fh.truncate(len); }
   sync(): Promise<void> { return this.fh.sync(); }
   close(): Promise<void> { return this.fh.close(); }
@@ -80,7 +81,9 @@ export const realFs: Fs = {
   // WHY not recursive: a durable directory needs its PARENT fsynced after each level is created, and the
   // caller (mkdirDurable below) creates one level at a time so it can do exactly that.
   async mkdir(path) { try { await fsp.mkdir(path, { mode: 0o700 }); } catch (e: any) { if (e.code !== 'EEXIST') throw e; } },
+  // DESTRUCTIVE-OK(door): the Fs door itself; every caller carries its own reason
   rename: (a, b) => fsp.rename(a, b),
+  // DESTRUCTIVE-OK(door): the Fs door itself; every caller carries its own reason
   async unlink(path) { try { await fsp.unlink(path); } catch (e: any) { if (e.code !== 'ENOENT') throw e; } },
   async fsyncDir(path) {
     // Directories cannot be opened for fsync on Windows; there (only) the call is a no-op (UNVERIFIED there).
@@ -117,6 +120,7 @@ export async function writeFileAtomic(fs: Fs, path: string, data: Uint8Array): P
   const tmp = `${path}.tmp-${process.pid}-${tmpCounter++}`;
   const f = await fs.open(tmp, { create: true });
   try { await f.write(data, 0); await f.sync(); } finally { await f.close(); }
+  // DESTRUCTIVE-OK(door): replaces the target atomically (the old file or the new one survives a kill); callers say why replacing is safe
   await fs.rename(tmp, path);
   await fs.fsyncDir(dir);
 }
@@ -124,5 +128,6 @@ let tmpCounter = 0;
 
 /** Remove leftover `*.tmp-*` files in a directory (an interrupted atomic write). */
 export async function sweepTemps(fs: Fs, dir: string): Promise<void> {
+  // DESTRUCTIVE-OK(scratch): a `.tmp-` file is an interrupted atomic write; the file it was going to replace is untouched
   for (const name of await fs.readdir(dir)) if (/\.tmp-\d+-\d+$/.test(name)) await fs.unlink(nodePath.join(dir, name));
 }

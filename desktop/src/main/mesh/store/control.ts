@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { mkdirDurable, sweepTemps, writeFileAtomic, type Fs } from './fsio';
 import { StoreError } from './errors';
 import { crc32, isHash64 } from './chain';
+import { isDiskFull } from './storeutil';
 
 export interface ControlEntry {
   id: string;
@@ -113,7 +114,9 @@ function resync(buf: Buffer, from: number): number {
   return -1;
 }
 
-interface ChatLog { dir: string; ids: Set<string>; entries: ControlEntry[]; size: number; parked: Map<string, string[]>; damage: ControlDamage[]; refuseWrites: string | null }
+interface ChatLog { dir: string; ids: Set<string>; entries: ControlEntry[]; size: number; parked: Map<string, string[]>; damage: ControlDamage[]; refuseWrites: string | null; /** a torn tail starts here in log.bin but could not be copied aside yet (disk full): the next write does that first */ tornPending: number | null }
+
+const allZero = (b: Buffer, from: number, to: number): boolean => { for (let i = from; i < to; i++) if (b[i] !== 0) return false; return true; };
 
 export class ControlStore {
   private readonly cache = new Map<string, ChatLog>();
@@ -138,7 +141,7 @@ export class ControlStore {
     const path = nodePath.join(dir, 'log.bin');
     const f = await this.fs.open(path, { create: true });
     const entries: ControlEntry[] = []; const ids = new Set<string>(); const damage: ControlDamage[] = []; let size = 0;
-    let refuseWrites: string | null = null;
+    let refuseWrites: string | null = null; let tornPending: number | null = null;
     try {
       size = await f.size();
       const buf = size ? await f.read(0, size) : Buffer.alloc(0);
@@ -150,17 +153,28 @@ export class ControlStore {
         // damage: resume after this record when its own header said where it ends, else look for the next record
         const next = r.end !== null ? r.end : resync(buf, pos + 1);
         const stop = next === -1 ? buf.length : next;
+        // WHY (review 3, F6): a tail of zero bytes with no valid record after it is the usual shape of a power cut (the file size was saved, the data was not).
+        // That is a torn write, not damage: cut it (kept) instead of reporting it for ever. Anything that is NOT all zeros could be an acknowledged entry whose
+        // marker rotted, so it stays reported damage and is never cut.
+        if (stop === buf.length && allZero(buf, r.kind === 'bad' && r.end !== null ? pos + LOG_HDR : pos, buf.length)) { tornFrom = pos; break; }
         damage.push({ offset: pos, length: stop - pos, why: r.why });
         pos = stop;
       }
       if (tornFrom !== null) {
-        const kept = await this.keepTorn(dir, Buffer.from(buf.subarray(tornFrom)));
-        if (kept) { await f.truncate(tornFrom); await f.sync(); size = tornFrom; }
-        else refuseWrites = `${MAX_TORN_FILES} torn-write files are already kept for this chat`;
+        try {
+          const kept = await this.keepTorn(dir, Buffer.from(buf.subarray(tornFrom)));
+          // DESTRUCTIVE-OK(kept-copy-first): the cut-off bytes were copied to torn-N.bin (fsynced) just above
+          if (kept) { await f.truncate(tornFrom); await f.sync(); size = tornFrom; }
+          else refuseWrites = `${MAX_TORN_FILES} torn-write files are already kept for this chat`;
+        } catch (e) {
+          // WHY (review 3, F7): reading must not need free space. The entries before the torn tail are served; the copy-and-cut is done before the next write.
+          if (!isDiskFull(e)) throw e;
+          tornPending = tornFrom; size = tornFrom;
+        }
       }
     } finally { await f.close(); }
     await this.fs.fsyncDir(dir);
-    const log: ChatLog = { dir, ids, entries, size, parked: new Map(), damage, refuseWrites };
+    const log: ChatLog = { dir, ids, entries, size, parked: new Map(), damage, refuseWrites, tornPending };
     // remember what is parked (the parked folder is read once here, never per append: M3 quadratic)
     for (const n of await this.fs.readdir(nodePath.join(dir, 'parked'))) {
       if (!n.endsWith('.ent')) continue;
@@ -169,7 +183,8 @@ export class ControlStore {
     }
     this.cache.set(chat, log);
     // finish applying parked entries whose causes are now present (a kill after an apply but before the unlink)
-    if (!refuseWrites) await this.drain(chat, log);
+    // WHY tolerant (review 3, F7): applying a parked entry writes; a read must not fail because the disk is full. The next append retries it.
+    if (!refuseWrites && tornPending === null) { try { await this.drain(chat, log); } catch (e) { if (!isDiskFull(e)) throw e; } }
     return log;
   }
 
@@ -182,7 +197,7 @@ export class ControlStore {
     let max = 0; const names = (await this.fs.readdir(dir)).filter((n) => /^torn-\d+\.bin$/.test(n));
     if (names.length >= MAX_TORN_FILES) return false;
     for (const n of names) max = Math.max(max, parseInt(n.slice(5), 10));
-    await writeFileAtomic(this.fs, nodePath.join(dir, `torn-${max + 1}.bin`), data);
+    await writeFileAtomic(this.fs, nodePath.join(dir, `torn-${max + 1}.bin`), data); // DESTRUCTIVE-OK(kept-copy-first): a NEW name (max + 1), nothing replaced
     return true;
   }
 
@@ -192,6 +207,7 @@ export class ControlStore {
     const dir = this.dirOf(chat);
     let n = 1; while (await this.fs.exists(nodePath.join(dir, `quarantine-${n}.bin`))) n++;
     const name = `quarantine-${n}.bin`;
+    // DESTRUCTIVE-OK(explicit-request): the caller asked for the log to be set aside; it moves to a name that does not exist, bytes kept
     await this.fs.rename(nodePath.join(dir, 'log.bin'), nodePath.join(dir, name));
     await this.fs.fsyncDir(dir);
     return name;
@@ -223,12 +239,13 @@ export class ControlStore {
       const log = await this.load(e.chat);
       if (log.ids.has(e.id)) return 'duplicate';
       if (log.refuseWrites) throw new StoreError('limit', log.refuseWrites);
+      if (log.tornPending !== null) await this.settleTorn(log);
       if (!e.seen.every((s) => log.ids.has(s))) {
         if (log.parked.has(e.id)) return 'parked';
         if (log.parked.size >= this.maxParked) throw new StoreError('parked-full', `${log.parked.size} parked control entries`);
         const pdir = nodePath.join(log.dir, 'parked');
         await mkdirDurable(this.fs, pdir);
-        await writeFileAtomic(this.fs, nodePath.join(pdir, `${e.id}.ent`), frame(encode(e)));
+        await writeFileAtomic(this.fs, nodePath.join(pdir, `${e.id}.ent`), frame(encode(e))); // DESTRUCTIVE-OK(verified-record): the file name is the entry id; the same id means the same body (checked in checkEntry), a rewrite replaces identical bytes
         log.parked.set(e.id, e.seen);
         return 'parked';
       }
@@ -236,6 +253,20 @@ export class ControlStore {
       await this.drain(e.chat, log);
       return 'ok';
     } catch (err) { this.cache.delete(e.chat); throw err; }
+  }
+
+  /** Copy a torn tail that could not be copied while reading (disk full) and cut it. Throws the typed error again while it still cannot. */
+  private async settleTorn(log: ChatLog): Promise<void> {
+    const f = await this.fs.open(nodePath.join(log.dir, 'log.bin'), { create: false });
+    try {
+      const from = log.tornPending!; const size = await f.size();
+      if (size > from) {
+        if (!(await this.keepTorn(log.dir, await f.read(from, size - from)))) throw new StoreError('limit', `${MAX_TORN_FILES} torn-write files are already kept for this chat`);
+        // DESTRUCTIVE-OK(kept-copy-first): the cut-off bytes were copied to torn-N.bin (fsynced) just above
+        await f.truncate(from); await f.sync();
+      }
+      log.tornPending = null;
+    } finally { await f.close(); }
   }
 
   /** Append one record: written and fsynced before it counts; memory updated only afterwards. */
@@ -262,11 +293,13 @@ export class ControlStore {
       let progressed = false;
       for (const [id, seen] of [...log.parked].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
         const path = nodePath.join(pdir, `${id}.ent`);
+        // DESTRUCTIVE-OK(verified-record): the entry is already in the log (log.ids is built from checksummed records), so the parked copy is redundant
         if (log.ids.has(id)) { await this.fs.unlink(path); await this.fs.fsyncDir(pdir); log.parked.delete(id); progressed = true; continue; }
         if (!seen.every((s) => log.ids.has(s))) continue;
         const e = await this.readParked(path);
         if (!e) { log.parked.delete(id); continue; } // damaged parked file: left in place, never deleted
         await this.apply(log, e);
+        // DESTRUCTIVE-OK(verified-record): the entry passed its CRC and id check when read above and apply() returned after fsyncing it into the log
         await this.fs.unlink(path); await this.fs.fsyncDir(pdir);
         log.parked.delete(id);
         progressed = true;

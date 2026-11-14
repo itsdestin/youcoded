@@ -123,6 +123,7 @@ async function createLockFile(path: string, body: string): Promise<boolean> {
   const fh = await fsp.open(tmp, 'wx', 0o600);
   try { await fh.writeFile(body); await fh.sync(); } finally { await fh.close(); }
   try {
+    // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
     try { await fsp.link(tmp, path); return true; }
     catch (e: any) {
       if (e.code === 'EEXIST') return false;
@@ -130,6 +131,7 @@ async function createLockFile(path: string, body: string): Promise<boolean> {
       try { const f2 = await fsp.open(path, 'wx', 0o600); try { await f2.writeFile(body); await f2.sync(); } finally { await f2.close(); } return true; }
       catch (e2: any) { if (e2.code === 'EEXIST') return false; throw e2; }
     }
+  // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
   } finally { await fsp.unlink(tmp).catch(() => undefined); }
 }
 
@@ -141,6 +143,7 @@ async function sweepLockLitter(root: string): Promise<void> {
     if (!/^LOCK\.new-\d+-[0-9a-f]+$/.test(n)) continue;
     const p = nodePath.join(root, n);
     const st = await fsp.stat(p).catch(() => null);
+    // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
     if (st && Date.now() - st.mtimeMs > 60_000) await fsp.unlink(p).catch(() => undefined);
   }
 }
@@ -157,7 +160,7 @@ const OLD_ENOUGH_MS = 30_000;
  * Take the exclusive lock on a store root or throw StoreError('store-locked') / ('store-locked-stale?').
  * `breakLockToken` (from a previous `store-locked-stale?`) takes over exactly that lock regardless of liveness.
  */
-export async function acquireLock(root: string, opts: { breakLockToken?: string | null } = {}): Promise<StoreLock> {
+export async function acquireLock(root: string, opts: { breakLockToken?: string | null; /** test seam only: runs between claiming the takeover file and re-reading the lock */ hooks?: { beforeRecheck?: () => Promise<void> } } = {}): Promise<StoreLock> {
   const key = nodePath.resolve(root);
   const path = nodePath.join(root, 'LOCK');
   const token = randomBytes(8).toString('hex');
@@ -167,6 +170,7 @@ export async function acquireLock(root: string, opts: { breakLockToken?: string 
   const release = async () => {
     if (heldRoots.get(key) === token) heldRoots.delete(key);
     const cur = await readLock(path);
+    // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
     if (cur && cur !== 'unreadable' && cur.token === token) await fsp.unlink(path).catch(() => undefined);
   };
   const lock: StoreLock = {
@@ -204,15 +208,19 @@ export async function acquireLock(root: string, opts: { breakLockToken?: string 
     else if (t === 'unreadable') { const st = await fsp.stat(tpath).catch(() => null); tStale = !st || Date.now() - st.mtimeMs >= OLD_ENOUGH_MS; }
     else tStale = (await judge(t, key)).kind === 'stale';
     if (!tStale) throw held('another opener is taking over a stale lock');
+    // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
     await fsp.unlink(tpath).catch(() => undefined);
     if (!(await createLockFile(tpath, body))) throw held('lost a race taking over a stale lock');
   }
   try {
+    if (opts.hooks?.beforeRecheck) await opts.hooks.beforeRecheck();
     const again = await readLock(path);
     const same = cur === 'unreadable' ? again === 'unreadable' : !!again && again !== 'unreadable' && again.token === cur.token;
     if (again && !same) throw held('the lock changed hands');
+    // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
     await fsp.unlink(path).catch(() => undefined);
     if (!(await createLockFile(path, body))) throw held('lost a race for the lock');
+  // DESTRUCTIVE-OK(lock): lock bookkeeping, never chat data; guarded by the token / liveness checks around it
   } finally { await fsp.unlink(tpath).catch(() => undefined); }
   return got();
 }

@@ -45,6 +45,7 @@ export class Extras {
     const bad = nodePath.join(this.root, 'extras-bad');
     await mkdirDurable(this.fs, bad);
     let n = 1; while (await this.fs.exists(nodePath.join(bad, `${hash}-${n}`))) n++;
+    // DESTRUCTIVE-OK(kept-copy-first): the extra's name is its SHA-256 and the bytes failed it (checked by the caller); moved to a NEW name in extras-bad/, kept
     await this.fs.rename(path, nodePath.join(bad, `${hash}-${n}`));
     await this.fs.fsyncDir(bad); await this.fs.fsyncDir(nodePath.dirname(path));
   }
@@ -68,6 +69,7 @@ export class Extras {
     await mkdirDurable(this.fs, dir);
     // interrupted writes into an extras folder are swept the first time it is written to in this run (L9)
     if (!this.swept.has(dir)) { await sweepTemps(this.fs, dir); this.swept.add(dir); }
+    // DESTRUCTIVE-OK(verified-record): the target is absent or was just moved to extras-bad/ because it did not match its hash; the new bytes were checked against it
     await writeFileAtomic(this.fs, path, bytes);
     this.total = total + bytes.length;
     return 'stored';

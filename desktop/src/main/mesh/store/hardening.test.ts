@@ -12,6 +12,7 @@ import { REC, recPos } from './records';
 import { cc, nl, ccConversation, nativeConversation } from './fixtures';
 import { CHAT, V, openWith, refChains, tmpRoot, listFiles } from './testkit';
 import { FaultFs } from './fault-fs';
+import { encodeSide, decodeSide } from './sidefile';
 import { analyseLine, initialReplyState, replyEndStep } from './classify';
 import { defaultChainSeeds, hex } from './chain';
 import { initAdapterState, poll, isRewritten, type AdapterOptions, type PollBatch, type PollResult } from './adapter';
@@ -63,8 +64,8 @@ describe('C1: a damaged index never costs acknowledged lines', () => {
     await s.close();
   });
 
-  it('record AND body both damaged (N7): the verified prefix stays served, the rest is set aside intact, flagged, and a correct resend heals it', async () => {
-    // WAS (round 1): the whole version was quarantined. A single rotted byte must not take a healthy chat out of service.
+  it('record AND body both damaged (N7), in different lines: every verifiable line is served, the rotted one is flagged, the old index is kept, and a correct resend heals it', async () => {
+    // WAS (round 1): the whole version was quarantined; (round 2) only the prefix was served. Now nothing verifiable is hidden.
     const L = rows(100); await build(t.dir, L);
     const ip = path.join(vdir(t.dir), 'index.bin'); const bp = path.join(vdir(t.dir), 'body-0000000000000000.bin');
     const dmgIndex = flip(ip, recPos(50) + 20);
@@ -72,17 +73,15 @@ describe('C1: a damaged index never costs acknowledged lines', () => {
     const dmgBody = flip(bp, at70);
     const s = await ChatStore.open(t.dir);
     const head = await s.head(V(1));
-    // lines 0..69 are vouched for by valid records (51..69) and the chain; line 70's body disagrees with its valid record
-    expect(head.lines).toBe(70); expect(head.hash).toBe(refChains(L).raw[70]); expect(head.damagedFromLine).toBe(70);
+    // record 50 is re-derived (and confirmed by the valid record 51); line 70's body disagrees with its valid record
+    expect(head.lines).toBe(100); expect(head.hash).toBe(refChains(L).raw[100]); expect(head.damagedFromLine).toBe(70);
     expect(asideDirs(t.dir)).toEqual([]);
     expect(Buffer.concat((await s.read(V(1), 0, 0, 70)) as Buffer[]).equals(Buffer.concat(L.slice(0, 70)))).toBe(true);
-    expect((await s.verify(V(1))).ok).toBe(true);
-    // nothing is gone: the old index (damaged record included) and the cut-off body bytes (damaged byte included) are kept
+    expect(Buffer.concat((await s.read(V(1), 0, 71, 100)) as Buffer[]).equals(Buffer.concat(L.slice(71, 100)))).toBe(true);
+    await rejects(s.read(V(1), 0, 70, 71), 'corrupt');
+    // nothing is gone: the old index (damaged record included) is kept, and the rotted byte is still in the body
     expect(fs.readFileSync(path.join(vdir(t.dir), 'replaced-index', 'index-0001.bin')).equals(dmgIndex)).toBe(true);
-    const torn = fs.readdirSync(path.join(vdir(t.dir), 'torn')).filter((f) => f.endsWith('-body'));
-    expect(torn.length).toBe(1);
-    const kept = fs.readFileSync(path.join(vdir(t.dir), 'torn', torn[0]));
-    expect(kept.equals(dmgBody.subarray(L.slice(0, 70).reduce((n, l) => n + l.length, 0)))).toBe(true);
+    expect(fs.readFileSync(bp).equals(dmgBody)).toBe(true);
     // a correct resend heals (the lines are chain-checked against the kept prefix), and the flag clears
     expect(await s.append(V(1), 0, 70, L.slice(70))).toBe('ok');
     const healed = await s.head(V(1));
@@ -290,7 +289,7 @@ describe('H2: set-aside of a damaged copy keeps the aside index at every kill po
     // state "moves done, intent still there, fresh header-only index already created": the review's kill point
     const s = await ChatStore.open(t.dir); await s.setAsideDamaged(V(1)); await s.close();
     const name = asideDirs(t.dir)[0];
-    fs.writeFileSync(path.join(vdir(t.dir), 'aside.intent'), JSON.stringify({ asideName: name }));
+    fs.writeFileSync(path.join(vdir(t.dir), 'aside.intent'), encodeSide({ asideName: name }));
     const s2 = await ChatStore.open(t.dir);
     expect((await s2.head(V(1))).lines).toBe(0);
     expect(fs.readFileSync(path.join(t.dir, 'aside', name, 'index.bin')).equals(orig)).toBe(true);
@@ -384,7 +383,7 @@ describe('H4: an eviction proof cannot be self-asserted', () => {
     expect(seen).toEqual([]);                                           // the verifier is only asked about well-bound proofs
     expect((await s.evictBody(V(1), good)).evictedLines).toBe(4);
     expect(seen).toEqual([`${vhex.slice(0, 4)}:4`]);
-    expect(JSON.parse(fs.readFileSync(path.join(vdir(t.dir), 'evicted.json'), 'utf8')).holders).toEqual(['dev-a']);
+    expect((decodeSide(fs.readFileSync(path.join(vdir(t.dir), 'evicted.json'))) as { value: { holders: string[] } }).value.holders).toEqual(['dev-a']);
     await s.close();
   });
 

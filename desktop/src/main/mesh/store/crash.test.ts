@@ -347,11 +347,10 @@ describe('kill at every operation: the new recovery paths', () => {
         const s = await ChatStore.open(root);
         await s.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' });
         const head = await s.head(V(1));
-        expect(head.lines).toBe(40); expect(head.hash).toBe(RREF.raw[40]); expect(head.damagedFromLine).toBe(40);
-        expect((await s.verify(V(1))).ok).toBe(true);
-        // the rotted byte is still on disk somewhere (torn/ copy of the cut-off body), never silently gone
-        const kept = fs.readdirSync(path.join(vdirOf(root), 'torn')).filter((n) => n.endsWith('-body')).map((n) => fs.readFileSync(path.join(vdirOf(root), 'torn', n)));
-        expect(kept.some((b) => b.length >= R100.slice(40).reduce((a, l) => a + l.length, 0) && b[5] === (R100[40][5] ^ 0xff))).toBe(true);
+        expect(head.lines).toBe(100); expect(head.hash).toBe(RREF.raw[100]); expect(head.damagedFromLine).toBe(40);
+        // every other line is served, the rotted one is reported
+        expect(((await s.read(V(1), 0, 41, 42)) as Buffer[])[0].equals(R100[41])).toBe(true);
+        await expect(s.read(V(1), 0, 40, 41)).rejects.toMatchObject({ code: 'corrupt' });
         expect(await s.append(V(1), 0, 40, R100.slice(40))).toBe('ok');
         expect((await s.head(V(1))).hash).toBe(RREF.raw[100]);
         expect((await s.verify(V(1))).ok).toBe(true);
@@ -400,7 +399,8 @@ describe('kill at every operation: the new recovery paths', () => {
       check: async (root) => {
         const s = await ChatStore.open(root);
         await expect(s.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
-        const q = path.join(root, 'aside', fs.readdirSync(path.join(root, 'aside'))[0]);
+        // a kill right after the aside folder was made (before the move) leaves an empty folder; the copy is in the one that holds the body
+        const q = fs.readdirSync(path.join(root, 'aside')).map((n) => path.join(root, 'aside', n)).find((d) => fs.existsSync(path.join(d, 'body-0000000000000000.bin')))!;
         expect(fs.readFileSync(path.join(q, 'body-0000000000000000.bin')).equals(rotted)).toBe(true);
         await s.close();
       },

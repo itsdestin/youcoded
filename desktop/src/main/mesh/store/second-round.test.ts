@@ -11,7 +11,7 @@ import { REC, recPos } from './records';
 import { cc } from './fixtures';
 import { CHAT, V, openWith, refChains, tmpRoot } from './testkit';
 import { FaultFs } from './fault-fs';
-import { readCheckpoint } from './checkpoint';
+import { readCheckpoint, writeCheckpoint } from './checkpoint';
 
 let t: Awaited<ReturnType<typeof tmpRoot>>;
 beforeEach(async () => { t = await tmpRoot('second-round-'); });
@@ -38,14 +38,15 @@ describe('N1: a rebuild never accepts bytes that only the damaged index could vo
   const rotLine = 10;
   const rot = () => lineStart(L, rotLine) + 5;
 
-  it('bad header + one rotted body byte (the review demonstration): NOT "verify ok with a different head"; the prefix is served and a correct resend heals', async () => {
+  it('bad header + one rotted body byte (the review demonstration): NOT "verify ok with a different head"; the rotted line is reported, every other line is served, a correct resend heals', async () => {
     await build(t.dir, L);
     flipAt(path.join(vdir(t.dir), 'index.bin'), 2);           // header
     flipAt(body0(t.dir), rot());
     const s = await ChatStore.open(t.dir);
     const head = await s.head(V(1));
-    expect(head.lines).toBe(rotLine); expect(head.hash).toBe(refChains(L).raw[rotLine]); expect(head.damagedFromLine).toBe(rotLine);
-    // the wrong line is not served, and the head is a TRUE prefix head, so the peer's resend can still attach to it
+    expect(head.lines).toBe(100); expect(head.hash).toBe(refChains(L).raw[100]); expect(head.damagedFromLine).toBe(rotLine);
+    // the wrong line is not served, and the head is the TRUE head, so the peer's resend attaches to it
+    await rejects(s.read(V(1), 0, rotLine, rotLine + 1), 'corrupt');
     expect(await s.append(V(1), 0, rotLine, L.slice(rotLine))).toBe('ok');
     expect((await s.head(V(1))).hash).toBe(refChains(L).raw[100]);
     expect((await readAll(s, 100)).equals(Buffer.concat(L))).toBe(true);
@@ -84,7 +85,7 @@ describe('N1: a rebuild never accepts bytes that only the damaged index could vo
     flipAt(body0(t.dir), rot());
     const s = await ChatStore.open(t.dir);
     const head = await s.head(V(1));
-    expect(head.lines).toBe(rotLine); expect(head.hash).toBe(refChains(L).raw[rotLine]);
+    expect(head.lines).toBe(100); expect(head.hash).toBe(refChains(L).raw[100]); expect(head.damagedFromLine).toBe(rotLine);
     await s.close();
   });
 
@@ -106,29 +107,29 @@ describe('N1: a rebuild never accepts bytes that only the damaged index could vo
     await s.close();
   });
 
-  it('the checkpoint is separate, checksummed and kept level: written every checkpointEvery lines, every append while short, and at close', async () => {
-    const s = await openWith(t.dir, V(1), { checkpointEvery: 10 });
+  it('the checkpoint is separate, checksummed, in two slots, and level with every acknowledged append (no close needed)', async () => {
+    const s = await openWith(t.dir, V(1));
     for (let i = 0; i < 25; i++) await s.append(V(1), 0, i, [L[i]]);
-    // 25 single-line appends: lines 1..10 each checkpointed, then at 20 (not at 21..25)
-    expect((await readCheckpoint(realFsOnly(), vdir(t.dir)))!.count).toBe(20);
-    await s.close();
     const ck = (await readCheckpoint(realFsOnly(), vdir(t.dir)))!;
     expect(ck.count).toBe(25); expect(ck.h.toString('hex')).toBe(refChains(L).raw[25]);
-    // a damaged checkpoint is not evidence and not an error: the store still opens and verifies
+    await s.close();
+    // one damaged slot: the other one (the previous statement) is still evidence
     flipAt(path.join(vdir(t.dir), 'checkpoint.bin'), 30);
-    expect(await readCheckpoint(realFsOnly(), vdir(t.dir))).toBeNull();
+    flipAt(path.join(vdir(t.dir), 'checkpoint.bin'), 30 + 96);
+    expect(await readCheckpoint(realFsOnly(), vdir(t.dir))).toBeNull();      // both damaged: not evidence, and not an error
     const s2 = await ChatStore.open(t.dir);
     expect((await s2.head(V(1))).lines).toBe(25);
     await s2.close();
+    flipAt(path.join(vdir(t.dir), 'checkpoint.bin'), 30 + 96);               // repair one slot by flipping it back
+    expect((await readCheckpoint(realFsOnly(), vdir(t.dir)))!.count).toBeGreaterThanOrEqual(24);
   });
 
   it('a checkpoint that disagrees with an index that agrees with its body is not "resolved" by guessing: quarantined intact', async () => {
     await build(t.dir, L);
     const cp = path.join(vdir(t.dir), 'checkpoint.bin');
-    flipAt(cp, 25);                                             // inside h, CRC now wrong -> ignored, so craft a valid one instead
-    const b = fs.readFileSync(cp); b.fill(0x11, 20, 52);
-    const { crc32 } = await import('./chain');
-    b.writeUInt32BE(crc32(b, 0, b.length - 4), b.length - 4); fs.writeFileSync(cp, b);
+    const good = (await readCheckpoint(realFsOnly(), vdir(t.dir)))!;
+    fs.unlinkSync(cp);
+    await writeCheckpoint(realFsOnly(), vdir(t.dir), { ...good, h: Buffer.alloc(32, 0x11) });   // a VALID statement that disagrees with the index
     const s = await ChatStore.open(t.dir);
     await rejects(s.head(V(1)), 'damaged');
     await s.close();
@@ -202,18 +203,22 @@ describe('N4/N7/N8: one bad version, byte or stamp never takes a healthy version
     await s.close();
   });
 
-  it('N7: 300 lines, one rotted byte at line 40, then an app update changes the stamp: lines 0..39 stay served, the rest is set aside intact, a resend heals', async () => {
+  it('N7: 300 lines, one rotted byte at line 40, then an app update changes the stamp: every line is served but the rotted one, the conversation chain is flagged stale, a resend heals and the next open recomputes it', async () => {
     const L = rows(300); await build(t.dir, L);
     flipAt(body0(t.dir), lineStart(L, 40) + 7);
-    const s = await ChatStore.open(t.dir, { replyEnd: { apiErrorsEndReplies: false } });
+    const o = { replyEnd: { apiErrorsEndReplies: false } };
+    const s = await ChatStore.open(t.dir, o);
     const h = await s.head(V(1));
-    expect(h.lines).toBe(40); expect(h.damagedFromLine).toBe(40);
-    expect(h.conversationHash).toBe(refChains(L.slice(0, 40)).conv);
+    expect(h.lines).toBe(300); expect(h.hash).toBe(refChains(L).raw[300]); expect(h.damagedFromLine).toBe(40);
+    expect(h.conversationChainStale).toBe(true);        // the chain of the rotted line's neighbours cannot be recomputed until the line is healed
     expect(asideDirs(t.dir)).toEqual([]);
     expect(await s.append(V(1), 0, 40, L.slice(40))).toBe('ok');
-    expect((await s.head(V(1))).damagedFromLine).toBeNull();
-    expect((await readAll(s, 300)).equals(Buffer.concat(L))).toBe(true);
     await s.close();
+    const s2 = await ChatStore.open(t.dir, o);
+    const h2 = await s2.head(V(1));
+    expect(h2.damagedFromLine).toBeNull(); expect(h2.conversationChainStale).toBe(false);
+    expect((await readAll(s2, 300)).equals(Buffer.concat(L))).toBe(true);
+    await s2.close();
   });
 
   it('N7: one flipped index record plus one unrelated flipped body byte', async () => {
@@ -222,7 +227,7 @@ describe('N4/N7/N8: one bad version, byte or stamp never takes a healthy version
     flipAt(body0(t.dir), lineStart(L, 200) + 3);
     const s = await ChatStore.open(t.dir);
     const h = await s.head(V(1));
-    expect(h.lines).toBe(200); expect(h.hash).toBe(refChains(L).raw[200]);
+    expect(h.lines).toBe(300); expect(h.hash).toBe(refChains(L).raw[300]); expect(h.damagedFromLine).toBe(200);
     await s.close();
   });
 
@@ -243,18 +248,19 @@ describe('N4/N7/N8: one bad version, byte or stamp never takes a healthy version
     for (const n of [1, 2, 3, 4]) { await s.registerVersion(V(n), { chatId: CHAT + n, runtime: 'claude-code' }); await s.append(V(n), 0, 0, rows(5, 'v' + n)); }
     await s.close();
     fs.writeFileSync(path.join(vdir(t.dir, V(2).toString('hex')), 'meta.json'), 'not json');
+    fs.writeFileSync(path.join(vdir(t.dir, V(2).toString('hex')), 'meta.copy'), 'not json either');
     fs.writeFileSync(path.join(vdir(t.dir, V(3).toString('hex')), 'evicted.json'), '{{{');
     fs.writeFileSync(path.join(vdir(t.dir, V(4).toString('hex')), 'damaged.json'), 'garbage');
     const s2 = await ChatStore.open(t.dir);
     const lv = await s2.listVersions();
-    expect(lv.map((v) => v.damaged)).toEqual([null, 'unreadable: corrupt', 'unreadable: corrupt', 'unreadable: corrupt']);
+    expect(lv.map((v) => v.damaged)).toEqual([null, 'unreadable: corrupt', null, 'unknown']);   // a garbage evicted.json is just ignored; a garbage damaged marker still reports damaged
     expect(lv[0].head!.lines).toBe(5); expect(lv[1].chatId).toBeNull();
     expect((await s2.head(V(1))).lines).toBe(5);
     // the remedy does not itself need the bad file
-    for (const n of [2, 3, 4]) await s2.setAsideDamaged(V(n));
+    for (const n of [2, 4]) await s2.setAsideDamaged(V(n));
     const lv2 = await s2.listVersions();
     expect(lv2.filter((v) => v.damaged !== null)).toEqual([]);
-    expect(lv2.map((v) => v.head?.lines)).toEqual([5, 0, 0]);   // version 2 lost its registration (re-register it); 3 and 4 are empty, ready to recopy
+    expect(lv2.map((v) => v.head?.lines)).toEqual([5, 5, 5]);   // version 2 lost its registration (re-register it); 3 and 4 kept their lines (their bad files were only markers)
     await s2.registerVersion(V(2), { chatId: CHAT + 2, runtime: 'claude-code' });
     expect(await s2.append(V(2), 0, 0, rows(5, 'v2'))).toBe('ok');
     await s2.close();

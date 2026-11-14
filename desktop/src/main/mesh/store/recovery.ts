@@ -3,7 +3,8 @@
 // aside (torn/) instead of deleting them. Pure helpers over the Fs door; they hold no store state.
 import * as nodePath from 'node:path';
 import { writeFileAtomic, mkdirDurable, type Fs, type FileLike } from './fsio';
-import { readCheckpoint, writeCheckpoint } from './checkpoint';
+import { readCheckpoint, writeCheckpoint, CHECKPOINT_FILE } from './checkpoint';
+import { writeSide } from './sidefile';
 import { StoreError } from './errors';
 import { chainStep, type ChainSeeds, type RuntimeKind } from './chain';
 import { analyseLine, initialReplyState, replyEndStep, type LineInfo, type ReplyEndOptions, type ReplyState } from './classify';
@@ -54,7 +55,7 @@ export class BodyTools {
   }
 
   /** Chunk files must meet end to end and the first must not start past the evicted bytes. */
-  async checkChunks(dir: string, ev: { lines: number; bytes: number }): Promise<{ chunks: number[]; sizes: number[]; phys: number }> {
+  async checkChunks(dir: string, ev: { bytes: number }): Promise<{ chunks: number[]; sizes: number[]; phys: number }> {
     const chunks = await this.listChunks(dir);
     const sizes: number[] = [];
     for (const c of chunks) sizes.push(await this.fileSize(chunkPathOf(dir, c)));
@@ -65,49 +66,6 @@ export class BodyTools {
     if (chunks[0] > ev.bytes) throw new Damaged('the first body chunk is missing');
     const i = chunks.length - 1;
     return { chunks, sizes, phys: chunks[i] + sizes[i] };
-  }
-
-  /**
-   * Walk the body from `start.off`, split into lines, encode records in batches and hand each batch to
-   * `onBatch`. Stops after `limit` lines. Returns the final state and the byte offset after the last whole line.
-   */
-  async deriveFromBody(dir: string, layout: { chunks: number[]; sizes: number[] }, runtime: RuntimeKind, start: BatchState, limit: number,
-    onBatch: (recs: Buffer, firstLine: number, n: number) => Promise<void>): Promise<{ state: BatchState; end: number }> {
-    const s: BatchState = { ...start };
-    const sum: SumFacts = { title: null, model: null, cwd: null };
-    let lines: Buffer[] = []; let lineBytes = 0; let emitted = 0;
-    const flush = async () => {
-      if (!lines.length) return;
-      const first = s.count;
-      const { recs } = this.encodeBatch(runtime, s, lines, sum);
-      await onBatch(recs, first, lines.length);
-      lines = []; lineBytes = 0;
-    };
-    outer: for (let ci = 0; ci < layout.chunks.length; ci++) {
-      const cstart = layout.chunks[ci]; const cend = cstart + layout.sizes[ci];
-      if (cend <= start.off) continue;
-      let pos = Math.max(start.off, cstart);
-      const cf = await this.fs.open(chunkPathOf(dir, cstart), { create: false });
-      let carry: Buffer = Buffer.alloc(0);
-      try {
-        while (pos < cend) {
-          const block = await cf.read(pos - cstart, Math.min(4 * MIB, cend - pos));
-          if (block.length === 0) throw new Damaged('body chunk shorter than its size');
-          pos += block.length;
-          const data = carry.length ? Buffer.concat([carry, block]) : block;
-          let from = 0; let nl: number;
-          while ((nl = data.indexOf(0x0a, from)) !== -1) {
-            lines.push(Buffer.from(data.subarray(from, nl + 1))); lineBytes += nl + 1 - from; from = nl + 1; emitted++;
-            if (lineBytes >= 8 * MIB || lines.length >= SCAN_BATCH) await flush();
-            if (emitted >= limit) { await flush(); break outer; }
-          }
-          carry = Buffer.from(data.subarray(from));
-        }
-      } finally { await cf.close(); }
-      if (carry.length && ci + 1 < layout.chunks.length) throw new Damaged('a line runs across two body chunks');
-    }
-    await flush();
-    return { state: s, end: s.off };
   }
 
   /**
@@ -141,24 +99,30 @@ export class BodyTools {
     return { recs, confirmed };
   }
 
-  /** Save `data` under torn/ (kept, never pruned: see MAX_TORN_FILES). Never holds acknowledged data that exists elsewhere. */
+
+  /**
+   * Save `data` under torn/ (kept, never pruned: see MAX_TORN_FILES). Refuses with `limit` at the cap instead of deleting to make room.
+   * WHY the exists check: the next number is max+1, but a kept file that vanished (a fault) must never let a later keep land on a name
+   * that still exists, so a kept copy is never overwritten.
+   */
   async keepBytes(dir: string, kind: string, data: Buffer): Promise<void> {
     if (data.length === 0) return;
     const d = nodePath.join(dir, 'torn');
     await mkdirDurable(this.fs, d);
-    const name = `${String(await this.nextTornNumber(d)).padStart(6, '0')}-${kind}`;
+    const name = await this.nextTornName(d, kind);
+    // DESTRUCTIVE-OK(kept-copy-first): writes a NEW name that does not exist (checked); nothing is replaced
     await writeFileAtomic(this.fs, nodePath.join(d, name), data);
   }
-  private async nextTornNumber(d: string): Promise<number> {
+  private async nextTornName(d: string, kind: string): Promise<string> {
     let max = 0; let count = 0;
     for (const n of await this.fs.readdir(d)) { const m = /^(\d{6})-/.exec(n); if (m) { count++; max = Math.max(max, parseInt(m[1], 10)); } }
     if (count >= MAX_TORN_FILES) throw new StoreError('limit', `${count} set-aside torn files are already kept for this version; nothing is deleted to make room`);
-    return max + 1;
+    for (let n = max + 1; ; n++) { const name = `${String(n).padStart(6, '0')}-${kind}`; if (!(await this.fs.exists(nodePath.join(d, name)))) return name; }
   }
 
   /**
-   * Cut the body back to logical offset `end`: the bytes past it are copied to torn/ first when `keep`,
-   * chunks starting at or after `end` are removed and the chunk holding `end` is truncated.
+   * Cut the body back to logical offset `end`: the bytes past it are copied to torn/ first when `keep` (durably, before anything is
+   * cut), chunks starting at or after `end` are removed and the chunk holding `end` is truncated.
    */
   async trimBody(dir: string, end: number, keep: boolean): Promise<void> {
     const chunks = await this.listChunks(dir);
@@ -169,7 +133,8 @@ export class BodyTools {
     if (keep) {
       const td = nodePath.join(dir, 'torn');
       await mkdirDurable(this.fs, td);
-      const dest = nodePath.join(td, `${String(await this.nextTornNumber(td)).padStart(6, '0')}-body`);
+      const dest = nodePath.join(td, await this.nextTornName(td, 'body'));
+      // DESTRUCTIVE-OK(kept-copy-first): the destination is a new file; the copy is fsynced before the cut below
       const df = await this.fs.open(dest, { create: true });
       try {
         let at = 0;
@@ -184,49 +149,69 @@ export class BodyTools {
       await this.fs.fsyncDir(td);
     }
     for (let i = 0; i < chunks.length; i++) {
+      // DESTRUCTIVE-OK(kept-copy-first): every byte past `end` was copied to torn/ and fsynced above, or (keep=false, a cut) is saved by the caller in a verified tail file
       if (chunks[i] >= end) await this.fs.unlink(chunkPathOf(dir, chunks[i]));
-      else if (chunks[i] + sizes[i] > end) { const cf = await this.fs.open(chunkPathOf(dir, chunks[i]), { create: false }); try { await cf.truncate(end - chunks[i]); await cf.sync(); } finally { await cf.close(); } }
+      else if (chunks[i] + sizes[i] > end) { const cf = await this.fs.open(chunkPathOf(dir, chunks[i]), { create: false }); try { await cf.truncate(end - chunks[i]); await cf.sync(); } finally { await cf.close(); } } // DESTRUCTIVE-OK(kept-copy-first): same bytes, same reason
     }
     await this.fs.fsyncDir(dir);
   }
 
+  /** Number of whole lines (ending in 0x0a) in the body from `from` on; the partial last line is not counted. */
+  async countWholeLines(dir: string, from: number): Promise<number> {
+    const chunks = await this.listChunks(dir); let n = 0;
+    for (const c of chunks) {
+      const size = await this.fileSize(chunkPathOf(dir, c)); const cend = c + size;
+      if (cend <= from) continue;
+      const cf = await this.fs.open(chunkPathOf(dir, c), { create: false });
+      try {
+        for (let p = Math.max(from, c); p < cend; p += 4 * MIB) {
+          const b = await cf.read(p - c, Math.min(4 * MIB, cend - p));
+          for (let i = b.indexOf(0x0a); i !== -1; i = b.indexOf(0x0a, i + 1)) n++;
+        }
+      } finally { await cf.close(); }
+    }
+    return n;
+  }
 
   /**
-   * Rebuild index.bin from the body, VERIFYING the body against chain values that are stored independently of
-   * the index being replaced (review N1, N7). Sources, strongest first:
-   *   1. every CRC-valid record of the old index, read whether or not its 16-byte header is intact (a damaged
-   *      header is not a reason to throw the records away);
-   *   2. the separate checkpoint file (checkpoint.ts): the chain value at the last checkpointed line;
-   *   3. only when the old index has no usable record at all (missing, or under one record): the newest
-   *      replaced-index/ files (previous real indexes).
-   * Outcomes:
-   *   - full: every derived line agrees (or sits before a verified anchor). The index is replaced; the old one is kept.
-   *   - split: the FIRST line whose body disagrees with a valid record is `k`; the lines before the last verified
-   *     one are kept and served, the rest is set aside (the body bytes are copied to torn/ by the next load, the old
-   *     index is kept in replaced-index/) and `partial.json` marks it. A correct resend from a peer heals it.
-   *   - Damaged: the chain cannot be anchored at all (nothing stored vouches for the body, the checkpoint
-   *     disagrees without a localisable line, or the body is shorter than what is vouched for). The caller
-   *     quarantines the whole version, intact.
-   * Never "verify ok with a different head": a rebuild that derives bytes nothing vouches for is refused.
-   * Lines after the newest anchor (at most the checkpoint interval when the index is lost) are unverifiable
-   * and are accepted; that residue is the documented bound.
+   * Rebuild index.bin from the body, keeping EVERY valid record of the old index (review 3, F2) and verifying the body against chain
+   * values that are stored independently of the index being replaced (N1): the CRC-valid records of the old index (whether or not its
+   * 16-byte header is intact), the checkpoint file, and only when the old index has no usable record at all the newest replaced-index/ files.
+   *
+   * Walking slot by slot:
+   *  - a slot WITH a valid record: the line is cut from the body by the record's own offset and length, hashed from the previous record's
+   *    chain value, and compared with the record. A mismatch means THAT line's body rotted: the record is kept (its chain value is the truth),
+   *    the first such line is reported (scrub.json is pointed at it), and the walk goes on. Lines after it are served.
+   *  - a slot WITHOUT one (a rotted record, or records lost past the end): the line is derived from the body, and is trusted only when the
+   *    next valid record or the checkpoint's chain value confirms it. If that confirmation fails, two independent faults hit the same stretch
+   *    and nothing can tell which line is bad: the verified lines before the stretch are kept and everything from it on is set aside
+   *    (bytes kept in torn/) and marked partial.json, so the head never forks.
+   * Lines past max(last valid record, checkpoint) were never acknowledged (the checkpoint is written before every acknowledgement) and are
+   * left as surplus for the next load to keep aside; when no checkpoint exists they are possibly acknowledged and are also marked partial.
+   * Nothing vouching at all (no valid record, no checkpoint) for a body with whole lines is refused as damaged (quarantine, bytes kept).
    */
-  async rebuildIndex(dir: string, runtime: RuntimeKind, seeds: ChainSeeds, ev: { lines: number; bytes: number }, stamp: number, opts: { convStale?: boolean } = {}): Promise<RebuildResult> {
-    const layout = await this.checkChunks(dir, ev);
+  async rebuildIndex(dir: string, runtime: RuntimeKind, seeds: ChainSeeds, evIn: { hint: { lines: number; bytes: number } | null; derivedBytes: number }, stamp: number, opts: { convStale?: boolean } = {}): Promise<RebuildResult> {
+    const layout = await this.checkChunks(dir, { bytes: evIn.derivedBytes });
+    // eviction: the marker's numbers are a candidate only when a prefix of valid records ends exactly there; the chunk files' start is the other candidate
+    const candidates: { lines: number | null; bytes: number }[] = [];
+    if (evIn.hint && evIn.hint.bytes > 0 && evIn.hint.bytes >= evIn.derivedBytes) candidates.push(evIn.hint);
+    if (evIn.derivedBytes > 0) candidates.push({ lines: null, bytes: evIn.derivedBytes });
+    let ev: { lines: number | null; bytes: number } = { lines: 0, bytes: 0 };
     const oldPath = nodePath.join(dir, 'index.bin');
     const tmpPath = nodePath.join(dir, 'index.rebuild');
     const hadOld = await this.fs.exists(oldPath);
     const ckpt = await readCheckpoint(this.fs, dir);
     const handles: FileLike[] = [];
-    // WHY every handle is opened INSIDE the try and closed in the one finally (N10): an open that fails after another
-    // succeeded (inode exhaustion, permissions, an injected crash) used to leak the first handle.
+    // WHY every handle is opened INSIDE the try and closed in the one finally (N10)
     try {
       const open = async (path: string, create = false): Promise<FileLike> => { const f = await this.fs.open(path, { create }); handles.push(f); return f; };
       const refs: Ref[] = [];
       const addRef = async (path: string): Promise<Ref> => {
         const f = await open(path); const size = await f.size();
-        const hdrOk = size >= HDR && headerOk(await f.read(0, HDR));
-        const ref: Ref = { f, slots: size >= HDR ? Math.ceil((size - HDR) / REC) : 0, stampSame: hdrOk && headerStamp(await f.read(0, HDR)) === stamp && !opts.convStale, size };
+        const hdr = size >= HDR ? await f.read(0, HDR) : Buffer.alloc(0);
+        const hdrOk = hdr.length >= HDR && headerOk(hdr);
+        // WHY three states: a damaged header cannot say which classifier wrote the records, so it is "unknown" and decided by the records themselves
+        const ref: Ref = { f, slots: size >= HDR ? Math.ceil((size - HDR) / REC) : 0, size, mode: opts.convStale ? 'changed' : hdrOk ? (headerStamp(hdr) === stamp ? 'same' : 'changed') : 'unknown', cache: new Map() };
         refs.push(ref); return ref;
       };
       const primary = hadOld ? await addRef(oldPath) : null;
@@ -234,66 +219,128 @@ export class BodyTools {
         const rd = nodePath.join(dir, 'replaced-index');
         for (const n of (await this.fs.readdir(rd)).filter((x) => /^index-\d{4}\.bin$/.test(x)).sort().reverse().slice(0, 2)) await addRef(nodePath.join(rd, n));
       }
+      /** The valid record of `slot` from the first source that has one (windows of 1024 records are cached per source). */
+      const refRec = async (slot: number): Promise<{ rec: Rec; ref: Ref; raw: Buffer } | null> => {
+        for (const r of refs) {
+          if (slot >= r.slots) continue;
+          const first = slot - (slot % 1024);
+          let buf = r.cache.get(first);
+          if (!buf) { r.cache.clear(); buf = await r.f.read(recPos(first), Math.min(1024, r.slots - first) * REC); r.cache.set(first, buf); }
+          const d = decodeRecord(buf, (slot - first) * REC);
+          if (d) return { rec: d, ref: r, raw: buf.subarray((slot - first) * REC, (slot - first + 1) * REC) };
+        }
+        return null;
+      };
+      // the newest slot any source has a valid record for (a pass over the sources' checksums only)
+      let lastValid = -1;
+      for (const r of refs) for (let first = 0; first < r.slots; first += 1024) {
+        const buf = await r.f.read(recPos(first), Math.min(1024, r.slots - first) * REC);
+        for (let i = Math.min(1024, r.slots - first) - 1; i >= 0; i--) if (decodeRecord(buf, i * REC)) { lastValid = Math.max(lastValid, first + i); break; }
+      }
       const nf = await open(tmpPath, true);
+      // DESTRUCTIVE-OK(scratch): index.rebuild is a scratch file derived from the body and the old index; it is never the only copy of anything
       await nf.truncate(0);
       await nf.write(indexHeader(stamp), 0);
       let start: BatchState = { count: 0, h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation), convCount: 0, off: 0, rs: initialReplyState() };
       let staleOut = false;
       let prefixBuf: Buffer | null = null;
-      if (ev.lines > 0) {
+      let evLines = 0;
+      if (candidates.length) {
         // evicted bodies cannot be re-derived: their records come from the first copy of the index that has them all intact
         let src: Ref | null = null;
-        for (const r of refs) {
-          if (r.slots < ev.lines) continue;
-          const buf = await r.f.read(recPos(0), ev.lines * REC);
-          let ok = buf.length === ev.lines * REC; let prev: { offset: number; len: number } | null = null;
-          for (let i = 0; ok && i < ev.lines; i++) { const d = decodeRecord(buf, i * REC); if (!d || (prev && d.offset !== prev.offset + prev.len)) ok = false; else prev = d; }
-          if (ok) { src = r; prefixBuf = buf; break; }
+        for (const cand of candidates) {
+          for (const r of refs) {
+            const buf = await r.f.read(recPos(0), Math.min(cand.lines ?? r.slots, r.slots) * REC);
+            let n = 0; let prevEnd = 0; let found = false;
+            for (; (n + 1) * REC <= buf.length; n++) {
+              const d = decodeRecord(buf, n * REC);
+              if (!d || d.offset !== prevEnd) break;
+              prevEnd = d.offset + d.len;
+              if (cand.lines === null ? prevEnd === cand.bytes : n + 1 === cand.lines) { n++; found = prevEnd === cand.bytes; break; }
+            }
+            if (found) { src = r; prefixBuf = buf.subarray(0, n * REC); evLines = n; ev = cand; break; }
+          }
+          if (src) break;
         }
         if (!src || !prefixBuf) throw new Damaged('the index records of the evicted lines are damaged and no other copy of them exists');
-        // WHY not an error (N4): the evicted lines' conversation chain was written by another classifier; it can only be
-        // recomputed from their bodies. Keep serving everything else and say so (stale-conv.json) until the bodies return.
-        staleOut = !src.stampSame;
+        staleOut = src.mode === 'changed';
         await nf.write(prefixBuf, recPos(0));
-        const lr = decodeRecord(prefixBuf, (ev.lines - 1) * REC)!;
-        start = { count: ev.lines, h: lr.h, c: lr.c, convCount: lr.convCount, off: lr.offset + lr.len, rs: { cand: lr.candN === NONE ? null : { n: lr.candN, id: lr.candId } } };
+        const lr = decodeRecord(prefixBuf, (evLines - 1) * REC)!;
+        start = { count: evLines, h: lr.h, c: lr.c, convCount: lr.convCount, off: lr.offset + lr.len, rs: { cand: lr.candN === NONE ? null : { n: lr.candN, id: lr.candId } } };
       }
-      // Derive no more lines than the old index claimed when there was one: lines past that were never
-      // indexed (never acknowledged) and are handled as ordinary surplus on the next load.
-      // the checkpoint proves lines were acknowledged even when the index lost their records
-      const limit = primary && primary.size >= HDR ? Math.max(0, Math.max(primary.slots, ckpt ? ckpt.count : 0) - ev.lines) : Infinity;
-      let lastAnchored = ev.lines - 1;        // the newest line a stored record vouched for; everything at or before it is verified
-      const found: { mismatchAt: number | null } = { mismatchAt: null };   // an object, not a variable: the callback below assigns it
-      const refRec = async (line: number, cache: Map<Ref, Buffer>, first: number, n: number): Promise<{ rec: Rec; stampSame: boolean } | null> => {
-        for (const r of refs) {
-          if (line >= r.slots) continue;
-          let buf = cache.get(r);
-          if (!buf) { buf = await r.f.read(recPos(first), Math.max(0, Math.min(n, r.slots - first)) * REC); cache.set(r, buf); }
-          const d = decodeRecord(buf, (line - first) * REC);
-          if (d) return { rec: d, stampSame: r.stampSame };
+      const include = Math.max(lastValid + 1, ckpt ? ckpt.count : 0, evLines);
+      const cursor = new BodyCursor(this.fs, dir, layout, handles);
+      const s: BatchState = { ...start };
+      const sum: SumFacts = { title: null, model: null, cwd: null };
+      let gapStart = -1;                 // first slot of the current run of derived-only records, or -1
+      let firstBad: number | null = null;
+      let convStaleNow = staleOut;
+      let pos = start.off;
+      let stopAt = include;              // slots [evLines, stopAt) end up in the new index
+      let ambiguous = false;
+      const out: Buffer[] = []; let outFrom = evLines;
+      const flush = async (to: number) => { if (out.length) { await nf.write(Buffer.concat(out), recPos(outFrom)); out.length = 0; } outFrom = to; };
+      for (let i = evLines; i < include; i++) {
+        const o = await refRec(i);
+        let line: Buffer | null;
+        if (o) {
+          if (o.rec.offset !== pos) { if (gapStart >= 0) { ambiguous = true; stopAt = gapStart; break; } throw new Damaged(`record ${i} says its line starts at byte ${o.rec.offset}, the body is at ${pos}`); }
+          line = await cursor.take(pos, o.rec.len);
+          if (!line) throw new Damaged(`record ${i} survives but the body has no line for it`);
+        } else {
+          line = await cursor.takeLine(pos);
+          if (!line) throw new Damaged(`the body holds no line ${i}, but the index or the checkpoint vouches for it`);
         }
-        return null;
-      };
-      const Stop = Symbol('stop');
-      let out: { state: BatchState; end: number } | null = null;
-      try {
-        out = await this.deriveFromBody(dir, layout, runtime, start, limit, async (recs, firstLine, n) => {
-          const cache = new Map<Ref, Buffer>();
-          for (let i = 0; i < n; i++) {
-            const o = await refRec(firstLine + i, cache, firstLine, n);
-            if (!o) continue;
-            const r = decodeRecord(recs, i * REC)!;
-            if (o.rec.offset !== r.offset || o.rec.len !== r.len || !o.rec.h.equals(r.h) || (o.stampSame && (!o.rec.c.equals(r.c) || o.rec.convCount !== r.convCount))) {
-              found.mismatchAt = firstLine + i;
-              if (i > 0) await nf.write(recs.subarray(0, i * REC), recPos(firstLine));
-              throw Object.assign(new Error('stop'), { [Stop]: true });
-            }
-            lastAnchored = firstLine + i;
+        const sb = { ...s };
+        const { recs } = this.encodeBatch(runtime, s, [line], sum);
+        let d = decodeRecord(recs, 0)!;
+        if (o) {
+          const rawOk = d.h.equals(o.rec.h);
+          const fieldsSame = d.c.equals(o.rec.c) && d.convCount === o.rec.convCount && d.kind === o.rec.kind && d.confirms === o.rec.confirms && d.candN === o.rec.candN && d.candId === o.rec.candId && d.conversation === o.rec.conversation;
+          if (o.ref.mode === 'unknown' && rawOk && !fieldsSame) o.ref.mode = 'changed';
+          const trust = o.ref.mode !== 'changed';
+          if (!rawOk) {
+            if (gapStart >= 0) { ambiguous = true; stopAt = gapStart; Object.assign(s, sb); break; }
+            if (firstBad === null) firstBad = i;
+            // the old record's chain value is the truth; the rotted bytes only taint what is derived from them
+            s.h = Buffer.from(o.rec.h);
+            if (trust) { s.c = Buffer.from(o.rec.c); s.convCount = o.rec.convCount; s.rs = { cand: o.rec.candN === NONE ? null : { n: o.rec.candN, id: o.rec.candId } }; d = o.rec; }
+            else { convStaleNow = true; d = { ...d, h: Buffer.from(o.rec.h) }; }
+          } else {
+            gapStart = -1;
+            if (trust) { s.c = Buffer.from(o.rec.c); s.convCount = o.rec.convCount; s.rs = { cand: o.rec.candN === NONE ? null : { n: o.rec.candN, id: o.rec.candId } }; d = o.rec; }
           }
-          await nf.write(recs, recPos(firstLine));
-        });
-      } catch (e) { if (!(e as any)?.[Stop]) throw e; }
-
+        } else if (gapStart < 0) gapStart = i;
+        const ob = Buffer.alloc(REC); encodeRecord(d, ob, 0); out.push(ob);
+        pos += line.length;
+        if (out.length >= 1024) await flush(i + 1);
+      }
+      await flush(stopAt);
+      let count = ambiguous ? stopAt : include;
+      // a derived-only stretch at the end is confirmed by the checkpoint's chain value or not at all
+      if (!ambiguous && gapStart >= 0) {
+        const lr = await this.recFromFile(nf, include - 1);
+        if (!ckpt || ckpt.count !== include || !lr || !lr.h.equals(ckpt.h)) { ambiguous = true; count = gapStart; }
+      }
+      if (!ambiguous && ckpt && ckpt.count > 0 && ckpt.count <= include) {
+        const lr = await this.recFromFile(nf, ckpt.count - 1);
+        if (!lr || !lr.h.equals(ckpt.h)) throw new Damaged(`the rebuilt chain disagrees with the checkpoint at line ${ckpt.count}`);
+      }
+      if (ckpt && ckpt.count > include) throw new Damaged(`the checkpoint vouches for ${ckpt.count} lines but the body holds ${include}`);
+      // nothing at all is verified (no valid record, and the one stretch the checkpoint covers does not match): refused as damaged, the whole version is kept intact in aside/
+      if (ambiguous && count === 0) throw new Damaged('nothing stored vouches for the body: the checkpoint disagrees with the derived chain and no valid record narrows it down');
+      await nf.truncate(recPos(count));        // DESTRUCTIVE-OK(scratch): cuts only the scratch file
+      // lines past what is vouched for: never acknowledged when a checkpoint says so, possibly acknowledged when it does not
+      const lastRec = count > 0 ? await this.recFromFile(nf, count - 1) : null;
+      const endOff = lastRec ? lastRec.offset + lastRec.len : 0;
+      const surplusLines = await this.countWholeLines(dir, endOff);
+      let partial: { fromLine: number; lost: number } | null = null;
+      if (ambiguous) partial = { fromLine: count, lost: Math.max(1, (ckpt ? Math.max(ckpt.count, include) : include) - count) };
+      else if (!ckpt && surplusLines > 0) {
+        if (count === evLines && count === 0) throw new Damaged('nothing stored vouches for the body (no valid index record and no checkpoint): refusing to accept it');
+        partial = { fromLine: count, lost: surplusLines };
+      }
+      const ckStamp = convStaleNow ? (stamp ^ 0x80000000) >>> 0 : stamp;   // a stamp that never equals the real one: its `c` is not comparable
       const finishSwap = async (): Promise<void> => {
         await nf.sync();
         // WHY close before renaming: Windows refuses to rename a file that is still open
@@ -301,76 +348,60 @@ export class BodyTools {
         if (hadOld) {
           const rd = nodePath.join(dir, 'replaced-index');
           await mkdirDurable(this.fs, rd);
-          const n = (await this.fs.readdir(rd)).length + 1;
-          await this.fs.rename(oldPath, nodePath.join(rd, `index-${String(n).padStart(4, '0')}.bin`));
+          const to = nodePath.join(rd, await nextNumbered(this.fs, rd, 'index-', '.bin', 4));
+          // DESTRUCTIVE-OK(kept-copy-first): the old index moves to a NEW name in replaced-index/ (never overwritten) before the new one takes its place
+          await this.fs.rename(oldPath, to);
           await this.fs.fsyncDir(rd); await this.fs.fsyncDir(dir);
         }
+        // DESTRUCTIVE-OK(kept-copy-first): the target name was just vacated by the move above, or never existed
         await this.fs.rename(tmpPath, oldPath);
         await this.fs.fsyncDir(dir);
-        // verified under the old index: start the pass over (directory synced: an unsynced unlink could bring the stale mark back)
-        await this.fs.unlink(nodePath.join(dir, 'scrub.json')); await this.fs.fsyncDir(dir);
       };
-      const ckStamp = staleOut ? (stamp ^ 0x80000000) >>> 0 : stamp;   // a stamp that never equals the real one: its `c` is not comparable
-      const recAt = async (line: number): Promise<Rec | null> => {
-        if (line < ev.lines && prefixBuf) return decodeRecord(prefixBuf, line * REC);
-        const b = await nf.read(recPos(line), REC); return b.length === REC ? decodeRecord(b, 0) : null;
-      };
-
-      const mismatchAt = found.mismatchAt;
-      if (mismatchAt !== null) {
-        // SPLIT (N7): keep the verified prefix, set the rest aside.
-        const keep = lastAnchored + 1;
-        const newest = Math.max(...refs.map((r) => r.slots), 0);
-        const lost = Math.max(mismatchAt + 1, newest) - keep;
-        await nf.truncate(recPos(keep));
-        const keepRec = keep > 0 ? await recAt(keep - 1) : null;
-        // the checkpoint is lowered BEFORE the swap, never left ahead of the index
-        await writeCheckpoint(this.fs, dir, { count: keep, stamp: ckStamp, h: keepRec ? keepRec.h : Buffer.from(seeds.raw), c: keepRec ? keepRec.c : Buffer.from(seeds.conversation) });
-        await writeFileAtomic(this.fs, nodePath.join(dir, PARTIAL_FILE), Buffer.from(JSON.stringify({ fromLine: keep, lost, atMs: Date.now() })));
-        if (staleOut) await writeFileAtomic(this.fs, nodePath.join(dir, STALE_CONV_FILE), Buffer.from(JSON.stringify({ through: ev.lines })));
-        await finishSwap();
-        return { split: { keep, lost }, staleConv: staleOut };
-      }
-
-      const total = out!.state.count;
-      // a surviving valid old record past the rebuilt end means the body is short
-      if (primary) {
-        for (let i = total; i < primary.slots; i++) {
-          if (decodeRecord(await primary.f.read(recPos(i), REC), 0)) throw new Damaged(`record ${i} survives but the body has no line for it`);
+      if (partial) {
+        // the checkpoint would claim lines the index no longer has: keep its old statement in torn/, then lower it BEFORE the swap
+        if (ckpt && ckpt.count > count) {
+          const old = await this.fs.readFile(nodePath.join(dir, CHECKPOINT_FILE));
+          // WHY Damaged and not the raw error: the statement must not be lowered without a kept copy, and a full keep-area or disk must not wedge the version; quarantine needs only renames
+          try { if (old) await this.keepBytes(dir, 'checkpoint', old); }
+          catch (e) { if (isDiskFull(e) || (e instanceof StoreError && e.code === 'limit')) throw new Damaged('the old checkpoint statement could not be kept (the keep-area or the disk is full)'); throw e; }
         }
+        await writeSide(this.fs, nodePath.join(dir, PARTIAL_FILE), { fromLine: partial.fromLine, lost: partial.lost, atMs: Date.now() }); // DESTRUCTIVE-OK(hint): marks lines as set aside; replaces an older marker of the same kind
       }
-      let covered = lastAnchored;
-      if (ckpt) {
-        if (ckpt.count > total) throw new Damaged(`the checkpoint vouches for ${ckpt.count} lines but the body holds ${total}`);
-        if (ckpt.count > 0) {
-          const r = await recAt(ckpt.count - 1);
-          if (!r || !r.h.equals(ckpt.h) || (ckpt.stamp === stamp && !staleOut && !r.c.equals(ckpt.c))) throw new Damaged(`the rebuilt chain disagrees with the checkpoint at line ${ckpt.count}`);
-          covered = Math.max(covered, ckpt.count - 1);
-        }
+      if (partial || !ckpt || ckpt.count !== count || ckpt.stamp !== ckStamp) {
+        // DESTRUCTIVE-OK(verified-record): the new statement is the chain value of a verified record; an older, higher statement was copied to torn/ above whenever it is being lowered
+        await writeCheckpoint(this.fs, dir, { count, stamp: ckStamp, h: lastRec ? lastRec.h : Buffer.from(seeds.raw), c: lastRec ? lastRec.c : Buffer.from(seeds.conversation) });
       }
-      // nothing stored vouches for any derived line: the rebuild would only compare the bytes with themselves
-      if (total > ev.lines && covered < ev.lines) throw new Damaged('nothing stored vouches for the body (no valid index record and no checkpoint): refusing to accept it');
-      if (total > 0 && covered === total - 1 && !(ckpt && ckpt.count === total && !staleOut)) {
-        const lr = await recAt(total - 1);
-        if (lr) await writeCheckpoint(this.fs, dir, { count: total, stamp: ckStamp, h: lr.h, c: lr.c });
-      }
-      if (staleOut) await writeFileAtomic(this.fs, nodePath.join(dir, STALE_CONV_FILE), Buffer.from(JSON.stringify({ through: ev.lines })));
+      if (convStaleNow) await writeSide(this.fs, nodePath.join(dir, STALE_CONV_FILE), { through: evLines, bad: firstBad }); // DESTRUCTIVE-OK(hint): existence-only marker; `bad` names the unhealed rotted line, if that is why
       await finishSwap();
-      if (!staleOut && ev.lines === 0) { await this.fs.unlink(nodePath.join(dir, STALE_CONV_FILE)); await this.fs.fsyncDir(dir); }
-      return { split: null, staleConv: staleOut };
+      // scrub.json: the old mark described the old index. Point the scrub at the first bad line so the next open reports it at once.
+      await writeSide(this.fs, nodePath.join(dir, 'scrub.json'), { lines: firstBad ?? 0, passEnd: count }); // DESTRUCTIVE-OK(hint): a progress hint
+      if (!convStaleNow && evLines === 0) { await this.fs.unlink(nodePath.join(dir, STALE_CONV_FILE)); await this.fs.fsyncDir(dir); } // DESTRUCTIVE-OK(hint): existence-only marker, recomputed from full bodies just now
+      return { count, firstBad, partial, staleConv: convStaleNow };
     } finally { for (const f of handles) await f.close().catch(() => undefined); }
   }
 
-  /** Examine index.bin. Repairs a damaged TAIL in place (bytes kept); anything else throws NeedsRebuild. */
-  async settleIndex(dir: string, ev: { lines: number; bytes: number }, layout: { chunks: number[]; phys: number }, stamp: number): Promise<{ count: number; last: Rec | null; adopt: boolean; needsInit?: boolean }> {
+  private async recFromFile(f: FileLike, slot: number): Promise<Rec | null> {
+    if (slot < 0) return null;
+    const b = await f.read(recPos(slot), REC);
+    return b.length === REC ? decodeRecord(b, 0) : null;
+  }
+
+  /**
+   * Examine index.bin. Repairs a damaged or torn TAIL in place (the bytes are kept in torn/ first); anything else throws NeedsRebuild.
+   * Nothing is ever re-derived or adopted here (review 3, F3): a cut-off record region says "an index write was in flight or a record rotted"
+   * and loadOnce decides, from the checkpoint, whether the body lines after it were acknowledged. `tailDamaged` says there was such a region.
+   * When the cut cannot be made (the keep-area is full or the disk is full) the index file is left alone and `tailDeferred` says so.
+   */
+  async settleIndex(dir: string, ev: { lines: number; bytes: number }, layout: { chunks: number[]; phys: number }, stamp: number): Promise<{ count: number; last: Rec | null; tailDamaged: boolean; tailDeferred: boolean; needsInit?: boolean }> {
     const ip = nodePath.join(dir, 'index.bin');
     const hasBodies = layout.chunks.length > 0 && layout.phys > ev.bytes;
+    const none = { count: 0, last: null, tailDamaged: false, tailDeferred: false };
     if (!(await this.fs.exists(ip))) {
       if (!hasBodies && ev.lines === 0) {
         // WHY tolerate a full disk (N5): a version that was registered but never written to is empty, and "empty" can be served
         // without creating its index file; the file is created by the first append (which is then refused, typed, while the disk is full)
-        try { await this.ensureIndex(dir, stamp); } catch (e) { if (!isDiskFull(e)) throw e; return { count: 0, last: null, adopt: false, needsInit: true }; }
-        return { count: 0, last: null, adopt: false };
+        try { await this.ensureIndex(dir, stamp); } catch (e) { if (!isDiskFull(e)) throw e; return { ...none, needsInit: true }; }
+        return none;
       }
       throw new NeedsRebuild('index.bin is missing');
     }
@@ -379,8 +410,9 @@ export class BodyTools {
       const size = await f.size();
       if (size < HDR) {
         if (!hasBodies && ev.lines === 0) {
-          try { await f.truncate(0); await f.write(indexHeader(stamp), 0); await f.sync(); } catch (e) { if (!isDiskFull(e)) throw e; return { count: 0, last: null, adopt: false, needsInit: true }; }
-          return { count: 0, last: null, adopt: false };
+          // DESTRUCTIVE-OK(scratch): a file shorter than its own header holds no record; with no bodies and nothing evicted there is nothing it could describe
+          try { await f.truncate(0); await f.write(indexHeader(stamp), 0); await f.sync(); } catch (e) { if (!isDiskFull(e)) throw e; return { ...none, needsInit: true }; }
+          return none;
         }
         throw new NeedsRebuild('index header is missing');
       }
@@ -399,50 +431,92 @@ export class BodyTools {
         if (!r || (prev && r.offset !== prev.offset + prev.len)) break;
         prev = r;
       }
-      let adopt = false;
+      let tailDamaged = false; let tailDeferred = false;
+      const cut = async (keepFrom: number, newCount: number): Promise<void> => {
+        tailDamaged = true;
+        try {
+          await this.keepBytes(dir, 'index-tail', await f.read(keepFrom, size - keepFrom));
+          // DESTRUCTIVE-OK(kept-copy-first): the cut-off bytes were copied to torn/ and fsynced just above
+          await f.truncate(recPos(newCount)); await f.sync();
+        } catch (e) {
+          // WHY not fatal: the keep-area is full (`limit`) or the disk is full. Serving the valid records needs no write; the cut is retried before the next write.
+          if (!isDiskFull(e) && !(e instanceof StoreError && e.code === 'limit')) throw e;
+          tailDeferred = true;
+        }
+        count = newCount;
+      };
       if (from + good < count) {
         // A valid record after the first bad one is NOT a torn tail: that is bit rot or a lost record (C1).
         for (let i = good; i < count - from; i++) if (decodeRecord(buf, i * REC)) throw new NeedsRebuild(`record ${from + good} is damaged but later records are valid`);
-        await this.keepBytes(dir, 'index-tail', await f.read(recPos(from + good), size - recPos(from + good)));
-        count = from + good; await f.truncate(recPos(count)); await f.sync(); adopt = true;
-      } else if (partial > 0) {
-        await this.keepBytes(dir, 'index-tail', await f.read(recPos(count), partial));
-        await f.truncate(recPos(count)); await f.sync(); adopt = true;
-      }
+        await cut(recPos(from + good), from + good);
+      } else if (partial > 0) await cut(recPos(count), count);
       let last: Rec | null = null;
       if (count > 0) { last = decodeRecord(await f.read(recPos(count - 1), REC), 0); if (!last) throw new NeedsRebuild('last index record is unreadable'); }
-      return { count, last, adopt };
+      return { count, last, tailDamaged, tailDeferred };
     } finally { await f.close(); }
   }
-
-  /** Re-derive records for the whole lines in the body past the index end and append them to the index. */
-  async adoptSurplus(dir: string, layout: { chunks: number[]; sizes: number[]; phys: number }, count: number, last: Rec | null, seeds: ChainSeeds, runtime: RuntimeKind): Promise<{ count: number; last: Rec | null; bodyEnd: number }> {
-    const start: BatchState = last
-      ? { count, h: last.h, c: last.c, convCount: last.convCount, off: last.offset + last.len, rs: { cand: last.candN === NONE ? null : { n: last.candN, id: last.candId } } }
-      : { count: 0, h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation), convCount: 0, off: 0, rs: initialReplyState() };
-    const f = await this.fs.open(nodePath.join(dir, 'index.bin'), { create: false });
-    let lastRec: Rec | null = last;
-    try {
-      const out = await this.deriveFromBody(dir, layout, runtime, start, Infinity, async (recs, firstLine, n) => {
-        await f.write(recs, recPos(firstLine));
-        lastRec = decodeRecord(recs, (n - 1) * REC);
-      });
-      await f.sync();
-      await this.trimBody(dir, out.end, true); // a partial last line (no newline) is kept aside and cut
-      return { count: out.state.count, last: lastRec, bodyEnd: out.end };
-    } finally { await f.close(); }
-  }
-
 
   /** Create index.bin with just a header when it is missing or short (an empty version). */
   async ensureIndex(dir: string, stamp: number): Promise<void> {
     const f = await this.fs.open(nodePath.join(dir, 'index.bin'), { create: true });
     try {
+      // DESTRUCTIVE-OK(scratch): only when the file is shorter than a header, i.e. holds no record
       if ((await f.size()) < HDR) { await f.truncate(0); await f.write(indexHeader(stamp), 0); await f.sync(); }
     } finally { await f.close(); }
     await this.fs.fsyncDir(dir);
   }
 }
 
-interface Ref { f: FileLike; slots: number; stampSame: boolean; size: number }
-export interface RebuildResult { split: { keep: number; lost: number } | null; staleConv: boolean }
+/** Reads the body by logical offset across chunk files with a one-block cache. Lines never cross a chunk. */
+class BodyCursor {
+  private cache: { chunk: number; start: number; buf: Buffer } | null = null;
+  private readonly files = new Map<number, FileLike>();
+  constructor(private readonly fs: Fs, private readonly dir: string, private readonly layout: { chunks: number[]; sizes: number[] }, private readonly handles: FileLike[]) {}
+  private chunkIdx(pos: number): number { for (let i = 0; i < this.layout.chunks.length; i++) if (pos >= this.layout.chunks[i] && pos < this.layout.chunks[i] + this.layout.sizes[i]) return i; return -1; }
+  private async file(i: number): Promise<FileLike> {
+    let f = this.files.get(i);
+    if (!f) { f = await this.fs.open(chunkPathOf(this.dir, this.layout.chunks[i]), { create: false }); this.handles.push(f); this.files.set(i, f); }
+    return f;
+  }
+  private async load(i: number, pos: number, want: number): Promise<Buffer> {
+    const cend = this.layout.chunks[i] + this.layout.sizes[i];
+    const n = Math.min(Math.max(want, 4 * MIB), cend - pos);
+    const b = await (await this.file(i)).read(pos - this.layout.chunks[i], n);
+    this.cache = { chunk: i, start: pos, buf: b };
+    return b;
+  }
+  /** `len` bytes at `pos`, or null when they do not lie wholly inside one chunk. */
+  async take(pos: number, len: number): Promise<Buffer | null> {
+    const i = this.chunkIdx(pos);
+    if (i < 0 || pos + len > this.layout.chunks[i] + this.layout.sizes[i]) return null;
+    let c = this.cache;
+    if (!c || c.chunk !== i || pos < c.start || pos + len > c.start + c.buf.length) { await this.load(i, pos, len); c = this.cache!; }
+    return c.buf.length >= pos - c.start + len ? c.buf.subarray(pos - c.start, pos - c.start + len) : null;
+  }
+  /** The line at `pos` including its newline, or null when the chunk ends first (a partial line is not a line). */
+  async takeLine(pos: number): Promise<Buffer | null> {
+    const i = this.chunkIdx(pos);
+    if (i < 0) return null;
+    const cend = this.layout.chunks[i] + this.layout.sizes[i];
+    let want = 4 * MIB;
+    for (;;) {
+      let c = this.cache;
+      if (!c || c.chunk !== i || pos < c.start || pos >= c.start + c.buf.length) { await this.load(i, pos, want); c = this.cache!; }
+      const nl = c.buf.indexOf(0x0a, pos - c.start);
+      if (nl !== -1) return c.buf.subarray(pos - c.start, nl + 1);
+      if (c.start + c.buf.length >= cend) return null;
+      want = Math.min(cend - pos, (c.buf.length - (pos - c.start)) * 2 + 4 * MIB);
+      await this.load(i, pos, want);
+    }
+  }
+}
+
+/** The next free `<prefix><n><suffix>` in `dir` (max existing + 1, never a name that exists). WHY not a directory count: a kept file that vanished must not let a later one reuse its name. */
+export async function nextNumbered(fs: Fs, dir: string, prefix: string, suffix: string, width: number): Promise<string> {
+  let max = 0;
+  for (const n of await fs.readdir(dir)) { if (n.startsWith(prefix) && n.endsWith(suffix)) { const v = parseInt(n.slice(prefix.length, n.length - suffix.length), 10); if (Number.isFinite(v)) max = Math.max(max, v); } }
+  for (let v = max + 1; ; v++) { const name = `${prefix}${String(v).padStart(width, '0')}${suffix}`; if (!(await fs.exists(nodePath.join(dir, name)))) return name; }
+}
+
+interface Ref { f: FileLike; slots: number; size: number; mode: 'same' | 'changed' | 'unknown'; cache: Map<number, Buffer> }
+export interface RebuildResult { count: number; firstBad: number | null; partial: { fromLine: number; lost: number } | null; staleConv: boolean }
