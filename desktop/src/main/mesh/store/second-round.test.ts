@@ -11,7 +11,7 @@ import { REC, recPos } from './records';
 import { cc } from './fixtures';
 import { CHAT, V, openWith, refChains, tmpRoot } from './testkit';
 import { FaultFs } from './fault-fs';
-import { readCheckpoint, writeCheckpoint } from './checkpoint';
+import { readCheckpoint, writeCheckpoint, CHECKPOINT_SLOT } from './checkpoint';
 
 let t: Awaited<ReturnType<typeof tmpRoot>>;
 beforeEach(async () => { t = await tmpRoot('second-round-'); });
@@ -115,12 +115,12 @@ describe('N1: a rebuild never accepts bytes that only the damaged index could vo
     await s.close();
     // one damaged slot: the other one (the previous statement) is still evidence
     flipAt(path.join(vdir(t.dir), 'checkpoint.bin'), 30);
-    flipAt(path.join(vdir(t.dir), 'checkpoint.bin'), 30 + 96);
+    flipAt(path.join(vdir(t.dir), 'checkpoint.bin'), 30 + CHECKPOINT_SLOT);
     expect(await readCheckpoint(realFsOnly(), vdir(t.dir))).toBeNull();      // both damaged: not evidence, and not an error
     const s2 = await ChatStore.open(t.dir);
     expect((await s2.head(V(1))).lines).toBe(25);
     await s2.close();
-    flipAt(path.join(vdir(t.dir), 'checkpoint.bin'), 30 + 96);               // repair one slot by flipping it back
+    flipAt(path.join(vdir(t.dir), 'checkpoint.bin'), 30 + CHECKPOINT_SLOT);               // repair one slot by flipping it back
     expect((await readCheckpoint(realFsOnly(), vdir(t.dir)))!.count).toBeGreaterThanOrEqual(24);
   });
 
@@ -250,6 +250,7 @@ describe('N4/N7/N8: one bad version, byte or stamp never takes a healthy version
     fs.writeFileSync(path.join(vdir(t.dir, V(2).toString('hex')), 'meta.json'), 'not json');
     fs.writeFileSync(path.join(vdir(t.dir, V(2).toString('hex')), 'meta.copy'), 'not json either');
     fs.writeFileSync(path.join(vdir(t.dir, V(3).toString('hex')), 'evicted.json'), '{{{');
+    fs.unlinkSync(path.join(vdir(t.dir, V(4).toString('hex')), 'index.bin'));   // a quarantined version has no live index (review 4: a marker next to a live index is an older copy and is ignored)
     fs.writeFileSync(path.join(vdir(t.dir, V(4).toString('hex')), 'damaged.json'), 'garbage');
     const s2 = await ChatStore.open(t.dir);
     const lv = await s2.listVersions();

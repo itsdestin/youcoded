@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { ChatStore } from './store';
 import { cc } from './fixtures';
 import { CHAT, V, openWith, tmpRoot } from './testkit';
-import { inventoryRow } from './inventory';
+import { inventoryRow, ROOT_ROWS, VERSION_ROWS } from './inventory';
 import { recPos } from './records';
 
 const walk = (d: string, out: string[] = []): string[] => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p, out); else out.push(p); } return out; };
@@ -65,11 +65,24 @@ describe('every file the store writes is in the inventory', () => {
   });
 });
 
+describe('every inventory row answers the five questions of the class (review 4)', () => {
+  it('rotted, older copy, foreign copy, missing and cleanly truncated each have a stated, non-destructive answer', () => {
+    for (const row of [...ROOT_ROWS, ...VERSION_ROWS]) {
+      for (const k of ['rotted', 'older', 'foreign', 'missing', 'truncated'] as const) {
+        const a = row.answers[k];
+        expect(a.length, `${row.id}.${k}`).toBeGreaterThan(2);
+        // the answer may never be "delete or cut something else" or "silently fewer"
+        expect(/\bdelete[sd]? (the|a|an) (body|chunk|line|chat|version)|silently (fewer|dropped|lost)/i.test(a), `${row.id}.${k}: ${a}`).toBe(false);
+      }
+    }
+  });
+});
+
 describe('every call that can destroy bytes says why it is safe', () => {
   const dir = path.dirname(fileURLToPath(new URL(import.meta.url)));
-  const files = ['store.ts', 'recovery.ts', 'control.ts', 'extras.ts', 'checkpoint.ts', 'lock.ts', 'sidefile.ts', 'fsio.ts'];
+  const files = ['store.ts', 'recovery.ts', 'control.ts', 'extras.ts', 'checkpoint.ts', 'lock.ts', 'sidefile.ts', 'fsio.ts', 'versionfiles.ts'];
   // unlink, truncate, rename, rm, an atomic overwrite, a hard link, or a write that lands inside existing bytes
-  const DESTRUCTIVE = /\.unlink\(|\.truncate\(|\.rename\(|\brm\(|\brmSync\(|\bwriteFileAtomic\(|fsp\.link\(|\bwriteSide\(|\bwriteCheckpoint\(|\bf\.write\(slotBytes|\bcf\.write\(want/;
+  const DESTRUCTIVE = /\.unlink\(|\.truncate\(|\.rename\(|\brm\(|\brmSync\(|\bwriteFileAtomic\(|fsp\.link\(|\bwriteSide\(|\bwriteSideFor\(|\bwriteCheckpoint\(|\bf\.write\(slotBytes|\bcf\.write\(want|\bcf\.write\(data/;
   const TAG = /DESTRUCTIVE-OK\((hint|scratch|kept-copy-first|verified-record|rollback-own-bytes|explicit-request|lock|door)\)/;
   it('each unlink, truncate, rename, atomic overwrite or in-place overwrite carries a DESTRUCTIVE-OK(<category>) reason on its line or the lines just above', () => {
     const missing: string[] = [];

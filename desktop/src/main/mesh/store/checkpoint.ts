@@ -13,44 +13,61 @@
 // statement. So at any instant: every acknowledged line is at or below `count` of the newest valid slot, or (one slot
 // damaged by a fault) at most one append behind it, which the index covers. Lowering (a cut or a split) writes BOTH slots.
 //
-// Slot layout (big-endian): magic 'YCMCKPT2' (8) | seq u64 | count u64 | stamp u32 | h 32 | c 32 | crc32 u32 over all before it.
+// Slot layout (big-endian): magic 'YCMCKPT3' (8) | seq u64 | count u64 | stamp u32 | evLines u64 | evBytes u64 | version tag 16 | h 32 | c 32 | crc32 u32 over all before it.
+//
+// Review 4 added two things, both for "a file that is valid but the WRONG one":
+//  - the version tag: a checkpoint copied in from another version (or chat) decodes as NO evidence instead of being believed;
+//  - the EVICTION STATE (evLines, evBytes), kept here and nowhere else as the authority. WHY: evicted.json was a separate file with no freshness, so an older
+//    copy of it made the store delete bodies that had been restored, and a deleted body chunk looked like an eviction. The checkpoint is rewritten in place at
+//    every acknowledgement and is the one record the store already trusts as current, so "which lines have no body on purpose" lives in it. evicted.json is now
+//    only a record of WHO held the lines; nothing is decided from it.
 import * as nodePath from 'node:path';
-import { crc32 } from './chain';
+import { crc32, versionTag } from './chain';
 import type { Fs } from './fsio';
 
-const MAGIC = Buffer.from('YCMCKPT2', 'ascii');
-const SLOT = 8 + 8 + 8 + 4 + 32 + 32 + 4;
+const MAGIC = Buffer.from('YCMCKPT3', 'ascii');
+export const CHECKPOINT_SLOT = 8 + 8 + 8 + 4 + 8 + 8 + 16 + 32 + 32 + 4;
+const SLOT = CHECKPOINT_SLOT;
 export const CHECKPOINT_FILE = 'checkpoint.bin';
 
-export interface Checkpoint { count: number; stamp: number; h: Buffer; c: Buffer }
+/** `evLines`/`evBytes`: the evicted prefix (lines whose bodies were dropped on a proven eviction); 0/0 when nothing is evicted. */
+export interface Checkpoint { count: number; stamp: number; h: Buffer; c: Buffer; evLines: number; evBytes: number }
+/** The identity every file of the version folder `dir` carries (the folder name is the version key). */
+const tagOf = (dir: string): Buffer => versionTag(nodePath.basename(dir));
 /** What a version remembers between appends: the newest statement's sequence number and the slot the NEXT write goes to. */
 export interface CheckpointState { ck: Checkpoint | null; seq: number; next: 0 | 1; /** how many of the two slots hold a valid statement */ slotsOk: number }
 
-function encodeSlot(k: Checkpoint, seq: number): Buffer {
+function encodeSlot(k: Checkpoint, seq: number, tag: Buffer): Buffer {
   const b = Buffer.alloc(SLOT);
   MAGIC.copy(b, 0);
   b.writeBigUInt64BE(BigInt(seq), 8);
   b.writeBigUInt64BE(BigInt(k.count), 16);
   b.writeUInt32BE(k.stamp >>> 0, 24);
-  k.h.copy(b, 28); k.c.copy(b, 60);
+  b.writeBigUInt64BE(BigInt(k.evLines), 28); b.writeBigUInt64BE(BigInt(k.evBytes), 36);
+  tag.copy(b, 44, 0, 16);
+  k.h.copy(b, 60); k.c.copy(b, 92);
   b.writeUInt32BE(crc32(b, 0, SLOT - 4), SLOT - 4);
   return b;
 }
 
-function decodeSlot(b: Buffer, at: number): { seq: number; ck: Checkpoint } | null {
+function decodeSlot(b: Buffer, at: number, tag: Buffer): { seq: number; ck: Checkpoint } | null {
   if (b.length < at + SLOT) return null;
   const s = b.subarray(at, at + SLOT);
   if (!s.subarray(0, 8).equals(MAGIC) || crc32(s, 0, SLOT - 4) !== s.readUInt32BE(SLOT - 4)) return null;
+  // a slot that belongs to another version is not evidence about this one (valid checksum, wrong identity)
+  if (!s.subarray(44, 60).equals(tag)) return null;
   const seq = Number(s.readBigUInt64BE(8)); const count = Number(s.readBigUInt64BE(16));
-  if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(count)) return null;
-  return { seq, ck: { count, stamp: s.readUInt32BE(24), h: Buffer.from(s.subarray(28, 60)), c: Buffer.from(s.subarray(60, 92)) } };
+  const evLines = Number(s.readBigUInt64BE(28)); const evBytes = Number(s.readBigUInt64BE(36));
+  if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(count) || !Number.isSafeInteger(evLines) || !Number.isSafeInteger(evBytes) || evLines > count || (evLines === 0) !== (evBytes === 0)) return null;
+  return { seq, ck: { count, stamp: s.readUInt32BE(24), evLines, evBytes, h: Buffer.from(s.subarray(60, 92)), c: Buffer.from(s.subarray(92, 124)) } };
 }
 
 /** Read both slots: the newest valid statement (or null: absent or damaged is simply no evidence), and where the next write goes. */
 export async function readCheckpointState(fs: Fs, dir: string): Promise<CheckpointState> {
   const b = await fs.readFile(nodePath.join(dir, CHECKPOINT_FILE));
   if (!b) return { ck: null, seq: 0, next: 0, slotsOk: 0 };
-  const slots = [decodeSlot(b, 0), decodeSlot(b, SLOT)];
+  const tag = tagOf(dir);
+  const slots = [decodeSlot(b, 0, tag), decodeSlot(b, SLOT, tag)];
   let best = -1;
   for (let i = 0; i < 2; i++) if (slots[i] && (best < 0 || slots[i]!.seq > slots[best]!.seq)) best = i;
   // a damaged or unwritten slot is the next one to be overwritten; if both are fine, the older one
@@ -67,7 +84,7 @@ async function putSlot(fs: Fs, dir: string, slot: 0 | 1, k: Checkpoint, seq: num
   const created = !(await fs.exists(path));
   const f = await fs.open(path, { create: true });
   try {
-    const slotBytes = encodeSlot(k, seq);
+    const slotBytes = encodeSlot(k, seq, tagOf(dir));
     // DESTRUCTIVE-OK(verified-record): overwrites only the OLDER slot; the newest valid slot is untouched, so a torn write leaves the previous statement intact
     await f.write(slotBytes, slot * SLOT); await f.sync();
   } finally { await f.close(); }

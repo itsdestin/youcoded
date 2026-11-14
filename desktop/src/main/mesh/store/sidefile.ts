@@ -39,6 +39,20 @@ export async function writeSide(fs: Fs, path: string, value: unknown): Promise<v
   await writeFileAtomic(fs, path, encodeSide(value));
 }
 
+/**
+ * Version-scoped side files (review 4, class fix): the value carries the version key it belongs to. A copy of summary.json, partial.json, damaged.json
+ * and the like taken from ANOTHER version has a good checksum, so only this field can say it is foreign; it then reads as `bad` (never believed).
+ * `version` is a reserved field name for these files.
+ */
+export async function readSideFor(fs: Fs, path: string, key: string): Promise<SideRead> {
+  const r = await readSide(fs, path);
+  return r.kind === 'ok' && r.value?.version !== key ? { kind: 'bad' } : r;
+}
+export function writeSideFor(fs: Fs, path: string, key: string, value: Record<string, unknown>): Promise<void> {
+  // DESTRUCTIVE-OK(verified-record): the callers decide what may be replaced; this adds the identity field and replaces whole files atomically
+  return writeSide(fs, path, { ...value, version: key });
+}
+
 /** `<name>.bad-<n>`: a damaged state file moved aside (kept) before a fresh one is written. n is the next free number, never a name already taken. */
 export async function keepBadSideFile(fs: Fs, path: string): Promise<string> {
   const dir = nodePath.dirname(path); const base = nodePath.basename(path);

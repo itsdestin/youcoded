@@ -91,29 +91,33 @@ describe('C1: a damaged index never costs acknowledged lines', () => {
     await s.close();
   });
 
-  it('a missing middle body chunk is "damaged" with the rest kept, not a raw ENOENT', async () => {
+  it('a missing middle body chunk is reported line by line with every other line served and nothing set aside, never a raw ENOENT (review 4, F3)', async () => {
     const L = rows(100); await build(t.dir, L, { chunkBytes: 900 });
     const bodies = fs.readdirSync(vdir(t.dir)).filter((f) => f.startsWith('body-')).sort();
     expect(bodies.length).toBeGreaterThan(3);
     fs.unlinkSync(path.join(vdir(t.dir), bodies[2]));
     const s = await ChatStore.open(t.dir, { chunkBytes: 900 });
-    await rejects(s.head(V(1)), 'damaged');
-    const q = path.join(t.dir, 'aside', asideDirs(t.dir)[0]);
-    expect(fs.readdirSync(q).filter((f) => f.startsWith('body-')).length).toBe(bodies.length - 1);
-    expect(fs.existsSync(path.join(q, 'index.bin'))).toBe(true);
+    const h = await s.head(V(1));
+    expect(h.lines).toBe(100); expect(h.damagedFromLine).not.toBeNull();
+    expect(((await s.read(V(1), 0, 0, 1)) as Buffer[])[0].equals(L[0])).toBe(true);
+    expect(((await s.read(V(1), 0, 99, 100)) as Buffer[])[0].equals(L[99])).toBe(true);
+    await expect(s.read(V(1), 0, h.damagedFromLine!, h.damagedFromLine! + 1)).rejects.toMatchObject({ code: 'corrupt' });
+    expect(fs.existsSync(path.join(t.dir, 'aside')) ? asideDirs(t.dir) : []).toEqual([]);
     await s.close();
   });
 
-  it('a body shorter than its index (acknowledged lines missing) is damaged, not silently trimmed', async () => {
+  it('a body shorter than its index (acknowledged lines missing): the lines that are whole are served, the cut ones are reported damaged, nothing is trimmed or set aside (review 4, F3)', async () => {
     const L = rows(30); await build(t.dir, L);
     const bp = path.join(vdir(t.dir), 'body-0000000000000000.bin');
     const size = fs.statSync(bp).size;
     fs.truncateSync(bp, size - 5);
     const s = await ChatStore.open(t.dir);
-    await rejects(s.head(V(1)), 'damaged');
-    const q = path.join(t.dir, 'aside', asideDirs(t.dir)[0]);
-    expect(fs.statSync(path.join(q, 'body-0000000000000000.bin')).size).toBe(size - 5);
-    expect(fs.statSync(path.join(q, 'index.bin')).size).toBe(recPos(30));
+    const h = await s.head(V(1));
+    expect(h.lines).toBe(30); expect(h.damagedFromLine).toBe(29);
+    expect(((await s.read(V(1), 0, 28, 29)) as Buffer[])[0].equals(L[28])).toBe(true);
+    await expect(s.read(V(1), 0, 29, 30)).rejects.toMatchObject({ code: 'corrupt' });
+    expect(fs.statSync(bp).size).toBe(size - 5);                       // not trimmed, not moved
+    expect(fs.statSync(path.join(vdir(t.dir), 'index.bin')).size).toBe(recPos(30));
     await s.close();
   });
 
@@ -289,7 +293,7 @@ describe('H2: set-aside of a damaged copy keeps the aside index at every kill po
     // state "moves done, intent still there, fresh header-only index already created": the review's kill point
     const s = await ChatStore.open(t.dir); await s.setAsideDamaged(V(1)); await s.close();
     const name = asideDirs(t.dir)[0];
-    fs.writeFileSync(path.join(vdir(t.dir), 'aside.intent'), encodeSide({ asideName: name }));
+    fs.writeFileSync(path.join(vdir(t.dir), 'aside.intent'), encodeSide({ asideName: name, version: V(1).toString('hex') }));
     const s2 = await ChatStore.open(t.dir);
     expect((await s2.head(V(1))).lines).toBe(0);
     expect(fs.readFileSync(path.join(t.dir, 'aside', name, 'index.bin')).equals(orig)).toBe(true);

@@ -54,16 +54,16 @@ import { acquireLock, type StoreLock } from './lock';
 // DESTRUCTIVE-OK(hint): FORMAT is a constant; writing it replaces nothing that is not a constant
 const writeSide0 = (fs: Fs, path: string, text: string): Promise<void> => writeFileAtomic(fs, path, Buffer.from(text));
 import { readCheckpoint, readCheckpointState, appendCheckpoint, writeCheckpoint, CHECKPOINT_FILE, type CheckpointState } from './checkpoint';
-import { readSide, writeSide, keepBadSideFile, formatLine, parseFormat, type SideRead } from './sidefile';
+import { readSide, readSideFor, writeSide, writeSideFor, keepBadSideFile, formatLine, parseFormat, type SideRead } from './sidefile';
 import { Extras, bytesUnder } from './extras';
 import { asLine, decodeTailFile, encodeTailFile, isDiskFull, validateProofShape, type TailFile } from './storeutil';
-import { chainStep, crc32, defaultChainSeeds, hex, isHash64, unhex, type ChainSeedFn, type ChainSeeds, type RuntimeKind } from './chain';
+import { chainStep, crc32, defaultChainSeeds, hex, isHash64, unhex, versionTag, type ChainSeedFn, type ChainSeeds, type RuntimeKind } from './chain';
 import { CLASSIFIER_VERSION, analyseLine, initialReplyState, replyEndStep, type LineInfo, type ReplyEndOptions, type ReplyState } from './classify';
 import { HDR, REC, NONE, decodeRecord, encodeRecord, frameLines, headerOk, headerStamp, indexHeader, recPos, unframeLines, type Rec } from './records';
 import { ControlStore, type ControlDamage, type ControlEntry } from './control';
 import type { AppendResult, EvictionProof, Head, ProofVerifier, ScrubReport, StoreOptions, Summary, TailRecord, VerifyReport, VersionId, VersionMeta } from './types';
 import type { VState } from './vstate';
-import { readMeta, readPartial, readDamaged, readScrubMark, readEvictedHint, resolveEvicted, lineVerifies, nextAsideName } from './versionfiles';
+import { readMeta, readPartial, readDamaged, readScrubMark, lineVerifies, nextAsideName } from './versionfiles';
 import { BodyTools, Damaged, NeedsRebuild, PARTIAL_FILE, STALE_CONV_FILE, chunkPathOf, nextNumbered, type BatchState, type RebuildResult, type SumFacts } from './recovery';
 
 export type { VersionId, ProofVerifier, StoreOptions, VersionMeta, Head, AppendResult, Summary, EvictionProof, TailRecord, VerifyReport, ScrubReport } from './types';
@@ -76,6 +76,8 @@ const MIB = 1024 * 1024;
 const SUMMARY_SAVE_EVERY = 2048;
 const TAKEOVER_RE = /^[0-9a-f]{8,128}$/;
 const ASIDE_RE = /^[0-9a-f]+-q?\d+$/;
+/** Longest version id the store accepts (see keyOf). */
+export const MAX_VERSION_ID_BYTES = 64;
 const MAX_TAILS = 1024;
 const MAX_REJECTED = 1024;
 const MAX_REJECTED_BYTES = 256 * MIB;
@@ -201,7 +203,9 @@ export class ChatStore {
   private chunkPath(st: { dir: string }, start: number): string { return chunkPathOf(st.dir, start); }
   private ixPath(dir: string): string { return nodePath.join(dir, 'index.bin'); }
   private keyOf(version: VersionId): string {
-    if (!(version instanceof Uint8Array) || version.length < 1 || version.length > 128) throw new StoreError('bad-argument', 'version id must be 1..128 bytes');
+    // WHY 64 (review 4, F9): the id becomes folder names in hex (2 characters per byte) and the longest name the store makes is the quarantine folder
+    // `<hex>-q<n>`; file systems stop at 255 characters. 64 bytes (128 hex characters) leaves room for every name with a wide margin; real ids are 32 bytes.
+    if (!(version instanceof Uint8Array) || version.length < 1 || version.length > MAX_VERSION_ID_BYTES) throw new StoreError('bad-argument', `version id must be 1..${MAX_VERSION_ID_BYTES} bytes`);
     return hex(version);
   }
   private checkSegment(segment: number): void { if (segment !== 0) throw new StoreError('bad-argument', 'segment is always 0'); }
@@ -225,7 +229,7 @@ export class ChatStore {
           return;
         }
         await mkdirDurable(this.fs, dir);
-        const m = { format: 1, chatId: meta.chatId, runtime: meta.runtime, parent, createdMs: this.now() };
+        const m = { format: 1, version: key, chatId: meta.chatId, runtime: meta.runtime, parent, createdMs: this.now() };
         // WHY two copies, each checksummed (review 3, F5): one flipped letter of the chat id changes every chain seed, so every line would read as rotted.
         // Either copy alone is enough; a damaged one is replaced from the other (readMeta). Both are new files here (neither existed).
         await writeSide(this.fs, nodePath.join(dir, 'meta.json'), m); // DESTRUCTIVE-OK(verified-record): a NEW file, the version had no meta
@@ -234,7 +238,7 @@ export class ChatStore {
         // WHY a checkpoint from the very start: "no checkpoint" must always mean a fault, never "nothing was written yet" (review 3, F3)
         const seeds = this.seedFn({ chatId: meta.chatId, version: unhex(key), segment: 0 });
         // DESTRUCTIVE-OK(verified-record): only when no checkpoint exists yet (a new version has none)
-        if (!(await readCheckpoint(this.fs, dir))) await writeCheckpoint(this.fs, dir, { count: 0, stamp: this.stamp, h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation) });
+        if (!(await readCheckpoint(this.fs, dir))) await writeCheckpoint(this.fs, dir, { count: 0, stamp: this.stamp, evLines: 0, evBytes: 0, h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation) });
         await this.fs.fsyncDir(nodePath.join(this.root, 'versions'));
       }));
     });
@@ -246,7 +250,7 @@ export class ChatStore {
     const f = await this.fs.open(p, { create: true });
     try {
       // DESTRUCTIVE-OK(scratch): only when the file is shorter than a header, i.e. holds no record
-      if ((await f.size()) < HDR) { await f.truncate(0); await f.write(indexHeader(this.stamp), 0); await f.sync(); }
+      if ((await f.size()) < HDR) { await f.truncate(0); await f.write(indexHeader(this.stamp, versionTag(nodePath.basename(dir))), 0); await f.sync(); }
     } finally { await f.close(); }
     await this.fs.fsyncDir(dir);
   }
@@ -288,40 +292,47 @@ export class ChatStore {
     await this.finishAside(key, dir); // a set-aside interrupted half way is completed first
     const dmg = await readDamaged(this.fs, dir);
     if (dmg) throw new StoreError('damaged', dmg.asideName);
+    // WHY (review 4, F5 class): a damaged.json that survives next to a live index.bin is an OLDER copy of a marker (a quarantine really moves the index away).
+    // readDamaged ignores it; it is moved to damaged.json.bad-N (kept) so it cannot confuse the next reader. Best effort: a read never fails for lack of space.
+    try { if (await this.fs.exists(nodePath.join(dir, 'damaged.json'))) await keepBadSideFile(this.fs, nodePath.join(dir, 'damaged.json')); } catch (e) { if (!isDiskFull(e)) throw e; }
     const seeds = this.seedFn({ chatId: meta.chatId, version: unhex(key), segment: 0 });
 
-    // 0. What has been evicted. evicted.json is only a HINT (review 3, F1): it is checksummed, and its numbers are cross-checked against the
-    // index below. Whatever it says, nothing is deleted on its word unless that check passes; when it fails (or the file is absent or damaged)
-    // the evicted prefix is derived from which body chunk files are actually present.
-    const hint = await readEvictedHint(this.fs, dir);
-    const chunkNames = await this.tools.listChunks(dir);
-    // (the marker is NOT used for the first layout look: an untrusted marker must not be able to make a healthy version look damaged)
-    const trial = { lines: chunkNames.length && chunkNames[0] > 0 ? 1 : 0, bytes: chunkNames.length ? chunkNames[0] : 0 };
-    // 1. Body chunks must be one gapless run that covers the index (a missing middle chunk is damage).
-    let layout = await this.tools.checkChunks(dir, trial);
-    // 2. The index: only its tail is repaired in place (bytes kept); anything else is NeedsRebuild / Damaged.
-    const ix = await this.tools.settleIndex(dir, trial, layout, this.stamp);
-    let { count, last } = ix;
+    // 0. What was evicted ON PURPOSE. Review 4 (F1, F4, F5): the only authority is the eviction state inside the checkpoint (checkpoint.ts), which is rewritten in
+    // place at every acknowledgement and carries this version's identity. evicted.json is NOT read: it had no freshness, so an older copy of it deleted restored
+    // bodies (F1), quarantined a healthy chat (F5), and "which chunk files exist" made a deleted first chunk look like an eviction (F4). Nothing is unlinked here.
     const ckState = await readCheckpointState(this.fs, dir);
     const ck = ckState.ck;
-    // an index SHORTER than the checkpoint or than the eviction marker lost records: re-derive it before anything is decided from it
+    const ev = ck ? { lines: ck.evLines, bytes: ck.evBytes } : { lines: 0, bytes: 0 };
+    // 1. The chunk files as they are: holes are allowed here (F3), they are reported below line by line and never hide the lines that are whole.
+    let layout = await this.tools.layout(dir);
+    // 2. The index: only its tail is repaired in place (bytes kept); anything else is NeedsRebuild / Damaged.
+    const ix = await this.tools.settleIndex(dir, ev, layout, this.stamp);
+    let { count, last } = ix;
+    // an index SHORTER than the checkpoint lost records (an older copy, a cut at a record boundary): re-derive it before anything is decided from it
     if (ck && ck.count > count) throw new NeedsRebuild('the index is shorter than the checkpoint');
-    if (hint && hint.lines > count) throw new NeedsRebuild('the index is shorter than the eviction marker');
-    const ev = await resolveEvicted(this.fs, dir, hint, chunkNames, count, last);
-    layout = await this.tools.checkChunks(dir, ev);
+    // N1: a record that disagrees with the checkpoint means the index (a foreign or damaged one), not the body, is what is wrong. WHY BEFORE the surplus cut below
+    // (review 4, F8): a foreign index is shorter than the body, so the body's "extra" bytes were being moved away as never-acknowledged before anything compared the index with the checkpoint.
+    if (ck && ck.count > 0) {
+      const r = decodeRecord(await this.readAt(this.ixPath(dir), recPos(ck.count - 1), REC), 0);
+      if (!r) throw new NeedsRebuild(`record ${ck.count - 1} fails its checksum`);
+      if (!r.h.equals(ck.h)) throw new NeedsRebuild('the index disagrees with the checkpoint');
+    }
+    // the eviction record must agree with the index record of its last line (an independent, checksummed record)
+    if (ev.lines > 0) {
+      const r = decodeRecord(await this.readAt(this.ixPath(dir), recPos(ev.lines - 1), REC), 0);
+      if (!r) throw new NeedsRebuild(`record ${ev.lines - 1} fails its checksum`);
+      if (r.offset + r.len !== ev.bytes) throw new NeedsRebuild('the index disagrees with the eviction record');
+    }
     // the conversation chain's staleness is recorded twice (the marker file and the checkpoint stamp), so losing either one restores it from the other
     const staleConv = (await this.fs.exists(nodePath.join(dir, STALE_CONV_FILE))) || (ck !== null && ck.stamp === ((this.stamp ^ 0x80000000) >>> 0));
     // N4: the evicted bodies are back, so the conversation chain can be recomputed now
     if (staleConv && ev.lines === 0) {
       // WHY not always (review 3): the chain is also stale while a rotted line is not healed yet (the marker says which). Rebuilding then changes nothing and would loop.
-      const mk = await readSide(this.fs, nodePath.join(dir, STALE_CONV_FILE));
+      const mk = await readSideFor(this.fs, nodePath.join(dir, STALE_CONV_FILE), key);
       const bad = mk.kind === 'ok' && Number.isSafeInteger(mk.value?.bad) ? (mk.value.bad as number) : null;
       if (bad === null || bad >= count || (await lineVerifies(this.fs, dir, layout.chunks, bad, seeds.raw))) throw new NeedsRebuild('evicted bodies are back or the rotted line was healed: recompute the conversation chain');
     }
-    // N1: the checkpoint is a statement the index must agree with (an index shorter than it was re-derived above, VERIFIED against it,
-    // before any surplus body bytes are moved aside as "never acknowledged").
     let bodyEnd = last ? last.offset + last.len : 0;
-    if (layout.phys < bodyEnd) throw new Damaged(`body ends at ${layout.phys}, the index claims ${bodyEnd}`);
     let deferred: VState['deferred'] = ix.tailDeferred ? { trimTo: null, indexTail: true, partial: null } : null;
     let partial = await readPartial(this.fs, dir, count);
     if (layout.phys > bodyEnd) {
@@ -334,7 +345,7 @@ export class ChatStore {
       if (ix.tailDamaged && !ck) { const lost = await this.tools.countWholeLines(dir, bodyEnd); if (lost > 0) marker = { fromLine: count, lost }; }
       if (marker) partial = marker;
       try {
-        if (marker) await writeSide(this.fs, nodePath.join(dir, PARTIAL_FILE), { ...marker, atMs: this.now() }); // DESTRUCTIVE-OK(hint): a marker; replaces an older marker of the same kind
+        if (marker) await writeSideFor(this.fs, nodePath.join(dir, PARTIAL_FILE), key, { ...marker, atMs: this.now() }); // DESTRUCTIVE-OK(hint): a marker; replaces an older marker of the same kind
         await this.tools.trimBody(dir, bodyEnd, true);
       } catch (e) {
         // WHY (N5, review 3 F7): copying the surplus to torn/ needs space and a free slot in the keep-area. Keep serving what is indexed (the surplus
@@ -342,44 +353,33 @@ export class ChatStore {
         if (!isDiskFull(e) && !(e instanceof StoreError && e.code === 'limit')) throw e;
         deferred = { trimTo: bodyEnd, indexTail: ix.tailDeferred, partial: marker };
       }
-      layout = await this.tools.checkChunks(dir, ev);
+      layout = await this.tools.layout(dir);
     }
     // surplus chunk files (only possible while a trim is deferred) are not part of the version
     const chunks = deferred && deferred.trimTo !== null ? layout.chunks.filter((c) => c < bodyEnd || c === layout.chunks[0]) : layout.chunks;
 
-    // N1: a record that disagrees with the checkpoint means the index (not the body) is what is wrong
-    if (ck && ck.count > 0) {
-      const r = decodeRecord(await this.readAt(this.ixPath(dir), recPos(ck.count - 1), REC), 0);
-      if (!r) throw new NeedsRebuild(`record ${ck.count - 1} fails its checksum`);
-      if (!r.h.equals(ck.h)) throw new NeedsRebuild('the index disagrees with the checkpoint');
-    }
-
-    // A line whose body no longer matches its chain value (checked cheaply for the last line only; the rolling scrub does the rest).
+    // Lines whose body is not on disk (F3, F4): a hole in the chunk files from the eviction point on. Reported as damaged from the first such line; every line
+    // that lies wholly inside a chunk file is still served. A hole below the eviction point is nothing (those bodies were dropped on purpose).
     let badLine: number | null = null;
-    if (count > ev.lines && last) {
+    if (count > ev.lines) {
+      const gs = this.tools.gapStart(layout, ev.bytes, bodyEnd);
+      if (gs !== null) badLine = await this.tools.firstLineEndingAfter(dir, ev.lines, count, gs);
+    }
+    // A line whose body no longer matches its chain value (checked cheaply for the last line only; the rolling scrub does the rest).
+    if (badLine === null && count > ev.lines && last) {
       const prevH = count > 1 ? (await this.recAtDir(dir, count - 2)).h : seeds.raw;
       const cs = chunks.filter((c) => c <= last!.offset).pop();
-      if (cs === undefined) throw new Damaged('no body chunk covers the last line');
-      const line = await this.readAt(chunkPathOf(dir, cs), last.offset - cs, last.len);
+      const line = cs === undefined ? Buffer.alloc(0) : await this.readAt(chunkPathOf(dir, cs), last.offset - cs, last.len);
       if (line.length !== last.len || !chainStep(prevH, line).equals(last.h)) badLine = count - 1;
     }
 
-    // Finish an interrupted eviction: chunks wholly below the evicted byte count are gone for good. ONLY when the marker passed its
-    // checksum AND agrees with the index record of the last evicted line (ev.trusted): never on the word of an unchecked number (F1).
-    const keep: number[] = [];
-    for (let i = 0; i < chunks.length; i++) {
-      const end = i + 1 < chunks.length ? chunks[i + 1] : bodyEnd;
-      // DESTRUCTIVE-OK(verified-record): an eviction the caller proved (holders) and the store recorded in a checksummed marker that matches the index
-      if (ev.trusted && ev.bytes > 0 && end <= ev.bytes) await this.fs.unlink(chunkPathOf(dir, chunks[i]));
-      else keep.push(chunks[i]);
-    }
     const st: VState = {
       key, dir, meta, seeds, count,
       h: last ? last.h : Buffer.from(seeds.raw), c: last ? last.c : Buffer.from(seeds.conversation),
       convCount: last ? last.convCount : 0, bodyEnd,
       rs: last ? { cand: last.candN === NONE ? null : { n: last.candN, id: last.candId } } : initialReplyState(),
-      evictedLines: Math.min(ev.lines, count), evictedBytes: ev.lines <= count ? ev.bytes : 0,
-      chunks: keep, replyEndsCache: null, summarySavedAt: 0,
+      evictedLines: ev.lines, evictedBytes: ev.bytes,
+      chunks, replyEndsCache: null, summarySavedAt: 0,
       summary: { title: null, model: null, cwd: null, lastAppendMs: null, lines: 0 },
       badLine, scrubMark: 0, passEnd: 0, ck: ckState, deferred, summaryDirty: false, indexNeedsInit: !!ix.needsInit,
       partial, staleConv,
@@ -404,12 +404,12 @@ export class ChatStore {
    */
   private async restoreRedundancy(st: VState): Promise<void> {
     try {
-      const want = { count: st.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, h: st.h, c: st.c };
+      const want = { count: st.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: st.evictedLines, evBytes: st.evictedBytes, h: st.h, c: st.c };
       const cur = st.ck.ck;
       // DESTRUCTIVE-OK(verified-record): the head's chain values come from the CRC-checked index record and the load checks above; a lagging or damaged slot is replaced, a statement AHEAD of the index never reaches here
-      if (!cur || cur.count !== st.count || cur.stamp !== want.stamp || st.ck.slotsOk < 2) await writeCheckpoint(this.fs, st.dir, want, st.ck);
+      if (!cur || cur.count !== st.count || cur.stamp !== want.stamp || cur.evLines !== want.evLines || cur.evBytes !== want.evBytes || st.ck.slotsOk < 2) await writeCheckpoint(this.fs, st.dir, want, st.ck);
       const sp = nodePath.join(st.dir, STALE_CONV_FILE);
-      if (st.staleConv && !(await this.fs.exists(sp))) await writeSide(this.fs, sp, { through: st.evictedLines, bad: null }); // DESTRUCTIVE-OK(hint): existence-only marker, restored from the checkpoint stamp
+      if (st.staleConv && !(await this.fs.exists(sp))) await writeSideFor(this.fs, sp, st.key, { through: st.evictedLines, bad: null }); // DESTRUCTIVE-OK(hint): existence-only marker, restored from the checkpoint stamp
     } catch (e) { if (!isDiskFull(e)) throw e; }
   }
 
@@ -424,9 +424,9 @@ export class ChatStore {
     const seeds = this.seedFn({ chatId: meta.chatId, version: unhex(key), segment: 0 });
     const ck0 = (await readCheckpoint(this.fs, dir));
     const convStale = (await this.fs.exists(nodePath.join(dir, STALE_CONV_FILE))) || (ck0 !== null && ck0.stamp === ((this.stamp ^ 0x80000000) >>> 0));
-    const hint = await readEvictedHint(this.fs, dir);
-    const chunkNames = await this.tools.listChunks(dir);
-    const res = await this.tools.rebuildIndex(dir, meta.runtime, seeds, { hint, derivedBytes: chunkNames.length ? chunkNames[0] : 0 }, this.stamp, { convStale });
+    // the only record of what was evicted on purpose is the checkpoint's (review 4): never evicted.json, never "which chunk files exist"
+    const hint = ck0 && ck0.evLines > 0 ? { lines: ck0.evLines, bytes: ck0.evBytes } : null;
+    const res = await this.tools.rebuildIndex(dir, meta.runtime, seeds, { hint }, this.stamp, { convStale });
     void reason;
     return res;
   }
@@ -443,7 +443,7 @@ export class ChatStore {
     const dir = this.vdir(key);
     const asideName = await nextAsideName(this.fs, this.root, key, true);
     await mkdirDurable(this.fs, nodePath.join(this.root, 'aside', asideName));   // the space-needing step first: a later read that has to finish the move then needs none
-    await writeSide(this.fs, nodePath.join(dir, 'aside.intent'), { asideName, reason }); // DESTRUCTIVE-OK(hint): a note of intent; load() finishes the move it names
+    await writeSideFor(this.fs, nodePath.join(dir, 'aside.intent'), key, { asideName, reason }); // DESTRUCTIVE-OK(hint): a note of intent; load() finishes the move it names
     this.versions.delete(key);
     await this.finishAside(key, dir);
     throw new StoreError('damaged', asideName);
@@ -490,12 +490,25 @@ export class ChatStore {
       let prev: Rec | null = null; let h: Buffer = st.seeds.raw;
       if (n > 0) { prev = decodeRecord(await f.read(recPos(n - 1), REC), 0); if (!prev) throw new NeedsRebuild(`record ${n - 1} fails its checksum`); h = prev.h; }
       while (n < end && bytes < maxBytes && recs < maxRecs) {
-        const take = Math.min(256, end - n, maxRecs - recs);
+        let take = Math.min(256, end - n, maxRecs - recs);
         const buf = await f.read(recPos(n), take * REC);
         // records first: a bad one must be reported as repairable index damage before any body read trips over it
         for (let i = 0; i < take; i++) if (!decodeRecord(buf, i * REC)) throw new NeedsRebuild(`record ${n + i} fails its checksum`);
         const lo = Math.max(n, st.evictedLines);
-        const bodies = lo < n + take ? await this.readRange(st, lo, n + take, false) : [];
+        // WHY the fallback (review 4, F3): a hole in the chunk files makes a batch read fail as a whole. Find the first line that cannot be read, serve the checks for
+        // the whole lines before it, and flag it like any line whose bytes do not match (`badLine`; a correct resend heals it).
+        let bodies: Buffer[] = [];
+        if (lo < n + take) {
+          try { bodies = await this.readRange(st, lo, n + take, false); }
+          catch (e) {
+            if (!(e instanceof StoreError && e.code === 'corrupt') && (e as { code?: string } | null)?.code !== 'ENOENT') throw e;
+            let k = lo;
+            for (; k < n + take; k++) { try { await this.readRange(st, k, k + 1, false); } catch (e2) { if ((e2 instanceof StoreError && e2.code === 'corrupt') || (e2 as { code?: string } | null)?.code === 'ENOENT') break; throw e2; } }
+            st.badLine = st.badLine === null ? k : Math.min(st.badLine, k);
+            if (k === lo) { st.scrubMark = k; if (st.scrubMark !== startN) await this.saveScrubMark(st); return report(); }
+            take = k - n; bodies = await this.readRange(st, lo, k, false);
+          }
+        }
         for (let i = 0; i < take; i++) {
           const r = decodeRecord(buf, i * REC)!;
           if (prev && r.offset !== prev.offset + prev.len) throw new NeedsRebuild(`record ${n + i} breaks the byte offsets`);
@@ -523,7 +536,7 @@ export class ChatStore {
    * disk is full. Only a full disk is swallowed; every other error still surfaces.
    */
   private async saveScrubMark(st: VState): Promise<void> {
-    try { await writeSide(this.fs, nodePath.join(st.dir, 'scrub.json'), { lines: st.scrubMark, passEnd: st.passEnd }); } // DESTRUCTIVE-OK(hint): a progress mark; losing it only repeats work
+    try { await writeSideFor(this.fs, nodePath.join(st.dir, 'scrub.json'), st.key, { lines: st.scrubMark, passEnd: st.passEnd }); } // DESTRUCTIVE-OK(hint): a progress mark; losing it only repeats work
     catch (e) { if (!isDiskFull(e)) throw e; }
   }
 
@@ -731,39 +744,87 @@ export class ChatStore {
       } finally { await f.close(); }
       // WHY then compare the stored BYTES (H3): the chain check above only proves the index agrees with the
       // incoming line. If the body bytes on disk differ, answering `ok` would leave the damage in place.
-      await this.healBodies(st, fromLine, lines.slice(0, overlap));
+      await this.repairBodies(st, fromLine, lines.slice(0, overlap), st.evictedLines);
     }
     const fresh = lines.slice(overlap);
     if (fresh.length) await this.writeNew(st, fresh);
     return 'ok';
   }
 
-  /** For lines [from, from+good.length) that still have bodies: where the stored bytes differ from the (chain-correct) incoming ones, keep the bad bytes aside and overwrite in place. */
-  private async healBodies(st: VState, from: number, good: Buffer[]): Promise<void> {
-    const lo = Math.max(from, st.evictedLines);
-    for (let a = lo; a < from + good.length;) {
-      const b = Math.min(from + good.length, a + 256);
-      const stored = await this.readRange(st, a, b, false);
-      for (let k = 0; k < stored.length; k++) {
-        const want = good[a - from + k];
-        if (stored[k].equals(want)) continue;
-        const line = a + k;
-        const f = await this.fs.open(this.ixPath(st.dir), { create: false });
-        let r: Rec; try { r = this.mustRec(await f.read(recPos(line), REC)); } finally { await f.close(); }
+  /**
+   * For lines [from, from+good.length) (below `floor` nothing is expected: evicted lines have no body): make the stored bytes the chain-correct ones.
+   *  - a line whose bytes differ: the bad bytes are kept under healed/ first, then overwritten in place;
+   *  - a line whose bytes are NOT THERE (a missing or short chunk file, review 4 F3/F4): written back, coalesced into runs, into the chunk file that holds or
+   *    touches that place, or into a new chunk file named by the line's own offset. No file is ever recreated from zeros and no other line is touched.
+   * The caller has already checked every `good` line against the index's chain values (applyLines, restoreBody).
+   */
+  private async repairBodies(st: VState, from: number, good: Buffer[], floor: number): Promise<void> {
+    const lo = Math.max(from, floor); const hiLine = from + good.length;
+    let run: { offset: number; parts: Buffer[]; len: number } | null = null;
+    const flush = async (): Promise<void> => { if (run) { const r = run; run = null; await this.writeAt(st, r.offset, Buffer.concat(r.parts)); } };
+    const isMissing = (e: unknown): boolean => (e instanceof StoreError && e.code === 'corrupt') || (e as { code?: string } | null)?.code === 'ENOENT';
+    for (let a = lo; a < hiLine;) {
+      const b = Math.min(hiLine, a + 256);
+      let stored: (Buffer | null)[];
+      try { stored = await this.readRange(st, a, b, false); }
+      catch (e) {
+        if (!isMissing(e)) throw e;
+        stored = [];
+        for (let k = a; k < b; k++) { try { stored.push((await this.readRange(st, k, k + 1, false))[0]); } catch (e2) { if (!isMissing(e2)) throw e2; stored.push(null); } }
+      }
+      const f = await this.fs.open(this.ixPath(st.dir), { create: false });
+      let recs: Buffer; try { recs = await f.read(recPos(a), (b - a) * REC); } finally { await f.close(); }
+      for (let k = 0; k < b - a; k++) {
+        const line = a + k; const want = good[line - from]; const have = stored[k];
+        if (have && have.equals(want)) { await flush(); continue; }
+        const r = this.mustRec(recs, k * REC);
         if (want.length !== r.len) throw new StoreError('corrupt', `line ${line}: the index length disagrees with the chain-correct bytes`);
-        const hd = nodePath.join(st.dir, 'healed');
-        await mkdirDurable(this.fs, hd);
-        // DESTRUCTIVE-OK(kept-copy-first): the bad bytes are saved under a NEW name (never reused) before they are overwritten below
-        await writeFileAtomic(this.fs, nodePath.join(hd, await nextNumbered(this.fs, hd, `line-${line}-`, '.bin', 1)), stored[k]);
-        const cs = this.chunkFor(st, r.offset);
-        const cf = await this.fs.open(this.chunkPath(st, cs), { create: false });
-        // DESTRUCTIVE-OK(verified-record): `want` hashes to the index record's chain value (checked in applyLines) and the bytes replaced were saved to healed/ above
-        try { await cf.write(want, r.offset - cs); await cf.sync(); } finally { await cf.close(); }
-        if (st.badLine === line) st.badLine = null;
+        if (have) {
+          await flush();
+          const hd = nodePath.join(st.dir, 'healed');
+          await mkdirDurable(this.fs, hd);
+          // DESTRUCTIVE-OK(kept-copy-first): the bad bytes are saved under a NEW name (never reused) before they are overwritten below
+          await writeFileAtomic(this.fs, nodePath.join(hd, await nextNumbered(this.fs, hd, `line-${line}-`, '.bin', 1)), have);
+          // DESTRUCTIVE-OK(verified-record): `want` hashes to the index record's chain value (checked by the caller) and the bytes replaced were saved to healed/ above
+          await this.writeAt(st, r.offset, want);
+        } else if (run && run.offset + run.len === r.offset && !st.chunks.some((c) => c > run!.offset && c <= r.offset)) { run.parts.push(want); run.len += want.length; }
+        else { await flush(); run = { offset: r.offset, parts: [want], len: want.length }; }
         if (st.scrubMark > line) st.scrubMark = line; // re-check from the healed line
       }
       a = b;
     }
+    await flush();
+    // the first line that is still not readable may now be a later one (or none)
+    if (st.badLine !== null && st.badLine >= lo && st.badLine < hiLine) st.badLine = null;
+    const gb = await this.gapBadLine(st);
+    if (gb !== null) st.badLine = st.badLine === null ? gb : Math.min(st.badLine, gb);
+  }
+
+  /** The first line whose bytes are not in any chunk file (a hole from the eviction point on), or null. */
+  private async gapBadLine(st: VState): Promise<number | null> {
+    if (st.count <= st.evictedLines) return null;
+    const gs = this.tools.gapStart(await this.tools.layout(st.dir), st.evictedBytes, st.bodyEnd);
+    return gs === null ? null : this.tools.firstLineEndingAfter(st.dir, st.evictedLines, st.count, gs);
+  }
+
+  /**
+   * Put `data` at logical byte `offset` of the body. Into the last chunk file that starts at or before it when that file reaches the offset (an in-place overwrite
+   * or a contiguous extension); otherwise into a NEW chunk file named by `offset`. The caller has proved `data` hashes to the index record's chain value.
+   */
+  private async writeAt(st: VState, offset: number, data: Buffer): Promise<void> {
+    let ci = -1;
+    for (let i = 0; i < st.chunks.length; i++) { if (st.chunks[i] <= offset) ci = i; else break; }
+    if (ci >= 0) {
+      const cs = st.chunks[ci];
+      const cf = await this.fs.open(this.chunkPath(st, cs), { create: false });
+      try {
+        if (cs + (await cf.size()) >= offset) { await cf.write(data, offset - cs); await cf.sync(); return; }   // DESTRUCTIVE-OK(verified-record): see the doc comment above
+      } finally { await cf.close(); }
+    }
+    const nf = await this.fs.open(this.chunkPath(st, offset), { create: true });
+    try { await nf.write(data, 0); await nf.sync(); } finally { await nf.close(); }
+    await this.fs.fsyncDir(st.dir);
+    if (!st.chunks.includes(offset)) { st.chunks.push(offset); st.chunks.sort((x, y) => x - y); }
   }
 
   /** Append lines that continue the head. Body first, fsync, then index, fsync, then the checkpoint, fsync (crash rule 1), and only then acknowledge. */
@@ -780,6 +841,9 @@ export class ChatStore {
     let chunkStart = active;
     let created = false;
     if (active < 0 || st.bodyEnd - active >= this.chunkBytes) { chunkStart = st.bodyEnd; created = !st.chunks.includes(chunkStart); }
+    // WHY (review 4, F3): an active chunk that is SHORTER than the index says lost its tail to a fault. New lines must not be written at a position past its end (that would
+    // zero-fill the hole and the guard below would refuse every append): they start a NEW chunk at the head. The hole stays reported and a correct resend fills it.
+    else if ((await this.tools.fileSize(this.chunkPath(st, active))) < st.bodyEnd - active) { chunkStart = st.bodyEnd; created = !st.chunks.includes(chunkStart); }
     try {
       const bf = await this.fs.open(this.chunkPath(st, chunkStart), { create: true });
       try {
@@ -805,7 +869,7 @@ export class ChatStore {
     // WHY the checkpoint BEFORE the acknowledgement, every time (review 3, F3/F9): it is the independent record that says which lines were
     // acknowledged. If it fails, the lines stay (they are whole and valid, just not acknowledged), the append reports the error, the cached state
     // is dropped, and the caller's retry finds them already stored. No rollback here: a rollback after a checkpoint that may have landed would leave it ahead of the index.
-    await appendCheckpoint(this.fs, st.dir, st.ck, { count: bs.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, h: bs.h, c: bs.c });
+    await appendCheckpoint(this.fs, st.dir, st.ck, { count: bs.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: st.evictedLines, evBytes: st.evictedBytes, h: bs.h, c: bs.c });
     // acknowledged: now update memory
     if (created) st.chunks.push(chunkStart);
     st.count = bs.count; st.h = bs.h; st.c = bs.c; st.convCount = bs.convCount; st.bodyEnd = bs.off; st.rs = bs.rs;
@@ -825,7 +889,7 @@ export class ChatStore {
   /** Do now what a read had to postpone (a copy to torn/ and a cut). Throws the typed error again when it still cannot be done. */
   private async runDeferred(st: VState): Promise<void> {
     const d = st.deferred!;
-    if (d.partial) await writeSide(this.fs, nodePath.join(st.dir, PARTIAL_FILE), { ...d.partial, atMs: this.now() }); // DESTRUCTIVE-OK(hint): a marker; replaces an older marker of the same kind
+    if (d.partial) await writeSideFor(this.fs, nodePath.join(st.dir, PARTIAL_FILE), st.key, { ...d.partial, atMs: this.now() }); // DESTRUCTIVE-OK(hint): a marker; replaces an older marker of the same kind
     if (d.indexTail) {
       const f = await this.fs.open(this.ixPath(st.dir), { create: false });
       try {
@@ -874,7 +938,9 @@ export class ChatStore {
     const hsh = createHash('sha256'); for (const l of lines) hsh.update(l);
     // 16 digits: names sort by line number up to 2^53, past the 12 digits that broke the old ordering
     const name = `${fromLine.toString().padStart(16, '0')}-${hsh.digest('hex').slice(0, 16)}.park`;
-    const data = frameLines(lines);
+    // WHY the version tag in front (review 4, class fix): a parked file copied in from another version has a good checksum and a content-derived name; applied, it would put
+    // another chat's lines at the head of this one. The tag makes it foreign (moved to rejected/, never applied).
+    const data = Buffer.concat([versionTag(st.key), frameLines(lines)]);
     if (st.parked.has(name)) {
       // WHY not simply "already parked" (the file could have rotted since): an intact copy is enough, a damaged one is kept in rejected/ and replaced
       const have = await this.fs.readFile(nodePath.join(st.dir, 'parked', name));
@@ -907,7 +973,7 @@ export class ChatStore {
         if (from > st.count) break; // sorted by line number: the rest still have a gap
         const path = nodePath.join(dir, name);
         const raw = await this.fs.readFile(path);
-        const lines = raw ? unframeLines(raw) : null;
+        const lines = raw && raw.length > 16 && raw.subarray(0, 16).equals(versionTag(st.key)) ? unframeLines(raw.subarray(16)) : null;
         if (!lines) { if (await this.moveAway(st, path, name)) progressed = true; else skip.add(name); continue; }
         const res = await this.applyLines(st, from, lines);
         if (res === 'not-a-prefix') { if (await this.moveAway(st, path, name)) progressed = true; else skip.add(name); }
@@ -1023,13 +1089,13 @@ export class ChatStore {
   }
 
   private async saveSummary(st: VState): Promise<void> {
-    await writeSide(this.fs, nodePath.join(st.dir, 'summary.json'), { ...st.summary, lines: st.count }); // DESTRUCTIVE-OK(hint): a cache of facts the index and bodies can recompute
+    await writeSideFor(this.fs, nodePath.join(st.dir, 'summary.json'), st.key, { ...st.summary, lines: st.count }); // DESTRUCTIVE-OK(hint): a cache of facts the index and bodies can recompute
     st.summarySavedAt = st.count; st.summaryDirty = false;
   }
 
   /** Load the saved summary and replay any lines it has not seen (needs their bodies; stays stale if evicted). */
   private async loadSummary(st: VState): Promise<void> {
-    const r = await readSide(this.fs, nodePath.join(st.dir, 'summary.json'));
+    const r = await readSideFor(this.fs, nodePath.join(st.dir, 'summary.json'), st.key);
     let from = 0;
     if (r.kind === 'ok' && r.value && typeof r.value === 'object') {
       const m = r.value;
@@ -1112,6 +1178,9 @@ export class ChatStore {
         const dir = nodePath.join(st.dir, 'tails');
         const path = nodePath.join(dir, `${takeoverId}.tail`);
         const existing = await this.readTailFile(path);
+        // WHY (review 4, F6): a `.done` marker with no tail file means the tail (the only copy of the cut lines) was lost. A retry must not write an empty valid tail over
+        // that evidence; it is reported, and nothing is written.
+        if (!existing && await this.fs.exists(nodePath.join(dir, `${takeoverId}.done`))) throw new StoreError('corrupt', 'the saved tail file is missing although the cut was marked done');
         if (existing) {
           const L = existing.lines.length;
           // a request past the head was clamped to the head the first time: the same request again is the same retry
@@ -1159,6 +1228,7 @@ export class ChatStore {
         const keys = only ? [only] : await this.fs.readdir(nodePath.join(this.root, 'versions'));
         for (const key of keys) {
           const t = await this.readTailFile(nodePath.join(this.vdir(key), 'tails', `${takeoverId}.tail`));
+          if (!t && await this.fs.exists(nodePath.join(this.vdir(key), 'tails', `${takeoverId}.done`))) throw new StoreError('corrupt', 'the saved tail file is missing although the cut was marked done');
           if (t) return { version: unhex(t.version), fromLine: t.fromLine, fromHash: t.fromHash, fromConversationHash: t.fromConv, headHash: t.headHash, headConversationHash: t.headConv, lines: t.lines, replyEnds: t.replyEnds, pendingReplyEnd: t.pending };
         }
         return null;
@@ -1204,7 +1274,7 @@ export class ChatStore {
     // the next load would call the version damaged. Lowered first, a kill between the two steps leaves it merely behind the index.
     if (st.ck.ck && st.ck.ck.count > n) {
       // DESTRUCTIVE-OK(verified-record): lowers the statement to the chain value of record n-1, read from the checksummed index; the caller saved the cut lines in a verified tail file
-      await writeCheckpoint(this.fs, st.dir, { count: n, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, h: lastKept ? lastKept.h : st.seeds.raw, c: lastKept ? lastKept.c : st.seeds.conversation }, st.ck);
+      await writeCheckpoint(this.fs, st.dir, { count: n, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: st.evictedLines, evBytes: st.evictedBytes, h: lastKept ? lastKept.h : st.seeds.raw, c: lastKept ? lastKept.c : st.seeds.conversation }, st.ck);
     }
     const f = await this.fs.open(this.ixPath(st.dir), { create: false });
     // DESTRUCTIVE-OK(kept-copy-first): the lines past n were saved in a tail file that was read back and compared before this call (setAsideTail)
@@ -1249,7 +1319,7 @@ export class ChatStore {
         }
         const asideName = await nextAsideName(this.fs, this.root, key, false);
         await mkdirDurable(this.fs, nodePath.join(this.root, 'aside', asideName));   // the space-needing step first (see quarantine)
-        await writeSide(this.fs, nodePath.join(dir, 'aside.intent'), metaBad ? { asideName, moveMeta: true } : { asideName }); // DESTRUCTIVE-OK(hint): a note of intent; load() finishes the move it names
+        await writeSideFor(this.fs, nodePath.join(dir, 'aside.intent'), key, metaBad ? { asideName, moveMeta: true } : { asideName }); // DESTRUCTIVE-OK(hint): a note of intent; load() finishes the move it names
         this.versions.delete(key);
         await this.finishAside(key, dir);
         return { asideName };
@@ -1258,8 +1328,14 @@ export class ChatStore {
   }
 
   private async finishAside(key: string, dir: string): Promise<void> {
-    const ir = await readSide(this.fs, nodePath.join(dir, 'aside.intent'));
+    const intentPath = nodePath.join(dir, 'aside.intent');
+    const ir = await readSide(this.fs, intentPath);
     if (ir.kind === 'absent') return;
+    // WHY (review 4, class fix): an intent is a note that exists only while a move is in flight. One that names ANOTHER version is a foreign copy, and one whose aside
+    // folder already carries the COMPLETE mark (written last, just before the note is removed) is an older copy of a note that did its job. Acting on either would move
+    // a healthy version aside. Both are kept as aside.intent.bad-N and ignored. (An intent that merely fails its checksum is still finished, below.)
+    if (ir.kind === 'ok' && ir.value?.version !== key) { await keepBadSideFile(this.fs, intentPath); return; }
+    if (ir.kind === 'ok' && typeof ir.value?.asideName === 'string' && ASIDE_RE.test(ir.value.asideName) && await this.fs.exists(nodePath.join(this.root, 'aside', ir.value.asideName, 'COMPLETE'))) { await keepBadSideFile(this.fs, intentPath); return; }
     let { asideName, reason, moveMeta } = (ir.kind === 'ok' && ir.value ? ir.value : {}) as { asideName?: string; reason?: string; moveMeta?: boolean };
     // WHY not an error when the note is unreadable (review 3, class fix): the move still has to be finished, and a version must never be wedged by it. A fresh aside
     // name is chosen and the version reports `damaged` until the caller clears it; the files already moved stay where they are.
@@ -1278,12 +1354,20 @@ export class ChatStore {
     }
     await this.fs.fsyncDir(target); await this.fs.fsyncDir(dir);
     // WHY (review 3, F7): reading must not fail because the disk is full. With no room for the marker the version is still reported `damaged` (typed), and the intent stays so the marker is written when space returns.
-    try { if (reason !== undefined) await writeSide(this.fs, nodePath.join(dir, 'damaged.json'), { asideName, reason, atMs: this.now() }); } // DESTRUCTIVE-OK(hint): the marker that says where the copy went
+    try { if (reason !== undefined) await writeSideFor(this.fs, nodePath.join(dir, 'damaged.json'), key, { asideName, reason, atMs: this.now() }); } // DESTRUCTIVE-OK(hint): the marker that says where the copy went
     catch (e) { if (!isDiskFull(e)) throw e; throw new StoreError('damaged', asideName); }
     // WHY the intent goes BEFORE the fresh index (H2): once the moves are durable the intent has done its job.
     // If it outlived the fresh index, a rerun would move that new empty index over the aside copy's index.
-    await this.fs.unlink(nodePath.join(dir, 'aside.intent')); // DESTRUCTIVE-OK(hint): the note has done its job; every move it described is durable
-    await this.fs.fsyncDir(dir);
+    try {
+      await writeFileAtomic(this.fs, nodePath.join(target, 'COMPLETE'), Buffer.from('complete\n')); // DESTRUCTIVE-OK(hint): a NEW existence-only mark in the aside folder; it lets a later reader tell this finished note from a live one
+      await this.fs.unlink(nodePath.join(dir, 'aside.intent')); // DESTRUCTIVE-OK(hint): the note has done its job; every move it described is durable
+      await this.fs.fsyncDir(dir);
+    } catch (e) {
+      // WHY (review 3 F7 again): a read must not fail for lack of space. The note stays (every step it describes is repeatable) and is finished when space returns.
+      if (!isDiskFull(e)) throw e;
+      if (reason !== undefined) throw new StoreError('damaged', asideName);
+      return;
+    }
     // a version whose meta.json was garbage has no registration any more (the caller registers it again): no index to create
     if (reason === undefined && !moveMeta) { try { await this.ensureIndex(dir); } catch (e) { if (!isDiskFull(e)) throw e; } }   // a full disk: the empty version is served, the first append creates the index
     void key;
@@ -1315,26 +1399,42 @@ export class ChatStore {
         let genuine = false;
         try { genuine = (await this.verifier(proof, { version: key, chatId: st.meta.chatId, lines: proof.through, hash: proof.hash })) === true; } catch { genuine = false; }
         if (!genuine) throw new StoreError('bad-proof', 'proof was not accepted by the verifier');
-        if (proof.through <= st.evictedLines) return { evictedLines: st.evictedLines, freedBytes: 0 };
+        if (proof.through <= st.evictedLines) {
+          // Nothing new to evict. A kill between the eviction record and the unlinks leaves chunk files that lie wholly below the evicted bytes; load never removes them
+          // (review 4, F1: only a CURRENT proof may justify an unlink). This proof is current and bound to this chain value, so it finishes that job.
+          const f0 = await this.fs.open(this.ixPath(st.dir), { create: false });
+          let upTo: number; try { const r = this.mustRec(await f0.read(recPos(proof.through - 1), REC)); upTo = r.offset + r.len; } finally { await f0.close(); }
+          return { evictedLines: st.evictedLines, freedBytes: await this.dropChunksBelow(st, upTo) };
+        }
         // never drop the last good copy of bytes that no longer match their chain value
         const bad = await this.firstBadBody(st, st.evictedLines, proof.through);
         if (bad !== null) throw new StoreError('corrupt', `line ${bad}: body bytes do not match the chain; not evicting`);
         const f = await this.fs.open(this.ixPath(st.dir), { create: false });
         let byteAt: number;
         try { const r = this.mustRec(await f.read(recPos(proof.through - 1), REC)); byteAt = r.offset + r.len; } finally { await f.close(); }
-        // 1. the marker (atomic) 2. unlink the chunks wholly below it. A kill between leaves chunks that load() removes.
-        await writeSide(this.fs, nodePath.join(st.dir, 'evicted.json'), { lines: proof.through, bytes: byteAt, hash: proof.hash, holders: proof.acks.map((a) => a.holder), atMs: this.now() }); // DESTRUCTIVE-OK(verified-record): a proven eviction; `bytes` is read from the checksummed index record of the last evicted line
-        let freed = 0; const keep: number[] = [];
-        for (let i = 0; i < st.chunks.length; i++) {
-          const end = i + 1 < st.chunks.length ? st.chunks[i + 1] : st.bodyEnd;
-          // DESTRUCTIVE-OK(verified-record): the holders' proof was accepted by the verifier, bound to this chain value, and the bytes were just re-hashed against the index (firstBadBody)
-          if (end <= byteAt) { freed += end - st.chunks[i]; await this.fs.unlink(this.chunkPath(st, st.chunks[i])); } else keep.push(st.chunks[i]);
-        }
-        await this.fs.fsyncDir(st.dir);
-        st.chunks = keep; st.evictedLines = proof.through; st.evictedBytes = byteAt;
+        // 1. the eviction record, inside the checkpoint (both slots, atomic enough: each slot is its own checksummed write) 2. the holders' note 3. unlink the chunks wholly
+        // below it. A kill between 1 and 3 leaves chunk files that a later proof removes; nothing is ever removed on load.
+        // DESTRUCTIVE-OK(verified-record): a proven eviction; `byteAt` is read from the checksummed index record of the last evicted line; the new statement keeps the head's own chain values
+        await writeCheckpoint(this.fs, st.dir, { count: st.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: proof.through, evBytes: byteAt, h: st.h, c: st.c }, st.ck);
+        st.evictedLines = proof.through; st.evictedBytes = byteAt;
+        await writeSideFor(this.fs, nodePath.join(st.dir, 'evicted.json'), st.key, { lines: proof.through, bytes: byteAt, hash: proof.hash, holders: proof.acks.map((a) => a.holder), atMs: this.now() }); // DESTRUCTIVE-OK(hint): a record of who held the lines; nothing is decided from it
+        const freed = await this.dropChunksBelow(st, byteAt);
         return { evictedLines: st.evictedLines, freedBytes: freed };
       }));
     });
+  }
+
+  /** Unlink the chunk files that lie wholly below byte `upTo` (the caller holds a proof that justifies it). Returns the bytes freed. */
+  private async dropChunksBelow(st: VState, upTo: number): Promise<number> {
+    let freed = 0; const keep: number[] = [];
+    for (let i = 0; i < st.chunks.length; i++) {
+      const end = i + 1 < st.chunks.length ? st.chunks[i + 1] : st.bodyEnd;
+      // DESTRUCTIVE-OK(verified-record): the holders' proof was accepted by the verifier, bound to this chain value, and the bytes were just re-hashed against the index (firstBadBody)
+      if (end <= upTo) { freed += end - st.chunks[i]; await this.fs.unlink(this.chunkPath(st, st.chunks[i])); } else keep.push(st.chunks[i]);
+    }
+    if (keep.length !== st.chunks.length) await this.fs.fsyncDir(st.dir);
+    st.chunks = keep;
+    return freed;
   }
 
   /** First line in [from, to) whose body bytes do not hash to its recorded chain value, or null. */
@@ -1371,12 +1471,13 @@ export class ChatStore {
         if (st.evictedLines === 0) return { restoredLines: 0 };
         if (ls.length < st.evictedLines) throw new StoreError('bad-argument', 'need every evicted line, from line 0');
         // the restored region is [0, S) where S is where the earliest surviving chunk starts (or the end of data)
+        const E = st.evictedLines;
         const S = st.chunks.length ? st.chunks[0] : st.bodyEnd;
         const f = await this.fs.open(this.ixPath(st.dir), { create: false });
         const parts: Buffer[] = []; let h: Buffer = st.seeds.raw;
         try {
-          for (let n = 0; n < st.evictedLines;) {
-            const take = Math.min(SCAN_BATCH, st.evictedLines - n);
+          for (let n = 0; n < E;) {
+            const take = Math.min(SCAN_BATCH, E - n);
             const buf = await f.read(recPos(n), take * REC);
             for (let i = 0; i < take; i++, n++) {
               const r = this.mustRec(buf, i * REC);
@@ -1386,18 +1487,20 @@ export class ChatStore {
             }
           }
         } finally { await f.close(); }
-        // WHY skip when S is 0: eviction frees whole chunk files only, so the chunk holding the boundary
-        // (and every line before it, if it is the first chunk) is still physically there; overwriting it
-        // with the empty restored region would destroy the very lines we are restoring.
-        // DESTRUCTIVE-OK(verified-record): chunk 0 does not exist (S > 0 means every earlier chunk was freed); its bytes were checked line by line against the index above
-        if (S > 0) await writeFileAtomic(this.fs, this.chunkPath(st, 0), Buffer.concat(parts));
-        await writeSide(this.fs, nodePath.join(st.dir, 'evicted.json'), { lines: 0, bytes: 0 }); // DESTRUCTIVE-OK(verified-record): every evicted line was just verified against the chain and is back on disk
-        const restored = st.evictedLines;
+        // The common case: every chunk file below the boundary was freed, so the whole region [0, S) is one new chunk file written in one go. Whatever else is not
+        // right (a rotted byte in the boundary chunk, a missing chunk in the middle: review 4, F7) is repaired line by line below.
+        // DESTRUCTIVE-OK(verified-record): no chunk file starts at or before 0 here (S > 0); the bytes were checked line by line against the index above
+        if (S > 0 && parts.length) await this.writeAt(st, 0, Buffer.concat(parts));
+        await this.repairBodies(st, 0, ls.slice(0, E), 0);
+        // WHY the read-back (review 4, F7): "restored" must mean the lines read back from disk byte for byte. Only then is the eviction record cleared.
+        await this.readRange(st, 0, E, true);
+        // DESTRUCTIVE-OK(verified-record): every evicted line was just verified against the chain and read back from disk
+        await writeCheckpoint(this.fs, st.dir, { count: st.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: 0, evBytes: 0, h: st.h, c: st.c }, st.ck);
+        await writeSideFor(this.fs, nodePath.join(st.dir, 'evicted.json'), st.key, { lines: 0, bytes: 0 }); // DESTRUCTIVE-OK(hint): the holders' note; nothing is decided from it
         st.evictedLines = 0; st.evictedBytes = 0;
-        if (S > 0 && !st.chunks.includes(0)) st.chunks.unshift(0);
         // N4: with the bodies back the conversation chain can be recomputed: drop the cached state so the next call rebuilds it
         if (st.staleConv) this.versions.delete(key);
-        return { restoredLines: restored };
+        return { restoredLines: E };
       }));
     });
   }
@@ -1413,8 +1516,8 @@ export class ChatStore {
       try {
         if ((await f.size()) !== recPos(st.count)) return fail(st.count, 'index size');
         try {
-          const lay = await this.tools.checkChunks(st.dir, { bytes: st.evictedBytes });
-          if (lay.phys !== st.bodyEnd) return fail(st.count, 'body end');
+          const lay = await this.tools.layout(st.dir);
+          if (Math.max(lay.phys, st.evictedBytes) !== st.bodyEnd) return fail(st.count, 'body end');
         } catch (e) { return fail(0, e instanceof Damaged ? e.reason : 'body chunks'); }
         // N1: the head must also agree with the checkpoint kept in a separate file
         const ck = await readCheckpoint(this.fs, st.dir);

@@ -9,8 +9,9 @@ import { REC, HDR, recPos } from './records';
 import { cc } from './fixtures';
 import { CHAT, V, openWith, refChains, tmpRoot } from './testkit';
 import { FaultFs, InjectedCrash } from './fault-fs';
-import { readCheckpoint } from './checkpoint';
+import { readCheckpoint, CHECKPOINT_SLOT } from './checkpoint';
 import { realFs } from './fsio';
+import { versionTag } from './chain';
 import { acquireLock } from './lock';
 import { encodeSide } from './sidefile';
 
@@ -307,10 +308,14 @@ describe('control log tails', () => {
     await s3.close();
   });
   it('a last record whose header is whole but whose payload is all zeros is a torn write, not damage', async () => {
-    const s = await openWith(t.dir); for (let i = 0; i < 3; i++) await s.appendControl(entry(i)); await s.close();
+    const s = await openWith(t.dir); let anchorAfter2 = Buffer.alloc(0);
+    for (let i = 0; i < 3; i++) { await s.appendControl(entry(i)); if (i === 1) anchorAfter2 = fs.readFileSync(path.join(t.dir, 'control', fs.readdirSync(path.join(t.dir, 'control'))[0], 'anchor.json')); }
+    await s.close();
     const dirs = fs.readdirSync(path.join(t.dir, 'control')); const log = path.join(t.dir, 'control', dirs[0], 'log.bin');
     const b = fs.readFileSync(log); const lastStart = b.length - (16 + 34 + 4 + CHAT.length + entry(2).body.length + 32 * 0);
     b.fill(0, lastStart + 16); fs.writeFileSync(log, b);
+    // a REAL torn write is a crash before the append was acknowledged, so the independent record (anchor.json) never counted it: put the record back as it was after entry 2
+    fs.writeFileSync(path.join(path.dirname(log), 'anchor.json'), anchorAfter2);
     const s2 = await ChatStore.open(t.dir);
     expect((await s2.controlLog(CHAT)).length).toBe(2); expect(await s2.controlDamage(CHAT)).toEqual([]);
     await s2.close();
@@ -385,8 +390,9 @@ describe('reads on a full disk never fail', () => {
     const L = rows(20);
     for (let n = 1; n <= 30; n++) {
       const root = path.join(t.dir, `q${n}`); fs.mkdirSync(root);
-      await build(root, L);
-      fs.truncateSync(path.join(vdir(root), 'body-0000000000000000.bin'), lineStart(L, 12));   // the body is shorter than the index says: quarantine, no rebuild first
+      await build(root, L, { chunkBytes: 1 });                         // one chunk file per append (three of them)
+      // a version nothing can repair: no index, and a middle chunk file gone (two faults; a quarantine is only ever reached through a rebuild that cannot succeed)
+      fs.unlinkSync(path.join(vdir(root), 'index.bin')); fs.unlinkSync(path.join(vdir(root), fs.readdirSync(vdir(root)).filter((f) => f.startsWith('body-')).sort()[1]));
       const s = await ChatStore.open(root, { fs: new FaultFs(0, { enospcFrom: n }) });
       await expect(s.head(V(1)), `quarantine with the disk full from allocation ${n}`).rejects.toMatchObject({ code: 'damaged' });
       await s.close(); deadLock(root);
@@ -394,16 +400,17 @@ describe('reads on a full disk never fail', () => {
       await expect(s2.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
       await s2.close();
       const holders = [path.join(vdir(root), 'body-0000000000000000.bin'), ...(fs.existsSync(path.join(root, 'aside')) ? fs.readdirSync(path.join(root, 'aside')).map((d) => path.join(root, 'aside', d, 'body-0000000000000000.bin')) : [])];
-      expect(holders.some((f) => fs.existsSync(f) && fs.readFileSync(f).includes(L[11])), `bytes kept after allocation ${n}`).toBe(true);
+      expect(holders.some((f) => fs.existsSync(f) && fs.readFileSync(f).includes(L[3])), `bytes kept after allocation ${n}`).toBe(true);
     }
   });
   it('a quarantine whose damaged marker was not written yet (interrupted) is still reported damaged when read on a full disk', async () => {
-    const L = rows(20); await build(t.dir, L);
-    fs.truncateSync(path.join(vdir(), 'body-0000000000000000.bin'), lineStart(L, 12));
+    const L = rows(20); await build(t.dir, L, { chunkBytes: 1 });
+    fs.unlinkSync(path.join(vdir(), 'index.bin')); fs.unlinkSync(path.join(vdir(), fs.readdirSync(vdir()).filter((f) => f.startsWith('body-')).sort()[1]));   // a version nothing can repair: quarantine
     const s = await ChatStore.open(t.dir); await expect(s.head(V(1))).rejects.toMatchObject({ code: 'damaged' }); await s.close();
     const name = fs.readdirSync(path.join(t.dir, 'aside'))[0];
     fs.unlinkSync(path.join(vdir(), 'damaged.json'));                                   // the kill came before the marker
-    fs.writeFileSync(path.join(vdir(), 'aside.intent'), encodeSide({ asideName: name, reason: 'interrupted' }));
+    fs.unlinkSync(path.join(t.dir, 'aside', name, 'COMPLETE'));                          // (the COMPLETE mark is written after the marker, so it was not there either)
+    fs.writeFileSync(path.join(vdir(), 'aside.intent'), encodeSide({ asideName: name, reason: 'interrupted', version: vhex }));
     const s2 = await ChatStore.open(t.dir, { fs: new FaultFs(0, { enospcFrom: 1 }) });
     await expect(s2.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
     await s2.close();
@@ -417,7 +424,7 @@ describe('reads on a full disk never fail', () => {
     const s = await openWith(t.dir, V(1)); await s.append(V(1), 0, 0, L.slice(0, 10)); await s.close();
     const { frameLines } = await import('./records');
     fs.mkdirSync(path.join(vdir(), 'parked'), { recursive: true });
-    fs.writeFileSync(path.join(vdir(), 'parked', `${'10'.padStart(16, '0')}-${'a'.repeat(16)}.park`), frameLines(L.slice(10, 13)));
+    fs.writeFileSync(path.join(vdir(), 'parked', `${'10'.padStart(16, '0')}-${'a'.repeat(16)}.park`), Buffer.concat([versionTag(vhex), frameLines(L.slice(10, 13))]));
     const s2 = await ChatStore.open(t.dir, { fs: new FaultFs(0, { enospcFrom: 1 }) });
     expect((await s2.head(V(1))).lines).toBe(10);
     await s2.close();
@@ -482,9 +489,9 @@ describe('a second copy that was found damaged is repaired when the version load
   });
   it('a damaged slot is repaired at open and the other slot is not the only evidence any more', async () => {
     const s = await openWith(t.dir, V(1)); for (let i = 0; i < 40; i++) await s.append(V(1), 0, i, [L[i]]); await s.close();
-    flipAt(path.join(vdir(), 'checkpoint.bin'), 20 + 96);
+    flipAt(path.join(vdir(), 'checkpoint.bin'), 20 + CHECKPOINT_SLOT);
     const s2 = await ChatStore.open(t.dir); await s2.head(V(1)); await s2.close();
-    const b = fs.readFileSync(path.join(vdir(), 'checkpoint.bin')); expect(b.length).toBe(192);
+    const b = fs.readFileSync(path.join(vdir(), 'checkpoint.bin')); expect(b.length).toBe(2 * CHECKPOINT_SLOT);
     flipAt(path.join(vdir(), 'checkpoint.bin'), 20);                          // now the OTHER slot
     expect((await readCheckpoint(realFs, vdir()))!.count).toBe(40);
   });

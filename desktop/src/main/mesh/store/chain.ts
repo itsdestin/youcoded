@@ -39,6 +39,16 @@ export const defaultChainSeeds: ChainSeedFn = ({ chatId, segment }) => {
   return { raw, conversation };
 };
 
+/**
+ * A 16-byte identity of one VERSION folder (review 4, class fix). WHY: a file that is internally valid but belongs to ANOTHER version (a copy put in
+ * the wrong folder, a restored backup of a neighbour) passes every checksum. Files whose bytes mean something only for one version (the index header,
+ * the checkpoint slots, every small state file) carry this tag, so a foreign copy is recognised as foreign instead of being believed. Derived from the
+ * folder name (the version key), so it needs no other file to be readable.
+ */
+export function versionTag(key: string): Buffer {
+  return createHash('sha256').update('youcoded-mesh/v1/version-tag\0').update(key).digest().subarray(0, 16);
+}
+
 /** One chain step: SHA-256(previous value (32 raw bytes) || raw line bytes including the newline). */
 export function chainStep(prev: Uint8Array, line: Uint8Array): Buffer {
   return createHash('sha256').update(prev).update(line).digest();

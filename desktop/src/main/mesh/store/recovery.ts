@@ -4,12 +4,12 @@
 import * as nodePath from 'node:path';
 import { writeFileAtomic, mkdirDurable, type Fs, type FileLike } from './fsio';
 import { readCheckpoint, writeCheckpoint, CHECKPOINT_FILE } from './checkpoint';
-import { writeSide } from './sidefile';
+import { writeSideFor } from './sidefile';
 import { StoreError } from './errors';
-import { chainStep, type ChainSeeds, type RuntimeKind } from './chain';
+import { chainStep, versionTag, type ChainSeeds, type RuntimeKind } from './chain';
 import { analyseLine, initialReplyState, replyEndStep, type LineInfo, type ReplyEndOptions, type ReplyState } from './classify';
 import { isDiskFull } from './storeutil';
-import { HDR, REC, NONE, decodeRecord, encodeRecord, headerOk, headerStamp, indexHeader, recPos, type Rec } from './records';
+import { HDR, REC, NONE, decodeRecord, encodeRecord, headerOk, headerStamp, headerTag, indexHeader, recPos, type Rec } from './records';
 
 const MIB = 1024 * 1024;
 /** Verify only the window a crash could have damaged (the last this-many records); the rolling scrub walks the older part. */
@@ -34,6 +34,10 @@ export class Damaged extends Error { constructor(readonly reason: string) { supe
 /** The running state a batch of lines is encoded against. */
 export interface BatchState { count: number; h: Buffer; c: Buffer; convCount: number; off: number; rs: ReplyState }
 export interface SumFacts { title: string | null; model: string | null; cwd: string | null }
+
+/** The version key a version folder belongs to (the folder name), and its identity tag (chain.ts versionTag). */
+const keyOfDir = (dir: string): string => nodePath.basename(dir);
+const tagOfDir = (dir: string): Buffer => versionTag(keyOfDir(dir));
 
 export function chunkPathOf(dir: string, start: number): string { return nodePath.join(dir, `body-${start.toString(16).padStart(16, '0')}.bin`); }
 
@@ -66,6 +70,50 @@ export class BodyTools {
     if (chunks[0] > ev.bytes) throw new Damaged('the first body chunk is missing');
     const i = chunks.length - 1;
     return { chunks, sizes, phys: chunks[i] + sizes[i] };
+  }
+
+  /**
+   * The body chunk files as they are, WITHOUT demanding that they form one gapless run (review 4, F3): `chunks` are the start offsets in order, `sizes` the
+   * file sizes, `phys` the end of the last one. A missing, short or cut chunk is a hole in the byte space, found by `gapStart`; it must never hide the lines
+   * that are still whole.
+   */
+  async layout(dir: string): Promise<{ chunks: number[]; sizes: number[]; phys: number }> {
+    const chunks = await this.listChunks(dir);
+    const sizes: number[] = [];
+    for (const c of chunks) sizes.push(await this.fileSize(chunkPathOf(dir, c)));
+    const i = chunks.length - 1;
+    return { chunks, sizes, phys: i >= 0 ? chunks[i] + sizes[i] : 0 };
+  }
+
+  /**
+   * The first byte in [from, to) that no chunk file holds, or null when the whole range is covered. A chunk covers [start, min(start + size, next start)): bytes
+   * a chunk holds past the next chunk's start are never read (that is how a doubled or foreign-length file stays harmless).
+   */
+  gapStart(lay: { chunks: number[]; sizes: number[] }, from: number, to: number): number | null {
+    let cur = from;
+    for (let i = 0; i < lay.chunks.length && cur < to; i++) {
+      const end = Math.min(lay.chunks[i] + lay.sizes[i], i + 1 < lay.chunks.length ? lay.chunks[i + 1] : Infinity);
+      if (end <= cur) continue;
+      if (lay.chunks[i] > cur) return cur;
+      cur = end;
+    }
+    return cur < to ? cur : null;
+  }
+
+  /** The first line in [fromLine, count) whose bytes end after byte `at` (binary search over the index; offsets only grow), or null. */
+  async firstLineEndingAfter(dir: string, fromLine: number, count: number, at: number): Promise<number | null> {
+    if (fromLine >= count) return null;
+    const f = await this.fs.open(nodePath.join(dir, 'index.bin'), { create: false });
+    try {
+      let lo = fromLine; let hi = count - 1; let found: number | null = null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const r = decodeRecord(await f.read(recPos(mid), REC), 0);
+        if (!r) throw new NeedsRebuild(`record ${mid} fails its checksum`);
+        if (r.offset + r.len > at) { found = mid; hi = mid - 1; } else lo = mid + 1;
+      }
+      return found;
+    } finally { await f.close(); }
   }
 
   /**
@@ -190,12 +238,12 @@ export class BodyTools {
    * left as surplus for the next load to keep aside; when no checkpoint exists they are possibly acknowledged and are also marked partial.
    * Nothing vouching at all (no valid record, no checkpoint) for a body with whole lines is refused as damaged (quarantine, bytes kept).
    */
-  async rebuildIndex(dir: string, runtime: RuntimeKind, seeds: ChainSeeds, evIn: { hint: { lines: number; bytes: number } | null; derivedBytes: number }, stamp: number, opts: { convStale?: boolean } = {}): Promise<RebuildResult> {
-    const layout = await this.checkChunks(dir, { bytes: evIn.derivedBytes });
-    // eviction: the marker's numbers are a candidate only when a prefix of valid records ends exactly there; the chunk files' start is the other candidate
+  async rebuildIndex(dir: string, runtime: RuntimeKind, seeds: ChainSeeds, evIn: { hint: { lines: number; bytes: number } | null }, stamp: number, opts: { convStale?: boolean } = {}): Promise<RebuildResult> {
+    const layout = await this.checkChunks(dir, { bytes: evIn.hint?.bytes ?? 0 });
+    // eviction: the CHECKPOINT's record of it (hint) is the only candidate, and only when a prefix of valid records ends exactly there. WHY not "the first chunk file's
+    // start" any more (review 4, F4): a deleted first chunk looks exactly like an eviction, and must be reported as damage, never relabelled as one.
     const candidates: { lines: number | null; bytes: number }[] = [];
-    if (evIn.hint && evIn.hint.bytes > 0 && evIn.hint.bytes >= evIn.derivedBytes) candidates.push(evIn.hint);
-    if (evIn.derivedBytes > 0) candidates.push({ lines: null, bytes: evIn.derivedBytes });
+    if (evIn.hint && evIn.hint.bytes > 0) candidates.push(evIn.hint);
     let ev: { lines: number | null; bytes: number } = { lines: 0, bytes: 0 };
     const oldPath = nodePath.join(dir, 'index.bin');
     const tmpPath = nodePath.join(dir, 'index.rebuild');
@@ -206,16 +254,19 @@ export class BodyTools {
     try {
       const open = async (path: string, create = false): Promise<FileLike> => { const f = await this.fs.open(path, { create }); handles.push(f); return f; };
       const refs: Ref[] = [];
-      const addRef = async (path: string): Promise<Ref> => {
+      const myTag = tagOfDir(dir);
+      /** Returns null for an index that belongs to ANOTHER version (valid header, other identity tag): none of its records is ever used (review 4, F8). */
+      const addRef = async (path: string): Promise<Ref | null> => {
         const f = await open(path); const size = await f.size();
         const hdr = size >= HDR ? await f.read(0, HDR) : Buffer.alloc(0);
         const hdrOk = hdr.length >= HDR && headerOk(hdr);
+        if (hdrOk && !headerTag(hdr).equals(myTag)) return null;
         // WHY three states: a damaged header cannot say which classifier wrote the records, so it is "unknown" and decided by the records themselves
         const ref: Ref = { f, slots: size >= HDR ? Math.ceil((size - HDR) / REC) : 0, size, mode: opts.convStale ? 'changed' : hdrOk ? (headerStamp(hdr) === stamp ? 'same' : 'changed') : 'unknown', cache: new Map() };
         refs.push(ref); return ref;
       };
       const primary = hadOld ? await addRef(oldPath) : null;
-      if (!primary || primary.size < HDR + REC) {
+      if (!primary || primary.size < HDR + REC) {   // (a foreign primary is `null` here: it counts as having no usable record)
         const rd = nodePath.join(dir, 'replaced-index');
         for (const n of (await this.fs.readdir(rd)).filter((x) => /^index-\d{4}\.bin$/.test(x)).sort().reverse().slice(0, 2)) await addRef(nodePath.join(rd, n));
       }
@@ -240,7 +291,7 @@ export class BodyTools {
       const nf = await open(tmpPath, true);
       // DESTRUCTIVE-OK(scratch): index.rebuild is a scratch file derived from the body and the old index; it is never the only copy of anything
       await nf.truncate(0);
-      await nf.write(indexHeader(stamp), 0);
+      await nf.write(indexHeader(stamp, myTag), 0);
       let start: BatchState = { count: 0, h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation), convCount: 0, off: 0, rs: initialReplyState() };
       let staleOut = false;
       let prefixBuf: Buffer | null = null;
@@ -365,16 +416,17 @@ export class BodyTools {
           try { if (old) await this.keepBytes(dir, 'checkpoint', old); }
           catch (e) { if (isDiskFull(e) || (e instanceof StoreError && e.code === 'limit')) throw new Damaged('the old checkpoint statement could not be kept (the keep-area or the disk is full)'); throw e; }
         }
-        await writeSide(this.fs, nodePath.join(dir, PARTIAL_FILE), { fromLine: partial.fromLine, lost: partial.lost, atMs: Date.now() }); // DESTRUCTIVE-OK(hint): marks lines as set aside; replaces an older marker of the same kind
+        await writeSideFor(this.fs, nodePath.join(dir, PARTIAL_FILE), keyOfDir(dir), { fromLine: partial.fromLine, lost: partial.lost, atMs: Date.now() }); // DESTRUCTIVE-OK(hint): marks lines as set aside; replaces an older marker of the same kind
       }
-      if (partial || !ckpt || ckpt.count !== count || ckpt.stamp !== ckStamp) {
+      const evBytesOut = evLines > 0 ? ev.bytes : 0;
+      if (partial || !ckpt || ckpt.count !== count || ckpt.stamp !== ckStamp || ckpt.evLines !== evLines || ckpt.evBytes !== evBytesOut) {
         // DESTRUCTIVE-OK(verified-record): the new statement is the chain value of a verified record; an older, higher statement was copied to torn/ above whenever it is being lowered
-        await writeCheckpoint(this.fs, dir, { count, stamp: ckStamp, h: lastRec ? lastRec.h : Buffer.from(seeds.raw), c: lastRec ? lastRec.c : Buffer.from(seeds.conversation) });
+        await writeCheckpoint(this.fs, dir, { count, stamp: ckStamp, evLines, evBytes: evBytesOut, h: lastRec ? lastRec.h : Buffer.from(seeds.raw), c: lastRec ? lastRec.c : Buffer.from(seeds.conversation) });
       }
-      if (convStaleNow) await writeSide(this.fs, nodePath.join(dir, STALE_CONV_FILE), { through: evLines, bad: firstBad }); // DESTRUCTIVE-OK(hint): existence-only marker; `bad` names the unhealed rotted line, if that is why
+      if (convStaleNow) await writeSideFor(this.fs, nodePath.join(dir, STALE_CONV_FILE), keyOfDir(dir), { through: evLines, bad: firstBad }); // DESTRUCTIVE-OK(hint): existence-only marker; `bad` names the unhealed rotted line, if that is why
       await finishSwap();
       // scrub.json: the old mark described the old index. Point the scrub at the first bad line so the next open reports it at once.
-      await writeSide(this.fs, nodePath.join(dir, 'scrub.json'), { lines: firstBad ?? 0, passEnd: count }); // DESTRUCTIVE-OK(hint): a progress hint
+      await writeSideFor(this.fs, nodePath.join(dir, 'scrub.json'), keyOfDir(dir), { lines: firstBad ?? 0, passEnd: count }); // DESTRUCTIVE-OK(hint): a progress hint
       if (!convStaleNow && evLines === 0) { await this.fs.unlink(nodePath.join(dir, STALE_CONV_FILE)); await this.fs.fsyncDir(dir); } // DESTRUCTIVE-OK(hint): existence-only marker, recomputed from full bodies just now
       return { count, firstBad, partial, staleConv: convStaleNow };
     } finally { for (const f of handles) await f.close().catch(() => undefined); }
@@ -411,13 +463,16 @@ export class BodyTools {
       if (size < HDR) {
         if (!hasBodies && ev.lines === 0) {
           // DESTRUCTIVE-OK(scratch): a file shorter than its own header holds no record; with no bodies and nothing evicted there is nothing it could describe
-          try { await f.truncate(0); await f.write(indexHeader(stamp), 0); await f.sync(); } catch (e) { if (!isDiskFull(e)) throw e; return { ...none, needsInit: true }; }
+          try { await f.truncate(0); await f.write(indexHeader(stamp, tagOfDir(dir)), 0); await f.sync(); } catch (e) { if (!isDiskFull(e)) throw e; return { ...none, needsInit: true }; }
           return none;
         }
         throw new NeedsRebuild('index header is missing');
       }
       const hdr = await f.read(0, HDR);
       if (!headerOk(hdr)) throw new NeedsRebuild('index header is damaged');
+      // WHY (review 4, F8): a header with a good checksum and another version's tag is a FOREIGN index (a wrong-folder copy). Its records are valid for someone else; the
+      // rebuild leaves them out entirely and re-derives this version's index from its own bodies, confirmed by its own checkpoint.
+      if (!headerTag(hdr).equals(tagOfDir(dir))) throw new NeedsRebuild('index belongs to another version');
       if (headerStamp(hdr) !== stamp) throw new NeedsRebuild('classifier stamp changed');
       let count = Math.floor((size - HDR) / REC);
       const partial = size - HDR - count * REC;
@@ -461,7 +516,7 @@ export class BodyTools {
     const f = await this.fs.open(nodePath.join(dir, 'index.bin'), { create: true });
     try {
       // DESTRUCTIVE-OK(scratch): only when the file is shorter than a header, i.e. holds no record
-      if ((await f.size()) < HDR) { await f.truncate(0); await f.write(indexHeader(stamp), 0); await f.sync(); }
+      if ((await f.size()) < HDR) { await f.truncate(0); await f.write(indexHeader(stamp, tagOfDir(dir)), 0); await f.sync(); }
     } finally { await f.close(); }
     await this.fs.fsyncDir(dir);
   }

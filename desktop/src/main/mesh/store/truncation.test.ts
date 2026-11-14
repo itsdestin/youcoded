@@ -59,7 +59,7 @@ describe('truncate at every byte offset of the last record', () => {
     expect(checked).toBe(REC + 1);
   });
 
-  it('body chunk cut anywhere in the last line: acknowledged lines are missing, so the version is quarantined intact (damaged), never trimmed', async () => {
+  it('body chunk cut anywhere in the last line: that line is reported damaged and every other line is served; nothing is trimmed or set aside, and a resend heals it (review 4, F3)', async () => {
     const lastLen = conv[conv.length - 1].length;
     let checked = 0;
     for (const chunk of [undefined, 700]) {
@@ -75,12 +75,13 @@ describe('truncate at every byte offset of the last record', () => {
           if (drop === 0) await expectRecovered(t.dir, (n) => n === conv.length, chunk);
           else {
             const s = await ChatStore.open(t.dir, chunk ? { chunkBytes: chunk } : {});
-            await expect(s.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
-            const q = path.join(t.dir, 'aside', fs.readdirSync(path.join(t.dir, 'aside'))[0]);
-            expect(fs.statSync(path.join(q, 'index.bin')).size).toBe(recPos(conv.length));
-            expect(fs.statSync(path.join(q, path.basename(lastChunk))).size).toBe(before - drop);
-            await s.setAsideDamaged(V(1)); // the caller recopies from a peer
-            expect(await s.append(V(1), 0, 0, conv)).toBe('ok');
+            const h = await s.head(V(1));
+            expect(h.lines).toBe(conv.length); expect(h.damagedFromLine).toBe(conv.length - 1);
+            expect(((await s.read(V(1), 0, 0, 1)) as Buffer[])[0].equals(conv[0])).toBe(true);
+            await expect(s.read(V(1), 0, conv.length - 1, conv.length)).rejects.toMatchObject({ code: 'corrupt' });
+            expect(fs.existsSync(path.join(t.dir, 'aside')) ? fs.readdirSync(path.join(t.dir, 'aside')) : []).toEqual([]);
+            expect(fs.statSync(lastChunk).size).toBe(before - drop);       // nothing was trimmed
+            expect(await s.append(V(1), 0, 0, conv)).toBe('ok');           // the caller's resend heals it
             expect((await s.verify(V(1))).ok).toBe(true);
             await s.close();
           }

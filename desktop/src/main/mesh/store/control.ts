@@ -13,11 +13,19 @@
 // record is found by its magic and every later entry is served. Nothing kept is ever pruned; at 1,024 torn files writes are refused.
 // AMBIGUITY resolved here: S2 says `appendControl -> ok | parked | duplicate` without saying what parks.
 // Causal gaps via `seen` are the only reading that needs no interpretation of `body`.
+//
+// THE INDEPENDENT RECORD (review 4, F2). A record-by-record checksum cannot notice a log that is DELETED, rolled back to an older copy, or cut exactly at a record boundary:
+// every record that is left is perfect. So the log has a second file, anchor.json (checksummed, replaced atomically after every append): the COUNT of acknowledged
+// entries and an order-independent hash of their ids (the sum of SHA-256(id), mod 2^256). On load the entries read from log.bin must be at least that set; fewer, or a
+// different set, is REPORTED by damage() ("the log lost N acknowledged entries"), never silent. One entry more than the anchor is a crash between the log and the anchor
+// (the log is written first) and is accepted. A damaged, missing or foreign anchor is simply no evidence and is rewritten from the log. While a loss stands the anchor is
+// left alone (it is the evidence) until quarantine() resets it, which is also the documented remedy for a reported-damaged log.
 import * as nodePath from 'node:path';
 import { createHash } from 'node:crypto';
 import { mkdirDurable, sweepTemps, writeFileAtomic, type Fs } from './fsio';
 import { StoreError } from './errors';
 import { crc32, isHash64 } from './chain';
+import { readSide, writeSide } from './sidefile';
 import { isDiskFull } from './storeutil';
 
 export interface ControlEntry {
@@ -114,7 +122,10 @@ function resync(buf: Buffer, from: number): number {
   return -1;
 }
 
-interface ChatLog { dir: string; ids: Set<string>; entries: ControlEntry[]; size: number; parked: Map<string, string[]>; damage: ControlDamage[]; refuseWrites: string | null; /** a torn tail starts here in log.bin but could not be copied aside yet (disk full): the next write does that first */ tornPending: number | null }
+interface ChatLog { dir: string; /** count and id-hash sum of the acknowledged entries the anchor file says, or null when it is not trusted */ anchor: { count: number; acc: bigint } | null; /** entries the anchor vouches for are missing from log.bin: the anchor is not advanced */ lossStanding: boolean; ids: Set<string>; entries: ControlEntry[]; size: number; parked: Map<string, string[]>; damage: ControlDamage[]; refuseWrites: string | null; /** a torn tail starts here in log.bin but could not be copied aside yet (disk full): the next write does that first */ tornPending: number | null }
+
+const MOD = 1n << 256n;
+const idHash = (id: string): bigint => BigInt('0x' + createHash('sha256').update(Buffer.from(id, 'hex')).digest('hex'));
 
 const allZero = (b: Buffer, from: number, to: number): boolean => { for (let i = from; i < to; i++) if (b[i] !== 0) return false; return true; };
 
@@ -124,6 +135,16 @@ export class ControlStore {
   constructor(private readonly fs: Fs, private readonly root: string, o: { maxParked?: number } = {}) { this.maxParked = o.maxParked ?? DEFAULT_MAX_PARKED; }
 
   private dirOf(chat: string): string { return nodePath.join(this.root, createHash('sha256').update(chat, 'utf8').digest('hex')); }
+  private anchorPath(dir: string): string { return nodePath.join(dir, 'anchor.json'); }
+  /** The anchor file's statement for THIS chat, or null (absent, damaged, or another chat's: all simply no evidence). */
+  private async readAnchor(dir: string, chat: string): Promise<{ count: number; acc: bigint } | null> {
+    const r = await readSide(this.fs, this.anchorPath(dir));
+    if (r.kind !== 'ok' || !r.value || r.value.chat !== createHash('sha256').update(chat, 'utf8').digest('hex') || !Number.isSafeInteger(r.value.count) || r.value.count < 0 || typeof r.value.acc !== 'string' || !/^[0-9a-f]{1,64}$/.test(r.value.acc)) return null;
+    return { count: r.value.count, acc: BigInt('0x' + r.value.acc) };
+  }
+  private async writeAnchor(dir: string, chat: string, a: { count: number; acc: bigint }): Promise<void> {
+    await writeSide(this.fs, this.anchorPath(dir), { chat: createHash('sha256').update(chat, 'utf8').digest('hex'), count: a.count, acc: a.acc.toString(16) }); // DESTRUCTIVE-OK(verified-record): the statement is computed from log.bin's own checksummed records (or advanced by the one entry just made durable); an older statement is replaced whole and atomically
+  }
 
   /**
    * Read a chat's log. Only ONE thing is a torn append: the very last record, whose header is intact but whose
@@ -148,6 +169,8 @@ export class ControlStore {
       let pos = 0; let tornFrom: number | null = null;
       while (pos < buf.length) {
         const r = readRecord(buf, pos);
+        // WHY (review 4): a record from ANOTHER chat's log (a foreign copy) is perfectly valid on its own; its own `chat` field is what says it does not belong here
+        if (r.kind === 'ok' && r.entry.chat !== chat) { damage.push({ offset: pos, length: r.end - pos, why: 'record belongs to another chat' }); pos = r.end; continue; }
         if (r.kind === 'ok') { if (!ids.has(r.entry.id)) { entries.push(r.entry); ids.add(r.entry.id); } pos = r.end; continue; }
         if (r.kind === 'torn') { tornFrom = pos; break; }
         // damage: resume after this record when its own header said where it ends, else look for the next record
@@ -174,11 +197,32 @@ export class ControlStore {
       }
     } finally { await f.close(); }
     await this.fs.fsyncDir(dir);
-    const log: ChatLog = { dir, ids, entries, size, parked: new Map(), damage, refuseWrites, tornPending };
+    // the independent record (see the header): compare the entries read with the anchor
+    let acc = 0n; for (const e of entries) acc = (acc + idHash(e.id)) % MOD;
+    const anchor = await this.readAnchor(dir, chat);
+    let lossStanding = false; let trusted = anchor;
+    if (anchor) {
+      const n = entries.length;
+      let same = n === anchor.count && acc === anchor.acc;
+      // the log is written first, so one entry more than the anchor is a crash between the two: it is accepted when removing SOME entry gives exactly the anchored set
+      if (!same && n === anchor.count + 1) same = entries.some((e) => (acc - idHash(e.id) + MOD) % MOD === anchor.acc);
+      // an anchor that is far BEHIND the log (an older copy of the anchor) cannot be checked; the log is intact, so the anchor is simply rewritten forward
+      if (!same && n > anchor.count + 1) same = true;
+      if (!same) {
+        lossStanding = true;
+        // a record-level report (a bad range) already says entries are lost; the shortfall is not reported a second time
+        if (damage.length === 0) damage.push({ offset: size, length: 0, why: n < anchor.count ? `the log holds ${n} entries but ${anchor.count} were acknowledged: ${anchor.count - n} lost (deleted, cut or replaced by an older copy)` : 'the log holds a different set of entries than the independent record says was acknowledged' });
+      }
+    }
+    if (!lossStanding && (!anchor || anchor.count !== entries.length || anchor.acc !== acc)) {
+      // no usable record, or one that lags: (re)written from the log. Best effort: a read must not fail for lack of space.
+      try { await this.writeAnchor(dir, chat, { count: entries.length, acc }); trusted = { count: entries.length, acc }; } catch (e) { if (!isDiskFull(e)) throw e; trusted = { count: entries.length, acc }; }
+    }
+    const log: ChatLog = { dir, anchor: trusted, lossStanding, ids, entries, size, parked: new Map(), damage, refuseWrites, tornPending };
     // remember what is parked (the parked folder is read once here, never per append: M3 quadratic)
     for (const n of await this.fs.readdir(nodePath.join(dir, 'parked'))) {
       if (!n.endsWith('.ent')) continue;
-      const e = await this.readParked(nodePath.join(dir, 'parked', n));
+      const e = await this.readParked(nodePath.join(dir, 'parked', n), chat);
       if (e) log.parked.set(e.id, e.seen);
     }
     this.cache.set(chat, log);
@@ -207,6 +251,10 @@ export class ControlStore {
     const dir = this.dirOf(chat);
     let n = 1; while (await this.fs.exists(nodePath.join(dir, `quarantine-${n}.bin`))) n++;
     const name = `quarantine-${n}.bin`;
+    // the independent record starts over BEFORE the log moves: a kill between the two leaves a log longer than its record, which is accepted and rewritten (the other order would report a loss that was asked for)
+    await this.writeAnchor(dir, chat, { count: 0, acc: 0n });
+    // a log that was DELETED has nothing to move; the anchor reset above is what clears the reported loss
+    if (!(await this.fs.exists(nodePath.join(dir, 'log.bin')))) return 'none';
     // DESTRUCTIVE-OK(explicit-request): the caller asked for the log to be set aside; it moves to a name that does not exist, bytes kept
     await this.fs.rename(nodePath.join(dir, 'log.bin'), nodePath.join(dir, name));
     await this.fs.fsyncDir(dir);
@@ -223,7 +271,7 @@ export class ControlStore {
     const out: ControlEntry[] = [];
     for (const n of (await this.fs.readdir(nodePath.join(log.dir, 'parked'))).sort()) {
       if (!n.endsWith('.ent')) continue;
-      const e = await this.readParked(nodePath.join(log.dir, 'parked', n));
+      const e = await this.readParked(nodePath.join(log.dir, 'parked', n), chat);
       if (e) out.push(e);
     }
     return out;
@@ -275,15 +323,22 @@ export class ControlStore {
     const f = await this.fs.open(nodePath.join(log.dir, 'log.bin'), { create: false });
     try { await f.write(rec, log.size); await f.sync(); } finally { await f.close(); }
     log.size += rec.length; log.ids.add(e.id); log.entries.push(e);
+    // the anchor second, so a crash between the two leaves the log one entry ahead (accepted on load). Not advanced while a loss stands: it is the evidence of what was lost.
+    if (log.anchor && !log.lossStanding) {
+      const next = { count: log.anchor.count + 1, acc: (log.anchor.acc + idHash(e.id)) % MOD };
+      await this.writeAnchor(log.dir, e.chat, next);
+      log.anchor = next;
+    }
   }
 
-  private async readParked(path: string): Promise<ControlEntry | null> {
+  private async readParked(path: string, chat?: string): Promise<ControlEntry | null> {
     const b = await this.fs.readFile(path);
     if (!b || b.length < 8) return null;
     const len = b.readUInt32BE(0);
     if (8 + len !== b.length || crc32(b.subarray(8)) !== b.readUInt32BE(4)) return null;
     const e = decode(b.subarray(8));
-    return e && createHash('sha256').update(e.body).digest('hex') === e.id ? e : null;
+    // a parked file filed under ANOTHER chat's folder is not this chat's entry (review 4)
+    return e && createHash('sha256').update(e.body).digest('hex') === e.id && (chat === undefined || e.chat === chat) ? e : null;
   }
 
   /** Apply parked entries whose `seen` are all present; repeat until none applies. Works from memory: only an entry that can apply is read from disk. */
@@ -296,7 +351,7 @@ export class ControlStore {
         // DESTRUCTIVE-OK(verified-record): the entry is already in the log (log.ids is built from checksummed records), so the parked copy is redundant
         if (log.ids.has(id)) { await this.fs.unlink(path); await this.fs.fsyncDir(pdir); log.parked.delete(id); progressed = true; continue; }
         if (!seen.every((s) => log.ids.has(s))) continue;
-        const e = await this.readParked(path);
+        const e = await this.readParked(path, chat);
         if (!e) { log.parked.delete(id); continue; } // damaged parked file: left in place, never deleted
         await this.apply(log, e);
         // DESTRUCTIVE-OK(verified-record): the entry passed its CRC and id check when read above and apply() returned after fsyncing it into the log

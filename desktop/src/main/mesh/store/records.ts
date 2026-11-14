@@ -10,7 +10,7 @@ import type { LineKind } from './classify';
 
 const INDEX_MAGIC = Buffer.from('YCMESHIX', 'ascii');
 const INDEX_FORMAT = 1;
-export const HDR = 16;   // magic(8) format u32 reserved u32
+export const HDR = 36;   // magic(8) format u32 stamp u32 version-tag(16) crc32 u32 (review 4: identity + a checksum, so rot and 'foreign' can be told apart)
 export const REC = 116;  // see layout in encodeRecord
 
 export const NONE = -1;
@@ -47,15 +47,20 @@ export interface Rec {
  * WHY in the index itself: the stamp must travel with the chain it describes, so a changed classifier is
  * detected on open instead of two app versions silently producing different `c` values for identical bytes.
  */
-export function indexHeader(stamp: number): Buffer {
+export function indexHeader(stamp: number, tag: Buffer): Buffer {
   const b = Buffer.alloc(HDR);
   INDEX_MAGIC.copy(b, 0);
   b.writeUInt32BE(INDEX_FORMAT, 8);
   b.writeUInt32BE(stamp >>> 0, 12);
+  tag.copy(b, 16, 0, 16);
+  // WHY a header checksum (review 4, F8): without it a flipped bit in the identity tag looks exactly like another chat's file, and the
+  // records would be thrown away. With it, a bad checksum is ROT (keep the records) and a good checksum with another tag is FOREIGN (drop them).
+  b.writeUInt32BE(crc32(b, 0, HDR - 4), HDR - 4);
   return b;
 }
 export const headerStamp = (b: Buffer): number => b.readUInt32BE(12);
-export const headerOk = (b: Buffer): boolean => b.length >= HDR && b.subarray(0, 8).equals(INDEX_MAGIC) && b.readUInt32BE(8) === INDEX_FORMAT;
+export const headerTag = (b: Buffer): Buffer => b.subarray(16, 32);
+export const headerOk = (b: Buffer): boolean => b.length >= HDR && b.subarray(0, 8).equals(INDEX_MAGIC) && b.readUInt32BE(8) === INDEX_FORMAT && crc32(b, 0, HDR - 4) === b.readUInt32BE(HDR - 4);
 
 /**
  * Layout (big-endian): offset u64 | len u32 | flags u32 | confirms u64 | candN u64 | candId 8 bytes |
