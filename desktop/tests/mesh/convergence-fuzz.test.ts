@@ -45,6 +45,8 @@ describe.skipIf(from === null)('convergence fuzz: long run (opt-in)', () => {
       try { r = await runSchedule(optsFor(seed)); } catch (e) { bad.push(`seed ${seed}: threw ${(e as Error).message}`); continue; }
       n++;
       for (const v of r.violations) bad.push(`seed ${seed} (${r.scenario}): ${v}`);
+      // progress for a long run that may be interrupted: the same summary, rewritten every 500 schedules
+      if (process.env.MESH_FUZZ_OUT && n % 500 === 0) fs.writeFileSync(process.env.MESH_FUZZ_OUT + '.progress', `FUZZ-PROGRESS seeds=${from}..${seed} schedules=${n} violations=${bad.length}\n${bad.slice(0, 200).join('\n')}\n`);
     }
     const summary = `FUZZ-RESULT seeds=${from}..${to} schedules=${n} violations=${bad.length}\n${bad.slice(0, 200).join('\n')}\n`;
     console.log(summary);
