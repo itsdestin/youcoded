@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useTheme } from '../state/theme-context';
 import { Badge, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, FieldError, FoldRow, OneJobCard, OneJobText, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
@@ -452,6 +453,16 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const syncingRef = useRef(false);
   const toggleBusyRef = useRef(false);
   const additionalToggleRef = useRef<() => Promise<void>>(async () => {});
+  // N2 (Destin): scroll the failure notice into view when a NEW failure arrives. The effect depends on the notice object, which
+  // is created once per failure, so ordinary re-renders and later successes do not scroll. Reduced motion (the OS setting or the
+  // app's Reduced effects) jumps instead of animating.
+  const failureRef = useRef<HTMLDivElement>(null);
+  const { reducedEffects } = useTheme();
+  useEffect(() => {
+    if (!actionFailure) return;
+    const osReduced = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    failureRef.current?.scrollIntoView?.({ block: 'start', behavior: osReduced || reducedEffects ? 'auto' : 'smooth' });
+  }, [actionFailure]); // eslint-disable-line react-hooks/exhaustive-deps -- reducedEffects is read at the moment of a new failure only
   const failAction = useCallback((message: string, e: unknown, retry: () => void) => {
     setActionFailure({ message, details: plainMessage(e, ''), retry });
   }, []);
@@ -1111,8 +1122,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         // spacing, 16px between groups — was space-y-6 (24px).
         <div className="space-y-4">
             {actionFailure && (
-              <ErrorState variant="inline" message={actionFailure.message} details={actionFailure.details || undefined}
-                onRetry={() => { const retry = actionFailure.retry; setActionFailure(null); retry(); }} />
+              <div ref={failureRef} className="scroll-mt-2">
+                <ErrorState variant="inline" message={actionFailure.message} details={actionFailure.details || undefined}
+                  onRetry={() => { const retry = actionFailure.retry; setActionFailure(null); retry(); }} />
+              </div>
             )}
 
             {/* ============================================================
