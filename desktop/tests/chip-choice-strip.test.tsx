@@ -221,4 +221,46 @@ describe('quick chip over typed words', () => {
     plainClick(chip); // no pointerdown before this one
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add to end' }));
   });
+
+  const fire = (el: Element, type: string) => act(() => { el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true })); });
+  it('a touch press the browser cancelled (dragged off to scroll), then a keyboard click, is keyboard', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    box.focus();
+    down(chip, 'touch');
+    fire(chip, 'pointercancel');
+    plainClick(chip); // Enter / Space on the chip a moment later
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add to end' }));
+  });
+  it('a touchcancel clears it too', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    box.focus();
+    act(() => { chip.dispatchEvent(new Event('touchstart', { bubbles: true })); });
+    fire(chip, 'touchcancel');
+    plainClick(chip);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add to end' }));
+  });
+  it('a press that ended without a click and a keyboard click well after the finger lifted is keyboard', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { box, chip } = await composer();
+      typeWords(box, 'Draft a reply to Maya');
+      box.focus();
+      down(chip, 'touch');
+      fire(chip, 'pointerup');
+      vi.setSystemTime(Date.now() + 900);
+      plainClick(chip);
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add to end' }));
+    } finally { vi.useRealTimers(); }
+  });
+  it('the normal tap (pointerdown, pointerup, click a moment later) is still a tap', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    box.focus();
+    down(chip, 'touch');
+    fire(chip, 'pointerup');
+    plainClick(chip);
+    expect(document.activeElement).toBe(box);
+  });
 });
