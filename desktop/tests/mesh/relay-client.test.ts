@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { generateIdentity, setIdFor } from '../../src/main/mesh/crypto/identity';
 import { RelayClient } from '../../src/main/mesh/relay-client';
-import { FakeRelay } from './fake-relay';
+import { FakeRelay, putRoster } from './fake-relay';
 
 const relays: FakeRelay[] = [];
 const clients: RelayClient[] = [];
@@ -47,7 +47,7 @@ describe('sign-in', () => {
     second.start();
     await vi.waitFor(() => expect(delays.length).toBeGreaterThanOrEqual(3));
     expect(second.state).not.toBe('ready');
-    expect(await first.c.rosterAdd(stranger.signKey.toString('hex'))).toBe('ok');
+    expect(await putRoster(first.c, first.id, setIdFor(first.id.signKey), 'add', stranger)).toBe('ok');
     await when(second, 'ready');
     expect(second.reconnectAttempts).toBe(0); // reset by success
   });
@@ -84,12 +84,12 @@ describe('refusals that must NOT be retried', () => {
     const b = generateIdentity();
     const bc = new RelayClient({ url: r.url, setId: setIdFor(a.id.signKey), identity: b, baseDelayMs: 10, random: () => 0.5 });
     clients.push(bc);
-    expect(await a.c.rosterAdd(b.signKey.toString('hex'))).toBe('ok');
+    expect(await putRoster(a.c, a.id, setIdFor(a.id.signKey), 'add', b)).toBe('ok');
     bc.start();
     await when(bc, 'ready');
     let removed = false;
     bc.on('removed', () => { removed = true; });
-    expect(await a.c.rosterRemove(b.deviceId.toString('hex'))).toBe('ok');
+    expect(await putRoster(a.c, a.id, setIdFor(a.id.signKey), 'remove', b)).toBe('ok');
     await when(bc, 'removed');
     expect(removed).toBe(true);
     await expect(bc.hold({ group: 'g', session: '0'.repeat(32), n: 1, frame: Buffer.from('x') })).rejects.toThrow();
@@ -163,7 +163,7 @@ describe('send, acknowledge, fetch, catch up', () => {
     expect((await c.fetchAfter('nothing-here', 0)).frames).toEqual([]);
     await c.received('g1', 2);
   });
-  it('a live ring from another device reaches the listener', async () => {
+  it('a stored frame rings the other device with the group and a number (the doorbell), and not the sender', async () => {
     const r = await relay();
     const a = mk(r);
     a.c.start();
@@ -171,12 +171,15 @@ describe('send, acknowledge, fetch, catch up', () => {
     const b = generateIdentity();
     const bc = new RelayClient({ url: r.url, setId: setIdFor(a.id.signKey), identity: b });
     clients.push(bc);
-    await a.c.rosterAdd(b.signKey.toString('hex'));
+    await putRoster(a.c, a.id, setIdFor(a.id.signKey), 'add', b);
     bc.start();
     await when(bc, 'ready');
-    const got = new Promise<string>((res) => bc.on('pass', (m: { group: string }) => res(m.group)));
-    a.c.ring('chat.x');
-    expect(await got).toBe('chat.x');
+    const got = new Promise<{ group: string; seq: number }>((res) => bc.on('doorbell', res));
+    const sawOwn = vi.fn();
+    a.c.on('doorbell', sawOwn);
+    await a.c.hold({ group: 'chat.x', session: '0f'.repeat(16), n: 1, frame: Buffer.from('x') });
+    expect(await got).toEqual({ group: 'chat.x', seq: 1 });
+    expect(sawOwn).not.toHaveBeenCalled();
   });
 });
 

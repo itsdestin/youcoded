@@ -273,3 +273,19 @@ export function findLeaks(haystack: Buffer, needles: Array<{ label: string; byte
   }
   return found;
 }
+
+// ---------------------------------------------------------------- an outside attacker process
+export interface AttackResult { tries: number; joined: number; refused: number; welcomed: number; messagesFromHost: number }
+/** Run attacker.cjs as its own process: empty environment, throwaway HOME (inside the rig's root), loopback only. Killed by pid on timeout. */
+export function runAttacker(root: string, build: string, relayUrl: string, meetingId: string, tries: number): Promise<AttackResult> {
+  const home = path.join(root, 'attacker-home');
+  fs.mkdirSync(home, { recursive: true });
+  const env = { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, TMPDIR: home, LANG: 'C.UTF-8' };
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(__dirname, 'attacker.cjs'), build, relayUrl, meetingId, String(tries)], { env, cwd: home, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (c: Buffer) => { out += c.toString(); });
+    const kill = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } reject(new Error('attacker timed out')); }, 90_000);
+    child.on('exit', () => { clearTimeout(kill); try { resolve(JSON.parse(out.trim().split('\n').pop() as string) as AttackResult); } catch { reject(new Error(`attacker printed no result: ${out.slice(0, 200)}`)); } });
+  });
+}

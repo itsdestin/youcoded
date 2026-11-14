@@ -24,6 +24,11 @@ async function route(svc: MeshService, path: string, q: Json): Promise<Json> {
     case '/status': return { ...svc.status() };
     case '/create-set': await svc.createSet(); return { ok: true };
     case '/pair/open': return { ...svc.openPairing() };
+    // Through the relay's meeting point (the product path); the direct routes below stay as the hostile-pipe test carrier.
+    case '/pair/open-relay': return { ...(await svc.openPairingViaRelay()) };
+    case '/pair/join-relay': await svc.joinWithCode(String(q.code)); return { ok: true };
+    case '/pair/join-status': return { ...svc.joinStatus() };
+    case '/pair/state': return { ...svc.pairingState() };
     case '/pair/prompt': return { prompt: svc.pairingPrompt() };
     case '/pair/msg': return { out: svc.hostPairingMessage(String(q.conn), unb64(q.b64)).map(b64) };
     case '/pair/decide': return { out: (await svc.hostPairingDecide(String(q.conn), q.approve === true)).map(b64) };

@@ -185,7 +185,9 @@ export class RelayClient extends EventEmitter {
       return p.resolve({ header: h as unknown as Record<string, unknown>, payload: Buffer.from(m.payload) });
     }
     // Unsolicited pushes.
-    if (h.op === 'pass') this.emit('pass', { from: h.from, group: h.g, payload: Buffer.from(m.payload) });
+    // Doorbell: the relay stored a frame for this set. Carries only (group, seq); the link answers with a fetch.
+    if (h.op === 'doorbell') this.emit('doorbell', { group: h.g, seq: h.seq });
+    else if (h.op === 'pass') this.emit('pass', { from: h.from, group: h.g, payload: Buffer.from(m.payload) });
     else if (h.op === 'roster-changed') this.emit('roster-changed', { change: h.change, dev: h.dev });
     else if (h.op === 'released') this.emit('released', { group: h.g, throughSeq: h.throughSeq });
     else if (h.op === 'presence-change') this.emit('presence-change', { device: h.device, state: h.state });
@@ -235,17 +237,17 @@ export class RelayClient extends EventEmitter {
   async received(group: string, through: number): Promise<void> {
     await this.request({ op: 'received', g: group, through });
   }
-  /** Live "doorbell" to every other connected device: a one-byte pass, never stored. Receivers fetch. */
-  ring(group: string): void {
-    try { this.send({ op: 'pass', g: group, to: 'all' }, Uint8Array.of(1)); } catch { /* offline: they will fetch on connect */ }
-  }
-  async rosterAdd(signKeyHex: string): Promise<string> {
-    const r = await this.request({ op: 'roster-add', signKey: signKeyHex });
+  /** Ask the relay to record a roster change signed by this device (review finding 8; the statement is built and signed by the
+   *  caller, service.ts). Resolves 'ok' or the relay's reason. `duplicate` means the relay already has this exact entry. */
+  async rosterPut(p: { kind: 'add' | 'remove'; signer: string; target: string; targetKey?: string; entry: string; seen: string[]; at: number; sig: string }): Promise<string> {
+    const r = await this.request({ op: 'roster-put', ...p });
     return r.header.op === 'ok' ? 'ok' : String(r.header.reason ?? r.header.op);
   }
-  async rosterRemove(devHex: string): Promise<string> {
-    const r = await this.request({ op: 'roster-remove', dev: devHex });
-    return r.header.op === 'ok' ? 'ok' : String(r.header.reason ?? r.header.op);
+  /** Open a pairing meeting point (a member of this room only). `m` is the meeting id (meetingIdFor in crypto/relay-auth.ts). */
+  async meetOpen(m: string): Promise<{ ticket: string; ttlMs: number }> {
+    const r = await this.request({ op: 'meet-open', m });
+    if (r.header.op !== 'meet-opened') throw new Error(`meeting refused: ${String(r.header.reason ?? r.header.op)}`);
+    return { ticket: String(r.header.ticket), ttlMs: Number(r.header.ttlMs) };
   }
   async presence(): Promise<string[]> {
     const r = await this.request({ op: 'presence' });

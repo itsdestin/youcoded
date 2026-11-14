@@ -83,6 +83,29 @@ export const CLOSE_BAD_MESSAGE = 4006;      // malformed (not binary, bad header
 export const CLOSE_TOO_LARGE = 4007;
 export const CLOSE_TOO_FAST = 4008;
 export const CLOSE_RELAY_BUSY = 4009;
+export const CLOSE_MEET_ENDED = 4010;       // pairing meeting point closed, expired or used up (never a member's room)
+export const CLOSE_MEET_REFUSED = 4011;     // a meeting-point socket the meeting will not take (busy, wrong ticket, full)
+
+// ---- Pairing meeting point (T5 C10, threat model P-3 / P-9, design 5.1) ----
+/** A meeting point lives at most as long as the invite does (pairing.ts INVITE_LIFETIME_MS). */
+export const MEET_LIFETIME_MS = 5 * 60_000;
+/** One relayed pairing message. WHY 16 KiB: a CPace message is ~100 bytes and the welcome (set secret + the signed roster
+ *  log) is a few KiB for a normal set; far above that is an abuse of a pipe that exists only to introduce two devices. */
+export const MEET_MAX_MESSAGE_BYTES = 16 * 1024;
+/** Whole meeting, both directions (threat model P-9: "at most 64 KiB total"). */
+export const MEET_MAX_TOTAL_BYTES = 64 * 1024;
+export const MEET_MAX_MESSAGES = 64;
+/** Open sockets per meeting (host + guest + one newcomer being refused). */
+export const MEET_MAX_SOCKETS = 4;
+/** Guest connections ever made to one meeting: a stranger who knows the id can burn at most this many, then the meeting ends. */
+export const MEET_MAX_GUEST_CONNECTS = 8;
+/** A socket must say who it is (meet-join) within this long, and a guest must send its first message within it. */
+export const MEET_JOIN_DEADLINE_MS = 10_000;
+/** Per room: meetings open at once, and opened in the last hour. A room is opened by an authenticated member only. */
+export const MEET_MAX_OPEN_PER_ROOM = 2;
+export const MEET_OPENS_PER_HOUR = 12;
+/** Per-socket flood ceiling on a meeting point (far below RATE_MAX_MESSAGES: the exchange is a handful of messages). */
+export const MEET_RATE_MAX_MESSAGES = 40;
 
 // ---- Identifier shapes: lowercase hex, fixed length ----
 export const ROOM_HEX = 64;      // SHA-256 (T5 C2)
@@ -91,6 +114,7 @@ export const KEY_HEX = 64;       // Ed25519 public key
 export const SIG_HEX = 128;      // Ed25519 signature
 export const NONCE_HEX = 64;
 export const SESSION_HEX = 32;
+export const MEET_HEX = 64;      // meeting id: SHA-256 of the typed code's random meeting part (never of the secret part)
 
 export function isHex(v: unknown, len: number): v is string {
   return typeof v === "string" && v.length === len && /^[0-9a-f]+$/.test(v);
@@ -124,8 +148,14 @@ export type MeshClientMessage =
   | { op: "presence"; id?: string }
   | { op: "pass"; g: string; to: string; id?: string }                                                     // + payload
   | { op: "beat"; n: number }
-  | { op: "roster-add"; signKey: string; id?: string }
-  | { op: "roster-remove"; dev: string; id?: string }
+  // A roster change signed by a current member (review finding 8). `entry` is the id of the app's roster entry this
+  // statement is about; the statement itself names only public ids and keys, never a device name.
+  | { op: "roster-put"; kind: "add" | "remove"; signer: string; target: string; targetKey?: string; entry: string; seen: string[]; at: number; sig: string; id?: string }
+  // Pairing meeting point. meet-open is sent on an authenticated ROOM socket; the rest on a /mesh/meet/<id> socket.
+  | { op: "meet-open"; m: string; id?: string }
+  | { op: "meet-join"; role: "host" | "guest"; ticket?: string; id?: string }
+  | { op: "meet-relay"; n: number; id?: string }                                                           // + payload
+  | { op: "meet-close"; id?: string }
   | { op: "usage"; id?: string };
 
 // Relay to client.
@@ -150,6 +180,13 @@ export type MeshServerMessage =
   | { op: "pass"; from: string; g: string }                                                                // + payload
   | { op: "beat"; from: string; n: number }
   | { op: "roster-changed"; change: "added" | "removed"; dev: string }
+  // Doorbell: a frame was stored for this set. Numbered (the stored seq) so a device can tell a stale bell from a new one; no body, no size.
+  | { op: "doorbell"; g: string; seq: number }
+  | { op: "meet-opened"; id?: string; m: string; ticket: string; ttlMs: number }
+  | { op: "meet-joined"; id?: string; role: "host" | "guest"; gen: number; peer: boolean }
+  | { op: "meet-peer"; state: "on" | "off"; gen: number }
+  | { op: "meet-relay"; from: "host" | "guest"; gen: number; n: number }                                   // + payload
+  | { op: "meet-ended"; why: string }
   | { op: "ok"; id?: string }
   | { op: "usage-result"; id?: string; usage: MeshUsage }
   | { op: "error"; id?: string; reason: string };

@@ -8,7 +8,7 @@
 //   relay checks    : nonce is its own, unused, fresh; `dev` is on `room`'s roster; signature valid.
 // The room is named INSIDE the signed message and verified against that room's roster, never
 // trusted (gap G16: a device can be in two sets during a join).
-import { LABEL, concat, random, toHex, utf8, requireLen, type Bytes } from './bytes';
+import { LABEL, concat, random, sha256, toHex, utf8, requireLen, type Bytes } from './bytes';
 import { encode } from './cbor';
 import { MeshCryptoError } from './errors';
 import { signWith, verifySig, type DeviceIdentity } from './identity';
@@ -71,3 +71,31 @@ export class RelayAuthVerifier {
       : { ok: false, why: 'bad-signature' };
   }
 }
+
+// ---- Signed roster statement for the relay (review finding 8). The Worker (src/mesh/auth.ts rosterStatementMessage) builds the
+// same bytes with its own tiny encoder; tests/mesh/mesh-roster-vectors.json (byte-identical to the Worker's copy, pinned by a
+// drift test) holds known answers both sides must reproduce.
+// WHY a statement and not the roster entry: an `add` entry carries the new device's NAME, which the relay must never see;
+// the statement names the entry by its id and carries only public ids and keys.
+export interface RosterStatement {
+  kind: 'add' | 'remove';
+  room: Bytes;
+  signer: Bytes;
+  target: Bytes;
+  /** The added device's public signing key; null for a removal. */
+  targetKey: Bytes | null;
+  /** Id of the roster entry this statement is about. */
+  entry: Bytes;
+  /** The entry's own `seen` ids (its stated ancestry). */
+  seen: Bytes[];
+  at: number;
+}
+export const rosterStatementMessage = (s: RosterStatement): Buffer =>
+  concat(utf8(LABEL + 'relay-roster\0'), encode({ kind: s.kind, room: s.room, signer: s.signer, target: s.target, targetKey: s.targetKey, entry: s.entry, seen: s.seen, at: s.at }));
+export const signRosterStatement = (id: DeviceIdentity, s: Omit<RosterStatement, 'signer'>): { sig: Buffer; message: Buffer } => {
+  const message = rosterStatementMessage({ ...s, signer: id.deviceId });
+  return { sig: signWith(id, message), message };
+};
+
+/** The relay's name for a pairing meeting point: SHA-256 of the typed code's random MEETING part ONLY (never the secret part). */
+export const meetingIdFor = (meetingPart: Bytes): Buffer => sha256(utf8(LABEL + 'meet\0'), meetingPart);

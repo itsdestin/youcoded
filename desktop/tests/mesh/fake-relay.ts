@@ -1,10 +1,14 @@
 // A small stand-in for the Mesh relay, for unit tests ONLY (the rig test runs the real Worker code instead).
 // It speaks the same wire (shared/mesh-protocol.ts) and enforces the rules the client depends on: signed challenge
 // (verified with the crypto library's RelayAuthVerifier), roster membership, per-sender numbering, held frames per group,
-// fetch-after, pass, roster add/remove with close 4003. It is NOT a model of limits, hibernation or storage caps.
+// fetch-after, pass, doorbell, signed roster puts (signature and signer only; the Worker tests own the ancestry rules) with
+// close 4003, and a plain two-party meeting point. It is NOT a model of limits, hibernation or storage caps.
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { AddressInfo } from 'net';
-import { RelayAuthVerifier } from '../../src/main/mesh/crypto/relay-auth';
+import { RelayAuthVerifier, rosterStatementMessage, signRosterStatement } from '../../src/main/mesh/crypto/relay-auth';
+import { verifySig, type DeviceIdentity } from '../../src/main/mesh/crypto/identity';
+import type { RelayClient } from '../../src/main/mesh/relay-client';
+import { randomBytes } from 'crypto';
 import { deviceIdFor, setIdFor } from '../../src/main/mesh/crypto/identity';
 import {
   CLOSE_AUTH_FAILED, CLOSE_DEVICE_REMOVED, CLOSE_VERSION_REFUSED, MESH_MAX_VERSION_FOR_TESTS,
@@ -21,6 +25,8 @@ export class FakeRelay {
   /** Every raw payload ever stored (for "the relay cannot read it" checks). */
   readonly stored: Buffer[] = [];
   connects = 0;
+  /** Meeting points opened by a member (id -> sockets). */
+  readonly meetings = new Map<string, { ticket: string; host: WebSocket | null; guest: WebSocket | null; gens: number }>();
   /** Test knob: refuse the next N authentications with close 4002 (a device the relay has not been told about yet). */
   failAuth = 0;
   /** Test knob: the host name the relay claims in its challenge (to prove the client refuses a mismatch). */
@@ -54,7 +60,34 @@ export class FakeRelay {
   private send(c: Conn, header: object, payload?: Uint8Array): void {
     if (c.ws.readyState === 1) c.ws.send(Buffer.from(packMessage(header, payload)));
   }
+  private onMeeting(ws: WebSocket, id: string): void {
+    const mt = this.meetings.get(id);
+    if (!mt) { ws.close(4010, 'no such meeting'); return; }
+    let role: 'host' | 'guest' | null = null;
+    let gen = 0;
+    const out = (to: WebSocket | null, header: object, payload?: Uint8Array): void => { if (to && to.readyState === 1) to.send(Buffer.from(packMessage(header, payload))); };
+    ws.on('message', (data: Buffer, isBinary) => {
+      if (!isBinary) return;
+      const u = unpackMessage(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer);
+      if (!u.ok) return void ws.close(4006, 'malformed');
+      const h = u.header as Record<string, any>;
+      if (h.op === 'meet-join') {
+        if (h.role === 'host' && h.ticket === mt.ticket) { role = 'host'; mt.host = ws; out(ws, { op: 'meet-joined', role, gen: 0, peer: !!mt.guest }); }
+        else if (h.role === 'guest' && !mt.guest) { role = 'guest'; gen = ++mt.gens; mt.guest = ws; out(ws, { op: 'meet-joined', role, gen, peer: !!mt.host }); out(mt.host, { op: 'meet-peer', state: 'on', gen }); }
+        else { out(ws, { op: 'refused', reason: 'busy' }); ws.close(4011, 'refused'); }
+      } else if (h.op === 'meet-relay' && role) {
+        const peer = role === 'host' ? mt.guest : mt.host;
+        out(peer, { op: 'meet-relay', from: role, gen: role === 'guest' ? gen : mt.gens, n: h.n }, Buffer.from(u.payload));
+      } else if (h.op === 'meet-close') {
+        for (const w of [mt.host, mt.guest]) { out(w, { op: 'meet-ended', why: 'closed' }); w?.close(4010, 'closed'); }
+        this.meetings.delete(id);
+      }
+    });
+    ws.on('close', () => { if (role === 'guest') { mt.guest = null; out(mt.host, { op: 'meet-peer', state: 'off', gen }); } else if (role === 'host') this.meetings.delete(id); });
+  }
   private onConnection(ws: WebSocket, url: string, host: string): void {
+    const mm = /^\/mesh\/meet\/([0-9a-f]{64})\?v=1$/.exec(url);
+    if (mm) return this.onMeeting(ws, mm[1]);
     const m = /^\/mesh\/relay\/([0-9a-f]{64})\?v=(\d+)$/.exec(url);
     if (!m) { ws.close(CLOSE_AUTH_FAILED, 'bad path'); return; }
     if (Number(m[2]) > MESH_MAX_VERSION_FOR_TESTS || Number(m[2]) < 1) { ws.close(CLOSE_VERSION_REFUSED, 'version'); return; }
@@ -103,6 +136,7 @@ export class FakeRelay {
         list.push({ seq, bytes: payload });
         room.groups.set(h.g, list);
         this.stored.push(payload);
+        for (const o of this.conns) if (o !== c && o.dev && o.room === c.room) this.send(o, { op: 'doorbell', g: h.g, seq });
         return this.send(c, { op: 'stored', ...id, g: h.g, seq, fill: 'ok' });
       }
       case 'fetch-after': {
@@ -114,21 +148,41 @@ export class FakeRelay {
       case 'pass':
         for (const o of this.conns) if (o !== c && o.dev && (h.to === 'all' || h.to === o.dev)) this.send(o, { op: 'pass', from: c.dev, g: h.g }, payload);
         return;
-      case 'roster-add': {
-        const key = Buffer.from(h.signKey, 'hex');
-        const dev = deviceIdFor(key).toString('hex');
-        if (room.roster.has(dev)) return this.send(c, { op: 'refused', ...id, reason: 'already-member' });
-        room.roster.set(dev, { signKey: key, removed: false });
-        return this.send(c, { op: 'ok', ...id, dev });
-      }
-      case 'roster-remove': {
-        const t = room.roster.get(h.dev);
+      case 'roster-put': {
+        const signer = room.roster.get(h.signer);
+        if (!signer || signer.removed) return this.send(c, { op: 'refused', ...id, reason: signer ? 'signer-removed' : 'not-a-member' });
+        const st = { kind: h.kind, room: Buffer.from(c.room, 'hex'), signer: Buffer.from(h.signer, 'hex'), target: Buffer.from(h.target, 'hex'), targetKey: h.targetKey ? Buffer.from(h.targetKey, 'hex') : null, entry: Buffer.from(h.entry, 'hex'), seen: (h.seen as string[]).map((x) => Buffer.from(x, 'hex')), at: h.at };
+        if (!verifySig(signer.signKey, rosterStatementMessage(st), Buffer.from(h.sig, 'hex'))) return this.send(c, { op: 'refused', ...id, reason: 'bad-signature' });
+        if (h.kind === 'add') {
+          const key = Buffer.from(h.targetKey, 'hex');
+          if (deviceIdFor(key).toString('hex') !== h.target) return this.send(c, { op: 'refused', ...id, reason: 'bad-header' });
+          const had = room.roster.get(h.target);
+          if (had) return this.send(c, { op: 'refused', ...id, reason: had.removed ? 'banned' : 'already-member' });
+          room.roster.set(h.target, { signKey: key, removed: false });
+          return this.send(c, { op: 'ok', ...id, dev: h.target });
+        }
+        const t = room.roster.get(h.target);
         if (!t || t.removed) return this.send(c, { op: 'refused', ...id, reason: 'not-found' });
         t.removed = true;
-        for (const o of this.conns) if (o.dev === h.dev) o.ws.close(CLOSE_DEVICE_REMOVED, 'device removed');
+        for (const o of this.conns) if (o.dev === h.target) o.ws.close(CLOSE_DEVICE_REMOVED, 'device removed');
         return this.send(c, { op: 'ok', ...id });
+      }
+      case 'meet-open': {
+        const ticket = randomBytes(16).toString('hex');
+        this.meetings.set(h.m, { ticket, host: null, guest: null, gens: 0 });
+        return this.send(c, { op: 'meet-opened', ...id, m: h.m, ticket, ttlMs: 300000 });
       }
       default: return this.send(c, { op: 'refused', ...id, reason: 'unknown-op' });
     }
   }
+}
+
+/** A signed roster put from `signer` (a member) about `target`, built the way service.ts builds it; the fake checks signature and signer only. */
+export async function putRoster(c: RelayClient, signer: DeviceIdentity, room: Buffer, kind: 'add' | 'remove', target: DeviceIdentity): Promise<string> {
+  const entry = randomBytes(32);
+  const seen = [randomBytes(32)];
+  const at = Date.now();
+  const targetKey = kind === 'add' ? target.signKey : null;
+  const { sig } = signRosterStatement(signer, { kind, room, target: target.deviceId, targetKey, entry, seen, at });
+  return c.rosterPut({ kind, signer: signer.deviceId.toString('hex'), target: target.deviceId.toString('hex'), ...(targetKey ? { targetKey: targetKey.toString('hex') } : {}), entry: entry.toString('hex'), seen: seen.map((x) => x.toString('hex')), at, sig: sig.toString('hex') });
 }
