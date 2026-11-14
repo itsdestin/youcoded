@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { META_UNSUPPORTED_FALLBACK, type SessionFlagName, type SessionMetaResult } from '../../shared/types';
 import { useOnRemoteReconnect } from './useOnRemoteReconnect';
 import { plainMessage } from '../utils/ipc-error';
+import { announceFailed } from '../utils/announce';
 
 export interface SessionMetaApi {
   tags: Set<string>;   // applied tag ids
@@ -43,6 +44,16 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   // after the view closed set state on nothing (seen as stray errors after a test ended).
   const readSeq = useRef(0);
   const [unsupportedReason, setUnsupportedReason] = useState(META_UNSUPPORTED_FALLBACK);
+  // Card #134 round 4: a refused write already rolled the control back, but said nothing. It now says so — only for a real refusal
+  // (`ok:false`) that is not the host-is-unsupported case (that one already greys the controls out with its reason on hover), and
+  // only while this conversation is still the one on screen (a late answer for one you left, or after close, stays quiet).
+  const liveSession = useRef<string | null>(sessionId);
+  liveSession.current = sessionId;
+  useEffect(() => () => { liveSession.current = null; }, []);
+  const sayRefused = useCallback((forSession: string, what: string, res: any) => {
+    if (liveSession.current !== forSession || res?.unsupported) return;
+    announceFailed(what, res?.error);
+  }, []);
 
   // Only a refusal that explicitly says `unsupported` may flip `supported`.
   // Ordinary failures (invalid tag id, note too long) must NOT touch it — and
@@ -131,10 +142,10 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     // backend-side and we leave the optimistic value rather than fighting the network.
     try {
       Promise.resolve((window as any).claude.session.setTag(sessionId, tagId, next))
-        .then((res: any) => { if (res && res.ok === false) { revert(); noteRefusal(res); } })
+        .then((res: any) => { if (res && res.ok === false) { revert(); noteRefusal(res); sayRefused(sessionId, 'save this tag change', res); } })
         .catch(() => {});
     } catch { /* backend logs */ }
-  }, [sessionId, noteRefusal]);
+  }, [sessionId, noteRefusal, sayRefused]);
 
   const setNote = useCallback((text: string) => {
     if (!sessionId) return;
@@ -148,11 +159,11 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     try {
       Promise.resolve((window as any).claude.session.setNote(sessionId, text))
         .then((res: any) => {
-          if (res && res.ok === false) { savedNote.current = prevNote; setNoteState(prevNote); noteRefusal(res); }
+          if (res && res.ok === false) { savedNote.current = prevNote; setNoteState(prevNote); noteRefusal(res); sayRefused(sessionId, 'save the note', res); }
         })
         .catch(() => {});
     } catch { /* backend logs */ }
-  }, [sessionId, noteRefusal]);
+  }, [sessionId, noteRefusal, sayRefused]);
 
   // Same optimistic-then-revert contract as setTag: a refused write must roll
   // the local value back, or the flag looks set until the next refetch.
@@ -162,10 +173,10 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     setFlags((f) => ({ ...f, [flag]: next }));
     try {
       Promise.resolve((window as any).claude.session.setFlag(sessionId, flag, next))
-        .then((res: any) => { if (res && res.ok === false) { setFlags((f) => ({ ...f, [flag]: prev })); noteRefusal(res); } })
+        .then((res: any) => { if (res && res.ok === false) { setFlags((f) => ({ ...f, [flag]: prev })); noteRefusal(res); sayRefused(sessionId, 'save this change', res); } })
         .catch(() => {});
     } catch { /* backend logs */ }
-  }, [sessionId, flags, noteRefusal]);
+  }, [sessionId, flags, noteRefusal, sayRefused]);
 
   return { tags, flags, note, supported, unsupportedReason, setTag, setNote, setFlag };
 }
