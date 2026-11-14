@@ -32,6 +32,9 @@ export interface AutomationTool {
   exact?: string;
   /** What sort of permission it is; absent on the earlier sample jobs. Folder, site and command can be edited. */
   kind?: 'page-read' | 'page-write' | 'folder' | 'site' | 'command' | 'service';
+  /** A folder permission that may also change, add and remove files; absent = it may only look.
+   *  WHY a field: the two folder permissions differed only in their wording, which the runner must not read. */
+  change?: boolean;
 }
 
 /** What a waiting job does when nobody answered in time (Q-wait-long: "set ways to proceed"). */

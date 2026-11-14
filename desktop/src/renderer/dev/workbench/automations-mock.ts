@@ -102,7 +102,7 @@ function seedJobs(): AutomationSummary[] {
       model: 'Claude Haiku', subscription: true,
       tools: [
         { id: 't-list', kind: 'folder', label: 'See the files in a folder', source: 'Your computer', mode: 'allow', exact: '~/Downloads' },
-        { id: 't-move', kind: 'folder', label: 'Change the files in a folder', source: 'Your computer', mode: 'ask', exact: '~/Downloads' },
+        { id: 't-move', kind: 'folder', change: true, label: 'Change the files in a folder', source: 'Your computer', mode: 'ask', exact: '~/Downloads' },
         { id: 't-cmd', kind: 'command', label: 'Measure how big Downloads is', source: 'Your computer', mode: 'allow', exact: 'du -sh ~/Downloads' },
       ],
       whenAsk: 'skip', waitHours: null, noAnswer: 'skip', late: 'fallback', lateFallback: 'Only sort files older than a day, and tell me it ran late.',

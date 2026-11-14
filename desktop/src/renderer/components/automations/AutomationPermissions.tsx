@@ -39,7 +39,7 @@ const TITLE: Record<Step, string> = {
 
 function toolFrom(step: Step, d: Draft): AutomationTool {
   const id = d.id ?? `t-${Date.now()}`;
-  if (step === 'folder-read' || step === 'folder-change') return { id, kind: 'folder', label: TITLE[step], source: 'Your computer', exact: d.exact.trim(), mode: 'ask' };
+  if (step === 'folder-read' || step === 'folder-change') return { id, kind: 'folder', label: TITLE[step], source: 'Your computer', exact: d.exact.trim(), mode: 'ask', ...(step === 'folder-change' ? { change: true } : {}) };
   if (step === 'site') return { id, kind: 'site', label: 'Visit a website', source: 'Internet', exact: d.exact.trim(), mode: 'ask' };
   // A command typed by hand has no name of its own; one the assistant wrote keeps the name it gave.
   return { id, kind: 'command', label: d.label.trim() || 'Run a command', source: 'Your computer', exact: d.exact.trim(), mode: 'ask' };
