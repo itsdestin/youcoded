@@ -83,10 +83,22 @@ export function GitReviewView({
   const [opError, setOpError] = useState<{ kind: OpKind; detail: string } | null>(null);
   const aliveRef = useRef(true);
 
+  // Card #134 round 4: a failed read of the review used to leave a header over a blank timeline (first load) or quietly keep stale
+  // content. `loadFailed` is set by the NEWEST read only (a later read replaces it) and cleared by any successful read.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [moreFailed, setMoreFailed] = useState(false);
+  const readSeq = useRef(0);
   const refresh = useCallback(() => {
-    gitApi()?.fileReview?.(projectRoot, relPath)
-      .then((r: GitFileReviewResult) => { if (aliveRef.current && r?.ok) { setReview(r); } })
-      .catch(() => {});
+    const mine = ++readSeq.current;
+    const api = gitApi();
+    if (!api?.fileReview) return;
+    Promise.resolve(api.fileReview(projectRoot, relPath))
+      .then((r: GitFileReviewResult) => {
+        if (!aliveRef.current || mine !== readSeq.current) return; // unmounted, or a newer read took over
+        if (r?.ok) { setReview(r); setLoadFailed(false); }
+        else { console.warn('[git-review] read refused:', (r as { error?: unknown } | null)?.error); setLoadFailed(true); }
+      })
+      .catch((e: unknown) => { if (aliveRef.current && mine === readSeq.current) { console.warn('[git-review] read failed:', e); setLoadFailed(true); } });
   }, [projectRoot, relPath]);
 
   useEffect(() => {
@@ -162,8 +174,10 @@ export function GitReviewView({
     // overcounted --skip silently drops the commits in the gap.
     const skip = log.length;
     if (extraAnchor === null && reviewLog.length > 0) setExtraAnchor(reviewLog[reviewLog.length - 1].sha);
-    gitApi()?.fileReview?.(projectRoot, relPath, { logSkip: skip })
+    setMoreFailed(false);
+    Promise.resolve(gitApi()?.fileReview?.(projectRoot, relPath, { logSkip: skip }))
       .then((r: GitFileReviewResult) => {
+        if (aliveRef.current && !r?.ok) { console.warn('[git-review] show more refused:', (r as { error?: unknown } | null)?.error); setMoreFailed(true); return; }
         if (aliveRef.current && r?.ok) {
           // Same dedupe on append: a page fetched twice (double-click, or the
           // log shifting under us) must not stack the same commit again.
@@ -174,7 +188,7 @@ export function GitReviewView({
           setReview((prev) => (prev ? { ...prev, hasMore: r.hasMore } : prev));
         }
       })
-      .catch(() => {});
+      .catch((e: unknown) => { if (aliveRef.current) { console.warn('[git-review] show more failed:', e); setMoreFailed(true); } });
   };
 
   const run = async (kind: OpKind, op: () => Promise<{ ok: boolean; error?: string }>) => {
@@ -247,6 +261,14 @@ export function GitReviewView({
 
       {/* card timeline */}
       <div className="scroll-mask flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
+        {/* First read failed and nothing is on screen: the area says so. An older review still on screen gets the thin strip instead
+            (sentence + Try again; the reason is in the console). Both clear on the next successful read. */}
+        {loadFailed && !review && (
+          <ErrorState variant="inline" message="Couldn't load this file's changes." onRetry={refresh} />
+        )}
+        {loadFailed && !!review && (
+          <ErrorState variant="inline" message="Couldn't refresh this file's changes, so what's shown may be out of date." onRetry={refresh} />
+        )}
         {uncommitted && (
           <GitReviewCard
             accent
@@ -402,7 +424,8 @@ export function GitReviewView({
         {/* WHY outlined (guide: secondary actions are outlined, never bare
             text — "Show more" is named explicitly): was a hand-rolled
             text-fg-muted button. */}
-        {review?.hasMore && (
+        {moreFailed && <ErrorState variant="inline" message="Couldn't load more history." onRetry={showMore} />}
+        {review?.hasMore && !moreFailed && (
           <Button variant="secondary" size="sm" onClick={showMore}>
             Show more
           </Button>

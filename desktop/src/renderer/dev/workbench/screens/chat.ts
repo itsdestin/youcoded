@@ -332,6 +332,8 @@ export const CHAT: readonly ScreenEntry[] = [
   // ('chat/files'): the review replaces the viewer, whose own mark goes with it.
   { ...chat('chat/files/open/a-launch-brief#git-review', 'pane', 'viewer'), mark: 'chat/files',
     open: ['Review changes', '▸ a1b2c3d chat: cache the per-session selector…', { do: 'hover', target: { role: 'button', labelStarts: '▸ a1b2c3d chat: cache the per-session selector' } }] },
+  // Card #134 round 4: the review's first read fails, so the area says so with Try again (the Before has the header over a blank timeline).
+  { ...chat('chat/files/open/a-launch-brief#git-review-failed', 'pane', 'viewer', 'error-state'), mark: 'chat/files', params: { fail: 'git.fileReview' }, open: ['Review changes'] },
   chat('chat/files/open/a-q3-sales-comments', 'pane', 'viewer'),
   // WHY exercise the actual Add comment action rather than seed an already-open draft.
   { ...chat('chat/files/open/a-q3-sales-comments#new-comment', 'pane', 'viewer'),

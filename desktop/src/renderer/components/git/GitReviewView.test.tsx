@@ -409,3 +409,51 @@ describe('GitReviewCard highlight', () => {
     expect(header.parentElement!.className).toContain('has-[>button:hover]:bg-inset');
   });
 });
+
+// Card #134 round 4: a failed read says so; a stale review gets the thin strip; nothing false while a read is merely slow.
+describe('GitReviewView failed reads', () => {
+  const mountFailing = (fileReview: ReturnType<typeof vi.fn>) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (window as any).claude = { git: { fileReview, commitFileDiff: vi.fn(), stage: vi.fn(), unstage: vi.fn(), commit: vi.fn(), onChanged: vi.fn(() => () => {}) } };
+    render(<GitReviewView projectRoot="/proj" relPath="src/f.ts" fileName="f.ts" onBack={() => {}} onRequestDiscard={() => {}} />);
+  };
+
+  it('first read fails: "Couldn\'t load this file\'s changes." with Try again, which recovers', async () => {
+    const fileReview = vi.fn().mockRejectedValueOnce(new Error('git not found')).mockResolvedValue(review);
+    mountFailing(fileReview);
+    expect(await screen.findByText("Couldn't load this file's changes.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.getByText('Uncommitted changes')).toBeInTheDocument());
+    expect(screen.queryByText(/Couldn't load this file/)).toBeNull();
+  });
+
+  it('shows nothing while the first read is only slow', async () => {
+    mountFailing(vi.fn(() => new Promise(() => {})));
+    // settle: a slow read must not raise an error
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByText(/Couldn't/)).toBeNull();
+  });
+
+  it('a later refresh that fails over an older review shows the thin strip, and the next good read clears it', async () => {
+    let changed: () => void = () => {};
+    const fileReview = vi.fn().mockResolvedValueOnce(review).mockRejectedValueOnce(new Error('locked')).mockResolvedValue(review);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (window as any).claude = { git: { fileReview, commitFileDiff: vi.fn(), stage: vi.fn(), unstage: vi.fn(), commit: vi.fn(), onChanged: vi.fn((cb: () => void) => { changed = cb; return () => {}; }) } };
+    render(<GitReviewView projectRoot="/proj" relPath="src/f.ts" fileName="f.ts" onBack={() => {}} onRequestDiscard={() => {}} />);
+    await screen.findByText('Uncommitted changes');
+    changed();
+    expect(await screen.findByText("Couldn't refresh this file's changes, so what's shown may be out of date.")).toBeInTheDocument();
+    expect(screen.getByText('Uncommitted changes')).toBeInTheDocument(); // older content stays
+    changed();
+    await waitFor(() => expect(screen.queryByText(/Couldn't refresh/)).toBeNull());
+  });
+
+  it('Show more that fails says "Couldn\'t load more history." with Try again', async () => {
+    const fileReview = vi.fn().mockResolvedValueOnce({ ...review, hasMore: true }).mockRejectedValueOnce(new Error('x')).mockResolvedValue({ ...review, hasMore: false });
+    mountFailing(fileReview);
+    fireEvent.click(await screen.findByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText("Couldn't load more history.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.queryByText(/Couldn't load more/)).toBeNull());
+  });
+});
