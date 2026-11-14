@@ -27,6 +27,6 @@ export const settingsChannels: MainChannelDef[] = [
   // location; the notice is handed out once in total, so whichever window asks first (the computer's own, at launch) gets it.
   defineChannel({
     name: IPC.SETTINGS_REPAIR_NOTICE, kind: 'handle',
-    handler: () => takeSettingsRepairNotice(),
+    handler: (_p, ctx) => takeSettingsRepairNotice(ctx.remote ? 'remote' : 'window'),
   }),
 ];
