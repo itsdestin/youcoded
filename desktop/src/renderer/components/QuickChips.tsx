@@ -15,7 +15,8 @@ export interface QuickChip {
 }
 
 interface Props {
-  onChipTap: (chip: QuickChip) => void;
+  /** `ev` is the click itself: the chat reads how it was made (touch, pen, mouse, keyboard) from it. */
+  onChipTap: (chip: QuickChip, ev?: React.MouseEvent) => void;
 }
 
 export default function QuickChips({ onChipTap }: Props) {
@@ -54,7 +55,7 @@ export default function QuickChips({ onChipTap }: Props) {
         {displayChips.map((chip, i) => (
           <button
             key={`${i}-${chip.label}`}
-            onClick={() => onChipTap(chip)}
+            onClick={(e) => onChipTap(chip, e)}
             // `quick-chip` is the hook chrome-style: 'float' hangs its per-chip
             // lift on (globals.css → "FLOAT chrome"). A class, not a token: the
             // rule needs the element, and Tailwind has no way to name "the chip".

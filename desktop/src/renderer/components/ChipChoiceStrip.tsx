@@ -51,15 +51,6 @@ export function useChipChoice(
   useEffect(() => { setPending(null); }, [sessionId]); // a question about one chat's box must not follow to another
   // The question is about the words in the box: once the box is empty (cleared, or sent) there is nothing left to replace or add to.
   useEffect(() => { if (!text.trim()) setPending(null); }, [text]);
-  // Touch or keyboard, as the last pointerdown / keydown says (not `pointer: coarse`: a laptop can have both).
-  const touchRef = useRef(false);
-  useEffect(() => {
-    const down = (e: PointerEvent) => { touchRef.current = e.pointerType === 'touch' || e.pointerType === 'pen'; };
-    const key = () => { touchRef.current = false; };
-    window.addEventListener('pointerdown', down, true);
-    window.addEventListener('keydown', key, true);
-    return () => { window.removeEventListener('pointerdown', down, true); window.removeEventListener('keydown', key, true); };
-  }, []);
   const fill = useCallback((value: string) => {
     setText(value);
     requestAnimationFrame(() => {
@@ -69,8 +60,11 @@ export function useChipChoice(
   }, [setText, inputRef]);
   // WHY (card #143 c): a chip over typed words used to REPLACE them with no way back. Now the words wait untouched and a strip asks;
   // an empty box fills as always, and the chip never sends by itself.
-  const onChip = useCallback((chip: QuickChip) => {
-    if (textRef.current.trim()) setPending({ chip, touch: touchRef.current }); else fill(chip.prompt);
+  // WHY the click, not window listeners (review, performance rule 2: hidden means idle): a click made by touch or pen says so itself
+  // (pointerType), and one made by keyboard or mouse does not, so no listener has to watch the whole window from mount.
+  const onChip = useCallback((chip: QuickChip, ev?: React.MouseEvent) => {
+    const t = (ev?.nativeEvent as PointerEvent | undefined)?.pointerType;
+    if (textRef.current.trim()) setPending({ chip, touch: t === 'touch' || t === 'pen' }); else fill(chip.prompt);
   }, [textRef, fill]);
   const answer = useCallback((how: 'replace' | 'add' | 'close') => {
     const chip = pending?.chip;

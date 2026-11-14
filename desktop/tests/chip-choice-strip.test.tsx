@@ -4,7 +4,7 @@
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react';
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import { SkillProvider } from '../src/renderer/state/skill-context';
 import { EscCloseProvider, useEscClose, usePopupOpen } from '../src/renderer/hooks/use-esc-close';
@@ -147,32 +147,38 @@ describe('quick chip over typed words', () => {
     rerender(tree('s2'));
     expect(strip()).toBeNull();
   });
-  const pointer = (type: string) => { const e = new Event('pointerdown', { bubbles: true }); Object.defineProperty(e, 'pointerType', { value: type }); window.dispatchEvent(e); };
+  // A click as the browser makes it: a pointer click carries its pointerType ('' for a keyboard-made one); React reads it from there.
+  const tap = (el: Element, type: string) => { const e = new MouseEvent('click', { bubbles: true, cancelable: true }); Object.defineProperty(e, 'pointerType', { value: type }); act(() => { el.dispatchEvent(e); }); };
   it('a tap leaves focus where it is (the keyboard stays up); a mouse click moves focus to Add to end', async () => {
     const { box, chip } = await composer();
     typeWords(box, 'Draft a reply to Maya');
     box.focus();
-    pointer('touch');
-    fireEvent.click(chip);
+    tap(chip, 'touch');
     expect(strip()).not.toBeNull();
     expect(document.activeElement).toBe(box);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     typeWords(box, 'Draft a reply to Maya');
-    pointer('mouse');
-    fireEvent.click(chip);
+    tap(chip, 'mouse');
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add to end' }));
   });
-  it('a pen counts as touch, and a key press afterwards counts as keyboard again', async () => {
+  it('a pen counts as touch, and a keyboard-made click counts as keyboard', async () => {
     const { box, chip } = await composer();
     typeWords(box, 'Draft a reply to Maya');
     box.focus();
-    pointer('pen');
-    fireEvent.click(chip);
+    tap(chip, 'pen');
     expect(document.activeElement).toBe(box);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     typeWords(box, 'Draft a reply to Maya');
-    fireEvent.keyDown(document.body, { key: 'a' });
-    fireEvent.click(chip);
+    tap(chip, ''); // a keyboard-made click has no pointer type
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add to end' }));
+  });
+
+  it('no window-level pointer or key listener is added while a chat composer sits idle (hidden means idle)', async () => {
+    const add = vi.spyOn(window, 'addEventListener');
+    render(tree('s9'));
+    const types = add.mock.calls.map((c) => String(c[0]));
+    // The composer's own long-standing listeners are not the question; the chip question must not add ITS pointerdown listener.
+    expect(types.filter((t) => t === 'pointerdown').length).toBeLessThanOrEqual(1);
+    add.mockRestore();
   });
 });

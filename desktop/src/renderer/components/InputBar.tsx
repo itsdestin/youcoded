@@ -1022,13 +1022,6 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   };
 
   const chipChoice = useChipChoice(textRef, setText, inputRef, sessionId, text);
-  const handleChip = useCallback(
-    (chip: QuickChip) => {
-      // All chips fill the input bar for the user to review/edit/send — never auto-send; over typed words they ask first.
-      chipChoice.onChip(chip);
-    },
-    [chipChoice.onChip],
-  );
 
   const handleAttachClick = useCallback(async () => {
     try {
@@ -1114,7 +1107,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           the same "pill row above input bar" visual inside one container. */}
       {minimal && <TerminalToolbar sessionId={sessionId} />}
       {chipChoice.strip}
-      {!minimal && !compact && <QuickChips onChipTap={handleChip} />}
+      {!minimal && !compact && <QuickChips onChipTap={chipChoice.onChip} />}
 
       {attachments.length > 0 && (
         <div className="scroll-mask-x flex gap-2 px-3 py-2 overflow-x-auto">
