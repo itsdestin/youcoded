@@ -621,6 +621,21 @@ describe('SessionManager', () => {
     expect(manager.listSessions()).toHaveLength(0);
   });
 
+  it('reports a worker that died without an exit message as an unexpected exit, not code 0', () => {
+    manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
+    const exitHandler = mockWorker.on.mock.calls.find((c: any) => c[0] === 'exit')?.[1];
+    const codes: number[] = [];
+    manager.on('session-exit', (_id: string, code: number) => codes.push(code));
+    exitHandler();
+    expect(codes).toEqual([1]);
+  });
+
+  it('a PTY killed by a signal is reported with a non-zero code', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'pty-worker.js'), 'utf8');
+    // Source-text pin: the worker is a standalone script that cannot be loaded in a unit test.
+    expect(src).toMatch(/signal \? 128 \+ Number\(signal\) : reportedCode/);
+  });
+
   it('does not emit session-exit after explicit destroy', () => {
     manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
 

@@ -612,13 +612,18 @@ export class SessionManager extends EventEmitter {
 
     worker.on('exit', () => {
       workerGone = true;
+      // WHY (card #134, error inventory Backend row 4): reaching here with the session still listed means the worker died
+      // WITHOUT first sending its own exit message (native crash, out-of-memory kill). That used to be reported as exit
+      // code 0 = "finished normally", so an idle session's tab silently vanished. Only a handoff stop is a deliberate
+      // end; anything else is reported as an unexpected exit so the chat says "Session ended unexpectedly".
+      const deliberateStop = this.handoffStops.has(id) || this.handoffStopping.has(id);
       this.handoffStops.get(id)?.finish({ status: 'unknown' });
       this.handoffStopping.delete(id);
       clearTimeout(commandFallbackTimer);
       if (!this.sessions.has(id)) return;
       const exitingSession = this.sessions.get(id)!;
       exitingSession.info.status = 'destroyed';
-      this.emit('session-exit', id, 0);
+      this.emit('session-exit', id, deliberateStop ? 0 : 1);
       this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
     });
 
