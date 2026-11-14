@@ -3727,6 +3727,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // `?marketplace=empty` keeps the registry-less state reachable (the Marketplace
   // and Library empty states are real surfaces too); default is the sampled
   // registry in fixtures/marketplace/registry.ts.
+  let marketplaceListCalls = 0;
   const marketplaceEmpty = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('marketplace') === 'empty';
   // Marketplace detail states nobody could photograph before (marketplace-detail friction,
@@ -3818,7 +3819,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // WHY the stress branch (render-cost plan, Task 0 step 2b): `?stressRows=`
     // must reach the Marketplace too, or the DOM-size sweep measures ~60 cards
     // and a whole-list render looks cheap.
-    listMarketplace: async () => (marketplaceEmpty ? []
+    // `?mpRefresh=fail`: the FIRST load works and every later one rejects, so a refresh that fails over an older list can be photographed.
+    listMarketplace: async () => (marketplaceListCalls++ > 0 && typeof location !== 'undefined' && new URLSearchParams(location.search).get('mpRefresh') === 'fail'
+      ? Promise.reject(new Error('The registry did not answer'))
+      : marketplaceEmpty ? []
       : activeScenario === 'stress' ? buildStressCatalog(MARKETPLACE_PLUGINS, stressRowCount())
       : buildCatalog(MARKETPLACE_PLUGINS)),
     list: async () => (marketplaceEmpty ? [] : installedSkills.map((s) => ({ ...s }))),

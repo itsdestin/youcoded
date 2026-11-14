@@ -236,7 +236,7 @@ function hasWings(svgText: string): boolean {
   return clean.includes('id="rig-arm-left"') && clean.includes('id="rig-arm-right"');
 }
 
-export default function FlappyGame({ onEnd, best, onExit }: SoloGameProps) {
+export default function FlappyGame({ onEnd, best, onExit, onlineBestUnknown }: SoloGameProps) {
   const { theme, activeTheme, reducedEffects } = useTheme();
   const rigUrl = useWingedRig();
   // Where the theme ships a wallpaper, THAT is the sky (§5.1) — the playfield
@@ -664,7 +664,7 @@ export default function FlappyGame({ onEnd, best, onExit }: SoloGameProps) {
               // A zero is never a "New best", and "Your best: 0 pipes" is not
               // a target — it is a slightly insulting way to say nothing. Below
               // one pipe the card simply shows the score and the retry.
-              isBest={score > 0 && score > (best ?? 0)}
+              isBest={!onlineBestUnknown && score > 0 && score > (best ?? 0)}
               best={best != null && best > 0 && score <= best
                 ? (best === 1 ? '1 pipe' : `${best} pipes`)
                 : undefined}

@@ -21,8 +21,15 @@ import { render, cleanup, act } from '@testing-library/react';
 // WHY: the real stats provider fetches over HTTP (outside window.claude) and
 // publishes another context value whenever it settles. This test measures a
 // memo boundary, not network/cache initialization; keep that input fixed.
+// Lets a test force the marketplace's own refresh-failed state while the REAL provider still loads the list.
+const mpError = vi.hoisted(() => ({ registry: null as string | null, skills: null as string | null }));
+vi.mock('../src/renderer/state/marketplace-context', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/renderer/state/marketplace-context')>();
+  return { ...real, useMarketplace: () => { const mp = real.useMarketplace(); return mpError.registry || mpError.skills ? { ...mp, registryError: mpError.registry, error: mpError.registry ?? mpError.skills } : mp; } };
+});
+const statsState = vi.hoisted(() => ({ value: { loading: false, plugins: {}, themes: {}, error: null as string | null, refresh: () => {}, applyThumbs: () => {}, ensureLoaded: () => {} } }));
 vi.mock('../src/renderer/state/marketplace-stats-context', () => {
-  const stats = { loading: false, plugins: {}, themes: {}, refresh: vi.fn(), applyThumbs: vi.fn(), ensureLoaded: vi.fn() };
+  const stats = statsState.value;
   return { MarketplaceStatsProvider: ({ children }: { children: React.ReactNode }) => children, useMarketplaceStats: () => stats };
 });
 const renders = vi.hoisted(() => ({ corner: 0 }));
@@ -148,6 +155,8 @@ describe('MarketplaceScreen', () => {
     declareViewport(false);
     setupWindowClaude();
     renders.corner = 0;
+    statsState.value.error = null;
+    mpError.registry = null; mpError.skills = null;
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     io = installFiringIntersectionObserver();
   });
@@ -155,6 +164,50 @@ describe('MarketplaceScreen', () => {
     cleanup();
     io.restore();
     vi.restoreAllMocks();
+  });
+
+  // Card #134: failed community totals hid every install/like chip with no word; one notice says so.
+  it('says when the install and like counts could not load, with Try again', async () => {
+    statsState.value.error = 'HTTP 503';
+    const { container, getByText } = await renderScreen();
+    expect(getByText(/Couldn't load the install and like counts/)).toBeTruthy();
+    expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Try again')).toBe(true);
+  });
+
+  // Destin's N4: a failed refresh over an older list is a thin notice under the filter bar; the list stays usable.
+  it('says a refresh failed while the older list stays on screen, with Try again', async () => {
+    mpError.registry = 'timed out';
+    const { container, getByText } = await renderScreen();
+    expect(getByText("Couldn't refresh the marketplace, so this list may be out of date.")).toBeTruthy();
+    expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Try again')).toBe(true);
+    expect(cards(container)).toBeGreaterThan(0); // the list is still there and usable
+  });
+
+  it('shows no refresh strip when only the INSTALLED skills failed to load (that is not the marketplace)', async () => {
+    mpError.skills = 'could not read installed skills';
+    const { queryByText } = await renderScreen();
+    expect(queryByText(/Couldn't refresh the marketplace/)).toBeNull();
+  });
+
+  it('is one thin line: the sentence and Try again, no Details row, the raw reason logged instead', async () => {
+    mpError.registry = 'ECONNRESET 10.0.0.1';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { getByText, queryByText, container } = await renderScreen();
+    expect(getByText("Couldn't refresh the marketplace, so this list may be out of date.")).toBeTruthy();
+    expect(queryByText(/ECONNRESET/)).toBeNull();                                   // not shown
+    expect(queryByText('Details')).toBeNull();                                      // no Details row
+    expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Try again')).toBe(true);
+    expect(warn.mock.calls.some((c) => String(c.join(' ')).includes('ECONNRESET'))).toBe(true); // kept in the log
+  });
+
+  it('shows no refresh notice when the refresh did not fail', async () => {
+    const { queryByText } = await renderScreen();
+    expect(queryByText(/Couldn't refresh the marketplace/)).toBeNull();
+  });
+
+  it('shows no notice while the counts are fine', async () => {
+    const { queryByText } = await renderScreen();
+    expect(queryByText(/Couldn't load the install and like counts/)).toBeNull();
   });
 
   it('draws one chunk of the Explore-everything grid for 300 entries, and another on scroll', async () => {

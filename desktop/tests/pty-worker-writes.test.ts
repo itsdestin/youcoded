@@ -147,6 +147,19 @@ describe('pty-worker handoff stop', () => {
     expect(fakeProcess.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'exit' }), expect.anything());
   });
 
+  // Card #134 (error inventory Backend row 5): node-pty reports a kill by signal as exit code 0 plus the signal.
+  it('reports a PTY killed by a signal as a non-zero exit code, 128 plus the signal', () => {
+    const { fakeProcess, exitPty } = loadWorker();
+    exitPty({ exitCode: 0, signal: 9 });
+    expect(fakeProcess.send).toHaveBeenCalledWith({ type: 'exit', exitCode: 137 }, expect.any(Function));
+  });
+
+  it('passes an ordinary exit code through unchanged', () => {
+    const { fakeProcess, exitPty } = loadWorker();
+    exitPty({ exitCode: 2, signal: 0 });
+    expect(fakeProcess.send).toHaveBeenCalledWith({ type: 'exit', exitCode: 2 }, expect.any(Function));
+  });
+
   it('waits for onExit and for exit IPC flush before exiting, refusing late input', async () => {
     const { deliver, writes, fakePty, fakeProcess, exitPty } = loadWorker();
     deliver({ type: 'input', data: 'queued turn\r' });
