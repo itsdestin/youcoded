@@ -556,7 +556,10 @@ export default React.memo(function HeaderBar({
   // both sides more than the header had and the terminal button landed on the window buttons.
   // Each side now takes only its own width and the name fills what is left between them. The
   // same holds on a Mac, where the traffic lights take the room on the LEFT instead.
-  const ownWidths = narrowTop === 'lights';
+  // Round 8 (Destin on the phone bar: "doesn't quite feel well centered/visually balanced"): with + gone
+  // the phone has room again, so its name centres on the SCREEN (equal reservation, as today); only a
+  // window with its own buttons keeps per-side widths, its name already sitting left.
+  const ownWidths = windowButtonsBar;
   const clusterStyle: React.CSSProperties | undefined = ownWidths ? undefined : reservedWidth != null
     ? { flex: '0 0 auto', width: `${reservedWidth}px`, transition: 'width 200ms ease' }
     : undefined;
@@ -663,7 +666,7 @@ export default React.memo(function HeaderBar({
       {/* Round 7: the name sits on the same line as the buttons beside it (equal padding above and
           below), and the lights hang in the bottom padding, centred under it, instead of pushing the
           name up by their own height. */}
-      {narrowTop === 'lights' && <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2"><SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} /></span>}
+      {narrowTop === 'lights' && <span className="absolute bottom-1.5 left-1/2 -translate-x-1/2" /* round 8: "make status dots tighter below name" */><SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} /></span>}
       </div>
       ) : sessionStrip}
       </div>
