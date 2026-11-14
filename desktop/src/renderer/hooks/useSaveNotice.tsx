@@ -20,16 +20,21 @@ interface SaveFailure { message: string; details?: string; retry: () => void }
 export function useSaveNotice(open: boolean) {
   const [failures, setFailures] = useState<Record<string, SaveFailure>>({});
   const generation = useRef(0);
+  /** Per control: the number of the newest save, how many are still running, and how the newest one ended. */
   const seq = useRef<Record<string, number>>({});
+  const inFlight = useRef<Record<string, number>>({});
+  const newest = useRef<Record<string, { failed: boolean; details: string }>>({});
 
   // Closing (or reopening) starts a new generation: pending results from the old one are ignored, and no notice survives.
   useEffect(() => {
     generation.current += 1;
-    setFailures({});
+    seq.current = {}; inFlight.current = {}; newest.current = {};
+    setFailures((f) => (Object.keys(f).length ? {} : f)); // no new object when there is nothing to clear
     return () => { generation.current += 1; };
   }, [open]);
 
-  /** Run one save of `key`. `save` resolves false / `{ok:false}` / rejects on failure. `retry` re-does the user's action. */
+  /** Run one save of `key`. `save` resolves false / `{ok:false}` / rejects on failure. `retry` re-does the user's action with the
+   *  control's CURRENT value (the caller reads it fresh; do not capture the value that just failed). */
   const run = useCallback(async (
     key: string,
     label: string,
@@ -39,6 +44,7 @@ export function useSaveNotice(open: boolean) {
   ) => {
     const gen = generation.current;
     const mine = (seq.current[key] = (seq.current[key] ?? 0) + 1);
+    inFlight.current[key] = (inFlight.current[key] ?? 0) + 1;
     let failed = false;
     let details = '';
     try {
@@ -52,13 +58,20 @@ export function useSaveNotice(open: boolean) {
       failed = true;
       details = plainMessage(e, '');
     }
-    if (gen !== generation.current || mine !== seq.current[key]) return; // popup closed, or a newer save of this control took over
-    if (!failed) {
+    if (gen !== generation.current) return; // popup closed, or unmounted: nothing to say
+    inFlight.current[key] -= 1;
+    // Only the NEWEST save decides what the person sees; an older one just records nothing.
+    if (mine === seq.current[key]) newest.current[key] = { failed, details };
+    // Wait until every save of this control has settled, so a late result of an older one can never leave the screen and the
+    // disk disagreeing: whatever ended last, the control then shows the last value known saved unless the newest save worked.
+    if (inFlight.current[key] > 0) return;
+    const outcome = newest.current[key];
+    if (!outcome || !outcome.failed) {
       setFailures((f) => { if (!f[key]) return f; const { [key]: _gone, ...rest } = f; return rest; });
       return;
     }
     snapBack();
-    setFailures((f) => ({ ...f, [key]: { message: `Couldn't save ${label}`, details: details || undefined, retry } }));
+    setFailures((f) => ({ ...f, [key]: { message: `Couldn't save ${label}`, details: outcome.details || undefined, retry } }));
   }, []);
 
   /** The notice for one control, or null. Try again clears it and re-does the action. */

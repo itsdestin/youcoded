@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useSaveNotice } from '../hooks/useSaveNotice';
@@ -58,6 +58,10 @@ const ANDROID_LIBS: { lib: string; license: string; source: string }[] = [
 function AnalyticsOptInToggle() {
   const [optIn, setOptIn] = useState<boolean | null>(null);
   const { run, notice } = useSaveNotice(true); // always mounted while the popup is open; unmounts with it
+  // Last value known to be saved, and what the switch shows now (see apply below). Declared before the early return: hooks keep their order.
+  const saved = useRef<boolean | null>(null);
+  const current = useRef<boolean | null>(null);
+  if (saved.current === null && optIn !== null) { saved.current = optIn; current.current = optIn; }
 
   useEffect(() => {
     let cancelled = false;
@@ -68,12 +72,20 @@ function AnalyticsOptInToggle() {
   // Don't render until we know the state — avoids a visible flicker from OFF → ON.
   if (optIn === null) return null;
 
-  // N1 (Destin): a failed save is said inside this popup, under the row, and the toggle goes back to its saved value.
-  const apply = (next: boolean, previous: boolean) => {
+  // N1 (Destin): a failed save is said inside this popup, under the row, and the switch goes back to the last value KNOWN to be saved
+  // (not to "the opposite of what was just clicked", which is wrong when two quick clicks both fail). `current` is what the switch
+  // shows now; Try again re-sends it.
+  const apply = (next: boolean) => {
+    current.current = next;
     setOptIn(next);  // optimistic
-    void run('optin', 'the usage stats setting', () => window.claude.analytics.setOptIn(next), () => setOptIn(previous), () => apply(next, previous));
+    void run(
+      'optin', 'the usage stats setting',
+      async () => { await window.claude.analytics.setOptIn(next); saved.current = next; },
+      () => { current.current = saved.current; setOptIn(saved.current); },
+      () => apply(current.current === saved.current && next !== saved.current ? next : (current.current as boolean)),
+    );
   };
-  const flip = () => apply(!optIn, optIn);
+  const flip = () => apply(!(current.current ?? optIn));
 
   return (
     <>

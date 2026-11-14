@@ -50,3 +50,15 @@ it('says so, with Try again, when saving the usage stats setting fails, and the 
   expect(setOptIn).toHaveBeenCalledTimes(2);
   expect(screen.getByRole('switch', { name: 'Share anonymous usage stats' })).toHaveAttribute('aria-checked', 'false');
 });
+
+// Review item 3: two quick clicks that both fail must leave the switch at what is really saved.
+it('after two quick clicks that both fail, the switch shows the saved value, not the opposite of the last click', async () => {
+  const setOptIn = vi.fn().mockRejectedValue(new Error('locked'));
+  (window as any).claude = { analytics: { getOptIn: vi.fn().mockResolvedValue(true), setOptIn } };
+  render(<AboutPopup open onClose={() => {}} platform="desktop" version="1.3.1" />);
+  const name = 'Share anonymous usage stats';
+  fireEvent.click(await screen.findByRole('switch', { name }));
+  fireEvent.click(screen.getByRole('switch', { name }));
+  expect(await screen.findByText("Couldn't save the usage stats setting")).toBeInTheDocument();
+  expect(screen.getByRole('switch', { name })).toHaveAttribute('aria-checked', 'true');
+});

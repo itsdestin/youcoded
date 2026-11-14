@@ -102,18 +102,24 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
         systemPrompt: (systemPrompt as string) ?? DEFAULTS.systemPrompt,
       };
       saved.current = loadedPrefs;
+      latest.current = loadedPrefs;
       setPrefs(loadedPrefs);
       setLoaded(true);
     }).catch(() => {
+      latest.current = DEFAULTS;
       setPrefs(DEFAULTS);
       setLoaded(true);
     });
   }, [open]);
 
-  // Write-through: every change is persisted immediately. No "save" button —
-  // matches Claude Code's own /config TUI behavior.
-  const save = useCallback(<K extends keyof PrefsState>(key: K, value: PrefsState[K]) => {
-    setPrefs((p) => ({ ...p, [key]: value }));
+  // Write-through: every change is persisted. No "save" button - matches Claude Code's own /config TUI behavior.
+  // `latest` is what the person has CHOSEN right now (Try again re-sends this, never the value that failed); `saved` is what is known to be on disk.
+  const latest = useRef<PrefsState>(DEFAULTS);
+  const timers = useRef<Partial<Record<keyof PrefsState, ReturnType<typeof setTimeout>>>>({});
+  const TEXT_KEYS: ReadonlyArray<keyof PrefsState> = ['outputStyle', 'systemPrompt'];
+
+  const saveRef = useRef<(key: keyof PrefsState, value: never) => void>(() => {});
+  const persist = useCallback((key: keyof PrefsState) => {
     const api = (window.claude as any).settings;
     if (!api) return;
     const fieldMap: Record<keyof PrefsState, string> = {
@@ -124,15 +130,47 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
       outputStyle: 'outputStyle',
       systemPrompt: 'systemPrompt',
     };
-    // The UI updates at once (optimistic). `settings:set` answers false (or rejects) when the write did not happen: then the
-    // control goes back to the last value known to be saved and a notice appears beside it. A slow write shows nothing.
+    const value = latest.current[key];
+    // The UI already shows the value (optimistic). `settings:set` answers false (or rejects) when the write did not happen: then a
+    // notice appears beside the control. A choice control goes back to the last value known saved; a TEXT field keeps what the person
+    // typed (snapping back would wipe their writing), and Try again sends the text as it is now. A slow write shows nothing.
     void run(
       key, LABELS[key],
       async () => { const r = await api.set(fieldMap[key], value); if (r !== false) saved.current = { ...saved.current, [key]: value }; return r; },
-      () => setPrefs((p) => ({ ...p, [key]: saved.current[key] })),
-      () => save(key, value),
+      () => { if (TEXT_KEYS.includes(key)) return; latest.current = { ...latest.current, [key]: saved.current[key] }; setPrefs((p) => ({ ...p, [key]: saved.current[key] })); },
+      () => {
+        // Try again re-does the failed choice - unless the person has chosen something else for this control since it snapped back,
+        // in which case what they have chosen NOW is what is sent (never a stale value).
+        const changedSince = latest.current[key] !== saved.current[key];
+        if (TEXT_KEYS.includes(key) || changedSince) persist(key);
+        else saveRef.current(key, value as never);
+      },
     );
   }, [run]);
+
+  const save = useCallback(<K extends keyof PrefsState>(key: K, value: PrefsState[K]) => {
+    latest.current = { ...latest.current, [key]: value };
+    setPrefs((p) => ({ ...p, [key]: value }));
+    if (TEXT_KEYS.includes(key)) {
+      // Text is saved when the person pauses or leaves the field, not on every keystroke (a failure per keystroke would be noise).
+      clearTimeout(timers.current[key]);
+      timers.current[key] = setTimeout(() => { delete timers.current[key]; persist(key); }, 800);
+      return;
+    }
+    persist(key);
+  }, [persist]);
+  saveRef.current = save as never;
+  const flush = useCallback((key: keyof PrefsState) => {
+    if (timers.current[key] === undefined) return;
+    clearTimeout(timers.current[key]); delete timers.current[key]; persist(key);
+  }, [persist]);
+  // Closing with a pause still pending sends it once, so a typed line is not lost; nothing is said about its result after the popup is gone.
+  useEffect(() => () => {
+    for (const k of Object.keys(timers.current) as (keyof PrefsState)[]) {
+      clearTimeout(timers.current[k]); delete timers.current[k];
+      void (window.claude as any).settings?.set?.(({ outputStyle: 'outputStyle', systemPrompt: 'systemPrompt' } as Record<string, string>)[k] ?? k, latest.current[k])?.catch?.(() => {});
+    }
+  }, [open]);
 
   if (!open) return null;
 
@@ -203,13 +241,14 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
               <TextInput
                 value={prefs.outputStyle}
                 onChange={(e) => save('outputStyle', e.target.value)}
+                onBlur={() => flush('outputStyle')}
                 placeholder="e.g. concise, explanatory"
                 aria-label="Output style"
                 className="w-full"
               />
+              {notice('outputStyle')}
               <p className="text-2xs text-fg-muted">Preset name that tunes your assistant's response style. Leave blank for default.</p>
               </div>
-              {notice('outputStyle', 'mt-2')}
             </section>
 
             {/* Toggles */}
@@ -220,6 +259,7 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
                 checked={prefs.showTurnDuration}
                 onChange={(v) => save('showTurnDuration', v)}
               />
+              {notice('showTurnDuration')}
               <ToggleRow
                 label="Show per-turn metadata"
                 desc="Display model, token usage, and cache hits below each assistant response. Helpful for debugging long sessions or comparing model efficiency. Off by default."
@@ -232,8 +272,7 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
                 checked={prefs.preferReducedMotion}
                 onChange={(v) => save('preferReducedMotion', v)}
               />
-              {notice('showTurnDuration', 'mt-2')}
-              {notice('preferReducedMotion', 'mt-2')}
+              {notice('preferReducedMotion')}
             </section>
 
             {/* System prompt */}
@@ -245,14 +284,15 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
               <Textarea
                 value={prefs.systemPrompt}
                 onChange={(e) => save('systemPrompt', e.target.value)}
+                onBlur={() => flush('systemPrompt')}
                 placeholder="Instructions appended to every session..."
                 rows={4}
                 aria-label="System prompt"
                 className="w-full"
               />
+              {notice('systemPrompt')}
               <p className="text-2xs text-fg-muted">Applied globally. Leave blank to use Claude Code defaults.</p>
               </div>
-              {notice('systemPrompt', 'mt-2')}
             </section>
 
             {/* Advanced escape hatch — opens Claude Code's native TUI for any option not covered here */}

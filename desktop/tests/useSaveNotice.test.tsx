@@ -11,10 +11,10 @@ afterEach(cleanup);
 function Harness({ open, save }: { open: boolean; save: (v: boolean) => Promise<unknown> }) {
   const { run, notice } = useSaveNotice(open);
   const [on, setOn] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const saved = React.useRef(false);
   const toggle = (v: boolean) => {
     setOn(v);
-    void run('t', 'the toggle', async () => { const r = await save(v); if (r !== false) setSaved(v); return r; }, () => setOn(saved), () => toggle(v));
+    void run('t', 'the toggle', async () => { const r = await save(v); if (r !== false && (r as { ok?: boolean } | null)?.ok !== false) saved.current = v; return r; }, () => setOn(saved.current), () => toggle(v));
   };
   return (
     <div>
@@ -108,5 +108,26 @@ describe('save notices for small settings', () => {
     await act(async () => { fireEvent.click(screen.getByText('flip')); });
     await act(async () => { first.resolve(false); });
     expect(screen.queryByText(/Couldn't save/)).toBeNull();
+  });
+
+  // Review item 4: after every save settles the control shows the last value known saved, unless the newest save worked.
+  it('an older save that SUCCEEDS late, after the newest one failed, leaves the control showing what is on disk', async () => {
+    const older = deferred();
+    const save = vi.fn().mockReturnValueOnce(older.promise).mockResolvedValue(false);
+    render(<Harness open save={save} />);
+    fireEvent.click(screen.getByText('flip'));                              // older: true, still running
+    await act(async () => { fireEvent.click(screen.getByText('flip')); });  // newest: false, fails at once
+    expect(screen.queryByText(/Couldn't save/)).toBeNull();                 // waits: an older save is still running
+    await act(async () => { older.resolve(true); });                        // older lands: disk now says true
+    expect(await screen.findByText("Couldn't save the toggle")).toBeInTheDocument();
+    expect(screen.getByTestId('value')).toHaveTextContent('true');          // shows what is on disk, not the failed false
+  });
+
+  it('two quick toggles that both fail leave the control at the value that is really saved', async () => {
+    render(<Harness open save={() => Promise.resolve(false)} />);
+    fireEvent.click(screen.getByText('flip'));
+    await act(async () => { fireEvent.click(screen.getByText('flip')); });
+    expect(await screen.findByText("Couldn't save the toggle")).toBeInTheDocument();
+    expect(screen.getByTestId('value')).toHaveTextContent('false');
   });
 });
