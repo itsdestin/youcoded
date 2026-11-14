@@ -942,7 +942,9 @@ export class EngineSupervisor extends EventEmitter {
    *  the engine while the old child is still releasing the port. */
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
-    this.stopPromise = this._stop().finally(() => { this.stopPromise = null; });
+    // WHY close the log here: its open/writes are async, so "stop() resolved" must
+    // also mean nothing more lands in the engine folder (CI flake: ENOTEMPTY).
+    this.stopPromise = this._stop().finally(() => this.engineLog?.close()).finally(() => { this.stopPromise = null; });
     return this.stopPromise;
   }
 

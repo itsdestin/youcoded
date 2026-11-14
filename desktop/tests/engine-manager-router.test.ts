@@ -402,6 +402,9 @@ describe('per-model settings', () => {
     // No retries on purpose: stopAll() now abandons every pending apply, so nothing
     // writes here after it (CI follow-ups Plan A, Task 3). If ENOTEMPTY ever returns,
     // the cancellation regressed — fix that, do not put the retries back.
+    // The other async writer under .youcoded/engine is engine.log; stopAll() ->
+    // supervisor.stop() now awaits its close (CI flake: ENOTEMPTY in T23), so this
+    // removal needs no wait of its own.
     fs.rmSync(root, { recursive: true, force: true });
   });
 
