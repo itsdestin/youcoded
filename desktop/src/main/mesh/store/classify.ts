@@ -56,6 +56,20 @@ const NATIVE_CONVERSATION_TYPES: ReadonlySet<string> = new Set([
   'assistant-thinking', 'turn-complete', 'compact-summary', 'context-clear',
 ]);
 
+/**
+ * Version of everything in this file that changes what a stored record says (the allow-lists, the
+ * stop-reason list, the reply-end rule). Stored in every index header (records.ts); bump it whenever
+ * any of those change so two devices never compare conversation chains made by different rules (M5).
+ */
+export const CLASSIFIER_VERSION = 1;
+
+/**
+ * Review M6: the stop reasons that finish a reply, decided explicitly. `tool_use` means the turn goes on;
+ * `pause_turn` means the model was paused and will continue, so it is NOT an end. An unknown string is
+ * treated as an end (the previous behaviour, and the safer error: a reply is announced, never swallowed).
+ */
+const NON_END_STOP_REASONS: ReadonlySet<string> = new Set(['tool_use', 'pause_turn']);
+
 const INTERRUPTS = new Set(['[Request interrupted by user]', '[Request interrupted by user for tool use]']);
 
 const EMPTY: Omit<LineInfo, 'kind' | 'conversation'> = {
@@ -104,7 +118,7 @@ export function analyseLine(runtime: RuntimeKind, line: Uint8Array): LineInfo {
     const m = o.message;
     if (typeof m?.id === 'string') info.msgKey = idKey(m.id);
     const sr = m?.stop_reason;
-    info.endLooking = typeof sr === 'string' && sr !== '' && sr !== 'tool_use';
+    info.endLooking = typeof sr === 'string' && sr !== '' && !NON_END_STOP_REASONS.has(sr);
     info.apiError = !!o.isApiErrorMessage;
     if (typeof m?.model === 'string' && m.model !== '<synthetic>') info.model = m.model;
   } else if (type === 'system' && o.subtype === 'turn_duration') info.turnDuration = true;
@@ -145,7 +159,10 @@ export function replyEndStep(runtime: RuntimeKind, rs: ReplyState | null, info: 
   const confirm = () => { if (cur.cand) { confirmed.push(cur.cand.n); cur = { cand: null }; } };
   if (info.turnDuration) { confirm(); return { rs: cur, confirmed }; }
   if (info.kind === 'assistant') {
-    if (cur.cand && cur.cand.id !== info.msgKey) confirm();
+    // WHY a missing id counts as "different from everything" (M6): an id-less line (a synthetic API error,
+    // an interrupt marker's candidate) can never be a further block of the candidate's message, so waiting
+    // for a different id would lose the first reply end or leave the candidate pending forever.
+    if (cur.cand && (cur.cand.id === null || info.msgKey === null || cur.cand.id !== info.msgKey)) confirm();
     if (info.endLooking && (apiOk || !info.apiError)) cur = { cand: { n: lineNo, id: info.msgKey } };
     return { rs: cur, confirmed };
   }

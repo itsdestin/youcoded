@@ -37,12 +37,20 @@ export interface Rec {
   c: Buffer;            // conversation chain value after this line
 }
 
-export function indexHeader(): Buffer {
+/**
+ * `stamp` rides in the header's reserved word: it names the classifier (and reply-end options) that
+ * produced every record's conversation-chain value, conversation count and reply-end fields (review M5).
+ * WHY in the index itself: the stamp must travel with the chain it describes, so a changed classifier is
+ * detected on open instead of two app versions silently producing different `c` values for identical bytes.
+ */
+export function indexHeader(stamp: number): Buffer {
   const b = Buffer.alloc(HDR);
   INDEX_MAGIC.copy(b, 0);
   b.writeUInt32BE(INDEX_FORMAT, 8);
+  b.writeUInt32BE(stamp >>> 0, 12);
   return b;
 }
+export const headerStamp = (b: Buffer): number => b.readUInt32BE(12);
 export const headerOk = (b: Buffer): boolean => b.length >= HDR && b.subarray(0, 8).equals(INDEX_MAGIC) && b.readUInt32BE(8) === INDEX_FORMAT;
 
 /**

@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { ChatStore, type EvictionProof } from './store';
+import { ChatStore, type EvictionProof, type StoreOptions } from './store';
 import { FaultFs, InjectedCrash } from './fault-fs';
 import { ccConversation, cc } from './fixtures';
 import { CHAT, V, refChains, tmpRoot, listFiles } from './testkit';
@@ -34,7 +34,7 @@ interface Scenario {
   run: (s: ChatStore, progress: { acked: number }) => Promise<void>;
   /** After the kill: open with the real fs and check invariants. */
   check: (root: string, progress: { acked: number }, crashedAt: number) => Promise<void>;
-  storeOpts?: { chunkBytes?: number };
+  storeOpts?: StoreOptions;
 }
 
 async function sweep(sc: Scenario): Promise<{ ops: number; runs: number }> {
@@ -68,6 +68,9 @@ async function sweep(sc: Scenario): Promise<{ ops: number; runs: number }> {
         }
         expect(crashed, `op ${k} of ${total} should have been reached`).toBe(true);
         await ffs.applyPowerLoss();
+        // the killed process is gone, so its lock is stale: in-process the owner would still look alive, so mark it dead
+        const lockPath = path.join(t.dir, 'LOCK');
+        if (fs.existsSync(lockPath)) fs.writeFileSync(lockPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(lockPath, 'utf8')), pid: 2147483646, start: 'dead' }));
         try { await sc.check(t.dir, progress, k); }
         catch (e) { (e as Error).message = `[${sc.name} kill at op ${k}/${total} tear=${v.tear} powerLoss=${v.powerLoss}] ` + (e as Error).message; throw e; }
         runs++;
@@ -94,6 +97,9 @@ async function expectPrefixState(s: ChatStore, minLines: number): Promise<number
   expect(head.lines).toBeGreaterThanOrEqual(minLines);
   expect(head.lines).toBeLessThanOrEqual(conv.length);
   expect(head.hash).toBe(REF.raw[head.lines]);
+  // C1: no kill point may ever look like damage, and nothing acknowledged is moved aside
+  expect(fs.existsSync(path.join(s.root, 'versions', V(1).toString('hex'), 'damaged.json'))).toBe(false);
+  expect(fs.existsSync(path.join(s.root, 'aside')) ? fs.readdirSync(path.join(s.root, 'aside')) : []).toEqual([]);
   const rep = await s.verify(V(1));
   expect(rep, JSON.stringify(rep)).toMatchObject({ ok: true });
   expect(await s.replyEnds(V(1))).toEqual(refReplyEnds(conv, head.lines));
@@ -182,9 +188,10 @@ describe('kill at every disk operation', () => {
   }, 120_000);
 
   it('setAsideDamaged: every byte is either still in the version or in aside/, never gone', async () => {
+    let origIndex = Buffer.alloc(0);
     const r = await sweep({
       name: 'setAsideDamaged',
-      setup: (root) => plainSetup(root, conv.length),
+      setup: async (root) => { await plainSetup(root, conv.length); origIndex = fs.readFileSync(path.join(root, 'versions', V(1).toString('hex'), 'index.bin')); },
       run: async (s) => { await s.setAsideDamaged(V(1)); },
       check: async (root) => {
         const s = await ChatStore.open(root);
@@ -199,6 +206,8 @@ describe('kill at every disk operation', () => {
           expect(files.some((f) => f.startsWith('body-'))).toBe(true);
           const bodyBytes = files.filter((f) => f.startsWith('body-')).reduce((n, f) => n + fs.statSync(path.join(root, 'aside', asideDirs[0], f)).size, 0);
           expect(bodyBytes).toBe(Buffer.concat(conv).length);
+          // H2: the aside copy's INDEX is complete too, byte for byte (it used to be overwritten by the fresh empty one)
+          expect(fs.readFileSync(path.join(root, 'aside', asideDirs[0], 'index.bin')).equals(origIndex)).toBe(true);
         }
         await s.setAsideDamaged(V(1)); // redo is safe
         expect((await s.head(V(1))).lines).toBe(0);
@@ -210,14 +219,16 @@ describe('kill at every disk operation', () => {
 
   it('evictBody and restoreBody: chain values are never lost; a cut eviction is finished or undone', async () => {
     const THROUGH = 12;
-    const proof = (): EvictionProof => ({ kind: 'holders-confirmed', holders: ['dev-a'], through: THROUGH, hash: REF.raw[THROUGH] });
+    const vh = V(1).toString('hex');
+    const proof = (): EvictionProof => ({ kind: 'holders-confirmed', version: vh, through: THROUGH, hash: REF.raw[THROUGH], acks: [{ holder: 'dev-a', version: vh, lines: THROUGH, hash: REF.raw[THROUGH], signature: 'sig' }] });
+    const accept: StoreOptions = { chunkBytes: 500, proofVerifier: () => true };
     const evictSweep = await sweep({
       name: 'evict',
-      storeOpts: { chunkBytes: 500 },
-      setup: async (root) => { const s = await ChatStore.open(root, { chunkBytes: 500 }); await s.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' }); await s.append(V(1), 0, 0, conv.slice(0, 7)); await s.append(V(1), 0, 7, conv.slice(7)); await s.close(); },
+      storeOpts: accept,
+      setup: async (root) => { const s = await ChatStore.open(root, accept); await s.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' }); await s.append(V(1), 0, 0, conv.slice(0, 7)); await s.append(V(1), 0, 7, conv.slice(7)); await s.close(); },
       run: async (s) => { await s.evictBody(V(1), proof()); },
       check: async (root) => {
-        const s = await ChatStore.open(root, { chunkBytes: 500 });
+        const s = await ChatStore.open(root, accept);
         const head = await s.head(V(1));
         expect(head.lines).toBe(conv.length); expect(head.hash).toBe(REF.raw[conv.length]);
         expect([0, THROUGH]).toContain(head.evictedLines);
@@ -234,11 +245,11 @@ describe('kill at every disk operation', () => {
     });
     const restoreSweep = await sweep({
       name: 'restore',
-      storeOpts: { chunkBytes: 500 },
-      setup: async (root) => { const s = await ChatStore.open(root, { chunkBytes: 500 }); await s.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' }); await s.append(V(1), 0, 0, conv); await s.evictBody(V(1), proof()); await s.close(); },
+      storeOpts: accept,
+      setup: async (root) => { const s = await ChatStore.open(root, accept); await s.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' }); await s.append(V(1), 0, 0, conv); await s.evictBody(V(1), proof()); await s.close(); },
       run: async (s) => { await s.restoreBody(V(1), conv); },
       check: async (root) => {
-        const s = await ChatStore.open(root, { chunkBytes: 500 });
+        const s = await ChatStore.open(root, accept);
         const head = await s.head(V(1));
         expect([0, THROUGH]).toContain(head.evictedLines);
         expect(head.hash).toBe(REF.raw[conv.length]);
@@ -253,7 +264,7 @@ describe('kill at every disk operation', () => {
   }, 240_000);
 
   it('control log appends and parked entries', async () => {
-    const id = (n: number) => createHash('sha256').update('e' + n).digest('hex');
+    const id = (n: number) => createHash('sha256').update('opaque' + n).digest('hex'); // an entry id is the SHA-256 of its body
     const entries = [1, 2, 3, 4].map((n) => ({ id: id(n), chat: CHAT, seen: n > 1 ? [id(n - 1)] : [], body: Buffer.from('opaque' + n) }));
     const order = [entries[2], entries[3], entries[0], entries[1]]; // out of causal order on purpose
     const r = await sweep({

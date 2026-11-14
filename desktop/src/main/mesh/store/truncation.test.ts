@@ -37,7 +37,7 @@ async function expectRecovered(root: string, expectLines: (n: number) => boolean
 }
 
 describe('truncate at every byte offset of the last record', () => {
-  it('index.bin: cut anywhere in the last record leaves all earlier lines; the whole record keeps it', async () => {
+  it('index.bin: cut anywhere in the last record never loses an earlier line, and never loses the last one once its index write began', async () => {
     const last = conv.length - 1;
     let checked = 0;
     for (let cut = recPos(last); cut <= recPos(last + 1); cut++) {
@@ -45,15 +45,18 @@ describe('truncate at every byte offset of the last record', () => {
       try {
         await build(t.dir);
         fs.truncateSync(path.join(vdir(t.dir), 'index.bin'), cut);
-        const lines = await expectRecovered(t.dir, (n) => n === (cut === recPos(last + 1) ? conv.length : last));
-        expect(lines).toBe(cut === recPos(last + 1) ? conv.length : last);
+        // cut exactly at a record boundary: the line's body was never indexed, so it was never acknowledged (kept aside, resend re-adds it).
+        // cut inside the record: an index write had started, so the body is whole and the line is ADOPTED, not dropped (C1).
+        const want = cut === recPos(last) ? last : conv.length;
+        const lines = await expectRecovered(t.dir, (n) => n === want);
+        expect(lines).toBe(want);
         checked++;
       } finally { await t.cleanup(); }
     }
     expect(checked).toBe(REC + 1);
   });
 
-  it('body chunk: cut anywhere in the last line drops exactly that line', async () => {
+  it('body chunk cut anywhere in the last line: acknowledged lines are missing, so the version is quarantined intact (damaged), never trimmed', async () => {
     const lastLen = conv[conv.length - 1].length;
     let checked = 0;
     for (const chunk of [undefined, 700]) {
@@ -63,9 +66,21 @@ describe('truncate at every byte offset of the last record', () => {
           await build(t.dir, chunk);
           const files = fs.readdirSync(vdir(t.dir)).filter((f) => f.startsWith('body-')).sort();
           const lastChunk = path.join(vdir(t.dir), files[files.length - 1]);
-          fs.truncateSync(lastChunk, fs.statSync(lastChunk).size - drop);
-          // drop === lastLen exactly removes the last line's bytes; between, a torn body. Either way line N is lost.
-          await expectRecovered(t.dir, (n) => n === (drop === 0 ? conv.length : conv.length - 1), chunk);
+          const before = fs.statSync(lastChunk).size;
+          fs.truncateSync(lastChunk, before - drop);
+          // drop === 0: nothing cut. drop === lastLen: the last line's bytes are gone but its index record was acknowledged. Either way no line is silently dropped.
+          if (drop === 0) await expectRecovered(t.dir, (n) => n === conv.length, chunk);
+          else {
+            const s = await ChatStore.open(t.dir, chunk ? { chunkBytes: chunk } : {});
+            await expect(s.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
+            const q = path.join(t.dir, 'aside', fs.readdirSync(path.join(t.dir, 'aside'))[0]);
+            expect(fs.statSync(path.join(q, 'index.bin')).size).toBe(recPos(conv.length));
+            expect(fs.statSync(path.join(q, path.basename(lastChunk))).size).toBe(before - drop);
+            await s.setAsideDamaged(V(1)); // the caller recopies from a peer
+            expect(await s.append(V(1), 0, 0, conv)).toBe('ok');
+            expect((await s.verify(V(1))).ok).toBe(true);
+            await s.close();
+          }
           checked++;
         } finally { await t.cleanup(); }
       }
@@ -84,13 +99,15 @@ describe('truncate at every byte offset of the last record', () => {
           fs.truncateSync(path.join(vdir(t.dir), 'index.bin'), ic);
           const bf = path.join(vdir(t.dir), 'body-0000000000000000.bin');
           fs.truncateSync(bf, fs.statSync(bf).size - drop);
-          await expectRecovered(t.dir, (n) => n === conv.length - 1);
+          // a cut inside the index record means an index write had started: the whole body line exists only when none of it was cut
+          const wholeBody = drop === 0;
+          await expectRecovered(t.dir, (n) => n === (ic > recPos(conv.length - 1) && wholeBody ? conv.length : conv.length - 1));
         } finally { await t.cleanup(); }
       }
     }
   });
 
-  it('a garbage tail after the last whole record (a cut-off append) is ignored and trimmed', async () => {
+  it('a garbage tail after the last whole record (a cut-off append) is ignored; its bytes are kept aside', async () => {
     const t = await tmpRoot();
     try {
       await build(t.dir);
@@ -100,22 +117,22 @@ describe('truncate at every byte offset of the last record', () => {
     } finally { await t.cleanup(); }
   });
 
-  it('a record flipped in the middle of the verified window is detected, not trusted', async () => {
+  it('a record flipped in the middle is repaired from the body (no line is lost); it is never "trusted" and never truncates', async () => {
     const t = await tmpRoot();
     try {
       await build(t.dir);
       const p = path.join(vdir(t.dir), 'index.bin');
       const b = fs.readFileSync(p); b[recPos(5) + 20] ^= 0xff; fs.writeFileSync(p, b);
       const s = await ChatStore.open(t.dir);
-      expect((await s.head(V(1))).lines).toBe(5); // everything from the damaged record on is distrusted
-      await s.append(V(1), 0, 0, conv);
+      expect((await s.head(V(1))).lines).toBe(conv.length);
       expect((await s.head(V(1))).hash).toBe(REF.raw[conv.length]);
+      expect((await s.verify(V(1))).ok).toBe(true);
       await s.close();
     } finally { await t.cleanup(); }
   });
 
   it('control log: cut anywhere in the last record keeps the earlier entries and accepts the entry again', async () => {
-    const id = (n: number) => createHash('sha256').update('t' + n).digest('hex');
+    const id = (n: number) => createHash('sha256').update('b' + n).digest('hex'); // an entry id is the SHA-256 of its body
     const mk = (n: number) => ({ id: id(n), chat: CHAT, seen: n > 1 ? [id(n - 1)] : [], body: Buffer.from('b' + n) });
     const probe = await tmpRoot();
     let logSize = 0; let prevSize = 0; let logPath = '';

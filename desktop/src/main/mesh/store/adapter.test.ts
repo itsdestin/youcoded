@@ -98,14 +98,16 @@ describe('S1 adapter (ported prototype tests)', () => {
     expect(isRewritten(r2) && r2.rewritten).toBe('rewritten');
   });
 
-  it('KNOWN BLIND SPOT: a same-size mid-file edit passes the cheap check; scrub catches it', async () => {
+  it('a same-size mid-file edit passes the cheap check but the rolling scrub inside poll catches it (whole file fits one poll budget here)', async () => {
     const f = fresh();
     const all = Buffer.concat(Array.from({ length: 2000 }, (_, i) => line(i)));
     fs.writeFileSync(f, all);
     const r = ok(await poll(f, initAdapterState(seeds), opts));
     const fd = fs.openSync(f, 'r+'); fs.writeSync(fd, 'Z', Math.floor(all.length / 2)); fs.closeSync(fd);
+    fs.utimesSync(f, new Date(), new Date(Date.now() + 5000)); // an in-place edit moves the mtime; make it certain at ms resolution
+    expect(await cheapCheck(f, r.state)).toMatchObject({ kind: 'unchanged' }); // the cheap check alone still cannot see this
     const r2 = await poll(f, r.state, opts);
-    expect(isRewritten(r2)).toBe(false); // documented: the cheap check cannot see this
+    expect(isRewritten(r2) && r2.rewritten).toBe('rewritten');
     expect(await scrub(f, r.state, opts)).toBe(false);
   });
 
@@ -115,7 +117,7 @@ describe('S1 adapter (ported prototype tests)', () => {
     fs.writeFileSync(f, body);
     const r = ok(await poll(f, initAdapterState(seeds), opts));
     const tmp = f + '.new'; fs.writeFileSync(tmp, Buffer.concat([body, line(2)])); fs.renameSync(tmp, f);
-    const r2 = await poll(f, r.state, opts);
+    const r2 = await poll(f, r.state, { ...opts, verifyReplaced: false });
     expect(isRewritten(r2) && r2.rewritten).toBe('replaced');
   });
 

@@ -28,7 +28,8 @@ describe('append / head / hashAt / read', () => {
     const got = await s.read(V(1), 0, 3, 9);
     expect((got as Buffer[]).map((b) => b.toString('hex'))).toEqual(lines.slice(3, 9).map((b) => b.toString('hex')));
     expect(await s.read(V(1), 0, 5, 5)).toEqual([]);
-    expect((await s.read(V(1), 0, lines.length - 1, lines.length + 50) as Buffer[]).length).toBe(1);
+    expect((await s.read(V(1), 0, lines.length - 1, lines.length) as Buffer[]).length).toBe(1);
+    await rejects(s.read(V(1), 0, lines.length - 1, lines.length + 50), 'bad-argument'); // past the head is refused, not clamped
   });
 
   it('segment must be 0; version must be registered; lines must be whole lines', async () => {
@@ -130,9 +131,9 @@ describe('persistence and structure', () => {
       await s2.append(V(1), 0, 0, lines);
       expect((await s1.head(V(1))).hash).not.toBe((await s2.head(V(1))).hash); // a different rule gives different chains
       // and the default rule ignores the version id (T12 F6): same chat + lines under another version id: same chain
-      const s3 = await openWith(t2.dir, V(77));
-      await s3.append(V(77), 0, 0, lines);
-      expect((await s3.head(V(77))).hash).toBe((await s2.head(V(1))).hash);
+      await s2.registerVersion(V(77), { chatId: CHAT, runtime: 'claude-code' });
+      await s2.append(V(77), 0, 0, lines);
+      expect((await s2.head(V(77))).hash).toBe((await s2.head(V(1))).hash);
     } finally { await t2.cleanup(); }
   });
 
@@ -253,14 +254,18 @@ describe('set-asides', () => {
 });
 
 describe('eviction', () => {
-  const proofFor = async (s: ChatStore, through: number) => ({ kind: 'holders-confirmed' as const, holders: ['dev-a'], through, hash: (await s.hashAt(V(1), 0, through))! });
+  const vhex = V(1).toString('hex');
+  // the store only evicts when its caller-supplied verifier says the proof is genuine
+  const accept = { proofVerifier: () => true };
+  const proofFor = async (s: ChatStore, through: number) => { const hash = (await s.hashAt(V(1), 0, through))!; return { kind: 'holders-confirmed' as const, version: vhex, through, hash, acks: [{ holder: 'dev-a', version: vhex, lines: through, hash, signature: 'sig' }] }; };
 
   it('refuses without a well-formed proof, with a stale or foreign hash, or past the head', async () => {
     const lines = Array.from({ length: 6 }, (_, i) => cc.user('e' + i));
-    const s = await openWith(t.dir, V(1), { chunkBytes: 64 });
+    const s = await openWith(t.dir, V(1), { chunkBytes: 64, ...accept });
     await s.append(V(1), 0, 0, lines);
     const good = await proofFor(s, 4);
-    for (const bad of [undefined, null, {}, { ...good, kind: 'x' }, { ...good, holders: [] }, { ...good, holders: [''] }, { ...good, holders: ['a', 'a'] }, { ...good, through: 0 }, { ...good, hash: 'zz' }, { ...good, hash: 'ab'.repeat(32) }, { ...good, through: 7 }]) {
+    const ackOf = (o: object) => [{ ...good.acks[0], ...o }];
+    for (const bad of [undefined, null, {}, { ...good, kind: 'x' }, { ...good, acks: [] }, { ...good, acks: ackOf({ holder: '' }) }, { ...good, acks: [...good.acks, ...good.acks] }, { ...good, through: 0 }, { ...good, hash: 'zz' }, { ...good, hash: 'ab'.repeat(32) }, { ...good, through: 7 }]) {
       await rejects(s.evictBody(V(1), bad as any), 'bad-proof');
     }
     expect((await s.head(V(1))).evictedLines).toBe(0);
@@ -269,7 +274,7 @@ describe('eviction', () => {
 
   it('evicts bodies, keeps chain values, serves reads as evicted, still answers hashAt and idempotent appends, restores', async () => {
     const lines = Array.from({ length: 20 }, (_, i) => cc.user('e' + i + 'x'.repeat(40)));
-    const s = await openWith(t.dir, V(1), { chunkBytes: 256 });
+    const s = await openWith(t.dir, V(1), { chunkBytes: 256, ...accept });
     await s.append(V(1), 0, 0, lines.slice(0, 12));
     await s.append(V(1), 0, 12, lines.slice(12));
     const ref = refChains(lines);
@@ -303,7 +308,7 @@ describe('eviction', () => {
 
   it('cannot cut a tail out of evicted lines', async () => {
     const lines = Array.from({ length: 6 }, (_, i) => cc.user('c' + i));
-    const s = await openWith(t.dir);
+    const s = await openWith(t.dir, V(1), accept);
     await s.append(V(1), 0, 0, lines);
     await s.evictBody(V(1), await proofFor(s, 6));
     await rejects(s.setAsideTail('ef'.repeat(8), V(1), 2), 'evicted');
@@ -321,14 +326,16 @@ describe('extras', () => {
     expect(await s.hasExtra(hash)).toBe(true);
     expect((await s.readExtra(hash))!.equals(bytes)).toBe(true);
     expect(await s.readExtra('00'.repeat(32))).toBeNull();
-    expect(() => s.putExtra('00'.repeat(32), bytes)).toThrow(StoreError);
-    expect(() => s.hasExtra('../../etc/passwd')).toThrow(StoreError);
+    await expect(s.putExtra('00'.repeat(32), bytes)).rejects.toBeInstanceOf(StoreError);
+    await expect(s.hasExtra('../../etc/passwd')).rejects.toBeInstanceOf(StoreError);
   });
 });
 
 describe('control log storage', () => {
-  const id = (n: number) => createHash('sha256').update('entry' + n).digest('hex');
-  const entry = (n: number, seen: number[] = [], chat = 'synthetic:chat-1') => ({ id: id(n), chat, seen: seen.map(id), body: Buffer.from('opaque-' + n) });
+  // an entry's id is the SHA-256 of its body (the store refuses anything else)
+  const bodyOf = (n: number) => Buffer.from('opaque-' + n);
+  const id = (n: number) => createHash('sha256').update(bodyOf(n)).digest('hex');
+  const entry = (n: number, seen: number[] = [], chat = 'synthetic:chat-1') => ({ id: id(n), chat, seen: seen.map(id), body: bodyOf(n) });
 
   it('appends in order, reports duplicates, parks entries whose seen ids are missing and applies them later', async () => {
     let s = await openWith(t.dir);
@@ -364,7 +371,7 @@ describe('never touches anything outside its root', () => {
     fs.writeFileSync(path.join(parent, 'sentinel'), 'x');
     const s = await openWith(root);
     await s.append(V(1), 0, 0, [cc.user('a')]);
-    await s.appendControl({ id: 'ab'.repeat(32), chat: 'c', seen: [], body: Buffer.from('b') });
+    await s.appendControl({ id: createHash('sha256').update('b').digest('hex'), chat: 'c', seen: [], body: Buffer.from('b') });
     expect(fs.readdirSync(parent).sort()).toEqual(['sentinel', 'store']);
   });
 });

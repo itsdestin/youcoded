@@ -77,17 +77,36 @@ export const realFs: Fs = {
     try { return await fsp.readdir(path); } catch (e: any) { if (e.code === 'ENOENT') return []; throw e; }
   },
   async exists(path) { try { await fsp.lstat(path); return true; } catch { return false; } },
-  async mkdir(path) { await fsp.mkdir(path, { recursive: true, mode: 0o700 }); },
+  // WHY not recursive: a durable directory needs its PARENT fsynced after each level is created, and the
+  // caller (mkdirDurable below) creates one level at a time so it can do exactly that.
+  async mkdir(path) { try { await fsp.mkdir(path, { mode: 0o700 }); } catch (e: any) { if (e.code !== 'EEXIST') throw e; } },
   rename: (a, b) => fsp.rename(a, b),
   async unlink(path) { try { await fsp.unlink(path); } catch (e: any) { if (e.code !== 'ENOENT') throw e; } },
   async fsyncDir(path) {
-    // Directories cannot be opened for fsync on Windows; there the call is a no-op (UNVERIFIED there).
+    // Directories cannot be opened for fsync on Windows; there (only) the call is a no-op (UNVERIFIED there).
+    // WHY not swallow errors elsewhere (review L1): on Linux/macOS an EINVAL/ENOTSUP/EPERM would mean this
+    // file system cannot make directory entries durable, and silently carrying on would void every
+    // "acknowledged means durable" promise. Better to fail the operation loudly.
     let fh: FileHandle | undefined;
     try { fh = await fsp.open(path, 'r'); await fh.sync(); }
-    catch (e: any) { if (!['EISDIR', 'EPERM', 'EINVAL', 'EACCES', 'ENOTSUP'].includes(e.code)) throw e; }
+    catch (e: any) { if (!(process.platform === 'win32' && ['EISDIR', 'EPERM', 'EACCES', 'EINVAL'].includes(e.code))) throw e; }
     finally { await fh?.close(); }
   },
 };
+
+/**
+ * Create a directory (and any missing parents, one level at a time) and make every new entry durable by
+ * fsyncing the parent after each level (review M2). WHY: on POSIX a directory entry is only durable once
+ * its parent directory is fsynced; without this an acknowledged result (a parked append, a tail, an
+ * extra, a control entry) could vanish with its whole new folder after a power cut.
+ */
+export async function mkdirDurable(fs: Fs, path: string): Promise<void> {
+  if (await fs.exists(path)) return;
+  const parent = nodePath.dirname(path);
+  if (parent !== path) await mkdirDurable(fs, parent);
+  await fs.mkdir(path);
+  await fs.fsyncDir(parent);
+}
 
 /**
  * Atomic whole-file write: temp file, fsync, rename over the target, fsync the directory. A kill

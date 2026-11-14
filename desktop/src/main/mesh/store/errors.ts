@@ -10,7 +10,11 @@ export type StoreErrorCode =
   | 'evicted'
   | 'parked-full'
   | 'corrupt'           // on-disk data that cannot be explained by an interrupted write
-  | 'closed';
+  | 'closed'
+  | 'store-locked'      // another process (or another open in this one) holds this store root
+  | 'damaged'           // a version (or control log) failed an integrity check; its bytes are kept aside, nothing is served
+  | 'classifier-changed' // chain data was written under a different classifier and cannot be re-derived (bodies evicted)
+  | 'limit';            // a size or count cap was hit (refused loudly, never silently truncated)
 
 export class StoreError extends Error {
   constructor(public readonly code: StoreErrorCode, detail?: string) {
