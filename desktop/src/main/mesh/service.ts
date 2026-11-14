@@ -29,8 +29,9 @@
 import path from 'path';
 import { toHex, utf8 } from './crypto/bytes';
 import { meetingIdFor, signRosterStatement } from './crypto/relay-auth';
-import { openSecret, sealSecretTo } from './crypto/keygen';
 import { newSetSecret } from './crypto/keys';
+import { encodeStatement, signStatement } from './crypto/generation';
+import { DeviceCore, GenBook, type Out } from './device-core';
 import { deviceIdFor, setIdFor, type DeviceIdentity } from './crypto/identity';
 import { makeGenesisEntry, makeRemoveEntry, makeRenameEntry, parseEntry, encodeEntry, seenForNextEntry, type SignedEntry } from './crypto/roster';
 import { MeshCryptoError } from './crypto/errors';
@@ -42,10 +43,10 @@ import { MeetingClient } from './meeting-client';
 import { generateCode } from './crypto/pairing';
 import { adoptPairing, MEETING_PART_LENGTH, newTypedCode, PairingHost, PairingJoiner, parseTypedCode } from './pair-flow';
 import { RelayClient } from './relay-client';
-import { MeshRosterRejected, RosterStore } from './roster-store';
+import { RosterStore } from './roster-store';
 import { ensureDir, readFileIfExists, writeFileDurable } from './fs-durable';
 import { generateIdentity } from './crypto/identity';
-import { GROUP_ROSTER, GROUP_TEST_NOTE, KIND_NOTE, KIND_REMOVAL, KIND_ROSTER, noteBody, parseNoteBody, parseRemovalBody, parseRosterBody, removalBody, rosterBody } from './wire';
+import { GROUP_ROSTER, GROUP_TEST_NOTE, KIND_NOTE, KIND_ROSTER, noteBody, parseNoteBody, rosterBody } from './wire';
 
 type MeshLog = (event: string, fields?: Record<string, string | number | boolean>) => void;
 export interface MeshServiceOptions {
@@ -60,8 +61,12 @@ export interface MeshServiceOptions {
   now?: () => number;
   /** Relay timing, shrunk by the rig (design 5.2: "the rig must be able to shrink" timers). */
   relayBaseDelayMs?: number;
-  /** A pairing whose new device is not seen on the relay within this long is rolled back (default 15 minutes). */
+  /** Kept for old callers; no longer used. A pairing is never undone by a timer (review N8): an unconfirmed device stays listed as pending. */
   pairConfirmMs?: number;
+  /** Each rank in the member order waits this much longer before making the next shared secret itself (default 15 s). */
+  genTakeoverMs?: number;
+  /** How often this device repeats its roster heads so a dropped frame heals (default 30 s). */
+  headsEveryMs?: number;
   /** removeDevice() waits this long for the relay before answering 'pending' (default 10 s). */
   removeWaitMs?: number;
   /** First retry delay for the relay queue (doubles up to 30 s; default 2 s). */
@@ -81,6 +86,11 @@ export interface MeshStatus {
   activeDevices: string[];
   removedDevices: string[];
   generations: number[];
+  /** The generation new frames are sealed under, or null while none is held for the removals this device knows of. */
+  currentGeneration: number | null;
+  /** Devices on the roster that have not signed an entry of their own yet (pairing not finished). */
+  pendingDevices: string[];
+  parkedEntries: number;
   inbox: number;
   repairedTailBytes: number;
   parkedRoster: number;
@@ -108,7 +118,6 @@ export interface MeshStatus {
 // `bad-ancestry` never will, and retrying it forever would only hide it.
 const TRANSIENT = new Set(['roster-rate-limited', 'rate-limited', 'too-fast', 'relay-busy']);
 const ADD_PATIENCE = new Set(['already-member']);
-const waitableRosterError = (e: MeshCryptoError): boolean => e.code === 'bad-roster' && /signer not yet|unknown or later|signer's previous entry/.test(e.message);
 
 export class MeshService {
   readonly dir: string;
@@ -132,7 +141,11 @@ export class MeshService {
   readonly #waiters = new Map<string, Array<(r: 'ok' | 'refused') => void>>();
   readonly #refusals = new Map<string, number>();
   readonly #rosterRejected = new Map<string, number>();
-  readonly #joinTimers = new Map<string, NodeJS.Timeout>();
+  #core: DeviceCore | null = null;
+  readonly #book = new GenBook();
+  #planTimer: NodeJS.Timeout | null = null;
+  #headsTimer: NodeJS.Timeout | null = null;
+  #afterChain: Promise<unknown> = Promise.resolve();
   #opChain: Promise<unknown> = Promise.resolve();
   #rosterGaps = 0;
   readonly inbox: InboxItem[] = [];
@@ -159,8 +172,8 @@ export class MeshService {
   async stop(): Promise<void> {
     this.#stopped = true;
     if (this.#retryTimer) clearTimeout(this.#retryTimer);
-    for (const t of this.#joinTimers.values()) clearTimeout(t);
-    this.#joinTimers.clear();
+    if (this.#planTimer) clearTimeout(this.#planTimer);
+    if (this.#headsTimer) clearInterval(this.#headsTimer);
     this.#link?.stop();
     this.#relay?.stop();
     this.closeHostMeeting();
@@ -195,112 +208,102 @@ export class MeshService {
       // The relay is reachable (again): the queue of roster changes it still owes is worked off, and devices seen online confirm pairings.
       // WHY `presence()` and not the `devices` list in the sign-in answer: that list is the whole roster, online or not, so it proves nothing about a
       // pairing; the presence answer is who is connected right now.
-      this.#relay.on('ready', () => { this.#retryAttempt = 0; void this.drainRelay(); void this.confirmOnline(); });
+      this.#relay.on('ready', () => { this.#retryAttempt = 0; void this.drainRelay(); void this.confirmOnline(); void this.afterChange(true); });
       this.#relay.on('presence-change', (p: { device: string; state: string }) => { if (p.state === 'on') this.confirmJoin(p.device); });
     }
+    // The device-layer decisions (parked entries, which secret is current, who makes the next one) live in DeviceCore; see device-core.ts.
+    this.#core = new DeviceCore({ identity: this.id, setId, roster: this.roster, book: this.#book, takeoverMs: this.o.genTakeoverMs ?? 15_000 });
+    this.#core.adoptWelcome(this.#k.secrets, this.#k.stmts ?? new Map());
+    this.#book.dirty = false;
     const carrier = this.#relay ? relayCarrier(this.#relay) : null;
     if (!carrier) return; // no relay configured: identity and roster work, nothing connects
     this.#link = new Link({
       identity: this.id, setId, carrier, meshDir: this.dir,
-      secrets: () => this.#k.secrets,
+      secrets: () => this.#book.secrets(),
+      // WHY (review N3, N12): notes are sealed only under the secret made for exactly the removals this device knows of, and not at all
+      // until one is held. Control traffic (roster entries, bundles, heads, requests) uses a secret every member holds, so it is always readable.
+      sealLabel: (group, kind) => (group === GROUP_ROSTER ? (kind === KIND_ROSTER ? (this.#core?.currentLabel() ?? this.#core?.oldestLabel() ?? null) : (this.#core?.oldestLabel() ?? null)) : (this.#core?.currentLabel() ?? null)),
       signKeyFor: (d) => this.roster.signKeyFor(d),
       isRemoved: (d) => this.roster.isRemoved(d),
       now: this.o.now,
       // The receiver save number lives in the sealed key file (see link.ts for why and where it falls short).
       counter: { get: () => this.#k.receiverSaves, set: async (n) => { this.#k = await this.keys.update((k) => { k.receiverSaves = Math.max(k.receiverSaves, n); }); } },
       onFrame: (f) => this.onFrame(f),
-      onEvent: (e, info) => { if (e === 'gap' && info.group === GROUP_ROSTER) this.#rosterGaps++; },
+      onEvent: (e, info) => { if (e === 'gap' && info.group === GROUP_ROSTER) { this.#rosterGaps++; void this.afterChange(true); } },
       log: this.o.log,
     });
     await this.#link.start(this.o.testMode ? [GROUP_ROSTER, GROUP_TEST_NOTE] : [GROUP_ROSTER]);
     if (!this.#offline) this.#relay?.start();
-    // Whatever a previous run left half done is finished now (a killed backend between the steps of a removal or a pairing).
+    // Heads are repeated now and then so that a frame the relay dropped, or an entry that never left its author, still reaches everyone.
+    this.#headsTimer = setInterval(() => { void this.afterChange(true); }, this.o.headsEveryMs ?? 30_000);
+    this.#headsTimer.unref?.();
+    // Whatever a previous run left half done is finished now (a killed backend between the steps of a pairing).
     void this.resume().catch(() => this.o.log('resume-failed'));
+    void this.afterChange(false);
+  }
+
+  /** Everything that follows a change to the roster or the secrets, one at a time: save new secrets, wake waiting frames, and send what
+   *  DeviceCore says to send (hello, a new secret when it is our turn, requests, heads when `announce`). */
+  private afterChange(announce: boolean): Promise<void> {
+    const run = async (): Promise<void> => {
+      const core = this.#core;
+      if (!core || this.#stopped) return;
+      if (this.roster.isRemoved(this.id.deviceId) && !this.#removed) { this.#removed = true; this.#link?.stop(); this.o.log('removed-from-set'); }
+      if (this.#removed) return;
+      const r = await core.tick(this.now(), announce);
+      await this.persistBook();
+      this.emit(r.out);
+      if (this.#planTimer) { clearTimeout(this.#planTimer); this.#planTimer = null; }
+      if (r.nextAt !== null) {
+        this.#planTimer = setTimeout(() => { this.#planTimer = null; void this.afterChange(false); }, Math.max(10, r.nextAt - this.now()));
+        this.#planTimer.unref?.();
+      }
+      this.#link?.retryPending();
+      this.#link?.kick();
+    };
+    const p = this.#afterChain.then(run, run);
+    this.#afterChain = p.catch(() => undefined);
+    return p;
+  }
+  private emit(out: Out[]): void {
+    for (const o of out) void this.#link?.sendDurable({ group: GROUP_ROSTER, kind: o.kind, body: o.body, to: o.to }).catch(() => undefined);
+  }
+  private async persistBook(): Promise<void> {
+    if (!this.#book.dirty) return;
+    this.#book.dirty = false;
+    const held = [...this.#book.held];
+    this.#k = await this.keys.update((k) => {
+      for (const [label, h] of held) {
+        k.secrets.set(label, h.secret);
+        if (h.stmt) (k.stmts ??= new Map()).set(label, encodeStatement(h.stmt));
+      }
+    });
   }
 
   // ---------------------------------------------------------------- incoming frames
   private async onFrame(f: LinkFrame): Promise<void> {
     // A verified frame from a device proves it exists and holds the set secret: a pairing it came out of is complete.
     this.confirmJoin(toHex(f.header.from));
-    if (f.header.kind === KIND_ROSTER && f.group === GROUP_ROSTER) {
-      const r = await this.takeRosterEntries(parseRosterBody(f.body));
-      if (r.waiting) throw new FrameWait('roster-entry'); // appended entries stay; the frame is judged again when more of the roster arrives
-      return;
-    }
-    if (f.header.kind === KIND_REMOVAL && f.group === GROUP_ROSTER) return await this.takeRemoval(f);
-    if (f.header.kind === KIND_NOTE && f.group === GROUP_TEST_NOTE && this.o.testMode) {
-      this.inbox.push({ from: toHex(f.header.from), counter: f.header.counter, text: parseNoteBody(f.body) });
-    }
-    // Any other kind is ignored: this layer does not know it.
-  }
-
-  /** Append entries that came from the network. An entry that does not fit YET sets `waiting`; one from a flooding member is refused
-   *  and counted (the member is flagged: nothing more from it is examined); one that can never fit is counted and dropped. */
-  private async takeRosterEntries(entries: SignedEntry[]): Promise<{ appended: boolean; waiting: boolean }> {
-    let appended = false;
-    let waiting = false;
-    for (const e of entries) {
-      try {
-        if ((await this.roster.append(e, { remote: true })) === 'appended') appended = true;
-      } catch (err) {
-        if (err instanceof MeshRosterRejected) {
-          this.countRoster(`rejected-${err.why}`);
-          this.o.log('roster-entry-rejected', { why: err.why, signer: err.signer.slice(0, 8) });
-        } else if (err instanceof MeshCryptoError) {
-          if (waitableRosterError(err)) waiting = true;
-          else { this.countRoster(`invalid-${err.code}`); this.o.log('roster-entry-invalid', { code: err.code }); }
-        } else throw err;
+    const core = this.#core;
+    if (!core || f.group !== GROUP_ROSTER) {
+      if (f.header.kind === KIND_NOTE && f.group === GROUP_TEST_NOTE && this.o.testMode) {
+        this.inbox.push({ from: toHex(f.header.from), counter: f.header.counter, text: parseNoteBody(f.body) });
       }
+      return; // any other kind is ignored: this layer does not know it
     }
-    if (appended) this.#link?.retryPending();
-    return { appended, waiting };
+    const r = await core.onMessage(f.header.kind, f.body, f.header.from);
+    this.mirrorCounts();
+    // WHY the secrets are saved BEFORE this handler returns: the link saves its read position right after, and a secret received in this
+    // frame that was not yet on disk would be lost by a kill in between (nobody would send it again).
+    await this.persistBook();
+    this.emit(r.out);
+    if (r.wait) throw new FrameWait('roster-entry');
+    if (r.reject) throw new FrameReject(r.reject);
+    if (r.changed) void this.afterChange(false);
   }
-  private countRoster(k: string): void {
-    this.#rosterRejected.set(k, (this.#rosterRejected.get(k) ?? 0) + 1);
-  }
-
-  /**
-   * A removal bundle: the signed `remove` entry and the NEXT generation's secret sealed to each remaining device. WHY so many checks
-   * (review finding 3): the old code stored whatever generation number and secret any member sent, so one member could overwrite
-   * another device's secret and split the set. A secret is now taken only when ALL of these hold:
-   *  - the sender is a current member (the link already verified its signature; removed devices are refused there);
-   *  - the bundle carries a `remove` entry signed by that sender which is in our roster after we apply the bundle's entries;
-   *  - the generation is exactly 1 + the number of removals up to and including that entry, so a removal can justify ONE generation and
-   *    an old removal cannot be replayed to mint a new one;
-   *  - the sealed secrets are addressed only to devices that are current members, and one is addressed to this device unless this device is
-   *    the one being removed;
-   *  - this device's own blob opens under ITS OWN agreement key (HPKE binds the sender and this device's id), so a device never accepts a
-   *    "secret for device X" that X did not receive through its own key;
-   *  - an existing generation is NEVER overwritten (a repeat of the same secret is fine: delivery can repeat).
-   * Anything wrong is a FrameReject (counted, the sender's id prefix recorded, never blocks later frames).
-   */
-  private async takeRemoval(f: LinkFrame): Promise<void> {
-    if (!this.#k.setId) return;
-    const b = parseRemovalBody(f.body);
-    const sender = f.header.from;
-    if (!this.roster.signKeyFor(sender)) throw new FrameReject('sender-not-a-member');
-    const r = await this.takeRosterEntries(b.entries);
-    const justifying = b.entries.find((e) => e.kind === 'remove' && e.device.equals(sender) && this.roster.has(e.id));
-    if (!justifying) {
-      if (r.waiting) throw new FrameWait('roster-entry');
-      throw new FrameReject('removal-without-entry');
-    }
-    const target = Buffer.from((justifying.body as { target: Uint8Array }).target);
-    const expectedGen = 1 + this.roster.removalsUpTo(justifying.id);
-    if (b.gen !== expectedGen) throw new FrameReject('generation-not-justified');
-    const me = toHex(this.id.deviceId);
-    for (const k of b.sealed.keys()) if (!this.roster.verified?.devices.has(k)) throw new FrameReject('sealed-to-unknown-device');
-    if (target.equals(this.id.deviceId)) return; // I am the device being removed: there is no secret for me, and nothing to take
-    const mine = b.sealed.get(me);
-    if (!mine) throw new FrameReject('no-secret-for-me');
-    const secret = openSecret(this.id.agreeSecret, mine, this.#k.setId, b.gen, f.header.from, this.id.deviceId);
-    const have = this.#k.secrets.get(b.gen);
-    if (have) {
-      if (have.equals(secret)) return; // the same bundle again
-      throw new FrameReject('generation-already-held');
-    }
-    this.#k = await this.keys.update((k) => { if (!k.secrets.has(b.gen)) k.secrets.set(b.gen, secret); });
-    this.#link?.retryPending();
+  private mirrorCounts(): void {
+    if (!this.#core) return;
+    for (const [k, n] of Object.entries(this.#core.counts)) this.#rosterRejected.set(k, n);
   }
 
   // ---------------------------------------------------------------- operations
@@ -309,13 +312,16 @@ export class MeshService {
     if (this.inSet()) throw new Error('already in a set');
     const genesis = makeGenesisEntry(this.id, this.o.deviceName, this.o.platform, this.now());
     await this.roster.append(genesis);
-    this.#k = await this.keys.update((k) => { k.setId = setIdFor(this.id.signKey); k.secrets = new Map([[1, newSetSecret()]]); });
+    const setId = setIdFor(this.id.signKey);
+    const secret = newSetSecret();
+    const stmt = signStatement(this.id, { set: setId, removed: [], members: [this.id.deviceId], secret });
+    this.#k = await this.keys.update((k) => { k.setId = setId; k.secrets = new Map([[stmt.label, secret]]); k.stmts = new Map([[stmt.label, encodeStatement(stmt)]]); });
     await this.activate();
   }
 
   private makeHost(): PairingHost {
     return new PairingHost({
-      identity: this.id, setId: this.#k.setId as Buffer, secrets: () => this.#k.secrets, roster: this.roster, now: this.o.now,
+      identity: this.id, setId: this.#k.setId as Buffer, secrets: () => this.#book.secrets(), stmts: () => new Map([...this.#book.held].filter(([, h]) => h.stmt).map(([l, h]) => [l, encodeStatement(h.stmt as never)])), roster: this.roster, now: this.o.now,
       // The relay must know the newcomer's public key before the newcomer can sign in: a statement signed by THIS device. Runs BEFORE the
       // add is written to our log (pair-flow.ts), so a refusal leaves nothing to undo.
       admitAtRelay: async (_signKeyHex, entry) => {
@@ -331,7 +337,6 @@ export class MeshService {
           throw new Error('relay refused the new device');
         }
         await this.#sync.noteAccepted(toHex(entry.id));
-        this.armJoinTimer(dev, this.now());
       },
       // WHY not awaited: the welcome must not wait for the other devices' copy of the roster; the frame is queued and retried by the link.
       afterAdded: (entry) => { void this.publishRoster([entry]).catch(() => undefined); },
@@ -428,14 +433,11 @@ export class MeshService {
     });
   }
 
-  // ---------------------------------------------------------------- pairings that have to be confirmed or rolled back
-  private armJoinTimer(dev: string, since: number): void {
-    if (this.#joinTimers.has(dev) || this.#stopped) return;
-    const wait = Math.max(0, since + (this.o.pairConfirmMs ?? 15 * 60_000) - this.now());
-    const t = setTimeout(() => { void this.rollBackJoin(dev); }, wait);
-    t.unref?.();
-    this.#joinTimers.set(dev, t);
-  }
+  // ---------------------------------------------------------------- pairings that have to be confirmed
+  // WHY NO TIMER (review N8): the host used to remove a new device it had not seen online within 15 minutes. If the host's own link was down
+  // at that moment, or it restarted, a perfectly good device was removed. Now nothing is ever removed automatically: a device that has not
+  // finished joining stays listed as "pending" (status().unconfirmedJoins / pendingDevices) until it signs its first entry; if the pairing
+  // really failed, the leftover is removed by hand. A device that never existed holds sealed copies of the secret nobody can open.
   /** Ask the relay who is connected now; every unconfirmed pairing whose device is among them is confirmed. */
   private async confirmOnline(): Promise<boolean> {
     if (!this.#relay || this.#sync.joins.length === 0) return false;
@@ -448,30 +450,11 @@ export class MeshService {
   /** The new device was seen on the relay (or sent a verified frame): the pairing really happened. */
   private confirmJoin(dev: string): void {
     if (!this.#sync.joins.some((j) => j.dev === dev)) return;
-    const t = this.#joinTimers.get(dev);
-    if (t) clearTimeout(t);
-    this.#joinTimers.delete(dev);
     void this.#sync.removeJoin(dev);
   }
-  /** The new device never showed up: take it out again with an ordinary removal, so no phantom member stays in the set. */
-  private async rollBackJoin(dev: string): Promise<void> {
-    this.#joinTimers.delete(dev);
-    if (!this.#sync.joins.some((j) => j.dev === dev) || this.#stopped) return;
-    // One last look before undoing anything: is it connected right now?
-    await this.confirmOnline();
-    if (!this.#sync.joins.some((j) => j.dev === dev)) return;
-    this.o.log('pairing-rolled-back');
-    try {
-      if (this.roster.activeDevices().some((d) => toHex(d.deviceId) === dev)) await this.removeDevice(dev);
-      await this.#sync.removeJoin(dev);
-    } catch {
-      this.armJoinTimer(dev, this.now()); // could not do it now: try again after another wait
-    }
-  }
 
-  /** After a start: finish what a previous run left half done (a pairing, a removal, the relay queue). */
+  /** After a start: finish what a previous run left half done (a pairing the relay accepted whose add may not have reached the log). */
   private async resume(): Promise<void> {
-    // 1. pairings the relay accepted but whose add may not have reached the log (a kill between the two)
     for (const j of this.#sync.joins) {
       try {
         const entry = parseEntry(Buffer.from(j.entry, 'base64'));
@@ -479,38 +462,10 @@ export class MeshService {
           await this.roster.append(entry);
           void this.publishRoster([entry]).catch(() => undefined);
         }
-        this.armJoinTimer(j.dev, j.at);
+        if (this.roster.confirmedIds().has(j.dev)) await this.#sync.removeJoin(j.dev);
       } catch { await this.#sync.removeJoin(j.dev); }
     }
-    // 2. a removal that was started (its secret was saved) but not finished
-    await this.resumeRemoval();
-    // 3. the relay queue
     void this.drainRelay();
-  }
-  private async resumeRemoval(): Promise<void> {
-    const p = this.#k.pending;
-    if (!p) return;
-    const entry = this.roster.entryById(p.entry);
-    if (!entry) {
-      // The kill came before the entry reached the log: the removal never happened. The unused secret is simply dropped.
-      this.#k = await this.keys.update((k) => { k.pending = null; });
-      return;
-    }
-    await this.finishRemoval(entry, p.gen, p.secret);
-  }
-  /** Steps 3 and 4 of a removal: send the bundle under the current generation, then adopt the new one. Safe to run again. */
-  private async finishRemoval(entry: SignedEntry, gen: number, secret: Buffer): Promise<void> {
-    if (!this.#link || !this.#k.setId) return;
-    const setId = this.#k.setId;
-    const target = toHex(Buffer.from((entry.body as { target: Uint8Array }).target));
-    const removed = this.roster.removedIds();
-    // Sealed to every device that is still a member now and is not me; the removed one never gets a secret.
-    const remaining = this.roster.activeDevices().filter((d) => !removed.has(toHex(d.deviceId)) && toHex(d.deviceId) !== target && !d.deviceId.equals(this.id.deviceId));
-    const sealed = new Map<string, Buffer>();
-    for (const d of remaining) sealed.set(toHex(d.deviceId), sealSecretTo(d.agreeKey, setId, gen, secret, this.id.deviceId, d.deviceId));
-    // Sent under the CURRENT (old) generation, which every remaining device holds. Resolves when the relay stored it.
-    await this.#link.sendDurable({ group: GROUP_ROSTER, kind: KIND_REMOVAL, body: removalBody({ entries: [entry], gen, sealed }) });
-    this.#k = await this.keys.update((k) => { k.secrets.set(gen, secret); k.pending = null; });
   }
 
   /** Host, DIRECT test carrier: start a typed-code invite. The code is returned to be SHOWN; it is not logged. */
@@ -684,29 +639,26 @@ export class MeshService {
     return this.serial(() => this.removeDeviceNow(targetHex));
   }
   private async removeDeviceNow(targetHex: string): Promise<RemovalOutcome> {
-    if (!this.#link || !this.#k.setId) throw new Error('not in a set');
+    if (!this.#link || !this.#k.setId || !this.#core) throw new Error('not in a set');
     if (!/^[0-9a-f]{32}$/.test(targetHex)) throw new Error('bad device id');
     const target = Buffer.from(targetHex, 'hex');
     if (!this.roster.activeDevices().some((d) => d.deviceId.equals(target))) throw new Error('not an active device');
-    if (this.#k.pending) await this.resumeRemoval(); // finish an earlier removal first: one generation at a time
     const entry = makeRemoveEntry(this.id, target, seenForNextEntry(this.roster.entries, this.id.deviceId), this.now());
-    // The generation this removal justifies: 1 + the removals in its causal past, itself included (receivers compute the same with
-    // removalsUpTo). The new entry cites every current head, so its past is the whole log: every removal so far, plus itself.
-    const gen = 2 + this.roster.removalCount();
-    const secret = newSetSecret();
-    // Step 1: the new secret is saved first, sealed, so a kill at any later step can be finished instead of forgotten.
-    this.#k = await this.keys.update((k) => { k.pending = { gen, secret, entry: entry.id }; });
-    // Step 2: queue for the relay BEFORE the log write (a kill between the two leaves an id with no entry, which the queue drops), then write.
+    // Queue for the relay BEFORE the log write (a kill between the two leaves an id with no entry, which the queue drops), then write.
     const id = toHex(entry.id);
     await this.#sync.enqueue(id);
     await this.roster.append(entry);
     this.#settled.delete(id);
     void this.drainRelay();
-    // Steps 3 and 4 run in the background so an unreachable relay cannot hang the caller.
-    const bundle = this.finishRemoval(entry, gen, secret).then(() => 'ok' as const, () => 'failed' as const);
+    // The new shared secret is made by whoever's turn it is (device-core.ts), not necessarily this device: nothing here waits on a bundle
+    // being sent, so a removal can no longer block later operations (review N12).
+    void this.publishRoster([entry]).catch(() => undefined);
+    await this.afterChange(true);
     const wait = this.o.removeWaitMs ?? 10_000;
-    const [relay, sent] = await Promise.all([this.waitForRelay(id, wait), Promise.race([bundle, new Promise<'timeout'>((r) => { const t = setTimeout(() => r('timeout'), wait); t.unref?.(); })])]);
-    return relay === 'ok' && sent === 'ok' ? 'done' : 'pending';
+    const relay = await this.waitForRelay(id, wait);
+    const t0 = Date.now();
+    while (this.#core.currentLabel() === null && Date.now() - t0 < wait) await new Promise((r) => setTimeout(r, 15));
+    return relay === 'ok' && this.#core.currentLabel() !== null ? 'done' : 'pending';
   }
 
   /** Change this device's own name (a signed `rename` entry; the relay is told it happened but never the name). */
@@ -718,6 +670,7 @@ export class MeshService {
       await this.roster.append(entry);
       void this.drainRelay();
       void this.publishRoster([entry]).catch(() => undefined);
+      void this.afterChange(true);
     });
   }
 
@@ -745,15 +698,13 @@ export class MeshService {
     return done;
   }
 
-  /** Targets of removals recorded here that the relay has not accepted yet, or whose bundle is not out yet. */
+  /** Targets of removals recorded here that the relay has not accepted yet, or whose new shared secret is not held yet. */
   private removalsPending(): string[] {
     const out = new Set<string>();
     for (const id of this.#sync.pending) {
       const e = this.roster.entryById(Buffer.from(id, 'hex'));
       if (e?.kind === 'remove') out.add(toHex(Buffer.from((e.body as { target: Uint8Array }).target)));
     }
-    const p = this.#k.pending && this.roster.entryById(this.#k.pending.entry);
-    if (p) out.add(toHex(Buffer.from((p.body as { target: Uint8Array }).target)));
     return [...out];
   }
 
@@ -768,7 +719,10 @@ export class MeshService {
       rosterIds: this.roster.entries.map((e) => toHex(e.id).slice(0, 12)),
       activeDevices: this.roster.activeDevices().map((d) => toHex(d.deviceId)),
       removedDevices: [...removed],
-      generations: [...this.#k.secrets.keys()].sort((a, b) => a - b),
+      generations: [...this.#book.held.keys()].sort((a, b) => a - b),
+      currentGeneration: this.#core?.currentLabel() ?? null,
+      pendingDevices: this.roster.activeDevices().map((d) => toHex(d.deviceId)).filter((d) => !this.roster.confirmedIds().has(d)),
+      parkedEntries: this.#core?.parked.size ?? 0,
       inbox: this.inbox.length,
       repairedTailBytes: this.roster.repairedTailBytes,
       parkedRoster: this.#link?.waitingCount ?? 0,

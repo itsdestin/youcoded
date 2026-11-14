@@ -33,6 +33,7 @@ export interface HostOptions {
   identity: DeviceIdentity;
   setId: Buffer;
   secrets: () => Map<number, Buffer>;
+  stmts?: () => Map<number, Buffer>;
   roster: RosterStore;
   /** Runs BEFORE the add is written to the log: tell the relay (when there is one) about the new device, and record the pairing as
    *  unconfirmed. Must throw if the relay refuses. */
@@ -50,7 +51,7 @@ export class PairingHost {
   #added: SignedEntry | null = null;
   constructor(o: HostOptions) {
     this.#o = o;
-    this.#state = { setId: o.setId, secrets: o.secrets(), roster: [...o.roster.entries] };
+    this.#state = { setId: o.setId, secrets: o.secrets(), stmts: o.stmts?.(), roster: [...o.roster.entries] };
     this.#existing = new Existing(o.identity, this.#state, {
       // undefined = "a human answers later through decide()"; the screen reads prompt().
       onAddPrompt: (info, conn) => { this.#prompt = { conn, info }; return undefined; },
@@ -62,6 +63,7 @@ export class PairingHost {
   open(room?: Buffer): { room: Buffer; code: string; invite: Invite } {
     this.#state.roster = [...this.#o.roster.entries];
     this.#state.secrets = this.#o.secrets();
+    this.#state.stmts = this.#o.stmts?.();
     const invite = this.#existing.openInvite('code', room);
     return { room: invite.room, code: invite.code as string, invite };
   }
@@ -80,6 +82,8 @@ export class PairingHost {
   /** The human's answer. Resolves with the messages to send back; the welcome is released only once everything is durable. */
   async decide(conn: string, approved: boolean): Promise<Buffer[]> {
     this.#state.roster = [...this.#o.roster.entries];
+    this.#state.secrets = this.#o.secrets();
+    this.#state.stmts = this.#o.stmts?.();
     this.#added = null;
     const out = this.#existing.decide(conn, approved);
     this.#prompt = null;
@@ -128,6 +132,7 @@ export async function adoptPairing(success: PairingSuccess, keys: MeshKeyStore, 
   await keys.update((k) => {
     k.setId = success.setId;
     k.secrets = new Map(success.secrets);
+    k.stmts = new Map(success.stmts);
   });
   for (const e of success.roster) await roster.append(e);
 }

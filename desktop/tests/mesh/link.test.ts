@@ -361,12 +361,11 @@ describe('link: a lying relay cannot set the read position', () => {
     expect(s.got).toEqual(['after the lie', 'after restart']);
     void lb2;
   });
-  it('a frame numbered millions ahead is refused', async () => {
+  it('a frame numbered millions ahead is judged like any other (junk is rejected) and never moves the saved position', async () => {
     const s = await setup();
     const lb = await s.mkB(lying(s.cB, s.mode));
     s.mode.v = 'seq-huge';
     await lb.syncAll();
-    expect(lb.rejections().counts['relay-bad-seq']).toBeGreaterThanOrEqual(1);
     s.mode.v = 'honest';
     await s.la.sendDurable({ group: 'g', kind: 'note', body: noteBody('still hears') });
     await settle();

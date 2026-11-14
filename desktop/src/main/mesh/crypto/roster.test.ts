@@ -86,7 +86,7 @@ describe('roster log verification', () => {
   it('a removed device stays in the key map (frames it signed earlier must still verify; the decide layer rules on later entries)', () => {
     expect(verifyRosterLog([g, addB, makeRemoveEntry(A, B.deviceId, [addB.id], 3)]).devices.has(hex(B.deviceId))).toBe(true);
   });
-  it('refuses: empty, genesis that is not a self-add, signer not yet in the log, tampered entry, duplicate, remove of an unknown device, outsider', () => {
+  it('refuses: empty, genesis that is not a self-add, signer not yet in the log, tampered entry, duplicate, outsider', () => {
     const X = generateIdentity();
     const forgedGenesis = makeAddEntry(A, info(B), [], 1); // signed by A but names B
     const outsider = makeAddEntry(X, info(generateIdentity()), [g.id], 9);
@@ -99,9 +99,14 @@ describe('roster log verification', () => {
       ['outsider', [g, outsider], 'bad-roster'],
       ['tampered', [g, tampered], 'bad-entry'],
       ['duplicate', [g, addB, addB], 'bad-roster'],
-      ['remove unknown', [g, makeRemoveEntry(A, Buffer.alloc(16, 1), [g.id], 2)], 'bad-roster'],
     ];
     for (const [name, log, code] of cases) expect(codeOf(() => verifyRosterLog(log)), name).toBe(code);
+  });
+  it('a remove that names a device nobody introduced is accepted into the set but has no effect (void), in any arrival order', () => {
+    const r = makeRemoveEntry(A, Buffer.alloc(16, 1), [g.id], 2);
+    const v = verifyRosterLog([g, r]);
+    expect(v.facts.get(hex(r.id))!.void).toBe(true);
+    expect(v.removed.size).toBe(0);
   });
   it('an add body with extra fields or short keys is rejected', () => {
     const badBody = signEntry(A, { kind: 'add', body: { name: 'x', platform: 'p', signKey: Buffer.alloc(31), agreeKey: Buffer.alloc(32) }, seen: [g.id], at: 2 });
@@ -142,18 +147,24 @@ describe('an add can never overwrite a device that is already in the log', () =>
   const g = makeGenesisEntry(A, 'Desktop', 'linux', 1);
   const addB = makeAddEntry(A, info(B), [g.id], 2);
   const addC = makeAddEntry(B, info(C), [addB.id], 3);
-  it("member C re-adding A's signing key with C's agreement key is refused (the reviewer's attack)", () => {
+  it("member C re-adding A's signing key with C's agreement key has no effect (the reviewer's attack)", () => {
     const hijack = makeAddEntry(C, { name: 'Desktop', platform: 'linux', signKey: A.signKey, agreeKey: C.agreeKey }, [addC.id], 4);
-    expect(codeOf(() => verifyRosterLog([g, addB, addC, hijack]))).toBe('bad-roster');
+    const v = verifyRosterLog([g, addB, addC, hijack]);
+    expect(v.facts.get(hex(hijack.id))!.void).toBe(true);
+    expect(hex(v.devices.get(hex(A.deviceId))!.agreeKey)).toBe(hex(A.agreeKey));
   });
-  it('a device re-adding itself (even with new keys of its own choosing, same signing key) is refused', () => {
+  it('a device re-adding itself (even with new keys of its own choosing, same signing key) has no effect', () => {
     const self = makeAddEntry(B, { name: 'B', platform: 'p', signKey: B.signKey, agreeKey: generateIdentity().agreeKey }, [addC.id], 4);
-    expect(codeOf(() => verifyRosterLog([g, addB, addC, self]))).toBe('bad-roster');
+    const v = verifyRosterLog([g, addB, addC, self]);
+    expect(v.facts.get(hex(self.id))!.void).toBe(true);
+    expect(hex(v.devices.get(hex(B.deviceId))!.agreeKey)).toBe(hex(B.agreeKey));
   });
-  it('a removed device re-adding itself is refused by the verifier itself', () => {
+  it('a removed device re-adding itself has no effect', () => {
     const rem = makeRemoveEntry(A, B.deviceId, [addC.id], 4);
     const readd = makeAddEntry(B, info(B), [addC.id], 5); // B has NOT seen its removal here: still refused, id already present
-    expect(codeOf(() => verifyRosterLog([g, addB, addC, rem, readd]))).toBe('bad-roster');
+    const v = verifyRosterLog([g, addB, addC, rem, readd]);
+    expect(v.facts.get(hex(readd.id))!.void).toBe(true);
+    expect(v.removed.has(hex(B.deviceId))).toBe(true);
   });
   it('the agreement key of an existing device is unchanged by any accepted log', () => {
     const r = verifyRosterLog([g, addB, addC]);
@@ -178,31 +189,40 @@ describe('every entry names the roster state it was made against, and the verifi
     const later = makeRenameEntry(A, 'y', [g.id], 5);
     expect(codeOf(() => verifyRosterLog([g, makeRenameEntry(A, 'x', [later.id], 2), later]))).toBe('bad-roster');
   });
-  it("an entry must have seen its signer's own previous entry (or the add that introduced it): no back-dating, no forked own history", () => {
-    // B's first entry cites only the genesis, not addB that introduced B.
-    expect(codeOf(() => verifyRosterLog([g, addB, makeRenameEntry(B, 'x', [g.id], 3)]))).toBe('bad-roster');
-    // A's second entry after addB cites only genesis: it skipped its own previous entry (addB).
-    expect(codeOf(() => verifyRosterLog([g, addB, makeRenameEntry(A, 'x', [g.id], 3)]))).toBe('bad-roster');
+  it("an entry that does not cite its signer's introduction is void (no effect), however it arrives", () => {
+    const early = makeRenameEntry(B, 'x', [g.id], 3); // B's first entry cites only the genesis, not the add that introduced B
+    const v = verifyRosterLog([g, addB, early]);
+    expect(v.facts.get(hex(early.id))!.void).toBe(true);
+    expect(v.devices.get(hex(B.deviceId))!.name).not.toBe('x');
   });
-  it('a removed device that has SEEN its removal cannot add, remove or rename: refused', () => {
+  it('a removed device that has SEEN its removal cannot add, remove or rename: the entry is void', () => {
     for (const make of [
       () => makeAddEntry(B, info(D), [addB.id, remB.id], 4),
       () => makeRenameEntry(B, 'still here', [addB.id, remB.id], 4),
       () => makeRemoveEntry(B, A.deviceId, [addB.id, remB.id], 4),
-    ]) expect(codeOf(() => verifyRosterLog([g, addB, remB, make()]))).toBe('bad-roster');
+    ]) {
+      const e = make();
+      const v = verifyRosterLog([g, addB, remB, e]);
+      expect(v.facts.get(hex(e.id))!.void).toBe(true);
+      expect(v.removed.has(hex(A.deviceId))).toBe(false);
+      expect(v.devices.has(hex(D.deviceId))).toBe(false);
+    }
   });
-  it('a removed device that did NOT cite its removal is accepted but flagged, so the decide layer can tell the cases apart', () => {
+  it('an entry of a removed device that did NOT cite its removal is flagged and void; the entries it made before are kept', () => {
     const early = makeRenameEntry(B, 'early', [addB.id], 2);
     const late = makeRenameEntry(B, 'late', [early.id], 9); // never cites remB
-    const r = verifyRosterLog([g, addB, early, remB, late]);
+    const remEarly = makeRemoveEntry(A, B.deviceId, [addB.id, early.id], 3); // saw `early`, not `late`
+    const r = verifyRosterLog([g, addB, early, remEarly, late]);
     const f = (e: SignedEntry) => r.facts.get(hex(e.id))!;
     expect(f(early).signerRemovedEarlierInLog).toBe(false);
     expect(f(early).signerKnewOwnRemoval).toBe(false);
     expect(f(late).signerRemovedEarlierInLog).toBe(true);
     expect(f(late).signerKnewOwnRemoval).toBe(false);
-    expect(r.happenedBefore(addB.id, remB.id)).toBe(true);
-    expect(r.happenedBefore(remB.id, addB.id)).toBe(false);
-    expect(r.happenedBefore(remB.id, late.id)).toBe(false); // late never saw the removal: concurrent as far as the signatures show
+    expect(f(late).void).toBe(true);
+    expect(f(early).void).toBe(false);
+    expect(r.happenedBefore(addB.id, remEarly.id)).toBe(true);
+    expect(r.happenedBefore(remEarly.id, addB.id)).toBe(false);
+    expect(r.happenedBefore(remEarly.id, late.id)).toBe(false); // late never saw the removal: concurrent as far as the signatures show
     expect(r.happenedBefore(early.id, late.id)).toBe(true);
     expect(r.happenedBefore(g.id, g.id)).toBe(false);
   });

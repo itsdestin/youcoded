@@ -18,6 +18,8 @@ export const GROUP_TEST_NOTE = 'note.test';
 export const KIND_ROSTER = 'roster';
 export const KIND_REMOVAL = 'removal';
 export const KIND_NOTE = 'note';
+export const KIND_HEADS = 'heads';
+export const KIND_NEED = 'need';
 
 export const rosterBody = (entries: readonly SignedEntry[]): CborValue => ({ entries: entries.map(entryToValue) });
 export function parseRosterBody(body: unknown): SignedEntry[] {
@@ -28,21 +30,24 @@ export function parseRosterBody(body: unknown): SignedEntry[] {
   });
 }
 
+/** A generation bundle: a generation statement (signed by whoever made the secret) and the secret sealed, separately, to each device
+ *  named in `sealed` (any subset of the members: a holder may re-seal the same secret to a member that lacks it). `entries` are the removal
+ *  entries the statement rests on, so a device that has not heard of them can apply them first. Kind name kept from the first design. */
 export interface RemovalBundle {
   entries: SignedEntry[];
-  gen: number;
-  /** hex device id -> the new generation's secret, HPKE-sealed to that device. */
+  stmt: Buffer;
+  /** hex device id -> the secret, HPKE-sealed to that device. */
   sealed: Map<string, Buffer>;
 }
 export const removalBody = (b: RemovalBundle): CborValue => ({
   entries: b.entries.map(entryToValue),
-  gen: b.gen,
+  stmt: b.stmt,
   sealed: Object.fromEntries([...b.sealed.entries()]),
 });
 export function parseRemovalBody(body: unknown): RemovalBundle {
   return guard(() => {
     const m = asMap(body, 'removal body');
-    onlyKeys(m, ['entries', 'gen', 'sealed'], 'removal body');
+    onlyKeys(m, ['entries', 'stmt', 'sealed'], 'removal body');
     const sealed = new Map<string, Buffer>();
     const sm = asMap(m.sealed, 'sealed');
     const keys = Object.keys(sm);
@@ -51,7 +56,26 @@ export function parseRemovalBody(body: unknown): RemovalBundle {
       if (!/^[0-9a-f]{32}$/.test(k)) throw new RangeError('device id');
       sealed.set(k, asBytes(sm[k], 'sealed secret'));
     }
-    return { entries: asArray(m.entries, 'entries', 64).map((v) => parseEntryValue(v)), gen: asUint(m.gen, 'gen', 0xffffffff), sealed };
+    return { entries: asArray(m.entries, 'entries', 64).map((v) => parseEntryValue(v)), stmt: asBytes(m.stmt, 'stmt'), sealed };
+  });
+}
+
+/** Anti-entropy. `heads`: "these are the newest roster entries I hold". `need`: "send me these entries (and what they rest on)" and
+ *  "re-seal these generations to me" (`gens`, labels I could not open). Both carry only ids. */
+export const headsBody = (heads: readonly Buffer[]): CborValue => ({ heads: [...heads] });
+export function parseHeadsBody(body: unknown): Buffer[] {
+  return guard(() => {
+    const m = asMap(body, 'heads body');
+    onlyKeys(m, ['heads'], 'heads body');
+    return asArray(m.heads, 'heads', 64).map((h) => asBytes(h, 'head', 32));
+  });
+}
+export const needBody = (want: readonly Buffer[], gens: readonly number[] = []): CborValue => ({ want: [...want], gens: [...gens] });
+export function parseNeedBody(body: unknown): { want: Buffer[]; gens: number[] } {
+  return guard(() => {
+    const m = asMap(body, 'need body');
+    onlyKeys(m, ['want', 'gens'], 'need body');
+    return { want: asArray(m.want, 'want', 64).map((h) => asBytes(h, 'want', 32)), gens: asArray(m.gens, 'gens', 8).map((g) => asUint(g, 'gen', 0x7fffffff)) };
   });
 }
 

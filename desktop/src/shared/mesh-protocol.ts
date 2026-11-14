@@ -38,6 +38,24 @@ export const REGISTER_MAX_BYTES = 16 * 1024;
 export const MAX_REGISTERS = 4096;
 export const MAX_GROUPS = 5000;
 export const MAX_DEVICES = 16;
+
+// ---- Retention classes and per-writer quotas (review 2, N5/N6) ----
+/** Group names whose retention class the relay knows by name: always CONTROL (never released under pressure, never expired by the 30-day line rule,
+ *  `line:true` refused). Every other name is classed by its first hold, permanently. Add future fixed control names here. */
+export const CONTROL_GROUPS: readonly string[] = ["roster"];
+export function isControlGroup(g: string): boolean { return CONTROL_GROUPS.includes(g); }
+/** Non-line, non-control groups ("other control"): a member's junk. Numbers (why): 32 MiB per group is far above any honest control frame (a removal
+ *  bundle is about 100 bytes per device); 64 MiB and 4096 frames per writer keep one device from owning more than 1/14 of the 900 MiB ceiling, and 16
+ *  devices at that quota (1 GiB) cannot exceed the cap below because of the shared reserve. */
+export const OTHER_GROUP_MAX_BYTES = 32 * 1024 * 1024;
+export const OTHER_WRITER_MAX_BYTES = 64 * 1024 * 1024;
+export const OTHER_WRITER_MAX_FRAMES = 4096;
+/** The roster group, per writer: 4 MiB x 16 devices = 64 MiB, which fits inside the reserve below at every ceiling this relay uses (10 MiB before pairing, with one device). */
+export const ROSTER_WRITER_MAX_BYTES = 4 * 1024 * 1024;
+export const ROSTER_WRITER_MAX_FRAMES = 2048;
+/** Share of the set ceiling that "other control" junk may never occupy, so a removal bundle can always be stored. Chat lines are exempt: they are
+ *  released to make room (a roster hold releases them). */
+export const CONTROL_RESERVE_FRACTION = 0.1;
 /** Authenticated connections per set. */
 export const MAX_SOCKETS = 64;
 /** WHY a separate, small cap (review finding 5): sockets that have not proved who they are are the only
@@ -64,6 +82,12 @@ export const CHALLENGE_TTL_MS = 30_000;
 export const DAY_MS = 86_400_000;
 /** A chat's group is dropped this long after its last line (design 5.6). */
 export const GROUP_TTL_MS = 30 * DAY_MS;
+/** WHY (review 2, dead member): a control group's frame (the roster group) is dropped only when EVERY roster device has acknowledged it, so a device that
+ *  is on the roster but dead would pin those frames forever. They are therefore also released this long after they were written. SAFE BEHAVIOUR for a
+ *  device that comes back later: its fetch starts below the group's released_through mark, so it is answered with `gap`; the app treats a gap in the
+ *  roster group as "ask for everything again" and heals from its other devices. 90 days matches SET_IDLE_ERASE_MS: a set nobody touched that long is
+ *  erased anyway, and a phone that sat in a drawer for a season is the longest honest absence we plan for. */
+export const CONTROL_FRAME_TTL_MS = 90 * DAY_MS;
 /** A set nobody has connected to for this long is erased entirely (design 5.6). */
 export const SET_IDLE_ERASE_MS = 90 * DAY_MS;
 
@@ -184,7 +208,7 @@ export type MeshServerMessage =
   | { op: "version-refused"; min: number; max: number }
   | { op: "stored"; id?: string; g: string; seq: number; fill: MeshFill }
   | { op: "duplicate"; id?: string; g: string; n: number }
-  | { op: "over-limit"; id?: string; why: "frame" | "group" | "set" | "groups" | "register" | "rate"; fill?: MeshFill }
+  | { op: "over-limit"; id?: string; why: "frame" | "group" | "set" | "groups" | "register" | "rate" | "writer"; fill?: MeshFill }
   | { op: "refused"; id?: string; reason: string }
   | { op: "frame"; id?: string; g: string; seq: number }                                                   // + payload
   | { op: "frames-end"; id?: string; g: string; more: boolean; last?: number; empty?: boolean }

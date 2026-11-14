@@ -62,7 +62,7 @@ export const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 /** Digits of the matching number, a constant on both sides. One guess succeeds with probability 10^-SAS_DIGITS. */
 export const SAS_DIGITS = 6;
 const SAS_NONCE_BYTES = 16;
-const MAX_GENERATIONS = 64;
+const MAX_GENERATIONS = 256;
 const HALF_OPEN_TTL_MS = 60_000;
 
 export type PairMode = 'qr' | 'code';
@@ -189,6 +189,8 @@ export interface ExistingState {
   setId: Bytes;
   /** generation -> 32-byte set secret */
   secrets: Map<number, Bytes>;
+  /** generation -> its signed statement (crypto/generation.ts), when the host has one. */
+  stmts?: Map<number, Bytes>;
   /** The signed roster log, genesis first. */
   roster: SignedEntry[];
 }
@@ -439,6 +441,7 @@ export class Existing {
         setId: this.#state.setId,
         roster: [...this.#state.roster, add].map(entryToValue),
         secrets,
+        stmts: Object.fromEntries([...(this.#state.stmts ?? [])].map(([g, m]) => [String(g), Buffer.from(m)])),
         signKey: this.#id.signKey,
         agreeKey: this.#id.agreeKey,
         pop: signWith(this.#id, popE(c.isk, p, this.#id)),
@@ -466,14 +469,17 @@ export class PairingSuccess {
   /** Matching number to show; compare with the existing device's screen. */
   readonly sas: string;
   readonly #secrets: Map<number, Buffer>;
-  constructor(o: { setId: Buffer; secrets: Map<number, Buffer>; roster: SignedEntry[]; devices: Map<string, RosterDevice>; existing: { signKey: Buffer; agreeKey: Buffer; deviceId: Buffer }; sas: string }) {
+  constructor(o: { setId: Buffer; secrets: Map<number, Buffer>; stmts?: Map<number, Buffer>; roster: SignedEntry[]; devices: Map<string, RosterDevice>; existing: { signKey: Buffer; agreeKey: Buffer; deviceId: Buffer }; sas: string }) {
     this.setId = o.setId;
     this.roster = o.roster;
     this.devices = o.devices;
     this.existing = o.existing;
     this.sas = o.sas;
     this.#secrets = o.secrets;
+    this.stmts = o.stmts ?? new Map();
   }
+  /** generation -> signed statement, as the host held it (public data; checked by the device layer). */
+  readonly stmts: Map<number, Buffer>;
   /** generation -> set secret. SECRET. */
   get secrets(): Map<number, Buffer> {
     return this.#secrets;
@@ -600,7 +606,7 @@ export class NewDevice {
     if (t === 'declined' && this.stage === 'await-welcome') return this.failWith('declined');
     if (t === 'welcome' && this.stage === 'await-welcome' && this.#k && this.#isk) {
       const w = asMap(open(this.#k.kEN, this.#sid, 'E2N', 1, asBytes(m.ct, 'ct')), 'welcome');
-      onlyKeys(w, ['setId', 'roster', 'secrets', 'signKey', 'agreeKey', 'pop'], 'welcome');
+      onlyKeys(w, ['setId', 'roster', 'secrets', 'stmts', 'signKey', 'agreeKey', 'pop'], 'welcome');
       return this.finishWelcome(w);
     }
     return [];
@@ -636,8 +642,10 @@ export class NewDevice {
       if (S.length !== SET_SECRET_LENGTH) return this.failWith('secrets');
       secrets.set(gen, S);
     }
+    const stmts = new Map<number, Buffer>();
+    if (w.stmts !== undefined) for (const [g, m] of Object.entries(asMap(w.stmts, 'stmts'))) stmts.set(asUint(Number(g), 'gen', 0xffffffff), asBytes(m, 'stmt'));
     this.stage = 'done';
-    this.result = new PairingSuccess({ setId, secrets, roster: entries, devices: verified.devices, existing: { ...e, deviceId: eId }, sas: this.#sas as string });
+    this.result = new PairingSuccess({ setId, secrets, stmts, roster: entries, devices: verified.devices, existing: { ...e, deviceId: eId }, sas: this.#sas as string });
     return [];
   }
   /** The matching number, available once E's nonce has been revealed and checked against its commitment. */

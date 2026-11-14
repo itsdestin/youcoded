@@ -91,10 +91,8 @@ export interface MeshKeys {
   setId: Buffer | null;
   /** Highest receiver-state save number this device has written (rollback tripwire; see link.ts). */
   receiverSaves: number;
-  /** A removal this device has started but not finished: the NEXT generation's secret and the `remove` entry it belongs to. WHY here and
-   *  not in a plain file: it holds a set secret, so it lives in the sealed key file; a kill between the steps of a removal resumes from it
-   *  (service.ts removeDevice). Null when no removal is in flight. */
-  pending?: { gen: number; secret: Buffer; entry: Buffer } | null;
+  /** label -> the signed generation statement that says what the secret is for (crypto/generation.ts). Absent for a secret received without one. */
+  stmts?: Map<number, Buffer>;
 }
 
 const MAGIC = Buffer.from('YCMK');
@@ -109,26 +107,24 @@ function encodeKeys(k: MeshKeys): Buffer {
     label: BLOB_LABEL,
     identity: serializeIdentity(k.identity),
     setId: k.setId,
-    secrets: [...k.secrets.entries()].sort((a, b) => a[0] - b[0]).map(([g, s]) => ({ g, s })),
+    secrets: [...k.secrets.entries()].sort((a, b) => a[0] - b[0]).map(([g, s]) => ({ g, s, m: k.stmts?.get(g) ?? null })),
     saves: k.receiverSaves,
-    pending: k.pending ? { g: k.pending.gen, s: k.pending.secret, e: k.pending.entry } : null,
   });
 }
 function decodeKeys(plain: Buffer): MeshKeys {
   const m = asMap(decode(plain), 'keys');
-  onlyKeys(m, ['v', 'label', 'identity', 'setId', 'secrets', 'saves', 'pending'], 'keys');
+  onlyKeys(m, ['v', 'label', 'identity', 'setId', 'secrets', 'saves'], 'keys');
   if (asUint(m.v, 'v') !== 1 || asText(m.label, 'label') !== BLOB_LABEL) throw new MeshKeyStoreRefused('corrupt');
   const secrets = new Map<number, Buffer>();
-  for (const e of asArray(m.secrets, 'secrets', 64)) {
+  const stmts = new Map<number, Buffer>();
+  // 256: a set that has lived through many removals (and a few takeovers) keeps every secret, so older frames stay readable.
+  for (const e of asArray(m.secrets, 'secrets', 256)) {
     const em = asMap(e, 'secret');
-    secrets.set(asUint(em.g, 'g', 0xffffffff), asBytes(em.s, 's', 32));
+    const g = asUint(em.g, 'g', 0xffffffff);
+    secrets.set(g, asBytes(em.s, 's', 32));
+    if (em.m !== null && em.m !== undefined) stmts.set(g, asBytes(em.m, 'm'));
   }
-  let pending: MeshKeys['pending'] = null;
-  if (m.pending !== undefined && m.pending !== null) {
-    const pm = asMap(m.pending, 'pending');
-    pending = { gen: asUint(pm.g, 'g', 0xffffffff), secret: asBytes(pm.s, 's', 32), entry: asBytes(pm.e, 'e', 32) };
-  }
-  return { identity: parseIdentity(asBytes(m.identity, 'identity')), setId: m.setId === null ? null : asBytes(m.setId, 'setId', 32), secrets, receiverSaves: asUint(m.saves, 'saves'), pending };
+  return { identity: parseIdentity(asBytes(m.identity, 'identity')), setId: m.setId === null ? null : asBytes(m.setId, 'setId', 32), secrets, stmts, receiverSaves: asUint(m.saves, 'saves') };
 }
 
 export class MeshKeyStore {
@@ -171,7 +167,7 @@ export class MeshKeyStore {
   update(mutate: (k: MeshKeys) => void): Promise<MeshKeys> {
     const run = async (): Promise<MeshKeys> => {
       const cur = await this.loadOrCreate();
-      const next: MeshKeys = { ...cur, secrets: new Map(cur.secrets) };
+      const next: MeshKeys = { ...cur, secrets: new Map(cur.secrets), stmts: new Map(cur.stmts ?? []) };
       mutate(next);
       await this.write(next);
       return next;

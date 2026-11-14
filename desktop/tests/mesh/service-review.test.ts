@@ -11,6 +11,7 @@ import { RelayClient } from '../../src/main/mesh/relay-client';
 import { RelaySyncState } from '../../src/main/mesh/relay-sync';
 import { FrameSender } from '../../src/main/mesh/crypto/frames';
 import { sealSecretTo } from '../../src/main/mesh/crypto/keygen';
+import { encodeStatement, signStatement } from '../../src/main/mesh/crypto/generation';
 import { makeAddEntry, makeRemoveEntry, makeRenameEntry, encodeEntry, seenForNextEntry } from '../../src/main/mesh/crypto/roster';
 import { deviceIdFor, generateIdentity, setIdFor } from '../../src/main/mesh/crypto/identity';
 import { RosterStore } from '../../src/main/mesh/roster-store';
@@ -27,7 +28,7 @@ afterEach(async () => {
 const logs: string[] = [];
 const dirs = new Map<MeshService, string>();
 const mk = async (name: string, extra: Partial<MeshServiceOptions> = {}, dir = tmp(`rv-${name}-`)): Promise<MeshService> => {
-  const s = new MeshService({ userData: dir, sealer: insecureTestSealer({ testMode: true }), testMode: true, relayUrl: relay.url, deviceName: name, platform: 'linux', log: (e, f) => logs.push(`${e} ${JSON.stringify(f ?? {})}`), relayBaseDelayMs: 20, ...extra });
+  const s = new MeshService({ userData: dir, sealer: insecureTestSealer({ testMode: true }), testMode: true, relayUrl: relay.url, deviceName: name, platform: 'linux', log: (e, f) => logs.push(`${e} ${JSON.stringify(f ?? {})}`), relayBaseDelayMs: 20, genTakeoverMs: 150, headsEveryMs: 1000, ...extra });
   await s.start();
   live.push(s);
   dirs.set(s, dir);
@@ -64,7 +65,7 @@ async function trio(extraA: Partial<MeshServiceOptions> = {}) {
   const C = await mk('C');
   await pair(A, C);
   await until(() => C.status().relay === 'ready', 'C ready');
-  await until(() => [A, B, C].every((s) => s.status().rosterCount === 3), 'roster of 3 everywhere');
+  await until(() => [A, B, C].every((s) => s.status().rosterCount >= 3 && s.status().pendingDevices.length === 0), 'roster of 3 everywhere');
   return { A, B, C };
 }
 /** Send a frame AS a member (that device's own keys), with a body of the attacker's choosing: what a compromised device could do. */
@@ -130,7 +131,8 @@ describe('rename, removal and pairing against a relay that follows ancestry', ()
     relay.rosterPutRefusal = null;
     await until(() => A.status().removalsPending.length === 0, 'the retry got through', 8000);
     await until(() => B.status().relay === 'removed', 'B cut off');
-    expect(A.status().generations).toContain(2);
+    expect(A.status().currentGeneration).not.toBeNull();
+    expect(A.status().currentGeneration).not.toBe(1);
   });
 
   it('a removal still pending survives a restart: the new secret was saved first, the queue is on disk, and the restart finishes it', async () => {
@@ -145,8 +147,8 @@ describe('rename, removal and pairing against a relay that follows ancestry', ()
     expect(A2.status().removalsPending).toEqual([bId]); // still known after the restart
     await until(() => B.status().relay === 'removed', 'B cut off after the restart', 10_000);
     await until(() => A2.status().removalsPending.length === 0 && A2.status().relayPending === 0, 'queue empty');
-    await until(() => C.status().generations.includes(2), 'C holds generation 2');
-    expect(A2.status().generations).toContain(2);
+    await until(() => (C.status().currentGeneration ?? 1) !== 1, 'C holds the new generation');
+    expect(A2.status().currentGeneration).not.toBe(1);
     await A2.sendNote('after the restart');
     await until(() => C.inbox.some((i) => i.text === 'after the restart'), 'C hears A under generation 2');
   });
@@ -175,28 +177,29 @@ describe('rename, removal and pairing against a relay that follows ancestry', ()
     relay.rosterPutRefusal = null;
     await pair(A, B); // the same joiner, the same host: works
     expect(B.status().inSet).toBe(true);
-    expect(A.status().rosterCount).toBe(2);
+    expect(A.status().rosterCount).toBeGreaterThanOrEqual(2);
   });
 
-  it('a pairing whose new device never connects is rolled back by an ordinary removal; one that does connect is kept', async () => {
+  it('a pairing whose new device is slow to connect is NEVER undone by a timer: it stays listed as pending, and finishes when the device shows up', async () => {
     relay = await new FakeRelay().ready();
-    const A = await mk('A', { pairConfirmMs: 400 });
+    const A = await mk('A', { pairConfirmMs: 100 });
     await A.createSet();
     await until(() => A.status().relay === 'ready', 'A ready');
-    const B = await mk('B');
-    await pair(A, B);
-    await until(() => B.status().relay === 'ready', 'B ready');
     const ghost = await mk('G');
-    ghost.setOffline(true); // finishes the pairing, never reaches the relay
+    ghost.setOffline(true); // finishes the pairing, does not reach the relay yet
     await pair(A, ghost);
     expect(ghost.status().inSet).toBe(true);
     expect(A.status().unconfirmedJoins).toEqual([idOf(ghost)]);
-    await until(() => A.status().removedDevices.includes(idOf(ghost)) && A.status().unconfirmedJoins.length === 0, 'the pairing rolled back', 10_000);
-    expect(A.status().activeDevices.sort()).toEqual([idOf(A), idOf(B)].sort());
-    expect(A.status().removedDevices).not.toContain(idOf(B)); // the one that connected was confirmed and kept
+    await new Promise((r) => setTimeout(r, 600)); // settle: many times the old timer
+    expect(A.status().removedDevices).toEqual([]);
+    expect(A.status().activeDevices).toContain(idOf(ghost));
+    expect(A.status().pendingDevices).toContain(idOf(ghost));
+    ghost.setOffline(false);
+    await until(() => A.status().pendingDevices.length === 0 && A.status().unconfirmedJoins.length === 0, 'the pairing finished once the device connected', 10_000);
+    expect(A.status().removedDevices).toEqual([]);
   });
 
-  it('a kill between the relay accepting a pairing and the host writing it down is finished at the next start (then rolled back if nobody comes)', async () => {
+  it('a kill between the relay accepting a pairing and the host writing it down is finished at the next start (and stays pending, never removed by itself)', async () => {
     relay = await new FakeRelay().ready();
     const dirA = tmp('rv-A-');
     const A = await mk('A', {}, dirA);
@@ -210,18 +213,19 @@ describe('rename, removal and pairing against a relay that follows ancestry', ()
     const sync = new RelaySyncState(path.join(dirA, 'mesh'));
     await sync.load();
     await sync.addJoin({ dev: ghost.deviceId.toString('hex'), entry: Buffer.from(encodeEntry(add)).toString('base64'), at: Date.now() });
-    const A2 = await mk('A', { pairConfirmMs: 300 }, dirA);
+    const A2 = await mk('A', {}, dirA);
     await until(() => A2.status().rosterCount >= 2, 'the add was finished');
-    await until(() => A2.status().removedDevices.includes(ghost.deviceId.toString('hex')) && A2.status().unconfirmedJoins.length === 0, 'and rolled back', 10_000);
-    expect(A2.status().activeDevices).toEqual([idOf(A2)]);
+    await new Promise((r) => setTimeout(r, 500)); // settle
+    expect(A2.status().removedDevices).toEqual([]);
+    expect(A2.status().pendingDevices).toEqual([ghost.deviceId.toString('hex')]);
   });
 });
 
 describe('a bad or leftover frame never freezes a device', () => {
   it('a member sends a removal bundle with junk inside: it is rejected (counted, sender prefix), and later notes still arrive, across a restart', async () => {
     const { A, B, C } = await trio();
-    await attackerFrame(C, B, GROUP_ROSTER, KIND_REMOVAL, removalBody({ entries: [], gen: 1, sealed: new Map([[idOf(C), randomBytes(100)]]) }));
-    await until(() => (C.status().rejections.counts['removal-without-entry'] ?? 0) === 1, 'the junk was rejected');
+    await attackerFrame(C, B, GROUP_ROSTER, KIND_REMOVAL, removalBody({ entries: [], stmt: randomBytes(100), sealed: new Map([[idOf(C), randomBytes(100)]]) }));
+    await until(() => (C.status().rejections.counts['bad-statement'] ?? 0) === 1, 'the junk was rejected');
     expect(C.status().rejections.recent[0].from).toBe(idOf(B).slice(0, 8));
     expect(JSON.stringify(C.status().rejections)).not.toMatch(/[0-9a-f]{20}/); // a prefix, never a full id or any content
     await A.sendNote('still works');
@@ -230,7 +234,7 @@ describe('a bad or leftover frame never freezes a device', () => {
     await C.stop();
     const C2 = await mk('C', {}, dirC);
     await until(() => C2.status().relay === 'ready', 'C2 ready');
-    expect(C2.status().rejections.counts['removal-without-entry']).toBe(1); // counted, and remembered
+    expect(C2.status().rejections.counts['bad-statement']).toBe(1); // counted, and remembered
     await A.sendNote('after restart');
     await until(() => C2.inbox.some((i) => i.text === 'after restart'), 'C2 hears A');
     // and a LATER legitimate removal of the attacker reaches C2 (it used to never arrive: the group stayed paused on the junk frame)
@@ -252,37 +256,31 @@ describe('a bad or leftover frame never freezes a device', () => {
   });
 });
 
-describe('a set secret is taken only from a verified removal', () => {
-  it('a member cannot overwrite another device\'s secret with a bundle that has no removal, or replay an old removal to mint a new generation', async () => {
+describe('a set secret is taken only from a verified generation statement', () => {
+  it('a member cannot overwrite another device\'s secret: a junk statement, a statement for removals nobody has seen, and a forged first generation are all refused or kept waiting', async () => {
     const { A, B, C } = await trio();
-    const setId = Buffer.from((await new MeshKeyStore(path.join(dirs.get(B)!, 'mesh'), insecureTestSealer({ testMode: true })).load())!.setId as Buffer);
     const kB = (await new MeshKeyStore(path.join(dirs.get(B)!, 'mesh'), insecureTestSealer({ testMode: true })).load())!;
     const kC = (await new MeshKeyStore(path.join(dirs.get(C)!, 'mesh'), insecureTestSealer({ testMode: true })).load())!;
+    const setId = Buffer.from(kB.setId as Buffer);
     const evil = randomBytes(32);
-    const sealFor = (gen: number): Map<string, Buffer> => new Map([[idOf(C), sealSecretTo(kC.identity.agreeKey, setId, gen, evil, kB.identity.deviceId, kC.identity.deviceId)]]);
-    // 1. the attack from the review: no entries, gen 1, a secret sealed to the victim
-    await attackerFrame(C, B, GROUP_ROSTER, KIND_REMOVAL, removalBody({ entries: [], gen: 1, sealed: sealFor(1) }));
-    await until(() => (C.status().rejections.counts['removal-without-entry'] ?? 0) === 1, 'refused');
-    // C and A still share generation 1: A's notes reach C, and C's reach A
+    const bundleFor = (removed: Buffer[], label?: number): { stmt: Buffer; sealed: Map<string, Buffer> } => {
+      const st = signStatement(kB.identity, { set: setId, removed, members: [kB.identity.deviceId, kC.identity.deviceId, deviceIdFor(kC.identity.signKey)], secret: evil });
+      const stmt = encodeStatement(label === undefined ? st : { ...st, label });
+      return { stmt, sealed: new Map([[idOf(C), sealSecretTo(kC.identity.agreeKey, setId, st.label, evil, kB.identity.deviceId, kC.identity.deviceId)]]) };
+    };
+    // 1. junk where the statement should be
+    await attackerFrame(C, B, GROUP_ROSTER, KIND_REMOVAL, removalBody({ entries: [], stmt: randomBytes(50), sealed: new Map([[idOf(C), randomBytes(100)]]) }));
+    await until(() => (C.status().rejections.counts['bad-statement'] ?? 0) === 1, 'junk refused');
+    // 2. a real, signed statement by member B, but for a removal nobody has seen: it waits, it is never taken
+    await attackerFrame(C, B, GROUP_ROSTER, KIND_REMOVAL, removalBody({ entries: [], ...bundleFor([randomBytes(16)]) }));
+    // 3. a statement for "no removals" (generation 1) by anyone but the set's creator: refused
+    await attackerFrame(C, B, GROUP_ROSTER, KIND_REMOVAL, removalBody({ entries: [], ...bundleFor([]) }));
+    await until(() => (C.status().rejections.counts['bad-statement'] ?? 0) === 2, 'forged generation 1 refused');
     await A.sendNote('A to C');
     await C.sendNote('C to A');
     await until(() => C.inbox.some((i) => i.text === 'A to C') && A.inbox.some((i) => i.text === 'C to A'), 'both directions still work');
     expect(C.status().generations).toEqual([1]);
-    // 2. B removes a third device for real (generation 2) ... then replays that very removal entry to mint generation 3
-    const D = await mk('D');
-    await pair(A, D);
-    await until(() => [A, B, C].every((s) => s.status().rosterCount === 4), 'D known everywhere');
-    expect(await B.removeDevice(idOf(D))).toBe('done');
-    await until(() => C.status().generations.includes(2), 'C holds generation 2');
-    const removeEntry = B.roster.entries.find((e) => e.kind === 'remove')!;
-    await attackerFrame(C, B, GROUP_ROSTER, KIND_REMOVAL, removalBody({ entries: [removeEntry], gen: 3, sealed: sealFor(3) }));
-    await until(() => (C.status().rejections.counts['generation-not-justified'] ?? 0) === 1, 'the replayed removal was refused');
-    // 3. the same removal, the right generation number but a different secret: an existing generation is never overwritten
-    await attackerFrame(C, B, GROUP_ROSTER, KIND_REMOVAL, removalBody({ entries: [removeEntry], gen: 2, sealed: sealFor(2) }));
-    await until(() => (C.status().rejections.counts['generation-already-held'] ?? 0) === 1, 'overwrite refused');
-    expect(C.status().generations).toEqual([1, 2]);
-    await A.sendNote('A to C, generation 2');
-    await until(() => C.inbox.some((i) => i.text === 'A to C, generation 2'), 'still one view of the set');
+    expect(C.status().currentGeneration).toBe(1);
   });
 
   it('POLICY (a decision for the product owner, deliberately NOT changed here): any member may remove any other, the first device included', async () => {
@@ -293,18 +291,16 @@ describe('a set secret is taken only from a verified removal', () => {
   });
 });
 
-describe('a flooding member is refused and flagged, not obeyed', () => {
-  it('80 renames from one member: the receiver stops at its limit, flags the member, stays quick, and can still remove it', async () => {
+describe('a flooding member only ever costs itself', () => {
+  it('80 renames from one member are taken (well inside its own allowance) and nothing else suffers: the receiver stays quick and can still remove it', async () => {
     const { A, B } = await trio();
-    // B writes 80 valid renames into ITS OWN log (a custom client would), then ships them to A as roster frames, ten per frame
     await B.stressAppend(80);
     const ours = B.roster.entries.slice(-80);
     const t0 = Date.now();
     for (let i = 0; i < ours.length; i += 10) await attackerFrame(A, B, GROUP_ROSTER, KIND_ROSTER, rosterBody(ours.slice(i, i + 10)));
-    await until(() => A.status().flaggedDevices.includes(idOf(B)), 'B flagged', 15_000);
+    await until(() => A.roster.countOf(idOf(B)) >= 80, 'A took B\'s entries', 15_000);
     expect(Date.now() - t0).toBeLessThan(15_000);
-    expect((A.status().rosterRejected['rejected-rate'] ?? 0) + (A.status().rosterRejected['rejected-flagged'] ?? 0)).toBeGreaterThan(0);
-    expect(A.roster.countOf(idOf(B))).toBeLessThanOrEqual(61); // 60 an hour, plus its introduction
+    expect(A.status().flaggedDevices).toEqual([]);
     expect(await A.removeDevice(idOf(B))).toBe('done');
   });
 });
@@ -318,12 +314,12 @@ describe('a device that was away comes back and gets the whole roster, verified 
     await pair(A, D);
     await A.renameSelf('A renamed');
     expect(await A.removeDevice(idOf(B))).toBe('done');
-    await until(() => A.status().rosterCount === 6, 'A holds 6 entries');
+    await until(() => A.status().rosterCount >= 6, 'A holds 6 entries');
     C.setOffline(false);
-    await until(() => C.status().rosterCount === 6, 'C holds the whole roster after returning', 10_000);
-    expect(C.status().rosterIds).toEqual(A.status().rosterIds);
+    await until(() => C.status().rosterCount === A.status().rosterCount, 'C holds the whole roster after returning', 10_000);
+    expect([...C.status().rosterIds].sort()).toEqual([...A.status().rosterIds].sort());
     expect(C.status().removedDevices).toContain(idOf(B));
-    await until(() => C.status().generations.includes(2), 'and generation 2');
+    await until(() => (C.status().currentGeneration ?? 1) !== 1, 'and the new generation');
     expect(C.status().rosterGaps).toBe(0);
     expect(C.status().parkedRoster).toBe(0);
   });

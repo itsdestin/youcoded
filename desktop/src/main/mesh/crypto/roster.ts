@@ -158,6 +158,8 @@ export const makeAddEntry = (signer: DeviceIdentity, device: RosterDeviceInfo, s
 /** `cutoff` is carried opaquely; its meaning is the decide layer's. */
 export const makeRemoveEntry = (signer: DeviceIdentity, target: Bytes, seen: Bytes[], at: number, cutoff?: CborValue): SignedEntry =>
   signEntry(signer, { kind: 'remove', body: { target, cutoff }, seen, at });
+/** A device's first entry of its own: "I finished joining". Until a device has signed something it is only "pending" (review N8). */
+export const makeHelloEntry = (signer: DeviceIdentity, seen: Bytes[], at: number): SignedEntry => signEntry(signer, { kind: 'hello', body: {}, seen, at });
 export const makeRenameEntry = (signer: DeviceIdentity, name: string, seen: Bytes[], at: number): SignedEntry =>
   signEntry(signer, { kind: 'rename', body: { name: sanitizeDeviceName(name) }, seen, at });
 
@@ -176,22 +178,24 @@ function readAdd(body: unknown): RosterDeviceInfo {
   };
 }
 
-/** What the verifier can prove about one entry (it rules on none of it except where a header says so). */
+/** What the verifier can prove about one entry. */
 export interface EntryFacts {
-  /** Position in the log. */
+  /** Position in the canonical order (depth, then id): the same on every device that holds the same set. */
   index: number;
   /** Signer's device id, hex. */
   signer: string;
   kind: string;
-  /** The entry's `seen` closure contains a removal of its own signer: the signer knew it was removed. */
+  /** The entry's `seen` closure contains an effective removal of its own signer: the signer knew it was removed. */
   signerKnewOwnRemoval: boolean;
-  /** Some removal of the signer sits earlier in the log but the entry does not cite it (omitted, or concurrent). */
+  /** Some effective removal of the signer is concurrent with this entry (neither cites the other). */
   signerRemovedEarlierInLog: boolean;
+  /** True when the entry has no effect (see "VOID" in the header). It still counts as an ancestor. */
+  void: boolean;
 }
 
 export interface VerifiedRoster {
   setId: Buffer;
-  /** Every device that was ever added, by hex device id. Includes removed devices (see file header). */
+  /** Every device that was effectively introduced, by hex device id. Includes removed devices (see file header). */
   devices: Map<string, RosterDevice>;
   /** Per entry id (hex). */
   facts: Map<string, EntryFacts>;
@@ -199,187 +203,312 @@ export interface VerifiedRoster {
   happenedBefore(a: Bytes, b: Bytes): boolean;
 }
 
-const EMPTY_SET: ReadonlySet<string> = new Set();
-
 // WHY QUOTAS (review finding 4): any member can write valid entries as fast as it can sign them (renames change nothing and are
 // nearly free), so the log needs a per-device ceiling that every device computes the same way from the log alone. 512 is far above
 // what a person produces (a handful of renames over years) and 16 devices x 512 stays under the 8192 hard cap.
 export const MAX_ENTRIES_PER_DEVICE = 512;
 // WHY RESERVE (finding 4, "8192-entry dead end"): when the log is nearly full, adds and renames are refused but a REMOVE is still
-// accepted, so a device that somehow fills the log can still be removed. Full compaction (a signed checkpoint that replaces the
-// log prefix) needs the decide rules, which do not exist yet; see the note on `RosterVerifier` for exactly what is left.
+// accepted, so a device that somehow fills the log can still be removed.
 export const ROSTER_REMOVE_RESERVE = 64;
 
+/** What happens when two devices remove each other at the same time, neither knowing of the other's removal (the OPEN product
+ *  decision, review N3 / gap G6). One swappable rule: 'both' (default, the security review's choice: both removals stand, both devices
+ *  are out) or 'first-admitted' (the device admitted earlier survives; the later one is removed). Both variants are tested. */
+export type MutualRule = 'both' | 'first-admitted';
+export const DEFAULT_MUTUAL_RULE: MutualRule = 'both';
+
+const MAX_RESTARTS = 24;
+const GATED = new Set(['add', 'remove', 'rename']);
+
+interface Computed {
+  setId: Buffer;
+  devices: Map<string, RosterDevice>;
+  removed: Set<string>;
+  confirmed: Set<string>;
+  voided: Set<string>;
+  facts: Map<string, EntryFacts>;
+  pos: Map<string, number>;
+  rows: Uint32Array[];
+  admitted: Map<string, number>;
+  /** removal entry ids (hex) that are effective, by target */
+  removalsOf: Map<string, string[]>;
+}
+
 /**
- * Incremental roster verifier. `prepare(entry)` checks ONE entry against the state built so far and returns a `commit()` that
- * applies it; nothing is changed by a prepare that throws, or by a prepare whose commit is never called (the store writes the
- * record to disk between the two, so a disk failure leaves the verified state matching the file).
- * Cost per entry is the signature check plus O(|seen| x entries/32); the whole log is near-linear instead of the old
- * verify-everything-again per append (600 entries took 26 s per receiver).
- *
- * WHAT IS NOT BUILT (checkpoint / compaction): a log can still only grow to MAX_ROSTER_ENTRIES. The safe subset is in place:
- * per-device quotas (a flooder cannot fill it), a reserve for removals, and `headroom` so the app can warn. A checkpoint entry
- * (a signed digest of the log prefix plus the live device table) needs the decide rules to say who may sign one and what a
- * concurrent checkpoint means, and is deliberately left to that part.
+ * Roster state: a pure function of the SET of signed entries held (order of arrival, duplicates and timing play no part).
+ * `prepare(entry)` checks what can be checked for ONE entry on arrival and returns a `commit()` that adds it to the set; the state is then
+ * recomputed from the whole set (cached signature checks; near-linear), so there is no order in which two devices holding the same set
+ * can disagree. See the header "CONVERGENCE BY CONSTRUCTION".
  */
 export class RosterVerifier implements VerifiedRoster {
-  setId!: Buffer;
-  readonly devices = new Map<string, RosterDevice>();
-  readonly facts = new Map<string, EntryFacts>();
-  /** Devices removed by some entry in the log (hex ids). */
-  readonly removed = new Set<string>();
-  readonly #index = new Map<string, number>();
-  readonly #anc: Uint32Array[] = [];
-  readonly #removedKnown: ReadonlySet<string>[] = [];
-  readonly #lastOwn = new Map<string, number>();
-  readonly #introducedAt = new Map<string, number>();
-  readonly #removalsOf = new Map<string, number>();
+  readonly #raw = new Map<string, SignedEntry>();
+  readonly #order: SignedEntry[] = [];
+  readonly #depth = new Map<string, number>();
+  readonly #keyOf = new Map<string, Buffer>();
   readonly #perDevice = new Map<string, number>();
+  #calc: Computed | null = null;
+  #setId: Buffer | undefined;
+  constructor(readonly mutual: MutualRule = DEFAULT_MUTUAL_RULE) {}
+
   get size(): number {
-    return this.#index.size;
+    return this.#order.length;
   }
-  /** Entries that may still be added before the log is full. */
   get headroom(): number {
-    return MAX_ROSTER_ENTRIES - this.#index.size;
+    return MAX_ROSTER_ENTRIES - this.#order.length;
   }
-  /** How many entries a device has signed (its quota use). */
   countOf(deviceHex: string): number {
     return this.#perDevice.get(deviceHex) ?? 0;
   }
+  get setId(): Buffer {
+    return this.#setId as Buffer;
+  }
+  private get c(): Computed {
+    if (!this.#calc) this.#calc = this.compute();
+    return this.#calc;
+  }
+  get devices(): Map<string, RosterDevice> {
+    return this.c.devices;
+  }
+  get facts(): Map<string, EntryFacts> {
+    return this.c.facts;
+  }
+  /** Devices removed by an effective removal. */
+  get removed(): Set<string> {
+    return this.c.removed;
+  }
+  /** Devices that have signed an effective entry of their own (or created the set): pairing completed. Others are "pending". */
+  get confirmed(): Set<string> {
+    return this.c.confirmed;
+  }
+  /** Ids (hex) of entries with no effect. */
+  get voided(): Set<string> {
+    return this.c.voided;
+  }
+  /** Introduced, not removed. */
+  active(): RosterDevice[] {
+    const c = this.c;
+    return [...c.devices.entries()].filter(([id]) => !c.removed.has(id)).map(([, d]) => d);
+  }
+  /** Effective removal entries (hex ids) of a device. */
+  removalsOf(deviceHex: string): string[] {
+    return this.c.removalsOf.get(deviceHex) ?? [];
+  }
   happenedBefore(a: Bytes, b: Bytes): boolean {
-    const ia = this.#index.get(toHex(a));
-    const ib = this.#index.get(toHex(b));
+    const c = this.c;
+    const ia = c.pos.get(toHex(a));
+    const ib = c.pos.get(toHex(b));
     if (ia === undefined || ib === undefined || ia === ib) return false;
+    const row = c.rows[ib];
     const w = ia >>> 5;
-    const row = this.#anc[ib];
     return w < row.length && (row[w] & (1 << (ia & 31))) !== 0;
   }
 
   prepare(e: SignedEntry): () => void {
-    const i = this.#index.size;
+    const i = this.#order.length;
     if (i >= MAX_ROSTER_ENTRIES) throw new MeshCryptoError('bad-roster', 'size');
     if (i >= MAX_ROSTER_ENTRIES - ROSTER_REMOVE_RESERVE && e.kind !== 'remove') throw new MeshCryptoError('bad-roster', 'log nearly full: only removals');
     const idHex = toHex(e.id);
-    if (this.#index.has(idHex)) throw new MeshCryptoError('bad-roster', 'duplicate entry');
-    let signer: RosterDevice | undefined;
+    if (this.#raw.has(idHex)) throw new MeshCryptoError('bad-roster', 'duplicate entry');
+    let signKey: Buffer | undefined;
     let genesisSetId: Buffer | undefined;
     if (i === 0) {
       if (e.kind !== 'add') throw new MeshCryptoError('bad-roster', 'genesis must be an add');
       const self = readAdd(e.body);
-      signer = { ...self, deviceId: deviceIdFor(self.signKey) };
-      if (!ctEqual(signer.deviceId, e.device)) throw new MeshCryptoError('bad-roster', 'genesis must be self-signed');
+      signKey = self.signKey;
+      if (!ctEqual(deviceIdFor(self.signKey), e.device)) throw new MeshCryptoError('bad-roster', 'genesis must be self-signed');
       genesisSetId = setIdFor(self.signKey);
       if (e.seen.length !== 0) throw new MeshCryptoError('bad-roster', 'genesis cannot cite earlier entries');
     } else {
-      signer = this.devices.get(toHex(e.device));
-      if (!signer) throw new MeshCryptoError('bad-roster', 'signer not yet in roster');
+      signKey = this.#keyOf.get(toHex(e.device));
+      // WHY: the signer's key comes from an `add` we hold; without one the entry cannot be judged yet (the caller parks it, bounded).
+      if (!signKey) throw new MeshCryptoError('bad-roster', 'signer not yet in roster');
       if (e.seen.length === 0) throw new MeshCryptoError('bad-roster', 'entry names no earlier state');
     }
-    if (!verifyEntry(e, signer.signKey)) throw new MeshCryptoError('bad-entry', e.kind);
-    const signerHex = toHex(signer.deviceId);
+    if (!verifyEntry(e, signKey)) throw new MeshCryptoError('bad-entry', e.kind);
+    const signerHex = toHex(e.device);
     if ((this.#perDevice.get(signerHex) ?? 0) >= MAX_ENTRIES_PER_DEVICE) throw new MeshCryptoError('bad-roster', 'device quota');
-
-    // ---- what this entry was made against: its seen-closure and the removals inside it ----
-    const words = (i + 32) >>> 5; // enough bits for indices 0..i
-    const bits = new Uint32Array(words);
-    let known: ReadonlySet<string> = EMPTY_SET;
-    let owned = false;
-    const cited = new Set<number>();
+    let depth = 1;
+    const cited = new Set<string>();
     for (const s of e.seen) {
-      const j = this.#index.get(toHex(s));
-      if (j === undefined) throw new MeshCryptoError('bad-roster', 'seen names an unknown or later entry');
-      if (cited.has(j)) throw new MeshCryptoError('bad-roster', 'seen repeats an entry');
-      cited.add(j);
-      bits[j >>> 5] |= 1 << (j & 31);
-      const pa = this.#anc[j];
-      for (let w = 0; w < pa.length; w++) bits[w] |= pa[w];
-      const pk = this.#removedKnown[j];
-      if (pk.size > 0 && pk !== known) {
-        if (known.size === 0) known = pk;
-        else {
-          if (!owned) {
-            known = new Set(known);
-            owned = true;
-          }
-          for (const x of pk) (known as Set<string>).add(x);
-        }
-      }
+      const k = toHex(s);
+      const d = this.#depth.get(k);
+      if (d === undefined) throw new MeshCryptoError('bad-roster', 'seen names an unknown or later entry');
+      if (cited.has(k)) throw new MeshCryptoError('bad-roster', 'seen repeats an entry');
+      cited.add(k);
+      if (d + 1 > depth) depth = d + 1;
     }
-    const inClosure = (j: number): boolean => (bits[j >>> 5] & (1 << (j & 31))) !== 0;
-    if (i > 0) {
-      // WHY: ties each device's entries into one chain and proves "made after being added".
-      const ref = this.#lastOwn.get(signerHex) ?? this.#introducedAt.get(signerHex);
-      if (ref === undefined || !inClosure(ref)) throw new MeshCryptoError('bad-roster', 'entry has not seen its signer\'s previous entry');
-    }
-    const knew = known.has(signerHex);
-    if (knew && (e.kind === 'add' || e.kind === 'remove' || e.kind === 'rename')) throw new MeshCryptoError('bad-roster', 'removed device signs roster change');
-
-    // ---- kind-specific checks (all of them BEFORE anything is changed) ----
-    let apply: () => void = () => {};
-    let removalTarget: string | null = null;
+    // Shapes only (the rules that need the whole set run in compute()).
+    let newKey: Buffer | undefined;
     if (e.kind === 'add') {
       const info = readAdd(e.body);
-      const id = deviceIdFor(info.signKey);
-      const idKey = toHex(id);
-      // WHY: an add may only INTRODUCE a device. Overwriting let any member rebind another device's
-      // key-agreement key (so it would receive that device's future secrets) or let a removed device re-add itself.
-      if (i > 0 && this.devices.has(idKey)) throw new MeshCryptoError('bad-roster', 'duplicate device');
-      apply = () => {
-        this.devices.set(idKey, { ...info, deviceId: id });
-        this.#introducedAt.set(idKey, i);
-      };
+      newKey = info.signKey;
     } else if (e.kind === 'rename') {
-      const m = asMap(e.body, 'rename body');
-      const name = sanitizeDeviceName(asText(m.name, 'name', 200));
-      apply = () => {
-        const cur = this.devices.get(signerHex);
-        if (cur) this.devices.set(signerHex, { ...cur, name });
-      };
+      sanitizeDeviceName(asText(asMap(e.body, 'rename body').name, 'name', 200));
     } else if (e.kind === 'remove') {
-      const m = asMap(e.body, 'remove body');
-      const target = toHex(asBytes(m.target, 'target', 16));
-      if (!this.devices.has(target)) throw new MeshCryptoError('bad-roster', 'remove names unknown device');
-      removalTarget = target;
+      asBytes(asMap(e.body, 'remove body').target, 'target', 16);
     }
-    if (removalTarget !== null) {
-      if (!owned) known = new Set(known);
-      (known as Set<string>).add(removalTarget);
-    }
-    // Other kinds (witness, cutoff, ...) are signature-checked above and otherwise passed through untouched.
-
     return () => {
-      if (i === 0) this.setId = genesisSetId as Buffer;
-      this.facts.set(idHex, { index: i, signer: signerHex, kind: e.kind, signerKnewOwnRemoval: knew, signerRemovedEarlierInLog: (this.#removalsOf.get(signerHex) ?? 0) > 0 });
-      apply();
-      if (removalTarget !== null) {
-        this.#removalsOf.set(removalTarget, (this.#removalsOf.get(removalTarget) ?? 0) + 1);
-        this.removed.add(removalTarget);
-      }
-      this.#anc.push(bits);
-      this.#removedKnown.push(known);
-      this.#index.set(idHex, i);
-      this.#lastOwn.set(signerHex, i);
+      if (i === 0) this.#setId = genesisSetId;
+      this.#raw.set(idHex, e);
+      this.#order.push(e);
+      this.#depth.set(idHex, depth);
       this.#perDevice.set(signerHex, (this.#perDevice.get(signerHex) ?? 0) + 1);
+      if (newKey) {
+        const id = toHex(deviceIdFor(newKey));
+        if (!this.#keyOf.has(id)) this.#keyOf.set(id, newKey);
+      }
+      this.#calc = null;
     };
   }
   /** prepare + commit in one step (no disk in between). */
   add(e: SignedEntry): void {
     this.prepare(e)();
   }
+
+  private compute(): Computed {
+    const order = [...this.#order].sort((x, y) => (this.#depth.get(toHex(x.id)) as number) - (this.#depth.get(toHex(y.id)) as number) || Buffer.compare(x.id, y.id));
+    const n = order.length;
+    const pos = new Map<string, number>();
+    order.forEach((e, p) => pos.set(toHex(e.id), p));
+    const rows: Uint32Array[] = [];
+    for (let p = 0; p < n; p++) {
+      const row = new Uint32Array((p + 32) >>> 5);
+      for (const s of order[p].seen) {
+        const j = pos.get(toHex(s)) as number;
+        row[j >>> 5] |= 1 << (j & 31);
+        const pr = rows[j];
+        for (let w = 0; w < pr.length; w++) row[w] |= pr[w];
+      }
+      rows.push(row);
+    }
+    const inClosure = (of: number, x: number): boolean => (rows[of][x >>> 5] & (1 << (x & 31))) !== 0;
+    const seed = new Set<string>();
+    let result: Computed | null = null;
+    for (let round = 0; round <= MAX_RESTARTS; round++) {
+      const { res, proposed } = this.fold(order, rows, pos, inClosure, seed);
+      result = { ...res, pos, rows };
+      let grew = false;
+      if (round < MAX_RESTARTS) for (const id of proposed) if (!seed.has(id)) { seed.add(id); grew = true; }
+      if (!grew) break;
+    }
+    return result as Computed;
+  }
+
+  private fold(order: SignedEntry[], rows: Uint32Array[], pos: Map<string, number>, inClosure: (of: number, x: number) => boolean, seed: Set<string>): { res: Omit<Computed, 'pos' | 'rows'>; proposed: Set<string> } {
+    const n = order.length;
+    const devices = new Map<string, RosterDevice>();
+    const admitted = new Map<string, number>(); // device -> canonical position of its effective introducing add
+    const removed = new Set<string>();
+    const confirmed = new Set<string>();
+    const voided = new Set<string>();
+    const facts = new Map<string, EntryFacts>();
+    const removalsOf = new Map<string, number[]>(); // target -> effective removal positions
+    const byDevice = new Map<string, number[]>(); // signer -> positions of its EFFECTIVE entries
+    const known: Array<Set<string>> = [];
+    const proposed = new Set<string>();
+    const removerOf = (p: number): string => toHex(order[p].device);
+    let setId: Buffer = this.#setId as Buffer;
+    for (let p = 0; p < n; p++) {
+      const e = order[p];
+      const idHex = toHex(e.id);
+      const signer = toHex(e.device);
+      let k: Set<string> = new Set();
+      for (const s of e.seen) { const kk = known[pos.get(toHex(s)) as number]; for (const x of kk) k.add(x); }
+      let isVoid = seed.has(idHex);
+      let knew = false;
+      // A revoked entry was found concurrent with a removal of its own signer (the removal sorts after it in this order).
+      let concurrentRemoval = isVoid && GATED.has(e.kind);
+      if (!isVoid) {
+        if (p === 0) {
+          // genesis: self-add, accepted at ingest
+        } else {
+          const introPos = admitted.get(signer);
+          if (introPos === undefined || !inClosure(p, introPos)) isVoid = true; // no effective introduction among its ancestors
+          else {
+            knew = k.has(signer);
+            if (knew && GATED.has(e.kind)) isVoid = true; // it knew it was removed
+            const rs = removalsOf.get(signer);
+            if (!isVoid && rs && rs.length > 0 && GATED.has(e.kind)) {
+              concurrentRemoval = true;
+              // Entries of a removed device that its remover did not see are void, except one half of a mutual removal.
+              let allowed = false;
+              if (e.kind === 'remove') {
+                const target = toHex(asBytes(asMap(e.body, 'remove body').target, 'target', 16));
+                const mutual = rs.filter((r) => removerOf(r) === target && !inClosure(p, r));
+                if (mutual.length > 0) {
+                  if (this.mutual === 'both') allowed = true;
+                  else {
+                    const mine = admitted.get(signer) as number;
+                    const theirs = admitted.get(target);
+                    if (theirs !== undefined && mine < theirs) {
+                      allowed = true;
+                      for (const r of mutual) proposed.add(toHex(order[r].id)); // the later-admitted device's removal does not stand
+                    }
+                  }
+                }
+              }
+              if (!allowed) isVoid = true;
+            }
+          }
+        }
+      }
+      if (!isVoid) {
+        if (e.kind === 'add') {
+          const info = readAdd(e.body);
+          const id = toHex(deviceIdFor(info.signKey));
+          if (p > 0 && admitted.has(id)) isVoid = true; // a key can never be overwritten
+          else {
+            admitted.set(id, p);
+            devices.set(id, { ...info, deviceId: deviceIdFor(info.signKey) });
+            if (p === 0) { setId = setIdFor(info.signKey); confirmed.add(id); }
+          }
+        } else if (e.kind === 'rename') {
+          const cur = devices.get(signer);
+          if (cur) devices.set(signer, { ...cur, name: sanitizeDeviceName(asText(asMap(e.body, 'rename body').name, 'name', 200)) });
+        } else if (e.kind === 'remove') {
+          const target = toHex(asBytes(asMap(e.body, 'remove body').target, 'target', 16));
+          if (!devices.has(target)) isVoid = true; // names a device nobody introduced
+          else {
+            removed.add(target);
+            const list = removalsOf.get(target) ?? [];
+            list.push(p);
+            removalsOf.set(target, list);
+            k.add(target);
+            // Retroactive: what the target signed that this removal did not see has no effect (ghost devices, late removals).
+            for (const xp of byDevice.get(target) ?? []) {
+              const x = order[xp];
+              if (!GATED.has(x.kind) || inClosure(p, xp)) continue;
+              if (x.kind === 'remove' && toHex(asBytes(asMap(x.body, 'remove body').target, 'target', 16)) === signer && !inClosure(xp, p)) {
+                if (this.mutual === 'both') continue; // mutual removal: both stand
+              }
+              proposed.add(toHex(x.id));
+            }
+          }
+        }
+      }
+      known.push(k);
+      if (isVoid) voided.add(idHex);
+      else {
+        const l = byDevice.get(signer) ?? [];
+        l.push(p);
+        byDevice.set(signer, l);
+        if (p > 0 || e.kind === 'add') confirmed.add(signer);
+      }
+      facts.set(idHex, { index: p, signer, kind: e.kind, signerKnewOwnRemoval: knew, signerRemovedEarlierInLog: concurrentRemoval, void: isVoid });
+    }
+    const removalsHex = new Map<string, string[]>();
+    for (const [t, ps] of removalsOf) removalsHex.set(t, ps.map((q) => toHex(order[q].id)));
+    return { res: { setId, devices, removed, confirmed, voided, facts, admitted, removalsOf: removalsHex }, proposed };
+  }
 }
 
 /**
- * Verify a roster log given in an order where each signer's `add` precedes its entries (the order
- * a pairing welcome and a keeper's log both use). Checks: genesis is a self-add naming nothing;
- * every later entry is signed by a device added earlier in the log; ids match content; `seen`
- * names earlier entries only and includes the signer's own previous entry; `add` bodies are well
- * formed and never repeat a device id; `remove` names a known device; a device that has seen its
- * own removal does not add/remove/rename; no duplicate ids; no device exceeds its entry quota.
- * Throws MeshCryptoError('bad-roster'|'bad-entry'|'malformed'|'low-order-point').
+ * Verify a roster log given in any causal order (each entry after the entries it cites). Throws MeshCryptoError('bad-roster'|'bad-entry'|
+ * 'malformed'|'low-order-point').
  */
-export function verifyRosterLog(entries: readonly SignedEntry[]): RosterVerifier {
+export function verifyRosterLog(entries: readonly SignedEntry[], mutual: MutualRule = DEFAULT_MUTUAL_RULE): RosterVerifier {
   if (entries.length === 0 || entries.length > MAX_ROSTER_ENTRIES) throw new MeshCryptoError('bad-roster', 'size');
-  const v = new RosterVerifier();
+  const v = new RosterVerifier(mutual);
   for (const e of entries) v.add(e);
   return v;
 }

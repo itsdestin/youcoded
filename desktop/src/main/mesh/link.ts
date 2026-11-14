@@ -89,6 +89,10 @@ const MAX_POSITION_JUMP = 100_000;
 /** Waiting frames kept (count, bytes) and for how long. */
 const MAX_WAITING = 64;
 const MAX_WAITING_BYTES = 8 * 1024 * 1024;
+/** WHY per sender (review N4): frames that cannot be judged yet are parked BEFORE anything is authenticated, so anyone could fill a shared
+ *  list. Each claimed sender now has its own allowance and overflow only ever pushes out that sender's OWN oldest frame. */
+const MAX_WAITING_PER_SENDER = 16;
+const MAX_WAITING_BYTES_PER_SENDER = 1024 * 1024;
 const WAIT_EXPIRY_MS = 24 * 3_600_000;
 const MAX_HANDLER_TRIES = 3;
 const RECENT_REJECTIONS = 50;
@@ -100,6 +104,9 @@ export interface LinkOptions {
   /** Directory for link-state.bin (the mesh folder). */
   meshDir: string;
   secrets: () => Map<number, Buffer>;
+  /** Which generation label a new frame of this kind is sealed under; null = none is usable yet (nothing is sealed, the frame waits).
+   *  Omitted: the highest label held. WHY (review N3, N12): the service names the secret made for exactly the removals it knows. */
+  sealLabel?: (group: string, kind: string) => number | null;
   signKeyFor: (deviceId: Buffer) => Buffer | undefined;
   counter: CounterStore;
   onFrame: (f: LinkFrame) => void | Promise<void>;
@@ -115,6 +122,7 @@ type Waiting =
   | { kind: 'opened'; group: string; seq: number; since: number; fkind: string; from: Buffer; counter: number; body: CborValue };
 const waitingBytes = (w: Waiting): number => (w.kind === 'wire' ? w.wire.length : encode(w.body).length + 64);
 
+class NoSecretYet extends Error {}
 interface Outgoing { group: string; kind: string; body: CborValue; to?: Buffer; line?: boolean; resolve: (r: { counter: number }) => void; reject: (e: Error) => void; sealed?: { wire: Buffer; counter: number } }
 
 const WAITABLE = new Set(['unknown-signer', 'unknown-generation']);
@@ -184,7 +192,17 @@ export class Link {
       void this.flush();
     });
   }
-  private currentGen(): number {
+  /** Call when a generation arrived or the roster changed: frames that were waiting for a usable secret are sealed and sent. */
+  kick(): void {
+    void this.flush();
+  }
+  private currentGen(head?: Outgoing): number {
+    if (this.#o.sealLabel && head) {
+      const l = this.#o.sealLabel(head.group, head.kind);
+      if (l === null) throw new NoSecretYet();
+      if (!this.#o.secrets().has(l)) throw new NoSecretYet();
+      return l;
+    }
     let g = -1;
     for (const k of this.#o.secrets().keys()) g = Math.max(g, k);
     if (g < 0) throw new MeshCryptoError('unknown-generation', 'no set secret');
@@ -199,7 +217,7 @@ export class Link {
         const head = this.#outbox[0];
         try {
           if (!head.sealed) {
-            const gen = this.currentGen();
+            const gen = this.currentGen(head);
             const secret = this.#o.secrets().get(gen) as Buffer;
             const wire = this.#sender.seal({ secret, gen, group: head.group, kind: head.kind, body: head.body, to: head.to ?? null });
             head.sealed = { wire, counter: this.#sender.framesSealed - 1 };
@@ -209,6 +227,7 @@ export class Link {
           this.#outbox.shift();
           head.resolve({ counter: head.sealed.counter });
         } catch (e) {
+          if (e instanceof NoSecretYet) return; // no usable secret yet: kick() resumes when one arrives
           if (e instanceof MeshCryptoError) { this.#outbox.shift(); head.reject(e); continue; } // cannot seal: not retryable
           this.log('send-retry'); // carrier trouble (offline, timeout): keep the same sealed bytes and try again
           // A reconnect also triggers a flush; the timer covers a hiccup on a connection that stays up.
@@ -275,7 +294,8 @@ export class Link {
         // The relay released frames this device had not collected (it was away more than the relay's keep time).
         // WHY the jump is bounded and only soft (finding 7): `through` is the relay's word; 9e15 once froze a device for good.
         const through = res.gap.through;
-        if (!Number.isSafeInteger(through) || through <= cursor || through - cursor > MAX_POSITION_JUMP) { this.hostile(group, 'bad-gap'); return; }
+        // A far jump is not refused (an honest relay can have released a long run): it only moves the SESSION position, never the saved one (review N9).
+        if (!Number.isSafeInteger(through) || through <= cursor) { this.hostile(group, 'bad-gap'); return; }
         this.#soft.set(group, through);
         this.log('gap', { group, through });
         this.#o.onEvent?.('gap', { group });
@@ -283,7 +303,7 @@ export class Link {
       }
       let prev = cursor;
       for (const f of res.frames) {
-        if (!Number.isSafeInteger(f.seq) || f.seq <= prev || f.seq - prev > MAX_POSITION_JUMP) { this.hostile(group, 'bad-seq'); return; }
+        if (!Number.isSafeInteger(f.seq) || f.seq <= prev) { this.hostile(group, 'bad-seq'); return; }
         prev = f.seq;
       }
       let committed = this.#cursors.get(group) ?? 0;
@@ -291,9 +311,13 @@ export class Link {
       for (const f of res.frames) {
         const verdict = await this.handle(group, f.seq, f.bytes);
         if (verdict === 'blocked') { blocked = true; break; }
-        this.#soft.set(group, f.seq);
+        // A frame far past the position that did NOT verify (a lying relay's junk) must not drag even the session position along.
+        const far = f.seq - (this.#cursors.get(group) ?? 0) > MAX_POSITION_JUMP;
+        if (!(far && verdict === 'soft')) this.#soft.set(group, f.seq);
         // Only frames this device verified (or parked, which it now holds) move the committed position.
-        if (verdict === 'verified' || verdict === 'waited') committed = Math.max(committed, f.seq);
+        // WHY the bound on SAVING (review 7 kept, N9 fixed): a verified frame far ahead is delivered but cannot drag the saved position past what
+        // a lying relay could have invented; the next connection reads it again and replay protection keeps it from being applied twice.
+        if ((verdict === 'verified' || verdict === 'waited') && f.seq - (this.#cursors.get(group) ?? 0) <= MAX_POSITION_JUMP) committed = Math.max(committed, f.seq);
       }
       const advanced = committed !== (this.#cursors.get(group) ?? 0);
       if (advanced || this.#dirty) {
@@ -331,14 +355,31 @@ export class Link {
     this.log('frame-rejected', { group, reason, from });
     this.#o.onEvent?.('rejected', { group });
   }
+  private senderOf(w: Waiting): string {
+    return w.kind === 'wire' ? this.prefixOf(w.wire) : w.from.toString('hex').slice(0, 8);
+  }
   private park(w: Waiting): void {
     this.#waiting.push(w);
     this.#dirty = true;
-    let bytes = this.#waiting.reduce((n, x) => n + waitingBytes(x), 0);
-    while (this.#waiting.length > MAX_WAITING || bytes > MAX_WAITING_BYTES) {
-      const old = this.#waiting.shift() as Waiting;
-      bytes -= waitingBytes(old);
-      this.reject(old.group, old.seq, old.kind === 'wire' ? 'unknown' : old.from.toString('hex').slice(0, 8), 'wait-overflow');
+    const who = this.senderOf(w);
+    const evict = (victim: Waiting): void => {
+      this.#waiting = this.#waiting.filter((x) => x !== victim);
+      this.reject(victim.group, victim.seq, this.senderOf(victim), 'wait-overflow');
+    };
+    // 1. one sender over ITS allowance loses its own oldest
+    for (;;) {
+      const mine = this.#waiting.filter((x) => this.senderOf(x) === who);
+      if (mine.length <= MAX_WAITING_PER_SENDER && mine.reduce((n, x) => n + waitingBytes(x), 0) <= MAX_WAITING_BYTES_PER_SENDER) break;
+      evict(mine[0]);
+    }
+    // 2. the whole list over its bound: the sender holding the most loses its oldest (a sender within a small share is never the victim)
+    for (;;) {
+      const bytes = this.#waiting.reduce((n, x) => n + waitingBytes(x), 0);
+      if (this.#waiting.length <= MAX_WAITING && bytes <= MAX_WAITING_BYTES) break;
+      const counts = new Map<string, number>();
+      for (const x of this.#waiting) counts.set(this.senderOf(x), (counts.get(this.senderOf(x)) ?? 0) + 1);
+      const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      evict(this.#waiting.find((x) => this.senderOf(x) === top) as Waiting);
     }
     this.log('frame-waiting', { group: w.group });
   }

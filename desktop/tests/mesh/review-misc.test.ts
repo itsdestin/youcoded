@@ -60,28 +60,35 @@ describe('one damaged length in the middle of roster.log must not silently delet
 });
 
 describe('limits on entries that arrive from the network', () => {
-  it('more than REMOTE_ENTRIES_PER_HOUR from one signer: refused, the signer is flagged, and nothing more of it is examined', async () => {
+  it('the hourly allowance belongs to the member that DELIVERS entries and is spent only by entries really signed by members: junk naming someone else costs them nothing', async () => {
     let t = 1_000_000;
     const d = tmp();
     const s = new RosterStore(d, () => t);
     await s.load();
     const g = makeGenesisEntry(A, 'A', 'linux', 1);
     await s.append(g);
-    let prev = makeAddEntry(A, info(B, 'B'), [g.id], 2);
-    await s.append(prev);
+    const addB = makeAddEntry(A, info(B, 'B'), [g.id], 2);
+    await s.append(addB);
+    // 100 forged entries that name A, delivered by D: they fail the signature check and are not counted against anyone
+    for (let i = 0; i < 100; i++) await s.append({ ...g, id: Buffer.alloc(32, i + 1), device: A.deviceId, seen: [g.id], signature: Buffer.alloc(64, 1) } as SignedEntry, { remote: true, from: 'dd-junk' }).catch(() => undefined);
+    expect(s.flagged.has('dd-junk')).toBe(false);
+    // real entries (each citing the introductions, so a refused one never strands the next) from two members, 605 in all, all handed over by ONE deliverer: the last 5 are refused and only the deliverer is flagged
     const log: SignedEntry[] = [];
-    for (let i = 0; i < REMOTE_ENTRIES_PER_HOUR + 5; i++) { prev = makeRenameEntry(B, 'x' + i, [prev.id], 3 + i); log.push(prev); }
+    let pa = addB, pb = addB;
+    for (let i = 0; i < 300; i++) { pa = makeRenameEntry(A, 'a' + i, [g.id, addB.id], 3 + i); log.push(pa); }
+    for (let i = 0; i < 305; i++) { pb = makeRenameEntry(B, 'b' + i, [addB.id], 3 + i); log.push(pb); }
     let rejected = 0;
     for (const e of log) {
-      try { await s.append(e, { remote: true }); } catch (err) { if (err instanceof MeshRosterRejected) rejected++; else throw err; }
+      try { await s.append(e, { remote: true, from: 'dd' }); } catch (err) { if (err instanceof MeshRosterRejected) rejected++; else throw err; }
     }
     expect(rejected).toBe(5);
-    expect(s.flagged.has(B.deviceId.toString('hex'))).toBe(true);
-    expect(s.countOf(B.deviceId.toString('hex'))).toBe(REMOTE_ENTRIES_PER_HOUR);
-    // an hour later it is still flagged (a flooder is not forgiven by waiting), and a member that was never flagged is unaffected
+    expect(s.flagged.has('dd')).toBe(true);
+    expect(s.flagged.has(A.deviceId.toString('hex'))).toBe(false);
+    expect(s.flagged.has(B.deviceId.toString('hex'))).toBe(false);
+    // the same entries still arrive from another member (and, by anti-entropy, are not lost)
     t += 3_700_000;
-    await expect(s.append(makeRenameEntry(B, 'later', [prev.id], 999), { remote: true })).rejects.toMatchObject({ why: 'flagged' });
-    expect(await s.append(makeRenameEntry(A, 'fine', [g.id, prev.id].slice(0, 1), 5), { remote: true }).catch(() => 'rejected')).toBeDefined();
+    await expect(s.append(makeRenameEntry(A, 'later', [g.id, addB.id], 999), { remote: true, from: 'dd' })).rejects.toMatchObject({ why: 'flagged' });
+    expect(await s.append(makeRenameEntry(A, 'later', [g.id, addB.id], 999), { remote: true, from: 'other' })).toBe('appended');
   });
   it('removedIds, signKeyFor and activeDevices stay correct without rebuilding from the log (and the removed device\'s key is refused)', async () => {
     const d = tmp();
@@ -97,7 +104,7 @@ describe('limits on entries that arrive from the network', () => {
     expect(s.signKeyFor(B.deviceId)).toBeUndefined();
     expect(s.isRemoved(B.deviceId)).toBe(true);
     expect(s.activeDevices().map((x) => x.deviceId.toString('hex'))).toEqual([A.deviceId.toString('hex')]);
-    expect(s.removalCount()).toBe(1);
+    expect(s.removalIdsOf(B.deviceId.toString('hex')).length).toBe(1);
   });
 });
 

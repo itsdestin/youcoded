@@ -17,7 +17,7 @@ import path from 'path';
 import { toHex, sha256, ctEqual, type Bytes } from './crypto/bytes';
 import { MeshCryptoError } from './crypto/errors';
 import { deviceIdFor } from './crypto/identity';
-import { MAX_ENTRIES_PER_DEVICE, RosterVerifier, verifyRosterLog, encodeEntry, parseEntry, rosterHeads, type SignedEntry, type VerifiedRoster, type RosterDevice } from './crypto/roster';
+import { DEFAULT_MUTUAL_RULE, RosterVerifier, type MutualRule, verifyRosterLog, encodeEntry, parseEntry, rosterHeads, type SignedEntry, type VerifiedRoster, type RosterDevice } from './crypto/roster';
 import { ensureDir, readFileIfExists, syncDir } from './fs-durable';
 
 export class MeshRosterCorrupt extends Error {
@@ -28,17 +28,17 @@ export class MeshRosterCorrupt extends Error {
 }
 export type AppendResult = 'appended' | 'duplicate';
 
-/** An entry refused because of HOW MANY a device has written or how fast they arrive, not because it is malformed (finding 4).
- *  'flagged' means its signer was already judged a flooder and nothing it sends is looked at any more. */
+/** An entry refused because of HOW FAST one DELIVERING member is handing them over (never because of whose name is on the entry:
+ *  review N2). Only entries whose signature has already verified are counted, so unsigned junk can never use up anyone's allowance. */
 export class MeshRosterRejected extends Error {
-  constructor(readonly why: 'rate' | 'quota' | 'flagged', readonly signer: string) {
+  constructor(readonly why: 'rate' | 'flagged', readonly signer: string) {
     super(`mesh roster entry rejected: ${why}`);
     this.name = 'MeshRosterRejected';
   }
 }
-/** Entries one device may deliver per rolling hour (by arrival time here, not by the `at` it wrote, which it controls). The relay allows
- *  30 an hour per device, so an honest device is never near this; a flooding member crosses it within seconds and is flagged. */
-export const REMOTE_ENTRIES_PER_HOUR = 60;
+/** New, signature-checked entries one delivering member may hand over per rolling hour. An honest catch-up is far below this (a device
+ *  writes a handful of entries a year); a hostile member is bounded by its own per-device quota of 512 anyway. */
+export const REMOTE_ENTRIES_PER_HOUR = 600;
 const HOUR_MS = 3_600_000;
 
 const MAX_RECORD = 1 << 20; // far above any entry; stops a damaged length field from allocating gigabytes
@@ -55,7 +55,7 @@ export class RosterStore {
   #entries: SignedEntry[] = [];
   #v: RosterVerifier | null = null;
   readonly #arrivals = new Map<string, number[]>();
-  /** Signers judged flooders: their entries are no longer examined. In memory on purpose: a restart gives a returning device a fresh look. */
+  /** Delivering members judged to be flooding: what THEY hand over is not examined any more (entries come from others as before). In memory on purpose. */
   readonly flagged = new Set<string>();
   #ids = new Set<string>();
   readonly #byId = new Map<string, SignedEntry>();
@@ -63,12 +63,19 @@ export class RosterStore {
   #opened = false;
   /** Bytes of a torn last record trimmed at load (0 on a clean file). Diagnostic and test evidence only. */
   repairedTailBytes = 0;
-  constructor(meshDir: string, private readonly now: () => number = Date.now) {
+  readonly #memory: boolean;
+  /** `opts.memory`: keep everything in memory, touch no file (the convergence fuzz and nothing else: it runs thousands of schedules). */
+  constructor(meshDir: string, private readonly now: () => number = Date.now, opts: { memory?: boolean; mutual?: MutualRule } = {}) {
     this.file = path.join(meshDir, 'roster.log');
+    this.#memory = opts.memory === true;
+    this.#mutual = opts.mutual ?? DEFAULT_MUTUAL_RULE;
+    if (this.#memory) this.#opened = true;
   }
+  readonly #mutual: MutualRule;
 
   /** Read and verify the log. Creates nothing when the file is absent. Trims a torn last record. */
   async load(): Promise<void> {
+    if (this.#memory) return;
     const raw = await readFileIfExists(this.file);
     const entries: SignedEntry[] = [];
     let good = 0;
@@ -108,7 +115,7 @@ export class RosterStore {
     }
     if (entries.length > 0) {
       try {
-        this.#v = verifyRosterLog(entries);
+        this.#v = verifyRosterLog(entries, this.#mutual);
       } catch (e) {
         if (e instanceof MeshCryptoError) throw new MeshRosterCorrupt('log-invalid');
         throw e;
@@ -163,17 +170,16 @@ export class RosterStore {
     }
     return undefined;
   }
-  /** Removal entries in the log. */
-  removalCount(): number {
-    let n = 0;
-    for (const e of this.#entries) if (e.kind === 'remove') n++;
-    return n;
+  /** Devices (hex) that have signed an entry of their own: pairing completed. Active devices not in this set are "pending". */
+  confirmedIds(): Set<string> {
+    return new Set(this.#v?.confirmed ?? []);
   }
-  /** How many removals are in the causal past of `id`, itself included: the number that decides which set-secret generation `id`'s bundle may carry. */
-  removalsUpTo(id: Bytes): number {
-    let n = 0;
-    for (const e of this.#entries) if (e.kind === 'remove' && (e.id.equals(id) || (this.#v?.happenedBefore(e.id, id) ?? false))) n++;
-    return n;
+  /** Effective removal entries (hex ids) of a device. */
+  removalIdsOf(deviceHex: string): string[] {
+    return this.#v?.removalsOf(deviceHex) ?? [];
+  }
+  voidedIds(): Set<string> {
+    return new Set(this.#v?.voided ?? []);
   }
   heads(): Buffer[] {
     return rosterHeads(this.#entries);
@@ -181,7 +187,7 @@ export class RosterStore {
   /** Devices that were ever added and have not been removed by an entry in this log. */
   activeDevices(): RosterDevice[] {
     if (!this.#v) return [];
-    return [...this.#v.devices.entries()].filter(([id]) => !this.#v!.removed.has(id)).map(([, d]) => d);
+    return this.#v.active();
   }
   removedIds(): Set<string> {
     return new Set(this.#v?.removed ?? []);
@@ -206,28 +212,31 @@ export class RosterStore {
    * Verify then durably append. Throws MeshCryptoError (bad-roster / bad-entry) for an entry that does not fit
    * the log; nothing is written in that case. Resolves 'duplicate' for an entry already held (idempotent).
    */
-  append(entry: SignedEntry, opts: { remote?: boolean } = {}): Promise<AppendResult> {
+  append(entry: SignedEntry, opts: { remote?: boolean; from?: string } = {}): Promise<AppendResult> {
     const run = async (): Promise<AppendResult> => {
       if (!this.#opened) throw new Error('RosterStore.load() must run first');
       if (this.#ids.has(toHex(entry.id))) return 'duplicate';
-      const signer = toHex(entry.device);
-      if (opts.remote) this.limitRemote(signer); // finding 4: a flooder is refused BEFORE any signature is checked
-      // Incremental (finding 4): prepare() checks this one entry against the state built so far; commit() applies it after the
-      // record is on disk, so memory never gets ahead of the file. A throw leaves both untouched.
-      const v = this.#v ?? new RosterVerifier();
+      // prepare() checks one entry (its signature against the key of an `add` we hold, its place in the log); commit() adds it to the set
+      // after the record is on disk, so memory never gets ahead of the file. A throw leaves both untouched.
+      const v = this.#v ?? new RosterVerifier(this.#mutual);
       const commit = v.prepare(entry);
-      const bytes = frame(entry);
-      await ensureDir(path.dirname(this.file));
-      const fresh = this.#entries.length === 0 && !(await fs.promises.stat(this.file).then(() => true, () => false));
-      // WHY O_NOFOLLOW (review 15): the log is opened for append and would otherwise follow a symlink planted in the profile.
-      const h = await fs.promises.open(this.file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
-      try {
-        await h.write(bytes);
-        await h.datasync(); // the acknowledgement below means "on disk"
-      } finally {
-        await h.close();
+      // WHY here, after the signature checked (review N2): the allowance belongs to the member that DELIVERED the entry and is spent only by
+      // entries that are really signed by a member, so junk naming someone else's id costs that someone nothing.
+      if (opts.remote && opts.from) this.chargeDeliverer(opts.from);
+      if (!this.#memory) {
+        const bytes = frame(entry);
+        await ensureDir(path.dirname(this.file));
+        const fresh = this.#entries.length === 0 && !(await fs.promises.stat(this.file).then(() => true, () => false));
+        // WHY O_NOFOLLOW (review 15): the log is opened for append and would otherwise follow a symlink planted in the profile.
+        const h = await fs.promises.open(this.file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+        try {
+          await h.write(bytes);
+          await h.datasync(); // the acknowledgement below means "on disk"
+        } finally {
+          await h.close();
+        }
+        if (fresh) await syncDir(path.dirname(this.file)); // a brand-new file's directory entry must survive too
       }
-      if (fresh) await syncDir(path.dirname(this.file)); // a brand-new file's directory entry must survive too
       commit();
       this.#v = v;
       this.#entries = [...this.#entries, entry];
@@ -240,20 +249,15 @@ export class RosterStore {
     return p;
   }
 
-  /** Quota and arrival-rate checks for an entry that came from the network. Counts the arrival; throws MeshRosterRejected. */
-  private limitRemote(signer: string): void {
-    if (this.flagged.has(signer)) throw new MeshRosterRejected('flagged', signer);
-    if (this.countOf(signer) >= MAX_ENTRIES_PER_DEVICE) {
-      this.flagged.add(signer);
-      throw new MeshRosterRejected('quota', signer);
-    }
+  private chargeDeliverer(from: string): void {
+    if (this.flagged.has(from)) throw new MeshRosterRejected('flagged', from);
     const t = this.now();
-    const list = (this.#arrivals.get(signer) ?? []).filter((x) => t - x < HOUR_MS);
+    const list = (this.#arrivals.get(from) ?? []).filter((x) => t - x < HOUR_MS);
     list.push(t);
-    this.#arrivals.set(signer, list);
+    this.#arrivals.set(from, list);
     if (list.length > REMOTE_ENTRIES_PER_HOUR) {
-      this.flagged.add(signer);
-      throw new MeshRosterRejected('rate', signer);
+      this.flagged.add(from);
+      throw new MeshRosterRejected('rate', from);
     }
   }
 }

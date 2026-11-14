@@ -14,7 +14,7 @@ let relay: FakeRelay;
 afterEach(async () => { while (live.length) await live.pop()!.stop(); await relay?.close(); });
 const logs: string[] = [];
 const mk = async (name: string): Promise<MeshService> => {
-  const s = new MeshService({ userData: tmp(`rp-${name}-`), sealer: insecureTestSealer({ testMode: true }), testMode: true, relayUrl: relay.url, deviceName: name, platform: 'linux', log: (e, f) => logs.push(`${e} ${JSON.stringify(f ?? {})}`), relayBaseDelayMs: 20 });
+  const s = new MeshService({ userData: tmp(`rp-${name}-`), sealer: insecureTestSealer({ testMode: true }), testMode: true, relayUrl: relay.url, deviceName: name, platform: 'linux', log: (e, f) => logs.push(`${e} ${JSON.stringify(f ?? {})}`), relayBaseDelayMs: 20, genTakeoverMs: 150, headsEveryMs: 1000 });
   await s.start();
   live.push(s);
   return s;
