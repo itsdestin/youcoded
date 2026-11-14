@@ -2,7 +2,7 @@
 //  1. a tool result was not sized to the room left in the window,
 //  2. the compaction check accepted a junk "summary" (bare tool-call markup),
 //  3. the pre-check's "cannot fit" error and the engine's refusal reached the user as different errors.
-// Investigation: workspace docs/active/investigations/2026-11-08-local-model-speed-and-context-faults.md
+// Investigation: workspace docs/archive/investigations/2026-11-08-local-model-speed-and-context-faults.md
 import { describe, it, expect } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
 import { makeSession, scriptModel, fakeTool } from './helpers/harness-fakes';
