@@ -12,7 +12,7 @@ import { PageHost } from '../../src/renderer/components/pages/PageHost';
 import { OfficeView } from '../../src/renderer/components/office/OfficeView';
 import { EditorFrame, type EditorFrameHandle } from '../../src/renderer/components/office/EditorFrame';
 import { useUnsavedGuard } from '../../src/renderer/components/artifact-views/UnsavedChangesDialog';
-import { markCopied, markFailed, officeDocFor, openDoc, resetOfficeStoreForTests, saveStateFor } from '../../src/renderer/components/office/office-store';
+import { HOME_TAB, markCopied, markFailed, officeDocFor, openDoc, resetOfficeStoreForTests, saveStateFor, selectTab } from '../../src/renderer/components/office/office-store';
 import { resetOfficeAvailabilityForTests } from '../../src/renderer/components/office/office-availability';
 import { OFFICE_PAGE_ID, OFFICE_PAGE_SUMMARY } from '../../src/shared/pages-types';
 import type { OfficeBridge, OfficeFile, OfficeStatus } from '../../src/shared/office-types';
@@ -92,7 +92,8 @@ describe('an Office editor is not torn down with unsaved work', () => {
   it('keeps the editor when a status re-fetch fails', async () => {
     let fail = false;
     const office = withOffice({ status: vi.fn(async () => { if (fail) throw new Error('boom'); return READY; }) });
-    act(() => openDoc(FILE));
+    // On Home with the document open in a tab behind it: Recent is only asked for while Home shows.
+    act(() => { openDoc(FILE); selectTab(HOME_TAB); });
     const { container, rerender } = render(<OfficeView projectRoot="/a" />);
     await waitFor(() => expect(frameOf(container)).not.toBeNull());
     const before = frameOf(container);

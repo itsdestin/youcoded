@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, renderHook, waitFor } from '@testing-l
 import { OfficeView } from '../../src/renderer/components/office/OfficeView';
 import { officeHeaderAction, useOfficeHeaderAction } from '../../src/renderer/components/office/use-office-edit-screen';
 import { resetOfficeAvailabilityForTests, useOfficeAvailable } from '../../src/renderer/components/office/office-availability';
-import { markFailed, openDoc, resetOfficeStoreForTests } from '../../src/renderer/components/office/office-store';
+import { HOME_TAB, markFailed, openDoc, resetOfficeStoreForTests, selectTab } from '../../src/renderer/components/office/office-store';
 import { usePages } from '../../src/renderer/components/pages/use-pages';
 import { ActiveArtifactView, type ActiveArtifactHandle } from '../../src/renderer/components/artifact-views/ActiveArtifactView';
 import { OFFICE_PAGE_SUMMARY } from '../../src/shared/pages-types';
@@ -63,6 +63,25 @@ describe('the Office page', () => {
     status.mockResolvedValueOnce({ ...READY, recent: [FILE] });
     rerender(<OfficeView visible />);
     expect(await findByText('plan.docx')).toBeTruthy();
+    expect(status).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks for Recent again when the Home tab comes back from a document tab', async () => {
+    const status = vi.fn(async () => READY);
+    withOffice({
+      status,
+      open: async () => ({ ok: true as const, token: 't1', origin: 'office://t1' }),
+      invoke: async () => null,
+      close: async () => {},
+    });
+    const { findByText } = render(<OfficeView visible />);
+    await findByText('Files you open in Office will show up here.');
+    expect(status).toHaveBeenCalledTimes(1);
+    // The page never hides here — only its tab changes — so `visible` alone would miss this.
+    act(() => openDoc(FILE));
+    status.mockResolvedValueOnce({ ...READY, recent: [FILE] });
+    act(() => selectTab(HOME_TAB));
+    expect(await findByText('plan')).toBeTruthy();
     expect(status).toHaveBeenCalledTimes(2);
   });
 
