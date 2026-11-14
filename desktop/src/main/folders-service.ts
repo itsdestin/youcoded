@@ -13,7 +13,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { readFolders, writeFolders, homeIsAppPrivate, withoutPrivateHome, pathKey, type SavedFolder } from './saved-folders';
-import { folderUsage, noteProjectUsed, loadFolderUsage } from './folder-usage';
+import { folderUsage, noteProjectUsed } from './folder-usage';
 import { getManagedRoots, isRemovedProject } from './sync-spaces/service';
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 
@@ -155,10 +155,4 @@ export function setFolderDescription(folderPath: string, description: string, fi
   entry.description = String(description ?? '').trim().slice(0, PROJECT_DESCRIPTION_MAX) || null;
   writeFolders(folders, file);
   return true;
-}
-
-/** The folder list is asked for through here by the handler, so the usage stamps are loaded (async) before the sync list reads them. */
-export async function listPickerFoldersReady(file?: string): Promise<PickerFolder[]> {
-  await loadFolderUsage(file);
-  return listPickerFolders(file);
 }
