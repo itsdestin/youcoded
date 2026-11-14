@@ -9,7 +9,7 @@ afterEach(cleanup);
 const noop = () => {};
 describe('toast layout', () => {
   it('the global toast wraps its buttons beneath the words, right-aligned', () => {
-    const { container } = render(<Toast message="a long notice" actions={[{ label: 'Show old copy', onClick: noop }]} onDismiss={noop} durationMs={null} />);
+    const { container } = render(<Toast message="a long notice" actions={[{ label: 'Show file', onClick: noop }]} onDismiss={noop} durationMs={null} />);
     const root = container.querySelector('[role="status"]') as HTMLElement;
     expect(root.className).toContain('flex-wrap');
     expect(root.querySelector('button')!.closest('span')!.className).toContain('ml-auto');
