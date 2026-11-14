@@ -1119,6 +1119,19 @@ describe('first save without a conflict token', () => {
       expect(utils.getByText(/changed on disk while you were editing/i)).toBeTruthy();
     });
 
+    // Card #134 round 4: a save that REJECTS used to do nothing (editor open, no banner).
+    it('a save that rejects shows the Save failed banner with the real reason, keeps the editor open and the draft', async () => {
+      get.mockResolvedValue({ ok: true, content: 'hello', orphan: false, mtimeMs: 77 });
+      save.mockRejectedValue(new Error('EACCES: permission denied'));
+      const { ref, utils } = mountView();
+      await act(async () => { ref.current!.startEdit(); });
+      let ok: boolean | undefined;
+      await act(async () => { ok = await ref.current!.saveEdit(); });
+      expect(ok).toBe(false);
+      expect(utils.getByText(/Save failed: .*permission denied/i)).toBeTruthy();
+      expect(ref.current!.editing).toBe(true);
+    });
+
     it('when the check itself fails, refuses to save and says the check could not be made', async () => {
       get.mockRejectedValue(new Error('bridge closed'));
       const { ref, utils } = mountView();
