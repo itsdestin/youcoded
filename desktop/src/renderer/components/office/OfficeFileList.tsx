@@ -13,7 +13,7 @@ import { ContextMenu } from '../context-menu/ContextMenu';
 import type { MenuEntry } from '../context-menu/build-menu';
 import { MenuIcon } from '../context-menu/menu-icons';
 import { genRefId } from '../context-menu/compose-ref';
-import { TextInput, Tooltip } from '../ui';
+import { Button, Dialog, ErrorState, OneJobCard, OneJobHint, OneJobLabel, TextInput, Tooltip } from '../ui';
 import { OfficeKindGlyph } from './office-icons';
 
 /** What a row's actions do. One object for every row (OfficeHome keeps it stable), so a memoised
@@ -65,12 +65,25 @@ function menuFor(f: OfficeFile, actions: OfficeRowActions, startRename: () => vo
 }
 
 // WHY a fill step on hover, not only a colour nudge (design guide §2.4 "Hover, press and focus").
-// opacity-0 until the row is pointed at or a button in it has focus; `touch-reveal` keeps them on
-// screen on touch, where there is no hover (narrow-viewport rule).
 const ROW_BUTTON =
   'shrink-0 w-7 h-7 rounded-md inline-flex items-center justify-center text-fg-muted hover:text-fg hover:bg-well active:bg-edge ' +
-  'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent coarse-hit cursor-pointer ' +
-  'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 touch-reveal transition-opacity';
+  'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent coarse-hit cursor-pointer';
+
+// WHY one right-hand slot shared by the time and the buttons (Destin, review 1 R-2: "fully right
+// aligned and replace the changed/opened … text while on hover", with a polished fade): the time
+// fades out as the buttons fade and slide in, in the same place, so the row never reflows. Only
+// opacity and transform move (performance rule 6); motion-reduce keeps the swap but drops the
+// slide. On touch (no hover) the buttons stay and the time gives way to them (narrow-viewport rule).
+const SLOT_FADE = 'transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none';
+const TIME_CLASS =
+  `absolute inset-y-0 right-0 flex items-center whitespace-nowrap text-2xs text-fg-muted ${SLOT_FADE} ` +
+  'group-hover:opacity-0 group-focus-within:opacity-0 pointer-coarse:opacity-0';
+const BUTTONS_CLASS =
+  `absolute inset-y-0 right-0 flex items-center gap-0.5 ${SLOT_FADE} ` +
+  'opacity-0 translate-x-1 pointer-events-none ' +
+  'group-hover:opacity-100 group-hover:translate-x-0 group-hover:pointer-events-auto ' +
+  'group-focus-within:opacity-100 group-focus-within:translate-x-0 group-focus-within:pointer-events-auto ' +
+  'pointer-coarse:opacity-100 pointer-coarse:translate-x-0 pointer-coarse:pointer-events-auto motion-reduce:translate-x-0';
 
 function MoreGlyph() {
   return (
@@ -92,12 +105,12 @@ function RowButton({ label, onClick, children, ...rest }: { label: string; onCli
 
 export const OfficeFileRow = memo(function OfficeFileRow({ f, verb, when, actions, startRenaming = false, startMenu = false, pointed = false }: {
   f: OfficeFile; verb: string; when: string; actions: OfficeRowActions;
-  /** Photo-only: the row opens already renaming (shoot's `office/home#rename`). */
+  /** Photo-only: the rename popup opens over this row (shoot's `office/rename`). */
   startRenaming?: boolean;
   /** Photo-only: the row opens with its menu showing (shoot's `office/home#menu`). */
   startMenu?: boolean;
   /** Photo-only: the row drawn as it is under the pointer (shoot's `office/home#hover`) — a still
-   *  picture cannot hover. The same classes hover gives, nothing more. */
+   *  picture cannot hover. The same look hover gives, nothing more. */
   pointed?: boolean;
 }) {
   const [renaming, setRenaming] = useState(startRenaming);
@@ -112,95 +125,94 @@ export const OfficeFileRow = memo(function OfficeFileRow({ f, verb, when, action
   }, [startMenu]);
 
   return (
-    <div
-      ref={rowRef}
-      role="button"
-      tabIndex={0}
-      aria-label={f.name}
-      onClick={() => { if (!renaming) actions.open(f); }}
-      onKeyDown={(e) => {
-        if (renaming || e.target !== e.currentTarget) return;
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); actions.open(f); }
-        // The keyboard way to the menu (and the rename shortcut every file manager has).
-        if (e.key === 'F2') { e.preventDefault(); setRenaming(true); }
-        if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
-          e.preventDefault();
-          const r = e.currentTarget.getBoundingClientRect();
-          openMenuAt(r.left + 40, r.bottom - 4);
-        }
-      }}
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); if (!renaming) openMenuAt(e.clientX, e.clientY); }}
-      className={`group flex items-center gap-3 min-h-11 px-2 rounded-md cursor-pointer text-left hover:bg-inset active:bg-edge focus:outline-none focus-visible:ring-2 focus-visible:ring-accent select-none ${pointed ? 'bg-inset' : ''}`}
-    >
-      <OfficeKindGlyph kind={f.kind} className="w-4 h-4 shrink-0 text-fg-2" />
-      <div className="min-w-0 flex-1 py-1">
-        {renaming
-          ? <RenameField f={f} actions={actions} onDone={() => { setRenaming(false); rowRef.current?.focus(); }} />
-          : <div className="text-sm text-fg truncate">{f.name}</div>}
-        <div className="text-2xs text-fg-muted truncate">{f.folder}</div>
-      </div>
-      {!renaming && (
-        <div className={`flex items-center gap-0.5 shrink-0 ${pointed ? '[&_button]:opacity-100' : ''}`}>
-          <RowButton label="Ask about this" onClick={() => askAbout(f)}><MenuIcon name="ask" /></RowButton>
-          <RowButton label="Rename" onClick={() => setRenaming(true)}><MenuIcon name="rename" /></RowButton>
-          {inOs && <RowButton label="View in folder" onClick={() => viewInFolder(f)}><MenuIcon name="folder" /></RowButton>}
-          <RowButton label="More" aria-haspopup="menu" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); openMenuAt(r.left, r.bottom + 4); }}><MoreGlyph /></RowButton>
+    <>
+      <div
+        ref={rowRef}
+        role="button"
+        tabIndex={0}
+        aria-label={f.name}
+        onClick={() => actions.open(f)}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); actions.open(f); }
+          // The keyboard way to the menu (and the rename shortcut every file manager has).
+          if (e.key === 'F2') { e.preventDefault(); setRenaming(true); }
+          if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+            e.preventDefault();
+            const r = e.currentTarget.getBoundingClientRect();
+            openMenuAt(r.left + 40, r.bottom - 4);
+          }
+        }}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); openMenuAt(e.clientX, e.clientY); }}
+        className={`group flex items-center gap-3 h-11 px-2 rounded-md cursor-pointer text-left hover:bg-inset active:bg-edge focus:outline-none focus-visible:ring-2 focus-visible:ring-accent select-none ${pointed ? 'bg-inset' : ''}`}
+      >
+        <OfficeKindGlyph kind={f.kind} className="w-4 h-4 shrink-0 text-fg-2" />
+        <div className="min-w-0 flex-1">
+          <div className="text-sm text-fg truncate">{f.name}</div>
+          <div className="text-2xs text-fg-muted truncate">{f.folder}</div>
         </div>
-      )}
-      {/* Says WHICH time it is: Recent shows when you opened it, the project list when it changed (U3). */}
-      {!renaming && <span className="shrink-0 w-28 text-right text-2xs text-fg-muted">{verb} {when}</span>}
+        {/* The time and the buttons share this one slot, right-aligned (see SLOT_FADE). */}
+        <div className="relative shrink-0 w-32 h-7">
+          {/* Says WHICH time it is: Recent shows when you opened it, the project list when it changed (U3). */}
+          <span className={`${TIME_CLASS} ${pointed ? '!opacity-0' : ''}`}>{verb} {when}</span>
+          <div className={`${BUTTONS_CLASS} ${pointed ? '!opacity-100 !translate-x-0' : ''}`}>
+            <RowButton label="Ask about this" onClick={() => askAbout(f)}><MenuIcon name="ask" /></RowButton>
+            <RowButton label="Rename" onClick={() => setRenaming(true)}><MenuIcon name="rename" /></RowButton>
+            {inOs && <RowButton label="View in folder" onClick={() => viewInFolder(f)}><MenuIcon name="folder" /></RowButton>}
+            <RowButton label="More" aria-haspopup="menu" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); openMenuAt(r.left, r.bottom + 4); }}><MoreGlyph /></RowButton>
+          </div>
+        </div>
+      </div>
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} anchor={rowRef.current ?? undefined}
           entries={menuFor(f, actions, () => setRenaming(true))} onClose={() => setMenu(null)} />
       )}
-    </div>
+      {/* WHY outside the row: the popup is portalled, but React still bubbles its clicks up the
+          component tree — inside the row, every click in it would also open the file. */}
+      {renaming && <RenameFileDialog f={f} actions={actions} onClose={() => { setRenaming(false); rowRef.current?.focus(); }} />}
+    </>
   );
 });
 
-/** The name, editable in place (the file drawer's rename): Enter or leaving the box saves, Escape
- *  puts it back. The extension stays as it is — only the name before it is typed. */
-function RenameField({ f, actions, onDone }: { f: OfficeFile; actions: OfficeRowActions; onDone: () => void }) {
+/** Rename, as a session is renamed (Destin, review 1 R-2/R-4: "more like session renaming";
+ *  SessionRenameDialog.tsx): a small popup with the name field, Save over Cancel. Only the name
+ *  before the ending is typed — .docx stays, so the file keeps opening in Office. */
+function RenameFileDialog({ f, actions, onClose }: { f: OfficeFile; actions: OfficeRowActions; onClose: () => void }) {
   const [draft, setDraft] = useState(stem(f.name));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const input = useRef<HTMLInputElement>(null);
-  const done = useRef(false);
-  useEffect(() => { input.current?.focus(); input.current?.select(); }, []);
-  const commit = async () => {
-    if (done.current || saving) return;
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+  const ending = ext(f.name);
+  const save = async () => {
     const next = draft.trim();
-    if (!next || next === stem(f.name)) { done.current = true; onDone(); return; }
-    setSaving(true);
-    const why = await actions.rename(f, `${next}${ext(f.name)}`);
+    if (!next || saving) return;
+    if (next === stem(f.name)) { onClose(); return; }
+    setSaving(true); setError(null);
+    const why = await actions.rename(f, `${next}${ending}`);
+    if (!alive.current) return;
     setSaving(false);
-    // WHY the box stays open on a refusal (file drawer, same rule): the name typed is kept and the
-    // reason shows under it, so a rename never silently does nothing.
-    if (why) { setError(why); input.current?.focus(); return; }
-    done.current = true;
-    onDone();
+    // WHY the popup stays on a refusal: the typed name is kept and the reason shows above it,
+    // so a rename never silently does nothing.
+    if (why) { setError(why); return; }
+    onClose();
   };
   return (
-    // WHY capped: a name box as wide as the row read as a search bar (first picture, 2026-11-14).
-    <div onClick={(e) => e.stopPropagation()} className="max-w-md">
-      <div className="flex items-center gap-1">
-        <TextInput
-          ref={input}
-          size="sm"
-          aria-label={`New name for ${f.name}`}
-          value={draft}
-          disabled={saving}
-          onChange={(e) => { setDraft(e.target.value); setError(null); }}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === 'Enter') { e.preventDefault(); void commit(); }
-            if (e.key === 'Escape') { e.preventDefault(); done.current = true; onDone(); }
-          }}
-          onBlur={() => void commit()}
-          className="flex-1 min-w-0"
-        />
-        <span className="shrink-0 text-sm text-fg-muted">{ext(f.name)}</span>
-      </div>
-      {error && <div role="alert" className="mt-1 text-2xs text-danger">{error}</div>}
-    </div>
+    <Dialog open screen="office/rename" title="Rename file" size="panel" layer={3} onClose={() => { if (!saving) onClose(); }}>
+      {error && <ErrorState message={error} onRetry={() => void save()} variant="inline" />}
+      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+        <OneJobCard actions={<>
+          <Button type="submit" disabled={saving || !draft.trim()}>{saving ? 'Saving…' : 'Save'}</Button>
+          <Button variant="secondary" type="button" disabled={saving} onClick={onClose}>Cancel</Button>
+        </>}>
+          <div>
+            <OneJobLabel htmlFor="office-file-name">File name</OneJobLabel>
+            <TextInput id="office-file-name" value={draft} disabled={saving} onChange={(e) => { setDraft(e.target.value); setError(null); }}
+              autoFocus onFocus={(e) => e.currentTarget.select()} maxLength={200} className="w-full" />
+            {ending && <OneJobHint>Keeps its {ending} ending, so it still opens in Office.</OneJobHint>}
+          </div>
+        </OneJobCard>
+      </form>
+    </Dialog>
   );
 }

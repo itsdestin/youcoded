@@ -106,7 +106,7 @@ export const PAGES: readonly ScreenEntry[] = [
   // Home's row actions, search and "Show all" (card #143, design stage): the first Recent row's
   // menu open, the first row renaming, a search typed, and the project list shown in full.
   { ...pg('office/home#menu', 'view', 'office'), params: { officeHome: 'menu' } },
-  { ...pg('office/home#rename', 'view', 'office'), params: { officeHome: 'rename' } },
+  { ...pg('office/rename', 'dialog', 'office'), params: { officeHome: 'rename' } },
   { ...pg('office/home#search', 'view', 'office'), params: { officeHome: 'search' } },
   { ...pg('office/home#hover', 'view', 'office'), params: { officeHome: 'hover' } },
   // Tall enough that the project list's foot — its "Show all" — is in the picture.

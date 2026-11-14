@@ -17,6 +17,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, CARD_LEVEL_1, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState, SearchFilterPill, SectionLabel } from '../ui';
 import { OfficeFileRow, type OfficeRowActions } from './OfficeFileList';
+import { MenuIcon } from '../context-menu/menu-icons';
 import { isWorkbenchDocument } from '../../workbench-mode';
 import type { DocumentTab } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeKind, OfficeStatus, OfficeVersion } from '../../../shared/office-types';
@@ -278,7 +279,7 @@ function OfficeHome({ load, project, actionError, onRetry, onCreate, onPick, onO
   if (load.state === 'failed') return <div className="p-6 max-w-xl mx-auto"><ErrorState message="Office could not be started." onRetry={onRetry} /></div>;
   // Specific and certain, and no Retry: nothing the person can do here changes it.
   if (load.state === 'unavailable') return <div className="p-6 max-w-xl mx-auto"><EmptyState message="Office isn't included in this build." /></div>;
-  // WHY Home is drawn while Recent loads (fix round 1): New and "Open a file…" need no list, and
+  // WHY Home is drawn while Recent loads (fix round 1): New and "Browse files" need no list, and
   // must never wait on a slow drive; only the Recent list itself shows it is loading.
   const recent = load.state === 'ready' ? load.status.recent : null;
   const projectFiles = (project?.files ?? []).filter((f) => !recent?.some((r) => r.path === f.path));
@@ -313,11 +314,12 @@ function OfficeHome({ load, project, actionError, onRetry, onCreate, onPick, onO
           <div className="flex items-center gap-3">
             <Eyebrow>Recent</Eyebrow>
             <div className="flex-1" />
+            {/* WHY "Browse files" with a folder, search to its right (Destin, review 1 R-1). */}
+            <Button variant="secondary" size="sm" onClick={onPick}><MenuIcon name="folder" />Browse files</Button>
             {/* Only once there is something to search (an empty Home has nothing to narrow). */}
             {hasFiles && (
               <SearchFilterPill value={query} onChange={setQuery} placeholder="Search files" inputAriaLabel="Search your Office files" className="w-56 max-sm:w-40" />
             )}
-            <Button variant="secondary" size="sm" onClick={onPick}>Open a file…</Button>
           </div>
           {rowError && <ErrorState variant="inline" message={rowError.message} onRetry={rowError.retry} />}
           {recent === null

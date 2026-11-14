@@ -75,7 +75,7 @@ describe('the Office page', () => {
     const { findByText, getByText, queryByText } = render(<OfficeView projectRoot="/home/you/Projects/garden" />);
     // Nothing has answered yet: New and Open are already there.
     expect(getByText('Document')).toBeTruthy();
-    expect(getByText('Open a file…')).toBeTruthy();
+    expect(getByText('Browse files')).toBeTruthy();
     act(() => answerRecent({ ...READY, recent: [FILE] }));
     expect(await findByText('plan.docx')).toBeTruthy();
     expect(queryByText('In garden')).toBeNull();
@@ -140,7 +140,7 @@ describe('the Office page', () => {
     withOffice({ status: async () => READY, pick: async () => { throw new Error('no window'); } });
     const { findByText, getByText, getByRole } = render(<OfficeView />);
     await findByText('Files you open in Office will show up here.');
-    fireEvent.click(getByText('Open a file…'));
+    fireEvent.click(getByText('Browse files'));
     expect(await findByText("Office couldn't open the file picker.")).toBeTruthy();
     expect(getByRole('button', { name: /try again/i })).toBeTruthy();
     quiet.mockRestore();
