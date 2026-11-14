@@ -82,9 +82,11 @@ export const syncSpacesChannels: MainChannelDef[] = [
     name: IPC.SYNC_SPACES_RENAME_DEVICE, kind: 'handle',
     handler: async (p) => {
       const pr = getManagedRoots()?.personalRoot;
-      if (!pr) return { ok: false };
+      // Card #134 round 4: the failure answered a bare { ok:false }, so the screen's "Couldn't rename this device" box had no reason to show
+      // under Details. Same sentence the rest of sync uses when its folders are not ready; the catch passes the real error message.
+      if (!pr) return { ok: false, error: 'Sync is still starting up — try again in a moment' };
       try { await renameDevice(pr, String(p?.id ?? ''), String(p?.name ?? '')); return { ok: true }; }
-      catch { return { ok: false }; }
+      catch (e) { return { ok: false, error: e instanceof Error && e.message ? e.message : undefined }; }
     },
   }),
   defineChannel({
