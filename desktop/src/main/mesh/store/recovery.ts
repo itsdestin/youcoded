@@ -397,7 +397,9 @@ export class BodyTools {
       }
       if (ckpt && ckpt.count > include) throw new Damaged(`the checkpoint vouches for ${ckpt.count} lines but the body holds ${include}`);
       // nothing at all is verified (no valid record, and the one stretch the checkpoint covers does not match): refused as damaged, the whole version is kept intact in aside/
-      if (ambiguous && count === 0) throw new Damaged('nothing stored vouches for the body: the checkpoint disagrees with the derived chain and no valid record narrows it down');
+      // (a body with NO whole line at all is not "unvouched bytes": it is an empty version whose checkpoint is stale, e.g. an older copy taken before a set-aside moved everything away;
+      // that is reported as lines set aside from the head, below, instead of quarantining nothing)
+      if (ambiguous && count === 0 && (await this.countWholeLines(dir, 0)) > 0) throw new Damaged('nothing stored vouches for the body: the checkpoint disagrees with the derived chain and no valid record narrows it down');
       await nf.truncate(recPos(count));        // DESTRUCTIVE-OK(scratch): cuts only the scratch file
       // lines past what is vouched for: never acknowledged when a checkpoint says so, possibly acknowledged when it does not
       const lastRec = count > 0 ? await this.recFromFile(nf, count - 1) : null;

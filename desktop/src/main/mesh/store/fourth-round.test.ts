@@ -409,4 +409,18 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
     expect(await readAll(s2, ls)).toBe('.'.repeat(30));
     await s2.close(); await t.cleanup();
   });
+
+  it('an older checkpoint taken before a set-aside moved everything away leaves an empty chat reported from its head, not a quarantined one', async () => {
+    const { t, s, root } = await fresh(12);
+    const cp = path.join(vdir(root), 'checkpoint.bin'); const before = fs.readFileSync(cp);
+    await s.setAsideDamaged(V(1)); await s.close();
+    fs.writeFileSync(cp, before);                                                            // the older statement: 12 lines, none of which are here any more
+    const s2 = await reopen(root);
+    const h = await s2.head(V(1));
+    expect(h.lines).toBe(0); expect(h.damagedFromLine).toBe(0);
+    expect(fs.readdirSync(path.join(root, 'aside')).filter((n) => /-q\d+$/.test(n))).toEqual([]);   // nothing was quarantined
+    expect(await s2.append(V(1), 0, 0, lines(12))).toBe('ok');
+    expect((await s2.head(V(1))).damagedFromLine).toBeNull();                                // the report clears once the chat has refilled the 12 lines it claimed
+    await s2.close(); await t.cleanup();
+  });
 });
