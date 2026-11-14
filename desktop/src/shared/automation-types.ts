@@ -97,6 +97,8 @@ export interface AutomationSummary {
   /** The most runs in one day, for a job a button or an event starts (review deck Q-cap: only where it makes
    *  sense, so never on a schedule). null = any number. */
   maxRunsPerDay?: number | null;
+  /** How many runs it has started today, counted by the runner; with `maxRunsPerDay` it says whether another may start. */
+  runsToday?: number;
   /** Monthly limit in dollars (Q-limit: $5 to start, changeable). Absent on a subscription job. */
   limit?: number;
   enabled: boolean;

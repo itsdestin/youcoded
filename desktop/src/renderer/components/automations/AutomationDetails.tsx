@@ -199,7 +199,18 @@ function TopCard({ job, isNew, onChange }: { job: AutomationSummary; isNew: bool
           </div>
         </Callout>
       )}
-      {!isNew && <Button variant="secondary" className="w-full" onClick={() => void runNow()}>Run now</Button>}
+      {/* WHY the reason inside the greyed button (the daily limit, review deck Q-cap): the same treatment as a page's
+          "Finish on your computer" button (page-connections.tsx) — the one control where Run now would be says why it
+          can't. One rule for every start: the popup's Run now counts toward the limit like a page's button does, and
+          the number to raise is in Runs per day, in this same popup. */}
+      {!isNew && (job.maxRunsPerDay != null && (job.runsToday ?? 0) >= job.maxRunsPerDay ? (
+        <Button variant="secondary" disabled className="w-full h-auto" data-run-limit-reached>
+          <span className="flex flex-col items-center gap-0.5 py-1 whitespace-normal text-center">
+            <span>Daily limit reached</span>
+            <span className="text-2xs opacity-80">{job.runsToday} of {job.maxRunsPerDay} runs today. It can run again tomorrow.</span>
+          </span>
+        </Button>
+      ) : <Button variant="secondary" className="w-full" onClick={() => void runNow()}>Run now</Button>)}
     </div>
   );
 }

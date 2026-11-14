@@ -55,6 +55,8 @@ function seedJobs(): AutomationSummary[] {
       instruction: 'Read this week’s meals on this page and write one shopping list, grouped by aisle, leaving out what’s already in the pantry list.',
       links: [{ kind: 'page', id: 'page-recipes', name: 'Recipe notes', icon: 'notes' }],
       start: { kind: 'button', label: 'Make this week’s shopping list' }, maxRunsPerDay: 20,
+      // `?autoView=limit` photographs the day's limit used up; otherwise a few runs so far.
+      runsToday: typeof location !== 'undefined' && new URLSearchParams(location.search).get('autoView') === 'limit' ? 20 : 3,
       model: 'Claude Haiku', subscription: true,
       tools: [
         { id: 't-rread', label: 'Read this page’s information', source: 'Recipe notes', mode: 'allow' },

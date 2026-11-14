@@ -148,6 +148,8 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('automations/details#describe-result', 'automations'), params: { autoView: 'describe-result' }, newIn: 'after' },
   { ...pg('automations/details#cap', 'automations'), params: { autoView: 'cap' }, newIn: 'after' },
   { ...pg('automations/details#delete', 'automations'), params: { autoView: 'delete' }, newIn: 'after' },
+  // The day's limit used up: Run now is greyed and says why (review deck Q-cap).
+  { ...pg('automations/details#limit', 'automations'), params: { autoView: 'limit' }, newIn: 'after' },
   { ...pg('automations#phone', 'view', 'automations', 'narrow'), viewport: PHONE, mark: 'automations' },
   { ...pg('automations/details#phone', 'automations', 'narrow'), viewport: PHONE },
   // A page's own automations, in its Page settings (the Money page has the morning check).
