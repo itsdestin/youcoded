@@ -272,6 +272,18 @@ describe('folder order: synced projects', () => {
     expect(Object.keys(stamps)).toHaveLength(1);
   });
 
+  it('a stamped project that later becomes a saved folder keeps its recency, read-only', async () => {
+    const { a, b, saved } = setup();
+    const { noteFolderUsed, listPickerFolders, loadFolderUsage } = await load();
+    await loadFolderUsage(file);
+    noteFolderUsed(b, file); // used while it was only a synced project
+    // Later the person adds it as a folder: the saved entry has no lastUsedAt of its own.
+    fs.writeFileSync(file, JSON.stringify([{ path: saved, nickname: 'saved', addedAt: 5 }, { path: b, nickname: 'beta', addedAt: 9 }]));
+    const before = fs.readFileSync(file, 'utf8');
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['beta', 'saved', 'alpha']);
+    expect(fs.readFileSync(file, 'utf8')).toBe(before); // merged on read only
+    void a;
+  });
   it('stamps survive a restart: the file written by one run is loaded by the next', async () => {
     const { b } = setup();
     const { noteFolderUsed, listPickerFolders, loadFolderUsage, flushFolderUsage } = await load();

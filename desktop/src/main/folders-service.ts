@@ -57,18 +57,26 @@ export function listPickerFolders(file?: string): PickerFolder[] {
   // flow rewrites saved entries to their new managed path) — badge it like the synthesized rows.
   const projectsRoot = getManagedRoots()?.projectsRoot;
   const projectsPrefix = projectsRoot ? pathKey(projectsRoot) + path.sep : null;
-  const result: PickerFolder[] = folders.map((f) => ({
-    ...f,
-    exists: fs.existsSync(f.path),
-    ...(projectsPrefix && pathKey(f.path).startsWith(projectsPrefix) ? { managed: true as const } : {}),
-  }));
+  const managed = getManagedRoots()?.listProjects() ?? [];
+  // Last-use stamps of synced projects live in their own small file (folder-usage.ts, built from `usagePath`), read from memory here.
+  const usage = managed.length ? folderUsage(file) : {};
+  const result: PickerFolder[] = folders.map((f) => {
+    // A synced project that was stamped and LATER became a saved folder keeps its recency: use the usage stamp when it is newer than
+    // the saved entry's own (read-only; the saved-folders file is never written for this).
+    const stamp = usage[pathKey(f.path)];
+    const lastUsedAt = stamp && stamp > (f.lastUsedAt ?? 0) ? stamp : f.lastUsedAt;
+    return {
+      ...f,
+      ...(lastUsedAt ? { lastUsedAt } : {}),
+      exists: fs.existsSync(f.path),
+      ...(projectsPrefix && pathKey(f.path).startsWith(projectsPrefix) ? { managed: true as const } : {}),
+    };
+  });
   // Managed projects (sync spec §3) always appear in the picker, deduped against saved folders by
   // normalized path. addedAt:0 sorts them below user-added folders.
-  const managed = getManagedRoots()?.listProjects() ?? [];
   const known = new Set(result.map((f) => pathKey(f.path)));
-  // Last-use stamps of synced projects live in their own small file (saved-folders.ts usageFilePath), applied here to the rows
-  // that are only synthesized, so a project used most recently sorts first without ever becoming a saved folder.
-  const usage = managed.length ? folderUsage(file) : {};
+  // The rows that are only synthesized get their stamp the same way, so a project used most recently sorts first without ever
+  // becoming a saved folder.
   for (const p of managed) {
     if (isRemovedFromLists(p.path, saved)) continue;
     if (!known.has(pathKey(p.path))) {
