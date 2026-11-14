@@ -3,6 +3,7 @@ import { NARROW_VIEWPORT_QUERY } from '../hooks/use-narrow-viewport';
 import { useChatDispatch } from '../state/chat-context';
 import QuickChips, { QuickChip } from './QuickChips';
 import { useToastClearance } from '../hooks/useToastClearance';
+import { useChipChoice } from './ChipChoiceStrip';
 import { createQueueDraft } from '../state/queue-draft';
 import { readQueueTransferDraft, saveQueueTransferDraft, updateQueueTransferDraft } from '../state/queue-transfer-storage';
 import { pendingQueueSend } from '../state/pending-queue-send';
@@ -1020,18 +1021,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     }
   };
 
+  const chipChoice = useChipChoice(textRef, setText, inputRef, sessionId);
   const handleChip = useCallback(
     (chip: QuickChip) => {
-      // All chips fill the input bar for the user to review/edit/send — never auto-send.
-      setText(chip.prompt);
-      requestAnimationFrame(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          inputRef.current.setSelectionRange(chip.prompt.length, chip.prompt.length);
-        }
-      });
+      // All chips fill the input bar for the user to review/edit/send — never auto-send; over typed words they ask first.
+      chipChoice.onChip(chip);
     },
-    [],
+    [chipChoice.onChip],
   );
 
   const handleAttachClick = useCallback(async () => {
@@ -1117,6 +1113,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           the same slot QuickChips occupies in chat view, so both modes share
           the same "pill row above input bar" visual inside one container. */}
       {minimal && <TerminalToolbar sessionId={sessionId} />}
+      {chipChoice.strip}
       {!minimal && !compact && <QuickChips onChipTap={handleChip} />}
 
       {attachments.length > 0 && (

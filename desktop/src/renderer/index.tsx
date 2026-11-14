@@ -250,15 +250,6 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
         __mount.render(<ThemeProvider><UnreachableStripDemo /></ThemeProvider>);
         return;
       }
-      // Card #143 c: three stylings for the quick chip's Replace / Add choice (dev/workbench/mockups/ChipChoiceDemo.tsx).
-      if (__view === 'chip-choice') {
-        const [{ ChipChoiceDemo }, { ThemeProvider }] = await Promise.all([
-          import('./dev/workbench/mockups/ChipChoiceDemo'),
-          import('./state/theme-context'),
-        ]);
-        __mount.render(<ThemeProvider><ChipChoiceDemo /></ThemeProvider>);
-        return;
-      }
       // Session status-pill page (dev/workbench/mockups/SessionStatusPills.tsx)
       // — the five states of the All Sessions menu's pill and what each means,
       // rendering the shipping pill so the words cannot drift from the menu.
