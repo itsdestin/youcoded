@@ -18,6 +18,7 @@ const line = (i: number, tag = 'a') => nl({ type: 'user', uuid: `${tag}-${i}`, m
 const lines = (n: number, tag = 'a') => Array.from({ length: n }, (_, i) => line(i, tag));
 const opts = { chunkBytes: 1000, proofVerifier: () => true };
 const keyOf = (v: Buffer) => v.toString('hex');
+const keyOfV = (n: number) => V(n).toString('hex');
 const vdir = (root: string, v: Buffer = V(1)) => path.join(root, 'versions', keyOf(v));
 const bodies = (root: string, v: Buffer = V(1)) => fs.readdirSync(vdir(root, v)).filter((f) => f.startsWith('body-')).sort();
 
@@ -449,6 +450,17 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
     s2 = await reopen(root);
     expect((await s2.head(V(1))).damagedFromLine).not.toBeNull();                            // still reported, from the other copy
     expect(fs.existsSync(path.join(vdir(root), 'partial.json'))).toBe(true);                 // and the lost copy is rewritten
+    await s2.close(); await t.cleanup();
+  });
+
+  it('deleting one of the two quarantine markers does not make the emptied chat look healthy: it is still reported damaged and the lost copy is rewritten', async () => {
+    const { t, s, root } = await fresh(10);
+    await expect((s as any).quarantine(keyOfV(1), 'test')).rejects.toMatchObject({ code: 'damaged' });
+    await s.close();
+    fs.rmSync(path.join(vdir(root), 'damaged.json'));
+    const s2 = await reopen(root);
+    await expect(s2.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
+    expect(fs.existsSync(path.join(vdir(root), 'damaged.json'))).toBe(true);
     await s2.close(); await t.cleanup();
   });
 });

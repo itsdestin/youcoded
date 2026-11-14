@@ -8,7 +8,7 @@ import { StoreError } from './errors';
 import { type Fs } from './fsio';
 import { readSide, readSideFor, writeSide, keepBadSideFile, type SideRead } from './sidefile';
 import { REC, decodeRecord, recPos } from './records';
-import { PARTIAL_FILE, PARTIAL_COPY, writePartial, chunkPathOf } from './recovery';
+import { PARTIAL_FILE, PARTIAL_COPY, DAMAGED_COPY, writePartial, writeDamaged, chunkPathOf } from './recovery';
 
 /** The version key a version folder belongs to (the folder name). */
 const keyOfDir = (dir: string): string => nodePath.basename(dir);
@@ -76,14 +76,22 @@ export async function readPartial(fs: Fs, dir: string, count: number): Promise<{
     return { fromLine: count, lost: 1 };
   }
 
-  /** damaged.json: absent means healthy; a damaged marker still means damaged (the aside name is then unknown). */
+  /**
+   * damaged.json / damaged.copy: absent (both) means healthy; a damaged marker still means damaged (the aside name is then unknown). WHY two copies (review 4): a quarantine
+   * moves everything away, so the marker is the ONLY thing that says this empty-looking version is not simply empty; one deleted file must not turn "damaged" into "fine".
+   * Either copy alone is enough; the missing or damaged one is rewritten from it.
+   */
 export async function readDamaged(fs: Fs, dir: string): Promise<{ asideName: string; reason: string } | null> {
-    const r = await readSideFor(fs, nodePath.join(dir, 'damaged.json'), keyOfDir(dir));
-    if (r.kind === 'absent') return null;
+    const reads = [await readSideFor(fs, nodePath.join(dir, 'damaged.json'), keyOfDir(dir)), await readSideFor(fs, nodePath.join(dir, DAMAGED_COPY), keyOfDir(dir))];
+    if (reads.every((x) => x.kind === 'absent')) return null;
+    const r = reads.find((x) => x.kind === 'ok' && typeof x.value?.asideName === 'string') ?? (reads.find((x) => x.kind === 'bad') ?? reads[0]);
     // WHY (review 4): a quarantine really moves index.bin away, so a marker that sits next to a live index.bin is an OLDER copy of a marker (taken before the version
     // was cleared and refilled). Believing it would hide a healthy chat. Whatever else is wrong with it, a version with a live index is not quarantined.
     if (await fs.exists(nodePath.join(dir, 'index.bin'))) return null;
-    if (r.kind === 'ok' && typeof r.value?.asideName === 'string') return { asideName: r.value.asideName, reason: String(r.value.reason ?? '') };
+    if (r.kind === 'ok' && typeof r.value?.asideName === 'string') {
+      if (reads.some((x) => x.kind !== 'ok')) { try { await writeDamaged(fs, dir, { asideName: r.value.asideName, reason: String(r.value.reason ?? ''), atMs: Date.now() }); } catch (e) { if (!isDiskFull(e)) throw e; } }
+      return { asideName: r.value.asideName, reason: String(r.value.reason ?? '') };
+    }
     return { asideName: 'unknown', reason: 'damaged.json is unreadable' };
   }
 

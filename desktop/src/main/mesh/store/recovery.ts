@@ -25,6 +25,14 @@ const MAX_TORN_FILES = 4096;
 export const STALE_CONV_FILE = 'stale-conv.json';
 /** Marker file: lines from `fromLine` were set aside by a rebuild because their bodies did not match the chain (N7). */
 export const PARTIAL_FILE = 'partial.json';
+/** The second copy of damaged.json (see readDamaged in versionfiles.ts for why there are two). */
+export const DAMAGED_COPY = 'damaged.copy';
+/** Write the quarantine marker twice, one copy at a time. */
+export async function writeDamaged(fs: Fs, dir: string, value: { asideName: string; reason: string; atMs: number }): Promise<void> {
+  const key = nodePath.basename(dir);
+  await writeSideFor(fs, nodePath.join(dir, 'damaged.json'), key, value); // DESTRUCTIVE-OK(hint): the marker that says where the copy went
+  await writeSideFor(fs, nodePath.join(dir, DAMAGED_COPY), key, value); // DESTRUCTIVE-OK(hint): the second copy of the same marker
+}
 /** The second copy of partial.json (review 4): the marker is the ONLY record that a rebuild set lines aside, so one deleted or damaged file must not silence the report. */
 export const PARTIAL_COPY = 'partial.copy';
 /** Write the marker twice, one copy at a time (a kill leaves at least one intact). */

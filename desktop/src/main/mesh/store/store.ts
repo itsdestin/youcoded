@@ -72,7 +72,7 @@ import { ControlStore, type ControlDamage, type ControlEntry } from './control';
 import type { AppendResult, EvictionProof, Head, ProofVerifier, ScrubReport, StoreOptions, Summary, TailRecord, VerifyReport, VersionId, VersionMeta } from './types';
 import type { VState } from './vstate';
 import { readMeta, readPartial, readDamaged, readScrubMark, readEvictedNote, lineVerifies, nextAsideName } from './versionfiles';
-import { BodyTools, Damaged, NeedsRebuild, PARTIAL_FILE, PARTIAL_COPY, writePartial, STALE_CONV_FILE, chunkPathOf, nextNumbered, type BatchState, type RebuildResult, type SumFacts } from './recovery';
+import { BodyTools, Damaged, NeedsRebuild, PARTIAL_FILE, PARTIAL_COPY, DAMAGED_COPY, writePartial, writeDamaged, STALE_CONV_FILE, chunkPathOf, nextNumbered, type BatchState, type RebuildResult, type SumFacts } from './recovery';
 
 export type { VersionId, ProofVerifier, StoreOptions, VersionMeta, Head, AppendResult, Summary, EvictionProof, TailRecord, VerifyReport, ScrubReport } from './types';
 
@@ -302,7 +302,7 @@ export class ChatStore {
     if (dmg) throw new StoreError('damaged', dmg.asideName);
     // WHY (review 4, F5 class): a damaged.json that survives next to a live index.bin is an OLDER copy of a marker (a quarantine really moves the index away).
     // readDamaged ignores it; it is moved to damaged.json.bad-N (kept) so it cannot confuse the next reader. Best effort: a read never fails for lack of space.
-    try { if (await this.fs.exists(nodePath.join(dir, 'damaged.json'))) await keepBadSideFile(this.fs, nodePath.join(dir, 'damaged.json')); } catch (e) { if (!isDiskFull(e)) throw e; }
+    try { for (const n of ['damaged.json', DAMAGED_COPY]) if (await this.fs.exists(nodePath.join(dir, n))) await keepBadSideFile(this.fs, nodePath.join(dir, n)); } catch (e) { if (!isDiskFull(e)) throw e; }
     const seeds = this.seedFn({ chatId: meta.chatId, version: unhex(key), segment: 0 });
 
     // 0. What was evicted ON PURPOSE. Review 4 (F1, F4, F5): the only authority is the eviction state inside the checkpoint (checkpoint.ts), which is rewritten in
@@ -1341,9 +1341,13 @@ export class ChatStore {
           // WHY the check: the marker may only be cleared when the quarantined copy it names is really there (a cross-check, not the marker's say-so)
           const asideOk = dmg.asideName === 'unknown' || await this.fs.exists(nodePath.join(this.root, 'aside', dmg.asideName));
           if (!asideOk) throw new StoreError('corrupt', `the quarantined copy ${dmg.asideName} is missing; the damaged marker is kept`);
-          const mp = nodePath.join(dir, 'damaged.json');
-          if (dmg.asideName === 'unknown') await keepBadSideFile(this.fs, mp);
-          else { await this.fs.unlink(mp); await this.fs.fsyncDir(dir); } // DESTRUCTIVE-OK(explicit-request): the caller asked for the marker to be cleared; the aside copy it names was found above
+          for (const n of ['damaged.json', DAMAGED_COPY]) {
+            const mp = nodePath.join(dir, n);
+            if (!(await this.fs.exists(mp))) continue;
+            if (dmg.asideName === 'unknown') await keepBadSideFile(this.fs, mp);
+            else await this.fs.unlink(mp); // DESTRUCTIVE-OK(explicit-request): the caller asked for the marker to be cleared; the aside copy it names was found above
+          }
+          await this.fs.fsyncDir(dir);
           this.versions.delete(key);
           await this.ensureIndex(dir);
           return { asideName: dmg.asideName };
@@ -1385,7 +1389,7 @@ export class ChatStore {
     }
     await this.fs.fsyncDir(target); await this.fs.fsyncDir(dir);
     // WHY (review 3, F7): reading must not fail because the disk is full. With no room for the marker the version is still reported `damaged` (typed), and the intent stays so the marker is written when space returns.
-    try { if (reason !== undefined) await writeSideFor(this.fs, nodePath.join(dir, 'damaged.json'), key, { asideName, reason, atMs: this.now() }); } // DESTRUCTIVE-OK(hint): the marker that says where the copy went
+    try { if (reason !== undefined) await writeDamaged(this.fs, dir, { asideName, reason, atMs: this.now() }); } // DESTRUCTIVE-OK(hint): the marker that says where the copy went
     catch (e) { if (!isDiskFull(e)) throw e; throw new StoreError('damaged', asideName); }
     // WHY the intent goes BEFORE the fresh index (H2): once the moves are durable the intent has done its job.
     // If it outlived the fresh index, a rerun would move that new empty index over the aside copy's index.
