@@ -174,11 +174,12 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
       // Comma-separated so decided choices stack under the one being compared
       // (e.g. `shape-round,cards-raised`): later names win within the layer.
       const css: string[] = [];
+      const sheetLoaders = new Map(Object.entries(sheets));
       for (const name of __proposal.split(',').map((n) => n.trim()).filter(Boolean)) {
-        // WHY the own-property check (CodeQL js/unvalidated-dynamic-method-call, PR #756): `name` comes from the address bar,
-        // so a plain lookup could reach an inherited member such as `constructor` and call it. Only a real sheet is called.
-        const key = `./dev/workbench/proposals/${name}.css`;
-        const load = Object.prototype.hasOwnProperty.call(sheets, key) ? sheets[key] : undefined;
+        // WHY a Map lookup (CodeQL js/unvalidated-dynamic-method-call, PR #756): `name` comes from the address bar, so a
+        // plain object lookup could reach an inherited member such as `constructor` and call it. A Map holds only the real
+        // sheets (an own-property check on the object was not enough for the scanner).
+        const load = sheetLoaders.get(`./dev/workbench/proposals/${name}.css`);
         if (typeof load === 'function') css.push((await load()) as string);
         else console.error(`[workbench] no style proposal named ${name}`);
       }
