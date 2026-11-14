@@ -37,7 +37,9 @@ export function useDefaultsSaver<D extends object>(
     let why: unknown;
     try {
       const r = await save(updates);
-      if (r === false || (r && typeof r === 'object' && (r as { ok?: unknown }).ok === false)) { failed = true; why = (r as { error?: unknown } | null)?.error; }
+      // The defaults channel answers the merged object on success and `null` when the write failed (prefs-service writeDefaults
+      // catches every write error). `undefined` = no such channel here (older host): not a failure. false / { ok:false } also count.
+      if (r === null || r === false || (r && typeof r === 'object' && (r as { ok?: unknown }).ok === false)) { failed = true; why = (r as { error?: unknown } | null)?.error; }
     } catch (e) { failed = true; why = e; }
     inFlight.current -= 1;
     if (failed) { failedInBatch.current = true; lastWhy.current = why; } else saved.current = { ...saved.current, ...updates } as D;

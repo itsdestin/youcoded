@@ -45,6 +45,9 @@ function currentPlatform(): "darwin" | "linux" | "win32" | "unknown" {
   return "unknown";
 }
 
+/** A plugin folder that an uninstall tried to delete and could not (card #134 round 4); carries the real reason. */
+export class IntegrationUninstallError extends Error {}
+
 export class IntegrationInstaller {
   private deps: IntegrationInstallerDeps;
 
@@ -183,9 +186,18 @@ export class IntegrationInstaller {
       const catalog = await this.listCatalog();
       const entry = (catalog.integrations || []).find((e) => e.slug === slug);
       if (entry?.setup.type === "plugin" && entry.setup.pluginId) {
-        await uninstallPlugin(entry.setup.pluginId);
+        const outcome = await uninstallPlugin(entry.setup.pluginId);
+        // Card #134 round 4: a delete that was attempted and left the folder behind used to be ignored, the manifest was cleared and
+        // the page closed as if it worked. Now the manifest stays (it IS still installed) and the caller sees the failure.
+        // (A refused id or an already-missing folder still clears, as before.)
+        if (outcome && outcome.ok === false && outcome.reason === "delete-failed") {
+          throw new IntegrationUninstallError(`its folder could not be deleted (${outcome.detail})`);
+        }
       }
-    } catch { /* ignore — clear state below regardless */ }
+    } catch (err) {
+      if (err instanceof IntegrationUninstallError) throw err;
+      /* ignore — clear state below regardless */
+    }
 
     delete manifest[slug];
     this.writeManifest(manifest);

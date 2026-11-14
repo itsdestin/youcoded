@@ -88,6 +88,8 @@ export function GitReviewView({
   const [loadFailed, setLoadFailed] = useState(false);
   const [moreFailed, setMoreFailed] = useState(false);
   const readSeq = useRef(0);
+  // A different file (or project) is a different list: its "Show more" notice must not carry over.
+  useEffect(() => { setMoreFailed(false); }, [projectRoot, relPath]);
   const refresh = useCallback(() => {
     const mine = ++readSeq.current;
     const api = gitApi();
@@ -95,7 +97,7 @@ export function GitReviewView({
     Promise.resolve(api.fileReview(projectRoot, relPath))
       .then((r: GitFileReviewResult) => {
         if (!aliveRef.current || mine !== readSeq.current) return; // unmounted, or a newer read took over
-        if (r?.ok) { setReview(r); setLoadFailed(false); }
+        if (r?.ok) { setReview(r); setLoadFailed(false); setMoreFailed(false); }
         else { console.warn('[git-review] read refused:', (r as { error?: unknown } | null)?.error); setLoadFailed(true); }
       })
       .catch((e: unknown) => { if (aliveRef.current && mine === readSeq.current) { console.warn('[git-review] read failed:', e); setLoadFailed(true); } });

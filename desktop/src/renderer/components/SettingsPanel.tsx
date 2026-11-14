@@ -2860,6 +2860,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const [enableError, setEnableError] = useState('');
   const { toggleEnabled: handleToggleEnabled, setKeepAwake: handleSetKeepAwake, enabledNotice, keepAwakeNotice } = useRemoteSaves(open, config, setConfig, setEnableError);
   const [passwordFailed, setPasswordFailed] = usePasswordFailed(open);
+  useEffect(() => { if (!open) setNewPassword(''); }, [open]); // a password typed (or refused) never lingers in memory after the panel closes
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAbout, setShowAbout] = useState(false);

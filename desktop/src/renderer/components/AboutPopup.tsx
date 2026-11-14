@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscClose } from '../hooks/use-esc-close';
+import { isUnsupportedHere } from '../utils/ipc-error';
 import { useSaveNotice } from '../hooks/useSaveNotice';
 import { Toggle } from './settings-toggle';
 import { Button, CARD_LEVEL_1, Dialog, FoldRow, SectionLabel, SettingRow, ErrorState } from './ui';
@@ -72,7 +73,7 @@ function AnalyticsOptInToggle() {
     setReadFailed(false);
     Promise.resolve(window.claude.analytics.getOptIn()).then(
       (v) => { if (!cancelled) setOptIn(v); },
-      (e: unknown) => { if (!cancelled) { console.warn('[about] usage-stats setting read failed:', e); setReadFailed(true); } },
+      (e: unknown) => { if (!cancelled && !isUnsupportedHere(e)) { console.warn('[about] usage-stats setting read failed:', e); setReadFailed(true); } }, // not allowed over remote: row stays hidden, as before
     );
     return () => { cancelled = true; };
   }, [readTry]);

@@ -842,17 +842,31 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
   }
 }
 
-export async function uninstallPlugin(id: string): Promise<boolean> {
+/**
+ * What an uninstall did. `ok:false` has three reasons, and only ONE is a failure the person should hear about (card #134 round 4):
+ *  - 'id-refused' / 'path-refused': the id failed the safety check or resolved outside the plugins folder. Nothing was deleted
+ *    and nothing could be — the settings entry should still be cleared by the caller, exactly as before.
+ *  - 'delete-failed': a delete was attempted and the folder is STILL there afterwards. `unregistered` says whether Claude Code's
+ *    own registries had already let go of it (so a retry only has the folder left to do).
+ */
+export type UninstallOutcome =
+  | { ok: true }
+  | { ok: false; reason: 'id-refused' | 'path-refused' }
+  | { ok: false; reason: 'delete-failed'; unregistered: boolean; detail: string };
+
+export async function uninstallPlugin(id: string): Promise<UninstallOutcome> {
   // Security: validate plugin ID to prevent path traversal → arbitrary directory deletion
-  if (!SAFE_ID_RE.test(id)) return false;
+  if (!SAFE_ID_RE.test(id)) return { ok: false, reason: 'id-refused' };
+  let unregistered = false;
+  const stillThere = (p: string) => fs.promises.stat(p).then(() => true, () => false);
   try {
     // Remove from all four Claude Code registries first so /reload-plugins
     // stops trying to load a directory we're about to delete.
-    try { await unregisterPluginInstall(id); } catch {}
+    try { await unregisterPluginInstall(id); unregistered = true; } catch {}
 
     const targetDir = pluginInstallDir(id);
     // Double-check: resolved path must stay within plugins directory
-    if (!isContainedIn(targetDir, PLUGINS_DIR)) return false;
+    if (!isContainedIn(targetDir, PLUGINS_DIR)) return { ok: false, reason: 'path-refused' };
     if (fs.existsSync(targetDir)) {
       fs.rmSync(targetDir, { recursive: true, force: true });
     }
@@ -869,9 +883,11 @@ export async function uninstallPlugin(id: string): Promise<boolean> {
         fs.rmSync(legacyDir, { recursive: true, force: true });
       }
     }
-    return true;
-  } catch {
-    return false;
+    return { ok: true };
+  } catch (err) {
+    // A delete threw. If the folder is gone anyway there is nothing to report; only a folder that is still there is a failure.
+    if (!(await stillThere(pluginInstallDir(id)))) return { ok: true };
+    return { ok: false, reason: 'delete-failed', unregistered, detail: err instanceof Error ? err.message : String(err) };
   }
 }
 

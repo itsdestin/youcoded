@@ -47,6 +47,10 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   // Card #134 round 4: a refused write already rolled the control back, but said nothing. It now says so — only for a real refusal
   // (`ok:false`) that is not the host-is-unsupported case (that one already greys the controls out with its reason on hover), and
   // only while this conversation is still the one on screen (a late answer for one you left, or after close, stays quiet).
+  // Newest-wins per field: the number of the latest save SENT for each tag / flag. An older answer (a failure arriving after a newer
+  // save of the same field) neither rolls back nor speaks, so it cannot put an old value back over a newer one.
+  const fieldSeq = useRef<Record<string, number>>({});
+  const nextSeq = (key: string) => (fieldSeq.current[key] = (fieldSeq.current[key] ?? 0) + 1);
   const liveSession = useRef<string | null>(sessionId);
   liveSession.current = sessionId;
   useEffect(() => () => { liveSession.current = null; }, []);
@@ -131,6 +135,8 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
 
   const setTag = useCallback((tagId: string, next: boolean) => {
     if (!sessionId) return;
+    const mine = nextSeq(`tag:${tagId}`);
+    const isNewest = () => fieldSeq.current[`tag:${tagId}`] === mine;
     const revert = () => setTags((prev) => {
       const s = new Set(prev); if (next) s.delete(tagId); else s.add(tagId); return s;
     });
@@ -142,14 +148,14 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     // backend-side and we leave the optimistic value rather than fighting the network.
     try {
       Promise.resolve((window as any).claude.session.setTag(sessionId, tagId, next))
-        .then((res: any) => { if (res && res.ok === false) { revert(); noteRefusal(res); sayRefused(sessionId, 'save this tag change', res); } })
+        .then((res: any) => { if (res && res.ok === false && isNewest()) { revert(); noteRefusal(res); sayRefused(sessionId, 'save this tag change', res); } })
         .catch(() => {});
     } catch { /* backend logs */ }
   }, [sessionId, noteRefusal, sayRefused]);
 
   const setNote = useCallback((text: string) => {
     if (!sessionId) return;
-    noteEdits.current++;
+    const myEdit = ++noteEdits.current;
     // Revert target comes from a REF, not the render closure: two setNote calls
     // dispatched from the same callback instance would both capture the same
     // closure value, so a failed second write could roll back past the first.
@@ -159,7 +165,7 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     try {
       Promise.resolve((window as any).claude.session.setNote(sessionId, text))
         .then((res: any) => {
-          if (res && res.ok === false) { savedNote.current = prevNote; setNoteState(prevNote); noteRefusal(res); sayRefused(sessionId, 'save the note', res); }
+          if (res && res.ok === false && noteEdits.current === myEdit) { savedNote.current = prevNote; setNoteState(prevNote); noteRefusal(res); sayRefused(sessionId, 'save the note', res); }
         })
         .catch(() => {});
     } catch { /* backend logs */ }
@@ -170,10 +176,11 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   const setFlag = useCallback((flag: SessionFlagName, next: boolean) => {
     if (!sessionId) return;
     const prev = !!flags[flag];
+    const mine = nextSeq(`flag:${flag}`);
     setFlags((f) => ({ ...f, [flag]: next }));
     try {
       Promise.resolve((window as any).claude.session.setFlag(sessionId, flag, next))
-        .then((res: any) => { if (res && res.ok === false) { setFlags((f) => ({ ...f, [flag]: prev })); noteRefusal(res); sayRefused(sessionId, 'save this change', res); } })
+        .then((res: any) => { if (res && res.ok === false && fieldSeq.current[`flag:${flag}`] === mine) { setFlags((f) => ({ ...f, [flag]: prev })); noteRefusal(res); sayRefused(sessionId, 'save this change', res); } })
         .catch(() => {});
     } catch { /* backend logs */ }
   }, [sessionId, flags, noteRefusal, sayRefused]);

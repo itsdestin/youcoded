@@ -547,20 +547,21 @@ export class LocalSkillProvider {
     return parentPluginId && installed[parentPluginId] ? parentPluginId : null;
   }
 
-  async uninstall(id: string): Promise<{ type: 'plugin' | 'prompt'; failed?: string }> {
+  async uninstall(id: string): Promise<{ type: 'plugin' | 'prompt'; failed?: string; reload?: boolean }> {
     const pluginId = await this.resolveUninstallTarget(id);
     if (pluginId) {
       // WHY: without this a plugin's hooks and connected tools outlived Uninstall (see detachPluginExtras).
       await detachPluginExtras(pluginInstallDir(pluginId));
-      const removed = await uninstallPlugin(pluginId);
-      // Card #134 round 4: uninstallPlugin answers false when the folder could not be deleted (or the id was refused); that answer
-      // was ignored, so the plugin was dropped from the settings and shown as uninstalled while its files stayed on disk. Now
-      // it says so (the answer carries `failed`, which the channel turns into { ok:false, error }; the renderer shows it under "Couldn't uninstall"), keeps the plugin listed — it IS still there — and
-      // re-reads the list. The plain sentence names no cause because the false answer does not carry one.
-      if (!removed) {
+      const outcome = await uninstallPlugin(pluginId);
+      // Card #134 round 4: ONLY "a delete was attempted and the folder is still there" is a failure. A refused id or a folder that
+      // is already gone clears the settings entry as before (so an id with a '.' or '@' can still be removed from the list). On a
+      // real failure the plugin stays listed — it IS still on disk — and a retry finishes the job; the reason below says what is
+      // true (Claude Code may already have let go of it) and never says "fully" about files that are all still there.
+      if (outcome && outcome.ok === false && outcome.reason === 'delete-failed') {
         this.installedCache = null;
         this.onCacheInvalidated?.();
-        return { type: 'plugin', failed: 'its files could not be fully removed from this computer' };
+        const where = outcome.unregistered ? 'Claude Code no longer loads it, but ' : '';
+        return { type: 'plugin', failed: `${where}its folder could not be deleted (${outcome.detail}). Try again to finish removing it`, reload: outcome.unregistered };
       }
       // A plugin turned off as unsafe is held outside the plugins folder: Remove deletes that too.
       await fs.promises.rm(turnedOffDir(pluginId), { recursive: true, force: true }).catch(() => {});

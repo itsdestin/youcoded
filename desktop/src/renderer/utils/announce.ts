@@ -1,3 +1,4 @@
+import { isUnsupportedHere } from './ipc-error';
 // A one-line notice from anywhere in the renderer to the app's one <Toast>.
 //
 // WHY: App.tsx owns the toast state, and the components that most need to say
@@ -30,6 +31,8 @@ export function announce(message: string, durationMs?: number, action?: AppNotic
  * is guessed on screen and nothing is lost for whoever investigates (docs/error-message-standards.md).
  */
 export function announceFailed(what: string, cause?: unknown): void {
+  // An "unsupported here" answer is not a failure: the remote shim has already said so in its own notice (card #134 round 4).
+  if (isUnsupportedHere(cause)) { console.warn(`[app] ${what}: not available on this client`); return; }
   console.warn(`[app] couldn't ${what}:`, cause instanceof Error ? cause.message : cause);
   announce(`Couldn't ${what}.`);
 }

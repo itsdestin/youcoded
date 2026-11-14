@@ -77,12 +77,23 @@ export const remoteAdminChannels: MainChannelDef[] = [
       const remoteConfig = config();
       const remoteServer = deps?.server;
       const wasEnabled = remoteConfig.enabled;
+      const wasKeepAwake = remoteConfig.keepAwakeHours;
       if (typeof updates.enabled === 'boolean') remoteConfig.enabled = updates.enabled;
       if (typeof updates.keepAwakeHours === 'number') {
         remoteConfig.keepAwakeHours = updates.keepAwakeHours;
         deps?.applyKeepAwake(updates.keepAwakeHours);
       }
-      remoteConfig.save();
+      try {
+        remoteConfig.save();
+      } catch (err) {
+        // Card #134 round 4: save() writes the file synchronously and can throw. The running process had already taken the new
+        // values, so the screen ("last saved") and reality disagreed. Put the previous values back (and re-apply keep-awake) and
+        // let the rejection reach the screen, which says "Couldn't save …" and keeps showing the old value.
+        remoteConfig.enabled = wasEnabled;
+        if (remoteConfig.keepAwakeHours !== wasKeepAwake) { remoteConfig.keepAwakeHours = wasKeepAwake; deps?.applyKeepAwake(wasKeepAwake); }
+        console.error('[remote] saving the remote access settings failed:', err instanceof Error ? err.message : err);
+        throw err;
+      }
 
       // Fix: flipping this toggle used to persist `enabled` and stop there. remoteServer.start() ran exactly once, at boot
       // (main.ts), when the flag was still false — so turning remote access on did nothing until the app was restarted,

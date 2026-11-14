@@ -637,7 +637,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // WHY: the context menu identifies a composer-only image paste, while this
       // component keeps ownership of both clipboard serialization and attachments.
       void window.claude.dialog.saveClipboardImage().then((saved) => {
-        if (saved) addFiles([saved]); else announceFailed('attach the pasted image');
+        if (saved) addFiles([saved]); else if (saved !== undefined) announceFailed('attach the pasted image'); // undefined = unsupported here
       }, (err) => announceFailed('attach the pasted image', err));
     };
     window.addEventListener('youcoded:composer-paste-image', listener);
@@ -1051,7 +1051,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         // attach it (it used to vanish with no word). A successful save attaches it exactly as before.
         try {
           const saved = await window.claude.dialog.saveClipboardImage();
-          if (saved) addFiles([saved]); else announceFailed('attach the pasted image');
+          if (saved) addFiles([saved]); else if (saved !== undefined) announceFailed('attach the pasted image'); // undefined = unsupported on this client: silent
         } catch (err) { announceFailed('attach the pasted image', err); }
         return;
       }

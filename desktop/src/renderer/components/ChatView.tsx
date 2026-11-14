@@ -501,8 +501,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // Announce FIRST: `loading` is the one-in-flight guard, so a second sentinel
     // hit in the same frame must already see it set.
     dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId });
-    const stillHere = () => liveSessionRef.current === sessionId;
-    try {
+    const stillHere = () => liveSessionRef.current === sessionId;    try {
       const page = await (window as any).claude?.detach?.requestTranscriptPage?.({ sessionId, beforeCursor: cursor });
       // Main could not LOCATE the transcript — NOT "this is the beginning of the
       // conversation". Recording it as a page would write hasMore:false and a
@@ -546,6 +545,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   }, [dispatch, sessionId, history.cursor, history.loading, captureScrollAnchor]);
 
   useEffect(() => { loadOlderPageRef.current = loadOlderPage; });
+  useEffect(() => { setOlderFailed(false); }, [history.cursor, history.hasMore]); // refilled by something else: the old failure is moot
 
   // A pending retry belongs to the conversation that scheduled it. Switching
   // sessions (this component is reused per session id) must not fire it against
