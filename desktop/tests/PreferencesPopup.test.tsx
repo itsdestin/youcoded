@@ -161,6 +161,88 @@ describe('PreferencesPopup failed saves', () => {
       expect(order.indexOf('write done')).toBeLessThan(order.indexOf('get'));
     });
 
+    // Final review: the commonest close - Close blurs the box first, so the save is already running when the popup goes away.
+    it.each([
+      ['rejects', () => Promise.reject(new Error('locked'))],
+      ['answers false', () => Promise.resolve(false)],
+    ])('a save started by blur and still running at close toasts once when it %s', async (_n, answer) => {
+      const n = notices();
+      let finish!: () => void;
+      const gate = new Promise<void>((r) => { finish = r; });
+      setup(vi.fn(async () => { await gate; return (answer as () => Promise<unknown>)(); }));
+      const view = open();
+      const box = await screen.findByRole('textbox', { name: 'System prompt' });
+      fireEvent.change(box, { target: { value: 'be brief' } });
+      fireEvent.blur(box);                                                    // starts the save
+      view.rerender(<PreferencesPopup open={false} onClose={() => {}} onOpenAdvanced={() => {}} />);   // popup closes while it runs
+      await act(async () => { finish(); await new Promise((r) => setTimeout(r, 20)); });
+      expect(n.got).toEqual(["Couldn't save your system prompt."]);
+      n.off();
+    });
+
+    it('a save started by the pause timer and still running at close toasts once on failure', async () => {
+      vi.useFakeTimers();
+      try {
+        const n = notices();
+        let finish!: () => void;
+        const gate = new Promise<void>((r) => { finish = r; });
+        setup(vi.fn(async () => { await gate; return false; }));
+        const view = open();
+        await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+        fireEvent.change(screen.getByRole('textbox', { name: 'Output style' }), { target: { value: 'kind' } });
+        await act(async () => { await vi.advanceTimersByTimeAsync(900); });                // the pause ends: the save starts
+        view.rerender(<PreferencesPopup open={false} onClose={() => {}} onOpenAdvanced={() => {}} />);
+        await act(async () => { finish(); await vi.advanceTimersByTimeAsync(20); });
+        expect(n.got).toEqual(["Couldn't save your output style."]);
+        n.off();
+      } finally { vi.useRealTimers(); }
+    });
+
+    it('successes at close toast nothing: blur-started, and a failure while the popup is still open shows the inline notice instead', async () => {
+      const n = notices();
+      const ok = vi.fn().mockResolvedValue(true);
+      setup(ok);
+      const view = open();
+      const box = await screen.findByRole('textbox', { name: 'System prompt' });
+      fireEvent.change(box, { target: { value: 'be brief' } });
+      fireEvent.blur(box);
+      view.rerender(<PreferencesPopup open={false} onClose={() => {}} onOpenAdvanced={() => {}} />);
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      expect(ok).toHaveBeenCalledTimes(1);
+      expect(n.got).toEqual([]);
+      n.off();
+      // a failure that lands while the popup is still open is the inline notice, not a toast
+      const n2 = notices();
+      setup(vi.fn().mockResolvedValue(false));
+      open();
+      const box2 = await screen.findByRole('textbox', { name: 'Output style' });
+      fireEvent.change(box2, { target: { value: 'x' } });
+      await act(async () => { fireEvent.blur(box2); });
+      expect(await screen.findByText("Couldn't save the output style")).toBeInTheDocument();
+      expect(n2.got).toEqual([]);
+      n2.off();
+    });
+
+    it('a close-time write that never settles does not keep "Loading preferences" up forever', async () => {
+      vi.useFakeTimers();
+      try {
+        const get = vi.fn().mockResolvedValue(undefined);
+        (window as any).claude = { settings: { get, set: vi.fn(() => new Promise<boolean>(() => {})) } };
+        const view = open();
+        await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+        fireEvent.change(screen.getByRole('textbox', { name: 'System prompt' }), { target: { value: 'x' } });
+        fireEvent.blur(screen.getByRole('textbox', { name: 'System prompt' }));        // a write that will never answer
+        view.rerender(<PreferencesPopup open={false} onClose={() => {}} onOpenAdvanced={() => {}} />);
+        view.rerender(<PreferencesPopup open onClose={() => {}} onOpenAdvanced={() => {}} />);
+        get.mockClear();
+        await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+        expect(get).not.toHaveBeenCalled();                                              // still waiting, briefly
+        await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+        expect(get).toHaveBeenCalled();                                                  // gave up waiting and loaded
+        expect(screen.getByRole('textbox', { name: 'System prompt' })).toBeInTheDocument();
+      } finally { vi.useRealTimers(); }
+    });
+
     it('a slow earlier load cannot overwrite a later one', async () => {
       let releaseOld!: () => void;
       const slow = new Promise<void>((r) => { releaseOld = r; });

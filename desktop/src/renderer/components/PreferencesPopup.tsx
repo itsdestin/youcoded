@@ -48,6 +48,9 @@ const LABELS: Record<keyof PrefsState, string> = {
   systemPrompt: 'the system prompt',
 };
 
+/** The longest a reopening popup waits for the previous close-time write before it loads anyway. */
+const CLOSE_WRITE_WAIT_MS = 2500;
+
 const DEFAULTS: PrefsState = {
   defaultMode: 'default',
   editorMode: 'normal',
@@ -88,7 +91,9 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
       setLoaded(true);
       return;
     }
-    closing.current.then(() => (cancelled ? undefined : Promise.all([
+    // Wait for a close-time write, but not forever: a write that never settles must not leave "Loading preferences" up.
+    let giveUp: ReturnType<typeof setTimeout> | undefined;
+    Promise.race([closing.current, new Promise<void>((r) => { giveUp = setTimeout(r, CLOSE_WRITE_WAIT_MS); })]).then(() => (cancelled ? undefined : Promise.all([
       api.get('permissions.defaultMode'),
       api.get('editorMode'),
       api.get('showTurnDuration'),
@@ -116,7 +121,7 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
       setPrefs(DEFAULTS);
       setLoaded(true);
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; clearTimeout(giveUp); };
   }, [open]);
 
   // Write-through: every change is persisted. No "save" button - matches Claude Code's own /config TUI behavior.
@@ -124,8 +129,13 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
   const latest = useRef<PrefsState>(DEFAULTS);
   const timers = useRef<Partial<Record<keyof PrefsState, ReturnType<typeof setTimeout>>>>({});
   const TEXT_KEYS: ReadonlyArray<keyof PrefsState> = ['outputStyle', 'systemPrompt'];
+  const TEXT_FIELD: Record<string, string> = { outputStyle: 'outputStyle', systemPrompt: 'systemPrompt' };
+  const TEXT_WORDS: Record<string, string> = { outputStyle: 'your output style', systemPrompt: 'your system prompt' };
 
   const saveRef = useRef<(key: keyof PrefsState, value: never) => void>(() => {});
+  /** Bumped whenever the popup closes; a save that finishes under a newer number finished after the popup was gone. */
+  const openGen = useRef(0);
+  const inflight = useRef<Set<Promise<unknown>>>(new Set());
   const persist = useCallback((key: keyof PrefsState) => {
     const api = (window.claude as any).settings;
     if (!api) return;
@@ -143,7 +153,24 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
     // typed (snapping back would wipe their writing), and Try again sends the text as it is now. A slow write shows nothing.
     void run(
       key, LABELS[key],
-      async () => { const r = await api.set(fieldMap[key], value); if (r !== false) saved.current = { ...saved.current, [key]: value }; return r; },
+      async () => {
+        const popupGen = openGen.current;
+        const write = (async () => { const r = await api.set(fieldMap[key], value); if (r !== false) saved.current = { ...saved.current, [key]: value }; return r; })();
+        if (!TEXT_KEYS.includes(key)) return write;
+        // A text save still running when the popup closes (a blur or a pause started it just before) has no popup notice left to show,
+        // so its failure goes to the app toast - once, here, and only for a failure.
+        const tracked = write.then(() => undefined, () => undefined);
+        inflight.current.add(tracked);
+        void tracked.then(() => { inflight.current.delete(tracked); });
+        try {
+          const r = await write;
+          if (openGen.current !== popupGen && (r === false || (!!r && typeof r === 'object' && (r as { ok?: unknown }).ok === false))) announce(`Couldn't save ${TEXT_WORDS[key] ?? 'that setting'}.`);
+          return r;
+        } catch (e) {
+          if (openGen.current !== popupGen) announce(`Couldn't save ${TEXT_WORDS[key] ?? 'that setting'}.`);
+          throw e;
+        }
+      },
       () => { if (TEXT_KEYS.includes(key)) return; latest.current = { ...latest.current, [key]: saved.current[key] }; setPrefs((p) => ({ ...p, [key]: saved.current[key] })); },
       () => {
         // Try again re-does the failed choice - unless the person has chosen something else for this control since it snapped back,
@@ -172,8 +199,6 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
     clearTimeout(timers.current[key]); delete timers.current[key]; persist(key);
   }, [persist]);
   // Text with a pause still pending (typed, not yet sent). Written straight to settings, with no popup notice, by the three paths below.
-  const TEXT_FIELD: Record<string, string> = { outputStyle: 'outputStyle', systemPrompt: 'systemPrompt' };
-  const TEXT_WORDS: Record<string, string> = { outputStyle: 'your output style', systemPrompt: 'your system prompt' };
   /** Send every pending text now. `report` says a failure in the app's toast (the popup is gone, so its own notice cannot). */
   const writePending = useCallback((report: boolean): Promise<void> => {
     const keys = Object.keys(timers.current) as (keyof PrefsState)[];
@@ -192,7 +217,13 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
   /** The close-time write still running, so a reopening popup can wait for it before it reads the settings back. */
   const closing = useRef<Promise<void>>(Promise.resolve());
   // Closing (or unmounting) with a pause still pending sends it once, so a typed line is not lost; a failure is toasted.
-  useEffect(() => () => { if (Object.keys(timers.current).length) closing.current = writePending(true); }, [open, writePending]);
+  useEffect(() => () => {
+    openGen.current += 1; // saves still running now will finish "after close" and toast a failure themselves
+    const waits: Promise<unknown>[] = [...inflight.current];
+    if (Object.keys(timers.current).length) waits.push(writePending(true));
+    // Only when there is something to wait for: the same cleanup also runs when the popup OPENS, and must not replace a real wait with a finished one.
+    if (waits.length) closing.current = Promise.all(waits).then(() => undefined);
+  }, [open, writePending]);
   // The window going away inside the pause: the page is hidden, so fire the write (no toast possible, no waiting). Listens only while open.
   useEffect(() => {
     if (!open) return undefined;
