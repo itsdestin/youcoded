@@ -40,4 +40,25 @@ describe('the phone\'s connection band', () => {
     rerender(<ConnectionStrip sessionId="s1" conversationStatus="complete" />);
     expect(container.textContent).toBe('');
   });
+
+  // Card #182 (deck C-6): the person's own words, after about 20 s of silence.
+  it('after about 20 s of no answer says the computer may be asleep or off, and a computer that answers clears it', () => {
+    vi.useFakeTimers();
+    const { rerender, container } = render(<ConnectionStrip sessionId="s1" conversationStatus="complete" waitingForComputer />);
+    act(() => { vi.advanceTimersByTime(14_000); });
+    expect(screen.getByText('Waiting for your computer…')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(1_500); });
+    expect(container.textContent).toBe("Can't reach your computer. It may be asleep or off. YouCoded will keep trying.");
+    rerender(<ConnectionStrip sessionId="s1" conversationStatus="complete" />);
+    expect(container.textContent).toBe('');
+  });
+
+  it('a dropped connection waits the full 20 s before guessing', () => {
+    vi.useFakeTimers();
+    const { container } = render(<ConnectionStrip sessionId="s1" conversationStatus="reconnecting" />);
+    act(() => { vi.advanceTimersByTime(19_000); });
+    expect(screen.getByText('Reconnecting to your computer…')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(1_500); });
+    expect(container.textContent).toContain("Can't reach your computer.");
+  });
 });
