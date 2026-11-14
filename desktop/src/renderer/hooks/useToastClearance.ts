@@ -11,7 +11,7 @@ export const TOAST_CLEARANCE_VAR = '--toast-clearance';
 /** Whether the bar is really on screen: laid out (not display:none, not zero size), not inert chrome (the terminal view keeps the bar
  *  mounted but inert and zero-size so a draft survives the switch), and its top inside the window. Anything else must fall back to the
  *  default, because a clearance measured from a hidden bar would push the notice off the screen. */
-export function barIsUsable(el: HTMLElement, windowHeight: number): boolean {
+function barIsUsable(el: HTMLElement, windowHeight: number): boolean {
   if (!el.isConnected || el.closest('[inert]')) return false;
   const style = getComputedStyle(el);
   if (style.display === 'none' || style.visibility === 'hidden') return false;

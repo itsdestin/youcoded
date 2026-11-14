@@ -25,7 +25,6 @@ const MAX_PICTURE_BYTES = 50 * 1024 * 1024;
 /** The whole fetch, redirects included, gets this long. A body that never ends is cut here. */
 const PICTURE_TIMEOUT_MS = 30_000;
 
-export type PictureAction = 'copy' | 'save';
 export interface PictureResult { ok: boolean; canceled?: boolean; reason?: string }
 
 /** The picture formats Save will write, found from the FIRST BYTES, never from the name or the declared type. SVG is left out on
