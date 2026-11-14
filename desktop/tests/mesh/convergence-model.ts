@@ -304,7 +304,9 @@ class Sim {
     let last = '';
     for (let round = 0; round < 80; round++) {
       this.rounds = round;
-      this.now += TAKEOVER * 8;
+      // WHY 10 s a round (third review): heads repeat every 30 s in the service (every 3rd round here), and a peer is answered at most REPLY_ENTRIES entries
+      // per 30 s; the old 0.8 s round made the reply budget look 12x tighter than it is.
+      this.now += 10_000;
       for (const d of this.devs) if (d.honest && !d.silent) await this.after(d, round % 3 === 0 || round < 6); // quiet (self-removed) devices tick too: they must still ask for what they lack
       let moved = true;
       let guard = 0;
@@ -362,15 +364,27 @@ class Sim {
     if (remaining.length > 0) {
       // order independence: the same SET in another order and with duplicates gives the same state
       const ref = remaining[0];
-      const shuffled = [...ref.roster.entries].sort(() => this.r() - 0.5);
-      const s = new RosterStore('mem', () => this.now, { memory: true, mutual: this.o.mutual });
-      let pending = shuffled;
-      for (let i = 0; i < 40 && pending.length; i++) {
-        const next: SignedEntry[] = [];
-        for (const e of pending) { try { await s.append(e); } catch { next.push(e); } }
-        if (next.length === pending.length) break;
-        pending = next;
+      // a RANDOM CAUSAL order (every entry after the entries it cites, otherwise random): Kahn's algorithm with a random pick among the ready ones
+      const all = [...ref.roster.entries];
+      const byId = new Map(all.map((e) => [toHex(e.id), e]));
+      const waitingOn = new Map<string, number>();
+      const children = new Map<string, SignedEntry[]>();
+      const ready: SignedEntry[] = [];
+      for (const e of all) {
+        const deps = e.seen.map((x) => toHex(x)).filter((x) => byId.has(x));
+        waitingOn.set(toHex(e.id), deps.length);
+        for (const dp of deps) children.set(dp, [...(children.get(dp) ?? []), e]);
+        if (deps.length === 0) ready.push(e);
       }
+      const shuffled: SignedEntry[] = [];
+      while (ready.length) {
+        const e = ready.splice(Math.floor(this.r() * ready.length), 1)[0];
+        shuffled.push(e);
+        for (const c of children.get(toHex(e.id)) ?? []) { const w = (waitingOn.get(toHex(c.id)) as number) - 1; waitingOn.set(toHex(c.id), w); if (w === 0) ready.push(c); }
+      }
+      const s = new RosterStore('mem', () => this.now, { memory: true, mutual: this.o.mutual });
+      const pending: SignedEntry[] = [];
+      for (const e of shuffled) { try { await s.append(e); } catch (err) { pending.push(e); if (process.env.DBGF) require('fs').appendFileSync(process.env.DBGF, `${e.kind} by ${toHex(e.device).slice(0, 4)}: ${(err as Error).message}\n`); } }
       for (const e of shuffled.slice(0, 5)) await s.append(e).catch(() => undefined); // duplicates
       const probe: Dev = { ...ref, roster: s } as Dev;
       if (pending.length === 0 && this.digest(probe) !== this.digest(ref)) bad.push('(i) the state depends on the order entries arrived in');

@@ -114,7 +114,7 @@ export interface LinkOptions {
   isRemoved?: (deviceId: Buffer) => boolean;
   now?: () => number;
   log?: (event: string, fields?: Record<string, string | number>) => void;
-  onEvent?: (event: 'rolled-back' | 'gap' | 'rejected', info: { group: string }) => void;
+  onEvent?: (event: 'rolled-back' | 'gap' | 'rejected' | 'waiting', info: { group: string }) => void;
 }
 
 type Waiting =
@@ -390,6 +390,9 @@ export class Link {
       evict(this.#waiting.find((x) => this.senderOf(x) === top) as Waiting);
     }
     this.log('frame-waiting', { group: w.group });
+    // WHY (third review, finding 7): control frames are now sealed under the secret that excludes removed devices, so a device that is behind sees the
+    // other members' frames as waiting (secret not held yet). It says so at once (the service answers with its heads) instead of waiting for its next periodic announcement.
+    this.#o.onEvent?.('waiting', { group: w.group });
   }
   /** Judge every waiting frame of `group` again (each once). Frames that now verify are delivered; the rest stay or expire. */
   private async drainWaiting(group: string): Promise<void> {

@@ -234,7 +234,11 @@ export class MeshService {
       // The receiver save number lives in the sealed key file (see link.ts for why and where it falls short).
       counter: { get: () => this.#k.receiverSaves, set: async (n) => { this.#k = await this.keys.update((k) => { k.receiverSaves = Math.max(k.receiverSaves, n); }); } },
       onFrame: (f) => this.onFrame(f),
-      onEvent: (e, info) => { if (e === 'gap' && info.group === GROUP_ROSTER) { this.#rosterGaps++; void this.afterChange(true); } },
+      onEvent: (e, info) => {
+        if (e === 'gap' && info.group === GROUP_ROSTER) { this.#rosterGaps++; void this.afterChange(true); }
+        // a device that is behind announces its heads at once (at most every 5 s), so the others answer with the proof of what it missed
+        if (e === 'waiting' && info.group === GROUP_ROSTER && this.now() - this.#lastWaitingHeads >= 5_000) { this.#lastWaitingHeads = this.now(); void this.afterChange(true); }
+      },
       log: this.o.log,
     });
     await this.#link.start(this.o.testMode ? [GROUP_ROSTER, GROUP_TEST_NOTE] : [GROUP_ROSTER]);
@@ -272,6 +276,7 @@ export class MeshService {
     this.#afterChain = p.catch(() => undefined);
     return p;
   }
+  #lastWaitingHeads = 0;
   private emit(out: Out[]): void {
     // optional: a frame that needs the current secret when none is held yet is dropped, not queued (it would block the bundle that creates that secret); heads and requests repeat
     for (const o of out) void this.#link?.sendDurable({ group: GROUP_ROSTER, kind: o.kind, body: o.body, to: o.to, wide: o.wide === true, optional: o.wide !== true }).catch(() => undefined);

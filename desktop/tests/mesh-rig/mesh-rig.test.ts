@@ -358,17 +358,17 @@ describe.skipIf(!enabled || !avail.ok)('mesh rig: three jailed backends and the 
     expect((await status(devs.P)).removedDevices).not.toContain(uId);
   }, 180_000);
 
-  it('a host with 500 roster entries still pairs a new device through the relay (the welcome is far above the old 16 KiB limit)', async () => {
+  it('a host with 240 roster entries (the most one device may sign is 256) still pairs a new device through the relay (the welcome is far above the old 16 KiB limit)', async () => {
     await Promise.all(['V', 'W'].map((n) => startDevice(devs[n], opts[n])));
     await devs.V.control!.post('/create-set');
     await until(async () => (await status(devs.V)).relay === 'ready', 'V on the relay');
-    await devs.V.control!.post('/stress-append', { n: 500 });
-    expect((await status(devs.V)).rosterCount).toBe(501);
+    await devs.V.control!.post('/stress-append', { n: 240 });
+    expect((await status(devs.V)).rosterCount).toBe(241);
     await pair(devs.V, devs.W);
-    await until(async () => (await status(devs.W)).rosterCount >= 502, 'W holds the whole roster');
+    await until(async () => (await status(devs.W)).rosterCount >= 242, 'W holds the whole roster');
     const re = new RosterStore(path.join(devs.W.userData, 'mesh'));
     await re.load();
-    expect(re.size).toBeGreaterThanOrEqual(502);
+    expect(re.size).toBeGreaterThanOrEqual(242);
     await until(async () => (await status(devs.W)).relay === 'ready', 'W on the relay');
     expect((await status(devs.V)).unconfirmedJoins).toEqual([]);
   }, 240_000);

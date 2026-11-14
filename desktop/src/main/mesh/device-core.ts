@@ -144,19 +144,23 @@ export class DeviceCore {
     }
     return [...out.values()].slice(0, 64);
   }
-  /** Entries (with ancestors we hold) that answer a request for `ids`. */
+  /** Entries (with ancestors we hold) that answer a request for `ids`, NEAREST FIRST: the asked entries, then their parents, and so on.
+   *  WHY not in log order (third review): an answer is cut to a few hundred entries per window, and a device that asks for what it lacks already holds the
+   *  oldest part of the log, so log order would send it the same old entries every time and never the ones it asked for. */
   answerNeed(ids: Buffer[]): SignedEntry[] {
-    const want = new Set<string>();
-    const stack = ids.filter((i) => this.o.roster.has(i)).map((i) => toHex(i));
-    while (stack.length && want.size < MAX_REPLY_ENTRIES) {
-      const k = stack.pop() as string;
-      if (want.has(k)) continue;
+    const seen = new Set<string>();
+    const out: SignedEntry[] = [];
+    const queue = ids.filter((i) => this.o.roster.has(i)).map((i) => toHex(i));
+    for (let qi = 0; qi < queue.length && out.length < MAX_REPLY_ENTRIES; qi++) {
+      const k = queue[qi];
+      if (seen.has(k)) continue;
+      seen.add(k);
       const e = this.o.roster.entryById(Buffer.from(k, 'hex'));
       if (!e) continue;
-      want.add(k);
-      for (const s of e.seen) stack.push(toHex(s));
+      out.push(e);
+      for (const x of e.seen) queue.push(toHex(x));
     }
-    return this.o.roster.entries.filter((e) => want.has(toHex(e.id)));
+    return out;
   }
   heads(): Buffer[] {
     return this.o.roster.heads().slice(0, 64);
@@ -363,24 +367,30 @@ export class DeviceCore {
       }
     } else if (kind === KIND_HEADS) {
       const hb = parseHeadsBody(body);
+      if (this.peerGens.size < 256 || this.peerGens.has(fromHex)) this.peerGens.set(fromHex, hb.gens.slice(0, 64));
       const { want, send } = this.onPeerHeads(hb.heads);
-      // a removed asker, or one that does not yet hold our current secret (it is BEHIND: it has not heard of the removal, and the removal bundle cannot be
-      // accepted without the entries it rests on), is told only what proves the removals, sealed under the first secret every member holds
-      const removedAsker = this.o.roster.isRemoved(from) || this.behind(fromHex);
+      // A REMOVED asker is told only what proves its removal. A member that does not yet hold our current secret (it is BEHIND: it has not heard of the
+      // removal, and cannot read anything sealed under the new secret, including the entries its acceptance of the removal bundle waits for) is answered
+      // under the first secret every member holds ("wide"), with everything it lacks: it needs the whole set to judge the removal the way we do, so its
+      // answer cannot be cut down to a "proof" (a view built from a proof alone can be wrong, and it never converges). The cost: for as long as a member is
+      // behind, what it lacks is readable by a removed device that is still listening. That is the honest limit of "wide".
+      const removedAsker = this.o.roster.isRemoved(from);
+      const wideAsker = removedAsker || this.behind(fromHex);
       // a current secret this member lacks (a bundle that never reached it): re-seal it, same secret, to that member (never to a removed one: answerGenNeed refuses)
       for (const b of this.answerGenNeed(this.currentLabels().filter((l) => !hb.gens.includes(l)), fromHex)) if (this.spendBundle(fromHex)) out.push({ kind: KIND_REMOVAL, body: removalBody(b), to: from, wide: true });
       const ents = removedAsker ? this.removalProof(send) : send;
       const n = this.spend(fromHex, Math.min(ents.length, REPLY_ENTRIES_PER_FRAME), 1);
-      if (ents.length && n > 0) out.push({ kind: KIND_ROSTER, body: rosterBody(ents.slice(0, n)), to: from, ...(removedAsker ? { wide: true as const } : {}) });
+      if (ents.length && n > 0) out.push({ kind: KIND_ROSTER, body: rosterBody(ents.slice(0, n)), to: from, ...(wideAsker ? { wide: true as const } : {}) });
       else if (ents.length) this.count('reply-throttled');
-      if (want.length) out.push({ kind: KIND_NEED, body: needBody(want), to: from, ...(removedAsker ? { wide: true as const } : {}) });
+      if (want.length) out.push({ kind: KIND_NEED, body: needBody(want), to: from, ...(wideAsker ? { wide: true as const } : {}) });
     } else if (kind === KIND_NEED) {
       const n = parseNeedBody(body);
-      const removedAsker = this.o.roster.isRemoved(from) || this.behind(fromHex);
+      const removedAsker = this.o.roster.isRemoved(from);
+      const wideAsker = removedAsker || this.behind(fromHex);
       const all = this.answerNeed(n.want);
       const ents = removedAsker ? this.removalProof(all) : all;
       const k = this.spend(fromHex, Math.min(ents.length, REPLY_ENTRIES_PER_FRAME), 1);
-      if (ents.length && k > 0) out.push({ kind: KIND_ROSTER, body: rosterBody(ents.slice(0, k)), to: from, ...(removedAsker ? { wide: true as const } : {}) });
+      if (ents.length && k > 0) out.push({ kind: KIND_ROSTER, body: rosterBody(ents.slice(0, k)), to: from, ...(wideAsker ? { wide: true as const } : {}) });
       else if (ents.length) this.count('reply-throttled');
       for (const b of this.answerGenNeed(n.gens, fromHex)) if (this.spendBundle(fromHex)) out.push({ kind: KIND_REMOVAL, body: removalBody(b), to: from, wide: true });
     }
@@ -412,18 +422,27 @@ export class DeviceCore {
    *  the removal bundle that would catch it up needs entries that only such frames carry. Such a member is answered under the first secret, with the proof only. */
   private behind(peerHex: string): boolean {
     if (this.o.roster.removedIds().size === 0 && this.o.roster.excludedIds().size === 0) return false;
-    const cur = this.currentLabel();
-    if (cur === null) return true; // we know of removals and hold no secret that excludes them yet: nobody can be given more than the proof
-    const h = this.o.book.held.get(cur);
-    if (!h?.stmt) return false;
-    return !h.stmt.members.some((m) => toHex(m) === peerHex) && !(this.o.book.sealedTo.get(cur)?.has(peerHex) ?? false);
+    const cur = this.currentLabels();
+    if (cur.length === 0) return true; // we know of removals and hold no secret that excludes them yet: nobody can be given more than the proof
+    // WHY the peer's own list of secrets it holds (its last `heads`), and not whether the secret was made FOR it: a member the secret was made for may
+    // still lack it (the bundle was lost, or this device restarted), and then everything sealed under it is unreadable to that member, including the
+    // entries its acceptance of the bundle waits for. Unknown (no heads seen yet) counts as behind: the proof costs nothing and the first heads settle it.
+    const known = this.peerGens.get(peerHex);
+    return !known || !cur.some((l) => known.includes(l));
   }
+  private readonly peerGens = new Map<string, number[]>();
   /** What a removed or behind device may still be told: only the entries that prove the removals (each removal and everything before it), so it learns
    *  it is out (or catches up) and learns nothing about what happened afterwards. */
   private removalProof(entries: SignedEntry[]): SignedEntry[] {
     const allowed = new Set<string>();
     const stack: string[] = [];
-    for (const t of this.o.roster.excludedIds()) stack.push(...this.o.roster.removalIdsOf(t));
+    for (const t of this.o.roster.excludedIds()) {
+      stack.push(...this.o.roster.removalIdsOf(t));
+      // WHY also the entry that introduced each excluded device: a secret's statement lists every device excluded when it was made (ghosts whose admission is
+      // void included), and a receiver waits until it knows each of them, so it must be able to get those `add` entries (and what they rest on).
+      const intro = this.o.roster.introductionOf(Buffer.from(t, 'hex'));
+      if (intro) stack.push(toHex(intro.id));
+    }
     while (stack.length) {
       const k = stack.pop() as string;
       if (allowed.has(k)) continue;
@@ -445,13 +464,18 @@ export class DeviceCore {
     if (hello) out.push({ kind: KIND_ROSTER, body: rosterBody([hello]) });
     const plan = quiet ? { bundles: [], nextAt: null } : this.plan(now);
     for (const b of plan.bundles) if (b.sealed.size > 0) out.push({ kind: KIND_REMOVAL, body: removalBody(b), wide: true });
-    if (announce) out.push({ kind: KIND_HEADS, body: headsBody(this.heads(), this.currentLabels()) });
+    // WHY also when the set of current secrets changed (third review, finding 7): peers answer a member that lacks the current secret with the removal proof
+    // only (they remember which secrets each peer last said it holds), so a device that has just taken the new secret says so at once.
+    const gensNow = this.currentLabels().join(',');
+    if (announce || gensNow !== this.gensSent) out.push({ kind: KIND_HEADS, body: headsBody(this.heads(), this.currentLabels()) });
+    this.gensSent = gensNow;
     const wanted = this.wanted();
     if (wanted.length && (announce || wanted.length !== this.wantedSent)) out.push({ kind: KIND_NEED, body: needBody(wanted) });
     this.wantedSent = wanted.length;
     return { out, nextAt: plan.nextAt };
   }
   wantedSent = 0;
+  private gensSent = '';
 
   /** Genesis: the secret made with the set. */
   genesis(): void {

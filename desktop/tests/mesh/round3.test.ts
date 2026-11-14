@@ -536,7 +536,7 @@ describe('replies: frame budget, and a member that is behind', () => {
     expect(frames).toBeLessThanOrEqual(16);
     expect(frames).toBeGreaterThan(0);
   });
-  it('a member that does not hold the current secret (admitted after it was made, not re-sealed yet) is answered with the removal proof only, under the first secret', async () => {
+  it('a member that does not hold the current secret (admitted after it was made, not re-sealed yet) is answered under the FIRST secret (wide), with everything it lacks (it needs the whole set to judge the removal as we do)', async () => {
     const [A, B, X, C] = ids(4);
     const clock = { t: 1_000_000 };
     const roster = new RosterStore('/x', () => clock.t, { memory: true });
@@ -554,6 +554,6 @@ describe('replies: frame budget, and a member that is behind', () => {
     const sent = r.out.filter((o) => o.kind === KIND_ROSTER);
     expect(sent.length).toBeGreaterThan(0);
     expect(sent.every((o) => o.wide === true)).toBe(true);
-    expect(sent.flatMap((o) => (o.body as unknown as { entries: SignedEntry[] }).entries).some((e) => e.id.equals(extra.id))).toBe(false);
+    expect(sent.flatMap((o) => (o.body as unknown as { entries: SignedEntry[] }).entries).some((e) => e.id.equals(extra.id))).toBe(true);
   });
 });
