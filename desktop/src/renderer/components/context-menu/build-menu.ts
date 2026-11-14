@@ -326,10 +326,12 @@ function imageMenu(img: HTMLImageElement, target: HTMLElement): MenuEntry[] {
     }
     if (!ok) announce(action === 'copy' ? "Couldn't copy that picture." : "Couldn't save that picture.");
   };
-  if (desktop || canCopyImageHere()) {
+  // WHY only a website address gets Copy and Save: the computer refuses every other kind (picture-actions.ts), so offering them
+  // would be a button that always fails.
+  if (onWeb && (desktop || canCopyImageHere())) {
     entries.push({ type: 'item', id: 'copy-image', label: 'Copy image', icon: 'copy', disabled: !src, run: () => attempt('copy') });
   }
-  if (desktop) entries.push({ type: 'item', id: 'save-image', label: 'Save image as\u2026', icon: 'save', disabled: !src, run: () => attempt('save') });
+  if (onWeb && desktop) entries.push({ type: 'item', id: 'save-image', label: 'Save image as\u2026', icon: 'save', disabled: !src, run: () => attempt('save') });
   if (onWeb) entries.push({ type: 'item', id: 'copy-image-address', label: 'Copy image address', icon: 'link', run: () => void copyText(src) });
   if (entries.length) entries.push({ type: 'sep' });
   const name = alt || baseName(src.split(/[?#]/)[0]) || 'picture';

@@ -140,7 +140,7 @@ export const shellChannels: MainChannelDef[] = [
   // Copy or save a picture from a chat (card #143 a). desktopOnly: it uses the computer's clipboard and save window.
   defineChannel({
     name: IPC.PICTURE_ACTION, kind: 'handle', desktopOnly: true,
-    handler: async (payload) => runPictureAction(payload?.action === 'save' ? 'save' : 'copy', payload?.src, getMainWindow()),
+    handler: async (payload) => runPictureAction(payload?.action, payload?.src, getMainWindow()),
   }),
 
   // Open a local file with the OS default app (HTML to browser, .docx to Word, ...). Resolves with '' on success or an

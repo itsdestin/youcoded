@@ -21,10 +21,10 @@ describe('picture menu', () => {
     (window as any).claude = { shell: { pictureAction: vi.fn().mockResolvedValue({ ok: true }) } };
     expect(ids(chatWithPicture('https://example.com/a.png'))).toEqual(['copy-image', 'save-image', 'copy-image-address', 'ask']);
   });
-  it('a picture that is not from a website has no address item', () => {
+  it('a picture that is not from a website has no copy, save or address item (the computer refuses such addresses)', () => {
     (globalThis as any).__openInOs = true;
     (window as any).claude = { shell: { pictureAction: vi.fn() } };
-    expect(ids(chatWithPicture('file:///home/me/a.png'))).toEqual(['copy-image', 'save-image', 'ask']);
+    expect(ids(chatWithPicture('file:///home/me/a.png'))).toEqual(['ask']);
   });
   it('on a phone: no save, and no copy where the browser cannot put a picture on the clipboard', () => {
     expect(ids(chatWithPicture('https://example.com/a.png'))).toEqual(['copy-image-address', 'ask']);
