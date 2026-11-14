@@ -21,6 +21,12 @@ import { render, cleanup, act } from '@testing-library/react';
 // WHY: the real stats provider fetches over HTTP (outside window.claude) and
 // publishes another context value whenever it settles. This test measures a
 // memo boundary, not network/cache initialization; keep that input fixed.
+// Lets a test force the marketplace's own refresh-failed state while the REAL provider still loads the list.
+const mpError = vi.hoisted(() => ({ value: null as string | null }));
+vi.mock('../src/renderer/state/marketplace-context', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/renderer/state/marketplace-context')>();
+  return { ...real, useMarketplace: () => { const mp = real.useMarketplace(); return mpError.value ? { ...mp, error: mpError.value } : mp; } };
+});
 const statsState = vi.hoisted(() => ({ value: { loading: false, plugins: {}, themes: {}, error: null as string | null, refresh: () => {}, applyThumbs: () => {}, ensureLoaded: () => {} } }));
 vi.mock('../src/renderer/state/marketplace-stats-context', () => {
   const stats = statsState.value;
@@ -150,6 +156,7 @@ describe('MarketplaceScreen', () => {
     setupWindowClaude();
     renders.corner = 0;
     statsState.value.error = null;
+    mpError.value = null;
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     io = installFiringIntersectionObserver();
   });
@@ -165,6 +172,20 @@ describe('MarketplaceScreen', () => {
     const { container, getByText } = await renderScreen();
     expect(getByText(/Couldn't load the install and like counts/)).toBeTruthy();
     expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Try again')).toBe(true);
+  });
+
+  // Destin's N4: a failed refresh over an older list is a thin notice under the filter bar; the list stays usable.
+  it('says a refresh failed while the older list stays on screen, with Try again', async () => {
+    mpError.value = 'timed out';
+    const { container, getByText } = await renderScreen();
+    expect(getByText(/Couldn't refresh the marketplace, so this list may be out of date/)).toBeTruthy();
+    expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Try again')).toBe(true);
+    expect(cards(container)).toBeGreaterThan(0); // the list is still there and usable
+  });
+
+  it('shows no refresh notice when the refresh did not fail', async () => {
+    const { queryByText } = await renderScreen();
+    expect(queryByText(/Couldn't refresh the marketplace/)).toBeNull();
   });
 
   it('shows no notice while the counts are fine', async () => {

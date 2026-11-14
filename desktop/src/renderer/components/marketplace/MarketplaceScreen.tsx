@@ -524,6 +524,14 @@ export default function MarketplaceScreen({
       <div className="px-3 sm:px-4 mt-2">
         <MarketplaceFilterBar value={filter} onChange={setFilter} />
       </div>
+      {/* N4 (Destin): a refresh that failed while an older list is on screen. The list stays usable; the strip says it may be
+          out of date and offers Try again. `mp.error` is cleared when the next load starts and only set again on failure, so
+          it disappears on the next successful refresh. A screen with NOTHING loaded gets the full-screen error instead. */}
+      {!!mp.error && !registryEmpty && (
+        <div className="px-3 sm:px-4 mt-2">
+          <ErrorState variant="inline" message={`Couldn't refresh the marketplace, so this list may be out of date: ${plainMessage(mp.error)}`} onRetry={() => { void mp.refresh(); }} />
+        </div>
+      )}
       {statsFailed && (
         <div className="px-3 sm:px-4 mt-2">
           <ErrorState variant="inline" message={`Couldn't load the install and like counts, so they are hidden: ${plainMessage(stats.error)}`} onRetry={() => { void stats.refresh(); }} />
