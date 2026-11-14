@@ -295,7 +295,10 @@ describe('a foldered model is found by the header reader and by the loaded-memor
     // weights alone, so without the projector term a resident vision model is
     // under-counted by up to 2.6 GB — and the number it feeds is the one that
     // decides whether the NEXT model is refused.
-    plantVisionFolder('R-Q4_K_M', 3 * GB, GB);           // the resident one
+    // WHY a projector of exactly 1e9 bytes (2026-11-13): the headline is in 1000-based GB to one
+    // decimal (#143), so a 1024-based GB (1.074) made the delta 1.0 or 1.1 depending on how the
+    // rest of the sum rounded — it turned 1.1 when the default context became 64k.
+    plantVisionFolder('R-Q4_K_M', 3 * GB, 1e9);          // the resident one
     plantVisionFolder('V-Q4_K_M', 4 * GB, 2 * GB);       // the one being checked
     const userData = path.join(root, 'userData');
     plantEngine(userData);
