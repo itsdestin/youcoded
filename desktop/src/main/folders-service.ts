@@ -12,7 +12,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { readFolders, writeFolders, homeIsAppPrivate, withoutPrivateHome, pathKey, type SavedFolder } from './saved-folders';
+import { readFolders, writeFolders, readUsage, writeUsage, homeIsAppPrivate, withoutPrivateHome, pathKey, type SavedFolder } from './saved-folders';
 import { getManagedRoots, isRemovedProject } from './sync-spaces/service';
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 
@@ -65,10 +65,14 @@ export function listPickerFolders(file?: string): PickerFolder[] {
   // normalized path. addedAt:0 sorts them below user-added folders.
   const managed = getManagedRoots()?.listProjects() ?? [];
   const known = new Set(result.map((f) => pathKey(f.path)));
+  // Last-use stamps of synced projects live in their own small file (saved-folders.ts usageFilePath), applied here to the rows
+  // that are only synthesized, so a project used most recently sorts first without ever becoming a saved folder.
+  const usage = managed.length ? readUsage(file) : {};
   for (const p of managed) {
     if (isRemovedFromLists(p.path, saved)) continue;
     if (!known.has(pathKey(p.path))) {
-      result.push({ path: p.path, nickname: p.name, addedAt: 0, exists: true, managed: true });
+      const at = usage[pathKey(p.path)];
+      result.push({ path: p.path, nickname: p.name, addedAt: 0, exists: true, managed: true, ...(at ? { lastUsedAt: at } : {}) });
     }
   }
   // Card #143 b: most recently used first. A stable sort, so folders never used (no stamp) keep the order they always had,
@@ -76,16 +80,27 @@ export function listPickerFolders(file?: string): PickerFolder[] {
   return result.map((f, i) => ({ f, i })).sort((a, b) => ((b.f.lastUsedAt ?? 0) - (a.f.lastUsedAt ?? 0)) || a.i - b.i).map((x) => x.f);
 }
 
-/** Stamp a saved folder as just used (a session started in it). A folder that is not saved is left alone: the picker lists
- *  synced projects without saving them, and a start in a one-off folder must not add it to the list. Never throws. */
+/** Stamp a folder as just used (a session the person started in it): a saved folder on its own entry, a synced project in the usage file.
+ *  A start in a one-off folder (neither) must not add it to the list. Never throws. */
 export function noteFolderUsed(folderPath: unknown, file?: string): void {
   try {
     if (typeof folderPath !== 'string' || !folderPath) return;
     const folders = readFolders(file);
     const entry = folders.find((f) => keyOf(f.path) === keyOf(folderPath));
-    if (!entry) return;
-    entry.lastUsedAt = Date.now();
-    writeFolders(folders, file);
+    if (entry) {
+      entry.lastUsedAt = Date.now();
+      writeFolders(folders, file);
+      return;
+    }
+    // Not saved: a synced project is still a row in the picker, so it is stamped too, in its own file and WITHOUT being saved. A one-off
+    // folder that is neither saved nor a project gets nothing. Stamps of projects that no longer exist are dropped on every write.
+    const projects = getManagedRoots()?.listProjects() ?? [];
+    const here = projects.find((p) => keyOf(p.path) === keyOf(folderPath));
+    if (!here || isRemovedFromLists(here.path, folders)) return;
+    const live = new Set(projects.map((p) => keyOf(p.path)));
+    const usage = Object.fromEntries(Object.entries(readUsage(file)).filter(([k]) => live.has(k)));
+    usage[keyOf(here.path)] = Date.now();
+    writeUsage(usage, file);
   } catch { /* an unwritable list must never stop a session from starting */ }
 }
 

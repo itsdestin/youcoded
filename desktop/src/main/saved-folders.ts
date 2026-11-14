@@ -28,6 +28,32 @@ function foldersFilePath(): string {
   return path.join(os.homedir(), '.claude', 'youcoded-folders.json');
 }
 
+/** Where "when was this synced project last used" lives: a small file beside the saved folders, NOT inside them. WHY (Destin, Q-8:
+ *  "if its synced, then shouldnt it be in the list?"): a synced project must rise to the top like any folder once used, but saving
+ *  it as a folder would change what removal, "Sync stopped" and the import flow see. Key = pathKey(path), value = ms. */
+export function usageFilePath(foldersFile: string = foldersFilePath()): string {
+  return path.join(path.dirname(foldersFile), 'youcoded-folder-usage.json');
+}
+
+export function readUsage(foldersFile?: string): Record<string, number> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(usageFilePath(foldersFile), 'utf-8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter(([, v]) => typeof v === 'number' && Number.isFinite(v))) as Record<string, number>;
+  } catch {
+    return {};
+  }
+}
+
+export function writeUsage(usage: Record<string, number>, foldersFile?: string): void {
+  const file = usageFilePath(foldersFile);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // Same temp-file + rename as writeFolders: a concurrent reader never sees half a file.
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(usage));
+  try { fs.renameSync(tmp, file); } catch (e) { try { fs.rmSync(tmp, { force: true }); } catch { /* best-effort */ } throw e; }
+}
+
 export function readFolders(file: string = foldersFilePath()): SavedFolder[] {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));

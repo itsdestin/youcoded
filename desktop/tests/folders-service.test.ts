@@ -208,3 +208,57 @@ describe('folder order by last use', () => {
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toHaveLength(1);
   });
 });
+
+// Destin, Q-8 ("if its synced, then shouldnt it be in the list?"): a synced project he uses rises to the top like any folder, without
+// ever becoming a saved folder.
+describe('folder order: synced projects', () => {
+  const setup = () => {
+    const projectsRoot = path.join(dir, 'Projects');
+    const a = path.join(projectsRoot, 'alpha'); const b = path.join(projectsRoot, 'beta');
+    const saved = path.join(dir, 'saved');
+    fs.mkdirSync(a, { recursive: true }); fs.mkdirSync(b, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify([{ path: saved, nickname: 'saved', addedAt: 5 }]));
+    h.managed = { projectsRoot, listProjects: () => [{ path: a, name: 'alpha' }, { path: b, name: 'beta' }] };
+    return { a, b, saved };
+  };
+  it('a synced project used most recently sorts first, and the saved-folders file is untouched by using it', async () => {
+    const { b } = setup();
+    const before = fs.readFileSync(file, 'utf8');
+    const { noteFolderUsed } = await import('../src/main/folders-service');
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['saved', 'alpha', 'beta']);
+    noteFolderUsed(b, file);
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['beta', 'saved', 'alpha']);
+    expect(fs.readFileSync(file, 'utf8')).toBe(before); // never became a saved folder
+  });
+  it('a saved folder used later than a project goes above it, and the project keeps its row as a synced one', async () => {
+    const { a, saved } = setup();
+    const { noteFolderUsed } = await import('../src/main/folders-service');
+    noteFolderUsed(a, file);
+    await new Promise((r) => setTimeout(r, 5));
+    noteFolderUsed(saved, file);
+    const list = listPickerFolders(file);
+    expect(list.map((f) => f.nickname)).toEqual(['saved', 'alpha', 'beta']);
+    expect(list.find((f) => f.nickname === 'alpha')!.managed).toBe(true);
+  });
+  it('a one-off folder that is neither saved nor a project is not added and leaves no stamp', async () => {
+    setup();
+    const { noteFolderUsed } = await import('../src/main/folders-service');
+    const before = fs.readFileSync(file, 'utf8');
+    noteFolderUsed(path.join(dir, 'elsewhere'), file);
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    expect(fs.existsSync(path.join(dir, 'youcoded-folder-usage.json'))).toBe(false);
+  });
+  it('a removed project leaves no row, is not stamped, and its old stamp is dropped on the next write', async () => {
+    const { a, b } = setup();
+    const { noteFolderUsed } = await import('../src/main/folders-service');
+    noteFolderUsed(a, file);
+    noteFolderUsed(b, file);
+    h.removed = new Set(['alpha']);
+    expect(listPickerFolders(file).map((f) => f.nickname)).not.toContain('alpha');
+    noteFolderUsed(a, file); // removed: no stamp
+    h.managed = { ...h.managed!, listProjects: () => [{ path: b, name: 'beta' }] }; // alpha is gone entirely
+    noteFolderUsed(b, file);
+    const stamps = JSON.parse(fs.readFileSync(path.join(dir, 'youcoded-folder-usage.json'), 'utf8'));
+    expect(Object.keys(stamps)).toHaveLength(1);
+  });
+});
