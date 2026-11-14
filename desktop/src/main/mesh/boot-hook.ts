@@ -6,6 +6,7 @@
 //
 // When the switch is OFF this returns null having done nothing but read `<userData>/mesh-switch.json` (and found nothing):
 // no folder, no file, no socket, no timer.
+import os from 'os';
 import { meshSwitch } from './config';
 import type { SafeStorageLike } from './keystore';
 import { log } from '../logger';
@@ -14,8 +15,7 @@ export interface MeshBootInput {
   userData: string;
   safeStorage: SafeStorageLike;
   packaged: boolean;
-  /** Device name and platform for the roster entry. */
-  deviceName?: string;
+  /** Platform word for the roster entry (the phone's backend passes 'android'; default is this OS). */
   platform?: string;
 }
 export interface MeshHandle { stop(): Promise<void> }
@@ -38,7 +38,7 @@ export async function startMeshIfEnabled(i: MeshBootInput): Promise<MeshHandle |
       throw e;
     }
     const svc = new MeshService({
-      userData: i.userData, sealer, testMode: sw.testMode, deviceName: i.deviceName ?? 'This device', platform: i.platform ?? process.platform, log: event,
+      userData: i.userData, sealer, testMode: sw.testMode, deviceName: process.env.YOUCODED_DEVICE_NAME || os.hostname(), platform: i.platform ?? process.platform, log: event,
       relayUrl: sw.testMode ? process.env.YOUCODED_MESH_RELAY_URL : undefined,
       relayBaseDelayMs: sw.testMode && process.env.YOUCODED_MESH_RELAY_BACKOFF_MS ? Number(process.env.YOUCODED_MESH_RELAY_BACKOFF_MS) : undefined,
     });

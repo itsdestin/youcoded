@@ -72,8 +72,17 @@
     // in an empty network namespace so it cannot fetch a web-address picture during a
     // save. A POSIX/Linux utility, never an npm package, and its ABSENCE is a handled
     // case (netnsSupported() probes it once and falls back when the kernel forbids it).
-    "unshare"
+    "unshare",
+    // bubblewrap (Linux sandbox), tests/mesh-rig/rig.ts: the Mesh test rig runs each backend with the real home
+    // replaced by an empty decoy folder. A system tool, never an npm package; the test skips with a message without it.
+    "bwrap"
   ],
+
+  // The relay wire types are a VERBATIM copy of the Worker's protocol.ts (tests/mesh/protocol-drift.test.ts fails if the two
+  // differ), so the app cannot delete the constants it does not use yet without breaking the copy. Not dead code.
+  "ignoreIssues": {
+    "src/shared/mesh-protocol.ts": ["exports", "types"]
+  },
 
   "ignoreDependencies": [
     // tailwindcss is NOT listed any more: with .css in `project`, knip resolves

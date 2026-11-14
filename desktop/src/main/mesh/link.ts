@@ -46,7 +46,7 @@ export interface Carrier {
 }
 
 /** Where the receiver save number lives (see the header). keys.bin implements it today. */
-export interface CounterStore {
+interface CounterStore {
   get(): number;
   set(n: number): Promise<void>;
 }

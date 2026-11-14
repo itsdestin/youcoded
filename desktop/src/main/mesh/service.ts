@@ -26,7 +26,7 @@ import { RosterStore } from './roster-store';
 import { ensureDir } from './fs-durable';
 import { GROUP_ROSTER, GROUP_TEST_NOTE, KIND_NOTE, KIND_REMOVAL, KIND_ROSTER, noteBody, parseNoteBody, parseRemovalBody, parseRosterBody, removalBody, rosterBody } from './wire';
 
-export type MeshLog = (event: string, fields?: Record<string, string | number | boolean>) => void;
+type MeshLog = (event: string, fields?: Record<string, string | number | boolean>) => void;
 export interface MeshServiceOptions {
   userData: string;
   sealer: SecretSealer;

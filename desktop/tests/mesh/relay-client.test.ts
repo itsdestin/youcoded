@@ -1,6 +1,6 @@
 // The relay client against a stand-in relay: sign-in, version refusal, removal, reconnect with backoff and jitter,
 // send/ack/fetch, and "no frame body in any log".
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { generateIdentity, setIdFor } from '../../src/main/mesh/crypto/identity';
 import { RelayClient } from '../../src/main/mesh/relay-client';
 import { FakeRelay } from './fake-relay';
@@ -45,8 +45,7 @@ describe('sign-in', () => {
     const delays: number[] = [];
     second.on('backoff', (d: number) => delays.push(d));
     second.start();
-    await new Promise((res) => setTimeout(res, 150));
-    expect(delays.length).toBeGreaterThanOrEqual(3);
+    await vi.waitFor(() => expect(delays.length).toBeGreaterThanOrEqual(3));
     expect(second.state).not.toBe('ready');
     expect(await first.c.rosterAdd(stranger.signKey.toString('hex'))).toBe('ok');
     await when(second, 'ready');
@@ -71,9 +70,10 @@ describe('refusals that must NOT be retried', () => {
     c.on('version-refused', () => { said = true; });
     c.start();
     await when(c, 'refused-version');
-    const connects = r.connects;
-    await new Promise((res) => setTimeout(res, 150));
     expect(said).toBe(true);
+    const connects = r.connects;
+    // settle: give a (wrong) reconnect time to happen, then check none did
+    await new Promise((res) => setTimeout(res, 150));
     expect(r.connects).toBe(connects);
   });
   it('removal closes the connection for good and later calls fail', async () => {
@@ -94,6 +94,7 @@ describe('refusals that must NOT be retried', () => {
     expect(removed).toBe(true);
     await expect(bc.hold({ group: 'g', session: '0'.repeat(32), n: 1, frame: Buffer.from('x') })).rejects.toThrow();
     const connects = r.connects;
+    // settle: a removed device must not come back; wait long enough that a reconnect would have shown
     await new Promise((res) => setTimeout(res, 100));
     expect(r.connects).toBe(connects);
   });

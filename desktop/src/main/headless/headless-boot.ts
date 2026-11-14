@@ -313,6 +313,9 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   startTagRegistry();
   startChatsearchIndex();
   startOutboxDrain(ipcWiring.outboxBroadcast);
+  // Mesh ("Chats on every device"), SWITCHED OFF: one guarded call. Off by default it reads one optional file and does nothing else;
+  // the wiring lives in mesh/boot-hook.ts because this file has a line budget. The phone's backend reports itself as 'android'.
+  const mesh = await import('../mesh/boot-hook').then((m) => m.startMeshIfEnabled({ userData, safeStorage, packaged: false, platform: 'android' })).catch(() => null);
 
   // Last: open the door. The app waits for this line before it loads its page.
   await remoteServer.start();
@@ -321,6 +324,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
 
   return {
     stop: async () => {
+      void mesh?.stop();
       remoteServer.stop();
       void ipcWiring.cleanup?.();
       await nativeRuntime?.cleanup();
