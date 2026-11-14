@@ -241,6 +241,15 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
         __mount.render(<ThemeProvider><AttachmentChipsMockup /></ThemeProvider>);
         return;
       }
+      // Card #182 review: the 20-second strip with and without the draft line (dev/workbench/mockups/UnreachableStripDemo.tsx).
+      if (__view === 'unreachable-strip') {
+        const [{ UnreachableStripDemo }, { ThemeProvider }] = await Promise.all([
+          import('./dev/workbench/mockups/UnreachableStripDemo'),
+          import('./state/theme-context'),
+        ]);
+        __mount.render(<ThemeProvider><UnreachableStripDemo /></ThemeProvider>);
+        return;
+      }
       // Card #143 c: three stylings for the quick chip's Replace / Add choice (dev/workbench/mockups/ChipChoiceDemo.tsx).
       if (__view === 'chip-choice') {
         const [{ ChipChoiceDemo }, { ThemeProvider }] = await Promise.all([
