@@ -680,6 +680,10 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   const win = new BrowserWindow({
     width: buddyDimensions.width ?? opts?.width ?? 1200,
     height: buddyDimensions.height ?? opts?.height ?? 800,
+    // WHY a minimum width (narrow-screens round 6, Destin: "the window should block itself from being made
+    // smaller to prevent overlap"): below ~340px the top bar's ☰, name, terminal switch and window buttons
+    // can no longer sit side by side. Buddy windows size themselves and keep no minimum.
+    minWidth: opts?.buddy ? undefined : 340,
     x: opts?.x,
     y: opts?.y,
     icon,

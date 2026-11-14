@@ -17,8 +17,9 @@ export function PencilIcon({ size = 10 }: { size?: number }) {
  *  message strip's Edit and the quick chips' edit cannot drift apart.
  *  `className` adds hooks only (QuickChips passes `quick-chip-edit`, which float
  *  chrome uses to give it the chips' own surface); the look lives here. */
-export function EditPencilButton({ label, onClick, className = '', plain = false }: { label: string; onClick: () => void; className?: string; plain?: boolean }) {
-  const android = fingerSized();
+export function EditPencilButton({ label, onClick, className = '', plain = false, small = false }: { label: string; onClick: () => void; className?: string; plain?: boolean; small?: boolean }) {
+  // `small`: the quick chips' compact phone row (round 6) keeps the chips' 24px height.
+  const android = fingerSized() && !small;
   // `plain` (Destin, 2026-09-28: "no background on the edit button" in the
   // waiting-message strip): the same pencil and size with no box, so it sits
   // like the plain trash icon beside it. The quick chips keep their box.

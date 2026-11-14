@@ -1969,8 +1969,10 @@ pre.yc-code code {
   /* WHY 1.25rem now (record deck R-3, 2026-11-14): Destin, "making the chips vertically
      shorter/smaller. by a lot". 32px -> 20px; the row no longer matches the shortcut chips'
      height, and a 20px pill is under finger size (master's fingerSized() asks h-8). */
-  height: 1.25rem;
-  min-width: 1.25rem;
+  /* Round 6 (Destin: "just a smidge taller so everything is still touch friendly"): 24px, the
+     same as the quick chips in this row's practice layout. */
+  height: 1.5rem;
+  min-width: 1.5rem;
   border-radius: var(--radius-md, 12px);
   padding: 0 0.5rem;
   display: inline-flex;
@@ -1981,6 +1983,10 @@ pre.yc-code code {
   line-height: 1;
   box-sizing: border-box;
 }
+
+/* The status row's pencil is a square, not a labelled pill (round 6, Destin: "the edit icon is
+   broken"): the shared side padding left a 20px-wide box ~4px of room for its picture. */
+.status-pencil-uniform { width: 1.5rem; padding: 0; }
 
 /* Session strip dropdown — row stagger entrance.
    Uses transform: none in `to` (not translateY(0)) so fill-mode: both

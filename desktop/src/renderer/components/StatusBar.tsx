@@ -738,7 +738,9 @@ function useWidgetVisibility() {
 // Pencil SVG icon (inline to avoid extra dependencies)
 function PencilIcon() {
   return (
-    <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+    // shrink-0 (round 6, Destin: "the edit icon is broken, way too small"): inside the compact row's
+    // fixed-width pill the flex box squeezed the picture to a few pixels.
+    <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" className="shrink-0" xmlns="http://www.w3.org/2000/svg">
       <path d="M12.146.854a.5.5 0 0 1 .708 0l2.292 2.292a.5.5 0 0 1 0 .708l-9.5 9.5a.5.5 0 0 1-.168.11l-4 1.5a.5.5 0 0 1-.638-.638l1.5-4a.5.5 0 0 1 .11-.168l9.5-9.5zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5z"/>
     </svg>
   );
@@ -1082,7 +1084,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
               Destin, "it should be light like the others, maybe with a green glow behind the computer
               outline". Same surface as its neighbours; the glow is the fixed status green ("connected"). */}
           <span aria-label="Connected to your computer" className="flex items-center rounded-sm bg-panel border border-edge-dim text-fg-2">
-            <span className="flex" style={{ filter: 'drop-shadow(0 0 2px rgb(34 197 94)) drop-shadow(0 0 4px rgb(34 197 94 / 0.6))' }}><ComputerIcon /></span>
+            <span className="flex" style={{ filter: 'drop-shadow(0 0 1.5px rgb(34 197 94 / 0.45))' /* round 6: "reduce that green glow a LOT" */ }}><ComputerIcon /></span>
           </span>
         </Tooltip>
       )}

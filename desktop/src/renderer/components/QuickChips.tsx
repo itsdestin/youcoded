@@ -1,4 +1,6 @@
 import { fingerSized } from '../device';
+import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { workbenchNarrowPills } from '../workbench-mode';
 import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useSkills } from '../state/skill-context';
@@ -43,7 +45,12 @@ export default function QuickChips({ onChipTap }: Props) {
   const handleEditorClose = useCallback(() => setEditorOpen(false), [setEditorOpen]);
   useEscClose(editorOpen, handleEditorClose);
 
-  const android = fingerSized();
+  // Round 6 (Destin, on the shortened pills: "could we possibly try shrinking quick chips in the same way
+  // on mobile? and any shot we could make them just a smidge taller so everything is still touch
+  // friendly?"): with the compact pill row, chips and pills share one 24px height. Practice-only: the
+  // switch reads `today` outside the workbench, where chips stay finger-sized (h-8).
+  const compactRow = useNarrowViewport() && workbenchNarrowPills() === 'compact';
+  const android = fingerSized() && !compactRow;
   const chipHeight = android ? 'h-8' : 'h-6';
 
   return (
@@ -67,7 +74,7 @@ export default function QuickChips({ onChipTap }: Props) {
         {/* Pencil button — opens chip editor. `quick-chip-edit`: float chrome
             gives it the chips' own surface, as the status bar's edit button
             shares its chips' surface. */}
-        <EditPencilButton label="Edit quick chips" onClick={() => setEditorOpen(!editorOpen)} className="quick-chip-edit" />
+        <EditPencilButton label="Edit quick chips" onClick={() => setEditorOpen(!editorOpen)} className="quick-chip-edit" small={compactRow} />
       </div>
 
       {/* Chip editor popup — centered L2 modal (Scrim + OverlayPanel) to match

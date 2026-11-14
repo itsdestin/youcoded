@@ -416,6 +416,11 @@ export default React.memo(function HeaderBar({
   // Round 3 (Destin's L-1 note): `plain`, `lights` and `hub` keep pair's two
   // buttons each side; only the name button and what ☰ opens differ.
   const twoEachSide = narrowTop === 'pair' || narrowTop === 'plain' || narrowTop === 'lights' || narrowTop === 'hub';
+  // Round 6 (Destin, on a narrow computer window: "projects should probably get folded into the 3-line
+  // menu and the session name become left-aligned"): a window with its own buttons (Minimize/Maximize/
+  // Close, or a Mac's three on the left) has no room for Projects, so it lives in ☰ there, and the name
+  // starts right after ☰ instead of centring. Phones keep Projects on the bar (round 5 N-1 yes).
+  const windowButtonsBar = narrowTop === 'lights' && getCapabilities().nativeWindows;
   // Q-3: the REMOTE label moves into the pill row under the message box
   // (StatusBar draws it there when the compact pills are on).
   const remoteInPills = narrow && workbenchNarrowPills() === 'compact';
@@ -622,7 +627,7 @@ export default React.memo(function HeaderBar({
             Wide layouts only; narrow reaches Pages via ||| . */}
         {!narrow && <PagesButton />}
         {/* Projects button — wide layouts only; narrow reaches it via ||| . */}
-        {(!narrow || twoEachSide) && <ProjectsButton />}
+        {(!narrow || (twoEachSide && !windowButtonsBar)) && <ProjectsButton />}
         {!narrow && <PinnedPageButtons />}
         {isRemoteMode() && !remoteInPills && (
           <span className="text-3xs font-medium px-1.5 py-0.5 rounded-sm bg-blue-500/15 text-fg-2 border border-blue-500/40 shrink-0" title="Connected to another computer">
@@ -639,7 +644,7 @@ export default React.memo(function HeaderBar({
           flex-1 wrapper gives the strip a pre-allocated budget (~1/3 of the
           header) so packSessions reads an available-space value rather than
           its own current content width (chicken-and-egg fix). */}
-      <div className="flex-1 min-w-0 flex justify-center">
+      <div className={`flex-1 min-w-0 flex ${windowButtonsBar ? 'justify-start' : 'justify-center'}`}>
       {/* Round 4 (Destin picked the lights bar: "prettier … clean up the dead space and improve
           alignment/centering"): the name, its arrow AND the lights are one stack with ONE hover
           background, so the lights read as part of the button. Only that bar gets the wrapper: the
@@ -650,7 +655,7 @@ export default React.memo(function HeaderBar({
       // clickable"): the stack takes the click itself, so its padding and the gaps between dot,
       // name, arrow and lights all open the list. The name and arrow inside pass their clicks up
       // (SessionStrip, narrowTop === 'lights'); the arrow stays the keyboard's way in.
-      <div onClick={() => stripApi.current?.toggleList()} className="session-name-stack cursor-pointer flex flex-col items-center justify-center min-w-0 max-w-full rounded-lg px-1 pb-1 hover:bg-inset transition-colors">
+      <div onClick={() => stripApi.current?.toggleList()} className={`session-name-stack cursor-pointer flex flex-col ${windowButtonsBar ? 'items-start' : 'items-center'} justify-center min-w-0 max-w-full rounded-lg px-1 pb-1 hover:bg-inset transition-colors`}>
       {sessionStrip}
       {narrowTop === 'lights' && <SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} />}
       </div>

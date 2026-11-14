@@ -2513,7 +2513,9 @@ export default function SessionStrip({
                         setMenuDragId(s.id);
                       }}
                       onDragEnd={endMenuDrag}
-                      className={`shrink-0 flex items-center pl-1.5 transition-opacity ${isAndroid() || viewer ? 'hidden' : 'opacity-0 group-hover/row:opacity-100 cursor-grab active:cursor-grabbing'}`}
+                      // Phone rows drop the grip too (round 6): it is a hover handle, and its width pushed the
+                      // row's text off the heading's left edge.
+                      className={`shrink-0 flex items-center pl-1.5 transition-opacity ${isAndroid() || viewer || phoneRows ? 'hidden' : 'opacity-0 group-hover/row:opacity-100 cursor-grab active:cursor-grabbing'}`}
                     >
                       <DragGrip />
                     </span>
@@ -2536,7 +2538,10 @@ export default function SessionStrip({
                         e.preventDefault();
                         if (!suppressClick.current) { onSelectSession(s.id, 'menu', e); setMenuOpen(false); }
                       }}
-                      className="flex-1 text-left pl-1 pr-1.5 py-1.5 flex items-center min-w-0 cursor-pointer"
+                      // WHY px-3 on phone rows (round 6, Destin: "make the left/right margin on each session row
+                      // a bit more consistent, and also make it better match the 'your sessions' line margin"): the
+                      // heading is mx-3, so rows start and end 12px in, the same on both sides.
+                      className={`flex-1 text-left ${phoneRows ? 'px-3' : 'pl-1 pr-1.5'} py-1.5 flex items-center min-w-0 cursor-pointer`}
                     >
                       {/* P-8 (2026-08-28): name and project start at the SAME left
                           edge, one under the other; what used to be a bare dot at
