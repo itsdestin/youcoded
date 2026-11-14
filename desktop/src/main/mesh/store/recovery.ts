@@ -25,6 +25,14 @@ const MAX_TORN_FILES = 4096;
 export const STALE_CONV_FILE = 'stale-conv.json';
 /** Marker file: lines from `fromLine` were set aside by a rebuild because their bodies did not match the chain (N7). */
 export const PARTIAL_FILE = 'partial.json';
+/** The second copy of partial.json (review 4): the marker is the ONLY record that a rebuild set lines aside, so one deleted or damaged file must not silence the report. */
+export const PARTIAL_COPY = 'partial.copy';
+/** Write the marker twice, one copy at a time (a kill leaves at least one intact). */
+export async function writePartial(fs: Fs, dir: string, value: { fromLine: number; lost: number; atMs: number }): Promise<void> {
+  const key = nodePath.basename(dir);
+  await writeSideFor(fs, nodePath.join(dir, PARTIAL_FILE), key, value); // DESTRUCTIVE-OK(hint): a marker; replaces an older marker of the same kind
+  await writeSideFor(fs, nodePath.join(dir, PARTIAL_COPY), key, value); // DESTRUCTIVE-OK(hint): the second copy of the same marker
+}
 
 /** Internal: the index can be repaired by re-deriving it from the body. */
 export class NeedsRebuild extends Error { constructor(readonly reason: string) { super(reason); } }
@@ -436,7 +444,7 @@ export class BodyTools {
           try { if (old) await this.keepBytes(dir, 'checkpoint', old); }
           catch (e) { if (isDiskFull(e) || (e instanceof StoreError && e.code === 'limit')) throw new Damaged('the old checkpoint statement could not be kept (the keep-area or the disk is full)'); throw e; }
         }
-        await writeSideFor(this.fs, nodePath.join(dir, PARTIAL_FILE), keyOfDir(dir), { fromLine: partial.fromLine, lost: partial.lost, atMs: Date.now() }); // DESTRUCTIVE-OK(hint): marks lines as set aside; replaces an older marker of the same kind
+        await writePartial(this.fs, dir, { fromLine: partial.fromLine, lost: partial.lost, atMs: Date.now() }); // DESTRUCTIVE-OK(hint): marks lines as set aside; replaces an older marker of the same kind
       }
       const evBytesOut = evLines > 0 ? ev.bytes : 0;
       if (partial || !ckpt || ckpt.count !== count || ckpt.stamp !== ckStamp || ckpt.evLines !== evLines || ckpt.evBytes !== evBytesOut) {

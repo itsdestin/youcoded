@@ -8,7 +8,7 @@ import { StoreError } from './errors';
 import { type Fs } from './fsio';
 import { readSide, readSideFor, writeSide, keepBadSideFile, type SideRead } from './sidefile';
 import { REC, decodeRecord, recPos } from './records';
-import { PARTIAL_FILE, chunkPathOf } from './recovery';
+import { PARTIAL_FILE, PARTIAL_COPY, writePartial, chunkPathOf } from './recovery';
 
 /** The version key a version folder belongs to (the folder name). */
 const keyOfDir = (dir: string): string => nodePath.basename(dir);
@@ -63,9 +63,15 @@ async function lineVerifiesRaw(fs: Fs, dir: string, chunks: number[], n: number,
 
   /** partial.json: lines a rebuild or a recovery set aside because they could not be verified (review 3, F4). A damaged marker still reports: damaged from the head. */
 export async function readPartial(fs: Fs, dir: string, count: number): Promise<{ fromLine: number; lost: number } | null> {
-    const r = await readSideFor(fs, nodePath.join(dir, PARTIAL_FILE), keyOfDir(dir));
-    if (r.kind === 'absent') return null;
-    if (r.kind === 'ok' && Number.isSafeInteger(r.value?.fromLine) && Number.isSafeInteger(r.value?.lost) && r.value.lost >= 0) return { fromLine: r.value.fromLine, lost: r.value.lost };
+    const reads = [await readSideFor(fs, nodePath.join(dir, PARTIAL_FILE), keyOfDir(dir)), await readSideFor(fs, nodePath.join(dir, PARTIAL_COPY), keyOfDir(dir))];
+    if (reads.every((r) => r.kind === 'absent')) return null;
+    const ok = reads.filter((r) => r.kind === 'ok' && Number.isSafeInteger(r.value?.fromLine) && Number.isSafeInteger(r.value?.lost) && r.value.lost >= 0).map((r) => ({ fromLine: (r as { value: { fromLine: number } }).value.fromLine, lost: (r as { value: { lost: number } }).value.lost }));
+    if (ok.length) {
+      const best = ok.reduce((a, b) => (b.fromLine + b.lost > a.fromLine + a.lost ? b : a));
+      // either copy alone is enough; the missing or damaged one is rewritten from it (best effort: a read never fails for lack of space)
+      if (ok.length < 2 || reads.some((r) => r.kind !== 'ok')) { try { await writePartial(fs, dir, { ...best, atMs: Date.now() }); } catch (e) { if (!isDiskFull(e)) throw e; } }
+      return best;
+    }
     // WHY not "no marker": a version that silently looks healthy but shorter cannot be told from a short chat (review 3, F4). Reported from its head, until the next line lands.
     return { fromLine: count, lost: 1 };
   }

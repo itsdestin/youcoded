@@ -72,7 +72,7 @@ import { ControlStore, type ControlDamage, type ControlEntry } from './control';
 import type { AppendResult, EvictionProof, Head, ProofVerifier, ScrubReport, StoreOptions, Summary, TailRecord, VerifyReport, VersionId, VersionMeta } from './types';
 import type { VState } from './vstate';
 import { readMeta, readPartial, readDamaged, readScrubMark, readEvictedNote, lineVerifies, nextAsideName } from './versionfiles';
-import { BodyTools, Damaged, NeedsRebuild, PARTIAL_FILE, STALE_CONV_FILE, chunkPathOf, nextNumbered, type BatchState, type RebuildResult, type SumFacts } from './recovery';
+import { BodyTools, Damaged, NeedsRebuild, PARTIAL_FILE, PARTIAL_COPY, writePartial, STALE_CONV_FILE, chunkPathOf, nextNumbered, type BatchState, type RebuildResult, type SumFacts } from './recovery';
 
 export type { VersionId, ProofVerifier, StoreOptions, VersionMeta, Head, AppendResult, Summary, EvictionProof, TailRecord, VerifyReport, ScrubReport } from './types';
 
@@ -362,7 +362,7 @@ export class ChatStore {
       if (ix.tailDamaged && !ck) { const lost = await this.tools.countWholeLines(dir, bodyEnd); if (lost > 0) marker = { fromLine: count, lost }; }
       if (marker) partial = marker;
       try {
-        if (marker) await writeSideFor(this.fs, nodePath.join(dir, PARTIAL_FILE), key, { ...marker, atMs: this.now() }); // DESTRUCTIVE-OK(hint): a marker; replaces an older marker of the same kind
+        if (marker) await writePartial(this.fs, dir, { ...marker, atMs: this.now() }); // DESTRUCTIVE-OK(hint): a marker; replaces an older marker of the same kind
         await this.tools.trimBody(dir, bodyEnd, true);
       } catch (e) {
         // WHY (N5, review 3 F7): copying the surplus to torn/ needs space and a free slot in the keep-area. Keep serving what is indexed (the surplus
@@ -910,14 +910,14 @@ export class ChatStore {
       // The summary file is only rewritten when a fact in it changed, to keep a live append at three small syncs.
       // Counts come from the index; arrival time is written at close and may lag by a few appends after a crash.
       if (changed || st.count - st.summarySavedAt >= SUMMARY_SAVE_EVERY) await this.saveSummary(st);
-      if (st.partial && st.count >= st.partial.fromLine + st.partial.lost) { await this.fs.unlink(nodePath.join(st.dir, PARTIAL_FILE)); await this.fs.fsyncDir(st.dir); st.partial = null; } // DESTRUCTIVE-OK(hint): the lines the marker said were missing have been filled
+      if (st.partial && st.count >= st.partial.fromLine + st.partial.lost) { await this.fs.unlink(nodePath.join(st.dir, PARTIAL_FILE)); await this.fs.unlink(nodePath.join(st.dir, PARTIAL_COPY)); await this.fs.fsyncDir(st.dir); st.partial = null; } // DESTRUCTIVE-OK(hint): the lines the marker said were missing have been filled
     } catch (e) { if (!isDiskFull(e)) throw e; }
   }
 
   /** Do now what a read had to postpone (a copy to torn/ and a cut). Throws the typed error again when it still cannot be done. */
   private async runDeferred(st: VState): Promise<void> {
     const d = st.deferred!;
-    if (d.partial) await writeSideFor(this.fs, nodePath.join(st.dir, PARTIAL_FILE), st.key, { ...d.partial, atMs: this.now() }); // DESTRUCTIVE-OK(hint): a marker; replaces an older marker of the same kind
+    if (d.partial) await writePartial(this.fs, st.dir, { ...d.partial, atMs: this.now() }); // DESTRUCTIVE-OK(hint): a marker; replaces an older marker of the same kind
     if (d.indexTail) {
       const f = await this.fs.open(this.ixPath(st.dir), { create: false });
       try {
@@ -1374,7 +1374,7 @@ export class ChatStore {
     const target = nodePath.join(this.root, 'aside', asideName);
     await mkdirDurable(this.fs, target);
     for (const name of await this.fs.readdir(dir)) {
-      if (name === 'index.bin' || name === 'index.rebuild' || name === 'evicted.json' || name === 'summary.json' || name === 'scrub.json' || name === CHECKPOINT_FILE || name === PARTIAL_FILE || name === STALE_CONV_FILE || (moveMeta && (name === 'meta.json' || name === 'meta.copy')) || /^body-[0-9a-f]{16}\.bin$/.test(name)) {
+      if (name === 'index.bin' || name === 'index.rebuild' || name === 'evicted.json' || name === 'summary.json' || name === 'scrub.json' || name === CHECKPOINT_FILE || name === PARTIAL_FILE || name === PARTIAL_COPY || name === STALE_CONV_FILE || (moveMeta && (name === 'meta.json' || name === 'meta.copy')) || /^body-[0-9a-f]{16}\.bin$/.test(name)) {
         // WHY never overwrite (H2): a rename over an existing aside file would destroy the very copy being kept.
         // The aside copy already holds this file, so the move happened before; what is in the version
         // folder is newer and stays where it is.
@@ -1499,10 +1499,16 @@ export class ChatStore {
       const ls = lines.map(asLine);
       return this.exclusive(() => this.mutate(key, async () => {
         const st = await this.state(version);
-        if (st.evictedLines === 0) return { restoredLines: 0 };
-        if (ls.length < st.evictedLines) throw new StoreError('bad-argument', 'need every evicted line, from line 0');
+        // WHY the second mode (review 4): the eviction record can be LOST (a missing, damaged or older checkpoint) while the bodies really are gone. The store then reports those lines
+        // damaged, and a caller who asks for the bodies back must get them: with no eviction in force, "restore" repairs whatever lines the caller supplies that are not on disk.
+        let E = st.evictedLines;
+        if (E === 0) {
+          if ((await this.gapBadLine(st)) === null) return { restoredLines: 0 };
+          E = Math.min(ls.length, st.count);
+          if (E === 0) return { restoredLines: 0 };
+        }
+        if (ls.length < E) throw new StoreError('bad-argument', 'need every evicted line, from line 0');
         // the restored region is [0, S) where S is where the earliest surviving chunk starts (or the end of data)
-        const E = st.evictedLines;
         const S = st.chunks.length ? st.chunks[0] : st.bodyEnd;
         const f = await this.fs.open(this.ixPath(st.dir), { create: false });
         const parts: Buffer[] = []; let h: Buffer = st.seeds.raw;
@@ -1525,10 +1531,16 @@ export class ChatStore {
         await this.repairBodies(st, 0, ls.slice(0, E), 0);
         // WHY the read-back (review 4, F7): "restored" must mean the lines read back from disk byte for byte. Only then is the eviction record cleared.
         await this.readRange(st, 0, E, true);
-        // DESTRUCTIVE-OK(verified-record): every evicted line was just verified against the chain and read back from disk
-        await writeCheckpoint(this.fs, st.dir, { count: st.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: 0, evBytes: 0, h: st.h, c: st.c }, st.ck);
-        await writeSideFor(this.fs, nodePath.join(st.dir, 'evicted.json'), st.key, { lines: 0, bytes: 0 }); // DESTRUCTIVE-OK(hint): the holders' note; nothing is decided from it
-        st.evictedLines = 0; st.evictedBytes = 0;
+        if (st.evictedLines > 0) {
+          // DESTRUCTIVE-OK(verified-record): every evicted line was just verified against the chain and read back from disk
+          await writeCheckpoint(this.fs, st.dir, { count: st.count, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, evLines: 0, evBytes: 0, h: st.h, c: st.c }, st.ck);
+          await writeSideFor(this.fs, nodePath.join(st.dir, 'evicted.json'), st.key, { lines: 0, bytes: 0 }); // DESTRUCTIVE-OK(hint): the holders' note; nothing is decided from it
+          st.evictedLines = 0; st.evictedBytes = 0;
+        }
+        // the lines just written back are no longer damaged; a hole further on (lines the caller did not supply) still is
+        if (st.badLine !== null && st.badLine < E) st.badLine = null;
+        const gb = await this.gapBadLine(st);
+        if (gb !== null) st.badLine = st.badLine === null ? gb : Math.min(st.badLine, gb);
         // N4: with the bodies back the conversation chain can be recomputed: drop the cached state so the next call rebuilds it
         if (st.staleConv) this.versions.delete(key);
         return { restoredLines: E };

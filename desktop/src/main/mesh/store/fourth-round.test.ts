@@ -423,4 +423,32 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
     expect((await s2.head(V(1))).damagedFromLine).toBeNull();                                // the report clears once the chat has refilled the 12 lines it claimed
     await s2.close(); await t.cleanup();
   });
+
+  it('with the eviction record lost (checkpoint deleted) restoreBody still brings the bodies back from the lines the caller supplies', async () => {
+    const { t, s, ls, root } = await fresh(30);
+    await evict(s, 20); await s.close();
+    fs.rmSync(path.join(vdir(root), 'checkpoint.bin'));
+    const s2 = await reopen(root);
+    const h = await s2.head(V(1));
+    expect(h.evictedLines).toBe(0); expect(h.damagedFromLine).toBe(0);                      // reported damaged, never relabelled as evicted
+    expect((await s2.restoreBody(V(1), ls)).restoredLines).toBeGreaterThan(0);
+    expect(await readAll(s2, ls)).toBe('.'.repeat(30));
+    expect((await s2.head(V(1))).damagedFromLine).toBeNull();
+    await s2.close(); await t.cleanup();
+  });
+
+  it('the report that a rebuild set lines aside survives the loss of one of its two files', async () => {
+    const { t, s, root } = await fresh(30);
+    const cp = path.join(vdir(root), 'checkpoint.bin'); const before = fs.readFileSync(cp);
+    await s.setAsideTail('abcdef012345', V(1), 12); await s.close();
+    fs.writeFileSync(cp, before);                                                            // an older statement: a rebuild reports the lines it claimed as set aside
+    let s2 = await reopen(root);
+    expect((await s2.head(V(1))).damagedFromLine).not.toBeNull();
+    await s2.close();
+    fs.rmSync(path.join(vdir(root), 'partial.json'));                                        // one copy of the report is lost
+    s2 = await reopen(root);
+    expect((await s2.head(V(1))).damagedFromLine).not.toBeNull();                            // still reported, from the other copy
+    expect(fs.existsSync(path.join(vdir(root), 'partial.json'))).toBe(true);                 // and the lost copy is rewritten
+    await s2.close(); await t.cleanup();
+  });
 });
