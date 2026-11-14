@@ -35,4 +35,34 @@ describe('engine log', () => {
     const log = openEngineLog(path.join(dir, 'missing', 'engine.log'));
     expect(() => { log.write('x\n'); log.write('y\n'); }).not.toThrow();
   });
+
+  it('close() resolves only once the file is on disk, so nothing lands after it', async () => {
+    // WHY (CI flake, engine-manager-router T23): the open and the writes are async, so
+    // a stopped engine used to create/append engine.log after stop() returned and a
+    // temp-folder cleanup raced it (ENOTEMPTY). Nothing here waits or sleeps: close()
+    // itself is the thing awaited, and the file must be complete the instant it resolves.
+    const file = path.join(dir, 'engine.log');
+    const log = openEngineLog(file);
+    log.begin(['llama-server']);
+    log.write('last words\n');
+    await log.close();
+    expect(read(file)).toContain('last words');
+    const before = fs.readdirSync(dir);
+    // A plain removal (no retries) is what a clean teardown looks like.
+    expect(() => fs.rmSync(dir, { recursive: true })).not.toThrow();
+    expect(before).toEqual(['engine.log']);
+    fs.mkdirSync(dir); // afterEach removes it again
+  });
+
+  it('close() on a log that never wrote, or twice, is harmless; a later write reopens', async () => {
+    const file = path.join(dir, 'engine.log');
+    const log = openEngineLog(file);
+    await log.close();
+    log.write('one\n');
+    await log.close();
+    await log.close();
+    log.write('two\n');
+    await log.close();
+    expect(read(file)).toBe('one\ntwo\n');
+  });
 });
