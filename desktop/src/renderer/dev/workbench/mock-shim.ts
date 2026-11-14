@@ -250,6 +250,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // workbench has files to list and versions to show without the add-on or a disk.
   'office.status', 'office.create', 'office.pick', 'office.open', 'office.invoke', 'office.close',
   'office.versions', 'office.restore', 'office.saveCopy',
+  // Home's row actions (card #143) — designed ahead of main; rows in mock-only.ts.
+  'office.rename', 'office.duplicate', 'office.forgetRecent',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
@@ -545,7 +547,7 @@ import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fa
 import { findHomeVariant, withHomeVariant } from './fixtures/home-variants/registry';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
 import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
-import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
+import type { OfficeBridge, OfficeFile, OfficeVersion } from '../../../shared/office-types';
 import type { PagesBridge, PageDocument, PageSocketEvent, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 import { sameEndpoint } from '../../../shared/endpoint-address';
 import { FIXTURE_BASE } from './fixtures/clock';
@@ -4667,20 +4669,51 @@ const OFFICE_PAGE: PageDocument = { ...OFFICE_PAGE_SUMMARY, html: '', data: null
 function createOfficeMock(empty: boolean): OfficeBridge {
   const HOUR = 3_600_000;
   const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
-  const recent = empty ? [] : OFFICE_FILES.map((f, i) => ({ ...f, at: ago([0.4, 5, 30][i] * HOUR) }));
+  // WHY `let` lists (card #143 design stage): Home's Rename, Make a copy and Remove from Recent
+  // change them, and the next status answer must show it — as main's would.
+  let recent: OfficeFile[] = empty ? [] : OFFICE_FILES.map((f, i) => ({ ...f, at: ago([0.4, 5, 30][i] * HOUR) }));
+  // Files beyond Recent, so the "In <project>" list has something of its own to show (Recent's
+  // files are not repeated there), and more than 12 of them, so "Show all" appears. They open the
+  // fixture of their kind.
+  const PROJ = '/home/you/Projects/community-garden';
+  let projectFiles: OfficeFile[] = empty ? [] : [
+    ...OFFICE_FILES.map((f, i) => ({ ...f, at: ago([26, 49, 75][i] * HOUR) })),
+    { ...OFFICE_FILES[1], path: `${PROJ}/Volunteer rota.xlsx`, name: 'Volunteer rota.xlsx', at: ago(52 * HOUR) },
+    { ...OFFICE_FILES[0], path: `${PROJ}/Grant report.docx`, name: 'Grant report.docx', at: ago(120 * HOUR) },
+    ...['Seed order', 'Plot map', 'Compost schedule', 'Harvest log', 'Workshop flyer', 'Meeting notes March', 'Meeting notes April',
+      'Budget 2027', 'Tool library', 'Rain barrel quote', 'Bee survey', 'Fall planting', 'Newsletter draft'].map((n, i) => {
+      const f = OFFICE_FILES[i % 3];
+      const name = `${n}${f.name.slice(f.name.lastIndexOf('.'))}`;
+      return { ...f, path: `${PROJ}/archive/${name}`, name, folder: 'archive', at: ago((130 + i * 20) * HOUR) };
+    }),
+  ];
+  const everywhere = () => [...recent, ...projectFiles];
+  const withName = (f: OfficeFile, name: string): OfficeFile => ({ ...f, name, path: `${f.path.slice(0, f.path.lastIndexOf('/') + 1)}${name}` });
   let created = 0;
   return {
-    status: async () => ({
-      available: true,
-      recent,
-      // Two files beyond Recent, so the "In <project>" list has something of its own to show
-      // (Recent's files are not repeated there). They open the fixture of their kind.
-      project: empty ? null : { name: 'community-garden', files: [
-        ...OFFICE_FILES.map((f, i) => ({ ...f, at: ago([26, 49, 75][i] * HOUR) })),
-        { ...OFFICE_FILES[1], path: '/home/you/Projects/community-garden/Volunteer rota.xlsx', name: 'Volunteer rota.xlsx', at: ago(52 * HOUR) },
-        { ...OFFICE_FILES[0], path: '/home/you/Projects/community-garden/Grant report.docx', name: 'Grant report.docx', at: ago(120 * HOUR) },
-      ] },
-    }),
+    status: async () => ({ available: true, recent, project: empty ? null : { name: 'community-garden', files: projectFiles } }),
+    // MOCK_ONLY (card #143): Home's row actions, designed ahead of main (mock-only.ts).
+    rename: async (path, newName) => {
+      const f = everywhere().find((x) => x.path === path);
+      if (!f) return { ok: false, message: "Office can't find this file." };
+      if (/[\\/]/.test(newName)) return { ok: false, message: 'A name can’t contain / or \\.' };
+      if (everywhere().some((x) => x.path !== path && x.folder === f.folder && x.name.toLowerCase() === newName.toLowerCase())) {
+        return { ok: false, message: 'A file with that name is already in this folder.' };
+      }
+      const next = withName(f, newName);
+      recent = recent.map((x) => (x.path === path ? next : x));
+      projectFiles = projectFiles.map((x) => (x.path === path ? next : x));
+      return { ok: true, file: next };
+    },
+    duplicate: async (path) => {
+      const f = everywhere().find((x) => x.path === path);
+      if (!f) return { ok: false, message: "Office can't find this file." };
+      const dot = f.name.lastIndexOf('.');
+      const copy = { ...withName(f, `${f.name.slice(0, dot)} (copy)${f.name.slice(dot)}`), at: new Date().toISOString() };
+      projectFiles = [copy, ...projectFiles];
+      return { ok: true, file: copy };
+    },
+    forgetRecent: async (path) => { recent = recent.filter((x) => x.path !== path); },
     create: async (kind) => {
       created += 1;
       const base = OFFICE_FILES.find((f) => f.kind === kind)!;

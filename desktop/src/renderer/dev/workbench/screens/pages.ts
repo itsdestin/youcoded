@@ -103,6 +103,14 @@ export const PAGES: readonly ScreenEntry[] = [
   // Office (built in, design stage). Documents need the editor add-on served on
   // 127.0.0.1:4717 — fixtures/office.ts says how.
   pg('office/home', 'view', 'office'),
+  // Home's row actions, search and "Show all" (card #143, design stage): the first Recent row's
+  // menu open, the first row renaming, a search typed, and the project list shown in full.
+  { ...pg('office/home#menu', 'view', 'office'), params: { officeHome: 'menu' } },
+  { ...pg('office/home#rename', 'view', 'office'), params: { officeHome: 'rename' } },
+  { ...pg('office/home#search', 'view', 'office'), params: { officeHome: 'search' } },
+  { ...pg('office/home#hover', 'view', 'office'), params: { officeHome: 'hover' } },
+  // Tall enough that the project list's foot — its "Show all" — is in the picture.
+  { ...pg('office/home#show-all', 'view', 'office'), viewport: { width: 1440, height: 1500 } },
   { ...pg('office/first-run', 'view', 'office', 'empty-state'), scenario: 'empty' },
   pg('office/document', 'view', 'office'),
   pg('office/spreadsheet', 'view', 'office'),

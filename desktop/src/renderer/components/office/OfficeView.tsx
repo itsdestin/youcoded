@@ -14,8 +14,10 @@
 // back to (Q-save); the editor wears the theme — colours, font, glass and
 // roundness (Q-theme). The editors are Euro-Office (office-base#Q-base-final),
 // on their own sealed origin; only files and small messages cross.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, CARD_LEVEL_1, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState, SectionLabel } from '../ui';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Button, CARD_LEVEL_1, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState, SearchFilterPill, SectionLabel } from '../ui';
+import { OfficeFileRow, type OfficeRowActions } from './OfficeFileList';
+import { isWorkbenchDocument } from '../../workbench-mode';
 import type { DocumentTab } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeKind, OfficeStatus, OfficeVersion } from '../../../shared/office-types';
 import { HistoryGlyph, HomeGlyph, KIND_LABEL, OfficeKindGlyph } from './office-icons';
@@ -191,6 +193,7 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
             onCreate={create}
             onPick={pick}
             onOpen={openDoc}
+            onChanged={reloadStatus}
             actionError={actionError && (
               actionError.general
                 ? <ErrorState
@@ -255,10 +258,23 @@ export function saveLabel(s: OfficeSaveState): string {
   return s.copiedTo ? `Saved a copy to ${s.copiedTo} — now editing the copy.` : 'Saved';
 }
 
-function OfficeHome({ load, project, actionError, onRetry, onCreate, onPick, onOpen }: {
+function OfficeHome({ load, project, actionError, onRetry, onCreate, onPick, onOpen, onChanged }: {
   load: StatusLoad; project: OfficeStatus['project']; actionError: React.ReactNode;
   onRetry: () => void; onCreate: (k: OfficeKind) => void; onPick: () => void; onOpen: (f: OfficeFile) => void;
+  /** A row's action changed the lists (renamed, copied, removed from Recent): ask main again. */
+  onChanged: () => void;
 }) {
+  // Photo-only states (shoot's office/home#search, #all, #rename): the workbench opens them by URL.
+  const preview = isWorkbenchDocument() ? new URLSearchParams(location.search).get('officeHome') : null;
+  // WHY here, not in OfficeView: the search box's text changes on every key, and only this list
+  // reads it (performance rule 5) — the editors beside it never redraw for a keystroke.
+  const [query, setQuery] = useState(preview === 'search' ? 'garden' : '');
+  const [showAll, setShowAll] = useState(false);
+  // What the last row action failed with (rename's own refusals show under the name instead).
+  const [rowError, setRowError] = useState<{ message: string; retry: () => void } | null>(null);
+  const actions = useRowActions(onOpen, onChanged, setRowError);
+  const recentActions = useMemo<OfficeRowActions>(() => ({ ...actions, forget: (f) => void forgetRecent(f, onChanged, setRowError) }), [actions, onChanged]);
+
   if (load.state === 'failed') return <div className="p-6 max-w-xl mx-auto"><ErrorState message="Office could not be started." onRetry={onRetry} /></div>;
   // Specific and certain, and no Retry: nothing the person can do here changes it.
   if (load.state === 'unavailable') return <div className="p-6 max-w-xl mx-auto"><EmptyState message="Office isn't included in this build." /></div>;
@@ -266,6 +282,18 @@ function OfficeHome({ load, project, actionError, onRetry, onCreate, onPick, onO
   // must never wait on a slow drive; only the Recent list itself shows it is loading.
   const recent = load.state === 'ready' ? load.status.recent : null;
   const projectFiles = (project?.files ?? []).filter((f) => !recent?.some((r) => r.path === f.path));
+  // The search narrows both lists by name, as you type; nothing is fetched (the lists are already
+  // here — Recent's 12 and the project's first 50).
+  const q = query.trim().toLowerCase();
+  const matches = (f: OfficeFile) => !q || f.name.toLowerCase().includes(q);
+  const recentShown = (recent ?? []).filter(matches);
+  const projectMatches = projectFiles.filter(matches);
+  // WHY 12 then "Show all" (Destin's pick, 2026-11-14): the list used to stop at 12 with no sign
+  // more existed. A search shows every match — it is already narrowed.
+  const projectShown = showAll || q ? projectMatches : projectMatches.slice(0, PROJECT_FIRST);
+  const hidden = projectMatches.length - projectShown.length;
+  const nothingMatches = !!q && recent !== null && recentShown.length === 0 && projectMatches.length === 0;
+  const hasFiles = (recent?.length ?? 0) + projectFiles.length > 0;
   return (
     <div className="scroll-mask absolute inset-0 overflow-y-auto">
       {/* Photo-only: a first run (nothing recent) is its own screen, named without '#' so a deck can link its picture. */}
@@ -285,25 +313,78 @@ function OfficeHome({ load, project, actionError, onRetry, onCreate, onPick, onO
           <div className="flex items-center gap-3">
             <Eyebrow>Recent</Eyebrow>
             <div className="flex-1" />
+            {/* Only once there is something to search (an empty Home has nothing to narrow). */}
+            {hasFiles && (
+              <SearchFilterPill value={query} onChange={setQuery} placeholder="Search files" inputAriaLabel="Search your Office files" className="w-56 max-sm:w-40" />
+            )}
             <Button variant="secondary" size="sm" onClick={onPick}>Open a file…</Button>
           </div>
+          {rowError && <ErrorState variant="inline" message={rowError.message} onRetry={rowError.retry} />}
           {recent === null
             ? <LoadingState what="Recent" variant="inline" />
             : recent.length === 0
             ? <EmptyState message="Files you open in Office will show up here." />
-            : <FileList files={recent} verb="Opened" onOpen={onOpen} />}
+            : nothingMatches
+            ? <EmptyState message={`No files match “${query.trim()}”.`} />
+            : recentShown.length === 0 && q
+            ? <div className="px-2 text-xs text-fg-muted">No recent files match.</div>
+            : <FileList files={recentShown} verb="Opened" actions={recentActions} preview={preview} />}
         </section>
 
         {/* A file already under Recent is not repeated here (UX review 1, U3). */}
-        {projectFiles.length > 0 && project && (
+        {projectShown.length > 0 && project && (
           <section className="flex flex-col gap-2">
             <Eyebrow>In {project.name}</Eyebrow>
-            <FileList files={projectFiles} verb="Changed" onOpen={onOpen} />
+            <FileList files={projectShown} verb="Changed" actions={actions} />
+            {hidden > 0 && (
+              <div className="px-1">
+                <Button variant="ghost" size="sm" onClick={() => setShowAll(true)}>Show all {projectMatches.length}</Button>
+              </div>
+            )}
           </section>
         )}
       </div>
     </div>
   );
+}
+
+/** How many of the project's files show before "Show all" (Recent itself keeps only 12). */
+const PROJECT_FIRST = 12;
+
+/** The row actions, one stable object (memoised rows — renderer-lists). WHY through main: every
+ *  one changes a file or Office's own list, and the renderer never touches a disk. */
+type SetRowError = (e: { message: string; retry: () => void } | null) => void;
+function useRowActions(onOpen: (f: OfficeFile) => void, onChanged: () => void, setError: SetRowError): OfficeRowActions {
+  const rename = useCallback(async (f: OfficeFile, newName: string): Promise<string | null> => {
+    try {
+      const r = await officeBridge()?.rename?.(f.path, newName);
+      if (!r) return "Office couldn't rename this file.";
+      if (!r.ok) return r.message;
+      onChanged();
+      return null;
+    } catch {
+      return "Office couldn't rename this file.";
+    }
+  }, [onChanged]);
+  const duplicate = useCallback(function dup(f: OfficeFile) {
+    setError(null);
+    const failed = (message: string) => setError({ message, retry: () => dup(f) });
+    void (officeBridge()?.duplicate?.(f.path) ?? Promise.resolve(null)).then(
+      (r) => { if (!r) failed("Office couldn't make a copy of this file."); else if (!r.ok) failed(r.message); else onChanged(); },
+      () => failed("Office couldn't make a copy of this file."),
+    );
+  }, [onChanged, setError]);
+  return useMemo(() => ({ open: onOpen, rename, duplicate }), [onOpen, rename, duplicate]);
+}
+
+async function forgetRecent(f: OfficeFile, onChanged: () => void, setError: SetRowError): Promise<void> {
+  setError(null);
+  try {
+    await officeBridge()?.forgetRecent?.(f.path);
+    onChanged();
+  } catch {
+    setError({ message: "Office couldn't remove this file from Recent.", retry: () => void forgetRecent(f, onChanged, setError) });
+  }
 }
 
 // WHY the shared small label, not spaced capitals (decisions "Heading ladder", H-3/L-1…L-4:
@@ -339,28 +420,13 @@ function NewCard({ kind, onClick }: { kind: OfficeKind; onClick: () => void }) {
   );
 }
 
-/** Files rows (guide G-17: icon · name · meta). Short lists — Recent keeps 12,
- *  the project list shows its first 12 — so no chunked reveal is needed here. */
-function FileList({ files, verb, onOpen }: { files: readonly OfficeFile[]; verb: string; onOpen: (f: OfficeFile) => void }) {
+/** Files rows (guide G-17: icon · name · meta), each with its own actions (OfficeFileList.tsx).
+ *  Short lists — Recent keeps 12, the project list at most 50 — so no chunked reveal is needed. */
+function FileList({ files, verb, actions, preview = null }: { files: readonly OfficeFile[]; verb: string; actions: OfficeRowActions; preview?: string | null }) {
   return (
     <div className="flex flex-col">
-      {files.slice(0, 12).map((f) => (
-        <div
-          key={f.path}
-          role="button"
-          tabIndex={0}
-          onClick={() => onOpen(f)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(f); } }}
-          className="flex items-center gap-3 h-11 px-2 rounded-md cursor-pointer text-left hover:bg-inset active:bg-edge focus:outline-none focus-visible:ring-2 focus-visible:ring-accent select-none"
-        >
-          <OfficeKindGlyph kind={f.kind} className="w-4 h-4 shrink-0 text-fg-2" />
-          <div className="min-w-0 flex-1">
-            <div className="text-sm text-fg truncate">{f.name}</div>
-            <div className="text-2xs text-fg-muted truncate">{f.folder}</div>
-          </div>
-          {/* Says WHICH time it is: Recent shows when you opened it, the project list when it changed (U3). */}
-          <span className="shrink-0 text-2xs text-fg-muted">{verb} {relative(f.at)}</span>
-        </div>
+      {files.map((f, i) => (
+        <OfficeFileRow key={f.path} f={f} verb={verb} when={relative(f.at)} actions={actions} startRenaming={preview === 'rename' && i === 0} startMenu={preview === 'menu' && i === 0} pointed={preview === 'hover' && i === 0} />
       ))}
     </div>
   );

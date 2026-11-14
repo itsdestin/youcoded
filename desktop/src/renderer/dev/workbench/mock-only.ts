@@ -108,6 +108,11 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // Office Home's row actions (card #143, 2026-11-14): Rename, Make a copy and Remove from Recent
+  // were designed here first. Delete each row when its office:* channel lands in main.
+  { channel: 'office.rename', feature: 'Office Home: rename a file from its row' },
+  { channel: 'office.duplicate', feature: 'Office Home: make a copy of a file' },
+  { channel: 'office.forgetRecent', feature: 'Office Home: remove a file from Recent' },
   // Automatic updates (#183): its last row (update.restartToUpdate) is GONE (T3): main + preload +
   // remote-shim carry the real channel; the hand-written mock in mock-shim.ts stays.
   // Welcome back's session.reopenList/session.forgetReopen rows are GONE
