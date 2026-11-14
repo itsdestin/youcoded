@@ -461,7 +461,18 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   useEffect(() => {
     if (!actionFailure) return;
     const osReduced = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    failureRef.current?.scrollIntoView?.({ block: 'start', behavior: osReduced || reducedEffects ? 'auto' : 'smooth' });
+    const el = failureRef.current;
+    if (!el) return;
+    const behavior = osReduced || reducedEffects ? 'auto' : 'smooth';
+    // Scroll ONLY the popup's own scroller (never the page behind it): scrollIntoView would also move every scrollable ancestor.
+    // The popup's header sits outside that scroller, so nothing sticky can cover the notice; 8px of air above it.
+    const scroller = el.closest('.dialog-scroll') as HTMLElement | null;
+    if (scroller && typeof scroller.scrollTo === 'function') {
+      const top = scroller.scrollTop + (el.getBoundingClientRect().top - scroller.getBoundingClientRect().top) - 8;
+      scroller.scrollTo({ top: Math.max(0, top), behavior });
+    } else {
+      el.scrollIntoView?.({ block: 'start', behavior });
+    }
   }, [actionFailure]); // eslint-disable-line react-hooks/exhaustive-deps -- reducedEffects is read at the moment of a new failure only
   const failAction = useCallback((message: string, e: unknown, retry: () => void) => {
     setActionFailure({ message, details: plainMessage(e, ''), retry });

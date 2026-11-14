@@ -570,27 +570,27 @@ describe('Backup & sync actions that fail', () => {
     const scrollSpy = vi.fn();
     const failingDismiss = () => vi.fn().mockRejectedValueOnce(new Error('locked')).mockResolvedValue(undefined);
     const warn = { ...RETRY_WARNING, dismissible: true, fixAction: undefined };
-    afterEach(() => { delete (Element.prototype as any).scrollIntoView; delete (window as any).matchMedia; scrollSpy.mockReset(); });
+    afterEach(() => { delete (Element.prototype as any).scrollTo; delete (window as any).matchMedia; scrollSpy.mockReset(); });
 
     it('scrolls the notice into view smoothly on a new failure, and not again on later renders', async () => {
-      (Element.prototype as any).scrollIntoView = scrollSpy;
+      (Element.prototype as any).scrollTo = scrollSpy;
       stub({ dismissWarning: failingDismiss() }, [warn]);
       render(<SyncSection autoOpen />);
       fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
       await screen.findByText("Couldn't dismiss that warning");
       await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(1));
-      expect(scrollSpy).toHaveBeenCalledWith({ block: 'start', behavior: 'smooth' });
+      expect(scrollSpy).toHaveBeenCalledWith({ top: expect.any(Number), behavior: 'smooth' });
       await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
       expect(scrollSpy).toHaveBeenCalledTimes(1);
     });
 
     it('jumps instead of animating when the system asks for reduced motion', async () => {
-      (Element.prototype as any).scrollIntoView = scrollSpy;
+      (Element.prototype as any).scrollTo = scrollSpy;
       (window as any).matchMedia = (q: string) => ({ matches: q.includes('reduce'), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
       stub({ dismissWarning: failingDismiss() }, [warn]);
       render(<SyncSection autoOpen />);
       fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
-      await waitFor(() => expect(scrollSpy).toHaveBeenCalledWith({ block: 'start', behavior: 'auto' }));
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalledWith({ top: expect.any(Number), behavior: 'auto' }));
     });
   });
 
