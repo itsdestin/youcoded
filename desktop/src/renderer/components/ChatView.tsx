@@ -52,6 +52,7 @@ import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import { useBrowserExpanded } from '../state/browser-store';
+import { ErrorState } from './ui';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -490,6 +491,12 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   /** The timer fires long after the closure that scheduled it went stale. */
   const loadOlderPageRef = useRef<() => void>(() => {});
 
+  // Card #134 round 4: an older page that could not be read used to just stop the scrolling with no hint. `olderFailed` is set only
+  // when a request really failed (a read still being retried on the timer below says nothing yet), by the request of the CURRENT
+  // conversation only, and cleared by a successful page, Try again, and switching conversations.
+  const [olderFailed, setOlderFailed] = useState(false);
+  const liveSessionRef = useRef(sessionId);
+  liveSessionRef.current = sessionId;
   const loadOlderPage = useCallback(async () => {
     const cursor = history.cursor;
     if (!cursor || history.loading) return;
@@ -497,6 +504,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // Announce FIRST: `loading` is the one-in-flight guard, so a second sentinel
     // hit in the same frame must already see it set.
     dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId });
+    const stillHere = () => liveSessionRef.current === sessionId;
     try {
       const page = await (window as any).claude?.detach?.requestTranscriptPage?.({ sessionId, beforeCursor: cursor });
       // Main could not LOCATE the transcript — NOT "this is the beginning of the
@@ -519,22 +527,28 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             unresolvedRetryRef.current.notBefore = 0;
             void loadOlderPageRef.current();
           }, delay);
+        } else if (stillHere()) {
+          console.warn('[chat] older history could not be located after retries');
+          setOlderFailed(true);
         }
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
         return;
       }
       if (page) {
         unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
+        if (stillHere()) setOlderFailed(false);
         // Capture just before prepend: streaming during the await may move the anchor.
         prependAnchorRef.current = captureScrollAnchor();
         // WHY: older pages can hold an orphaned tool; preserve main's recovery verdict.
         dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds, reconcileBackground: page.reconcileBackground === true });
       } else {
+        if (stillHere()) { console.warn('[chat] older history request returned nothing'); setOlderFailed(true); }
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
       }
-    } catch {
+    } catch (e) {
       // Clear the flag so the next scroll retries — a stuck `loading` would make
       // the rest of the conversation permanently unreachable.
+      if (stillHere()) { console.warn('[chat] older history request failed:', e); setOlderFailed(true); }
       dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
     }
   }, [dispatch, sessionId, history.cursor, history.loading, captureScrollAnchor]);
@@ -546,6 +560,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // the new one, and must give the new one a full budget of its own.
   useEffect(() => {
     unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
+    setOlderFailed(false);
     return () => {
       if (unresolvedTimerRef.current) clearTimeout(unresolvedTimerRef.current);
       unresolvedTimerRef.current = null;
@@ -553,7 +568,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   }, [sessionId]);
 
   useEffect(() => {
-    if (!history.hasMore || history.loading || !history.cursor) return;
+    // olderFailed: the sentinel is gone while the strip shows, so a still-visible sentinel cannot re-fire the failing read in a loop.
+    if (!history.hasMore || history.loading || !history.cursor || olderFailed) return;
     // No IntersectionObserver (an exotic WebView): fall back to nothing rather
     // than eagerly loading the whole conversation, which is the cost this
     // feature exists to avoid. There is NO scroll-handler backstop — this
@@ -570,7 +586,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [history.hasMore, history.loading, history.cursor, loadOlderPage]);
+  }, [history.hasMore, history.loading, history.cursor, loadOlderPage, olderFailed]);
 
   // Hold the reader's place across a prepended page. Runs BEFORE paint (useLayoutEffect), so the prepended
   // turns are never SEEN to push the view down, and keeps correcting for a short window afterwards because
@@ -1184,8 +1200,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         {/* Paged history: crossing this loads the previous ~30 turns. Rendered
             only while there IS older history, so reaching the beginning of the
             conversation stops the fetching for good. */}
-        {history.hasMore && (
+        {history.hasMore && !olderFailed && (
           <div ref={historySentinelRef} data-history-sentinel className="h-px" aria-hidden="true" />
+        )}
+        {history.hasMore && olderFailed && (
+          <div className="px-4 pt-2">
+            <ErrorState variant="inline" message="Couldn't load earlier messages."
+              onRetry={() => { unresolvedRetryRef.current = { attempts: 0, notBefore: 0 }; setOlderFailed(false); void loadOlderPage(); }} />
+          </div>
         )}
         {state.timeline.length === 0 && !state.isThinking ? null : (
           <>

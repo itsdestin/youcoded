@@ -174,6 +174,10 @@ function PdfPage({ doc, index, scale, fitWidth }: {
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const taskRef = useRef<any>(null);
+  // Card #134 round 4: a page that failed to load or draw used to stay a blank gap. `failed` is set only by a REAL failure of the
+  // newest draw (a cancelled render — scale change, unmount — is the expected path and never counts) and cleared by the next
+  // successful draw.
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -183,7 +187,9 @@ function PdfPage({ doc, index, scale, fitWidth }: {
       if (!pdf || !canvas) return;
       // Cancel the previous render for THIS canvas before touching it again.
       taskRef.current?.cancel?.();
-      const page = await pdf.getPage(index);
+      let page: any;
+      try { page = await pdf.getPage(index); }
+      catch (e) { if (!cancelled) { console.warn(`[pdf] page ${index} failed to load:`, e); setFailed(true); } return; }
       if (cancelled) return;
       const viewport = page.getViewport({ scale });
       canvas.width = viewport.width;
@@ -195,7 +201,11 @@ function PdfPage({ doc, index, scale, fitWidth }: {
       taskRef.current = page.render({ canvasContext: ctx, viewport, canvas });
       // A cancelled render rejects — that is the expected path on a scale change,
       // not an error worth surfacing.
-      await taskRef.current.promise.catch(() => {});
+      try { await taskRef.current.promise; if (!cancelled) setFailed(false); }
+      catch (e) {
+        // A cancelled render rejects with this name; anything else is a real draw failure.
+        if (!cancelled && (e as { name?: string } | null)?.name !== 'RenderingCancelledException') { console.warn(`[pdf] page ${index} failed to draw:`, e); setFailed(true); }
+      }
     })();
     return () => {
       cancelled = true;
@@ -203,5 +213,10 @@ function PdfPage({ doc, index, scale, fitWidth }: {
     };
   }, [doc, index, scale, fitWidth]);
 
-  return <canvas ref={canvasRef} />;
+  return (
+    <>
+      <canvas ref={canvasRef} className={failed ? 'hidden' : undefined} />
+      {failed && <div role="alert" className="text-xs text-fg-muted py-3 text-center">Couldn’t show page {index}.</div>}
+    </>
+  );
 }

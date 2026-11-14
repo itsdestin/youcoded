@@ -64,6 +64,26 @@ interface HeroSync {
   stopped: boolean;
 }
 
+
+// Card #134 round 4: rename, description and Stop syncing used to swallow every failure (`.catch(() => {})`), so a refused change
+// just looked like it never took. `refused` = the channel answered "no" (false, or { ok:false }). A synced-project call can also
+// REJECT after the change was already written locally (the push to other devices is the last step), so for those a rejection is
+// only logged: saying "Couldn't rename" there could be false. Plain-folder calls are purely local, so a rejection is a failure.
+function refused(r: unknown): { yes: boolean; why?: unknown } {
+  if (r === false) return { yes: true };
+  if (r && typeof r === 'object' && (r as { ok?: unknown }).ok === false) return { yes: true, why: (r as { error?: unknown }).error };
+  return { yes: false };
+}
+async function reportOutcome(what: string, call: Promise<unknown> | undefined, rejectionIsFailure: boolean): Promise<void> {
+  try {
+    const r = refused(await call);
+    if (r.yes) announceFailed(what, r.why);
+  } catch (e) {
+    if (rejectionIsFailure) announceFailed(what, e);
+    else console.warn(`[project-hero] ${what}: the call rejected (the change may still have been saved locally):`, e);
+  }
+}
+
 interface ProjectHeroProps {
   project: CentralIndexProject;
   // Synced display name from the cross-device project registry (2026-07-12),
@@ -163,11 +183,11 @@ export function ProjectHero({
       // Synced project: change the SYNCED display name (propagates to every
       // device via the Personal space). NEVER the folder on disk — the repo name
       // is derived from the folder, so a folder move is a deferred flow (spec §15).
-      await (window.claude as any).syncSpaces.renameProject?.(syncedFolderName, n).catch(() => {});
+      await reportOutcome('rename this project', (window.claude as any).syncSpaces.renameProject?.(syncedFolderName, n), false);
     } else {
       // Plain local folder: picker nickname only. folders.rename updates the
       // nickname, which buildSavedFolderProjects prefers for the display name.
-      await (window.claude as any).folders.rename(project.path, n).catch(() => {});
+      await reportOutcome('rename this project', (window.claude as any).folders.rename(project.path, n), true);
     }
     onRenamed();
   };
@@ -200,12 +220,12 @@ export function ProjectHero({
       // displayName, so every device sees the same words.
       // No `?.` — both channels are real now (Tasks 2-5), so a missing one
       // should fail loudly instead of silently no-opping.
-      await (window.claude as any).syncSpaces.setProjectDescription(syncedFolderName, d).catch(() => {});
+      await reportOutcome('save the description', (window.claude as any).syncSpaces.setProjectDescription(syncedFolderName, d), false);
     } else {
       // Plain local folder: saved-folders record only — nothing to sync it to.
       // `d` is always a string (descDraft.trim()) — the local-folder handler's
       // trim() has no null guard, so this must never pass null/undefined.
-      await (window.claude as any).folders.setDescription(project.path, d).catch(() => {});
+      await reportOutcome('save the description', (window.claude as any).folders.setDescription(project.path, d), true);
     }
     onRenamed();
   };
@@ -218,7 +238,7 @@ export function ProjectHero({
   const commitStop = async () => {
     setConfirmingStop(false);
     if (!syncedFolderName) return;
-    await (window.claude as any).syncSpaces.stopProject?.(syncedFolderName).catch(() => {});
+    await reportOutcome('stop syncing this project', (window.claude as any).syncSpaces.stopProject?.(syncedFolderName), false);
     onRenamed(); // optimistic refresh; a Personal `synced` event also refreshes
   };
 

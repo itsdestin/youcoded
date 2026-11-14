@@ -16,6 +16,7 @@
 // here (project-scoped). The "+ Add external file" affordance moved into
 // FilesTab (artifact-scoped) since it operates on the active project's artifacts.
 import { plainMessage } from '../../utils/ipc-error';
+import { announceFailed } from '../../utils/announce';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -87,7 +88,7 @@ function readStoredFileView(): FileViewMode {
     return localStorage.getItem(FILE_VIEW_KEY) === 'list' ? 'list' : 'grid';
   } catch { return 'grid'; } // storage blocked (some Android WebView configs)
 }
-import { Button, SearchFilterPill } from '../ui';
+import { Button, SearchFilterPill, ErrorState } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
 import { readStoredShowHidden, storeShowHidden } from './hidden-files';
 import { getCapabilities } from '../../platform';
@@ -219,6 +220,10 @@ export function ProjectView(props: ProjectViewProps) {
   // (ProjectsEmptyCard) would flash on every open for the beat before the
   // index answers. False until phase 1 of the load below resolves.
   const [indexLoaded, setIndexLoaded] = useState(false);
+  // Card #134 round 4: the first read of the project list failed (rejected or answered not-ok). Set only by the NEWEST open's
+  // first read, cleared by any successful read and on close; Try again bumps `indexTry` to re-run the open effect.
+  const [indexFailed, setIndexFailed] = useState(false);
+  const [indexTry, setIndexTry] = useState(0);
   const [activeProject, setActiveProject] = useState<CentralIndexProject | null>(null);
   // Latest focused-conversation cwd, held in a ref so the load effect can read
   // it WITHOUT depending on it. A dep would re-run the whole open-time load —
@@ -411,10 +416,13 @@ export function ProjectView(props: ProjectViewProps) {
     // stale `true` from the last open would let the empty card render off the
     // previous list for a beat before this open's answer arrives.
     setIndexLoaded(false);
+    setIndexFailed(false);
     // Phase 1: fast list (sidecar-only counts) so the list/switcher appears
     // instantly and a project is selected without waiting on disk scans.
     (window.claude as any).artifacts.listProjectsIndex().then((res: any) => {
-      if (cancelled || !res?.ok) return;
+      if (cancelled) return;
+      // WHY: a refused read used to leave "Select a project" with no hint the list never arrived.
+      if (!res?.ok) { console.warn('[project-view] project list refused:', res?.error); setIndexFailed(true); return; }
       setProjects(res.projects);
       setIndexLoaded(true);
       // Every open re-homes to the focused conversation's project. Destin's
@@ -432,9 +440,12 @@ export function ProjectView(props: ProjectViewProps) {
         if (cancelled || !res2?.ok) return;
         setProjects(res2.projects);
       }).catch(() => { /* the fast list above already shows; reopening or a reconnect asks again */ });
-    }).catch(() => { /* reopening the view, or a remote reconnect (below), asks again */ });
+    }).catch((e: unknown) => {
+      // Reopening, Try again, or a remote reconnect (below) asks again.
+      if (!cancelled) { console.warn('[project-view] project list failed:', e); setIndexFailed(true); }
+    });
     return () => { cancelled = true; };
-  }, [projectViewOpen]);
+  }, [projectViewOpen, indexTry]);
 
   // After a remote reconnect, an open Project View asks again for its project list and
   // the chosen project's conversations and counts. WHY: each was read once per open, so a
@@ -450,6 +461,7 @@ export function ProjectView(props: ProjectViewProps) {
     ctxCache.current.clear();
     Promise.resolve((window.claude as any).artifacts.listProjectsIndex({ withCounts: true })).then((res: any) => {
       if (!res?.ok) return;
+      setIndexFailed(false);
       setProjects(res.projects);
       setIndexLoaded(true);
       setActiveProject((prev) => prev
@@ -696,9 +708,12 @@ export function ProjectView(props: ProjectViewProps) {
           (p: CentralIndexProject) => p.path.replace(/\\/g, '/').toLowerCase() === path.replace(/\\/g, '/').toLowerCase()
         );
         if (added) setActiveProject(added);
+      } else {
+        announceFailed('refresh the project list', res?.error);
       }
     } catch (err) {
-      console.warn('post-add project list refresh failed', err);
+      // The project WAS added; only the list on screen may be behind. Saying so is true; re-opening the view refreshes it.
+      announceFailed('refresh the project list', err);
     }
   };
 
@@ -786,8 +801,10 @@ export function ProjectView(props: ProjectViewProps) {
     if (!activeProject || !pendingImport) return;
     const destDir = importDestDir();
     const sources = pendingImport.sources;
+    // Card #134 round 4: one file's call REJECTING used to abort the whole batch silently (dialog stuck, nothing said). It is now
+    // that file's own line in the result dialog, with the real message; the other files' outcomes still show.
     const results = await Promise.all(sources.map((p) =>
-      (window.claude as any).artifacts.importFile(activeProject.path, p, destDir, {
+      Promise.resolve((window.claude as any).artifacts.importFile(activeProject.path, p, destDir, {
         mode,
         onCollision,
         // Forward the EXACT collision list the dialog named. Main applies
@@ -796,7 +813,7 @@ export function ProjectView(props: ProjectViewProps) {
         // back to keep-both instead of silently overwriting a file the user was
         // never shown. See artifacts/import-file.ts.
         disclosedCollisions: pendingImport.collisions,
-      })));
+      })).catch((e: unknown) => ({ ok: false, error: plainMessage(e, 'The import did not complete') }))));
     // Surface the REAL failure (code + path) — never a guessed cause. See
     // describeImportFailure above for the two codes that need human wording.
     // Results are index-aligned with `sources` (Promise.all preserves order),
@@ -945,9 +962,11 @@ export function ProjectView(props: ProjectViewProps) {
                         (p: CentralIndexProject) => p.path.replace(/\\/g, '/').toLowerCase() === activeProject.path.replace(/\\/g, '/').toLowerCase()
                       );
                       if (cur) setActiveProject(cur);
+                    } else {
+                      announceFailed('refresh the project list', res?.error);
                     }
                   } catch (err) {
-                    console.warn('post-rename project list refresh failed', err);
+                    announceFailed('refresh the project list', err);
                   }
                 }}
                 // WHY every project now (backlog row 10: "there's no way to delete some
@@ -958,7 +977,11 @@ export function ProjectView(props: ProjectViewProps) {
                 onRemove={() => setDeletingProject(activeProject)}
               />
             ) : (
-              <div className="text-sm text-fg-muted">Select a project to view its artifacts.</div>
+              indexFailed ? (
+                <ErrorState variant="inline" message="Couldn't load your projects." onRetry={() => setIndexTry((n) => n + 1)} />
+              ) : (
+                <div className="text-sm text-fg-muted">Select a project to view its artifacts.</div>
+              )
             )}
 
             {/* Seg-row: unified segmented control (left) + the active tab's
