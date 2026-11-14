@@ -468,7 +468,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     // The popup's header sits outside that scroller, so nothing sticky can cover the notice; 8px of air above it.
     const scroller = el.closest('.dialog-scroll') as HTMLElement | null;
     if (scroller && typeof scroller.scrollTo === 'function') {
-      const top = scroller.scrollTop + (el.getBoundingClientRect().top - scroller.getBoundingClientRect().top) - 8;
+      const box = el.getBoundingClientRect();
+      const view = scroller.getBoundingClientRect();
+      if (box.top >= view.top && box.bottom <= view.bottom) return; // already fully in view: no needless movement
+      const top = scroller.scrollTop + (box.top - view.top) - 8;
       scroller.scrollTo({ top: Math.max(0, top), behavior });
     } else {
       el.scrollIntoView?.({ block: 'start', behavior });

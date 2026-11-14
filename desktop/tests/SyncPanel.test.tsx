@@ -570,10 +570,22 @@ describe('Backup & sync actions that fail', () => {
     const scrollSpy = vi.fn();
     const failingDismiss = () => vi.fn().mockRejectedValueOnce(new Error('locked')).mockResolvedValue(undefined);
     const warn = { ...RETRY_WARNING, dismissible: true, fixAction: undefined };
-    afterEach(() => { delete (Element.prototype as any).scrollTo; delete (window as any).matchMedia; scrollSpy.mockReset(); });
+    // jsdom lays nothing out, so the popup's scroller and the notice get boxes by hand.
+    const boxes = (notice: { top: number; bottom: number }) => {
+      const real = Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect = function (this: Element) {
+        const b = this.classList?.contains('dialog-scroll') ? { top: 100, bottom: 400 }
+          : this.classList?.contains('scroll-mt-2') ? notice : { top: 0, bottom: 0 };
+        return { ...b, left: 0, right: 0, width: 0, height: b.bottom - b.top, x: 0, y: b.top, toJSON() {} } as DOMRect;
+      };
+      return () => { Element.prototype.getBoundingClientRect = real; };
+    };
+    let restoreBoxes = () => {};
+    afterEach(() => { restoreBoxes(); delete (Element.prototype as any).scrollTo; delete (window as any).matchMedia; scrollSpy.mockReset(); });
 
     it('scrolls the notice into view smoothly on a new failure, and not again on later renders', async () => {
       (Element.prototype as any).scrollTo = scrollSpy;
+      restoreBoxes = boxes({ top: 700, bottom: 780 }); // the notice is below the visible part of the popup
       stub({ dismissWarning: failingDismiss() }, [warn]);
       render(<SyncSection autoOpen />);
       fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
@@ -584,8 +596,20 @@ describe('Backup & sync actions that fail', () => {
       expect(scrollSpy).toHaveBeenCalledTimes(1);
     });
 
+    it('does not scroll when the notice is already fully visible in the popup', async () => {
+      (Element.prototype as any).scrollTo = scrollSpy;
+      restoreBoxes = boxes({ top: 150, bottom: 230 });  // inside the popup's visible 100..400
+      stub({ dismissWarning: failingDismiss() }, [warn]);
+      render(<SyncSection autoOpen />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
+      await screen.findByText("Couldn't dismiss that warning");
+      await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+      expect(scrollSpy).not.toHaveBeenCalled();
+    });
+
     it('jumps instead of animating when the system asks for reduced motion', async () => {
       (Element.prototype as any).scrollTo = scrollSpy;
+      restoreBoxes = boxes({ top: 700, bottom: 780 });
       (window as any).matchMedia = (q: string) => ({ matches: q.includes('reduce'), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
       stub({ dismissWarning: failingDismiss() }, [warn]);
       render(<SyncSection autoOpen />);
