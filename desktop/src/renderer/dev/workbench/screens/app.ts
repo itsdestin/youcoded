@@ -41,6 +41,8 @@ export const APP: readonly ScreenEntry[] = [
   // Card #216: the "signed out of your YouCoded account" heads-up with its "Sign in again" button.
   // The same screen with nothing shown: what the app looked like before the notice existed (the deck's Before picture).
   { name: 'dev/toast#none', tags: ['dev'], session: 'wb-1', params: { toast: 'none' }, newIn: 'after' as const, sameAs: { name: 'chat#queue-idle-after', why: 'The same chat with no notice raised (the Before picture for the signed-out notice).' } },
+  // Card #134 round 4: a button's action failed (Copy path here): the plain sentence in the toast, no invented cause (the Before is dev/toast#none).
+  { name: 'dev/toast#action-failed', tags: ['dev'], session: 'wb-1', params: { toast: 'action-failed' }, newIn: 'after' as const },
   { name: 'dev/toast#signed-out', tags: ['dev'], session: 'wb-1', params: { toast: 'signed-out' }, newIn: 'after' as const },
   // Card #11 a: the one-time "damaged Claude Code settings file replaced" heads-up with its "Show file" button (the Before is dev/toast#none).
   { name: 'dev/toast#settings-repaired', tags: ['dev'], session: 'wb-1', params: { toast: 'settings-repaired' }, newIn: 'after' as const },

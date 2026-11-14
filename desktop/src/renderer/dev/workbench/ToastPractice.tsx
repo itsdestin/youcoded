@@ -3,7 +3,7 @@
 // after a failure, so no click reaches them. The words come from the real code's exports, so the picture cannot drift.
 // Photo-only build only (index.tsx). Never ships.
 import { useEffect, useState } from 'react';
-import { announce } from '../../utils/announce';
+import { announce, announceFailed } from '../../utils/announce';
 import { LOST_SEND_NOTICE } from '../../state/submit-outgoing';
 import { savedPasswordRefusedNotice } from '../../remote-gate';
 import { announcePluginTurnedOff } from '../../utils/plugin-off-notice';
@@ -18,6 +18,7 @@ export default function ToastPractice() {
     if (which === 'turned-off') announcePluginTurnedOff(60_000);
     else if (which === 'none') { /* the same screen with no notice: the "Before" picture for card #216 */ }
     else if (which === 'settings-repaired') announceSettingsRepaired('/home/me/.claude/settings.json.corrupt-2026-11-12T04-30-00-000Z', 60_000); // card #11 a
+    else if (which === 'action-failed') announceFailed('copy the path'); // card #134 round 4
     else if (which === 'signed-out') announceSessionLost(() => {}, 60_000); // card #216
     else announce(which === 'password' ? savedPasswordRefusedNotice('Home PC') : LOST_SEND_NOTICE, 60_000);
     setShown(true);

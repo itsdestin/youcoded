@@ -1,4 +1,5 @@
 import { gitChipLabel } from '../state/git-chip-label';
+import { announceFailed } from '../utils/announce';
 import { versionPillTooltip } from './version-pill-tooltip';
 import { useState, useCallback, useEffect, useSyncExternalStore, memo } from 'react';
 import { useChatStore } from '../state/chat-context';
@@ -931,7 +932,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   // ChatGPT plan — the Model Providers row that shows the plan and its windows.
   const openUsage = () => chatgptWindows
     ? window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'))
-    : window.claude.shell.openExternal('https://claude.ai/settings/usage');
+    : void Promise.resolve(window.claude.shell.openExternal('https://claude.ai/settings/usage')).catch((e) => announceFailed('open the browser', e));
   const usageTitle = chatgptWindows ? 'Your ChatGPT plan — click to open Model Providers' : 'View usage on claude.ai';
   const ss = sessionStats; // shorthand
 

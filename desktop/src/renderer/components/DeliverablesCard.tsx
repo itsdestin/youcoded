@@ -29,6 +29,7 @@
 //   - Preview is ArtifactThumbnail: ONE preview mechanism app-wide (image /
 //     first lines of text / scaled HTML page / letter glyph). Nothing here
 //     re-implements a thumbnail.
+import { announceFailed } from '../utils/announce';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCompactSurface } from '../state/compact-surface-context';
 import type { ToolCallState } from '../../shared/types';
@@ -97,7 +98,7 @@ export function sentLinks(input: Record<string, unknown>): SentLink[] {
  *  remote/Android shims map it the same way). Only called on a user click —
  *  the model never triggers navigation itself. */
 export function openExternalUrl(url: string): void {
-  void (window.claude?.shell?.openExternal?.(url) ?? Promise.resolve());
+  void Promise.resolve(window.claude?.shell?.openExternal?.(url)).catch((e) => announceFailed('open the link', e));
 }
 
 function basename(fp: string): string {

@@ -6,6 +6,8 @@
 //
 // History: Task 6.x scaffolded a fixed 180px-list + viewer split. This file
 // replaced that split with the push-sidebar layout (2026-06).
+import { announceFailed } from '../utils/announce';
+import { copyText } from './context-menu/clipboard';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
 import { useTheme } from '../state/theme-context';
@@ -480,7 +482,9 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
       setRenameError(null);
       return;
     }
-    const res = await (window.claude as any).artifacts.rename(projectRoot, active.id, next);
+    let res: any;
+    try { res = await (window.claude as any).artifacts.rename(projectRoot, active.id, next); }
+    catch (e) { res = { ok: false, rejected: e }; } // a rejected call is a failed rename too (card #134): same notice, field stays open
     if (res?.ok) {
       setRenaming(false);
       setRenameError(null);
@@ -492,7 +496,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
     } else {
       // Failure (name-taken / invalid / etc.) — keep the field open with the old
       // name and surface WHY, so the rename doesn't silently appear to do nothing.
-      setRenameError(renameErrorCopy(res?.error));
+      setRenameError(res?.rejected ? "Couldn't rename this file." : renameErrorCopy(res?.error));
       renameActiveRef.current = true; // re-arm so the next Enter/blur commits again
       setRenaming(true);
       if (viaEnter) requestAnimationFrame(() => renameInputRef.current?.focus());
@@ -514,10 +518,11 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   const [copiedPath, setCopiedPath] = useState(false);
   const handleCopyPath = useCallback(() => {
     if (!absolutePath) return;
-    navigator.clipboard?.writeText(absolutePath).then(() => {
+    void copyText(absolutePath).then((ok) => {
+      if (!ok) { announceFailed('copy the path'); return; }
       setCopiedPath(true);
       window.setTimeout(() => setCopiedPath(false), 1500);
-    }).catch(() => {});
+    });
   }, [absolutePath]);
 
   const handleReveal = useCallback(() => {
@@ -528,7 +533,8 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // the right action for formats the in-app viewer can't fully render. Desktop
   // only (shell.openPath); the button is gated on canOpenInOs like Reveal.
   const handleOpenExternal = useCallback(() => {
-    if (absolutePath) (window.claude as any).shell?.openPath?.(absolutePath);
+    // shell.openPath answers with the OS's error text when it fails ('' on success); a rejection is a failure too (card #134).
+    if (absolutePath) void Promise.resolve((window.claude as any).shell?.openPath?.(absolutePath)).then((err) => { if (typeof err === 'string' && err) announceFailed('open the file', err); }, (e) => announceFailed('open the file', e));
   }, [absolutePath]);
 
   // Remote access batch 3 (questions deck 2026-09-10, Q-7 yes): a phone cannot
@@ -628,8 +634,10 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // (Android stub, write conflict) it quietly no-ops — same graceful-degrade
   // contract as rename on mobile.
   const handleRemoveRecord = useCallback(async (artifactId: string) => {
-    const res = await (window.claude as any).artifacts.removeRecord?.(projectRoot, artifactId);
-    if (!res?.ok) return;
+    let res: any;
+    try { res = await (window.claude as any).artifacts.removeRecord?.(projectRoot, artifactId); } catch (e) { announceFailed('remove this from the list', e); return; }
+    // An answered refusal is a failure the person should hear about. No removeRecord at all (phone stub) stays quiet: nothing was attempted.
+    if (!res?.ok) { if (res) announceFailed('remove this from the list', res.error); return; }
     if (activeArtifactId === artifactId) dispatch({ type: 'ACTIVE_ARTIFACT_CLEARED', sessionId });
     const refreshed = await (window.claude as any).artifacts.listSession(sessionId, projectRoot);
     if (refreshed?.ok && Array.isArray(refreshed.artifacts)) {

@@ -12,6 +12,7 @@
 // The project name is a clickable switcher trigger (opens <ProjectSwitcher>,
 // Task 2.3) and MUST NOT truncate — it wraps. The ONE accent use in this card is
 // the New conversation primary button.
+import { announceFailed } from '../../utils/announce';
 import React, { useEffect, useState } from 'react';
 import type { CentralIndexProject } from '../../../shared/artifacts/types';
 import { getCapabilities } from '../../platform';
@@ -370,7 +371,7 @@ export function ProjectHero({
           <Tooltip text={canOpenInOs ? 'Open in File Explorer' : project.path}>
             <button
               type="button"
-              onClick={canOpenInOs ? () => void (window.claude as any).shell.openPath(project.path) : undefined}
+              onClick={canOpenInOs ? () => void Promise.resolve((window.claude as any).shell.openPath(project.path)).then((err) => { if (typeof err === 'string' && err) announceFailed('open the folder', err); }, (e) => announceFailed('open the folder', e)) : undefined}
               disabled={!canOpenInOs}
               className="inline-flex items-center gap-1 min-w-0 text-fg-muted hover:text-fg-2 transition-colors disabled:cursor-default"
             >
@@ -388,7 +389,7 @@ export function ProjectHero({
               <Tooltip text={`Open ${repo!.owner}/${repo!.name} on GitHub`}>
                 <button
                   type="button"
-                  onClick={() => window.claude.shell.openExternal(repo!.webUrl!)}
+                  onClick={() => void Promise.resolve(window.claude.shell.openExternal(repo!.webUrl!)).catch((e) => announceFailed('open the page', e))}
                   className="inline-flex items-center gap-1 text-xs text-fg-dim hover:text-fg-2 shrink-0 transition-colors"
                 >
                   <GitHubIcon size={13} />

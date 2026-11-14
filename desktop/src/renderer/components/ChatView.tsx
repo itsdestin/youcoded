@@ -1,4 +1,5 @@
 import { KeepGoingRow } from './KeepGoingRow';
+import { announceFailed } from '../utils/announce';
 import { useModelProviderType } from '../hooks/use-provider-type';
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
@@ -1399,7 +1400,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               ? MODEL_LOADING_DEMOS[demoLoading] ?? MODEL_LOADING_DEMOS['1']
               : { modelState: state.modelState, modelInfo: state.modelInfo, loadedBytes: state.modelLoadedBytes,
                 loadExpectedMs: state.modelLoadExpectedMs, everResident: state.modelEverResident, isThinking: state.isThinking })}
-            onReload={(modelId) => { void window.claude.models.load(modelId, sessionId); }}
+            onReload={(modelId) => { void Promise.resolve(window.claude.models.load(modelId, sessionId)).catch((e) => announceFailed('reload the model', e)); }}
           />
         </div>
         {/* Right frame edge / divider + Session Drawer — only shown when open.
