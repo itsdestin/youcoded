@@ -85,7 +85,7 @@ const SUMMARY_SAVE_EVERY = 2048;
 const TAKEOVER_RE = /^[0-9a-f]{8,128}$/;
 const ASIDE_RE = /^[0-9a-f]+-q?\d+$/;
 /** Longest version id the store accepts (see keyOf). */
-export const MAX_VERSION_ID_BYTES = 64;
+const MAX_VERSION_ID_BYTES = 64;
 const MAX_TAILS = 1024;
 const MAX_REJECTED = 1024;
 const MAX_REJECTED_BYTES = 256 * MIB;

@@ -29,7 +29,7 @@
 // `inventory.test.ts` fails when the store writes a name that has no row; `fuzz.test.ts` and `matrix.test.ts` apply each of the five faults to every file of a real folder.
 //
 // Paths are relative to the store root with `/` separators. Version files appear under versions/<vhex>/ and, moved whole, under aside/<name>/.
-export interface InventoryAnswers { rotted: string; older: string; foreign: string; missing: string; truncated: string }
+interface InventoryAnswers { rotted: string; older: string; foreign: string; missing: string; truncated: string }
 export interface InventoryRow {
   id: string;
   pattern: RegExp;
