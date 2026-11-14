@@ -71,7 +71,22 @@ export function listPickerFolders(file?: string): PickerFolder[] {
       result.push({ path: p.path, nickname: p.name, addedAt: 0, exists: true, managed: true });
     }
   }
-  return result;
+  // Card #143 b: most recently used first. A stable sort, so folders never used (no stamp) keep the order they always had,
+  // and the synced projects appended above (addedAt 0) stay last among them.
+  return result.map((f, i) => ({ f, i })).sort((a, b) => ((b.f.lastUsedAt ?? 0) - (a.f.lastUsedAt ?? 0)) || a.i - b.i).map((x) => x.f);
+}
+
+/** Stamp a saved folder as just used (a session started in it). A folder that is not saved is left alone: the picker lists
+ *  synced projects without saving them, and a start in a one-off folder must not add it to the list. Never throws. */
+export function noteFolderUsed(folderPath: unknown, file?: string): void {
+  try {
+    if (typeof folderPath !== 'string' || !folderPath) return;
+    const folders = readFolders(file);
+    const entry = folders.find((f) => keyOf(f.path) === keyOf(folderPath));
+    if (!entry) return;
+    entry.lastUsedAt = Date.now();
+    writeFolders(folders, file);
+  } catch { /* an unwritable list must never stop a session from starting */ }
 }
 
 export function addFolder(folderPath: string, nickname: string | undefined, file?: string): SavedFolder {

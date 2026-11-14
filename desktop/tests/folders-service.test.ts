@@ -187,3 +187,24 @@ describe('folder paths that differ only by letter case', () => {
     });
   }
 });
+
+// Card #143 b (deck C-3): the one list is ordered by last use.
+describe('folder order by last use', () => {
+  it('a folder a session just started in moves to the top; unused ones keep their old order', async () => {
+    const a = path.join(dir, 'a'); const b = path.join(dir, 'b'); const c = path.join(dir, 'c');
+    fs.writeFileSync(file, JSON.stringify([{ path: a, nickname: 'a', addedAt: 3 }, { path: b, nickname: 'b', addedAt: 2 }, { path: c, nickname: 'c', addedAt: 1 }]));
+    const { noteFolderUsed } = await import('../src/main/folders-service');
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['a', 'b', 'c']);
+    noteFolderUsed(c, file);
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['c', 'a', 'b']);
+    await new Promise((r) => setTimeout(r, 5));
+    noteFolderUsed(b, file);
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['b', 'c', 'a']);
+  });
+  it('a folder that is not saved is not added by being used', async () => {
+    fs.writeFileSync(file, JSON.stringify([{ path: path.join(dir, 'a'), nickname: 'a', addedAt: 1 }]));
+    const { noteFolderUsed } = await import('../src/main/folders-service');
+    noteFolderUsed(path.join(dir, 'elsewhere'), file);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toHaveLength(1);
+  });
+});
