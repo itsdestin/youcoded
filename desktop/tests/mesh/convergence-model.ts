@@ -265,7 +265,7 @@ class Sim {
     for (let round = 0; round < 80; round++) {
       this.rounds = round;
       this.now += TAKEOVER * 8;
-      for (const d of this.devs) if (d.honest && !d.silent && !isInert(d)) await this.after(d, round % 3 === 0 || round < 6);
+      for (const d of this.devs) if (d.honest && !d.silent) await this.after(d, round % 3 === 0 || round < 6); // quiet (self-removed) devices tick too: they must still ask for what they lack
       let moved = true;
       let guard = 0;
       while (moved && guard++ < 5000) {
@@ -505,6 +505,7 @@ export async function runSchedule(o: RunOptions): Promise<RunResult> {
   const dump = sim.devs.map((d) => `${d.name} ${d.honest ? 'H' : 'X'}${d.silent ? 's' : ''}${isInert(d) ? 'i' : ''} size=${d.roster.size} active=[${d.roster.activeDevices().map((x) => x.name).join(',')}] removed=${[...d.roster.removedIds()].map((x) => sim.devs.find((q) => q.hex === x)?.name ?? x.slice(0, 4)).join(',')} gens=${d.book.held.size} cur=${d.core.currentLabel()} waiting=${d.parked.length} parked=${d.core.parked.size}`);
   for (const d of sim.devs) for (const pe of d.core.parked.values()) {
     const miss = pe.entry.seen.filter((x) => !d.roster.has(x)).map((x) => toHex(x).slice(0, 6) + ' held by ' + sim.devs.filter((q) => q.roster.has(x)).map((q) => q.name).join('/'));
+    dump.push(`  ${d.name} wants=${d.core.wanted().map((x) => toHex(x).slice(0, 6))} inbox=${d.inbox.length} online=${d.online} wantedSent=${d.core.wantedSent}`);
     dump.push(`  ${d.name} parks ${pe.entry.kind} by ${sim.devs.find((q) => q.hex === toHex(pe.entry.device))?.name} missing ${miss.join(';')}`);
   }
   const nm = (h: string): string => sim.devs.find((q) => q.hex === h)?.name ?? h.slice(0, 4);
