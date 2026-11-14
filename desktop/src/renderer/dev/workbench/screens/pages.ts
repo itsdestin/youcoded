@@ -152,6 +152,9 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('automations/details#phone', 'automations', 'narrow'), viewport: PHONE },
   // A page's own automations, in its Page settings (the Money page has the morning check).
   { ...pg('pages/library/settings#automations', 'automations'), params: { pagesSettings: 'page-money' } },
+  // Delete page (step 4d deck, Q-deletepage): the button at the foot, and its warning with a choice per automation.
+  { ...pg('pages/library/settings#foot', 'automations'), params: { pagesSettings: 'page-money', pagesSettingsView: 'foot' }, newIn: 'after', sameAs: { name: 'pages/library/settings#automations', why: 'this page\'s settings fit without scrolling in some themes, so the foot is already showing' } },
+  { ...pg('pages/library/settings#delete', 'automations'), params: { pagesSettings: 'page-money', pagesSettingsView: 'delete' }, newIn: 'after' },
   // Office (built in, design stage). Documents need the editor add-on served on
   // 127.0.0.1:4717 — fixtures/office.ts says how.
   pg('office/home', 'view', 'office'),

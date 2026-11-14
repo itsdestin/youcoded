@@ -657,6 +657,10 @@ export interface PagesBridge {
    *  its site to the page's `openSites`; `open: false` only records — the asking
    *  screen (a phone's own browser) opens the address itself. */
   openWebsite?: (id: string, url: string, remember: boolean, open: boolean) => Promise<PageOpenResult>;
+  /** Deletes the page with its earlier versions and its chats (Page settings → Delete page), and the linked
+   *  automations named in `deleteAutomations`; the other linked automations stay and lose the link.
+   *  Design stage: only the workbench answers it (mock-only.ts). */
+  deletePage?: (id: string, deleteAutomations: string[]) => Promise<PageSummary[]>;
   /** Takes a site back off `openSites`, so links to it ask again. */
   forgetOpenSite?: (id: string, site: string) => Promise<PageSummary[]>;
   /** Fetch fresh information now (the band's refresh button). */

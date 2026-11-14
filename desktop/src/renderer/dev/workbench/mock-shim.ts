@@ -248,6 +248,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
   // Finishing Pages, step 1 (2026-10-24): "Open this website?" and Page settings' site list.
   'pages.openWebsite', 'pages.forgetOpenSite',
+  // Delete page (pages-finish step 4d, Q-deletepage) — designed ahead of the backend; row in mock-only.ts.
+  'pages.deletePage',
   // Finishing Pages, step 3 (the page's assistant): real channels; faked with the practice chat's two requests.
   'pages.assistantChats', 'pages.versions', 'pages.restoreVersion',
   // Finishing Pages, step 2 (files): real channels since 2026-10-24; faked over a practice home.
@@ -4696,6 +4698,14 @@ function createPagesMock(scenario: string): PagesBridge {
       const saved = { at: Date.now(), label: `Before putting back a version at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`, change: 'both' as const };
       practiceVersionsByPage.set(id, [saved, ...list]);
       return { ok: true as const, versions: practiceVersionsByPage.get(id)! };
+    },
+    // Delete page: the page leaves the list, and the automations chosen for deletion go with it.
+    deletePage: async (id, deleteAutomations) => {
+      const autos = (window as unknown as { claude?: { automations?: { remove(id: string): Promise<unknown> } } }).claude?.automations;
+      for (const a of deleteAutomations) await autos?.remove(a);
+      pages = pages.filter((p) => p.id !== id);
+      publish();
+      return summaries();
     },
     forgetOpenSite: async (id, site) => {
       pages = pages.map((p) => (p.id !== id ? p : { ...p, openSites: (p.openSites ?? []).filter((s) => s !== site) }));

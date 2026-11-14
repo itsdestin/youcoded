@@ -111,6 +111,8 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   { channel: 'automations.runNow', feature: 'Automations (pages-finish step 4) — UI mockup only' },
   { channel: 'automations.answer', feature: 'Automations (pages-finish step 4) — UI mockup only' },
   { channel: 'automations.remove', feature: 'Automations (pages-finish step 4) — UI mockup only' },
+  // Delete page (step 4d deck, Q-deletepage): drawn in Page settings; main has no page delete yet.
+  { channel: 'pages.deletePage', feature: 'Delete page (pages-finish step 4) — UI mockup only' },
   // The workbench builds its conversations by replaying fixtures through the real reducer and handing the result to App whole. A real
   // screen never gets a seed: it is filled from the computer's record (session.open, one-core R5-2). Stays as long as the workbench does.
   { channel: 'on.seedChat', feature: 'Dev workbench: conversations seeded from fixtures' },
