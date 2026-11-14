@@ -12,7 +12,7 @@
 //    leaderboard being down must never look like the game being down (§4.2).
 
 import type { GameDefinition } from './game-registry';
-import { Button, SectionLabel } from '../ui';
+import { Button, ErrorState, SectionLabel } from '../ui';
 
 export interface LeaderboardRow {
   accountId: string;
@@ -34,9 +34,12 @@ interface Props {
    *  finished a run, which is a DIFFERENT screen from "we don't know yet". */
   unpublishedBest?: string | null;
   onSignIn?: () => void;
+  /** The signed-in player's online read failed (card #134). Replaces the empty-board copy, which
+   *  would otherwise say "Play a round…" or "Sign in…" to someone who has and is. */
+  loadError?: { detail: string; onRetry: () => void };
 }
 
-export default function Leaderboard({ game, rows, staleNote, unpublishedBest, onSignIn }: Props) {
+export default function Leaderboard({ game, rows, staleNote, unpublishedBest, onSignIn, loadError }: Props) {
   const label = game.scoring?.label ?? 'Score';
   const alone = rows.length === 1 && rows[0]!.isYou;
 
@@ -53,14 +56,21 @@ export default function Leaderboard({ game, rows, staleNote, unpublishedBest, on
           <span className="text-sm font-medium text-fg tabular-nums">
             {/* An em dash, not a zero: you have not scored nothing, you have
                 not played. A "0" reads as a bad run. */}
-            {unpublishedBest ?? '—'}
+            {unpublishedBest ?? (loadError ? 'Not loaded' : '—')}
           </span>
         </div>
+        {loadError ? (
+          <>
+            <ErrorState variant="inline" message="Couldn't load your online best and the friends board." details={loadError.detail} onRetry={loadError.onRetry} />
+            {unpublishedBest && <p className="text-2xs text-fg-muted leading-relaxed">Saved on this device.</p>}
+          </>
+        ) : (
         <p className="text-2xs text-fg-muted leading-relaxed">
           {unpublishedBest
             ? 'Saved on this device. Sign in to rank it against your friends.'
             : 'Play a round and your best shows up here.'}
         </p>
+        )}
         {/* WHY outlined (guide: secondary actions are outlined, never bare
             text — "Sign in links that are really actions" is named
             explicitly): was a hand-rolled text-link button. */}

@@ -229,6 +229,9 @@ export const CHAT: readonly ScreenEntry[] = [
   // autoplay; autoplay=0 keeps them in the lobby, where the head-to-head record shows.
   { ...chat('chat/games/flappy', 'pane', 'games'), params: { signedIn: '1' } },
   { ...chat('chat/games/flappy#alone', 'pane', 'games'), params: { signedIn: '1', arcade: 'alone' } },
+  // Card #134: the online scores read fails for a signed-in player (the picker and the board each say so).
+  { ...chat('chat/games#scores-failed', 'pane', 'games', 'error-state'), params: { signedIn: '1', fail: 'arcade.status,arcade.leaderboard' } },
+  { ...chat('chat/games/flappy#scores-failed', 'pane', 'games', 'error-state'), params: { signedIn: '1', fail: 'arcade.status,arcade.leaderboard' } },
   { ...chat('chat/games/flappy/play', 'pane', 'games'), params: { signedIn: '1' } },
   { ...chat('chat/games/2048', 'pane', 'games'), params: { signedIn: '1' } },
   { ...chat('chat/games/chess', 'pane', 'games'), params: { signedIn: '1' } },
