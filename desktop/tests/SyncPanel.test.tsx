@@ -592,6 +592,7 @@ describe('Backup & sync actions that fail', () => {
       await screen.findByText("Couldn't dismiss that warning");
       await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(1));
       expect(scrollSpy).toHaveBeenCalledWith({ top: expect.any(Number), behavior: 'smooth' });
+      // settle: later renders must not scroll again
       await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
       expect(scrollSpy).toHaveBeenCalledTimes(1);
     });

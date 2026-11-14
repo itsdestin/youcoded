@@ -175,8 +175,11 @@ describe('PreferencesPopup failed saves', () => {
       fireEvent.change(box, { target: { value: 'be brief' } });
       fireEvent.blur(box);                                                    // starts the save
       view.rerender(<PreferencesPopup open={false} onClose={() => {}} onOpenAdvanced={() => {}} />);   // popup closes while it runs
-      await act(async () => { finish(); await new Promise((r) => setTimeout(r, 20)); });
-      expect(n.got).toEqual(["Couldn't save your system prompt."]);
+      await act(async () => { finish(); });
+      await vi.waitFor(() => expect(n.got).toEqual(["Couldn't save your system prompt."]));
+      // settle: no second toast arrives afterwards
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      expect(n.got).toHaveLength(1);
       n.off();
     });
 
@@ -207,8 +210,9 @@ describe('PreferencesPopup failed saves', () => {
       fireEvent.change(box, { target: { value: 'be brief' } });
       fireEvent.blur(box);
       view.rerender(<PreferencesPopup open={false} onClose={() => {}} onOpenAdvanced={() => {}} />);
+      await vi.waitFor(() => expect(ok).toHaveBeenCalledTimes(1));
+      // settle: a success toasts nothing
       await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
-      expect(ok).toHaveBeenCalledTimes(1);
       expect(n.got).toEqual([]);
       n.off();
       // a failure that lands while the popup is still open is the inline notice, not a toast
@@ -271,10 +275,12 @@ describe('PreferencesPopup failed saves', () => {
       fireEvent.change(box, { target: { value: 'a' } }); fireEvent.blur(box);          // write A running
       fireEvent.change(box, { target: { value: 'ab' } });                              // more typed: pause still pending
       view.rerender(closed);                                                           // close starts write B
-      await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
-      expect(g.list).toHaveLength(2);
-      await act(async () => { g.list[0](false); g.list[1](false); await new Promise((r) => setTimeout(r, 20)); });
-      expect(n.got).toEqual(["Couldn't save your system prompt."]);
+      await vi.waitFor(() => expect(g.list).toHaveLength(2));
+      await act(async () => { g.list[0](false); g.list[1](false); });
+      await vi.waitFor(() => expect(n.got).toEqual(["Couldn't save your system prompt."]));
+      // settle: still exactly one toast
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      expect(n.got).toHaveLength(1);
       n.off();
     });
 
@@ -313,6 +319,7 @@ describe('PreferencesPopup failed saves', () => {
       view.rerender(<PreferencesPopup open onClose={() => {}} onOpenAdvanced={() => {}} />);            // second load: fast
       const box = await screen.findByRole('textbox', { name: 'System prompt' }) as HTMLTextAreaElement;
       await waitFor(() => expect(box.value).toBe('NEW'));
+      // settle: the slow earlier load lands after the later one and must change nothing
       await act(async () => { releaseOld(); await new Promise((r) => setTimeout(r, 20)); });
       expect((screen.getByRole('textbox', { name: 'System prompt' }) as HTMLTextAreaElement).value).toBe('NEW');
     });
