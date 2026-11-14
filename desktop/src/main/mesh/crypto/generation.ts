@@ -19,8 +19,8 @@ import { asBytes, asArray, asMap, asUint, decode, encode, onlyKeys } from './cbo
 import { MeshCryptoError, guard } from './errors';
 import { deviceIdFor, signWith, verifySig, type DeviceIdentity } from './identity';
 
-export const GEN_LABEL_FIRST = 1;
-export const MAX_GEN_DEVICES = 64;
+const GEN_LABEL_FIRST = 1;
+const MAX_GEN_DEVICES = 64;
 
 export interface GenStatement {
   set: Buffer;
@@ -37,7 +37,7 @@ const sortIds = (ids: readonly Bytes[]): Buffer[] => ids.map((i) => Buffer.from(
 export const removedKey = (removed: readonly Bytes[]): string => sortIds(removed).map((r) => toHex(r)).join(',');
 
 /** The label of the secret `minter` makes for removed set `removed`. */
-export function genLabel(setId: Bytes, removed: readonly Bytes[], minter: Bytes): number {
+function genLabel(setId: Bytes, removed: readonly Bytes[], minter: Bytes): number {
   const r = sortIds(removed);
   if (r.length === 0) return GEN_LABEL_FIRST; // the secret made with the set (only its creator can make it, see verifyStatement)
   const h = sha256(utf8(LABEL + 'gen\0'), setId, ...r, minter);

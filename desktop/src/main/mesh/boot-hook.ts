@@ -50,6 +50,8 @@ export async function startMeshIfEnabled(i: MeshBootInput): Promise<MeshHandle |
       pairConfirmMs: sw.testMode && process.env.YOUCODED_MESH_PAIR_CONFIRM_MS ? Number(process.env.YOUCODED_MESH_PAIR_CONFIRM_MS) : undefined,
       removeWaitMs: sw.testMode && process.env.YOUCODED_MESH_REMOVE_WAIT_MS ? Number(process.env.YOUCODED_MESH_REMOVE_WAIT_MS) : undefined,
       relayRetryMs: sw.testMode && process.env.YOUCODED_MESH_RELAY_RETRY_MS ? Number(process.env.YOUCODED_MESH_RELAY_RETRY_MS) : undefined,
+      genTakeoverMs: sw.testMode && process.env.YOUCODED_MESH_GEN_TAKEOVER_MS ? Number(process.env.YOUCODED_MESH_GEN_TAKEOVER_MS) : undefined,
+      headsEveryMs: sw.testMode && process.env.YOUCODED_MESH_HEADS_MS ? Number(process.env.YOUCODED_MESH_HEADS_MS) : undefined,
     });
     await svc.start();
     let control: { close(): Promise<void> } | null = null;

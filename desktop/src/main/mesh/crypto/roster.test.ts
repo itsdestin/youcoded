@@ -398,3 +398,55 @@ describe('a 5,000-entry roster verifies and every entry parses back', () => {
     expect(() => v.add(makeRemoveEntry(devs[0], devs[5].deviceId, seen, 99999))).not.toThrow(); // the reserve is for removals
   }, 60_000);
 });
+
+describe('roster state is a function of the SET of entries (convergence by construction)', () => {
+  const A = generateIdentity(), B = generateIdentity(), C = generateIdentity(), G = generateIdentity();
+  const g = makeGenesisEntry(A, 'A', 'linux', 1);
+  const addB = makeAddEntry(A, info(B, 'B'), [g.id], 2);
+  const addC = makeAddEntry(A, info(C, 'C'), [g.id, addB.id], 3);
+  const rBA = makeRemoveEntry(B, A.deviceId, [addB.id, addC.id], 4); // B removes A
+  const rAB = makeRemoveEntry(A, B.deviceId, [addB.id, addC.id], 4); // A removes B at the same moment (mutual)
+  const ghost = makeAddEntry(C, info(G, 'ghost'), [addC.id], 5); // C admits a ghost while ...
+  const rAC = makeRemoveEntry(A, C.deviceId, [addB.id, addC.id], 5); // ... A removes C without seeing it
+  const rename = makeRenameEntry(B, 'B2', [addB.id], 5);
+  const all = [g, addB, addC, rBA, rAB, ghost, rAC, rename];
+  /** A random order in which every entry comes after the entries it cites. */
+  function causalShuffle(seed: number): SignedEntry[] {
+    let s = seed;
+    const r = (): number => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+    const left = [...all];
+    const done = new Set<string>();
+    const out: SignedEntry[] = [];
+    while (left.length) {
+      const ready = left.filter((e) => e.seen.every((x) => done.has(hex(x))));
+      const e = ready[Math.floor(r() * ready.length)];
+      left.splice(left.indexOf(e), 1);
+      done.add(hex(e.id));
+      out.push(e);
+    }
+    return out;
+  }
+  const digest = (v: RosterVerifier): string => JSON.stringify({ act: v.active().map((d) => `${hex(d.deviceId)}:${d.name}`).sort(), rem: [...v.removed].sort(), voided: [...v.voided].sort() });
+  it('any causal order, with repeats, gives the same state, for both mutual-removal rules', () => {
+    for (const rule of ['both', 'first-admitted'] as const) {
+      const ref = digest(verifyRosterLog(causalShuffle(1), rule));
+      for (let seed = 2; seed < 40; seed++) {
+        const v = new RosterVerifier(rule);
+        for (const e of causalShuffle(seed)) v.add(e);
+        expect(digest(v), `${rule} seed ${seed}`).toBe(ref);
+      }
+    }
+  });
+  it('mutual removal: both are out by default; with the other rule the earlier-admitted device stays', () => {
+    const both = verifyRosterLog([g, addB, addC, rBA, rAB], 'both');
+    expect(both.removed.has(hex(A.deviceId)) && both.removed.has(hex(B.deviceId))).toBe(true);
+    const first = verifyRosterLog([g, addB, addC, rBA, rAB], 'first-admitted');
+    expect(first.removed.has(hex(B.deviceId))).toBe(true);
+    expect(first.removed.has(hex(A.deviceId))).toBe(false);
+  });
+  it('a ghost admitted by a member at the moment it is removed is not a member', () => {
+    const v = verifyRosterLog([g, addB, addC, ghost, rAC]);
+    expect(v.active().map((d) => d.name).sort()).toEqual(['A', 'B']);
+    expect(v.facts.get(hex(ghost.id))!.void).toBe(true);
+  });
+});
