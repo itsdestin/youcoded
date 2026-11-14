@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { memoWhileClosed } from './memo-while-closed';
 import { createPortal } from 'react-dom';
 import { useTheme } from '../state/theme-context';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useSaveNotice } from '../hooks/useSaveNotice';
 import { Button, CARD_LEVEL_1, Dialog, Toggle, TextInput, Textarea, LoadingState, RadioGroup, SegmentedTabs, SectionLabel, SettingRow } from './ui';
 
 // Native replacement for Claude Code's /config TUI. Reads/writes fields in
@@ -36,6 +37,16 @@ interface PrefsState {
   systemPrompt: string;       // Multiline — appended to all sessions
 }
 
+/** Words for each setting in a "Couldn't save …" notice. */
+const LABELS: Record<keyof PrefsState, string> = {
+  defaultMode: 'the default permission mode',
+  editorMode: 'the editor mode',
+  showTurnDuration: 'the turn duration setting',
+  preferReducedMotion: 'the reduced motion setting',
+  outputStyle: 'the output style',
+  systemPrompt: 'the system prompt',
+};
+
 const DEFAULTS: PrefsState = {
   defaultMode: 'default',
   editorMode: 'normal',
@@ -56,6 +67,9 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
   useEscClose(open, onClose);
   const [prefs, setPrefs] = useState<PrefsState>(DEFAULTS);
   const [loaded, setLoaded] = useState(false);
+  // N1: failed saves are said beside their control; `saved` is each field's last value known to be on disk (what a failure snaps back to).
+  const { run, notice } = useSaveNotice(open);
+  const saved = useRef<PrefsState>(DEFAULTS);
   // Per-turn metadata toggle is a theme-context preference (localStorage-backed),
   // not a Claude Code settings.json field — source state from useTheme(), not prefs.
   const { showTurnMetadata, setShowTurnMetadata } = useTheme();
@@ -79,14 +93,16 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
       api.get('outputStyle'),
       api.get('systemPrompt'),
     ]).then(([defaultMode, editorMode, showTurnDuration, preferReducedMotion, outputStyle, systemPrompt]) => {
-      setPrefs({
+      const loadedPrefs: PrefsState = {
         defaultMode: (defaultMode as PermissionDefault) ?? DEFAULTS.defaultMode,
         editorMode: (editorMode as EditorMode) ?? DEFAULTS.editorMode,
         showTurnDuration: typeof showTurnDuration === 'boolean' ? showTurnDuration : DEFAULTS.showTurnDuration,
         preferReducedMotion: typeof preferReducedMotion === 'boolean' ? preferReducedMotion : DEFAULTS.preferReducedMotion,
         outputStyle: (outputStyle as string) ?? DEFAULTS.outputStyle,
         systemPrompt: (systemPrompt as string) ?? DEFAULTS.systemPrompt,
-      });
+      };
+      saved.current = loadedPrefs;
+      setPrefs(loadedPrefs);
       setLoaded(true);
     }).catch(() => {
       setPrefs(DEFAULTS);
@@ -108,10 +124,15 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
       outputStyle: 'outputStyle',
       systemPrompt: 'systemPrompt',
     };
-    // Writes don't need to await — UI is already updated optimistically.
-    // If write fails, next open will reload from disk and correct UI drift.
-    api.set(fieldMap[key], value).catch(() => {});
-  }, []);
+    // The UI updates at once (optimistic). `settings:set` answers false (or rejects) when the write did not happen: then the
+    // control goes back to the last value known to be saved and a notice appears beside it. A slow write shows nothing.
+    void run(
+      key, LABELS[key],
+      async () => { const r = await api.set(fieldMap[key], value); if (r !== false) saved.current = { ...saved.current, [key]: value }; return r; },
+      () => setPrefs((p) => ({ ...p, [key]: saved.current[key] })),
+      () => save(key, value),
+    );
+  }, [run]);
 
   if (!open) return null;
 
@@ -150,6 +171,7 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
                   />
                 ))}
               </RadioGroup>
+              {notice('defaultMode', 'mt-2')}
             </section>
 
             {/* Editor mode */}
@@ -166,6 +188,7 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
                   { id: 'vim', label: 'Vim' },
                 ]}
               />
+              {notice('editorMode', 'mt-2')}
             </section>
 
             {/* Output style */}
@@ -186,6 +209,7 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
               />
               <p className="text-2xs text-fg-muted">Preset name that tunes your assistant's response style. Leave blank for default.</p>
               </div>
+              {notice('outputStyle', 'mt-2')}
             </section>
 
             {/* Toggles */}
@@ -208,6 +232,8 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
                 checked={prefs.preferReducedMotion}
                 onChange={(v) => save('preferReducedMotion', v)}
               />
+              {notice('showTurnDuration', 'mt-2')}
+              {notice('preferReducedMotion', 'mt-2')}
             </section>
 
             {/* System prompt */}
@@ -226,6 +252,7 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
               />
               <p className="text-2xs text-fg-muted">Applied globally. Leave blank to use Claude Code defaults.</p>
               </div>
+              {notice('systemPrompt', 'mt-2')}
             </section>
 
             {/* Advanced escape hatch — opens Claude Code's native TUI for any option not covered here */}

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import AboutPopup from '../src/renderer/components/AboutPopup';
 
@@ -33,4 +33,20 @@ it('shows the version in the body\'s last card, not under the About title', () =
   expect(header.textContent).toBe('About');
   expect(body.textContent).toContain('1.3.1');
   expect(body.textContent!.indexOf('1.3.1')).toBeGreaterThan(body.textContent!.indexOf('Licenses'));
+});
+
+// Destin's N1: a failed save of the usage-stats switch is said inside the popup and the switch goes back.
+it('says so, with Try again, when saving the usage stats setting fails, and the switch goes back', async () => {
+  const setOptIn = vi.fn().mockRejectedValueOnce(new Error('settings file locked')).mockResolvedValue(undefined);
+  (window as any).claude = { analytics: { getOptIn: vi.fn().mockResolvedValue(true), setOptIn } };
+  render(<AboutPopup open onClose={() => {}} platform="desktop" version="1.3.1" />);
+  const toggle = await screen.findByRole('switch', { name: 'Share anonymous usage stats' });
+  expect(toggle).toHaveAttribute('aria-checked', 'true');
+  fireEvent.click(toggle);
+  expect(await screen.findByText("Couldn't save the usage stats setting")).toBeInTheDocument();
+  expect(screen.getByRole('switch', { name: 'Share anonymous usage stats' })).toHaveAttribute('aria-checked', 'true');
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  await waitFor(() => expect(screen.queryByText(/Couldn't save/)).toBeNull());
+  expect(setOptIn).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('switch', { name: 'Share anonymous usage stats' })).toHaveAttribute('aria-checked', 'false');
 });

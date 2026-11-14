@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useSaveNotice } from '../hooks/useSaveNotice';
 import type { ExplainerSection } from './SettingsExplainer';
 import { Button, Callout, CARD_LEVEL_1, Dialog, FoldRow, SectionLabel, Toggle, SettingRow } from './ui';
 
@@ -73,12 +74,11 @@ export default function PerformancePopup({
   useEscClose(true, onClose);
   const [restarting, setRestarting] = useState(false);
 
+  // N1 (Destin): a failed save is said inside this popup, beside the toggle. The hook (usePerformanceConfig) already puts the
+  // toggle back and re-throws; this turns that rejection into the notice. Always mounted while open, so `open` is true.
+  const { run, notice } = useSaveNotice(true);
   const handleToggle = () => {
-    // Hook owns optimistic rollback + re-throw on persistence failure.
-    // Suppress here because we have no error-toast surface yet — if the
-    // write fails, the visual state has already corrected itself via the
-    // hook's revert; surfacing the rejection in the console is just noise.
-    setPreferPowerSaving(!saved).catch(() => { /* see WHY above */ });
+    void run('power', 'the power saving setting', () => setPreferPowerSaving(!saved), () => { /* the hook already reverted */ }, handleToggle);
   };
 
   const handleRestart = async () => {
@@ -126,6 +126,7 @@ export default function PerformancePopup({
                   />
                 }
               />
+              {notice('power', 'mt-2')}
               <p className="text-3xs text-fg-muted leading-relaxed">
                 Use the integrated GPU instead of the discrete one. Saves battery, but UI animations may stutter.
                 {gpuList.length > 0 && <><br />Detected: {gpuList.join(', ')}</>}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useSaveNotice } from '../hooks/useSaveNotice';
 import { Toggle } from './settings-toggle';
 import { Button, CARD_LEVEL_1, Dialog, FoldRow, SectionLabel, SettingRow } from './ui';
 import { formatVersionLine } from '../../shared/version-line';
@@ -56,6 +57,7 @@ const ANDROID_LIBS: { lib: string; license: string; source: string }[] = [
 // dialog (parallel with skip-permissions and reduced-effects). No destructive red.
 function AnalyticsOptInToggle() {
   const [optIn, setOptIn] = useState<boolean | null>(null);
+  const { run, notice } = useSaveNotice(true); // always mounted while the popup is open; unmounts with it
 
   useEffect(() => {
     let cancelled = false;
@@ -66,19 +68,23 @@ function AnalyticsOptInToggle() {
   // Don't render until we know the state — avoids a visible flicker from OFF → ON.
   if (optIn === null) return null;
 
-  const flip = () => {
-    const next = !optIn;
+  // N1 (Destin): a failed save is said inside this popup, under the row, and the toggle goes back to its saved value.
+  const apply = (next: boolean, previous: boolean) => {
     setOptIn(next);  // optimistic
-    window.claude.analytics.setOptIn(next).catch(() => setOptIn(!next));  // revert on failure
+    void run('optin', 'the usage stats setting', () => window.claude.analytics.setOptIn(next), () => setOptIn(previous), () => apply(next, previous));
   };
+  const flip = () => apply(!optIn, optIn);
 
   return (
-    <SettingRow
-      variant="item"
-      title="Share anonymous usage stats"
-      description="Sends a daily ping with the fields listed above."
-      control={<Toggle enabled={optIn} onToggle={flip} label="Share anonymous usage stats" />}
-    />
+    <>
+      <SettingRow
+        variant="item"
+        title="Share anonymous usage stats"
+        description="Sends a daily ping with the fields listed above."
+        control={<Toggle enabled={optIn} onToggle={flip} label="Share anonymous usage stats" />}
+      />
+      {notice('optin', 'mt-2')}
+    </>
   );
 }
 
