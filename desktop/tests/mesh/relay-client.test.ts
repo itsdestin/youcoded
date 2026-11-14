@@ -40,7 +40,7 @@ describe('sign-in', () => {
     first.c.start();
     await when(first.c, 'ready');
     const stranger = generateIdentity();
-    const second = new RelayClient({ url: r.url, setId: setIdFor(first.id.signKey), identity: stranger, baseDelayMs: 10, maxDelayMs: 40, random: () => 0.5 });
+    const second = new RelayClient({ url: r.url, setId: setIdFor(first.id.signKey), identity: stranger, baseDelayMs: 10, maxDelayMs: 40, random: () => 0.5, stableReadyMs: 30 });
     clients.push(second);
     const delays: number[] = [];
     second.on('backoff', (d: number) => delays.push(d));
@@ -49,7 +49,8 @@ describe('sign-in', () => {
     expect(second.state).not.toBe('ready');
     expect(await putRoster(first.c, first.id, setIdFor(first.id.signKey), 'add', stranger)).toBe('ok');
     await when(second, 'ready');
-    expect(second.reconnectAttempts).toBe(0); // reset by success
+    // reset once the connection has stayed healthy (review 15: a bare "ok" no longer resets it)
+    await vi.waitFor(() => expect(second.reconnectAttempts).toBe(0));
   });
   it('refuses to sign when the relay names a different host than the one dialled (a relay forwarding another relay\'s challenge)', async () => {
     const r = await relay();
@@ -103,7 +104,7 @@ describe('refusals that must NOT be retried', () => {
 describe('reconnect', () => {
   it('after a network cut it reconnects by itself with growing, jittered delays', async () => {
     const r = await relay();
-    const { c } = mk(r, undefined, { baseDelayMs: 20, maxDelayMs: 1000, random: () => 1 });
+    const { c } = mk(r, undefined, { baseDelayMs: 20, maxDelayMs: 1000, random: () => 1, stableReadyMs: 30 });
     const delays: number[] = [];
     c.on('backoff', (d: number) => delays.push(d));
     c.start();
@@ -112,7 +113,7 @@ describe('reconnect', () => {
     await when(c, 'backoff');
     await when(c, 'ready');
     expect(delays.length).toBeGreaterThanOrEqual(1);
-    expect(c.reconnectAttempts).toBe(0);
+    await vi.waitFor(() => expect(c.reconnectAttempts).toBe(0));
   });
   it('delay doubles up to the cap, always inside [cap/2, cap] (equal jitter)', async () => {
     const r = await relay();

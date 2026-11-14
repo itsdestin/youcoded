@@ -6,9 +6,21 @@
 // it only holds its identity (made on first enable) and waits for createSet() or a pairing.
 //
 // WHAT IS NOT HERE (later parts, listed so nobody assumes): the chat store and replicator (nothing replicates chats yet),
-// the decide rules (who may add or remove whom: today any member's roster entries that VERIFY are accepted), the cut-off
-// for what a removed device signed before it knew, the pairing meeting point on the relay, real unlock prompts, and a
-// durable outbox. Frames carry only roster entries, removal bundles and (test mode) notes.
+// the decide rules (who may add or remove whom: today ANY member may remove ANY other, the first device included, a deliberate
+// reading of "all devices are equal" that the product owner still has to confirm; pinned by a test), the cut-off for what a removed
+// device signed before it knew, real unlock prompts, and a durable outbox for frames. Frames carry only roster entries, removal
+// bundles and (test mode) notes.
+//
+// A ROSTER CHANGE IS A TWO-STEP WITH A DEFINED OUTCOME AT EVERY FAILURE (review finding 1):
+//  * REMOVAL: (1) the next generation's secret is saved in the sealed key file as `pending`, (2) the signed `remove` entry is written to the
+//    log and queued for the relay (relay-sync.json), (3) the removal bundle (entry + sealed secrets) is sent under the old generation,
+//    (4) the new secret is adopted, (5) the relay accepts the signed statement and cuts the device off. removeDevice() answers 'done' only
+//    when 3 to 5 have happened; otherwise 'pending', and the rest is finished in the background and after a restart (resume on start).
+//    `status().removalsPending` is the data the future screen reads for "removal pending".
+//  * PAIRING (host): the relay is told first, the log written second, so a refusal leaves the host untouched. A pairing whose new device never
+//    shows up on the relay within `pairConfirmMs` is rolled back by an ordinary removal, whatever went wrong in between (killed backend, lost
+//    welcome, a joiner that gave up).
+//  * RECEIVING a removal bundle: a new generation is accepted only as the consequence of a verified removal (see takeRemoval).
 //
 // PAIRING OVER THE RELAY. openPairingViaRelay() / joinWithCode() run the pairing exchange through the relay's meeting point
 // (meeting-client.ts). The older openPairing() / joinStart() / hostPairingMessage() / joinMessage() surface stays as the DIRECT
@@ -20,18 +32,19 @@ import { meetingIdFor, signRosterStatement } from './crypto/relay-auth';
 import { openSecret, sealSecretTo } from './crypto/keygen';
 import { newSetSecret } from './crypto/keys';
 import { deviceIdFor, setIdFor, type DeviceIdentity } from './crypto/identity';
-import { makeGenesisEntry, makeRemoveEntry, makeRenameEntry, seenForNextEntry, type SignedEntry } from './crypto/roster';
+import { makeGenesisEntry, makeRemoveEntry, makeRenameEntry, parseEntry, encodeEntry, seenForNextEntry, type SignedEntry } from './crypto/roster';
 import { MeshCryptoError } from './crypto/errors';
-import type { OpenedFrame } from './crypto/frames';
 import { relayCarrier } from './carrier-relay';
-import { Link } from './link';
+import { FrameReject, FrameWait, Link, type LinkFrame } from './link';
 import { MeshKeyStore, type MeshKeys, type SecretSealer } from './keystore';
+import { RelaySyncState } from './relay-sync';
 import { MeetingClient } from './meeting-client';
 import { generateCode } from './crypto/pairing';
 import { adoptPairing, MEETING_PART_LENGTH, newTypedCode, PairingHost, PairingJoiner, parseTypedCode } from './pair-flow';
 import { RelayClient } from './relay-client';
-import { RosterStore } from './roster-store';
-import { ensureDir } from './fs-durable';
+import { MeshRosterRejected, RosterStore } from './roster-store';
+import { ensureDir, readFileIfExists, writeFileDurable } from './fs-durable';
+import { generateIdentity } from './crypto/identity';
 import { GROUP_ROSTER, GROUP_TEST_NOTE, KIND_NOTE, KIND_REMOVAL, KIND_ROSTER, noteBody, parseNoteBody, parseRemovalBody, parseRosterBody, removalBody, rosterBody } from './wire';
 
 type MeshLog = (event: string, fields?: Record<string, string | number | boolean>) => void;
@@ -47,7 +60,14 @@ export interface MeshServiceOptions {
   now?: () => number;
   /** Relay timing, shrunk by the rig (design 5.2: "the rig must be able to shrink" timers). */
   relayBaseDelayMs?: number;
+  /** A pairing whose new device is not seen on the relay within this long is rolled back (default 15 minutes). */
+  pairConfirmMs?: number;
+  /** removeDevice() waits this long for the relay before answering 'pending' (default 10 s). */
+  removeWaitMs?: number;
+  /** First retry delay for the relay queue (doubles up to 30 s; default 2 s). */
+  relayRetryMs?: number;
 }
+export type RemovalOutcome = 'done' | 'pending';
 
 export interface InboxItem { from: string; counter: number; text: string }
 export interface MeshStatus {
@@ -64,11 +84,31 @@ export interface MeshStatus {
   inbox: number;
   repairedTailBytes: number;
   parkedRoster: number;
+  /** Frames this device refused, by reason (never content), and the latest few with the sender's 8-character id prefix. */
+  rejections: { counts: Record<string, number>; recent: Array<{ group: string; seq: number; from: string; reason: string }> };
+  /** Frames waiting to be judged (their signer, secret or roster entry has not arrived). */
+  waitingFrames: number;
+  /** Devices whose removal is recorded here but not yet accepted by the relay ("removal pending"). */
+  removalsPending: string[];
+  /** Own roster changes the relay has not accepted yet, and refusals it gave, by reason. */
+  relayPending: number;
+  relayRefusals: Record<string, number>;
+  /** Members judged to be flooding the roster (entries ignored), roster entries refused by reason, and entries still allowed in the log. */
+  flaggedDevices: string[];
+  rosterRejected: Record<string, number>;
+  rosterHeadroom: number;
+  /** Pairings this device hosted whose new device has not been seen on the relay yet. */
+  unconfirmedJoins: string[];
+  rosterGaps: number;
   /** How many doorbells the relay has rung on this device (each makes the link fetch). The rig asserts catch-up is bell-driven. */
   doorbells: number;
 }
 
-const MAX_PARKED = 64;
+// WHY these relay answers are retried and the rest are not: a rate limit or a network trouble passes, a refusal such as `banned` or
+// `bad-ancestry` never will, and retrying it forever would only hide it.
+const TRANSIENT = new Set(['roster-rate-limited', 'rate-limited', 'too-fast', 'relay-busy']);
+const ADD_PATIENCE = new Set(['already-member']);
+const waitableRosterError = (e: MeshCryptoError): boolean => e.code === 'bad-roster' && /signer not yet|unknown or later|signer's previous entry/.test(e.message);
 
 export class MeshService {
   readonly dir: string;
@@ -83,7 +123,18 @@ export class MeshService {
   #hostMeeting: { client: MeetingClient; gen: number; timer: NodeJS.Timeout } | null = null;
   #joinMeeting: MeetingClient | null = null;
   #joinState: { stage: string; sas?: string; done: boolean; failed?: string } = { stage: 'none', done: false };
-  #parked: SignedEntry[] = [];
+  readonly #sync: RelaySyncState;
+  #draining = false;
+  #drainAgain = false;
+  #retryTimer: NodeJS.Timeout | null = null;
+  #retryAttempt = 0;
+  readonly #settled = new Map<string, 'ok' | 'refused'>();
+  readonly #waiters = new Map<string, Array<(r: 'ok' | 'refused') => void>>();
+  readonly #refusals = new Map<string, number>();
+  readonly #rosterRejected = new Map<string, number>();
+  readonly #joinTimers = new Map<string, NodeJS.Timeout>();
+  #opChain: Promise<unknown> = Promise.resolve();
+  #rosterGaps = 0;
   readonly inbox: InboxItem[] = [];
   #offline = false;
   #doorbells = 0;
@@ -92,7 +143,8 @@ export class MeshService {
   constructor(readonly o: MeshServiceOptions) {
     this.dir = path.join(o.userData, 'mesh');
     this.keys = new MeshKeyStore(this.dir, o.sealer);
-    this.roster = new RosterStore(this.dir);
+    this.roster = new RosterStore(this.dir, o.now);
+    this.#sync = new RelaySyncState(this.dir);
   }
 
   /** Create the folder, load (or, on first enable, create) the identity, load the roster, and go live if already in a set. */
@@ -100,11 +152,15 @@ export class MeshService {
     await ensureDir(this.dir);
     this.#k = await this.keys.loadOrCreate();
     await this.roster.load();
+    await this.#sync.load();
     if (this.inSet()) await this.activate();
     this.o.log('started', { inSet: this.inSet(), keystore: this.keys.kind });
   }
   async stop(): Promise<void> {
     this.#stopped = true;
+    if (this.#retryTimer) clearTimeout(this.#retryTimer);
+    for (const t of this.#joinTimers.values()) clearTimeout(t);
+    this.#joinTimers.clear();
     this.#link?.stop();
     this.#relay?.stop();
     this.closeHostMeeting();
@@ -136,6 +192,11 @@ export class MeshService {
       this.#relay.on('removed', () => { this.#removed = true; this.#link?.stop(); this.o.log('removed-from-set'); });
       this.#relay.on('doorbell', () => { this.#doorbells++; });
       this.#relay.on('version-refused', () => this.o.log('relay-version-refused'));
+      // The relay is reachable (again): the queue of roster changes it still owes is worked off, and devices seen online confirm pairings.
+      // WHY `presence()` and not the `devices` list in the sign-in answer: that list is the whole roster, online or not, so it proves nothing about a
+      // pairing; the presence answer is who is connected right now.
+      this.#relay.on('ready', () => { this.#retryAttempt = 0; void this.drainRelay(); void this.confirmOnline(); });
+      this.#relay.on('presence-change', (p: { device: string; state: string }) => { if (p.state === 'on') this.confirmJoin(p.device); });
     }
     const carrier = this.#relay ? relayCarrier(this.#relay) : null;
     if (!carrier) return; // no relay configured: identity and roster work, nothing connects
@@ -143,63 +204,103 @@ export class MeshService {
       identity: this.id, setId, carrier, meshDir: this.dir,
       secrets: () => this.#k.secrets,
       signKeyFor: (d) => this.roster.signKeyFor(d),
+      isRemoved: (d) => this.roster.isRemoved(d),
+      now: this.o.now,
       // The receiver save number lives in the sealed key file (see link.ts for why and where it falls short).
       counter: { get: () => this.#k.receiverSaves, set: async (n) => { this.#k = await this.keys.update((k) => { k.receiverSaves = Math.max(k.receiverSaves, n); }); } },
       onFrame: (f) => this.onFrame(f),
+      onEvent: (e, info) => { if (e === 'gap' && info.group === GROUP_ROSTER) this.#rosterGaps++; },
       log: this.o.log,
     });
     await this.#link.start(this.o.testMode ? [GROUP_ROSTER, GROUP_TEST_NOTE] : [GROUP_ROSTER]);
     if (!this.#offline) this.#relay?.start();
+    // Whatever a previous run left half done is finished now (a killed backend between the steps of a removal or a pairing).
+    void this.resume().catch(() => this.o.log('resume-failed'));
   }
 
   // ---------------------------------------------------------------- incoming frames
-  private async onFrame(f: OpenedFrame & { group: string; seq: number }): Promise<void> {
+  private async onFrame(f: LinkFrame): Promise<void> {
+    // A verified frame from a device proves it exists and holds the set secret: a pairing it came out of is complete.
+    this.confirmJoin(toHex(f.header.from));
     if (f.header.kind === KIND_ROSTER && f.group === GROUP_ROSTER) {
-      for (const e of parseRosterBody(f.body)) await this.takeRosterEntry(e);
+      const r = await this.takeRosterEntries(parseRosterBody(f.body));
+      if (r.waiting) throw new FrameWait('roster-entry'); // appended entries stay; the frame is judged again when more of the roster arrives
       return;
     }
-    if (f.header.kind === KIND_REMOVAL && f.group === GROUP_ROSTER) {
-      const b = parseRemovalBody(f.body);
-      for (const e of b.entries) await this.takeRosterEntry(e);
-      const mine = b.sealed.get(toHex(this.id.deviceId));
-      if (mine && this.#k.setId) {
-        // The next generation's secret, sealed to this device by the sender (HPKE binds sender and recipient ids).
-        const secret = openSecret(this.id.agreeSecret, mine, this.#k.setId, b.gen, f.header.from, this.id.deviceId);
-        this.#k = await this.keys.update((k) => { k.secrets.set(b.gen, secret); });
-        this.#link?.retryPending();
-      }
-      return;
-    }
+    if (f.header.kind === KIND_REMOVAL && f.group === GROUP_ROSTER) return await this.takeRemoval(f);
     if (f.header.kind === KIND_NOTE && f.group === GROUP_TEST_NOTE && this.o.testMode) {
       this.inbox.push({ from: toHex(f.header.from), counter: f.header.counter, text: parseNoteBody(f.body) });
     }
     // Any other kind is ignored: this layer does not know it.
   }
 
-  /** Append a roster entry; one that does not fit YET (its signer or predecessor has not arrived) is parked and retried. */
-  private async takeRosterEntry(e: SignedEntry): Promise<void> {
-    try {
-      const r = await this.roster.append(e);
-      if (r === 'appended') await this.retryParked();
-    } catch (err) {
-      if (!(err instanceof MeshCryptoError)) throw err;
-      if (this.#parked.length < MAX_PARKED && !this.#parked.some((p) => p.id.equals(e.id))) this.#parked.push(e);
-      this.o.log('roster-entry-parked', { code: err.code });
-    }
-    this.#link?.retryPending();
-  }
-  private async retryParked(): Promise<void> {
-    let progress = true;
-    while (progress && this.#parked.length) {
-      progress = false;
-      for (const p of [...this.#parked]) {
-        try {
-          await this.roster.append(p);
-          this.#parked = this.#parked.filter((x) => x !== p);
-          progress = true;
-        } catch { /* still does not fit */ }
+  /** Append entries that came from the network. An entry that does not fit YET sets `waiting`; one from a flooding member is refused
+   *  and counted (the member is flagged: nothing more from it is examined); one that can never fit is counted and dropped. */
+  private async takeRosterEntries(entries: SignedEntry[]): Promise<{ appended: boolean; waiting: boolean }> {
+    let appended = false;
+    let waiting = false;
+    for (const e of entries) {
+      try {
+        if ((await this.roster.append(e, { remote: true })) === 'appended') appended = true;
+      } catch (err) {
+        if (err instanceof MeshRosterRejected) {
+          this.countRoster(`rejected-${err.why}`);
+          this.o.log('roster-entry-rejected', { why: err.why, signer: err.signer.slice(0, 8) });
+        } else if (err instanceof MeshCryptoError) {
+          if (waitableRosterError(err)) waiting = true;
+          else { this.countRoster(`invalid-${err.code}`); this.o.log('roster-entry-invalid', { code: err.code }); }
+        } else throw err;
       }
     }
+    if (appended) this.#link?.retryPending();
+    return { appended, waiting };
+  }
+  private countRoster(k: string): void {
+    this.#rosterRejected.set(k, (this.#rosterRejected.get(k) ?? 0) + 1);
+  }
+
+  /**
+   * A removal bundle: the signed `remove` entry and the NEXT generation's secret sealed to each remaining device. WHY so many checks
+   * (review finding 3): the old code stored whatever generation number and secret any member sent, so one member could overwrite
+   * another device's secret and split the set. A secret is now taken only when ALL of these hold:
+   *  - the sender is a current member (the link already verified its signature; removed devices are refused there);
+   *  - the bundle carries a `remove` entry signed by that sender which is in our roster after we apply the bundle's entries;
+   *  - the generation is exactly 1 + the number of removals up to and including that entry, so a removal can justify ONE generation and
+   *    an old removal cannot be replayed to mint a new one;
+   *  - the sealed secrets are addressed only to devices that are current members, and one is addressed to this device unless this device is
+   *    the one being removed;
+   *  - this device's own blob opens under ITS OWN agreement key (HPKE binds the sender and this device's id), so a device never accepts a
+   *    "secret for device X" that X did not receive through its own key;
+   *  - an existing generation is NEVER overwritten (a repeat of the same secret is fine: delivery can repeat).
+   * Anything wrong is a FrameReject (counted, the sender's id prefix recorded, never blocks later frames).
+   */
+  private async takeRemoval(f: LinkFrame): Promise<void> {
+    if (!this.#k.setId) return;
+    const b = parseRemovalBody(f.body);
+    const sender = f.header.from;
+    if (!this.roster.signKeyFor(sender)) throw new FrameReject('sender-not-a-member');
+    const r = await this.takeRosterEntries(b.entries);
+    const justifying = b.entries.find((e) => e.kind === 'remove' && e.device.equals(sender) && this.roster.has(e.id));
+    if (!justifying) {
+      if (r.waiting) throw new FrameWait('roster-entry');
+      throw new FrameReject('removal-without-entry');
+    }
+    const target = Buffer.from((justifying.body as { target: Uint8Array }).target);
+    const expectedGen = 1 + this.roster.removalsUpTo(justifying.id);
+    if (b.gen !== expectedGen) throw new FrameReject('generation-not-justified');
+    const me = toHex(this.id.deviceId);
+    for (const k of b.sealed.keys()) if (!this.roster.verified?.devices.has(k)) throw new FrameReject('sealed-to-unknown-device');
+    if (target.equals(this.id.deviceId)) return; // I am the device being removed: there is no secret for me, and nothing to take
+    const mine = b.sealed.get(me);
+    if (!mine) throw new FrameReject('no-secret-for-me');
+    const secret = openSecret(this.id.agreeSecret, mine, this.#k.setId, b.gen, f.header.from, this.id.deviceId);
+    const have = this.#k.secrets.get(b.gen);
+    if (have) {
+      if (have.equals(secret)) return; // the same bundle again
+      throw new FrameReject('generation-already-held');
+    }
+    this.#k = await this.keys.update((k) => { if (!k.secrets.has(b.gen)) k.secrets.set(b.gen, secret); });
+    this.#link?.retryPending();
   }
 
   // ---------------------------------------------------------------- operations
@@ -215,32 +316,201 @@ export class MeshService {
   private makeHost(): PairingHost {
     return new PairingHost({
       identity: this.id, setId: this.#k.setId as Buffer, secrets: () => this.#k.secrets, roster: this.roster, now: this.o.now,
-      // The relay must know the newcomer's public key before the newcomer can sign in: a statement signed by THIS device.
+      // The relay must know the newcomer's public key before the newcomer can sign in: a statement signed by THIS device. Runs BEFORE the
+      // add is written to our log (pair-flow.ts), so a refusal leaves nothing to undo.
       admitAtRelay: async (_signKeyHex, entry) => {
         if (!this.#relay) return;
-        const r = await this.putAtRelay(entry);
-        if (r !== 'ok') throw new Error('relay refused the new device');
+        const dev = toHex(deviceIdFor((entry.body as { signKey: Uint8Array }).signKey));
+        // The pairing is recorded as UNCONFIRMED before the relay hears of it: a kill from here on is recovered at the next start
+        // (finish the add, then roll it back by a removal if the new device never shows up).
+        await this.#sync.addJoin({ dev, entry: Buffer.from(encodeEntry(entry)).toString('base64'), at: this.now() });
+        let r: string;
+        try { r = await this.putAtRelay(entry); } catch { r = 'network'; }
+        if (r !== 'ok') {
+          await this.#sync.removeJoin(dev); // the relay did not take it: there is nothing to confirm or roll back
+          throw new Error('relay refused the new device');
+        }
+        await this.#sync.noteAccepted(toHex(entry.id));
+        this.armJoinTimer(dev, this.now());
       },
-      afterAdded: async (entry) => { await this.publishRoster([entry]); },
+      // WHY not awaited: the welcome must not wait for the other devices' copy of the roster; the frame is queued and retried by the link.
+      afterAdded: (entry) => { void this.publishRoster([entry]).catch(() => undefined); },
     });
   }
 
-  /** Tell the relay about a roster entry THIS device just signed (an `add` or a `remove`). Returns 'ok' or the relay's reason.
-   *  WHY a statement (finding 8): the relay verifies a signature by a current member and the entry's stated ancestry. It sees
-   *  the new device's public key and the entry's id, never its name. */
+  /** The `seen` list a relay statement carries: this entry's signer's own introduction plus the latest of its entries the relay accepted.
+   *  WHY not the entry's own `seen` (review finding 1): that names the newest heads, which can be an entry the relay never heard of (a
+   *  rename), and the relay's ancestry walk then could not reach the signer's introduction, so every later add and remove was refused. */
+  private relaySeen(entry: SignedEntry): Buffer[] {
+    const out: Buffer[] = [];
+    const intro = this.roster.introductionOf(entry.device);
+    if (intro && !intro.id.equals(entry.id)) out.push(intro.id);
+    const acked = this.#sync.acked;
+    if (acked && !out.some((x) => toHex(x) === acked) && acked !== toHex(entry.id)) out.push(Buffer.from(acked, 'hex'));
+    // A creator's very first statement names its own genesis entry (which is the entry itself when the genesis is what is being told).
+    if (out.length === 0) out.push(intro?.id ?? (entry.seen[0] as Buffer));
+    return out;
+  }
+
+  /** Tell the relay about a roster entry THIS device signed (an `add`, a `remove` or a `rename`). Resolves 'ok' or the relay's reason;
+   *  throws when the relay cannot be reached. WHY a statement (finding 8): the relay verifies a signature by a current member and the entry's
+   *  stated ancestry. It sees the new device's public key and the entry's id, never its name (a rename carries no name at all). */
   private async putAtRelay(entry: SignedEntry): Promise<string> {
     if (!this.#relay || !this.#k.setId) return 'ok';
     const body = entry.body as { signKey?: Uint8Array; target?: Uint8Array };
-    const kind = entry.kind === 'add' ? 'add' : entry.kind === 'remove' ? 'remove' : null;
-    if (!kind) return 'ok'; // renames are not put at the relay (it never needs them)
-    const target = kind === 'add' ? deviceIdFor(body.signKey as Uint8Array) : Buffer.from(body.target as Uint8Array);
+    const kind = entry.kind === 'add' || entry.kind === 'remove' || entry.kind === 'rename' ? entry.kind : null;
+    if (!kind) return 'ok'; // other kinds (none are written yet) are the decide layer's, not the relay's
+    const target = kind === 'add' ? deviceIdFor(body.signKey as Uint8Array) : kind === 'remove' ? Buffer.from(body.target as Uint8Array) : this.id.deviceId;
     const targetKey = kind === 'add' ? Buffer.from(body.signKey as Uint8Array) : null;
-    const { sig } = signRosterStatement(this.id, { kind, room: this.#k.setId, target, targetKey, entry: entry.id, seen: entry.seen, at: entry.at });
+    const seen = this.relaySeen(entry);
+    const { sig } = signRosterStatement(this.id, { kind, room: this.#k.setId, target, targetKey, entry: entry.id, seen, at: entry.at });
     const r = await this.#relay.rosterPut({
       kind, signer: toHex(this.id.deviceId), target: toHex(target), ...(targetKey ? { targetKey: toHex(targetKey) } : {}),
-      entry: toHex(entry.id), seen: entry.seen.map((x) => toHex(x)), at: entry.at, sig: sig.toString('hex'),
+      entry: toHex(entry.id), seen: seen.map((x) => toHex(x)), at: entry.at, sig: sig.toString('hex'),
     });
     return r === 'duplicate' ? 'ok' : r; // the relay already holds this exact entry
+  }
+
+  // ---------------------------------------------------------------- the relay queue (finding 1)
+  /** Work off the entries the relay still owes an answer on, in log order. Safe to call any time; calls overlap into one run. */
+  private async drainRelay(): Promise<void> {
+    if (this.#draining) { this.#drainAgain = true; return; }
+    this.#draining = true;
+    try {
+      for (;;) {
+        const id = this.#sync.pending[0];
+        if (!id) break;
+        if (!this.#relay || this.#relay.state !== 'ready' || this.#stopped) break;
+        const entry = this.roster.entryById(Buffer.from(id, 'hex'));
+        if (!entry) { await this.#sync.settle(id, false); this.settled(id, 'refused'); continue; } // never reached the log: nothing to tell
+        let r: string;
+        try { r = await this.putAtRelay(entry); } catch { r = 'network'; }
+        if (r === 'ok' || (entry.kind === 'add' && ADD_PATIENCE.has(r)) || (entry.kind === 'remove' && r === 'not-found')) {
+          // 'not-found' on a removal: the relay already has that device as gone: the outcome we wanted.
+          await this.#sync.settle(id, true);
+          this.settled(id, 'ok');
+          continue;
+        }
+        if (r === 'network' || TRANSIENT.has(r)) { this.scheduleRelayRetry(); break; }
+        // A refusal that will not change (a banned device, a signer the relay does not know): counted and shown, never retried forever.
+        this.#refusals.set(r, (this.#refusals.get(r) ?? 0) + 1);
+        this.o.log('relay-roster-refused', { reason: r, kind: entry.kind });
+        await this.#sync.settle(id, false);
+        this.settled(id, 'refused');
+      }
+    } finally {
+      this.#draining = false;
+      if (this.#drainAgain) { this.#drainAgain = false; void this.drainRelay(); }
+    }
+  }
+  private scheduleRelayRetry(): void {
+    if (this.#retryTimer || this.#stopped) return;
+    const delay = Math.min(30_000, (this.o.relayRetryMs ?? 2000) * 2 ** Math.min(this.#retryAttempt++, 5));
+    this.#retryTimer = setTimeout(() => { this.#retryTimer = null; void this.drainRelay(); }, delay);
+    this.#retryTimer.unref?.();
+  }
+  private settled(id: string, r: 'ok' | 'refused'): void {
+    this.#settled.set(id, r);
+    for (const w of this.#waiters.get(id) ?? []) w(r);
+    this.#waiters.delete(id);
+  }
+  /** Resolves when the relay accepted (or finally refused) this entry, or 'pending' after `ms`. */
+  private waitForRelay(id: string, ms: number): Promise<'ok' | 'refused' | 'pending'> {
+    const done = this.#settled.get(id);
+    if (done) return Promise.resolve(done);
+    if (!this.#sync.pending.includes(id)) return Promise.resolve('ok');
+    return new Promise((resolve) => {
+      const t = setTimeout(() => { resolve('pending'); }, ms);
+      t.unref?.();
+      const list = this.#waiters.get(id) ?? [];
+      list.push((r) => { clearTimeout(t); resolve(r); });
+      this.#waiters.set(id, list);
+    });
+  }
+
+  // ---------------------------------------------------------------- pairings that have to be confirmed or rolled back
+  private armJoinTimer(dev: string, since: number): void {
+    if (this.#joinTimers.has(dev) || this.#stopped) return;
+    const wait = Math.max(0, since + (this.o.pairConfirmMs ?? 15 * 60_000) - this.now());
+    const t = setTimeout(() => { void this.rollBackJoin(dev); }, wait);
+    t.unref?.();
+    this.#joinTimers.set(dev, t);
+  }
+  /** Ask the relay who is connected now; every unconfirmed pairing whose device is among them is confirmed. */
+  private async confirmOnline(): Promise<boolean> {
+    if (!this.#relay || this.#sync.joins.length === 0) return false;
+    try {
+      const online = await this.#relay.presence();
+      for (const d of online) this.confirmJoin(d);
+      return true;
+    } catch { return false; }
+  }
+  /** The new device was seen on the relay (or sent a verified frame): the pairing really happened. */
+  private confirmJoin(dev: string): void {
+    if (!this.#sync.joins.some((j) => j.dev === dev)) return;
+    const t = this.#joinTimers.get(dev);
+    if (t) clearTimeout(t);
+    this.#joinTimers.delete(dev);
+    void this.#sync.removeJoin(dev);
+  }
+  /** The new device never showed up: take it out again with an ordinary removal, so no phantom member stays in the set. */
+  private async rollBackJoin(dev: string): Promise<void> {
+    this.#joinTimers.delete(dev);
+    if (!this.#sync.joins.some((j) => j.dev === dev) || this.#stopped) return;
+    // One last look before undoing anything: is it connected right now?
+    await this.confirmOnline();
+    if (!this.#sync.joins.some((j) => j.dev === dev)) return;
+    this.o.log('pairing-rolled-back');
+    try {
+      if (this.roster.activeDevices().some((d) => toHex(d.deviceId) === dev)) await this.removeDevice(dev);
+      await this.#sync.removeJoin(dev);
+    } catch {
+      this.armJoinTimer(dev, this.now()); // could not do it now: try again after another wait
+    }
+  }
+
+  /** After a start: finish what a previous run left half done (a pairing, a removal, the relay queue). */
+  private async resume(): Promise<void> {
+    // 1. pairings the relay accepted but whose add may not have reached the log (a kill between the two)
+    for (const j of this.#sync.joins) {
+      try {
+        const entry = parseEntry(Buffer.from(j.entry, 'base64'));
+        if (!this.roster.has(entry.id)) {
+          await this.roster.append(entry);
+          void this.publishRoster([entry]).catch(() => undefined);
+        }
+        this.armJoinTimer(j.dev, j.at);
+      } catch { await this.#sync.removeJoin(j.dev); }
+    }
+    // 2. a removal that was started (its secret was saved) but not finished
+    await this.resumeRemoval();
+    // 3. the relay queue
+    void this.drainRelay();
+  }
+  private async resumeRemoval(): Promise<void> {
+    const p = this.#k.pending;
+    if (!p) return;
+    const entry = this.roster.entryById(p.entry);
+    if (!entry) {
+      // The kill came before the entry reached the log: the removal never happened. The unused secret is simply dropped.
+      this.#k = await this.keys.update((k) => { k.pending = null; });
+      return;
+    }
+    await this.finishRemoval(entry, p.gen, p.secret);
+  }
+  /** Steps 3 and 4 of a removal: send the bundle under the current generation, then adopt the new one. Safe to run again. */
+  private async finishRemoval(entry: SignedEntry, gen: number, secret: Buffer): Promise<void> {
+    if (!this.#link || !this.#k.setId) return;
+    const setId = this.#k.setId;
+    const target = toHex(Buffer.from((entry.body as { target: Uint8Array }).target));
+    const removed = this.roster.removedIds();
+    // Sealed to every device that is still a member now and is not me; the removed one never gets a secret.
+    const remaining = this.roster.activeDevices().filter((d) => !removed.has(toHex(d.deviceId)) && toHex(d.deviceId) !== target && !d.deviceId.equals(this.id.deviceId));
+    const sealed = new Map<string, Buffer>();
+    for (const d of remaining) sealed.set(toHex(d.deviceId), sealSecretTo(d.agreeKey, setId, gen, secret, this.id.deviceId, d.deviceId));
+    // Sent under the CURRENT (old) generation, which every remaining device holds. Resolves when the relay stored it.
+    await this.#link.sendDurable({ group: GROUP_ROSTER, kind: KIND_REMOVAL, body: removalBody({ entries: [entry], gen, sealed }) });
+    this.#k = await this.keys.update((k) => { k.secrets.set(gen, secret); k.pending = null; });
   }
 
   /** Host, DIRECT test carrier: start a typed-code invite. The code is returned to be SHOWN; it is not logged. */
@@ -344,6 +614,7 @@ export class MeshService {
     if (this.inSet()) throw new Error('already in a set');
     if (!this.o.relayUrl) throw new Error('no relay configured');
     const { meetingPart, secret } = parseTypedCode(typed);
+    await this.freshIdentityForRetry();
     this.#joinMeeting?.close();
     this.#joinState = { stage: 'connecting', done: false };
     const first = this.joinStart({ room: utf8(meetingPart), code: secret });
@@ -369,6 +640,13 @@ export class MeshService {
     await client.connect();
     client.send(first);
   }
+  /** WHY (review finding 1): a pairing that failed after the host wrote the add leaves this device's id banned in the set (a device id can
+   *  never be added twice). A device that is not in a set owns nothing under its old identity, so a SECOND attempt starts with a new one. */
+  private async freshIdentityForRetry(): Promise<void> {
+    const marker = path.join(this.dir, 'join-attempted');
+    if (await readFileIfExists(marker)) this.#k = await this.keys.update((k) => { k.identity = generateIdentity(); });
+    await writeFileDurable(marker, Buffer.alloc(0));
+  }
   joinStatus(): { stage: string; sas?: string; done: boolean; failed?: string } {
     return { ...this.#joinState };
   }
@@ -383,29 +661,69 @@ export class MeshService {
     if (!this.o.testMode) throw new Error('notes exist only in test mode');
     if (this.#removed) throw new Error('removed from the set');
     if (!this.#link) throw new Error('not connected to a set');
-    return this.#link.sendDurable({ group: GROUP_TEST_NOTE, kind: KIND_NOTE, body: noteBody(text), to: to ? Buffer.from(to, 'hex') : undefined });
+    // line: true marks a chat line for the relay (30-day keep, may be released under pressure); roster frames are control data and are not marked.
+    return this.#link.sendDurable({ group: GROUP_TEST_NOTE, kind: KIND_NOTE, body: noteBody(text), to: to ? Buffer.from(to, 'hex') : undefined, line: true });
+  }
+
+  /** Run roster operations one at a time (two removals at once would race on the generation number and on the log heads). */
+  private serial<T>(fn: () => Promise<T>): Promise<T> {
+    const p = this.#opChain.then(fn, fn);
+    this.#opChain = p.catch(() => undefined);
+    return p;
   }
 
   /**
-   * Remove a device: the signed `remove` entry and the NEXT generation's secret (sealed separately to each remaining
-   * device) travel as ONE frame under the old generation; only then does this device switch to the new generation and
-   * ask the relay to drop the removed device (which closes its connection at once).
+   * Remove a device. See the header for the five steps. Answers 'done' when the removal bundle is out, the new generation adopted AND the
+   * relay has cut the device off; 'pending' when any of that is still outstanding after `removeWaitMs` (it keeps going in the background and
+   * after a restart; `status().removalsPending` lists it). Throws only for what can never work (not in a set, unknown device).
+   *
+   * POLICY (product owner's decision, not changed here): ANY member may remove ANY other member, the set's first device and itself included.
+   * The design says all devices are equal; the cost is that one compromised device can remove the others. tests pin this on purpose.
    */
-  async removeDevice(targetHex: string): Promise<void> {
+  removeDevice(targetHex: string): Promise<RemovalOutcome> {
+    return this.serial(() => this.removeDeviceNow(targetHex));
+  }
+  private async removeDeviceNow(targetHex: string): Promise<RemovalOutcome> {
     if (!this.#link || !this.#k.setId) throw new Error('not in a set');
+    if (!/^[0-9a-f]{32}$/.test(targetHex)) throw new Error('bad device id');
     const target = Buffer.from(targetHex, 'hex');
-    const remaining = this.roster.activeDevices().filter((d) => !d.deviceId.equals(target) && !d.deviceId.equals(this.id.deviceId));
-    const gen = Math.max(...this.#k.secrets.keys()) + 1;
-    const secret = newSetSecret();
-    const sealed = new Map<string, Buffer>();
-    for (const d of remaining) sealed.set(toHex(d.deviceId), sealSecretTo(d.agreeKey, this.#k.setId, gen, secret, this.id.deviceId, d.deviceId));
+    if (!this.roster.activeDevices().some((d) => d.deviceId.equals(target))) throw new Error('not an active device');
+    if (this.#k.pending) await this.resumeRemoval(); // finish an earlier removal first: one generation at a time
     const entry = makeRemoveEntry(this.id, target, seenForNextEntry(this.roster.entries, this.id.deviceId), this.now());
+    // The generation this removal justifies: 1 + the removals in its causal past, itself included (receivers compute the same with
+    // removalsUpTo). The new entry cites every current head, so its past is the whole log: every removal so far, plus itself.
+    const gen = 2 + this.roster.removalCount();
+    const secret = newSetSecret();
+    // Step 1: the new secret is saved first, sealed, so a kill at any later step can be finished instead of forgotten.
+    this.#k = await this.keys.update((k) => { k.pending = { gen, secret, entry: entry.id }; });
+    // Step 2: queue for the relay BEFORE the log write (a kill between the two leaves an id with no entry, which the queue drops), then write.
+    const id = toHex(entry.id);
+    await this.#sync.enqueue(id);
     await this.roster.append(entry);
-    // Sent under the CURRENT (old) generation, which every remaining device holds.
-    await this.#link.sendDurable({ group: GROUP_ROSTER, kind: KIND_REMOVAL, body: removalBody({ entries: [entry], gen, sealed }) });
-    this.#k = await this.keys.update((k) => { k.secrets.set(gen, secret); });
-    const r = await this.putAtRelay(entry);
-    if (r !== 'ok') this.o.log('relay-remove-refused', { reason: r });
+    this.#settled.delete(id);
+    void this.drainRelay();
+    // Steps 3 and 4 run in the background so an unreachable relay cannot hang the caller.
+    const bundle = this.finishRemoval(entry, gen, secret).then(() => 'ok' as const, () => 'failed' as const);
+    const wait = this.o.removeWaitMs ?? 10_000;
+    const [relay, sent] = await Promise.all([this.waitForRelay(id, wait), Promise.race([bundle, new Promise<'timeout'>((r) => { const t = setTimeout(() => r('timeout'), wait); t.unref?.(); })])]);
+    return relay === 'ok' && sent === 'ok' ? 'done' : 'pending';
+  }
+
+  /** Change this device's own name (a signed `rename` entry; the relay is told it happened but never the name). */
+  renameSelf(name: string): Promise<void> {
+    return this.serial(async () => {
+      if (!this.inSet()) throw new Error('not in a set');
+      const entry = makeRenameEntry(this.id, name, seenForNextEntry(this.roster.entries, this.id.deviceId), this.now());
+      await this.#sync.enqueue(toHex(entry.id));
+      await this.roster.append(entry);
+      void this.drainRelay();
+      void this.publishRoster([entry]).catch(() => undefined);
+    });
+  }
+
+  /** Operator action: read every group again from the start (a damaged or poisoned read position). Already-applied frames stay refused as replays. */
+  async resetReadPosition(): Promise<void> {
+    await this.#link?.resetReadPosition();
   }
 
   /** Rig only: take this device off the relay (or back on) without stopping the process. */
@@ -419,10 +737,24 @@ export class MeshService {
   async stressAppend(n: number): Promise<number> {
     let done = 0;
     for (let i = 0; i < n; i++) {
+      // Appends directly (no relay statement): a stand-in for entries the relay was never told about. The statement of a later add
+      // is built from entries the relay knows (relaySeen), which is exactly what this exercises.
       await this.roster.append(makeRenameEntry(this.id, `${this.o.deviceName}-${i}`, seenForNextEntry(this.roster.entries, this.id.deviceId), this.now()));
       done++;
     }
     return done;
+  }
+
+  /** Targets of removals recorded here that the relay has not accepted yet, or whose bundle is not out yet. */
+  private removalsPending(): string[] {
+    const out = new Set<string>();
+    for (const id of this.#sync.pending) {
+      const e = this.roster.entryById(Buffer.from(id, 'hex'));
+      if (e?.kind === 'remove') out.add(toHex(Buffer.from((e.body as { target: Uint8Array }).target)));
+    }
+    const p = this.#k.pending && this.roster.entryById(this.#k.pending.entry);
+    if (p) out.add(toHex(Buffer.from((p.body as { target: Uint8Array }).target)));
+    return [...out];
   }
 
   status(): MeshStatus {
@@ -439,7 +771,17 @@ export class MeshService {
       generations: [...this.#k.secrets.keys()].sort((a, b) => a - b),
       inbox: this.inbox.length,
       repairedTailBytes: this.roster.repairedTailBytes,
-      parkedRoster: this.#parked.length,
+      parkedRoster: this.#link?.waitingCount ?? 0,
+      rejections: this.#link?.rejections() ?? { counts: {}, recent: [] },
+      waitingFrames: this.#link?.waitingCount ?? 0,
+      removalsPending: this.removalsPending(),
+      relayPending: this.#sync.pending.length,
+      relayRefusals: Object.fromEntries(this.#refusals),
+      flaggedDevices: [...this.roster.flagged],
+      rosterRejected: Object.fromEntries(this.#rosterRejected),
+      rosterHeadroom: this.roster.headroom,
+      unconfirmedJoins: this.#sync.joins.map((j) => j.dev),
+      rosterGaps: this.#rosterGaps,
       doorbells: this.#doorbells,
     };
   }

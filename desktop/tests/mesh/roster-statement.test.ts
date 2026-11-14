@@ -19,12 +19,12 @@ function build() {
   const signer = identityFromSecrets(fill(32, 0x11), fill(32, 0x12));
   const other = identityFromSecrets(fill(32, 0x21), fill(32, 0x22));
   const room = setIdFor(signer.signKey);
-  const mk = (name: string, kind: 'add' | 'remove', at: number, seen: Buffer[]) => {
-    const st = { kind, room, target: other.deviceId, targetKey: kind === 'add' ? other.signKey : null, entry: fill(32, 0x30 + seen.length), seen, at };
+  const mk = (name: string, kind: 'add' | 'remove' | 'rename', at: number, seen: Buffer[]) => {
+    const st = { kind, room, target: kind === 'rename' ? signer.deviceId : other.deviceId, targetKey: kind === 'add' ? other.signKey : null, entry: fill(32, 0x30 + seen.length), seen, at };
     const { sig, message } = signRosterStatement(signer, st);
     return {
       name,
-      statement: { kind, room: h(room), signer: h(signer.deviceId), target: h(other.deviceId), targetKey: st.targetKey ? h(st.targetKey) : null, entry: h(st.entry), seen: seen.map(h), at },
+      statement: { kind, room: h(room), signer: h(signer.deviceId), target: h(st.target), targetKey: st.targetKey ? h(st.targetKey) : null, entry: h(st.entry), seen: seen.map(h), at },
       messageHex: h(message),
       sigHex: h(sig),
     };
@@ -39,6 +39,8 @@ function build() {
       mk('add, two seen ids, millisecond clock above 2^32', 'add', 1_800_000_000_123, [fill(32, 0x42), fill(32, 0x43)]),
       mk('remove, key is null', 'remove', 24, [fill(32, 0x44)]),
       mk('remove, three seen ids, clock 255 and 65536', 'remove', 65_536, [fill(32, 0x45), fill(32, 0x46), fill(32, 0x47)]),
+      mk('rename, target is the signer, key is null', 'rename', 5000, [fill(32, 0x48)]),
+      mk('rename, 64 seen ids (the app\'s limit), large clock', 'rename', 1_800_000_000_999, Array.from({ length: 64 }, (_, i) => fill(32, 0x50 + i))),
     ],
     meetingId: { meetingPartUtf8: 'K7QD4MXW9R2PH', idHex: h(meetingIdFor(utf8('K7QD4MXW9R2PH'))) },
   };

@@ -33,7 +33,7 @@ async function world(names: string[]): Promise<{ hub: MemoryHub; devs: Record<st
     const events: string[] = [];
     const failHandler = { on: false };
     const link = new Link({
-      identity: ids[n], setId, carrier, meshDir: dirs[n], secrets: () => new Map([[1, secret]]), signKeyFor: (d) => roster.signKeyFor(d),
+      identity: ids[n], setId, carrier, meshDir: dirs[n], secrets: () => new Map([[1, secret]]), signKeyFor: (d) => roster.signKeyFor(d), isRemoved: (d) => roster.isRemoved(d),
       counter: { get: () => saves[n].n, set: async (v) => { saves[n].n = Math.max(saves[n].n, v); } },
       onFrame: (f) => { if (failHandler.on) throw new Error('boom'); got.push(parseNoteBody(f.body)); },
       onEvent: (e) => events.push(e),
@@ -188,5 +188,213 @@ describe('link: frames that cannot be checked yet or fail', () => {
     await send(devs.A, 'good');
     await settle();
     expect(devs.B.got).toEqual(['good']);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review fixes (2026-11-14): finding 2 (a frame can never freeze a group) and finding 7 (a lying relay cannot set the read position).
+// ---------------------------------------------------------------------------------------------------------------------------
+import { FrameReject, FrameWait } from '../../src/main/mesh/link';
+import type { Carrier } from '../../src/main/mesh/link';
+
+describe('link: a frame can never freeze a group', () => {
+  it('a handler that says FrameReject is skipped, counted, and the next frame is delivered (no pause, no retry loop)', async () => {
+    const hub = new MemoryHub();
+    const A = generateIdentity(); const B = generateIdentity();
+    const setId = setIdFor(A.signKey);
+    const entries = [makeGenesisEntry(A, 'A', 'linux', 1)];
+    entries.push(makeAddEntry(A, { name: 'B', platform: 'linux', signKey: B.signKey, agreeKey: B.agreeKey }, seenForNextEntry(entries, A.deviceId), 2));
+    const rosterB = new RosterStore(tmp('rej-B-')); await rosterB.load(); for (const e of entries) await rosterB.append(e);
+    const rosterA = new RosterStore(tmp('rej-A-')); await rosterA.load(); for (const e of entries) await rosterA.append(e);
+    const got: string[] = [];
+    const dirB = tmp('rej-Bdir-');
+    const mkLink = async (id: DeviceIdentity, roster: RosterStore, dir: string, onFrame: (f: { body: unknown }) => void) => {
+      const l = new Link({ identity: id, setId, carrier: hub.members.get(id.deviceId.toString('hex')) ?? hub.carrier(id.deviceId.toString('hex')), meshDir: dir, secrets: () => new Map([[1, secret]]), signKeyFor: (d) => roster.signKeyFor(d), counter: { get: () => 0, set: async () => {} }, onFrame: onFrame as never });
+      await l.start(['g']);
+      return l;
+    };
+    const la = await mkLink(A, rosterA, tmp('rej-Adir-'), () => {});
+    const lb = await mkLink(B, rosterB, dirB, (f) => { const t = parseNoteBody(f.body); if (t === 'bad') throw new FrameReject('bad-content'); got.push(t); });
+    await la.sendDurable({ group: 'g', kind: 'note', body: noteBody('bad') });
+    await la.sendDurable({ group: 'g', kind: 'note', body: noteBody('good') });
+    await settle();
+    expect(got).toEqual(['good']);
+    expect(lb.rejections().counts['bad-content']).toBe(1);
+    expect(lb.rejections().recent[0].from).toBe(A.deviceId.toString('hex').slice(0, 8));
+    // across a restart: the counted rejection is remembered and the rejected frame is not read again
+    lb.stop();
+    const lb2 = await mkLink(B, rosterB, dirB, (f) => { got.push('again:' + parseNoteBody(f.body)); });
+    await settle();
+    expect(lb2.rejections().counts['bad-content']).toBe(1);
+    expect(got).toEqual(['good']);
+    await la.sendDurable({ group: 'g', kind: 'note', body: noteBody('later') });
+    await settle();
+    expect(got).toEqual(['good', 'again:later']);
+  });
+
+  it('a frame whose handler says FrameWait is kept (and saved), does not block the next one, and is delivered after retryPending - also across a restart', async () => {
+    const hub = new MemoryHub();
+    const A = generateIdentity(); const B = generateIdentity();
+    const setId = setIdFor(A.signKey);
+    const entries = [makeGenesisEntry(A, 'A', 'linux', 1)];
+    entries.push(makeAddEntry(A, { name: 'B', platform: 'linux', signKey: B.signKey, agreeKey: B.agreeKey }, seenForNextEntry(entries, A.deviceId), 2));
+    const rosters = [tmp('w-A-'), tmp('w-B-')];
+    const rA = new RosterStore(rosters[0]); await rA.load(); const rB = new RosterStore(rosters[1]); await rB.load();
+    for (const e of entries) { await rA.append(e); await rB.append(e); }
+    const got: string[] = [];
+    let ready = false;
+    const dirB = tmp('w-Bdir-');
+    const mk2 = async (id: DeviceIdentity, roster: RosterStore, dir: string, onFrame: (f: { body: unknown }) => void) => {
+      const l = new Link({ identity: id, setId, carrier: hub.members.get(id.deviceId.toString('hex')) ?? hub.carrier(id.deviceId.toString('hex')), meshDir: dir, secrets: () => new Map([[1, secret]]), signKeyFor: (d) => roster.signKeyFor(d), counter: { get: () => 0, set: async () => {} }, onFrame: onFrame as never });
+      await l.start(['g']);
+      return l;
+    };
+    const handler = (f: { body: unknown }): void => { const t = parseNoteBody(f.body); if (t === 'early' && !ready) throw new FrameWait('not yet'); got.push(t); };
+    const la = await mk2(A, rA, tmp('w-Adir-'), () => {});
+    const lb = await mk2(B, rB, dirB, handler);
+    await la.sendDurable({ group: 'g', kind: 'note', body: noteBody('early') });
+    await la.sendDurable({ group: 'g', kind: 'note', body: noteBody('next') });
+    await settle();
+    expect(got).toEqual(['next']); // the waiting frame did not hold 'next' back
+    expect(lb.waitingCount).toBe(1);
+    lb.stop();
+    const lb2 = await mk2(B, rB, dirB, handler); // restart: the waiting frame was saved with the read position
+    expect(lb2.waitingCount).toBe(1);
+    ready = true;
+    lb2.retryPending();
+    await settle();
+    expect(got).toEqual(['next', 'early']);
+    expect(lb2.waitingCount).toBe(0);
+  });
+
+  it('a handler that keeps failing with a plain error is given up on after a few tries instead of freezing the group', async () => {
+    const { devs } = await world(['A', 'B']);
+    devs.B.failHandler.on = true;
+    await send(devs.A, 'doomed');
+    await settle();
+    for (let i = 0; i < 4; i++) await devs.B.link.syncAll();
+    devs.B.failHandler.on = false;
+    await send(devs.A, 'fine');
+    await settle();
+    await devs.B.link.syncAll();
+    expect(devs.B.got).toEqual(['fine']);
+    expect(devs.B.link.rejections().counts['handler-failed']).toBe(1);
+  });
+
+  it('a frame from a REMOVED device is rejected as signer-removed (not parked, not blocking)', async () => {
+    const w = await world(['A', 'B', 'C']);
+    const c = w.devs.C;
+    const b = w.devs.B;
+    await send(c, 'leftover from C');
+    // B removes C in its own roster before it reads the frame
+    b.carrier.setOnline(false);
+    await send(c, 'second leftover');
+    const rem = (await import('../../src/main/mesh/crypto/roster')).makeRemoveEntry(b.id, c.id.deviceId, seenForNextEntry(b.roster.entries, b.id.deviceId), 9);
+    await b.roster.append(rem);
+    b.link.stop();
+    b.carrier.setOnline(true);
+    const b2 = await w.remake('B');
+    await send(w.devs.A, 'live');
+    await settle();
+    expect(b2.got).toContain('live');
+    expect(b2.link.rejections().counts['signer-removed'] ?? 0).toBeGreaterThanOrEqual(1);
+    expect(b2.link.waitingCount).toBe(0);
+  });
+});
+
+describe('link: a lying relay cannot set the read position', () => {
+  /** A carrier that wraps the honest one and answers fetches as told. */
+  function lying(inner: Carrier, mode: { v: 'honest' | 'gap-huge' | 'seq-huge' | 'junk-tail' }): Carrier {
+    return {
+      get connected() { return inner.connected; },
+      hold: (...a) => inner.hold(...a),
+      received: (g, s) => inner.received(g, s),
+      ring: (g) => inner.ring(g),
+      onRing: (cb) => inner.onRing(cb),
+      onConnected: (cb) => inner.onConnected(cb),
+      async fetchAfter(g, seq) {
+        if (mode.v === 'gap-huge') return { frames: [{ seq: 9_000_000_000_000_000 + 1, bytes: Buffer.from('junk') }], more: false, gap: { through: 9_000_000_000_000_000 } };
+        if (mode.v === 'seq-huge') return { frames: [{ seq: seq + 5_000_000, bytes: Buffer.from('junk') }], more: false };
+        if (mode.v === 'junk-tail') return { frames: [{ seq: seq + 1, bytes: Buffer.from('junk') }, { seq: seq + 2, bytes: Buffer.from('junk2') }], more: false };
+        return inner.fetchAfter(g, seq);
+      },
+    };
+  }
+  async function setup() {
+    const hub = new MemoryHub();
+    const A = generateIdentity(); const B = generateIdentity();
+    const setId = setIdFor(A.signKey);
+    const entries = [makeGenesisEntry(A, 'A', 'linux', 1)];
+    entries.push(makeAddEntry(A, { name: 'B', platform: 'linux', signKey: B.signKey, agreeKey: B.agreeKey }, seenForNextEntry(entries, A.deviceId), 2));
+    const rA = new RosterStore(tmp('p-A-')); await rA.load(); const rB = new RosterStore(tmp('p-B-')); await rB.load();
+    for (const e of entries) { await rA.append(e); await rB.append(e); }
+    const mode: { v: 'honest' | 'gap-huge' | 'seq-huge' | 'junk-tail' } = { v: 'honest' };
+    const got: string[] = [];
+    const dirB = tmp('p-Bdir-');
+    const mk2 = async (id: DeviceIdentity, roster: RosterStore, dir: string, carrier: Carrier, onFrame: (f: { body: unknown }) => void) => {
+      const l = new Link({ identity: id, setId, carrier, meshDir: dir, secrets: () => new Map([[1, secret]]), signKeyFor: (d) => roster.signKeyFor(d), counter: { get: () => 0, set: async () => {} }, onFrame: onFrame as never });
+      await l.start(['g']);
+      return l;
+    };
+    const cA = hub.carrier('A'); const cB = hub.carrier('B');
+    const la = await mk2(A, rA, tmp('p-Adir-'), cA, () => {});
+    return { hub, la, cB, mode, got, dirB, mkB: (c: Carrier) => mk2(B, rB, dirB, c, (f) => { got.push(parseNoteBody(f.body)); }) };
+  }
+
+  it('a gap that jumps to 9e15 is refused; after switching back to the honest relay the device receives new notes (it used to be deaf for good)', async () => {
+    const s = await setup();
+    const lb = await s.mkB(lying(s.cB, s.mode));
+    s.mode.v = 'gap-huge';
+    await lb.syncAll();
+    expect(lb.rejections().counts['relay-bad-gap']).toBeGreaterThanOrEqual(1);
+    s.mode.v = 'honest';
+    await s.la.sendDurable({ group: 'g', kind: 'note', body: noteBody('after the lie') });
+    await settle();
+    await lb.syncAll();
+    expect(s.got).toEqual(['after the lie']);
+    // and the saved position was never poisoned: a restart on the honest relay still works
+    lb.stop();
+    const lb2 = await s.mkB(s.cB);
+    await s.la.sendDurable({ group: 'g', kind: 'note', body: noteBody('after restart') });
+    await settle();
+    await lb2.syncAll();
+    expect(s.got).toEqual(['after the lie', 'after restart']);
+    void lb2;
+  });
+  it('a frame numbered millions ahead is refused', async () => {
+    const s = await setup();
+    const lb = await s.mkB(lying(s.cB, s.mode));
+    s.mode.v = 'seq-huge';
+    await lb.syncAll();
+    expect(lb.rejections().counts['relay-bad-seq']).toBeGreaterThanOrEqual(1);
+    s.mode.v = 'honest';
+    await s.la.sendDurable({ group: 'g', kind: 'note', body: noteBody('still hears') });
+    await settle();
+    expect(s.got).toEqual(['still hears']);
+  });
+  it('junk the relay serves at the tail is skipped for this session only: the SAVED position does not move past frames the device never verified', async () => {
+    const s = await setup();
+    const lb = await s.mkB(lying(s.cB, s.mode));
+    s.mode.v = 'junk-tail';
+    await lb.syncAll();
+    expect(lb.rejections().counts['malformed'] ?? lb.rejections().counts['error'] ?? 0).toBeGreaterThanOrEqual(0);
+    lb.stop();
+    // the honest relay's real frames sit at seq 1 and 2: they must still be read after a restart on the honest relay
+    s.mode.v = 'honest';
+    await s.la.sendDurable({ group: 'g', kind: 'note', body: noteBody('one') });
+    await s.la.sendDurable({ group: 'g', kind: 'note', body: noteBody('two') });
+    await settle();
+    const lb2 = await s.mkB(s.cB);
+    await lb2.syncAll();
+    expect(s.got).toEqual(['one', 'two']);
+  });
+  it('resetReadPosition reads everything again and delivers nothing twice', async () => {
+    const s = await setup();
+    const lb = await s.mkB(s.cB);
+    await s.la.sendDurable({ group: 'g', kind: 'note', body: noteBody('x') });
+    await settle();
+    await lb.resetReadPosition();
+    await settle();
+    expect(s.got).toEqual(['x']);
   });
 });

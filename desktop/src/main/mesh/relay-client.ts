@@ -20,9 +20,26 @@ import WebSocket from 'ws';
 import { answerRelayChallenge } from './crypto/relay-auth';
 import type { DeviceIdentity } from './crypto/identity';
 import {
-  CLOSE_DEVICE_REMOVED, CLOSE_SET_ERASED, CLOSE_VERSION_REFUSED, MESH_PROTOCOL_VERSION,
+  CLOSE_DEVICE_REMOVED, CLOSE_SET_ERASED, CLOSE_VERSION_REFUSED, FETCH_PAGE_BYTES, MAX_FRAME_BYTES, MAX_MESSAGE_BYTES, MESH_PROTOCOL_VERSION,
   packMessage, unpackMessage, type MeshServerMessage,
 } from '../../shared/mesh-protocol';
+
+// WHY THESE CEILINGS (review finding 8): the real relay never sends more than FETCH_PAGE_BYTES of frames for one fetch, in frames of
+// at most MAX_FRAME_BYTES. A hostile one (or a network attacker on a plain ws:// link) buffered 1.75 GB in this client with 100 junk
+// frames. The client now holds the line itself: anything past the honest relay's own limits (plus a little slack) ends the request.
+/** Frames one fetch reply may carry. FETCH_PAGE_BYTES / the smallest real frame (~200 bytes) is about 21,000; this is the same order. */
+export const MAX_FETCH_FRAMES = 25_000;
+const MAX_FETCH_BYTES = FETCH_PAGE_BYTES + MAX_FRAME_BYTES; // one page, plus the one frame the relay may overshoot it by
+/** A connection that stays ready this long counts as healthy: only then does the reconnect delay start over (review 15). */
+const STABLE_READY_MS = 10_000;
+
+/** ws:// is allowed only to this machine. WHY: a plain link lets anyone on the path read the relay's public metadata and inject frames. */
+export function assertSafeRelayUrl(url: string): void {
+  const u = new URL(url);
+  if (u.protocol === 'wss:') return;
+  if (u.protocol === 'ws:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]' || u.hostname === '::1')) return;
+  throw new Error('insecure-relay-url');
+}
 
 export type RelayState = 'idle' | 'connecting' | 'authenticating' | 'ready' | 'backoff' | 'stopped' | 'refused-version' | 'removed' | 'erased';
 type LogFields = Record<string, string | number | boolean>;
@@ -41,6 +58,8 @@ export interface RelayClientOptions {
   random?: () => number;
   requestTimeoutMs?: number;
   keepaliveMs?: number;
+  /** TEST SEAM: how long a connection must stay ready before the reconnect delay starts over. */
+  stableReadyMs?: number;
   /** TEST SEAM: dial with another protocol version to prove the refusal path. */
   protocolVersion?: number;
 }
@@ -49,7 +68,7 @@ export interface HoldArgs { group: string; session: string; n: number; frame: Ui
 export type HoldResult = { op: 'stored'; seq: number; fill: string } | { op: 'duplicate' } | { op: 'over-limit'; why: string } | { op: 'refused'; reason: string };
 export interface FetchResult { frames: Array<{ seq: number; bytes: Buffer }>; more: boolean; last?: number; gap?: { through: number }; empty?: boolean }
 
-interface Pending { resolve: (m: { header: Record<string, unknown>; payload: Uint8Array }) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; frames?: Array<{ seq: number; bytes: Buffer }> }
+interface Pending { resolve: (m: { header: Record<string, unknown>; payload: Uint8Array }) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; frames?: Array<{ seq: number; bytes: Buffer }>; bytes?: number }
 
 const toArrayBuffer = (b: Buffer): ArrayBuffer => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
 
@@ -67,8 +86,10 @@ export class RelayClient extends EventEmitter {
   readonly #o: RelayClientOptions;
   /** Result of the most recent sign-in, for diagnostics ("not-on-roster" while a pairing finishes, and so on). */
   lastAuthResult = '';
+  #stable: NodeJS.Timeout | null = null;
   constructor(o: RelayClientOptions) {
     super();
+    assertSafeRelayUrl(o.url);
     this.#o = o;
     this.#room = o.setId.toString('hex');
     this.#host = new URL(o.url).host;
@@ -107,7 +128,8 @@ export class RelayClient extends EventEmitter {
   private clearTimers(): void {
     if (this.#timer) clearTimeout(this.#timer);
     if (this.#keepalive) clearInterval(this.#keepalive);
-    this.#timer = this.#keepalive = null;
+    if (this.#stable) clearTimeout(this.#stable);
+    this.#timer = this.#keepalive = this.#stable = null;
   }
   private failAll(e: Error): void {
     for (const p of this.#pending.values()) { clearTimeout(p.timer); p.reject(e); }
@@ -117,7 +139,7 @@ export class RelayClient extends EventEmitter {
   private connect(): void {
     this.setState('connecting');
     const v = this.#o.protocolVersion ?? MESH_PROTOCOL_VERSION;
-    const ws = new WebSocket(`${this.#o.url.replace(/\/$/, '')}/mesh/relay/${this.#room}?v=${v}`, { maxPayload: 8 * 1024 * 1024 });
+    const ws = new WebSocket(`${this.#o.url.replace(/\/$/, '')}/mesh/relay/${this.#room}?v=${v}`, { maxPayload: MAX_MESSAGE_BYTES });
     this.#ws = ws;
     this.#lastRx = Date.now();
     ws.on('open', () => { this.setState('authenticating'); this.log('connected'); });
@@ -173,13 +195,35 @@ export class RelayClient extends EventEmitter {
     if (h.op === 'version-refused') { this.log('version-refused'); return; } // the close (4005) that follows does the work
     if (h.op === 'auth-result') {
       this.lastAuthResult = h.r;
-      if (h.r === 'ok') { this.#attempt = 0; this.setState('ready'); this.log('ready'); this.emit('ready', { created: h.created === true, devices: h.devices ?? [] }); }
+      if (h.r === 'ok') {
+        // WHY not `this.#attempt = 0` here (review 15): a relay that says "ok" and hangs up reset the delay every time, so the device
+        // redialled about once a second. The delay starts over only after the connection has stayed healthy for a while.
+        if (this.#stable) clearTimeout(this.#stable);
+        this.#stable = setTimeout(() => { this.#attempt = 0; }, this.#o.stableReadyMs ?? STABLE_READY_MS);
+        this.#stable.unref?.();
+        this.setState('ready'); this.log('ready'); this.emit('ready', { created: h.created === true, devices: h.devices ?? [] }); }
       else this.log('auth-refused', { result: h.r });
       return;
     }
     if (h.id && this.#pending.has(h.id)) {
       const p = this.#pending.get(h.id) as Pending;
-      if (h.op === 'frame') { (p.frames ??= []).push({ seq: h.seq as number, bytes: Buffer.from(m.payload) }); return; }
+      if (h.op === 'frame') {
+        if (!p.frames) return; // a `frame` answering a request that did not ask for frames: ignored
+        // Bounds BEFORE copying the payload (the copy is the allocation that hurt): count, bytes, and this one frame.
+        p.bytes = (p.bytes ?? 0) + m.payload.byteLength;
+        if (p.frames.length >= MAX_FETCH_FRAMES || p.bytes > MAX_FETCH_BYTES || m.payload.byteLength > MAX_FRAME_BYTES || !Number.isSafeInteger(h.seq)) {
+          p.frames = [];
+          clearTimeout(p.timer);
+          this.#pending.delete(h.id);
+          this.log('relay-oversize-answer');
+          p.reject(new Error('relay-oversize-answer'));
+          // A relay that ignores the limits is not served any longer: hang up (the normal reconnect loop then dials again).
+          try { this.#ws?.terminate(); } catch { /* gone */ }
+          return;
+        }
+        p.frames.push({ seq: h.seq as number, bytes: Buffer.from(m.payload) });
+        return;
+      }
       clearTimeout(p.timer);
       this.#pending.delete(h.id);
       return p.resolve({ header: h as unknown as Record<string, unknown>, payload: Buffer.from(m.payload) });
@@ -239,7 +283,7 @@ export class RelayClient extends EventEmitter {
   }
   /** Ask the relay to record a roster change signed by this device (review finding 8; the statement is built and signed by the
    *  caller, service.ts). Resolves 'ok' or the relay's reason. `duplicate` means the relay already has this exact entry. */
-  async rosterPut(p: { kind: 'add' | 'remove'; signer: string; target: string; targetKey?: string; entry: string; seen: string[]; at: number; sig: string }): Promise<string> {
+  async rosterPut(p: { kind: 'add' | 'remove' | 'rename'; signer: string; target: string; targetKey?: string; entry: string; seen: string[]; at: number; sig: string }): Promise<string> {
     const r = await this.request({ op: 'roster-put', ...p });
     return r.header.op === 'ok' ? 'ok' : String(r.header.reason ?? r.header.op);
   }

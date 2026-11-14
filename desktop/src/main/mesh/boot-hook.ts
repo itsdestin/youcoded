@@ -17,7 +17,12 @@ export interface MeshBootInput {
   packaged: boolean;
   /** Platform word for the roster entry (the phone's backend passes 'android'; default is this OS). */
   platform?: string;
+  /** The host's own statement of what holds the secrets key (headless only). When given it OVERRIDES the shim's backend answer: the mesh
+   *  never trusts a hard-coded 'android_keystore' (review finding 10). */
+  secretStoreBackend?: () => string;
 }
+/** Methods are called on the original object (a plain spread would lose `this`). */
+const hostBound = (s: SafeStorageLike): SafeStorageLike => ({ isEncryptionAvailable: () => s.isEncryptionAvailable(), encryptString: (v) => s.encryptString(v), decryptString: (v) => s.decryptString(v) });
 export interface MeshHandle { stop(): Promise<void> }
 
 export async function startMeshIfEnabled(i: MeshBootInput): Promise<MeshHandle | null> {
@@ -32,7 +37,7 @@ export async function startMeshIfEnabled(i: MeshBootInput): Promise<MeshHandle |
     try {
       // Test mode may use the insecure plaintext file (the rig's homes are throwaway); everything else needs a real OS
       // secret store and REFUSES otherwise (design 5.1; round-15 P-3 default: refuse, never plaintext).
-      sealer = sw.testMode && process.env.YOUCODED_MESH_KEYSTORE !== 'os' ? insecureTestSealer({ testMode: true }) : safeStorageSealer(i.safeStorage);
+      sealer = sw.testMode && process.env.YOUCODED_MESH_KEYSTORE !== 'os' ? insecureTestSealer({ testMode: true }) : safeStorageSealer(i.secretStoreBackend ? { ...hostBound(i.safeStorage), getSelectedStorageBackend: i.secretStoreBackend } : i.safeStorage);
     } catch (e) {
       if (e instanceof MeshKeyStoreRefused) { event('refused', { reason: e.code }); return null; }
       throw e;
@@ -41,10 +46,17 @@ export async function startMeshIfEnabled(i: MeshBootInput): Promise<MeshHandle |
       userData: i.userData, sealer, testMode: sw.testMode, deviceName: process.env.YOUCODED_DEVICE_NAME || os.hostname(), platform: i.platform ?? process.platform, log: event,
       relayUrl: sw.testMode ? process.env.YOUCODED_MESH_RELAY_URL : undefined,
       relayBaseDelayMs: sw.testMode && process.env.YOUCODED_MESH_RELAY_BACKOFF_MS ? Number(process.env.YOUCODED_MESH_RELAY_BACKOFF_MS) : undefined,
+      // Shrunk timers for the rig (test mode only; a normal run uses the service's own defaults).
+      pairConfirmMs: sw.testMode && process.env.YOUCODED_MESH_PAIR_CONFIRM_MS ? Number(process.env.YOUCODED_MESH_PAIR_CONFIRM_MS) : undefined,
+      removeWaitMs: sw.testMode && process.env.YOUCODED_MESH_REMOVE_WAIT_MS ? Number(process.env.YOUCODED_MESH_REMOVE_WAIT_MS) : undefined,
+      relayRetryMs: sw.testMode && process.env.YOUCODED_MESH_RELAY_RETRY_MS ? Number(process.env.YOUCODED_MESH_RELAY_RETRY_MS) : undefined,
     });
     await svc.start();
     let control: { close(): Promise<void> } | null = null;
     const token = process.env.YOUCODED_MESH_TEST_TOKEN;
+    // WHY removed from the environment once read (review 15): every terminal the backend starts inherits its environment, so the
+    // control token would otherwise sit in front of any program the assistant runs. Test mode only; a no-op otherwise.
+    delete process.env.YOUCODED_MESH_TEST_TOKEN;
     if (sw.testMode && token && token.length >= 32) control = await (await import('./test-control')).startTestControl(svc, token);
     return { stop: async () => { await control?.close(); await svc.stop(); } };
   } catch {

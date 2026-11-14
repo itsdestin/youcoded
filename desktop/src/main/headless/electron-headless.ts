@@ -147,6 +147,19 @@ let heldSecretKey: Buffer | null = null;
 export function holdSecretKey(hex: string | undefined): void {
   heldSecretKey = hex && /^[0-9a-f]{64}$/i.test(hex) ? Buffer.from(hex, 'hex') : null;
 }
+// WHAT KIND OF STORE HOLDS THAT KEY (review finding 10, the host interface). The phone's Kotlin app keeps the key in the Android Keystore
+// when it can, but falls back to a plain preference file when the encrypted store fails (PairedDeviceStore.kt), and this process cannot see
+// which happened. The host says so in the same stdin line that carries the key: {"key": "...", "keyStore": "android_keystore"}, or as the
+// variable YOUCODED_SECRET_STORE for a laptop test run. ONLY the exact word 'android_keystore' means "really the Keystore"; anything else,
+// and above all silence, is reported as 'unknown', which the mesh key store refuses (keystore.ts). Used by the mesh only: the older
+// `getSelectedStorageBackend` below is unchanged, so no other feature sees a different answer.
+let hostSecretStore = 'unknown';
+export function holdSecretStoreBackend(word: string | undefined): void {
+  hostSecretStore = word === 'android_keystore' ? 'android_keystore' : word === 'basic_text' ? 'basic_text' : 'unknown';
+}
+export function hostSecretStoreBackend(): string {
+  return hostSecretStore;
+}
 function secretKey(): Buffer | null {
   return heldSecretKey;
 }

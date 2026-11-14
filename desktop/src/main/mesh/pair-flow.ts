@@ -8,9 +8,13 @@
 // HOST (the existing device):
 //  * open() makes a typed-code invite. The code and the meeting point are returned to the caller to SHOW; they are never
 //    logged here.
-//  * decide() answers "Add this device?". The welcome (set secrets + roster) leaves ONLY after the new `add` entry has
-//    been appended to the durable roster log and the relay (if any) has been told the new device's public key, so a
-//    device that received a welcome is always one the host can prove it added and the relay will let in.
+//  * decide() answers "Add this device?". The welcome (set secrets + roster) leaves ONLY after the relay (if any) accepted the new
+//    device and the new `add` entry is in the durable roster log, so a device that received a welcome is always one the host can prove it
+//    added and the relay will let in.
+//    ORDER (review finding 1, "failed pairing leaves a phantom member"): the relay is told FIRST and the host's own log written SECOND. A
+//    refusal or an outage at the relay then leaves the host exactly as it was (nothing to undo); previously the add was already in the log
+//    and had to be left there, so the host showed a member that never joined. A failure AFTER the relay accepted (the log write itself)
+//    is recovered by the service (relay-sync.ts `joins`), which finishes or rolls back the add.
 // JOINER (the new device):
 //  * adoptPairing() stores the received secrets in the key store and appends every roster entry, in order, through the
 //    verifying roster store. Nothing is stored unless the whole welcome verified (the crypto library checked it).
@@ -30,10 +34,10 @@ export interface HostOptions {
   setId: Buffer;
   secrets: () => Map<number, Buffer>;
   roster: RosterStore;
-  /** Tell the relay (when there is one) about the new device: its public signing key, and the signed `add` entry that admits it
-   *  (the relay checks a statement signed by this device, service.ts), so the newcomer can sign in. */
+  /** Runs BEFORE the add is written to the log: tell the relay (when there is one) about the new device, and record the pairing as
+   *  unconfirmed. Must throw if the relay refuses. */
   admitAtRelay?: (signKeyHex: string, entry: SignedEntry) => Promise<void>;
-  /** After the add is durable (publish it to the other devices here). */
+  /** After the add is durable (publish it to the other devices here). Must not wait on the network: the welcome is released right after. */
   afterAdded?: (entry: SignedEntry) => Promise<void> | void;
   now?: () => number;
 }
@@ -82,9 +86,9 @@ export class PairingHost {
     const add = this.#added as SignedEntry | null;
     if (!add) return out; // declined, expired or refused: nothing was added
     try {
-      await this.#o.roster.append(add); // verified + fsynced
       const key = (add.body as { signKey: Uint8Array }).signKey;
-      await this.#o.admitAtRelay?.(Buffer.from(key).toString('hex'), add);
+      await this.#o.admitAtRelay?.(Buffer.from(key).toString('hex'), add); // relay first: a refusal leaves nothing to undo
+      await this.#o.roster.append(add); // verified + fsynced
       await this.#o.afterAdded?.(add);
     } catch {
       // The new device must not hold a welcome for a membership this device could not record.

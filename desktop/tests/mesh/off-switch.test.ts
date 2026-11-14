@@ -2,6 +2,7 @@
 import fs from 'fs';
 import http from 'http';
 import net from 'net';
+import cp from 'child_process';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startMeshIfEnabled } from '../../src/main/mesh/boot-hook';
@@ -18,11 +19,21 @@ function spyEverything() {
     const orig = (fsp as any)[k].bind(fsp);
     vi.spyOn(fsp as any, k).mockImplementation((...a: unknown[]) => { calls.push(`fs.${k}`); return orig(...a); });
   }
+  // WHY these as well (review, "tests that cannot catch what they claim"): the first version watched only the async fs calls, `setInterval`, `listen`
+  // and `connect`. A synchronous write, a one-shot timer, a write stream or a child process would have passed unseen.
+  for (const k of ['writeFileSync', 'appendFileSync', 'mkdirSync', 'openSync', 'renameSync', 'copyFileSync', 'symlinkSync', 'rmSync', 'unlinkSync', 'mkdtempSync', 'createWriteStream', 'truncateSync'] as const) {
+    const orig = (fs as any)[k].bind(fs);
+    vi.spyOn(fs as any, k).mockImplementation((...a: unknown[]) => { calls.push(`fs.${k} ${String(a[0])}`); return orig(...a); });
+  }
+  for (const k of ['spawn', 'exec', 'execFile', 'fork', 'spawnSync', 'execSync', 'execFileSync'] as const) {
+    vi.spyOn(cp as any, k).mockImplementation(() => { calls.push(`child_process.${k}`); throw new Error('a mesh-off boot must not start a process'); });
+  }
+  const timeouts = vi.spyOn(globalThis, 'setTimeout');
   vi.spyOn(net.Server.prototype, 'listen').mockImplementation(function (this: net.Server) { note('listen')(); return this; });
   vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) { note('connect')(); return this; });
   vi.spyOn(http, 'createServer').mockImplementation((() => { note('createServer')(); return {} as http.Server; }) as any);
   const st = vi.spyOn(globalThis, 'setInterval');
-  return { calls, intervals: () => st.mock.calls.length };
+  return { calls, intervals: () => st.mock.calls.length, timeouts: () => timeouts.mock.calls.length };
 }
 
 describe('mesh OFF (the default)', () => {
@@ -38,6 +49,7 @@ describe('mesh OFF (the default)', () => {
     expect(fs.statSync(d).mtimeMs).toBe(mtimeBefore);
     expect(spy.calls).toEqual([]);
     expect(spy.intervals()).toBe(0);
+    expect(spy.timeouts()).toBe(0);
     expect(fs.existsSync(path.join(d, 'mesh'))).toBe(false);
   });
   it('a packaged build with a stray YOUCODED_MESH=1 in its environment stays off', async () => {
@@ -60,7 +72,8 @@ describe('mesh ON but no real secret store (Linux basic_text)', () => {
     expect(h).toBeNull();
     expect(listFiles(d)).toEqual([]);
     // The one allowed write is the app's own log line saying why it refused (the logger writes to the app log, not the profile).
-    expect(spy.calls.filter((c) => c !== 'fs.appendFile')).toEqual([]);
+    // (module loading and the logger use the file system too: only calls that touch THIS profile count.)
+    expect(spy.calls.filter((c) => c.includes(d))).toEqual([]);
   });
 });
 

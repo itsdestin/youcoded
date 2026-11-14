@@ -89,11 +89,16 @@ export const CLOSE_MEET_REFUSED = 4011;     // a meeting-point socket the meetin
 // ---- Pairing meeting point (T5 C10, threat model P-3 / P-9, design 5.1) ----
 /** A meeting point lives at most as long as the invite does (pairing.ts INVITE_LIFETIME_MS). */
 export const MEET_LIFETIME_MS = 5 * 60_000;
-/** One relayed pairing message. WHY 16 KiB: a CPace message is ~100 bytes and the welcome (set secret + the signed roster
- *  log) is a few KiB for a normal set; far above that is an abuse of a pipe that exists only to introduce two devices. */
+/** One relayed pairing message FROM THE GUEST. WHY 16 KiB: a CPace message is ~100 bytes; far above that is an abuse of a pipe
+ *  that exists only to introduce two devices. The guest is unauthenticated until the exchange completes, so this stays small. */
 export const MEET_MAX_MESSAGE_BYTES = 16 * 1024;
-/** Whole meeting, both directions (threat model P-9: "at most 64 KiB total"). */
-export const MEET_MAX_TOTAL_BYTES = 64 * 1024;
+/** One relayed pairing message FROM THE HOST (review finding 11). WHY 1 MiB: the welcome carries the signed roster log, which is
+ *  about 230-450 bytes per entry; 16 KiB broke pairing at about 70 entries (measured). A log is capped at 8192 entries and a
+ *  device may sign at most 512, so 1 MiB covers every log the app will build while staying far below the room frame limit. Only
+ *  the host direction is widened: the host is an authenticated member holding the single-use ticket, a guest is a stranger. */
+export const MEET_MAX_HOST_MESSAGE_BYTES = 1 << 20;
+/** Whole meeting, both directions, host bytes included (threat model P-9 was 64 KiB, which a long welcome cannot fit). */
+export const MEET_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 export const MEET_MAX_MESSAGES = 64;
 /** Open sockets per meeting (host + guest + one newcomer being refused). */
 export const MEET_MAX_SOCKETS = 4;
@@ -101,9 +106,23 @@ export const MEET_MAX_SOCKETS = 4;
 export const MEET_MAX_GUEST_CONNECTS = 8;
 /** A socket must say who it is (meet-join) within this long, and a guest must send its first message within it. */
 export const MEET_JOIN_DEADLINE_MS = 10_000;
-/** Per room: meetings open at once, and opened in the last hour. A room is opened by an authenticated member only. */
-export const MEET_MAX_OPEN_PER_ROOM = 2;
-export const MEET_OPENS_PER_HOUR = 12;
+/** Meeting limits are PER OPENING DEVICE with a reserved share (review finding 12, M4): one member could otherwise open the room's
+ *  whole allowance and lock the owner out of pairing. Each device gets its own two-at-once and six-an-hour; the room totals are
+ *  sized so every one of the 16 devices can always use at least its own share's first meeting. */
+export const MEET_MAX_OPEN_PER_DEVICE = 2;
+export const MEET_OPENS_PER_DEVICE_HOUR = 6;
+export const MEET_MAX_OPEN_PER_ROOM = 16;
+export const MEET_OPENS_PER_ROOM_HOUR = 48;
+
+// ---- Roster statement flood limits (review finding 4). Per signing device, enforced by the relay; the app enforces its own. ----
+/** Statements a device may ever have recorded (add, remove and rename together). */
+export const ROSTER_MAX_PER_SIGNER = 512;
+/** ...and within any rolling hour, by the relay's clock. */
+export const ROSTER_MAX_PER_SIGNER_HOUR = 30;
+/** Largest `seen` list in a statement (the app's MAX_SEEN). */
+export const ROSTER_MAX_SEEN = 64;
+/** The room's first statement must be dated within this of the relay's clock (replay of an old captured statement after an idle erase). */
+export const FIRST_STATEMENT_SKEW_MS = 24 * 60 * 60_000; // one day (written out, not an alias of DAY_MS: knip counts an alias as a duplicate export)
 /** Per-socket flood ceiling on a meeting point (far below RATE_MAX_MESSAGES: the exchange is a handful of messages). */
 export const MEET_RATE_MAX_MESSAGES = 40;
 
@@ -148,9 +167,9 @@ export type MeshClientMessage =
   | { op: "presence"; id?: string }
   | { op: "pass"; g: string; to: string; id?: string }                                                     // + payload
   | { op: "beat"; n: number }
-  // A roster change signed by a current member (review finding 8). `entry` is the id of the app's roster entry this
+  // A roster change signed by a current member (review finding 8). A `rename` names the signer as its own target and carries no name or key. `entry` is the id of the app's roster entry this
   // statement is about; the statement itself names only public ids and keys, never a device name.
-  | { op: "roster-put"; kind: "add" | "remove"; signer: string; target: string; targetKey?: string; entry: string; seen: string[]; at: number; sig: string; id?: string }
+  | { op: "roster-put"; kind: "add" | "remove" | "rename"; signer: string; target: string; targetKey?: string; entry: string; seen: string[]; at: number; sig: string; id?: string }
   // Pairing meeting point. meet-open is sent on an authenticated ROOM socket; the rest on a /mesh/meet/<id> socket.
   | { op: "meet-open"; m: string; id?: string }
   | { op: "meet-join"; role: "host" | "guest"; ticket?: string; id?: string }

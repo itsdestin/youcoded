@@ -69,8 +69,13 @@ describe.skipIf(!enabled || !avail.ok)('mesh rig: three jailed backends and the 
     relay = await startRelay(root);
     for (const n of ['A', 'B', 'C']) opts[n] = { mesh: true, relayUrl: relay.url, build: buildDir };
     opts.D = { mesh: true, keystore: 'os', relayUrl: relay.url, build: buildDir };
+    // The review-fix story (below) uses its own devices: P hosts every pairing and has shortened timers.
+    opts.P = { mesh: true, relayUrl: relay.url, build: buildDir, extraEnv: { YOUCODED_MESH_PAIR_CONFIRM_MS: '8000', YOUCODED_MESH_REMOVE_WAIT_MS: '2500', YOUCODED_MESH_RELAY_RETRY_MS: '300' } };
+    for (const n of ['Q', 'R', 'T', 'U', 'W']) opts[n] = { mesh: true, relayUrl: relay.url, build: buildDir };
+    opts.V = { mesh: true, relayUrl: relay.url, build: buildDir };
     for (const n of Object.keys(opts)) devs[n] = planDevice(root, n, opts[n]);
-    await Promise.all(Object.keys(opts).map((n) => startDevice(devs[n], opts[n])));
+    // The review-fix devices (P, Q, R, T, U, V, W) are started by the tests that need them, so the first story runs on four processes as before.
+    await Promise.all(['A', 'B', 'C', 'D'].map((n) => startDevice(devs[n], opts[n])));
   }, 420_000);
 
   afterAll(async () => {
@@ -282,6 +287,87 @@ describe.skipIf(!enabled || !avail.ok)('mesh rig: three jailed backends and the 
     expect((await keysOf(d, shimSealer(d.key))).identity.deviceId.toString('hex')).toBe(s.deviceId);
   }, 120_000);
 
+  // ---------------------------------------------------------------------------------------------------------------------
+  // Review fixes (2026-11-14): rename, removal in two steps, killed backends, a failed pairing, a long roster. Devices P (host), Q, R, T, U, V, W.
+  // ---------------------------------------------------------------------------------------------------------------------
+  const roster = (d: Device) => status(d);
+  const names = (s: any): string[] => s.activeDevices;
+
+  it('after a rename the relay still takes a pairing and a removal (it used to refuse both, silently)', async () => {
+    await Promise.all(['P', 'Q', 'R', 'T'].map((n) => startDevice(devs[n], opts[n])));
+    await devs.P.control!.post('/create-set');
+    await until(async () => (await status(devs.P)).relay === 'ready', 'P on the relay');
+    for (const n of ['Q', 'R']) {
+      await pair(devs.P, devs[n]);
+      await until(async () => (await status(devs[n])).relay === 'ready', `${n} on the relay`);
+    }
+    await devs.P.control!.post('/rename', { name: 'renamed-P' });
+    await until(async () => (await status(devs.P)).relayPending === 0, 'the relay accepted the rename');
+    await devs.Q.control!.post('/rename', { name: 'renamed-Q' });
+    await until(async () => (await status(devs.Q)).relayPending === 0, 'the relay accepted Q\'s rename');
+    // a 4th device pairs AFTER the renames: the relay must still let it in
+    await pair(devs.P, devs.T);
+    await until(async () => (await status(devs.T)).relay === 'ready', 'T on the relay');
+    await until(async () => (await Promise.all(['P', 'Q', 'R', 'T'].map((n) => roster(devs[n])))).every((s) => s.activeDevices.length === 4), 'four active devices everywhere');
+    // and a removal after the renames reaches the relay: R is cut off, and the answer is "done", not "pending"
+    const rId = (await status(devs.R)).deviceId;
+    const r = await devs.P.control!.post<any>('/remove', { device: rId });
+    expect(r.outcome).toBe('done');
+    await until(async () => (await status(devs.R)).relay === 'removed', 'R cut off at the relay');
+    expect((await status(devs.P)).removalsPending).toEqual([]);
+    expect((await status(devs.P)).relayRefusals).toEqual({});
+  }, 240_000);
+
+  it('a removal while the relay is unreachable is "pending", survives a KILLED backend, and completes after the restart', async () => {
+    const qId = (await status(devs.Q)).deviceId;
+    await devs.P.control!.post('/offline', { offline: true });
+    await until(async () => (await status(devs.P)).relay === 'stopped', 'P offline');
+    const r = await devs.P.control!.post<any>('/remove', { device: qId });
+    expect(r.outcome).toBe('pending');
+    expect((await status(devs.P)).removalsPending).toEqual([qId]);
+    expect((await status(devs.Q)).relay).toBe('ready'); // the relay has not been told: Q is not cut off yet
+    await killDevice(devs.P); // between the steps: the entry is in the log, the new secret saved, nothing reached the relay
+    await startDevice(devs.P, opts.P);
+    await until(async () => (await status(devs.Q)).relay === 'removed', 'Q cut off after the restart', 40_000);
+    await until(async () => { const s = await status(devs.P); return s.removalsPending.length === 0 && s.relayPending === 0 && s.generations.includes(3); }, 'P finished the removal and holds generation 3', 40_000);
+    await until(async () => { const t = await status(devs.T); return t.removedDevices.includes(qId) && t.generations.includes(3); }, 'T learned of the removal and holds generation 3', 40_000);
+    // and the survivors still talk to each other under the new generation
+    await devs.P.control!.post('/send', { text: 'after-kill-note' });
+    await until(async () => (await inbox(devs.T)).includes('after-kill-note'), 'T receives under generation 3');
+    notes.push('after-kill-note');
+  }, 240_000);
+
+  it('a pairing whose new device never shows up is rolled back by the host (no phantom member), and the host log stays consistent', async () => {
+    await startDevice(devs.U, opts.U);
+    await devs.U.control!.post('/offline', { offline: true }); // U will finish pairing but never connect to the relay
+    const before = await status(devs.P);
+    await pair(devs.P, devs.U);
+    const mid = await status(devs.P);
+    expect(mid.activeDevices.length).toBe(before.activeDevices.length + 1);
+    expect(mid.unconfirmedJoins.length).toBe(1);
+    const uId = mid.unconfirmedJoins[0];
+    await until(async () => { const s = await status(devs.P); return s.removedDevices.includes(uId) && s.unconfirmedJoins.length === 0; }, 'P rolled the pairing back', 60_000);
+    const after = await status(devs.P);
+    expect(after.activeDevices).not.toContain(uId);
+    expect(after.activeDevices.sort()).toEqual(before.activeDevices.sort());
+    await until(async () => (await status(devs.T)).removedDevices.includes(uId), 'T sees the rollback');
+  }, 180_000);
+
+  it('a host with 500 roster entries still pairs a new device through the relay (the welcome is far above the old 16 KiB limit)', async () => {
+    await Promise.all(['V', 'W'].map((n) => startDevice(devs[n], opts[n])));
+    await devs.V.control!.post('/create-set');
+    await until(async () => (await status(devs.V)).relay === 'ready', 'V on the relay');
+    await devs.V.control!.post('/stress-append', { n: 500 });
+    expect((await status(devs.V)).rosterCount).toBe(501);
+    await pair(devs.V, devs.W);
+    await until(async () => (await status(devs.W)).rosterCount === 502, 'W holds the whole roster');
+    const re = new RosterStore(path.join(devs.W.userData, 'mesh'));
+    await re.load();
+    expect(re.size).toBe(502);
+    await until(async () => (await status(devs.W)).relay === 'ready', 'W on the relay');
+    expect((await status(devs.V)).unconfirmedJoins).toEqual([]);
+  }, 240_000);
+
   it('no key, code or frame body appears in any process log, in the relay log, or in what the relay stored', async () => {
     const needles: Array<{ label: string; bytes: Buffer }> = [];
     for (const n of ['A', 'B', 'C']) {
@@ -321,8 +407,9 @@ describe.skipIf(!enabled || !avail.ok)('mesh rig: three jailed backends and the 
     }
     // each device's own files are where they should be
     // A only ever sent, so it never had anything to save a receive position for; B and C received frames, so they did.
-    expect(inventory(path.join(devs.A.userData, 'mesh'))).toEqual(['keys.bin', 'roster.log']);
-    for (const n of ['B', 'C']) expect(inventory(path.join(devs[n].userData, 'mesh'))).toEqual(['keys.bin', 'link-state.bin', 'roster.log']);
+    // (relay-sync.json: the host's record of pairings it still has to confirm; join-attempted: a joiner's marker that a second try uses a new identity)
+    expect(inventory(path.join(devs.A.userData, 'mesh'))).toEqual(['keys.bin', 'relay-sync.json', 'roster.log']);
+    for (const n of ['B', 'C']) expect(inventory(path.join(devs[n].userData, 'mesh'))).toEqual(['join-attempted', 'keys.bin', 'link-state.bin', 'roster.log']);
   }, 30_000);
 
   it('with the mesh OFF a profile gets exactly the files it got before this change (same set as the pre-change build, when it is available)', async () => {

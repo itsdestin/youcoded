@@ -13,7 +13,8 @@
 // LOGGING: event names and close codes only. Never the id, the ticket, a message or the code (pinned by no-secret-logging).
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
-import { MESH_PROTOCOL_VERSION, packMessage, unpackMessage } from '../../shared/mesh-protocol';
+import { MAX_MESSAGE_BYTES, MESH_PROTOCOL_VERSION, packMessage, unpackMessage } from '../../shared/mesh-protocol';
+import { assertSafeRelayUrl } from './relay-client';
 
 export interface MeetingOptions {
   /** `ws://127.0.0.1:1234` or `wss://host` (no path). */
@@ -37,6 +38,7 @@ export class MeetingClient extends EventEmitter {
   readonly #o: MeetingOptions;
   constructor(o: MeetingOptions) {
     super();
+    assertSafeRelayUrl(o.url);
     this.#o = o;
   }
   get isOpen(): boolean {
@@ -45,7 +47,7 @@ export class MeetingClient extends EventEmitter {
   /** Connect and say who we are. Resolves once the relay accepted the role; rejects if it refused or the socket failed. */
   connect(): Promise<{ gen: number; peer: boolean }> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`${this.#o.url.replace(/\/$/, '')}/mesh/meet/${this.#o.id}?v=${MESH_PROTOCOL_VERSION}`, { maxPayload: 1024 * 1024 });
+      const ws = new WebSocket(`${this.#o.url.replace(/\/$/, '')}/mesh/meet/${this.#o.id}?v=${MESH_PROTOCOL_VERSION}`, { maxPayload: MAX_MESSAGE_BYTES });
       this.#ws = ws;
       let settled = false;
       const fail = (e: Error): void => { if (!settled) { settled = true; reject(e); } };

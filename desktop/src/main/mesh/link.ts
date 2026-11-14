@@ -23,9 +23,22 @@
 // only a store outside the profile can (OS keychain entry, Android Keystore-side preference). That is the seam
 // `CounterStore` below; today it is implemented by keys.bin.
 //
+// ONE FRAME CAN NEVER FREEZE A GROUP (review finding 2). Every frame ends in exactly one of: applied; skipped as a repeat; REJECTED
+// (counted by reason with only the sender's 8-character id prefix, never content: `rejections()`); or WAITING. A waiting frame is
+// one that cannot be judged yet (unknown signer or generation, or a handler that says "not yet": FrameWait). Waiting frames are
+// kept, bounded and expiring, in link-state.bin, and the read position moves past them, so a frame that never becomes
+// judgeable costs one slot for a day and blocks nothing. A handler that throws something else (a disk error) is retried a few
+// times and then the frame is rejected.
+//
+// THE READ POSITION IS NOT THE RELAY'S TO SET (review finding 7). The relay supplies sequence numbers and the `gap` marker, and a
+// hostile one can lie. The COMMITTED position (saved, acknowledged to the relay) only moves past a frame this device actually
+// verified or parked; a rejected or repeated frame moves a session-only soft position, so junk can be skipped without being able to
+// poison the saved number. A position that jumps further than MAX_POSITION_JUMP is refused as a hostile answer. Reconnecting forgets
+// the soft position. resetReadPosition() is the operator's way back to the start (replay protection keeps duplicates out).
+//
 // LOGGING: event names, group names, close codes, counts. Never frame bytes, keys or bodies.
 import path from 'path';
-import { asBytes, asMap, asUint, decode, encode, onlyKeys, type CborValue } from './crypto/cbor';
+import { asArray, asBytes, asMap, asText, asUint, decode, encode, onlyKeys, type CborValue } from './crypto/cbor';
 import { MeshCryptoError } from './crypto/errors';
 import { FrameReceiver, FrameSender, peekHeader, type OpenedFrame } from './crypto/frames';
 import type { DeviceIdentity } from './crypto/identity';
@@ -35,7 +48,9 @@ import { readFileIfExists, writeFileDurable } from './fs-durable';
 export interface Carrier {
   readonly connected: boolean;
   /** Store a sealed frame durably. `n` is the sender's strictly rising number (counter + 1). */
-  hold(group: string, session: string, n: number, frame: Uint8Array): Promise<'stored' | 'duplicate'>;
+  /** `line` marks a chat line (the relay keeps those 30 days and may release them under pressure); omitted means control data
+   *  (roster, removal bundles), which the relay holds until every device acknowledged it (review finding 5). */
+  hold(group: string, session: string, n: number, frame: Uint8Array, line?: boolean): Promise<'stored' | 'duplicate'>;
   fetchAfter(group: string, seq: number): Promise<{ frames: Array<{ seq: number; bytes: Buffer }>; more: boolean; gap?: { through: number } }>;
   /** "I have handled everything in `group` through `seq`." Best effort. */
   received(group: string, seq: number): Promise<void>;
@@ -51,6 +66,33 @@ interface CounterStore {
   set(n: number): Promise<void>;
 }
 
+/** What a handler is given: the verified facts of one frame (a subset of OpenedFrame, so a deferred frame can be saved and replayed). */
+export interface LinkFrame {
+  group: string;
+  seq: number;
+  header: { kind: string; from: Buffer; counter: number };
+  body: CborValue;
+}
+/** A handler throws this to say "I cannot act on this frame yet" (its roster entry or predecessor has not arrived): it is kept and
+ *  retried after retryPending(), and expires. */
+export class FrameWait extends Error {
+  constructor(readonly why: string) { super(`frame waits: ${why}`); this.name = 'FrameWait'; }
+}
+/** A handler throws this to refuse a verified frame for good (bad content from a member): counted, never retried. */
+export class FrameReject extends Error {
+  constructor(readonly why: string) { super(`frame rejected: ${why}`); this.name = 'FrameReject'; }
+}
+export interface Rejection { group: string; seq: number; from: string; reason: string }
+
+/** A relay answer may move the read position at most this far in one step; further is a hostile or broken relay. */
+const MAX_POSITION_JUMP = 100_000;
+/** Waiting frames kept (count, bytes) and for how long. */
+const MAX_WAITING = 64;
+const MAX_WAITING_BYTES = 8 * 1024 * 1024;
+const WAIT_EXPIRY_MS = 24 * 3_600_000;
+const MAX_HANDLER_TRIES = 3;
+const RECENT_REJECTIONS = 50;
+
 export interface LinkOptions {
   identity: DeviceIdentity;
   setId: Buffer;
@@ -60,27 +102,42 @@ export interface LinkOptions {
   secrets: () => Map<number, Buffer>;
   signKeyFor: (deviceId: Buffer) => Buffer | undefined;
   counter: CounterStore;
-  onFrame: (f: OpenedFrame & { group: string; seq: number }) => void | Promise<void>;
+  onFrame: (f: LinkFrame) => void | Promise<void>;
+  /** Is this device known AND removed? Only used to NAME a rejection ("signer-removed"); it never accepts anything. */
+  isRemoved?: (deviceId: Buffer) => boolean;
+  now?: () => number;
   log?: (event: string, fields?: Record<string, string | number>) => void;
-  onEvent?: (event: 'rolled-back' | 'gap', info: { group: string }) => void;
+  onEvent?: (event: 'rolled-back' | 'gap' | 'rejected', info: { group: string }) => void;
 }
 
-interface Outgoing { group: string; kind: string; body: CborValue; to?: Buffer; resolve: (r: { counter: number }) => void; reject: (e: Error) => void; sealed?: { wire: Buffer; counter: number } }
+type Waiting =
+  | { kind: 'wire'; group: string; seq: number; since: number; wire: Buffer }
+  | { kind: 'opened'; group: string; seq: number; since: number; fkind: string; from: Buffer; counter: number; body: CborValue };
+const waitingBytes = (w: Waiting): number => (w.kind === 'wire' ? w.wire.length : encode(w.body).length + 64);
 
-const PAUSING = new Set(['unknown-signer', 'unknown-generation']);
+interface Outgoing { group: string; kind: string; body: CborValue; to?: Buffer; line?: boolean; resolve: (r: { counter: number }) => void; reject: (e: Error) => void; sealed?: { wire: Buffer; counter: number } }
+
+const WAITABLE = new Set(['unknown-signer', 'unknown-generation']);
+// Normal traffic, not an attack: repeats, and frames addressed to another device.
+const QUIET = new Set(['replay', 'out-of-window', 'not-addressed-to-me']);
 const STATE_VERSION = 1;
 
 export class Link {
   readonly #o: LinkOptions;
   readonly #sender: FrameSender;
   readonly #receiver: FrameReceiver;
+  /** COMMITTED read positions (saved, acknowledged). */
   readonly #cursors = new Map<string, number>();
-  readonly #paused = new Set<string>();
+  /** Session-only position, never behind the committed one (see the header). */
+  readonly #soft = new Map<string, number>();
+  #waiting: Waiting[] = [];
+  readonly #rejectCounts = new Map<string, number>();
+  readonly #recent: Rejection[] = [];
   readonly #syncing = new Map<string, Promise<void>>();
   readonly #again = new Set<string>();
   /** Frames that opened fine but whose handler failed. WHY kept: open() records the counter at once, so reopening the same
    *  wire bytes would be refused as a replay and the frame would be lost; the retry uses this copy instead. */
-  readonly #failedOpen = new Map<string, OpenedFrame>();
+  readonly #failedOpen = new Map<string, { opened: OpenedFrame; tries: number }>();
   #outbox: Outgoing[] = [];
   #flushing = false;
   #stopped = false;
@@ -107,7 +164,8 @@ export class Link {
     await this.loadState();
     for (const g of groups) if (!this.#cursors.has(g)) this.#cursors.set(g, 0);
     this.#o.carrier.onRing((g) => { if (this.#cursors.has(g)) void this.sync(g); });
-    this.#o.carrier.onConnected(() => { void this.flush(); void this.syncAll(); });
+    // WHY the soft position is forgotten on every (re)connect: a lying relay must not leave a position behind that an honest one then inherits.
+    this.#o.carrier.onConnected(() => { this.#soft.clear(); void this.flush(); void this.syncAll(); });
     if (this.#o.carrier.connected) { void this.flush(); void this.syncAll(); }
   }
   stop(): void {
@@ -120,7 +178,7 @@ export class Link {
   }
 
   // ---------------------------------------------------------------- sending
-  sendDurable(a: { group: string; kind: string; body: CborValue; to?: Buffer }): Promise<{ counter: number }> {
+  sendDurable(a: { group: string; kind: string; body: CborValue; to?: Buffer; line?: boolean }): Promise<{ counter: number }> {
     return new Promise((resolve, reject) => {
       this.#outbox.push({ ...a, resolve, reject });
       void this.flush();
@@ -146,7 +204,7 @@ export class Link {
             const wire = this.#sender.seal({ secret, gen, group: head.group, kind: head.kind, body: head.body, to: head.to ?? null });
             head.sealed = { wire, counter: this.#sender.framesSealed - 1 };
           }
-          const r = await this.#o.carrier.hold(head.group, this.sessionHex, head.sealed.counter + 1, head.sealed.wire);
+          const r = await this.#o.carrier.hold(head.group, this.sessionHex, head.sealed.counter + 1, head.sealed.wire, head.line === true);
           if (r === 'stored') this.#o.carrier.ring(head.group);
           this.#outbox.shift();
           head.resolve({ counter: head.sealed.counter });
@@ -168,11 +226,26 @@ export class Link {
   async syncAll(): Promise<void> {
     await Promise.all([...this.#cursors.keys()].map((g) => this.sync(g)));
   }
-  /** Call after the roster or a set secret changed: groups paused on "unknown signer/generation" try again. */
+  /** Call after the roster or a set secret changed: waiting frames are judged again. */
   retryPending(): void {
-    for (const g of [...this.#paused]) { this.#paused.delete(g); void this.sync(g); }
+    if (this.#waiting.length === 0) return;
+    for (const g of this.#cursors.keys()) void this.sync(g);
   }
-  /** Resolves when this group is caught up (or paused/offline). Overlapping calls are coalesced and re-run once. */
+  /** Frames waiting to be judged, and every rejection so far by reason (never content). */
+  get waitingCount(): number {
+    return this.#waiting.length;
+  }
+  rejections(): { counts: Record<string, number>; recent: Rejection[] } {
+    return { counts: Object.fromEntries(this.#rejectCounts), recent: [...this.#recent] };
+  }
+  /** Operator reset: read every group again from the start. Replay protection keeps already-applied frames out. */
+  async resetReadPosition(): Promise<void> {
+    for (const g of this.#cursors.keys()) this.#cursors.set(g, 0);
+    this.#soft.clear();
+    await this.persist();
+    void this.syncAll();
+  }
+  /** Resolves when this group is caught up (or offline). Overlapping calls are coalesced and re-run once. */
   sync(group: string): Promise<void> {
     const running = this.#syncing.get(group);
     if (running) { this.#again.add(group); return running; }
@@ -185,58 +258,194 @@ export class Link {
     this.#syncing.set(group, p);
     return p;
   }
+  private now(): number {
+    return (this.#o.now ?? Date.now)();
+  }
+  private position(group: string): number {
+    return Math.max(this.#soft.get(group) ?? 0, this.#cursors.get(group) ?? 0);
+  }
   private async syncOnce(group: string): Promise<void> {
-    if (!this.#o.carrier.connected || this.#stopped) return;
+    if (this.#stopped) return;
+    await this.drainWaiting(group); // needs no connection: the frames are already here
+    if (!this.#o.carrier.connected) return;
     for (;;) {
-      const cursor = this.#cursors.get(group) ?? 0;
+      const cursor = this.position(group);
       const res = await this.#o.carrier.fetchAfter(group, cursor);
       if (res.gap) {
         // The relay released frames this device had not collected (it was away more than the relay's keep time).
-        // Skip to the gap's end; the replicator (later) repairs content from other devices.
-        this.#cursors.set(group, Math.max(cursor, res.gap.through));
-        this.log('gap', { group, through: res.gap.through });
+        // WHY the jump is bounded and only soft (finding 7): `through` is the relay's word; 9e15 once froze a device for good.
+        const through = res.gap.through;
+        if (!Number.isSafeInteger(through) || through <= cursor || through - cursor > MAX_POSITION_JUMP) { this.hostile(group, 'bad-gap'); return; }
+        this.#soft.set(group, through);
+        this.log('gap', { group, through });
         this.#o.onEvent?.('gap', { group });
         continue;
       }
-      let last = cursor;
+      let prev = cursor;
+      for (const f of res.frames) {
+        if (!Number.isSafeInteger(f.seq) || f.seq <= prev || f.seq - prev > MAX_POSITION_JUMP) { this.hostile(group, 'bad-seq'); return; }
+        prev = f.seq;
+      }
+      let committed = this.#cursors.get(group) ?? 0;
       let blocked = false;
       for (const f of res.frames) {
         const verdict = await this.handle(group, f.seq, f.bytes);
-        if (verdict === 'pause') { blocked = true; this.#paused.add(group); break; }
-        last = f.seq;
+        if (verdict === 'blocked') { blocked = true; break; }
+        this.#soft.set(group, f.seq);
+        // Only frames this device verified (or parked, which it now holds) move the committed position.
+        if (verdict === 'verified' || verdict === 'waited') committed = Math.max(committed, f.seq);
       }
-      if (last !== cursor) {
-        this.#cursors.set(group, last);
+      const advanced = committed !== (this.#cursors.get(group) ?? 0);
+      if (advanced || this.#dirty) {
+        this.#cursors.set(group, committed);
         // While a frame is waiting on its handler, the receiver's table already counts it as seen: saving now could make a
         // crash lose it. Skip the save AND the acknowledgement; the next clean batch writes both.
         if (this.#failedOpen.size === 0) {
           await this.persist(); // durable BEFORE the acknowledgement below
-          await this.#o.carrier.received(group, last).catch(() => undefined);
+          if (advanced) await this.#o.carrier.received(group, committed).catch(() => undefined);
         }
       }
-      if (blocked || !res.more || res.frames.length === 0) return;
+      if (blocked) {
+        const t = setTimeout(() => { void this.sync(group); }, 2000);
+        t.unref?.();
+        return;
+      }
+      if (!res.more || res.frames.length === 0) return;
     }
   }
-  private async handle(group: string, seq: number, wire: Buffer): Promise<'done' | 'pause'> {
-    try {
-      if (peekHeader(wire).from.equals(this.#o.identity.deviceId)) return 'done'; // my own frame coming back
-      const key = `${group}:${seq}`;
-      const opened = this.#failedOpen.get(key) ?? this.#receiver.open(wire);
-      try {
-        await this.#o.onFrame({ ...opened, group, seq });
-      } catch {
-        this.log('handler-failed', { group });
-        this.#failedOpen.set(key, opened);
-        return 'pause'; // not processed: do not advance past it
+  #dirty = false;
+  /** The relay answered with a position no honest relay could: forget the soft position and say so. */
+  private hostile(group: string, why: string): void {
+    this.#soft.delete(group);
+    this.bump(`relay-${why}`);
+    this.log('relay-bad-position', { group, why });
+  }
+  private bump(reason: string): void {
+    this.#rejectCounts.set(reason, (this.#rejectCounts.get(reason) ?? 0) + 1);
+    this.#dirty = true;
+  }
+  private reject(group: string, seq: number, from: string, reason: string): void {
+    this.bump(reason);
+    this.#recent.push({ group, seq, from, reason });
+    if (this.#recent.length > RECENT_REJECTIONS) this.#recent.shift();
+    this.log('frame-rejected', { group, reason, from });
+    this.#o.onEvent?.('rejected', { group });
+  }
+  private park(w: Waiting): void {
+    this.#waiting.push(w);
+    this.#dirty = true;
+    let bytes = this.#waiting.reduce((n, x) => n + waitingBytes(x), 0);
+    while (this.#waiting.length > MAX_WAITING || bytes > MAX_WAITING_BYTES) {
+      const old = this.#waiting.shift() as Waiting;
+      bytes -= waitingBytes(old);
+      this.reject(old.group, old.seq, old.kind === 'wire' ? 'unknown' : old.from.toString('hex').slice(0, 8), 'wait-overflow');
+    }
+    this.log('frame-waiting', { group: w.group });
+  }
+  /** Judge every waiting frame of `group` again (each once). Frames that now verify are delivered; the rest stay or expire. */
+  private async drainWaiting(group: string): Promise<void> {
+    const mine = this.#waiting.filter((w) => w.group === group);
+    if (mine.length === 0) return;
+    for (const w of mine) {
+      const idx = this.#waiting.indexOf(w);
+      if (idx < 0) continue;
+      const fromPrefix = w.kind === 'wire' ? this.prefixOf(w.wire) : w.from.toString('hex').slice(0, 8);
+      if (this.now() - w.since > WAIT_EXPIRY_MS) { this.removeWaiting(w); this.reject(w.group, w.seq, fromPrefix, 'wait-expired'); continue; }
+      if (w.kind === 'wire') {
+        const out = this.tryOpen(w.group, w.seq, w.wire);
+        if (out === 'waiting') continue;
+        this.removeWaiting(w);
+        if (out === 'rejected' || out === 'quiet') continue; // tryOpen counted a rejection; quiet is a repeat
+        await this.deliverLinkFrame({ group: w.group, seq: w.seq, header: { kind: out.opened.header.kind, from: out.opened.header.from, counter: out.opened.header.counter }, body: out.opened.body as CborValue }, w.since);
+      } else {
+        this.removeWaiting(w);
+        await this.deliverLinkFrame({ group: w.group, seq: w.seq, header: { kind: w.fkind, from: w.from, counter: w.counter }, body: w.body }, w.since);
       }
-      this.#failedOpen.delete(key);
-      return 'done';
+    }
+    if (this.#dirty && this.#failedOpen.size === 0) await this.persist();
+  }
+  private removeWaiting(w: Waiting): void {
+    this.#waiting = this.#waiting.filter((x) => x !== w);
+    this.#dirty = true;
+  }
+  private prefixOf(wire: Uint8Array): string {
+    try { return peekHeader(wire).from.toString('hex').slice(0, 8); } catch { return 'unknown'; }
+  }
+  /** Open a frame. 'waiting' when it cannot be judged yet, 'rejected' (already counted) when it is refused, 'quiet' for traffic that is simply not for us / a repeat. */
+  private tryOpen(group: string, seq: number, wire: Buffer): 'waiting' | 'rejected' | 'quiet' | { opened: OpenedFrame } {
+    try {
+      return { opened: this.#receiver.open(wire) };
     } catch (e) {
       const code = e instanceof MeshCryptoError ? e.code : 'error';
-      if (PAUSING.has(code)) { this.log('frame-waiting', { group, code }); return 'pause'; }
-      if (code !== 'replay' && code !== 'out-of-window') this.log('frame-dropped', { group, code });
-      return 'done';
+      if (QUIET.has(code)) return 'quiet';
+      const from = this.prefixOf(wire);
+      if (code === 'unknown-signer') {
+        let removed = false;
+        try { removed = this.#o.isRemoved?.(peekHeader(wire).from) === true; } catch { /* not a frame header */ }
+        // A removed device's leftover frame can never become judgeable: waiting for it would only fill a slot.
+        if (removed) { this.reject(group, seq, from, 'signer-removed'); return 'rejected'; }
+      }
+      if (WAITABLE.has(code)) return 'waiting';
+      this.reject(group, seq, from, code);
+      return 'rejected';
     }
+  }
+  private async handle(group: string, seq: number, wire: Buffer): Promise<'verified' | 'waited' | 'soft' | 'blocked'> {
+    const key = `${group}:${seq}`;
+    const prior = this.#failedOpen.get(key);
+    let opened: OpenedFrame;
+    if (prior) opened = prior.opened;
+    else {
+      const out = this.tryOpen(group, seq, wire);
+      if (out === 'waiting') {
+        this.park({ kind: 'wire', group, seq, since: this.now(), wire });
+        return 'waited';
+      }
+      if (out === 'rejected' || out === 'quiet') return 'soft';
+      opened = out.opened;
+    }
+    return this.deliver(group, seq, opened);
+  }
+  private async deliver(group: string, seq: number, opened: OpenedFrame): Promise<'verified' | 'waited' | 'soft' | 'blocked'> {
+    // My own frame coming back: it verified (so it is genuine), and there is nothing to apply.
+    if (opened.header.from.equals(this.#o.identity.deviceId)) return 'verified';
+    const f: LinkFrame = { group, seq, header: { kind: opened.header.kind, from: opened.header.from, counter: opened.header.counter }, body: opened.body as CborValue };
+    return this.deliverLinkFrame(f, this.now(), `${group}:${seq}`, opened);
+  }
+  /** `opened` is given for a frame fresh off the wire (so a transient handler failure can retry it in place); a frame replayed from the
+   *  waiting list has no such handle and goes back to the waiting list instead. */
+  private async deliverLinkFrame(f: LinkFrame, since: number, key?: string, opened?: OpenedFrame): Promise<'verified' | 'waited' | 'soft' | 'blocked'> {
+    const fromPrefix = f.header.from.toString('hex').slice(0, 8);
+    const rewait = (): 'waited' => {
+      this.park({ kind: 'opened', group: f.group, seq: f.seq, since, fkind: f.header.kind, from: f.header.from, counter: f.header.counter, body: f.body });
+      return 'waited';
+    };
+    try {
+      await this.#o.onFrame(f);
+    } catch (e) {
+      if (e instanceof FrameWait) {
+        if (key) this.#failedOpen.delete(key);
+        return rewait();
+      }
+      if (e instanceof FrameReject || e instanceof MeshCryptoError) {
+        if (key) this.#failedOpen.delete(key);
+        this.reject(f.group, f.seq, fromPrefix, e instanceof FrameReject ? e.why : `bad-${(e as MeshCryptoError).code}`);
+        return 'verified'; // authenticated, just refused
+      }
+      // Anything else (a disk error): retry a few times, then give the frame up instead of freezing the group.
+      if (!opened || !key) return rewait();
+      const tries = (this.#failedOpen.get(key)?.tries ?? 0) + 1;
+      if (tries >= MAX_HANDLER_TRIES) {
+        this.#failedOpen.delete(key);
+        this.reject(f.group, f.seq, fromPrefix, 'handler-failed');
+        return 'verified';
+      }
+      this.log('handler-failed', { group: f.group });
+      this.#failedOpen.set(key, { opened, tries });
+      return 'blocked';
+    }
+    if (key) this.#failedOpen.delete(key);
+    return 'verified';
   }
 
   // ---------------------------------------------------------------- state
@@ -247,7 +456,13 @@ export class Link {
     const bytes = this.#receiver.exportState();
     const cursors: { [g: string]: CborValue } = {};
     for (const [g, c] of this.#cursors) cursors[g] = c;
-    await writeFileDurable(this.stateFile, encode({ v: STATE_VERSION, receiver: bytes, cursors }));
+    const waiting: CborValue[] = this.#waiting.map((w) => (w.kind === 'wire'
+      ? { k: 'w', g: w.group, q: w.seq, t: w.since, b: w.wire }
+      : { k: 'o', g: w.group, q: w.seq, t: w.since, fk: w.fkind, f: w.from, c: w.counter, b: encode(w.body) }));
+    const rej: { [k: string]: CborValue } = {};
+    for (const [k, n] of this.#rejectCounts) rej[k] = n;
+    this.#dirty = false;
+    await writeFileDurable(this.stateFile, encode({ v: STATE_VERSION, receiver: bytes, cursors, waiting, rej }));
     await this.#o.counter.set(this.#receiver.saveCounter); // second file, second place: see the header
   }
   private async loadState(): Promise<void> {
@@ -256,13 +471,23 @@ export class Link {
     let receiverBytes: Buffer;
     try {
       const m = asMap(decode(raw), 'link state');
-      onlyKeys(m, ['v', 'receiver', 'cursors'], 'link state');
+      onlyKeys(m, ['v', 'receiver', 'cursors', 'waiting', 'rej'], 'link state');
       if (asUint(m.v, 'v') !== STATE_VERSION) return;
       receiverBytes = asBytes(m.receiver, 'receiver');
       for (const [g, c] of Object.entries(asMap(m.cursors, 'cursors'))) this.#cursors.set(g, asUint(c, 'cursor'));
+      if (m.waiting !== undefined) {
+        for (const raw of asArray(m.waiting, 'waiting', MAX_WAITING)) {
+          const w = asMap(raw, 'waiting entry');
+          const base = { group: asText(w.g, 'g', 100), seq: asUint(w.q, 'q'), since: asUint(w.t, 't') };
+          if (asText(w.k, 'k', 1) === 'w') this.#waiting.push({ kind: 'wire', ...base, wire: asBytes(w.b, 'wire') });
+          else this.#waiting.push({ kind: 'opened', ...base, fkind: asText(w.fk, 'fk', 64), from: asBytes(w.f, 'from', 16), counter: asUint(w.c, 'c'), body: decode(asBytes(w.b, 'body')) });
+        }
+      }
+      if (m.rej !== undefined) for (const [k, n] of Object.entries(asMap(m.rej, 'rej'))) this.#rejectCounts.set(k, asUint(n, 'rej count'));
     } catch {
       this.log('state-unreadable'); // a damaged file means "re-read everything"; replay refusal still protects what is known
       this.#cursors.clear();
+      this.#waiting = [];
       return;
     }
     const min = this.#o.counter.get();
@@ -276,6 +501,7 @@ export class Link {
       this.#receiver.importState(receiverBytes);
       while (this.#receiver.saveCounter <= min) this.#receiver.exportState();
       for (const g of this.#cursors.keys()) this.#cursors.set(g, 0);
+      this.#soft.clear();
       this.log('rolled-back');
       this.#o.onEvent?.('rolled-back', { group: '' });
     }

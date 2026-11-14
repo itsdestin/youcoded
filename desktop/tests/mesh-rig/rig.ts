@@ -101,6 +101,8 @@ export interface DeviceOptions {
   keystore?: 'os';
   relayUrl?: string;
   build: string;
+  /** Extra environment for this device only (test-mode timers such as YOUCODED_MESH_PAIR_CONFIRM_MS). */
+  extraEnv?: Record<string, string>;
 }
 
 export function planDevice(root: string, name: string, o: DeviceOptions): Device {
@@ -154,6 +156,7 @@ function deviceEnv(d: Device, port: number, o: DeviceOptions): Record<string, st
     if (o.relayUrl) e.YOUCODED_MESH_RELAY_URL = o.relayUrl;
     e.YOUCODED_MESH_RELAY_BACKOFF_MS = '150'; // rig shrinks the reconnect delay (design 5.2: timers the rig must be able to shrink)
     if (o.keystore === 'os') e.YOUCODED_MESH_KEYSTORE = 'os';
+    Object.assign(e, o.extraEnv ?? {});
   }
   return e;
 }
@@ -197,7 +200,8 @@ export async function startDevice(d: Device, o: DeviceOptions): Promise<Device> 
   const logFrom = fs.statSync(d.log).size; // a restart appends to the same log: only look at what THIS start wrote
   const child = spawn('bwrap', [...jailArgv(d, env), '/usr/bin/node', ...node], { stdio: ['pipe', out, out] });
   // The owner token and secret key go on stdin as ONE JSON line, never in argv or the log (headless-main.ts readSecrets).
-  child.stdin?.end(JSON.stringify({ token: d.token, key: d.key }) + '\n');
+  // keyStore is the HOST's statement of what holds the key (finding 10): the rig plays the phone app and says the Keystore did, for D only.
+  child.stdin?.end(JSON.stringify({ token: d.token, key: d.key, ...(o.keystore === 'os' ? { keyStore: 'android_keystore' } : {}) }) + '\n');
   child.on('exit', (code, sig) => { d.exited = { code, sig }; });
   Object.assign(d, { pid: child.pid, port, child, control: undefined });
   const t0 = Date.now();

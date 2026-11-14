@@ -13,8 +13,8 @@ export function relayCarrier(client: RelayClient): Carrier {
   client.on('ready', () => connCbs.forEach((cb) => cb()));
   return {
     get connected() { return client.state === 'ready'; },
-    async hold(group, session, n, frame) {
-      const r = await client.hold({ group, session, n, frame });
+    async hold(group, session, n, frame, line) {
+      const r = await client.hold({ group, session, n, frame, ...(line ? { line: true } : {}) });
       if (r.op === 'stored') return 'stored';
       if (r.op === 'duplicate') return 'duplicate';
       throw new Error(`hold refused: ${r.op === 'over-limit' ? r.why : r.op === 'refused' ? r.reason : 'unknown'}`);

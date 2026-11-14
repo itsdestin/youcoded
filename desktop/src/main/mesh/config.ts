@@ -16,6 +16,7 @@
 // leave the profile folder byte-for-byte as it was, so this module only ever READS.
 import fs from 'fs';
 import path from 'path';
+import { OFFICIAL_BUILD } from '../official-build';
 
 export interface MeshSwitchInput {
   /** The app's own data folder (app.getPath('userData')). The only place the file is looked for. */
@@ -44,7 +45,10 @@ async function fileSaysOn(userData: string): Promise<boolean> {
 
 export async function meshSwitch(input: MeshSwitchInput): Promise<MeshSwitch> {
   const env = input.env ?? process.env;
-  const packaged = input.packaged === true;
+  // WHY OFFICIAL_BUILD joins `packaged` (review finding 9): the headless boot (the phone's path) is never "packaged", so environment variables could
+  // turn the mesh and test mode on there. The release workflows stamp OFFICIAL_BUILD = true into every shipped build (desktop and Android),
+  // so a release behaves as packaged on EVERY boot path; only an unstamped dev or test build can read the test variables.
+  const packaged = input.packaged === true || OFFICIAL_BUILD;
   if (!input.userData) return OFF;
   const envOn = !packaged && env.YOUCODED_MESH === '1';
   const on = envOn || (await fileSaysOn(input.userData));

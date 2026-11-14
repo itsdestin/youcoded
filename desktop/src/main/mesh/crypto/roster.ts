@@ -177,7 +177,7 @@ function readAdd(body: unknown): RosterDeviceInfo {
 }
 
 /** What the verifier can prove about one entry (it rules on none of it except where a header says so). */
-interface EntryFacts {
+export interface EntryFacts {
   /** Position in the log. */
   index: number;
   /** Signer's device id, hex. */
@@ -201,61 +201,99 @@ export interface VerifiedRoster {
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
+// WHY QUOTAS (review finding 4): any member can write valid entries as fast as it can sign them (renames change nothing and are
+// nearly free), so the log needs a per-device ceiling that every device computes the same way from the log alone. 512 is far above
+// what a person produces (a handful of renames over years) and 16 devices x 512 stays under the 8192 hard cap.
+export const MAX_ENTRIES_PER_DEVICE = 512;
+// WHY RESERVE (finding 4, "8192-entry dead end"): when the log is nearly full, adds and renames are refused but a REMOVE is still
+// accepted, so a device that somehow fills the log can still be removed. Full compaction (a signed checkpoint that replaces the
+// log prefix) needs the decide rules, which do not exist yet; see the note on `RosterVerifier` for exactly what is left.
+export const ROSTER_REMOVE_RESERVE = 64;
+
 /**
- * Verify a roster log given in an order where each signer's `add` precedes its entries (the order
- * a pairing welcome and a keeper's log both use). Checks: genesis is a self-add naming nothing;
- * every later entry is signed by a device added earlier in the log; ids match content; `seen`
- * names earlier entries only and includes the signer's own previous entry; `add` bodies are well
- * formed and never repeat a device id; `remove` names a known device; a device that has seen its
- * own removal does not add/remove/rename; no duplicate ids.
- * Throws MeshCryptoError('bad-roster'|'bad-entry'|'malformed'|'low-order-point').
+ * Incremental roster verifier. `prepare(entry)` checks ONE entry against the state built so far and returns a `commit()` that
+ * applies it; nothing is changed by a prepare that throws, or by a prepare whose commit is never called (the store writes the
+ * record to disk between the two, so a disk failure leaves the verified state matching the file).
+ * Cost per entry is the signature check plus O(|seen| x entries/32); the whole log is near-linear instead of the old
+ * verify-everything-again per append (600 entries took 26 s per receiver).
+ *
+ * WHAT IS NOT BUILT (checkpoint / compaction): a log can still only grow to MAX_ROSTER_ENTRIES. The safe subset is in place:
+ * per-device quotas (a flooder cannot fill it), a reserve for removals, and `headroom` so the app can warn. A checkpoint entry
+ * (a signed digest of the log prefix plus the live device table) needs the decide rules to say who may sign one and what a
+ * concurrent checkpoint means, and is deliberately left to that part.
  */
-export function verifyRosterLog(entries: readonly SignedEntry[]): VerifiedRoster {
-  if (entries.length === 0 || entries.length > MAX_ROSTER_ENTRIES) throw new MeshCryptoError('bad-roster', 'size');
-  const n = entries.length;
-  const words = (n + 31) >>> 5;
-  const devices = new Map<string, RosterDevice>();
-  const index = new Map<string, number>(); // entry id -> position
-  const anc: Uint32Array[] = []; // anc[i] has bit j set when entry j is in the seen-closure of entry i
-  const removedKnown: ReadonlySet<string>[] = []; // devices whose removal is in each entry's closure
-  const lastOwn = new Map<string, number>(); // signer -> position of its latest entry so far
-  const introducedAt = new Map<string, number>(); // device -> position of the add that introduced it
-  const removalsOf = new Map<string, number>(); // device -> how many removals of it so far
-  const facts = new Map<string, EntryFacts>();
-  let setId: Buffer | undefined;
-  entries.forEach((e, i) => {
+export class RosterVerifier implements VerifiedRoster {
+  setId!: Buffer;
+  readonly devices = new Map<string, RosterDevice>();
+  readonly facts = new Map<string, EntryFacts>();
+  /** Devices removed by some entry in the log (hex ids). */
+  readonly removed = new Set<string>();
+  readonly #index = new Map<string, number>();
+  readonly #anc: Uint32Array[] = [];
+  readonly #removedKnown: ReadonlySet<string>[] = [];
+  readonly #lastOwn = new Map<string, number>();
+  readonly #introducedAt = new Map<string, number>();
+  readonly #removalsOf = new Map<string, number>();
+  readonly #perDevice = new Map<string, number>();
+  get size(): number {
+    return this.#index.size;
+  }
+  /** Entries that may still be added before the log is full. */
+  get headroom(): number {
+    return MAX_ROSTER_ENTRIES - this.#index.size;
+  }
+  /** How many entries a device has signed (its quota use). */
+  countOf(deviceHex: string): number {
+    return this.#perDevice.get(deviceHex) ?? 0;
+  }
+  happenedBefore(a: Bytes, b: Bytes): boolean {
+    const ia = this.#index.get(toHex(a));
+    const ib = this.#index.get(toHex(b));
+    if (ia === undefined || ib === undefined || ia === ib) return false;
+    const w = ia >>> 5;
+    const row = this.#anc[ib];
+    return w < row.length && (row[w] & (1 << (ia & 31))) !== 0;
+  }
+
+  prepare(e: SignedEntry): () => void {
+    const i = this.#index.size;
+    if (i >= MAX_ROSTER_ENTRIES) throw new MeshCryptoError('bad-roster', 'size');
+    if (i >= MAX_ROSTER_ENTRIES - ROSTER_REMOVE_RESERVE && e.kind !== 'remove') throw new MeshCryptoError('bad-roster', 'log nearly full: only removals');
     const idHex = toHex(e.id);
-    if (index.has(idHex)) throw new MeshCryptoError('bad-roster', 'duplicate entry');
+    if (this.#index.has(idHex)) throw new MeshCryptoError('bad-roster', 'duplicate entry');
     let signer: RosterDevice | undefined;
+    let genesisSetId: Buffer | undefined;
     if (i === 0) {
       if (e.kind !== 'add') throw new MeshCryptoError('bad-roster', 'genesis must be an add');
       const self = readAdd(e.body);
       signer = { ...self, deviceId: deviceIdFor(self.signKey) };
       if (!ctEqual(signer.deviceId, e.device)) throw new MeshCryptoError('bad-roster', 'genesis must be self-signed');
-      setId = setIdFor(self.signKey);
+      genesisSetId = setIdFor(self.signKey);
       if (e.seen.length !== 0) throw new MeshCryptoError('bad-roster', 'genesis cannot cite earlier entries');
     } else {
-      signer = devices.get(toHex(e.device));
+      signer = this.devices.get(toHex(e.device));
       if (!signer) throw new MeshCryptoError('bad-roster', 'signer not yet in roster');
       if (e.seen.length === 0) throw new MeshCryptoError('bad-roster', 'entry names no earlier state');
     }
     if (!verifyEntry(e, signer.signKey)) throw new MeshCryptoError('bad-entry', e.kind);
     const signerHex = toHex(signer.deviceId);
+    if ((this.#perDevice.get(signerHex) ?? 0) >= MAX_ENTRIES_PER_DEVICE) throw new MeshCryptoError('bad-roster', 'device quota');
 
     // ---- what this entry was made against: its seen-closure and the removals inside it ----
+    const words = (i + 32) >>> 5; // enough bits for indices 0..i
     const bits = new Uint32Array(words);
     let known: ReadonlySet<string> = EMPTY_SET;
     let owned = false;
     const cited = new Set<number>();
     for (const s of e.seen) {
-      const j = index.get(toHex(s));
+      const j = this.#index.get(toHex(s));
       if (j === undefined) throw new MeshCryptoError('bad-roster', 'seen names an unknown or later entry');
       if (cited.has(j)) throw new MeshCryptoError('bad-roster', 'seen repeats an entry');
       cited.add(j);
       bits[j >>> 5] |= 1 << (j & 31);
-      const pa = anc[j];
-      for (let w = 0; w < words; w++) bits[w] |= pa[w];
-      const pk = removedKnown[j];
+      const pa = this.#anc[j];
+      for (let w = 0; w < pa.length; w++) bits[w] |= pa[w];
+      const pk = this.#removedKnown[j];
       if (pk.size > 0 && pk !== known) {
         if (known.size === 0) known = pk;
         else {
@@ -270,50 +308,80 @@ export function verifyRosterLog(entries: readonly SignedEntry[]): VerifiedRoster
     const inClosure = (j: number): boolean => (bits[j >>> 5] & (1 << (j & 31))) !== 0;
     if (i > 0) {
       // WHY: ties each device's entries into one chain and proves "made after being added".
-      const ref = lastOwn.get(signerHex) ?? introducedAt.get(signerHex);
+      const ref = this.#lastOwn.get(signerHex) ?? this.#introducedAt.get(signerHex);
       if (ref === undefined || !inClosure(ref)) throw new MeshCryptoError('bad-roster', 'entry has not seen its signer\'s previous entry');
     }
     const knew = known.has(signerHex);
-    facts.set(idHex, { index: i, signer: signerHex, kind: e.kind, signerKnewOwnRemoval: knew, signerRemovedEarlierInLog: (removalsOf.get(signerHex) ?? 0) > 0 });
     if (knew && (e.kind === 'add' || e.kind === 'remove' || e.kind === 'rename')) throw new MeshCryptoError('bad-roster', 'removed device signs roster change');
 
+    // ---- kind-specific checks (all of them BEFORE anything is changed) ----
+    let apply: () => void = () => {};
+    let removalTarget: string | null = null;
     if (e.kind === 'add') {
       const info = readAdd(e.body);
       const id = deviceIdFor(info.signKey);
       const idKey = toHex(id);
       // WHY: an add may only INTRODUCE a device. Overwriting let any member rebind another device's
       // key-agreement key (so it would receive that device's future secrets) or let a removed device re-add itself.
-      if (devices.has(idKey)) throw new MeshCryptoError('bad-roster', 'duplicate device');
-      devices.set(idKey, { ...info, deviceId: id });
-      introducedAt.set(idKey, i);
+      if (i > 0 && this.devices.has(idKey)) throw new MeshCryptoError('bad-roster', 'duplicate device');
+      apply = () => {
+        this.devices.set(idKey, { ...info, deviceId: id });
+        this.#introducedAt.set(idKey, i);
+      };
     } else if (e.kind === 'rename') {
       const m = asMap(e.body, 'rename body');
-      const cur = devices.get(signerHex);
-      if (cur) devices.set(signerHex, { ...cur, name: sanitizeDeviceName(asText(m.name, 'name', 200)) });
+      const name = sanitizeDeviceName(asText(m.name, 'name', 200));
+      apply = () => {
+        const cur = this.devices.get(signerHex);
+        if (cur) this.devices.set(signerHex, { ...cur, name });
+      };
     } else if (e.kind === 'remove') {
       const m = asMap(e.body, 'remove body');
       const target = toHex(asBytes(m.target, 'target', 16));
-      if (!devices.has(target)) throw new MeshCryptoError('bad-roster', 'remove names unknown device');
+      if (!this.devices.has(target)) throw new MeshCryptoError('bad-roster', 'remove names unknown device');
+      removalTarget = target;
+    }
+    if (removalTarget !== null) {
       if (!owned) known = new Set(known);
-      (known as Set<string>).add(target);
-      removalsOf.set(target, (removalsOf.get(target) ?? 0) + 1);
+      (known as Set<string>).add(removalTarget);
     }
     // Other kinds (witness, cutoff, ...) are signature-checked above and otherwise passed through untouched.
-    anc.push(bits);
-    removedKnown.push(known);
-    index.set(idHex, i);
-    lastOwn.set(signerHex, i);
-  });
-  return {
-    setId: setId as Buffer,
-    devices,
-    facts,
-    happenedBefore(a, b) {
-      const ia = index.get(toHex(a));
-      const ib = index.get(toHex(b));
-      return ia !== undefined && ib !== undefined && ia !== ib && (anc[ib][ia >>> 5] & (1 << (ia & 31))) !== 0;
-    },
-  };
+
+    return () => {
+      if (i === 0) this.setId = genesisSetId as Buffer;
+      this.facts.set(idHex, { index: i, signer: signerHex, kind: e.kind, signerKnewOwnRemoval: knew, signerRemovedEarlierInLog: (this.#removalsOf.get(signerHex) ?? 0) > 0 });
+      apply();
+      if (removalTarget !== null) {
+        this.#removalsOf.set(removalTarget, (this.#removalsOf.get(removalTarget) ?? 0) + 1);
+        this.removed.add(removalTarget);
+      }
+      this.#anc.push(bits);
+      this.#removedKnown.push(known);
+      this.#index.set(idHex, i);
+      this.#lastOwn.set(signerHex, i);
+      this.#perDevice.set(signerHex, (this.#perDevice.get(signerHex) ?? 0) + 1);
+    };
+  }
+  /** prepare + commit in one step (no disk in between). */
+  add(e: SignedEntry): void {
+    this.prepare(e)();
+  }
+}
+
+/**
+ * Verify a roster log given in an order where each signer's `add` precedes its entries (the order
+ * a pairing welcome and a keeper's log both use). Checks: genesis is a self-add naming nothing;
+ * every later entry is signed by a device added earlier in the log; ids match content; `seen`
+ * names earlier entries only and includes the signer's own previous entry; `add` bodies are well
+ * formed and never repeat a device id; `remove` names a known device; a device that has seen its
+ * own removal does not add/remove/rename; no duplicate ids; no device exceeds its entry quota.
+ * Throws MeshCryptoError('bad-roster'|'bad-entry'|'malformed'|'low-order-point').
+ */
+export function verifyRosterLog(entries: readonly SignedEntry[]): RosterVerifier {
+  if (entries.length === 0 || entries.length > MAX_ROSTER_ENTRIES) throw new MeshCryptoError('bad-roster', 'size');
+  const v = new RosterVerifier();
+  for (const e of entries) v.add(e);
+  return v;
 }
 
 /** Entries no other entry cites yet (the current heads), newest first. Does not verify anything. */

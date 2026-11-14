@@ -28,7 +28,7 @@ export class MemoryCarrier implements Carrier {
     this.online = on;
     if (on) this.#conn.forEach((cb) => cb());
   }
-  async hold(group: string, session: string, n: number, frame: Uint8Array): Promise<'stored' | 'duplicate'> {
+  async hold(group: string, session: string, n: number, frame: Uint8Array, _line?: boolean): Promise<'stored' | 'duplicate'> {
     if (!this.online) throw new Error('offline');
     const key = `${this.dev}/${session}`;
     if (n <= (this.hub.lastN.get(key) ?? 0)) return 'duplicate';

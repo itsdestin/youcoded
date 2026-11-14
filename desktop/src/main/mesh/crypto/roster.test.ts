@@ -1,6 +1,6 @@
 // Signed entries and roster-log verification. Merge/decide rules are NOT tested here (another part owns them).
 import { describe, expect, it } from 'vitest';
-import { encodeEntry, entryToValue, makeAddEntry, makeGenesisEntry, makeRemoveEntry, makeRenameEntry, parseEntry, parseEntryValue, sanitizeDeviceName, sanitizePlatform, signEntry, verifyEntry, verifyRosterLog, rosterHeads, MAX_DEVICE_NAME, MAX_ROSTER_ENTRIES, MAX_SEEN, type SignedEntry } from './roster';
+import { ROSTER_REMOVE_RESERVE, encodeEntry, entryToValue, makeAddEntry, makeGenesisEntry, makeRemoveEntry, makeRenameEntry, parseEntry, parseEntryValue, sanitizeDeviceName, sanitizePlatform, signEntry, verifyEntry, verifyRosterLog, rosterHeads, MAX_DEVICE_NAME, MAX_ENTRIES_PER_DEVICE, MAX_ROSTER_ENTRIES, MAX_SEEN, RosterVerifier, seenForNextEntry, type SignedEntry } from './roster';
 import { decode, encode } from './cbor';
 import { generateIdentity, identityFromSecrets, setIdFor } from './identity';
 import { MeshCryptoError } from './errors';
@@ -286,15 +286,95 @@ describe('weak agreement keys are refused when parsed, with the module typed err
 
 describe('a 5,000-entry roster verifies and every entry parses back', () => {
   it('verifies, with exact ancestry facts', () => {
-    const A = generateIdentity();
+    // WHY ten devices (review finding 4): one device may sign at most MAX_ENTRIES_PER_DEVICE entries, so a long log has many signers.
+    const devs = Array.from({ length: 10 }, () => generateIdentity());
+    const A = devs[0];
     const entries: SignedEntry[] = [makeGenesisEntry(A, 'D', 'linux', 1)];
-    for (let i = 1; i < 5000; i++) entries.push(makeRenameEntry(A, 'n' + i, [entries[i - 1].id], i + 1));
+    for (let d = 1; d < 10; d++) entries.push(makeAddEntry(A, { name: 'd' + d, platform: 'linux', signKey: devs[d].signKey, agreeKey: devs[d].agreeKey }, seenForNextEntry(entries, A.deviceId), entries.length + 1));
+    const lastOwn = new Map<number, SignedEntry>([[0, entries[0]]]);
+    for (let d = 1; d < 10; d++) lastOwn.set(d, entries[d]); // each device's introducing add
+    while (entries.length < 5000) {
+      const k = entries.length % 10;
+      // seen = the signer's own previous entry and the newest entry overall (no O(n) head search per entry: that made building the test slow)
+      const e = makeRenameEntry(devs[k], 'n' + entries.length, [lastOwn.get(k)!.id, entries[entries.length - 1].id].filter((x, i, a) => a.findIndex((y) => y.equals(x)) === i), entries.length + 1);
+      entries.push(e);
+      lastOwn.set(k, e);
+    }
     const r = verifyRosterLog(entries);
-    expect(r.devices.size).toBe(1);
+    expect(r.devices.size).toBe(10);
     expect(r.happenedBefore(entries[0].id, entries[4999].id)).toBe(true);
     expect(r.happenedBefore(entries[4999].id, entries[0].id)).toBe(false);
     expect(rosterHeads(entries).map(hex)).toEqual([hex(entries[4999].id)]);
     // every entry still parses back (the old 1024-id cap was the break)
     for (const e of [entries[0], entries[2500], entries[4999]]) expect(() => parseEntryValue(decode(encode(entryToValue(e))))).not.toThrow();
+  }, 60_000);
+
+  it('verification is incremental: appending entry n+1 costs about the same as entry 2 (finding 4: it was quadratic)', () => {
+    const A = generateIdentity();
+    const v = new RosterVerifier();
+    const log: SignedEntry[] = [makeGenesisEntry(A, 'D', 'linux', 1)];
+    v.add(log[0]);
+    for (let i = 1; i < 400; i++) { log.push(makeRenameEntry(A, 'n' + i, [log[i - 1].id], i + 1)); v.add(log[i]); }
+    const next = makeRenameEntry(A, 'late', [log[399].id], 500);
+    const t0 = process.hrtime.bigint();
+    v.add(next);
+    const oneStep = Number(process.hrtime.bigint() - t0) / 1e6;
+    const t1 = process.hrtime.bigint();
+    verifyRosterLog([...log, makeRenameEntry(A, 'late2', [log[399].id], 501)]);
+    const full = Number(process.hrtime.bigint() - t1) / 1e6;
+    expect(oneStep * 20).toBeLessThan(full); // one more entry is a small fraction of re-verifying the whole log
+  });
+
+  it('a failed prepare changes nothing, and a prepare that is never committed changes nothing', () => {
+    const A = generateIdentity();
+    const g = makeGenesisEntry(A, 'D', 'linux', 1);
+    const v = new RosterVerifier();
+    v.add(g);
+    const bad = makeRenameEntry(A, 'x', [Buffer.alloc(32, 7)], 2); // names an unknown entry
+    expect(codeOf(() => v.add(bad))).toBe('bad-roster');
+    const good = makeRenameEntry(A, 'y', [g.id], 2);
+    v.prepare(good); // never committed (the disk write failed)
+    expect(v.size).toBe(1);
+    v.add(good);
+    expect(v.size).toBe(2);
+  });
+
+  it('a device cannot sign more than MAX_ENTRIES_PER_DEVICE entries', () => {
+    const A = generateIdentity();
+    const v = new RosterVerifier();
+    let prev = makeGenesisEntry(A, 'D', 'linux', 1);
+    v.add(prev);
+    for (let i = 1; i < MAX_ENTRIES_PER_DEVICE; i++) { prev = makeRenameEntry(A, 'n', [prev.id], i + 1); v.add(prev); }
+    expect(v.countOf(hex(A.deviceId))).toBe(MAX_ENTRIES_PER_DEVICE);
+    expect(codeOf(() => v.add(makeRenameEntry(A, 'one more', [prev.id], 9999)))).toBe('bad-roster');
+  }, 60_000);
+
+  it('near the 8192 cap adds and renames are refused but a removal is still accepted (no dead end that nobody can remove a flooder from)', () => {
+    const devs = Array.from({ length: 16 }, () => generateIdentity());
+    const v = new RosterVerifier();
+    const entries: SignedEntry[] = [makeGenesisEntry(devs[0], 'g', 'linux', 1)];
+    v.add(entries[0]);
+    const lastOwn = new Map<number, SignedEntry>([[0, entries[0]]]);
+    for (let d = 1; d < 16; d++) {
+      const e = makeAddEntry(devs[0], { name: 'd' + d, platform: 'linux', signKey: devs[d].signKey, agreeKey: devs[d].agreeKey }, [lastOwn.get(0)!.id], entries.length + 1);
+      v.add(e); entries.push(e); lastOwn.set(d, e); lastOwn.set(0, e);
+    }
+    const limit = MAX_ROSTER_ENTRIES - ROSTER_REMOVE_RESERVE;
+    const hexOf = (d: { deviceId: Buffer }): string => d.deviceId.toString('hex');
+    let rr = 0;
+    while (v.size < limit) {
+      let k = rr++ % 16;
+      while (v.countOf(hexOf(devs[k])) >= MAX_ENTRIES_PER_DEVICE - 1) k = (k + 1) % 16; // device 0 already signed the adds
+      const head = entries[entries.length - 1];
+      const mine = lastOwn.get(k)!;
+      const e = makeRenameEntry(devs[k], 'n', mine.id.equals(head.id) ? [head.id] : [mine.id, head.id], entries.length + 1);
+      v.add(e); entries.push(e); lastOwn.set(k, e);
+    }
+    expect(v.headroom).toBe(ROSTER_REMOVE_RESERVE);
+    const head = entries[entries.length - 1];
+    const mine0 = lastOwn.get(0)!;
+    const seen = mine0.id.equals(head.id) ? [head.id] : [mine0.id, head.id];
+    expect(codeOf(() => v.add(makeRenameEntry(devs[0], 'one more', seen, 99999)))).toBe('bad-roster');
+    expect(() => v.add(makeRemoveEntry(devs[0], devs[5].deviceId, seen, 99999))).not.toThrow(); // the reserve is for removals
   }, 60_000);
 });

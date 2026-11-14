@@ -10,7 +10,7 @@ import { decode, encode } from './cbor';
 import { FrameReceiver, FrameSender } from './frames';
 import { generateIdentity, setIdFor, type DeviceIdentity } from './identity';
 import { LABEL, sha256, toHex } from './bytes';
-import { MAX_SEEN, makeGenesisEntry, makeRenameEntry, verifyRosterLog } from './roster';
+import { MAX_SEEN, makeAddEntry, makeGenesisEntry, makeRenameEntry, seenForNextEntry, verifyRosterLog, type SignedEntry } from './roster';
 import { newSetSecret } from './keys';
 import { MeshCryptoError } from './errors';
 
@@ -549,7 +549,24 @@ describe('what a new device may say about itself', () => {
 describe('a long roster pairs (5,000 entries)', () => {
   it('E cites only the current heads, so the new entry stays small and the new device verifies the whole log', () => {
     const { E, state, id } = makeSet();
-    for (let i = 1; i < 5000; i++) state.roster.push(makeRenameEntry(id, 'n' + i, [state.roster[i - 1].id], i + 1));
+    // WHY twelve signers: one device may sign at most MAX_ENTRIES_PER_DEVICE entries (review finding 4).
+    const others = Array.from({ length: 11 }, () => generateIdentity());
+    const last = new Map<string, SignedEntry>([[id.deviceId.toString('hex'), state.roster[0]]]);
+    for (const o of others) {
+      const a = makeAddEntry(id, { name: 'o', platform: 'linux', signKey: o.signKey, agreeKey: o.agreeKey }, seenForNextEntry(state.roster, id.deviceId), state.roster.length + 1);
+      state.roster.push(a);
+      last.set(o.deviceId.toString('hex'), a);
+      last.set(id.deviceId.toString('hex'), a);
+    }
+    const all = [id, ...others];
+    while (state.roster.length < 5000) {
+      const d = all[state.roster.length % 12];
+      const mine = last.get(d.deviceId.toString('hex'))!;
+      const head = state.roster[state.roster.length - 1];
+      const e = makeRenameEntry(d, 'n' + state.roster.length, mine.id.equals(head.id) ? [head.id] : [mine.id, head.id], state.roster.length + 1);
+      state.roster.push(e);
+      last.set(d.deviceId.toString('hex'), e);
+    }
     const inv = E.openInvite('code');
     const N = newDev(inv, 'code');
     pipeRun(E, N);
@@ -558,6 +575,6 @@ describe('a long roster pairs (5,000 entries)', () => {
     expect(N.result.roster).toHaveLength(5001);
     const add = N.result.roster[5000];
     expect(add.seen.length).toBeLessThanOrEqual(MAX_SEEN);
-    expect(verifyRosterLog(N.result.roster).devices.size).toBe(2);
+    expect(verifyRosterLog(N.result.roster).devices.size).toBe(13);
   }, 60_000);
 });

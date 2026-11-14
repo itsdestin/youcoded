@@ -21,9 +21,9 @@ function fail(message: string): never {
  *  so Claude Code — or any tool it runs — could read them there, or from this process's own /proc/<pid>/environ, and
  *  print them into a conversation that syncs. The Android app writes them as ONE JSON line on this process's stdin
  *  (YOUCODED_SECRETS_ON_STDIN=1) and closes it; a laptop test run may still pass them as variables. */
-function readSecrets(): { token: string; key: string | undefined } {
+function readSecrets(): { token: string; key: string | undefined; keyStore: string | undefined } {
   if (process.env.YOUCODED_SECRETS_ON_STDIN !== '1') {
-    const fromEnv = { token: process.env.YOUCODED_HEADLESS_TOKEN ?? '', key: process.env.YOUCODED_SECRET_KEY };
+    const fromEnv = { token: process.env.YOUCODED_HEADLESS_TOKEN ?? '', key: process.env.YOUCODED_SECRET_KEY, keyStore: process.env.YOUCODED_SECRET_STORE };
     delete process.env.YOUCODED_SECRET_KEY;
     delete process.env.YOUCODED_HEADLESS_TOKEN;
     return fromEnv;
@@ -35,14 +35,16 @@ function readSecrets(): { token: string; key: string | undefined } {
     if (n <= 0) break;
     text += buf.toString('utf8', 0, n);
   }
-  const line = JSON.parse(text.split('\n')[0] || '{}') as { token?: string; key?: string };
-  return { token: line.token ?? '', key: line.key };
+  const line = JSON.parse(text.split('\n')[0] || '{}') as { token?: string; key?: string; keyStore?: string };
+  return { token: line.token ?? '', key: line.key, keyStore: line.keyStore };
 }
 
 const port = Number(process.env.YOUCODED_HEADLESS_PORT);
-const { token, key } = readSecrets();
+const { token, key, keyStore } = readSecrets();
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the stand-in itself, loaded by path after the hook
-(require('./electron-headless') as typeof import('./electron-headless')).holdSecretKey(key);
+const shim = require('./electron-headless') as typeof import('./electron-headless');
+shim.holdSecretKey(key);
+shim.holdSecretStoreBackend(keyStore); // what kind of store the host says holds the key (unset = unknown = the mesh refuses)
 if (!Number.isInteger(port) || port <= 0 || port > 65535) fail('YOUCODED_HEADLESS_PORT must be a port number.');
 if (token.length < 32) fail('YOUCODED_HEADLESS_TOKEN must be at least 32 characters.');
 

@@ -20,10 +20,16 @@ interface Conn { ws: WebSocket; dev: string | null; room: string; verifier: Rela
 export class FakeRelay {
   readonly wss: WebSocketServer;
   port = 0;
-  readonly rooms = new Map<string, { roster: Map<string, { signKey: Buffer; removed: boolean }>; groups: Map<string, Array<{ seq: number; bytes: Buffer }>>; lastN: Map<string, number> }>();
+  readonly rooms = new Map<string, { roster: Map<string, { signKey: Buffer; removed: boolean }>; groups: Map<string, Array<{ seq: number; bytes: Buffer }>>; lastN: Map<string, number>; entries: Map<string, string[]>; intro: Map<string, string> }>();
+  /** Test knob: answer every roster-put with this refusal (null = behave). A transient reason ('roster-rate-limited') is retried by the app. */
+  rosterPutRefusal: string | null = null;
+  /** Every roster statement accepted, in order: kind and the (hex) entry id. */
+  readonly accepted: Array<{ kind: string; entry: string; seen: string[] }> = [];
   readonly conns = new Set<Conn>();
   /** Every raw payload ever stored (for "the relay cannot read it" checks). */
   readonly stored: Buffer[] = [];
+  /** Every hold, with whether the sender marked it a chat line (`line`), as the relay's retention rule reads it. */
+  readonly holds: Array<{ g: string; line: boolean }> = [];
   connects = 0;
   /** Meeting points opened by a member (id -> sockets). */
   readonly meetings = new Map<string, { ticket: string; host: WebSocket | null; guest: WebSocket | null; gens: number }>();
@@ -54,7 +60,7 @@ export class FakeRelay {
 
   private room(id: string) {
     let r = this.rooms.get(id);
-    if (!r) { r = { roster: new Map(), groups: new Map(), lastN: new Map() }; this.rooms.set(id, r); }
+    if (!r) { r = { roster: new Map(), groups: new Map(), lastN: new Map(), entries: new Map(), intro: new Map() }; this.rooms.set(id, r); }
     return r;
   }
   private send(c: Conn, header: object, payload?: Uint8Array): void {
@@ -121,7 +127,9 @@ export class FakeRelay {
       const v = c.verifier.verify({ room: Buffer.from(c.room, 'hex'), nonce: Buffer.from(c.nonceHex, 'hex'), dev: Buffer.from(h.dev, 'hex'), sig: Buffer.from(h.sig, 'hex') });
       if (!v.ok) return c.ws.close(CLOSE_AUTH_FAILED, 'refused');
       c.dev = h.dev;
-      return this.send(c, { op: 'auth-result', r: 'ok', created: false, devices: [...room.roster.keys()] });
+      this.send(c, { op: 'auth-result', r: 'ok', created: false, devices: [...room.roster.keys()] });
+      for (const o of this.conns) if (o !== c && o.dev && o.room === c.room && o.dev !== c.dev) this.send(o, { op: 'presence-change', device: c.dev, state: 'on' });
+      return;
     }
     const row = room.roster.get(c.dev);
     if (!row || row.removed) return c.ws.close(CLOSE_DEVICE_REMOVED, 'removed');
@@ -131,6 +139,7 @@ export class FakeRelay {
         const key = `${c.dev}/${h.session}`;
         if (h.n <= (room.lastN.get(key) ?? 0)) return this.send(c, { op: 'duplicate', ...id, g: h.g, n: h.n });
         room.lastN.set(key, h.n);
+        this.holds.push({ g: h.g, line: h.line === true });
         const list = room.groups.get(h.g) ?? [];
         const seq = list.length + 1;
         list.push({ seq, bytes: payload });
@@ -145,6 +154,7 @@ export class FakeRelay {
         return this.send(c, { op: 'frames-end', ...id, g: h.g, more: false, last: list.at(-1)?.seq ?? h.seq, empty: list.length === 0 });
       }
       case 'received': return this.send(c, { op: 'ok', ...id });
+      case 'presence': return this.send(c, { op: 'presence-result', ...id, devices: [...new Set([...this.conns].filter((o) => o.dev && o.room === c.room).map((o) => o.dev as string))] });
       case 'pass':
         for (const o of this.conns) if (o !== c && o.dev && (h.to === 'all' || h.to === o.dev)) this.send(o, { op: 'pass', from: c.dev, g: h.g }, payload);
         return;
@@ -153,17 +163,39 @@ export class FakeRelay {
         if (!signer || signer.removed) return this.send(c, { op: 'refused', ...id, reason: signer ? 'signer-removed' : 'not-a-member' });
         const st = { kind: h.kind, room: Buffer.from(c.room, 'hex'), signer: Buffer.from(h.signer, 'hex'), target: Buffer.from(h.target, 'hex'), targetKey: h.targetKey ? Buffer.from(h.targetKey, 'hex') : null, entry: Buffer.from(h.entry, 'hex'), seen: (h.seen as string[]).map((x) => Buffer.from(x, 'hex')), at: h.at };
         if (!verifySig(signer.signKey, rosterStatementMessage(st), Buffer.from(h.sig, 'hex'))) return this.send(c, { op: 'refused', ...id, reason: 'bad-signature' });
+        if (this.rosterPutRefusal) return this.send(c, { op: 'refused', ...id, reason: this.rosterPutRefusal });
+        // The relay's ANCESTRY rule, as the Worker applies it (relay-room.ts rosterPut): the first statement names the creator's genesis
+        // entry alone; every later one must reach the signer's own introduction through statements the relay has accepted. This is what a
+        // rename the relay never heard of used to break, so the stand-in must enforce it too or the unit tests could not catch that.
+        const seenHex = h.seen as string[];
+        if (room.entries.size === 0) {
+          if (seenHex.length !== 1 || [...room.roster.values()].filter((r) => !r.removed).length !== 1) return this.send(c, { op: 'refused', ...id, reason: 'bad-ancestry' });
+          room.entries.set(seenHex[0], []);
+          room.intro.set(h.signer, seenHex[0]);
+        } else {
+          const intro = room.intro.get(h.signer);
+          const visited = new Set<string>();
+          const stack = [...seenHex];
+          while (stack.length) { const x = stack.pop() as string; if (visited.has(x)) continue; visited.add(x); for (const y of room.entries.get(x) ?? []) stack.push(y); }
+          if (!intro || !visited.has(intro)) return this.send(c, { op: 'refused', ...id, reason: 'bad-ancestry' });
+        }
+        if (room.entries.has(h.entry)) return this.send(c, { op: 'refused', ...id, reason: 'duplicate' });
+        const accept = (): void => { room.entries.set(h.entry, seenHex); this.accepted.push({ kind: h.kind, entry: h.entry, seen: seenHex }); };
+        if (h.kind === 'rename') { accept(); return this.send(c, { op: 'ok', ...id }); }
         if (h.kind === 'add') {
           const key = Buffer.from(h.targetKey, 'hex');
           if (deviceIdFor(key).toString('hex') !== h.target) return this.send(c, { op: 'refused', ...id, reason: 'bad-header' });
           const had = room.roster.get(h.target);
           if (had) return this.send(c, { op: 'refused', ...id, reason: had.removed ? 'banned' : 'already-member' });
           room.roster.set(h.target, { signKey: key, removed: false });
+          room.intro.set(h.target, h.entry);
+          accept();
           return this.send(c, { op: 'ok', ...id, dev: h.target });
         }
         const t = room.roster.get(h.target);
         if (!t || t.removed) return this.send(c, { op: 'refused', ...id, reason: 'not-found' });
         t.removed = true;
+        accept();
         for (const o of this.conns) if (o.dev === h.target) o.ws.close(CLOSE_DEVICE_REMOVED, 'device removed');
         return this.send(c, { op: 'ok', ...id });
       }
@@ -177,12 +209,19 @@ export class FakeRelay {
   }
 }
 
-/** A signed roster put from `signer` (a member) about `target`, built the way service.ts builds it; the fake checks signature and signer only. */
-export async function putRoster(c: RelayClient, signer: DeviceIdentity, room: Buffer, kind: 'add' | 'remove', target: DeviceIdentity): Promise<string> {
+/** Introduction entry per (room, device) for the helper below: a creator's is the first `seen` it used (its genesis), an added device's is the add. */
+const introFor = new Map<string, Buffer>();
+/** A signed roster put from `signer` (a member) about `target`, built the way service.ts builds it (ancestry = the signer's own introduction);
+ *  the fake checks signature, signer and ancestry. */
+export async function putRoster(c: RelayClient, signer: DeviceIdentity, room: Buffer, kind: 'add' | 'remove' | 'rename', target: DeviceIdentity, seenIn?: Buffer[]): Promise<string> {
   const entry = randomBytes(32);
-  const seen = [randomBytes(32)];
+  const k = (d: DeviceIdentity): string => `${room.toString('hex')}/${d.deviceId.toString('hex')}`;
+  const seen = seenIn ?? [introFor.get(k(signer)) ?? randomBytes(32)];
+  if (!introFor.has(k(signer))) introFor.set(k(signer), seen[0]);
   const at = Date.now();
   const targetKey = kind === 'add' ? target.signKey : null;
-  const { sig } = signRosterStatement(signer, { kind, room, target: target.deviceId, targetKey, entry, seen, at });
-  return c.rosterPut({ kind, signer: signer.deviceId.toString('hex'), target: target.deviceId.toString('hex'), ...(targetKey ? { targetKey: targetKey.toString('hex') } : {}), entry: entry.toString('hex'), seen: seen.map((x) => x.toString('hex')), at, sig: sig.toString('hex') });
+  const { sig } = signRosterStatement(signer, { kind, room, target: kind === 'rename' ? signer.deviceId : target.deviceId, targetKey, entry, seen, at });
+  const r = await c.rosterPut({ kind, signer: signer.deviceId.toString('hex'), target: (kind === 'rename' ? signer : target).deviceId.toString('hex'), ...(targetKey ? { targetKey: targetKey.toString('hex') } : {}), entry: entry.toString('hex'), seen: seen.map((x) => x.toString('hex')), at, sig: sig.toString('hex') });
+  if (r === 'ok' && kind === 'add') introFor.set(k(target), entry);
+  return r;
 }

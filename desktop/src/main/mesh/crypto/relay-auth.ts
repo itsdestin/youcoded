@@ -78,7 +78,9 @@ export class RelayAuthVerifier {
 // WHY a statement and not the roster entry: an `add` entry carries the new device's NAME, which the relay must never see;
 // the statement names the entry by its id and carries only public ids and keys.
 export interface RosterStatement {
-  kind: 'add' | 'remove';
+  // WHY 'rename' (review finding 1): the relay must be able to follow EVERY entry kind the app writes, or a device that has ever
+  // renamed itself could not be vouched for. A rename statement names the signer as its own target and carries no name.
+  kind: 'add' | 'remove' | 'rename';
   room: Bytes;
   signer: Bytes;
   target: Bytes;

@@ -36,7 +36,9 @@ async function route(svc: MeshService, path: string, q: Json): Promise<Json> {
     case '/pair/join-msg': { const r = await svc.joinMessage(unb64(q.b64)); return { out: r.out.map(b64), stage: r.stage, sas: r.sas, done: r.done, failed: r.failed }; }
     case '/send': return { ...(await svc.sendNote(String(q.text), q.to ? String(q.to) : undefined)) };
     case '/inbox': return { items: svc.inbox };
-    case '/remove': await svc.removeDevice(String(q.device)); return { ok: true };
+    case '/remove': return { ok: true, outcome: await svc.removeDevice(String(q.device)) };
+    case '/rename': await svc.renameSelf(String(q.name)); return { ok: true };
+    case '/reset-position': await svc.resetReadPosition(); return { ok: true };
     case '/offline': svc.setOffline(q.offline !== false); return { ok: true };
     case '/stress-append': return { done: await svc.stressAppend(Number(q.n) || 0) };
     default: throw Object.assign(new Error('no such route'), { status: 404 });
