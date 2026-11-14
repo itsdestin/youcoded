@@ -60,14 +60,15 @@ export function parseRemovalBody(body: unknown): RemovalBundle {
   });
 }
 
-/** Anti-entropy. `heads`: "these are the newest roster entries I hold". `need`: "send me these entries (and what they rest on)" and
+/** Anti-entropy. `heads`: "these are the newest roster entries I hold"; `gens`: "and these are the generations (labels) I hold for the removals I know of", so a
+ *  member that holds one this device lacks can send it (a bundle the relay lost is repaired by the next heads, not forgotten). `need`: "send me these entries (and what they rest on)" and
  *  "re-seal these generations to me" (`gens`, labels I could not open). Both carry only ids. */
-export const headsBody = (heads: readonly Buffer[]): CborValue => ({ heads: [...heads] });
-export function parseHeadsBody(body: unknown): Buffer[] {
+export const headsBody = (heads: readonly Buffer[], gens: readonly number[] = []): CborValue => ({ heads: [...heads], gens: [...gens] });
+export function parseHeadsBody(body: unknown): { heads: Buffer[]; gens: number[] } {
   return guard(() => {
     const m = asMap(body, 'heads body');
-    onlyKeys(m, ['heads'], 'heads body');
-    return asArray(m.heads, 'heads', 64).map((h) => asBytes(h, 'head', 32));
+    onlyKeys(m, ['heads', 'gens'], 'heads body');
+    return { heads: asArray(m.heads, 'heads', 64).map((h) => asBytes(h, 'head', 32)), gens: m.gens === undefined ? [] : asArray(m.gens, 'gens', 16).map((g) => asUint(g, 'gen', 0x7fffffff)) };
   });
 }
 export const needBody = (want: readonly Buffer[], gens: readonly number[] = []): CborValue => ({ want: [...want], gens: [...gens] });

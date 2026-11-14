@@ -62,10 +62,12 @@ describe('device layer, end to end in one process', () => {
     await until(() => C.status().relay === 'ready', 'C on the relay');
 
     // every device ends with the same verified roster (B learns of C through A's roster frame)
-    await until(() => [A, B, C].every((s) => s.status().rosterCount >= 3), 'roster of 3 on all');
-    const ids = A.status().rosterIds;
-    expect(B.status().rosterIds).toEqual(ids);
-    expect(C.status().rosterIds).toEqual(ids);
+    // (each new device also signs a first entry of its own, so the roster settles at 5: three adds/genesis and two of those first entries)
+    const same = (): boolean => { const x = [...A.status().rosterIds].sort().join(); return x === [...B.status().rosterIds].sort().join() && x === [...C.status().rosterIds].sort().join() && A.status().rosterCount >= 5; };
+    await until(same, 'the same roster on all three');
+    const ids = [...A.status().rosterIds].sort();
+    expect([...B.status().rosterIds].sort()).toEqual(ids);
+    expect([...C.status().rosterIds].sort()).toEqual(ids);
     expect(A.status().activeDevices.sort()).toEqual(B.status().activeDevices.sort());
 
     // a sealed note from A reaches B and C

@@ -178,6 +178,15 @@ export class RosterStore {
   removalIdsOf(deviceHex: string): string[] {
     return this.#v?.removalsOf(deviceHex) ?? [];
   }
+  /** Devices named by some held `add` that are NOT members now: removed, or admitted by an entry that turned out void. WHY (review N3/N7): the
+   *  shared secret is made for exactly this set, so a device whose admission is voided is shut out of the next secret just like a removed one. */
+  excludedIds(): Set<string> {
+    const out = new Set<string>();
+    if (!this.#v) return out;
+    const act = new Set(this.#v.active().map((d) => toHex(d.deviceId)));
+    for (const id of this.#v.knownDeviceIds()) if (!act.has(id)) out.add(id);
+    return out;
+  }
   voidedIds(): Set<string> {
     return new Set(this.#v?.voided ?? []);
   }
@@ -202,6 +211,14 @@ export class RosterStore {
     const id = toHex(deviceId);
     if (!this.#v || this.#v.removed.has(id)) return undefined;
     return this.#v.devices.get(id)?.signKey;
+  }
+  /** The signing key of any device an `add` we hold names: a member, a REMOVED one, or one whose admission is void. WHY (convergence, mutual removal): a roster entry is signed on its own,
+   *  so a frame from a removed device may still carry entries other members need (the other half of a mutual removal); what it must not
+   *  carry is anything else, which DeviceCore.onMessage and the service enforce. */
+  knownSignKeyFor(deviceId: Buffer): Buffer | undefined {
+    // ANY held `add` gives a key, even one whose admission turned out void: the entries such a device signs are verifiable, and refusing to
+    // hear them would leave two devices holding different sets for good (one holds entries the other will never be told).
+    return this.#v?.keyFor(toHex(deviceId));
   }
   /** True when this device is on the roster but has been removed. */
   isRemoved(deviceId: Buffer): boolean {

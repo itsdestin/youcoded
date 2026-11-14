@@ -24,3 +24,19 @@ describe('a stamped (official) build, unpackaged boot path as on the phone', () 
     expect(() => insecureTestSealer({ testMode: true })).toThrow();
   });
 });
+
+// Review 2, N11: the stamp FAILS OPEN (an unstamped build keeps environment-driven test mode available on a headless boot), so the build
+// workflows themselves are checked: each release workflow must run the stamp step, and before anything that builds the app.
+describe('release workflows stamp the build before they build it', () => {
+  const dir = path.join(__dirname, '..', '..', '..', '.github', 'workflows');
+  const have = fs.existsSync(dir);
+  for (const [file, buildMarkers] of [['desktop-release.yml', ['npm run build', 'electron-builder', 'npm run dist']], ['android-release.yml', ['build-web-ui.sh', 'gradlew']]] as const) {
+    it.skipIf(!have)(`${file} runs stamp-official-build.mjs, and before any build step`, () => {
+      const lines = fs.readFileSync(path.join(dir, file), 'utf8').split('\n');
+      const stamp = lines.findIndex((l) => /^\s*run:\s*node\s+(desktop\/)?scripts\/stamp-official-build\.mjs/.test(l));
+      expect(stamp, `${file} has no "run: node scripts/stamp-official-build.mjs" step`).toBeGreaterThan(-1);
+      const firstBuild = lines.findIndex((l, i) => i !== stamp && /^\s*(run:|-\s*run:|\w.*)/.test(l) && !l.trim().startsWith('#') && buildMarkers.some((m) => l.includes(m)));
+      if (firstBuild >= 0) expect(stamp, `${file} builds (line ${firstBuild + 1}) before it stamps (line ${stamp + 1})`).toBeLessThan(firstBuild);
+    });
+  }
+});

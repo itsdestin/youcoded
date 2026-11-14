@@ -26,14 +26,14 @@
 // ONE FRAME CAN NEVER FREEZE A GROUP (review finding 2). Every frame ends in exactly one of: applied; skipped as a repeat; REJECTED
 // (counted by reason with only the sender's 8-character id prefix, never content: `rejections()`); or WAITING. A waiting frame is
 // one that cannot be judged yet (unknown signer or generation, or a handler that says "not yet": FrameWait). Waiting frames are
-// kept, bounded and expiring, in link-state.bin, and the read position moves past them, so a frame that never becomes
+// kept, bounded PER SENDER (one sender can only ever push out its own, N4) and expiring, in link-state.bin, and the read position moves past them, so a frame that never becomes
 // judgeable costs one slot for a day and blocks nothing. A handler that throws something else (a disk error) is retried a few
 // times and then the frame is rejected.
 //
 // THE READ POSITION IS NOT THE RELAY'S TO SET (review finding 7). The relay supplies sequence numbers and the `gap` marker, and a
 // hostile one can lie. The COMMITTED position (saved, acknowledged to the relay) only moves past a frame this device actually
 // verified or parked; a rejected or repeated frame moves a session-only soft position, so junk can be skipped without being able to
-// poison the saved number. A position that jumps further than MAX_POSITION_JUMP is refused as a hostile answer. Reconnecting forgets
+// poison the saved number. A frame further than MAX_POSITION_JUMP ahead is still read (an honest relay can have released a long run, N9) but neither it nor a gap that far can move the SAVED position, and junk that far ahead cannot move even the session position. Reconnecting forgets
 // the soft position. resetReadPosition() is the operator's way back to the start (replay protection keeps duplicates out).
 //
 // LOGGING: event names, group names, close codes, counts. Never frame bytes, keys or bodies.

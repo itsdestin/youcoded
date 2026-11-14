@@ -5,23 +5,25 @@
 // WHAT "IN A SET" MEANS: this device has keys, a set id, at least one set secret AND a non-empty roster log. Until then
 // it only holds its identity (made on first enable) and waits for createSet() or a pairing.
 //
-// WHAT IS NOT HERE (later parts, listed so nobody assumes): the chat store and replicator (nothing replicates chats yet),
-// the decide rules (who may add or remove whom: today ANY member may remove ANY other, the first device included, a deliberate
-// reading of "all devices are equal" that the product owner still has to confirm; pinned by a test), the cut-off for what a removed
-// device signed before it knew, real unlock prompts, and a durable outbox for frames. Frames carry only roster entries, removal
-// bundles and (test mode) notes.
+// WHAT IS NOT HERE (later parts, listed so nobody assumes): the chat store and replicator (nothing replicates chats yet), who MAY add or
+// remove whom (today ANY member may remove ANY other, the first device included: a deliberate reading of "all devices are equal" that the
+// product owner still has to confirm; pinned by a test), real unlock prompts, and a durable outbox for frames (the roster needs none: see below).
 //
-// A ROSTER CHANGE IS A TWO-STEP WITH A DEFINED OUTCOME AT EVERY FAILURE (review finding 1):
-//  * REMOVAL: (1) the next generation's secret is saved in the sealed key file as `pending`, (2) the signed `remove` entry is written to the
-//    log and queued for the relay (relay-sync.json), (3) the removal bundle (entry + sealed secrets) is sent under the old generation,
-//    (4) the new secret is adopted, (5) the relay accepts the signed statement and cuts the device off. removeDevice() answers 'done' only
-//    when 3 to 5 have happened; otherwise 'pending', and the rest is finished in the background and after a restart (resume on start).
-//    `status().removalsPending` is the data the future screen reads for "removal pending".
-//  * PAIRING (host): the relay is told first, the log written second, so a refusal leaves the host untouched. A pairing whose new device never
-//    shows up on the relay within `pairConfirmMs` is rolled back by an ordinary removal, whatever went wrong in between (killed backend, lost
-//    welcome, a joiner that gave up).
-//  * RECEIVING a removal bundle: a new generation is accepted only as the consequence of a verified removal (see takeRemoval).
-//
+// CONVERGENCE (second-round review). The roster is a pure function of the set of signed entries a device holds (crypto/roster.ts) and the
+// shared secret follows it (crypto/generation.ts); every decision about entries and secrets lives in device-core.ts, which the convergence
+// fuzz (tests/mesh/convergence-fuzz.test.ts) drives unchanged. This file only connects it to files, the relay and the screen.
+//  * A device's roster entries are durable in roster.log the moment they are made. Nothing else has to survive a crash: the heads every device
+//    repeats let any member that holds an entry another lacks send it, and entries that arrive before what they rest on are parked and asked for.
+//  * A REMOVAL: the signed `remove` entry is written to the log, queued for the relay (relay-sync.json) and published. The next shared secret is
+//    made by whoever's turn it is (members ranked by id, the next rank takes over after genTakeoverMs without one), sealed to every member and
+//    sent in a bundle; any holder re-seals the same secret to a member that lacks it. removeDevice() answers 'done' when the relay accepted the
+//    entry AND this device holds the new secret; otherwise 'pending' and it finishes in the background. Until a secret for the removals this
+//    device knows of is held, nothing new is sealed (notes wait), so a removed device never reads anything sent after the removal is known.
+//  * A device that sees itself removed goes quiet (no secrets, no hello, no notes) but keeps reading and asking: the removal may be voided.
+//  * PAIRING (host): the relay is told first, the log written second, so a refusal leaves the host untouched. The new device signs a first entry
+//    of its own when it joins; until then it is "pending" (status().pendingDevices). NOTHING removes a pending device by itself (the old 15-minute
+//    rollback removed good devices, review N8).
+//  * RECEIVING a generation bundle: see device-core.ts acceptBundle.
 // PAIRING OVER THE RELAY. openPairingViaRelay() / joinWithCode() run the pairing exchange through the relay's meeting point
 // (meeting-client.ts). The older openPairing() / joinStart() / hostPairingMessage() / joinMessage() surface stays as the DIRECT
 // test carrier (unit tests and the rig's hostile-pipe case move the bytes themselves).
@@ -221,9 +223,10 @@ export class MeshService {
       identity: this.id, setId, carrier, meshDir: this.dir,
       secrets: () => this.#book.secrets(),
       // WHY (review N3, N12): notes are sealed only under the secret made for exactly the removals this device knows of, and not at all
-      // until one is held. Control traffic (roster entries, bundles, heads, requests) uses a secret every member holds, so it is always readable.
-      sealLabel: (group, kind) => (group === GROUP_ROSTER ? (kind === KIND_ROSTER ? (this.#core?.currentLabel() ?? this.#core?.oldestLabel() ?? null) : (this.#core?.oldestLabel() ?? null)) : (this.#core?.currentLabel() ?? null)),
-      signKeyFor: (d) => this.roster.signKeyFor(d),
+      // until one is held. Control traffic (roster entries, bundles, heads, requests) uses the FIRST secret, which every device ever paired holds,
+      // so it is always readable, including by a device that has just been removed by another (mutual removals must still exchange entries).
+      sealLabel: (group) => (group === GROUP_ROSTER ? (this.#core?.oldestLabel() ?? null) : (this.#core?.currentLabel() ?? null)),
+      signKeyFor: (d) => this.roster.knownSignKeyFor(d),
       isRemoved: (d) => this.roster.isRemoved(d),
       now: this.o.now,
       // The receiver save number lives in the sealed key file (see link.ts for why and where it falls short).
@@ -248,7 +251,9 @@ export class MeshService {
     const run = async (): Promise<void> => {
       const core = this.#core;
       if (!core || this.#stopped) return;
-      if (this.roster.isRemoved(this.id.deviceId) && !this.#removed) { this.#removed = true; this.#link?.stop(); this.o.log('removed-from-set'); }
+      // WHY not stopped for good (convergence): a removal this roster shows can later turn out to have no effect (its signer was itself removed
+      // at the same moment, see roster.ts VOID), so a device that sees itself removed only goes QUIET (no secrets made, nothing sent of its own,
+      // no notes) and still reads and answers roster traffic; it resumes by itself if the removal is voided. A removal by the RELAY is final.
       if (this.#removed) return;
       const r = await core.tick(this.now(), announce);
       await this.persistBook();
@@ -286,6 +291,7 @@ export class MeshService {
     this.confirmJoin(toHex(f.header.from));
     const core = this.#core;
     if (!core || f.group !== GROUP_ROSTER) {
+      if (!this.roster.signKeyFor(f.header.from)) throw new FrameReject('signer-removed');
       if (f.header.kind === KIND_NOTE && f.group === GROUP_TEST_NOTE && this.o.testMode) {
         this.inbox.push({ from: toHex(f.header.from), counter: f.header.counter, text: parseNoteBody(f.body) });
       }
@@ -614,7 +620,7 @@ export class MeshService {
   /** Test mode only: send a note to every device in the set. */
   async sendNote(text: string, to?: string): Promise<{ counter: number }> {
     if (!this.o.testMode) throw new Error('notes exist only in test mode');
-    if (this.#removed) throw new Error('removed from the set');
+    if (this.#removed || this.roster.isRemoved(this.id.deviceId)) throw new Error('removed from the set');
     if (!this.#link) throw new Error('not connected to a set');
     // line: true marks a chat line for the relay (30-day keep, may be released under pressure); roster frames are control data and are not marked.
     return this.#link.sendDurable({ group: GROUP_TEST_NOTE, kind: KIND_NOTE, body: noteBody(text), to: to ? Buffer.from(to, 'hex') : undefined, line: true });

@@ -1,27 +1,34 @@
 // Signed entries and the device roster (T5 C8; design 5.1 "Roster", 6.2).
 //
-// SCOPE: this file builds and VERIFIES signed entries and checks that a roster log is signed by
-// devices that were in it. It deliberately does NOT decide anything: no cut-off, no witness
-// rules, no "two devices removing each other" outcome, no void/valid ruling. Those merge/decide
-// rules belong to another part (T5 gaps G6/G7/G8). So `verifyRosterLog` reports keys, never
-// "who is currently a member"; a removed device's key stays in the map because frames it signed
-// before removal must still verify, and whether a later entry counts is the decide layer's call.
+// CONVERGENCE BY CONSTRUCTION (second-round review 2026-11-14, N1-N3, N7; T5 gaps G6-G8). The roster state (who is a member, who was
+// removed, names, which entries count) is a PURE FUNCTION OF THE SET of valid signed entries a device holds. Order of arrival,
+// duplicates and timing play no part: two devices holding the same set hold the same state, so "patch one interleaving at a time" is over.
+//  * An entry is held only when its signature verifies against the key of an `add` we hold and every entry it cites is held. An entry that
+//    cannot be judged YET is not part of the set (device-core.ts parks it, bounded per delivering member, and asks for what it rests on);
+//    junk that does not verify is ignored as if never seen and costs nobody anything (N2).
+//  * Entries form a DAG through `seen` (signed). Canonical order = (depth, id). Whether an entry has any EFFECT ("void" or not) is decided
+//    from the set alone:
+//      - its signer must have been introduced by an effective `add` among its ancestors, else void (a ghost admitted by a void entry is no
+//        member, and nothing it signs counts);
+//      - `add` of a device already introduced is void (a key is never overwritten);
+//      - once a device is removed by an effective removal, what it signed that the removal did NOT see (not an ancestor of it) is void; what it
+//        signed after seeing its own removal is void as well. So a removed member can never hand out further changes, and devices it admitted
+//        concurrently are not members (N7);
+//      - exception, MUTUAL removal (A removes B and B removes A, neither seeing the other): one swappable rule, `MutualRule`. Default 'both'
+//        (both removals stand, both devices are out, the security review's choice); 'first-admitted' (the earlier-admitted device stays).
+//  * Which removals are effective is settled deterministically (compute()): removals are tried from the most senior signer down; one is taken
+//    when it stands on its own in the state that results, and one taken earlier is dropped if the new one voids it (its signer was removed by
+//    the new one without having seen it). This makes "A removes B while B removes C while C removes A" come out the same everywhere. If that
+//    ever fails to settle (a long cycle) a second, plainly ordered pass decides. A removal that loses is shown as void.
+//  * Concurrent removals of the same device, removal of a removed device (no-op), removal by a member that is itself concurrently removed
+//    (void, unless mutual): all follow from the rules above; nothing depends on who delivered what first.
+// The shared SECRET follows the roster the same way (crypto/generation.ts, device-core.ts): its identity names the exact set of excluded
+// devices it was made for, there is a derived order of who makes the next one with takeover, and any holder can re-seal the same secret.
 //
-// WHAT THE VERIFIER DOES GUARANTEE (so the decide layer has honest facts to work from):
-//  * every entry's `seen` is signed and must name entries EARLIER in the log (no dangling or
-//    forward references, no duplicates); genesis names nothing, every later entry names something;
-//  * an entry must have seen its signer's own previous entry (or, for a signer's first entry, the
-//    `add` that introduced it). So one device's entries form a chain nobody can back-date or fork,
-//    and an entry is provably "made after" everything in its `seen` closure;
-//  * `add` of a device id that is already present is refused: a key can never be overwritten.
-//    A key change is NOT SUPPORTED yet: it would change who receives future set secrets, so it
-//    needs its own typed, self-signed entry kind AND a decide-layer rule; nobody owns that yet, and
-//    inventing a half-rule here would be worse than refusing.
-//  * a device whose `seen` closure contains its OWN removal cannot sign add/remove/rename: it knew.
-//  * facts the verifier exposes but does not rule on: whether an entry's signer was removed
-//    earlier in the log without the entry citing it (`signerRemovedEarlierInLog`), and exact
-//    ancestry (`happenedBefore`). An entry that never cites a removal may simply be concurrent
-//    with it: the decide layer's call, not ours.
+// WHAT THE VERIFIER GUARANTEES: signatures and ids; `seen` names entries already held, no repeats, genesis names nothing and is a self-add;
+// `add` bodies are well formed; per-device quota of MAX_ENTRIES_PER_DEVICE and a reserve of removals when the log is nearly full.
+// WHAT IT NO LONGER ENFORCES AT ARRIVAL: "entry has seen its signer's previous entry" (a fork by one device is harmless now: each entry is
+// judged by its own ancestors) and the removed-signer rules, which are state (void), not refusal, so arrival order cannot change them.
 //
 // Entry id and signature (gap G5, previously unspecified):
 //   id        = SHA-256( LABEL+"entry\0" || canonical{chat, kind, body, seen, at, device} )
@@ -191,6 +198,8 @@ export interface EntryFacts {
   signerRemovedEarlierInLog: boolean;
   /** True when the entry has no effect (see "VOID" in the header). It still counts as an ancestor. */
   void: boolean;
+  /** Why it has no effect (diagnostics only). */
+  why?: string;
 }
 
 export interface VerifiedRoster {
@@ -217,7 +226,7 @@ export const ROSTER_REMOVE_RESERVE = 64;
 export type MutualRule = 'both' | 'first-admitted';
 export const DEFAULT_MUTUAL_RULE: MutualRule = 'both';
 
-const MAX_RESTARTS = 24;
+const MAX_REMOVALS_CONSIDERED = 96;
 const GATED = new Set(['add', 'remove', 'rename']);
 
 interface Computed {
@@ -283,6 +292,14 @@ export class RosterVerifier implements VerifiedRoster {
   /** Ids (hex) of entries with no effect. */
   get voided(): Set<string> {
     return this.c.voided;
+  }
+  /** The signing key an `add` we hold gives this device id (member or not), or undefined. */
+  keyFor(deviceHex: string): Buffer | undefined {
+    return this.#keyOf.get(deviceHex);
+  }
+  /** Every device that any held `add` names, member or not (hex ids). */
+  knownDeviceIds(): string[] {
+    return [...this.#keyOf.keys()];
   }
   /** Introduced, not removed. */
   active(): RosterDevice[] {
@@ -382,73 +399,117 @@ export class RosterVerifier implements VerifiedRoster {
       rows.push(row);
     }
     const inClosure = (of: number, x: number): boolean => (rows[of][x >>> 5] & (1 << (x & 31))) !== 0;
-    const seed = new Set<string>();
-    let result: Computed | null = null;
-    for (let round = 0; round <= MAX_RESTARTS; round++) {
-      const { res, proposed } = this.fold(order, rows, pos, inClosure, seed);
-      result = { ...res, pos, rows };
-      let grew = false;
-      if (round < MAX_RESTARTS) for (const id of proposed) if (!seed.has(id)) { seed.add(id); grew = true; }
-      if (!grew) break;
+    // SENIORITY: a device's seniority is where the add that introduced it sits in the canonical order (the set's creator first). An
+    // introducer is always more senior than the device it introduces, and nobody can make themselves more senior than the devices that
+    // admitted them. WHY it matters: removals are decided from the most senior signer down, and a removal that would undo the effect of a more
+    // senior one is not applied. So when a removal and a ghost's later removal contradict each other (A removes H; H's ghost G removes A, all
+    // at once: two self-consistent readings exist), the senior one stands.
+    const introPos = new Map<string, number>();
+    for (let p = 0; p < n; p++) if (order[p].kind === 'add') {
+      const id = toHex(deviceIdFor(readAdd(order[p].body).signKey));
+      if (!introPos.has(id)) introPos.set(id, p);
     }
-    return result as Computed;
+    const senior = (devHex: string): number => introPos.get(devHex) ?? Number.MAX_SAFE_INTEGER;
+    const removals: number[] = [];
+    for (let p = 0; p < n; p++) if (order[p].kind === 'remove') removals.push(p);
+    removals.sort((x, y) => senior(toHex(order[x].device)) - senior(toHex(order[y].device)) || x - y);
+    const eff = new Set<number>();
+    let res = this.fold(order, rows, pos, inClosure, eff, senior);
+    // WHY a cap: every decision costs a pass over the set, and nobody honest writes this many removals.
+    // A removal is taken when it is valid in the state that results from taking it; a removal taken earlier that the new one voids (its
+    // signer was removed by the new one and had not seen it) is dropped. Candidates go from the most senior signer down, so a junior device
+    // can override a senior one only with a removal that stands on its own, never one that depends on what it voids.
+    // A removal turned down early (its signer looked removed) is tried again after later ones changed the picture; a few passes settle it.
+    let changed = true;
+    for (let pass = 0; pass < 6 && changed; pass++) {
+    changed = false;
+    for (const r of removals.slice(0, MAX_REMOVALS_CONSIDERED)) {
+      if (eff.has(r)) continue;
+      const tried = new Set(eff);
+      tried.add(r);
+      let t = this.fold(order, rows, pos, inClosure, tried, senior);
+      if (t.voidedPos.has(r)) continue;
+      for (let guard = 0; guard < MAX_REMOVALS_CONSIDERED; guard++) {
+        const drop = [...tried].filter((e) => t.voidedPos.has(e));
+        if (drop.length === 0) break;
+        for (const e of drop) tried.delete(e);
+        t = this.fold(order, rows, pos, inClosure, tried, senior);
+      }
+      if (t.voidedPos.has(r) || !tried.has(r)) continue;
+      eff.clear();
+      for (const e of tried) eff.add(e);
+      res = t;
+      changed = true;
+    }
+    }
+    if (changed) {
+      // Three or more removals that each remove the signer of the next, all at once, can flip back and forth forever. Deterministic way out: go
+      // through them once from the most senior signer down and keep a removal only if it voids none of those already kept.
+      eff.clear();
+      res = this.fold(order, rows, pos, inClosure, eff, senior);
+      for (const r of removals.slice(0, MAX_REMOVALS_CONSIDERED)) {
+        const tried = new Set(eff);
+        tried.add(r);
+        const t = this.fold(order, rows, pos, inClosure, tried, senior);
+        let ok = !t.voidedPos.has(r);
+        if (ok) for (const e of eff) if (t.voidedPos.has(e)) { ok = false; break; }
+        if (ok) { eff.add(r); res = t; }
+      }
+    }
+    // a removal that lost to a more senior one has no effect
+    for (const r of removals) {
+      if (eff.has(r) || res.voidedPos.has(r)) continue;
+      const id = toHex(order[r].id);
+      res.out.voided.add(id);
+      const f = res.out.facts.get(id);
+      if (f) { f.void = true; f.why = 'overridden-by-senior'; }
+    }
+    return { ...res.out, pos, rows };
   }
 
-  private fold(order: SignedEntry[], rows: Uint32Array[], pos: Map<string, number>, inClosure: (of: number, x: number) => boolean, seed: Set<string>): { res: Omit<Computed, 'pos' | 'rows'>; proposed: Set<string> } {
+  private fold(order: SignedEntry[], rows: Uint32Array[], pos: Map<string, number>, inClosure: (of: number, x: number) => boolean, eff: Set<number>, senior: (d: string) => number): { out: Omit<Computed, 'pos' | 'rows'>; voidedPos: Set<number> } {
     const n = order.length;
     const devices = new Map<string, RosterDevice>();
     const admitted = new Map<string, number>(); // device -> canonical position of its effective introducing add
     const removed = new Set<string>();
     const confirmed = new Set<string>();
     const voided = new Set<string>();
+    const voidedPos = new Set<number>();
     const facts = new Map<string, EntryFacts>();
-    const removalsOf = new Map<string, number[]>(); // target -> effective removal positions
-    const byDevice = new Map<string, number[]>(); // signer -> positions of its EFFECTIVE entries
-    const known: Array<Set<string>> = [];
-    const proposed = new Set<string>();
-    const removerOf = (p: number): string => toHex(order[p].device);
+    const removalsOf = new Map<string, number[]>();
+    const killers = new Map<string, number[]>(); // target -> positions of the removals taken as effective
+    void pos;
+    for (const q of eff) {
+      const t = toHex(asBytes(asMap(order[q].body, 'remove body').target, 'target', 16));
+      killers.set(t, [...(killers.get(t) ?? []), q]);
+    }
+    const targetOf = (p: number): string => toHex(asBytes(asMap(order[p].body, 'remove body').target, 'target', 16));
     let setId: Buffer = this.#setId as Buffer;
     for (let p = 0; p < n; p++) {
       const e = order[p];
       const idHex = toHex(e.id);
       const signer = toHex(e.device);
-      let k: Set<string> = new Set();
-      for (const s of e.seen) { const kk = known[pos.get(toHex(s)) as number]; for (const x of kk) k.add(x); }
-      let isVoid = seed.has(idHex);
+      let isVoid = false;
+      let why = '';
       let knew = false;
-      // A revoked entry was found concurrent with a removal of its own signer (the removal sorts after it in this order).
-      let concurrentRemoval = isVoid && GATED.has(e.kind);
-      if (!isVoid) {
-        if (p === 0) {
-          // genesis: self-add, accepted at ingest
-        } else {
-          const introPos = admitted.get(signer);
-          if (introPos === undefined || !inClosure(p, introPos)) isVoid = true; // no effective introduction among its ancestors
-          else {
-            knew = k.has(signer);
-            if (knew && GATED.has(e.kind)) isVoid = true; // it knew it was removed
-            const rs = removalsOf.get(signer);
-            if (!isVoid && rs && rs.length > 0 && GATED.has(e.kind)) {
-              concurrentRemoval = true;
-              // Entries of a removed device that its remover did not see are void, except one half of a mutual removal.
-              let allowed = false;
-              if (e.kind === 'remove') {
-                const target = toHex(asBytes(asMap(e.body, 'remove body').target, 'target', 16));
-                const mutual = rs.filter((r) => removerOf(r) === target && !inClosure(p, r));
-                if (mutual.length > 0) {
-                  if (this.mutual === 'both') allowed = true;
-                  else {
-                    const mine = admitted.get(signer) as number;
-                    const theirs = admitted.get(target);
-                    if (theirs !== undefined && mine < theirs) {
-                      allowed = true;
-                      for (const r of mutual) proposed.add(toHex(order[r].id)); // the later-admitted device's removal does not stand
-                    }
-                  }
-                }
-              }
-              if (!allowed) isVoid = true;
+      let concurrent = false;
+      if (p === 0) {
+        // genesis: self-add, accepted at ingest
+      } else {
+        const ip = admitted.get(signer);
+        if (ip === undefined || !inClosure(p, ip)) { isVoid = true; why = 'no-intro'; } // no effective introduction among its ancestors
+        else if (GATED.has(e.kind)) {
+          for (const q of killers.get(signer) ?? []) {
+            if (q === p || inClosure(q, p)) continue; // made before the removal and seen by it: it stands
+            if (inClosure(p, q)) { knew = true; isVoid = true; why = 'knew-removal'; break; } // it knew it was removed
+            concurrent = true;
+            // concurrent with its own removal: void, except one half of a mutual removal
+            let allowed = false;
+            if (e.kind === 'remove' && targetOf(p) === toHex(order[q].device) && !inClosure(p, q)) {
+              if (this.mutual === 'both') allowed = true;
+              else allowed = senior(signer) < senior(toHex(order[q].device)); // the later-admitted one does not stand
             }
+            if (!allowed) { isVoid = true; why = 'concurrent-with-own-removal'; break; }
           }
         }
       }
@@ -456,7 +517,7 @@ export class RosterVerifier implements VerifiedRoster {
         if (e.kind === 'add') {
           const info = readAdd(e.body);
           const id = toHex(deviceIdFor(info.signKey));
-          if (p > 0 && admitted.has(id)) isVoid = true; // a key can never be overwritten
+          if (p > 0 && admitted.has(id)) { isVoid = true; why = 'duplicate-add'; } // a key can never be overwritten
           else {
             admitted.set(id, p);
             devices.set(id, { ...info, deviceId: deviceIdFor(info.signKey) });
@@ -466,39 +527,20 @@ export class RosterVerifier implements VerifiedRoster {
           const cur = devices.get(signer);
           if (cur) devices.set(signer, { ...cur, name: sanitizeDeviceName(asText(asMap(e.body, 'rename body').name, 'name', 200)) });
         } else if (e.kind === 'remove') {
-          const target = toHex(asBytes(asMap(e.body, 'remove body').target, 'target', 16));
-          if (!devices.has(target)) isVoid = true; // names a device nobody introduced
-          else {
+          const target = targetOf(p);
+          if (!devices.has(target)) { isVoid = true; why = 'unknown-target'; } // names a device nobody introduced
+          else if (eff.has(p)) {
             removed.add(target);
-            const list = removalsOf.get(target) ?? [];
-            list.push(p);
-            removalsOf.set(target, list);
-            k.add(target);
-            // Retroactive: what the target signed that this removal did not see has no effect (ghost devices, late removals).
-            for (const xp of byDevice.get(target) ?? []) {
-              const x = order[xp];
-              if (!GATED.has(x.kind) || inClosure(p, xp)) continue;
-              if (x.kind === 'remove' && toHex(asBytes(asMap(x.body, 'remove body').target, 'target', 16)) === signer && !inClosure(xp, p)) {
-                if (this.mutual === 'both') continue; // mutual removal: both stand
-              }
-              proposed.add(toHex(x.id));
-            }
+            removalsOf.set(target, [...(removalsOf.get(target) ?? []), p]);
           }
         }
       }
-      known.push(k);
-      if (isVoid) voided.add(idHex);
-      else {
-        const l = byDevice.get(signer) ?? [];
-        l.push(p);
-        byDevice.set(signer, l);
-        if (p > 0 || e.kind === 'add') confirmed.add(signer);
-      }
-      facts.set(idHex, { index: p, signer, kind: e.kind, signerKnewOwnRemoval: knew, signerRemovedEarlierInLog: concurrentRemoval, void: isVoid });
+      if (isVoid) { voided.add(idHex); voidedPos.add(p); } else if (p > 0 || e.kind === 'add') confirmed.add(signer);
+      facts.set(idHex, { index: p, signer, kind: e.kind, signerKnewOwnRemoval: knew, signerRemovedEarlierInLog: concurrent, void: isVoid, why });
     }
     const removalsHex = new Map<string, string[]>();
     for (const [t, ps] of removalsOf) removalsHex.set(t, ps.map((q) => toHex(order[q].id)));
-    return { res: { setId, devices, removed, confirmed, voided, facts, admitted, removalsOf: removalsHex }, proposed };
+    return { out: { setId, devices, removed, confirmed, voided, facts, admitted, removalsOf: removalsHex }, voidedPos };
   }
 }
 

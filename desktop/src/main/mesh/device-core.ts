@@ -152,18 +152,29 @@ export class DeviceCore {
 
   // ------------------------------------------------------------ generations
   private removedHex(): string[] {
-    return [...this.o.roster.removedIds()];
+    return [...this.o.roster.excludedIds()];
   }
   /** The label new frames are sealed under, or null when none for the current removals is held yet. */
   currentLabel(): number | null {
     const key = removedKey(this.removedHex().map((h) => Buffer.from(h, 'hex')));
+    const active = new Set(this.o.roster.activeDevices().map((d) => toHex(d.deviceId)));
     let best: { label: number; minter: string } | null = null;
     for (const [label, h] of this.o.book.held) {
-      if (!h.stmt || removedKey(h.stmt.removed) !== key) continue;
+      // WHY the minter must be a member NOW: a secret made by a device whose admission later turned out void (or that was removed) is not
+      // trusted as current, so it can neither split the members nor stay in the hands of a device that is no longer one of them.
+      if (!h.stmt || removedKey(h.stmt.removed) !== key || !active.has(toHex(h.stmt.minter))) continue;
       const minter = toHex(h.stmt.minter);
       if (!best || minter < best.minter) best = { label, minter };
     }
     return best ? best.label : null;
+  }
+  /** Labels held that were made for exactly the removals this device knows of (at most 16). */
+  currentLabels(): number[] {
+    const key = removedKey(this.removedHex().map((h) => Buffer.from(h, 'hex')));
+    const out: number[] = [];
+    const active = new Set(this.o.roster.activeDevices().map((d) => toHex(d.deviceId)));
+    for (const [label, h] of this.o.book.held) if (h.stmt && removedKey(h.stmt.removed) === key && active.has(toHex(h.stmt.minter))) out.push(label);
+    return out.slice(0, 16);
   }
   /** Oldest label held: control traffic every member can read (it carries no secret in the clear). */
   oldestLabel(): number | null {
@@ -197,7 +208,7 @@ export class DeviceCore {
       else nextAt = due;
     } else {
       for (const [label, h] of this.o.book.held) {
-        if (!h.stmt || removedKey(h.stmt.removed) !== key || h.stmt.removed.length === 0) continue;
+        if (!h.stmt || removedKey(h.stmt.removed) !== key || h.stmt.removed.length === 0 || !r.activeDevices().some((d) => d.deviceId.equals((h.stmt as GenStatement).minter))) continue;
         const have = new Set(h.stmt.members.map((m) => toHex(m)));
         for (const s of this.o.book.sealedTo.get(label) ?? []) have.add(s);
         const targets = r.activeDevices().filter((d) => !have.has(toHex(d.deviceId)) && toHex(d.deviceId) !== this.me);
@@ -252,9 +263,10 @@ export class DeviceCore {
     if (!v || !minterDev) return 'wait';
     const creator = r.entries[0] ? (asMap(r.entries[0].body, 'add').signKey as Buffer) : undefined;
     if (!verifyStatement(stmt, minterDev.signKey, this.o.setId, creator)) return 'reject:bad-statement';
-    const removedNow = r.removedIds();
+    const removedNow = r.excludedIds();
     for (const x of stmt.removed) if (!removedNow.has(toHex(x))) return 'wait'; // we have not heard of that removal yet
-    for (const m of stmt.members) if (!v.devices.has(toHex(m))) return 'wait';
+    // (the member list is not checked against this roster: it can name devices whose admission turned out void here, and waiting for them
+    // would wait forever; what protects the receiver is that the minter is a member here and the removed set matches)
     const sealedSet = this.o.book.sealedTo.get(stmt.label) ?? new Set<string>();
     for (const k of b.sealed.keys()) sealedSet.add(k);
     this.o.book.sealedTo.set(stmt.label, sealedSet);
@@ -299,7 +311,11 @@ export class DeviceCore {
   async onMessage(kind: string, body: unknown, from: Buffer): Promise<{ out: Out[]; wait?: true; reject?: string; changed: boolean }> {
     const out: Out[] = [];
     const fromHex = toHex(from);
-    if (!this.o.roster.signKeyFor(from)) return { out, reject: 'sender-not-a-member', changed: false };
+    // Entries are signed one by one, so roster entries are taken from ANY known device, a removed one included (otherwise two devices that
+    // removed each other at the same moment would never learn of each other's removal), and so are the requests for entries that ask for
+    // nothing secret (heads, need: they let a removed device learn that it was removed); a generation bundle only from an active member.
+    if (!this.o.roster.knownSignKeyFor(from)) return { out, reject: 'sender-not-a-member', changed: false };
+    if (kind === KIND_REMOVAL && !this.o.roster.signKeyFor(from)) return { out, reject: 'signer-not-a-member', changed: false };
     let changed = false;
     if (kind === KIND_ROSTER) {
       const r = await this.takeEntries(parseRosterBody(body), fromHex);
@@ -316,7 +332,10 @@ export class DeviceCore {
         return { out, reject: v.slice(7), changed };
       }
     } else if (kind === KIND_HEADS) {
-      const { want, send } = this.onPeerHeads(parseHeadsBody(body));
+      const hb = parseHeadsBody(body);
+      const { want, send } = this.onPeerHeads(hb.heads);
+      // a current secret this member lacks (a bundle that never reached it): re-seal it, same secret, to that member
+      for (const b of this.answerGenNeed(this.currentLabels().filter((l) => !hb.gens.includes(l)), fromHex)) out.push({ kind: KIND_REMOVAL, body: removalBody(b), to: from });
       if (send.length) out.push({ kind: KIND_ROSTER, body: rosterBody(send.slice(0, 256)), to: from });
       if (want.length) out.push({ kind: KIND_NEED, body: needBody(want), to: from });
     } else if (kind === KIND_NEED) {
@@ -331,13 +350,16 @@ export class DeviceCore {
    *  `announce`) say which roster entries we hold. `nextAt` is when to look again for a turn that has not come yet. */
   async tick(now: number, announce: boolean): Promise<{ out: Out[]; nextAt: number | null }> {
     const out: Out[] = [];
-    const hello = await this.ensureHello(now);
+    // A device that sees itself removed makes no secrets and says no hello, but still asks for the entries it is missing and announces what it
+    // holds: the removal it sees may turn out to have no effect, and it must be able to find that out.
+    const quiet = this.o.roster.isRemoved(this.o.identity.deviceId);
+    const hello = quiet ? null : await this.ensureHello(now);
     if (hello) out.push({ kind: KIND_ROSTER, body: rosterBody([hello]) });
-    const plan = this.plan(now);
+    const plan = quiet ? { bundles: [], nextAt: null } : this.plan(now);
     for (const b of plan.bundles) if (b.sealed.size > 0) out.push({ kind: KIND_REMOVAL, body: removalBody(b) });
-    if (announce) out.push({ kind: KIND_HEADS, body: headsBody(this.heads()) });
+    if (announce) out.push({ kind: KIND_HEADS, body: headsBody(this.heads(), this.currentLabels()) });
     const wanted = this.wanted();
-    if (wanted.length && wanted.length !== this.wantedSent) out.push({ kind: KIND_NEED, body: needBody(wanted) });
+    if (wanted.length && (announce || wanted.length !== this.wantedSent)) out.push({ kind: KIND_NEED, body: needBody(wanted) });
     this.wantedSent = wanted.length;
     return { out, nextAt: plan.nextAt };
   }
