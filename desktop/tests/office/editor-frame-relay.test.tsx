@@ -6,7 +6,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
 import { EditorFrame, autosaveDelay } from '../../src/renderer/components/office/EditorFrame';
-import { closeDoc, openDoc, resetOfficeStoreForTests, saveStateFor, useOfficeAlerts, useSaveState } from '../../src/renderer/components/office/office-store';
+import { closeDoc, officeDocFor, openDoc, resetOfficeStoreForTests, saveStateFor, useOfficeAlerts, useSaveState } from '../../src/renderer/components/office/office-store';
 import type { OfficeBridge, OfficeFile } from '../../src/shared/office-types';
 
 const FILE: OfficeFile = { path: '/home/you/plan.docx', name: 'plan.docx', kind: 'document', folder: 'you', at: '2026-09-28T00:00:00Z' };
@@ -782,5 +782,22 @@ describe('EditorFrame relaying comment requests', () => {
     const { fromEditor } = await mountFrame();
     fromEditor({ type: 'yc:office-comments-changed' });
     expect(c.commentsChanged).toHaveBeenCalledWith('t1');
+  });
+});
+
+describe('one tab per real file', () => {
+  it('gives way to the tab already showing the same file under another spelling', async () => {
+    // Main answers both spellings (a link and its target) with the one session's token.
+    const b = fakeBridge();
+    const LINK: OfficeFile = { ...FILE, path: '/home/you/link/plan.docx' };
+    openDoc(FILE);
+    openDoc(LINK);
+    const first = render(<EditorFrame file={FILE} />);
+    await waitFor(() => expect(first.container.querySelector('iframe')).not.toBeNull());
+    // (The page unmounts the dropped tab's frame; rendered alone here, only the tab list is checked.)
+    render(<EditorFrame file={LINK} />);
+    await waitFor(() => expect(b.close).toHaveBeenCalledWith('t1'));
+    expect(officeDocFor(LINK.path)).toBeNull();
+    expect(officeDocFor(FILE.path)).not.toBeNull();
   });
 });

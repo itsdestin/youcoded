@@ -17,7 +17,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, editorFontLinks, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, noteRecoverOffer, onCommentsRequest, onDocumentReplaced, registerFlush, saveStateFor } from './office-store';
+import { claimOfficeToken, markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, mergeDuplicateTab, noteCloseFailedWhileHidden, noteCopying, noteRecoverOffer, onCommentsRequest, onDocumentReplaced, registerFlush, releaseOfficeToken, saveStateFor } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
@@ -402,6 +402,11 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     b.open(file.path).then((r) => {
       if (!r.ok) { failWith(r.message); return; }
       if (gone) { void b.close(r.token).catch(() => {}); return; }
+      // WHY (office review 2026-11-14): another tab already shows this very file under another
+      // spelling (a link, other capitals). Two editors on one document overwrite each other's
+      // saves, so this one gives back its share before starting and that tab comes forward.
+      const keep = claimOfficeToken(r.token, file.path);
+      if (keep) { void b.close(r.token).catch(() => {}); mergeDuplicateTab(file.path, keep); return; }
       token = r.token;
       replacedRef.current = false;
       // Edits kept from last time for a file that changed since: offered on the strip (fix round 1).
@@ -420,7 +425,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       const s = save.current;
       if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
       if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
-      if (token) void b.close(token).catch(() => {});
+      if (token) { releaseOfficeToken(token, file.path); void b.close(token).catch(() => {}); }
     };
   }, [file.path, attempt]);
 

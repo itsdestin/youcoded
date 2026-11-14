@@ -23,7 +23,7 @@ import { CAS_REPLACE_ANY, casWrite, renameReplacing, type CasExpectation } from 
 import { noteOwnWrite } from '../artifacts/project-watcher';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
-import { finishCopy, SAVE_DIR_MARK, sweepStaleSaveDirsSoon } from './office-commands';
+import { finishCopy, saveDirPrefix, sweepStaleSaveDirsSoon } from './office-commands';
 
 // ── The owner's pruning rules, "tiered-30" (R11) ──
 const KEEP_ALL_MS = 24 * 60 * 60 * 1000;
@@ -328,7 +328,7 @@ async function writeBack(target: string, bytes: Buffer): Promise<void> {
   // such leftover over an hour old beside this file now. Started, never awaited, errors swallowed
   // (office-commands.ts sweepStaleSaveDirsSoon), so it can neither slow nor fail the restore.
   sweepStaleSaveDirsSoon(path.dirname(target), base);
-  const priv = await fsp.mkdtemp(path.join(path.dirname(target), `.${base}${SAVE_DIR_MARK}`));
+  const priv = await fsp.mkdtemp(path.join(path.dirname(target), saveDirPrefix(base)));
   try {
     const tmp = path.join(priv, base);
     await fsp.writeFile(tmp, bytes);

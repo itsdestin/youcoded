@@ -266,6 +266,17 @@ describe('the recovery journal', () => {
     expect(await fsp.readdir(journals())).toHaveLength(0);
   });
 
+  it('the startup tidy-up keeps a journal whose file sits on a folder that is not there (a drive not connected)', async () => {
+    const a = await editor();
+    await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });
+    await sessions.close(a.s.token);
+    // The whole folder is gone, as when a USB stick or network drive is not mounted at launch:
+    // the file may well come back, so its unsaved edits must too.
+    await fsp.rm(path.dirname(file), { recursive: true, force: true });
+    await pruneRecovery();
+    expect(await fsp.readdir(journals())).toHaveLength(1);
+  });
+
   it('skips a last line cut short by a crash, and refuses another document\'s id', async () => {
     const a = await editor();
     await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });

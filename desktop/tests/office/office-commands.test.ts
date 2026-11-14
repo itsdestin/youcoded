@@ -1196,3 +1196,68 @@ describe.skipIf(!HAS_ADDON)('the PDF made for printing, with the bundled x2t', (
     expect((await readdir(path.dirname(s.path))).sort()).toEqual(['pages.docx']);
   }, X2T_WARMUP_BUDGET_MS);
 });
+
+describe('saving when the file or its folder changed under the document', () => {
+  it('refuses to save a file deleted after it opened, and never brings it back', async () => {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+    await run(s.token, 'open_file', {}).catch(() => {}); // stamps the file as it was opened
+    await writeBin(run, s.token);
+    await rm(s.path);
+    await expect(run(s.token, 'save_file', {})).rejects.toThrow('This file is no longer where Office opened it');
+    expect(existsSync(s.path)).toBe(false);
+  });
+
+  it('refuses to recreate a file renamed after it opened, leaving the renamed file alone', async () => {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+    await run(s.token, 'open_file', {}).catch(() => {});
+    await writeBin(run, s.token);
+    const renamed = path.join(path.dirname(s.path), 'renamed.docx');
+    const before = await readFile(s.path);
+    await fsNode.rename(s.path, renamed);
+    await expect(run(s.token, 'save_file', {})).rejects.toThrow('moved, renamed or deleted');
+    expect(existsSync(s.path)).toBe(false);
+    expect(await readFile(renamed)).toEqual(before);
+  });
+
+  it('saves a file whose name is too long to fit inside the hidden save folder\'s name', async () => {
+    // 80 three-byte characters = 240 bytes: a legal file name, but "." + name + ".office-save-XXXXXX" is not.
+    const s = await sessionFor(MEMO, `docs/${'文'.repeat(80)}.docx`);
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+    await writeBin(run, s.token);
+    expect(await run(s.token, 'save_file', {})).toBe('ok');
+    expect((await readFile(s.path)).subarray(0, 4).toString('latin1')).toBe('PK\x03\x04');
+    expect((await readdir(path.dirname(s.path))).filter((n) => n.startsWith('.'))).toEqual([]);
+  });
+
+  it('sweeps a long-named file\'s leftover save folder from a crash', async () => {
+    const name = `${'文'.repeat(80)}.docx`;
+    const s = await sessionFor(MEMO, `docs/${name}`);
+    const { saveDirPrefix } = await import('../../src/main/office/office-commands');
+    const stale = path.join(path.dirname(s.path), `${saveDirPrefix(name)}stale1`);
+    await mkdir(stale);
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(stale, old, old);
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+    await writeBin(run, s.token);
+    await run(s.token, 'save_file', {});
+    expect(existsSync(stale)).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'says the folder is the problem when it refuses new files but the file itself is writable (POSIX, non-root)',
+    async () => {
+      const s = await sessionFor(MEMO);
+      const docs = path.dirname(s.path);
+      const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+      await writeBin(run, s.token);
+      await chmod(docs, 0o555);
+      try {
+        await expect(run(s.token, 'save_file', {})).rejects.toThrow("Office can't save in this file's folder");
+      } finally {
+        await chmod(docs, 0o755);
+      }
+    },
+  );
+});

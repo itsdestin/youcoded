@@ -97,7 +97,9 @@ A release tarball per platform holds `manifest.json`, `editors/`, `converter/` (
 Tracked in `docs/roadmap/files.md` (Office entries); the load-bearing ones:
 
 - Only docx/xlsx/pptx; no legacy/ODF/CSV open.
-- Office does not notice the open file changing on disk, and saves have no modified-time check: another program's (or the assistant's file-tool) edit to an open document is overwritten by the editor's next autosave. Only comments are routed through the editor. The open-time journal check is the only outside-change handling.
+- Office does not notice the open file changing on disk while it is open: another program's (or the assistant's file-tool) edit is overwritten by the editor's next autosave, but that save first keeps the overwritten file in Versions (size/modified-time stamp, `knownStamp`). A file renamed, moved or deleted while open is never recreated at its old name: the save fails with "no longer where Office opened it" and Save a copy. Only comments are routed through the editor.
+- Versions and the recovery journal are keyed by the file's path: a file renamed or moved outside Office starts with an empty Versions list, and its old entries age out under the usual rules. The startup tidy-up deletes a journal only when the file is missing AND its folder is there (a drive not connected keeps it).
+- Windows: the hidden save folder beside the file (`.<name>.office-save-…`, shortened with a fingerprint past 100 bytes) is not hidden there, and a cloud-sync client may briefly see it. A save blocked by another program holding the file says so as a condition ("If it's open in another program…"). Neither is verified on Windows.
 - Tabs never sleep: every open document keeps its editor mounted (hidden when not in front) — memory grows with each open document.
 - No Linux ARM bundle; no network block for x2t on Mac/Windows; a printed selection and the editor's printer/copies rows are not offered.
 - Windows converter folder permissions are inherited from the document's folder (roadmap).

@@ -300,6 +300,20 @@ export async function discardRecoveryFor(file: string): Promise<void> {
 /** Startup tidy-up (fix round 1), never awaited by anyone: journals of files that are gone, and
  *  journals nothing touched for 30 days, are removed. */
 export const RECOVERY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** WHY not plain `!exists` (office review 2026-11-14): any failed look counted as "gone", so a
+ *  file on a USB stick or network drive that was not connected at launch — or a permission
+ *  hiccup — had its unsaved edits deleted for good. Gone means: the file is missing (ENOENT) AND
+ *  its folder is still there to say so. Anything else keeps the journal (30-day rule still applies). */
+async function surelyGone(file: string): Promise<boolean> {
+  try {
+    await fsp.stat(file);
+    return false;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') return false;
+    return exists(path.dirname(file));
+  }
+}
 export async function pruneRecovery(now = Date.now()): Promise<void> {
   if (!root) return;
   const names = await fsp.readdir(root).catch(() => [] as string[]);
@@ -308,7 +322,7 @@ export async function pruneRecovery(now = Date.now()): Promise<void> {
     try {
       const info = JSON.parse(await fsp.readFile(path.join(dir, 'info.json'), 'utf8')) as { path?: unknown };
       const touched = Math.max(...(await Promise.all(['info.json', 'changes.log'].map((f) => fsp.stat(path.join(dir, f)).then((st) => st.mtimeMs, () => 0)))));
-      const gone = typeof info.path !== 'string' || !(await exists(info.path));
+      const gone = typeof info.path !== 'string' || (await surelyGone(info.path));
       if (!gone && now - touched < RECOVERY_MAX_AGE_MS) continue;
       if (typeof info.path === 'string' && journals.has(info.path)) continue; // being written right now
     } catch { /* no readable info: a broken journal, nothing can recover it */ }

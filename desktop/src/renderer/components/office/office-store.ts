@@ -282,6 +282,37 @@ export function replaceDoc(oldPath: string, file: OfficeFile): void {
   forgetSaveState(oldPath);
 }
 
+// ── One tab per real file (office review 2026-11-14) ──
+// Tabs are keyed by the path they were opened with, but main keys a document by its REAL path:
+// the same file reached through a link (or, on Windows, other capitals) got a second tab whose
+// editor shared one session and working copy with the first, so each tab's save overwrote the
+// other's edits. Main hands both the same token, which is how a duplicate is recognised here.
+const tokenTabs = new Map<string, string>();
+/** A frame's open succeeded with `token`. Returns the path of another open tab already showing
+ *  that document (the caller then gives way to it), or null after recording this tab as its holder. */
+export function claimOfficeToken(token: string, path: string): string | null {
+  const holder = tokenTabs.get(token);
+  if (holder && holder !== path && state.docs.some((d) => d.file.path === holder)) return holder;
+  tokenTabs.set(token, path);
+  return null;
+}
+export function releaseOfficeToken(token: string, path: string): void {
+  if (tokenTabs.get(token) === path) tokenTabs.delete(token);
+}
+/** The tab `dupPath` turned out to be `keepPath`'s file under another spelling: drop it (its
+ *  editor never started, so nothing is unsaved) and bring the existing tab forward, as opening
+ *  the same spelling twice would. */
+export function mergeDuplicateTab(dupPath: string, keepPath: string): void {
+  set({
+    ...state,
+    docs: state.docs
+      .filter((d) => d.file.path !== dupPath)
+      .map((d) => (d.file.path === keepPath ? { ...d, asleep: false, closing: false } : d)),
+    active: keepPath,
+  });
+  forgetSaveState(dupPath);
+}
+
 /** The closing tab's editor has saved (or given up after 5 s): remove it for good. */
 export function finishClose(path: string): void {
   if (!state.docs.some((d) => d.file.path === path && d.closing)) return;
@@ -496,6 +527,7 @@ export function resetOfficeStoreForTests(): void {
   unsavedHolds.clear();
   inlineCopies.clear();
   inlineRevealers.clear();
+  tokenTabs.clear();
   promptWatched = false;
   reloaders.clear();
   changedSubscribed = false;
