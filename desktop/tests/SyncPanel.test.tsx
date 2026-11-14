@@ -565,6 +565,20 @@ describe('Sync log that cannot be read', () => {
 describe('Backup & sync actions that fail', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
+  it('a later successful action replaces an older failure notice', async () => {
+    const dismissWarning = vi.fn()
+      .mockRejectedValueOnce(new Error('settings file locked'))
+      .mockResolvedValue(undefined);
+    const base = { ...RETRY_WARNING, dismissible: true, fixAction: undefined };
+    stub({ dismissWarning }, [{ ...base, code: 'A', title: 'First warning' }, { ...base, code: 'B', title: 'Second warning' }]);
+    render(<SyncSection autoOpen />);
+    const dismiss = await screen.findAllByRole('button', { name: 'Dismiss' });
+    fireEvent.click(dismiss[0]);
+    expect(await screen.findByText("Couldn't dismiss that warning")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]);
+    await waitFor(() => expect(screen.queryByText("Couldn't dismiss that warning")).toBeNull());
+  });
+
   it('a warning that could not be dismissed says so, with the reason and Try again, and Try again re-runs it', async () => {
     const dismissWarning = vi.fn()
       .mockRejectedValueOnce(new Error('settings file locked'))

@@ -189,6 +189,9 @@ interface ManagedSession {
 
 export type HandoffStopResult = { status: 'stopped' } | { status: 'unknown' };
 
+/** How long after a worker's process exits we wait for its channel to close before calling the exit unexpected. */
+const EXIT_SETTLE_MS = 500;
+
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, ManagedSession>();
   private handoffStops = new Map<string, { worker: ChildProcess; promise: Promise<HandoffStopResult>; finish: (result: HandoffStopResult) => void }>();
@@ -577,7 +580,8 @@ export class SessionManager extends EventEmitter {
           flushCommand();
           break;
         case 'exit':
-          if (workerGone) return; // no proof from a frame after worker death
+          // A frame read while `settling` was sent BEFORE the worker died (frames are ordered); only one after a closed channel is refused.
+          if (workerGone && !settling) return; // no proof from a frame after worker death
           clearTimeout(commandFallbackTimer);
           // WHY: only this message is emitted by the worker's PTY onExit callback.
           // A dead/disconnected worker alone cannot certify a final transcript.
@@ -605,9 +609,14 @@ export class SessionManager extends EventEmitter {
       }
     });
 
+    // Set while the worker's process has exited but its message channel may still hold unread frames (see 'exit' below).
+    let settling = false;
+    let channelClosed: (() => void) | null = null;
     worker.on('disconnect', () => {
       workerGone = true;
       this.handoffStops.get(id)?.finish({ status: 'unknown' });
+      // Frames are delivered before 'disconnect', so by now any real exit message has been read.
+      channelClosed?.();
     });
 
     worker.on('exit', () => {
@@ -616,15 +625,28 @@ export class SessionManager extends EventEmitter {
       // WITHOUT first sending its own exit message (native crash, out-of-memory kill). That used to be reported as exit
       // code 0 = "finished normally", so an idle session's tab silently vanished. Only a handoff stop is a deliberate
       // end; anything else is reported as an unexpected exit so the chat says "Session ended unexpectedly".
+      // WHY WAIT FOR THE CHANNEL (review of 9dbd8b927): on a NORMAL exit the worker sends {type:'exit'} and then quits, and
+      // Node can deliver the process 'exit' event BEFORE this side has read that message (~2% of runs). Deciding at once
+      // would show "ended unexpectedly" after a clean /exit. So the decision waits until the channel has closed (every
+      // frame delivered before 'disconnect') or a short settle passes, and a real exit message that arrives meanwhile wins.
       const deliberateStop = this.handoffStops.has(id) || this.handoffStopping.has(id);
       this.handoffStops.get(id)?.finish({ status: 'unknown' });
       this.handoffStopping.delete(id);
       clearTimeout(commandFallbackTimer);
       if (!this.sessions.has(id)) return;
-      const exitingSession = this.sessions.get(id)!;
-      exitingSession.info.status = 'destroyed';
-      this.emit('session-exit', id, deliberateStop ? 0 : 1);
-      this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
+      settling = true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const decide = () => {
+        clearTimeout(timer); channelClosed = null; settling = false;
+        if (!this.sessions.has(id)) return; // the real exit message arrived and was handled
+        const exitingSession = this.sessions.get(id)!;
+        exitingSession.info.status = 'destroyed';
+        this.emit('session-exit', id, deliberateStop ? 0 : 1);
+        this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
+      };
+      channelClosed = decide;
+      timer = setTimeout(decide, EXIT_SETTLE_MS);
+      if (!worker.connected) decide(); // channel already closed: nothing more can arrive
     });
 
     // Tell the worker to spawn the CLI, passing our session ID

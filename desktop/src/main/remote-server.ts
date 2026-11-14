@@ -1370,8 +1370,9 @@ export class RemoteServer {
 
   // --- Helpers ---
 
-  // A throwing handler is answered at once (card #134; see remote-failed-answer.ts).
-  private respondToFailure(client: AuthenticatedClient, raw: Buffer | string, err: unknown): void { const a = failedMessageAnswer(raw, err); if (a) this.respond(client, a.type, a.id, a.payload); }
+  // A throwing handler is answered at once (card #134; see remote-failed-answer.ts), unless it had already answered that request.
+  private respondToFailure(client: AuthenticatedClient, raw: Buffer | string, err: unknown): void { const a = failedMessageAnswer(raw, err); if (a && !this.wasAnswered(a.id)) this.respond(client, a.type, a.id, a.payload); }
+  private wasAnswered(id: string): boolean { return (this.completedRequests.get(id.split(':')[0] ?? '') ?? []).some((e) => e.id === id); }
 
   /** Returns how many characters were sent (0 when the socket had closed). */
   private respond(client: AuthenticatedClient, type: string, id: string, payload: any): number {

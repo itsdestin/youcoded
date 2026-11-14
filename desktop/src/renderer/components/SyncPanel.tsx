@@ -447,6 +447,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   // failed save looked saved. One notice at the top of the main view says which action failed, with the real reason under
   // Details and Try again re-running that same action. A success clears it.
   const [actionFailure, setActionFailure] = useState<{ message: string; details?: string; retry: () => void } | null>(null);
+  // The latest handlers and in-flight flags, for Try again: a retry must act on CURRENT state (not what the panel looked
+  // like when the failure happened) and must never overlap an action that is already running.
+  const syncingRef = useRef(false);
+  const toggleBusyRef = useRef(false);
+  const additionalToggleRef = useRef<() => Promise<void>>(async () => {});
   const failAction = useCallback((message: string, e: unknown, retry: () => void) => {
     setActionFailure({ message, details: plainMessage(e, ''), retry });
   }, []);
@@ -602,6 +607,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
 
   // Force sync all sync-enabled backends
   const handleForceSync = useCallback(async () => {
+    if (syncingRef.current) return; // Try again cannot start a second run while one is going
+    syncingRef.current = true;
     setSyncing(true);
     try {
       const res = await claude.sync.force();
@@ -612,12 +619,14 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
       const log = await claude.sync.getLog(30);
       setLogLines(log);
     } catch (e) { failAction("Couldn't back up everything", e, handleForceSync); }
+    syncingRef.current = false;
     setSyncing(false);
   }, [claude, refreshStatus, failAction]);
 
   const handleDismiss = useCallback(async (code: string) => {
     try {
       await claude.sync.dismissWarning(code);
+      setActionFailure(null);
       // Fix: filter by w.code now that warnings are SyncWarning objects, not strings.
       setStatus(prev => prev ? { ...prev, warnings: prev.warnings.filter(w => w.code !== code) } : prev);
     } catch (e) { failAction("Couldn't dismiss that warning", e, () => { void handleDismiss(code); }); }
@@ -665,6 +674,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const handleToggleSync = useCallback(async (id: string, syncEnabled: boolean) => {
     try {
       await claude.sync.updateBackend(id, { syncEnabled });
+      setActionFailure(null); // a later success replaces an older failure notice
       await refreshStatus();
     } catch (e) { failAction(syncEnabled ? "Couldn't resume this backup" : "Couldn't pause this backup", e, () => { void handleToggleSync(id, syncEnabled); }); }
   }, [claude, refreshStatus, failAction]);
@@ -672,6 +682,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const handleRemoveBackend = useCallback(async (id: string) => {
     try {
       await claude.sync.removeBackend(id);
+      setActionFailure(null);
       await refreshStatus();
     } catch (e) { failAction("Couldn't remove this backup", e, () => { void handleRemoveBackend(id); }); }
     setMenuOpenId(null);
@@ -848,6 +859,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
       const res = await fn(id, name);
       // The handler answers { ok:false } for a failed rename; the old name simply came back with no word (card #134).
       if (res && res.ok === false) failAction("Couldn't rename this device", res.error ? { message: res.error } : '', () => { void handleRenameDevice(id, name); });
+      else setActionFailure(null);
     } catch (e) { failAction("Couldn't rename this device", e, () => { void handleRenameDevice(id, name); }); }
     await loadDevices(); // re-fetch so the fold-on-read authoritative name is shown
   }, [loadDevices, failAction]);
@@ -920,7 +932,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   // backend, ON -> resume every paused backend. Non-destructive (never removes a
   // backend). With zero backends, turning ON just reveals the inline picker
   // (additionalIntent) — actually adding a backend is what persists anything.
-  const handleAdditionalToggle = useCallback(async () => {
+  const runAdditionalToggle = useCallback(async () => {
     const list = status?.backends ?? [];
     const on = list.some(b => b.syncEnabled) || additionalIntent;
     // A rejection mid-loop used to escape as an unhandled error, leaving some backups changed and some not with no word.
@@ -928,8 +940,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     const runAll = async (enabled: boolean) => {
       try {
         for (const b of list) if (enabled ? !b.syncEnabled : !!b.syncEnabled) await claude.sync.updateBackend(b.id, { syncEnabled: enabled });
+        setActionFailure(null);
         return true;
-      } catch (e) { failAction("Couldn't change every backup. Some may have changed", e, () => { void handleAdditionalToggle(); }); return false; }
+      } catch (e) { failAction("Couldn't change every backup. Some may have changed", e, () => { void additionalToggleRef.current(); }); return false; }
     };
     if (on) {
       // Turn OFF: pause all currently-active backends and drop the picker intent.
@@ -944,6 +957,12 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
       await refreshStatus();
     }
   }, [status, additionalIntent, claude, refreshStatus, failAction]);
+  const handleAdditionalToggle = useCallback(async () => {
+    if (toggleBusyRef.current) return; // a second tap (or Try again) while it is running does nothing
+    toggleBusyRef.current = true;
+    try { await runAdditionalToggle(); } finally { toggleBusyRef.current = false; }
+  }, [runAdditionalToggle]);
+  additionalToggleRef.current = handleAdditionalToggle; // Try again always runs the latest one, on current state
 
   // Recent sync events for DISPLAY only. `hub-status` entries drive the
   // "Instant sync" status line below (that's their surface); `projects-changed`
@@ -1077,6 +1096,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               const save = async () => {
                 try {
                   await claude.sync.updateBackend(editingId, updates);
+                  setActionFailure(null);
                   await refreshStatus();
                 } catch (e) { failAction("Couldn't save your changes to this backup", e, () => { void save(); }); }
               };

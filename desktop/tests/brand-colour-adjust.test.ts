@@ -60,17 +60,33 @@ describe('brand colour adjustment', () => {
     expect(g).toBeGreaterThan(b);
   });
 
+  it('never throws on missing, invalid or 3-digit surface colours', () => {
+    const base = BRAND_BASE.light;
+    for (const bad of [undefined, null, '', 'red', 'rgb(1,2,3)', '#12', '#GGGGGG', 42, '#12345678']) {
+      const out = computeBrandTokens({ canvas: bad as any, panel: '#D4C5E6' }, false);
+      expect(out['--brand-claude']).toBe(base.claude);
+      expect(() => computeBrandTokens({ canvas: '#FFFFFF', panel: bad as any }, false)).not.toThrow();
+    }
+    expect(() => computeBrandTokens(undefined as any, true)).not.toThrow();
+    // A 3-digit hex is understood, not rejected: "#dcf" is the same pale panel as "#DDCCFF".
+    expect(computeBrandTokens({ canvas: '#fff', panel: '#dcf' }, false)).toEqual(computeBrandTokens({ canvas: '#FFFFFF', panel: '#DDCCFF' }, false));
+  });
+
   it('lightens colours on a dark theme that is too dim for them', () => {
     const panel = '#101018';
     const out = computeBrandTokens({ canvas: '#000000', panel }, true);
     for (const v of Object.values(out)) expect(ratio(v, panel)).toBeGreaterThanOrEqual(4.5);
   });
 
-  it('clears 4.5:1 for every published community theme (when the sibling checkout exists)', () => {
-    const root = resolve(__dirname, '..', '..', '..', 'wecoded-themes', 'themes');
-    const alt = '/home/destin/youcoded-dev/wecoded-themes/themes';
-    const dir = existsSync(root) ? root : existsSync(alt) ? alt : null;
-    if (!dir) return;
+  it('clears 4.5:1 for every published community theme (when the sibling checkout exists)', (ctx) => {
+    // The sibling wecoded-themes checkout: beside youcoded/ in the workspace, or at the workspace root when run from a session worktree.
+    const candidates = [
+      resolve(__dirname, '..', '..', '..', 'wecoded-themes', 'themes'),
+      resolve(__dirname, '..', '..', '..', '..', '..', '..', 'wecoded-themes', 'themes'),
+    ];
+    const dir = candidates.find((d) => existsSync(d));
+    if (!dir) { ctx.skip(); return; } // skipped with a visible reason, not silently passed: no wecoded-themes checkout beside this one
+    let checked = 0;
     for (const slug of readdirSync(dir)) {
       const f = join(dir, slug, 'manifest.json');
       if (!existsSync(f)) continue;
@@ -78,6 +94,8 @@ describe('brand colour adjustment', () => {
       if (typeof m.tokens?.panel !== 'string' || !m.tokens.panel.startsWith('#')) continue;
       const out = computeBrandTokens(m.tokens, !!m.dark);
       for (const [k, v] of Object.entries(out)) expect(ratio(v, m.tokens.panel), `${slug} ${k}`).toBeGreaterThanOrEqual(4.5);
+      checked++;
     }
+    expect(checked).toBeGreaterThan(0);
   });
 });

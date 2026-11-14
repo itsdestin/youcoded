@@ -425,10 +425,24 @@ export function computeBrandTokens(
   tokens: Pick<ThemeTokens, 'canvas' | 'panel'>,
   dark: boolean,
 ): Record<string, string> {
-  const worst = (c: string) => Math.min(contrastRatio(c, tokens.canvas), contrastRatio(c, tokens.panel));
+  // WHY the guard (review of 802720a3c): a community theme is user-supplied data. A missing, non-string or non-hex surface
+  // colour (or a 3-digit "#abc") must never throw inside applyThemeToDom, which runs on every theme switch. Anything we
+  // cannot measure leaves the fixed colours as they are, which is exactly what happened before this adjustment existed.
+  const surface = (c: unknown): string | null => {
+    if (typeof c !== 'string') return null;
+    const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c.trim());
+    if (!m) return null;
+    const h = m[1].length === 3 ? m[1].replace(/./g, (d) => d + d) : m[1];
+    return '#' + h.toUpperCase();
+  };
+  const canvas = surface(tokens?.canvas);
+  const panel = surface(tokens?.panel);
+  const baseSet = BRAND_BASE[dark ? 'dark' : 'light'];
+  if (!canvas || !panel) return Object.fromEntries(Object.entries(baseSet).map(([n, v]) => [`--brand-${n}`, v]));
+  const worst = (c: string) => Math.min(contrastRatio(c, canvas), contrastRatio(c, panel));
   const target = dark ? '#FFFFFF' : '#000000';
   const out: Record<string, string> = {};
-  for (const [name, base] of Object.entries(BRAND_BASE[dark ? 'dark' : 'light'])) {
+  for (const [name, base] of Object.entries(baseSet)) {
     let color = base;
     if (worst(base) < 4.5) {
       color = target;

@@ -204,6 +204,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         if (cancelled || !res?.ok || !Array.isArray(res.artifacts)) return;
         artifactDispatch({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: res.artifacts });
       })
+      // WHY silent: a background pre-warm so inline file pills can resolve; nothing is waiting on it. The files drawer
+      // runs its own read and shows its own "Couldn't load this chat's files" notice with Try again when that one fails.
       .catch(() => {});
     return () => { cancelled = true; };
   }, [cwd, sessionId, artifactDispatch]);
