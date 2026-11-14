@@ -98,6 +98,7 @@ export default function MarketplaceScreen({
   // Photo-only build: `shoot` opens a tab, a search, or a detail by name. Fixture ids from the
   // practice marketplace: the civic-report skill and the meadow-mist theme.
   useScreenOpen('marketplace/skills', () => setFilter({ ...emptyFilter(), type: 'plugin' }));
+  useScreenOpen('marketplace/refresh-failed', () => { setFilter({ ...emptyFilter(), type: 'plugin' }); void mp.refresh(); });
   useScreenOpen('marketplace/themes', () => setFilter({ ...emptyFilter(), type: 'theme' }));
   useScreenOpen('marketplace/search', () => setFilter({ ...emptyFilter(), query: 'civic' }));
   // WHY one screen per KIND of detail page (2026-10-04, detail-page redesign): the page
