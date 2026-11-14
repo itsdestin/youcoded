@@ -644,7 +644,10 @@ export default React.memo(function HeaderBar({
           flex-1 wrapper gives the strip a pre-allocated budget (~1/3 of the
           header) so packSessions reads an available-space value rather than
           its own current content width (chicken-and-egg fix). */}
-      <div className={`flex-1 min-w-0 flex ${windowButtonsBar ? 'justify-start' : 'justify-center'}`}>
+      {/* Round 7 (Destin on round 6: "the alignment is all fucked up"): the whole name stack moves left,
+          but the lights stay centred under the name (round 6 left them hanging past the dot), and the
+          stack keeps a gap before the terminal switch instead of its arrow touching it. */}
+      <div className={`flex-1 min-w-0 flex ${windowButtonsBar ? 'justify-start pr-2' : 'justify-center'}`}>
       {/* Round 4 (Destin picked the lights bar: "prettier … clean up the dead space and improve
           alignment/centering"): the name, its arrow AND the lights are one stack with ONE hover
           background, so the lights read as part of the button. Only that bar gets the wrapper: the
@@ -655,9 +658,12 @@ export default React.memo(function HeaderBar({
       // clickable"): the stack takes the click itself, so its padding and the gaps between dot,
       // name, arrow and lights all open the list. The name and arrow inside pass their clicks up
       // (SessionStrip, narrowTop === 'lights'); the arrow stays the keyboard's way in.
-      <div onClick={() => stripApi.current?.toggleList()} className={`session-name-stack cursor-pointer flex flex-col ${windowButtonsBar ? 'items-start' : 'items-center'} justify-center min-w-0 max-w-full rounded-lg px-1 pb-1 hover:bg-inset transition-colors`}>
+      <div onClick={() => stripApi.current?.toggleList()} className={`session-name-stack relative cursor-pointer flex flex-col items-center justify-center min-w-0 max-w-full rounded-lg px-1 py-2 hover:bg-inset transition-colors`}>
       {sessionStrip}
-      {narrowTop === 'lights' && <SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} />}
+      {/* Round 7: the name sits on the same line as the buttons beside it (equal padding above and
+          below), and the lights hang in the bottom padding, centred under it, instead of pushing the
+          name up by their own height. */}
+      {narrowTop === 'lights' && <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2"><SessionLights ids={sessions.map((s) => s.id)} activeId={activeSessionId} statuses={sessionStatuses} /></span>}
       </div>
       ) : sessionStrip}
       </div>
