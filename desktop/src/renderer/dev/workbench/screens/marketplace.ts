@@ -7,6 +7,7 @@ const mp = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags: ['ma
 export const MARKETPLACE: readonly ScreenEntry[] = [
   mp('marketplace/skills', 'view'),
   mp('marketplace/themes', 'view'),
+  { ...mp('marketplace/skills#counts-failed', 'view', 'error-state'), params: { statsFail: '1' } },
   mp('marketplace/search', 'view'),
   mp('marketplace/detail', 'dialog'),
   // The account chip's small menu, opened by clicking the chip (signed in as the practice "you").

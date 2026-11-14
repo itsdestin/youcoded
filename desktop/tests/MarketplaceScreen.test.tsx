@@ -21,8 +21,9 @@ import { render, cleanup, act } from '@testing-library/react';
 // WHY: the real stats provider fetches over HTTP (outside window.claude) and
 // publishes another context value whenever it settles. This test measures a
 // memo boundary, not network/cache initialization; keep that input fixed.
+const statsState = vi.hoisted(() => ({ value: { loading: false, plugins: {}, themes: {}, error: null as string | null, refresh: () => {}, applyThumbs: () => {}, ensureLoaded: () => {} } }));
 vi.mock('../src/renderer/state/marketplace-stats-context', () => {
-  const stats = { loading: false, plugins: {}, themes: {}, refresh: vi.fn(), applyThumbs: vi.fn(), ensureLoaded: vi.fn() };
+  const stats = statsState.value;
   return { MarketplaceStatsProvider: ({ children }: { children: React.ReactNode }) => children, useMarketplaceStats: () => stats };
 });
 const renders = vi.hoisted(() => ({ corner: 0 }));
@@ -148,6 +149,7 @@ describe('MarketplaceScreen', () => {
     declareViewport(false);
     setupWindowClaude();
     renders.corner = 0;
+    statsState.value.error = null;
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     io = installFiringIntersectionObserver();
   });
@@ -155,6 +157,19 @@ describe('MarketplaceScreen', () => {
     cleanup();
     io.restore();
     vi.restoreAllMocks();
+  });
+
+  // Card #134: failed community totals hid every install/like chip with no word; one notice says so.
+  it('says when the install and like counts could not load, with Try again', async () => {
+    statsState.value.error = 'HTTP 503';
+    const { container, getByText } = await renderScreen();
+    expect(getByText(/Couldn't load the install and like counts/)).toBeTruthy();
+    expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Try again')).toBe(true);
+  });
+
+  it('shows no notice while the counts are fine', async () => {
+    const { queryByText } = await renderScreen();
+    expect(queryByText(/Couldn't load the install and like counts/)).toBeNull();
   });
 
   it('draws one chunk of the Explore-everything grid for 300 entries, and another on scroll', async () => {

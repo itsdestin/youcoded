@@ -20,7 +20,9 @@ import MarketplaceDetailOverlay, { type DetailTarget } from "./MarketplaceDetail
 import WallpaperBackdrop from "../WallpaperBackdrop";
 import InstallingFooterStrip from "./InstallingFooterStrip";
 import MarketplaceAuthChip from "./MarketplaceAuthChip";
-import { Button, EmptyState, LoadingState, ScreenError } from "../ui";
+import { Button, EmptyState, ErrorState, LoadingState, ScreenError } from "../ui";
+import { useMarketplaceStats } from "../../state/marketplace-stats-context";
+import { plainMessage } from "../../utils/ipc-error";
 import { ScreenBand } from "../ScreenBand";
 import { LibraryIcon, MarketplaceIcon } from "../screen-icons";
 import { useEscClose } from "../../hooks/use-esc-close";
@@ -80,6 +82,11 @@ export default function MarketplaceScreen({
   onExit, settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onOpenLibrary, onOpenShareSheet, onOpenThemeShare, initialTypeChip, initialDetailId, onDetailConsumed,
 }: Props) {
   const mp = useMarketplace();
+  // Card #134: the install / like / vote chips vanish when the community totals fail to load, which
+  // read as "nobody has installed anything". `stats.error` is only reported when nothing is on screen to
+  // show instead (the context keeps totals it already had).
+  const stats = useMarketplaceStats();
+  const statsFailed = !!stats.error && Object.keys(stats.plugins).length === 0 && Object.keys(stats.themes).length === 0;
   const currentPlatform = useCurrentPlatform();
   const isPhoneDevice = deviceNoun() === 'phone';
   const [filter, setFilter] = useState<FilterState>(() => {
@@ -517,6 +524,11 @@ export default function MarketplaceScreen({
       <div className="px-3 sm:px-4 mt-2">
         <MarketplaceFilterBar value={filter} onChange={setFilter} />
       </div>
+      {statsFailed && (
+        <div className="px-3 sm:px-4 mt-2">
+          <ErrorState variant="inline" message={`Couldn't load the install and like counts, so they are hidden: ${plainMessage(stats.error)}`} onRetry={() => { void stats.refresh(); }} />
+        </div>
+      )}
 
       {/* Tightened section spacing: gap-2 between rails (was gap-6) lets the
           rail's pt-3/pb-6 shadow buffers carry the visual rhythm instead of
