@@ -40,6 +40,9 @@ import type { BuddyHelperStatus, BuddyStyle } from '../../shared/types';
 import { BuddyStyleRow, readBuddyStyle, saveBuddyStyle, trayPlaceName } from './BuddyStyleRow';
 import { Button, CARD_LEVEL_1, CloseButton, Slider, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
 import { plainMessage } from '../utils/ipc-error';
+import { announceFailed } from '../utils/announce';
+import { useSaveNotice } from '../hooks/useSaveNotice';
+import { useDefaultsSaver } from '../hooks/useDefaultsSaver';
 import { useGuideReset } from './guide/guide-events';
 
 // Both are Vite `define` substitutions, so they're constants at module scope.
@@ -1533,6 +1536,8 @@ interface RemoteButtonProps {
   /** Why the server refused to start, shown under the Enabled toggle. */
   enableError: string;
   onSetKeepAwake: (hours: number) => void;
+  /** Card #134 round 4: "Couldn't save …" notices for the Enabled toggle, Keep awake and Set password (undefined = none showing). */
+  saveNotices?: { enabled?: React.ReactNode; keepAwake?: React.ReactNode; password?: React.ReactNode };
   onRunSetup: () => void;
   onConfirmSetup: () => void;
   onCancelSetup: () => void;
@@ -1575,7 +1580,7 @@ function RemoteButton(props: RemoteButtonProps) {
   config, tailscale, clients, loading,
   newPassword, passwordStatus, copied, showSetupQR, showAddDevice,
   onSetNewPassword, onSetPassword, onToggleEnabled, enableError,
-  onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, setupCheck, onUnpairDevice, status, onCopyLink,
+  onSetKeepAwake, saveNotices, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, setupCheck, onUnpairDevice, status, onCopyLink,
   onSetShowSetupQR, onSetShowAddDevice, onReportIssue,
   } = props;
   const [open, setOpen] = useState(!!props.mockView);
@@ -1914,6 +1919,7 @@ function RemoteButton(props: RemoteButtonProps) {
                         {enableError && (
                           <FieldError as="p" size="2xs">{plainReason(enableError)}</FieldError>
                         )}
+                        {saveNotices?.enabled}
                         {/* A bind failure was logged and nowhere else. Specific and accurate
                             when the OS gave us a reason; never a guess. */}
                         {!enableError && status?.state === 'failed' && (
@@ -1969,6 +1975,7 @@ function RemoteButton(props: RemoteButtonProps) {
                           {passwordStatus === 'too-short' && (
                             <FieldError as="p">Use at least {MIN_REMOTE_PASSWORD_LENGTH} characters.</FieldError>
                           )}
+                          {saveNotices?.password}
                           {/* The disconnect warning (2026-09-10 security review, #5). */}
                           <p className="text-3xs text-fg-muted">
                             Changing the password disconnects every device; each reconnects with the new one.
@@ -1999,6 +2006,7 @@ function RemoteButton(props: RemoteButtonProps) {
                               label: opt.label,
                             }))}
                           />
+                          {saveNotices?.keepAwake}
                         </div>
                       </div>
                     </section>
@@ -2686,18 +2694,21 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
   }, []);
 
   const handleSetTier = useCallback(async (newTier: string) => {
-    const result = await claude.android?.setTier?.(newTier);
-    setTier(newTier);
-    if (result?.restartRequired) {
-      // The bridge handles restart prompt natively
-    }
+    // Card #134 round 4: the tier only changes on screen after the save answers (it already did), but a failed save said nothing, so
+    // the picker just closed with the old tier still showing. Now a real failure (rejected, or an answer of false / { ok:false })
+    // says so in a toast and the old tier stays shown.
+    try {
+      const result = await claude.android?.setTier?.(newTier);
+      if (result === false || (result && typeof result === 'object' && result.ok === false)) { announceFailed('change the plan tier', result?.error); return; }
+      setTier(newTier);
+      if (result?.restartRequired) {
+        // The bridge handles restart prompt natively
+      }
+    } catch (e) { announceFailed('change the plan tier', e); }
   }, []);
 
-  const handleDefaultsChange = useCallback(async (updates: Partial<typeof defaults>) => {
-    const merged = { ...defaults, ...updates };
-    setDefaults(merged);
-    await claude.defaults?.set?.(updates);
-  }, [defaults]);
+  // Card #134 round 4: a failed save used to leave the page showing a value that was never stored (see useDefaultsSaver).
+  const handleDefaultsChange = useDefaultsSaver(defaults, setDefaults, (updates) => claude.defaults?.set?.(updates));
 
   if (loading) {
     return (
@@ -2850,6 +2861,12 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const [setupCheck, setSetupCheck] = useState<SetupCheck | null>(null);
   // Populated when IPC.REMOTE_SET_CONFIG reports the server failed to bind.
   const [enableError, setEnableError] = useState('');
+  // Card #134 round 4: failed saves of the Enabled toggle / Keep awake / password, said beside the control. `config` only changes
+  // after a save ANSWERS, so the controls already show the last value really saved; the hook adds the lifecycle (no notice for a
+  // slow save, a late or superseded answer is ignored, cleared on success / Try again / closing the panel).
+  const { run: runSave, notice: saveNotice } = useSaveNotice(open);
+  const [passwordFailed, setPasswordFailed] = useState(false);
+  useEffect(() => { setPasswordFailed(false); }, [open]);
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
@@ -2921,6 +2938,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       return;
     }
     setPasswordStatus('saving');
+    setPasswordFailed(false);
     try {
       const ok = await (window as any).claude.remote.setPassword(newPassword);
       if (ok === false) { setPasswordStatus('too-short'); return; }
@@ -2930,25 +2948,32 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       setNewPassword('');
       setPasswordStatus('saved');
       setTimeout(() => setPasswordStatus('idle'), 2000);
-    } catch {
+    } catch (e) {
+      // The typed password stays in the box, so pressing Set again is the retry. (Used to reset silently.)
+      console.warn('[remote] setting the password failed:', e);
       setPasswordStatus('idle');
+      setPasswordFailed(true);
     }
   }, [newPassword]);
 
   const handleToggleEnabled = useCallback(async () => {
     if (!config) return;
     setEnableError('');
-    const updated = await (window as any).claude.remote.setConfig({ enabled: !config.enabled });
-    // Main rolls `enabled` back to false when the server can't bind and returns
-    // the OS error; spreading `updated` therefore also un-sticks the toggle.
-    if (updated?.error) setEnableError(String(updated.error));
-    setConfig(prev => prev ? { ...prev, ...updated } : prev);
-  }, [config]);
+    void runSave('enabled', 'the remote access setting', async () => {
+      const updated = await (window as any).claude.remote.setConfig({ enabled: !config.enabled });
+      // Main rolls `enabled` back to false when the server can't bind and returns
+      // the OS error; spreading `updated` therefore also un-sticks the toggle.
+      if (updated?.error) setEnableError(String(updated.error));
+      setConfig(prev => prev ? { ...prev, ...updated } : prev);
+    }, () => { /* config only changes after an answer: the switch already shows the last saved value */ }, () => { void handleToggleEnabled(); });
+  }, [config, runSave]);
 
   const handleSetKeepAwake = useCallback(async (hours: number) => {
-    const updated = await (window as any).claude.remote.setConfig({ keepAwakeHours: hours });
-    setConfig(prev => prev ? { ...prev, ...updated } : prev);
-  }, []);
+    await runSave('keepAwake', 'the keep awake setting', async () => {
+      const updated = await (window as any).claude.remote.setConfig({ keepAwakeHours: hours });
+      setConfig(prev => prev ? { ...prev, ...updated } : prev);
+    }, () => { /* the control shows config, which did not change */ }, () => { void handleSetKeepAwake(hours); });
+  }, [runSave]);
 
   const handleRunSetup = useCallback(() => {
     setSetupStatus('confirm');
@@ -3066,11 +3091,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     }
   }, [tailscale]);
 
-  const handleDefaultsChange = useCallback(async (updates: Partial<typeof defaults>) => {
-    const merged = { ...defaults, ...updates };
-    setDefaults(merged);
-    await (window as any).claude.defaults?.set?.(updates);
-  }, [defaults]);
+  const handleDefaultsChange = useDefaultsSaver(defaults, setDefaults, (updates) => (window as any).claude.defaults?.set?.(updates));
 
   return (
     <>
@@ -3129,6 +3150,11 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onToggleEnabled={handleToggleEnabled}
           enableError={enableError}
           onSetKeepAwake={handleSetKeepAwake}
+          saveNotices={{
+            enabled: saveNotice('enabled', 'mt-1'),
+            keepAwake: saveNotice('keepAwake', 'mt-2'),
+            password: passwordFailed ? <FieldError as="p">Couldn't set the password.</FieldError> : null,
+          }}
           onRunSetup={handleRunSetup}
           onConfirmSetup={handleConfirmSetup}
           onCancelSetup={handleCancelSetup}
