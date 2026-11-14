@@ -31,7 +31,7 @@ function foldersFilePath(): string {
 /** Where "when was this synced project last used" lives: a small file beside the saved folders, NOT inside them. WHY (Destin, Q-8:
  *  "if its synced, then shouldnt it be in the list?"): a synced project must rise to the top like any folder once used, but saving
  *  it as a folder would change what removal, "Sync stopped" and the import flow see. Key = pathKey(path), value = ms. */
-export function usageFilePath(foldersFile: string = foldersFilePath()): string {
+function usageFilePath(foldersFile: string = foldersFilePath()): string {
   return path.join(path.dirname(foldersFile), 'youcoded-folder-usage.json');
 }
 
