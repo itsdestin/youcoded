@@ -890,23 +890,17 @@ describe('RemoteServer — a phone\'s live page sockets', () => {
 // Card #134 (error inventory Backend row 11): a handler that throws must be answered at once, not left to time out.
 describe('a message handler that throws', () => {
   it('answers an awaited request with the failure flag and the real reason, and stays quiet for a push', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const sent: any[] = [];
-    const client: any = { ws: { readyState: 1, send: (d: string) => sent.push(JSON.parse(d)) } };
-    const server: any = new RemoteServer(new EventEmitter() as any, new EventEmitter() as any, {
-      enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}),
-    } as any);
+    const { failedMessageAnswer } = await import('../src/main/remote-failed-answer');
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    server.answerFailedMessage(client, JSON.stringify({ type: 'session:destroy', id: 'r1', payload: {} }), new Error('disk is read-only'));
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ type: 'session:destroy:response', id: 'r1', payload: { ok: false, error: 'disk is read-only', tableHandlerFailed: true } });
-    server.answerFailedMessage(client, JSON.stringify({ type: 'pty:input', payload: {} }), new Error('x'));
-    expect(sent).toHaveLength(1);
+    expect(failedMessageAnswer(JSON.stringify({ type: 'session:destroy', id: 'r1', payload: {} }), new Error('disk is read-only')))
+      .toEqual({ type: 'session:destroy', id: 'r1', payload: { ok: false, error: 'disk is read-only', tableHandlerFailed: true } });
+    expect(failedMessageAnswer(JSON.stringify({ type: 'pty:input', payload: {} }), new Error('x'))).toBeNull();
+    expect(failedMessageAnswer('not json', new Error('x'))).toBeNull();
   });
 
   it('is what the socket listener calls when handleMessage rejects', () => {
-    // Source-text pin (the listener is wired inside the auth flow, out of reach of a unit test): the listener must route a rejection here, or the 30 s silence returns.
+    // Source-text pin (the listener is wired inside the auth flow, out of reach of a unit test): without it the 30 s silence returns.
     const src = fs.readFileSync(join(__dirname, '..', 'src', 'main', 'remote-server.ts'), 'utf8');
-    expect(src).toMatch(/this\.handleMessage\(client, raw as Buffer \| string\)\.catch\(\(err\) => this\.answerFailedMessage\(/);
+    expect(src).toMatch(/this\.handleMessage\(client, raw as Buffer \| string\)\.catch\(\(err\) => this\.respondToFailure\(/);
   });
 });
