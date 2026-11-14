@@ -3015,6 +3015,10 @@ export function installShim(): void {
       restore: (filePath: string, versionId: string) => invoke('office:restore', { path: filePath, versionId }),
       onChanged: (cb: (p: { path: string; token: string }) => void) => { const h: Callback = (p: any) => cb(p); addListener('office:changed', h); return () => removeListener('office:changed', h); },
       saveCopy: (token: string, mode: string, data?: string) => invoke('office:save-copy', { token, mode, data }),
+      // Office Home's row actions (card #143): refused like the rest.
+      rename: (filePath: string, newName: string) => invoke('office:rename', { path: filePath, newName }),
+      duplicate: (filePath: string) => invoke('office:duplicate', { path: filePath }),
+      forgetRecent: (filePath: string) => invoke('office:forget-recent', { path: filePath }),
     },
     // Project View IPC — sibling to artifacts. Object-payload invoke style
     // mirrors the artifacts namespace above; the literal 'project:*' channel

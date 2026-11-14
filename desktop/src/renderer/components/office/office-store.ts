@@ -282,6 +282,19 @@ export function replaceDoc(oldPath: string, file: OfficeFile): void {
   forgetSaveState(oldPath);
 }
 
+/** Resolves true once `path` has no tab at all (a closing tab counts until finishClose removes
+ *  it), or false after `ms` if it is still there (the close failed and the tab came back).
+ *  WHY: Rename must not start while main still counts the file as open. */
+export function whenDocGone(path: string, ms = 8000): Promise<boolean> {
+  if (!officeDocFor(path)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const done = (v: boolean) => { clearTimeout(timer); listeners.delete(check); resolve(v); };
+    const check = () => { if (!officeDocFor(path)) done(true); };
+    const timer = setTimeout(() => done(false), ms);
+    listeners.add(check);
+  });
+}
+
 /** The closing tab's editor has saved (or given up after 5 s): remove it for good. */
 export function finishClose(path: string): void {
   if (!state.docs.some((d) => d.file.path === path && d.closing)) return;

@@ -98,8 +98,8 @@ async function aDocx(name = 'memo.docx'): Promise<string> {
 }
 
 describe('office IPC channels', () => {
-  it('registers all nine channels, clearing each one first so a reload can register again', () => {
-    const all = ['office:status', 'office:create', 'office:pick', 'office:open', 'office:invoke', 'office:close', 'office:versions', 'office:restore', 'office:save-copy'];
+  it('registers all twelve channels, clearing each one first so a reload can register again', () => {
+    const all = ['office:status', 'office:create', 'office:pick', 'office:open', 'office:invoke', 'office:close', 'office:versions', 'office:restore', 'office:save-copy', 'office:rename', 'office:duplicate', 'office:forget-recent'];
     expect([...ipc.handlers.keys()].sort()).toEqual([...all].sort());
     expect([...ipc.removed].sort()).toEqual([...all].sort());
     expect(() => registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => true, root: dir, userData: dir })).not.toThrow();
@@ -1021,5 +1021,149 @@ describe.skipIf(!HAS_ADDON)('a copy from kept typing after a restore, with the b
     const { token } = (await call('office:open', w, file)) as { token: string };
     await expect(call('office:save-copy', w, token, 'save', 42)).resolves.toEqual({ ok: false, message: 'refused' });
     w.removeAllListeners();
+  });
+});
+
+// Office Home's row actions (card #143): rename, make a copy, remove from Recent.
+describe('Home row actions', () => {
+  const recentOf = async () => (await call('office:status', win1, null) as { recent: OfficeFile[] }).recent;
+  /** Open a file (so it is in Recent and has a kept version), then close it so it can be renamed. */
+  async function openedAndClosed(name = 'memo.docx') {
+    const file = await aDocx(name);
+    const r = (await call('office:open', win1, file)) as { token: string };
+    await call('office:close', win1, r.token);
+    // WHY seeded by hand: the "opened" version is kept by open_file, which needs the real converter.
+    await snapshot(path.join(dir, 'userData'), file, 'opened', await readFile(file));
+    await vi.waitFor(async () => expect((await recentOf()).some((f) => f.path === file)).toBe(true));
+    return file;
+  }
+
+  it('renames a file, keeps its place in Recent and carries its kept versions to the new name', async () => {
+    const other = await aDocx('other.docx');
+    await call('office:open', win1, other);
+    const file = await openedAndClosed();
+    const before = (await call('office:versions', win1, file)) as unknown[];
+    expect(before.length).toBeGreaterThan(0);
+    const r = (await call('office:rename', win1, file, 'Plan.docx')) as { ok: boolean; file: OfficeFile };
+    expect(r).toMatchObject({ ok: true, file: { name: 'Plan.docx', path: path.join(dir, 'Plan.docx') } });
+    expect(existsSync(file)).toBe(false);
+    expect(existsSync(path.join(dir, 'Plan.docx'))).toBe(true);
+    // Recent: same row (first), new name.
+    const list = await recentOf();
+    expect(list.map((f) => f.name)).toEqual(['Plan.docx', 'other.docx']);
+    // History follows the file; the old key is empty.
+    expect(((await call('office:versions', win1, path.join(dir, 'Plan.docx'))) as unknown[]).length).toBe(before.length);
+    expect(existsSync(versionsDir(path.join(dir, 'userData'), file))).toBe(false);
+  });
+
+  it('refuses a name that is taken, and leaves both files as they were', async () => {
+    const file = await openedAndClosed();
+    await writeFile(path.join(dir, 'Taken.docx'), 'someone else');
+    await expect(call('office:rename', win1, file, 'Taken.docx')).resolves.toEqual({ ok: false, message: 'A file with that name is already in this folder.' });
+    expect(await readFile(path.join(dir, 'Taken.docx'), 'utf8')).toBe('someone else');
+    expect(existsSync(file)).toBe(true);
+  });
+
+  it.each([
+    ['a/b.docx', "A file name can't contain / or \\."],
+    ['a\\b.docx', "A file name can't contain / or \\."],
+    ['', 'Type a name for this file.'],
+    ['  ..  ', 'Type a name for this file.'],
+    ['what?.docx', `A file name can't contain any of these: < > : " | ? *`],
+    ['bad.docx ', "A file name can't end with a space or a period."],
+    ['bad.docx.', "A file name can't end with a space or a period."],
+    ['CON.docx', '"CON" is a name your computer keeps for itself. Pick another.'],
+    ['lpt3.docx', '"lpt3" is a name your computer keeps for itself. Pick another.'],
+    ['x'.repeat(260) + '.docx', 'That name is too long.'],
+    ['memo.xlsx', 'The file type has to stay .docx.'],
+    ['memo', 'The file type has to stay .docx.'],
+  ])('refuses the name %j with a specific sentence', async (name, message) => {
+    const file = await openedAndClosed();
+    await expect(call('office:rename', win1, file, name)).resolves.toEqual({ ok: false, message });
+    expect(existsSync(file)).toBe(true);
+  });
+
+  it('will not rename a file that is open in Office', async () => {
+    const file = await aDocx();
+    await call('office:open', win1, file);
+    const t0 = Date.now();
+    await expect(call('office:rename', win1, file, 'Plan.docx')).resolves.toEqual({ ok: false, message: 'Close this file in Office first, then rename it.' });
+    // An open tab is refused at once; only a tab still closing is waited for.
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(existsSync(file)).toBe(true);
+  });
+
+  it('refuses after waiting when Office still holds the file (a close that never finishes)', async () => {
+    const file = await aDocx();
+    registry = { ...sessions, byPath: () => undefined, inUse: () => true } as unknown as typeof sessions;
+    await expect(call('office:rename', win1, file, 'Plan.docx')).resolves.toEqual({ ok: false, message: 'Close this file in Office first, then rename it.' });
+    expect(existsSync(file)).toBe(true);
+  }, 15_000);
+
+  it('renames a file whose tab was only just closed, once its last save has drained', async () => {
+    const file = await aDocx();
+    const r = (await call('office:open', win1, file)) as { token: string };
+    const closing = call('office:close', win1, r.token);
+    await expect(call('office:rename', win1, file, 'Plan.docx')).resolves.toMatchObject({ ok: true });
+    await closing;
+  });
+
+  it('renames only the case of a name (the same file) when that is all that changes', async () => {
+    const file = await openedAndClosed('memo.docx');
+    await expect(call('office:rename', win1, file, 'MEMO.docx')).resolves.toMatchObject({ ok: true, file: { name: 'MEMO.docx' } });
+    expect(await readdir(dir)).toContain('MEMO.docx');
+    expect(await readdir(dir)).not.toContain('memo.docx');
+  });
+
+  it('says the file cannot be found when it is gone', async () => {
+    await expect(call('office:rename', win1, path.join(dir, 'gone.docx'), 'New.docx')).resolves.toEqual({ ok: false, message: "Office can't find this file." });
+  });
+
+  it('moves a crash-recovery journal (and its recorded path) to the new name', async () => {
+    const { keepRecoveryIn } = await import('../../src/main/office/office-recovery');
+    const file = await openedAndClosed();
+    const root = path.join(dir, 'userData', 'office-recovery');
+    keepRecoveryIn(path.join(dir, 'userData'));
+    const { createHash } = await import('node:crypto');
+    const key = (f: string) => createHash('sha256').update(f).digest('hex').slice(0, 32);
+    await mkdir(path.join(root, key(file) + '.held'), { recursive: true });
+    await writeFile(path.join(root, key(file) + '.held', 'info.json'), JSON.stringify({ path: file }));
+    await call('office:rename', win1, file, 'Plan.docx');
+    const next = path.join(dir, 'Plan.docx');
+    const info = JSON.parse(await readFile(path.join(root, key(next) + '.held', 'info.json'), 'utf8'));
+    expect(info.path).toBe(next);
+    expect(existsSync(path.join(root, key(file) + '.held'))).toBe(false);
+  });
+
+  it('makes copies beside the file: (copy), (copy 2), (copy 3), never over an existing file', async () => {
+    const file = await aDocx();
+    const names: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const r = (await call('office:duplicate', win1, file)) as { ok: true; file: OfficeFile };
+      expect(r.ok).toBe(true);
+      names.push(r.file.name);
+    }
+    expect(names).toEqual(['memo (copy).docx', 'memo (copy 2).docx', 'memo (copy 3).docx']);
+    expect((await readFile(path.join(dir, 'memo (copy 2).docx'))).equals(await readFile(file))).toBe(true);
+  });
+
+  it('skips a copy name already taken by another file without touching it', async () => {
+    const file = await aDocx();
+    await writeFile(path.join(dir, 'memo (copy).docx'), 'precious');
+    const r = (await call('office:duplicate', win1, file)) as { ok: true; file: OfficeFile };
+    expect(r.file.name).toBe('memo (copy 2).docx');
+    expect(await readFile(path.join(dir, 'memo (copy).docx'), 'utf8')).toBe('precious');
+  });
+
+  it('removes a file from Recent only, leaving the file itself, even when the file is gone', async () => {
+    const file = await openedAndClosed();
+    await call('office:forget-recent', win1, file);
+    expect(await recentOf()).toEqual([]);
+    expect(existsSync(file)).toBe(true);
+    // A gone file is matched by its stored path.
+    const second = await openedAndClosed('b.docx');
+    await rm(second);
+    await call('office:forget-recent', win1, second);
+    expect(await readFile(path.join(dir, 'userData', 'office-recent.json'), 'utf8')).not.toContain('b.docx');
   });
 });

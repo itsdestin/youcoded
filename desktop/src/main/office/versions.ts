@@ -425,3 +425,30 @@ async function sweepStrays(dir: string): Promise<void> {
     if (st && now - st.mtimeMs > STRAY_AGE_MS) await fsp.rm(full, { force: true }).catch(() => {});
   }
 }
+
+/**
+ * A file was renamed in the app: its kept versions follow it. The folder is keyed on the path, so
+ * it is moved to the new path's key and the index's recorded path is updated.
+ * WHY best-effort and never an error: the rename has already happened and must not be reported as
+ * failed because history could not follow. If the new key already has a folder (the new name had
+ * history of its own) nothing is merged and the old history stays where it is, unreachable but safe.
+ * Returns true when the history moved.
+ */
+export async function moveVersions(userData: string, oldPath: string, newPath: string): Promise<boolean> {
+  const from = versionsDir(userData, oldPath);
+  const to = versionsDir(userData, newPath);
+  if (from === to) return false;
+  try {
+    return await locked(from, () => locked(to, async () => {
+      if (!(await fsp.stat(from).then(() => true, () => false))) return false;
+      if (await fsp.stat(to).then(() => true, () => false)) return false;
+      await fsp.rename(from, to);
+      // The index's `path` is for a person looking at the folder; keep it truthful.
+      await updateIndex(to, newPath, (list) => list);
+      return true;
+    }));
+  } catch (e) {
+    log('WARN', 'Office', 'kept versions could not follow a rename', { error: String((e as Error)?.name), code: (e as NodeJS.ErrnoException)?.code ?? null });
+    return false;
+  }
+}

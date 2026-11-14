@@ -8,7 +8,8 @@
 // Pushes (office:changed, office:journal-request, office:unsaved-prompt, office:comments-request) are not rows.
 import type { OfficeBridge, OfficeKind } from './office-types';
 
-type Answer<K extends keyof OfficeBridge> = OfficeBridge[K] extends (...a: any[]) => infer R ? Awaited<R> : never;
+// WHY NonNullable: rename/duplicate/forgetRecent are optional on the bridge (the phone and old shims lack them); the channel's answer is what the function returns when present.
+type Answer<K extends keyof OfficeBridge> = NonNullable<OfficeBridge[K]> extends (...a: any[]) => infer R ? Awaited<R> : never;
 type Nothing = void;
 
 export interface OfficeChannelTypes {
@@ -21,6 +22,9 @@ export interface OfficeChannelTypes {
   'office:versions': { request: { path: string }; response: Answer<'versions'> };
   'office:restore': { request: { path: string; versionId: string }; response: Answer<'restore'> };
   'office:save-copy': { request: { token: string; mode: 'check' | 'save' | 'again' | 'release'; data?: string }; response: Answer<'saveCopy'> };
+  'office:rename': { request: { path: string; newName: string }; response: Answer<'rename'> };
+  'office:duplicate': { request: { path: string }; response: Answer<'duplicate'> };
+  'office:forget-recent': { request: { path: string }; response: Nothing };
   // The window's answers to main's pushes (fire-and-forget).
   'office:journal-done': { request: { id: string }; response: Nothing };
   'office:other-unsaved': { request: { names: string[] }; response: Nothing };

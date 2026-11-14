@@ -441,6 +441,9 @@ const IPC = {
   OFFICE_VERSIONS: 'office:versions',
   OFFICE_RESTORE: 'office:restore',
   OFFICE_SAVE_COPY: 'office:save-copy',
+  OFFICE_RENAME: 'office:rename',
+  OFFICE_DUPLICATE: 'office:duplicate',
+  OFFICE_FORGET_RECENT: 'office:forget-recent',
   OFFICE_JOURNAL_DONE: 'office:journal-done',
   OFFICE_OTHER_UNSAVED: 'office:other-unsaved',
   OFFICE_PROCEED: 'office:proceed',
@@ -2619,6 +2622,10 @@ contextBridge.exposeInMainWorld('claude', {
     // After a restore, the editor holding the token reopens its file (EditorFrame).
     onChanged: (cb: (p: { path: string; token: string }) => void) => officePush(IPC.OFFICE_CHANGED, cb),
     saveCopy: (token: string, mode: string, data?: string) => ipcRenderer.invoke(IPC.OFFICE_SAVE_COPY, { token, mode, data }),
+    // Office Home's row actions (card #143).
+    rename: (p: string, newName: string) => ipcRenderer.invoke(IPC.OFFICE_RENAME, { path: p, newName }),
+    duplicate: (p: string) => ipcRenderer.invoke(IPC.OFFICE_DUPLICATE, { path: p }),
+    forgetRecent: (p: string) => ipcRenderer.invoke(IPC.OFFICE_FORGET_RECENT, { path: p }),
     // Before its window closes, its editors journal their newest edits (main/office/office-journal-sync.ts) — desktop only.
     onJournalRequest: (cb: (id: string) => void) => officePush(IPC.OFFICE_JOURNAL_REQUEST, cb),
     journalDone: (id: string) => ipcRenderer.send(IPC.OFFICE_JOURNAL_DONE, { id }),

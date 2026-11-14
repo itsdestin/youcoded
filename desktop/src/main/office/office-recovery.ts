@@ -297,6 +297,31 @@ export async function discardRecoveryFor(file: string): Promise<void> {
   await discardHeldRecovery(file);
 }
 
+/** A file was renamed in the app: its journal (and a set-aside `.held` one) follow it. The folders
+ *  are keyed on the path and their info.json records it (offerRecovery refuses a journal whose
+ *  info.path differs), so both are moved and rewritten. WHY best-effort: the rename has already
+ *  happened; a journal that cannot follow is only logged. A target key that already has a folder
+ *  is left alone (nothing is merged). The file must not be open (the caller checked). */
+export async function moveRecovery(oldFile: string, newFile: string): Promise<void> {
+  if (!root) return;
+  for (const [from, to] of [
+    [path.join(root, keyOf(oldFile)), path.join(root, keyOf(newFile))],
+    [heldDir(oldFile), heldDir(newFile)],
+  ]) {
+    try {
+      if (!(await exists(from)) || (await exists(to))) continue;
+      await fsp.rename(from, to);
+      const infoFile = path.join(to, 'info.json');
+      const info = JSON.parse(await fsp.readFile(infoFile, 'utf8'));
+      info.path = newFile;
+      await fsp.writeFile(`${infoFile}.part`, JSON.stringify(info));
+      await fsp.rename(`${infoFile}.part`, infoFile); // whole or not at all, like writeInfo
+    } catch (e) {
+      log('WARN', 'Office', 'a recovery journal could not follow a rename', { code: (e as NodeJS.ErrnoException)?.code ?? null });
+    }
+  }
+}
+
 /** Startup tidy-up (fix round 1), never awaited by anyone: journals of files that are gone, and
  *  journals nothing touched for 30 days, are removed. */
 export const RECOVERY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;

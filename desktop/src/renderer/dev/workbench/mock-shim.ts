@@ -250,7 +250,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // workbench has files to list and versions to show without the add-on or a disk.
   'office.status', 'office.create', 'office.pick', 'office.open', 'office.invoke', 'office.close',
   'office.versions', 'office.restore', 'office.saveCopy',
-  // Home's row actions (card #143) — designed ahead of main; rows in mock-only.ts.
+  // Home's row actions (card #143) — real channels (office:rename / duplicate / forget-recent); faked here for the workbench.
   'office.rename', 'office.duplicate', 'office.forgetRecent',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
