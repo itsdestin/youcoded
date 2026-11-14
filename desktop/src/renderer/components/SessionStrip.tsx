@@ -2578,8 +2578,9 @@ export default function SessionStrip({
                             </span>
                           )}
                           <PinMark sessionId={s.id} />
-                          {/* Phone rows keep the status as a dot, giving the name ~60px back. */}
-                          {phoneRows ? <Tooltip text={STATUS_LABEL[color] ?? ''}><span className="shrink-0 flex items-center"><SessionDot color={color} isActive={s.id === activeSessionId} /></span></Tooltip> : <StatusPill color={color} isActive={s.id === activeSessionId} />}
+                          {/* WHY the worded status stays on phones too (record deck R-2, 2026-11-14): Destin
+                              rejected the dot ("dont like the status light changes"). */}
+                          <StatusPill color={color} isActive={s.id === activeSessionId} />
                         </span>
                         <span className="flex items-center gap-2 min-w-0">
                           <span className={`flex-1 min-w-0 flex items-center gap-1 text-3xs text-fg-muted ${phoneRows ? 'min-w-[4.5rem]' : ''}`}>
@@ -2609,8 +2610,11 @@ export default function SessionStrip({
                                     <ProviderIcon icon={rt.icon} size={10} />
                                   </span>
                                 )}
-                                {/* Phone rows: the model alone; the brand mark names the assistant. */}
-                                <span className="truncate">{phoneRows ? rt.text.split(' · ').pop() : rt.text}</span>
+                                {/* WHY the model alone at every width (record deck R-2, 2026-11-14): Destin, "the
+                                    reduction to just showing the model (dropping claude code/youcoded coder etc)
+                                    should happen on desktop too". The brand mark beside it still names the
+                                    assistant, and the hover text below keeps the full wording. */}
+                                <span className="truncate">{rt.text.split(' · ').pop()}</span>
                               </span>
                               </Tooltip>
                             );
@@ -2738,7 +2742,8 @@ export default function SessionStrip({
                                           <ProviderIcon icon={rt.icon} size={10} />
                                         </span>
                                       )}
-                                      <span className="truncate">{rt.text}</span>
+                                      {/* Model alone, as in this window's rows above (record deck R-2). */}
+                                      <span className="truncate">{rt.text.split(' · ').pop()}</span>
                                     </span>
                                     </Tooltip>
                                   );

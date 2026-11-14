@@ -21,7 +21,7 @@ import { workbenchNarrowPills } from '../workbench-mode';
 import { SessionTagsChip } from './tags/SessionTagsChip';
 import SpecialistsChip from './SpecialistsChip';
 import BackgroundCommandsChip from './BackgroundCommandsChip';
-import { CARD_LEVEL_1, CARD_LEVEL_2, CheckboxMark, Dialog, FoldRow, Pill, RowStatus, SectionLabel, SettingRow, Toggle, Tooltip } from './ui';
+import { CARD_LEVEL_1, CARD_LEVEL_2, CheckboxMark, Dialog, FoldRow, RowStatus, SectionLabel, SettingRow, Toggle, Tooltip } from './ui';
 import { resolveModelBrand, type ProviderIconKey } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import type { SessionTotals } from '../state/session-totals';
@@ -1078,7 +1078,12 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         // Round 3: the computer icon alone ("some of these need to be shortened, like remote");
         // the words are in the hint and read out by screen readers.
         <Tooltip text="This phone is connected to your computer — the assistant runs there">
-          <span aria-label="Connected to your computer"><Pill tone="info"><ComputerIcon /></Pill></span>
+          {/* WHY a plain pill with a green glow (record deck R-3 / branch review V-3, 2026-11-14):
+              Destin, "it should be light like the others, maybe with a green glow behind the computer
+              outline". Same surface as its neighbours; the glow is the fixed status green ("connected"). */}
+          <span aria-label="Connected to your computer" className="flex items-center rounded-sm bg-panel border border-edge-dim text-fg-2">
+            <span className="flex" style={{ filter: 'drop-shadow(0 0 2px rgb(34 197 94)) drop-shadow(0 0 4px rgb(34 197 94 / 0.6))' }}><ComputerIcon /></span>
+          </span>
         </Tooltip>
       )}
       {/* Combined model + effort pill — clicking opens the full picker (same as /effort).

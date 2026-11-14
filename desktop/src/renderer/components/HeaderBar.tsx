@@ -546,10 +546,16 @@ export default React.memo(function HeaderBar({
   // (pre-measurement or not-yet-laid-out), we fall back to `flex-1` via
   // className. The width transition smooths the shift that happens when the
   // chat/terminal toggle's active label changes width (Chat=3rem, Term=4.5rem).
-  const clusterStyle: React.CSSProperties | undefined = reservedWidth != null
+  // WHY the lights bar skips the equal reservation (record deck R-4, 2026-11-14): in a narrow
+  // computer window the right side carries Minimize/Maximize/Close too, so matching widths gave
+  // both sides more than the header had and the terminal button landed on the window buttons.
+  // Each side now takes only its own width and the name fills what is left between them. The
+  // same holds on a Mac, where the traffic lights take the room on the LEFT instead.
+  const ownWidths = narrowTop === 'lights';
+  const clusterStyle: React.CSSProperties | undefined = ownWidths ? undefined : reservedWidth != null
     ? { flex: '0 0 auto', width: `${reservedWidth}px`, transition: 'width 200ms ease' }
     : undefined;
-  const clusterFlexClass = reservedWidth == null ? 'flex-1 ' : '';
+  const clusterFlexClass = ownWidths ? 'shrink-0 ' : reservedWidth == null ? 'flex-1 ' : '';
 
   // Narrow swaps the two-segment pill for a single target-view icon button.
   //
@@ -661,7 +667,9 @@ export default React.memo(function HeaderBar({
         {/* "Two buttons each side" top bar: New session joins the view
             switch on the right; it opens the same form as the list's own
             New session button. */}
-        {twoEachSide && (
+        {/* WHY not on the lights bar (record deck R-1, 2026-11-14): Destin, "i hate the + new
+            session". New session stays one tap into the list, as today. */}
+        {twoEachSide && narrowTop !== 'lights' && (
           <Tooltip text="New session" placement="bottom">
             <button
               type="button"

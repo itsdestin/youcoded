@@ -1966,10 +1966,13 @@ pre.yc-code code {
      (rebase onto master, 2026-11-11): master made the chips finger-sized (h-8)
      on every touch screen AND every narrow window (device.ts fingerSized()), and
      this row only exists in a narrow window, so the chips there are always h-8. */
-  height: 2rem;
-  min-width: 2rem;
+  /* WHY 1.25rem now (record deck R-3, 2026-11-14): Destin, "making the chips vertically
+     shorter/smaller. by a lot". 32px -> 20px; the row no longer matches the shortcut chips'
+     height, and a 20px pill is under finger size (master's fingerSized() asks h-8). */
+  height: 1.25rem;
+  min-width: 1.25rem;
   border-radius: var(--radius-md, 12px);
-  padding: 0 0.625rem;
+  padding: 0 0.5rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
