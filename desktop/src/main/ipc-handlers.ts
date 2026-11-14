@@ -1,4 +1,3 @@
-import { noteFolderUsed } from './folders-service';
 import { setBrowserAskListener } from './ipc/browser';
 import { app, IpcMain, BrowserWindow, powerSaveBlocker, webContents } from 'electron';
 import fs from 'fs';
@@ -569,7 +568,6 @@ export function registerIpcHandlers(
   sessionManager.on('session-created', (info) => {
     // A new record, a new epoch (one-core R5-1). Synchronous, so it exists before any of the session's events.
     runtime.records.begin(info.id);
-    noteFolderUsed(info.cwd); // card #143 b: the folder list orders by last use
     process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, [info]));
   });
   attachStartupDialogLog(sessionManager, hookRelay, log, (id) => sessionManager.markStarted(id)); // desktop.log + SessionInfo.awaitingStart
