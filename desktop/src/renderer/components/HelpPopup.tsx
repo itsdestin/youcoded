@@ -107,7 +107,8 @@ export function HelpPopup({ open, onClose, onShowMeAround, onOpenBug, onOpenCont
               icon={<PeopleIcon />}
               title="Community on Reddit"
               description="Questions, ideas, other users"
-              onClick={() => { window.open(COMMUNITY_URL, '_blank'); onClose(); }}
+              // Stays open behind the browser, like Known issues (Destin, review deck Q-1: all three the same).
+              onClick={() => { window.open(COMMUNITY_URL, '_blank'); }}
             />
             <SettingRow
               icon={<BugIcon />}
@@ -128,7 +129,8 @@ export function HelpPopup({ open, onClose, onShowMeAround, onOpenBug, onOpenCont
               icon={<ClipboardListIcon />}
               title="Roadmap"
               description="See what's planned on GitHub"
-              onClick={() => { window.open(ROADMAP_URL, '_blank', 'noopener,noreferrer'); onClose(); }}
+              // Stays open behind the browser, like Known issues (Destin, review deck Q-1).
+              onClick={() => { window.open(ROADMAP_URL, '_blank', 'noopener,noreferrer'); }}
             />
           </div>
         </section>

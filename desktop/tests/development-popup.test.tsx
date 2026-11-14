@@ -38,6 +38,17 @@ describe('Help & feedback carries the development rows', () => {
     openSpy.mockRestore();
   });
 
+  it('Roadmap and Community on Reddit also leave Help open behind the browser (Destin, Q-1: all three the same)', () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const onClose = vi.fn();
+    renderHelp({ onClose });
+    fireEvent.click(screen.getByText(/^Roadmap$/));
+    fireEvent.click(screen.getByText(/^Community on Reddit$/));
+    expect(openSpy).toHaveBeenCalledTimes(2);
+    expect(onClose).not.toHaveBeenCalled();
+    openSpy.mockRestore();
+  });
+
   it('carries the shared dialog header: a title and a ✕', () => {
     renderHelp();
     expect(screen.getByRole('heading', { name: 'Help & feedback' })).toBeInTheDocument();
