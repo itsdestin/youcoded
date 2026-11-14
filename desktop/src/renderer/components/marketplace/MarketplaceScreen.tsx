@@ -35,6 +35,7 @@ import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 // Integrations carry their catalog metadata plus live installed/connected state
 // (type and detail page: IntegrationDetailOverlay.tsx since the 2026-10-04 redesign).
 import { IntegrationDetailOverlay, type IntegrationCardItem } from "./IntegrationDetailOverlay";
+import { announceFailed } from '../../utils/announce';
 
 // Integration icons live in the marketplace repo at integrations/icons/,
 // referenced via raw.githubusercontent.com. Pre-built once at module scope
@@ -161,11 +162,19 @@ export default function MarketplaceScreen({
        .catch(() => setIntegrations([]));
   }, []);
 
-  const refreshIntegrations = async () => {
+  // Card #134 round 4: returns the fresh list (or null if it could not be read) so the open detail page can show the NEW state
+  // — it holds its own copy, so a failed install's recorded error never reached it. A list that cannot be read is said so by the
+  // caller, because the screen may then be out of date.
+  const refreshIntegrations = async (): Promise<IntegrationCardItem[] | null> => {
     try {
-      const items = await (window as any).claude.integrations.list();
-      setIntegrations(items || []);
-    } catch { /* ignore */ }
+      const items: IntegrationCardItem[] = (await (window as any).claude.integrations.list()) || [];
+      setIntegrations(items);
+      setIntegrationDetail((prev) => (prev ? items.find((it) => it.slug === prev.slug) ?? prev : prev));
+      return items;
+    } catch (e) {
+      console.warn('[marketplace] integrations list refresh failed:', e);
+      return null;
+    }
   };
 
   // Compute the status-pill text/tone for an integration. Mirrors the
@@ -199,37 +208,53 @@ export default function MarketplaceScreen({
   // command — that path was timing-fragile and frequently no-op'd against a
   // still-booting CLI.
   const openSetupSession = async (displayName: string) => {
-    const info = await (window as any).claude.session.create({
-      name: `Set up ${displayName}`,
-      cwd: "",
-      skipPermissions: false,
-      model: "claude-sonnet-4-6",
-    });
-    if (info?.id) onExit();
+    // Card #134 round 4: a refused/failed create used to do nothing — the marketplace stayed as it was with no word. Only a real
+    // failure speaks: a result without an id, or a rejection.
+    try {
+      const info = await (window as any).claude.session.create({
+        name: `Set up ${displayName}`,
+        cwd: "",
+        skipPermissions: false,
+        model: "claude-sonnet-4-6",
+      });
+      if (info?.id) onExit();
+      else announceFailed('open a setup session', (info as { error?: unknown } | undefined)?.error);
+    } catch (e) {
+      announceFailed('open a setup session', e);
+    }
   };
 
   const installIntegration = async (item: IntegrationCardItem) => {
     if (item.status !== "available") return;
-    const result = await (window as any).claude.integrations.install(item.slug);
-    await refreshIntegrations();
+    let result: any;
+    try { result = await (window as any).claude.integrations.install(item.slug); }
+    catch (e) { announceFailed(`install ${item.displayName}`, e); return; }
+    // A refused install is recorded by main and shows on the detail page ("Couldn't install" + Try again) once the list is re-read.
+    if ((await refreshIntegrations()) === null) announceFailed('refresh the integrations list');
     if (result?.postInstallCommand) {
       setSetupHint({ slug: item.slug, displayName: item.displayName, command: result.postInstallCommand });
     }
   };
 
   const connectIntegration = async (item: IntegrationCardItem) => {
-    const result = await (window as any).claude.integrations.connect(item.slug);
-    await refreshIntegrations();
+    let result: any;
+    try { result = await (window as any).claude.integrations.connect(item.slug); }
+    catch (e) { announceFailed(`connect ${item.displayName}`, e); return; }
+    // Unlike install, main does NOT record a refused connect anywhere the page reads, so it is said here.
+    if (result?.error) announceFailed(`connect ${item.displayName}`, result.error);
+    if ((await refreshIntegrations()) === null) announceFailed('refresh the integrations list');
     if (result?.postInstallCommand) {
       setSetupHint({ slug: item.slug, displayName: item.displayName, command: result.postInstallCommand });
     }
   };
 
   const uninstallIntegration = async (item: IntegrationCardItem) => {
-    await (window as any).claude.integrations.uninstall(item.slug);
-    await refreshIntegrations();
+    try { await (window as any).claude.integrations.uninstall(item.slug); }
+    catch (e) { announceFailed(`uninstall ${item.displayName}`, e); return false; }
+    if ((await refreshIntegrations()) === null) announceFailed('refresh the integrations list');
     // Clear any setup hint for this slug — the command's moot now.
     setSetupHint((prev) => (prev?.slug === item.slug ? null : prev));
+    return true;
   };
 
   // Register with the dismissal stack. ESC (desktop) and hardware back
@@ -760,8 +785,8 @@ export default function MarketplaceScreen({
               await connectIntegration(integrationDetail);
             }}
             onUninstall={async () => {
-              await uninstallIntegration(integrationDetail);
-              setIntegrationDetail(null);
+              // Stay on the page when the uninstall failed (the toast says so); close only when it worked.
+              if (await uninstallIntegration(integrationDetail)) setIntegrationDetail(null);
             }}
             statusBadge={integrationStatusBadge(integrationDetail)}
             iconUrl={integrationDetail.iconUrl ? `${INTEGRATION_ICON_BASE}/${integrationDetail.iconUrl}` : undefined}

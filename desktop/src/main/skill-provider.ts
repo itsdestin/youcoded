@@ -547,12 +547,21 @@ export class LocalSkillProvider {
     return parentPluginId && installed[parentPluginId] ? parentPluginId : null;
   }
 
-  async uninstall(id: string): Promise<{ type: 'plugin' | 'prompt' }> {
+  async uninstall(id: string): Promise<{ type: 'plugin' | 'prompt'; failed?: string }> {
     const pluginId = await this.resolveUninstallTarget(id);
     if (pluginId) {
       // WHY: without this a plugin's hooks and connected tools outlived Uninstall (see detachPluginExtras).
       await detachPluginExtras(pluginInstallDir(pluginId));
-      await uninstallPlugin(pluginId);
+      const removed = await uninstallPlugin(pluginId);
+      // Card #134 round 4: uninstallPlugin answers false when the folder could not be deleted (or the id was refused); that answer
+      // was ignored, so the plugin was dropped from the settings and shown as uninstalled while its files stayed on disk. Now
+      // it says so (the answer carries `failed`, which the channel turns into { ok:false, error }; the renderer shows it under "Couldn't uninstall"), keeps the plugin listed — it IS still there — and
+      // re-reads the list. The plain sentence names no cause because the false answer does not carry one.
+      if (!removed) {
+        this.installedCache = null;
+        this.onCacheInvalidated?.();
+        return { type: 'plugin', failed: 'its files could not be fully removed from this computer' };
+      }
       // A plugin turned off as unsafe is held outside the plugins folder: Remove deletes that too.
       await fs.promises.rm(turnedOffDir(pluginId), { recursive: true, force: true }).catch(() => {});
       this.configStore.removePluginInstall(pluginId);

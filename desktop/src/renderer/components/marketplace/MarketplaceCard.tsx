@@ -6,6 +6,7 @@
 // cards"): every card wears the shared card outline (guide "Card levels" → the outline is
 // what separates layers); the hero dropped its accent border the same way (P-21 #1).
 
+import { announceFailed } from '../../utils/announce';
 import { memo, useId, useState } from "react";
 import type { SkillEntry, SkillComponents } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
@@ -124,8 +125,8 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
   const [themePreviewFailed, setThemePreviewFailed] = useState(false);
 
   const toggleFavorite = () => {
-    if (kind === "theme") mp.favoriteTheme(item.entry.slug, !isFavorited).catch(() => {});
-    else mp.setFavorite(item.entry.id, !isFavorited).catch(() => {});
+    if (kind === "theme") mp.favoriteTheme(item.entry.slug, !isFavorited).catch((e) => announceFailed('change your favorites', e));
+    else mp.setFavorite(item.entry.id, !isFavorited).catch((e) => announceFailed('change your favorites', e));
   };
 
   const install = () => {

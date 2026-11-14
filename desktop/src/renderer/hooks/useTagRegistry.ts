@@ -1,6 +1,7 @@
 // src/renderer/hooks/useTagRegistry.ts
 // Live view of the tag registry. Loads via window.claude.tags.list() and
 // refetches whenever a tags:changed push arrives (any window/device mutation).
+import { announceFailed } from '../utils/announce';
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { TagRecord, TagColor } from '../../shared/tags';
 import { REMOTE_RECONNECTED_EVENT } from '../remote-events';
@@ -161,13 +162,18 @@ export function useTagRegistry(opts?: { refreshOnMount?: boolean }): TagRegistry
   const create = useCallback(async (label: string, color: TagColor) => {
     const res: any = await (window as any).claude.tags.create(label, color);
     load();
+    // Card #134 round 4: a refused create used to just return null and the form did nothing. The registry re-read above shows truth.
+    if (!res?.ok) announceFailed('create the tag', res?.error);
     return res?.ok ? (res.tag as TagRecord) : null;
   }, []);
   const update = useCallback(async (id: string, patch: { label?: string; color?: TagColor; archived?: boolean }) => {
-    await (window as any).claude.tags.update(id, patch); load();
+    const res: any = await (window as any).claude.tags.update(id, patch); load();
+    // Said only when the host answered "no" (ok:false); the re-read above puts the true name/colour back on screen.
+    if (res && res.ok === false) announceFailed('save the tag', res.error);
   }, []);
   const remove = useCallback(async (id: string) => {
-    await (window as any).claude.tags.delete(id); load();
+    const res: any = await (window as any).claude.tags.delete(id); load();
+    if (res && res.ok === false) announceFailed('delete the tag', res.error);
   }, []);
   return useMemo(() => ({ ...s, reload: load, create, update, remove }), [s, create, update, remove]);
 }

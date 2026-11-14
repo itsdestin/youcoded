@@ -1,4 +1,5 @@
 import { useLayoutEffect, useMemo, useRef } from 'react';
+import { announceFailed } from '../utils/announce';
 import { useTheme } from '../state/theme-context';
 import { useMarketplace } from '../state/marketplace-context';
 import SettingsExplainer, { type ExplainerSection } from './SettingsExplainer';
@@ -169,7 +170,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
                 active={t.slug === activeSlug}
                 favorite={themeFavSet.has(t.slug)}
                 onSelect={() => setTheme(t.slug)}
-                onToggleFavorite={() => { mp.favoriteTheme(t.slug, !themeFavSet.has(t.slug)).catch(() => {}); }}
+                onToggleFavorite={() => { mp.favoriteTheme(t.slug, !themeFavSet.has(t.slug)).catch((e) => { announceFailed('change your favorites', e); }); }}
                 // The share icon exists only on the user's own themes (canPublish).
                 onShare={canPublish(t) && onPublishTheme ? () => onPublishTheme(t.slug) : undefined}
                 fallbackPreview={libraryPreviews.get(t.slug)}

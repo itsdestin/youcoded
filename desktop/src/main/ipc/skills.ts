@@ -63,6 +63,7 @@ export const skillsChannels: MainChannelDef[] = [
       const owner = await skillProvider.resolveUninstallTarget(id);
       if (owner && isBundledPlugin(owner)) return refusal;
       const result = await skillProvider.uninstall(id);
+      if (result.failed) return { ok: false, error: result.failed, type: result.type };
       // Reload plugins so Claude Code drops the uninstalled plugin.
       if (result.type === 'plugin') sessionManager.broadcastReloadPlugins();
       return result;
