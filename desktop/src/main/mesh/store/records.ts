@@ -37,6 +37,10 @@ export interface Rec {
   c: Buffer;            // conversation chain value after this line
 }
 
+// FORMAT TRAP for later (review N16): never put per-line PROVENANCE (which device wrote a line) in an index record. A rebuild
+// re-derives every record from the body bytes alone, so anything stored only in the record would be lost by the first rebuild.
+// Keep provenance in its own file keyed by line number, and make the rebuild treat that file as optional.
+
 /**
  * `stamp` rides in the header's reserved word: it names the classifier (and reply-end options) that
  * produced every record's conversation-chain value, conversation count and reply-end fields (review M5).

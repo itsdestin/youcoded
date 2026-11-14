@@ -63,29 +63,32 @@ describe('C1: a damaged index never costs acknowledged lines', () => {
     await s.close();
   });
 
-  it('record AND body both damaged: the whole version moves aside intact, typed "damaged", nothing wrong is served', async () => {
+  it('record AND body both damaged (N7): the verified prefix stays served, the rest is set aside intact, flagged, and a correct resend heals it', async () => {
+    // WAS (round 1): the whole version was quarantined. A single rotted byte must not take a healthy chat out of service.
     const L = rows(100); await build(t.dir, L);
     const ip = path.join(vdir(t.dir), 'index.bin'); const bp = path.join(vdir(t.dir), 'body-0000000000000000.bin');
     const dmgIndex = flip(ip, recPos(50) + 20);
     const at70 = L.slice(0, 70).reduce((n, l) => n + l.length, 0) + 5;
     const dmgBody = flip(bp, at70);
     const s = await ChatStore.open(t.dir);
-    await rejects(s.head(V(1)), 'damaged');
-    const dirs = asideDirs(t.dir);
-    expect(dirs).toEqual([`${vhex}-q1`]);
-    const q = path.join(t.dir, 'aside', dirs[0]);
-    expect(fs.readFileSync(path.join(q, 'index.bin')).equals(dmgIndex)).toBe(true);
-    expect(fs.readFileSync(path.join(q, 'body-0000000000000000.bin')).equals(dmgBody)).toBe(true);
-    expect(fs.readdirSync(vdir(t.dir)).filter((f) => f.startsWith('body-') || f === 'index.bin')).toEqual([]);
-    await rejects(s.read(V(1), 0, 0, 1), 'damaged');
-    await rejects(s.append(V(1), 0, 0, L), 'damaged');
-    const lv = await s.listVersions();
-    expect(lv[0].damaged).toBe(`${vhex}-q1`); expect(lv[0].head).toBeNull();
-    // only an explicit reset (the caller recopies from a peer) clears it; the quarantined copy stays
-    expect((await s.setAsideDamaged(V(1))).asideName).toBe(`${vhex}-q1`);
-    expect((await s.head(V(1))).lines).toBe(0);
-    expect(await s.append(V(1), 0, 0, L)).toBe('ok');
-    expect(fs.readdirSync(path.join(q)).length).toBeGreaterThan(1);
+    const head = await s.head(V(1));
+    // lines 0..69 are vouched for by valid records (51..69) and the chain; line 70's body disagrees with its valid record
+    expect(head.lines).toBe(70); expect(head.hash).toBe(refChains(L).raw[70]); expect(head.damagedFromLine).toBe(70);
+    expect(asideDirs(t.dir)).toEqual([]);
+    expect(Buffer.concat((await s.read(V(1), 0, 0, 70)) as Buffer[]).equals(Buffer.concat(L.slice(0, 70)))).toBe(true);
+    expect((await s.verify(V(1))).ok).toBe(true);
+    // nothing is gone: the old index (damaged record included) and the cut-off body bytes (damaged byte included) are kept
+    expect(fs.readFileSync(path.join(vdir(t.dir), 'replaced-index', 'index-0001.bin')).equals(dmgIndex)).toBe(true);
+    const torn = fs.readdirSync(path.join(vdir(t.dir), 'torn')).filter((f) => f.endsWith('-body'));
+    expect(torn.length).toBe(1);
+    const kept = fs.readFileSync(path.join(vdir(t.dir), 'torn', torn[0]));
+    expect(kept.equals(dmgBody.subarray(L.slice(0, 70).reduce((n, l) => n + l.length, 0)))).toBe(true);
+    // a correct resend heals (the lines are chain-checked against the kept prefix), and the flag clears
+    expect(await s.append(V(1), 0, 70, L.slice(70))).toBe('ok');
+    const healed = await s.head(V(1));
+    expect(healed.lines).toBe(100); expect(healed.hash).toBe(refChains(L).raw[100]); expect(healed.damagedFromLine).toBeNull();
+    expect((await readAll(s, 100)).equals(Buffer.concat(L))).toBe(true);
+    expect((await s.verify(V(1))).ok).toBe(true);
     await s.close();
   });
 
@@ -177,7 +180,8 @@ describe('C2: one writer per store root', () => {
     fs.unlinkSync(path.join(t.dir, 'LOCK'));
     const B = await ChatStore.open(t.dir); await B.head(V(1));
     expect(await B.append(V(1), 0, 10, rows(2, 'b'))).toBe('ok');
-    await rejects(A.append(V(1), 0, 10, rows(1, 'a')), 'corrupt');
+    // WHY store-locked and not corrupt (N9d): the write is now refused BEFORE it touches a file, because the lock is no longer ours
+    await rejects(A.append(V(1), 0, 10, rows(1, 'a')), 'store-locked');
     await B.close();
     const C = await ChatStore.open(t.dir);
     expect((await C.head(V(1))).lines).toBe(12);
@@ -220,10 +224,17 @@ describe('C2: one writer per store root', () => {
     } finally { child.kill('SIGKILL'); }
   });
 
-  it('a lock from another machine (shared folder) is never taken over', async () => {
+  it('a lock from another machine (shared folder) is never taken over by itself, but offers the evidence so the caller can decide (N9)', async () => {
     const probe = await openWith(t.dir); await probe.close();
     fs.writeFileSync(path.join(t.dir, 'LOCK'), JSON.stringify({ pid: 2147483646, start: 'x', host: 'some-other-computer', token: 'z' }));
-    await rejects(ChatStore.open(t.dir), 'store-locked');
+    const err = await ChatStore.open(t.dir).then(() => null, (e) => e);
+    expect(err).toMatchObject({ name: 'StoreError', code: 'store-locked-stale?' });
+    expect(err.evidence).toMatchObject({ pid: 2147483646, host: 'some-other-computer', token: 'z', breakLockToken: 'z' });
+    expect(err.evidence.why).toContain('some-other-computer');
+    // the caller says "yes, break it" with the token it was shown; a different token breaks nothing
+    await rejects(ChatStore.open(t.dir, { breakLockToken: 'not-that-one' }), 'store-locked-stale?');
+    const b = await ChatStore.open(t.dir, { breakLockToken: err.evidence.breakLockToken });
+    await b.close();
   });
 });
 
@@ -252,11 +263,21 @@ describe('H1: setAsideTail replay never cuts lines appended since', () => {
     const L = rows(12);
     const s = await openWith(t.dir); await s.append(V(1), 0, 0, L);
     await s.setAsideTail(takeover, V(1), 4);
-    // simulate "tail file durable, cut not done": put the tail lines back by appending them again
+    // simulate "tail file durable, cut not done": put the tail lines back and remove the "cut done" marker (N15)
     expect(await s.append(V(1), 0, 4, L.slice(4))).toBe('ok');
+    fs.unlinkSync(path.join(vdir(t.dir), 'tails', `${takeover}.done`));
     expect((await s.head(V(1))).lines).toBe(12);
     await s.setAsideTail(takeover, V(1), 4);
     expect((await s.head(V(1))).lines).toBe(4);
+    await s.close();
+  });
+  it('N15: once the cut is recorded as done, byte-identical lines appended later are NOT cut again by a replay', async () => {
+    const L = rows(12);
+    const s = await openWith(t.dir); await s.append(V(1), 0, 0, L);
+    await s.setAsideTail(takeover, V(1), 4);
+    expect(await s.append(V(1), 0, 4, L.slice(4))).toBe('ok');         // the new host happens to write the same lines
+    expect((await s.setAsideTail(takeover, V(1), 4)).lines).toBe(8);   // redelivered request: the original answer...
+    expect((await s.head(V(1))).lines).toBe(12);                       // ...and the lines stay
     await s.close();
   });
 });
@@ -464,23 +485,48 @@ describe('M3: control log', () => {
   const idOf = (body: Buffer) => createHash('sha256').update(body).digest('hex');
   const mk = (n: number, seen: string[] = []) => { const body = Buffer.from('ctl-' + n); return { id: idOf(body), chat: CHAT, seen, body }; };
 
-  it('a damaged middle record is NOT cut off with everything after it: typed damaged, bytes kept', async () => {
+  const logDir = () => path.join(t.dir, 'control', createHash('sha256').update(CHAT).digest('hex'));
+  it('a damaged middle record is skipped, reported, and every later entry is still served (N2); log.bin is never cut', async () => {
     const e1 = mk(1); const e2 = mk(2, [e1.id]); const e3 = mk(3, [e2.id]);
     const s = await openWith(t.dir);
     for (const e of [e1, e2, e3]) await s.appendControl(e);
     await s.close();
-    const dir = path.join(t.dir, 'control', createHash('sha256').update(CHAT).digest('hex'));
+    const dir = logDir();
     const before = fs.readFileSync(path.join(dir, 'log.bin'));
-    const firstLen = 8 + before.readUInt32BE(0);
-    flip(path.join(dir, 'log.bin'), firstLen + 12);               // inside record 2's payload
+    const firstLen = 16 + before.readUInt32BE(4);
+    flip(path.join(dir, 'log.bin'), firstLen + 20);               // inside record 2's payload
     const after = fs.readFileSync(path.join(dir, 'log.bin'));
     const s2 = await ChatStore.open(t.dir);
-    await rejects(s2.controlLog(CHAT), 'damaged');
+    expect((await s2.controlLog(CHAT)).map((e) => e.id)).toEqual([e1.id, e3.id]);
+    const dmg = await s2.controlDamage(CHAT);
+    expect(dmg).toHaveLength(1); expect(dmg[0].offset).toBe(firstLen); expect(dmg[0].why).toContain('checksum');
     expect(fs.readFileSync(path.join(dir, 'log.bin')).equals(after)).toBe(true);
-    await rejects(s2.appendControl(mk(4, [e3.id])), 'damaged');
-    const moved = await s2.quarantineControl(CHAT);
-    expect(fs.readFileSync(path.join(dir, moved)).equals(after)).toBe(true);
-    expect(await s2.controlLog(CHAT)).toEqual([]);
+    // appends still work, and e2's loss is recoverable: re-appending it (from a peer) is stored again
+    expect(await s2.appendControl(mk(4, [e3.id]))).toBe('ok');
+    expect(await s2.appendControl(e2)).toBe('ok');
+    expect((await s2.controlLog(CHAT)).map((e) => e.id).sort()).toEqual([e1.id, e2.id, e3.id, mk(4).id].sort());
+    await s2.close();
+    const s3 = await ChatStore.open(t.dir);                      // and it all survives a reopen
+    expect((await s3.controlLog(CHAT)).length).toBe(4);
+    await s3.close();
+  });
+
+  it('N2 review demonstration: one flipped bit in a record LENGTH no longer reads as a torn tail that drops the 7 entries after it', async () => {
+    const es: ReturnType<typeof mk>[] = [];
+    for (let i = 1; i <= 10; i++) es.push(mk(i, i > 1 ? [es[i - 2].id] : []));
+    const s = await openWith(t.dir);
+    for (const e of es) await s.appendControl(e);
+    await s.close();
+    const lp = path.join(logDir(), 'log.bin');
+    const b = fs.readFileSync(lp);
+    let pos = 0; for (let i = 0; i < 2; i++) pos += 16 + b.readUInt32BE(pos + 4);   // start of record 3
+    b[pos + 4 + 1] ^= 0x40;                                      // a bit in its length field
+    fs.writeFileSync(lp, b);
+    const s2 = await ChatStore.open(t.dir);
+    expect((await s2.controlLog(CHAT)).map((e) => e.id)).toEqual(es.filter((_, i) => i !== 2).map((e) => e.id));
+    expect((await s2.controlDamage(CHAT)).length).toBe(1);
+    expect(fs.readdirSync(logDir()).filter((n) => n.startsWith('torn-'))).toEqual([]);   // nothing was cut away
+    expect(fs.readFileSync(lp).equals(b)).toBe(true);
     await s2.close();
   });
 

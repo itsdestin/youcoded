@@ -14,9 +14,18 @@
 //    the directory holding it was fsynced afterwards (fsyncDir). Otherwise power loss removes the created
 //    entry, and undoes the rename (the old name comes back). Review M2: this is what lets the sweeps see a
 //    missing parent fsync.
-//  NOT modelled (unverified): a rename ONTO an existing name (either old or new content is legal and the
-//  shim keeps the new), an unlink that was never directory-synced (the file could come back), and
-//  reordering of unsynced writes between files.
+//  - UNSYNCED UNLINK and RENAME-OVER-EXISTING (review "crash sweep honesty"), modelled when `shadowDir`
+//    is given (a folder on the same file system, outside the store): an unlink moves the file into
+//    shadowDir instead of deleting it; a rename onto an existing name first moves the old target there.
+//    fsyncDir of the holding directory makes the change permanent. On power loss an unsynced unlink
+//    RESURRECTS the file, and with `revertOverwrites` an unsynced overwrite brings the OLD content back
+//    (both outcomes are legal on a real file system, so the sweeps run both).
+//  - ENOSPC (`enospcFrom: n`): from the n-th space-allocating operation on (a write, a new file, a new
+//    directory) every such operation fails with code ENOSPC until the shim is discarded ("space freed");
+//    with `tear` a failing write first lands half its bytes, like a real full disk. Reads, unlinks, renames,
+//    truncates and fsyncs keep working, as they do on a full disk.
+//  - OPEN HANDLES: `openHandles` counts opened-minus-closed files, so a test can prove no path leaks one (N10).
+//  NOT modelled (unverified): reordering of unsynced writes between files, and file systems that lie about fsync.
 import * as fsp from 'node:fs/promises';
 import * as nodePath from 'node:path';
 import type { Fs, FileLike } from './fsio';
@@ -27,6 +36,10 @@ export class InjectedCrash extends Error {
 }
 
 interface PendingRename { from: string; to: string; dirsLeft: Set<string> }
+interface PendingShadow { path: string; shadow: string; dir: string }
+
+/** An error shaped like the one Node raises on a full disk. */
+function enospc(what: string): Error { return Object.assign(new Error(`ENOSPC: no space left on device, ${what}`), { code: 'ENOSPC' }); }
 
 export class FaultFs implements Fs {
   ops = 0;
@@ -35,7 +48,21 @@ export class FaultFs implements Fs {
   private touched = new Set<string>();
   private pendingCreates = new Set<string>();  // created, parent directory not yet fsynced
   private pendingRenames: PendingRename[] = [];
-  constructor(private readonly failAt: number, private readonly opts: { tear?: boolean; powerLoss?: boolean } = {}, private readonly inner: Fs = realFs) {}
+  /** Space-allocating operations so far (what `enospcFrom` counts). */
+  allocs = 0;
+  /** Files opened and not yet closed. */
+  openHandles = 0;
+  private pendingUnlinks: PendingShadow[] = [];
+  private pendingOverwrites: PendingShadow[] = [];
+  private shadowN = 0;
+  constructor(private readonly failAt: number, private readonly opts: { tear?: boolean; powerLoss?: boolean; enospcFrom?: number; shadowDir?: string; revertOverwrites?: boolean } = {}, private readonly inner: Fs = realFs) {}
+
+  /** Count a space-allocating operation; true when the (simulated) disk is full for it. */
+  private full(): boolean {
+    this.allocs++;
+    return this.opts.enospcFrom !== undefined && this.allocs >= this.opts.enospcFrom;
+  }
+  private shadowPath(): string { return nodePath.join(this.opts.shadowDir!, `s${this.shadowN++}`); }
 
   private tick(what: string): void {
     if (this.crashed) throw new InjectedCrash(this.ops, 'after-crash:' + what);
@@ -46,10 +73,16 @@ export class FaultFs implements Fs {
   async open(path: string, o: { create: boolean }): Promise<FileLike> {
     const isNew = o.create && !(await this.inner.exists(path));
     if (isNew) this.tick('create ' + path);
+    if (isNew && this.full()) throw enospc('open ' + path);
     const f = await this.inner.open(path, o);
-    if (isNew) this.pendingCreates.add(path);
-    // A file that already existed is durable at its current length (everything before this run was synced).
-    if (!this.synced.has(path)) this.synced.set(path, await f.size());
+    // WHY the try (N10): the bookkeeping below can fail (an injected error); the real handle must not leak then.
+    try {
+      if (isNew) this.pendingCreates.add(path);
+      // A file that already existed is durable at its current length (everything before this run was synced).
+      if (!this.synced.has(path)) this.synced.set(path, await f.size());
+    } catch (e) { await f.close().catch(() => undefined); throw e; }
+    this.openHandles++;
+    let closed = false;
     const self = this;
     const guard: FileLike = {
       async write(buf, pos) {
@@ -60,6 +93,10 @@ export class FaultFs implements Fs {
           if (self.opts.tear && buf.length > 1) await f.write(buf.subarray(0, buf.length >> 1), pos);
           throw new InjectedCrash(self.ops, 'write ' + path);
         }
+        if (self.full()) {
+          if (self.opts.tear && buf.length > 1) { self.touched.add(path); await f.write(buf.subarray(0, buf.length >> 1), pos); }
+          throw enospc('write ' + path);
+        }
         self.touched.add(path);
         await f.write(buf, pos);
       },
@@ -67,7 +104,7 @@ export class FaultFs implements Fs {
       size: () => f.size(),
       async truncate(len) { self.tick('truncate ' + path); self.touched.add(path); await f.truncate(len); },
       async sync() { self.tick('fsync ' + path); await f.sync(); self.synced.set(path, await f.size()); self.touched.delete(path); },
-      close: () => f.close(),
+      async close() { if (!closed) { closed = true; self.openHandles--; } await f.close(); },
     };
     return guard;
   }
@@ -76,12 +113,19 @@ export class FaultFs implements Fs {
   exists(p: string) { return this.inner.exists(p); }
   async mkdir(p: string) {
     const isNew = !(await this.inner.exists(p));
-    this.tick('mkdir ' + p); await this.inner.mkdir(p);
+    this.tick('mkdir ' + p);
+    if (isNew && this.full()) throw enospc('mkdir ' + p);
+    await this.inner.mkdir(p);
     if (isNew) this.pendingCreates.add(p);
   }
   async rename(a: string, b: string) {
     this.tick('rename ' + a);
     const overwrote = await this.inner.exists(b);
+    if (overwrote && this.opts.shadowDir) {
+      const sh = this.shadowPath();
+      await this.inner.rename(b, sh);
+      this.pendingOverwrites.push({ path: b, shadow: sh, dir: nodePath.dirname(b) });
+    }
     await this.inner.rename(a, b);
     const s = this.synced.get(a);
     if (s !== undefined) { this.synced.set(b, s); this.synced.delete(a); }
@@ -90,12 +134,23 @@ export class FaultFs implements Fs {
     if (this.pendingCreates.delete(a)) this.pendingCreates.add(b); // still a not-yet-durable creation, under its new name
     else this.pendingRenames.push({ from: a, to: b, dirsLeft: new Set([nodePath.dirname(a), nodePath.dirname(b)]) });
   }
-  async unlink(p: string) { this.tick('unlink ' + p); await this.inner.unlink(p); this.synced.delete(p); this.touched.delete(p); this.pendingCreates.delete(p); }
+  async unlink(p: string) {
+    this.tick('unlink ' + p);
+    if (this.opts.shadowDir && await this.inner.exists(p)) {
+      // not deleted yet as far as the disk is concerned: kept in the shadow folder until the directory is fsynced
+      const sh = this.shadowPath();
+      await this.inner.rename(p, sh);
+      this.pendingUnlinks.push({ path: p, shadow: sh, dir: nodePath.dirname(p) });
+    } else await this.inner.unlink(p);
+    this.synced.delete(p); this.touched.delete(p); this.pendingCreates.delete(p);
+  }
   async fsyncDir(p: string) {
     this.tick('fsyncDir ' + p); await this.inner.fsyncDir(p);
     for (const c of [...this.pendingCreates]) if (nodePath.dirname(c) === p) this.pendingCreates.delete(c);
     for (const r of this.pendingRenames) r.dirsLeft.delete(p);
     this.pendingRenames = this.pendingRenames.filter((r) => r.dirsLeft.size > 0);
+    this.pendingUnlinks = this.pendingUnlinks.filter((u) => u.dir !== p);
+    this.pendingOverwrites = this.pendingOverwrites.filter((u) => u.dir !== p);
   }
 
   /** Apply the power-loss model after a crash (see the header for exactly what is modelled). */
@@ -112,5 +167,16 @@ export class FaultFs implements Fs {
     }
     // deepest first so a directory's own entries go before the directory
     for (const p of [...this.pendingCreates].sort((x, y) => y.length - x.length)) await fsp.rm(p, { recursive: true, force: true });
+    // an overwrite that was never directory-synced may show the OLD content again (a legal outcome)
+    if (this.opts.revertOverwrites) {
+      for (const o of [...this.pendingOverwrites].reverse()) {
+        await fsp.rm(o.path, { force: true });
+        await this.inner.rename(o.shadow, o.path);
+      }
+    }
+    // an unlink that was never directory-synced: the file is back
+    for (const u of [...this.pendingUnlinks].reverse()) {
+      if (!(await this.inner.exists(u.path))) await this.inner.rename(u.shadow, u.path);
+    }
   }
 }

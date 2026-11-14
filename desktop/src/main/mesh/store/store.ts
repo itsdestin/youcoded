@@ -9,7 +9,10 @@
 //       body-<startByte>.bin           raw line bytes, chunked; the index says where each line is
 //       evicted.json                   {lines, bytes, holders, hash}: bodies of the first `lines` lines were dropped
 //       summary.json                   latest title / model / folder
-//       scrub.json                     {lines}: high-water mark of the rolling integrity scrub
+//       scrub.json                     {lines, passEnd}: high-water mark of the rolling integrity scrub and where this pass ends (N3)
+//       checkpoint.bin                 count + chain values vouched for, in a file of its own, checksummed (checkpoint.ts, N1)
+//       partial.json                   a rebuild set lines [fromLine, fromLine+lost) aside (N7); cleared when a resend fills them
+//       stale-conv.json                the evicted lines' conversation chain was written by another classifier (N4)
 //       parked/<from>-<hash>.park      appends that arrived with a gap before them
 //       rejected/...                   parked appends found NOT to be a prefix (kept, never deleted)
 //       tails/<takeoverId>.tail        a host's tail set aside at a takeover
@@ -17,7 +20,7 @@
 //       damaged.json                   the version failed an integrity check and was quarantined (see below)
 //   <root>/aside/<vhex>-<n>/           files of a copy found damaged and recopied (kept, never deleted)
 //   <root>/aside/<vhex>-q<n>/          a QUARANTINED copy: index AND bodies moved aside intact, version reports "damaged"
-//   <root>/extras/<aa>/<sha256>        extras by content hash
+//   <root>/extras/<aa>/<sha256>        extras by content hash; <root>/extras-bad/ holds extras that failed their hash (N6)
 //   <root>/control/<sha256(chat)>/     control-log storage (control.ts)
 //
 // Crash rules (the reasons for the write order below):
@@ -40,11 +43,19 @@
 //  - body bytes past the last record and NO index damage: an append died between body fsync and index write.
 //    Never acknowledged by construction. Copied to torn/ (kept), then trimmed.
 //  - a bad record FOLLOWED by a valid one, a missing/short index, a bad header or a changed classifier
-//    stamp: the index is rebuilt from the body, but only if every surviving old record agrees with the
-//    rebuilt chain. The old index is kept in replaced-index/.
-//  - anything else (body shorter than the index, a missing middle chunk, rebuilt chain disagreeing with a
-//    surviving record): the whole version (index AND bodies) is moved to aside/<vhex>-q<n>/, the version
-//    reports a typed `damaged` error and serves nothing until setAsideDamaged() clears it.
+//    stamp: the index is rebuilt from the body, and the body is ALWAYS verified against chain values stored
+//    independently of the index being rebuilt (N1): the valid old records (header or not), the separate
+//    checkpoint file, and a previous index in replaced-index/. The old index is kept in replaced-index/.
+//    A rebuild is refused ("damaged") rather than accepted when nothing vouches for the body.
+//  - a rebuild whose body disagrees with a VALID old record at line k (a rotted byte, N7): lines before the
+//    last verified one stay served, the rest is set aside intact (torn/ + replaced-index/), `damagedFromLine`
+//    names it, and a correct resend from a peer heals it. The version is never taken out of service for it.
+//  - anything else (body shorter than the index or the checkpoint, a missing middle chunk, a checkpoint that
+//    cannot be reconciled, nothing vouching for the body): the whole version (index AND bodies) is moved to
+//    aside/<vhex>-q<n>/, the version reports a typed `damaged` error and serves nothing until
+//    setAsideDamaged() clears it.
+// A full disk (N5) is one typed `disk-full` refusal; reads never write anything that can fail (scrub mark,
+// checkpoint and summary writes are best effort), and a failed append cuts back what it added.
 //
 // No file handles are kept open between calls (a user can have 1,400+ chats; handles would exhaust the
 // process limit). One in-process lock serialises all calls and lock.ts keeps other processes out.
@@ -53,122 +64,17 @@ import { createHash } from 'node:crypto';
 import { realFs, writeFileAtomic, sweepTemps, mkdirDurable, type Fs } from './fsio';
 import { StoreError } from './errors';
 import { acquireLock, type StoreLock } from './lock';
+import { readCheckpoint, writeCheckpoint, CHECKPOINT_FILE } from './checkpoint';
+import { Extras, bytesUnder } from './extras';
+import { asLine, decodeTailFile, encodeTailFile, isDiskFull, validateProofShape, type TailFile } from './storeutil';
 import { chainStep, crc32, defaultChainSeeds, hex, isHash64, unhex, type ChainSeedFn, type ChainSeeds, type RuntimeKind } from './chain';
 import { CLASSIFIER_VERSION, analyseLine, initialReplyState, replyEndStep, type LineInfo, type ReplyEndOptions, type ReplyState } from './classify';
 import { HDR, REC, NONE, decodeRecord, encodeRecord, frameLines, headerOk, headerStamp, indexHeader, recPos, unframeLines, type Rec } from './records';
-import { ControlStore, type ControlEntry } from './control';
-import { BodyTools, Damaged, NeedsRebuild, chunkPathOf, type BatchState, type SumFacts } from './recovery';
+import { ControlStore, type ControlDamage, type ControlEntry } from './control';
+import type { AppendResult, EvictionProof, Head, ProofVerifier, ScrubReport, StoreOptions, Summary, TailRecord, VerifyReport, VersionId, VersionMeta } from './types';
+import { BodyTools, Damaged, NeedsRebuild, PARTIAL_FILE, STALE_CONV_FILE, chunkPathOf, type BatchState, type RebuildResult, type SumFacts } from './recovery';
 
-export type VersionId = Uint8Array;
-
-/**
- * Whether a proof is genuine. Supplied by the caller at construction (the replicator, which can check
- * holder signatures); the store cannot. Must resolve to exactly `true`: anything else, or a throw, refuses.
- */
-export type ProofVerifier = (proof: EvictionProof, ctx: { version: string; chatId: string; lines: number; hash: string }) => boolean | Promise<boolean>;
-
-export interface StoreOptions {
-  fs?: Fs;
-  /** The single replaceable rule that seeds both chains (chain.ts). */
-  seeds?: ChainSeedFn;
-  /** Arrival-time clock for "last used" (never a line timestamp: T2 finding 10). */
-  now?: () => number;
-  /** A new body chunk file starts once the active one reaches this size. */
-  chunkBytes?: number;
-  /** Cap on bytes of parked (gapped) appends held per version. */
-  maxParkedBytes?: number;
-  /** Cap on the NUMBER of parked append files per version (M4). */
-  maxParkedFiles?: number;
-  /** An append may start at most this many lines past the head (M4); further is refused as bad-argument. */
-  maxParkGap?: number;
-  /** One append call may carry at most this many bytes (L8). */
-  maxAppendBytes?: number;
-  /** One extra may be at most this many bytes (L9). */
-  maxExtraBytes?: number;
-  /** Cap on parked control entries per chat (M3). */
-  maxParkedControl?: number;
-  /** Bytes of the rolling integrity scrub run when a version is first loaded; 0 turns it off (H3). */
-  scrubOnOpenBytes?: number;
-  replyEnd?: ReplyEndOptions;
-  /** Decides whether an eviction proof is genuine. Default refuses everything (H4). */
-  proofVerifier?: ProofVerifier;
-}
-
-export interface VersionMeta {
-  chatId: string;
-  runtime: RuntimeKind;
-  /** Opaque parent version id (rewrite becomes a new version whose parent is the old one); not interpreted here. */
-  parent?: VersionId | null;
-}
-
-export interface Head {
-  lines: number;
-  /** Raw chain value after `lines` lines, 64 hex. */
-  hash: string;
-  conversationLines: number;
-  conversationHash: string;
-  /** Lines whose bodies were evicted (chain values are always kept). */
-  evictedLines: number;
-  /**
-   * Which classifier (and reply-end option) produced the conversation chain and reply ends (M5). Two heads
-   * are comparable on `conversationHash` only when their stamps are equal.
-   */
-  classifierStamp: number;
-  /** First line whose body bytes were found not to match the chain, or null (H3). A correct resend heals it. */
-  damagedFromLine: number | null;
-}
-
-export type AppendResult = 'ok' | 'parked' | 'not-a-prefix';
-
-export interface Summary {
-  lines: number;
-  conversationLines: number;
-  replyEnds: number;
-  title: string | null;
-  model: string | null;
-  cwd: string | null;
-  /** Arrival time (ms since epoch) of the last append: "used" comes from arrival, never from line timestamps. */
-  lastAppendMs: number | null;
-}
-
-/** One holder's statement "I hold `lines` lines of `version` and my chain value there is `hash`". */
-interface ProofAck {
-  holder: string;
-  version: string;
-  lines: number;
-  hash: string;
-  /** Opaque to the store; checked by the ProofVerifier. */
-  signature: string;
-}
-
-/**
- * Proof that other devices hold these lines. The store checks the BINDING (this version, this line count,
- * this chain value, distinct holders) and then asks the caller-supplied ProofVerifier; shape and a matching
- * hash alone never suffice (H4: the store's own hashAt would otherwise forge one).
- */
-export interface EvictionProof {
-  kind: 'holders-confirmed';
-  version: string;
-  through: number;
-  hash: string;
-  acks: ProofAck[];
-}
-
-export interface TailRecord {
-  version: VersionId;
-  fromLine: number;
-  fromHash: string;
-  fromConversationHash: string;
-  headHash: string;
-  headConversationHash: string;
-  lines: Buffer[];
-  /** Reply ends confirmed inside the tail (absolute line numbers) and the unconfirmed candidate, if any. */
-  replyEnds: number[];
-  pendingReplyEnd: number | null;
-}
-
-export interface VerifyReport { ok: boolean; lines: number; firstBadLine: number | null; reason?: string }
-export interface ScrubReport { verifiedLines: number; total: number; damagedFromLine: number | null }
+export type { VersionId, ProofVerifier, StoreOptions, VersionMeta, Head, AppendResult, Summary, EvictionProof, TailRecord, VerifyReport, ScrubReport } from './types';
 
 const DEFAULT_CHUNK = 16 * 1024 * 1024;
 const VERIFY_WINDOW = 4096;
@@ -180,6 +86,9 @@ const TAKEOVER_RE = /^[0-9a-f]{8,128}$/;
 const ASIDE_RE = /^[0-9a-f]+-q?\d+$/;
 const MAX_TAILS = 1024;
 const MAX_REJECTED = 1024;
+const MAX_REJECTED_BYTES = 256 * MIB;
+const DEFAULT_CHECKPOINT_EVERY = 32;
+const DEFAULT_MAX_EXTRAS = 4 * 1024 * MIB;
 const LOAD_SCRUB_RECORDS = 8192;
 const STEP_SCRUB_RECORDS = 65536;
 
@@ -205,6 +114,18 @@ interface VState {
   badLine: number | null;
   /** Rolling scrub high-water mark: lines [0, mark) were verified in this pass. */
   scrubMark: number;
+  /** Head count when the current scrub pass began: the pass ends at this line however much the chat grew meanwhile (N3). */
+  passEnd: number;
+  /** Line count the checkpoint file vouches for (0 when none). */
+  ckptCount: number;
+  /** Surplus body bytes could not be copied to torn/ because the disk was full: the next write retries before appending (N5). */
+  trimDeferred: boolean;
+  /** The empty version's index file could not be created (disk full): the first append creates it (N5). */
+  indexNeedsInit: boolean;
+  /** A rebuild set lines [fromLine, fromLine+lost) aside because their bodies did not match the chain (N7). */
+  partial: { fromLine: number; lost: number } | null;
+  /** stale-conv.json exists (N4). */
+  staleConv: boolean;
   /** Parked append files: name -> size, kept in memory so a park never rescans the folder (M4). */
   parked: Map<string, number>;
   parkedBytes: number;
@@ -222,11 +143,14 @@ export class ChatStore {
   private readonly maxExtraBytes: number;
   private readonly scrubOnOpen: number;
   private readonly replyOpts: ReplyEndOptions;
+  private readonly ckptEvery: number;
+  private readonly maxExtrasBytes: number;
+  private readonly maxRejectedBytes: number;
+  private readonly extras: Extras;
   private readonly verifier: ProofVerifier;
   /** Stamp written into every index header (M5): classifier version and the one reply-end option that changes records. */
   private readonly stamp: number;
   private readonly versions = new Map<string, VState>();
-  private readonly sweptExtraDirs = new Set<string>();
   private chain: Promise<unknown> = Promise.resolve();
   private closed = false;
   private lock: StoreLock | null = null;
@@ -245,9 +169,13 @@ export class ChatStore {
     this.maxExtraBytes = o.maxExtraBytes ?? 256 * MIB;
     this.scrubOnOpen = o.scrubOnOpenBytes ?? 4 * MIB;
     this.replyOpts = o.replyEnd ?? {};
+    this.ckptEvery = Math.max(1, o.checkpointEvery ?? DEFAULT_CHECKPOINT_EVERY);
+    this.maxExtrasBytes = o.maxExtrasBytes ?? DEFAULT_MAX_EXTRAS;
+    this.maxRejectedBytes = o.maxRejectedBytes ?? MAX_REJECTED_BYTES;
     this.verifier = o.proofVerifier ?? (() => false);
     this.stamp = ((CLASSIFIER_VERSION << 1) | ((this.replyOpts.apiErrorsEndReplies ?? true) ? 1 : 0)) >>> 0;
     this.tools = new BodyTools(this.fs, this.replyOpts);
+    this.extras = new Extras(this.fs, this.tools, root, this.maxExtraBytes, this.maxExtrasBytes);
     this.control = new ControlStore(this.fs, nodePath.join(root, 'control'), { maxParked: o.maxParkedControl });
   }
 
@@ -260,7 +188,7 @@ export class ChatStore {
     const s = new ChatStore(root, o);
     const fs = s.fs;
     await mkdirDurable(fs, root);
-    s.lock = await acquireLock(root);
+    s.lock = await acquireLock(root, { breakLockToken: o.breakLockToken });
     try {
       const fmt = nodePath.join(root, 'FORMAT');
       const cur = await fs.readFile(fmt);
@@ -276,6 +204,11 @@ export class ChatStore {
 
   async close(): Promise<void> {
     await this.chain.catch(() => undefined);
+    // WHY at close (N1): the checkpoint is written every few lines, so up to ckptEvery-1 acknowledged lines are not in it
+    // yet; closing brings it level, which makes the next rebuild's verification as strong as possible.
+    for (const st of this.versions.values()) {
+      if (st.count > 0 && st.count !== st.ckptCount) await this.saveCheckpoint(st).catch((e) => { if (!isDiskFull(e)) throw e; });
+    }
     this.closed = true; this.versions.clear();
     const l = this.lock; this.lock = null;
     if (l) await l.release();
@@ -286,11 +219,16 @@ export class ChatStore {
     if (this.closed) return Promise.reject(new StoreError('closed'));
     const run = this.chain.then(fn, fn);
     this.chain = run.catch(() => undefined);
-    return run;
+    // WHY (N5): a full disk is one typed refusal everywhere, never a raw ENOSPC from whichever write hit it
+    return run.catch((e) => { throw isDiskFull(e) ? new StoreError('disk-full', String((e as Error).message)) : e; });
   }
   /** Run a mutation; on any failure drop cached state of the version so the next call repairs from disk. */
   private async mutate<T>(key: string | null, fn: () => Promise<T>): Promise<T> {
-    try { return await fn(); }
+    try {
+      // WHY (N9d): the lock file can be deleted under a live holder; refuse the write instead of racing a second writer
+      await this.lock?.assertHeld();
+      return await fn();
+    }
     catch (e) { if (key) this.versions.delete(key); else this.versions.clear(); throw e; }
   }
   /** WHY (review L2): argument errors must reject like every other failure, never throw synchronously past a `.catch()`. */
@@ -374,7 +312,7 @@ export class ChatStore {
       catch (e) {
         if (e instanceof NeedsRebuild && attempt < 2) {
           try { await this.rebuildIndex(key, e.reason); } catch (e2) { if (e2 instanceof Damaged) await this.quarantine(key, e2.reason); throw e2; }
-          continue;
+          continue; // a split rebuild leaves the cut-off bytes as surplus, which the next loadOnce moves to torn/
         }
         if (e instanceof NeedsRebuild) throw new StoreError('corrupt', `index could not be repaired: ${e.reason}`);
         if (e instanceof Damaged) await this.quarantine(key, e.reason);
@@ -393,12 +331,21 @@ export class ChatStore {
     if (dmg) throw new StoreError('damaged', dmg.asideName);
     const seeds = this.seedFn({ chatId: meta.chatId, version: unhex(key), segment: 0 });
     const ev = await this.readEvicted(dir);
+    const staleConv = await this.fs.exists(nodePath.join(dir, STALE_CONV_FILE));
+    // N4: the evicted bodies are back, so the conversation chain can be recomputed now
+    if (staleConv && ev.lines === 0) throw new NeedsRebuild('evicted bodies are back: recompute the conversation chain');
 
     // 1. Body chunks must be one gapless run that covers the index (a missing middle chunk is damage).
     let layout = await this.tools.checkChunks(dir, ev);
     // 2. The index: repaired in place when only its tail is damaged, otherwise NeedsRebuild / Damaged.
-    const ix = await this.settleIndex(dir, ev, layout);
+    const ix = await this.tools.settleIndex(dir, ev, layout, this.stamp);
     let { count, last } = ix;
+    let trimDeferred = false;
+    // N1: the checkpoint is a statement the index must agree with. An index SHORTER than it lost acknowledged records: the body
+    // still has the lines (checked below), so re-derive the index from it, verified against the checkpoint, BEFORE the surplus
+    // body bytes are moved aside as "never acknowledged".
+    const ck = await readCheckpoint(this.fs, dir);
+    if (ck && ck.count > count && !ix.adopt) throw new NeedsRebuild('the index is shorter than the checkpoint');
     let bodyEnd = last ? last.offset + last.len : 0;
     if (layout.phys < bodyEnd) throw new Damaged(`body ends at ${layout.phys}, the index claims ${bodyEnd}`);
     if (layout.phys > bodyEnd) {
@@ -406,16 +353,30 @@ export class ChatStore {
       if (ix.adopt) {
         // WHY adopt: the index tail was damaged, which means an index write had started, which happens only
         // after the body was fsynced: these lines are whole and were (or were about to be) acknowledged.
-        const adopted = await this.adoptSurplus(dir, layout, ev, count, last, seeds, meta.runtime);
+        const adopted = await this.tools.adoptSurplus(dir, layout, count, last, seeds, meta.runtime);
         count = adopted.count; last = adopted.last; bodyEnd = adopted.bodyEnd;
       } else {
         // WHY trim: no index write was ever started for these bytes, so they were never acknowledged (crash rule 1).
         // Still kept (torn/), because "never delete" is cheaper than being wrong.
-        await this.tools.trimBody(dir, bodyEnd, true);
+        try { await this.tools.trimBody(dir, bodyEnd, true); }
+        catch (e) {
+          // WHY (N5): copying the surplus to torn/ needs space. On a full disk keep serving what is indexed (the surplus is
+          // never read) and retry the trim before the next write; never make a healthy version unreadable because the disk is full.
+          if (!isDiskFull(e)) throw e;
+          trimDeferred = true;
+        }
       }
       layout = await this.tools.checkChunks(dir, ev);
     }
-    const chunks = layout.chunks;
+    // surplus chunk files (only possible while a trim is deferred) are not part of the version
+    const chunks = trimDeferred ? layout.chunks.filter((c) => c === 0 || c < bodyEnd) : layout.chunks;
+
+    // N1: a record that disagrees with the checkpoint means the index (not the body) is what is wrong
+    if (ck) {
+      if (ck.count > count) throw new Damaged(`the checkpoint vouches for ${ck.count} lines but the index and body hold ${count}`);
+      if (ck.count > 0 && !(await this.recAtDir(dir, ck.count - 1)).h.equals(ck.h)) throw new NeedsRebuild('the index disagrees with the checkpoint');
+    }
+    const partialRaw = await this.readPartial(dir);
 
     // A line whose body no longer matches its chain value (checked cheaply for the last line only; the rolling scrub does the rest).
     let badLine: number | null = null;
@@ -442,8 +403,12 @@ export class ChatStore {
       evictedLines: Math.min(ev.lines, count), evictedBytes: ev.lines <= count ? ev.bytes : 0,
       chunks: keep, replyEndsCache: null, summarySavedAt: 0,
       summary: { title: null, model: null, cwd: null, lastAppendMs: null, lines: 0 },
-      badLine, scrubMark: await this.readScrubMark(dir), parked: new Map(), parkedBytes: 0,
+      badLine, scrubMark: 0, passEnd: 0, ckptCount: ck ? ck.count : 0, trimDeferred, indexNeedsInit: !!ix.needsInit,
+      partial: partialRaw, staleConv,
+      parked: new Map(), parkedBytes: 0,
     };
+    const mark = await this.readScrubMark(dir);
+    st.passEnd = Math.min(mark.passEnd, count); st.scrubMark = Math.min(mark.lines, st.passEnd);
     await this.loadSummary(st);
     await this.loadParkedIndex(st);
     if (this.scrubOnOpen > 0) await this.scrubSome(st, this.scrubOnOpen, LOAD_SCRUB_RECORDS);
@@ -451,79 +416,25 @@ export class ChatStore {
     return st;
   }
 
-  // ---- index and body recovery ----------------------------------------------------------------------
-  /** Examine index.bin. Repairs a damaged TAIL in place (bytes kept); anything else throws NeedsRebuild. */
-  private async settleIndex(dir: string, ev: { lines: number; bytes: number }, layout: { chunks: number[]; phys: number }): Promise<{ count: number; last: Rec | null; adopt: boolean }> {
-    const ip = this.ixPath(dir);
-    const hasBodies = layout.chunks.length > 0 && layout.phys > ev.bytes;
-    if (!(await this.fs.exists(ip))) {
-      if (!hasBodies && ev.lines === 0) { await this.ensureIndex(dir); return { count: 0, last: null, adopt: false }; }
-      throw new NeedsRebuild('index.bin is missing');
-    }
-    const f = await this.fs.open(ip, { create: false });
-    try {
-      const size = await f.size();
-      if (size < HDR) {
-        if (!hasBodies && ev.lines === 0) { await f.truncate(0); await f.write(indexHeader(this.stamp), 0); await f.sync(); return { count: 0, last: null, adopt: false }; }
-        throw new NeedsRebuild('index header is missing');
-      }
-      const hdr = await f.read(0, HDR);
-      if (!headerOk(hdr)) throw new NeedsRebuild('index header is damaged');
-      if (headerStamp(hdr) !== this.stamp) throw new NeedsRebuild('classifier stamp changed');
-      let count = Math.floor((size - HDR) / REC);
-      const partial = size - HDR - count * REC;
-      // Verify only the window a crash could have damaged (the last VERIFY_WINDOW records); the rolling
-      // scrub (scrubSome) walks the older part a bounded amount per open.
-      const from = Math.max(0, count - VERIFY_WINDOW);
-      const buf = await f.read(recPos(from), (count - from) * REC);
-      let good = 0; let prev: Rec | null = null;
-      for (; good < count - from; good++) {
-        const r = decodeRecord(buf, good * REC);
-        if (!r || (prev && r.offset !== prev.offset + prev.len)) break;
-        prev = r;
-      }
-      let adopt = false;
-      if (from + good < count) {
-        // A valid record after the first bad one is NOT a torn tail: that is bit rot or a lost record (C1).
-        for (let i = good; i < count - from; i++) if (decodeRecord(buf, i * REC)) throw new NeedsRebuild(`record ${from + good} is damaged but later records are valid`);
-        await this.tools.keepBytes(dir, 'index-tail', await f.read(recPos(from + good), size - recPos(from + good)));
-        count = from + good; await f.truncate(recPos(count)); await f.sync(); adopt = true;
-      } else if (partial > 0) {
-        await this.tools.keepBytes(dir, 'index-tail', await f.read(recPos(count), partial));
-        await f.truncate(recPos(count)); await f.sync(); adopt = true;
-      }
-      let last: Rec | null = null;
-      if (count > 0) { last = decodeRecord(await f.read(recPos(count - 1), REC), 0); if (!last) throw new NeedsRebuild('last index record is unreadable'); }
-      return { count, last, adopt };
-    } finally { await f.close(); }
-  }
-
-  /** Re-derive records for the whole lines in the body past the index end and append them to the index. */
-  private async adoptSurplus(dir: string, layout: { chunks: number[]; sizes: number[]; phys: number }, ev: { lines: number; bytes: number }, count: number, last: Rec | null, seeds: ChainSeeds, runtime: RuntimeKind): Promise<{ count: number; last: Rec | null; bodyEnd: number }> {
-    const start: BatchState = last
-      ? { count, h: last.h, c: last.c, convCount: last.convCount, off: last.offset + last.len, rs: { cand: last.candN === NONE ? null : { n: last.candN, id: last.candId } } }
-      : { count: 0, h: Buffer.from(seeds.raw), c: Buffer.from(seeds.conversation), convCount: 0, off: 0, rs: initialReplyState() };
-    const f = await this.fs.open(this.ixPath(dir), { create: false });
-    let lastRec: Rec | null = last;
-    try {
-      const out = await this.tools.deriveFromBody(dir, layout, runtime, start, Infinity, async (recs, firstLine, n) => {
-        await f.write(recs, recPos(firstLine));
-        lastRec = decodeRecord(recs, (n - 1) * REC);
-      });
-      await f.sync();
-      await this.tools.trimBody(dir, out.end, true); // a partial last line (no newline) is kept aside and cut
-      return { count: out.state.count, last: lastRec, bodyEnd: out.end };
-    } finally { await f.close(); }
-  }
-
+  // ---- index and body recovery (recovery.ts: settleIndex, adoptSurplus, rebuildIndex) --------------------------------
   /** Rebuild the index from the body (recovery.ts holds the work); Damaged means the caller quarantines. */
-  private async rebuildIndex(key: string, reason: string): Promise<void> {
+  private async rebuildIndex(key: string, reason: string): Promise<RebuildResult> {
     const dir = this.vdir(key);
     const meta = await this.readMeta(dir);
     if (!meta) throw new StoreError('unknown-version', key.slice(0, 8));
     const seeds = this.seedFn({ chatId: meta.chatId, version: unhex(key), segment: 0 });
-    await this.tools.rebuildIndex(dir, meta.runtime, seeds, await this.readEvicted(dir), this.stamp);
+    const convStale = await this.fs.exists(nodePath.join(dir, STALE_CONV_FILE));
+    const res = await this.tools.rebuildIndex(dir, meta.runtime, seeds, await this.readEvicted(dir), this.stamp, { convStale });
     void reason;
+    return res;
+  }
+
+  /** partial.json: lines a rebuild set aside because their bodies did not match the chain (N7). */
+  private async readPartial(dir: string): Promise<{ fromLine: number; lost: number } | null> {
+    const b = await this.fs.readFile(nodePath.join(dir, PARTIAL_FILE));
+    if (!b) return null;
+    try { const m = JSON.parse(b.toString()); if (Number.isSafeInteger(m.fromLine) && Number.isSafeInteger(m.lost) && m.lost >= 0) return { fromLine: m.fromLine, lost: m.lost }; } catch { /* fallthrough */ }
+    return null;   // a damaged marker only loses the "damaged" flag; the lines themselves were already cut
   }
 
   /** Move the whole version (index AND bodies) to aside/<vhex>-q<n>, mark it damaged, report it. Never deletes. */
@@ -544,11 +455,14 @@ export class ChatStore {
     throw new StoreError('corrupt', 'damaged.json');
   }
 
-  private async readScrubMark(dir: string): Promise<number> {
+  private async readScrubMark(dir: string): Promise<{ lines: number; passEnd: number }> {
     const b = await this.fs.readFile(nodePath.join(dir, 'scrub.json'));
-    if (!b) return 0;
-    try { const m = JSON.parse(b.toString()); if (Number.isSafeInteger(m.lines) && m.lines >= 0) return m.lines; } catch { /* fallthrough */ }
-    return 0;
+    if (!b) return { lines: 0, passEnd: 0 };
+    try {
+      const m = JSON.parse(b.toString());
+      if (Number.isSafeInteger(m.lines) && m.lines >= 0) return { lines: m.lines, passEnd: Number.isSafeInteger(m.passEnd) && m.passEnd >= m.lines ? m.passEnd : m.lines };
+    } catch { /* fallthrough */ }
+    return { lines: 0, passEnd: 0 };
   }
 
   private async recAtDir(dir: string, n: number): Promise<Rec> {
@@ -567,27 +481,35 @@ export class ChatStore {
     throw new StoreError('corrupt', 'evicted.json');
   }
 
-  // ---- rolling scrub (H3) ----------------------------------------------------------------------------
+  // ---- rolling scrub (H3, N3) ------------------------------------------------------------------------
   /**
    * Verify a bounded slice of the version, continuing from a persisted high-water mark: index records
    * (checksum, continuity) and, for lines that still have bodies, the body bytes against the chain. A bad
    * index record throws NeedsRebuild (repair from body); a body that does not match its chain value is
-   * flagged in `badLine` (a correct resend heals it) and the mark stays at it. When a pass reaches the
-   * end the next call starts over, so the whole version is re-checked continuously, `maxBytes` at a time.
-   * Detection bound: a damaged byte is found within ceil(version bytes / maxBytes) calls.
+   * flagged in `badLine` (a correct resend heals it) and the mark stays at it.
+   *
+   * DETECTION BOUND (N3, stated and tested): a pass covers lines [0, passEnd) where passEnd is the line count
+   * when the pass STARTED. A pass ends when the mark reaches passEnd, and the next call starts a new one at line
+   * 0 whatever was appended meanwhile (before this fix a chat that gained a line between calls never wrapped, so
+   * old rot was never found). So a byte that exists when a pass starts is verified within
+   * max(ceil(bytes / maxBytes), ceil(lines / maxRecs)) calls, and ANY byte within one pass of being written plus
+   * one pass: a chat that keeps growing is covered as fast as one that does not.
    */
   private async scrubSome(st: VState, maxBytes: number, maxRecs: number): Promise<ScrubReport> {
-    const report = (): ScrubReport => ({ verifiedLines: st.scrubMark, total: st.count, damagedFromLine: st.badLine });
+    const report = (): ScrubReport => ({ verifiedLines: st.scrubMark, total: st.count, damagedFromLine: this.damagedFrom(st) });
     if (st.count === 0 || maxBytes <= 0) return report();
-    if (st.scrubMark >= st.count) st.scrubMark = 0;
+    if (st.passEnd > st.count) st.passEnd = st.count;                // the version got shorter (a cut)
+    if (st.scrubMark > st.passEnd) st.scrubMark = st.passEnd;
+    if (st.scrubMark >= st.passEnd) { st.scrubMark = 0; st.passEnd = st.count; }   // pass finished: start the next
+    const end = st.passEnd;
     let n = st.scrubMark; const startN = n;
     let bytes = 0; let recs = 0;
     const f = await this.fs.open(this.ixPath(st.dir), { create: false });
     try {
       let prev: Rec | null = null; let h: Buffer = st.seeds.raw;
       if (n > 0) { prev = decodeRecord(await f.read(recPos(n - 1), REC), 0); if (!prev) throw new NeedsRebuild(`record ${n - 1} fails its checksum`); h = prev.h; }
-      while (n < st.count && bytes < maxBytes && recs < maxRecs) {
-        const take = Math.min(256, st.count - n, maxRecs - recs);
+      while (n < end && bytes < maxBytes && recs < maxRecs) {
+        const take = Math.min(256, end - n, maxRecs - recs);
         const buf = await f.read(recPos(n), take * REC);
         // records first: a bad one must be reported as repairable index damage before any body read trips over it
         for (let i = 0; i < take; i++) if (!decodeRecord(buf, i * REC)) throw new NeedsRebuild(`record ${n + i} fails its checksum`);
@@ -612,11 +534,24 @@ export class ChatStore {
       }
     } finally { await f.close(); }
     st.scrubMark = n;
-    if (n !== startN) await this.saveScrubMark(st);
+    if (n !== startN || st.passEnd !== end) await this.saveScrubMark(st);
     return report();
   }
+  /**
+   * WHY best effort (N5): the mark is a convenience (losing it only repeats work), and a READ must never fail because the
+   * disk is full. Only a full disk is swallowed; every other error still surfaces.
+   */
   private async saveScrubMark(st: VState): Promise<void> {
-    await writeFileAtomic(this.fs, nodePath.join(st.dir, 'scrub.json'), Buffer.from(JSON.stringify({ lines: st.scrubMark })));
+    try { await writeFileAtomic(this.fs, nodePath.join(st.dir, 'scrub.json'), Buffer.from(JSON.stringify({ lines: st.scrubMark, passEnd: st.passEnd }))); }
+    catch (e) { if (!isDiskFull(e)) throw e; }
+  }
+
+  /** Vouch for the current head in checkpoint.bin (N1). Always after the index it describes is durable. */
+  private async saveCheckpoint(st: VState): Promise<void> {
+    // a stamp that never equals the real one while the conversation chain is stale: its `c` must not be compared
+    const stamp = st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp;
+    await writeCheckpoint(this.fs, st.dir, { count: st.count, stamp, h: st.h, c: st.c });
+    st.ckptCount = st.count;
   }
 
   /** Run one bounded slice of the rolling integrity scrub (the caller schedules this in the background). */
@@ -859,6 +794,9 @@ export class ChatStore {
 
   /** Append lines that continue the head. Body first, fsync, then index, fsync (crash rule 1). */
   private async writeNew(st: VState, fresh: Buffer[]): Promise<void> {
+    // N5: surplus bytes left by an earlier failed write on a full disk are moved aside first (still full: refused, typed)
+    if (st.trimDeferred) { await this.tools.trimBody(st.dir, st.bodyEnd, true); st.trimDeferred = false; }
+    if (st.indexNeedsInit) { await this.ensureIndex(st.dir); st.indexNeedsInit = false; }
     const bs: BatchState = { count: st.count, h: st.h, c: st.c, convCount: st.convCount, off: st.bodyEnd, rs: st.rs };
     const sum: SumFacts & { lastAppendMs?: number } = { title: st.summary.title, model: st.summary.model, cwd: st.summary.cwd };
     const { recs, confirmed: confirmedNow } = this.tools.encodeBatch(st.meta.runtime, bs, fresh, sum);
@@ -868,29 +806,55 @@ export class ChatStore {
     let chunkStart = active;
     let created = false;
     if (active < 0 || st.bodyEnd - active >= this.chunkBytes) { chunkStart = st.bodyEnd; created = !st.chunks.includes(chunkStart); }
-    const bf = await this.fs.open(this.chunkPath(st, chunkStart), { create: true });
     try {
-      // WHY (defence in depth, C2): another writer moved the files since this state was read. The lock
-      // should make that impossible; if it ever happens, refuse rather than overwrite its lines.
-      if ((await bf.size()) !== st.bodyEnd - chunkStart) throw new StoreError('corrupt', 'body file changed under this store (another writer?)');
-      await bf.write(body, st.bodyEnd - chunkStart); await bf.sync();
-    } finally { await bf.close(); }
-    if (created) await this.fs.fsyncDir(st.dir);
-    // index
-    const xf = await this.fs.open(this.ixPath(st.dir), { create: false });
-    try {
-      if ((await xf.size()) !== recPos(st.count)) throw new StoreError('corrupt', 'index file changed under this store (another writer?)');
-      await xf.write(recs, recPos(st.count)); await xf.sync();
-    } finally { await xf.close(); }
+      const bf = await this.fs.open(this.chunkPath(st, chunkStart), { create: true });
+      try {
+        // WHY (defence in depth, C2): another writer moved the files since this state was read. The lock
+        // should make that impossible; if it ever happens, refuse rather than overwrite its lines.
+        if ((await bf.size()) !== st.bodyEnd - chunkStart) throw new StoreError('corrupt', 'body file changed under this store (another writer?)');
+        await bf.write(body, st.bodyEnd - chunkStart); await bf.sync();
+      } finally { await bf.close(); }
+      if (created) await this.fs.fsyncDir(st.dir);
+      // index
+      const xf = await this.fs.open(this.ixPath(st.dir), { create: false });
+      try {
+        if ((await xf.size()) !== recPos(st.count)) throw new StoreError('corrupt', 'index file changed under this store (another writer?)');
+        await xf.write(recs, recPos(st.count)); await xf.sync();
+      } finally { await xf.close(); }
+    } catch (e) {
+      // WHY a rollback (N5): a refused write (full disk) must leave exactly what was there. Cutting the bytes this call added
+      // needs no free space. Skipped for the "another writer" error, where the bytes are not ours to cut, and best effort
+      // otherwise (after it fails, the next load treats the leftover as surplus like after any kill).
+      if (!(e instanceof StoreError && e.code === 'corrupt')) await this.rollbackAppend(st, chunkStart, created).catch(() => undefined);
+      throw e;
+    }
     // acknowledged: now update memory
     if (created) st.chunks.push(chunkStart);
     st.count = bs.count; st.h = bs.h; st.c = bs.c; st.convCount = bs.convCount; st.bodyEnd = bs.off; st.rs = bs.rs;
     if (st.replyEndsCache) st.replyEndsCache.push(...confirmedNow);
     const changed = sum.title !== st.summary.title || sum.model !== st.summary.model || sum.cwd !== st.summary.cwd;
     st.summary = { title: sum.title, model: sum.model, cwd: sum.cwd, lastAppendMs: this.now(), lines: st.count };
-    // The summary file is only rewritten when a fact in it changed, to keep a live append at one body
-    // sync + one index sync. Counts come from the index; arrival time may lag by a few appends after a crash.
-    if (changed || st.count - st.summarySavedAt >= SUMMARY_SAVE_EVERY) await this.saveSummary(st);
+    // From here the lines ARE durable. A full disk for the small side files is not a failed append (they are rebuilt on load).
+    try {
+      // The summary file is only rewritten when a fact in it changed, to keep a live append at one body
+      // sync + one index sync. Counts come from the index; arrival time may lag by a few appends after a crash.
+      if (changed || st.count - st.summarySavedAt >= SUMMARY_SAVE_EVERY) await this.saveSummary(st);
+      // N1: vouch for the head every few lines (every line while the version is short), AFTER the index is durable
+      if (st.count - st.ckptCount >= this.ckptEvery || st.count <= this.ckptEvery) await this.saveCheckpoint(st);
+      if (st.partial && st.count >= st.partial.fromLine + st.partial.lost) { await this.fs.unlink(nodePath.join(st.dir, PARTIAL_FILE)); await this.fs.fsyncDir(st.dir); st.partial = null; }
+    } catch (e) { if (!isDiskFull(e)) throw e; }
+  }
+
+  /** Cut back what a failed append added: the body to where it was, the index to its old record count. */
+  private async rollbackAppend(st: VState, chunkStart: number, created: boolean): Promise<void> {
+    const path = this.chunkPath(st, chunkStart);
+    if (await this.fs.exists(path)) {
+      const bf = await this.fs.open(path, { create: false });
+      try { if ((await bf.size()) > st.bodyEnd - chunkStart) { await bf.truncate(st.bodyEnd - chunkStart); await bf.sync(); } } finally { await bf.close(); }
+      if (created && st.bodyEnd - chunkStart === 0) { await this.fs.unlink(path); await this.fs.fsyncDir(st.dir); }
+    }
+    const xf = await this.fs.open(this.ixPath(st.dir), { create: false });
+    try { if ((await xf.size()) > recPos(st.count)) { await xf.truncate(recPos(st.count)); await xf.sync(); } } finally { await xf.close(); }
   }
 
   // ---- parked appends ------------------------------------------------------------------------
@@ -950,6 +914,49 @@ export class ChatStore {
   }
 
   /**
+   * Parked appends waiting for a gap to fill (N12a). A `parked` answer is provisional: the lines are safe on disk but are not part of
+   * the version until the head reaches `fromLine`. One far past the head occupies the cap until the gap fills; the caller owns the
+   * timeout and can give up on it with `releaseParked`.
+   */
+  parkedList(version: VersionId): Promise<{ name: string; fromLine: number; bytes: number }[]> {
+    return this.guard(() => this.exclusive(async () => {
+      const st = await this.state(version);
+      return [...st.parked].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([name, bytes]) => ({ name, fromLine: parseInt(name.slice(0, 16), 10), bytes }));
+    }));
+  }
+  /**
+   * Parks that were found NOT to be a prefix and set aside (N12b). A caller that was told `parked` must read this to learn that the lines
+   * it believed safe were moved here instead. Nothing here is deleted; the files are framed line lists (see `unframeLines`).
+   */
+  rejectedList(version: VersionId): Promise<{ name: string; fromLine: number; bytes: number }[]> {
+    return this.guard(() => {
+      const key = this.keyOf(version);
+      return this.exclusive(async () => {
+        const dir = nodePath.join(this.vdir(key), 'rejected');
+        const out = [];
+        for (const name of (await this.fs.readdir(dir)).sort()) {
+          if (!/^\d{16}-[0-9a-f]{16}\.park$/.test(name)) continue;
+          out.push({ name, fromLine: parseInt(name.slice(0, 16), 10), bytes: await this.tools.fileSize(nodePath.join(dir, name)) });
+        }
+        return out;
+      });
+    });
+  }
+  /** Give up on a parked append (a timeout the caller owns): moved to rejected/, kept, never deleted. Returns false when there is no such park. */
+  releaseParked(version: VersionId, name: string): Promise<boolean> {
+    return this.guard(() => {
+      if (!/^\d{16}-[0-9a-f]{16}\.park$/.test(name)) throw new StoreError('bad-argument', 'parked name');
+      const key = this.keyOf(version);
+      return this.exclusive(() => this.mutate(key, async () => {
+        const st = await this.state(version);
+        if (!st.parked.has(name)) return false;
+        if (!(await this.moveAway(st, nodePath.join(st.dir, 'parked', name), name))) throw new StoreError('limit', 'rejected/ is full');
+        return true;
+      }));
+    });
+  }
+
+  /**
    * A parked append that is not a prefix is KEPT (retention rule) under rejected/, never deleted. At the
    * cap it stays in parked/ instead (where it counts toward the parked cap and so surfaces loudly).
    */
@@ -957,6 +964,8 @@ export class ChatStore {
     const rej = nodePath.join(st.dir, 'rejected');
     await mkdirDurable(this.fs, rej);
     if ((await this.fs.readdir(rej)).length >= MAX_REJECTED) return false;
+    // N11: a byte cap as well as a file cap (a junk park can be hundreds of MB); at the cap it stays in parked/, counting toward that cap
+    if ((await this.bytesUnder(rej)) + (st.parked.get(name) ?? 0) > this.maxRejectedBytes) return false;
     await this.fs.rename(path, nodePath.join(rej, name));
     await this.fs.fsyncDir(rej); await this.fs.fsyncDir(nodePath.join(st.dir, 'parked'));
     this.forgetParked(st, name);
@@ -1046,23 +1055,31 @@ export class ChatStore {
   }
 
   // ---- versions ------------------------------------------------------------------------------------
-  listVersions(): Promise<{ version: Buffer; chatId: string; runtime: RuntimeKind; parent: Buffer | null; head: Head | null; damaged: string | null }[]> {
+  /**
+   * Every version with its head, or a typed reason it cannot be served. WHY one try per version (N4, N8): one version with a
+   * garbage metadata file, a classifier it cannot re-derive or any other unreadable state must never make the listing (and
+   * so every other version) throw. A version that cannot be read is listed with `damaged: 'unreadable: <code>'`;
+   * `chatId`/`runtime` are null when its own meta.json is what is unreadable.
+   */
+  listVersions(): Promise<{ version: Buffer; chatId: string | null; runtime: RuntimeKind | null; parent: Buffer | null; head: Head | null; damaged: string | null }[]> {
     return this.exclusive(async () => {
       const out = [];
       for (const key of (await this.fs.readdir(nodePath.join(this.root, 'versions'))).sort()) {
         if (!/^[0-9a-f]{2,256}$/.test(key) || key.length % 2) continue;
-        const meta = await this.readMetaIfPresent(this.vdir(key)); // registration may never have finished
-        if (!meta) continue;
-        const dmg = await this.readDamaged(this.vdir(key));
-        const base = { version: unhex(key), chatId: meta.chatId, runtime: meta.runtime, parent: meta.parent ? unhex(meta.parent) : null };
-        if (dmg) { out.push({ ...base, head: null, damaged: dmg.asideName }); continue; }
+        let base: { version: Buffer; chatId: string | null; runtime: RuntimeKind | null; parent: Buffer | null } = { version: unhex(key), chatId: null, runtime: null, parent: null };
         try {
+          const meta = await this.readMetaIfPresent(this.vdir(key)); // registration may never have finished
+          if (!meta) continue;
+          base = { version: unhex(key), chatId: meta.chatId, runtime: meta.runtime, parent: meta.parent ? unhex(meta.parent) : null };
+          const dmg = await this.readDamaged(this.vdir(key));
+          if (dmg) { out.push({ ...base, head: null, damaged: dmg.asideName }); continue; }
           let st = this.versions.get(key);
           if (!st) { st = await this.load(key); this.versions.set(key, st); }
           out.push({ ...base, head: this.headOf(st), damaged: null });
         } catch (e) {
-          if (e instanceof StoreError && e.code === 'damaged') { out.push({ ...base, head: null, damaged: (await this.readDamaged(this.vdir(key)))?.asideName ?? 'damaged' }); continue; }
-          throw e;
+          this.versions.delete(key);
+          if (e instanceof StoreError && e.code === 'damaged') { out.push({ ...base, head: null, damaged: (await this.readDamaged(this.vdir(key)).catch(() => null))?.asideName ?? 'damaged' }); continue; }
+          out.push({ ...base, head: null, damaged: `unreadable: ${e instanceof StoreError ? e.code : ((e as { code?: string })?.code ?? 'error')}` });
         }
       }
       return out;
@@ -1093,7 +1110,11 @@ export class ChatStore {
           // a request past the head was clamped to the head the first time: the same request again is the same retry
           const same = existing.fromLine === fromLine || (L === 0 && fromLine > existing.fromLine);
           if (existing.version !== key || !same) throw new StoreError('bad-argument', 'takeover id already used for a different tail');
-          if (L > 0 && st.count === existing.fromLine + L && hex((await this.stateAtLine(st, st.count)).h) === existing.headHash) await this.cutTo(st, existing.fromLine);
+          // N15: a persisted "cut done" marker. Without it, lines the new host appended that happen to be byte-identical to the saved
+          // tail would satisfy this test and be cut a second time. (Residual: a kill between the cut and the marker, then the same
+          // lines re-appended before this retry, still cuts once more; the tail file keeps them.)
+          const done = await this.fs.exists(nodePath.join(dir, `${takeoverId}.done`));
+          if (!done && L > 0 && st.count === existing.fromLine + L && hex((await this.stateAtLine(st, st.count)).h) === existing.headHash) { await this.cutTo(st, existing.fromLine); await this.markCutDone(dir, takeoverId); }
           return { lines: L };
         }
         if (fromLine < st.evictedLines) throw new StoreError('evicted', 'tail lines have no body here');
@@ -1106,15 +1127,17 @@ export class ChatStore {
           version: key, fromLine: from, fromHash: hex(fromRec.h), fromConv: hex(fromRec.c), headHash: hex(st.h), headConv: hex(st.c),
           replyEnds: re, pending: st.rs.cand && st.rs.cand.n >= from ? st.rs.cand.n : null,
         };
-        const hb = Buffer.from(JSON.stringify(header));
-        const hl = Buffer.alloc(4); hl.writeUInt32BE(hb.length);
-        const hc = Buffer.alloc(4); hc.writeUInt32BE(crc32(hb));
         await mkdirDurable(this.fs, dir);
-        await writeFileAtomic(this.fs, path, Buffer.concat([Buffer.from('YCMTAIL2'), hl, hb, hc, frameLines(lines)]));
+        await writeFileAtomic(this.fs, path, encodeTailFile(header, lines));
         if (st.count > from) await this.cutTo(st, from);
+        await this.markCutDone(dir, takeoverId);
         return { lines: lines.length };
       }));
     });
+  }
+
+  private async markCutDone(dir: string, takeoverId: string): Promise<void> {
+    await writeFileAtomic(this.fs, nodePath.join(dir, `${takeoverId}.done`), Buffer.from('cut done\n'));
   }
 
   /** A previously set-aside tail, with the chain values around it, or null. Pass `version` to look in one version only. */
@@ -1133,18 +1156,9 @@ export class ChatStore {
     });
   }
 
-  private async readTailFile(path: string): Promise<{ version: string; fromLine: number; fromHash: string; fromConv: string; headHash: string; headConv: string; lines: Buffer[]; replyEnds: number[]; pending: number | null } | null> {
+  private async readTailFile(path: string): Promise<TailFile | null> {
     const b = await this.fs.readFile(path);
-    if (!b) return null;
-    if (b.length < 16 || b.subarray(0, 8).toString() !== 'YCMTAIL2') throw new StoreError('corrupt', 'tail file');
-    const hl = b.readUInt32BE(8);
-    // WHY a checksum on the header (L6): the framed lines carry their own, the JSON header did not
-    if (12 + hl + 4 > b.length || crc32(b.subarray(12, 12 + hl)) !== b.readUInt32BE(12 + hl)) throw new StoreError('corrupt', 'tail file header');
-    let header: any;
-    try { header = JSON.parse(b.subarray(12, 12 + hl).toString()); } catch { throw new StoreError('corrupt', 'tail file header'); }
-    const lines = unframeLines(b.subarray(12 + hl + 4));
-    if (!lines) throw new StoreError('corrupt', 'tail file body');
-    return { version: header.version, fromLine: header.fromLine, fromHash: header.fromHash, fromConv: header.fromConv, headHash: header.headHash, headConv: header.headConv, lines, replyEnds: header.replyEnds, pending: header.pending };
+    return b ? decodeTailFile(b) : null;
   }
 
   private async stateAtLine(st: VState, n: number): Promise<{ h: Buffer; c: Buffer }> {
@@ -1176,6 +1190,12 @@ export class ChatStore {
     if (n < st.evictedLines) throw new StoreError('evicted', 'cannot cut into evicted lines');
     const lastKept = n === 0 ? null : this.mustRec(await this.readAt(this.ixPath(st.dir), recPos(n - 1), REC));
     const endOff = lastKept ? lastKept.offset + lastKept.len : 0;
+    // WHY the checkpoint is lowered BEFORE the cut (N1): a checkpoint that outlives the cut would claim lines that are gone, and
+    // the next load would call the version damaged. Lowered first, a kill between the two steps leaves it merely behind the index.
+    if (st.ckptCount > n) {
+      await writeCheckpoint(this.fs, st.dir, { count: n, stamp: st.staleConv ? (this.stamp ^ 0x80000000) >>> 0 : this.stamp, h: lastKept ? lastKept.h : st.seeds.raw, c: lastKept ? lastKept.c : st.seeds.conversation });
+      st.ckptCount = n;
+    }
     const f = await this.fs.open(this.ixPath(st.dir), { create: false });
     try { await f.truncate(recPos(n)); await f.sync(); } finally { await f.close(); }
     await this.tools.trimBody(st.dir, endOff, false);
@@ -1200,8 +1220,12 @@ export class ChatStore {
       const key = this.keyOf(version);
       return this.exclusive(() => this.mutate(key, async () => {
         const dir = this.vdir(key);
-        if (!(await this.readMeta(dir))) throw new StoreError('unknown-version', key.slice(0, 8));
-        const dmg = await this.readDamaged(dir);
+        // WHY not readMeta alone (N8): the remedy for a version with a garbage meta.json must not itself need that file
+        let metaBad = false;
+        try { if (!(await this.readMeta(dir))) throw new StoreError('unknown-version', key.slice(0, 8)); }
+        catch (e) { if (e instanceof StoreError && e.code === 'corrupt') metaBad = true; else throw e; }
+        let dmg: { asideName: string; reason: string } | null = null;
+        try { dmg = await this.readDamaged(dir); } catch (e) { if (!(e instanceof StoreError && e.code === 'corrupt')) throw e; await this.fs.unlink(nodePath.join(dir, 'damaged.json')); }
         if (dmg) {
           await this.fs.unlink(nodePath.join(dir, 'damaged.json')); await this.fs.fsyncDir(dir);
           this.versions.delete(key);
@@ -1210,7 +1234,7 @@ export class ChatStore {
         }
         const taken = (await this.fs.readdir(nodePath.join(this.root, 'aside'))).filter((n) => n.startsWith(key + '-')).length;
         const asideName = `${key}-${taken + 1}`;
-        await writeFileAtomic(this.fs, nodePath.join(dir, 'aside.intent'), Buffer.from(JSON.stringify({ asideName })));
+        await writeFileAtomic(this.fs, nodePath.join(dir, 'aside.intent'), Buffer.from(JSON.stringify(metaBad ? { asideName, moveMeta: true } : { asideName })));
         this.versions.delete(key);
         await this.finishAside(key, dir);
         return { asideName };
@@ -1221,12 +1245,12 @@ export class ChatStore {
   private async finishAside(key: string, dir: string): Promise<void> {
     const ib = await this.fs.readFile(nodePath.join(dir, 'aside.intent'));
     if (!ib) return;
-    const { asideName, reason } = JSON.parse(ib.toString()) as { asideName: string; reason?: string };
+    const { asideName, reason, moveMeta } = JSON.parse(ib.toString()) as { asideName: string; reason?: string; moveMeta?: boolean };
     if (!ASIDE_RE.test(asideName)) throw new StoreError('corrupt', 'aside intent');
     const target = nodePath.join(this.root, 'aside', asideName);
     await mkdirDurable(this.fs, target);
     for (const name of await this.fs.readdir(dir)) {
-      if (name === 'index.bin' || name === 'index.rebuild' || name === 'evicted.json' || name === 'summary.json' || name === 'scrub.json' || /^body-[0-9a-f]{16}\.bin$/.test(name)) {
+      if (name === 'index.bin' || name === 'index.rebuild' || name === 'evicted.json' || name === 'summary.json' || name === 'scrub.json' || name === CHECKPOINT_FILE || name === PARTIAL_FILE || name === STALE_CONV_FILE || (moveMeta && name === 'meta.json') || /^body-[0-9a-f]{16}\.bin$/.test(name)) {
         // WHY never overwrite (H2): a rename over an existing aside file would destroy the very copy being kept.
         // The aside copy already holds this file, so the move happened before; what is in the version
         // folder is newer and stays where it is.
@@ -1240,7 +1264,8 @@ export class ChatStore {
     // If it outlived the fresh index, a rerun would move that new empty index over the aside copy's index.
     await this.fs.unlink(nodePath.join(dir, 'aside.intent'));
     await this.fs.fsyncDir(dir);
-    if (reason === undefined) await this.ensureIndex(dir);
+    // a version whose meta.json was garbage has no registration any more (the caller registers it again): no index to create
+    if (reason === undefined && !moveMeta) await this.ensureIndex(dir);
     void key;
   }
 
@@ -1348,6 +1373,8 @@ export class ChatStore {
         const restored = st.evictedLines;
         st.evictedLines = 0; st.evictedBytes = 0;
         if (S > 0 && !st.chunks.includes(0)) st.chunks.unshift(0);
+        // N4: with the bodies back the conversation chain can be recomputed: drop the cached state so the next call rebuilds it
+        if (st.staleConv) this.versions.delete(key);
         return { restoredLines: restored };
       }));
     });
@@ -1358,6 +1385,7 @@ export class ChatStore {
   verify(version: VersionId): Promise<VerifyReport> {
     return this.exclusive(async () => {
       const st = await this.state(version);
+      if (st.indexNeedsInit) return { ok: true, lines: 0, firstBadLine: null };
       const f = await this.fs.open(this.ixPath(st.dir), { create: false });
       const fail = (line: number, reason: string): VerifyReport => ({ ok: false, lines: st.count, firstBadLine: line, reason });
       try {
@@ -1366,6 +1394,12 @@ export class ChatStore {
           const lay = await this.tools.checkChunks(st.dir, { lines: st.evictedLines, bytes: st.evictedBytes });
           if (lay.phys !== st.bodyEnd) return fail(st.count, 'body end');
         } catch (e) { return fail(0, e instanceof Damaged ? e.reason : 'body chunks'); }
+        // N1: the head must also agree with the checkpoint kept in a separate file
+        const ck = await readCheckpoint(this.fs, st.dir);
+        if (ck) {
+          if (ck.count > st.count) return fail(st.count, 'checkpoint is ahead of the index');
+          if (ck.count > 0 && !this.mustRec(await f.read(recPos(ck.count - 1), REC)).h.equals(ck.h)) return fail(ck.count - 1, 'checkpoint');
+        }
         // chain start: the seed, or (bodies evicted) the stored value at the last evicted line
         let h: Buffer = st.seeds.raw; let prev: Rec | null = null;
         for (let n = 0; n < st.count; n += 256) {
@@ -1392,33 +1426,36 @@ export class ChatStore {
     });
   }
 
-  // ---- extras ----------------------------------------------------------------------------------------
-  private extraPath(h: string): string {
-    if (!isHash64(h)) throw new StoreError('bad-argument', 'extra hash must be 64 lowercase hex');
-    return nodePath.join(this.root, 'extras', h.slice(0, 2), h);
-  }
-  hasExtra(hash: string): Promise<boolean> { return this.guard(() => { const p = this.extraPath(hash); return this.exclusive(() => this.fs.exists(p)); }); }
-  readExtra(hash: string): Promise<Buffer | null> { return this.guard(() => { const p = this.extraPath(hash); return this.exclusive(() => this.fs.readFile(p)); }); }
+  // ---- extras (extras.ts) ------------------------------------------------------------------------------
+  hasExtra(hash: string): Promise<boolean> { return this.guard(() => this.exclusive(() => this.extras.has(hash))); }
+  /** The extra's bytes, verified against their hash; a rotted one is set aside and reported `corrupt` once (N6). */
+  readExtra(hash: string): Promise<Buffer | null> { return this.guard(() => this.exclusive(() => this.extras.read(hash))); }
   /** Store bytes under their SHA-256. A mismatch is refused: a peer cannot file bytes under a hash they do not have. */
   putExtra(hash: string, bytes: Uint8Array): Promise<'stored' | 'present'> {
-    return this.guard(() => {
-      const path = this.extraPath(hash);
-      if (bytes.length > this.maxExtraBytes) throw new StoreError('limit', `extra of ${bytes.length} bytes exceeds the ${this.maxExtraBytes} byte cap`);
-      if (createHash('sha256').update(bytes).digest('hex') !== hash) throw new StoreError('bad-argument', 'extra bytes do not match their hash');
-      return this.exclusive(async () => {
-        if (await this.fs.exists(path)) return 'present';
-        const dir = nodePath.dirname(path);
-        await mkdirDurable(this.fs, dir);
-        // interrupted writes into an extras folder are swept the first time it is written to in this run (L9)
-        if (!this.sweptExtraDirs.has(dir)) { await sweepTemps(this.fs, dir); this.sweptExtraDirs.add(dir); }
-        await writeFileAtomic(this.fs, path, bytes);
-        return 'stored';
-      });
+    return this.guard(() => { this.extras.check(hash, bytes); return this.exclusive(() => this.extras.put(hash, bytes)); });
+  }
+  private bytesUnder(path: string): Promise<number> { return bytesUnder(this.fs, this.tools, path); }
+
+  /**
+   * Disk used by everything the store KEEPS and never deletes (N11), so the replicator can own a disk budget:
+   * set-aside copies, rejected parks, tails, replaced indexes, healed bytes, torn bytes, rotted extras, and extras.
+   */
+  keptBytes(): Promise<{ aside: number; extrasBad: number; extras: number; perVersion: { version: string; rejected: number; tails: number; replacedIndex: number; healed: number; torn: number; parked: number }[] }> {
+    return this.exclusive(async () => {
+      const perVersion = [];
+      for (const key of (await this.fs.readdir(nodePath.join(this.root, 'versions'))).sort()) {
+        const d = this.vdir(key);
+        const sz = (n: string) => this.bytesUnder(nodePath.join(d, n));
+        perVersion.push({ version: key, rejected: await sz('rejected'), tails: await sz('tails'), replacedIndex: await sz('replaced-index'), healed: await sz('healed'), torn: await sz('torn'), parked: await sz('parked') });
+      }
+      return { aside: await this.bytesUnder(nodePath.join(this.root, 'aside')), extrasBad: await this.bytesUnder(nodePath.join(this.root, 'extras-bad')), extras: await this.extras.bytes(), perVersion };
     });
   }
 
   // ---- control log storage (no interpretation) --------------------------------------------------------
   controlLog(chat: string): Promise<ControlEntry[]> { return this.exclusive(() => this.control.log(chat)); }
+  /** Byte ranges of a chat's control log that could not be read and were skipped; the rest of the log is served (N2). Empty when clean. */
+  controlDamage(chat: string): Promise<ControlDamage[]> { return this.exclusive(() => this.control.damage(chat)); }
   parkedControl(chat: string): Promise<ControlEntry[]> { return this.exclusive(() => this.control.parked(chat)); }
   appendControl(entry: ControlEntry): Promise<'ok' | 'parked' | 'duplicate'> {
     return this.exclusive(() => this.control.append(entry));
@@ -1426,30 +1463,14 @@ export class ChatStore {
   /** A control log reported `damaged`: move its file aside (kept) so the log starts empty and can be refetched. Returns the kept file's name. */
   quarantineControl(chat: string): Promise<string> { return this.exclusive(() => this.control.quarantine(chat)); }
 
-  private headOf(st: VState): Head {
-    return { lines: st.count, hash: hex(st.h), conversationLines: st.convCount, conversationHash: hex(st.c), evictedLines: st.evictedLines, classifierStamp: this.stamp, damagedFromLine: st.badLine };
+  /** First line whose bytes are not trustworthy: a body that failed its chain value, or lines a rebuild set aside and a resend has not yet replaced. */
+  private damagedFrom(st: VState): number | null {
+    const p = st.partial && st.count < st.partial.fromLine + st.partial.lost ? st.partial.fromLine : null;
+    if (st.badLine === null) return p;
+    return p === null ? st.badLine : Math.min(p, st.badLine);
   }
-}
 
-/** A line must be exactly one line: ends in 0x0a and has no other 0x0a. */
-function asLine(l: Uint8Array): Buffer {
-  const b = Buffer.from(l.buffer, l.byteOffset, l.byteLength);
-  if (b.length === 0 || b[b.length - 1] !== 0x0a || b.indexOf(0x0a) !== b.length - 1) throw new StoreError('bad-line');
-  return b;
-}
-
-function validateProofShape(p: EvictionProof): void {
-  const bad = (m: string): never => { throw new StoreError('bad-proof', m); };
-  if (!p || typeof p !== 'object' || p.kind !== 'holders-confirmed') bad('kind');
-  if (typeof p.version !== 'string') bad('version');
-  if (!Number.isSafeInteger(p.through) || p.through < 1) bad('through');
-  if (!isHash64(p.hash)) bad('hash');
-  if (!Array.isArray(p.acks) || p.acks.length < 1 || p.acks.length > 64) bad('acknowledgements');
-  const holders = new Set<string>();
-  for (const a of p.acks) {
-    if (!a || typeof a !== 'object' || typeof a.holder !== 'string' || a.holder.length < 1 || a.holder.length > 256) bad('holder id');
-    if (typeof a.version !== 'string' || !Number.isSafeInteger(a.lines) || !isHash64(a.hash) || typeof a.signature !== 'string') bad('acknowledgement fields');
-    if (holders.has(a.holder)) bad('the same holder twice');
-    holders.add(a.holder);
+  private headOf(st: VState): Head {
+    return { lines: st.count, hash: hex(st.h), conversationLines: st.convCount, conversationHash: hex(st.c), evictedLines: st.evictedLines, classifierStamp: this.stamp, damagedFromLine: this.damagedFrom(st), conversationChainStale: st.staleConv };
   }
 }

@@ -11,8 +11,10 @@ export const V = (n: number): Buffer => Buffer.from([0xaa, n & 0xff, (n >> 8) & 
 export const CHAT = 'synthetic:chat-1';
 
 // WHY async: this file lives under src/main, where the repo bans blocking fs calls outside tests.
+// WHY MESH_STORE_TMPDIR (review M7): every test used to run on tmpfs, where fsync is free and ordering never bites. Pointing this
+// variable at a folder on a REAL disk (under the worktree's own scratch space, never the user's data) runs the same suites there.
 export async function tmpRoot(prefix = 'mesh-store-'): Promise<{ dir: string; cleanup: () => Promise<void> }> {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+  const dir = await fsp.mkdtemp(path.join(process.env.MESH_STORE_TMPDIR || os.tmpdir(), prefix));
   return { dir, cleanup: () => fsp.rm(dir, { recursive: true, force: true }) };
 }
 

@@ -16,8 +16,14 @@ import { ccConversation, cc } from './fixtures';
 import { CHAT, V, refChains, tmpRoot, listFiles } from './testkit';
 import { analyseLine, initialReplyState, replyEndStep } from './classify';
 
-type Variant = { tear: boolean; powerLoss: boolean };
-const VARIANTS: Variant[] = [{ tear: false, powerLoss: false }, { tear: true, powerLoss: false }, { tear: true, powerLoss: true }];
+// WHY the two shadow variants (review "crash sweep honesty"): the shim now also models an unlink and a rename-over-existing
+// that were never directory-synced. `shadow` keeps unlinked files and overwritten targets so power loss can bring them back;
+// `revert` additionally makes every unsynced overwrite show the OLD content (both outcomes are legal on a real disk).
+type Variant = { tear: boolean; powerLoss: boolean; shadow?: boolean; revert?: boolean };
+const VARIANTS: Variant[] = [
+  { tear: false, powerLoss: false }, { tear: true, powerLoss: false }, { tear: true, powerLoss: true },
+  { tear: true, powerLoss: true, shadow: true }, { tear: true, powerLoss: true, shadow: true, revert: true },
+];
 
 /** Reply ends the pure tracker finds in the first n lines (the reference for the stored index). */
 function refReplyEnds(lines: Buffer[], n: number): { confirmed: number[]; pending: number | null } {
@@ -56,7 +62,8 @@ async function sweep(sc: Scenario): Promise<{ ops: number; runs: number }> {
       const t = await tmpRoot('crash-run-');
       try {
         await sc.setup?.(t.dir);
-        const ffs = new FaultFs(k, v);
+        const shadowDir = v.shadow ? fs.mkdtempSync(path.join(path.dirname(t.dir), 'shadow-')) : undefined;
+        const ffs = new FaultFs(k, { tear: v.tear, powerLoss: v.powerLoss, shadowDir, revertOverwrites: v.revert });
         const progress = { acked: 0 };
         let crashed = false;
         try {
@@ -67,13 +74,16 @@ async function sweep(sc: Scenario): Promise<{ ops: number; runs: number }> {
           crashed = true;
         }
         expect(crashed, `op ${k} of ${total} should have been reached`).toBe(true);
+        // N10: a killed operation must not leave a file handle open (Node 24+ raises an uncaught error when one is garbage-collected)
+        expect(ffs.openHandles, `[${sc.name} kill at op ${k}] file handles left open`).toBe(0);
         await ffs.applyPowerLoss();
         // the killed process is gone, so its lock is stale: in-process the owner would still look alive, so mark it dead
         const lockPath = path.join(t.dir, 'LOCK');
         if (fs.existsSync(lockPath)) fs.writeFileSync(lockPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(lockPath, 'utf8')), pid: 2147483646, start: 'dead' }));
         try { await sc.check(t.dir, progress, k); }
-        catch (e) { (e as Error).message = `[${sc.name} kill at op ${k}/${total} tear=${v.tear} powerLoss=${v.powerLoss}] ` + (e as Error).message; throw e; }
+        catch (e) { (e as Error).message = `[${sc.name} kill at op ${k}/${total} tear=${v.tear} powerLoss=${v.powerLoss} shadow=${!!v.shadow} revert=${!!v.revert}] ` + (e as Error).message; throw e; }
         runs++;
+        if (shadowDir) fs.rmSync(shadowDir, { recursive: true, force: true });
       } finally { await t.cleanup(); }
     }
   }
@@ -303,4 +313,168 @@ describe('kill at every disk operation', () => {
       },
     });
   }, 60_000);
+});
+
+// ------------------------------------------------------------------------------------------------ second-round sweeps
+// The new recovery operations (review N1, N4, N7) are the most dangerous code in the store: each is killed at every
+// operation, in every failure mode above, and the folder must reopen to a state that lost no acknowledged byte.
+const R100 = Array.from({ length: 100 }, (_, i) => cc.user(`row ${i} ${'z'.repeat(20)}`));
+const RREF = refChains(R100);
+const AFTER = cc.user('after');   // one fixed line: cc.user numbers its lines, so two calls give two different lines
+const vdirOf = (root: string) => path.join(root, 'versions', V(1).toString('hex'));
+async function buildRows(root: string, rows: Buffer[], o: StoreOptions = {}): Promise<void> {
+  const s = await ChatStore.open(root, o);
+  await s.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' });
+  for (let i = 0; i < rows.length; i += 7) await s.append(V(1), 0, i, rows.slice(i, i + 7));
+  await s.close();
+}
+const lineStart = (rows: Buffer[], n: number) => rows.slice(0, n).reduce((a, l) => a + l.length, 0);
+
+describe('kill at every operation: the new recovery paths', () => {
+  it('split rebuild (a rotted body byte behind a damaged index header): never loses a byte, always converges', async () => {
+    const rot = lineStart(R100, 40) + 5;
+    await sweep({
+      name: 'split-rebuild',
+      setup: async (root) => {
+        await buildRows(root, R100);
+        const ip = path.join(vdirOf(root), 'index.bin'); const ib = fs.readFileSync(ip); ib[3] ^= 0xff; fs.writeFileSync(ip, ib);
+        const bp = path.join(vdirOf(root), 'body-0000000000000000.bin'); const bb = fs.readFileSync(bp); bb[rot] ^= 0xff; fs.writeFileSync(bp, bb);
+      },
+      run: async (s) => { await s.head(V(1)); },
+      check: async (root) => {
+        const bodyBefore = fs.readFileSync(path.join(vdirOf(root), 'body-0000000000000000.bin'));
+        void bodyBefore;
+        const s = await ChatStore.open(root);
+        await s.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' });
+        const head = await s.head(V(1));
+        expect(head.lines).toBe(40); expect(head.hash).toBe(RREF.raw[40]); expect(head.damagedFromLine).toBe(40);
+        expect((await s.verify(V(1))).ok).toBe(true);
+        // the rotted byte is still on disk somewhere (torn/ copy of the cut-off body), never silently gone
+        const kept = fs.readdirSync(path.join(vdirOf(root), 'torn')).filter((n) => n.endsWith('-body')).map((n) => fs.readFileSync(path.join(vdirOf(root), 'torn', n)));
+        expect(kept.some((b) => b.length >= R100.slice(40).reduce((a, l) => a + l.length, 0) && b[5] === (R100[40][5] ^ 0xff))).toBe(true);
+        expect(await s.append(V(1), 0, 40, R100.slice(40))).toBe('ok');
+        expect((await s.head(V(1))).hash).toBe(RREF.raw[100]);
+        expect((await s.verify(V(1))).ok).toBe(true);
+        await s.close();
+      },
+    });
+  }, 240_000);
+
+  it('rebuild after a classifier change with an evicted prefix: the version stays served, flagged, and recovers when the bodies return', async () => {
+    const accept: StoreOptions = { proofVerifier: () => true };
+    const changed: StoreOptions = { proofVerifier: () => true, replyEnd: { apiErrorsEndReplies: false } };
+    const vh = V(1).toString('hex');
+    const proof = (): EvictionProof => ({ kind: 'holders-confirmed', version: vh, through: 30, hash: RREF.raw[30], acks: [{ holder: 'dev-a', version: vh, lines: 30, hash: RREF.raw[30], signature: 'sig' }] });
+    await sweep({
+      name: 'stamp-change-evicted',
+      storeOpts: changed,
+      setup: async (root) => { await buildRows(root, R100, accept); const s = await ChatStore.open(root, accept); await s.evictBody(V(1), proof()); await s.close(); },
+      run: async (s) => { await s.head(V(1)); },
+      check: async (root) => {
+        const s = await ChatStore.open(root, changed);
+        const head = await s.head(V(1));
+        expect(head.lines).toBe(100); expect(head.hash).toBe(RREF.raw[100]); expect(head.evictedLines).toBe(30); expect(head.conversationChainStale).toBe(true);
+        expect((await s.verify(V(1))).ok).toBe(true);
+        expect(await s.append(V(1), 0, 100, [AFTER])).toBe('ok');
+        expect((await s.restoreBody(V(1), R100)).restoredLines).toBe(30);
+        const h2 = await s.head(V(1));
+        expect(h2.conversationChainStale).toBe(false); expect(h2.evictedLines).toBe(0);
+        expect(h2.conversationHash).toBe(refChains([...R100, AFTER]).conv);
+        expect((await s.verify(V(1))).ok).toBe(true);
+        await s.close();
+      },
+    });
+  }, 240_000);
+
+  it('a rebuild nothing can vouch for (index gone, body rotted) quarantines intact at every kill point', async () => {
+    const rot = lineStart(R100, 10) + 3;
+    let rotted = Buffer.alloc(0);
+    await sweep({
+      name: 'quarantine-unanchored',
+      setup: async (root) => {
+        await buildRows(root, R100);
+        fs.unlinkSync(path.join(vdirOf(root), 'index.bin'));
+        const bp = path.join(vdirOf(root), 'body-0000000000000000.bin'); const bb = fs.readFileSync(bp); bb[rot] ^= 0xff; fs.writeFileSync(bp, bb); rotted = bb;
+      },
+      run: async (s) => { await s.head(V(1)).catch((e) => { if (e instanceof InjectedCrash) throw e; }); },
+      check: async (root) => {
+        const s = await ChatStore.open(root);
+        await expect(s.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
+        const q = path.join(root, 'aside', fs.readdirSync(path.join(root, 'aside'))[0]);
+        expect(fs.readFileSync(path.join(q, 'body-0000000000000000.bin')).equals(rotted)).toBe(true);
+        await s.close();
+      },
+    });
+  }, 240_000);
+});
+
+// ------------------------------------------------------------------------------------------------ full disk (N5)
+describe('a full disk at every space-allocating operation (N5)', () => {
+  it('refuses the write with a typed error, keeps every healthy version readable, loses nothing acknowledged, and converges once space returns', async () => {
+    const A = Array.from({ length: 12 }, (_, i) => cc.user(`a ${i} ${'q'.repeat(15)}`));
+    const AREF = refChains(A, 'claude-code', 'synthetic:chat-A');
+    const setup = async (root: string) => {
+      const s = await ChatStore.open(root);
+      await s.registerVersion(V(7), { chatId: 'synthetic:chat-A', runtime: 'claude-code' });
+      await s.append(V(7), 0, 0, A);
+      await s.close();
+    };
+    const run = async (s: ChatStore, p: { acked: number }) => {
+      await s.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' });
+      let at = 0;
+      for (const n of [4, 5, 5, conv.length - 14]) { await s.append(V(1), 0, at, conv.slice(at, at + n)); at += n; p.acked = at; }
+      await s.putExtra(createHash('sha256').update('x').digest('hex'), Buffer.from('x'));
+      await s.appendControl({ id: createHash('sha256').update('c').digest('hex'), chat: CHAT, seen: [], body: Buffer.from('c') });
+    };
+    // count the space-allocating operations of one clean run
+    const probe = await tmpRoot('enospc-count-');
+    let total = 0;
+    try { await setup(probe.dir); const ffs = new FaultFs(0); const s = await ChatStore.open(probe.dir, { fs: ffs, chunkBytes: 600 }); await run(s, { acked: 0 }); total = ffs.allocs; await s.close(); } finally { await probe.cleanup(); }
+    expect(total).toBeGreaterThan(10);
+    let runs = 0;
+    for (const tear of [false, true]) {
+      for (let k = 1; k <= total; k++) {
+        const t = await tmpRoot('enospc-run-');
+        try {
+          await setup(t.dir);
+          const ffs = new FaultFs(0, { tear, enospcFrom: k });
+          const progress = { acked: 0 };
+          let s = await ChatStore.open(t.dir, { fs: ffs, chunkBytes: 600 });
+          let refused = false;
+          try { await run(s, progress); }
+          catch (e) { refused = true; expect(e, `op ${k} (tear=${tear})`).toMatchObject({ name: 'StoreError', code: 'disk-full' }); }
+          expect(refused, `allocation ${k} of ${total} should have been refused`).toBe(true);
+          await s.close();
+          expect(ffs.openHandles, `[enospc ${k}] file handles left open`).toBe(0);
+          // STILL FULL: a new store object must still serve the healthy version and everything acknowledged on the other one
+          s = await ChatStore.open(t.dir, { fs: ffs, chunkBytes: 600 });
+          const ha = await s.head(V(7));
+          expect(ha.lines).toBe(12); expect(ha.hash).toBe(AREF.raw[12]);
+          expect(Buffer.concat(await s.read(V(7), 0, 0, 12) as Buffer[]).equals(Buffer.concat(A))).toBe(true);
+          if (progress.acked > 0 || (await s.listVersions()).some((v) => v.version.equals(V(1)))) {
+            const hb = await s.head(V(1));
+            expect(hb.lines).toBeGreaterThanOrEqual(progress.acked); expect(hb.hash).toBe(REF.raw[hb.lines]);
+            if (hb.lines) expect(Buffer.concat(await s.read(V(1), 0, 0, hb.lines) as Buffer[]).equals(Buffer.concat(conv.slice(0, hb.lines)))).toBe(true);
+          }
+          // a write is refused with the typed error (not a raw ENOSPC, not a hang)
+          await expect(s.append(V(7), 0, 12, [cc.user('more')])).rejects.toMatchObject({ code: 'disk-full' });
+          expect((await s.head(V(7))).lines).toBe(12);
+          await s.close();
+          expect(ffs.openHandles).toBe(0);
+          // SPACE RETURNS (fresh shim): everything converges, nothing is marked damaged, no aside copy was made
+          const s2 = await ChatStore.open(t.dir, { chunkBytes: 600 });
+          await s2.registerVersion(V(1), { chatId: CHAT, runtime: 'claude-code' });
+          expect(await s2.append(V(1), 0, 0, conv)).toBe('ok');
+          expect((await s2.head(V(1))).hash).toBe(REF.raw[conv.length]);
+          expect((await s2.verify(V(1))).ok).toBe(true); expect((await s2.verify(V(7))).ok).toBe(true);
+          expect((await s2.listVersions()).every((v) => v.damaged === null)).toBe(true);
+          expect(fs.existsSync(path.join(t.dir, 'aside')) ? fs.readdirSync(path.join(t.dir, 'aside')) : []).toEqual([]);
+          await s2.close();
+          runs++;
+        } catch (e) { (e as Error).message = `[enospc from allocation ${k}/${total} tear=${tear}] ` + (e as Error).message; throw e; }
+        finally { await t.cleanup(); }
+      }
+    }
+    expect(runs).toBe(2 * total);
+  }, 240_000);
 });

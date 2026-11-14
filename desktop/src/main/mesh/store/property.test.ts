@@ -36,7 +36,13 @@ function randomLines(rand: () => number, n: number, runtime: RuntimeKind = 'clau
   return out;
 }
 
-const SEEDS = Array.from({ length: 40 }, (_, i) => i + 1);
+// WHY the extra seeds (review M7: "property tests still use fixed seeds"): the 40 fixed seeds keep CI reproducible; setting
+// MESH_PROPERTY_EXTRA_SEEDS=N adds N fresh random ones per run (printed, and named in every failure message) so repeated runs
+// keep exploring new interleavings.
+const EXTRA = Number(process.env.MESH_PROPERTY_EXTRA_SEEDS ?? 0);
+const FRESH = Array.from({ length: EXTRA }, () => 1000 + Math.floor(Math.random() * 1_000_000));
+if (FRESH.length) process.stdout.write(`property tests: extra random seeds ${FRESH.join(',')}\n`);
+const SEEDS = [...Array.from({ length: 40 }, (_, i) => i + 1), ...FRESH];
 
 describe('convergence', () => {
   it('any interleaving, duplication and reordering of appends of the same content reaches the same head and chain', async () => {

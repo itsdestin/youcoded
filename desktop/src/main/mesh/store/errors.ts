@@ -14,10 +14,23 @@ export type StoreErrorCode =
   | 'store-locked'      // another process (or another open in this one) holds this store root
   | 'damaged'           // a version (or control log) failed an integrity check; its bytes are kept aside, nothing is served
   | 'classifier-changed' // chain data was written under a different classifier and cannot be re-derived (bodies evicted)
-  | 'limit';            // a size or count cap was hit (refused loudly, never silently truncated)
+  | 'limit'             // a size or count cap was hit (refused loudly, never silently truncated)
+  | 'disk-full'         // the disk (or quota) is full: the write was refused, nothing already stored is affected (N5)
+  | 'store-locked-stale?'; // a lock whose holder MIGHT be dead; `evidence` lets the caller decide (N9)
+
+/** What the lock file said and what this process could and could not check about it (N9). */
+export interface LockEvidence {
+  pid: number | null;
+  token: string | null;
+  host: string | null;
+  /** Why the store cannot tell: which check was unavailable or inconclusive. */
+  why: string;
+  /** Pass this to `ChatStore.open(root, { breakLockToken })` to take over exactly this lock. */
+  breakLockToken: string | null;
+}
 
 export class StoreError extends Error {
-  constructor(public readonly code: StoreErrorCode, detail?: string) {
+  constructor(public readonly code: StoreErrorCode, detail?: string, public readonly evidence?: LockEvidence) {
     super(detail ? `${code}: ${detail}` : code);
     this.name = 'StoreError';
   }

@@ -13,10 +13,16 @@
 // Review M1: the cheap check alone cannot see a same-size edit in the middle of a big file, so every
 // poll ALSO advances a rolling scrub: a re-hash of the already-ingested prefix, `scrubBytesPerPoll` bytes
 // per poll, resumed from a cursor kept in the (JSON-safe) state. A cycle starts whenever the file's mtime
-// moved since the last cycle began, or `scrubPeriodMs` passed (a forged mtime). Detection bound: an edit
-// anywhere in the first `offset` bytes is found within ceil(offset / scrubBytesPerPoll) polls after the
-// cycle starts (the next poll that sees the new mtime), at a cost of at most scrubBytesPerPoll of hashing
-// per poll.
+// moved since the last cycle began, or `scrubPeriodMs` passed (a forged mtime). Detection bound (CORRECTED,
+// review N13: the old text said one cycle, measured reality was about two): a cycle re-hashes the prefix as
+// it was when the cycle STARTED, ceil(offset / scrubBytesPerPoll) polls. An edit that changes the mtime is
+// found by the cycle the next poll starts, but if the edit lands behind the cursor of a cycle already
+// running (or the file keeps growing and a new cycle only starts at the next mtime change), it is found by
+// the FOLLOWING cycle: allow two cycles, i.e. 2 x ceil(offset / scrubBytesPerPoll) polls (measured 95 polls
+// at 256 KiB per poll on a 13 MB growing file). An edit that RESTORES the mtime (`touch -r`) on an idle file
+// is invisible until `scrubPeriodMs` (6 h by default) has passed: that hole is documented, not closed. A
+// caller that wants a harder guarantee runs `scrub()` (a full re-hash, 0.5 s per 300 MB) at app start for
+// the chats it cares about. Cost: at most scrubBytesPerPoll of hashing per poll.
 //
 // This module only ever opens runtime files for reading. It never writes, renames or deletes them
 // (design 5.3: the mesh never touches a file a runtime has open).

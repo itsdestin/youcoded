@@ -1,7 +1,7 @@
 // Truncate each store file at EVERY byte offset inside its last record (loss test LT-6, store half) and
 // reopen. A kill, a full disk or a bad sector can cut a file anywhere; the store must come back with a
 // clean prefix and accept the missing piece again.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -10,6 +10,8 @@ import { REC, recPos } from './records';
 import { ccConversation } from './fixtures';
 import { CHAT, V, refChains, tmpRoot } from './testkit';
 
+// WHY: these loops build a store per byte offset; on a real disk (MESH_STORE_TMPDIR, review M7) the fsyncs make them take ~50 s
+vi.setConfig({ testTimeout: 300_000 });
 const conv = ccConversation().lines;
 const REF = refChains(conv);
 const vdir = (root: string) => path.join(root, 'versions', V(1).toString('hex'));
@@ -45,9 +47,10 @@ describe('truncate at every byte offset of the last record', () => {
       try {
         await build(t.dir);
         fs.truncateSync(path.join(vdir(t.dir), 'index.bin'), cut);
-        // cut exactly at a record boundary: the line's body was never indexed, so it was never acknowledged (kept aside, resend re-adds it).
-        // cut inside the record: an index write had started, so the body is whole and the line is ADOPTED, not dropped (C1).
-        const want = cut === recPos(last) ? last : conv.length;
+        // WHY every cut now keeps the last line (N1): build() acknowledged it AND closed, so the checkpoint file vouches for it. A cut
+        // exactly at a record boundary used to read as "never acknowledged" and the line was set aside; the checkpoint proves otherwise,
+        // so the index is re-derived from the whole body and verified against it. A cut inside the record is adopted (C1).
+        const want = conv.length;
         const lines = await expectRecovered(t.dir, (n) => n === want);
         expect(lines).toBe(want);
         checked++;
@@ -99,9 +102,17 @@ describe('truncate at every byte offset of the last record', () => {
           fs.truncateSync(path.join(vdir(t.dir), 'index.bin'), ic);
           const bf = path.join(vdir(t.dir), 'body-0000000000000000.bin');
           fs.truncateSync(bf, fs.statSync(bf).size - drop);
-          // a cut inside the index record means an index write had started: the whole body line exists only when none of it was cut
-          const wholeBody = drop === 0;
-          await expectRecovered(t.dir, (n) => n === (ic > recPos(conv.length - 1) && wholeBody ? conv.length : conv.length - 1));
+          // The last line was acknowledged (and checkpointed). Whole body: it is kept whatever the index lost. Part of it cut: an
+          // acknowledged line is missing, so the version is quarantined intact (never silently dropped, never served short).
+          if (drop === 0) await expectRecovered(t.dir, (n) => n === conv.length);
+          else {
+            const s = await ChatStore.open(t.dir);
+            await expect(s.head(V(1))).rejects.toMatchObject({ code: 'damaged' });
+            await s.setAsideDamaged(V(1));
+            expect(await s.append(V(1), 0, 0, conv)).toBe('ok');
+            expect((await s.verify(V(1))).ok).toBe(true);
+            await s.close();
+          }
         } finally { await t.cleanup(); }
       }
     }
