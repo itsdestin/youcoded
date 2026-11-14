@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import { SkillProvider } from '../src/renderer/state/skill-context';
-import { EscCloseProvider } from '../src/renderer/hooks/use-esc-close';
+import { EscCloseProvider, useEscClose, usePopupOpen } from '../src/renderer/hooks/use-esc-close';
 import InputBar from '../src/renderer/components/InputBar';
 
 class NoopResizeObserver { observe() {} unobserve() {} disconnect() {} }
@@ -26,8 +26,14 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
+let popupOpenNow: () => boolean = () => false;
+function Probe() { popupOpenNow = usePopupOpen(); return null; }
+function RealPopup() { useEscClose(true, () => {}); return null; }
+const tree = (sid: string, extra?: React.ReactNode) => (
+  <ChatProvider><SkillProvider><EscCloseProvider><Probe />{extra}<InputBar sessionId={sid} provider="native" /></EscCloseProvider></SkillProvider></ChatProvider>
+);
 async function composer() {
-  render(<ChatProvider><SkillProvider><EscCloseProvider><InputBar sessionId="s1" provider="native" /></EscCloseProvider></SkillProvider></ChatProvider>);
+  render(tree('s1'));
   const box = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
   const chip = await waitFor(() => screen.getByRole('button', { name: 'Inbox' }));
   return { box, chip };
@@ -88,5 +94,85 @@ describe('quick chip over typed words', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(strip()).toBeNull();
     expect(box.value).toBe('Draft a reply to Maya');
+  });
+
+  // Review 2026-11-13 ---------------------------------------------------------------------------------------------------------
+  it('the strip is not counted as a popup, so Enter still reaches the message box and chat cards; a real popup still is', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    fireEvent.click(chip);
+    expect(strip()).not.toBeNull();
+    expect(popupOpenNow()).toBe(false);
+    cleanup();
+    render(tree('s1', <RealPopup />));
+    expect(popupOpenNow()).toBe(true); // control: the probe does see a real popup
+  });
+  it('Enter on a strip button is not seen by window-level Enter handlers (a waiting card cannot answer the same key press)', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    fireEvent.click(chip);
+    const seen = vi.fn();
+    window.addEventListener('keydown', seen);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Add to end' }), { key: 'Enter' });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Add to end' }), { key: 'ArrowLeft' });
+    window.removeEventListener('keydown', seen);
+    expect(seen).toHaveBeenCalledTimes(1); // the arrow reached it; the Enter did not
+  });
+  it('emptying the box while the strip is open drops the question', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    fireEvent.click(chip);
+    typeWords(box, '');
+    expect(strip()).toBeNull();
+  });
+  it('sending the message while the strip is open drops the question', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    fireEvent.click(chip);
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(box.value).toBe(''));
+    expect(strip()).toBeNull();
+  });
+  it('switching to another session drops the question', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    fireEvent.click(chip);
+    expect(strip()).not.toBeNull();
+    cleanup();
+    const { rerender } = render(tree('s1'));
+    const b = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    typeWords(b, 'words');
+    fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Inbox' })));
+    expect(strip()).not.toBeNull();
+    rerender(tree('s2'));
+    expect(strip()).toBeNull();
+  });
+  const pointer = (type: string) => { const e = new Event('pointerdown', { bubbles: true }); Object.defineProperty(e, 'pointerType', { value: type }); window.dispatchEvent(e); };
+  it('a tap leaves focus where it is (the keyboard stays up); a mouse click moves focus to Add to end', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    box.focus();
+    pointer('touch');
+    fireEvent.click(chip);
+    expect(strip()).not.toBeNull();
+    expect(document.activeElement).toBe(box);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    typeWords(box, 'Draft a reply to Maya');
+    pointer('mouse');
+    fireEvent.click(chip);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add to end' }));
+  });
+  it('a pen counts as touch, and a key press afterwards counts as keyboard again', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    box.focus();
+    pointer('pen');
+    fireEvent.click(chip);
+    expect(document.activeElement).toBe(box);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    typeWords(box, 'Draft a reply to Maya');
+    fireEvent.keyDown(document.body, { key: 'a' });
+    fireEvent.click(chip);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add to end' }));
   });
 });

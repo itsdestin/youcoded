@@ -1021,7 +1021,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     }
   };
 
-  const chipChoice = useChipChoice(textRef, setText, inputRef, sessionId);
+  const chipChoice = useChipChoice(textRef, setText, inputRef, sessionId, text);
   const handleChip = useCallback(
     (chip: QuickChip) => {
       // All chips fill the input bar for the user to review/edit/send — never auto-send; over typed words they ask first.
