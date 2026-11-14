@@ -67,7 +67,11 @@ export function Toast({
       className={[
         'flex items-center gap-2 px-4 py-2 text-sm text-fg pointer-events-none',
         variant === 'global'
-          ? 'fixed left-1/2 -translate-x-1/2'
+          // WHY flex-wrap + the buttons' ml-auto (Destin, R3-6b: "with big notices like this, it would be a better use of space to
+          // put the button under the text on the bottom right"): a short notice fits words + button on one line, button beside the
+          // text as before. When the words alone fill the line (a long notice wraps), the buttons no longer fit beside them, so
+          // they drop to their own row and ml-auto pushes them to the right. Pure layout, nothing is measured.
+          ? 'fixed left-1/2 -translate-x-1/2 flex-wrap gap-y-2'
           : 'absolute bottom-full right-0 mb-1 whitespace-nowrap',
       ].join(' ')}
       // A toast is a control-sized surface, not a panel, so it wants radius-lg
@@ -84,14 +88,17 @@ export function Toast({
         ...(variant === 'global' ? { bottom: 'var(--toast-clearance, 4rem)', width: 'max-content', maxWidth: 'calc(100vw - 2rem)' } : null),
       }}
     >
-      {tone === 'error' && (
-        // The state family's failure mark (§1.6) — same dot ErrorState uses.
-        <span className="w-1.5 h-1.5 rounded-full bg-destructive shrink-0" aria-hidden="true" />
-      )}
-      {message}
-      {action && <span className="pointer-events-auto shrink-0">{action}</span>}
+      {/* The dot stays with its words; min-w-0 lets the words wrap instead of forcing the row wider than the window. */}
+      <span className="flex items-center gap-2 min-w-0">
+        {tone === 'error' && (
+          // The state family's failure mark (§1.6) — same dot ErrorState uses.
+          <span className="w-1.5 h-1.5 rounded-full bg-destructive shrink-0" aria-hidden="true" />
+        )}
+        <span className="min-w-0">{message}</span>
+      </span>
+      {action && <span className="pointer-events-auto shrink-0 ml-auto">{action}</span>}
       {!action && actions && actions.length > 0 && (
-        <span className="pointer-events-auto shrink-0 flex items-center gap-1.5">
+        <span className="pointer-events-auto shrink-0 flex items-center gap-1.5 ml-auto">
           {actions.map((x) => (
             <Button key={x.label} variant={x.primary ? 'primary' : 'secondary'} size="sm" onClick={x.onClick}>{x.label}</Button>
           ))}
