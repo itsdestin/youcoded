@@ -243,6 +243,59 @@ describe('PreferencesPopup failed saves', () => {
       } finally { vi.useRealTimers(); }
     });
 
+    // Third review: the toast follows the same newest-write-decides rule as the inline notice.
+    const gates = () => { const list: Array<(v: unknown) => void> = []; const rejecters: Array<(e: unknown) => void> = []; const make = () => new Promise<unknown>((res, rej) => { list.push(res); rejecters.push(rej); }); return { list, make }; };
+    const closed = <PreferencesPopup open={false} onClose={() => {}} onOpenAdvanced={() => {}} />;
+    const reopened = <PreferencesPopup open onClose={() => {}} onOpenAdvanced={() => {}} />;
+
+    it('an OLDER write that fails while a NEWER one reached the disk says nothing (no false alarm)', async () => {
+      const n = notices();
+      const g = gates();
+      setup(vi.fn(() => g.make()));
+      const view = open();
+      const box = await screen.findByRole('textbox', { name: 'System prompt' });
+      fireEvent.change(box, { target: { value: 'a' } }); fireEvent.blur(box);          // older write A running
+      fireEvent.change(box, { target: { value: 'ab' } }); fireEvent.blur(box);         // newer write B running
+      view.rerender(closed);
+      await act(async () => { g.list[1](true); g.list[0](false); await new Promise((r) => setTimeout(r, 20)); }); // B ok, A fails
+      expect(n.got).toEqual([]);
+      n.off();
+    });
+
+    it('two failing writes of one field (one running, one started by the close) toast exactly once', async () => {
+      const n = notices();
+      const g = gates();
+      setup(vi.fn(() => g.make()));
+      const view = open();
+      const box = await screen.findByRole('textbox', { name: 'System prompt' });
+      fireEvent.change(box, { target: { value: 'a' } }); fireEvent.blur(box);          // write A running
+      fireEvent.change(box, { target: { value: 'ab' } });                              // more typed: pause still pending
+      view.rerender(closed);                                                           // close starts write B
+      await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+      expect(g.list).toHaveLength(2);
+      await act(async () => { g.list[0](false); g.list[1](false); await new Promise((r) => setTimeout(r, 20)); });
+      expect(n.got).toEqual(["Couldn't save your system prompt."]);
+      n.off();
+    });
+
+    it('reopening waits for BOTH a running write and the close-time write', async () => {
+      const g = gates();
+      const get = vi.fn().mockResolvedValue(undefined);
+      (window as any).claude = { settings: { get, set: vi.fn(() => g.make()) } };
+      const view = open();
+      const box = await screen.findByRole('textbox', { name: 'System prompt' });
+      fireEvent.change(box, { target: { value: 'a' } }); fireEvent.blur(box);          // write A running
+      fireEvent.change(box, { target: { value: 'ab' } });                              // pending
+      view.rerender(closed);                                                           // close starts write B
+      await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+      get.mockClear();
+      view.rerender(reopened);                                                         // reopen at once
+      await act(async () => { g.list[0](true); await new Promise((r) => setTimeout(r, 30)); });
+      expect(get).not.toHaveBeenCalled();                                              // A done, B still running: keep waiting
+      await act(async () => { g.list[1](true); });
+      await waitFor(() => expect(get).toHaveBeenCalled());
+    });
+
     it('a slow earlier load cannot overwrite a later one', async () => {
       let releaseOld!: () => void;
       const slow = new Promise<void>((r) => { releaseOld = r; });

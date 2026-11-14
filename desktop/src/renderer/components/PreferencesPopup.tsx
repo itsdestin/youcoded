@@ -135,7 +135,44 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
   const saveRef = useRef<(key: keyof PrefsState, value: never) => void>(() => {});
   /** Bumped whenever the popup closes; a save that finishes under a newer number finished after the popup was gone. */
   const openGen = useRef(0);
+  /** Every text write still running (from a blur, the pause timer, the close, or pagehide); a reopening popup waits for all of them. */
   const inflight = useRef<Set<Promise<unknown>>>(new Set());
+  const wSeq = useRef<Record<string, number>>({});
+  const wRunning = useRef<Record<string, number>>({});
+  const wNewestFailed = useRef<Record<string, boolean>>({});
+  const wClosed = useRef<Record<string, boolean>>({});
+  /**
+   * One text write, tracked per field. The toast for a failure after the popup closed follows the SAME rule as the inline notice:
+   * the NEWEST write of a field decides, once every write of that field has settled, so an older write failing while a newer one
+   * reached the disk says nothing (that would be a false alarm), and two failing writes of one field say it exactly once.
+   * `quiet`: pagehide, where nothing can be shown. `afterClose`: the write itself starts at close.
+   */
+  const trackText = useCallback(async (key: keyof PrefsState, doWrite: () => Promise<unknown>, opts: { quiet?: boolean; afterClose?: boolean }) => {
+    const gen = openGen.current;
+    const mine = (wSeq.current[key] = (wSeq.current[key] ?? 0) + 1);
+    wRunning.current[key] = (wRunning.current[key] ?? 0) + 1;
+    if (opts.afterClose) wClosed.current[key] = true;
+    let failed = false; let result: unknown; let error: unknown; let threw = false;
+    const settled = (async () => {
+      try {
+        result = await doWrite();
+        failed = result === false || (!!result && typeof result === 'object' && (result as { ok?: unknown }).ok === false);
+      } catch (e) { failed = true; threw = true; error = e; }
+    })();
+    inflight.current.add(settled);
+    await settled;
+    inflight.current.delete(settled);
+    wRunning.current[key] -= 1;
+    if (openGen.current !== gen) wClosed.current[key] = true; // the popup closed at some point while this was running
+    if (mine === wSeq.current[key]) wNewestFailed.current[key] = failed;
+    if (wRunning.current[key] === 0) {
+      // No invented cause: only the plain fact that it did not save.
+      if (wClosed.current[key] && wNewestFailed.current[key] && !opts.quiet) announce(`Couldn't save ${TEXT_WORDS[key] ?? 'that setting'}.`);
+      wClosed.current[key] = false; wNewestFailed.current[key] = false;
+    }
+    if (threw) throw error;
+    return result;
+  }, []);
   const persist = useCallback((key: keyof PrefsState) => {
     const api = (window.claude as any).settings;
     if (!api) return;
@@ -154,22 +191,9 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
     void run(
       key, LABELS[key],
       async () => {
-        const popupGen = openGen.current;
-        const write = (async () => { const r = await api.set(fieldMap[key], value); if (r !== false) saved.current = { ...saved.current, [key]: value }; return r; })();
-        if (!TEXT_KEYS.includes(key)) return write;
-        // A text save still running when the popup closes (a blur or a pause started it just before) has no popup notice left to show,
-        // so its failure goes to the app toast - once, here, and only for a failure.
-        const tracked = write.then(() => undefined, () => undefined);
-        inflight.current.add(tracked);
-        void tracked.then(() => { inflight.current.delete(tracked); });
-        try {
-          const r = await write;
-          if (openGen.current !== popupGen && (r === false || (!!r && typeof r === 'object' && (r as { ok?: unknown }).ok === false))) announce(`Couldn't save ${TEXT_WORDS[key] ?? 'that setting'}.`);
-          return r;
-        } catch (e) {
-          if (openGen.current !== popupGen) announce(`Couldn't save ${TEXT_WORDS[key] ?? 'that setting'}.`);
-          throw e;
-        }
+        const write = async () => { const r = await api.set(fieldMap[key], value); if (r !== false) saved.current = { ...saved.current, [key]: value }; return r; };
+        // Text goes through the shared tracker so a failure after the popup is gone is toasted by the same rule from every path.
+        return TEXT_KEYS.includes(key) ? trackText(key, write, {}) : write();
       },
       () => { if (TEXT_KEYS.includes(key)) return; latest.current = { ...latest.current, [key]: saved.current[key] }; setPrefs((p) => ({ ...p, [key]: saved.current[key] })); },
       () => {
@@ -205,23 +229,18 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
     const api = (window.claude as any).settings;
     return Promise.all(keys.map(async (k) => {
       clearTimeout(timers.current[k]); delete timers.current[k];
-      let failed = false;
-      try {
-        const r = await api?.set?.(TEXT_FIELD[k] ?? k, latest.current[k]);
-        failed = r === false || (!!r && typeof r === 'object' && (r as { ok?: unknown }).ok === false);
-      } catch { failed = true; }
-      // No invented cause: only the plain fact that it did not save.
-      if (failed && report) announce(`Couldn't save ${TEXT_WORDS[k] ?? 'that setting'}.`);
+      try { await trackText(k, () => api?.set?.(TEXT_FIELD[k] ?? k, latest.current[k]), { quiet: !report, afterClose: report }); } catch { /* reported by trackText */ }
     })).then(() => undefined);
-  }, []);
+  }, [trackText]);
   /** The close-time write still running, so a reopening popup can wait for it before it reads the settings back. */
   const closing = useRef<Promise<void>>(Promise.resolve());
   // Closing (or unmounting) with a pause still pending sends it once, so a typed line is not lost; a failure is toasted.
   useEffect(() => () => {
-    openGen.current += 1; // saves still running now will finish "after close" and toast a failure themselves
-    const waits: Promise<unknown>[] = [...inflight.current];
-    if (Object.keys(timers.current).length) waits.push(writePending(true));
-    // Only when there is something to wait for: the same cleanup also runs when the popup OPENS, and must not replace a real wait with a finished one.
+    openGen.current += 1; // writes still running now finish "after close": trackText toasts a failure if the newest one failed
+    if (Object.keys(timers.current).length) void writePending(true);
+    // ALL running text writes (earlier ones and the one just started) are waited for. Only assigned when there is something running:
+    // the same cleanup also runs when the popup OPENS, and must not replace a real wait with a finished one.
+    const waits = [...inflight.current];
     if (waits.length) closing.current = Promise.all(waits).then(() => undefined);
   }, [open, writePending]);
   // The window going away inside the pause: the page is hidden, so fire the write (no toast possible, no waiting). Listens only while open.
