@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { QuickChip } from './QuickChips';
-import { Button } from './ui';
+import { Button, CloseButton } from './ui';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
@@ -11,7 +11,7 @@ import { useScreenOpen, ScreenMark } from '../shoot-mode';
 //
 // WHY keyboard: Escape closes it (the app's central Escape stack, so it never competes with another layer), and focus moves to
 // "Add to end", the answer that cannot lose words — never to Replace, so a stray Enter cannot throw the draft away.
-export function ChipChoiceStrip({ onReplace, onAdd, onClose }: { onReplace: () => void; onAdd: () => void; onClose: () => void }) {
+function ChipChoiceStrip({ onReplace, onAdd, onClose }: { onReplace: () => void; onAdd: () => void; onClose: () => void }) {
   useEscClose(true, onClose);
   const addRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { addRef.current?.focus(); }, []);
@@ -22,7 +22,7 @@ export function ChipChoiceStrip({ onReplace, onAdd, onClose }: { onReplace: () =
         <div className="flex items-center gap-2 ml-auto">
           <Button ref={addRef} variant="secondary" size="sm" onClick={onAdd}>Add to end</Button>
           <Button variant="primary" size="sm" onClick={onReplace}>Replace</Button>
-          <Button variant="ghost" size="icon" aria-label="Cancel" onClick={onClose} className="w-6 h-6 rounded-full text-fg-dim">✕</Button>
+          <CloseButton label="Cancel" onClick={onClose} />
         </div>
         <ScreenMark name="chat/chip-choice" />
       </div>
