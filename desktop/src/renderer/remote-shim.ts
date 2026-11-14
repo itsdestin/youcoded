@@ -2747,7 +2747,7 @@ export function installShim(): void {
     settings: {
       get: (field: string) => invoke('settings:get', { field }),
       set: (field: string, value: unknown) => invoke('settings:set', { field, value }),
-      takeRepairNotice: (): Promise<{ backupPath: string } | null> => invoke('settings:repair-notice').catch(() => null), // desktop-only channel: a phone gets null, never an error
+      takeRepairNotice: (): Promise<{ backupPath: string } | null> => invoke('settings:repair-notice').catch(() => null), // open to a phone since card #11 a (deck C-1); an older computer refuses it, which reads as no notice
     },
     modes: {
       get: () => invoke('modes:get'),
