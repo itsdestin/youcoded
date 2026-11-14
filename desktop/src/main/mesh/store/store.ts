@@ -71,7 +71,7 @@ import { HDR, REC, NONE, decodeRecord, encodeRecord, frameLines, headerOk, heade
 import { ControlStore, type ControlDamage, type ControlEntry } from './control';
 import type { AppendResult, EvictionProof, Head, ProofVerifier, ScrubReport, StoreOptions, Summary, TailRecord, VerifyReport, VersionId, VersionMeta } from './types';
 import type { VState } from './vstate';
-import { readMeta, readPartial, readDamaged, readScrubMark, lineVerifies, nextAsideName } from './versionfiles';
+import { readMeta, readPartial, readDamaged, readScrubMark, readEvictedNote, lineVerifies, nextAsideName } from './versionfiles';
 import { BodyTools, Damaged, NeedsRebuild, PARTIAL_FILE, STALE_CONV_FILE, chunkPathOf, nextNumbered, type BatchState, type RebuildResult, type SumFacts } from './recovery';
 
 export type { VersionId, ProofVerifier, StoreOptions, VersionMeta, Head, AppendResult, Summary, EvictionProof, TailRecord, VerifyReport, ScrubReport } from './types';
@@ -310,9 +310,18 @@ export class ChatStore {
     // bodies (F1), quarantined a healthy chat (F5), and "which chunk files exist" made a deleted first chunk look like an eviction (F4). Nothing is unlinked here.
     const ckState = await readCheckpointState(this.fs, dir);
     const ck = ckState.ck;
-    const ev = ck ? { lines: ck.evLines, bytes: ck.evBytes } : { lines: 0, bytes: 0 };
     // 1. The chunk files as they are: holes are allowed here (F3), they are reported below line by line and never hide the lines that are whole.
     let layout = await this.tools.layout(dir);
+    // WHY the veto (review 4, F1 through the checkpoint): "evicted" means the bodies are gone on purpose. When every body below the recorded eviction point is in fact still on
+    // disk AND the holders' note (evicted.json, written after every eviction and every restore) records a DIFFERENT state, the checkpoint's record is an older copy (a restore
+    // undid it and an old checkpoint brought it back, or a kill came between the record and the unlinks). Those lines are served, never relabelled "proven held elsewhere",
+    // and the next checkpoint write forgets the stale record. The note alone decides nothing: it can only veto an eviction whose bodies are all present.
+    let evInForce = !!ck && ck.evLines > 0;
+    if (evInForce && this.tools.gapStart(layout, 0, ck!.evBytes) === null) {
+      const note = await readEvictedNote(this.fs, dir);
+      if (note && (note.lines !== ck!.evLines || note.bytes !== ck!.evBytes)) evInForce = false;
+    }
+    const ev = evInForce ? { lines: ck!.evLines, bytes: ck!.evBytes } : { lines: 0, bytes: 0 };
     // 2. The index: only its tail is repaired in place (bytes kept); anything else is NeedsRebuild / Damaged.
     const ix = await this.tools.settleIndex(dir, ev, layout, this.stamp);
     let { count, last } = ix;

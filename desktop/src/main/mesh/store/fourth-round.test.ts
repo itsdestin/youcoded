@@ -369,6 +369,20 @@ describe('what the fuzz of the fourth round found while the fixes were being bui
     await s2.close(); await t.cleanup();
   });
 
+  it('an older checkpoint that records an eviction a restore has since undone does not relabel the restored lines as evicted (they are served)', async () => {
+    const { t, s, ls, root } = await fresh(30);
+    await evict(s, 20);
+    const cp = path.join(vdir(root), 'checkpoint.bin'); const evictedStatement = fs.readFileSync(cp);
+    await s.restoreBody(V(1), ls);
+    await s.close();
+    fs.writeFileSync(cp, evictedStatement);                                                  // the older statement: 20 lines evicted
+    const s2 = await reopen(root);
+    const h = await s2.head(V(1));
+    expect(h.evictedLines).toBe(0);
+    expect(await readAll(s2, ls)).toBe('.'.repeat(30));                                      // every body is on disk, so every line is served
+    await s2.close(); await t.cleanup();
+  });
+
   it('an older checkpoint that still records an eviction that a restore has since undone does not quarantine the chat', async () => {
     const { t, s, ls, root } = await fresh(30);
     await evict(s, 20);

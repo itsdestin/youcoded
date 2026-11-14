@@ -337,7 +337,17 @@ export class BodyTools {
             // WHY not Damaged past the checkpoint (review 4): a record the checkpoint never vouched for and whose body is not there is not an acknowledged line. It comes from an
             // OLDER index copy (replaced-index/ after a cut, an older index.bin) whose lines were cut away since. The rebuild ends before it; the lines before it are untouched.
             if (ckpt && i >= ckpt.count && i >= evLines && gapStart < 0) { include = i; stopAt = i; break; }
-            throw new Damaged(`record ${i} survives but the body has no line for it`);
+            // WHY not Damaged for a record the checkpoint (or nothing) vouches for (review 4, F3): a body that is simply not there is a hole, reported line by line, exactly like a body that
+            // does not match its chain value. The record's own chain value stays the truth, it is kept as it is, and the first such line is reported (scrub.json points at it).
+            // A derived-only stretch before it cannot be confirmed past a hole: it is dropped from its start, as for any unconfirmed stretch.
+            if (gapStart >= 0) { ambiguous = true; stopAt = gapStart; break; }
+            if (firstBad === null) firstBad = i;
+            if (o.ref.mode === 'changed') convStaleNow = true;
+            s.h = Buffer.from(o.rec.h); s.c = Buffer.from(o.rec.c); s.convCount = o.rec.convCount; s.rs = { cand: o.rec.candN === NONE ? null : { n: o.rec.candN, id: o.rec.candId } };
+            s.off = o.rec.offset + o.rec.len; s.count++; pos = s.off;
+            const hb = Buffer.alloc(REC); encodeRecord(o.rec, hb, 0); out.push(hb);
+            if (out.length >= 1024) await flush(i + 1);
+            continue;
           }
         } else {
           line = await cursor.takeLine(pos);
@@ -345,7 +355,8 @@ export class BodyTools {
             // WHY not Damaged when ONLY the checkpoint vouches for this line and every line before it has a valid record (review 4): the body holds exactly what the index
             // holds, so the checkpoint is the file that is ahead of everything (an older copy taken before a cut, which setAsideTail makes legitimate). The lines the
             // checkpoint claimed are reported as set aside (partial.json) and the old statement is kept in torn/ before it is lowered; the chat is not hidden.
-            if (i > lastValid && gapStart < 0) { ambiguous = true; stopAt = i; break; }
+            // (When earlier lines in this stretch were derived from the body alone, nothing can confirm them either: the stretch is dropped from its start, the lines stay in torn/.)
+            if (i > lastValid) { ambiguous = true; stopAt = gapStart >= 0 ? gapStart : i; break; }
             throw new Damaged(`the body holds no line ${i}, but the index or the checkpoint vouches for it`);
           }
         }

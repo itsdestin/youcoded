@@ -88,6 +88,13 @@ export async function readScrubMark(fs: Fs, dir: string): Promise<{ lines: numbe
     return { lines: 0, passEnd: 0 };   // absent or damaged: the pass starts over
   }
 
+  /** evicted.json, the holders' note: its numbers, or null when it is absent, damaged or another version's. NEVER the authority for an eviction (the checkpoint is); it can only veto one whose bodies are all present. */
+export async function readEvictedNote(fs: Fs, dir: string): Promise<{ lines: number; bytes: number } | null> {
+    const r = await readSideFor(fs, nodePath.join(dir, 'evicted.json'), keyOfDir(dir));
+    const m = r.kind === 'ok' ? r.value : null;
+    return m && Number.isSafeInteger(m.lines) && Number.isSafeInteger(m.bytes) && m.lines >= 0 && m.bytes >= 0 ? { lines: m.lines, bytes: m.bytes } : null;
+  }
+
   /** The next unused aside name for this version: max existing number + 1 over BOTH kinds, never a name that exists (a deleted aside folder must not let a new copy merge into an old one). */
 export async function nextAsideName(fs: Fs, root: string, key: string, quarantined: boolean): Promise<string> {
     const asideDir = nodePath.join(root, 'aside');
