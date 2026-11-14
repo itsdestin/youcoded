@@ -1585,7 +1585,7 @@ interface ClaudeApi {
     onDownloadProgress: (cb: (p: any) => void) => () => void;
     // Create-time / swap memory guard + [Reload Model] (2026-07-14).
     memoryCheck: (modelId: string) => Promise<{ verdict: 'ok' | 'tight' | 'too-large'; headline: string; detail: string }>;
-    load: (modelId: string) => Promise<boolean>;
+    load: (modelId: string, sessionId?: string) => Promise<boolean>;
     // 2026-09-05 local-engine upgrades. Real on every surface now.
     /** One model's engine settings as STORED (deck Q-2). The stored shape,
      *  not the four fields the dialog writes: the dialog also shows whether

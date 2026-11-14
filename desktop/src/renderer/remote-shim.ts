@@ -3620,7 +3620,7 @@ export function installShim(): void {
       detectEndpoints: () => invoke('endpoints:detect'),
       setBackend: (backend: string) => invoke('engine:set-backend', { backend }),
       memoryCheck: (modelId: string) => invoke('models:memory-check', { modelId }),
-      load: (modelId: string) => invoke('models:load', { modelId }),
+      load: (modelId: string, sessionId?: string) => invoke('models:load', { modelId, sessionId }),
       onDownloadProgress: (cb: (p: unknown) => void) => {
         const handler: Callback = (payload: any) => cb(payload);
         addListener('models:download-progress', handler);
