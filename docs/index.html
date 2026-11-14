@@ -105,6 +105,24 @@
 html[data-dark="1"]{ --glass-hi:rgba(255,255,255,.14); --ink:rgba(0,0,0,.42); }
 html[data-dark="0"]{ --glass-hi:rgba(255,255,255,.55); --ink:rgba(255,255,255,.34); }
 html{scroll-behavior:smooth}
+/* WHY .intro-scope (2026-11-13, traced). The opening intro shows each word in a
+   different look. A look is ~20 colour settings, and they used to be written on
+   the page's root, so each word made the browser re-style all ~940 elements of
+   a page that is still invisible (a 37ms stall at 4x slowdown, three times,
+   the last one as "Yours." lands -- the hitch Destin reported at "the very end
+   of the header cycle animation"). During the intro only the bar at the top
+   and the headline row are on screen, so the script now writes each word's
+   colours on those two elements (it adds this class to them) and leaves the
+   root on the look the intro finishes in. The lines below re-make, for those
+   two, the settings the root builds out of the colours, and restate the two
+   inherited ones <body> sets from them. :where() keeps this at zero weight so
+   it can never out-rank a rule of the bar's or the headline's own. */
+:where(.intro-scope){
+  --glass:rgba(var(--panel-rgb), var(--panel-op));
+  --glass-prose:rgba(var(--panel-rgb), var(--panel-op-prose));
+  --hair:rgba(var(--edge-rgb), .55);
+  --m-solid:rgb(var(--panel-rgb));--m-bg:rgba(var(--panel-rgb),.97);--m-fg:var(--fg);--m-dim:var(--dim);--m-line:var(--hair);
+  color:var(--fg);font-family:var(--font-theme)}
 
 body{font-family:var(--font-theme);color:var(--fg);line-height:1.6;-webkit-font-smoothing:antialiased;
   overflow-x:hidden;background:var(--canvas)}
@@ -1294,7 +1312,25 @@ body.intro-mode .hero-app,
 body.intro-mode .dlfloat,
 body.intro-mode > section,
 body.intro-mode > footer,
-body.intro-mode > .topcta{opacity:0;pointer-events:none}
+body.intro-mode > .topcta{opacity:0}
+/* WHY no pointer-events:none here any more (2026-11-13, traced). That property
+   is inherited, so switching it back on at the end of the intro made the browser
+   re-style every one of the page's ~940 elements in the same instant the page
+   content starts to rise -- the hitch Destin reported ("the subsequent fade-up
+   of the robot buttons and other page content still lags/hitches just a bit").
+   Opacity and transform are not inherited: now only the hidden blocks
+   themselves change. The culprits were the big sections BELOW the header
+   (~470 elements), so only they lost it: clicks on them while invisible are
+   swallowed by a small guard in the intro script (search: introClickGuard).
+   The header's own hidden pieces KEEP it, just below -- they are few, and the
+   headline row is centred right on top of the invisible demo window during
+   the intro, so without it the robots could not be clicked. */
+body.intro-mode .kicker,
+body.intro-mode .hero-sub,
+body.intro-mode .dlrow,
+body.intro-mode .hero-app,
+body.intro-mode .dlfloat,
+body.intro-mode > .topcta{pointer-events:none}
 /* The pill fades on ITS OWN and is deliberately absent from the translateY list
    below (Destin 2026-09-03: "it pops in in a really ugly way"). Measured cause:
    it is position:fixed and used to live INSIDE .hero-app, and a transformed
@@ -2263,7 +2299,14 @@ html{-webkit-tap-highlight-color:transparent}
 /* WHY (2026-11-13, speed pass): this drawing is 179 pieces that each fade four
    colours whenever the look goes light<->dark. The intro does that twice while
    the drawing is still invisible, so all of it was animating for nobody. */
-body.intro-mode .devdemo,body.intro-mode .devdemo *{transition:none}
+/* WHY the rule that stood here is gone (2026-11-13, traced). It read
+   `body.intro-mode .devdemo *{transition:none}`. A rule that starts at <body>
+   and ends in `*` makes the browser re-check EVERY element on the page when
+   the class leaves <body> -- 943 of them, in the very instant the page content
+   starts to rise (Destin: "the subsequent fade-up of the robot buttons and other
+   page content still lags/hitches just a bit"). It was also not needed: the
+   drawing is already parked with .dv-idle (below) until its card is on screen,
+   and the intro's colours no longer reach it at all (see .intro-scope). */
 /* WHY (same pass): each look brings its own font, so every word of the intro
    re-flowed the whole hidden page in a new font. Until the intro ends the
    hidden sections stay in the resting look's font (Outfit, YouCoded Light's:
@@ -3048,9 +3091,41 @@ var BRAND = {
 // Chrome re-reads the <link> on href change; swapping the whole element is not
 // needed and flickers. docs/brand/default-32.png is the resting state a
 // bookmark or a crawler gets.
-function setBrand(slug, t){
+// WHY introScope (2026-11-13): see the note beside `.intro-scope` in the styles.
+// While the intro plays its own words, a look's colours are written on the bar
+// at the top and the headline row (the only things on screen) instead of the
+// page's root, so the hidden page is not re-styled for every word. The intro
+// ends on the look the root already wears, so at the last word the two elements
+// simply drop their own copies (clearIntroScope) and take the root's again.
+var introScope = null, introScopeProps = {};
+function themeTargets(scoped){
+  var root = [document.documentElement];
+  if (!scoped || !document.body.classList.contains('intro-mode')) return root;
+  if (!introScope) {
+    // WHY the headline row's CHILDREN and not the row itself: the row is the
+    // element that glides back up when the intro ends, so the browser re-works
+    // its style at that moment -- and if the colours sat on it, everything
+    // inside it (about 400 pieces: the robots are drawings) was re-worked too.
+    introScope = [].slice.call(document.querySelectorAll('.nav, .flankrow > *'));
+    introScope.forEach(function(el){ el.classList.add('intro-scope'); });
+  }
+  return introScope.length ? introScope : root;
+}
+function setThemeVar(targets, name, value){
+  if (targets === introScope) introScopeProps[name] = 1;
+  targets.forEach(function(el){ el.style.setProperty(name, value); });
+}
+function clearIntroScope(){
+  if (!introScope) return;
+  introScope.forEach(function(el){
+    Object.keys(introScopeProps).forEach(function(name){ el.style.removeProperty(name); });
+    el.classList.remove('intro-scope');
+  });
+  introScope = null; introScopeProps = {};
+}
+function setBrand(slug, t, targets){
   var b = BRAND[slug] || BRAND['cotton-candy-sky'];
-  var r = document.documentElement.style;
+  var r = { setProperty: function(n, v){ setThemeVar(targets || [document.documentElement], n, v); } };
   r.setProperty('--wm-a', b.a); r.setProperty('--wm-b', b.b);
   r.setProperty('--wm-ink', t.dark ? t.fg : b.ink);
   r.setProperty('--wm-tag', t.dark ? t.dim : '#8a7b96');
@@ -3058,9 +3133,11 @@ function setBrand(slug, t){
   var link = document.getElementById('favicon');
   if (link) link.setAttribute('href', 'brand/' + b.icon + '-32.png');
 }
-function applyTheme(slug){
+function applyTheme(slug, scoped){
   var t = THEMES[slug]; if(!t) return;
-  var r = document.documentElement.style;
+  // `scoped` is passed only by the intro's own word steps (see introScope).
+  var targets = themeTargets(scoped);
+  var r = { setProperty: function(n, v){ setThemeVar(targets, n, v); } };
   // Panels are rgba() built from the theme's own panel colour + its own
   // panels-opacity, so the site is made of the same material as the app.
   r.setProperty('--panel-rgb', rgb(t.panel));
@@ -3079,7 +3156,15 @@ function applyTheme(slug){
   // holding prose get a readability FLOOR; frames keep the theme's real numbers.
   r.setProperty('--panel-op-prose', Math.max(t.opacity, 0.80));
   r.setProperty('--blur-prose', Math.max(t.blur, 16) + 'px');
-  document.documentElement.setAttribute('data-dark', t.dark ? '1' : '0');
+  if (targets === introScope) {
+    // The root's light/dark switch sets these two; during the intro the root is
+    // left alone, so give the two visible elements the same pair directly
+    // (keep in step with html[data-dark] at the top of the styles).
+    r.setProperty('--glass-hi', t.dark ? 'rgba(255,255,255,.14)' : 'rgba(255,255,255,.55)');
+    r.setProperty('--ink', t.dark ? 'rgba(0,0,0,.42)' : 'rgba(255,255,255,.34)');
+  } else {
+    document.documentElement.setAttribute('data-dark', t.dark ? '1' : '0');
+  }
   // Load the theme's own webfont, exactly like the app does.
   if (t.fontUrl && !fontLinks[t.fontUrl]) {
     var l = document.createElement('link'); l.rel='stylesheet'; l.href=t.fontUrl;
@@ -3141,7 +3226,7 @@ function applyTheme(slug){
     s.classList.toggle('on', on);
     s.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
-  setBrand(slug, t);
+  setBrand(slug, t, targets);
   try { localStorage.setItem('yc-mock-theme', slug); } catch(e){}
   // The demo is the real app's interface, and it keeps its theme under this
   // key (same origin, so we share storage): set it before boot, sync it after.
@@ -5156,13 +5241,38 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 
   var timers = [];
   var introEnded = false;
+  // WHY: the hidden page used to be made unclickable with a CSS property that
+  // cost a whole-page re-style when the intro ended (see the note beside
+  // `body.intro-mode > .topcta`). This does the same job for free: while the
+  // intro runs, a click anywhere except the bar at the top and the headline row
+  // (the robots, which take over the intro) does nothing.
+  function introClickGuard(e){
+    if (!document.body.classList.contains('intro-mode')) return;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;   // nothing is hidden then
+    if (e.target.closest && e.target.closest('.nav, .flankrow')) return;
+    e.preventDefault(); e.stopPropagation();
+    // On a very tall window an invisible section can lie over the centred
+    // headline. If a robot is under the pointer, the click was meant for it.
+    if (e.isTrusted && document.elementsFromPoint) {
+      var hit = document.elementsFromPoint(e.clientX, e.clientY).filter(function(n){ return n.closest && n.closest('.flankrow .mascot'); })[0];
+      if (hit) hit.closest('.mascot').click();
+    }
+  }
+  document.addEventListener('click', introClickGuard, true);
   function endIntro(){
     document.body.classList.remove('intro-mode');
+    document.removeEventListener('click', introClickGuard, true);
     // The live demo waits for this before it boots (autoBoot, above).
-    if (!introEnded) { introEnded = true; document.dispatchEvent(new Event('yc:intro-end')); }
+    if (!introEnded) {
+      introEnded = true; document.dispatchEvent(new Event('yc:intro-end'));
+      clearIntroScope();   // normally already done at the last word; a safety net
+    }
   }
   function cancel(){
     timers.forEach(clearTimeout); timers = [];
+    // The visitor picked a look themselves: the root now carries it, so the
+    // intro's own copies on the bar and headline must go at once.
+    clearIntroScope();
     document.body.classList.remove('iv2-first', 'iv2-shut');   // their removal timers were just cleared
     // Taken over mid-intro: go straight to the resting word, the way the static
     // path does. WHY always (2026-11-12), not only before the words were
@@ -5320,7 +5430,14 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
         // TOGETHER, just early enough that the room is there for each letter.
         if (CLOSED && i === 0) at = LEAD - 140;
         timers.push(setTimeout(function(){
-          applyTheme(step.theme);
+          // true: colour only what is on screen (see introScope). The LAST word is
+          // the look the page's root has worn since it loaded, so there the bar
+          // and headline just drop their own copies and take the root's again:
+          // the root is told nothing new and the hidden page is left alone.
+          // (Measured: dropping them later, when the intro ends, re-styled the
+          // headline's ~400 pieces in the same instant the page starts to rise.)
+          if (i === HERO_SEQUENCE.length - 1) { clearIntroScope(); applyTheme(step.theme); }
+          else applyTheme(step.theme, true);
           curStep = i;
           applyStep(i);
           document.body.classList.remove('iv2-shut');   // hand the spare room back as the slot opens
