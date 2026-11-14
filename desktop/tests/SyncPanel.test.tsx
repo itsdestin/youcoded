@@ -560,3 +560,23 @@ describe('Sync log that cannot be read', () => {
     expect(await screen.findByText('Pushed')).toBeInTheDocument();
   });
 });
+
+// Card #134: Backup & Sync actions that used to end in `catch {}` now say which one failed.
+describe('Backup & sync actions that fail', () => {
+  afterEach(() => { cleanup(); delete (window as any).claude; });
+
+  it('a warning that could not be dismissed says so, with the reason and Try again, and Try again re-runs it', async () => {
+    const dismissWarning = vi.fn()
+      .mockRejectedValueOnce(new Error('settings file locked'))
+      .mockResolvedValue(undefined);
+    stub({ dismissWarning }, [{ ...RETRY_WARNING, dismissible: true, fixAction: undefined }]);
+    render(<SyncSection autoOpen />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
+    const notice = await screen.findByText("Couldn't dismiss that warning");
+    expect(notice).toBeInTheDocument();
+    const again = screen.getAllByRole('button', { name: 'Try again' });
+    await act(async () => { fireEvent.click(again[again.length - 1]); });
+    await waitFor(() => expect(dismissWarning).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText("Couldn't dismiss that warning")).toBeNull());
+  });
+});

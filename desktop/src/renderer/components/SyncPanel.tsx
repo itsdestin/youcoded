@@ -442,6 +442,14 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   // WHY (error inventory 2026-09-10, Settings row 75): a log that could not be read said "No sync log
   // entries yet." - the same words as a log that is genuinely empty. The failure is now kept and shown.
   const [logError, setLogError] = useState<string | null>(null);
+  // WHY (card #134, error inventory Settings rows for Back up all now / Pause / Remove / Edit / Dismiss / rename device /
+  // all-backups toggle): each of these ended in `catch {}`, so a failed action looked like a button that did nothing, and a
+  // failed save looked saved. One notice at the top of the main view says which action failed, with the real reason under
+  // Details and Try again re-running that same action. A success clears it.
+  const [actionFailure, setActionFailure] = useState<{ message: string; details?: string; retry: () => void } | null>(null);
+  const failAction = useCallback((message: string, e: unknown, retry: () => void) => {
+    setActionFailure({ message, details: plainMessage(e, ''), retry });
+  }, []);
   const [loading, setLoading] = useState(!initialStatus);
   const [syncing, setSyncing] = useState(false);
   const [showLog, setShowLog] = useState(false);
@@ -596,21 +604,24 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const handleForceSync = useCallback(async () => {
     setSyncing(true);
     try {
-      await claude.sync.force();
+      const res = await claude.sync.force();
+      // `force` answers { success:false, error } instead of throwing; it used to be dropped here.
+      if (res && res.success === false) failAction("Couldn't back up everything", res.error ? { message: res.error } : '', handleForceSync);
+      else setActionFailure(null);
       await refreshStatus();
       const log = await claude.sync.getLog(30);
       setLogLines(log);
-    } catch {}
+    } catch (e) { failAction("Couldn't back up everything", e, handleForceSync); }
     setSyncing(false);
-  }, [claude, refreshStatus]);
+  }, [claude, refreshStatus, failAction]);
 
   const handleDismiss = useCallback(async (code: string) => {
     try {
       await claude.sync.dismissWarning(code);
       // Fix: filter by w.code now that warnings are SyncWarning objects, not strings.
       setStatus(prev => prev ? { ...prev, warnings: prev.warnings.filter(w => w.code !== code) } : prev);
-    } catch {}
-  }, [claude]);
+    } catch (e) { failAction("Couldn't dismiss that warning", e, () => { void handleDismiss(code); }); }
+  }, [claude, failAction]);
 
   // Per-backend actions
   // WHY (Destin, batch 1 deck E-1 then E-1b): a bare "Error" that vanished after two seconds
@@ -655,16 +666,16 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     try {
       await claude.sync.updateBackend(id, { syncEnabled });
       await refreshStatus();
-    } catch {}
-  }, [claude, refreshStatus]);
+    } catch (e) { failAction(syncEnabled ? "Couldn't resume this backup" : "Couldn't pause this backup", e, () => { void handleToggleSync(id, syncEnabled); }); }
+  }, [claude, refreshStatus, failAction]);
 
   const handleRemoveBackend = useCallback(async (id: string) => {
     try {
       await claude.sync.removeBackend(id);
       await refreshStatus();
-    } catch {}
+    } catch (e) { failAction("Couldn't remove this backup", e, () => { void handleRemoveBackend(id); }); }
     setMenuOpenId(null);
-  }, [claude, refreshStatus]);
+  }, [claude, refreshStatus, failAction]);
 
   // Wizard preselect: when a warning fix-action opens the wizard for a specific backend,
   // we stash the backend id+type here so SyncSetupWizard jumps straight to the right flow.
@@ -833,9 +844,13 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const handleRenameDevice = useCallback(async (id: string, name: string) => {
     const fn = (window as any).claude?.syncSpaces?.renameDevice;
     if (typeof fn !== 'function') return;
-    try { await fn(id, name); } catch {}
+    try {
+      const res = await fn(id, name);
+      // The handler answers { ok:false } for a failed rename; the old name simply came back with no word (card #134).
+      if (res && res.ok === false) failAction("Couldn't rename this device", res.error ? { message: res.error } : '', () => { void handleRenameDevice(id, name); });
+    } catch (e) { failAction("Couldn't rename this device", e, () => { void handleRenameDevice(id, name); }); }
     await loadDevices(); // re-fetch so the fold-on-read authoritative name is shown
-  }, [loadDevices]);
+  }, [loadDevices, failAction]);
   // Returns a plain-words failure note, or null on success — DevicesTab renders it.
   // Discarding the result would be wrong: both handlers answer { ok:false } for a
   // real failure and { ok:false, error } for the self-guard, so silence would leave
@@ -908,20 +923,27 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const handleAdditionalToggle = useCallback(async () => {
     const list = status?.backends ?? [];
     const on = list.some(b => b.syncEnabled) || additionalIntent;
+    // A rejection mid-loop used to escape as an unhandled error, leaving some backups changed and some not with no word.
+    // The status refresh runs either way so the rows show what really happened; Try again re-runs the toggle.
+    const runAll = async (enabled: boolean) => {
+      try {
+        for (const b of list) if (enabled ? !b.syncEnabled : !!b.syncEnabled) await claude.sync.updateBackend(b.id, { syncEnabled: enabled });
+        return true;
+      } catch (e) { failAction("Couldn't change every backup. Some may have changed", e, () => { void handleAdditionalToggle(); }); return false; }
+    };
     if (on) {
       // Turn OFF: pause all currently-active backends and drop the picker intent.
-      for (const b of list) if (b.syncEnabled) await claude.sync.updateBackend(b.id, { syncEnabled: false });
-      setAdditionalIntent(false);
+      if (await runAll(false)) setAdditionalIntent(false);
       await refreshStatus();
     } else if (list.length === 0) {
       // Turn ON with nothing connected: reveal the inline Drive/iCloud picker.
       setAdditionalIntent(true);
     } else {
       // Turn ON with paused backends: resume them all.
-      for (const b of list) if (!b.syncEnabled) await claude.sync.updateBackend(b.id, { syncEnabled: true });
+      await runAll(true);
       await refreshStatus();
     }
-  }, [status, additionalIntent, claude, refreshStatus]);
+  }, [status, additionalIntent, claude, refreshStatus, failAction]);
 
   // Recent sync events for DISPLAY only. `hub-status` entries drive the
   // "Instant sync" status line below (that's their surface); `projects-changed`
@@ -1052,10 +1074,13 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           <EditBackendForm
             backend={editingBackend}
             onSave={async (updates) => {
-              try {
-                await claude.sync.updateBackend(editingId, updates);
-                await refreshStatus();
-              } catch {}
+              const save = async () => {
+                try {
+                  await claude.sync.updateBackend(editingId, updates);
+                  await refreshStatus();
+                } catch (e) { failAction("Couldn't save your changes to this backup", e, () => { void save(); }); }
+              };
+              await save();
               setView('main');
               setEditingId(null);
             }}
@@ -1065,6 +1090,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         // WHY space-y-4 (fix batch 1, 2026-09-24): design guide Settings
         // spacing, 16px between groups — was space-y-6 (24px).
         <div className="space-y-4">
+            {actionFailure && (
+              <ErrorState variant="inline" message={actionFailure.message} details={actionFailure.details || undefined}
+                onRetry={() => { const retry = actionFailure.retry; setActionFailure(null); retry(); }} />
+            )}
 
             {/* ============================================================
                 PRIMARY — Cross-device backup & sync box (redesign 2026-07-15).
