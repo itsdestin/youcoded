@@ -303,6 +303,8 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
                 <openGame.Play
                   onEnd={endRun}
                   best={bestOf(openGame.id)}
+                  // N3 (Destin): no "New best" when the online best failed to load - it may be higher than what this computer knows.
+                  onlineBestUnknown={!!serverError}
                   onExit={() => setPlaying(false)}
                 />
               </Suspense>
