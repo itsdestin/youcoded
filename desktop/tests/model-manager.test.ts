@@ -109,9 +109,9 @@ describe('ModelManager.download — the disk guard reserves the projector', () =
     // 3.5 GB free against a 3 GB model: the old guard, which reserved
     // `totalSizeBytes` alone, let this through and the download then ran the
     // disk out partway through the projector (T15 handoff 2). The refusal has
-    // to quote 4.0 GB — the whole job — not 3.0.
+    // to quote 4.3 GB (4 GiB in decimal units) — the whole job — not 3.0.
     await expect(manager({ freeDiskBytes: 3.5 * GB }).download('unsloth/V-GGUF', visionQuant as any)).rejects.toThrow(
-      'Not enough free space: this download needs about 4.0 GB but only 3.5 GB is free.');
+      'Not enough free space: this download needs about 4.3 GB but only 3.8 GB is free.');
     expect(urls).toEqual([]);          // nothing was fetched
     expect(fs.existsSync(path.join(cacheDir, 'V-Q4_K_M'))).toBe(false);
   });
@@ -236,7 +236,7 @@ describe('ModelManager.memoryCheck — the projector is memory too', () => {
     const verdict = await mm.memoryCheck('V-Q4_K_M');
     // Exact string: the headline is the ONLY thing the warning row draws, and a
     // substring match on "vision" would stay green if the size were wrong.
-    expect(verdict.headline).toContain('4.0 GB model + 2.0 GB vision file');
+    expect(verdict.headline).toContain('4.3 GB model + 2.1 GB vision file');
   });
 });
 
@@ -287,7 +287,7 @@ describe('a foldered model is found by the header reader and by the loaded-memor
     // "up to" is the reader saying it could not understand the file. Reading the
     // right path removes it; reading the flat path puts it back.
     expect(headline).not.toContain('up to');
-    expect(headline).toContain('4.0 GB model + 1.0 GB vision file');
+    expect(headline).toContain('4.3 GB model + 1.1 GB vision file');
   });
 
   it("counts a RESIDENT model's projector in what is already loaded", async () => {

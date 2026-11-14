@@ -25,6 +25,7 @@ import type { BackendOption, EnginePrereqs, EngineSpeedSettings } from '../../sh
 // vision” show one too, and each copy is a call site that can forget to strip.
 import { plainMessage } from '../utils/ipc-error';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
+import { formatGb, formatMbWhole } from '../../shared/format-bytes';
 
 interface EngineStatusView {
   installed: boolean;
@@ -62,9 +63,10 @@ type Progress =
   | { kind: 'done' } | { kind: 'error'; message: string };
 
 // Bytes → whole MB for the download progress line.
-const mb = (n: number) => `${Math.round(n / 1048576)} MB`;
+// WHY shared 1000-based helpers (card #143, Destin 2026-11-12): same numbers as Hugging Face and the file manager.
+const mb = (n: number) => formatMbWhole(n);
 // Bytes → GB with one decimal, for "8.9 GB loaded".
-const gb = (n: number) => `${(n / 1073741824).toFixed(1)} GB`;
+const gb = (n: number) => formatGb(n);
 
 // Plain names for the engine builds. The backend id is what main stores; the
 // user reads the chip family it targets.

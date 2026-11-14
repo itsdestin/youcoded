@@ -14,6 +14,7 @@ const STEPS: Array<[string, string]> = [
 const ms = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n < 3_600_000;
 
 /** `remote:timings` from a phone, as one line, or null when it is not one. Times are milliseconds. */
+import { formatBytes } from '../shared/format-bytes';
 export function describePhoneTimings(payload: unknown): string | null {
   const p = payload as { kind?: unknown; nav?: unknown; downloaded?: unknown; marks?: unknown } | null;
   if (!p || (p.kind !== 'load' && p.kind !== 'reconnect') || !p.marks || typeof p.marks !== 'object') return null;
@@ -33,5 +34,5 @@ export function describeAnswer(type: string, payload: unknown, tookMs: number, c
 }
 
 function kb(n: number): string {
-  return n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`;
+  return formatBytes(n, { kbDecimals: 0 }); // 1000-based (card #143)
 }

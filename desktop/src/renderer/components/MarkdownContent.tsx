@@ -18,6 +18,7 @@ import {
   DETAILS_OPEN_WITH_SUMMARY, DETAILS_OPEN, DETAILS_SUMMARY, DETAILS_CLOSE, DETAILS_OPEN_ANY,
   fenceOverHighlightLimit, canDrawInSlices, sliceCuts, nextSliceEnd, PROGRESSIVE_FIRST_CHARS, PROGRESSIVE_BATCH_CHARS,
 } from './markdown-blocks';
+import { Tooltip } from './ui';
 
 /**
  * Rehype plugin: tag every <code> that lives inside a <pre> with data-block.
@@ -316,23 +317,24 @@ function ChatImage({ src, alt, ...props }: any) {
   let host = 'a website';
   try { host = new URL(source).host || host; } catch { /* keep the generic label */ }
   return (
-    <button
-      type="button"
-      onClick={() => setShown(true)}
-      // F6 (doc-comments T14 review): this label is interaction STATE (it
-      // disappears the moment the image is shown), not part of the document's
-      // own words — ANCHOR_SKIP_ATTR (anchor-skip.ts) tells both the
-      // save-time (build-menu.ts) and resolve-time (use-quote-marks.ts) text
-      // walkers to leave it out of a comment's captured/searched text.
-      {...{ [ANCHOR_SKIP_ATTR]: true }}
-      className="my-2 inline-flex items-center gap-2 rounded border border-edge bg-inset px-3 py-2 text-sm text-fg-2 hover:bg-panel"
-      title={`Load image from ${host}`}
-      data-message-find-ignore
-    >
-      <span aria-hidden>🖼</span>
-      <span>Image from {host}</span>
-      <span className="text-fg-dim">· Show</span>
-    </button>
+    <Tooltip text={`Load image from ${host}`}>
+      <button
+        type="button"
+        onClick={() => setShown(true)}
+        // F6 (doc-comments T14 review): this label is interaction STATE (it
+        // disappears the moment the image is shown), not part of the document's
+        // own words — ANCHOR_SKIP_ATTR (anchor-skip.ts) tells both the
+        // save-time (build-menu.ts) and resolve-time (use-quote-marks.ts) text
+        // walkers to leave it out of a comment's captured/searched text.
+        {...{ [ANCHOR_SKIP_ATTR]: true }}
+        className="my-2 inline-flex items-center gap-2 rounded border border-edge bg-inset px-3 py-2 text-sm text-fg-2 hover:bg-panel"
+        data-message-find-ignore
+      >
+        <span aria-hidden>🖼</span>
+        <span>Image from {host}</span>
+        <span className="text-fg-dim">· Show</span>
+      </button>
+    </Tooltip>
   );
 }
 

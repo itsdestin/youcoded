@@ -19,6 +19,7 @@
 // stays readable on every theme's accent.
 import { useState } from 'react';
 import { dispatchRefHover, type ComposeRef } from '../context-menu/compose-ref';
+import { Tooltip } from '../ui';
 
 interface Props {
   ref_: ComposeRef;
@@ -37,19 +38,20 @@ export function TokenPill({ ref_, onJump, tone = 'default' }: Props) {
   // something".
   const [hover, setHover] = useState(false);
   return (
-    <span
-      className={`rounded-sm px-1 py-0.5 select-none whitespace-nowrap ${tone === 'on-accent' ? 'text-on-accent' : 'text-fg'}`}
-      style={{
-        backgroundColor: `color-mix(in srgb, ${base} ${hover ? 36 : 22}%, transparent)`,
-        boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${base} 50%, transparent)`,
-        ...(clickable ? { cursor: 'pointer' } : null),
-      }}
-      title={ref_.fileName ? `${ref_.label} · ${ref_.fileName}` : ref_.label}
-      onClick={clickable ? () => onJump?.(ref_) : undefined}
-      onMouseEnter={clickable ? () => { setHover(true); dispatchRefHover(ref_); } : undefined}
-      onMouseLeave={clickable ? () => { setHover(false); dispatchRefHover(null); } : undefined}
-    >
-      {ref_.label}
-    </span>
+    <Tooltip text={ref_.fileName ? `${ref_.label} · ${ref_.fileName}` : ref_.label}>
+      <span
+        className={`rounded-sm px-1 py-0.5 select-none whitespace-nowrap ${tone === 'on-accent' ? 'text-on-accent' : 'text-fg'}`}
+        style={{
+          backgroundColor: `color-mix(in srgb, ${base} ${hover ? 36 : 22}%, transparent)`,
+          boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${base} 50%, transparent)`,
+          ...(clickable ? { cursor: 'pointer' } : null),
+        }}
+        onClick={clickable ? () => onJump?.(ref_) : undefined}
+        onMouseEnter={clickable ? () => { setHover(true); dispatchRefHover(ref_); } : undefined}
+        onMouseLeave={clickable ? () => { setHover(false); dispatchRefHover(null); } : undefined}
+      >
+        {ref_.label}
+      </span>
+    </Tooltip>
   );
 }

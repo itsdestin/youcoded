@@ -21,7 +21,7 @@ import { ContextIntroBanner } from '../ContextIntroBanner';
 // Plain-text load-timing label — shared with ContextEditorOverlay
 // (context-labels.ts); spelled out in words, never a glyph.
 import { timingLabel } from '../context-labels';
-import { CARD_LEVEL_1 } from '../../ui';
+import { CARD_LEVEL_1, ErrorState } from '../../ui';
 import { TabHeading } from '../TabHeading';
 import { useScrollFade } from '../../../hooks/useScrollFade';
 
@@ -30,6 +30,9 @@ interface ContextTabProps {
   groups: ContextGroup[] | null;
   onEditFile: (file: ContextFile) => void;
   onOpenInfo: (scope: ContextScope) => void;
+  /** Why the list could not be read, or null. An empty list with this set is NOT "no context files". */
+  loadError?: string | null;
+  onRetry?: () => void;
 }
 
 // Per-scope teaching copy. Descriptions are EXACT and intentionally have NO
@@ -77,6 +80,7 @@ function FileGlyph({ scope, size = 17 }: { scope: ContextScope; size?: number })
 // Info-circle glyph (an "i", not a status glyph) — shared module.
 import { InfoIcon } from '../icons';
 import { useScreenOpen } from '../../../shoot-mode';
+import { Tooltip } from '../../ui';
 
 // Outer clips, inner scrolls with FilesTab's exact `p-2 -m-2` offset. This tab
 // used to scroll the PADDED element itself, which put its scrollbar hard against
@@ -96,7 +100,7 @@ function ContextTabShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) {
+export function ContextTab({ groups, onEditFile, onOpenInfo, loadError, onRetry }: ContextTabProps) {
   // Photo-only build: `shoot` opens the first context file's editor, or the explainer.
   useScreenOpen('projects/context/editor', () => { const f = groups?.flatMap((g) => g.files)[0]; if (f) onEditFile(f); });
   useScreenOpen('projects/context/how', () => onOpenInfo('project'));
@@ -105,6 +109,16 @@ export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) 
       <ContextTabShell>
         <ContextIntroBanner />
         <p className="text-sm text-fg-muted">Loading…</p>
+      </ContextTabShell>
+    );
+  }
+
+  if (groups.length === 0 && loadError && onRetry) {
+    // WHY (error inventory 2026-09-10, Projects row 8): a failed read is not "no context files".
+    return (
+      <ContextTabShell>
+        <ContextIntroBanner />
+        <ErrorState variant="inline" message={`Couldn't load this project's context files: ${loadError}`} onRetry={onRetry} />
       </ContextTabShell>
     );
   }
@@ -137,15 +151,16 @@ export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) 
             <TabHeading
               description={meta.desc}
               action={(
-                <button
-                  type="button"
-                  className="w-6 h-6 rounded-md inline-flex items-center justify-center text-fg-muted hover:text-fg hover:bg-inset transition-colors"
-                  title="Learn how these work"
-                  aria-label={`How ${meta.label} context works`}
-                  onClick={() => onOpenInfo(group.scope)}
-                >
-                  <InfoIcon />
-                </button>
+                <Tooltip text="Learn how these work">
+                  <button
+                    type="button"
+                    className="w-6 h-6 rounded-md inline-flex items-center justify-center text-fg-muted hover:text-fg hover:bg-inset transition-colors"
+                    aria-label={`How ${meta.label} context works`}
+                    onClick={() => onOpenInfo(group.scope)}
+                  >
+                    <InfoIcon />
+                  </button>
+                </Tooltip>
               )}
             >
               {meta.label}
@@ -157,35 +172,35 @@ export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) 
             ) : (
               <div className="flex flex-col gap-2">
                 {group.files.map((f) => (
-                  <button
-                    key={f.id}
-                    type="button"
-                    // WHY CARD_LEVEL_1: the app's one first-level card, matching the
-                    // conversation cards on the tab beside it (was bg-panel + a
-                    // dimmer edge, a look no other list uses).
-                    className={`w-full text-left flex items-center gap-3 ${CARD_LEVEL_1} p-3 shrink-0 hover:bg-inset transition-colors`}
-                    onClick={() => onEditFile(f)}
-                    title={f.absolutePath}
-                  >
-                    <span className="w-9 h-9 rounded-md shrink-0 inline-flex items-center justify-center bg-inset text-fg-dim">
-                      <FileGlyph scope={group.scope} size={17} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2">
-                        <span className="text-sm font-medium font-mono text-fg truncate">{f.label}</span>
-                        {/* Plain-text load badge — subtle pill, never a glyph. */}
-                        <span className="inline-flex items-center text-3xs text-fg-dim bg-well border border-edge-dim rounded-full px-2 py-0.5 shrink-0">
-                          {timingLabel(f)}
-                        </span>
+                  <Tooltip key={f.id} text={f.absolutePath}>
+                    <button
+                      type="button"
+                      // WHY CARD_LEVEL_1: the app's one first-level card, matching the
+                      // conversation cards on the tab beside it (was bg-panel + a
+                      // dimmer edge, a look no other list uses).
+                      className={`w-full text-left flex items-center gap-3 ${CARD_LEVEL_1} p-3 shrink-0 hover:bg-inset transition-colors`}
+                      onClick={() => onEditFile(f)}
+                    >
+                      <span className="w-9 h-9 rounded-md shrink-0 inline-flex items-center justify-center bg-inset text-fg-dim">
+                        <FileGlyph scope={group.scope} size={17} />
                       </span>
-                      {f.description ? (
-                        <span className="block text-xs text-fg-2 truncate mt-0.5">{f.description}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-2">
+                          <span className="text-sm font-medium font-mono text-fg truncate">{f.label}</span>
+                          {/* Plain-text load badge — subtle pill, never a glyph. */}
+                          <span className="inline-flex items-center text-3xs text-fg-dim bg-well border border-edge-dim rounded-full px-2 py-0.5 shrink-0">
+                            {timingLabel(f)}
+                          </span>
+                        </span>
+                        {f.description ? (
+                          <span className="block text-xs text-fg-2 truncate mt-0.5">{f.description}</span>
+                        ) : null}
+                      </span>
+                      {f.size ? (
+                        <span className="text-2xs text-fg-muted font-mono shrink-0">{f.size}</span>
                       ) : null}
-                    </span>
-                    {f.size ? (
-                      <span className="text-2xs text-fg-muted font-mono shrink-0">{f.size}</span>
-                    ) : null}
-                  </button>
+                    </button>
+                  </Tooltip>
                 ))}
               </div>
             )}

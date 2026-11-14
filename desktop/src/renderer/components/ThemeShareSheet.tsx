@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../state/theme-context';
 import type { PublishState } from '../../shared/theme-marketplace-types';
 import { Button, CARD_LEVEL_1, Dialog, FieldError, LoadingState } from './ui';
+import { Tooltip } from './ui';
 
 interface ThemeShareSheetProps {
   themeSlug: string;
@@ -190,16 +191,17 @@ function renderPublishButton(args: {
 
   if (state.kind === 'in-review') {
     return (
-      <a
-        href={state.prUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(e) => { e.preventDefault(); openExternal(state.prUrl); }}
-        className="block w-full py-2.5 text-xs font-medium rounded-lg border border-edge text-fg-muted text-center cursor-pointer hover:text-fg hover:border-edge-bright transition-colors"
-        title="Your submission is awaiting review. You'll see ✓ Published here once it's merged."
-      >
-        Pull request open · #{state.prNumber} ↗
-      </a>
+      <Tooltip text="Your submission is awaiting review. You'll see ✓ Published here once it's merged.">
+        <a
+          href={state.prUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => { e.preventDefault(); openExternal(state.prUrl); }}
+          className="block w-full py-2.5 text-xs font-medium rounded-lg border border-edge text-fg-muted text-center cursor-pointer hover:text-fg hover:border-edge-bright transition-colors"
+        >
+          Pull request open · #{state.prNumber} ↗
+        </a>
+      </Tooltip>
     );
   }
 

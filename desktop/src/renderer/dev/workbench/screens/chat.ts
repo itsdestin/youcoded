@@ -14,6 +14,10 @@ export const CHAT: readonly ScreenEntry[] = [
   // Spacing review: two stacked queued cards over the chat, wide and phone.
   { ...chat('chat#queue-stack', 'view'), session: 'wb-1', params: { queuePreview: 'stack' } },
   { ...chat('chat#queue-stack-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'stack' }, viewport: { width: 390, height: 844 } },
+  // Card #62: a waiting message with files attached shows file-name chips (names only).
+  { ...chat('chat#queue-waiting-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'waiting-after' }, viewport: { width: 390, height: 844 }, newIn: 'after' as const },
+  { ...chat('chat#queue-waiting-long', 'view'), session: 'wb-1', params: { queuePreview: 'waiting-long-after' }, newIn: 'after' as const },
+  { ...chat('chat#queue-waiting-long-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'waiting-long-after' }, viewport: { width: 390, height: 844 }, newIn: 'after' as const, sameAs: { name: 'chat#queue-waiting-phone', why: 'On a phone the words already truncate at the column edge, so a longer message draws the same row.' } },
   { ...chat('chat#queue-uncertain-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'uncertain-after' }, viewport: { width: 390, height: 844 } },
   // Phone connection strips (phone-reliability review deck, 2026-10-22). The Android app, since "Use this phone only" is its button;
   // before master the same state reads the old words and has no button.
@@ -235,6 +239,8 @@ export const CHAT: readonly ScreenEntry[] = [
   // status, none yet, a request each way; then a phone and a 640×480 window. The chess lobby with
   // the same four friends shows a winning, a losing, an even and a never-played record.
   { ...chat('chat/games#friends', 'pane', 'games'), params: { signedIn: '1', friends: 'many' } },
+  // Card #134 batch 2: the friends read refused (opened, so the list area shows).
+  { ...chat('chat/games#friends-failed', 'pane', 'games', 'error-state'), params: { signedIn: '1', friendsOpen: '1', fail: 'social.listFriends' } },
   { ...chat('chat/games#no-friends', 'pane', 'games'), params: { signedIn: '1', friends: 'none' } },
   // Opened (it starts folded) so its rows compare with round 1's always-open card.
   { ...chat('chat/games#requests', 'pane', 'games'), params: { signedIn: '1', friends: 'requests', friendsOpen: '1' } },

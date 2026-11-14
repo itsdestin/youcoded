@@ -41,7 +41,7 @@ function declareViewport(narrow: boolean) {
   });
 }
 
-const cards = (c: HTMLElement) => c.querySelectorAll('button[title]').length;
+const cards = (c: HTMLElement) => c.querySelectorAll('button[data-hint]').length;
 
 describe('ConversationsTab', () => {
   let io: ReturnType<typeof installFiringIntersectionObserver>;

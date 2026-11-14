@@ -628,7 +628,7 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview();
       await screen.findByText(PREVIEW.title);
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
-      fireEvent.click(await screen.findByTitle('Edit note'));
+      fireEvent.click(await findByHint('Edit note'));
       const noteField = screen.getByRole('textbox', { name: 'Note' });
       expect(noteField).toHaveValue('original');
 
@@ -648,7 +648,7 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview();
       await screen.findByText(PREVIEW.title);
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
-      fireEvent.click(await screen.findByTitle('Edit note'));
+      fireEvent.click(await findByHint('Edit note'));
       const noteField = screen.getByRole('textbox', { name: 'Note' });
 
       fireEvent.change(noteField, { target: { value: 'edited' } });

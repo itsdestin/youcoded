@@ -271,7 +271,7 @@ describe('Read: image delivery', () => {
     fs.writeFileSync(p, Buffer.alloc(11 * 1024 * 1024));
     const r = await ReadTool.execute({ file_path: p }, { ...makeCtx(dir), supportsVision: true });
     expect(r.isError).toBe(true);
-    expect(r.text).toMatch(/11(\.\d)? MB.*10 MB/s);
+    expect(r.text).toMatch(/11\.5 MB.*10\.5 MB/s);
     // A refusal must never also promise the image (2026-08-11 review, Fix 5) —
     // the sibling refusal tests above pin this; this one didn't.
     expect(r.images).toBeUndefined();

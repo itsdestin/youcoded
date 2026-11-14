@@ -568,9 +568,11 @@ export default React.memo(function HeaderBar({
         {!narrow && <ProjectsButton />}
         {!narrow && <PinnedPageButtons />}
         {isRemoteMode() && (
-          <span className="text-3xs font-medium px-1.5 py-0.5 rounded-sm bg-blue-500/15 text-fg-2 border border-blue-500/40 shrink-0" title="Connected to another computer">
-            REMOTE
-          </span>
+          <Tooltip text="Connected to another computer">
+            <span className="text-3xs font-medium px-1.5 py-0.5 rounded-sm bg-blue-500/15 text-fg-2 border border-blue-500/40 shrink-0">
+              REMOTE
+            </span>
+          </Tooltip>
         )}
         {/* Narrow puts the toggle on the RIGHT regardless of platform
             (Destin, 2026-07-20): the left cluster is the ||| menu's home and

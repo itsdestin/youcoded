@@ -37,6 +37,7 @@ import { RemovedProjectsCard } from './RemovedProjectsCard';
 // WHY its own file (final review F53): SyncPanel grew past its line budget on this branch; the
 // devices list was a self-contained piece, moved unchanged.
 import { DevicesTab, type DeviceRow } from './SyncDevicesTab';
+import { Tooltip } from './ui';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
@@ -438,6 +439,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const narrow = useNarrowViewport();
   const [status, setStatus] = useState<SyncStatus | null>(initialStatus);
   const [logLines, setLogLines] = useState<string[]>([]);
+  // WHY (error inventory 2026-09-10, Settings row 75): a log that could not be read said "No sync log
+  // entries yet." - the same words as a log that is genuinely empty. The failure is now kept and shown.
+  const [logError, setLogError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!initialStatus);
   const [syncing, setSyncing] = useState(false);
   const [showLog, setShowLog] = useState(false);
@@ -1519,17 +1523,18 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                                 unsupported GitHub backup: Upload now and the rest would do nothing;
                                 its Remove sits in its notice below. */}
                             {!unsupported && <div className="relative shrink-0">
-                              <button
-                                onClick={(e) => { e.stopPropagation(); setMenuOpenId(menuOpenId === b.id ? null : b.id); }}
-                                className="w-6 h-6 flex items-center justify-center rounded hover:bg-inset text-fg-muted"
-                                title="Manage"
-                              >
-                                {/* App settings gear (same SVG as HeaderBar). */}
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                </svg>
-                              </button>
+                              <Tooltip text="Manage">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setMenuOpenId(menuOpenId === b.id ? null : b.id); }}
+                                  className="w-6 h-6 flex items-center justify-center rounded hover:bg-inset text-fg-muted"
+                                >
+                                  {/* App settings gear (same SVG as HeaderBar). */}
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                  </svg>
+                                </button>
+                              </Tooltip>
                               {menuOpenId === b.id && (
                                 /* Overflow menu — .layer-surface for theme-consistent look + glass. */
                                 <div className="layer-surface absolute right-0 top-7 w-44 py-1" style={{ zIndex: 10 }} onClick={(e) => e.stopPropagation()}>
@@ -1712,13 +1717,24 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               onToggle={async (next) => {
                 setShowLog(next);
                 if (next) {
-                  try { const log = await claude.sync.getLog(30); setLogLines(log); } catch {}
+                  try { const log = await claude.sync.getLog(30); setLogLines(log); setLogError(null); }
+                  catch (e) { setLogError(plainMessage(e, 'The log did not come back.')); }
                 }
               }}
             >
                 <div>
+                  {logError && (
+                    <ErrorState
+                      variant="inline"
+                      message={`Couldn't load the sync log: ${logError}`}
+                      onRetry={async () => {
+                        try { setLogLines(await claude.sync.getLog(30)); setLogError(null); }
+                        catch (e) { setLogError(plainMessage(e, 'The log did not come back.')); }
+                      }}
+                    />
+                  )}
                   {logLines.length === 0 ? (
-                    <div className="text-2xs text-fg-muted px-2 py-3">No sync log entries yet.</div>
+                    !logError && <div className="text-2xs text-fg-muted px-2 py-3">No sync log entries yet.</div>
                   ) : (
                     // WHY two boxes (2026-10-15, the one scroll fade): the fade is a mask, so on the
                     // bordered box it would fade the border and fill too. The outer box frames;
@@ -1753,7 +1769,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       group is never bare text. */}
                   <Button
                     variant="secondary"
-                    onClick={async () => { try { setLogLines(await claude.sync.getLog(30)); } catch {} }}
+                    onClick={async () => { try { setLogLines(await claude.sync.getLog(30)); setLogError(null); } catch (e) { setLogError(plainMessage(e, 'The log did not come back.')); } }}
                     className="w-full mt-1.5"
                   >
                     Refresh

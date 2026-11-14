@@ -480,7 +480,9 @@ function ShellView({ tool, commandField, sessionId }: {
         // The full log outlives the card's tail; the path is the model's and the
         // user's way back to all of it. Empty on a record rebuilt after a
         // restart — nothing honest to show, so the line is dropped.
-        <div className="text-3xs text-fg-muted font-mono truncate" title={run.logPath}>Full log: {run.logPath}</div>
+        <Tooltip text={run.logPath}>
+          <div className="text-3xs text-fg-muted font-mono truncate">Full log: {run.logPath}</div>
+        </Tooltip>
       )}
       {tool.error && <ErrorBlock error={tool.error} />}
     </div>
@@ -808,9 +810,11 @@ function AgentView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
           </Chip>
         )}
         {run?.model && (
-          <span className="text-4xs text-fg-muted" title={run.model.via === 'parent' ? "This conversation's model" : run.model.via === 'named' ? 'A model the assistant named' : `The ${run.model.via} model from Settings`}>
-            on {run.model.label}{run.model.fallback ? ' (fallback)' : ''}
-          </span>
+          <Tooltip text={run.model.via === 'parent' ? "This conversation's model" : run.model.via === 'named' ? 'A model the assistant named' : `The ${run.model.via} model from Settings`}>
+            <span className="text-4xs text-fg-muted">
+              on {run.model.label}{run.model.fallback ? ' (fallback)' : ''}
+            </span>
+          </Tooltip>
         )}
         {desc && !title && <span className="text-xs font-medium text-fg-2">{desc}</span>}
       </div>

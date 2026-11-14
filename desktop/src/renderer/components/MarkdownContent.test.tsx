@@ -1195,7 +1195,7 @@ describe('MarkdownContent while a reply streams in', { timeout: CPU_BOUND_WALL_L
   // The whole-message page with its picture tapped open, for comparison.
   const wholeTappedHtml = (md: string) => {
     const r = render(<Bubble md={md} />);
-    fireEvent.click(r.container.querySelector('button[title^="Load image"]')!);
+    fireEvent.click(r.container.querySelector('button[data-hint^="Load image"]')!);
     const html = canonical(r.container);
     r.unmount();
     return html;

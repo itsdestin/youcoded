@@ -9,6 +9,9 @@ export const PROJECTS: readonly ScreenEntry[] = [
   // The hero's description being written (close-session-4: the box keeps the card's margins).
   { ...pr('projects/files#description-edit', 'view'), open: [{ do: 'click', target: { role: 'button', labelStarts: '“The desktop and Android app' } }] },
   pr('projects/conversations', 'view'),
+  // Card #134 batch 2: the project's conversations / context lists refused.
+  { ...pr('projects/conversations#load-failed', 'view', 'error-state'), params: { fail: 'project.listConversations' } },
+  { ...pr('projects/context#load-failed', 'view', 'error-state'), params: { fail: 'project.listContext' } },
   pr('projects/conversations/preview', 'dialog'),
   pr('projects/context', 'view'),
   pr('projects/context/editor', 'dialog'),

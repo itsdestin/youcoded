@@ -1,5 +1,6 @@
 import FavoriteStar from './FavoriteStar';
 import BrailleSpinner from '../BrailleSpinner';
+import { Tooltip } from '../ui';
 
 interface Props {
   installed: boolean;
@@ -60,18 +61,19 @@ export default function InstallFavoriteCorner({
   // Not installed — download affordance.
   // Perf: no backdrop-blur — matches FavoriteStar's documented removal.
   return (
-    <button
-      type="button"
-      onClick={(e) => { e.stopPropagation(); onInstall(); }}
-      aria-label="Install"
-      title="Install"
-      className={`${place} p-1 rounded-md text-fg-dim hover:text-fg transition-colors`}
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-        <polyline points="7 10 12 15 17 10" />
-        <line x1="12" y1="15" x2="12" y2="3" />
-      </svg>
-    </button>
+    <Tooltip text="Install">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onInstall(); }}
+        aria-label="Install"
+        className={`${place} p-1 rounded-md text-fg-dim hover:text-fg transition-colors`}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="7 10 12 15 17 10" />
+          <line x1="12" y1="15" x2="12" y2="3" />
+        </svg>
+      </button>
+    </Tooltip>
   );
 }

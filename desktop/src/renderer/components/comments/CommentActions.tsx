@@ -28,6 +28,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button, FOCUS_RING } from '../ui/Button';
 import { FIELD_SIZE, FIELD_TEXT } from '../ui/field';
+import { Tooltip } from '../ui';
 
 /** 24×24 viewBox, stroke currentColor, the app's shared inline-icon
  *  convention (menu-icons.tsx, detail-tool-icons.tsx). */
@@ -105,12 +106,16 @@ function EditDeleteButtons({ onEdit, onDelete, editLabel, deleteLabel, className
     // the same flicker this file's WHY describes reopens between Edit and
     // Delete specifically.
     <div className={`flex items-center gap-0.5 shrink-0 cursor-pointer ${className}`.trim()}>
-      <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(); }} aria-label={editLabel} title={editLabel} className={ICON_BUTTON}>
-        <EditGlyph />
-      </button>
-      <button type="button" onClick={(e) => { e.stopPropagation(); onDelete(); }} aria-label={deleteLabel} title={deleteLabel} className={ICON_BUTTON}>
-        <DeleteGlyph />
-      </button>
+      <Tooltip text={editLabel}>
+        <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(); }} aria-label={editLabel} className={ICON_BUTTON}>
+          <EditGlyph />
+        </button>
+      </Tooltip>
+      <Tooltip text={deleteLabel}>
+        <button type="button" onClick={(e) => { e.stopPropagation(); onDelete(); }} aria-label={deleteLabel} className={ICON_BUTTON}>
+          <DeleteGlyph />
+        </button>
+      </Tooltip>
     </div>
   );
 }
@@ -133,16 +138,17 @@ const EDITING_PILL =
  *  Not exported (knip): only CommentRowActions below renders it. */
 function EditingPill({ onCancel }: { onCancel: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={(e) => { e.stopPropagation(); onCancel(); }}
-      aria-label="Cancel editing"
-      title="Cancel editing"
-      className={EDITING_PILL}
-    >
-      Editing
-      <EditGlyph className="w-2.5 h-2.5" />
-    </button>
+    <Tooltip text="Cancel editing">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onCancel(); }}
+        aria-label="Cancel editing"
+        className={EDITING_PILL}
+      >
+        Editing
+        <EditGlyph className="w-2.5 h-2.5" />
+      </button>
+    </Tooltip>
   );
 }
 

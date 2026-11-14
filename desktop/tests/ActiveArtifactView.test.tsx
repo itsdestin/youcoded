@@ -1022,7 +1022,7 @@ describe('read lifecycle through useArtifactContent', () => {
         ok: true, content: 'first chunk\n', orphan: false, binary: false,
         truncated: true, sizeBytes: 8.4 * 1024 * 1024, mtimeMs: 1,
       }));
-      expect(utils.getByText(/Showing 3\.0\/8\.4 MB/)).toBeTruthy();
+      expect(utils.getByText(/Showing 3\.1\/8\.8 MB/)).toBeTruthy();
     });
 
     // A complete file must NOT wear the notice.
