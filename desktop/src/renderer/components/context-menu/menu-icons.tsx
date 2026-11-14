@@ -18,6 +18,8 @@ export type MenuIconName =
   | 'link'
   | 'folder'
   | 'path'
+  // Card #143 a: the picture menu's "Save image as".
+  | 'save'
   // The Browser panel's "Stop for this chat" (2026-10-13).
   | 'stop';
 
@@ -69,6 +71,7 @@ const PATHS: Record<MenuIconName, React.ReactNode> = {
     </>
   ),
   folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
+  save: <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />,
   path: (
     <>
       <path d="M9 5h9a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-2" />

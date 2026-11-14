@@ -52,11 +52,11 @@ beforeEach(() => { windows.length = 0; });
 describe('which of the last channels a phone may call: exactly what it could before', () => {
   it('the table holds every channel of the group', () => {
     // 12 docComments + 3 theme + 5 appearance + 2 favorites + 2 game + 4 arcade + 4 zoom + platform + commands + 2 ui action + system +
-    // terminal + app:restart + 2 performance + 3 attention + 4 shell + 3 dialog + clipboard + 10 window (minimize maximize close
+    // terminal + app:restart + 2 performance + 3 attention + 5 shell (the fifth is the picture right-click, card #143 a) + 3 dialog + clipboard + 10 window (minimize maximize close
     // traffic-light icon get-id get-directory answer-close open-detached focus-and-switch) + detach:claim-pending + 8 detach/drag
     // + 16 buddy (buddy:mascot-hit joined with the taskbar-icon buddy, 2026-10-02; the buddy rebuild 2026-10-26 removed
     // subscribe/unsubscribe and added toggle-chat-size) + 6 integrations + 12 remote admin + 9 voice (two desktop-only vocabulary channels) + 14 social
-    expect(entries.length).toBe(129);
+    expect(entries.length).toBe(130);
   });
 
   it('exactly these are open to a phone; everything else is refused from the table', () => {
@@ -140,7 +140,7 @@ describe('remote administration: the refusals are kept byte for byte, and discon
 describe('window, detach, buddy, voice, social and the rest are the computer\'s own', () => {
   it('every one is desktop-only except the phone-open list above', () => {
     const computerOnly = entries.filter((d) => !phoneOpen(d) && !d.refusal).map((d) => d.name);
-    for (const name of ['window:minimize', 'window:get-id', 'detach:claim-pending', 'session:detach-live', 'session:drop-resolve', 'buddy:show', 'buddy:capture-desktop', 'buddy:install-helper', 'dialog:open-file', 'shell:open-external', 'clipboard:save-image',
+    for (const name of ['window:minimize', 'window:get-id', 'detach:claim-pending', 'session:detach-live', 'session:drop-resolve', 'buddy:show', 'buddy:capture-desktop', 'buddy:install-helper', 'dialog:open-file', 'shell:open-external', 'shell:picture-action', 'clipboard:save-image',
       'integrations:install', 'voice:start', 'voice:audio', 'social:list-friends', 'social:presence-send', 'performance:set-config', 'app:restart',
       'attention:report', 'terminal:get-screen-text', 'system:notify-stack-state', 'ui:action:broadcast']) {
       expect(computerOnly, name).toContain(name);

@@ -1089,11 +1089,13 @@ describe('NativeSessionHost', () => {
         expect(model).not.toHaveBeenCalled();
         writes.mockRestore();
         expect(h.send(id, 'storage recovered')).toMatchObject({ status: 'sent' });
-        await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
-        // WHY wait for the request itself (2026-11-13): on a busy machine drain() returned before the
-        // turn had asked for its model (0 calls at load ~60); the count is still checked after drain.
-        await vi.waitFor(() => expect(model).toHaveBeenCalledTimes(1));
+        // WHY: wait for the turn itself (entry.running resolves when the whole drain, report
+        // splice + model request, has finished). The old wait on `delivered` + drain() only
+        // flushed the transcript append chain: `delivered` flips BEFORE the model request is
+        // dispatched, so slow storage let the model-call assertion run first (2026-11-14 flake).
+        await (h as any).live.get(id).running;
         await h.drain(id);
+        expect(ledger.listFor(root, id)[0].delivered).toBe(true);
         // Card #148: the report is now supplied (history-only) before the user's turn, so one request carries both.
         expect(model).toHaveBeenCalledTimes(1);
       } finally { finish(); vi.restoreAllMocks(); await h.destroyAll(); }
@@ -1127,8 +1129,11 @@ describe('NativeSessionHost', () => {
         finish(); await outgoing;
         expect(model).not.toHaveBeenCalled();
         await h.resume(id, root);
-        await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
+        // WHY: await the resumed generation's own delivery pass rather than polling `delivered`
+        // (which flips before the model request is dispatched; same race as the sibling test above).
+        await (h as any).live.get(id).running;
         await h.drain(id);
+        expect(ledger.listFor(root, id)[0].delivered).toBe(true);
         expect(model).toHaveBeenCalledOnce();
       } finally { finish(); vi.restoreAllMocks(); await h.destroyAll(); }
     });

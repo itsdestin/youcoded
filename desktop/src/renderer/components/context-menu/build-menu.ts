@@ -1,6 +1,7 @@
 import { getCapabilities } from '../../platform';
 import { getSheetSelectionText } from '../artifact-views/artifact-find-bridge';
-import { copyText, readText } from './clipboard';
+import { copyText, readText, canCopyImageHere, copyImageFromPage } from './clipboard';
+import { announce } from '../../utils/announce';
 import { chipPathOf, selectionTextWithChipPaths } from './chip-copy';
 import { editorViewFor } from '../artifact-views/cm/editor-registry';
 import type { MenuIconName } from './menu-icons';
@@ -305,6 +306,45 @@ function filePillMenu(el: HTMLElement): MenuEntry[] {
   return entries;
 }
 
+// Card #143 a (deck C-2, Destin 2026-11-13: the four items): right-click on a picture in a chat.
+// Copy image / Save image as (the computer's own windows only: a phone cannot choose a place on the computer, as for file
+// chips) / Copy image address (website pictures only) / Ask about this.
+// WHY the words claim no cause on failure (docs/error-message-standards.md): the picture may be gone, blocked or too big.
+function imageMenu(img: HTMLImageElement, target: HTMLElement): MenuEntry[] {
+  const src = img.currentSrc || img.src || '';
+  const alt = (img.getAttribute('alt') || '').trim();
+  const onWeb = /^https?:\/\//i.test(src);
+  const desktop = getCapabilities().openInOs && typeof shell()?.pictureAction === 'function';
+  const entries: MenuEntry[] = [];
+  const attempt = async (action: 'copy' | 'save') => {
+    let ok = false;
+    if (desktop) {
+      const r = await shell().pictureAction(action, src).catch(() => null);
+      ok = !!r?.ok;
+    } else if (action === 'copy') {
+      ok = await copyImageFromPage(src);
+    }
+    if (!ok) announce(action === 'copy' ? "Couldn't copy that picture." : "Couldn't save that picture.");
+  };
+  // WHY only a website address gets Copy and Save: the computer refuses every other kind (picture-actions.ts), so offering them
+  // would be a button that always fails.
+  if (onWeb && (desktop || canCopyImageHere())) {
+    entries.push({ type: 'item', id: 'copy-image', label: 'Copy image', icon: 'copy', disabled: !src, run: () => attempt('copy') });
+  }
+  if (onWeb && desktop) entries.push({ type: 'item', id: 'save-image', label: 'Save image as\u2026', icon: 'save', disabled: !src, run: () => attempt('save') });
+  if (onWeb) entries.push({ type: 'item', id: 'copy-image-address', label: 'Copy image address', icon: 'link', run: () => void copyText(src) });
+  if (entries.length) entries.push({ type: 'sep' });
+  const name = alt || baseName(src.split(/[?#]/)[0]) || 'picture';
+  const ref: ComposeRef = {
+    id: genRefId(), kind: 'chat', label: `picture \u00b7 \u201c${truncateQuote(name, 24)}\u201d`,
+    // The words the assistant gets: the picture's description and where it came from, so it can find it again.
+    quote: `Picture${alt ? `: ${alt}` : ''}${src ? ` (${src})` : ''}`.slice(0, 2000),
+    entryKey: entryKeyOf(target),
+  };
+  entries.push({ type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, run: () => addReference(ref) });
+  return entries;
+}
+
 function linkMenu(a: HTMLAnchorElement, target: HTMLElement): MenuEntry[] {
   const href = a.href || a.getAttribute('href') || '';
   return [
@@ -588,6 +628,11 @@ export function buildContextMenu(target: HTMLElement): MenuEntry[] | null {
   // preview the whole menu without borrowing chat-composer CSS.
   if (!target.closest('.chat-scroll') && !target.closest('[data-conversation-id]')) return null;
 
+  // A picture (before the link check: a picture inside a link gets the picture's menu). Chrome (a button, an icon) has none.
+  const picture = target.closest('img');
+  if (picture instanceof HTMLImageElement && !isChrome(picture) && (picture.currentSrc || picture.src)) {
+    return finalize(imageMenu(picture, target));
+  }
   const filePill = target.closest('[data-file-path]');
   if (filePill instanceof HTMLElement && filePill.getAttribute('data-file-path')) {
     return finalize(filePillMenu(filePill));

@@ -15,7 +15,8 @@ export interface QuickChip {
 }
 
 interface Props {
-  onChipTap: (chip: QuickChip) => void;
+  /** `pointerType` says how the tap was made: 'touch' / 'pen' / 'mouse', or '' for the keyboard. */
+  onChipTap: (chip: QuickChip, pointerType?: string) => void;
 }
 
 export default function QuickChips({ onChipTap }: Props) {
@@ -45,6 +46,7 @@ export default function QuickChips({ onChipTap }: Props) {
 
   const android = fingerSized();
   const chipHeight = android ? 'h-8' : 'h-6';
+  const lastDown = useRef<{ type: string; at: number; upAt?: number } | null>(null);
 
   return (
     // select-none: quick chips are chrome, not highlightable or copyable
@@ -54,7 +56,26 @@ export default function QuickChips({ onChipTap }: Props) {
         {displayChips.map((chip, i) => (
           <button
             key={`${i}-${chip.label}`}
-            onClick={() => onChipTap(chip)}
+            // WHY the type is read here (performance rule 2: no window listeners): a click made by touch or pen says so itself where
+            // the browser's click is a PointerEvent. Where it is a plain MouseEvent (older Safari on an iPhone or iPad, Firefox) the
+            // chip's own pointerdown / touchstart, a moment earlier, says it instead. A click with neither came from the keyboard.
+            onPointerDown={(e) => { lastDown.current = { type: e.pointerType, at: Date.now() }; }}
+            onTouchStart={() => { lastDown.current = { type: 'touch', at: Date.now() }; }}
+            // A press that never becomes a click (the browser took the touch for a scroll or drag: pointercancel / touchcancel) is
+            // forgotten, so a later keyboard click cannot be read as it. When the finger lifts, the real click follows within a few
+            // milliseconds, so the press only counts for a short moment after lifting (pointerleave is NOT used: a touch fires it
+            // just before its own click).
+            onPointerUp={() => { if (lastDown.current) lastDown.current.upAt = Date.now(); }}
+            onTouchEnd={() => { if (lastDown.current) lastDown.current.upAt = Date.now(); }}
+            onPointerCancel={() => { lastDown.current = null; }}
+            onTouchCancel={() => { lastDown.current = null; }}
+            onClick={(e) => {
+              const own = (e.nativeEvent as PointerEvent).pointerType;
+              const d = lastDown.current;
+              lastDown.current = null; // each click uses its own press, so a later keyboard click is never read as the earlier touch
+              const fresh = d && (d.upAt ? Date.now() - d.upAt < 600 : Date.now() - d.at < 1500);
+              onChipTap(chip, own || (fresh ? d!.type : ''));
+            }}
             // `quick-chip` is the hook chrome-style: 'float' hangs its per-chip
             // lift on (globals.css → "FLOAT chrome"). A class, not a token: the
             // rule needs the element, and Tailwind has no way to name "the chip".

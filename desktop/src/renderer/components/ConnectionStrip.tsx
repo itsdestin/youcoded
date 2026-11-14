@@ -27,6 +27,14 @@ export interface ConnectionStripProps {
   onUsePhoneOnly?: () => void;
 }
 
+/** Card #182 (Destin, overnight deck C-6, 2026-11-13): after about 20 s of no answer the strip says the computer may be asleep or off.
+ *  WHY the two numbers: the page first calls the computer "slow" after 5 s of silence, so 15 s more is ~20 s of silence in all;
+ *  a "reconnecting" strip (a dropped connection, or the phone going offline) starts from a silence of unknown length, so it waits
+ *  the full 20 s before guessing. The words are the person's, exactly. */
+export const UNREACHABLE_MESSAGE = "Can't reach your computer. It may be asleep or off. YouCoded will keep trying.";
+const UNREACHABLE_AFTER_SLOW_MS = 15_000;
+const UNREACHABLE_AFTER_RECONNECTING_MS = 20_000;
+
 export function ConnectionStrip({ sessionId, conversationStatus, waitingForComputer, filling, onRefresh, onUsePhoneOnly }: ConnectionStripProps) {
   // The live status, plus a 2.5 s "Up to date" after a refresh so the person can see it worked (tester U9). An initial
   // `complete` — a phone that connected cleanly — shows nothing; only a transition OUT of restoring/incomplete earns the beat.
@@ -49,7 +57,17 @@ export function ConnectionStrip({ sessionId, conversationStatus, waitingForCompu
   // A conversation switched to but not filled yet shows the SAME "Catching up" a reconnect shows (one-core R5-3).
   const empty = useSessionIsEmpty(sessionId);
   // The computer slow to answer: said quietly, and only when nothing more specific is showing.
-  const shown = status ?? (filling && empty ? 'restoring' : waitingForComputer ? 'slow' : null);
+  const live = status ?? (filling && empty ? 'restoring' : waitingForComputer ? 'slow' : null);
+  // How long the computer has been quiet: counted while the strip says slow or reconnecting, reset the moment it says anything else.
+  const silent = live === 'slow' || live === 'reconnecting' ? live : null;
+  const [unreachable, setUnreachable] = useState(false);
+  useEffect(() => {
+    if (!silent) { setUnreachable(false); return undefined; }
+    // Keep the clock running if it flips between slow and reconnecting: it is one stretch of silence.
+    const t = window.setTimeout(() => setUnreachable(true), silent === 'slow' ? UNREACHABLE_AFTER_SLOW_MS : UNREACHABLE_AFTER_RECONNECTING_MS);
+    return () => window.clearTimeout(t);
+  }, [silent !== null]); // eslint-disable-line react-hooks/exhaustive-deps -- slow and reconnecting share ONE clock: it restarts only when the silence ends
+  const shown = silent && unreachable ? 'unreachable' : live;
   if (!shown) return null;
 
   return (
@@ -62,6 +80,15 @@ export function ConnectionStrip({ sessionId, conversationStatus, waitingForCompu
           action={<Button size="sm" onClick={onRefresh}>Refresh</Button>}
         >
           This conversation may be out of date.
+        </StatusStrip>
+      ) : shown === 'unreachable' ? (
+        // The Android app keeps its way out here too: a computer that is off is exactly when "Use this phone only" helps.
+        <StatusStrip
+          tone="warn"
+          actionBelow
+          action={onUsePhoneOnly && isAndroid() ? <Button size="sm" variant="secondary" className="w-full justify-center" onClick={onUsePhoneOnly}>Use this phone only</Button> : undefined}
+        >
+          {UNREACHABLE_MESSAGE}
         </StatusStrip>
       ) : shown === 'reconnecting' ? (
         // WHY the wording (2026-10-22): nothing sends on its own after a drop (contract row R2).

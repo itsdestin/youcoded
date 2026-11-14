@@ -61,6 +61,10 @@ const DRIVER = '__youcodedScreens';
 const MARK = '"data-screen":';
 const MOCK = 'installMock';
 
+// Destin, review deck Q-9 (2026-11-14): the developer practice pages (the `?view=` pages and the style-proposal loader) are for the dev
+// workbench and the photo-only build only. Each marker is a string only that page's code carries.
+const DEV_PAGE_MARKERS = ['session-pills', 'unreachable-strip', 'buddy-session', 'no style proposal'];
+
 describe('photo-only build stays out of the app and the landing page', () => {
   let root = '';
   const text: Record<'app' | 'site' | 'shoot', string> = { app: '', site: '', shoot: '' };
@@ -91,5 +95,16 @@ describe('photo-only build stays out of the app and the landing page', () => {
     expect(text.site.includes(MOCK), `site build should contain ${MOCK}`).toBe(true);
     expect(text.site.includes(DRIVER), `site build must not contain ${DRIVER}`).toBe(false);
     expect(text.site.includes(MARK), `site build must not contain ${MARK}`).toBe(false);
+  });
+
+  it('the photo-only build carries the developer practice pages (so the absence checks below are not vacuous)', () => {
+    for (const m of DEV_PAGE_MARKERS) expect(text.shoot.includes(m), `shoot build should contain "${m}"`).toBe(true);
+  });
+
+  it('neither the real app nor the landing page demo carries any developer practice page', () => {
+    for (const m of DEV_PAGE_MARKERS) {
+      expect(text.app.includes(m), `app build must not contain "${m}"`).toBe(false);
+      expect(text.site.includes(m), `site build must not contain "${m}"`).toBe(false);
+    }
   });
 });

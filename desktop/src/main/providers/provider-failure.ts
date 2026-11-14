@@ -20,6 +20,7 @@
 // (@ai-sdk/provider-utils handleFetchError: "Cannot connect to API: …",
 // "Failed to process successful response").
 
+import { isWordedContextOverflow } from './context-overflow';
 import { log } from '../logger';
 
 type FailureKind =
@@ -132,7 +133,9 @@ export function classifyFailure(error: unknown): ProviderFailure {
   // context_length_exceeded; llama.cpp exceed_context_size_error.
   if (status === 413 || type === 'request_too_large') return { kind: 'too-long', code: 'request-too-large' };
   if (codeField === 'context_length_exceeded' || orType === 'context_length_exceeded'
-    || type === 'exceed_context_size_error' || /^prompt is too long: \d+ tokens > \d+ maximum$/.test(message)) {
+    || type === 'exceed_context_size_error' || /^prompt is too long: \d+ tokens > \d+ maximum$/.test(message)
+    // Card #176: the worded refusals (DeepSeek, Mistral, ...) get the same card and Summarise button.
+    || isWordedContextOverflow(status, message)) {
     return { kind: 'too-long', code: 'context-too-long' };
   }
 

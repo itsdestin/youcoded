@@ -20,6 +20,7 @@
 //     phone always did).
 //   - session:create: a plain terminal is still refused for a phone, now declared as table policy.
 //   - session:set-flag stays refused for a phone; session:selected / terminal-ready stay computer-only.
+import { noteFolderUsed } from '../folders-service';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -202,7 +203,18 @@ const sessionEntries: MainChannelDef[] = [
     // Called synchronously, no await before it: the window must claim the session before the first await.
     handler: (opts, ctx) => {
       if (!boundOps) throw new Error('Session opening is not ready. Try again.');
-      return boundOps.createSession(ctx.sender ?? null, opts);
+      // Card #143 b (review 2026-11-13): the folder list orders by last use, and ONLY a session the person starts counts. This channel
+      // is what the New session form and Project View call; a resumed conversation (resumeSessionId) and every session the app makes
+      // itself (specialists, Development, setup chats) never come through here with a folder the person chose, so none of them can
+      // float a folder (Home, say) to the top unchosen.
+      // Stamped only AFTER the session really exists, so a failed start does not move a folder. The call below still runs
+      // synchronously (the window must claim the session before the first await).
+      const started = boundOps.createSession(ctx.sender ?? null, opts);
+      if (typeof opts?.cwd === 'string' && opts.cwd && !opts.resumeSessionId) {
+        const cwd = opts.cwd;
+        void Promise.resolve(started).then((info: any) => { if (info && typeof info.id === 'string' && info.id) noteFolderUsed(cwd); }, () => {});
+      }
+      return started;
     },
     // This payload reaches createSession unfiltered, so without this a phone could ask for
     // `{provider:'shell', cwd:'/'}`. BE PRECISE ABOUT WHAT THIS BUYS: it does NOT stop a signed-in phone

@@ -158,6 +158,8 @@ export const IPC = {
   UPDATE_RESTART_TO_UPDATE: 'update:restart-to-update', // () -> { restarting } (desktop only)
   OPEN_EXTERNAL: 'shell:open-external',
   SHOW_ITEM_IN_FOLDER: 'shell:show-item-in-folder',
+  // Card #143 a: right-click on a chat picture — Copy image / Save image as (computer's own windows only).
+  PICTURE_ACTION: 'shell:picture-action',
   // Open a local file with the OS default app (HTML→browser, .docx→Word, etc.).
   // Desktop-only: Android has no desktop shell; remote-shim no-ops it.
   OPEN_PATH: 'shell:open-path',
@@ -1188,6 +1190,8 @@ interface ClaudeApi {
     // the cast. Already real — preload.ts's shell.openPath, unrelated to
     // this feature.
     openPath: (filePath: string) => Promise<string>;
+    // Card #143 a: chat picture right-click — the computer fetches the picture, then copies or saves it.
+    pictureAction: (action: 'copy' | 'save', src: string) => Promise<{ ok: boolean; canceled?: boolean; reason?: string }>;
   };
   // Task 9: preload bridge for reading the xterm screen buffer from the main
   // process (used by useAttentionClassifier and the Android terminal-data parity
