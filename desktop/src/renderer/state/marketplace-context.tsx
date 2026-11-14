@@ -81,6 +81,9 @@ interface MarketplaceState {
   // Loading/error state
   loading: boolean;
   error: string | null;
+  /** Why the marketplace's OWN catalog read failed, or null. WHY separate from `error` (review of the N4 strip): `error` also folds in
+   *  a failed read of the INSTALLED skills (skillsLoadError), and a strip saying "couldn't refresh the marketplace" for that is false. */
+  registryError: string | null;
   /** Why the installed-theme list alone failed to load, or null. Only the Library's
    *  Themes tab reports it — the rest of the marketplace loaded fine. */
   themesError: string | null;
@@ -682,6 +685,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     // load" exactly as it did when this context fetched that list itself.
     loading: loading || skillsLoading,
     error: error ?? skillsLoadError,
+    registryError: error,
     themesError,
     packagesError,
     installSkill,

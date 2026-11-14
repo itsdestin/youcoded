@@ -22,10 +22,10 @@ import { render, cleanup, act } from '@testing-library/react';
 // publishes another context value whenever it settles. This test measures a
 // memo boundary, not network/cache initialization; keep that input fixed.
 // Lets a test force the marketplace's own refresh-failed state while the REAL provider still loads the list.
-const mpError = vi.hoisted(() => ({ value: null as string | null }));
+const mpError = vi.hoisted(() => ({ registry: null as string | null, skills: null as string | null }));
 vi.mock('../src/renderer/state/marketplace-context', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/renderer/state/marketplace-context')>();
-  return { ...real, useMarketplace: () => { const mp = real.useMarketplace(); return mpError.value ? { ...mp, error: mpError.value } : mp; } };
+  return { ...real, useMarketplace: () => { const mp = real.useMarketplace(); return mpError.registry || mpError.skills ? { ...mp, registryError: mpError.registry, error: mpError.registry ?? mpError.skills } : mp; } };
 });
 const statsState = vi.hoisted(() => ({ value: { loading: false, plugins: {}, themes: {}, error: null as string | null, refresh: () => {}, applyThumbs: () => {}, ensureLoaded: () => {} } }));
 vi.mock('../src/renderer/state/marketplace-stats-context', () => {
@@ -156,7 +156,7 @@ describe('MarketplaceScreen', () => {
     setupWindowClaude();
     renders.corner = 0;
     statsState.value.error = null;
-    mpError.value = null;
+    mpError.registry = null; mpError.skills = null;
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     io = installFiringIntersectionObserver();
   });
@@ -176,11 +176,24 @@ describe('MarketplaceScreen', () => {
 
   // Destin's N4: a failed refresh over an older list is a thin notice under the filter bar; the list stays usable.
   it('says a refresh failed while the older list stays on screen, with Try again', async () => {
-    mpError.value = 'timed out';
+    mpError.registry = 'timed out';
     const { container, getByText } = await renderScreen();
-    expect(getByText(/Couldn't refresh the marketplace, so this list may be out of date/)).toBeTruthy();
+    expect(getByText("Couldn't refresh the marketplace, so this list may be out of date.")).toBeTruthy();
     expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Try again')).toBe(true);
     expect(cards(container)).toBeGreaterThan(0); // the list is still there and usable
+  });
+
+  it('shows no refresh strip when only the INSTALLED skills failed to load (that is not the marketplace)', async () => {
+    mpError.skills = 'could not read installed skills';
+    const { queryByText } = await renderScreen();
+    expect(queryByText(/Couldn't refresh the marketplace/)).toBeNull();
+  });
+
+  it('keeps the raw reason out of the sentence, under Details', async () => {
+    mpError.registry = 'ECONNRESET 10.0.0.1';
+    const { getByText, queryByText } = await renderScreen();
+    expect(getByText("Couldn't refresh the marketplace, so this list may be out of date.")).toBeTruthy();
+    expect(queryByText(/ECONNRESET.*out of date/)).toBeNull();
   });
 
   it('shows no refresh notice when the refresh did not fail', async () => {
