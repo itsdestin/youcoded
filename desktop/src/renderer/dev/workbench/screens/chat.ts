@@ -66,7 +66,7 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/model-picker/switch-model', 'dialog'),
   chat('chat/preferences', 'dialog'),
   // Destin N1: the write of a setting fails, so the notice shows beside it and the switch goes back.
-  { ...chat('chat/preferences#save-failed', 'dialog', 'error-state'), params: { fail: 'settings.set' }, open: [{ do: 'scroll', dir: 'down', times: 3 }, { do: 'click', target: { role: 'switch', label: 'Show turn duration' } }, { do: 'scroll', dir: 'down', times: 3 }] },
+  { ...chat('chat/preferences#save-failed', 'dialog', 'error-state'), params: { fail: 'settings.set' }, open: [{ do: 'scroll', dir: 'down', times: 2 }, { do: 'click', target: { role: 'switch', label: 'Show turn duration' } }] },
   chat('chat/resume', 'dialog'),
   { ...chat('chat/resume#stress', 'dialog'), scenario: 'stress' },
   chat('chat/open-tasks', 'dialog'),
