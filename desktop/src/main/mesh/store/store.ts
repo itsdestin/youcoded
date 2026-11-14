@@ -16,7 +16,7 @@
 // appends are provisional. (4) Two faults are not promised, except that the store repairs every second copy it finds damaged AS IT LOADS (meta, checkpoint, control anchor).
 // Enforced by faults.test.ts, fuzz.test.ts (random crash points x one fault of EVERY kind in a random file of the real folder x reopen, invariant checked every time; opt-in
 // long run by environment variable), matrix.test.ts (every file x every fault, deterministic), inventory.test.ts (no file outside the table; five answers per row; every
-// unlink/truncate/rename/overwrite carries a DESTRUCTIVE-OK(<why>) reason) and the mutation table in the review-4 fix notes.
+// unlink/truncate/rename/overwrite carries a DESTRUCTIVE-OK(<why>) reason), durability-guards.test.ts (the places a mutation check showed no test would notice a wrong line) and the mutation check recorded in the round-4 commit message.
 //
 // EVERY FILE THE STORE WRITES, how a damaged copy is detected and what a damaged or missing one means (always non-destructive): inventory.ts.
 //
