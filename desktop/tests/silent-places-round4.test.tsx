@@ -105,3 +105,71 @@ describe('tag manager saves (useTagRegistry)', () => {
     expect(t.got).toEqual([]);
   });
 });
+
+// ── Review fixes ────────────────────────────────────────────────────────────
+import { announceFailed } from '../src/renderer/utils/announce';
+import { useSaveNotice } from '../src/renderer/hooks/useSaveNotice';
+
+describe('review: a defaults save that answers null is a failure', () => {
+  const setup = (save: (u: any) => Promise<unknown>) => renderHook(() => {
+    const [d, setD] = useState({ model: 'sonnet' });
+    return { d, change: useDefaultsSaver(d, setD, save) };
+  });
+  it('null (what writeDefaults answers when the write failed) reverts and says so; the merged object is success', async () => {
+    const bad = setup(vi.fn().mockResolvedValue(null));
+    await act(async () => { await bad.result.current.change({ model: 'opus' }); });
+    expect(bad.result.current.d.model).toBe('sonnet');
+    expect(t.got).toEqual(["Couldn't save this setting."]);
+    t.got.length = 0;
+    const good = setup(vi.fn().mockResolvedValue({ model: 'opus' }));
+    await act(async () => { await good.result.current.change({ model: 'opus' }); });
+    expect(good.result.current.d.model).toBe('opus');
+    expect(t.got).toEqual([]);
+  });
+});
+
+describe('review: "unsupported here" is never a failure notice', () => {
+  const unsupported = Object.assign(new Error('remote-unsupported: analytics:get-opt-in'), { code: 'REMOTE_UNSUPPORTED' });
+  it('announceFailed stays silent for it and still speaks for a real failure', () => {
+    announceFailed('stop this task', unsupported);
+    expect(t.got).toEqual([]);
+    announceFailed('stop this task', new Error('boom'));
+    expect(t.got).toEqual(["Couldn't stop this task."]);
+  });
+  it('useSaveNotice puts the control back but shows no notice for it', async () => {
+    const snap = vi.fn();
+    const { result } = renderHook(() => useSaveNotice(true));
+    await act(async () => { await result.current.run('k', 'x', () => Promise.reject(unsupported), snap, () => {}); });
+    expect(snap).toHaveBeenCalled();
+    expect(result.current.notice('k')).toBeNull();
+    await act(async () => { await result.current.run('k', 'x', () => Promise.reject(new Error('real')), snap, () => {}); });
+    expect(result.current.notice('k')).not.toBeNull();
+  });
+});
+
+describe('review: newest-wins session meta', () => {
+  it('an older failed tag save that arrives after a newer success neither rolls back nor speaks', async () => {
+    let failOld!: (v: unknown) => void;
+    const setTag = vi.fn()
+      .mockImplementationOnce(() => new Promise((r) => { failOld = r; }))
+      .mockResolvedValueOnce({ ok: true });
+    (window as any).claude = { session: { getMeta: vi.fn().mockResolvedValue({ tags: [], note: '', flags: {}, supported: true }), setTag }, on: {} };
+    const { result } = renderHook(() => useSessionMeta('s1'));
+    await waitFor(() => expect(result.current.supported).toBe(true));
+    act(() => result.current.setTag('t1', true));   // first save: will fail late
+    act(() => result.current.setTag('t1', false));  // newer save: works
+    await waitFor(() => expect(setTag).toHaveBeenCalledTimes(2));
+    await act(async () => { failOld({ ok: false, error: 'late' }); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.tags.has('t1')).toBe(false);
+    expect(t.got).toEqual([]);
+  });
+  it('the newest failing save still rolls back and speaks', async () => {
+    const setTag = vi.fn().mockResolvedValue({ ok: false, error: 'x' });
+    (window as any).claude = { session: { getMeta: vi.fn().mockResolvedValue({ tags: [], note: '', flags: {}, supported: true }), setTag }, on: {} };
+    const { result } = renderHook(() => useSessionMeta('s1'));
+    await waitFor(() => expect(result.current.supported).toBe(true));
+    act(() => result.current.setTag('t1', true));
+    await waitFor(() => expect(t.got).toEqual(["Couldn't save this tag change."]));
+    expect(result.current.tags.has('t1')).toBe(false);
+  });
+});

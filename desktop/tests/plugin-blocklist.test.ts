@@ -22,13 +22,14 @@ const hooks = vi.hoisted(() => ({ removePluginHooks: vi.fn(async () => 0), recon
 vi.mock('../src/main/hook-reconciler', async (orig) => ({ ...(await orig<object>()), ...hooks }));
 const mcp = vi.hoisted(() => ({ removePluginMcpServers: vi.fn(async () => []), reconcileMcp: vi.fn(async () => ({})) }));
 vi.mock('../src/main/mcp-reconciler', async (orig) => ({ ...(await orig<object>()), ...mcp }));
-vi.mock('../src/main/plugin-installer', async (orig) => ({ ...(await orig<object>()), uninstallPlugin: vi.fn(async () => true) }));
+vi.mock('../src/main/plugin-installer', async (orig) => ({ ...(await orig<object>()), uninstallPlugin: vi.fn(async () => ({ ok: true })) }));
 vi.mock('../src/main/logger', () => ({ log: vi.fn() }));
 
 import { parseBlocklist, fetchBlocklist } from '../src/main/plugin-blocklist';
 import { removePluginHooksInto } from '../src/main/hook-reconciler';
 import { removeManifestEntries } from '../src/main/mcp-reconciler';
 import { LocalSkillProvider } from '../src/main/skill-provider';
+import * as installer from '../src/main/plugin-installer';
 
 const answer = (body: unknown, ok = true) => vi.fn(async () => ({ ok, json: async () => body }) as unknown as Response);
 const offline = vi.fn(async () => { throw new Error('offline'); }) as unknown as typeof fetch;
@@ -171,5 +172,33 @@ describe('LocalSkillProvider off-switch', () => {
     expect(reg.unregister).not.toHaveBeenCalled();
     expect(fs.existsSync(pluginDir())).toBe(true);
     delete process.env.YOUCODED_PROFILE;
+  });
+});
+
+// Card #134 round 4: Uninstall fails ONLY when a delete was attempted and the folder is still there.
+describe('LocalSkillProvider uninstall outcomes', () => {
+  let p: LocalSkillProvider; let removeEntry: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    p = new LocalSkillProvider();
+    vi.spyOn(p, 'resolveUninstallTarget').mockResolvedValue('tab-tidy');
+    removeEntry = vi.spyOn(p.configStore, 'removePluginInstall').mockImplementation(() => {});
+  });
+  it('a refused id (or a folder already gone) still clears the entry: no failure', async () => {
+    vi.mocked(installer.uninstallPlugin).mockResolvedValueOnce({ ok: false, reason: 'id-refused' });
+    expect(await p.uninstall('x')).toEqual({ type: 'plugin' });
+    expect(removeEntry).toHaveBeenCalledWith('tab-tidy');
+  });
+  it('a delete that left the folder keeps the plugin listed and says so, truthfully about Claude Code', async () => {
+    vi.mocked(installer.uninstallPlugin).mockResolvedValueOnce({ ok: false, reason: 'delete-failed', unregistered: true, detail: 'EBUSY' });
+    const r = await p.uninstall('x');
+    expect(r.failed).toBe('Claude Code no longer loads it, but its folder could not be deleted (EBUSY). Try again to finish removing it');
+    expect(r.failed).not.toMatch(/fully removed/);
+    expect(r.reload).toBe(true);
+    expect(removeEntry).not.toHaveBeenCalled();
+    vi.mocked(installer.uninstallPlugin).mockResolvedValueOnce({ ok: false, reason: 'delete-failed', unregistered: false, detail: 'EBUSY' });
+    const again = await p.uninstall('x');
+    expect(again.failed).toBe('its folder could not be deleted (EBUSY). Try again to finish removing it');
+    expect(again.reload).toBe(false);
   });
 });

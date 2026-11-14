@@ -80,3 +80,16 @@ it('shows no read notice when the setting reads fine', async () => {
   await screen.findByRole('switch', { name: 'Share anonymous usage stats' });
   expect(screen.queryByText(/Couldn't/)).toBeNull();
 });
+
+// Card #134 round 4: over remote, analytics:get-opt-in is not allowed — the row stays hidden, as before, with no failure box.
+it('shows no failure box when the setting read is "unsupported here" (remote), and the row stays hidden', async () => {
+  const unsupported = Object.assign(new Error('remote-unsupported: analytics:get-opt-in'), { code: 'REMOTE_UNSUPPORTED' });
+  const getOptIn = vi.fn().mockRejectedValue(unsupported);
+  (window as any).claude = { analytics: { getOptIn } };
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  render(<AboutPopup open onClose={() => {}} platform="desktop" version="1.3.1" />);
+  await waitFor(() => expect(getOptIn).toHaveBeenCalled());
+  await Promise.resolve(); await Promise.resolve();
+  expect(screen.queryByText(/Couldn't load/)).toBeNull();
+  expect(screen.queryByRole('switch', { name: 'Share anonymous usage stats' })).toBeNull();
+});

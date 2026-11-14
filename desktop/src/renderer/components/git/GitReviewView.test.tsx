@@ -456,4 +456,25 @@ describe('GitReviewView failed reads', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(screen.queryByText(/Couldn't load more/)).toBeNull());
   });
+
+  // Card #134 round 4 review: the Show more notice clears when it is moot, not only via its own Try again.
+  it('the Show more notice clears when a later refresh succeeds, and when another file is opened', async () => {
+    let changed: () => void = () => {};
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fileReview = vi.fn()
+      .mockResolvedValueOnce({ ...review, hasMore: true }).mockRejectedValueOnce(new Error('x')).mockResolvedValue({ ...review, hasMore: true });
+    (window as any).claude = { git: { fileReview, commitFileDiff: vi.fn(), stage: vi.fn(), unstage: vi.fn(), commit: vi.fn(), onChanged: vi.fn((cb: () => void) => { changed = cb; return () => {}; }) } };
+    const ui = (rel: string) => <GitReviewView projectRoot="/proj" relPath={rel} fileName="f.ts" onBack={() => {}} onRequestDiscard={() => {}} />;
+    const view = render(ui('src/f.ts'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText("Couldn't load more history.")).toBeInTheDocument();
+    changed(); // a successful refresh
+    await waitFor(() => expect(screen.queryByText("Couldn't load more history.")).toBeNull());
+    // and a different file: fail again, then switch
+    fileReview.mockRejectedValueOnce(new Error('y'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText("Couldn't load more history.")).toBeInTheDocument();
+    view.rerender(ui('src/other.ts'));
+    await waitFor(() => expect(screen.queryByText("Couldn't load more history.")).toBeNull());
+  });
 });

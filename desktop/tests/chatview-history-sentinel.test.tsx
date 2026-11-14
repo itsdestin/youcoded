@@ -189,4 +189,16 @@ describe('an older page that could not be read', () => {
     await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'HISTORY_PAGE_LOADED' })));
     expect(container.textContent).not.toContain("Couldn't load earlier messages.");
   });
+  it('clears the failure and restores the top marker when something else refills the history (a reconnect sets a new cursor)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    requestPage.mockRejectedValue(new Error('nope'));
+    const { container, findByText, rerender } = renderWith(live);
+    expect(await findByText("Couldn't load earlier messages.")).toBeTruthy();
+    requestPage.mockResolvedValue({ events: [], cursor: null, hasMore: false });
+    mocks.state = { ...mocks.state, history: { cursor: { path: 'p', offset: 50, sizeAtRead: 900 }, hasMore: true, loading: false } };
+    rerender(<ChatView sessionId="s1" visible={true} sessionActive={true} cwd="/refilled" />); // a changed prop: ChatView is memoized
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Couldn't load earlier messages."));
+    // the marker is back and, being in view, fetches the page from the NEW cursor
+    await vi.waitFor(() => expect(requestPage).toHaveBeenLastCalledWith(expect.objectContaining({ beforeCursor: { path: 'p', offset: 50, sizeAtRead: 900 } })));
+  });
 });
