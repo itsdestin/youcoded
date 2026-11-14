@@ -546,21 +546,21 @@ describe('what a new device may say about itself', () => {
   });
 });
 
-describe('a long roster pairs (5,000 entries)', () => {
+describe('a long roster pairs (3,000 entries)', () => {
   it('E cites only the current heads, so the new entry stays small and the new device verifies the whole log', () => {
     const { E, state, id } = makeSet();
-    // WHY twelve signers: one device may sign at most MAX_ENTRIES_PER_DEVICE entries (review finding 4).
-    const others = Array.from({ length: 11 }, () => generateIdentity());
+    // WHY thirteen signers: one device may sign at most MAX_ENTRIES_PER_DEVICE entries and admit at most 4 devices (review finding 4, third review).
+    const others = Array.from({ length: 12 }, () => generateIdentity());
     const last = new Map<string, SignedEntry>([[id.deviceId.toString('hex'), state.roster[0]]]);
-    for (const o of others) {
-      const a = makeAddEntry(id, { name: 'o', platform: 'linux', signKey: o.signKey, agreeKey: o.agreeKey }, seenForNextEntry(state.roster, id.deviceId), state.roster.length + 1);
+    for (const [oi, o] of others.entries()) {
+      const by = oi < 3 ? id : others[Math.floor((oi - 3) / 4)]; // E keeps one admission free for the pairing below
+      const a = makeAddEntry(by, { name: 'o', platform: 'linux', signKey: o.signKey, agreeKey: o.agreeKey }, seenForNextEntry(state.roster, by.deviceId), state.roster.length + 1);
       state.roster.push(a);
       last.set(o.deviceId.toString('hex'), a);
-      last.set(id.deviceId.toString('hex'), a);
     }
     const all = [id, ...others];
-    while (state.roster.length < 5000) {
-      const d = all[state.roster.length % 12];
+    while (state.roster.length < 3000) {
+      const d = all[state.roster.length % 13];
       const mine = last.get(d.deviceId.toString('hex'))!;
       const head = state.roster[state.roster.length - 1];
       const e = makeRenameEntry(d, 'n' + state.roster.length, mine.id.equals(head.id) ? [head.id] : [mine.id, head.id], state.roster.length + 1);
@@ -572,9 +572,9 @@ describe('a long roster pairs (5,000 entries)', () => {
     pipeRun(E, N);
     expect(N.result?.ok).toBe(true);
     if (!N.result?.ok) return;
-    expect(N.result.roster).toHaveLength(5001);
-    const add = N.result.roster[5000];
+    expect(N.result.roster).toHaveLength(3001);
+    const add = N.result.roster[3000];
     expect(add.seen.length).toBeLessThanOrEqual(MAX_SEEN);
-    expect(verifyRosterLog(N.result.roster).devices.size).toBe(13);
+    expect(verifyRosterLog(N.result.roster).devices.size).toBe(14);
   }, 60_000);
 });

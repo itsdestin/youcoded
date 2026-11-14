@@ -39,6 +39,7 @@ import { LABEL, concat, ctEqual, sha256, toHex, utf8, type Bytes } from './bytes
 import { CborValue, asArray, asBytes, asMap, asText, asUint, decode, encode, onlyKeys, type CborMap } from './cbor';
 import { MeshCryptoError, guard } from './errors';
 import { deviceIdFor, requireAgreeKey, setIdFor, signWith, verifySig, type DeviceIdentity } from './identity';
+import { MAX_ADMISSIONS_PER_SIGNER, MAX_KNOWN_KEYS, MAX_SET_DEVICES, ROSTER_MAX_PER_SIGNER } from './limits';
 
 // WHY 8192 (was 4096): a log has to be verifiable in one welcome message even when long; ancestry
 // bookkeeping is n*n/8 bytes (8 MiB at the cap), still small.
@@ -215,7 +216,9 @@ export interface VerifiedRoster {
 // WHY QUOTAS (review finding 4): any member can write valid entries as fast as it can sign them (renames change nothing and are
 // nearly free), so the log needs a per-device ceiling that every device computes the same way from the log alone. 512 is far above
 // what a person produces (a handful of renames over years) and 16 devices x 512 stays under the 8192 hard cap.
-export const MAX_ENTRIES_PER_DEVICE = 512;
+// (Third review, finding 6: 512 became 256 so that MAX_KNOWN_KEYS signers can never fill the log; the relay uses the same number.)
+export const MAX_ENTRIES_PER_DEVICE = ROSTER_MAX_PER_SIGNER;
+export { MAX_ADMISSIONS_PER_SIGNER, MAX_KNOWN_KEYS, MAX_SET_DEVICES };
 // WHY RESERVE (finding 4, "8192-entry dead end"): when the log is nearly full, adds and renames are refused but a REMOVE is still
 // accepted, so a device that somehow fills the log can still be removed.
 export const ROSTER_REMOVE_RESERVE = 64;
@@ -225,8 +228,21 @@ export const ROSTER_REMOVE_RESERVE = 64;
  *  are out) or 'first-admitted' (the device admitted earlier survives; the later one is removed). Both variants are tested. */
 export type MutualRule = 'both' | 'first-admitted';
 export const DEFAULT_MUTUAL_RULE: MutualRule = 'both';
+/** What happens to the devices a removed device admitted (third review, finding 2). OPEN PRODUCT DECISION; both variants are tested.
+ *  'stay' (default, unchanged behaviour): they stay members until removed by hand (they may be honest: the owner's phone, paired through a laptop
+ *  that was later lost). 'cascade': they are removed together with the device that added them (closes "ghosts outlive the removal"). */
+export type AdoptedRule = 'stay' | 'cascade';
+export const DEFAULT_ADOPTED_RULE: AdoptedRule = 'stay';
 
-const MAX_REMOVALS_CONSIDERED = 96;
+/** THE CAP INVARIANT (third review, "volume defeats a limit"). Every limit in this layer obeys one rule:
+ *    1. it is counted PER SIGNER, against the entry's verified signer (a signature that checked), never against whoever delivered it;
+ *    2. when it is reached it drops only THAT signer's own excess, never another signer's entry;
+ *    3. what is dropped is chosen from the set alone (canonical order), so no device's answer depends on arrival order.
+ *  So a hostile member that floods can only lose its own entries; no honest device's entry is ever displaced by it. The caps: entries per
+ *  signer (MAX_ENTRIES_PER_DEVICE), `add`s per signer (MAX_ADMISSIONS_PER_SIGNER), removals per signer taken into the ranking
+ *  (MAX_REMOVALS_PER_SIGNER, one per target), parked entries per delivering member and stale secrets per minter (device-core.ts), waiting
+ *  frames per relay-stamped writer (link.ts), roster entries answered per peer (device-core.ts). Generic test: tests/mesh/cap-invariant.test.ts. */
+export const MAX_REMOVALS_PER_SIGNER = 8;
 const GATED = new Set(['add', 'remove', 'rename']);
 
 interface Computed {
@@ -255,9 +271,12 @@ export class RosterVerifier implements VerifiedRoster {
   readonly #depth = new Map<string, number>();
   readonly #keyOf = new Map<string, Buffer>();
   readonly #perDevice = new Map<string, number>();
+  readonly #addsBy = new Map<string, number>();
+  /** device (hex) -> ids (hex) of every held `add` that names its key: the entry that introduces a signer must be among its own ancestors. */
+  readonly #introAdds = new Map<string, Set<string>>();
   #calc: Computed | null = null;
   #setId: Buffer | undefined;
-  constructor(readonly mutual: MutualRule = DEFAULT_MUTUAL_RULE) {}
+  constructor(readonly mutual: MutualRule = DEFAULT_MUTUAL_RULE, readonly adopted: AdoptedRule = DEFAULT_ADOPTED_RULE) {}
 
   get size(): number {
     return this.#order.length;
@@ -354,11 +373,22 @@ export class RosterVerifier implements VerifiedRoster {
       cited.add(k);
       if (d + 1 > depth) depth = d + 1;
     }
+    // WHY (third review, volume): an entry whose signer was not introduced by an add among ITS OWN ancestors can never have an effect (compute()
+    // voids it as 'no-intro'), so it is not held. This is decided from the entry and what it cites alone (every cited entry is held by now), never
+    // from arrival order, and it stops a ghost tree (ghosts of ghosts nobody admitted) from ever taking space in the log.
+    if (i > 0 && !this.introducedAmong(signerHex, e.seen)) throw new MeshCryptoError('bad-roster', 'signer not introduced among its ancestors');
     // Shapes only (the rules that need the whole set run in compute()).
     let newKey: Buffer | undefined;
+    let isAdmission = false;
     if (e.kind === 'add') {
       const info = readAdd(e.body);
       newKey = info.signKey;
+      // WHY here (cap invariant): both limits are charged to the verified signer of THIS entry and drop only this signer's own excess.
+      if (i > 0 && !ctEqual(deviceIdFor(newKey), e.device)) {
+        isAdmission = true;
+        if ((this.#addsBy.get(signerHex) ?? 0) >= MAX_ADMISSIONS_PER_SIGNER) throw new MeshCryptoError('bad-roster', 'admission quota');
+        if (!this.#keyOf.has(toHex(deviceIdFor(newKey))) && this.#keyOf.size >= MAX_KNOWN_KEYS) throw new MeshCryptoError('bad-roster', 'too many device keys');
+      }
     } else if (e.kind === 'rename') {
       sanitizeDeviceName(asText(asMap(e.body, 'rename body').name, 'name', 200));
     } else if (e.kind === 'remove') {
@@ -373,9 +403,29 @@ export class RosterVerifier implements VerifiedRoster {
       if (newKey) {
         const id = toHex(deviceIdFor(newKey));
         if (!this.#keyOf.has(id)) this.#keyOf.set(id, newKey);
+        const set = this.#introAdds.get(id) ?? new Set<string>();
+        set.add(idHex);
+        this.#introAdds.set(id, set);
+        if (isAdmission) this.#addsBy.set(signerHex, (this.#addsBy.get(signerHex) ?? 0) + 1);
       }
       this.#calc = null;
     };
+  }
+  /** True when some held `add` that names `deviceHex`'s key is among the ancestors of an entry citing `seen` (or is one of them). */
+  private introducedAmong(deviceHex: string, seen: readonly Bytes[]): boolean {
+    const intros = this.#introAdds.get(deviceHex);
+    if (!intros) return false;
+    const visited = new Set<string>();
+    const stack = seen.map((x) => toHex(x));
+    while (stack.length) {
+      const k = stack.pop() as string;
+      if (visited.has(k)) continue;
+      if (intros.has(k)) return true;
+      visited.add(k);
+      const ent = this.#raw.get(k);
+      if (ent) for (const q of ent.seen) stack.push(toHex(q));
+    }
+    return false;
   }
   /** prepare + commit in one step (no disk in between). */
   add(e: SignedEntry): void {
@@ -410,8 +460,27 @@ export class RosterVerifier implements VerifiedRoster {
       if (!introPos.has(id)) introPos.set(id, p);
     }
     const senior = (devHex: string): number => introPos.get(devHex) ?? Number.MAX_SAFE_INTEGER;
+    // WHY the selection below (third review, serious 1): the old code took "the first 96 removals by signer seniority", so a senior hostile device
+    // signing 96 junk removals pushed every honest removal out of consideration. Now: (a) a removal that can have no effect at all (its signer was never
+    // introduced, or it names a device nobody introduced) is not a candidate, found by a plain pass with no removal in force; (b) each signer's own
+    // candidates are limited to MAX_REMOVALS_PER_SIGNER distinct targets, first in canonical order, so a signer can only crowd out ITS OWN excess; (c) what is
+    // left is bounded by (devices that can sign) x 8, which also bounds the work per arriving entry.
+    const targetOfPos = (p: number): string => toHex(asBytes(asMap(order[p].body, 'remove body').target, 'target', 16));
+    const baseFold = this.fold(order, rows, pos, inClosure, new Set(), senior, true);
+    const targetsBy = new Map<string, Set<string>>();
     const removals: number[] = [];
-    for (let p = 0; p < n; p++) if (order[p].kind === 'remove') removals.push(p);
+    const allRemovals: number[] = [];
+    for (let p = 0; p < n; p++) {
+      if (order[p].kind === 'remove') allRemovals.push(p);
+      if (order[p].kind !== 'remove' || baseFold.voidedPos.has(p)) continue;
+      const who = toHex(order[p].device);
+      const tg = targetOfPos(p);
+      const set = targetsBy.get(who) ?? new Set<string>();
+      targetsBy.set(who, set);
+      if (set.has(tg) || set.size >= MAX_REMOVALS_PER_SIGNER) continue;
+      set.add(tg);
+      removals.push(p);
+    }
     removals.sort((x, y) => senior(toHex(order[x].device)) - senior(toHex(order[y].device)) || x - y);
     const eff = new Set<number>();
     let res = this.fold(order, rows, pos, inClosure, eff, senior);
@@ -423,13 +492,13 @@ export class RosterVerifier implements VerifiedRoster {
     let changed = true;
     for (let pass = 0; pass < 6 && changed; pass++) {
     changed = false;
-    for (const r of removals.slice(0, MAX_REMOVALS_CONSIDERED)) {
+    for (const r of removals) {
       if (eff.has(r)) continue;
       const tried = new Set(eff);
       tried.add(r);
       let t = this.fold(order, rows, pos, inClosure, tried, senior);
       if (t.voidedPos.has(r)) continue;
-      for (let guard = 0; guard < MAX_REMOVALS_CONSIDERED; guard++) {
+      for (let guard = 0; guard < removals.length + 1; guard++) {
         const drop = [...tried].filter((e) => t.voidedPos.has(e));
         if (drop.length === 0) break;
         for (const e of drop) tried.delete(e);
@@ -447,7 +516,7 @@ export class RosterVerifier implements VerifiedRoster {
       // through them once from the most senior signer down and keep a removal only if it voids none of those already kept.
       eff.clear();
       res = this.fold(order, rows, pos, inClosure, eff, senior);
-      for (const r of removals.slice(0, MAX_REMOVALS_CONSIDERED)) {
+      for (const r of removals) {
         const tried = new Set(eff);
         tried.add(r);
         const t = this.fold(order, rows, pos, inClosure, tried, senior);
@@ -457,17 +526,17 @@ export class RosterVerifier implements VerifiedRoster {
       }
     }
     // a removal that lost to a more senior one has no effect
-    for (const r of removals) {
+    for (const r of allRemovals) {
       if (eff.has(r) || res.voidedPos.has(r)) continue;
       const id = toHex(order[r].id);
       res.out.voided.add(id);
       const f = res.out.facts.get(id);
-      if (f) { f.void = true; f.why = 'overridden-by-senior'; }
+      if (f) { f.void = true; f.why = removals.includes(r) ? 'overridden-by-senior' : 'not-considered'; }
     }
     return { ...res.out, pos, rows };
   }
 
-  private fold(order: SignedEntry[], rows: Uint32Array[], pos: Map<string, number>, inClosure: (of: number, x: number) => boolean, eff: Set<number>, senior: (d: string) => number): { out: Omit<Computed, 'pos' | 'rows'>; voidedPos: Set<number> } {
+  private fold(order: SignedEntry[], rows: Uint32Array[], pos: Map<string, number>, inClosure: (of: number, x: number) => boolean, eff: Set<number>, senior: (d: string) => number, lenient = false): { out: Omit<Computed, 'pos' | 'rows'>; voidedPos: Set<number> } {
     const n = order.length;
     const devices = new Map<string, RosterDevice>();
     const admitted = new Map<string, number>(); // device -> canonical position of its effective introducing add
@@ -485,6 +554,23 @@ export class RosterVerifier implements VerifiedRoster {
     }
     const targetOf = (p: number): string => toHex(asBytes(asMap(order[p].body, 'remove body').target, 'target', 16));
     let setId: Buffer = this.#setId as Buffer;
+    const introducer = new Map<string, string>(); // device -> the signer of the effective add that admitted it
+    const admissions = new Map<string, number>(); // signer -> effective admissions so far (canonical order)
+    // WHY (third review, serious 2): under the 'cascade' rule a device's removal also stands for every device it admitted (transitively): they are
+    // out with it, and what they signed concurrently with that removal is void like what the removed device itself signed. Under 'stay' (default) nothing here changes.
+    const killersFor = (signer: string): number[] => {
+      const own = killers.get(signer) ?? [];
+      const up = this.adopted === 'cascade' ? introducer.get(signer) : undefined;
+      return up ? [...own, ...killersFor(up)] : own;
+    };
+    const markRemoved = (t: string): void => {
+      removed.add(t);
+      if (this.adopted !== 'cascade') return;
+      for (let again = true; again;) {
+        again = false;
+        for (const [d, up] of introducer) if (removed.has(up) && !removed.has(d)) { removed.add(d); again = true; }
+      }
+    };
     for (let p = 0; p < n; p++) {
       const e = order[p];
       const idHex = toHex(e.id);
@@ -499,7 +585,7 @@ export class RosterVerifier implements VerifiedRoster {
         const ip = admitted.get(signer);
         if (ip === undefined || !inClosure(p, ip)) { isVoid = true; why = 'no-intro'; } // no effective introduction among its ancestors
         else if (GATED.has(e.kind)) {
-          for (const q of killers.get(signer) ?? []) {
+          for (const q of killersFor(signer)) {
             if (q === p || inClosure(q, p)) continue; // made before the removal and seen by it: it stands
             if (inClosure(p, q)) { knew = true; isVoid = true; why = 'knew-removal'; break; } // it knew it was removed
             concurrent = true;
@@ -518,7 +604,13 @@ export class RosterVerifier implements VerifiedRoster {
           const info = readAdd(e.body);
           const id = toHex(deviceIdFor(info.signKey));
           if (p > 0 && admitted.has(id)) { isVoid = true; why = 'duplicate-add'; } // a key can never be overwritten
+          // WHY (third review, serious 2): at most MAX_SET_DEVICES active devices (one constant, app and relay) and at most MAX_ADMISSIONS_PER_SIGNER
+          // admissions per signer, both decided in canonical order so every device agrees. A hostile member can therefore never make the set
+          // too big for a new secret to be sealed and read (the old "more than 64 ghosts stops key renewal for everyone").
+          else if (p > 0 && (admissions.get(signer) ?? 0) >= MAX_ADMISSIONS_PER_SIGNER) { isVoid = true; why = 'admission-quota'; }
+          else if (p > 0 && !lenient && devices.size - removed.size >= MAX_SET_DEVICES) { isVoid = true; why = 'set-full'; }
           else {
+            if (p > 0) { admissions.set(signer, (admissions.get(signer) ?? 0) + 1); introducer.set(id, signer); }
             admitted.set(id, p);
             devices.set(id, { ...info, deviceId: deviceIdFor(info.signKey) });
             if (p === 0) { setId = setIdFor(info.signKey); confirmed.add(id); }
@@ -530,7 +622,7 @@ export class RosterVerifier implements VerifiedRoster {
           const target = targetOf(p);
           if (!devices.has(target)) { isVoid = true; why = 'unknown-target'; } // names a device nobody introduced
           else if (eff.has(p)) {
-            removed.add(target);
+            markRemoved(target);
             removalsOf.set(target, [...(removalsOf.get(target) ?? []), p]);
           }
         }
@@ -548,9 +640,9 @@ export class RosterVerifier implements VerifiedRoster {
  * Verify a roster log given in any causal order (each entry after the entries it cites). Throws MeshCryptoError('bad-roster'|'bad-entry'|
  * 'malformed'|'low-order-point').
  */
-export function verifyRosterLog(entries: readonly SignedEntry[], mutual: MutualRule = DEFAULT_MUTUAL_RULE): RosterVerifier {
+export function verifyRosterLog(entries: readonly SignedEntry[], mutual: MutualRule = DEFAULT_MUTUAL_RULE, adopted: AdoptedRule = DEFAULT_ADOPTED_RULE): RosterVerifier {
   if (entries.length === 0 || entries.length > MAX_ROSTER_ENTRIES) throw new MeshCryptoError('bad-roster', 'size');
-  const v = new RosterVerifier(mutual);
+  const v = new RosterVerifier(mutual, adopted);
   for (const e of entries) v.add(e);
   return v;
 }

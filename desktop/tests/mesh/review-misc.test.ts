@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer } from 'ws';
 import type { AddressInfo } from 'net';
 import { generateIdentity, setIdFor } from '../../src/main/mesh/crypto/identity';
-import { makeAddEntry, makeGenesisEntry, makeRenameEntry, type SignedEntry } from '../../src/main/mesh/crypto/roster';
-import { MeshRosterCorrupt, MeshRosterRejected, REMOTE_ENTRIES_PER_HOUR, RosterStore } from '../../src/main/mesh/roster-store';
+import { makeAddEntry, makeGenesisEntry, makeRemoveEntry, makeRenameEntry, type SignedEntry } from '../../src/main/mesh/crypto/roster';
+import { MeshRosterCorrupt, MeshRosterRejected, REMOTE_OWN_ENTRIES_PER_HOUR, RosterStore } from '../../src/main/mesh/roster-store';
 import { RelayClient, assertSafeRelayUrl, MAX_FETCH_FRAMES } from '../../src/main/mesh/relay-client';
 import { MeetingClient } from '../../src/main/mesh/meeting-client';
 import { packMessage, unpackMessage } from '../../src/shared/mesh-protocol';
@@ -72,24 +72,26 @@ describe('limits on entries that arrive from the network', () => {
     // 100 forged entries that name A, delivered by D: they fail the signature check and are not counted against anyone
     for (let i = 0; i < 100; i++) await s.append({ ...g, id: Buffer.alloc(32, i + 1), device: A.deviceId, seen: [g.id], signature: Buffer.alloc(64, 1) } as SignedEntry, { remote: true, from: 'dd-junk' }).catch(() => undefined);
     expect(s.flagged.has('dd-junk')).toBe(false);
-    // real entries (each citing the introductions, so a refused one never strands the next) from two members, 605 in all, all handed over by ONE deliverer: the last 5 are refused and only the deliverer is flagged
-    const log: SignedEntry[] = [];
-    let pa = addB, pb = addB;
-    for (let i = 0; i < 300; i++) { pa = makeRenameEntry(A, 'a' + i, [g.id, addB.id], 3 + i); log.push(pa); }
-    for (let i = 0; i < 305; i++) { pb = makeRenameEntry(B, 'b' + i, [addB.id], 3 + i); log.push(pb); }
+    // WHY changed (third review, finding 5): the allowance now counts only entries the DELIVERER signed itself, never removals, and it is a rolling hour:
+    // a catch-up that relays someone else's entries costs the helper nothing, and a refused member is heard again when the hour has passed.
+    const mk = (who: typeof A, n: number, tag: string): SignedEntry[] => { const out: SignedEntry[] = []; for (let i = 0; i < n; i++) out.push(makeRenameEntry(who, tag + i, [g.id, addB.id], 3 + i)); return out; };
+    // B hands over 200 entries that B signed itself (more than the 120 an hour allows): the surplus is refused, only B is limited
     let rejected = 0;
-    for (const e of log) {
-      try { await s.append(e, { remote: true, from: 'dd' }); } catch (err) { if (err instanceof MeshRosterRejected) rejected++; else throw err; }
+    for (const e of mk(B, 200, 'b')) {
+      try { await s.append(e, { remote: true, from: B.deviceId.toString('hex') }); } catch (err) { if (err instanceof MeshRosterRejected) rejected++; else throw err; }
     }
-    expect(rejected).toBe(5);
-    expect(s.flagged.has('dd')).toBe(true);
+    expect(rejected).toBe(200 - REMOTE_OWN_ENTRIES_PER_HOUR);
+    expect(s.flagged.has(B.deviceId.toString('hex'))).toBe(true);
     expect(s.flagged.has(A.deviceId.toString('hex'))).toBe(false);
-    expect(s.flagged.has(B.deviceId.toString('hex'))).toBe(false);
-    // the same entries still arrive from another member (and, by anti-entropy, are not lost)
+    // a removal is never refused for rate, and entries RELAYED by B (signed by A) cost B nothing
+    expect(await s.append(makeRemoveEntry(B, A.deviceId, [g.id, addB.id], 5), { remote: true, from: B.deviceId.toString('hex') })).toBe('appended');
+    expect(await s.append(makeRenameEntry(A, 'relayed', [g.id, addB.id], 999), { remote: true, from: B.deviceId.toString('hex') })).toBe('appended');
+    // after the hour B is heard again, with no restart
     t += 3_700_000;
-    await expect(s.append(makeRenameEntry(A, 'later', [g.id, addB.id], 999), { remote: true, from: 'dd' })).rejects.toMatchObject({ why: 'flagged' });
-    expect(await s.append(makeRenameEntry(A, 'later', [g.id, addB.id], 999), { remote: true, from: 'other' })).toBe('appended');
+    expect(await s.append(makeRenameEntry(B, 'later', [g.id, addB.id], 998), { remote: true, from: B.deviceId.toString('hex') })).toBe('appended');
+    expect(s.flagged.has(B.deviceId.toString('hex'))).toBe(false);
   });
+
   it('removedIds, signKeyFor and activeDevices stay correct without rebuilding from the log (and the removed device\'s key is refused)', async () => {
     const d = tmp();
     const s = new RosterStore(d);

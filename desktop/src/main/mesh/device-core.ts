@@ -30,11 +30,27 @@ import { KIND_HEADS, KIND_NEED, KIND_REMOVAL, KIND_ROSTER, headsBody, needBody, 
 export interface GenHeld { stmt: GenStatement | null; secret: Buffer }
 export interface Bundle { entries: SignedEntry[]; stmt: Buffer; sealed: Map<string, Buffer> }
 /** A frame this device wants sent to the roster group (`to`: just that device). The link seals it. */
-export interface Out { kind: string; body: CborValue; to?: Buffer }
+export interface Out {
+  kind: string;
+  body: CborValue;
+  to?: Buffer;
+  /** Must be readable by a device that has been (or is being) removed: sealed under the oldest secret. Only removal bundles, removal entries and the
+   *  removal-proof answers to a removed device are wide; everything else is sealed under the secret made for the removals this device knows of, so a
+   *  removed device cannot read it (third review, finding 7). */
+  wide?: true;
+}
 export type BundleVerdict = 'accepted' | 'noop' | 'wait' | `reject:${string}`;
 
 const MAX_PARKED_PER_SENDER = 128;
 const MAX_PARKED_TOTAL = 1024;
+// WHY these numbers (third review, "heads amplification"): a 14-byte `heads` frame used to make a device send 55-100 KiB back with no limit, and forty of
+// them filled the roster group's quota at the relay. Now each PEER may cost this device at most REPLY_ENTRIES entries and REPLY_FRAMES answer frames per
+// REPLY_WINDOW_MS, whatever it sends, and no single answer carries more than REPLY_ENTRIES_PER_FRAME entries. A long honest catch-up simply takes a few windows.
+const REPLY_WINDOW_MS = 30_000;
+const REPLY_ENTRIES = 512;
+const REPLY_FRAMES = 16;
+const REPLY_ENTRIES_PER_FRAME = 128;
+const REPLY_BUNDLES = 32;
 const MAX_STALE_PER_MINTER = 8;
 const MAX_HELD = 256;
 const MAX_REPLY_ENTRIES = 512;
@@ -61,6 +77,9 @@ export class DeviceCore {
   readonly firstSeen = new Map<string, number>();
   /** Counts for status/tests. */
   readonly counts: Record<string, number> = {};
+  /** The last `now` this core was given (its only clock): onMessage uses it for the reply budget. */
+  private clock = 0;
+  private readonly replies = new Map<string, { t0: number; entries: number; frames: number; bundles: number }>();
   constructor(readonly o: { identity: DeviceIdentity; setId: Buffer; roster: RosterStore; book: GenBook; takeoverMs: number }) {}
   private count(k: string): void {
     this.counts[k] = (this.counts[k] ?? 0) + 1;
@@ -101,9 +120,19 @@ export class DeviceCore {
     const k = toHex(e.id);
     if (this.parked.has(k)) return;
     // WHY per sender and never evicting another's (review N4): a member can only fill its own allowance.
-    let mine = 0;
-    for (const p of this.parked.values()) if (p.from === from) mine++;
-    if (mine >= MAX_PARKED_PER_SENDER || this.parked.size >= MAX_PARKED_TOTAL) { this.count('park-refused'); return; }
+    // CAP INVARIANT (roster.ts): the allowance is per delivering member and a member over it loses only its own. When the TOTAL is full, the member holding
+    // the MOST loses its oldest (or, if that is the one delivering now, the new entry is dropped): a member with a small share is never the victim.
+    const counts = new Map<string, number>();
+    for (const p of this.parked.values()) counts.set(p.from, (counts.get(p.from) ?? 0) + 1);
+    if ((counts.get(from) ?? 0) >= MAX_PARKED_PER_SENDER) { this.count('park-refused'); return; }
+    if (this.parked.size >= MAX_PARKED_TOTAL) {
+      let top = from;
+      let topN = counts.get(from) ?? 0;
+      for (const [who, n] of counts) if (n > topN) { top = who; topN = n; }
+      if (top === from) { this.count('park-refused'); return; }
+      for (const [id, p] of this.parked) if (p.from === top) { this.parked.delete(id); break; }
+      this.count('park-evicted-largest');
+    }
     this.parked.set(k, { entry: e, from });
   }
   /** Ids of entries some parked entry cites that we hold neither as entry nor parked: ask for these. */
@@ -308,9 +337,10 @@ export class DeviceCore {
    * Handle one verified frame of the roster group from member `from`. Returns the frames to send in answer and whether the frame must
    * wait ('wait': it rests on roster entries not held yet) or is refused ('reject'). The same code the service runs.
    */
-  async onMessage(kind: string, body: unknown, from: Buffer): Promise<{ out: Out[]; wait?: true; reject?: string; changed: boolean }> {
+  async onMessage(kind: string, body: unknown, from: Buffer, now?: number): Promise<{ out: Out[]; wait?: true; reject?: string; changed: boolean }> {
     const out: Out[] = [];
     const fromHex = toHex(from);
+    if (now !== undefined) this.clock = now;
     // Entries are signed one by one, so roster entries are taken from ANY known device, a removed one included (otherwise two devices that
     // removed each other at the same moment would never learn of each other's removal), and so are the requests for entries that ask for
     // nothing secret (heads, need: they let a removed device learn that it was removed); a generation bundle only from an active member.
@@ -334,21 +364,79 @@ export class DeviceCore {
     } else if (kind === KIND_HEADS) {
       const hb = parseHeadsBody(body);
       const { want, send } = this.onPeerHeads(hb.heads);
-      // a current secret this member lacks (a bundle that never reached it): re-seal it, same secret, to that member
-      for (const b of this.answerGenNeed(this.currentLabels().filter((l) => !hb.gens.includes(l)), fromHex)) out.push({ kind: KIND_REMOVAL, body: removalBody(b), to: from });
-      if (send.length) out.push({ kind: KIND_ROSTER, body: rosterBody(send.slice(0, 256)), to: from });
-      if (want.length) out.push({ kind: KIND_NEED, body: needBody(want), to: from });
+      // a removed asker, or one that does not yet hold our current secret (it is BEHIND: it has not heard of the removal, and the removal bundle cannot be
+      // accepted without the entries it rests on), is told only what proves the removals, sealed under the first secret every member holds
+      const removedAsker = this.o.roster.isRemoved(from) || this.behind(fromHex);
+      // a current secret this member lacks (a bundle that never reached it): re-seal it, same secret, to that member (never to a removed one: answerGenNeed refuses)
+      for (const b of this.answerGenNeed(this.currentLabels().filter((l) => !hb.gens.includes(l)), fromHex)) if (this.spendBundle(fromHex)) out.push({ kind: KIND_REMOVAL, body: removalBody(b), to: from, wide: true });
+      const ents = removedAsker ? this.removalProof(send) : send;
+      const n = this.spend(fromHex, Math.min(ents.length, REPLY_ENTRIES_PER_FRAME), 1);
+      if (ents.length && n > 0) out.push({ kind: KIND_ROSTER, body: rosterBody(ents.slice(0, n)), to: from, ...(removedAsker ? { wide: true as const } : {}) });
+      else if (ents.length) this.count('reply-throttled');
+      if (want.length) out.push({ kind: KIND_NEED, body: needBody(want), to: from, ...(removedAsker ? { wide: true as const } : {}) });
     } else if (kind === KIND_NEED) {
       const n = parseNeedBody(body);
-      const ents = this.answerNeed(n.want);
-      if (ents.length) out.push({ kind: KIND_ROSTER, body: rosterBody(ents.slice(0, 256)), to: from });
-      for (const b of this.answerGenNeed(n.gens, fromHex)) out.push({ kind: KIND_REMOVAL, body: removalBody(b), to: from });
+      const removedAsker = this.o.roster.isRemoved(from) || this.behind(fromHex);
+      const all = this.answerNeed(n.want);
+      const ents = removedAsker ? this.removalProof(all) : all;
+      const k = this.spend(fromHex, Math.min(ents.length, REPLY_ENTRIES_PER_FRAME), 1);
+      if (ents.length && k > 0) out.push({ kind: KIND_ROSTER, body: rosterBody(ents.slice(0, k)), to: from, ...(removedAsker ? { wide: true as const } : {}) });
+      else if (ents.length) this.count('reply-throttled');
+      for (const b of this.answerGenNeed(n.gens, fromHex)) if (this.spendBundle(fromHex)) out.push({ kind: KIND_REMOVAL, body: removalBody(b), to: from, wide: true });
     }
     return { out, changed };
+  }
+  /** Charge one peer's reply budget: returns how many of `entries` it may be sent now (0 when the window is used up), and counts `frames` frames.
+   *  WHY here and not at the link: the amplification is a DEVICE decision (what to send back), so the limit lives with it, per asking peer. */
+  /** Re-sealed bundles are small but each costs a seal: a peer gets at most REPLY_BUNDLES per window. */
+  private spendBundle(peer: string): boolean {
+    this.spend(peer, 0, 0);
+    const b = this.replies.get(peer) as { bundles: number };
+    if (b.bundles >= REPLY_BUNDLES) return false;
+    b.bundles++;
+    return true;
+  }
+  private spend(peer: string, entries: number, frames: number): number {
+    let b = this.replies.get(peer);
+    if (!b || this.clock - b.t0 >= REPLY_WINDOW_MS) { b = { t0: this.clock, entries: 0, frames: 0, bundles: 0 }; this.replies.set(peer, b); }
+    if (this.replies.size > 256) for (const [k, v] of this.replies) if (this.clock - v.t0 >= REPLY_WINDOW_MS) this.replies.delete(k);
+    if (b.frames + frames > REPLY_FRAMES) return 0;
+    const grant = Math.min(entries, REPLY_ENTRIES - b.entries);
+    if (entries > 0 && grant <= 0) return 0;
+    b.entries += grant;
+    b.frames += frames;
+    return entries === 0 ? 1 : grant;
+  }
+  /** True when a member does not (as far as we know) hold the secret made for the removals we know of: it has not caught up with them yet.
+   *  WHY (third review, finding 7): control frames now use the secret that excludes removed devices, so a device that is behind cannot read them, and
+   *  the removal bundle that would catch it up needs entries that only such frames carry. Such a member is answered under the first secret, with the proof only. */
+  private behind(peerHex: string): boolean {
+    if (this.o.roster.removedIds().size === 0 && this.o.roster.excludedIds().size === 0) return false;
+    const cur = this.currentLabel();
+    if (cur === null) return true; // we know of removals and hold no secret that excludes them yet: nobody can be given more than the proof
+    const h = this.o.book.held.get(cur);
+    if (!h?.stmt) return false;
+    return !h.stmt.members.some((m) => toHex(m) === peerHex) && !(this.o.book.sealedTo.get(cur)?.has(peerHex) ?? false);
+  }
+  /** What a removed or behind device may still be told: only the entries that prove the removals (each removal and everything before it), so it learns
+   *  it is out (or catches up) and learns nothing about what happened afterwards. */
+  private removalProof(entries: SignedEntry[]): SignedEntry[] {
+    const allowed = new Set<string>();
+    const stack: string[] = [];
+    for (const t of this.o.roster.excludedIds()) stack.push(...this.o.roster.removalIdsOf(t));
+    while (stack.length) {
+      const k = stack.pop() as string;
+      if (allowed.has(k)) continue;
+      allowed.add(k);
+      const e = this.o.roster.entryById(Buffer.from(k, 'hex'));
+      if (e) for (const x of e.seen) stack.push(toHex(x));
+    }
+    return entries.filter((e) => allowed.has(toHex(e.id)));
   }
   /** Run after any change and now and then: say hello once, make or re-seal secrets when it is our turn, ask for missing entries, and (when
    *  `announce`) say which roster entries we hold. `nextAt` is when to look again for a turn that has not come yet. */
   async tick(now: number, announce: boolean): Promise<{ out: Out[]; nextAt: number | null }> {
+    this.clock = now;
     const out: Out[] = [];
     // A device that sees itself removed makes no secrets and says no hello, but still asks for the entries it is missing and announces what it
     // holds: the removal it sees may turn out to have no effect, and it must be able to find that out.
@@ -356,7 +444,7 @@ export class DeviceCore {
     const hello = quiet ? null : await this.ensureHello(now);
     if (hello) out.push({ kind: KIND_ROSTER, body: rosterBody([hello]) });
     const plan = quiet ? { bundles: [], nextAt: null } : this.plan(now);
-    for (const b of plan.bundles) if (b.sealed.size > 0) out.push({ kind: KIND_REMOVAL, body: removalBody(b) });
+    for (const b of plan.bundles) if (b.sealed.size > 0) out.push({ kind: KIND_REMOVAL, body: removalBody(b), wide: true });
     if (announce) out.push({ kind: KIND_HEADS, body: headsBody(this.heads(), this.currentLabels()) });
     const wanted = this.wanted();
     if (wanted.length && (announce || wanted.length !== this.wantedSent)) out.push({ kind: KIND_NEED, body: needBody(wanted) });

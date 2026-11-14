@@ -225,7 +225,9 @@ export class MeshService {
       // WHY (review N3, N12): notes are sealed only under the secret made for exactly the removals this device knows of, and not at all
       // until one is held. Control traffic (roster entries, bundles, heads, requests) uses the FIRST secret, which every device ever paired holds,
       // so it is always readable, including by a device that has just been removed by another (mutual removals must still exchange entries).
-      sealLabel: (group) => (group === GROUP_ROSTER ? (this.#core?.oldestLabel() ?? null) : (this.#core?.currentLabel() ?? null)),
+      // Third review, finding 7: only `wide` frames (removal bundles, removal entries, the removal-proof answer to a removed device) use the first secret that
+      // removed devices still hold; every other control frame uses the secret made for the removals this device knows of, which excludes them.
+      sealLabel: (group, _kind, wide) => (group === GROUP_ROSTER && wide ? (this.#core?.oldestLabel() ?? null) : (this.#core?.currentLabel() ?? null)),
       signKeyFor: (d) => this.roster.knownSignKeyFor(d),
       isRemoved: (d) => this.roster.isRemoved(d),
       now: this.o.now,
@@ -271,7 +273,8 @@ export class MeshService {
     return p;
   }
   private emit(out: Out[]): void {
-    for (const o of out) void this.#link?.sendDurable({ group: GROUP_ROSTER, kind: o.kind, body: o.body, to: o.to }).catch(() => undefined);
+    // optional: a frame that needs the current secret when none is held yet is dropped, not queued (it would block the bundle that creates that secret); heads and requests repeat
+    for (const o of out) void this.#link?.sendDurable({ group: GROUP_ROSTER, kind: o.kind, body: o.body, to: o.to, wide: o.wide === true, optional: o.wide !== true }).catch(() => undefined);
   }
   private async persistBook(): Promise<void> {
     if (!this.#book.dirty) return;
@@ -297,7 +300,7 @@ export class MeshService {
       }
       return; // any other kind is ignored: this layer does not know it
     }
-    const r = await core.onMessage(f.header.kind, f.body, f.header.from);
+    const r = await core.onMessage(f.header.kind, f.body, f.header.from, this.now());
     this.mirrorCounts();
     // WHY the secrets are saved BEFORE this handler returns: the link saves its read position right after, and a secret received in this
     // frame that was not yet on disk would be lost by a kill in between (nobody would send it again).
@@ -614,7 +617,9 @@ export class MeshService {
 
   private async publishRoster(entries: SignedEntry[]): Promise<void> {
     if (!this.#link) return;
-    await this.#link.sendDurable({ group: GROUP_ROSTER, kind: KIND_ROSTER, body: rosterBody(entries) });
+    // a frame carrying a removal is wide: a removed device (and the other half of a mutual removal) must be able to read it
+    const wide = entries.some((e) => e.kind === 'remove');
+    await this.#link.sendDurable({ group: GROUP_ROSTER, kind: KIND_ROSTER, body: rosterBody(entries), wide, optional: !wide });
   }
 
   /** Test mode only: send a note to every device in the set. */

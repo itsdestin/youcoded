@@ -39,9 +39,9 @@ export class MemoryCarrier implements Carrier {
     this.hub.stored.push(Buffer.from(frame));
     return 'stored';
   }
-  async fetchAfter(group: string, seq: number): Promise<{ frames: Array<{ seq: number; bytes: Buffer }>; more: boolean }> {
+  async fetchAfter(group: string, seq: number): Promise<{ frames: Array<{ seq: number; bytes: Buffer; writer: string }>; more: boolean }> {
     if (!this.online) throw new Error('offline');
-    return { frames: (this.hub.groups.get(group) ?? []).filter((f) => f.seq > seq).map((f) => ({ seq: f.seq, bytes: Buffer.from(f.bytes) })), more: false };
+    return { frames: (this.hub.groups.get(group) ?? []).filter((f) => f.seq > seq).map((f) => ({ seq: f.seq, bytes: Buffer.from(f.bytes), writer: f.from })), more: false };
   }
   async received(group: string, seq: number): Promise<void> {
     this.receivedThrough.set(group, seq);

@@ -66,9 +66,11 @@ export interface RelayClientOptions {
 
 export interface HoldArgs { group: string; session: string; n: number; frame: Uint8Array; line?: boolean }
 export type HoldResult = { op: 'stored'; seq: number; fill: string } | { op: 'duplicate' } | { op: 'over-limit'; why: string } | { op: 'refused'; reason: string };
-export interface FetchResult { frames: Array<{ seq: number; bytes: Buffer }>; more: boolean; last?: number; gap?: { through: number }; empty?: boolean }
+/** `writer`: the device the RELAY says wrote the frame (stamped from the writer's authenticated connection), or null (old relay / old row). Never taken from the frame itself. */
+export interface FetchedFrame { seq: number; bytes: Buffer; writer?: string | null }
+export interface FetchResult { frames: FetchedFrame[]; more: boolean; last?: number; gap?: { through: number }; empty?: boolean }
 
-interface Pending { resolve: (m: { header: Record<string, unknown>; payload: Uint8Array }) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; frames?: Array<{ seq: number; bytes: Buffer }>; bytes?: number }
+interface Pending { resolve: (m: { header: Record<string, unknown>; payload: Uint8Array }) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; frames?: FetchedFrame[]; bytes?: number }
 
 const toArrayBuffer = (b: Buffer): ArrayBuffer => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
 
@@ -221,7 +223,7 @@ export class RelayClient extends EventEmitter {
           try { this.#ws?.terminate(); } catch { /* gone */ }
           return;
         }
-        p.frames.push({ seq: h.seq as number, bytes: Buffer.from(m.payload) });
+        p.frames.push({ seq: h.seq as number, bytes: Buffer.from(m.payload), writer: typeof h.w === 'string' && /^[0-9a-f]{32}$/.test(h.w) ? h.w : null });
         return;
       }
       clearTimeout(p.timer);
@@ -249,7 +251,7 @@ export class RelayClient extends EventEmitter {
     }
   }
 
-  private request(header: Record<string, unknown>, payload?: Uint8Array, collectFrames = false): Promise<{ header: Record<string, unknown>; payload: Uint8Array; frames?: Array<{ seq: number; bytes: Buffer }> }> {
+  private request(header: Record<string, unknown>, payload?: Uint8Array, collectFrames = false): Promise<{ header: Record<string, unknown>; payload: Uint8Array; frames?: FetchedFrame[] }> {
     if (this.#state !== 'ready') return Promise.reject(new Error('not-connected'));
     const id = `r${++this.#seq}`;
     return new Promise((resolve, reject) => {

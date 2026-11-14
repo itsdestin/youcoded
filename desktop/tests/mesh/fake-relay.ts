@@ -142,7 +142,7 @@ export class FakeRelay {
         this.holds.push({ g: h.g, line: h.line === true });
         const list = room.groups.get(h.g) ?? [];
         const seq = list.length + 1;
-        list.push({ seq, bytes: payload });
+        list.push({ seq, bytes: payload, w: c.dev });
         room.groups.set(h.g, list);
         this.stored.push(payload);
         for (const o of this.conns) if (o !== c && o.dev && o.room === c.room) this.send(o, { op: 'doorbell', g: h.g, seq });
@@ -150,7 +150,7 @@ export class FakeRelay {
       }
       case 'fetch-after': {
         const list = (room.groups.get(h.g) ?? []).filter((f) => f.seq > h.seq);
-        for (const f of list) this.send(c, { op: 'frame', ...id, g: h.g, seq: f.seq }, f.bytes);
+        for (const f of list) this.send(c, { op: 'frame', ...id, g: h.g, seq: f.seq, w: f.w ?? null }, f.bytes);
         return this.send(c, { op: 'frames-end', ...id, g: h.g, more: false, last: list.at(-1)?.seq ?? h.seq, empty: list.length === 0 });
       }
       case 'received': return this.send(c, { op: 'ok', ...id });

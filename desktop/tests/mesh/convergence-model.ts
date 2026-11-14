@@ -173,7 +173,8 @@ class Sim {
     const id = this.ident();
     const e = makeAddEntry(host.id, { name, platform: 'linux', signKey: id.signKey, agreeKey: id.agreeKey }, seenForNextEntry(host.roster.entries, host.id.deviceId), this.now);
     this.trace.push(`add ${host.name} -> ${name}`);
-    await host.roster.append(e);
+    // WHY (third review): a device may admit at most MAX_ADMISSIONS_PER_SIGNER devices and a set holds at most MAX_SET_DEVICES; the service refuses beyond that, so the model does too
+    try { await host.roster.append(e); } catch { return null; }
     host.created.push(e);
     this.allEntries.set(toHex(e.id), e);
     const d = await this.newDev(name, true, false, id);
@@ -455,7 +456,7 @@ export async function runSchedule(o: RunOptions): Promise<RunResult> {
   } else if (scenario === 'n7' && H && a) {
     const id = sim.ident();
     const e = makeAddEntry(H.id, { name: 'ghost', platform: 'linux', signKey: id.signKey, agreeKey: id.agreeKey }, seenForNextEntry(H.roster.entries, H.id.deviceId), sim.now);
-    await H.roster.append(e);
+    try { await H.roster.append(e); } catch { return; }
     const gh = await sim.newDev('ghost', false, true, id);
     sim.n7Ghost = gh.hex;
     sim.n7Add = e;

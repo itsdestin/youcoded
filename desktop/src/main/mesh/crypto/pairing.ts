@@ -435,6 +435,14 @@ export class Existing {
       // WHY heads only: `seen` cites this device's own latest entry plus the current heads, never every id,
       // so the entry stays small however long the roster is (it used to break past 1024 entries).
       const add = makeAddEntry(this.#id, { name: p.name, platform: p.platform, signKey: p.signKey, agreeKey: p.agreeKey }, seenForNextEntry(this.#state.roster, this.#id.deviceId), this.#now());
+      // WHY (third review, serious 2): an add the roster would void (set full at MAX_SET_DEVICES, this device already admitted its MAX_ADMISSIONS_PER_SIGNER,
+      // too many keys) must not be handed to a new device as if it had worked. verifyRosterLog throws for the arrival limits and marks the rest void.
+      let probe: ReturnType<typeof verifyRosterLog> | null = null;
+      try { probe = verifyRosterLog([...this.#state.roster, add]); } catch (e) {
+        // only the limits matter here; any other fault in this device's own roster is what N's own checks are for
+        if (e instanceof MeshCryptoError && /admission quota|too many device keys/.test(e.message)) throw e;
+      }
+      if (probe?.facts.get(toHex(add.id))?.void) throw new MeshCryptoError('bad-roster', 'set full or admission limit reached');
       const secrets: { [gen: string]: CborValue } = {};
       for (const [g, S] of this.#state.secrets) secrets[String(g)] = sealSecretTo(p.agreeKey, this.#state.setId, g, S, this.#id.deviceId, devId);
       const welcome = {

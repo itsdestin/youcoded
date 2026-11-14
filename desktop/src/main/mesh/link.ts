@@ -51,7 +51,7 @@ export interface Carrier {
   /** `line` marks a chat line (the relay keeps those 30 days and may release them under pressure); omitted means control data
    *  (roster, removal bundles), which the relay holds until every device acknowledged it (review finding 5). */
   hold(group: string, session: string, n: number, frame: Uint8Array, line?: boolean): Promise<'stored' | 'duplicate'>;
-  fetchAfter(group: string, seq: number): Promise<{ frames: Array<{ seq: number; bytes: Buffer }>; more: boolean; gap?: { through: number } }>;
+  fetchAfter(group: string, seq: number): Promise<{ frames: Array<{ seq: number; bytes: Buffer; writer?: string | null }>; more: boolean; gap?: { through: number } }>;
   /** "I have handled everything in `group` through `seq`." Best effort. */
   received(group: string, seq: number): Promise<void>;
   /** Live doorbell to the other devices: "there is something new in `group`". Never stored. */
@@ -106,7 +106,7 @@ export interface LinkOptions {
   secrets: () => Map<number, Buffer>;
   /** Which generation label a new frame of this kind is sealed under; null = none is usable yet (nothing is sealed, the frame waits).
    *  Omitted: the highest label held. WHY (review N3, N12): the service names the secret made for exactly the removals it knows. */
-  sealLabel?: (group: string, kind: string) => number | null;
+  sealLabel?: (group: string, kind: string, wide?: boolean) => number | null;
   signKeyFor: (deviceId: Buffer) => Buffer | undefined;
   counter: CounterStore;
   onFrame: (f: LinkFrame) => void | Promise<void>;
@@ -118,12 +118,12 @@ export interface LinkOptions {
 }
 
 type Waiting =
-  | { kind: 'wire'; group: string; seq: number; since: number; wire: Buffer }
+  | { kind: 'wire'; group: string; seq: number; since: number; wire: Buffer; writer: string | null }
   | { kind: 'opened'; group: string; seq: number; since: number; fkind: string; from: Buffer; counter: number; body: CborValue };
 const waitingBytes = (w: Waiting): number => (w.kind === 'wire' ? w.wire.length : encode(w.body).length + 64);
 
 class NoSecretYet extends Error {}
-interface Outgoing { group: string; kind: string; body: CborValue; to?: Buffer; line?: boolean; resolve: (r: { counter: number }) => void; reject: (e: Error) => void; sealed?: { wire: Buffer; counter: number } }
+interface Outgoing { group: string; kind: string; body: CborValue; to?: Buffer; line?: boolean; wide?: boolean; optional?: boolean; resolve: (r: { counter: number }) => void; reject: (e: Error) => void; sealed?: { wire: Buffer; counter: number } }
 
 const WAITABLE = new Set(['unknown-signer', 'unknown-generation']);
 // Normal traffic, not an attack: repeats, and frames addressed to another device.
@@ -186,7 +186,7 @@ export class Link {
   }
 
   // ---------------------------------------------------------------- sending
-  sendDurable(a: { group: string; kind: string; body: CborValue; to?: Buffer; line?: boolean }): Promise<{ counter: number }> {
+  sendDurable(a: { group: string; kind: string; body: CborValue; to?: Buffer; line?: boolean; wide?: boolean; optional?: boolean }): Promise<{ counter: number }> {
     return new Promise((resolve, reject) => {
       this.#outbox.push({ ...a, resolve, reject });
       void this.flush();
@@ -198,7 +198,7 @@ export class Link {
   }
   private currentGen(head?: Outgoing): number {
     if (this.#o.sealLabel && head) {
-      const l = this.#o.sealLabel(head.group, head.kind);
+      const l = this.#o.sealLabel(head.group, head.kind, head.wide === true);
       if (l === null) throw new NoSecretYet();
       if (!this.#o.secrets().has(l)) throw new NoSecretYet();
       return l;
@@ -227,7 +227,11 @@ export class Link {
           this.#outbox.shift();
           head.resolve({ counter: head.sealed.counter });
         } catch (e) {
-          if (e instanceof NoSecretYet) return; // no usable secret yet: kick() resumes when one arrives
+          if (e instanceof NoSecretYet) {
+            // an OPTIONAL frame (a repeatable control frame) is dropped instead of blocking everything behind it; the rest wait for kick()
+            if (head.optional) { this.#outbox.shift(); head.reject(new Error('no-usable-secret')); continue; }
+            return; // no usable secret yet: kick() resumes when one arrives
+          }
           if (e instanceof MeshCryptoError) { this.#outbox.shift(); head.reject(e); continue; } // cannot seal: not retryable
           this.log('send-retry'); // carrier trouble (offline, timeout): keep the same sealed bytes and try again
           // A reconnect also triggers a flush; the timer covers a hiccup on a connection that stays up.
@@ -309,7 +313,7 @@ export class Link {
       let committed = this.#cursors.get(group) ?? 0;
       let blocked = false;
       for (const f of res.frames) {
-        const verdict = await this.handle(group, f.seq, f.bytes);
+        const verdict = await this.handle(group, f.seq, f.bytes, f.writer ?? null);
         if (verdict === 'blocked') { blocked = true; break; }
         // A frame far past the position that did NOT verify (a lying relay's junk) must not drag even the session position along.
         const far = f.seq - (this.#cursors.get(group) ?? 0) > MAX_POSITION_JUMP;
@@ -355,8 +359,12 @@ export class Link {
     this.log('frame-rejected', { group, reason, from });
     this.#o.onEvent?.('rejected', { group });
   }
+  /** WHY the relay's stamp and not the frame's own header (third review, finding 9): the sender named in an unopened frame is a claim anybody can write, so
+   *  17 junk frames naming a victim pushed the victim's real waiting frames out. The waiting allowance is charged to the device the relay says WROTE the
+   *  frame (it stamped it from that connection's authenticated identity); a frame with no stamp shares one 'unstamped' allowance. An opened frame's
+   *  sender is verified by its signature, so that is used for those. */
   private senderOf(w: Waiting): string {
-    return w.kind === 'wire' ? this.prefixOf(w.wire) : w.from.toString('hex').slice(0, 8);
+    return w.kind === 'wire' ? (w.writer ? w.writer.slice(0, 8) : 'unstamped') : w.from.toString('hex').slice(0, 8);
   }
   private park(w: Waiting): void {
     this.#waiting.push(w);
@@ -431,7 +439,7 @@ export class Link {
       return 'rejected';
     }
   }
-  private async handle(group: string, seq: number, wire: Buffer): Promise<'verified' | 'waited' | 'soft' | 'blocked'> {
+  private async handle(group: string, seq: number, wire: Buffer, writer: string | null): Promise<'verified' | 'waited' | 'soft' | 'blocked'> {
     const key = `${group}:${seq}`;
     const prior = this.#failedOpen.get(key);
     let opened: OpenedFrame;
@@ -439,7 +447,7 @@ export class Link {
     else {
       const out = this.tryOpen(group, seq, wire);
       if (out === 'waiting') {
-        this.park({ kind: 'wire', group, seq, since: this.now(), wire });
+        this.park({ kind: 'wire', group, seq, since: this.now(), wire, writer });
         return 'waited';
       }
       if (out === 'rejected' || out === 'quiet') return 'soft';
@@ -498,7 +506,7 @@ export class Link {
     const cursors: { [g: string]: CborValue } = {};
     for (const [g, c] of this.#cursors) cursors[g] = c;
     const waiting: CborValue[] = this.#waiting.map((w) => (w.kind === 'wire'
-      ? { k: 'w', g: w.group, q: w.seq, t: w.since, b: w.wire }
+      ? { k: 'w', g: w.group, q: w.seq, t: w.since, b: w.wire, ...(w.writer ? { wr: w.writer } : {}) }
       : { k: 'o', g: w.group, q: w.seq, t: w.since, fk: w.fkind, f: w.from, c: w.counter, b: encode(w.body) }));
     const rej: { [k: string]: CborValue } = {};
     for (const [k, n] of this.#rejectCounts) rej[k] = n;
@@ -520,7 +528,7 @@ export class Link {
         for (const raw of asArray(m.waiting, 'waiting', MAX_WAITING)) {
           const w = asMap(raw, 'waiting entry');
           const base = { group: asText(w.g, 'g', 100), seq: asUint(w.q, 'q'), since: asUint(w.t, 't') };
-          if (asText(w.k, 'k', 1) === 'w') this.#waiting.push({ kind: 'wire', ...base, wire: asBytes(w.b, 'wire') });
+          if (asText(w.k, 'k', 1) === 'w') this.#waiting.push({ kind: 'wire', ...base, wire: asBytes(w.b, 'wire'), writer: w.wr === undefined ? null : asText(w.wr, 'wr', 32) });
           else this.#waiting.push({ kind: 'opened', ...base, fkind: asText(w.fk, 'fk', 64), from: asBytes(w.f, 'from', 16), counter: asUint(w.c, 'c'), body: decode(asBytes(w.b, 'body')) });
         }
       }

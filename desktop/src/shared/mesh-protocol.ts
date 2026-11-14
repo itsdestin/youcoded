@@ -37,7 +37,7 @@ export const FETCH_PAGE_BYTES = 4 * 1024 * 1024;
 export const REGISTER_MAX_BYTES = 16 * 1024;
 export const MAX_REGISTERS = 4096;
 export const MAX_GROUPS = 5000;
-export const MAX_DEVICES = 16;
+export const MAX_DEVICES = 16; // THE set-size number (MAX_SET_DEVICES below is the same value under its roster name): change it here only
 
 // ---- Retention classes and per-writer quotas (review 2, N5/N6) ----
 /** Group names whose retention class the relay knows by name: always CONTROL (never released under pressure, never expired by the 30-day line rule,
@@ -139,8 +139,18 @@ export const MEET_MAX_OPEN_PER_ROOM = 16;
 export const MEET_OPENS_PER_ROOM_HOUR = 48;
 
 // ---- Roster statement flood limits (review finding 4). Per signing device, enforced by the relay; the app enforces its own. ----
-/** Statements a device may ever have recorded (add, remove and rename together). */
-export const ROSTER_MAX_PER_SIGNER = 512;
+/** Statements a device may ever have recorded (add, remove and rename together).
+ *  WHY 256 (third review, finding 6): with at most MAX_KNOWN_KEYS signing keys the whole log can never exceed 24 x 256 = 6,144 entries, below
+ *  the 8,128 line where adds and renames stop, so no set of hostile signers can fill the log. */
+export const ROSTER_MAX_PER_SIGNER = 256;
+/** THE set-size limit, one constant for the app's roster and the relay (third review, finding 2). Product decision: the owner may change it.
+ *  The app voids an `add` that would make more active devices than this; the relay refuses it ("too-many-devices"). Key rotation must succeed at
+ *  exactly this many devices, so it must stay well under the 64-device cap of a generation statement. */
+export const MAX_SET_DEVICES = MAX_DEVICES;
+/** Distinct device keys a set may ever name (members, removed devices and ghosts together). Caps how many signers can exist at all. */
+export const MAX_KNOWN_KEYS = 24;
+/** `add` entries one device may sign (held at the app on arrival, effective in the roster; counted by the relay). Charged to the verified signer. */
+export const MAX_ADMISSIONS_PER_SIGNER = 4;
 /** ...and within any rolling hour, by the relay's clock. */
 export const ROSTER_MAX_PER_SIGNER_HOUR = 30;
 /** Largest `seen` list in a statement (the app's MAX_SEEN). */
@@ -210,7 +220,7 @@ export type MeshServerMessage =
   | { op: "duplicate"; id?: string; g: string; n: number }
   | { op: "over-limit"; id?: string; why: "frame" | "group" | "set" | "groups" | "register" | "rate" | "writer"; fill?: MeshFill }
   | { op: "refused"; id?: string; reason: string }
-  | { op: "frame"; id?: string; g: string; seq: number }                                                   // + payload
+  | { op: "frame"; id?: string; g: string; seq: number; w?: string | null }                               // + payload; w = the writer, stamped by the relay from its authenticated connection
   | { op: "frames-end"; id?: string; g: string; more: boolean; last?: number; empty?: boolean }
   | { op: "gap"; id?: string; g: string; through: number }
   | { op: "released"; g: string; throughSeq: number }

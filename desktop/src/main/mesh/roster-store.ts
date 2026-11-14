@@ -17,7 +17,7 @@ import path from 'path';
 import { toHex, sha256, ctEqual, type Bytes } from './crypto/bytes';
 import { MeshCryptoError } from './crypto/errors';
 import { deviceIdFor } from './crypto/identity';
-import { DEFAULT_MUTUAL_RULE, RosterVerifier, type MutualRule, verifyRosterLog, encodeEntry, parseEntry, rosterHeads, type SignedEntry, type VerifiedRoster, type RosterDevice } from './crypto/roster';
+import { DEFAULT_ADOPTED_RULE, DEFAULT_MUTUAL_RULE, RosterVerifier, type AdoptedRule, type MutualRule, verifyRosterLog, encodeEntry, parseEntry, rosterHeads, type SignedEntry, type VerifiedRoster, type RosterDevice } from './crypto/roster';
 import { ensureDir, readFileIfExists, syncDir } from './fs-durable';
 
 export class MeshRosterCorrupt extends Error {
@@ -38,7 +38,7 @@ export class MeshRosterRejected extends Error {
 }
 /** New, signature-checked entries one delivering member may hand over per rolling hour. An honest catch-up is far below this (a device
  *  writes a handful of entries a year); a hostile member is bounded by its own per-device quota of 512 anyway. */
-export const REMOTE_ENTRIES_PER_HOUR = 600;
+export const REMOTE_OWN_ENTRIES_PER_HOUR = 120;
 const HOUR_MS = 3_600_000;
 
 const MAX_RECORD = 1 << 20; // far above any entry; stops a damaged length field from allocating gigabytes
@@ -65,13 +65,15 @@ export class RosterStore {
   repairedTailBytes = 0;
   readonly #memory: boolean;
   /** `opts.memory`: keep everything in memory, touch no file (the convergence fuzz and nothing else: it runs thousands of schedules). */
-  constructor(meshDir: string, private readonly now: () => number = Date.now, opts: { memory?: boolean; mutual?: MutualRule } = {}) {
+  constructor(meshDir: string, private readonly now: () => number = Date.now, opts: { memory?: boolean; mutual?: MutualRule; adopted?: AdoptedRule } = {}) {
     this.file = path.join(meshDir, 'roster.log');
     this.#memory = opts.memory === true;
     this.#mutual = opts.mutual ?? DEFAULT_MUTUAL_RULE;
+    this.#adopted = opts.adopted ?? DEFAULT_ADOPTED_RULE;
     if (this.#memory) this.#opened = true;
   }
   readonly #mutual: MutualRule;
+  readonly #adopted: AdoptedRule;
 
   /** Read and verify the log. Creates nothing when the file is absent. Trims a torn last record. */
   async load(): Promise<void> {
@@ -115,7 +117,7 @@ export class RosterStore {
     }
     if (entries.length > 0) {
       try {
-        this.#v = verifyRosterLog(entries, this.#mutual);
+        this.#v = verifyRosterLog(entries, this.#mutual, this.#adopted);
       } catch (e) {
         if (e instanceof MeshCryptoError) throw new MeshRosterCorrupt('log-invalid');
         throw e;
@@ -235,11 +237,11 @@ export class RosterStore {
       if (this.#ids.has(toHex(entry.id))) return 'duplicate';
       // prepare() checks one entry (its signature against the key of an `add` we hold, its place in the log); commit() adds it to the set
       // after the record is on disk, so memory never gets ahead of the file. A throw leaves both untouched.
-      const v = this.#v ?? new RosterVerifier(this.#mutual);
+      const v = this.#v ?? new RosterVerifier(this.#mutual, this.#adopted);
       const commit = v.prepare(entry);
       // WHY here, after the signature checked (review N2): the allowance belongs to the member that DELIVERED the entry and is spent only by
       // entries that are really signed by a member, so junk naming someone else's id costs that someone nothing.
-      if (opts.remote && opts.from) this.chargeDeliverer(opts.from);
+      if (opts.remote && opts.from) this.chargeDeliverer(opts.from, entry);
       if (!this.#memory) {
         const bytes = frame(entry);
         await ensureDir(path.dirname(this.file));
@@ -266,16 +268,22 @@ export class RosterStore {
     return p;
   }
 
-  private chargeDeliverer(from: string): void {
-    if (this.flagged.has(from)) throw new MeshRosterRejected('flagged', from);
+  /** WHY (third review, finding 5): the allowance used to be spent by every entry a member handed over, relayed ones included, and the flag it set
+   *  was never cleared, so one honest catch-up of 600 entries made a device permanently deaf to the member that helped (until restart).
+   *  Now: (1) only entries the deliverer SIGNED ITSELF are counted (an entry relayed from someone else is bounded by its own signer's quota, charged to
+   *  that signer); (2) a removal is never refused for rate; (3) the allowance is a rolling hour: a refused entry is not counted, so once the hour
+   *  passes the member is heard again and nothing needs a restart. */
+  private chargeDeliverer(from: string, entry: SignedEntry): void {
+    if (entry.kind === 'remove' || toHex(entry.device) !== from) return;
     const t = this.now();
     const list = (this.#arrivals.get(from) ?? []).filter((x) => t - x < HOUR_MS);
-    list.push(t);
     this.#arrivals.set(from, list);
-    if (list.length > REMOTE_ENTRIES_PER_HOUR) {
+    if (list.length >= REMOTE_OWN_ENTRIES_PER_HOUR) {
       this.flagged.add(from);
       throw new MeshRosterRejected('rate', from);
     }
+    this.flagged.delete(from);
+    list.push(t);
   }
 }
 
