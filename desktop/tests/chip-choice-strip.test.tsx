@@ -181,4 +181,44 @@ describe('quick chip over typed words', () => {
     expect(types.filter((t) => t === 'pointerdown').length).toBeLessThanOrEqual(1);
     add.mockRestore();
   });
+
+  // Where click is a plain MouseEvent (older Safari, Firefox) the chip's own pointerdown says how the tap was made.
+  const down = (el: Element, type: string) => { const e = new Event('pointerdown', { bubbles: true, cancelable: true }); Object.defineProperty(e, 'pointerType', { value: type }); act(() => { el.dispatchEvent(e); }); };
+  const plainClick = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); });
+  it('a plain click after a touch pointerdown is a tap: focus stays in the box', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    box.focus();
+    down(chip, 'touch');
+    plainClick(chip);
+    expect(strip()).not.toBeNull();
+    expect(document.activeElement).toBe(box);
+  });
+  it('a plain click after a mouse pointerdown is a mouse click: focus moves to Add to end', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    box.focus();
+    down(chip, 'mouse');
+    plainClick(chip);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add to end' }));
+  });
+  it('a touchstart alone also counts as touch', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    box.focus();
+    act(() => { chip.dispatchEvent(new Event('touchstart', { bubbles: true })); });
+    plainClick(chip);
+    expect(document.activeElement).toBe(box);
+  });
+  it('a keyboard click after an earlier touch is keyboard: each click uses only its own press', async () => {
+    const { box, chip } = await composer();
+    typeWords(box, 'Draft a reply to Maya');
+    box.focus();
+    down(chip, 'touch');
+    plainClick(chip);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    typeWords(box, 'Draft a reply to Maya');
+    plainClick(chip); // no pointerdown before this one
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add to end' }));
+  });
 });

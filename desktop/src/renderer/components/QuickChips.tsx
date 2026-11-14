@@ -15,8 +15,8 @@ export interface QuickChip {
 }
 
 interface Props {
-  /** `ev` is the click itself: the chat reads how it was made (touch, pen, mouse, keyboard) from it. */
-  onChipTap: (chip: QuickChip, ev?: React.MouseEvent) => void;
+  /** `pointerType` says how the tap was made: 'touch' / 'pen' / 'mouse', or '' for the keyboard. */
+  onChipTap: (chip: QuickChip, pointerType?: string) => void;
 }
 
 export default function QuickChips({ onChipTap }: Props) {
@@ -46,6 +46,7 @@ export default function QuickChips({ onChipTap }: Props) {
 
   const android = fingerSized();
   const chipHeight = android ? 'h-8' : 'h-6';
+  const lastDown = useRef<{ type: string; at: number } | null>(null);
 
   return (
     // select-none: quick chips are chrome, not highlightable or copyable
@@ -55,7 +56,17 @@ export default function QuickChips({ onChipTap }: Props) {
         {displayChips.map((chip, i) => (
           <button
             key={`${i}-${chip.label}`}
-            onClick={(e) => onChipTap(chip, e)}
+            // WHY the type is read here (performance rule 2: no window listeners): a click made by touch or pen says so itself where
+            // the browser's click is a PointerEvent. Where it is a plain MouseEvent (older Safari on an iPhone or iPad, Firefox) the
+            // chip's own pointerdown / touchstart, a moment earlier, says it instead. A click with neither came from the keyboard.
+            onPointerDown={(e) => { lastDown.current = { type: e.pointerType, at: Date.now() }; }}
+            onTouchStart={() => { lastDown.current = { type: 'touch', at: Date.now() }; }}
+            onClick={(e) => {
+              const own = (e.nativeEvent as PointerEvent).pointerType;
+              const d = lastDown.current;
+              lastDown.current = null; // each click uses its own press, so a later keyboard click is never read as the earlier touch
+              onChipTap(chip, own || (d && Date.now() - d.at < 1500 ? d.type : ''));
+            }}
             // `quick-chip` is the hook chrome-style: 'float' hangs its per-chip
             // lift on (globals.css → "FLOAT chrome"). A class, not a token: the
             // rule needs the element, and Tailwind has no way to name "the chip".

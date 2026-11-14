@@ -61,9 +61,8 @@ export function useChipChoice(
   // WHY (card #143 c): a chip over typed words used to REPLACE them with no way back. Now the words wait untouched and a strip asks;
   // an empty box fills as always, and the chip never sends by itself.
   // WHY the click, not window listeners (review, performance rule 2: hidden means idle): a click made by touch or pen says so itself
-  // (pointerType), and one made by keyboard or mouse does not, so no listener has to watch the whole window from mount.
-  const onChip = useCallback((chip: QuickChip, ev?: React.MouseEvent) => {
-    const t = (ev?.nativeEvent as PointerEvent | undefined)?.pointerType;
+  // (pointerType; QuickChips falls back to the chip's own pointerdown where click is a plain MouseEvent), and a keyboard one has none, so no listener has to watch the whole window from mount.
+  const onChip = useCallback((chip: QuickChip, t?: string) => {
     if (textRef.current.trim()) setPending({ chip, touch: t === 'touch' || t === 'pen' }); else fill(chip.prompt);
   }, [textRef, fill]);
   const answer = useCallback((how: 'replace' | 'add' | 'close') => {
