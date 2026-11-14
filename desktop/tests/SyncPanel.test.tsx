@@ -560,3 +560,91 @@ describe('Sync log that cannot be read', () => {
     expect(await screen.findByText('Pushed')).toBeInTheDocument();
   });
 });
+
+// Card #134: Backup & Sync actions that used to end in `catch {}` now say which one failed.
+describe('Backup & sync actions that fail', () => {
+  afterEach(() => { cleanup(); delete (window as any).claude; });
+
+  // Destin's N2: a new failure scrolls its notice into view, once, and respects reduced motion.
+  describe('scrolling to a failure', () => {
+    const scrollSpy = vi.fn();
+    const failingDismiss = () => vi.fn().mockRejectedValueOnce(new Error('locked')).mockResolvedValue(undefined);
+    const warn = { ...RETRY_WARNING, dismissible: true, fixAction: undefined };
+    // jsdom lays nothing out, so the popup's scroller and the notice get boxes by hand.
+    const boxes = (notice: { top: number; bottom: number }) => {
+      const real = Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect = function (this: Element) {
+        const b = this.classList?.contains('dialog-scroll') ? { top: 100, bottom: 400 }
+          : this.classList?.contains('scroll-mt-2') ? notice : { top: 0, bottom: 0 };
+        return { ...b, left: 0, right: 0, width: 0, height: b.bottom - b.top, x: 0, y: b.top, toJSON() {} } as DOMRect;
+      };
+      return () => { Element.prototype.getBoundingClientRect = real; };
+    };
+    let restoreBoxes = () => {};
+    afterEach(() => { restoreBoxes(); delete (Element.prototype as any).scrollTo; delete (window as any).matchMedia; scrollSpy.mockReset(); });
+
+    it('scrolls the notice into view smoothly on a new failure, and not again on later renders', async () => {
+      (Element.prototype as any).scrollTo = scrollSpy;
+      restoreBoxes = boxes({ top: 700, bottom: 780 }); // the notice is below the visible part of the popup
+      stub({ dismissWarning: failingDismiss() }, [warn]);
+      render(<SyncSection autoOpen />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
+      await screen.findByText("Couldn't dismiss that warning");
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(1));
+      expect(scrollSpy).toHaveBeenCalledWith({ top: expect.any(Number), behavior: 'smooth' });
+      // settle: later renders must not scroll again
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+      expect(scrollSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not scroll when the notice is already fully visible in the popup', async () => {
+      (Element.prototype as any).scrollTo = scrollSpy;
+      restoreBoxes = boxes({ top: 150, bottom: 230 });  // inside the popup's visible 100..400
+      stub({ dismissWarning: failingDismiss() }, [warn]);
+      render(<SyncSection autoOpen />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
+      await screen.findByText("Couldn't dismiss that warning");
+      await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+      expect(scrollSpy).not.toHaveBeenCalled();
+    });
+
+    it('jumps instead of animating when the system asks for reduced motion', async () => {
+      (Element.prototype as any).scrollTo = scrollSpy;
+      restoreBoxes = boxes({ top: 700, bottom: 780 });
+      (window as any).matchMedia = (q: string) => ({ matches: q.includes('reduce'), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+      stub({ dismissWarning: failingDismiss() }, [warn]);
+      render(<SyncSection autoOpen />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalledWith({ top: expect.any(Number), behavior: 'auto' }));
+    });
+  });
+
+  it('a later successful action replaces an older failure notice', async () => {
+    const dismissWarning = vi.fn()
+      .mockRejectedValueOnce(new Error('settings file locked'))
+      .mockResolvedValue(undefined);
+    const base = { ...RETRY_WARNING, dismissible: true, fixAction: undefined };
+    stub({ dismissWarning }, [{ ...base, code: 'A', title: 'First warning' }, { ...base, code: 'B', title: 'Second warning' }]);
+    render(<SyncSection autoOpen />);
+    const dismiss = await screen.findAllByRole('button', { name: 'Dismiss' });
+    fireEvent.click(dismiss[0]);
+    expect(await screen.findByText("Couldn't dismiss that warning")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]);
+    await waitFor(() => expect(screen.queryByText("Couldn't dismiss that warning")).toBeNull());
+  });
+
+  it('a warning that could not be dismissed says so, with the reason and Try again, and Try again re-runs it', async () => {
+    const dismissWarning = vi.fn()
+      .mockRejectedValueOnce(new Error('settings file locked'))
+      .mockResolvedValue(undefined);
+    stub({ dismissWarning }, [{ ...RETRY_WARNING, dismissible: true, fixAction: undefined }]);
+    render(<SyncSection autoOpen />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
+    const notice = await screen.findByText("Couldn't dismiss that warning");
+    expect(notice).toBeInTheDocument();
+    const again = screen.getAllByRole('button', { name: 'Try again' });
+    await act(async () => { fireEvent.click(again[again.length - 1]); });
+    await waitFor(() => expect(dismissWarning).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText("Couldn't dismiss that warning")).toBeNull());
+  });
+});

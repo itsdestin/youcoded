@@ -27,7 +27,7 @@ const WORKER_SRC = fs
 export function loadWorker(subagentModel?: string, extraEnv: Record<string, string> = {}, platform: string = process.platform, spawnFields: { sessionId?: string; controlEnv?: Record<string, string> } = {}, ptyFields: Record<string, unknown> = {}) {
   const writes: string[] = [];
   let spawnedEnv: Record<string, string | undefined> = {};
-  let onExit: ((result: { exitCode: number }) => void) | undefined;
+  let onExit: ((result: { exitCode: number; signal?: number }) => void) | undefined;
   // Every onData listener the worker attaches (its own forwarder plus any echo-wait one), so a test can
   // feed output the way the real PTY would.
   const dataListeners: Array<(d: string) => void> = [];
@@ -41,7 +41,7 @@ export function loadWorker(subagentModel?: string, extraEnv: Record<string, stri
     resume: vi.fn(),
     cols: 80,
     rows: 24,
-    onExit: (cb: (result: { exitCode: number }) => void) => { onExit = cb; },
+    onExit: (cb: (result: { exitCode: number; signal?: number }) => void) => { onExit = cb; },
     ...ptyFields,
   };
   const fakeProcess: any = new EventEmitter();
@@ -75,7 +75,7 @@ export function loadWorker(subagentModel?: string, extraEnv: Record<string, stri
   deliver({ type: 'spawn', command: '/bin/sh', args: [], cwd: '/tmp', cols: 120, rows: 30, sessionId: 'test-claude-session', ...spawnFields });
   writes.length = 0;   // drop anything the spawn itself wrote
   const emitData = (d: string) => { for (const cb of [...dataListeners]) cb(d); };
-  return { deliver, writes, spawnedEnv, fakePty, fakeProcess, emitData, exitPty: () => onExit?.({ exitCode: 0 }) };
+  return { deliver, writes, spawnedEnv, fakePty, fakeProcess, emitData, exitPty: (result: { exitCode: number; signal?: number } = { exitCode: 0 }) => onExit?.(result) };
 }
 
 /** Let the worker's promise-based input queue, and its inter-chunk timers, run

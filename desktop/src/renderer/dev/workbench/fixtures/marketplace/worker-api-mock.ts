@@ -40,6 +40,8 @@ export function installWorkerApiMock(): void {
     const method = (init?.method ?? 'GET').toUpperCase();
 
     if (path === '/stats' && method === 'GET') {
+      // `?statsFail=1` — the community totals read fails (card #134), so the chip-less state can be photographed.
+      if (new URLSearchParams(window.location.search).get('statsFail')) return new Response('down', { status: 503 });
       return json({ generated_at: Math.floor(Date.now() / 1000), plugins: stats, themes: { 'golden-sunbreak': { likes: 41, installs: 512 }, 'meadow-mist': { likes: 88, installs: 1240 }, 'halftone-dimension': { likes: 120, installs: 87 } } });
     }
     if (path.startsWith('/ratings/') && method === 'GET') return json({ ratings: [] });
