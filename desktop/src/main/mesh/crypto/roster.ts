@@ -274,6 +274,8 @@ export class RosterVerifier implements VerifiedRoster {
   readonly #addsBy = new Map<string, number>();
   /** device (hex) -> ids (hex) of every held `add` that names its key: the entry that introduces a signer must be among its own ancestors. */
   readonly #introAdds = new Map<string, Set<string>>();
+  /** Work done by the last evaluation (tests and the cost invariant): whole-set passes and removals taken into the ranking. */
+  readonly diag = { folds: 0, considered: 0 };
   #calc: Computed | null = null;
   #setId: Buffer | undefined;
   constructor(readonly mutual: MutualRule = DEFAULT_MUTUAL_RULE, readonly adopted: AdoptedRule = DEFAULT_ADOPTED_RULE) {}
@@ -433,6 +435,7 @@ export class RosterVerifier implements VerifiedRoster {
   }
 
   private compute(): Computed {
+    this.diag.folds = 0;
     const order = [...this.#order].sort((x, y) => (this.#depth.get(toHex(x.id)) as number) - (this.#depth.get(toHex(y.id)) as number) || Buffer.compare(x.id, y.id));
     const n = order.length;
     const pos = new Map<string, number>();
@@ -481,6 +484,7 @@ export class RosterVerifier implements VerifiedRoster {
       set.add(tg);
       removals.push(p);
     }
+    this.diag.considered = removals.length;
     removals.sort((x, y) => senior(toHex(order[x].device)) - senior(toHex(order[y].device)) || x - y);
     const eff = new Set<number>();
     let res = this.fold(order, rows, pos, inClosure, eff, senior);
@@ -537,6 +541,7 @@ export class RosterVerifier implements VerifiedRoster {
   }
 
   private fold(order: SignedEntry[], rows: Uint32Array[], pos: Map<string, number>, inClosure: (of: number, x: number) => boolean, eff: Set<number>, senior: (d: string) => number, lenient = false): { out: Omit<Computed, 'pos' | 'rows'>; voidedPos: Set<number> } {
+    this.diag.folds++;
     const n = order.length;
     const devices = new Map<string, RosterDevice>();
     const admitted = new Map<string, number>(); // device -> canonical position of its effective introducing add

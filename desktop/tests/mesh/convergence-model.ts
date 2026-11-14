@@ -10,6 +10,7 @@
 // as decoded values, authenticated by the sender id the way the link authenticates them).
 // After quiescence (everything delivered, everyone online) six properties are checked; see `check()`.
 import { randomBytes } from 'crypto';
+import { performance } from 'perf_hooks';
 import { toHex } from '../../src/main/mesh/crypto/bytes';
 import { decode, encode } from '../../src/main/mesh/crypto/cbor';
 import { FrameReceiver, FrameSender } from '../../src/main/mesh/crypto/frames';
@@ -19,7 +20,7 @@ import { sealSecretTo } from '../../src/main/mesh/crypto/keygen';
 import { makeAddEntry, makeGenesisEntry, makeRemoveEntry, makeRenameEntry, seenForNextEntry, type MutualRule, type SignedEntry } from '../../src/main/mesh/crypto/roster';
 import { DeviceCore, GenBook, type Out } from '../../src/main/mesh/device-core';
 import { RosterStore } from '../../src/main/mesh/roster-store';
-import { KIND_NEED, KIND_REMOVAL, KIND_ROSTER, needBody, noteBody, removalBody, rosterBody } from '../../src/main/mesh/wire';
+import { KIND_HEADS, KIND_NEED, KIND_REMOVAL, KIND_ROSTER, headsBody, needBody, noteBody, removalBody, rosterBody } from '../../src/main/mesh/wire';
 
 export type Scenario = 'random' | 'n1' | 'n2' | 'n3' | 'n7' | 'n8';
 export interface RunOptions { seed: number; scenario?: Scenario; hostile?: boolean; mutual?: MutualRule; mutation?: string; steps?: number }
@@ -72,6 +73,7 @@ class Sim {
   n7Ghost: string | null = null;
   n7Add: SignedEntry | null = null;
   n7Admitter: string | null = null;
+  hostileId: string | null = null;
   constructor(readonly o: RunOptions) {
     this.r = rng(o.seed);
   }
@@ -136,7 +138,9 @@ class Sim {
       if (d.parked.filter((m) => m.from.equals(msg.from)).length < 16) d.parked.push(msg);
       return;
     }
-    const r = await d.core.onMessage(msg.kind, msg.body, msg.from);
+    const t0 = performance.now();
+    const r = await d.core.onMessage(msg.kind, msg.body, msg.from, this.now);
+    this.maxMs = Math.max(this.maxMs, performance.now() - t0);
     if (!d.silent) this.send(d, r.out);
     if (r.wait) {
       if (d.parked.filter((m) => m.from.equals(msg.from)).length < 16) d.parked.push(msg);
@@ -155,6 +159,8 @@ class Sim {
     }
   }
   readonly retrying = new Set<Dev>();
+  /** (ix) the slowest single delivered frame (CPU of the device layer, one frame in). */
+  maxMs = 0;
   async deliverOne(d: Dev): Promise<boolean> {
     if (!d.online) return false;
     if (this.withholdFrom.has(d.hex)) return false;
@@ -215,7 +221,7 @@ class Sim {
   // ---- hostile member
   async hostileMove(h: Dev, force?: number, victim?: Dev): Promise<void> {
     const honest = this.devs.filter((d) => d.honest && !d.silent);
-    const k = force ?? Math.floor(this.r() * 7);
+    const k = force ?? Math.floor(this.r() * 12);
     if (k === 0 && honest.length) {
       // forged entries naming an honest device (bad signature), 70 in one frame: must cost that device nothing (N2)
       const vd = victim ?? this.pick(honest);
@@ -250,6 +256,39 @@ class Sim {
     } else if (k === 5) {
       const old = this.pick([...h.roster.entries]);
       if (old) this.send(h, [{ kind: KIND_ROSTER, body: rosterBody([old]) }]);
+    } else if (k === 7) {
+      // FLOOD (third review): a chain of junk removals (made-up ids and real devices) signed in one go and delivered at once, to defeat the removal cap
+      const batch: SignedEntry[] = [];
+      const targets = [...this.devs.map((q) => q.id.deviceId), ...Array.from({ length: 4 }, () => this.ident().deviceId)];
+      for (let i = 0; i < 40; i++) {
+        const e = makeRemoveEntry(h.id, this.pick(targets), seenForNextEntry([...h.roster.entries, ...batch], h.id.deviceId), this.now);
+        try { await h.roster.append(e); batch.push(e); } catch { break; }
+        this.allEntries.set(toHex(e.id), e);
+      }
+      for (let i = 0; i < batch.length; i += 20) this.send(h, [{ kind: KIND_ROSTER, body: rosterBody(batch.slice(i, i + 20)) }]);
+    } else if (k === 8 && honest.length) {
+      // PRE-SIGNED (third review): the hostile member signs "I remove an honest device" and a rename now, withholds them, and releases them later (k=2)
+      const t = this.pick(honest);
+      for (const e of [makeRemoveEntry(h.id, t.id.deviceId, seenForNextEntry(h.roster.entries, h.id.deviceId), this.now), makeRenameEntry(h.id, 'stash', seenForNextEntry(h.roster.entries, h.id.deviceId), this.now)]) {
+        try { await h.roster.append(e); } catch { continue; }
+        this.allEntries.set(toHex(e.id), e);
+        h.withheld.push(e);
+      }
+    } else if (k === 9) {
+      // AMPLIFICATION (third review): heads and need frames in bulk from the hostile member
+      for (let i = 0; i < 12; i++) this.send(h, [{ kind: KIND_HEADS, body: headsBody([], []) }, { kind: KIND_NEED, body: needBody(h.roster.heads().length ? h.roster.heads() : [randomBytes(32)]) }]);
+    } else if (k === 10) {
+      // GHOST MASS (third review): several ghosts admitted offline, each signing renames, all withheld and released together
+      const stash: SignedEntry[] = [];
+      let chain = [...h.roster.entries];
+      for (let i = 0; i < 5; i++) {
+        const id = this.ident();
+        const add = makeAddEntry(h.id, { name: 'ghost', platform: 'linux', signKey: id.signKey, agreeKey: id.agreeKey }, seenForNextEntry(chain, h.id.deviceId), this.now);
+        try { await h.roster.append(add); } catch { break; }
+        chain = [...chain, add]; stash.push(add); this.allEntries.set(toHex(add.id), add);
+        for (let j = 0; j < 6; j++) { const rn = makeRenameEntry(id, 'g' + j, seenForNextEntry(chain, id.deviceId), this.now); chain = [...chain, rn]; stash.push(rn); }
+      }
+      h.withheld.push(...stash);
     } else if (k === 6 && honest.length && this.o.hostile) {
       this.withholdFrom.clear();
       if (this.p(0.5)) this.withholdFrom.add(this.pick(honest).hex);
@@ -397,9 +436,38 @@ class Sim {
         if (!truth.roster.removedIds().has(d.hex)) continue; // an orphan (never a member in the final roster)
         const rid = truth.roster.removalIdsOf(d.hex);
         if (rid.length === 0) bad.push(`(v) ${d.name} is out but no removal entry names it`);
-        for (const id of rid) if (!this.issuedRemovals.has(id)) bad.push(`(v) a removal of ${d.name} exists that nobody issued`);
+        for (const id of rid) {
+          if (this.issuedRemovals.has(id)) continue;
+          // Third review: the hostile member signs removals too. One of its removals of an honest device may stand only in the DOCUMENTED cases:
+          // (1) policy, finding 4: it was made before, and seen by, an honest removal of the hostile member (or the hostile member is still a member);
+          // (2) the mutual-removal rule: it targets the device that removed the hostile member, concurrently with that removal.
+          const ent = allEntries.get(id);
+          const hv = truth.roster.verified;
+          if (ent && this.hostileId && toHex(ent.device) === this.hostileId && hv) {
+            const hostileOut = truth.roster.removedIds().has(this.hostileId);
+            const hRem = truth.roster.removalIdsOf(this.hostileId);
+            const seenByHRemoval = hRem.some((h) => hv.happenedBefore(ent.id, Buffer.from(h, 'hex')));
+            const removersOfH = new Set([...this.issuedRemovals.values()].filter((x) => x.target === this.hostileId).map((x) => x.by));
+            if (!hostileOut || seenByHRemoval || removersOfH.has(d.hex)) continue;
+          }
+          bad.push(`(v) a removal of ${d.name} exists that nobody issued`);
+        }
       }
     }
+    // (vii) third review: an honest removal of the hostile member by any honest device always takes effect once delivered, under the default rules,
+    // except in the exactly-documented mutual-removal case (the hostile member also removed that device concurrently, and the earlier-admitted device stays)
+    if (truth?.roster.verified && this.hostileId) {
+      const H = this.hostileId;
+      const honestRemovals = [...this.issuedRemovals.values()].filter((x) => x.target === H && this.devs.find((q) => q.hex === x.by)?.honest);
+      if (honestRemovals.length && truth.roster.activeDevices().some((x) => toHex(x.deviceId) === H)) {
+        const excused = this.o.mutual === 'first-admitted' && truth.roster.entries.some((e) => e.kind === 'remove' && toHex(e.device) === H && honestRemovals.some((x) => toHex((e.body as { target: Uint8Array }).target) === x.by));
+        if (!excused) bad.push('(vii) an honest removal of the hostile member did not take effect');
+      }
+      // (viii) no honest device permanently ignores another honest device: every entry an honest device created is held by every remaining one ((iv)),
+      // and none of them is still "flagged" for rate after the hour has passed and one more entry arrived
+    }
+    // (ix) the per-frame cost stays under a stated bound (1.5 s of CPU for one frame in, generous for a loaded machine; measured about 40 ms for 2,000 entries)
+    if (this.maxMs > 1500) bad.push(`(ix) one frame cost ${this.maxMs.toFixed(0)} ms`);
     // (vi) progress: everyone remaining has a current generation (checked in (ii)) and nothing is parked (above)
     return bad;
   }
@@ -430,7 +498,7 @@ export async function runSchedule(o: RunOptions): Promise<RunResult> {
   if (hostile) {
     const host = A;
     H = await sim.addDevice(host, 'H');
-    if (H) { H.honest = false; H.created = []; }
+    if (H) { H.honest = false; H.created = []; sim.hostileId = H.hex; }
   }
   await sim.quiesce();
   sim.chaos = true;
@@ -456,16 +524,18 @@ export async function runSchedule(o: RunOptions): Promise<RunResult> {
   } else if (scenario === 'n7' && H && a) {
     const id = sim.ident();
     const e = makeAddEntry(H.id, { name: 'ghost', platform: 'linux', signKey: id.signKey, agreeKey: id.agreeKey }, seenForNextEntry(H.roster.entries, H.id.deviceId), sim.now);
-    try { await H.roster.append(e); } catch { return; }
-    const gh = await sim.newDev('ghost', false, true, id);
-    sim.n7Ghost = gh.hex;
-    sim.n7Add = e;
-    sim.n7Admitter = H.hex;
-    for (const x of H.roster.entries) await gh.roster.append(x).catch(() => undefined);
-    gh.core.adoptWelcome(H.book.secrets(), new Map());
-    sim.allEntries.set(toHex(e.id), e);
-    await sim.remove(a, H); // concurrent with the ghost add, which is delivered afterwards
-    sim.send(H, [{ kind: KIND_ROSTER, body: rosterBody([e]) }]);
+    const okAdd = await H.roster.append(e).then(() => true, () => false);
+    if (okAdd) {
+      const gh = await sim.newDev('ghost', false, true, id);
+      sim.n7Ghost = gh.hex;
+      sim.n7Add = e;
+      sim.n7Admitter = H.hex;
+      for (const x of H.roster.entries) await gh.roster.append(x).catch(() => undefined);
+      gh.core.adoptWelcome(H.book.secrets(), new Map());
+      sim.allEntries.set(toHex(e.id), e);
+      await sim.remove(a, H); // concurrent with the ghost add, which is delivered afterwards
+      sim.send(H, [{ kind: KIND_ROSTER, body: rosterBody([e]) }]);
+    }
   } else if (scenario === 'n8' && b) {
     // a pairing finishes while its host is offline for ages; the host must never undo it by itself
     const nd = await sim.addDevice(a, 'N');

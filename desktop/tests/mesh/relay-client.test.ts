@@ -164,6 +164,16 @@ describe('send, acknowledge, fetch, catch up', () => {
     expect((await c.fetchAfter('nothing-here', 0)).frames).toEqual([]);
     await c.received('g1', 2);
   });
+  it('fetched frames carry the writer device the relay stamped, as a 32-hex id (never anything the frame says)', async () => {
+    const r = await relay();
+    const { c, id } = mk(r) as { c: RelayClient; id?: { deviceId: Buffer } };
+    c.start();
+    await when(c, 'ready');
+    await c.hold({ group: 'g1', session: 'cd'.repeat(16), n: 1, frame: Buffer.from('x') });
+    const got = await c.fetchAfter('g1', 0);
+    expect(got.frames[0].writer).toMatch(/^[0-9a-f]{32}$/);
+    if (id) expect(got.frames[0].writer).toBe(id.deviceId.toString('hex'));
+  });
   it('a stored frame rings the other device with the group and a number (the doorbell), and not the sender', async () => {
     const r = await relay();
     const a = mk(r);

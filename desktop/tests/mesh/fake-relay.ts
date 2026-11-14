@@ -20,7 +20,7 @@ interface Conn { ws: WebSocket; dev: string | null; room: string; verifier: Rela
 export class FakeRelay {
   readonly wss: WebSocketServer;
   port = 0;
-  readonly rooms = new Map<string, { roster: Map<string, { signKey: Buffer; removed: boolean }>; groups: Map<string, Array<{ seq: number; bytes: Buffer }>>; lastN: Map<string, number>; entries: Map<string, string[]>; intro: Map<string, string> }>();
+  readonly rooms = new Map<string, { roster: Map<string, { signKey: Buffer; removed: boolean }>; groups: Map<string, Array<{ seq: number; bytes: Buffer; w?: string }>>; lastN: Map<string, number>; entries: Map<string, string[]>; intro: Map<string, string> }>();
   /** Test knob: answer every roster-put with this refusal (null = behave). A transient reason ('roster-rate-limited') is retried by the app. */
   rosterPutRefusal: string | null = null;
   /** Every roster statement accepted, in order: kind and the (hex) entry id. */
