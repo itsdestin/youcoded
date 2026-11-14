@@ -234,3 +234,47 @@ describe('session meta rolls back to the last confirmed value', () => {
     expect(second.result.current.note).toBe('one');
   });
 });
+
+// Review of 12b302b16: only the newest save confirms, and an answer for a conversation we left changes nothing.
+describe('session meta acknowledgements are checked for staleness', () => {
+  const deferred = () => { let resolve!: (v: unknown) => void; const p = new Promise((r) => { resolve = r; }); return { p, resolve }; };
+  const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
+  const open = async (api: Record<string, unknown>, id = { v: 's1' }) => {
+    (window as any).claude = { session: { getMeta: vi.fn().mockResolvedValue({ tags: [], note: '', flags: {}, supported: true }), ...api }, on: {} };
+    const hook = renderHook(({ sid }) => useSessionMeta(sid), { initialProps: { sid: id.v } });
+    await act(async () => { await flush(); });
+    return hook;
+  };
+
+  it('tag/note/flag: an older ok arriving after a newer ok leaves the NEWER value confirmed (a later failure returns to it)', async () => {
+    const a = deferred(); const b = deferred();
+    const setTag = vi.fn().mockReturnValueOnce(a.p).mockReturnValueOnce(b.p).mockResolvedValueOnce({ ok: false });
+    const setNote = vi.fn().mockReturnValueOnce(a.p).mockReturnValueOnce(b.p).mockResolvedValueOnce({ ok: false });
+    const setFlag = vi.fn().mockReturnValueOnce(a.p).mockReturnValueOnce(b.p).mockResolvedValueOnce({ ok: false });
+    const { result } = await open({ setTag, setNote, setFlag });
+    act(() => { result.current.setTag('t', true); result.current.setNote('one'); result.current.setFlag('priority' as any, true); });
+    act(() => { result.current.setTag('t', false); result.current.setNote('two'); result.current.setFlag('priority' as any, false); });
+    // newer ok first, then the older ok last
+    await act(async () => { b.resolve({ ok: true }); await flush(); });
+    await act(async () => { a.resolve({ ok: true }); await flush(); });
+    // a third save fails: it must return to the NEWER confirmed value (off / 'two' / off), not the older (on / 'one' / on)
+    await act(async () => { result.current.setTag('t', true); result.current.setNote('three'); result.current.setFlag('priority' as any, true); await flush(); });
+    expect(result.current.tags.has('t')).toBe(false);
+    expect(result.current.note).toBe('two');
+    expect(!!(result.current.flags as any).priority).toBe(false);
+  });
+
+  it('an answer that lands after switching conversations changes nothing in the new one', async () => {
+    const a = deferred();
+    const setTag = vi.fn().mockReturnValueOnce(a.p).mockResolvedValueOnce({ ok: false });
+    const { result, rerender } = await open({ setTag });
+    act(() => result.current.setTag('t', true));            // save made in s1, answer still pending
+    rerender({ sid: 's2' });
+    await act(async () => { await flush(); });
+    await act(async () => { a.resolve({ ok: true }); await flush(); });   // s1's ok arrives while s2 is on screen
+    // in s2 the tag was never set; a refused save there must roll back to "off", not to s1's "on"
+    await act(async () => { result.current.setTag('t', true); await flush(); });
+    expect(result.current.tags.has('t')).toBe(false);
+    expect(t.got).toHaveLength(1);   // only s2's own refusal speaks
+  });
+});

@@ -155,7 +155,10 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     try {
       Promise.resolve((window as any).claude.session.setTag(sessionId, tagId, next))
         .then((res: any) => {
-          if (!res || res.ok !== false) { if (next) confirmedTags.current.add(tagId); else confirmedTags.current.delete(tagId); return; }
+          // WHY both checks (review of 12b302b16): only the NEWEST save of this tag may set the confirmed value (an older ok landing
+          // last would put older data back), and an answer for a conversation we have since left must touch nothing in the new one.
+          if (liveSession.current !== sessionId) return;
+          if (!res || res.ok !== false) { if (isNewest()) { if (next) confirmedTags.current.add(tagId); else confirmedTags.current.delete(tagId); } return; }
           if (isNewest()) { revert(); noteRefusal(res); sayRefused(sessionId, 'save this tag change', res); }
         })
         .catch(() => {});
@@ -170,7 +173,8 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     try {
       Promise.resolve((window as any).claude.session.setNote(sessionId, text))
         .then((res: any) => {
-          if (!res || res.ok !== false) { savedNote.current = text; return; }
+          if (liveSession.current !== sessionId) return;   // another conversation is on screen now: this answer is not about it
+          if (!res || res.ok !== false) { if (noteEdits.current === myEdit) savedNote.current = text; return; }   // only the newest edit confirms
           if (noteEdits.current === myEdit) { setNoteState(savedNote.current); noteRefusal(res); sayRefused(sessionId, 'save the note', res); }
         })
         .catch(() => {});
@@ -186,7 +190,8 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     try {
       Promise.resolve((window as any).claude.session.setFlag(sessionId, flag, next))
         .then((res: any) => {
-          if (!res || res.ok !== false) { confirmedFlags.current[flag] = next; return; }
+          if (liveSession.current !== sessionId) return;   // answer for a conversation we have left
+          if (!res || res.ok !== false) { if (fieldSeq.current[`flag:${flag}`] === mine) confirmedFlags.current[flag] = next; return; }   // only the newest save confirms
           if (fieldSeq.current[`flag:${flag}`] === mine) { setFlags((f) => ({ ...f, [flag]: !!confirmedFlags.current[flag] })); noteRefusal(res); sayRefused(sessionId, 'save this change', res); }
         })
         .catch(() => {});
