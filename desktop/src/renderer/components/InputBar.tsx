@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, useContext } from 'react';
+import { announceFailed } from '../utils/announce';
 import { NARROW_VIEWPORT_QUERY } from '../hooks/use-narrow-viewport';
 import { useChatDispatch } from '../state/chat-context';
 import QuickChips, { QuickChip } from './QuickChips';
@@ -636,8 +637,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // WHY: the context menu identifies a composer-only image paste, while this
       // component keeps ownership of both clipboard serialization and attachments.
       void window.claude.dialog.saveClipboardImage().then((saved) => {
-        if (saved) addFiles([saved]);
-      });
+        if (saved) addFiles([saved]); else announceFailed('attach the pasted image');
+      }, (err) => announceFailed('attach the pasted image', err));
     };
     window.addEventListener('youcoded:composer-paste-image', listener);
     return () => window.removeEventListener('youcoded:composer-paste-image', listener);
@@ -1030,7 +1031,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         addFiles(paths);
       }
     } catch (err) {
-      console.error('Failed to open file dialog:', err);
+      // Card #134 round 4: the console line was the only trace; the person pressed Attach and nothing opened.
+      announceFailed('open the file picker', err);
     }
   }, [addFiles]);
 
@@ -1045,8 +1047,12 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     for (const item of Array.from(items)) {
       if (item.type.startsWith('image/')) {
         e.preventDefault();
-        const saved = await window.claude.dialog.saveClipboardImage();
-        if (saved) addFiles([saved]);
+        // Card #134 round 4: the clipboard said it held an image, so "nothing came back" or a rejection is a real failure to
+        // attach it (it used to vanish with no word). A successful save attaches it exactly as before.
+        try {
+          const saved = await window.claude.dialog.saveClipboardImage();
+          if (saved) addFiles([saved]); else announceFailed('attach the pasted image');
+        } catch (err) { announceFailed('attach the pasted image', err); }
         return;
       }
     }
