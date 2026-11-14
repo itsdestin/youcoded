@@ -524,6 +524,8 @@ reading, which is exactly where ROCm falls behind.
   full prompt re-processing due to lack of cache data (likely due to SWA or
   hybrid/recurrent memory…)") — the slot file does not carry that model family's context
   checkpoints. Always check `prompt_n` after a restore; never trust the 200.
+- **Rerun any of the above** with the workspace's `scripts/engine-bench/run.sh` (separate engine
+  copy on port 9990; never the live app's 9920).
 - **Writing:** now within a few percent on the 27B (Vulkan 6.19-6.73, ROCm 5.99-6.67
   t/s), and equal on the 9B and 2B; the September 24-46% gap below did not reproduce.
 - **Small models:** the 2B's 31.6k read after three short requests took 22-27 s on
