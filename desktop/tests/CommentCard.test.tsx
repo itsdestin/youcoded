@@ -12,6 +12,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { CommentCard } from '../src/renderer/components/comments/CommentCard';
 import type { DocComment } from '../src/renderer/state/doc-comments-store';
+import { getByHint } from './helpers/hint-queries';
 
 afterEach(cleanup);
 
@@ -96,7 +97,7 @@ describe('CommentCard — a comment whose saved text/cell can no longer be found
     expect(screen.getByText(/text no longer found in this file\./i)).toBeTruthy();
     // Collapsed-resolved cards still render the reopen toggle (CompleteToggle) —
     // nothing about being detached removes the way back.
-    expect(screen.getByTitle(/reopen/i)).toBeTruthy();
+    expect(getByHint(document.body, /reopen/i)).toBeTruthy();
   });
 
   it('an open detached comment still offers a reply field (R6: nothing silently lost)', () => {
@@ -134,7 +135,7 @@ describe('CommentCard — a resolved comment with replies (Docs-style resolved t
     expect(screen.getByText(/agreed — i tightened the second sentence\./i)).toBeTruthy();
     expect(screen.getByText(/looks good, thanks\./i)).toBeTruthy();
     expect(screen.getByText(/resolved by/i)).toBeTruthy();
-    expect(screen.getByTitle(/reopen/i)).toBeTruthy();
+    expect(getByHint(document.body, /reopen/i)).toBeTruthy();
     expect(screen.queryByPlaceholderText(/reply/i)).toBeNull();
   });
 });
@@ -160,7 +161,7 @@ describe('CommentCard — a comment in a file too large to check (status "unchec
   it('a RESOLVED unchecked comment still shows the note and stays reopenable (R6)', () => {
     renderCard(baseComment({ status: 'unchecked', resolved: true, resolvedBy: 'user', resolvedAt: Date.now() }));
     expect(screen.getByText(/too large to show where this comment points/i)).toBeTruthy();
-    expect(screen.getByTitle(/reopen/i)).toBeTruthy();
+    expect(getByHint(document.body, /reopen/i)).toBeTruthy();
   });
 
   it('a still-empty draft never shows the unchecked note either', () => {

@@ -11,6 +11,7 @@ import { TagChip, TagStack } from './tags/TagChip';
 import { ModelIcon } from './model/ModelPicker';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
+import { Tooltip } from './ui';
 import { formatBytes } from '../../shared/format-bytes';
 
 export function formatRelativeTime(epochMs: number): string {
@@ -71,7 +72,9 @@ export function SessionCardTags({ session: s, tagsById, className = '' }: {
     <div className={`flex items-center gap-1 mt-0.5 flex-wrap ${className}`}>
       {/* Three or more tags: one stacked-icons button that rolls out on hover (pick-menus-6#PM6-1). */}
       {tags.length >= 3 ? <TagStack tags={tags} /> : tags.map((t) => <TagChip key={t.id} tag={t} />)}
-      {s.note && <span className="text-4xs text-fg-muted" title={s.note}>📝 note</span>}
+      {s.note && <Tooltip text={s.note}>
+        <span className="text-4xs text-fg-muted">📝 note</span>
+      </Tooltip>}
     </div>
   );
 }
@@ -114,23 +117,23 @@ export function SessionCardMeta({ session: s, showProject }: { session: PastSess
             // the record has one — showing the app default here would be a
             // guess dressed as history (see PastSession.lastUsedModel).
             s.lastUsedModel ? (
-              <span
-                key="model"
-                className="flex items-center gap-1 min-w-0"
-                title={`Last used ${s.lastUsedModel.modelId} (${s.lastUsedModel.providerLabel})`}
-              >
-                {/* Company mark instead of the generic glyph. The mark carries
-                    the brand colour; the model NAME stays muted like the rest
-                    of the line, so the model is not promoted above the project
-                    and the date. */}
-                {(() => {
-                  const b = resolveModelBrand(s.lastUsedModel.modelId, s.lastUsedModel.providerType);
-                  return b?.icon
-                    ? <span className="shrink-0 inline-flex" style={{ color: b.color }}><ProviderIcon icon={b.icon} size={12} /></span>
-                    : <ModelIcon className="w-3 h-3 shrink-0" />;
-                })()}
-                <span className="truncate">{formatModelId(s.lastUsedModel.modelId)}</span>
-              </span>
+              <Tooltip key="model" text={`Last used ${s.lastUsedModel.modelId} (${s.lastUsedModel.providerLabel})`}>
+                <span
+                  className="flex items-center gap-1 min-w-0"
+                >
+                  {/* Company mark instead of the generic glyph. The mark carries
+                      the brand colour; the model NAME stays muted like the rest
+                      of the line, so the model is not promoted above the project
+                      and the date. */}
+                  {(() => {
+                    const b = resolveModelBrand(s.lastUsedModel.modelId, s.lastUsedModel.providerType);
+                    return b?.icon
+                      ? <span className="shrink-0 inline-flex" style={{ color: b.color }}><ProviderIcon icon={b.icon} size={12} /></span>
+                      : <ModelIcon className="w-3 h-3 shrink-0" />;
+                  })()}
+                  <span className="truncate">{formatModelId(s.lastUsedModel.modelId)}</span>
+                </span>
+              </Tooltip>
             ) : null,
             // Size only when known: the side panel's conversation comes from the
             // search index, which does not record it (0), and "0B" would be a lie.
@@ -162,33 +165,34 @@ export function CompleteToggle({ done, name, onToggle, className = '', titles }:
   titles?: { set: string; unset: string };
 }) {
   return (
-    <button
-      type="button"
-      onClick={(e) => { e.stopPropagation(); onToggle(!done); }}
-      aria-pressed={done}
-      title={titles
+    <Tooltip text={titles
         ? (done ? titles.set : titles.unset)
-        : (done ? 'Marked complete — hidden unless Show complete is on. Click to undo.' : 'Mark this session complete?')}
-      aria-label={done ? `Mark ${name} not complete` : `Mark ${name} complete`}
-      // cursor-pointer is explicit (Destin, dev instance: cursor
-      // flicker/stutter sweeping the doc-comments Resolve/Edit/Delete row) —
-      // a bare <button>'s UA default is `cursor: default`, not inherited
-      // pointer, so without this it disagreed with its neighbors (and with
-      // the card background around it) on every button/gap crossing. See
-      // CommentActions.tsx's ICON_BUTTON WHY for the full mechanism.
-      className={`rounded-sm cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-        done ? 'text-accent' : 'text-fg-faint hover:text-fg-2'
-      } ${className}`}
-    >
-      {/* Check-in-a-circle: "done" is what the user is saying; hiding the row is
-          a consequence the Show complete toggle already explains. Filled when
-          set so the state reads at a glance. */}
-      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <circle cx="12" cy="12" r="9" fill={done ? 'currentColor' : 'none'} />
-        {/* Knocked out of the fill when set — var(--canvas), not a hardcoded
-            white, so it survives a dark or community theme. */}
-        <path d="M8 12.5l2.5 2.5L16 9.5" stroke={done ? 'var(--canvas)' : 'currentColor'} />
-      </svg>
-    </button>
+        : (done ? 'Marked complete — hidden unless Show complete is on. Click to undo.' : 'Mark this session complete?')}>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onToggle(!done); }}
+        aria-pressed={done}
+        aria-label={done ? `Mark ${name} not complete` : `Mark ${name} complete`}
+        // cursor-pointer is explicit (Destin, dev instance: cursor
+        // flicker/stutter sweeping the doc-comments Resolve/Edit/Delete row) —
+        // a bare <button>'s UA default is `cursor: default`, not inherited
+        // pointer, so without this it disagreed with its neighbors (and with
+        // the card background around it) on every button/gap crossing. See
+        // CommentActions.tsx's ICON_BUTTON WHY for the full mechanism.
+        className={`rounded-sm cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+          done ? 'text-accent' : 'text-fg-faint hover:text-fg-2'
+        } ${className}`}
+      >
+        {/* Check-in-a-circle: "done" is what the user is saying; hiding the row is
+            a consequence the Show complete toggle already explains. Filled when
+            set so the state reads at a glance. */}
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <circle cx="12" cy="12" r="9" fill={done ? 'currentColor' : 'none'} />
+          {/* Knocked out of the fill when set — var(--canvas), not a hardcoded
+              white, so it survives a dark or community theme. */}
+          <path d="M8 12.5l2.5 2.5L16 9.5" stroke={done ? 'var(--canvas)' : 'currentColor'} />
+        </svg>
+      </button>
+    </Tooltip>
   );
 }

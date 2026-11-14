@@ -19,6 +19,7 @@ import { isPlaceholderModelId } from '../../shared/model-ids';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import { toolOutcome } from '../utils/tool-outcome';
+import { Tooltip } from './ui';
 
 interface Props {
   turn: AssistantTurn;
@@ -81,14 +82,15 @@ function ReasoningSection({ content }: { content: string }) {
   useExpandAllToggle(() => setExpanded(true), () => setExpanded(false));
   return (
     <div className="mb-2">
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-1 text-2xs text-fg-muted hover:text-fg-dim select-none"
-        title="Show the model's reasoning"
-      >
-        <ChevronIcon className="w-3 h-3" expanded={expanded} />
-        <span className="italic">{expanded ? 'Hide reasoning' : 'Show reasoning'}</span>
-      </button>
+      <Tooltip text="Show the model's reasoning">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="flex items-center gap-1 text-2xs text-fg-muted hover:text-fg-dim select-none"
+        >
+          <ChevronIcon className="w-3 h-3" expanded={expanded} />
+          <span className="italic">{expanded ? 'Hide reasoning' : 'Show reasoning'}</span>
+        </button>
+      </Tooltip>
       {expanded && (
         <div className="mt-1 pl-2 border-l-2 border-edge-dim text-xs text-fg-dim">
           {/* Reasoning streams in too (before the reply) — same per-word saving. */}
@@ -123,35 +125,36 @@ function TurnMetadataStrip({ turn }: { turn: AssistantTurn }) {
   // lives, and it resolves the denominator per source (Destin, 2026-08-16).
 
   return (
-    <div
-      className="text-3xs text-fg-muted mt-1 pl-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono select-text"
-      title="Per-turn metadata from transcript"
-    >
-      {/* Fix: `<synthetic>` is CC's placeholder for a notice it wrote itself
-          (session limit, out of credits, /login), not a model — printing it
-          raw here showed the user a fake model name. Nothing replaces it: the
-          turn genuinely ran on no model. */}
-      {turn.model && !isPlaceholderModelId(turn.model) && (() => {
-        // The mark only; the id stays raw and mono. This strip exists to show
-        // the EXACT transcript values, so prettifying the id here would defeat
-        // its purpose — the mark just makes the company scannable when a long
-        // conversation switched models partway through.
-        const b = resolveModelBrand(turn.model);
-        return (
-          <span className="inline-flex items-center gap-1">
-            {b?.icon && <span style={{ color: b.color }} className="inline-flex"><ProviderIcon icon={b.icon} size={10} /></span>}
-            <span>{turn.model}</span>
-          </span>
-        );
-      })()}
-      {u && (
-        <>
-          <span>in {u.inputTokens.toLocaleString()}</span>
-          <span>out {u.outputTokens.toLocaleString()}</span>
-          {u.cacheReadTokens > 0 && <span>cached {u.cacheReadTokens.toLocaleString()}</span>}
-        </>
-      )}
-    </div>
+    <Tooltip text="Per-turn metadata from transcript">
+      <div
+        className="text-3xs text-fg-muted mt-1 pl-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono select-text"
+      >
+        {/* Fix: `<synthetic>` is CC's placeholder for a notice it wrote itself
+            (session limit, out of credits, /login), not a model — printing it
+            raw here showed the user a fake model name. Nothing replaces it: the
+            turn genuinely ran on no model. */}
+        {turn.model && !isPlaceholderModelId(turn.model) && (() => {
+          // The mark only; the id stays raw and mono. This strip exists to show
+          // the EXACT transcript values, so prettifying the id here would defeat
+          // its purpose — the mark just makes the company scannable when a long
+          // conversation switched models partway through.
+          const b = resolveModelBrand(turn.model);
+          return (
+            <span className="inline-flex items-center gap-1">
+              {b?.icon && <span style={{ color: b.color }} className="inline-flex"><ProviderIcon icon={b.icon} size={10} /></span>}
+              <span>{turn.model}</span>
+            </span>
+          );
+        })()}
+        {u && (
+          <>
+            <span>in {u.inputTokens.toLocaleString()}</span>
+            <span>out {u.outputTokens.toLocaleString()}</span>
+            {u.cacheReadTokens > 0 && <span>cached {u.cacheReadTokens.toLocaleString()}</span>}
+          </>
+        )}
+      </div>
+    </Tooltip>
   );
 }
 

@@ -7,7 +7,8 @@ import { OPENROUTER_CREDITS_URL, type OpenRouterSignInStatus, type ProviderHealt
 import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
-import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, OneJobCard, OneJobHint, OneJobLabel, OneJobText, SectionLabel, TextInput } from './ui';
+import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, FieldError, InputGroup, OneJobCard, OneJobHint, OneJobLabel, OneJobText, SectionLabel, TextInput } from './ui';
+import { plainMessage } from '../utils/ipc-error';
 import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
@@ -986,8 +987,12 @@ export function SearchProvidersBlock({ withHeader = true, card = false }: { with
   const [busy, setBusy] = useState(false);
 
   // hasKey comes ONLY from list() — we never infer "connected" from local state.
+  // WHY the failure is kept (error inventory 2026-09-10, Settings row 95): a failed read used to empty
+  // the list, so the Tavily/Exa rows quietly vanished. Rows already on screen stay; the failure is shown.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const refresh = useCallback(() => (window as any).claude.search?.list()
-    .then(setRows).catch(() => setRows([])), []);
+    .then((r: Array<{ id: SearchBackendId; label: string; hasKey: boolean }>) => { setRows(r); setLoadError(null); })
+    .catch((e: unknown) => setLoadError(plainMessage(e, 'the list did not come back'))), []);
   useEffect(() => { void refresh(); }, [refresh]);
 
   const openEditor = (id: SearchBackendId) => {
@@ -1056,6 +1061,9 @@ export function SearchProvidersBlock({ withHeader = true, card = false }: { with
         Web search works for free with no setup. Add an optional key to make it faster and more reliable.
       </p>
 
+      {loadError && (
+        <ErrorState variant="inline" className={card ? 'mb-1.5' : 'mb-2'} message={`Couldn't load the search options: ${loadError}`} onRetry={() => { void refresh(); }} />
+      )}
       <div className={card ? 'space-y-1.5' : 'space-y-2'}>
         {rows.map((row) => {
           const meta = SEARCH_BACKEND_META[row.id];

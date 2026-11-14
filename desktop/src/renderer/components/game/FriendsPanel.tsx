@@ -18,7 +18,7 @@ import { useAccount } from '../../state/account-context';
 import { statusLabel, type FriendRowData, type SocialState } from './friends-data';
 import { useFriends } from './useFriends';
 import { useScrollFade } from '../../hooks/useScrollFade';
-import { Button, CARD_LEVEL_1, Callout, ChevronDown, Dialog, FieldError, InputGroup, LoadingState, Menu, MenuRadioItem, Pill, PillButton, SectionLabel } from '../ui';
+import { Button, CARD_LEVEL_1, Callout, ChevronDown, Dialog, ErrorState, FieldError, InputGroup, LoadingState, Menu, MenuRadioItem, Pill, PillButton, SectionLabel } from '../ui';
 import { workbenchFriendsOpen } from '../../workbench-mode';
 import { useScreenOpen } from '../../shoot-mode';
 
@@ -148,7 +148,7 @@ function FriendsCard({ incognito, onToggleIncognito, social }: Props) {
   // was really a failure. Each now says what actually happened — the server cannot hide you yet, the
   // check failed and is being retried, or the hidden connection is still opening.
   const hiddenConnected = social === 'incognito' && state.connected;
-  const summary = !f.loaded ? 'Loading your friends…'
+  const summary = !f.loaded ? (f.friendsError ? "Couldn't load your friends" : 'Loading your friends…')
     : f.merged.length === 0 ? `No friends yet${requestText}`
     : hiddenConnected ? `${online.length} of ${total} online · they can't see you${requestText}`
     : social === 'incognito' && state.hiddenBlocked === 'unsupported' ? `${total} · the game server can't hide you yet, so who's online isn't shown${requestText}`
@@ -268,10 +268,15 @@ function PeopleList({ f, known }: { f: ReturnType<typeof useFriends>; known: boo
             right={<Button variant="secondary" size="sm" onClick={() => f.runMutation(() => window.claude.social.cancelRequest(req.id), req.id, "Couldn't cancel — try again")} disabled={f.pendingRows.has(req.id)} className="shrink-0">Cancel</Button>}
           />
         ))}
+        {f.requestsError && (
+          <li><ErrorState variant="inline" message={`Couldn't load your friend requests: ${f.requestsError}`} onRetry={() => { void f.refresh(); }} /></li>
+        )}
         {people === 0 && (
           f.loaded
             ? <li className="px-1 py-1.5 text-xs text-fg-muted">No friends yet. Add someone by their handle and they show up here.</li>
-            : <li><LoadingState what="your friends" variant="inline" /></li>
+            : f.friendsError
+              ? <li><ErrorState variant="inline" message={`Couldn't load your friends: ${f.friendsError}`} onRetry={() => { void f.refresh(); }} /></li>
+              : <li><LoadingState what="your friends" variant="inline" /></li>
         )}
       </ul>
       <div className="absolute inset-x-0 bottom-0 pt-2">

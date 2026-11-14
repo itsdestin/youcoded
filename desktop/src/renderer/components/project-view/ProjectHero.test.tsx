@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
 import { ProjectHero } from './ProjectHero';
+import { getByHint, queryByHint } from '../../../../tests/helpers/hint-queries';
 
 // R4-1: the card asks the screen's capabilities whether it can open a folder in the computer's file manager.
 vi.mock('../../platform', () => ({ getPlatform: () => 'electron', getCapabilities: () => ({ openInOs: true }) }));
@@ -144,7 +145,7 @@ describe('ProjectHero description', () => {
   // avoid watcher churn, and the UI shouldn't undo that by always calling.
   it('writes nothing when the text is unchanged', () => {
     renderHero({ ...syncedProps, description: 'same' });
-    fireEvent.click(screen.getByTitle('Edit description'));
+    fireEvent.click(getByHint(document.body, 'Edit description'));
     editDescription('same');
     expect((window as any).claude.syncSpaces.setProjectDescription).not.toHaveBeenCalled();
   });
@@ -344,18 +345,18 @@ describe.each([
 
   it('opens the file explorer when the path is clicked', () => {
     renderHero();
-    fireEvent.click(screen.getByTitle('Open in File Explorer'));
+    fireEvent.click(getByHint(document.body, 'Open in File Explorer'));
     expect((window as any).claude.shell.openPath).toHaveBeenCalledWith('/home/d/proj');
   });
 
   it('renders no repo link when the project has no web URL', () => {
     renderHero();
-    expect(screen.queryByTitle(/on GitHub$/)).toBeNull();
+    expect(queryByHint(document.body, /on GitHub$/)).toBeNull();
   });
 
   it('opens the repo on GitHub when the repo slug is clicked', () => {
     renderHero({ repo: { webUrl: 'https://github.com/a/b', owner: 'a', name: 'b' } });
-    fireEvent.click(screen.getByTitle('Open a/b on GitHub'));
+    fireEvent.click(getByHint(document.body, 'Open a/b on GitHub'));
     expect((window as any).claude.shell.openExternal).toHaveBeenCalledWith('https://github.com/a/b');
   });
 });

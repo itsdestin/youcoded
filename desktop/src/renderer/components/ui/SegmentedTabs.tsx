@@ -1,6 +1,7 @@
 import React from 'react';
 import { FOCUS_RING } from './Button';
 import { CARD_LEVEL_1, CARD_LEVEL_2 } from './cardLevels';
+import { Tooltip } from './Tooltip';
 
 /**
  * Tab rows (change 45, §1.8).
@@ -113,30 +114,30 @@ export function SegmentedTabs({
       {tabs.map((tab) => {
         const active = tab.id === value;
         return (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            // Roving tabindex: the row is one tab stop, arrows move within it.
-            tabIndex={active ? 0 : -1}
-            disabled={tab.disabled}
-            title={tab.title}
-            onClick={() => { if (!tab.disabled) onChange(tab.id); }}
-            className={[
-              // Contained tabs split the width evenly (flex-1), so side padding only sets
-              // the MINIMUM width — cutting it to px-1 lets five short words fit a 420px
-              // popup (Appearance's bubble/message-box strips, 2026-09-24) and changes
-              // nothing visible on the two-tab strips, whose text is centred anyway.
-              pill ? PILL_TAB_BASE : variant === 'contained' ? TAB_BASE.replace('px-3', 'px-1 min-w-0') : TAB_BASE,
-              active ? TAB_ACTIVE : tab.disabled ? 'text-fg-faint cursor-not-allowed' : pill ? PILL_TAB_INACTIVE : TAB_INACTIVE,
-              variant === 'contained' || variant === 'nested' ? 'flex-1' : '',
-            ]
-              .filter(Boolean)
-              .join(' ')}
-          >
-            {tab.label}
-          </button>
+          <Tooltip key={tab.id} text={tab.title ?? ''}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={active}
+              // Roving tabindex: the row is one tab stop, arrows move within it.
+              tabIndex={active ? 0 : -1}
+              disabled={tab.disabled}
+              onClick={() => { if (!tab.disabled) onChange(tab.id); }}
+              className={[
+                // Contained tabs split the width evenly (flex-1), so side padding only sets
+                // the MINIMUM width — cutting it to px-1 lets five short words fit a 420px
+                // popup (Appearance's bubble/message-box strips, 2026-09-24) and changes
+                // nothing visible on the two-tab strips, whose text is centred anyway.
+                pill ? PILL_TAB_BASE : variant === 'contained' ? TAB_BASE.replace('px-3', 'px-1 min-w-0') : TAB_BASE,
+                active ? TAB_ACTIVE : tab.disabled ? 'text-fg-faint cursor-not-allowed' : pill ? PILL_TAB_INACTIVE : TAB_INACTIVE,
+                variant === 'contained' || variant === 'nested' ? 'flex-1' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+            >
+              {tab.label}
+            </button>
+          </Tooltip>
         );
       })}
     </div>

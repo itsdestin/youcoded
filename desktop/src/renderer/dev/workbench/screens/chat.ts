@@ -239,6 +239,8 @@ export const CHAT: readonly ScreenEntry[] = [
   // status, none yet, a request each way; then a phone and a 640×480 window. The chess lobby with
   // the same four friends shows a winning, a losing, an even and a never-played record.
   { ...chat('chat/games#friends', 'pane', 'games'), params: { signedIn: '1', friends: 'many' } },
+  // Card #134 batch 2: the friends read refused (opened, so the list area shows).
+  { ...chat('chat/games#friends-failed', 'pane', 'games', 'error-state'), params: { signedIn: '1', friendsOpen: '1', fail: 'social.listFriends' } },
   { ...chat('chat/games#no-friends', 'pane', 'games'), params: { signedIn: '1', friends: 'none' } },
   // Opened (it starts folded) so its rows compare with round 1's always-open card.
   { ...chat('chat/games#requests', 'pane', 'games'), params: { signedIn: '1', friends: 'requests', friendsOpen: '1' } },

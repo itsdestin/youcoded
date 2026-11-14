@@ -24,6 +24,7 @@ import { fileExtension, fileKind, previewKind } from '../../shared/artifacts/cat
 import { READ_HEAD_DEFAULT_BYTES, type ReadHeadResult } from '../../shared/read-head';
 import { MarkdownHeadPreview, MonoHeadPreview } from './HeadPreview';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
+import { Tooltip } from './ui';
 import { attachmentPreviewFor } from '../utils/remote-attachment-previews';
 
 // ── Head cache ───────────────────────────────────────────────────────────────
@@ -143,36 +144,37 @@ export function AttachmentChip({ path, name, onRemove, imageSrc }: Props) {
   const label = name ?? fileNameOf(path);
   const kind = fileKind(path);
   return (
-    <div
-      title={label}
-      data-file-kind={kind}
-      className="relative shrink-0 w-32 h-24 rounded-md border border-edge bg-panel overflow-hidden flex flex-col"
-    >
-      <div className="flex-1 min-h-0 bg-inset overflow-hidden">
-        <Preview path={path} imageSrc={imageSrc} />
-      </div>
-      <div className="flex items-center gap-1 px-1.5 h-5 border-t border-edge bg-panel text-fg text-xs shrink-0">
-        <span className="text-fg-dim shrink-0"><FileKindIcon kind={kind} size={12} /></span>
-        <span className="truncate min-w-0">{label}</span>
-      </div>
-      {/* In-chip remover, NOT a panel closer — CloseButton's 28px would cover a
-          third of the card. Destin's call (spec §11.8 F): keep the 16px
-          geometry, the accessible name and the focus ring. Always visible
-          (no hover-only opacity) with a panel fill + border so it stays
-          legible over a photo. Still owed a `.coarse-hit` pass: 16px is well
-          under the ~44dp touch guideline and this renderer is the Android UI. */}
-      {/* WHY variant/size instead of a className restyle (2026-09-16): the design
-          check flagged this as a ghost button rebuilt by hand. raised + icon-xs are
-          the same look as shared styles; icon-xs keeps the touch-size hit area. */}
-      <Button
-        variant="raised"
-        size="icon-xs"
-        aria-label={`Remove ${label}`}
-        onClick={onRemove}
-        className="absolute top-1 right-1"
+    <Tooltip text={label}>
+      <div
+        data-file-kind={kind}
+        className="relative shrink-0 w-32 h-24 rounded-md border border-edge bg-panel overflow-hidden flex flex-col"
       >
-        ×
-      </Button>
-    </div>
+        <div className="flex-1 min-h-0 bg-inset overflow-hidden">
+          <Preview path={path} imageSrc={imageSrc} />
+        </div>
+        <div className="flex items-center gap-1 px-1.5 h-5 border-t border-edge bg-panel text-fg text-xs shrink-0">
+          <span className="text-fg-dim shrink-0"><FileKindIcon kind={kind} size={12} /></span>
+          <span className="truncate min-w-0">{label}</span>
+        </div>
+        {/* In-chip remover, NOT a panel closer — CloseButton's 28px would cover a
+            third of the card. Destin's call (spec §11.8 F): keep the 16px
+            geometry, the accessible name and the focus ring. Always visible
+            (no hover-only opacity) with a panel fill + border so it stays
+            legible over a photo. Still owed a `.coarse-hit` pass: 16px is well
+            under the ~44dp touch guideline and this renderer is the Android UI. */}
+        {/* WHY variant/size instead of a className restyle (2026-09-16): the design
+            check flagged this as a ghost button rebuilt by hand. raised + icon-xs are
+            the same look as shared styles; icon-xs keeps the touch-size hit area. */}
+        <Button
+          variant="raised"
+          size="icon-xs"
+          aria-label={`Remove ${label}`}
+          onClick={onRemove}
+          className="absolute top-1 right-1"
+        >
+          ×
+        </Button>
+      </div>
+    </Tooltip>
   );
 }
