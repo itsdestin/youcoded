@@ -121,6 +121,35 @@ describe('Copy and Save', () => {
   });
 });
 
+describe('early refusals release the connection; unsafe suggested names are fixed', () => {
+  const tracked = (bytes: Buffer, status: number, type: string) => {
+    const cancel = vi.fn(async () => {});
+    const res: any = new Response(new Uint8Array(bytes), { status, headers: { 'content-type': type } });
+    Object.defineProperty(res, 'body', { value: { cancel, getReader: () => { throw new Error('must not be read'); } } });
+    return { res, cancel };
+  };
+  it('cancels the body on a not-ok reply and on a not-a-picture reply', async () => {
+    const a = tracked(PNG, 404, 'image/png'); net.fetch.mockResolvedValueOnce(a.res);
+    expect((await runPictureAction('copy', 'https://example.com/a.png', null)).reason).toBe('fetch-failed');
+    expect(a.cancel).toHaveBeenCalledTimes(1);
+    const b = tracked(Buffer.from('<html>'), 200, 'text/html'); net.fetch.mockResolvedValueOnce(b.res);
+    expect((await runPictureAction('copy', 'https://example.com/a', null)).reason).toBe('not-a-picture');
+    expect(b.cancel).toHaveBeenCalledTimes(1);
+  });
+  it.each(['CON', 'nul', 'Com1', 'LPT9', 'aux', 'PRN'])('never suggests the Windows reserved name %s', async (name) => {
+    net.fetch.mockResolvedValue(reply(PNG));
+    h.save.mockResolvedValue({ canceled: true });
+    await runPictureAction('save', `https://example.com/${name}.png`, null);
+    expect(h.save.mock.calls.at(-1)![0].defaultPath).toBe(`picture-${name}.png`);
+  });
+  it('an address with no usable name suggests "picture"', async () => {
+    net.fetch.mockResolvedValue(reply(PNG));
+    h.save.mockResolvedValue({ canceled: true });
+    await runPictureAction('save', 'https://example.com/', null);
+    expect(h.save.mock.calls.at(-1)![0].defaultPath).toBe('picture.png');
+  });
+});
+
 describe('sniffPictureType', () => {
   it('knows the common formats by their first bytes and nothing else', () => {
     expect(sniffPictureType(PNG)?.ext).toBe('.png');

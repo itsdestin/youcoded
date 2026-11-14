@@ -7,7 +7,12 @@ import { findChannel } from '../src/main/ipc/channel-table';
 import { bindSessionOps } from '../src/main/ipc/session';
 
 const ctx: any = { door: 'desktop', runtime: null, broadcast: () => {}, sender: { id: 3 } };
-const create = (opts: any) => { bindSessionOps({ createSession: vi.fn(async () => ({ id: 'x' })) } as any); return findChannel('session:create')!.handler(opts, ctx); };
+const create = async (opts: any, make: () => Promise<unknown> = async () => ({ id: 'x' })) => {
+  bindSessionOps({ createSession: vi.fn(make) } as any);
+  const r = await findChannel('session:create')!.handler(opts, ctx).catch(() => null);
+  await Promise.resolve();
+  return r;
+};
 afterEach(() => { bindSessionOps(null); stamp.mockClear(); });
 
 describe('which sessions stamp a folder as used', () => {
@@ -22,6 +27,12 @@ describe('which sessions stamp a folder as used', () => {
   it('a session with no folder (a setup chat) does not', async () => {
     await create({ name: 'Set up X', cwd: '' });
     await create({ name: 'Set up X' });
+    expect(stamp).not.toHaveBeenCalled();
+  });
+
+  it('a start that fails (it throws, or answers with no session) does not', async () => {
+    await create({ name: 'x', cwd: '/home/me/work' }, async () => { throw new Error('could not start'); });
+    await create({ name: 'x', cwd: '/home/me/work' }, async () => ({ ok: false }));
     expect(stamp).not.toHaveBeenCalled();
   });
 });

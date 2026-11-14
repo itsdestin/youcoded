@@ -45,6 +45,9 @@ function stemFromAddress(url: URL): string {
   let name = '';
   try { name = decodeURIComponent(path.posix.basename(url.pathname)); } catch { name = path.posix.basename(url.pathname); }
   name = name.replace(/\.[^.]*$/, '').replace(/[^A-Za-z0-9 _-]/g, '_').replace(/^[._ ]+/, '').slice(0, 80);
+  // WHY (review): Windows cannot save a file named CON, PRN, AUX, NUL, COM1-9 or LPT1-9 (with or without an ending), so those are
+  // prefixed and the person still gets a usable suggestion.
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name)) name = `picture-${name}`;
   return name || 'picture';
 }
 
@@ -57,11 +60,13 @@ async function loadPicture(src: string, timeoutMs: number): Promise<{ bytes: Buf
     timeoutMs,
     headers: { accept: 'image/*' },
   });
-  if (!res.ok) return { ok: false, reason: 'fetch-failed' };
+  // WHY the body is cancelled on every early return: an unread body keeps its connection open until the timeout.
+  const drop = async () => { await res.body?.cancel().catch(() => {}); };
+  if (!res.ok) { await drop(); return { ok: false, reason: 'fetch-failed' }; }
   const declaredType = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
-  if (!declaredType.startsWith('image/')) return { ok: false, reason: 'not-a-picture' };
+  if (!declaredType.startsWith('image/')) { await drop(); return { ok: false, reason: 'not-a-picture' }; }
   const declaredLength = Number(res.headers.get('content-length') ?? 0);
-  if (declaredLength > MAX_PICTURE_BYTES) { await res.body?.cancel().catch(() => {}); return { ok: false, reason: 'too-large' }; }
+  if (declaredLength > MAX_PICTURE_BYTES) { await drop(); return { ok: false, reason: 'too-large' }; }
   // The cap is enforced as the body arrives, so a missing or lying length cannot fill memory.
   const { bytes, truncated } = await readBytesCapped(res, MAX_PICTURE_BYTES);
   if (truncated) return { ok: false, reason: 'too-large' };
