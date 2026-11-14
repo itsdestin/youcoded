@@ -6,13 +6,13 @@
 // `remoteOnError` keeps both exactly: a phone still gets the answer it always got.
 import os from 'os';
 import { IPC } from '../../shared/backend-contract';
-import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from '../folders-service';
+import { listPickerFoldersReady, addFolder, removeFolder, renameFolder, setFolderDescription } from '../folders-service';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
 export const foldersChannels: MainChannelDef[] = [
   defineChannel({
     name: IPC.FOLDERS_LIST, kind: 'handle',
-    handler: () => listPickerFolders(),
+    handler: () => listPickerFoldersReady(),
     // A phone whose folder read failed still shows Home rather than an empty picker.
     remoteOnError: () => [{ path: os.homedir(), nickname: 'Home', addedAt: Date.now(), exists: true }],
   }),

@@ -12,7 +12,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { readFolders, writeFolders, readUsage, writeUsage, homeIsAppPrivate, withoutPrivateHome, pathKey, type SavedFolder } from './saved-folders';
+import { readFolders, writeFolders, homeIsAppPrivate, withoutPrivateHome, pathKey, type SavedFolder } from './saved-folders';
+import { folderUsage, noteProjectUsed, loadFolderUsage } from './folder-usage';
 import { getManagedRoots, isRemovedProject } from './sync-spaces/service';
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 
@@ -67,7 +68,7 @@ export function listPickerFolders(file?: string): PickerFolder[] {
   const known = new Set(result.map((f) => pathKey(f.path)));
   // Last-use stamps of synced projects live in their own small file (saved-folders.ts usageFilePath), applied here to the rows
   // that are only synthesized, so a project used most recently sorts first without ever becoming a saved folder.
-  const usage = managed.length ? readUsage(file) : {};
+  const usage = managed.length ? folderUsage(file) : {};
   for (const p of managed) {
     if (isRemovedFromLists(p.path, saved)) continue;
     if (!known.has(pathKey(p.path))) {
@@ -97,10 +98,7 @@ export function noteFolderUsed(folderPath: unknown, file?: string): void {
     const projects = getManagedRoots()?.listProjects() ?? [];
     const here = projects.find((p) => keyOf(p.path) === keyOf(folderPath));
     if (!here || isRemovedFromLists(here.path, folders)) return;
-    const live = new Set(projects.map((p) => keyOf(p.path)));
-    const usage = Object.fromEntries(Object.entries(readUsage(file)).filter(([k]) => live.has(k)));
-    usage[keyOf(here.path)] = Date.now();
-    writeUsage(usage, file);
+    noteProjectUsed(keyOf(here.path), new Set(projects.map((p) => keyOf(p.path))), file);
   } catch { /* an unwritable list must never stop a session from starting */ }
 }
 
@@ -157,4 +155,10 @@ export function setFolderDescription(folderPath: string, description: string, fi
   entry.description = String(description ?? '').trim().slice(0, PROJECT_DESCRIPTION_MAX) || null;
   writeFolders(folders, file);
   return true;
+}
+
+/** The folder list is asked for through here by the handler, so the usage stamps are loaded (async) before the sync list reads them. */
+export async function listPickerFoldersReady(file?: string): Promise<PickerFolder[]> {
+  await loadFolderUsage(file);
+  return listPickerFolders(file);
 }
