@@ -189,11 +189,15 @@ describe('MarketplaceScreen', () => {
     expect(queryByText(/Couldn't refresh the marketplace/)).toBeNull();
   });
 
-  it('keeps the raw reason out of the sentence, under Details', async () => {
+  it('is one thin line: the sentence and Try again, no Details row, the raw reason logged instead', async () => {
     mpError.registry = 'ECONNRESET 10.0.0.1';
-    const { getByText, queryByText } = await renderScreen();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { getByText, queryByText, container } = await renderScreen();
     expect(getByText("Couldn't refresh the marketplace, so this list may be out of date.")).toBeTruthy();
-    expect(queryByText(/ECONNRESET.*out of date/)).toBeNull();
+    expect(queryByText(/ECONNRESET/)).toBeNull();                                   // not shown
+    expect(queryByText('Details')).toBeNull();                                      // no Details row
+    expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Try again')).toBe(true);
+    expect(warn.mock.calls.some((c) => String(c.join(' ')).includes('ECONNRESET'))).toBe(true); // kept in the log
   });
 
   it('shows no refresh notice when the refresh did not fail', async () => {

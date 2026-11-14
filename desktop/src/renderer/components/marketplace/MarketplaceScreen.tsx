@@ -86,6 +86,9 @@ export default function MarketplaceScreen({
   // read as "nobody has installed anything". `stats.error` is only reported when nothing is on screen to
   // show instead (the context keeps totals it already had).
   const stats = useMarketplaceStats();
+  // Destin: the two strips are one thin line each, so the raw reason is not shown; it is logged once per failure so it is not lost.
+  useEffect(() => { if (mp.registryError) console.warn('[marketplace] refresh failed:', plainMessage(mp.registryError)); }, [mp.registryError]);
+  useEffect(() => { if (stats.error) console.warn('[marketplace] counts failed to load:', plainMessage(stats.error)); }, [stats.error]);
   const statsFailed = !!stats.error && Object.keys(stats.plugins).length === 0 && Object.keys(stats.themes).length === 0;
   const currentPlatform = useCurrentPlatform();
   const isPhoneDevice = deviceNoun() === 'phone';
@@ -530,12 +533,12 @@ export default function MarketplaceScreen({
           it disappears on the next successful refresh. A screen with NOTHING loaded gets the full-screen error instead. */}
       {!!mp.registryError && !registryEmpty && (
         <div className="px-3 sm:px-4 mt-2">
-          <ErrorState variant="inline" message="Couldn't refresh the marketplace, so this list may be out of date." details={plainMessage(mp.registryError)} onRetry={() => { void mp.refresh(); }} />
+          <ErrorState variant="inline" message="Couldn't refresh the marketplace, so this list may be out of date." onRetry={() => { void mp.refresh(); }} />
         </div>
       )}
       {statsFailed && (
         <div className="px-3 sm:px-4 mt-2">
-          <ErrorState variant="inline" message="Couldn't load the install and like counts, so they are hidden." details={plainMessage(stats.error)} onRetry={() => { void stats.refresh(); }} />
+          <ErrorState variant="inline" message="Couldn't load the install and like counts, so they are hidden." onRetry={() => { void stats.refresh(); }} />
         </div>
       )}
 
