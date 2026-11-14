@@ -52,7 +52,7 @@ import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import { useBrowserExpanded } from '../state/browser-store';
-import { ErrorState } from './ui';
+import { HistoryTopMarker } from './HistoryTopMarker';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -491,12 +491,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   /** The timer fires long after the closure that scheduled it went stale. */
   const loadOlderPageRef = useRef<() => void>(() => {});
 
-  // Card #134 round 4: an older page that could not be read used to just stop the scrolling with no hint. `olderFailed` is set only
-  // when a request really failed (a read still being retried on the timer below says nothing yet), by the request of the CURRENT
-  // conversation only, and cleared by a successful page, Try again, and switching conversations.
+  // Card #134 r4: set only by a real failure of the CURRENT conversation's request; cleared by success, Try again, switching conversation.
   const [olderFailed, setOlderFailed] = useState(false);
-  const liveSessionRef = useRef(sessionId);
-  liveSessionRef.current = sessionId;
+  const liveSessionRef = useRef(sessionId); liveSessionRef.current = sessionId;
   const loadOlderPage = useCallback(async () => {
     const cursor = history.cursor;
     if (!cursor || history.loading) return;
@@ -527,16 +524,12 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             unresolvedRetryRef.current.notBefore = 0;
             void loadOlderPageRef.current();
           }, delay);
-        } else if (stillHere()) {
-          console.warn('[chat] older history could not be located after retries');
-          setOlderFailed(true);
-        }
+        } else if (stillHere()) { console.warn('[chat] older history could not be located after retries'); setOlderFailed(true); }
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
         return;
       }
       if (page) {
-        unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
-        if (stillHere()) setOlderFailed(false);
+        unresolvedRetryRef.current = { attempts: 0, notBefore: 0 }; if (stillHere()) setOlderFailed(false);
         // Capture just before prepend: streaming during the await may move the anchor.
         prependAnchorRef.current = captureScrollAnchor();
         // WHY: older pages can hold an orphaned tool; preserve main's recovery verdict.
@@ -546,8 +539,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
       }
     } catch (e) {
-      // Clear the flag so the next scroll retries — a stuck `loading` would make
-      // the rest of the conversation permanently unreachable.
+      // FAILED clears `loading` (a stuck flag would make the rest of the conversation unreachable).
       if (stillHere()) { console.warn('[chat] older history request failed:', e); setOlderFailed(true); }
       dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
     }
@@ -559,8 +551,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // sessions (this component is reused per session id) must not fire it against
   // the new one, and must give the new one a full budget of its own.
   useEffect(() => {
-    unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
-    setOlderFailed(false);
+    unresolvedRetryRef.current = { attempts: 0, notBefore: 0 }; setOlderFailed(false);
     return () => {
       if (unresolvedTimerRef.current) clearTimeout(unresolvedTimerRef.current);
       unresolvedTimerRef.current = null;
@@ -568,7 +559,6 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   }, [sessionId]);
 
   useEffect(() => {
-    // olderFailed: the sentinel is gone while the strip shows, so a still-visible sentinel cannot re-fire the failing read in a loop.
     if (!history.hasMore || history.loading || !history.cursor || olderFailed) return;
     // No IntersectionObserver (an exotic WebView): fall back to nothing rather
     // than eagerly loading the whole conversation, which is the cost this
@@ -1200,14 +1190,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         {/* Paged history: crossing this loads the previous ~30 turns. Rendered
             only while there IS older history, so reaching the beginning of the
             conversation stops the fetching for good. */}
-        {history.hasMore && !olderFailed && (
-          <div ref={historySentinelRef} data-history-sentinel className="h-px" aria-hidden="true" />
-        )}
-        {history.hasMore && olderFailed && (
-          <div className="px-4 pt-2">
-            <ErrorState variant="inline" message="Couldn't load earlier messages."
-              onRetry={() => { unresolvedRetryRef.current = { attempts: 0, notBefore: 0 }; setOlderFailed(false); void loadOlderPage(); }} />
-          </div>
+        {history.hasMore && (
+          <HistoryTopMarker failed={olderFailed} sentinelRef={historySentinelRef} onRetry={() => { unresolvedRetryRef.current = { attempts: 0, notBefore: 0 }; setOlderFailed(false); void loadOlderPage(); }} />
         )}
         {state.timeline.length === 0 && !state.isThinking ? null : (
           <>
