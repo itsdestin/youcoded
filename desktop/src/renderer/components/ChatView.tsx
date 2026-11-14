@@ -52,7 +52,7 @@ import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import { useBrowserExpanded } from '../state/browser-store';
-import { HistoryTopMarker } from './HistoryTopMarker';
+import { HistoryTopMarker, useHeldFlag } from './HistoryTopMarker';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -492,7 +492,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   const loadOlderPageRef = useRef<() => void>(() => {});
 
   // Card #134 r4: set only by a real failure of the CURRENT conversation's request; cleared by success, Try again, switching conversation.
-  const [olderFailed, setOlderFailed] = useState(false);
+  const [olderFailed, setOlderFailed] = useHeldFlag(scrollContainerRef, prependAnchorRef, captureScrollAnchor);
   const liveSessionRef = useRef(sessionId); liveSessionRef.current = sessionId;
   const loadOlderPage = useCallback(async () => {
     const cursor = history.cursor;
@@ -542,7 +542,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       if (stillHere()) { console.warn('[chat] older history request failed:', e); setOlderFailed(true); }
       dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
     }
-  }, [dispatch, sessionId, history.cursor, history.loading, captureScrollAnchor]);
+  }, [dispatch, sessionId, history.cursor, history.loading, captureScrollAnchor, setOlderFailed]);
 
   useEffect(() => { loadOlderPageRef.current = loadOlderPage; });
   useEffect(() => { setOlderFailed(false); }, [history.cursor, history.hasMore]); // refilled by something else: the old failure is moot
@@ -635,7 +635,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       if (endAnchorWindowRef.current === end) endAnchorWindowRef.current = null;
     }
     endAnchorWindowRef.current = end;
-  }, [state.timeline]);
+  }, [state.timeline, olderFailed]);   // olderFailed: the notice box above the messages also holds the reader's place
   // WHY separate: the window must outlive later timeline changes (a streamed delta must not cut the
   // correction short), so the layout effect above has no cleanup of its own; only leaving the chat ends it.
   useEffect(() => () => { endAnchorWindowRef.current?.(); }, []);

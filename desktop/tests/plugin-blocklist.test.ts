@@ -190,15 +190,18 @@ describe('LocalSkillProvider uninstall outcomes', () => {
     expect(removeEntry).toHaveBeenCalledWith('tab-tidy');
   });
   it('a delete that left the folder keeps the plugin listed and says so, truthfully about Claude Code', async () => {
-    vi.mocked(installer.uninstallPlugin).mockResolvedValueOnce({ ok: false, reason: 'delete-failed', unregistered: true, detail: 'EBUSY' });
+    vi.mocked(installer.uninstallPlugin).mockResolvedValueOnce({ ok: false, reason: 'delete-failed', unregistered: true, detail: 'it is in use by another program' });
     const r = await p.uninstall('x');
-    expect(r.failed).toBe('Claude Code no longer loads it, but its folder could not be deleted (EBUSY). Try again to finish removing it');
+    expect(r.failed).toBe('Claude Code no longer loads it, but its folder could not be deleted (it is in use by another program). Try again to finish removing it');
     expect(r.failed).not.toMatch(/fully removed/);
     expect(r.reload).toBe(true);
     expect(removeEntry).not.toHaveBeenCalled();
-    vi.mocked(installer.uninstallPlugin).mockResolvedValueOnce({ ok: false, reason: 'delete-failed', unregistered: false, detail: 'EBUSY' });
+    vi.mocked(installer.uninstallPlugin).mockResolvedValueOnce({ ok: false, reason: 'delete-failed', unregistered: false, detail: 'it is in use by another program' });
     const again = await p.uninstall('x');
-    expect(again.failed).toBe('its folder could not be deleted (EBUSY). Try again to finish removing it');
+    expect(again.failed).toBe('its folder could not be deleted (it is in use by another program). Try again to finish removing it');
     expect(again.reload).toBe(false);
+    // An error we cannot explain gives no reason at all, rather than a raw one.
+    vi.mocked(installer.uninstallPlugin).mockResolvedValueOnce({ ok: false, reason: 'delete-failed', unregistered: false, detail: '' });
+    expect((await p.uninstall('x')).failed).toBe('its folder could not be deleted. Try again to finish removing it');
   });
 });

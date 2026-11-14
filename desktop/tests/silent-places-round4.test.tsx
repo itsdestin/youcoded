@@ -173,3 +173,64 @@ describe('review: newest-wins session meta', () => {
     expect(result.current.tags.has('t1')).toBe(false);
   });
 });
+
+// Round 4 second review: a refused save rolls back to what the server last CONFIRMED, not to the previous unconfirmed screen value.
+describe('session meta rolls back to the last confirmed value', () => {
+  const open = async (api: Record<string, unknown>) => {
+    (window as any).claude = { session: { getMeta: vi.fn().mockResolvedValue({ tags: [], note: '', flags: {}, supported: true }), ...api }, on: {} };
+    const hook = renderHook(() => useSessionMeta('s1'));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });   // let the first read land
+    return hook;
+  };
+  const deferred = () => { let resolve!: (v: unknown) => void; const p = new Promise((r) => { resolve = r; }); return { p, resolve }; };
+
+  it('tag: on then off, first fails late, second fails -> shows OFF (what the server holds), not ON', async () => {
+    const a = deferred(); const b = deferred();
+    const setTag = vi.fn().mockReturnValueOnce(a.p).mockReturnValueOnce(b.p);
+    const { result } = await open({ setTag });
+    act(() => result.current.setTag('t1', true));
+    act(() => result.current.setTag('t1', false));
+    await act(async () => { a.resolve({ ok: false, error: 'x' }); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { b.resolve({ ok: false, error: 'x' }); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.tags.has('t1')).toBe(false);
+  });
+  it('tag: first succeeds (on), second (off) fails -> returns to ON', async () => {
+    const setTag = vi.fn().mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, error: 'x' });
+    const { result } = await open({ setTag });
+    await act(async () => { result.current.setTag('t1', true); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { result.current.setTag('t1', false); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.tags.has('t1')).toBe(true);
+  });
+  it('flag: both fail -> back to the confirmed (unset); first ok then second fails -> first value', async () => {
+    const a = deferred(); const b = deferred();
+    const setFlag = vi.fn().mockReturnValueOnce(a.p).mockReturnValueOnce(b.p);
+    const { result } = await open({ setFlag });
+    act(() => result.current.setFlag('priority' as any, true));
+    act(() => result.current.setFlag('priority' as any, false));
+    await act(async () => { a.resolve({ ok: false }); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { b.resolve({ ok: false }); await Promise.resolve(); await Promise.resolve(); });
+    expect(!!result.current.flags['priority' as keyof typeof result.current.flags]).toBe(false);
+
+    const setFlag2 = vi.fn().mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false });
+    const second = await open({ setFlag: setFlag2 });
+    await act(async () => { second.result.current.setFlag('priority' as any, true); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { second.result.current.setFlag('priority' as any, false); await Promise.resolve(); await Promise.resolve(); });
+    expect(second.result.current.flags['priority' as keyof typeof second.result.current.flags]).toBe(true);
+  });
+  it('note: both fail -> back to the confirmed text; first ok then second fails -> first text', async () => {
+    const a = deferred(); const b = deferred();
+    const setNote = vi.fn().mockReturnValueOnce(a.p).mockReturnValueOnce(b.p);
+    const { result } = await open({ setNote });
+    act(() => result.current.setNote('one'));
+    act(() => result.current.setNote('two'));
+    await act(async () => { a.resolve({ ok: false }); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { b.resolve({ ok: false }); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.note).toBe('');
+
+    const setNote2 = vi.fn().mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false });
+    const second = await open({ setNote: setNote2 });
+    await act(async () => { second.result.current.setNote('one'); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { second.result.current.setNote('two'); await Promise.resolve(); await Promise.resolve(); });
+    expect(second.result.current.note).toBe('one');
+  });
+});

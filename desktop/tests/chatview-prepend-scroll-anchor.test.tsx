@@ -244,4 +244,35 @@ describe('prepending older history does not disturb the reader', () => {
       expect(h.scroller.scrollTop).toBe(300);
     } finally { h.restore(); vi.useRealTimers(); }
   });
+
+  // Round 4 review: the "Couldn't load earlier messages" box above the messages holds the reader's place through the SAME element
+  // anchor (not a hand-rolled scrollTop nudge that double-corrected after the browser clamped on removal).
+  it('the failed-load notice appearing and going moves the view by exactly what the entries moved', async () => {
+    const realRect = Element.prototype.getBoundingClientRect;
+    let scroller!: HTMLElement;
+    const BOX = 60;
+    Element.prototype.getBoundingClientRect = function () {
+      const el = this as HTMLElement;
+      let top = 0;
+      if (!String(el.className ?? '').includes('chat-scroll') && el.classList?.contains('timeline-entry')) {
+        const base = (el.textContent ?? '').includes('older-visible') ? 450 : 550;
+        // entries sit one box lower in the document while the notice is shown
+        top = base + (document.querySelector('[data-history-failed-box]') ? BOX : 0) - (scroller?.scrollTop ?? 0);
+      }
+      return { top, bottom: top + 40, left: 0, right: 0, width: 0, height: 40, x: 0, y: top, toJSON() {} } as DOMRect;
+    };
+    try {
+      (window as any).claude.detach.requestTranscriptPage = vi.fn().mockResolvedValue(null);   // the page fails
+      mocks.state = baseState([userEntry('older-visible'), userEntry('newest')], { cursor: { path: 'p', offset: 10, sizeAtRead: 99 }, hasMore: true, loading: false });
+      const view = render(<ChatView sessionId="s1" visible={true} sessionActive={true} />);
+      scroller = view.container.querySelector('.chat-scroll') as HTMLElement;
+      scroller.scrollTop = 400;
+      await vi.waitFor(() => expect(view.container.querySelector('[data-history-failed-box]')).toBeTruthy());
+      expect(scroller.scrollTop).toBe(400 + BOX);   // moved down by exactly the box, no more
+      // Try again: the box goes (entries move up by the box); the view follows by exactly that.
+      (window as any).claude.detach.requestTranscriptPage = vi.fn(() => new Promise(() => {}));   // the retry is still in flight
+      await act(async () => { (view.getByText('Try again') as HTMLElement).click(); });
+      expect(scroller.scrollTop).toBe(400);
+    } finally { Element.prototype.getBoundingClientRect = realRect; }
+  });
 });

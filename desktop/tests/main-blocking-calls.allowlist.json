@@ -415,7 +415,6 @@
     {"file": "plugin-installer.ts", "fn": "sweepStaleUpgradeDirs", "call": "fs.readdirSync", "count": 1},
     {"file": "plugin-installer.ts", "fn": "sweepStaleUpgradeDirs", "call": "fs.rmSync", "count": 1},
     {"file": "plugin-installer.ts", "fn": "uninstallPlugin", "call": "fs.existsSync", "count": 2},
-    {"file": "plugin-installer.ts", "fn": "uninstallPlugin", "call": "fs.rmSync", "count": 2},
     {"file": "plugin-installer.ts", "fn": "upgradePluginFromGit", "call": "fs.existsSync", "count": 3},
     {"file": "plugin-installer.ts", "fn": "upgradePluginFromGit", "call": "fs.mkdirSync", "count": 1},
     {"file": "plugin-installer.ts", "fn": "upgradePluginFromGit", "call": "fs.renameSync", "count": 3},

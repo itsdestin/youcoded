@@ -191,7 +191,7 @@ export class IntegrationInstaller {
         // the page closed as if it worked. Now the manifest stays (it IS still installed) and the caller sees the failure.
         // (A refused id or an already-missing folder still clears, as before.)
         if (outcome && outcome.ok === false && outcome.reason === "delete-failed") {
-          throw new IntegrationUninstallError(`its folder could not be deleted (${outcome.detail})`);
+          throw new IntegrationUninstallError(`its folder could not be deleted${outcome.detail ? ` (${outcome.detail})` : ''}`);
         }
       }
     } catch (err) {

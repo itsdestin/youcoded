@@ -2603,7 +2603,7 @@ export function installShim(): void {
       openFolder: () => invoke('dialog:open-folder').catch(() => null),
       openSound: () => invoke('dialog:open-sound').catch(() => null),
       readTranscriptMeta: (p: string) => invoke('transcript:read-meta', { path: p }),
-      saveClipboardImage: async () => undefined as unknown as null, // undefined = unsupported here, vs desktop's null = tried and got nothing (#134)
+      saveClipboardImage: async (): Promise<string | null | undefined> => undefined,   // unsupported here; silent pending the owner's decision (backend-contract.ts)
     },
     shell: {
       // Matches the URL hardcoded in desktop's ipc-handlers.ts OPEN_CHANGELOG

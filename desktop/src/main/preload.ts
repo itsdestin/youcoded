@@ -1504,7 +1504,7 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.DIALOG_OPEN_SOUND),
     readTranscriptMeta: (transcriptPath: string): Promise<{ model: string; contextPercent: number } | null> =>
       ipcRenderer.invoke(IPC.READ_TRANSCRIPT_META, { path: transcriptPath }),
-    saveClipboardImage: (): Promise<string | null> =>
+    saveClipboardImage: (): Promise<string | null | undefined> =>   // see backend-contract.ts for what each value means
       ipcRenderer.invoke(IPC.CLIPBOARD_SAVE_IMAGE),
   },
   shell: {

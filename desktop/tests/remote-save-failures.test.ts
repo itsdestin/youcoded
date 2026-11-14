@@ -25,6 +25,24 @@ describe('remote:set-config when the save throws', () => {
     expect(cfg.keepAwakeHours).toBe(0);
     expect(applyKeepAwake.mock.calls).toEqual([[4], [0]]);
   });
+  it('keep-awake itself throwing restores the old values and rejects with THAT error', async () => {
+    const cfg = fakeConfig(false); vi.spyOn(console, 'error').mockImplementation(() => {});
+    const applyKeepAwake = vi.fn().mockImplementationOnce(() => { throw new Error('power service down'); });
+    bindRemoteAdmin({ config: cfg, server: undefined, applyKeepAwake });
+    await expect(channel(IPC.REMOTE_SET_CONFIG).handler({ enabled: true, keepAwakeHours: 4 }, ctx)).rejects.toThrow('power service down');
+    expect(cfg.enabled).toBe(false);
+    expect(cfg.keepAwakeHours).toBe(0);
+    expect(cfg.save).not.toHaveBeenCalled();
+  });
+  it('a restore step that throws (keep-awake, or the log) does not replace the original error', async () => {
+    const cfg = fakeConfig(true);
+    vi.spyOn(console, 'error').mockImplementation(() => { throw new Error('log pipe closed'); });
+    const applyKeepAwake = vi.fn().mockReturnValueOnce(undefined).mockImplementationOnce(() => { throw new Error('restore failed'); });
+    bindRemoteAdmin({ config: cfg, server: undefined, applyKeepAwake });
+    await expect(channel(IPC.REMOTE_SET_CONFIG).handler({ enabled: true, keepAwakeHours: 4 }, ctx)).rejects.toThrow('EACCES');
+    expect(cfg.keepAwakeHours).toBe(0);
+    expect(cfg.enabled).toBe(false);
+  });
   it('a save that works keeps the new values and answers them', async () => {
     const cfg = fakeConfig(false); const applyKeepAwake = vi.fn();
     bindRemoteAdmin({ config: cfg, server: undefined, applyKeepAwake });

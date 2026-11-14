@@ -39,7 +39,7 @@ import { formatVersionLine } from '../../shared/version-line';
 import type { BuddyHelperStatus, BuddyStyle } from '../../shared/types';
 import { BuddyStyleRow, readBuddyStyle, saveBuddyStyle, trayPlaceName } from './BuddyStyleRow';
 import { Button, CARD_LEVEL_1, CloseButton, Slider, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
-import { plainMessage } from '../utils/ipc-error';
+import { plainMessage, isUnsupportedHere } from '../utils/ipc-error';
 import { announceFailed } from '../utils/announce';
 import { useRemoteSaves, usePasswordFailed } from '../hooks/useRemoteSaves';
 import { useDefaultsSaver } from '../hooks/useDefaultsSaver';
@@ -2945,7 +2945,8 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     } catch (e) {
       console.warn('[remote] setting the password failed:', e);
       setPasswordStatus('idle');
-      setPasswordFailed(true);
+      // An "unsupported here" rejection is not a failure (owner rule: no false error warnings), same as the other notices.
+      if (!isUnsupportedHere(e)) setPasswordFailed(true);
     }
   }, [newPassword]);
 

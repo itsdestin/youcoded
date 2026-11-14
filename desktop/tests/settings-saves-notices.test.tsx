@@ -180,6 +180,13 @@ describe('Remote access password (desktop)', () => {
     expect(await screen.findByText("Couldn't set the password.")).toBeInTheDocument();
     expect(field().value).toBe('correct-horse-9');
   });
+  it('an "unsupported here" rejection of Set shows no "Couldn\'t set the password."', async () => {
+    const setPassword = vi.fn().mockRejectedValue(unsupported);
+    await typeAndSet(setPassword);
+    await vi.waitFor(() => expect(setPassword).toHaveBeenCalled());
+    await settle();
+    expect(screen.queryByText("Couldn't set the password.")).toBeNull();
+  });
   it('a Set that works shows no failure and clears the box', async () => {
     const setPassword = vi.fn().mockResolvedValue(true);
     await typeAndSet(setPassword);

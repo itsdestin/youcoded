@@ -31,9 +31,12 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   const [note, setNoteState] = useState('');
   // Default TRUE so the controls don't flash disabled during the first getMeta.
   const [supported, setSupported] = useState(true);
-  // Last value we believe the backend accepted — the rollback target for a
-  // refused write. Kept in a ref so back-to-back setNote calls chain correctly.
+  // Last value the backend CONFIRMED (answered without ok:false) — the rollback target for a refused write. NOT the previous
+  // optimistic value: with save 1 (on) and save 2 (off) in flight, a failing save 2 must return to what the server really holds,
+  // not to save 1's unconfirmed "on". Refs so back-to-back calls see each other; a read of server truth resets them (round 4 review).
   const savedNote = useRef('');
+  const confirmedTags = useRef<Set<string>>(new Set());
+  const confirmedFlags = useRef<Partial<Record<SessionFlagName, boolean>>>({});
   // Counts the person's note edits. A read that started before the latest edit must not put the
   // older text back: the editor saves on every keystroke, and a re-read landing mid-typing (a
   // reconnect's, or the change event after a save) snapped letters back (review of the
@@ -72,7 +75,7 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   }, []);
 
   const refetch = useCallback((opts?: { keepOnFailure?: boolean }) => {
-    if (!sessionId) { setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = ''; setSupported(true); return; }
+    if (!sessionId) { setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = ''; confirmedTags.current = new Set(); confirmedFlags.current = {}; setSupported(true); return; }
     const editsAtStart = noteEdits.current;
     const mine = ++readSeq.current;
     // WHY a failed read locks the editor (code review 2026-09-11, F1, on error inventory
@@ -81,7 +84,7 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     // nobody was shown. The hosts now answer `unreadable`; that, or a rejected call, takes
     // the same disabled state a refusing host does, with the reason in the tooltip.
     const markUnreadable = (reason: string) => {
-      setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = '';
+      setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = ''; confirmedTags.current = new Set(); confirmedFlags.current = {};
       setSupported(false);
       setUnsupportedReason(`Couldn't load this conversation's tags and note, so they can't be changed here: ${reason}`);
     };
@@ -90,8 +93,10 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
         if (mine !== readSeq.current) return;
         if (m?.unreadable) { markUnreadable(m.unreadable); return; }
         setTags(new Set(m?.tags ?? []));
+        confirmedTags.current = new Set(m?.tags ?? []);   // server truth is the rollback target
         // Missing is "none set" — an older peer omits the field entirely.
         setFlags(m?.flags ?? {});
+        confirmedFlags.current = { ...(m?.flags ?? {}) };
         if (noteEdits.current === editsAtStart) {
           setNoteState(m?.note ?? '');
           // Server truth resets the rollback target too, or a later refusal would
@@ -137,8 +142,9 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     if (!sessionId) return;
     const mine = nextSeq(`tag:${tagId}`);
     const isNewest = () => fieldSeq.current[`tag:${tagId}`] === mine;
+    // WHY confirmed, not "the opposite of next": roll back to what the server last accepted for this tag.
     const revert = () => setTags((prev) => {
-      const s = new Set(prev); if (next) s.delete(tagId); else s.add(tagId); return s;
+      const s = new Set(prev); if (confirmedTags.current.has(tagId)) s.add(tagId); else s.delete(tagId); return s;
     });
     setTags((prev) => { const s = new Set(prev); if (next) s.add(tagId); else s.delete(tagId); return s; });
     // Optimistic, but NOT fire-and-forget: an ok:false (e.g. a native session, whose
@@ -148,7 +154,10 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     // backend-side and we leave the optimistic value rather than fighting the network.
     try {
       Promise.resolve((window as any).claude.session.setTag(sessionId, tagId, next))
-        .then((res: any) => { if (res && res.ok === false && isNewest()) { revert(); noteRefusal(res); sayRefused(sessionId, 'save this tag change', res); } })
+        .then((res: any) => {
+          if (!res || res.ok !== false) { if (next) confirmedTags.current.add(tagId); else confirmedTags.current.delete(tagId); return; }
+          if (isNewest()) { revert(); noteRefusal(res); sayRefused(sessionId, 'save this tag change', res); }
+        })
         .catch(() => {});
     } catch { /* backend logs */ }
   }, [sessionId, noteRefusal, sayRefused]);
@@ -156,16 +165,13 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   const setNote = useCallback((text: string) => {
     if (!sessionId) return;
     const myEdit = ++noteEdits.current;
-    // Revert target comes from a REF, not the render closure: two setNote calls
-    // dispatched from the same callback instance would both capture the same
-    // closure value, so a failed second write could roll back past the first.
-    const prevNote = savedNote.current;
-    savedNote.current = text;
+    // Revert target is the last CONFIRMED text (a ref, so it is current even for two calls from one callback instance).
     setNoteState(text);
     try {
       Promise.resolve((window as any).claude.session.setNote(sessionId, text))
         .then((res: any) => {
-          if (res && res.ok === false && noteEdits.current === myEdit) { savedNote.current = prevNote; setNoteState(prevNote); noteRefusal(res); sayRefused(sessionId, 'save the note', res); }
+          if (!res || res.ok !== false) { savedNote.current = text; return; }
+          if (noteEdits.current === myEdit) { setNoteState(savedNote.current); noteRefusal(res); sayRefused(sessionId, 'save the note', res); }
         })
         .catch(() => {});
     } catch { /* backend logs */ }
@@ -175,15 +181,17 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   // the local value back, or the flag looks set until the next refetch.
   const setFlag = useCallback((flag: SessionFlagName, next: boolean) => {
     if (!sessionId) return;
-    const prev = !!flags[flag];
     const mine = nextSeq(`flag:${flag}`);
     setFlags((f) => ({ ...f, [flag]: next }));
     try {
       Promise.resolve((window as any).claude.session.setFlag(sessionId, flag, next))
-        .then((res: any) => { if (res && res.ok === false && fieldSeq.current[`flag:${flag}`] === mine) { setFlags((f) => ({ ...f, [flag]: prev })); noteRefusal(res); sayRefused(sessionId, 'save this change', res); } })
+        .then((res: any) => {
+          if (!res || res.ok !== false) { confirmedFlags.current[flag] = next; return; }
+          if (fieldSeq.current[`flag:${flag}`] === mine) { setFlags((f) => ({ ...f, [flag]: !!confirmedFlags.current[flag] })); noteRefusal(res); sayRefused(sessionId, 'save this change', res); }
+        })
         .catch(() => {});
     } catch { /* backend logs */ }
-  }, [sessionId, flags, noteRefusal, sayRefused]);
+  }, [sessionId, noteRefusal, sayRefused]);
 
   return { tags, flags, note, supported, unsupportedReason, setTag, setNote, setFlag };
 }

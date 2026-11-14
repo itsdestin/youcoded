@@ -1180,7 +1180,7 @@ interface ClaudeApi {
     openFolder: () => Promise<string | null>;
     openSound: () => Promise<string | null>;
     readTranscriptMeta: (path: string) => Promise<{ model: string; contextPercent: number } | null>;
-    saveClipboardImage: () => Promise<string | null>;
+    saveClipboardImage: () => Promise<string | null | undefined>;   // path | null = tried, got nothing (reported) | undefined = phone can't paste (SILENT, owner to decide)
   };
   shell: {
     openChangelog: () => Promise<void>;

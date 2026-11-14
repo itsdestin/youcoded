@@ -23,10 +23,10 @@ beforeEach(() => un.uninstallPlugin.mockReset());
 
 describe('IntegrationInstaller.uninstall', () => {
   it('throws with the real reason and keeps the manifest when the folder could not be deleted', async () => {
-    un.uninstallPlugin.mockResolvedValue({ ok: false, reason: 'delete-failed', unregistered: true, detail: 'EBUSY' });
+    un.uninstallPlugin.mockResolvedValue({ ok: false, reason: 'delete-failed', unregistered: true, detail: 'it is in use by another program' });
     const i = make();
     await expect(i.uninstall('google-services')).rejects.toBeInstanceOf(IntegrationUninstallError);
-    await expect(i.uninstall('google-services')).rejects.toThrow('EBUSY');
+    await expect(i.uninstall('google-services')).rejects.toThrow('it is in use by another program');
     expect(i.readManifest()['google-services']?.installed).toBe(true);
   });
   it('a refused id or a folder already gone still clears the manifest', async () => {

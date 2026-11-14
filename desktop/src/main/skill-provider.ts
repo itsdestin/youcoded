@@ -561,7 +561,7 @@ export class LocalSkillProvider {
         this.installedCache = null;
         this.onCacheInvalidated?.();
         const where = outcome.unregistered ? 'Claude Code no longer loads it, but ' : '';
-        return { type: 'plugin', failed: `${where}its folder could not be deleted (${outcome.detail}). Try again to finish removing it`, reload: outcome.unregistered };
+        return { type: 'plugin', failed: `${where}its folder could not be deleted${outcome.detail ? ` (${outcome.detail})` : ''}. Try again to finish removing it`, reload: outcome.unregistered };
       }
       // A plugin turned off as unsafe is held outside the plugins folder: Remove deletes that too.
       await fs.promises.rm(turnedOffDir(pluginId), { recursive: true, force: true }).catch(() => {});
