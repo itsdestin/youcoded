@@ -55,6 +55,7 @@ import { resolveStaticFile } from './remote-static-path';
 import { log } from './logger';
 import { CLOSE_REPLACED, CLOSE_DEVICE_EXPIRED, DEVICE_EXPIRY_DAYS } from '../shared/remote-close-codes';
 import { AuthThrottle, VerificationQueue } from './remote-auth-throttle';
+import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 
 const AUTH_TIMEOUT_MS = 5000;
 // The most an unauthenticated socket may buffer before it signs in. The auth
@@ -1098,7 +1099,7 @@ export class RemoteServer {
     // what an older page that expects a snapshot has no way to use.
     const drop = () => { this.removeClient(client); };
     ws.on('pong', () => { client.missedPings = 0; client.lastHeardAt = Date.now(); });
-    ws.on('message', (raw) => { client.missedPings = 0; client.lastHeardAt = Date.now(); void this.handleMessage(client, raw as Buffer | string); });
+    ws.on('message', (raw) => { client.missedPings = 0; client.lastHeardAt = Date.now(); this.handleMessage(client, raw as Buffer | string).catch((err) => this.answerFailedMessage(client, raw as Buffer | string, err)); });
     ws.on('close', (code: number, reason: Buffer) => {
       const why = reason && reason.length ? ` (${reason.toString()})` : '';
       // Silence before the drop separates "the phone went away" from "the phone was talking
@@ -1368,6 +1369,22 @@ export class RemoteServer {
   }
 
   // --- Helpers ---
+
+  /** A message handler threw (card #134, error inventory Backend row 11). Before this, the `switch` cases without
+   *  their own try/catch left the phone or browser waiting its full 30 s and then showing "Request <type> timed out",
+   *  hiding the host's real reason and making the 'did it run?' check answer "unknown". The table path already answers a
+   *  throw this way (channel-table.ts); this gives the older `switch` cases the same: an awaited request (one with an
+   *  id) is answered at once with the failure flag, which the page turns into a rejection carrying the host's own
+   *  sentence. A message with no id (a push) has no one waiting, so it is only logged. */
+  private answerFailedMessage(client: AuthenticatedClient, raw: Buffer | string, err: unknown): void {
+    const message = err instanceof Error ? err.message : String(err);
+    let type: unknown; let id: unknown;
+    try { ({ type, id } = JSON.parse(raw.toString())); } catch { /* unparseable: nothing to answer */ }
+    console.warn(`[remote-server] handler for ${String(type)} failed:`, message);
+    if (typeof type === 'string' && typeof id === 'string' && id) {
+      this.respond(client, type, id, { ok: false, error: message, [TABLE_ERROR_FLAG]: true });
+    }
+  }
 
   /** Returns how many characters were sent (0 when the socket had closed). */
   private respond(client: AuthenticatedClient, type: string, id: string, payload: any): number {
