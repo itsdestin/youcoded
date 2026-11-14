@@ -79,4 +79,27 @@ describe('Project View when a list will not load', () => {
     await act(async () => { fireEvent.click(view.getByText('Try again')); });
     await waitFor(() => expect(view.getByText('No context files found for this project.')).toBeTruthy());
   });
+
+  // Card #134 round 4: the project list itself failing used to leave "Select a project to view its artifacts." with no hint.
+  it('Project list: says it could not load with Try again, which re-reads and clears the notice', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setup(() => Promise.resolve({ ok: true, conversations: [] }), () => Promise.resolve({ ok: true, groups: [] }));
+    const list = vi.fn()
+      .mockRejectedValueOnce(new Error('index unreadable'))
+      .mockResolvedValue({ ok: true, projects: [project] });
+    (window as any).claude.artifacts.listProjectsIndex = list;
+    const view = render(<Harness />);
+    expect(await view.findByText("Couldn't load your projects.")).toBeTruthy();
+    expect(view.queryByText('Select a project to view its artifacts.')).toBeNull();
+    await act(async () => { fireEvent.click(view.getByText('Try again')); });
+    await waitFor(() => expect(view.queryByText("Couldn't load your projects.")).toBeNull());
+    expect(list).toHaveBeenCalled();
+  });
+
+  it('Project list: a list that loads shows no notice', async () => {
+    setup(() => Promise.resolve({ ok: true, conversations: [] }), () => Promise.resolve({ ok: true, groups: [] }));
+    const view = render(<Harness />);
+    await waitFor(() => expect(view.getAllByText('Proj').length).toBeGreaterThan(0));
+    expect(view.queryByText("Couldn't load your projects.")).toBeNull();
+  });
 });

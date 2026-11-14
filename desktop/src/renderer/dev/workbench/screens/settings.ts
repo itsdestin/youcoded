@@ -162,6 +162,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // "Remove backup?" on the default fixture's one backend (drive-1).
   settings('settings/sync/remove-backend', 'dialog'),
   settings('settings/remote', 'dialog'),
+  // Card #134 round 4: flipping the Enabled switch fails (the save rejects), so a box under the switch says so with Try again.
+  { ...settings('settings/remote#save-failed', 'dialog', 'error-state'), params: { fail: 'remote.setConfig' }, open: [{ do: 'click', target: { role: 'switch', label: 'Remote access server enabled' } }], newIn: 'after' as const, mark: 'settings/remote' },
   // Set up, with a paired phone and a paired tablet last used a while ago (the "Last used" line; 90-day sign-out).
   { ...settings('settings/remote#devices', 'dialog'), params: { remotePreview: 'ready' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   // Card #216: the same list with a phone signed out after 90 unused days, kept as a quiet row with Remove.
@@ -186,6 +188,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/shortcuts', 'dialog'),
   settings('settings/donate', 'dialog'),
   settings('settings/about', 'dialog'),
+  // Card #134 round 4: the usage-stats setting could not be read, so the row says so with Try again (the Before has no row at all).
+  { ...settings('settings/about#stats-read-failed', 'dialog', 'error-state'), params: { fail: 'analytics.getOptIn' }, newIn: 'after' as const, mark: 'settings/about' },
   { ...settings('settings/about#account-open', 'dialog', 'fold'), open: ['Your account (optional)'] },
   // The fold header's hover (submit-ticket-3#ST3-5: "not rounded"). Shoot at the normal 1.5×:
   // the pointer offset that once landed a hover one row off was fixed on 2026-10-06 (a394a871).
