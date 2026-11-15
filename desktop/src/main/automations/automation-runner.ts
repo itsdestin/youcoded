@@ -27,13 +27,18 @@ export interface EngineRun {
   /** Ask the person about one step. Resolves when they answer, when the wait runs out, or at once when
    *  this automation skips instead of waiting. `note` goes back to the model as the step's result. */
   ask: (q: { action: string; detail?: string; toolId?: string }) => Promise<{ allow: boolean; note: string }>;
+  /** True when this run was cut off by the app closing and is being picked up again (review deck Q-closed).
+   *  The engine continues from its saved conversation when it can; when it cannot it starts over and says
+   *  so in its result (`startedOver`). */
+  resume?: boolean;
   /** Report what a step cost. Returns false when the monthly limit is now reached: finish nothing more. */
   spent: (dollars: number, tokens: number) => Promise<boolean>;
 }
 
 export interface EngineHandle {
-  /** Settles when the run ends on its own. `news` = it has something to tell the person. */
-  done: Promise<{ summary: string; news?: boolean }>;
+  /** Settles when the run ends on its own. `news` = it has something to tell the person. `startedOver` =
+   *  a picked-up run could not continue and began again from the top. */
+  done: Promise<{ summary: string; news?: boolean; startedOver?: boolean }>;
   /** Stop it now. `done` then rejects or resolves; either is ignored. */
   stop: () => void;
 }
@@ -117,28 +122,48 @@ export class AutomationRunner {
     const record: StoredRun = { id: runId, startedAt: now, outcome: 'running', summary: '', tokens: 0 };
     await store.startRun(jobId, record);
     const liveRun: LiveRun = { jobId, record, skipped: [], handle: undefined as unknown as EngineHandle };
-    this.live.set(runId, liveRun);
+    await this.launch(liveRun, job, extra);
+    return { started: true, runId };
+  }
+
+  /** Hand a run to its engine and record how it ends. Shared by a fresh start and a picked-up run. */
+  private async launch(liveRun: LiveRun, job: StoredAutomation, extra: { instruction?: string; eventData?: string; resume?: boolean }): Promise<void> {
+    const jobId = liveRun.jobId;
+    this.live.set(liveRun.record.id, liveRun);
     // Before the engine starts: its very first step already reads the permissions from here.
     this.snapshot.set(jobId, job);
     try {
       liveRun.handle = this.opts.engineFor(job)({
-        runId, job,
+        runId: liveRun.record.id, job,
         instruction: extra.instruction ?? job.instruction,
         ...(extra.eventData !== undefined ? { eventData: extra.eventData } : {}),
+        ...(extra.resume ? { resume: true } : {}),
         current: () => this.snapshot.get(jobId),
         ask: (q) => this.ask(liveRun, q),
         spent: (d, t) => this.spent(liveRun, d, t),
       });
     } catch (err) {
       await this.finish(liveRun, 'failed', `Couldn’t start: ${err instanceof Error ? err.message : String(err)}`);
-      return { started: true, runId };
+      return;
     }
     void liveRun.handle.done.then(
-      (r) => this.finish(liveRun, liveRun.skipped.length > 0 ? 'skipped' : r.news ? 'news' : 'done', r.summary),
+      // "Started over" leads the line in the run list, so a run that repeated its early steps says so.
+      (r) => this.finish(liveRun, liveRun.skipped.length > 0 ? 'skipped' : r.news ? 'news' : 'done', r.startedOver ? `Started over after YouCoded was closed. ${r.summary}` : r.summary),
       (err) => this.finish(liveRun, 'failed', `Stopped with an error: ${err instanceof Error ? err.message : String(err)}`),
     );
     this.opts.onChanged();
-    return { started: true, runId };
+  }
+
+  /** At app start: pick up every run that was going (or waiting for an answer) when the app last closed
+   *  (review deck Q-closed). It keeps its place in the run list and is not counted as a new run today. */
+  async recover(): Promise<void> {
+    for (const job of await this.opts.store.list()) {
+      for (const record of await this.opts.store.runs(job.id)) {
+        if ((record.outcome !== 'running' && record.outcome !== 'waiting') || this.live.has(record.id)) continue;
+        const liveRun: LiveRun = { jobId: job.id, record: { ...record, outcome: 'running' }, skipped: record.skipped ? [...record.skipped] : [], handle: undefined as unknown as EngineHandle };
+        await this.launch(liveRun, job, { resume: true });
+      }
+    }
   }
 
   /** The automation each going run reads its permissions from; refreshed whenever one is saved. */

@@ -189,6 +189,8 @@ export class AutomationsService {
     if (this.timer) return;
     if (from !== undefined && Number.isFinite(from) && from < this.lastChecked) this.lastChecked = from;
     await fs.mkdir(this.deps.dir(), { recursive: true }).catch(() => {});
+    // Runs cut off when the app last closed carry on before anything new is started.
+    await this.runner.recover().catch(() => { /* a run that cannot be picked up must not stop the schedule */ });
     this.timer = setInterval(() => { void this.tick(); }, TICK_MS);
     // WHY unref: the schedule check must never keep the app from quitting.
     (this.timer as { unref?: () => void }).unref?.();

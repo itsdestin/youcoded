@@ -1,6 +1,6 @@
 // An automation's run on one of the app's own models: what the session is built with and what comes back.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -25,7 +25,7 @@ type Built = Parameters<NativeEngineDeps['createSession']>[0];
 
 /** A session that plays a script: the test says what the "model" does when it is sent the first message. */
 function fakeDeps(play: (built: Built, emit: (type: string, data: unknown) => void, sent: string) => Promise<void>) {
-  const seen: { built?: Built; sent?: string; interrupted: boolean; disposed: boolean } = { interrupted: false, disposed: false };
+  const seen: { built?: Built; sent?: string; seeded?: unknown[]; interrupted: boolean; disposed: boolean } = { interrupted: false, disposed: false };
   const deps: NativeEngineDeps = {
     workDirFor: (id) => path.join(root, 'work', id),
     transcriptFor: (id, run) => path.join(root, 'runs', id, `${run}.jsonl`),
@@ -34,6 +34,7 @@ function fakeDeps(play: (built: Built, emit: (type: string, data: unknown) => vo
       const bus = new EventEmitter();
       return {
         session: {
+          seedHistory: (messages) => { seen.seeded = messages; },
           on: (ev, fn) => bus.on(ev, fn),
           interrupt: () => { seen.interrupted = true; },
           send: async (text) => { seen.sent = text; await play(built, (type, data) => bus.emit('transcript-event', { type, data }), text); },
@@ -107,5 +108,42 @@ describe('native engine', () => {
   it('words a question for the person', () => {
     expect(wordAsk({ sessionId: 's', toolName: 'Write', toolInput: { file_path: '/a/b.txt' }, denyListed: false })).toEqual({ action: 'Write a file', detail: '/a/b.txt' });
     expect(wordAsk({ sessionId: 's', toolName: 'WebFetch', toolInput: { url: 'https://a.com/x' }, denyListed: false })).toEqual({ action: 'Visit a website', detail: 'https://a.com/x' });
+  });
+
+  /** A saved conversation: the instruction, one finished step, and one step the app closed in the middle of. */
+  function saveCutOffRun() {
+    const dir = path.join(root, 'runs', 'one');
+    mkdirSync(dir, { recursive: true });
+    const ev = (type: string, data: unknown, i: number) => JSON.stringify({ type, sessionId: 'r1', uuid: `u${i}`, timestamp: i, data });
+    writeFileSync(path.join(dir, 'r1.jsonl'), [
+      ev('user-message', { text: 'do it' }, 1),
+      ev('tool-use', { toolUseId: 't1', toolName: 'Read', toolInput: { file_path: '/a/list.txt' } }, 2),
+      ev('tool-result', { toolUseId: 't1', toolName: 'Read', toolResult: 'eggs', isError: false }, 3),
+      ev('tool-use', { toolUseId: 't2', toolName: 'Bash', toolInput: { command: 'mail -s hi sam' } }, 4),
+      '{"type":"tool-res', // the line being written when the app closed
+    ].join('\n'));
+  }
+
+  it('a picked-up run continues from its saved conversation and asks before redoing the half-done step', async () => {
+    saveCutOffRun();
+    const asked: unknown[] = [];
+    const { deps, seen } = fakeDeps(async (_b, emit) => { emit('assistant-text', { text: 'Summary: Finished the rest.', partId: 'z' }); });
+    const result = await nativeEngine(deps)(runOf(job(), { resume: true, ask: async (q) => { asked.push(q); return { allow: false, note: '' }; } })).done;
+    expect(result).toEqual({ summary: 'Finished the rest.', news: false });
+    expect(asked).toEqual([{ action: 'Run a step again that may have already run', detail: 'Run a command: mail -s hi sam' }]);
+    // The finished step is in what it remembers; the half-done one is not.
+    expect(JSON.stringify(seen.seeded)).toContain('eggs');
+    expect(JSON.stringify(seen.seeded)).not.toContain('mail -s hi sam');
+    expect(seen.sent).toContain('Do not repeat steps that already finished.');
+    expect(seen.sent).toContain('(Run a command: mail -s hi sam) may or may not have finished. Do not run it again');
+  });
+
+  it('a picked-up run with nothing saved starts over and says so', async () => {
+    const { deps, seen } = fakeDeps(async (_b, emit) => { emit('assistant-text', { text: 'Summary: Did it all.', partId: 'z' }); });
+    const result = await nativeEngine(deps)(runOf(job(), { resume: true })).done;
+    expect(result).toEqual({ summary: 'Did it all.', news: false, startedOver: true });
+    expect(seen.seeded).toBeUndefined();
+    expect(seen.sent).toBe('do it');
+    expect(existsSync(path.join(root, 'runs', 'one', 'r1.jsonl'))).toBe(true);
   });
 });

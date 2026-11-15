@@ -121,7 +121,7 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
     let proc: ClaudeProcess | undefined;
     let stopped = false;
 
-    const done = (async (): Promise<{ summary: string; news?: boolean }> => {
+    const done = (async (): Promise<{ summary: string; news?: boolean; startedOver?: boolean }> => {
       const on = run.job.runsOn;
       if (!on || on.runtime !== 'claude') throw new Error('No model is chosen for this automation.');
       const workDir = deps.workDirFor(run.job.id);
@@ -165,7 +165,7 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
         reply(requestId, a.allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: a.note || 'The person said no. Carry on without it.' });
       };
 
-      return await new Promise<{ summary: string; news?: boolean }>((resolve, reject) => {
+      return await new Promise<{ summary: string; news?: boolean; startedOver?: boolean }>((resolve, reject) => {
         let buffer = '';
         let errors = '';
         let result: { ok: boolean; text: string } | undefined;
@@ -197,7 +197,8 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
         child.stderr.on('data', (chunk) => { if (errors.length < 2000) errors += String(chunk); });
         child.on('error', (err) => reject(new Error((err as NodeJS.ErrnoException).code === 'ENOENT' ? 'Claude Code is not installed on this computer.' : err.message)));
         child.on('close', (code) => {
-          if (result?.ok) resolve(readEnding(result.text));
+          // Claude Code saves no session (see the header), so a picked-up run always begins again.
+          if (result?.ok) resolve({ ...readEnding(result.text), ...(run.resume ? { startedOver: true } : {}) });
           else if (result) reject(new Error(result.text || 'Claude Code ended the run with an error.'));
           // Never an invented cause: what Claude Code itself printed, or only the fact that it stopped.
           else reject(new Error(errors.trim().split('\n').slice(-1)[0] || `Claude Code stopped before finishing (code ${code ?? 'unknown'}).`));

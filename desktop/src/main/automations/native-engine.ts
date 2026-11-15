@@ -12,7 +12,9 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { ModelBinding } from '../../shared/provider-types';
 import type { PermissionDecision } from '../../shared/permission-types';
+import type { ModelMessage } from 'ai';
 import type { TranscriptEvent } from '../../shared/types';
+import { hasUnpairedToolCalls, rebuildHistory } from '../harness/history-rebuild';
 import type { AskDecision, AskRequest } from '../harness/permission-broker';
 import type { EngineHandle, EngineRun, RunEngine } from './automation-runner';
 import { buildJobDecide } from './job-decide';
@@ -20,6 +22,8 @@ import { firstMessage, readEnding, runBrief } from './run-brief';
 
 /** The part of the assistant loop this engine uses. */
 interface RunSession {
+  /** Put a saved conversation back before the next message (a picked-up run). */
+  seedHistory(messages: ModelMessage[]): void;
   send(text: string): Promise<void>;
   on(event: 'transcript-event', listener: (e: TranscriptEvent) => void): unknown;
   interrupt(): void;
@@ -68,19 +72,66 @@ export function wordAsk(req: AskRequest): { action: string; detail?: string } {
   }
 }
 
+/** A run's saved conversation, split into what finished and the step that was cut off mid-way.
+ *  null = nothing usable was saved, so the run starts over. */
+async function savedRun(file: string): Promise<{ messages: ModelMessage[]; cutOff: { action: string; detail?: string }[] } | null> {
+  let text: string;
+  try { text = await fs.readFile(file, 'utf8'); } catch { return null; }
+  const events: TranscriptEvent[] = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    // A last line cut off mid-write is simply left out.
+    try { events.push(JSON.parse(line) as TranscriptEvent); } catch { /* skip */ }
+  }
+  if (!events.some((e) => e.type === 'user-message')) return null;
+  // A step that was asked for but has no result: the app closed while it ran (or before it began).
+  const finished = new Set(events.filter((e) => e.type === 'tool-result').map((e) => (e.data as { toolUseId?: string }).toolUseId));
+  const cut = events.filter((e) => e.type === 'tool-use' && !finished.has((e.data as { toolUseId?: string }).toolUseId));
+  const kept = events.filter((e) => !cut.includes(e));
+  try {
+    const messages = rebuildHistory(kept);
+    if (messages.length === 0 || hasUnpairedToolCalls(messages)) return null;
+    return {
+      messages,
+      cutOff: cut.map((e) => {
+        const d = e.data as { toolName?: string; toolInput?: Record<string, unknown> };
+        return wordAsk({ sessionId: '', toolName: d.toolName ?? 'a tool', toolInput: d.toolInput ?? {}, denyListed: false });
+      }),
+    };
+  } catch { return null; }
+}
+
+/** What a picked-up run is told. The half-done step asks the person first (Destin, 2026-11-14: "okay to
+ *  ask"): an email may already have been sent, a file already moved. */
+async function resumeMessage(run: EngineRun, cutOff: { action: string; detail?: string }[]): Promise<string> {
+  const lines = ['This run was cut off when YouCoded was closed and is now continuing. Carry on from where you stopped. Do not repeat steps that already finished.'];
+  for (const step of cutOff) {
+    const what = step.detail ? `${step.action}: ${step.detail}` : step.action;
+    const a = await run.ask({ action: 'Run a step again that may have already run', detail: what });
+    lines.push(a.allow
+      ? `The step you were on when it stopped (${what}) may or may not have finished. The person says to run it again.`
+      : `The step you were on when it stopped (${what}) may or may not have finished. Do not run it again; carry on without it.${a.note ? ` ${a.note}` : ''}`);
+  }
+  return lines.join('\n');
+}
+
 export function nativeEngine(deps: NativeEngineDeps): RunEngine {
   return (run: EngineRun): EngineHandle => {
     let stopped = false;
     let session: RunSession | undefined;
     let dispose: (() => Promise<void>) | undefined;
 
-    const done = (async (): Promise<{ summary: string; news?: boolean }> => {
+    const done = (async (): Promise<{ summary: string; news?: boolean; startedOver?: boolean }> => {
       const on = run.job.runsOn;
       if (!on || on.runtime !== 'native') throw new Error('No model is chosen for this automation.');
       const workDir = deps.workDirFor(run.job.id);
       await fs.mkdir(workDir, { recursive: true });
       const transcript = deps.transcriptFor(run.job.id, run.runId);
       await fs.mkdir(path.dirname(transcript), { recursive: true });
+      // A picked-up run: its saved conversation, or null when there is nothing to continue from.
+      const saved = run.resume ? await savedRun(transcript) : null;
+      // Starting over begins a fresh record of the conversation.
+      if (run.resume && !saved) await fs.rm(transcript, { force: true });
 
       // The permission a question falls under, remembered between the check and the question that follows it.
       let askingFor: string | undefined;
@@ -117,10 +168,15 @@ export function nativeEngine(deps: NativeEngineDeps): RunEngine {
         }
       });
 
-      await session.send(firstMessage(run.instruction, run.eventData));
+      if (saved) {
+        session.seedHistory(saved.messages);
+        await session.send(await resumeMessage(run, saved.cutOff));
+      } else {
+        await session.send(firstMessage(run.instruction, run.eventData));
+      }
       await writing;
       if (failure) throw new Error(failure);
-      return readEnding(lastReply);
+      return { ...readEnding(lastReply), ...(run.resume && !saved ? { startedOver: true } : {}) };
     })().finally(() => { void dispose?.(); });
 
     return {
