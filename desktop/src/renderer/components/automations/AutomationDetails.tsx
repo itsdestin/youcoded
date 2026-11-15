@@ -32,7 +32,8 @@ export function blankAutomation(): AutomationSummary {
   return {
     id: `job-new-${Date.now()}`, name: '', instruction: '',
     links: [], start: { kind: 'schedule', every: 'day', at: '9:00' },
-    model: 'Claude Sonnet', subscription: true, tools: [],
+    // WHY runsOn from the start: the name alone runs nothing; a new automation must be able to run as created.
+    model: 'Claude Sonnet', runsOn: { runtime: 'claude', modelId: 'sonnet' }, subscription: true, tools: [],
     whenAsk: 'wait', waitHours: null, noAnswer: 'skip', late: 'run', overlap: 'skip-new',
     unlisted: { sites: 'never', commands: 'never' },
     devices: [{ id: 'here', name: 'This computer', here: true, runs: true }],
