@@ -36,6 +36,8 @@ import { siteKeyFor } from '../../shared/site-key';
 import type { EngineHandle, EngineRun, RunEngine } from './automation-runner';
 import { buildJobDecide } from './job-decide';
 import { firstMessage, readEnding, runBrief } from './run-brief';
+import { PAGE_CHANGE_TOOL, PAGE_READ_TOOL, PAGE_REFUSED, describePages, pageArgAllowed, runPagesFor } from './run-pages';
+import { PAGES_MCP_SERVER_ID, PAGES_ROOTS_ENV } from '../claude-code-pages-mcp';
 
 /** The part of a child process this engine uses (so a test can stand in for `claude`). */
 export interface ClaudeProcess {
@@ -51,6 +53,10 @@ export interface ClaudeEngineDeps {
   workDirFor: (jobId: string) => string;
   /** `~/.youcoded/automations` — the settings file every run shares lives here. */
   dir: () => string;
+  /** The folder of a page, or null when it is gone. */
+  pageDir: (pageId: string) => Promise<string | null>;
+  /** Write the page-data program somewhere and return its path (claude-code-pages-mcp.ts). */
+  pagesProgram: () => Promise<string>;
   /** Test injection. Production runs the person's `claude`. */
   spawnClaude?: (args: string[], opts: { cwd: string }) => ClaudeProcess;
 }
@@ -102,6 +108,8 @@ function wordAsk(tool: string, input: Record<string, unknown>): { action: string
     case 'Read': return { action: 'Read a file', detail: str('file_path') };
     case 'Glob': case 'Grep': return { action: 'Look through a folder', detail: str('path') };
     case 'WebFetch': return { action: 'Visit a website', detail: str('url') };
+    case `mcp__${PAGES_MCP_SERVER_ID}__${PAGE_READ_TOOL}`: return { action: 'Read a page’s information', detail: str('page') };
+    case `mcp__${PAGES_MCP_SERVER_ID}__${PAGE_CHANGE_TOOL}`: return { action: 'Change a page’s information', detail: str('page') };
     default: return { action: `Use ${tool}` };
   }
 }
@@ -131,8 +139,20 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
       await fs.writeFile(settingsFile, RUN_SETTINGS);
       // WHY a file and not an argument: the rules run to many lines, and on Windows the program is started
       // through a shell, where a long quoted argument is easy to break.
+      // The pages it is linked to. The same page-data program a chat gets is started by Claude Code with
+      // only those pages' folders (run-pages.ts); every call's `page` is checked in permission() below.
+      const pages = await runPagesFor(run.job, deps.pageDir);
       const briefFile = path.join(deps.dir(), 'work', `${run.job.id}.brief.txt`);
-      await fs.writeFile(briefFile, runBrief(run.job));
+      await fs.writeFile(briefFile, runBrief(run.job, describePages(pages)));
+      let mcpFile: string | undefined;
+      if (pages.pages.length > 0) {
+        mcpFile = path.join(deps.dir(), 'work', `${run.job.id}.mcp.json`);
+        // WHY the app's own program as `node`: nothing else needs to be installed for the page tools to run.
+        await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: { [PAGES_MCP_SERVER_ID]: {
+          type: 'stdio', command: process.execPath, args: [await deps.pagesProgram()],
+          env: { [PAGES_ROOTS_ENV]: JSON.stringify(pages.roots), ELECTRON_RUN_AS_NODE: '1' },
+        } } }));
+      }
 
       const home = os.homedir();
       const args = [
@@ -145,6 +165,7 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
       ];
       const dirs = addDirsFor(run.job, home);
       if (dirs.length) args.push('--add-dir', ...dirs);
+      if (mcpFile) args.push('--mcp-config', mcpFile);
       if (stopped) throw new Error('stopped');
       const child = spawnClaude(args, { cwd: workDir });
       proc = child;
@@ -158,6 +179,11 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
       /** One permission question from Claude Code. Every tool call arrives here (see the header). */
       const permission = async (requestId: string, tool: string, input: Record<string, unknown>): Promise<void> => {
         askingFor = undefined;
+        // A page tool: only for a page this automation is linked to, whatever else it is allowed.
+        if (tool.startsWith(`mcp__${PAGES_MCP_SERVER_ID}__`) && !pageArgAllowed(pages, input.page)) {
+          reply(requestId, { behavior: 'deny', message: PAGE_REFUSED });
+          return;
+        }
         const d = await decide(tool, subjectOf(tool, input));
         if (d.action === 'allow') { reply(requestId, { behavior: 'allow', updatedInput: input }); return; }
         if (d.action === 'deny') { reply(requestId, { behavior: 'deny', message: d.message ?? 'This automation is not allowed to do that.' }); return; }

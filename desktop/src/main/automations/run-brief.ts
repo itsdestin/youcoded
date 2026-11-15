@@ -46,8 +46,8 @@ const HOW = [
   'Tell them: <yes if there is something they should look at, otherwise no>',
 ].join('\n');
 
-export function runBrief(job: Pick<StoredAutomation, 'tools' | 'unlisted' | 'whenAsk'>): string {
-  return `${HOW}\n\n${describeRules(job)}`;
+export function runBrief(job: Pick<StoredAutomation, 'tools' | 'unlisted' | 'whenAsk'>, pages = ''): string {
+  return [HOW, describeRules(job), pages].filter(Boolean).join('\n\n');
 }
 
 /** The first message of a run. WHY the page's information is fenced and labelled: a page can send anything

@@ -24,7 +24,7 @@ const FREE_TOOLS = new Set(['TodoWrite', 'BashOutput', 'KillShell']);
 /** The page tools arrive bare (native) or as `mcp__youcoded-pages__ReadPageData` (Claude Code). */
 function pageTool(tool: string): 'read' | 'change' | null {
   const bare = tool.replace(/^mcp__[^_]+(?:[-_][^_]+)*__/, '');
-  if (bare === 'ReadPageData' || bare === 'ListPages') return 'read';
+  if (bare === 'ReadPageData') return 'read';
   if (bare === 'UpdatePageData') return 'change';
   return null;
 }
@@ -49,7 +49,9 @@ async function realLocation(p: string): Promise<string> {
 async function jobCallFor(tool: string, subject: string | undefined, cwd: string): Promise<JobCall | 'free' | null> {
   if (FREE_TOOLS.has(tool)) return 'free';
   const page = pageTool(tool);
-  if (page) return subject ? { kind: 'page', pageId: subject, change: page === 'change' } : null;
+  // WHICH page is checked where the call's own `page` value is visible (run-pages.ts); here only whether
+  // the automation may read or change a page at all. '*' = any page it is linked to.
+  if (page) return { kind: 'page', pageId: subject ?? '*', change: page === 'change' };
   if (subject === undefined) return null;
   if (LOOK_TOOLS.has(tool) || CHANGE_TOOLS.has(tool)) {
     return { kind: 'file', path: await realLocation(path.resolve(cwd, subject)), change: CHANGE_TOOLS.has(tool) };

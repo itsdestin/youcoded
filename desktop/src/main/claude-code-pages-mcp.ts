@@ -24,9 +24,10 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { CLAUDE_CODE_PROPOSE_AUTOMATION_TOOL, PROPOSE_AUTOMATION_DESCRIPTION, PROPOSE_AUTOMATION_INPUT_SCHEMA, PROPOSE_AUTOMATION_TOOL } from '../shared/propose-automation';
 
-const PAGES_MCP_SERVER_ID = 'youcoded-pages';
+export const PAGES_MCP_SERVER_ID = 'youcoded-pages';
 export const PAGES_MCP_READ_TOOLS = [`mcp__${PAGES_MCP_SERVER_ID}__ListPages`, `mcp__${PAGES_MCP_SERVER_ID}__ReadPageData`];
-const ROOTS_ENV = 'YOUCODED_PAGES_ROOTS';
+export const PAGES_ROOTS_ENV = 'YOUCODED_PAGES_ROOTS';
+const ROOTS_ENV = PAGES_ROOTS_ENV;
 
 const PAGES_SERVER_RAW = String.raw`// YouCoded's page-data MCP server (claude-code-pages-mcp.ts). Dependency-free:
 // a plain node process Claude Code spawns, with nothing beside it.
@@ -349,6 +350,16 @@ let personalPagesProvider: () => string | null = () => null;
 export function setPersonalPagesRoot(fn: () => string | null): void { personalPagesProvider = fn; }
 /** The Personal space's Pages/ folder, or null before sync spaces are set up. */
 export function personalPagesRoot(): string | null { try { return personalPagesProvider(); } catch { return null; } }
+
+/** Write the page-data server into `dir` and return its path. For an automation's run
+ *  (main/automations/run-pages.ts), which starts the same program with only the Pages folders of the pages
+ *  that automation is linked to. Async: called while a run starts, never on a click. */
+export async function writePagesMcpServer(dir: string): Promise<string> {
+  await fs.promises.mkdir(dir, { recursive: true });
+  const serverPath = path.join(dir, 'pages-mcp.js');
+  await fs.promises.writeFile(serverPath, PAGES_SERVER_JS, 'utf8');
+  return serverPath;
+}
 
 export interface PagesMcpDeployment { serverPath: string; configPath: string; allowedTools: string[] }
 

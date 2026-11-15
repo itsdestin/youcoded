@@ -26,7 +26,15 @@ type Built = Parameters<NativeEngineDeps['createSession']>[0];
 /** A session that plays a script: the test says what the "model" does when it is sent the first message. */
 function fakeDeps(play: (built: Built, emit: (type: string, data: unknown) => void, sent: string) => Promise<void>) {
   const seen: { built?: Built; sent?: string; seeded?: unknown[]; interrupted: boolean; disposed: boolean } = { interrupted: false, disposed: false };
+  const pageCalls: unknown[] = [];
+  let pageToolsClosed = false;
   const deps: NativeEngineDeps = {
+    pageDir: async (id) => (id === 'personal:money' ? path.join(root, 'Personal', 'Pages', 'money') : null),
+    pageTools: async (roots) => ({
+      tools: ['ListPages', 'ReadPageData', 'UpdatePageData'].map((name) => ({ name, inputSchema: {} })),
+      call: async (tool, args) => { pageCalls.push([roots, tool, args]); return { text: 'data', isError: false }; },
+      close: async () => { pageToolsClosed = true; },
+    }),
     workDirFor: (id) => path.join(root, 'work', id),
     transcriptFor: (id, run) => path.join(root, 'runs', id, `${run}.jsonl`),
     createSession: async (built) => {
@@ -43,7 +51,7 @@ function fakeDeps(play: (built: Built, emit: (type: string, data: unknown) => vo
       };
     },
   };
-  return { deps, seen };
+  return { deps, seen, pageCalls, pageToolsClosed: () => pageToolsClosed };
 }
 
 const runOf = (j: StoredAutomation, over: Partial<EngineRun> = {}): EngineRun => ({
@@ -145,5 +153,32 @@ describe('native engine', () => {
     expect(seen.seeded).toBeUndefined();
     expect(seen.sent).toBe('do it');
     expect(existsSync(path.join(root, 'runs', 'one', 'r1.jsonl'))).toBe(true);
+  });
+
+  it('gives a run the page tools for its linked pages only, and refuses any other page', async () => {
+    const linked = job({
+      links: [{ kind: 'page', id: 'personal:money', name: 'Money' }, { kind: 'page', id: 'personal:gone', name: 'Gone' }],
+      tools: [{ id: 'r', kind: 'page-read', label: 'Read', source: 'This page', mode: 'allow' }],
+    });
+    const f = fakeDeps(async (built) => {
+      const server = built.mcpServers![0];
+      // ListPages would name the person's other pages: it is not offered.
+      expect(server.tools.map((t) => t.name)).toEqual(['ReadPageData', 'UpdatePageData']);
+      expect(await server.call('ReadPageData', { page: 'money' }, new AbortController().signal)).toEqual({ text: 'data', isError: false });
+      expect((await server.call('ReadPageData', { page: 'budget' }, new AbortController().signal)).isError).toBe(true);
+      // Reading is allowed by its permission; changing is not.
+      expect((await built.decide('mcp__youcoded-pages__ReadPageData', undefined)).action).toBe('allow');
+      expect((await built.decide('mcp__youcoded-pages__UpdatePageData', undefined)).action).toBe('deny');
+      expect(built.systemPrompt).toContain('- Money: page "money"');
+      expect(built.systemPrompt).not.toContain('Gone');
+    });
+    await nativeEngine(f.deps)(runOf(linked)).done;
+    expect(f.pageCalls).toEqual([[[path.join(root, 'Personal', 'Pages')], 'ReadPageData', { page: 'money' }]]);
+    expect(f.pageToolsClosed()).toBe(true);
+  });
+
+  it('an automation with no page permission gets no page tools at all', async () => {
+    const f = fakeDeps(async (built) => { expect(built.mcpServers).toBeUndefined(); });
+    await nativeEngine(f.deps)(runOf(job({ links: [{ kind: 'page', id: 'personal:money', name: 'Money' }] }))).done;
   });
 });

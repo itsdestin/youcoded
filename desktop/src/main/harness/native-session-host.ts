@@ -74,6 +74,7 @@ import { log } from '../logger';
 // mirror — see slug-encoding.ts.
 import { nativeStoreSlug } from '../slug-encoding';
 import type { McpLease } from './mcp/mcp-manager';
+import type { ReadyServer } from './mcp/mcp-manager';
 import { SessionToolsStartup } from './session-tools-startup';
 import { SessionStartRegistry, type SessionStartTicket } from './session-start-registry';
 import type { NativeStartupAction, NativeStartupState } from '../../shared/native-startup';
@@ -3683,6 +3684,7 @@ export class NativeSessionHost extends EventEmitter {
     decide: (tool: string, subject: string | undefined) => Promise<PermissionDecision>;
     askUser: (req: AskRequest) => Promise<AskDecision>;
     onStepUsage: (u: { tokens: number; costUsd: number | null }) => Promise<void>;
+    mcpServers?: ReadyServer[];
   }): Promise<{ session: HarnessSession; dispose: () => Promise<void> }> {
     const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(opts.binding);
     const preset = resolvePreset(undefined);
@@ -3704,6 +3706,9 @@ export class NativeSessionHost extends EventEmitter {
         }),
         // An explicit EMPTY skill list: leaving it out would hand the run every installed skill.
         skillCatalog: { list: () => [], load: (id: string) => { throw new SkillNotFound(id, []); } },
+        // Only what the caller hands over (the page tools, limited to this automation's pages): none of the
+        // person's own MCP servers reach a run.
+        ...(opts.mcpServers ? { mcpServers: opts.mcpServers } : {}),
         decide: opts.decide,
         decideJudgesOutsidePaths: true,
         askUser: opts.askUser,

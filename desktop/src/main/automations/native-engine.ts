@@ -19,6 +19,9 @@ import type { AskDecision, AskRequest } from '../harness/permission-broker';
 import type { EngineHandle, EngineRun, RunEngine } from './automation-runner';
 import { buildJobDecide } from './job-decide';
 import { firstMessage, readEnding, runBrief } from './run-brief';
+import { PAGE_CHANGE_TOOL, PAGE_READ_TOOL, PAGE_REFUSED, describePages, pageArgAllowed, runPagesFor } from './run-pages';
+import { PAGES_MCP_SERVER_ID } from '../claude-code-pages-mcp';
+import type { ReadyServer } from '../harness/mcp/mcp-manager';
 
 /** The part of the assistant loop this engine uses. */
 interface RunSession {
@@ -37,11 +40,23 @@ export interface NativeEngineDeps {
     askUser: (req: AskRequest) => Promise<AskDecision>;
     /** What each step used, the moment it finishes. */
     onStepUsage: (u: { tokens: number; costUsd: number | null }) => Promise<void>;
+    /** The page tools, already limited to this run's pages (run-pages.ts). Absent = no page tools. */
+    mcpServers?: ReadyServer[];
   }) => Promise<{ session: RunSession; dispose: () => Promise<void> }>;
   /** `~/.youcoded/automations/work/<jobId>` — the run's own folder. */
   workDirFor: (jobId: string) => string;
+  /** The folder of a page, or null when it is gone. */
+  pageDir: (pageId: string) => Promise<string | null>;
+  /** Start the page-data program for these Pages folders (the same one a chat is given). */
+  pageTools: (roots: string[]) => Promise<PageToolsConnection>;
   /** Where a run's full conversation is kept (`runs/<jobId>/<runId>.jsonl`), for resuming and for looking back. */
   transcriptFor: (jobId: string, runId: string) => string;
+}
+
+interface PageToolsConnection {
+  tools: ReadyServer['tools'];
+  call: ReadyServer['call'];
+  close: () => Promise<void>;
 }
 
 /** The tools a run is given. WHY a tool it may never use is left out entirely, not just refused
@@ -65,6 +80,8 @@ export function wordAsk(req: AskRequest): { action: string; detail?: string } {
     case 'Read': return { action: 'Read a file', detail: str('file_path') };
     case 'Glob': case 'Grep': return { action: 'Look through a folder', detail: str('path') };
     case 'WebFetch': return { action: 'Visit a website', detail: str('url') };
+    case `mcp__${PAGES_MCP_SERVER_ID}__${PAGE_READ_TOOL}`: return { action: 'Read a page’s information', detail: str('page') };
+    case `mcp__${PAGES_MCP_SERVER_ID}__${PAGE_CHANGE_TOOL}`: return { action: 'Change a page’s information', detail: str('page') };
     // The loop's own safety stops (too many steps, repeating itself) also arrive as questions.
     case 'max_steps': return { action: 'Keep going past its usual number of steps' };
     case 'doom_loop': return { action: 'Keep going though it is repeating itself' };
@@ -120,6 +137,7 @@ export function nativeEngine(deps: NativeEngineDeps): RunEngine {
     let stopped = false;
     let session: RunSession | undefined;
     let dispose: (() => Promise<void>) | undefined;
+    let pageConnection: PageToolsConnection | undefined;
 
     const done = (async (): Promise<{ summary: string; news?: boolean; startedOver?: boolean }> => {
       const on = run.job.runsOn;
@@ -133,12 +151,28 @@ export function nativeEngine(deps: NativeEngineDeps): RunEngine {
       // Starting over begins a fresh record of the conversation.
       if (run.resume && !saved) await fs.rm(transcript, { force: true });
 
+      // The pages it is linked to, and the page tools limited to them.
+      const pages = await runPagesFor(run.job, deps.pageDir);
+      let pageServer: ReadyServer | undefined;
+      if (pages.pages.length > 0) {
+        const conn = await deps.pageTools(pages.roots);
+        pageConnection = conn;
+        pageServer = {
+          id: PAGES_MCP_SERVER_ID, label: 'Pages',
+          tools: conn.tools.filter((t) => t.name === PAGE_READ_TOOL || t.name === PAGE_CHANGE_TOOL),
+          // Which page: checked here, where the call's own `page` value is visible.
+          call: async (tool, args, signal) => (pageArgAllowed(pages, (args as { page?: unknown } | null)?.page)
+            ? conn.call(tool, args, signal) : { text: PAGE_REFUSED, isError: true }),
+        };
+      }
+
       // The permission a question falls under, remembered between the check and the question that follows it.
       let askingFor: string | undefined;
       const built = await deps.createSession({
         runId: run.runId, workDir,
         binding: { providerId: on.providerId, modelId: on.modelId },
-        systemPrompt: runBrief(run.job),
+        ...(pageServer ? { mcpServers: [pageServer] } : {}),
+        systemPrompt: runBrief(run.job, describePages(pages)),
         toolNames: toolNamesFor(run.job),
         decide: (tool, subject) => { askingFor = undefined; return buildJobDecide({ rules: run.current, workDir, onAsk: (id) => { askingFor = id; } })(tool, subject); },
         askUser: async (req) => {
@@ -177,7 +211,7 @@ export function nativeEngine(deps: NativeEngineDeps): RunEngine {
       await writing;
       if (failure) throw new Error(failure);
       return { ...readEnding(lastReply), ...(run.resume && !saved ? { startedOver: true } : {}) };
-    })().finally(() => { void dispose?.(); });
+    })().finally(() => { void dispose?.(); void pageConnection?.close().catch(() => {}); });
 
     return {
       done,

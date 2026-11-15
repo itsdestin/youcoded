@@ -10,6 +10,8 @@ import type { ModelBinding } from '../../shared/provider-types';
 import type { TranscriptEvent } from '../../shared/types';
 import { log } from '../logger';
 import { getPagesService } from '../pages/pages-service';
+import { PAGES_MCP_SERVER_ID, PAGES_ROOTS_ENV, writePagesMcpServer } from '../claude-code-pages-mcp';
+import { createConnection } from '../harness/mcp/mcp-client';
 import { watchProposals } from './propose';
 import { claudeEngine } from './claude-engine';
 import { initAutomationsService, type AutomationsService } from './automations-service';
@@ -34,12 +36,27 @@ export function startAutomations(deps: {
     engineFor: (job) => (job.runsOn?.runtime === 'claude' ? claude : native),
     broadcast: deps.broadcast,
   });
+  const pageDir = async (pageId: string): Promise<string | null> => (await getPagesService()?.store.pageDir(pageId)) ?? null;
+  const pagesProgram = (): Promise<string> => writePagesMcpServer(path.join(dir, 'page-tools'));
   const native = nativeEngine({
+    pageDir,
+    // The page-data program, started by the app for a run on one of its own models. It is the app's own
+    // program run as plain node, so nothing else needs to be installed.
+    pageTools: async (roots) => {
+      const conn = createConnection({
+        id: PAGES_MCP_SERVER_ID, label: 'Pages', enabled: true, origin: { kind: 'user' }, missingSecrets: [],
+        transport: { type: 'stdio', command: process.execPath, args: [await pagesProgram()] },
+        env: { [PAGES_ROOTS_ENV]: JSON.stringify(roots), ELECTRON_RUN_AS_NODE: '1' },
+      });
+      await conn.connect();
+      if (conn.state !== 'ready') throw new Error(conn.lastError ?? 'The page tools did not start.');
+      return { tools: conn.listTools(), call: (tool, args, signal) => conn.callTool(tool, args, signal), close: () => conn.close() };
+    },
     createSession: deps.createSession,
     workDirFor: (id) => service.workDirFor(id),
     transcriptFor: (id, runId) => service.transcriptFor(id, runId),
   });
-  const claude = claudeEngine({ dir: () => dir, workDirFor: (id) => service.workDirFor(id) });
+  const claude = claudeEngine({ dir: () => dir, workDirFor: (id) => service.workDirFor(id), pageDir, pagesProgram });
   // WHY no wake-from-sleep listener: each 30-second check compares the clock with the last check, so the
   // first check after the computer wakes sees every time it slept through (and the phone's backend has
   // no such listener to offer).

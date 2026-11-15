@@ -45,7 +45,11 @@ const runOf = (j: StoredAutomation, over: Partial<EngineRun> = {}): EngineRun =>
   runId: 'r1', job: j, instruction: j.instruction, current: () => j,
   ask: async () => ({ allow: true, note: '' }), spent: async () => true, ...over,
 });
-const engineWith = (f: ReturnType<typeof fakeClaude>) => claudeEngine({ dir: () => path.join(root, 'automations'), workDirFor: (id) => path.join(root, 'automations', 'work', id), spawnClaude: f.spawnClaude });
+const engineWith = (f: ReturnType<typeof fakeClaude>) => claudeEngine({
+  dir: () => path.join(root, 'automations'), workDirFor: (id) => path.join(root, 'automations', 'work', id), spawnClaude: f.spawnClaude,
+  pageDir: async (id) => (id === 'personal:money' ? path.join(root, 'Personal', 'Pages', 'money') : null),
+  pagesProgram: async () => path.join(root, 'page-tools', 'pages-mcp.js'),
+});
 const started = (f: ReturnType<typeof fakeClaude>) => expect.poll(() => f.written.length).toBeGreaterThan(0);
 const ask = (id: string, tool: string, input: Record<string, unknown>) => ({ type: 'control_request', request_id: id, request: { subtype: 'can_use_tool', tool_name: tool, input } });
 const answerTo = (f: ReturnType<typeof fakeClaude>, id: string) => f.written.find((w) => w.type === 'control_response' && w.response.request_id === id)?.response.response;
@@ -139,5 +143,42 @@ describe('claude engine', () => {
     expect(claudeToolsFor(job({ tools: [] }))).toEqual(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'TodoWrite']);
     expect(claudeToolsFor(job())).toContain('Bash');
     expect(claudeToolsFor(job({ tools: [], unlisted: { sites: 'ask', commands: 'never' } }))).toContain('WebFetch');
+  });
+
+  it('gives Claude Code the page tools for the linked pages only, and refuses any other page', async () => {
+    const f = fakeClaude();
+    const linked = job({
+      links: [{ kind: 'page', id: 'personal:money', name: 'Money' }],
+      tools: [{ id: 'r', kind: 'page-read', label: 'Read', source: 'This page', mode: 'allow' }],
+    });
+    const handle = engineWith(f)(runOf(linked));
+    await started(f);
+    const a = f.seen.args!;
+    const cfg = JSON.parse(readFileSync(a[a.indexOf('--mcp-config') + 1], 'utf8'));
+    expect(JSON.parse(cfg.mcpServers['youcoded-pages'].env.YOUCODED_PAGES_ROOTS)).toEqual([path.join(root, 'Personal', 'Pages')]);
+    expect(a).toContain('--strict-mcp-config');
+    expect(readFileSync(a[a.indexOf('--append-system-prompt-file') + 1], 'utf8')).toContain('- Money: page "money"');
+    f.print(ask('p1', 'mcp__youcoded-pages__ReadPageData', { page: 'money' }));
+    f.print(ask('p2', 'mcp__youcoded-pages__ReadPageData', { page: 'budget' }));
+    f.print(ask('p3', 'mcp__youcoded-pages__UpdatePageData', { page: 'money', ops: [] }));
+    f.print(ask('p4', 'mcp__youcoded-pages__ListPages', {}));
+    await expect.poll(() => answerTo(f, 'p4')).toBeTruthy();
+    expect(answerTo(f, 'p1')).toMatchObject({ behavior: 'allow' });
+    expect(answerTo(f, 'p2')).toMatchObject({ behavior: 'deny' }); // not its page
+    expect(answerTo(f, 'p3')).toMatchObject({ behavior: 'deny' }); // may read, not change
+    expect(answerTo(f, 'p4')).toMatchObject({ behavior: 'deny' }); // would name the person's other pages
+    f.print({ type: 'result', subtype: 'success', is_error: false, result: 'Summary: ok' });
+    f.close();
+    await handle.done;
+  });
+
+  it('an automation with no page permission starts Claude Code with no page tools', async () => {
+    const f = fakeClaude();
+    const handle = engineWith(f)(runOf(job()));
+    await started(f);
+    expect(f.seen.args).not.toContain('--mcp-config');
+    f.print({ type: 'result', subtype: 'success', is_error: false, result: 'Summary: ok' });
+    f.close();
+    await handle.done;
   });
 });

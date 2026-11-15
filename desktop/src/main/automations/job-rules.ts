@@ -134,7 +134,7 @@ function covers(tool: AutomationTool, call: JobCall, rules: JobRules, home: stri
       if (tool.kind !== 'page-read' && tool.kind !== 'page-write') return false;
       if (call.change && tool.kind !== 'page-write') return false;
       // "This page" means a page the automation is linked to — never some other page.
-      return rules.links.some((l) => l.kind === 'page' && l.id === call.pageId);
+      return rules.links.some((l) => l.kind === 'page' && (call.pageId === '*' || l.id === call.pageId));
     }
   }
 }
