@@ -17,7 +17,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, editorFontLinks, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, noteRecoverOffer, onCommentsRequest, onDocumentReplaced, registerFlush, saveStateFor } from './office-store';
+import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, noteRecoverOffer, onCommentsRequest, openCopyBeside, onDocumentReplaced, registerFlush, saveStateFor } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
@@ -748,8 +748,12 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
           markNote(file.path, (result as { outsideChange?: unknown } | null)?.outsideChange === true ? RECOVERED_OVER_CHANGE : RECOVERED);
         }
         if (m.cmd === 'save_file_as' && mountedRef.current) {
-          const r = result as { name?: unknown; folder?: unknown } | null;
-          if (r && typeof r.name === 'string' && typeof r.folder === 'string') markNote(file.path, `Saved a copy as ${r.name} in ${r.folder}.`);
+          const r = result as { name?: unknown; folder?: unknown; file?: OfficeFile } | null;
+          // A copy Office can edit opens in a new tab beside this one, in front (see main's
+          // saveFileAs). Only the Office page's own tabs do this: an editor inside a file panel
+          // (slim) has no tab strip, so it keeps the note.
+          if (r?.file && typeof r.file.path === 'string' && !slim) openCopyBeside(r.file, file.path);
+          else if (r && typeof r.name === 'string' && typeof r.folder === 'string') markNote(file.path, `Saved a copy as ${r.name} in ${r.folder}.`);
         }
         // Printing couldn't be shown and the person saved a PDF instead (main's offer): same note.
         if (m.cmd === 'print_document' && mountedRef.current) {

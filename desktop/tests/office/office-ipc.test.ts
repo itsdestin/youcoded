@@ -560,14 +560,17 @@ describe('the editor asks for a save dialog (Save As, Export)', () => {
     expect(handle).not.toContain(dir);
   });
 
-  it('save_file_as writes where that dialog said, once, and says only the name and folder name', async () => {
+  it('save_file_as writes where that dialog said, once, and names the copy for the renderer to open', async () => {
     const target = path.join(dir, 'out', 'Report.docx');
     await mkdir(path.dirname(target), { recursive: true });
     withSaver(target);
     const { file, token } = await openEdited();
     const original = await readFile(file);
     const handle = await call('office:invoke', win1, token, 'save_dialog', {});
-    await expect(call('office:invoke', win1, token, 'save_file_as', { path: handle })).resolves.toEqual({ name: 'Report.docx', folder: 'out' });
+    // `file` is for the renderer, which opens the copy in a tab; EditorFrame tells the frame only "ok".
+    await expect(call('office:invoke', win1, token, 'save_file_as', { path: handle })).resolves.toMatchObject({
+      name: 'Report.docx', folder: 'out', file: { path: target, name: 'Report.docx', kind: 'document', folder: 'out' },
+    });
     expect((await readFile(target)).toString('latin1')).toBe('PK\x03\x04doc');
     expect(await readFile(file)).toEqual(original);
     // A handle is good for one save.

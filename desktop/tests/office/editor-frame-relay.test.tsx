@@ -6,7 +6,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
 import { EditorFrame, autosaveDelay } from '../../src/renderer/components/office/EditorFrame';
-import { closeDoc, openDoc, resetOfficeStoreForTests, saveStateFor, useOfficeAlerts, useSaveState } from '../../src/renderer/components/office/office-store';
+import { closeDoc, officeTabsNow, openDoc, resetOfficeStoreForTests, saveStateFor, useOfficeAlerts, useSaveState } from '../../src/renderer/components/office/office-store';
 import type { OfficeBridge, OfficeFile } from '../../src/shared/office-types';
 
 const FILE: OfficeFile = { path: '/home/you/plan.docx', name: 'plan.docx', kind: 'document', folder: 'you', at: '2026-09-28T00:00:00Z' };
@@ -611,6 +611,21 @@ describe('EditorFrame and Save As', () => {
     expect(saveStateFor(FILE.path).note).toBe('Saved a copy as Report.pdf in out.');
     // The document itself was not saved by it: its own save state is untouched.
     expect(saveStateFor(FILE.path).phase).toBe('saved');
+  });
+
+  it('opens a copy Office can edit in a new tab right after the original, in front', async () => {
+    const OTHER: OfficeFile = { ...FILE, path: '/home/you/notes.docx', name: 'notes.docx' };
+    const COPY: OfficeFile = { ...FILE, path: '/home/you/plan v2.docx', name: 'plan v2.docx' };
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => (cmd === 'save_file_as' ? { name: COPY.name, folder: 'you', file: COPY } : 'ok')) as never });
+    const { fromEditor, posted } = await mountFrame();
+    act(() => { openDoc(FILE); openDoc(OTHER); });
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'save_file_as', args: { path: 'yc-save/abc/plan v2.docx' } });
+    await settle();
+    // The editor still learns nothing but "ok" — never the copy's folder.
+    expect(posted).toHaveBeenCalledWith({ yc: 'rpc-result', id: 4, result: 'ok' }, ORIGIN);
+    const tabs = officeTabsNow();
+    expect(tabs.docs.map((d) => d.file.name)).toEqual(['plan.docx', 'plan v2.docx', 'notes.docx']);
+    expect(tabs.active).toBe(COPY.path);
   });
 
   it("says main's reason on the strip when the copy or its dialog is refused", async () => {

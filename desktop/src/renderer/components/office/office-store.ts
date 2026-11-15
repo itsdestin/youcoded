@@ -239,6 +239,17 @@ function showDoc(file: OfficeFile): void {
   set({ ...state, docs, active: file.path });
 }
 
+/** Save As wrote a copy Office can edit: it opens in a new tab right after the original, in
+ *  front (Destin, 2026-11-14, the Google Docs way). The original stays open in its own tab.
+ *  WHY not openDoc: that adds at the end of the strip, far from the file it came from. */
+export function openCopyBeside(file: OfficeFile, originalPath: string): void {
+  if (state.docs.some((d) => d.file.path === file.path)) { showDoc(file); return; }
+  const docs = [...state.docs];
+  const at = docs.findIndex((d) => d.file.path === originalPath);
+  docs.splice(at < 0 ? docs.length : at + 1, 0, { file, asleep: false });
+  set({ ...state, docs, active: file.path });
+}
+
 /** Choosing a sleeping tab wakes it: its editor opens again where it was. */
 export function selectTab(id: string): void {
   set({ ...state, docs: state.docs.map((d) => (d.file.path === id ? { ...d, asleep: false } : d)), active: id });

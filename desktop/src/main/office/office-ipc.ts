@@ -455,7 +455,7 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
 
   // The answer's second half: write the copy where the dialog said. Answers the chosen file's
   // name and its folder's name for YouCoded's own note (EditorFrame keeps them from the frame).
-  async function saveFileAs(reg: Sessions, s: OfficeSession, a: Record<string, unknown>): Promise<{ name: string; folder: string }> {
+  async function saveFileAs(reg: Sessions, s: OfficeSession, a: Record<string, unknown>): Promise<{ name: string; folder: string; file?: OfficeFile }> {
     const handle = a.path;
     const target = typeof handle === 'string' && SAVE_HANDLE.test(handle) ? saveTargets.get(s)?.get(handle) : undefined;
     if (!target) throw new Error(MSG.refused);
@@ -463,7 +463,13 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
     saveTargets.get(s)?.delete(handle as string);
     // The editor's export choices go along; main checks them before x2t sees any (exportParams).
     await commandsFor(reg).saveAs(s.token, target, { text: a.text, json: a.json });
-    return { name: path.basename(target), folder: path.basename(path.dirname(target)) };
+    // WHY `file` (Destin, 2026-11-14: Save As "leaving me on the old version with no indication
+    // is super broken"; chose the Google Docs way): a copy Office can edit (.docx/.xlsx/.pptx)
+    // opens in a new tab beside the original, so the renderer needs the file to open. A PDF or
+    // other export has no `file` and stays a note. The renderer never forwards it to the frame.
+    const kind = kindFor(target);
+    const file = kind ? describeFile(target, kind, new Date()) : undefined;
+    return { name: path.basename(target), folder: path.basename(path.dirname(target)), ...(file ? { file } : {}) };
   }
 
   // ── Print (finish plan Task 3) ──
