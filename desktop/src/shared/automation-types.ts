@@ -75,6 +75,11 @@ export interface AutomationSummary {
   start: AutomationStart;
   /** The model's name as the model picker shows it. */
   model: string;
+  /** Which model actually runs it. `model` above is only the name shown.
+   *  'claude' = the person's own Claude Code (`modelId` is its model name); 'native' = any model the app
+   *  talks to itself (`providerId` + `modelId`). Absent on an automation that has never had a model chosen:
+   *  it cannot run and says so. */
+  runsOn?: { runtime: 'claude'; modelId: string } | { runtime: 'native'; providerId: string; modelId: string };
   /** True when it runs on the person's Claude subscription (no money limit, usage still counted). */
   subscription: boolean;
   tools: AutomationTool[];

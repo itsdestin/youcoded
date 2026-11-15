@@ -264,6 +264,9 @@ export interface HarnessSessionOpts {
    *  into a forced question first. Credential and secret paths are still refused above that point, and
    *  the Bash floors still run. Absent for every chat and helper: their behaviour is unchanged. */
   decideJudgesOutsidePaths?: boolean;
+  /** Set ONLY for an automation's run: told what each step used the moment it finishes. Absent for every
+   *  chat and helper (their totals still ride `turn-complete`, unchanged). */
+  onStepUsage?: (u: { tokens: number; costUsd: number | null }) => Promise<void> | void;
   /** Raise an interactive permission ask (broker.ask bound to this session).
    *  Also the surface for the max_steps / doom_loop budget asks. */
   askUser?: (req: AskRequest) => Promise<AskDecision>;
@@ -2923,6 +2926,12 @@ export class HarnessSession extends EventEmitter {
         turnUsage.outputTokens += step.usage.outputTokens;
         turnUsage.cacheReadTokens += step.usage.cacheReadTokens;
         turnUsage.cacheCreationTokens += step.usage.cacheCreationTokens;
+        // An automation's run counts its spending step by step (see onStepUsage). Awaited so its monthly
+        // limit can stop the run BEFORE the next step is sent, not at the end of the whole turn.
+        if (this.opts.onStepUsage) {
+          try { await this.opts.onStepUsage({ tokens: step.usage.inputTokens + step.usage.outputTokens, costUsd: turnFree ? null : costForUsage(step.usage, turnPricing) }); }
+          catch { /* a counting failure must never break the run itself */ }
+        }
         if (step.measuredUsage) {
           measuredTurnUsage.inputTokens += step.measuredUsage.inputTokens;
           measuredTurnUsage.outputTokens += step.measuredUsage.outputTokens;

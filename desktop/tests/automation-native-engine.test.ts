@@ -1,0 +1,111 @@
+// An automation's run on one of the app's own models: what the session is built with and what comes back.
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { nativeEngine, toolNamesFor, wordAsk, type NativeEngineDeps } from '../src/main/automations/native-engine';
+import type { EngineRun } from '../src/main/automations/automation-runner';
+import type { StoredAutomation } from '../src/main/automations/automation-store';
+
+let root: string;
+beforeEach(() => { root = mkdtempSync(path.join(tmpdir(), 'native-engine-')); });
+afterEach(() => { rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
+
+const job = (over: Partial<StoredAutomation> = {}): StoredAutomation => ({
+  id: 'one', name: 'One', instruction: 'do it', links: [], start: { kind: 'button', label: 'Run' }, model: 'GPT', subscription: false,
+  runsOn: { runtime: 'native', providerId: 'openrouter', modelId: 'gpt-x' },
+  tools: [{ id: 'send', kind: 'command', label: 'Mail', source: 'Your computer', mode: 'ask', exact: 'mail -s hi sam' }],
+  whenAsk: 'wait', waitHours: 1, noAnswer: 'skip', late: 'run', overlap: 'skip-new',
+  unlisted: { sites: 'never', commands: 'never' }, devices: [], notify: { needs: false, news: false, fails: false },
+  enabled: true, ...over,
+});
+
+type Built = Parameters<NativeEngineDeps['createSession']>[0];
+
+/** A session that plays a script: the test says what the "model" does when it is sent the first message. */
+function fakeDeps(play: (built: Built, emit: (type: string, data: unknown) => void, sent: string) => Promise<void>) {
+  const seen: { built?: Built; sent?: string; interrupted: boolean; disposed: boolean } = { interrupted: false, disposed: false };
+  const deps: NativeEngineDeps = {
+    workDirFor: (id) => path.join(root, 'work', id),
+    transcriptFor: (id, run) => path.join(root, 'runs', id, `${run}.jsonl`),
+    createSession: async (built) => {
+      seen.built = built;
+      const bus = new EventEmitter();
+      return {
+        session: {
+          on: (ev, fn) => bus.on(ev, fn),
+          interrupt: () => { seen.interrupted = true; },
+          send: async (text) => { seen.sent = text; await play(built, (type, data) => bus.emit('transcript-event', { type, data }), text); },
+        },
+        dispose: async () => { seen.disposed = true; },
+      };
+    },
+  };
+  return { deps, seen };
+}
+
+const runOf = (j: StoredAutomation, over: Partial<EngineRun> = {}): EngineRun => ({
+  runId: 'r1', job: j, instruction: j.instruction, current: () => j,
+  ask: async () => ({ allow: true, note: '' }), spent: async () => true, ...over,
+});
+
+describe('native engine', () => {
+  it('builds a session with the right model, rules and tools, and reads the ending', async () => {
+    const { deps, seen } = fakeDeps(async (_b, emit) => {
+      emit('assistant-text', { text: 'Working… ', partId: 'a' });
+      emit('assistant-text', { text: 'All sent.\nSummary: Sent one email.\nTell them: yes', partId: 'b' });
+    });
+    const result = await nativeEngine(deps)(runOf(job())).done;
+    expect(result).toEqual({ summary: 'Sent one email.', news: true });
+    expect(seen.built).toMatchObject({ runId: 'r1', binding: { providerId: 'openrouter', modelId: 'gpt-x' }, workDir: path.join(root, 'work', 'one') });
+    expect(seen.built!.systemPrompt).toContain('Run this command exactly as written: mail -s hi sam — the person is asked first');
+    expect(seen.built!.toolNames).toContain('Bash');
+    expect(seen.built!.toolNames).not.toContain('WebFetch');
+    expect(seen.sent).toBe('do it');
+    expect(seen.disposed).toBe(true);
+    // The whole conversation is kept, one line per event.
+    expect(readFileSync(path.join(root, 'runs', 'one', 'r1.jsonl'), 'utf8').trim().split('\n')).toHaveLength(2);
+  });
+
+  it("checks each step against the automation's own list and names the permission a question falls under", async () => {
+    const asked: unknown[] = [];
+    const { deps } = fakeDeps(async (built) => {
+      expect((await built.decide('Bash', 'rm -rf ~')).action).toBe('deny');
+      expect((await built.decide('Bash', 'mail -s hi sam')).action).toBe('ask');
+      const answer = await built.askUser({ sessionId: 'r1', toolName: 'Bash', toolInput: { command: 'mail -s hi sam' }, denyListed: false });
+      expect(answer).toEqual({ behavior: 'deny', message: 'Save a draft instead' });
+    });
+    await nativeEngine(deps)(runOf(job(), { ask: async (q) => { asked.push(q); return { allow: false, note: 'Save a draft instead' }; } })).done;
+    expect(asked).toEqual([{ action: 'Run a command', detail: 'mail -s hi sam', toolId: 'send' }]);
+  });
+
+  it('reports what each step used', async () => {
+    const spent: [number, number][] = [];
+    const { deps } = fakeDeps(async (built) => { await built.onStepUsage({ tokens: 1200, costUsd: 0.02 }); await built.onStepUsage({ tokens: 300, costUsd: null }); });
+    await nativeEngine(deps)(runOf(job(), { spent: async (d, t) => { spent.push([d, t]); return true; } })).done;
+    expect(spent).toEqual([[0.02, 1200], [0, 300]]);
+  });
+
+  it('a model error ends the run with that reason', async () => {
+    const { deps, seen } = fakeDeps(async (_b, emit) => { emit('session-error', { text: 'The model did not answer.' }); });
+    await expect(nativeEngine(deps)(runOf(job())).done).rejects.toThrow('The model did not answer.');
+    expect(seen.disposed).toBe(true);
+  });
+
+  it('an automation with no model chosen cannot run and says so', async () => {
+    const { deps } = fakeDeps(async () => {});
+    await expect(nativeEngine(deps)(runOf(job({ runsOn: undefined }))).done).rejects.toThrow('No model is chosen');
+  });
+
+  it('gives a run only the tools its permissions could ever use', () => {
+    expect(toolNamesFor(job({ tools: [], unlisted: { sites: 'never', commands: 'never' } }))).toEqual(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'TodoWrite']);
+    expect(toolNamesFor(job({ tools: [], unlisted: { sites: 'ask', commands: 'never' } }))).toContain('WebFetch');
+    expect(toolNamesFor(job({ tools: [], unlisted: { sites: 'never', commands: 'ask' } }))).toContain('Bash');
+  });
+
+  it('words a question for the person', () => {
+    expect(wordAsk({ sessionId: 's', toolName: 'Write', toolInput: { file_path: '/a/b.txt' }, denyListed: false })).toEqual({ action: 'Write a file', detail: '/a/b.txt' });
+    expect(wordAsk({ sessionId: 's', toolName: 'WebFetch', toolInput: { url: 'https://a.com/x' }, denyListed: false })).toEqual({ action: 'Visit a website', detail: 'https://a.com/x' });
+  });
+});
