@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AutomationSummary } from '../../shared/automation-types';
 import { log } from '../logger';
-import type { RunEngine } from './automation-runner';
+import { claudeEngine } from './claude-engine';
 import { initAutomationsService, type AutomationsService } from './automations-service';
 import { nativeEngine, type NativeEngineDeps } from './native-engine';
 
@@ -16,8 +16,9 @@ export function startAutomations(deps: {
   /** Send the fresh list to every window and every phone. */
   broadcast: (jobs: AutomationSummary[]) => void;
 }): AutomationsService {
+  const dir = path.join(os.homedir(), '.youcoded', 'automations');
   const service: AutomationsService = initAutomationsService({
-    dir: () => path.join(os.homedir(), '.youcoded', 'automations'),
+    dir: () => dir,
     engineFor: (job) => (job.runsOn?.runtime === 'claude' ? claude : native),
     broadcast: deps.broadcast,
   });
@@ -26,8 +27,7 @@ export function startAutomations(deps: {
     workDirFor: (id) => service.workDirFor(id),
     transcriptFor: (id, runId) => service.transcriptFor(id, runId),
   });
-  // Not built yet: an automation set to a Claude model says so in its run list instead of doing nothing.
-  const claude: RunEngine = () => ({ done: Promise.reject(new Error('Automations cannot run on Claude models yet. Choose another model for now.')), stop: () => {} });
+  const claude = claudeEngine({ dir: () => dir, workDirFor: (id) => service.workDirFor(id) });
   // WHY no wake-from-sleep listener: each 30-second check compares the clock with the last check, so the
   // first check after the computer wakes sees every time it slept through (and the phone's backend has
   // no such listener to offer).
