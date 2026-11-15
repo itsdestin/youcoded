@@ -78,6 +78,9 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/skills', 'drawer'),
   chat('chat/commands', 'drawer'),
   { ...chat('chat/overflow', 'menu', 'narrow'), viewport: { width: 390, height: 844 } },
+  // WHY: the decided narrow computer window folds Projects into this menu (round 6 M-1), and
+  // no picture of the opened menu existed — the overview deck (2026-11-14) needs one.
+  { ...chat('chat/overflow#window-decided', 'menu', 'narrow'), viewport: { width: 390, height: 844 }, params: { narrowTop: 'lights', narrowPills: 'compact' }, newIn: 'after' as const },
   chat('chat/model-picker', 'dialog'),
   // Custom providers (2026-10-20): a search that finds nothing offers "Check for new
   // models"; the first check finds Mercury 3, a failed one says which list it couldn't reach.
