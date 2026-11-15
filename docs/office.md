@@ -46,7 +46,7 @@ A release tarball per platform holds `manifest.json`, `editors/`, `converter/` (
 5. `node scripts/fetch-office.mjs` (dev copy into `desktop/office-addon/`, checksum-verified, atomic swap), then check the add-on in a dev instance (`bash scripts/run-dev.sh`).
 6. Run `bash scripts/verify.sh`. Skipping the pin edit leaves the app on the old add-on; a pin that disagrees with the installed `manifest.json` makes `officeAvailable()` false, so Office disappears.
 
-`npm run build` runs `fetch-office.mjs --release --required` (every arch pinned for the build OS into `desktop/office-build/<platform>-<arch>/`); `electron-builder.yml` packs that as `resources/office`. `office-pin.json` is packed into the asar because `office-root.ts` requires it at startup. Current pin: **v0.1.41**.
+`npm run build` runs `fetch-office.mjs --release --required` (every arch pinned for the build OS into `desktop/office-build/<platform>-<arch>/`); `electron-builder.yml` packs that as `resources/office`. `office-pin.json` is packed into the asar because `office-root.ts` requires it at startup. Current pin: **v0.1.44**.
 
 ## Platforms
 
