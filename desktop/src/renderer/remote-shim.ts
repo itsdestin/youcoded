@@ -1329,6 +1329,9 @@ function routePush(type: string, payload: any): void {
       // A live page socket's push, for the one client that owns it (remote-pages-bridge.ts).
       remotePages.push(payload);
       break;
+    case 'automations:proposed':
+      dispatchEvent('automations:proposed', payload);
+      break;
     case 'automations:changed':
       // The host's fresh list of automations after a run started, waited or ended.
       dispatchEvent('automations:changed', payload);
@@ -2947,6 +2950,10 @@ export function installShim(): void {
       onChanged: (cb: (jobs: any[]) => void) => {
         const handler = addListener('automations:changed', (jobs: any) => cb(jobs));
         return () => removeListener('automations:changed', handler);
+      },
+      onProposed: (cb: (draft: any) => void) => {
+        const handler = addListener('automations:proposed', (draft: any) => cb(draft));
+        return () => removeListener('automations:proposed', handler);
       },
     },
     // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-

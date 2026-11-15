@@ -34,7 +34,7 @@ export interface HarnessManifest {
 
 export const NATIVE_TOOL_NAMES = [
   'Read', 'Write', 'Edit', 'Bash', 'BashOutput', 'KillShell', 'Glob', 'Grep',
-  'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'SendUserFile', 'SendUserLink',
+  'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'SendUserFile', 'SendUserLink', 'ProposeAutomation',
   // T8 (docs/active/specs/2026-09-26-doc-comments-build-design.md §5) — the
   // assistant's six document-comment tools, unconditionally attached like the
   // rest of this list (no capability gate the way Skill/Task have one).

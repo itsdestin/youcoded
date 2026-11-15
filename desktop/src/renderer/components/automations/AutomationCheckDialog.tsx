@@ -11,7 +11,7 @@
 // Shape: an action popup that also edits (guide "Popups and side panels"): its editing cards are
 // open when it opens, nothing it edits is saved until Turn on, and the ✕ leaves everything as it
 // was. Its buttons act on the whole popup, so they sit on the pinned footer line.
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { AutomationSummary } from '../../../shared/automation-types';
 import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Chip, SectionLabel, SegmentedTabs, TextInput } from '../ui';
 import { Dialog } from '../ui/Dialog';
@@ -43,6 +43,8 @@ function sampleDraft(): AutomationSummary {
 export const AutomationCheckDialog = React.memo(function AutomationCheckDialog({ onOpenBuilder }: { onOpenBuilder?: (job: AutomationSummary) => void }) {
   const [draft, setDraft] = useState<AutomationSummary | null>(null);
   useScreenOpen('chat/automation-check', () => setDraft(sampleDraft()));
+  // The assistant proposed one in a chat (main/automations/propose.ts): show it. Nothing is saved until Turn on.
+  useEffect(() => automationsBridge()?.onProposed?.((proposed) => setDraft(proposed)), []);
   const close = () => setDraft(null);
   const turnOn = async () => {
     if (!draft) return;

@@ -205,6 +205,9 @@ export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
     // shell.openExternal's own scheme allowlist AT CLICK TIME — the model
     // never triggers navigation itself. Nothing to ask about, in any mode.
     { tool: 'SendUserLink', action: 'allow' },
+    // ProposeAutomation (2026-11-14, pages-finish step 4) saves and runs nothing: it shows the person a
+    // popup with the automation to check, and only their Turn on there saves it. Nothing to ask about.
+    { tool: 'ProposeAutomation', action: 'allow' },
     // The Browser (2026-10-13): never asked HERE in any mode — the Browser asks
     // the person with its own card (site permission, final steps, home-network
     // addresses), the SAME rules for native and Claude Code sessions. Gating it

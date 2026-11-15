@@ -126,6 +126,8 @@ const BOUNDS_EXEMPT: Record<string, string> = {
   // routes it straight to askUser() and execute() never runs, so neither
   // half of the contract applies.
   AskUserQuestion: 'interactive; defineTool never wraps it and execute() never runs',
+  // text is one fixed sentence (propose-automation.ts); the proposal itself goes to the app, not back to the model.
+  ProposeAutomation: 'returns one fixed sentence, never file or process output',
   // text is `Todo list updated: N items, M completed.` — depends only on the
   // COUNT of todos in the call, never their content, so it cannot approach
   // the 30k-char cap under normal use.

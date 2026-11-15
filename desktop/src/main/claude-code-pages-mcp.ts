@@ -22,12 +22,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { CLAUDE_CODE_PROPOSE_AUTOMATION_TOOL, PROPOSE_AUTOMATION_DESCRIPTION, PROPOSE_AUTOMATION_INPUT_SCHEMA, PROPOSE_AUTOMATION_TOOL } from '../shared/propose-automation';
 
 const PAGES_MCP_SERVER_ID = 'youcoded-pages';
 export const PAGES_MCP_READ_TOOLS = [`mcp__${PAGES_MCP_SERVER_ID}__ListPages`, `mcp__${PAGES_MCP_SERVER_ID}__ReadPageData`];
 const ROOTS_ENV = 'YOUCODED_PAGES_ROOTS';
 
-const PAGES_SERVER_JS = String.raw`// YouCoded's page-data MCP server (claude-code-pages-mcp.ts). Dependency-free:
+const PAGES_SERVER_RAW = String.raw`// YouCoded's page-data MCP server (claude-code-pages-mcp.ts). Dependency-free:
 // a plain node process Claude Code spawns, with nothing beside it.
 'use strict';
 var fs = require('fs');
@@ -43,6 +44,7 @@ try { ROOTS = JSON.parse(process.env.YOUCODED_PAGES_ROOTS || '[]').filter(functi
 
 var PATH_HELP = 'A path is a list of steps into the data: a field name ("accounts"), a position in a list (0), or {"field": value} to pick the item in a list whose field has that value ({"id": "m1"}).';
 var TOOLS = [
+  /*PROPOSE_AUTOMATION_TOOL*/
   {
     name: 'ListPages',
     description: 'List the user\'s YouCoded Pages (small apps inside YouCoded: a money dashboard, a grocery list, a workout log...). Returns each page\'s name, its id for the other page tools, what it is for, and the top-level fields of its saved data. Use it to find which page the user means.',
@@ -251,6 +253,9 @@ function mutateUnderLock(target, mutate) {
 // ── Tools ────────────────────────────────────────────────────────────────
 function callTool(id, params) {
   var name = params && params.name, a = (params && params.arguments) || {};
+  // Proposing an automation (shared/propose-automation.ts) touches no file: the app sees this call in the
+  // chat and shows the person the popup. So it answers the same with or without a Pages folder.
+  if (name === 'ProposeAutomation') return text(id, 'The person is now being shown this automation to check. Nothing is saved or running until they press Turn on. Tell them it is ready for them to check; do not say it is set up.');
   if (!ROOTS.length) return text(id, 'No Pages folder is available to this session.', true);
   if (name === 'ListPages') {
     return listPages().then(function (pages) {
@@ -331,6 +336,11 @@ process.stdin.on('end', function () { process.exit(0); });
 process.stdout.on('error', function () { process.exit(0); });
 `;
 
+// WHY spliced in rather than typed twice: the tool's words and input shape live once, in
+// shared/propose-automation.ts, for both kinds of chat.
+const PAGES_SERVER_JS = PAGES_SERVER_RAW.replace('/*PROPOSE_AUTOMATION_TOOL*/',
+  `${JSON.stringify({ name: PROPOSE_AUTOMATION_TOOL, description: PROPOSE_AUTOMATION_DESCRIPTION, inputSchema: PROPOSE_AUTOMATION_INPUT_SCHEMA })},`);
+
 const PAGES_MCP_DIR = 'claude-code-pages-mcp';
 
 // WHY a provider set by the pages service rather than an import of the sync service: session-manager would then
@@ -366,5 +376,6 @@ export function deployClaudeCodePagesMcp(baseDir: string, nodePath: string, root
   const configPath = path.join(dir, `mcp-config-${randomBytes(4).toString('hex')}.json`);
   const config = { mcpServers: { [PAGES_MCP_SERVER_ID]: { type: 'stdio', command: nodePath, args: [serverPath], env: { [ROOTS_ENV]: JSON.stringify(clean) } } } };
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
-  return { serverPath, configPath, allowedTools: [...PAGES_MCP_READ_TOOLS] };
+  // Proposing is pre-approved like the two read tools: it only shows the person a popup.
+  return { serverPath, configPath, allowedTools: [...PAGES_MCP_READ_TOOLS, CLAUDE_CODE_PROPOSE_AUTOMATION_TOOL] };
 }

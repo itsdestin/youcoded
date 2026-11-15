@@ -166,6 +166,8 @@ export interface AutomationsBridge {
   pageStart?(pageId: string, how: { job?: string; event?: string; data?: string }): Promise<{ ok: boolean; message?: string }>;
   /** The fresh list whenever a run starts, waits for an answer or ends, in any window or on a phone. */
   onChanged?(cb: (jobs: AutomationSummary[]) => void): () => void;
+  /** A draft the assistant proposed in a chat: open the check popup on it. Nothing is saved yet. */
+  onProposed?(cb: (draft: AutomationSummary) => void): () => void;
 }
 
 /** The built-in Automations page (Q-home note: "the main area could probably be a built-in

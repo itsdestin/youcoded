@@ -402,6 +402,7 @@ const IPC = {
   AUTOMATIONS_ANSWER: 'automations:answer',
   AUTOMATIONS_REMOVE: 'automations:remove',
   AUTOMATIONS_CHANGED: 'automations:changed',
+  AUTOMATIONS_PROPOSED: 'automations:proposed',
   AUTOMATIONS_PAGE_START: 'automations:page-start',
   FS_READ_HEAD: 'fs:read-head',
   FILE_UPLOAD: 'file:upload',
@@ -2529,6 +2530,11 @@ contextBridge.exposeInMainWorld('claude', {
       const handler = (_e: any, jobs: any[]) => cb(jobs);
       ipcRenderer.on(IPC.AUTOMATIONS_CHANGED, handler);
       return () => ipcRenderer.removeListener(IPC.AUTOMATIONS_CHANGED, handler);
+    },
+    onProposed: (cb: (draft: any) => void) => {
+      const handler = (_e: any, draft: any) => cb(draft);
+      ipcRenderer.on(IPC.AUTOMATIONS_PROPOSED, handler);
+      return () => ipcRenderer.removeListener(IPC.AUTOMATIONS_PROPOSED, handler);
     },
   },
   // YouCoded Pages: library, pins, document + data, change push. Shape: shared/pages-types.ts PagesBridge.

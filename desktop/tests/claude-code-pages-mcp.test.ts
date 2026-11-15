@@ -56,12 +56,19 @@ afterEach(() => {
 });
 
 describe('the page-data tools', () => {
-  it('offers three tools, of which only the two that read are pre-approved', async () => {
+  it('offers four tools; the two that read and the one that only proposes are pre-approved, changing a page is not', async () => {
     const { rpc, dep } = start([personal]);
     const list = await rpc('tools/list');
-    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(['ListPages', 'ReadPageData', 'UpdatePageData']);
-    expect(dep.allowedTools).toEqual(PAGES_MCP_READ_TOOLS);
+    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(['ProposeAutomation', 'ListPages', 'ReadPageData', 'UpdatePageData']);
+    expect(dep.allowedTools).toEqual([...PAGES_MCP_READ_TOOLS, 'mcp__youcoded-pages__ProposeAutomation']);
     expect(dep.allowedTools.some((t) => t.endsWith('UpdatePageData'))).toBe(false);
+  });
+
+  it('proposing an automation changes nothing and tells the assistant it is only being shown', async () => {
+    const { rpc } = start([personal]);
+    const r = await rpc('tools/call', { name: 'ProposeAutomation', arguments: { name: 'A', instruction: 'B', start: { kind: 'schedule', every: 'day', at: '7:00' } } });
+    expect(r.result.isError).toBeFalsy();
+    expect(r.result.content[0].text).toMatch(/Nothing is saved or running until they press Turn on/);
   });
 
   it('lists personal and project pages with what each one keeps', async () => {

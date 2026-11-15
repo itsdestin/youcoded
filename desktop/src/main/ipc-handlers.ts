@@ -1,5 +1,5 @@
 import { app, IpcMain, BrowserWindow, powerSaveBlocker, webContents } from 'electron';
-import { startAutomations } from './automations/start-automations';
+import { startAutomations, noteAutomationProposal } from './automations/start-automations';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -1538,6 +1538,7 @@ export function registerIpcHandlers(
     // CC summary, without mutating the saved transcript line.
     const event = liveFacts.prepareTranscript(sourceEvent);
     notePageRequest(event); // a page chat's request saves the page first (page-assistant-session.ts)
+    noteAutomationProposal(event);
     publish(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
     liveFacts.noteTranscript(event.sessionId, event); // a refused /model, a card Claude Code has moved past (R5-4a)
     // Conversation Store (Phase 2a): feed live activity into the record store.
@@ -1614,6 +1615,7 @@ export function registerIpcHandlers(
   nativeHost.on('transcript-event', (event: TranscriptEvent) => {
     publish(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
     notePageRequest(event); // a page chat's request saves the page first (page-assistant-session.ts)
+    noteAutomationProposal(event);
     // WHY (sync-fix6): the barrier resets the turn on every screen; the record's own `clear` line follows, numbered after it, so the divider has ONE source.
     if (event.type === 'context-clear') liveFacts.nativeCleared(event.sessionId, event.uuid, event.timestamp);
     // WHY: this is the single line that makes native conversations exist in the store (design §5); Task 3 made it correct rather than mislabeling.
@@ -2410,6 +2412,11 @@ export function registerIpcHandlers(
   // ── Automations (pages-finish step 4): main/automations/start-automations.ts ──
   const automationsService = startAutomations({
     createSession: (o) => nativeHost.createAutomationSession(o),
+    nativeBinding: (id) => nativeHost.getBinding(id) ?? undefined,
+    showProposal: (draft) => {
+      webContents.getAllWebContents().forEach((wc) => wc.send(IPC.AUTOMATIONS_PROPOSED, draft));
+      remoteServer?.broadcast({ type: IPC.AUTOMATIONS_PROPOSED, payload: draft });
+    },
     broadcast: (jobs) => {
       webContents.getAllWebContents().forEach((wc) => wc.send(IPC.AUTOMATIONS_CHANGED, jobs));
       remoteServer?.broadcast({ type: IPC.AUTOMATIONS_CHANGED, payload: jobs });
