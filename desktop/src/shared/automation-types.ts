@@ -161,6 +161,9 @@ export interface AutomationsBridge {
   answer(id: string, allow: boolean, note?: string, fromNowOn?: boolean): Promise<AutomationSummary[]>;
   /** Delete an automation with its settings and saved runs (review deck S-delete). */
   remove(id: string): Promise<AutomationSummary[]>;
+  /** A page's own button (`job`: an id or a name) or event. Only automations linked to that page start.
+   *  `message` says why when it did not (the daily limit, still running). */
+  pageStart?(pageId: string, how: { job?: string; event?: string; data?: string }): Promise<{ ok: boolean; message?: string }>;
   /** The fresh list whenever a run starts, waits for an answer or ends, in any window or on a phone. */
   onChanged?(cb: (jobs: AutomationSummary[]) => void): () => void;
 }

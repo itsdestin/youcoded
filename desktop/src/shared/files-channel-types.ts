@@ -120,6 +120,7 @@ export interface FilesChannelTypes {
   'automations:run-now': { request: { id: string }; response: AutomationSummary[] };
   'automations:answer': { request: { id: string; allow: boolean; note?: string; fromNowOn?: boolean }; response: AutomationSummary[] };
   'automations:remove': { request: { id: string }; response: AutomationSummary[] };
+  'automations:page-start': { request: { pageId: string; job?: string; event?: string; data?: string }; response: { ok: boolean; message?: string } };
   'pages:delete-saved-key': { request: { service: string; address: string }; response: PagesAnswer<'deleteSavedKey'> };
   'pages:fetch': { request: { id: string; request: PageFetchRequest }; response: PagesAnswer<'fetch'> | { ok: false; reason: 'network'; message: string } };
   'pages:plaid': { request: { id: string; request: unknown }; response: PlaidResult };

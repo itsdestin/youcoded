@@ -636,6 +636,7 @@ export const IPC = {
   AUTOMATIONS_ANSWER: 'automations:answer',
   AUTOMATIONS_REMOVE: 'automations:remove',
   AUTOMATIONS_CHANGED: 'automations:changed',
+  AUTOMATIONS_PAGE_START: 'automations:page-start', // a page's own button or event
   // ---- Remembered "Always allow" rules (M5 2a: permissions management UI) ----
   // list = every project's stored grants; remove/remove-project revoke them.
   // Keyed by PROJECT SLUG, not cwd — permissions.json never stored the cwd for

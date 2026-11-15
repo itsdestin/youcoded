@@ -89,6 +89,9 @@ describe('automations service', () => {
     await svc.save(job({ start: { kind: 'button', label: 'Run' }, links: [{ kind: 'page', id: 'p1', name: 'A' }] }));
     expect(await svc.startFromPage('other', 'one', { kind: 'button' })).toMatchObject({ started: false, why: 'missing' });
     expect(await svc.startFromPage('p1', 'one', { kind: 'button' })).toMatchObject({ started: true });
+    // By name too: a page's button is written against the name the person sees.
+    expect(await svc.startFromPage('p1', 'One', { kind: 'button' })).toMatchObject({ started: true });
+    expect(await svc.startFromPage('other', 'One', { kind: 'button' })).toMatchObject({ started: false });
   });
 
   it("a page's event starts the linked automations waiting for that event, with its information as data", async () => {

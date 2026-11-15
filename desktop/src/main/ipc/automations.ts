@@ -32,5 +32,21 @@ export const automationsChannels: MainChannelDef[] = [
     name: IPC.AUTOMATIONS_ANSWER, kind: 'handle', remoteAllowed: false,
     handler: async (p) => (await getAutomationsService()?.answer(str(p?.id), p?.allow === true, typeof p?.note === 'string' ? p.note : undefined, p?.fromNowOn === true)) ?? [],
   }),
+  // A page's own button (`job`) or event (`event`). `pageId` comes from the app's page host, never from the
+  // page's code, and the service starts only automations linked to that page.
+  defineChannel({
+    name: IPC.AUTOMATIONS_PAGE_START, kind: 'handle', remoteAllowed: false,
+    handler: async (p) => {
+      const svc = getAutomationsService();
+      if (!svc) return { ok: false, message: 'Automations are not available here.' };
+      const pageId = str(p?.pageId);
+      if (typeof p?.event === 'string') {
+        const results = await svc.eventFromPage(pageId, p.event, typeof p.data === 'string' ? p.data : undefined);
+        return { ok: results.some((r) => r.started) };
+      }
+      const r = await svc.startFromPage(pageId, str(p?.job), { kind: 'button' });
+      return r.started ? { ok: true } : { ok: false, message: r.message };
+    },
+  }),
   defineChannel({ name: IPC.AUTOMATIONS_REMOVE, kind: 'handle', remoteAllowed: false, handler: async (p) => (await getAutomationsService()?.remove(str(p?.id))) ?? [] }),
 ];

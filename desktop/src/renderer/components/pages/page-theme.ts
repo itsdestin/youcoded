@@ -16,6 +16,7 @@
 
 import { PAGES_SOLID_ATTR } from '../../themes/look-overrides';
 import { PAGE_KIT_JS } from './page-kit';
+import { PAGE_AUTOMATION_MESSAGE, PAGE_AUTOMATION_RESULT_MESSAGE, PAGE_AUTOMATIONS_STATE_MESSAGE } from './page-automations-host';
 import { MAX_PAGE_PROGRAM_INPUT, MAX_PAGE_SESSION_PROMPT, PAGE_CHATS_REFUSED, PAGE_PROGRAM_REFUSED, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
 
 const PAGE_THEME_TOKENS: readonly string[] = [
@@ -379,6 +380,63 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
       window.youcoded.chats.setMark = function (chat, mark, on) { return chatCall({ op: 'setMark', chat: String(chat), mark: String(mark), on: !!on }, false); };
     }
   }
+  // Automations linked to this page (pages-finish step 4). A page can start one (by its name or id), send an
+  // event, and read their states. A button marked data-yc-automation="Name" does all of it by itself: a
+  // press starts it, it shows a spinner while it runs and the orange dot while it waits for the person,
+  // and it greys out with the reason at its daily limit. The app checks the link to this page on every call.
+  var AUTO = ${JSON.stringify(PAGE_AUTOMATION_MESSAGE)};
+  var AUTO_RESULT = ${JSON.stringify(PAGE_AUTOMATION_RESULT_MESSAGE)};
+  var AUTO_STATE = ${JSON.stringify(PAGE_AUTOMATIONS_STATE_MESSAGE)};
+  var jobStates = [];
+  var jobListeners = [];
+  var jobSeq = 0;
+  var jobAsked = false;
+  // WHY asked for only when the page uses it (a marked button, or a call below): a page with no
+  // automations sends the app nothing extra. After that the app sends every change by itself.
+  function jobAsk() { if (!jobAsked) { jobAsked = true; jobCall({ op: 'list' }); } }
+  function jobCall(body) {
+    return new Promise(function (resolve) {
+      // Its own numbering ('a…'), so these calls never shift the ids of the page's other requests.
+      var id = 'a' + (++jobSeq);
+      body.type = AUTO; body.id = id;
+      waiting[id] = { resolve: resolve, reject: resolve, automation: true };
+      try { parent.postMessage(body, '*'); }
+      catch (e) { delete waiting[id]; resolve({ ok: false, message: 'The page was closed.' }); }
+    });
+  }
+  function jobFind(key) {
+    for (var i = 0; i < jobStates.length; i++) if (jobStates[i].id === key || jobStates[i].name === key) return jobStates[i];
+    return null;
+  }
+  function jobPaint() {
+    var els = document.querySelectorAll('[data-yc-automation]');
+    for (var i = 0; i < els.length; i++) {
+      var job = jobFind(els[i].getAttribute('data-yc-automation'));
+      var state = job ? job.state : 'idle';
+      els[i].setAttribute('data-yc-run', state);
+      // Greyed while it cannot be started; the reason is the button's hover text.
+      els[i].disabled = state === 'limit' || state === 'running';
+      if (job && job.message) els[i].title = job.message; else els[i].removeAttribute('title');
+    }
+  }
+  window.youcoded.automations = {
+    list: function () { jobAsk(); return jobStates.slice(); },
+    run: function (job) { return jobCall({ op: 'run', job: String(job) }); },
+    event: function (name, data) {
+      var text = data === undefined ? undefined : (typeof data === 'string' ? data : JSON.stringify(data));
+      return jobCall({ op: 'event', event: String(name), data: text });
+    },
+    onChange: function (cb) { if (typeof cb === 'function') { jobListeners.push(cb); jobAsk(); } }
+  };
+  // WHY the check: a page shown without a real document (a test frame) has nothing to listen on.
+  if (document.addEventListener) document.addEventListener('click', function (e) {
+    var el = e.target && e.target.closest ? e.target.closest('[data-yc-automation]') : null;
+    if (!el || el.disabled) return;
+    window.youcoded.automations.run(el.getAttribute('data-yc-automation'));
+  });
+  var jobMarked = function () { if (document.querySelector && document.querySelector('[data-yc-automation]')) jobAsk(); };
+  if (document.readyState === 'loading' && document.addEventListener) document.addEventListener('DOMContentLoaded', jobMarked);
+  else jobMarked();
   // Page programs (spec 2026-10-16): only the files with an approved line. The host and main check again, and
   // main also checks that the file is still the one that was approved.
   if (PROGRAM_FILES.length) {
@@ -511,6 +569,19 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
       delete waiting[d.id];
       var ok = !!(d.result && d.result.ok === true);
       sp.resolve(ok ? { ok: true } : { ok: false, reason: d.result && typeof d.result.reason === 'string' ? d.result.reason : REFUSED.closed });
+      return;
+    }
+    if (d.type === AUTO_STATE && Array.isArray(d.jobs)) {
+      jobStates = d.jobs;
+      jobPaint();
+      for (var ji = 0; ji < jobListeners.length; ji++) { try { jobListeners[ji](jobStates.slice()); } catch (err) { /* one listener's error is not another's */ } }
+      return;
+    }
+    if (d.type === AUTO_RESULT) {
+      var jw = waiting[d.id];
+      if (!jw || !jw.automation) return;
+      delete waiting[d.id];
+      jw.resolve(d.result && typeof d.result === 'object' && typeof d.result.ok === 'boolean' ? d.result : { ok: false, message: 'The automation could not be started.' });
       return;
     }
     if (d.type === CHATS_RESULT || d.type === PROGRAM_RESULT) {

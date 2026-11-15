@@ -28,6 +28,8 @@
 //   .yc-status [--info | --ok | --warning | --danger] [--dot] — the app's tinted status Pill
 //   .yc-notice [--warning | --danger] [--slim] (__text __title __details __actions) — the app's Callout
 //   .yc-loading [--inline]  .yc-screen-error   — the app's LoadingState and ScreenError
+//   [data-yc-automation="Name"] on a button    — starts that linked automation; the kit shows a spinner while it
+//                                                runs, the orange dot while it waits, and greys it at its daily limit
 //   .yc-switch (a <button role="switch" aria-checked>) — the app's Toggle; PAGE_KIT_JS flips it
 //   .yc-search  .yc-filter [aria-pressed]      — the app's search box and FilterChip, one height
 //   .yc-fold (<details>/<summary>)             — the app's FoldRow; .yc-section folds at phone width
@@ -341,6 +343,11 @@ table.yc-table td { padding: 8px; border-bottom: 1px solid var(--edge-dim); }
 .yc-loading { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 32px 0; font-size: 14px; color: var(--fg-muted); }
 .yc-loading--inline { justify-content: flex-start; padding: 0 4px; font-size: 11px; }
 .yc-loading::before { content: '⠋'; display: inline-block; flex: none; width: 1em; text-align: center; line-height: 1; animation: yc-spin 800ms steps(1, end) infinite, yc-spin-hue 3000ms steps(1, end) infinite; }
+/* A page's automation button (pages-finish step 4, deck Q-button "the kit does it"). The state is set by
+   the kit script (page-theme.ts) from what the app says; a page that styles its own button still gets it. */
+[data-yc-automation][data-yc-run="running"]::before { content: '⠋'; display: inline-block; flex: none; width: 1em; margin-right: 6px; text-align: center; line-height: 1; animation: yc-spin 800ms steps(1, end) infinite; }
+[data-yc-automation][data-yc-run="waiting"]::after { content: ''; display: inline-block; flex: none; width: 8px; height: 8px; margin-left: 6px; border-radius: 50%; background: var(--yc-warning); }
+[data-yc-automation][data-yc-run="limit"] { opacity: 0.5; cursor: not-allowed; }
 @keyframes yc-spin { 0% { content: '⠋'; } 10% { content: '⠙'; } 20% { content: '⠹'; } 30% { content: '⠸'; } 40% { content: '⠼'; } 50% { content: '⠴'; } 60% { content: '⠦'; } 70% { content: '⠧'; } 80% { content: '⠇'; } 90% { content: '⠏'; } 100% { content: '⠋'; } }
 @keyframes yc-spin-hue { 0% { color: var(--fg-dim); } 20% { color: var(--fg-2); } 40% { color: var(--accent); } 60% { color: var(--fg-muted); } 80% { color: var(--fg-muted); } 100% { color: var(--fg-dim); } }
 

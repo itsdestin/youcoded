@@ -591,3 +591,76 @@ describe("a page's files", () => {
     expect(Array.from(got.data as Uint8Array)).toEqual([104, 105]);
   });
 });
+
+describe("a page's automation button", () => {
+  /** The bootstrap with a fake page holding one marked button. */
+  function run(withButton = true) {
+    const src = /<script>([\s\S]*?)<\/script>/.exec(prepareHostedDocument('<p>hi</p>', THEME, KIT))?.[1] ?? '';
+    const winListeners: ((e: unknown) => void)[] = [];
+    const docListeners: Record<string, ((e: unknown) => void)[]> = {};
+    const attrs: Record<string, string> = { 'data-yc-automation': 'Shopping list' };
+    const button = {
+      disabled: false, title: '' as string | undefined,
+      getAttribute: (n: string) => attrs[n] ?? null,
+      setAttribute: (n: string, v: string) => { attrs[n] = v; },
+      removeAttribute: (n: string) => { if (n === 'title') button.title = undefined; else delete attrs[n]; },
+      closest: () => button,
+    };
+    const documentStub = {
+      getElementById: () => null, createElement: () => ({}), head: { appendChild: () => {} }, readyState: 'complete',
+      querySelector: () => (withButton ? button : null),
+      querySelectorAll: () => (withButton ? [button] : []),
+      addEventListener: (t: string, fn: (e: unknown) => void) => { (docListeners[t] ??= []).push(fn); },
+    };
+    const posted: Record<string, unknown>[] = [];
+    const parent = { postMessage: (m: Record<string, unknown>) => { posted.push(m); } };
+    const win = { addEventListener: (_t: string, fn: (e: unknown) => void) => winListeners.push(fn) } as Record<string, any>;
+    new Function('window', 'document', 'parent', src)(win, documentStub, parent);
+    return {
+      win, button, attrs, posted,
+      deliver: (data: unknown, source: unknown = parent) => winListeners.forEach((fn) => fn({ data, source })),
+      click: () => (docListeners.click ?? []).forEach((fn) => fn({ target: button })),
+    };
+  }
+
+  it('asks the app about its automations only when the page has a marked button', () => {
+    expect(run(true).posted).toEqual([{ type: 'youcoded:automation', id: 'a1', op: 'list' }]);
+    expect(run(false).posted).toEqual([]);
+  });
+
+  it('a press starts the automation by the name on the button', () => {
+    const { posted, click } = run();
+    click();
+    expect(posted[1]).toEqual({ type: 'youcoded:automation', id: 'a2', op: 'run', job: 'Shopping list' });
+  });
+
+  it('shows running, waiting and the daily limit as the app reports them, and cannot be pressed while greyed', () => {
+    const { button, attrs, posted, deliver, click } = run();
+    deliver({ type: 'youcoded:automations', jobs: [{ id: 'j1', name: 'Shopping list', state: 'running' }] });
+    expect(attrs['data-yc-run']).toBe('running');
+    expect(button.disabled).toBe(true);
+    deliver({ type: 'youcoded:automations', jobs: [{ id: 'j1', name: 'Shopping list', state: 'waiting', message: 'Waiting for your OK' }] });
+    expect(attrs['data-yc-run']).toBe('waiting');
+    expect(button.disabled).toBe(false);
+    expect(button.title).toBe('Waiting for your OK');
+    deliver({ type: 'youcoded:automations', jobs: [{ id: 'j1', name: 'Shopping list', state: 'limit', message: 'Daily limit reached. 20 of 20 runs today. It can run again tomorrow.' }] });
+    expect(button.disabled).toBe(true);
+    expect(button.title).toMatch(/Daily limit reached/);
+    click();
+    expect(posted).toHaveLength(1); // only the opening question: the greyed press sent nothing
+    // Not from the app: ignored.
+    deliver({ type: 'youcoded:automations', jobs: [] }, { name: 'popup' });
+    expect(attrs['data-yc-run']).toBe('limit');
+  });
+
+  it("gives the page's own code the result of a start, from the app only", async () => {
+    const { win, posted, deliver } = run(false);
+    const started = win.youcoded.automations.run('Shopping list');
+    const id = posted.at(-1)!.id;
+    deliver({ type: 'youcoded:automation:result', id, result: { ok: true } }, { name: 'popup' }); // ignored
+    deliver({ type: 'youcoded:automation:result', id, result: { ok: false, message: 'Its last run is still going.' } });
+    expect(await started).toEqual({ ok: false, message: 'Its last run is still going.' });
+    win.youcoded.automations.event('list-changed', { n: 3 });
+    expect(posted.at(-1)).toMatchObject({ op: 'event', event: 'list-changed', data: '{"n":3}' });
+  });
+});

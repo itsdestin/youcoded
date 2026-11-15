@@ -2943,6 +2943,7 @@ export function installShim(): void {
       runNow: (id: string) => invoke('automations:run-now', { id }),
       answer: (id: string, allow: boolean, note?: string, fromNowOn?: boolean) => invoke('automations:answer', { id, allow, note, fromNowOn }),
       remove: (id: string) => invoke('automations:remove', { id }),
+      pageStart: (pageId: string, how: { job?: string; event?: string; data?: string }) => invoke('automations:page-start', { pageId, ...how }),
       onChanged: (cb: (jobs: any[]) => void) => {
         const handler = addListener('automations:changed', (jobs: any) => cb(jobs));
         return () => removeListener('automations:changed', handler);

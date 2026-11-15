@@ -402,6 +402,7 @@ const IPC = {
   AUTOMATIONS_ANSWER: 'automations:answer',
   AUTOMATIONS_REMOVE: 'automations:remove',
   AUTOMATIONS_CHANGED: 'automations:changed',
+  AUTOMATIONS_PAGE_START: 'automations:page-start',
   FS_READ_HEAD: 'fs:read-head',
   FILE_UPLOAD: 'file:upload',
   PERMISSIONS_LIST: 'permissions:list',
@@ -2523,6 +2524,7 @@ contextBridge.exposeInMainWorld('claude', {
     runNow: (id: string) => ipcRenderer.invoke(IPC.AUTOMATIONS_RUN_NOW, { id }),
     answer: (id: string, allow: boolean, note?: string, fromNowOn?: boolean) => ipcRenderer.invoke(IPC.AUTOMATIONS_ANSWER, { id, allow, note, fromNowOn }),
     remove: (id: string) => ipcRenderer.invoke(IPC.AUTOMATIONS_REMOVE, { id }),
+    pageStart: (pageId: string, how: { job?: string; event?: string; data?: string }) => ipcRenderer.invoke(IPC.AUTOMATIONS_PAGE_START, { pageId, ...how }),
     onChanged: (cb: (jobs: any[]) => void) => {
       const handler = (_e: any, jobs: any[]) => cb(jobs);
       ipcRenderer.on(IPC.AUTOMATIONS_CHANGED, handler);

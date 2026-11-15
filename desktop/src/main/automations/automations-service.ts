@@ -104,12 +104,12 @@ export class AutomationsService {
 
   /** A page's own button or event. WHY the link is checked here, in main: a page may only start an
    *  automation linked to it, whatever id its code sends (design-review ruling 3). */
-  async startFromPage(pageId: string, jobId: string, how: { kind: 'button' } | { kind: 'event'; data?: string }): Promise<StartResult> {
-    const job = await this.store.get(jobId);
-    if (!job || !job.links.some((l) => l.kind === 'page' && l.id === pageId)) {
-      return { started: false, why: 'missing', message: 'This page has no automation by that name.' };
-    }
-    return this.runner.start(jobId, how.kind, how.kind === 'event' && how.data !== undefined ? { eventData: how.data } : {});
+  async startFromPage(pageId: string, idOrName: string, how: { kind: 'button' } | { kind: 'event'; data?: string }): Promise<StartResult> {
+    // By id, or by its name: the page builder writes a button for "Shopping list" without knowing its id.
+    const linked = (await this.store.list()).filter((j) => j.links.some((l) => l.kind === 'page' && l.id === pageId));
+    const job = linked.find((j) => j.id === idOrName) ?? linked.find((j) => j.name === idOrName);
+    if (!job) return { started: false, why: 'missing', message: 'This page has no automation by that name.' };
+    return this.runner.start(job.id, how.kind, how.kind === 'event' && how.data !== undefined ? { eventData: how.data } : {});
   }
 
   /** Every enabled automation started by this page's event of that name. */

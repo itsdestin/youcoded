@@ -59,7 +59,8 @@ import { OfficeView } from '../office/OfficeView';
 import { AutomationsView, openAutomationsAt, type AutomationsPhoto } from '../automations/AutomationsView';
 /** The photo-only states of the automation popup (`?autoView=`, screens/pages.ts). */
 const AUTOMATION_PHOTOS: AutomationsPhoto[] = ['runs', 'subscription', 'add-menu', 'new', 'lower', 'lower-open', 'add-folder', 'add-command', 'add-site', 'describe', 'describe-result', 'cap', 'limit', 'delete', 'commands'];
-import { useAutomationsWaiting } from '../automations/use-automations';
+import { useAutomations, useAutomationsWaiting } from '../automations/use-automations';
+import { handlePageAutomationMessage, postPageAutomations } from './page-automations-host';
 import { AUTOMATIONS_PAGE_ID } from '../../../shared/automation-types';
 import { HOME_TAB, officeDocFor, previewOfficeComments, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
 import { OfficeAlerts } from '../office/OfficeAlerts';
@@ -342,6 +343,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // The data the page in the frame is known to hold, so an outside change can
   // be told apart from the echo of the page's own save (see the onData effect).
   const frameDataRef = useRef<string>('null');
+  // WHY a ref beside the value: the message handler below must read the newest list without being rebuilt
+  // (rebuilding it restarts the page's save queue).
+  const automationJobs = useAutomations().jobs;
+  const automationJobsRef = useRef(automationJobs);
+  automationJobsRef.current = automationJobs;
   // True while the page's own save is waiting to be written (the 500 ms
   // debounce, then the write itself). WHY: any pages broadcast in that window
   // — a page's request updating its "Updated now" stamp is enough — re-read
@@ -444,6 +450,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     saveQueueRef.current = saves;
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow) return;
+      if (e.data && handlePageAutomationMessage(e.data as { type?: unknown }, e.source as Window, pageId, automationJobsRef.current)) return;
       const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown; as?: unknown; socket?: unknown; request?: unknown; top?: unknown; bottom?: unknown } | null;
       if (!d) return;
       // WHY the frame carries the page document's scroll fade (pages-kit-questions #7: every scrolling
@@ -674,6 +681,13 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     }, () => { /* the next broadcast tries again */ });
     return () => { cancelled = true; };
   }, [pages, load.state, pageId]);
+
+  // The page's own automation buttons (page-automations-host.ts): the page is told the state of the
+  // automations linked to it whenever one starts, waits or ends, so its button can show it.
+  useEffect(() => {
+    if (load.state !== 'ready' || pageId === null) return;
+    postPageAutomations(frameRef.current?.contentWindow, automationJobs, pageId);
+  }, [automationJobs, load.state, pageId]);
 
   // Live theme: watch the host document and post the fresh tokens in.
   useEffect(() => {
