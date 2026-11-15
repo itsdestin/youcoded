@@ -16,7 +16,7 @@ import type { ModelMessage } from 'ai';
 import type { TranscriptEvent } from '../../shared/types';
 import { hasUnpairedToolCalls, rebuildHistory } from '../harness/history-rebuild';
 import type { AskDecision, AskRequest } from '../harness/permission-broker';
-import type { EngineHandle, EngineRun, RunEngine } from './automation-runner';
+import { confirmStartOver, type EngineHandle, type EngineRun, type RunEngine } from './automation-runner';
 import { buildJobDecide } from './job-decide';
 import { firstMessage, readEnding, runBrief } from './run-brief';
 import { PAGE_CHANGE_TOOL, PAGE_READ_TOOL, PAGE_REFUSED, describePages, pageArgAllowed, runPagesFor } from './run-pages';
@@ -73,6 +73,9 @@ export function toolNamesFor(job: EngineRun['job']): string[] {
 export function wordAsk(req: AskRequest): { action: string; detail?: string } {
   const input = req.toolInput as Record<string, unknown>;
   const str = (k: string): string | undefined => (typeof input[k] === 'string' ? (input[k] as string) : undefined);
+  // The two page tools (plain ifs: their names are built from the page program's id).
+  if (req.toolName === `mcp__${PAGES_MCP_SERVER_ID}__${PAGE_READ_TOOL}`) return { action: 'Read a page’s information', detail: str('page') };
+  if (req.toolName === `mcp__${PAGES_MCP_SERVER_ID}__${PAGE_CHANGE_TOOL}`) return { action: 'Change a page’s information', detail: str('page') };
   switch (req.toolName) {
     case 'Bash': return { action: 'Run a command', detail: str('command') };
     case 'Write': return { action: 'Write a file', detail: str('file_path') };
@@ -80,8 +83,6 @@ export function wordAsk(req: AskRequest): { action: string; detail?: string } {
     case 'Read': return { action: 'Read a file', detail: str('file_path') };
     case 'Glob': case 'Grep': return { action: 'Look through a folder', detail: str('path') };
     case 'WebFetch': return { action: 'Visit a website', detail: str('url') };
-    case `mcp__${PAGES_MCP_SERVER_ID}__${PAGE_READ_TOOL}`: return { action: 'Read a page’s information', detail: str('page') };
-    case `mcp__${PAGES_MCP_SERVER_ID}__${PAGE_CHANGE_TOOL}`: return { action: 'Change a page’s information', detail: str('page') };
     // The loop's own safety stops (too many steps, repeating itself) also arrive as questions.
     case 'max_steps': return { action: 'Keep going past its usual number of steps' };
     case 'doom_loop': return { action: 'Keep going though it is repeating itself' };
@@ -148,8 +149,8 @@ export function nativeEngine(deps: NativeEngineDeps): RunEngine {
       await fs.mkdir(path.dirname(transcript), { recursive: true });
       // A picked-up run: its saved conversation, or null when there is nothing to continue from.
       const saved = run.resume ? await savedRun(transcript) : null;
-      // Starting over begins a fresh record of the conversation.
-      if (run.resume && !saved) await fs.rm(transcript, { force: true });
+      // Nothing to continue from: starting over could repeat steps, so the person is asked first.
+      if (run.resume && !saved) { await confirmStartOver(run); await fs.rm(transcript, { force: true }); }
 
       // The pages it is linked to, and the page tools limited to them.
       const pages = await runPagesFor(run.job, deps.pageDir);
@@ -167,16 +168,25 @@ export function nativeEngine(deps: NativeEngineDeps): RunEngine {
       }
 
       // The permission a question falls under, remembered between the check and the question that follows it.
-      let askingFor: string | undefined;
+      // Which permission each question falls under. WHY keyed by the step itself (tool + what it acts on): the
+      // loop checks a step and asks about it in two separate calls, and two steps can be in flight at once.
+      const askedUnder = new Map<string, string>();
+      const stepKey = (tool: string, subject: string | undefined): string => `${tool}\u0000${subject ?? ''}`;
+      const decide = buildJobDecide({ rules: run.current, workDir });
       const built = await deps.createSession({
         runId: run.runId, workDir,
         binding: { providerId: on.providerId, modelId: on.modelId },
         ...(pageServer ? { mcpServers: [pageServer] } : {}),
         systemPrompt: runBrief(run.job, describePages(pages)),
         toolNames: toolNamesFor(run.job),
-        decide: (tool, subject) => { askingFor = undefined; return buildJobDecide({ rules: run.current, workDir, onAsk: (id) => { askingFor = id; } })(tool, subject); },
+        decide: async (tool, subject) => {
+          const d = await decide(tool, subject);
+          if (d.action === 'ask' && d.toolId) askedUnder.set(stepKey(tool, subject), d.toolId); else askedUnder.delete(stepKey(tool, subject));
+          return d;
+        },
         askUser: async (req) => {
-          const a = await run.ask({ ...wordAsk(req), ...(askingFor ? { toolId: askingFor } : {}) });
+          const toolId = askedUnder.get(stepKey(req.toolName, req.subject));
+          const a = await run.ask({ ...wordAsk(req), ...(toolId ? { toolId } : {}) });
           return a.allow ? { behavior: 'allow' } : { behavior: 'deny', message: a.note };
         },
         // The runner adds it up and, at the monthly limit, stops the run (which interrupts the session).
@@ -211,7 +221,7 @@ export function nativeEngine(deps: NativeEngineDeps): RunEngine {
       await writing;
       if (failure) throw new Error(failure);
       return { ...readEnding(lastReply), ...(run.resume && !saved ? { startedOver: true } : {}) };
-    })().finally(() => { void dispose?.(); void pageConnection?.close().catch(() => {}); });
+    })().finally(() => { void dispose?.().catch(() => {}); void pageConnection?.close().catch(() => {}); });
 
     return {
       done,

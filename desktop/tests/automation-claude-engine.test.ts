@@ -181,4 +181,48 @@ describe('claude engine', () => {
     f.close();
     await handle.done;
   });
+
+  it('judges a search by the folder its pattern really starts in, and answers requests it does not know', async () => {
+    const f = fakeClaude();
+    const handle = engineWith(f)(runOf(job()));
+    await started(f);
+    f.print(ask('g1', 'Glob', { pattern: '/etc/ssh/*' }));
+    f.print(ask('g2', 'Glob', { pattern: '~/.ssh/*' }));
+    f.print(ask('g3', 'Glob', { pattern: '../../*' }));
+    f.print(ask('g4', 'Glob', { pattern: '*.md' }));
+    f.print(ask('g5', 'Read', { file_path: '~/.ssh/id_rsa' }));
+    f.print({ type: 'control_request', request_id: 'x1', request: { subtype: 'mcp_message' } });
+    await expect.poll(() => f.written.find((w) => w.response?.request_id === 'x1')).toBeTruthy();
+    await expect.poll(() => ['g1', 'g2', 'g3', 'g4', 'g5'].every((id) => answerTo(f, id))).toBe(true);
+    for (const id of ['g1', 'g2', 'g3', 'g5']) expect(answerTo(f, id), id).toMatchObject({ behavior: 'deny' });
+    expect(answerTo(f, 'g4')).toMatchObject({ behavior: 'allow' }); // its own work folder
+    expect(f.written.find((w) => w.response?.request_id === 'x1').response.subtype).toBe('error');
+    f.print({ type: 'result', subtype: 'success', is_error: false, result: 'Summary: ok' });
+    f.close();
+    await handle.done;
+  });
+
+  it('a picked-up run asks before starting over, and stays stopped on a no', async () => {
+    const f = fakeClaude();
+    const asked: unknown[] = [];
+    const handle = engineWith(f)(runOf(job(), { resume: true, ask: async (q) => { asked.push(q); return { allow: false, note: '' }; } }));
+    await expect(handle.done).rejects.toMatchObject({ name: 'RunStopped' });
+    expect(asked).toEqual([{ action: 'Start this run again from the beginning', detail: 'It was cut off when YouCoded closed and may repeat steps it already did.' }]);
+    expect(f.seen.args).toBeUndefined(); // Claude Code was never started
+  });
+
+  it('counts a reply that arrives in several lines once', async () => {
+    const f = fakeClaude();
+    const spent: number[] = [];
+    const handle = engineWith(f)(runOf(job(), { spent: async (_d, t) => { spent.push(t); return true; } }));
+    await started(f);
+    const usage = { input_tokens: 10, output_tokens: 5 };
+    f.print({ type: 'assistant', message: { id: 'm1', usage } });
+    f.print({ type: 'assistant', message: { id: 'm1', usage } });
+    f.print({ type: 'assistant', message: { id: 'm2', usage } });
+    f.print({ type: 'result', subtype: 'success', is_error: false, result: 'Summary: ok' });
+    f.close();
+    await handle.done;
+    expect(spent).toEqual([15, 15]);
+  });
 });

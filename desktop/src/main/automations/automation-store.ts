@@ -31,6 +31,11 @@ export interface StoredRun {
   skipped?: string[];
   dollars?: number;
   tokens: number;
+  /** What this run was asked to do, when it differs from the automation's own instruction (a late run's
+   *  other instructions), and what a page sent with its event. Kept so a run picked up after the app was
+   *  closed is given the same task, not a different one. */
+  instruction?: string;
+  eventData?: string;
 }
 
 interface UsageEntry {
@@ -118,7 +123,16 @@ export class AutomationStore {
     delete this.usage[id];
     this.saveJobs();
     this.saveUsage();
-    if (safeId(id)) this.queue(() => fs.rm(this.runsDir(id), { recursive: true, force: true }));
+    if (safeId(id)) {
+      this.queue(() => fs.rm(this.runsDir(id), { recursive: true, force: true }));
+      // Its work folder and the two small files a Claude run is started with.
+      const work = path.join(this.dir(), 'work');
+      this.queue(async () => {
+        await fs.rm(path.join(work, id), { recursive: true, force: true });
+        await fs.rm(path.join(work, `${id}.brief.txt`), { force: true });
+        await fs.rm(path.join(work, `${id}.mcp.json`), { force: true });
+      });
+    }
   }
 
   /** A page was deleted and the person chose Keep for its automations: they carry on, no longer linked to it. */
@@ -156,6 +170,8 @@ export class AutomationStore {
   /** Add what a step cost to this month's totals. */
   async addUsage(jobId: string, dollars: number, tokens: number, now = Date.now()): Promise<void> {
     await this.load();
+    // A run still stopping after its automation was deleted must not bring its counts back.
+    if (!this.jobs!.some((j) => j.id === jobId)) return;
     const e = this.entry(jobId, now);
     e.dollars += dollars;
     e.tokens += tokens;
@@ -178,6 +194,9 @@ export class AutomationStore {
   /** Save a run's newer state (it finished, is waiting, was stopped…). */
   async updateRun(jobId: string, run: StoredRun): Promise<void> {
     if (!safeId(jobId) || !safeId(run.id)) throw new Error('automation id not allowed');
+    await this.load();
+    // WHY: a run that ends just after its automation was deleted would otherwise write its folder back.
+    if (!this.jobs!.some((j) => j.id === jobId)) return;
     this.writeRun(jobId, run);
   }
 
@@ -210,6 +229,9 @@ export class AutomationStore {
   private async trim(jobId: string): Promise<void> {
     let names: string[];
     try { names = await fs.readdir(this.runsDir(jobId)); } catch { return; }
+    // WHY only the .json records are counted: a run's saved conversation (.jsonl) sits beside its record, and
+    // counting it halved the runs kept and deleted the conversation of a run still waiting to be picked up.
+    names = names.filter((n) => n.endsWith('.json'));
     if (names.length <= MAX_RUNS_KEPT) return;
     const dated: { n: string; at: number }[] = [];
     for (const n of names) {
@@ -217,6 +239,10 @@ export class AutomationStore {
       catch { dated.push({ n, at: 0 }); }
     }
     dated.sort((a, b) => b.at - a.at);
-    for (const old of dated.slice(MAX_RUNS_KEPT)) await fs.rm(path.join(this.runsDir(jobId), old.n), { force: true });
+    for (const old of dated.slice(MAX_RUNS_KEPT)) {
+      await fs.rm(path.join(this.runsDir(jobId), old.n), { force: true });
+      // Its conversation goes with it.
+      await fs.rm(path.join(this.runsDir(jobId), `${old.n.slice(0, -'.json'.length)}.jsonl`), { force: true });
+    }
   }
 }

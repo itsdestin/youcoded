@@ -33,7 +33,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { siteKeyFor } from '../../shared/site-key';
-import type { EngineHandle, EngineRun, RunEngine } from './automation-runner';
+import { confirmStartOver, type EngineHandle, type EngineRun, type RunEngine } from './automation-runner';
 import { buildJobDecide } from './job-decide';
 import { firstMessage, readEnding, runBrief } from './run-brief';
 import { PAGE_CHANGE_TOOL, PAGE_READ_TOOL, PAGE_REFUSED, describePages, pageArgAllowed, runPagesFor } from './run-pages';
@@ -94,13 +94,28 @@ function subjectOf(tool: string, input: Record<string, unknown>): string | undef
   const str = (k: string): string | undefined => (typeof input[k] === 'string' ? (input[k] as string) : undefined);
   if (tool === 'Bash') return str('command');
   if (tool === 'Read' || tool === 'Write' || tool === 'Edit') return str('file_path');
-  if (tool === 'Glob' || tool === 'Grep') return str('path') ?? '.';
+  if (tool === 'Glob' || tool === 'Grep') {
+    // WHY the pattern is looked at too: Claude Code's Glob accepts a pattern that names its own starting
+    // folder ("/home/u/.ssh/*", "~/x/**", "../y"), and with no `path` that would have been judged as the
+    // work folder, which is always allowed. The folder such a pattern starts in is what gets judged.
+    const pattern = tool === 'Glob' ? str('pattern') : undefined;
+    if (pattern && (path.isAbsolute(pattern) || pattern.startsWith('~') || pattern.split(/[\\/]/).includes('..'))) {
+      const fixed = pattern.split(/[*?[{]/)[0];
+      const folder = fixed.endsWith('/') || fixed.endsWith('\\') ? fixed : path.dirname(fixed);
+      // A pattern that names a place of its own starts there; a relative one starts from `path`.
+      return path.isAbsolute(folder) || folder.startsWith('~') ? folder : path.join(str('path') ?? '.', folder);
+    }
+    return str('path') ?? '.';
+  }
   if (tool === 'WebFetch') { const url = str('url'); return url ? (siteKeyFor(url) ?? url) : undefined; }
   return undefined;
 }
 
 function wordAsk(tool: string, input: Record<string, unknown>): { action: string; detail?: string } {
   const str = (k: string): string | undefined => (typeof input[k] === 'string' ? (input[k] as string) : undefined);
+  // The two page tools (plain ifs: their names are built from the page program's id).
+  if (tool === `mcp__${PAGES_MCP_SERVER_ID}__${PAGE_READ_TOOL}`) return { action: 'Read a page’s information', detail: str('page') };
+  if (tool === `mcp__${PAGES_MCP_SERVER_ID}__${PAGE_CHANGE_TOOL}`) return { action: 'Change a page’s information', detail: str('page') };
   switch (tool) {
     case 'Bash': return { action: 'Run a command', detail: str('command') };
     case 'Write': return { action: 'Write a file', detail: str('file_path') };
@@ -108,8 +123,6 @@ function wordAsk(tool: string, input: Record<string, unknown>): { action: string
     case 'Read': return { action: 'Read a file', detail: str('file_path') };
     case 'Glob': case 'Grep': return { action: 'Look through a folder', detail: str('path') };
     case 'WebFetch': return { action: 'Visit a website', detail: str('url') };
-    case `mcp__${PAGES_MCP_SERVER_ID}__${PAGE_READ_TOOL}`: return { action: 'Read a page’s information', detail: str('page') };
-    case `mcp__${PAGES_MCP_SERVER_ID}__${PAGE_CHANGE_TOOL}`: return { action: 'Change a page’s information', detail: str('page') };
     default: return { action: `Use ${tool}` };
   }
 }
@@ -120,7 +133,11 @@ function defaultSpawn(args: string[], opts: { cwd: string }): ClaudeProcess {
   // it behaves; an automation's run is its own session.
   delete env.CLAUDECODE; delete env.CLAUDE_CODE_ENTRYPOINT;
   // WHY shell on Windows: there `claude` is a .cmd shim, which only a shell can start.
-  return spawn('claude', args, { cwd: opts.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, shell: process.platform === 'win32' }) as unknown as ClaudeProcess;
+  if (process.platform !== 'win32') return spawn('claude', args, { cwd: opts.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] }) as unknown as ClaudeProcess;
+  // WHY each argument is quoted here: through a shell, a folder name with a space or an `&` would otherwise
+  // be split or read as a second command. (Not verified on a Windows machine.)
+  const quoted = args.map((a) => `"${a.replace(/"/g, '\\"')}"`);
+  return spawn('claude', quoted, { cwd: opts.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, shell: true }) as unknown as ClaudeProcess;
 }
 
 export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
@@ -166,19 +183,23 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
       const dirs = addDirsFor(run.job, home);
       if (dirs.length) args.push('--add-dir', ...dirs);
       if (mcpFile) args.push('--mcp-config', mcpFile);
+      // Claude Code saved nothing to continue from (see the header): starting over could repeat steps, so the
+      // person is asked first.
+      if (run.resume) await confirmStartOver(run);
       if (stopped) throw new Error('stopped');
       const child = spawnClaude(args, { cwd: workDir });
       proc = child;
 
-      let askingFor: string | undefined;
-      const decide = buildJobDecide({ rules: run.current, workDir, home, onAsk: (id) => { askingFor = id; } });
+      const decide = buildJobDecide({ rules: run.current, workDir, home });
+      /** Requests Claude Code took back before they were answered: a late answer to one is not sent. */
+      const cancelled = new Set<string>();
       const reply = (requestId: string, response: Record<string, unknown>): void => {
+        if (cancelled.has(requestId)) return;
         try { child.stdin.write(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })}\n`); }
         catch { /* the process ended while the person was deciding */ }
       };
       /** One permission question from Claude Code. Every tool call arrives here (see the header). */
       const permission = async (requestId: string, tool: string, input: Record<string, unknown>): Promise<void> => {
-        askingFor = undefined;
         // A page tool: only for a page this automation is linked to, whatever else it is allowed.
         if (tool.startsWith(`mcp__${PAGES_MCP_SERVER_ID}__`) && !pageArgAllowed(pages, input.page)) {
           reply(requestId, { behavior: 'deny', message: PAGE_REFUSED });
@@ -187,7 +208,7 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
         const d = await decide(tool, subjectOf(tool, input));
         if (d.action === 'allow') { reply(requestId, { behavior: 'allow', updatedInput: input }); return; }
         if (d.action === 'deny') { reply(requestId, { behavior: 'deny', message: d.message ?? 'This automation is not allowed to do that.' }); return; }
-        const a = await run.ask({ ...wordAsk(tool, input), ...(askingFor ? { toolId: askingFor } : {}) });
+        const a = await run.ask({ ...wordAsk(tool, input), ...(d.toolId ? { toolId: d.toolId } : {}) });
         reply(requestId, a.allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: a.note || 'The person said no. Carry on without it.' });
       };
 
@@ -195,6 +216,7 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
         let buffer = '';
         let errors = '';
         let result: { ok: boolean; text: string } | undefined;
+        const counted = new Set<string>();
         child.stdout.on('data', (chunk) => {
           buffer += String(chunk);
           let at: number;
@@ -208,7 +230,15 @@ export function claudeEngine(deps: ClaudeEngineDeps): RunEngine {
               // A failure to decide is a refusal, never a silent yes.
               void permission(m.request_id, String(m.request.tool_name ?? ''), (m.request.input ?? {}) as Record<string, unknown>)
                 .catch(() => reply(m.request_id as string, { behavior: 'deny', message: 'This step could not be checked, so it was refused.' }));
-            } else if (m.type === 'assistant' && m.message?.usage) {
+            } else if (m.type === 'control_request' && typeof m.request_id === 'string') {
+              // Any other kind of request: say plainly that it is not supported, so Claude Code does not wait
+              // forever for an answer that will never come.
+              try { child.stdin.write(`${JSON.stringify({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'Not supported in an automation run.' } })}\n`); } catch { /* ended */ }
+            } else if (m.type === 'control_cancel_request' && typeof m.request_id === 'string') {
+              cancelled.add(m.request_id);
+            } else if (m.type === 'assistant' && m.message?.usage && !counted.has(String(m.message.id ?? ''))) {
+              // One reply can arrive in several lines carrying the same count: each reply is counted once.
+              if (m.message.id) counted.add(String(m.message.id));
               const u = m.message.usage as { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number };
               // A plan, not a bill: tokens only (plan decision 8). Text read back from the cache is left out; it
               // would count the same words again on every step.

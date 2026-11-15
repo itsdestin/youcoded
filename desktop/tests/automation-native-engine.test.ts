@@ -82,7 +82,7 @@ describe('native engine', () => {
     const { deps } = fakeDeps(async (built) => {
       expect((await built.decide('Bash', 'rm -rf ~')).action).toBe('deny');
       expect((await built.decide('Bash', 'mail -s hi sam')).action).toBe('ask');
-      const answer = await built.askUser({ sessionId: 'r1', toolName: 'Bash', toolInput: { command: 'mail -s hi sam' }, denyListed: false });
+      const answer = await built.askUser({ sessionId: 'r1', toolName: 'Bash', toolInput: { command: 'mail -s hi sam' }, denyListed: false, subject: 'mail -s hi sam' });
       expect(answer).toEqual({ behavior: 'deny', message: 'Save a draft instead' });
     });
     await nativeEngine(deps)(runOf(job(), { ask: async (q) => { asked.push(q); return { allow: false, note: 'Save a draft instead' }; } })).done;
@@ -144,6 +144,12 @@ describe('native engine', () => {
     expect(JSON.stringify(seen.seeded)).not.toContain('mail -s hi sam');
     expect(seen.sent).toContain('Do not repeat steps that already finished.');
     expect(seen.sent).toContain('(Run a command: mail -s hi sam) may or may not have finished. Do not run it again');
+  });
+
+  it('a picked-up run with nothing saved asks before starting over, and stays stopped on a no', async () => {
+    const { deps, seen } = fakeDeps(async () => {});
+    await expect(nativeEngine(deps)(runOf(job(), { resume: true, ask: async () => ({ allow: false, note: '' }) })).done).rejects.toMatchObject({ name: 'RunStopped' });
+    expect(seen.sent).toBeUndefined();
   });
 
   it('a picked-up run with nothing saved starts over and says so', async () => {

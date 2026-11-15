@@ -128,4 +128,15 @@ describe('automations service', () => {
     expect(reopened).toHaveLength(1);
     await next.store.whenSaved();
   });
+
+  it('a page starts one run of an automation at a time, and deleting a page cannot delete an automation of another page', async () => {
+    const going = new AutomationsService({ dir: () => path.join(root, 'b'), now: () => clock, broadcast: () => {}, engineFor: () => () => ({ done: new Promise(() => {}), stop: () => {} }) });
+    await going.save(job({ start: { kind: 'button', label: 'Run' }, overlap: 'both', links: [{ kind: 'page', id: 'p1', name: 'A' }] }));
+    await going.save(job({ id: 'theirs', links: [{ kind: 'page', id: 'p2', name: 'B' }] }));
+    expect(await going.startFromPage('p1', 'one', { kind: 'button' })).toMatchObject({ started: true });
+    expect(await going.startFromPage('p1', 'one', { kind: 'button' })).toMatchObject({ started: false, why: 'running' });
+    await going.pageDeleted('p1', ['one', 'theirs']);
+    expect((await going.list()).map((j) => j.id)).toEqual(['theirs']);
+    await going.store.whenSaved();
+  });
 });

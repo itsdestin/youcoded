@@ -109,6 +109,9 @@ export class AutomationsService {
     const linked = (await this.store.list()).filter((j) => j.links.some((l) => l.kind === 'page' && l.id === pageId));
     const job = linked.find((j) => j.id === idOrName) ?? linked.find((j) => j.name === idOrName);
     if (!job) return { started: false, why: 'missing', message: 'This page has no automation by that name.' };
+    // WHY one at a time from a page, whatever the automation's own "still running" setting: a page's code
+    // can press its button in a loop, and nothing else bounds how many runs that starts.
+    if (this.runner.isRunning(job.id)) return { started: false, why: 'running', message: 'Its last run is still going.' };
     return this.runner.start(job.id, how.kind, how.kind === 'event' && how.data !== undefined ? { eventData: how.data } : {});
   }
 
@@ -118,6 +121,7 @@ export class AutomationsService {
     for (const job of await this.store.list()) {
       if (job.start.kind !== 'event' || job.start.event !== event) continue;
       if (!job.links.some((l) => l.kind === 'page' && l.id === pageId)) continue;
+      if (this.runner.isRunning(job.id)) { out.push({ started: false, why: 'running', message: 'Its last run is still going.' }); continue; }
       out.push(await this.runner.start(job.id, 'event', data !== undefined ? { eventData: data } : {}));
     }
     return out;
@@ -125,7 +129,9 @@ export class AutomationsService {
 
   /** A page is being deleted (step4f F-warning): each linked automation is deleted or kept, as the person chose. */
   async pageDeleted(pageId: string, deleteAutomations: string[]): Promise<void> {
-    for (const id of deleteAutomations) { await this.store.remove(id); await this.runner.refresh(id); }
+    // WHY checked here: the list comes from a screen; only automations really linked to this page may go with it.
+    const linked = new Set((await this.store.list()).filter((j) => j.links.some((l) => l.kind === 'page' && l.id === pageId)).map((j) => j.id));
+    for (const id of deleteAutomations) { if (!linked.has(id)) continue; await this.store.remove(id); await this.runner.refresh(id); }
     await this.store.unlinkPage(pageId);
     for (const job of await this.store.list()) await this.runner.refresh(job.id);
     this.changed();
@@ -145,13 +151,17 @@ export class AutomationsService {
         if (!job.enabled || job.start.kind !== 'schedule') continue;
         const due = dueSince(job.start, since, now);
         if (due.kind === 'none') continue;
-        if (due.kind === 'due') { await this.runner.start(job.id, 'schedule'); continue; }
-        // Missed while the app was closed or the computer asleep: what happens is this automation's own
-        // setting (plan#S-start). "At another time" is handled by treating that time as today's due time.
-        if (job.late === 'skip') await this.runner.noteMissed(job.id, due.dueAt);
-        else if (job.late === 'fallback' && job.lateFallback) await this.runner.start(job.id, 'missed', { instruction: job.lateFallback });
-        else if (job.late === 'later') this.runLater(job, now);
-        else await this.runner.start(job.id, 'missed');
+        // WHY caught per automation: the clock has already moved on, so one that fails to start must not
+        // take the others' due times with it.
+        try {
+          if (due.kind === 'due') { await this.runner.start(job.id, 'schedule'); continue; }
+          // Missed while the app was closed or the computer asleep: what happens is this automation's own
+          // setting (plan#S-start). "At another time" is handled by treating that time as today's due time.
+          if (job.late === 'skip') await this.runner.noteMissed(job.id, due.dueAt);
+          else if (job.late === 'fallback' && job.lateFallback) await this.runner.start(job.id, 'missed', { instruction: job.lateFallback });
+          else if (job.late === 'later') this.runLater(job, now);
+          else await this.runner.start(job.id, 'missed');
+        } catch { /* its next due time is tried as usual */ }
       }
       for (const [id, at] of [...this.later]) {
         if (at > now) continue;
@@ -191,7 +201,7 @@ export class AutomationsService {
     await fs.mkdir(this.deps.dir(), { recursive: true }).catch(() => {});
     // Runs cut off when the app last closed carry on before anything new is started.
     await this.runner.recover().catch(() => { /* a run that cannot be picked up must not stop the schedule */ });
-    this.timer = setInterval(() => { void this.tick(); }, TICK_MS);
+    this.timer = setInterval(() => { void this.tick().catch(() => { /* the next check tries again */ }); }, TICK_MS);
     // WHY unref: the schedule check must never keep the app from quitting.
     (this.timer as { unref?: () => void }).unref?.();
     await this.tick();

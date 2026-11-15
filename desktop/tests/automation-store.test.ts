@@ -1,7 +1,7 @@
 // Automations on disk (finishing Pages, step 4): settings, run history, and the counts behind the daily
 // limit and the monthly use.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { AutomationStore, MAX_RUNS_KEPT, type StoredAutomation, type StoredRun } from '../src/main/automations/automation-store';
@@ -85,6 +85,7 @@ describe('automation store', () => {
 
   it("adds up a month's use and starts again the next month", async () => {
     const s = new AutomationStore(dir);
+    await s.save(job('one'));
     await s.addUsage('one', 0.25, 1000, noon);
     await s.addUsage('one', 0.5, 500, nextDay);
     expect(await s.counts('one', nextDay)).toMatchObject({ dollars: 0.75, tokens: 1500 });
@@ -93,11 +94,42 @@ describe('automation store', () => {
 
   it('lists runs newest first, shows a later state of a run, and keeps only the newest', async () => {
     const s = new AutomationStore(dir);
+    await s.save(job('one'));
     for (let i = 0; i < MAX_RUNS_KEPT + 3; i++) await s.startRun('one', run(`r${i}`, noon + i * 1000, { outcome: 'running' }));
     await s.updateRun('one', run(`r${MAX_RUNS_KEPT + 2}`, noon + (MAX_RUNS_KEPT + 2) * 1000, { outcome: 'done', summary: 'finished' }));
     const list = await s.runs('one');
     expect(list).toHaveLength(MAX_RUNS_KEPT);
     expect(list[0]).toMatchObject({ id: `r${MAX_RUNS_KEPT + 2}`, outcome: 'done', summary: 'finished' });
     expect(list.at(-1)!.id).toBe('r3');
+  });
+
+  it("keeps a run's saved conversation as long as its record, and removes both together", async () => {
+    const s = new AutomationStore(dir);
+    await s.save(job('one'));
+    const runsDir = path.join(dir(), 'runs', 'one');
+    for (let i = 0; i < MAX_RUNS_KEPT + 2; i++) {
+      await s.startRun('one', run(`r${i}`, noon + i * 1000));
+      await s.whenSaved();
+      writeFileSync(path.join(runsDir, `r${i}.jsonl`), '{}\n');
+    }
+    await s.startRun('one', run('last', noon + 10_000_000));
+    await s.whenSaved();
+    expect(await s.runs('one')).toHaveLength(MAX_RUNS_KEPT);
+    // The newest runs still have their conversations; the trimmed ones lost record and conversation alike.
+    expect(existsSync(path.join(runsDir, `r${MAX_RUNS_KEPT + 1}.jsonl`))).toBe(true);
+    expect(existsSync(path.join(runsDir, 'r0.json'))).toBe(false);
+    expect(existsSync(path.join(runsDir, 'r0.jsonl'))).toBe(false);
+  });
+
+  it('a run ending after its automation was deleted writes nothing back', async () => {
+    const s = new AutomationStore(dir);
+    await s.save(job('one'));
+    await s.startRun('one', run('r1', noon));
+    await s.remove('one');
+    await s.updateRun('one', run('r1', noon, { outcome: 'done' }));
+    await s.addUsage('one', 1, 100, noon);
+    await s.whenSaved();
+    expect(existsSync(path.join(dir(), 'runs', 'one'))).toBe(false);
+    expect(await s.counts('one', noon)).toMatchObject({ dollars: 0, tokens: 0 });
   });
 });

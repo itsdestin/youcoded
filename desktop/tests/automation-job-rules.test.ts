@@ -55,6 +55,10 @@ describe('an automation\'s permissions', () => {
     expect(decide(r, { kind: 'command', command: 'whisper ~/Recordings/a.m4a --output /etc' })).toBe('deny');
     expect(decide(r, { kind: 'command', command: 'whisper ~/Recordings/$(whoami)' })).toBe('deny');
     expect(decide(r, { kind: 'command', command: 'whisper ~/Recordings/sub/tuesday.m4a' })).toBe('allow');
+    // Nothing the shell would turn into other names, and no hidden or parent step.
+    for (const sneaky of ['whisper ~/Recordings/.*/.ssh/id_rsa', 'whisper ~/Recordings/.?/x', 'whisper ~/Recordings/*', 'whisper ~/Recordings/{a,b}', 'whisper ~/Recordings/.hidden/x']) {
+      expect(decide(r, { kind: 'command', command: sneaky }), sneaky).toBe('deny');
+    }
     // A pattern that could run any code covers nothing, however it is written.
     const any = rules([tool({ kind: 'command', exact: 'node *' }), tool({ kind: 'command', exact: 'bash -c /*' })]);
     expect(decide(any, { kind: 'command', command: 'node -e process.exit()' })).toBe('deny');

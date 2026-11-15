@@ -48,8 +48,9 @@ export function startAutomations(deps: {
         transport: { type: 'stdio', command: process.execPath, args: [await pagesProgram()] },
         env: { [PAGES_ROOTS_ENV]: JSON.stringify(roots), ELECTRON_RUN_AS_NODE: '1' },
       });
-      await conn.connect();
-      if (conn.state !== 'ready') throw new Error(conn.lastError ?? 'The page tools did not start.');
+      // A program that did not start is closed again before the run is told, so nothing is left running.
+      try { await conn.connect(); } catch (err) { await conn.close().catch(() => {}); throw err; }
+      if (conn.state !== 'ready') { await conn.close().catch(() => {}); throw new Error(conn.lastError ?? 'The page tools did not start.'); }
       return { tools: conn.listTools(), call: (tool, args, signal) => conn.callTool(tool, args, signal), close: () => conn.close() };
     },
     createSession: deps.createSession,

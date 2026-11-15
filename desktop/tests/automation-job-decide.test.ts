@@ -23,8 +23,8 @@ beforeEach(() => {
 afterEach(() => { rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
 
 const tool = (over: Partial<AutomationTool>): AutomationTool => ({ id: 't', label: 'x', source: 'Your computer', mode: 'allow', ...over });
-const decideWith = (tools: AutomationTool[], unlisted = { sites: 'never' as const, commands: 'never' as const }, onAsk?: (id: string | undefined) => void) =>
-  buildJobDecide({ rules: () => ({ tools, unlisted, links: [{ kind: 'page', id: 'p1', name: 'P' }] }), workDir: work, home, onAsk });
+const decideWith = (tools: AutomationTool[], unlisted = { sites: 'never' as const, commands: 'never' as const }) =>
+  buildJobDecide({ rules: () => ({ tools, unlisted, links: [{ kind: 'page', id: 'p1', name: 'P' }] }), workDir: work, home });
 
 describe('an automation run asking before each step', () => {
   it('reads inside an allowed folder, and is refused a change there without a change permission', async () => {
@@ -51,10 +51,26 @@ describe('an automation run asking before each step', () => {
   });
 
   it('asks for a step set to Asks first and names the permission it falls under', async () => {
-    const asked: (string | undefined)[] = [];
-    const decide = decideWith([tool({ id: 'send', kind: 'command', exact: 'mail -s hi sam', mode: 'ask' })], undefined, (id) => asked.push(id));
-    expect((await decide('Bash', 'mail -s hi sam')).action).toBe('ask');
-    expect(asked).toEqual(['send']);
+    const decide = decideWith([tool({ id: 'send', kind: 'command', exact: 'mail -s hi sam', mode: 'ask' }), tool({ id: 'dl', kind: 'folder', exact: '~/Downloads', change: true, mode: 'ask' })]);
+    // Two steps checked at the same moment: each answer carries its own permission.
+    const [a, b] = await Promise.all([decide('Bash', 'mail -s hi sam'), decide('Write', path.join(home, 'Downloads', 'x.txt'))]);
+    expect([a.action, a.toolId, b.action, b.toolId]).toEqual(['ask', 'send', 'ask', 'dl']);
+  });
+
+  it('reads "~" as the home folder, so it is never mistaken for a file in the work folder', async () => {
+    const decide = decideWith([tool({ kind: 'folder', exact: '~/Downloads' })]);
+    expect((await decide('Read', '~/Secret/tax.pdf')).action).toBe('deny');
+    expect((await decide('Read', '~/Downloads/a.txt')).action).toBe('allow');
+    expect((await decide('Read', '~root/.ssh/id_rsa')).action).toBe('deny');
+  });
+
+  it('an allowed folder that is itself a link still covers its files', async (ctx) => {
+    const real = path.join(root, 'elsewhere');
+    mkdirSync(real);
+    writeFileSync(path.join(real, 'a.txt'), 'x');
+    try { symlinkSync(real, path.join(home, 'Linked'), 'dir'); } catch { ctx.skip(); return; }
+    const decide = decideWith([tool({ kind: 'folder', exact: '~/Linked' })]);
+    expect((await decide('Read', path.join(home, 'Linked', 'a.txt'))).action).toBe('allow');
   });
 
   it('checks a website by its site, and a page by the link to it', async () => {

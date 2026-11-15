@@ -97,8 +97,10 @@ function filePatternCovers(pattern: string, command: string): boolean {
   for (let i = 1; i < m.length; i++) {
     const got = m[i];
     if (afterSlash[i - 1]) {
-      // A file's path: no quotes or variables, and no `..` step that would leave the named folder.
-      if (/['"$~]/.test(got) || got.split('/').includes('..')) return false;
+      // A file's path, written out in full: no quotes or variables; nothing the shell would expand into other
+      // names (`*`, `?`, `[`, `{` — on older shells `.*` even matches `..`); and no step that begins with a
+      // dot, which covers `..` and hidden files such as `.ssh`.
+      if (/['"$~*?[\]{}]/.test(got) || got.split('/').some((step) => step.startsWith('.'))) return false;
     } else if (got !== '') {
       // Any other `*` keeps the chat matcher's rule: what it stands for begins and ends between words.
       const before = command[at - 1];

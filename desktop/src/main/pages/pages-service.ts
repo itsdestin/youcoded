@@ -164,8 +164,12 @@ class PagesService {
    *  WHY the folder first: if that fails nothing else has been touched and the page is still whole. */
   async deletePage(id: string, deleteAutomations: string[]): Promise<PageSummary[]> {
     const dir = await this.store.pageDir(id);
-    // Already gone (deleted in another window), or a built-in page, which has no folder of its own.
-    if (!dir) return this.listAndWatch();
+    // Already gone (its folder removed by hand, or deleted in another window), or a built-in page with no
+    // folder of its own: there is nothing to remove, but automations still linked to it are dealt with.
+    if (!dir) {
+      await this.deps.automationsForDeletedPage?.(id, deleteAutomations).catch(() => {});
+      return this.listAndWatch();
+    }
     // WHY re-checked here: this removes a whole folder, so it must be one directly inside a Pages folder
     // and nothing else, whatever the id resolved to.
     if (path.basename(path.dirname(dir)) !== PAGES_DIR) throw new Error('This page’s folder is not where pages are kept, so nothing was deleted.');

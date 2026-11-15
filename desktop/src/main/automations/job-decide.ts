@@ -46,7 +46,7 @@ async function realLocation(p: string): Promise<string> {
 }
 
 /** Turn one step into a plain fact, or null when the tool is none of the kinds a permission can cover. */
-async function jobCallFor(tool: string, subject: string | undefined, cwd: string): Promise<JobCall | 'free' | null> {
+async function jobCallFor(tool: string, subject: string | undefined, cwd: string, home: string): Promise<JobCall | 'free' | null> {
   if (FREE_TOOLS.has(tool)) return 'free';
   const page = pageTool(tool);
   // WHICH page is checked where the call's own `page` value is visible (run-pages.ts); here only whether
@@ -54,7 +54,12 @@ async function jobCallFor(tool: string, subject: string | undefined, cwd: string
   if (page) return { kind: 'page', pageId: subject ?? '*', change: page === 'change' };
   if (subject === undefined) return null;
   if (LOOK_TOOLS.has(tool) || CHANGE_TOOLS.has(tool)) {
-    return { kind: 'file', path: await realLocation(path.resolve(cwd, subject)), change: CHANGE_TOOLS.has(tool) };
+    // WHY `~` is opened up here: Claude Code reads "~/x" as the home folder, so judged as plain text it
+    // would look like a file inside the work folder (always allowed) while really reaching anywhere at home.
+    const named = subject === '~' ? home : /^~[\\/]/.test(subject) ? path.join(home, subject.slice(2)) : subject;
+    // "~someone/…" (another account's home) is nothing a permission can name.
+    if (named.startsWith('~')) return null;
+    return { kind: 'file', path: await realLocation(path.resolve(cwd, named)), change: CHANGE_TOOLS.has(tool) };
   }
   if (tool === 'Bash') return { kind: 'command', command: subject };
   // WebFetch's subject is the site ("bestbuy.com"), not the address (shared/site-key.ts).
@@ -71,18 +76,21 @@ export interface JobDecideOpts {
   /** The run's own work folder: it may always read and change files there. */
   workDir: string;
   home?: string;
-  /** Told which permission a question falls under, so "Allow from now on" knows what to switch. */
-  onAsk?: (toolId: string | undefined) => void;
 }
 
+/** A decision, with the permission it falls under when it is a question ("Allow from now on" switches
+ *  that one). WHY carried on the answer itself: two steps can be checked at the same moment, and a value
+ *  kept on the side was overwritten by the second before the first read it. */
+export type JobPermissionDecision = PermissionDecision & { toolId?: string };
+
 /** The `decide` a run is built with. */
-export function buildJobDecide(opts: JobDecideOpts): (tool: string, subject: string | undefined, where?: { shellCwd?: string }) => Promise<PermissionDecision> {
+export function buildJobDecide(opts: JobDecideOpts): (tool: string, subject: string | undefined, where?: { shellCwd?: string }) => Promise<JobPermissionDecision> {
   const home = opts.home ?? os.homedir();
   return async (tool, subject) => {
     const rules = opts.rules();
     // The automation was deleted while its run was going: nothing more is allowed.
     if (!rules) return { action: 'deny', denyListed: false, message: REFUSED };
-    const call = await jobCallFor(tool, subject, opts.workDir);
+    const call = await jobCallFor(tool, subject, opts.workDir, home);
     if (call === 'free') return { action: 'allow', denyListed: false };
     // A tool no permission can cover (searching the web, asking a question, sending a file) is refused.
     // WHY refused, not asked: the screen has no row for it, so there would be no way to allow it for next time.
@@ -92,8 +100,15 @@ export function buildJobDecide(opts: JobDecideOpts): (tool: string, subject: str
       const rel = path.relative(await realLocation(opts.workDir), call.path);
       if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) return { action: 'allow', denyListed: false };
     }
-    const d: JobDecision = decideForJob(rules, call, { home });
-    if (d.action === 'ask') opts.onAsk?.(d.toolId);
-    return d.action === 'deny' ? { action: 'deny', denyListed: false, message: REFUSED } : { action: d.action, denyListed: false };
+    // A folder permission is compared by its real location too, or a Downloads folder that is itself a link
+    // (to another drive, say) would refuse every file in it.
+    const judged = call.kind !== 'file' ? rules : {
+      ...rules,
+      tools: await Promise.all(rules.tools.map(async (t) => (t.kind === 'folder' && t.exact
+        ? { ...t, exact: await realLocation(t.exact === '~' ? home : /^~[\\/]/.test(t.exact) ? path.join(home, t.exact.slice(2)) : t.exact) } : t))),
+    };
+    const d: JobDecision = decideForJob(judged, call, { home });
+    if (d.action === 'deny') return { action: 'deny', denyListed: false, message: REFUSED };
+    return { action: d.action, denyListed: false, ...(d.action === 'ask' && d.toolId ? { toolId: d.toolId } : {}) };
   };
 }

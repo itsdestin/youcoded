@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { AutomationStore, type StoredAutomation } from '../src/main/automations/automation-store';
-import { AutomationRunner, type EngineRun, type RunEngine } from '../src/main/automations/automation-runner';
+import { AutomationRunner, RunStopped, type EngineRun, type RunEngine } from '../src/main/automations/automation-runner';
 
 let root: string;
 let store: AutomationStore;
@@ -226,5 +226,65 @@ describe('automation runner', () => {
     const third = handEngine();
     await runner(third.engine).recover();
     expect(third.runs).toHaveLength(0);
+  });
+
+  it('two questions asked at once each get their own answer, oldest first', async () => {
+    await store.save(job({ tools: [{ id: 'a', label: 'A', source: 's', mode: 'ask' }, { id: 'b', label: 'B', source: 's', mode: 'ask' }] }));
+    const { engine, runs } = handEngine();
+    const r = runner(engine);
+    await r.start('one', 'manual');
+    const first = runs[0].run.ask({ action: 'First', toolId: 'a' });
+    const second = runs[0].run.ask({ action: 'Second', toolId: 'b' });
+    expect((await r.summaries())[0].waiting).toMatchObject({ action: 'First' });
+    await r.answer('one', true, undefined, true);
+    expect(await first).toEqual({ allow: true, note: '' });
+    // The next one comes up, and "Allow from now on" changed only the permission the first fell under.
+    expect((await r.summaries())[0]).toMatchObject({ waiting: { action: 'Second' }, lastRun: { outcome: 'waiting' } });
+    expect((await store.get('one'))!.tools.map((t) => t.mode)).toEqual(['allow', 'ask']);
+    await r.answer('one', false);
+    expect((await second).allow).toBe(false);
+    expect((await r.summaries())[0].waiting).toBeUndefined();
+  });
+
+  it('a question timing out ends only that question', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await store.save(job({ waitHours: 1 }));
+    const { engine, runs } = handEngine();
+    const r = runner(engine);
+    await r.start('one', 'manual');
+    const first = runs[0].run.ask({ action: 'First' });
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    const second = runs[0].run.ask({ action: 'Second' });
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1); // the first one's hour is up; the second has half an hour left
+    expect((await first).note).toMatch(/Nobody answered/);
+    expect((await r.summaries())[0].waiting).toMatchObject({ action: 'Second' });
+    await r.answer('one', true);
+    expect((await second).allow).toBe(true);
+  });
+
+  it('a picked-up run of a paused automation stays stopped, and one that keeps its task is given the same task', async () => {
+    await store.save(job({ id: 'paused' }));
+    await store.save(job({ id: 'late', start: { kind: 'event', event: 'x' } }));
+    const first = handEngine();
+    const r1 = runner(first.engine);
+    await r1.start('paused', 'manual');
+    await r1.start('late', 'event', { instruction: 'Only look at today.', eventData: '{"n":3}' });
+    await store.save({ ...(await store.get('paused'))!, enabled: false });
+    await store.whenSaved();
+    const second = handEngine();
+    const r2 = runner(second.engine);
+    await r2.recover();
+    expect(second.runs.map((x) => [x.run.job.id, x.run.instruction, x.run.eventData])).toEqual([['late', 'Only look at today.', '{"n":3}']]);
+    expect((await r2.runs('paused'))[0]).toMatchObject({ outcome: 'stopped' });
+  });
+
+  it('a run an engine stops on purpose reads as stopped, not failed', async () => {
+    await store.save(job());
+    const { engine, runs } = handEngine();
+    const r = runner(engine);
+    await r.start('one', 'manual');
+    runs[0].fail(new RunStopped('Stopped: YouCoded was closed before it finished.'));
+    await settle();
+    expect((await r.runs('one'))[0]).toMatchObject({ outcome: 'stopped', summary: 'Stopped: YouCoded was closed before it finished.' });
   });
 });

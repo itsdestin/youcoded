@@ -45,6 +45,14 @@ export interface EngineHandle {
 
 export type RunEngine = (run: EngineRun) => EngineHandle;
 
+/** A picked-up run that cannot continue from where it stopped would begin again from the top and could
+ *  repeat steps it already did (an email sent twice). So the person is asked first; a no, or an automation
+ *  set to skip instead of waiting, ends it as stopped. Engines call this before starting over. */
+export async function confirmStartOver(run: EngineRun): Promise<void> {
+  const a = await run.ask({ action: 'Start this run again from the beginning', detail: 'It was cut off when YouCoded closed and may repeat steps it already did.' });
+  if (!a.allow) throw new RunStopped('Stopped: YouCoded was closed before it finished.');
+}
+
 export type StartReason = 'schedule' | 'missed' | 'button' | 'event' | 'manual';
 
 export type StartResult =
@@ -59,7 +67,21 @@ interface LiveRun {
   skipped: string[];
   /** Set by stop(): how the run list should describe a run that did not end on its own. */
   ended?: { outcome: AutomationOutcome; summary: string };
-  waiting?: { action: string; detail?: string; toolId?: string; askedAt: number; until: number | null; settle: (a: { allow: boolean; note: string }) => void; timer?: ReturnType<typeof setTimeout> };
+  /** Questions waiting for the person, oldest first. WHY a list: a model can ask for two steps at once, and
+   *  each must get its own answer (one slot lost the first question and hung the run). The screens show the
+   *  first; answering it brings up the next. */
+  waiting: Waiting[];
+}
+
+interface Waiting {
+  action: string; detail?: string; toolId?: string; askedAt: number; until: number | null;
+  settle: (a: { allow: boolean; note: string }) => void; timer?: ReturnType<typeof setTimeout>;
+}
+
+/** An engine ends a run this way when it was stopped on purpose rather than failing (a picked-up run the
+ *  person chose not to start again). The message is the run list's line. */
+export class RunStopped extends Error {
+  constructor(message: string) { super(message); this.name = 'RunStopped'; }
 }
 
 export interface RunnerOpts {
@@ -86,6 +108,8 @@ export class AutomationRunner {
   }
 
   private liveFor(jobId: string): LiveRun[] { return [...this.live.values()].filter((r) => r.jobId === jobId); }
+  /** Is a run of this automation going right now? */
+  isRunning(jobId: string): boolean { return this.liveFor(jobId).length > 0; }
 
   // ---- starting ----------------------------------------------------------------------------------------------
 
@@ -119,9 +143,12 @@ export class AutomationRunner {
     }
 
     const runId = this.newId();
-    const record: StoredRun = { id: runId, startedAt: now, outcome: 'running', summary: '', tokens: 0 };
+    const record: StoredRun = {
+      id: runId, startedAt: now, outcome: 'running', summary: '', tokens: 0,
+      ...(extra.instruction !== undefined ? { instruction: extra.instruction } : {}), ...(extra.eventData !== undefined ? { eventData: extra.eventData } : {}),
+    };
     await store.startRun(jobId, record);
-    const liveRun: LiveRun = { jobId, record, skipped: [], handle: undefined as unknown as EngineHandle };
+    const liveRun: LiveRun = { jobId, record, skipped: [], waiting: [], handle: undefined as unknown as EngineHandle };
     await this.launch(liveRun, job, extra);
     return { started: true, runId };
   }
@@ -149,7 +176,9 @@ export class AutomationRunner {
     void liveRun.handle.done.then(
       // "Started over" leads the line in the run list, so a run that repeated its early steps says so.
       (r) => this.finish(liveRun, liveRun.skipped.length > 0 ? 'skipped' : r.news ? 'news' : 'done', r.startedOver ? `Started over after YouCoded was closed. ${r.summary}` : r.summary),
-      (err) => this.finish(liveRun, 'failed', `Stopped with an error: ${err instanceof Error ? err.message : String(err)}`),
+      (err) => (err instanceof RunStopped
+        ? this.finish(liveRun, 'stopped', err.message)
+        : this.finish(liveRun, 'failed', `Stopped with an error: ${err instanceof Error ? err.message : String(err)}`)),
     );
     this.opts.onChanged();
   }
@@ -160,8 +189,13 @@ export class AutomationRunner {
     for (const job of await this.opts.store.list()) {
       for (const record of await this.opts.store.runs(job.id)) {
         if ((record.outcome !== 'running' && record.outcome !== 'waiting') || this.live.has(record.id)) continue;
-        const liveRun: LiveRun = { jobId: job.id, record: { ...record, outcome: 'running' }, skipped: record.skipped ? [...record.skipped] : [], handle: undefined as unknown as EngineHandle };
-        await this.launch(liveRun, job, { resume: true });
+        // Paused since: a paused automation does not come back to life by itself.
+        if (!job.enabled) {
+          await this.opts.store.updateRun(job.id, { ...record, endedAt: this.now(), outcome: 'stopped', summary: 'Stopped: YouCoded was closed while it ran, and the automation is paused.' });
+          continue;
+        }
+        const liveRun: LiveRun = { jobId: job.id, record: { ...record, outcome: 'running' }, skipped: record.skipped ? [...record.skipped] : [], waiting: [], handle: undefined as unknown as EngineHandle };
+        await this.launch(liveRun, job, { resume: true, ...(record.instruction !== undefined ? { instruction: record.instruction } : {}), ...(record.eventData !== undefined ? { eventData: record.eventData } : {}) });
       }
     }
   }
@@ -204,32 +238,36 @@ export class AutomationRunner {
     const until = job.waitHours != null ? askedAt + job.waitHours * 3600_000
       : job.start.kind === 'schedule' ? nextDue(job.start, askedAt) : null;
     return new Promise((settle) => {
-      run.waiting = { ...q, askedAt, until, settle };
+      const w: Waiting = { ...q, askedAt, until, settle };
       if (until !== null) {
-        const timer = setTimeout(() => this.unanswered(run), Math.max(0, until - askedAt));
+        // Each question has its own clock, and its timer only ever ends that one question.
+        w.timer = setTimeout(() => this.unanswered(run, w), Math.max(0, until - askedAt));
         // WHY unref: a waiting automation must never keep the app from quitting.
-        (timer as { unref?: () => void }).unref?.();
-        run.waiting.timer = timer;
+        (w.timer as { unref?: () => void }).unref?.();
       }
+      run.waiting.push(w);
       run.record = { ...run.record, outcome: 'waiting' };
       void this.opts.store.updateRun(run.jobId, run.record);
       this.opts.onChanged();
     });
   }
 
-  private clearWaiting(run: LiveRun): LiveRun['waiting'] {
-    const w = run.waiting;
-    if (!w) return undefined;
-    if (w.timer) clearTimeout(w.timer);
-    run.waiting = undefined;
-    if (!run.ended) { run.record = { ...run.record, outcome: 'running' }; void this.opts.store.updateRun(run.jobId, run.record); }
-    return w;
+  /** Take one question (or, with none named, every question) off the run. */
+  private takeWaiting(run: LiveRun, only?: Waiting): Waiting[] {
+    const taken = only ? run.waiting.filter((w) => w === only) : [...run.waiting];
+    for (const w of taken) if (w.timer) clearTimeout(w.timer);
+    run.waiting = run.waiting.filter((w) => !taken.includes(w));
+    if (taken.length > 0 && run.waiting.length === 0 && !run.ended) {
+      run.record = { ...run.record, outcome: 'running' };
+      void this.opts.store.updateRun(run.jobId, run.record);
+    }
+    return taken;
   }
 
   /** The wait ran out with no answer (design-review ruling 6: recorded, and its dot clears). */
-  private unanswered(run: LiveRun): void {
+  private unanswered(run: LiveRun, which: Waiting): void {
     const job = this.snapshot.get(run.jobId);
-    const w = this.clearWaiting(run);
+    const [w] = this.takeWaiting(run, which);
     if (!w) return;
     run.skipped.push(`${w.action} (no answer)`);
     if (job?.noAnswer === 'stop') {
@@ -243,11 +281,12 @@ export class AutomationRunner {
     this.opts.onChanged();
   }
 
-  /** The person answered the question on an automation. The first answer wins; a later one finds nothing waiting. */
+  /** The person answered the question shown on an automation (its oldest). The first answer wins; a later
+   *  one from another window finds either the next question or nothing waiting. */
   async answer(jobId: string, allow: boolean, note?: string, fromNowOn?: boolean): Promise<boolean> {
-    const run = this.liveFor(jobId).find((r) => r.waiting);
+    const run = this.liveFor(jobId).find((r) => r.waiting.length > 0);
     if (!run) return false;
-    const w = this.clearWaiting(run)!;
+    const [w] = this.takeWaiting(run, run.waiting[0]);
     // "Allow from now on" (plan-d Q-fromnow): that one permission becomes Always allowed for this automation.
     if (allow && fromNowOn && w.toolId) {
       const job = await this.opts.store.get(jobId);
@@ -288,8 +327,7 @@ export class AutomationRunner {
   private stopRun(run: LiveRun, outcome: AutomationOutcome, summary: string): void {
     if (run.ended) return;
     run.ended = { outcome, summary };
-    const w = this.clearWaiting(run);
-    w?.settle({ allow: false, note: 'This run has been stopped.' });
+    for (const w of this.takeWaiting(run)) w.settle({ allow: false, note: 'This run has been stopped.' });
     try { run.handle?.stop(); } catch { /* the engine was already gone */ }
     void this.finish(run, outcome, summary);
   }
@@ -302,7 +340,7 @@ export class AutomationRunner {
   private async finish(run: LiveRun, outcome: AutomationOutcome, summary: string): Promise<void> {
     if (!this.live.delete(run.record.id)) return; // already finished (stopped, then the engine settled)
     const end = run.ended ?? { outcome, summary };
-    this.clearWaiting(run);
+    for (const w of this.takeWaiting(run)) w.settle({ allow: false, note: 'This run has ended.' });
     run.record = { ...run.record, endedAt: this.now(), outcome: end.outcome, summary: end.summary, ...(run.skipped.length ? { skipped: run.skipped } : {}) };
     // An automation deleted mid-run has no folder to write into any more.
     if (await this.opts.store.get(run.jobId)) await this.opts.store.updateRun(run.jobId, run.record);
@@ -331,8 +369,8 @@ export class AutomationRunner {
     const out: AutomationSummary[] = [];
     for (const job of await store.list()) {
       const [counts, runs] = await Promise.all([store.counts(job.id, now), store.runs(job.id)]);
-      const waitingRun = this.liveFor(job.id).find((r) => r.waiting);
-      const w = waitingRun?.waiting;
+      const waitingRun = this.liveFor(job.id).find((r) => r.waiting.length > 0);
+      const w = waitingRun?.waiting[0];
       out.push({
         ...job,
         runsToday: counts.runsToday,
