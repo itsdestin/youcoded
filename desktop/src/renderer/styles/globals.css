@@ -1952,6 +1952,13 @@ pre.yc-code code {
    list itself shows every session's status while it is open. */
 .session-name-stack:has([data-menu-open]) .session-lights { opacity: 0; }
 
+/* WHY (overview deck V-5, Destin 2026-11-14: "names should be truncated with ... if too long to
+   fit"): everywhere else a long pill name fades out, because the label's width animates and an
+   ellipsis would jump mid-animation. The narrow bar shows ONE name that never animates, so here
+   it ends in "…" instead of a fade. */
+.session-name-stack .session-pill__label { -webkit-mask-image: none; mask-image: none; }
+.session-name-stack .session-pill__name { width: auto; padding-right: 0; overflow: hidden; text-overflow: ellipsis; }
+
 /* Phone pill row, round 3 (Destin: "every single element in that bottom row
    appears to have a unique style/size/height/roundness"). Every chip in the
    compact row gets ONE shape: same height, corner, padding, text size. A chip

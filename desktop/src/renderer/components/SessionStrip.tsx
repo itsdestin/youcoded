@@ -2073,7 +2073,7 @@ export default function SessionStrip({
         // window's; inert on every other model, where no browser drag exists.
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className={`session-strip relative flex items-center gap-0.5 ${plainTitle ? (narrowTop === 'lights' ? 'cursor-pointer' : 'hover:bg-inset cursor-pointer') : 'bg-inset'} rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink transition-shadow ${incomingDropActive ? 'ring-2 ring-accent/70' : ''}`}
+        className={`session-strip relative flex items-center gap-0.5 ${plainTitle ? (narrowTop === 'lights' ? 'cursor-pointer max-w-full' /* V-5: a long name is cut to the stack's width, never drawn over the buttons */ : 'hover:bg-inset cursor-pointer') : 'bg-inset'} rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink transition-shadow ${incomingDropActive ? 'ring-2 ring-accent/70' : ''}`}
       >
         {/* ── Session pills ──────────────────────────────── */}
         {visibleSessions.map((s, idx) => {

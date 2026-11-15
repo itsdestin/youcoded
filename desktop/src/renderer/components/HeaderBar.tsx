@@ -661,7 +661,17 @@ export default React.memo(function HeaderBar({
       // clickable"): the stack takes the click itself, so its padding and the gaps between dot,
       // name, arrow and lights all open the list. The name and arrow inside pass their clicks up
       // (SessionStrip, narrowTop === 'lights'); the arrow stays the keyboard's way in.
-      <div onClick={() => stripApi.current?.toggleList()} className={`session-name-stack relative cursor-pointer flex flex-col items-center justify-center min-w-0 max-w-full rounded-lg px-1 ${windowButtonsBar ? 'pt-1.5 pb-2.5' /* round 9, Destin: "just a smidge higher … a bit low of center" (2px up) */ : 'py-2'} hover:bg-inset transition-colors`}>
+      // WHY the contains() check (overview deck L-1, 2026-11-14: "clicking resume leaves the 'your
+      // sessions' window up … new session button doesn't seem to work at all"): the list is drawn
+      // elsewhere on the page (a portal), but React still passes its clicks up to this stack. Every
+      // tap INSIDE the list therefore also toggled it: Resume closed the list and this reopened it;
+      // New session opened its form and this closed the list over it. Only taps on the stack count.
+      <div onClick={(e) => { if (e.currentTarget.contains(e.target as Node)) stripApi.current?.toggleList(); }} className={`session-name-stack group isolate relative cursor-pointer flex flex-col items-center justify-center min-w-0 max-w-full px-1 ${windowButtonsBar ? 'pt-1.5 pb-2.5' /* round 9, Destin: "just a smidge higher … a bit low of center" (2px up) */ : 'py-2'}`}>
+      {/* WHY a separate highlight layer (overview deck L-1: "the hover box … touches the top of the
+          window and the bottom of the header"): the stack is as tall as the bar so the whole area
+          is tappable, but the highlight is drawn 4px short of the top and bottom so it reads as a
+          button inside the bar, like the buttons beside it. */}
+      <span aria-hidden className="absolute inset-x-0 inset-y-1 -z-10 rounded-lg pointer-events-none transition-colors group-hover:bg-inset" />
       {sessionStrip}
       {/* Round 7: the name sits on the same line as the buttons beside it (equal padding above and
           below), and the lights hang in the bottom padding, centred under it, instead of pushing the
