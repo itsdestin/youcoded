@@ -12,6 +12,7 @@ import { PageHost } from '../../src/renderer/components/pages/PageHost';
 import { OfficeView } from '../../src/renderer/components/office/OfficeView';
 import { EditorFrame, type EditorFrameHandle } from '../../src/renderer/components/office/EditorFrame';
 import { useUnsavedGuard } from '../../src/renderer/components/artifact-views/UnsavedChangesDialog';
+import { whenEditsSaved } from '../../src/renderer/components/artifact-views/dirty-editor-guard';
 import { HOME_TAB, markCopied, markFailed, officeDocFor, openDoc, resetOfficeStoreForTests, saveStateFor, selectTab } from '../../src/renderer/components/office/office-store';
 import { resetOfficeAvailabilityForTests } from '../../src/renderer/components/office/office-availability';
 import { OFFICE_PAGE_ID, OFFICE_PAGE_SUMMARY } from '../../src/shared/pages-types';
@@ -124,6 +125,34 @@ describe('an Office editor is not torn down with unsaved work', () => {
     await act(async () => { answer(true); });
     expect(close).toHaveBeenCalledTimes(1);
     expect(result.current.dialog).toBeNull(); // no "Unsaved changes" question for Office
+  });
+
+  it('a chat file link or tool card switching the panel waits for an Office edit to save first', async () => {
+    let answer!: (ok: boolean) => void;
+    const handle = { autosaves: true, editing: true, dirty: false, saveEdit: vi.fn(() => new Promise<boolean>((r) => (answer = r))), cancelEdit: vi.fn() };
+    const { result, unmount } = renderHook(() => {
+      const ref = useRef(handle);
+      return useUnsavedGuard(ref as never, 'plan.docx');
+    });
+    const switchFile = vi.fn();
+    act(() => whenEditsSaved(switchFile));
+    expect(handle.saveEdit).toHaveBeenCalled();
+    expect(switchFile).not.toHaveBeenCalled();
+    await act(async () => { answer(false); });
+    expect(switchFile).not.toHaveBeenCalled(); // failed: the editor stays, with its error
+    act(() => whenEditsSaved(switchFile));
+    await act(async () => { answer(true); });
+    expect(switchFile).toHaveBeenCalledTimes(1);
+    expect(result.current.dialog).toBeNull();
+    // A plain text editor with unsaved text is never asked about here (its draft is parked).
+    handle.autosaves = false; handle.dirty = true;
+    act(() => whenEditsSaved(switchFile));
+    expect(switchFile).toHaveBeenCalledTimes(2);
+    expect(result.current.dialog).toBeNull();
+    // No panel at all: the switch happens at once.
+    unmount();
+    whenEditsSaved(switchFile);
+    expect(switchFile).toHaveBeenCalledTimes(3);
   });
 });
 

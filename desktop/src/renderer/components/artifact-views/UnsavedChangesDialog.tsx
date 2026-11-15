@@ -4,7 +4,7 @@
 // from a dirty editor (selection change, close, Esc) through useUnsavedGuard.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { ActiveArtifactHandle } from './ActiveArtifactView';
-import { registerDirtyEditorGuard, unregisterDirtyEditorGuard } from './dirty-editor-guard';
+import { registerDirtyEditorGuard, registerOfficeEditFlush, unregisterDirtyEditorGuard, unregisterOfficeEditFlush } from './dirty-editor-guard';
 import { Button, CARD_LEVEL_1, Dialog } from '../ui';
 
 function UnsavedChangesDialog({
@@ -83,6 +83,18 @@ export function useUnsavedGuard(
     registerDirtyEditorGuard(guard);
     return () => unregisterDirtyEditorGuard(guard);
   }, [guard]);
+
+  // The Office half of the guard alone, for routes that switch the panel's file directly (a chat
+  // file link, a tool card): save an Office edit first, never ask (dirty-editor-guard.ts).
+  const officeFlush = useCallback((action: () => void) => {
+    const h = handleRef.current;
+    if (h?.autosaves && h.editing) { void h.saveEdit().then((ok) => { if (ok) action(); }); return; }
+    action();
+  }, [handleRef]);
+  useEffect(() => {
+    registerOfficeEditFlush(officeFlush);
+    return () => unregisterOfficeEditFlush(officeFlush);
+  }, [officeFlush]);
 
   const dialog = pending ? (
     <UnsavedChangesDialog

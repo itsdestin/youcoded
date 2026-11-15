@@ -83,6 +83,23 @@ describe('the recovery journal', () => {
     expect(await fsp.readFile(path.join(b.s.temp, 'Editor.bin'))).toEqual(Buffer.from(a.opened, 'base64'));
   });
 
+  it('an editor that began afresh never deletes earlier unsaved edits: they are set aside and offered', async () => {
+    const a = await editor();
+    await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });
+    await journalWritten();
+    await sessions.close(a.s.token); // nothing saved: the journal is kept
+    // The next editor did not replay them (an open that could not) and starts typing.
+    const b = await editor();
+    await b.run(b.s.token, 'save_changes', { changes: ['n1'], deleteIndex: null, count: 1 });
+    await b.run(b.s.token, 'write_editor_bin', { data: b.opened }); // waits for the journal's start
+    const names = await fsp.readdir(journals());
+    const held = names.find((n) => n.endsWith('.held'));
+    expect(held).toBeTruthy();
+    expect(await fsp.readFile(path.join(journals(), held!, 'changes.log'), 'utf8')).toContain('"c1"');
+    await sessions.close(b.s.token);
+    expect(await offerRecovery(file)).toBe(true); // Recover / Discard at the next open
+  });
+
   it('a save that holds every edit leaves nothing to recover, and closing removes the journal', async () => {
     const a = await editor();
     await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });

@@ -102,7 +102,19 @@ function started(j: Journal, s: OfficeSession): Promise<void> {
     // appending to the same folder, which this replaces. And the chain waits for the start, so no
     // line is appended to a folder not made yet.
     j.start = j.chain.then(async () => {
-      // A journal left from before that was not recovered (the editor began afresh) goes now.
+      // A journal left from before that was not recovered (the editor began afresh) goes now —
+      // unless it still holds edits no save has: then it is set aside as this file's held edits,
+      // offered (Recover / Discard) at the next open. WHY (independent review, 2026-11-14): an
+      // open that could not replay it (its writes still settling past the 2 s wait, a base too
+      // large) began afresh, and the first new keystroke here silently deleted the old typing.
+      const old = await readJournal(j.dir);
+      if (old && old.info.path === s.path && old.rev > old.info.savedRev) {
+        const held = heldDir(s.path);
+        // A held set already waiting keeps its place; this one is kept beside it (still on disk,
+        // pruned like any old journal) rather than replacing either.
+        const to = (await exists(held)) ? `${held}-${Date.now()}` : held;
+        await fsp.rename(j.dir, to).catch((e) => log('WARN', 'Office', 'could not set earlier unsaved edits aside', { error: String(e) }));
+      }
       await fsp.rm(j.dir, { recursive: true, force: true });
       await fsp.mkdir(path.join(j.dir, 'media'), { recursive: true, mode: 0o700 });
       // Still the Editor.bin the editor opened: write_editor_bin waits for this before replacing it.
