@@ -10,7 +10,6 @@
 // as decoded values, authenticated by the sender id the way the link authenticates them).
 // After quiescence (everything delivered, everyone online) six properties are checked; see `check()`.
 import { randomBytes } from 'crypto';
-import { performance } from 'perf_hooks';
 import { toHex } from '../../src/main/mesh/crypto/bytes';
 import { decode, encode } from '../../src/main/mesh/crypto/cbor';
 import { FrameReceiver, FrameSender } from '../../src/main/mesh/crypto/frames';
@@ -138,9 +137,11 @@ class Sim {
       if (d.parked.filter((m) => m.from.equals(msg.from)).length < 16) d.parked.push(msg);
       return;
     }
-    const t0 = performance.now();
+    // CPU time of this process, not wall clock (test-suite rule): a loaded machine stretches wall time, not CPU time
+    const c0 = process.cpuUsage();
     const r = await d.core.onMessage(msg.kind, msg.body, msg.from, this.now);
-    this.maxMs = Math.max(this.maxMs, performance.now() - t0);
+    const c1 = process.cpuUsage(c0);
+    this.maxMs = Math.max(this.maxMs, (c1.user + c1.system) / 1000);
     if (!d.silent) this.send(d, r.out);
     if (r.wait) {
       if (d.parked.filter((m) => m.from.equals(msg.from)).length < 16) d.parked.push(msg);
@@ -472,7 +473,9 @@ class Sim {
     // except in the exactly-documented mutual-removal case (the hostile member also removed that device concurrently, and the earlier-admitted device stays)
     if (truth?.roster.verified && this.hostileId) {
       const H = this.hostileId;
-      const honestRemovals = [...this.issuedRemovals.values()].filter((x) => x.target === H && this.devs.find((q) => q.hex === x.by)?.honest);
+      // WHY only removers that are not themselves removed: a removal made by a member that was removed at the same moment (by an honest or a hostile device, the
+      // model also makes honest devices remove each other at random) is void by the documented rule, so it is not an honest removal "that must take effect"
+      const honestRemovals = [...this.issuedRemovals.values()].filter((x) => x.target === H && this.devs.find((q) => q.hex === x.by)?.honest && !truth.roster.removedIds().has(x.by));
       if (honestRemovals.length && truth.roster.activeDevices().some((x) => toHex(x.deviceId) === H)) {
         const excused = this.o.mutual === 'first-admitted' && truth.roster.entries.some((e) => e.kind === 'remove' && toHex(e.device) === H && honestRemovals.some((x) => toHex((e.body as { target: Uint8Array }).target) === x.by));
         if (!excused) bad.push('(vii) an honest removal of the hostile member did not take effect');
