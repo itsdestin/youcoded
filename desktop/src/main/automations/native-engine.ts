@@ -19,7 +19,7 @@ import { buildJobDecide } from './job-decide';
 import { firstMessage, readEnding, runBrief } from './run-brief';
 
 /** The part of the assistant loop this engine uses. */
-export interface RunSession {
+interface RunSession {
   send(text: string): Promise<void>;
   on(event: 'transcript-event', listener: (e: TranscriptEvent) => void): unknown;
   interrupt(): void;

@@ -1329,6 +1329,10 @@ function routePush(type: string, payload: any): void {
       // A live page socket's push, for the one client that owns it (remote-pages-bridge.ts).
       remotePages.push(payload);
       break;
+    case 'automations:changed':
+      // The host's fresh list of automations after a run started, waited or ended.
+      dispatchEvent('automations:changed', payload);
+      break;
     case 'pages:changed':
       // YouCoded Pages: the host's fresh page list after any change in a home.
       dispatchEvent('pages:changed', payload);
@@ -2928,6 +2932,22 @@ export function installShim(): void {
       },
     },
     pages: remotePages.bridge,
+    // Automations (pages-finish step 4) — the same shape as preload.ts's `automations`.
+    automations: {
+      // WHY the array check: a host that refuses these (a paired phone, for now) answers with a small
+      // object, and the screens read a list. An empty list is the honest "nothing to show here".
+      list: () => invoke('automations:list').then((r) => (Array.isArray(r) ? r : [])),
+      runs: (id: string) => invoke('automations:runs', { id }).then((r) => (Array.isArray(r) ? r : [])),
+      save: (job: any) => invoke('automations:save', { job }),
+      setEnabled: (id: string, enabled: boolean) => invoke('automations:set-enabled', { id, enabled }),
+      runNow: (id: string) => invoke('automations:run-now', { id }),
+      answer: (id: string, allow: boolean, note?: string, fromNowOn?: boolean) => invoke('automations:answer', { id, allow, note, fromNowOn }),
+      remove: (id: string) => invoke('automations:remove', { id }),
+      onChanged: (cb: (jobs: any[]) => void) => {
+        const handler = addListener('automations:changed', (jobs: any) => cb(jobs));
+        return () => removeListener('automations:changed', handler);
+      },
+    },
     // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
     // build-design.md §1.6) — mirrors preload.ts's docComments namespace
     // exactly (core parity invariant: SAME shared window.claude shape).

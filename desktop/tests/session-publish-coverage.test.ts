@@ -64,6 +64,7 @@ const ALLOWED: Array<{ file: string; type: string; scope: 'global' | 'split'; wh
   { file: 'ipc-handlers.ts', type: 'IPC.GITHUB_CONNECT_DONE', scope: 'global', why: 'an account flow' },
   { file: 'ipc-handlers.ts', type: 'ARTIFACT_IPC.CHANGED', scope: 'global', why: 'files, not a session' },
   { file: 'ipc-handlers.ts', type: 'IPC.PAGES_CHANGED', scope: 'global', why: 'pages, not a session' },
+  { file: 'ipc-handlers.ts', type: 'IPC.AUTOMATIONS_CHANGED', scope: 'global', why: 'automations, not a session' },
   { file: 'ipc-handlers.ts', type: 'channel', scope: 'global', why: 'the channel table\'s own "every screen" push (tags and similar)' },
   { file: 'main.ts', type: "'syncspaces:event'", scope: 'global', why: 'sync, not a session' },
   { file: 'ipc/ui.ts', type: "'ui:action'", scope: 'global', why: 'a screen-level action' },

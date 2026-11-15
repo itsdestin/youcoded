@@ -161,6 +161,8 @@ export interface AutomationsBridge {
   answer(id: string, allow: boolean, note?: string, fromNowOn?: boolean): Promise<AutomationSummary[]>;
   /** Delete an automation with its settings and saved runs (review deck S-delete). */
   remove(id: string): Promise<AutomationSummary[]>;
+  /** The fresh list whenever a run starts, waits for an answer or ends, in any window or on a phone. */
+  onChanged?(cb: (jobs: AutomationSummary[]) => void): () => void;
 }
 
 /** The built-in Automations page (Q-home note: "the main area could probably be a built-in

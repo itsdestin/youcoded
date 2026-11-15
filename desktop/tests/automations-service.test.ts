@@ -80,7 +80,7 @@ describe('automations service', () => {
   it('times that came due before the app opened count as missed', async () => {
     await svc.save(job());
     clock = at(14, 9, 0);
-    svc.startSchedule(at(14, 6, 0));
+    await svc.startSchedule(at(14, 6, 0));
     await settle();
     expect(started).toHaveLength(1);
   });
@@ -111,5 +111,18 @@ describe('automations service', () => {
     expect((await svc.list())[0]).toMatchObject({ runsToday: 0, usage: { dollars: 0, tokens: 0 }, next: 'Today at 7:00' });
     await settle();
     expect(sent.at(-1)!.map((j) => j.id)).toEqual(['one']);
+  });
+
+  it('remembers when it last checked, so a time that passed while the app was closed is noticed at the next open', async () => {
+    await svc.save(job());
+    await svc.tick(); // 6:59: nothing due; the moment is written down
+    await settle();
+    const dir = path.join(root, 'automations');
+    const reopened: EngineRun[] = [];
+    const next = new AutomationsService({ dir: () => dir, now: () => at(14, 9, 0), broadcast: () => {}, engineFor: () => (run) => { reopened.push(run); return { done: Promise.resolve({ summary: 'ok' }), stop: () => {} }; } });
+    await next.startSchedule();
+    next.stop();
+    expect(reopened).toHaveLength(1);
+    await next.store.whenSaved();
   });
 });

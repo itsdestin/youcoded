@@ -25,6 +25,7 @@
 import type { VoiceBridge, VoiceVocabularyBridge } from './voice-types';
 import type { ClaudeControlRequest, ClaudeControlResult } from './claude-control-types';
 import type { PagesBridge } from './pages-types';
+import type { AutomationsBridge } from './automation-types';
 import type { OfficeBridge } from './office-types';
 import type { SavedFolder, PickerFolder, SessionDefaults, ModelModes } from './prefs-types';
 import type { TagListResult, TagMutationResult, TagDeleteResult, TagPatch } from './tags';
@@ -624,6 +625,17 @@ export const IPC = {
   PAGES_VIDEO_START: 'pages:video-start',
   PAGES_VIDEO_STOP: 'pages:video-stop',
   PAGES_VIDEO_PING: 'pages:video-ping',
+  // Delete a page with its versions and chat list; each linked automation is deleted or kept (pages-finish step 4).
+  PAGES_DELETE: 'pages:delete',
+  // ---- Automations (pages-finish step 4) — shared/automation-types.ts AutomationsBridge ----
+  AUTOMATIONS_LIST: 'automations:list',
+  AUTOMATIONS_RUNS: 'automations:runs',
+  AUTOMATIONS_SAVE: 'automations:save',
+  AUTOMATIONS_SET_ENABLED: 'automations:set-enabled',
+  AUTOMATIONS_RUN_NOW: 'automations:run-now',
+  AUTOMATIONS_ANSWER: 'automations:answer',
+  AUTOMATIONS_REMOVE: 'automations:remove',
+  AUTOMATIONS_CHANGED: 'automations:changed',
   // ---- Remembered "Always allow" rules (M5 2a: permissions management UI) ----
   // list = every project's stored grants; remove/remove-project revoke them.
   // Keyed by PROJECT SLUG, not cwd — permissions.json never stored the cwd for
@@ -1569,6 +1581,8 @@ interface ClaudeApi {
   // lands; the header hides the pinned buttons and the library shows an
   // error when it is undefined. Shape: shared/pages-types.ts.
   pages?: PagesBridge;
+  // Automations (pages-finish step 4). Shape: shared/automation-types.ts.
+  automations?: AutomationsBridge;
   // Office (build plan Task 5). Optional: absent in any host with no Office channels, and the file panels then keep their
   // usual buttons. The remote client and the phone carry it, but their hosts refuse every call (desktop only).
   // Shape: shared/office-types.ts.

@@ -43,6 +43,7 @@ export function createRemotePagesBridge(invoke: Invoke, addListener: Listen, rem
     listFolder: (id: string, ask: string, folder: string) => invoke('pages:list-folder', { id, ask, folder }),
     refresh: (id: string) => invoke('pages:refresh', { id }),
     savedKeys: () => invoke('pages:saved-keys'),
+    deletePage: (id: string, deleteAutomations: string[]) => invoke('pages:delete', { id, deleteAutomations }),
     deleteSavedKey: (service: string, address: string) => invoke('pages:delete-saved-key', { service, address }),
     // The request runs on the desktop, with the desktop's credential; only
     // the redacted answer crosses the socket.

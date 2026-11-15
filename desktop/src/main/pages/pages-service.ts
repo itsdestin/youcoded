@@ -9,6 +9,7 @@
 import { PageChatsStore } from './page-chats-store';
 import { PageVersions } from './page-versions';
 import path from 'node:path';
+import { promises as fsp } from 'node:fs';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { PagesStore, PAGES_DIR, isUnderPagesDir, type PagesStoreDeps } from './pages-store';
 import { fingerprint, keyPlacement, savedKeyTarget, withApprovedAddress } from './page-connections';
@@ -69,6 +70,9 @@ export interface PagesServiceDeps extends PagesStoreDeps {
   fileDialogs?: Pick<PageFilesDeps, 'showOpen' | 'showSave' | 'showFolder' | 'trash'>;
   /** Test injection: the home a page's `all` files line is confined to. */
   filesHome?: string;
+  /** A page is being deleted: delete the automations chosen and unlink the rest (automations-service.ts).
+   *  Absent in tests and until automations start: only the page itself is removed. */
+  automationsForDeletedPage?: (pageId: string, deleteAutomations: string[]) => Promise<void>;
 }
 
 class PagesService {
@@ -151,6 +155,31 @@ class PagesService {
     if (!r.ok) return r;
     this.schedule();
     return { ok: true, versions: await this.versions.list(id) };
+  }
+
+  /** Delete a page for good (Page settings → Delete page; decks step4d Q-deletepage, step4f F-warning).
+   *  Goes: the page's folder, its saved versions, its list of chats, and its approvals, folders and open
+   *  sites (pruned with the list, as for any page that disappears). Each linked automation is deleted when
+   *  it is named in `deleteAutomations`, otherwise only unlinked and it carries on.
+   *  WHY the folder first: if that fails nothing else has been touched and the page is still whole. */
+  async deletePage(id: string, deleteAutomations: string[]): Promise<PageSummary[]> {
+    const dir = await this.store.pageDir(id);
+    // Already gone (deleted in another window), or a built-in page, which has no folder of its own.
+    if (!dir) return this.listAndWatch();
+    // WHY re-checked here: this removes a whole folder, so it must be one directly inside a Pages folder
+    // and nothing else, whatever the id resolved to.
+    if (path.basename(path.dirname(dir)) !== PAGES_DIR) throw new Error('This page’s folder is not where pages are kept, so nothing was deleted.');
+    this.closeLiveFor(id, undefined, 'This page was deleted.');
+    // The bin when this computer has one (a last chance to get it back); otherwise removed outright.
+    const trash = this.deps.fileDialogs?.trash;
+    if (trash) await trash(dir).catch(() => fsp.rm(dir, { recursive: true, force: true }));
+    else await fsp.rm(dir, { recursive: true, force: true });
+    await this.versions.forget(id).catch(() => { /* leftovers are harmless and unreachable */ });
+    await this.assistantChats.forgetPage(id).catch(() => {});
+    await this.deps.automationsForDeletedPage?.(id, deleteAutomations).catch((err) => log('WARN', 'Pages', 'automations of a deleted page were not updated', { error: String(err) }));
+    const pages = await this.listAndWatch();
+    this.deps.broadcast(pages);
+    return pages;
   }
 
   /** The approved files lines of a page, with their folders and remembered files; read

@@ -124,8 +124,13 @@ export function AutomationDetails({ job, isNew, tab, atEnd = false, openFirst = 
                     something i can assign to any page/project, or multiple"): one box per link. */}
                 <Group label="Linked to"><LinksField links={draft.links} onChange={(links) => change({ links })} /></Group>
                 <Group label="Model">
-                  <ModelPicker value={choiceOf(draft.model)} runsOn="host" emptyLabel={draft.model} triggerClassName=""
-                    onSelect={(c, label) => change({ model: label?.model ?? draft.model, subscription: c.runtime === 'claude' || /chatgpt/i.test(label?.provider ?? ''), limit: draft.limit ?? 5 })} />
+                  <ModelPicker value={draft.runsOn ? (draft.runsOn.runtime === 'claude' ? { runtime: 'claude', alias: draft.runsOn.modelId } : draft.runsOn) : choiceOf(draft.model)} runsOn="host" emptyLabel={draft.model} triggerClassName=""
+                    onSelect={(c, label) => change({
+                      model: label?.model ?? draft.model,
+                      // WHY runsOn beside the name: the name is only what is shown; this is the model that really runs it.
+                      runsOn: c.runtime === 'claude' ? { runtime: 'claude', modelId: c.alias } : { runtime: 'native', providerId: c.providerId, modelId: c.modelId },
+                      subscription: c.runtime === 'claude' || /chatgpt/i.test(label?.provider ?? ''), limit: draft.limit ?? 5,
+                    })} />
                 </Group>
                 {/* A new job on a plan has nothing used yet and no limit, so the card would say nothing. */}
                 {!(isNew && draft.subscription) && <Group label={draft.subscription ? 'Usage' : 'Spending'}><SpendField job={draft} onLimit={(limit) => change({ limit })} /></Group>}

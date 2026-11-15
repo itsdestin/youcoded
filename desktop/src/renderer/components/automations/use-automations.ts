@@ -31,7 +31,13 @@ export async function refreshAutomations(): Promise<void> {
 
 function subscribe(cb: () => void): () => void {
   subs.add(cb);
-  if (!started) { started = true; void refreshAutomations(); }
+  if (!started) {
+    started = true;
+    void refreshAutomations();
+    // The backend sends the fresh list whenever a run starts, waits for an answer or ends, so the dots and
+    // the list change by themselves. One listener for the life of the app (the store is app-wide).
+    automationsBridge()?.onChanged?.((jobs) => publishAutomations(jobs));
+  }
   return () => { subs.delete(cb); };
 }
 

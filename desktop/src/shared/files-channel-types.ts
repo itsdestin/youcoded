@@ -22,6 +22,7 @@ import type { getPagesService } from '../main/pages/pages-service';
 import type { ensureProjectCoalesced } from '../main/artifacts/project-manager';
 import type { readFileHead } from '../main/fs-read-head';
 import type { ChatsearchReadRequest } from './chatsearch-refs';
+import type { AutomationRun, AutomationSummary } from './automation-types';
 import type { PageFetchRequest, PageFileEntry, PageFilesRequest, PageFilesResult, PageProgramResult, PlaidResult, PageSocketCall, PageSocketOpenResult, PageSocketCallResult, PageVideoStartRequest, PageVideoCall, PageVideoStartResult } from './pages-types';
 
 type Answer<F extends (...a: any[]) => any> = Awaited<ReturnType<F>>;
@@ -110,6 +111,15 @@ export interface FilesChannelTypes {
   'pages:list-folder': { request: { id: string; ask: string; folder: string }; response: { ok: true; entries: PageFileEntry[] } | { ok: false; message: string } };
   'pages:refresh': { request: { id: string }; response: PagesAnswer<'refresh'> };
   'pages:saved-keys': { request: void; response: PagesAnswer<'savedKeys'> };
+  'pages:delete': { request: { id: string; deleteAutomations: string[] }; response: PagesAnswer<'deletePage'> };
+  // ── Automations (pages-finish step 4): every change answers with the fresh list ──
+  'automations:list': { request: void; response: AutomationSummary[] };
+  'automations:runs': { request: { id: string }; response: AutomationRun[] };
+  'automations:save': { request: { job: AutomationSummary }; response: AutomationSummary[] };
+  'automations:set-enabled': { request: { id: string; enabled: boolean }; response: AutomationSummary[] };
+  'automations:run-now': { request: { id: string }; response: AutomationSummary[] };
+  'automations:answer': { request: { id: string; allow: boolean; note?: string; fromNowOn?: boolean }; response: AutomationSummary[] };
+  'automations:remove': { request: { id: string }; response: AutomationSummary[] };
   'pages:delete-saved-key': { request: { service: string; address: string }; response: PagesAnswer<'deleteSavedKey'> };
   'pages:fetch': { request: { id: string; request: PageFetchRequest }; response: PagesAnswer<'fetch'> | { ok: false; reason: 'network'; message: string } };
   'pages:plaid': { request: { id: string; request: unknown }; response: PlaidResult };

@@ -515,4 +515,21 @@ describe('a page that uses a folder of files', () => {
     const after = await service.forgetFile('personal:notes', 'one', id!);
     expect(after[0].connections?.[0]).not.toHaveProperty('remembered');
   });
+
+  it('deleting a page removes its folder, tells automations which to delete, and leaves other pages alone', async () => {
+    await writePage('weather', []);
+    await writePage('notes', []);
+    const told: [string, string[]][] = [];
+    start({ automationsForDeletedPage: async (id, del) => { told.push([id, del]); } });
+    const before = await service.listAndWatch();
+    const id = before.find((p) => p.name === 'weather')!.id;
+    const after = await service.deletePage(id, ['job-1']);
+    expect(after.map((p) => p.name)).toEqual(['notes']);
+    await expect(fs.stat(path.join(personal, 'Pages', 'weather'))).rejects.toThrow();
+    await fs.stat(path.join(personal, 'Pages', 'notes'));
+    expect(told).toEqual([[id, ['job-1']]]);
+    expect(broadcasts.at(-1)!.map((p) => p.name)).toEqual(['notes']);
+    // Deleting it again (a second window) changes nothing and does not throw.
+    expect((await service.deletePage(id, [])).map((p) => p.name)).toEqual(['notes']);
+  });
 });

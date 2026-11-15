@@ -54,6 +54,7 @@ import { projectChannels } from './project';
 import { chatsearchChannels } from './chatsearch';
 import { gitChannels } from './git';
 import { pagesChannels } from './pages';
+import { automationsChannels } from './automations';
 import { filesChannels } from './files';
 import { docCommentsChannels } from './doc-comments';
 import { appearanceChannels } from './appearance';
@@ -110,6 +111,7 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...chatsearchChannels,
   ...gitChannels,
   ...pagesChannels,
+  ...automationsChannels,
   ...filesChannels,
   ...docCommentsChannels,
   ...appearanceChannels,

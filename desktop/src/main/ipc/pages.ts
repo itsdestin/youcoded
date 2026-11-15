@@ -115,6 +115,16 @@ export const pagesChannels: MainChannelDef[] = [
     name: IPC.PAGES_ASSISTANT_CHATS, kind: 'handle', remoteOnError: () => [],
     handler: async (p) => (await getPagesService()?.assistantChatsOf(str(p?.id))) ?? [],
   }),
+  // Delete a page (Page settings). Closed to a paired phone until Destin decides (phone-open-channels.json).
+  defineChannel({
+    name: IPC.PAGES_DELETE, kind: 'handle', remoteAllowed: false,
+    handler: async (p) => {
+      const svc = getPagesService();
+      if (!svc) throw new Error(NOT_AVAILABLE);
+      const del = Array.isArray(p?.deleteAutomations) ? p.deleteAutomations.map(str) : [];
+      return svc.deletePage(str(p?.id), del);
+    },
+  }),
   defineChannel({
     name: IPC.PAGES_VERSIONS, kind: 'handle', remoteOnError: (e) => ({ ok: false as const, message: msg(e) }),
     handler: async (p) => (await getPagesService()?.listVersions(str(p?.id))) ?? { ok: false as const, message: NOT_AVAILABLE },

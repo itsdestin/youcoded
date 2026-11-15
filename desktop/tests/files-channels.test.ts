@@ -138,7 +138,7 @@ describe('which of these a phone may call: exactly what it could before', () => 
   const phoneOpen = (d: (typeof entries)[number]) => !d.desktopOnly && d.remoteAllowed !== false;
 
   it('the table holds all 62 channels of the group', () => {
-    expect(entries).toHaveLength(70); // 21 artifacts + 5 project + 2 chatsearch + 9 git + 30 pages (12 + 4 socket + 3 video + plaid + 2 program + 5 files + 3 assistant) + 3 singles
+    expect(entries).toHaveLength(71); // 21 artifacts + 5 project + 2 chatsearch + 9 git + 31 pages (12 + 4 socket + 3 video + plaid + 2 program + 5 files + 3 assistant + delete) + 3 singles
   });
 
   it('exactly these are open to a phone; everything else is refused', () => {
@@ -164,6 +164,8 @@ describe('which of these a phone may call: exactly what it could before', () => 
       'git:commit', 'git:commit-file-diff', 'git:discard', 'git:file-review', 'git:file-status', 'git:stage', 'git:unstage', 'git:unwatch', 'git:watch',
       // Choosing a page's folder shows the computer's Choose folder window (pages-finish step 2).
       'pages:choose-folder',
+      // Deleting a page: closed to a paired phone until Destin decides (pages-finish step 4).
+      'pages:delete',
       // A bank sign-in opens a browser on the computer, so a phone never reaches Plaid.
       'pages:plaid',
       // A program runs with the computer account's full access; a phone is refused until Destin widens it (spec 2026-10-16).

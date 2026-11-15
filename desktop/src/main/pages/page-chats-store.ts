@@ -116,6 +116,16 @@ export class PageChatsStore {
       .map((c) => ({ ...c, live: !!c.sessionId && this.live.has(c.sessionId) }));
   }
 
+  /** A page was deleted: it no longer lists any chats. (The conversations themselves are ordinary chats
+   *  and stay in Resume under their project.) */
+  async forgetPage(pageId: string): Promise<void> {
+    const chats = await this.load();
+    const kept = chats.filter((c) => c.pageId !== pageId);
+    if (kept.length === chats.length) return;
+    this.chats = kept;
+    this.save();
+  }
+
   private prune(pageId: string): void {
     const mine = (this.chats ?? []).filter((c) => c.pageId === pageId).sort((a, b) => b.usedAt - a.usedAt);
     const drop = new Set(mine.slice(MAX_PER_PAGE).filter((c) => !c.sessionId));

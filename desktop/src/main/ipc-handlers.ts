@@ -1,4 +1,5 @@
 import { app, IpcMain, BrowserWindow, powerSaveBlocker, webContents } from 'electron';
+import { startAutomations } from './automations/start-automations';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -2406,6 +2407,15 @@ export function registerIpcHandlers(
   // One store over the Personal space's Pages/ and every known project's
   // Pages/; one debounced push with the fresh list to every window and to
   // remote clients. Design: youcoded-dev docs/active/specs/2026-09-17-youcoded-pages-phase1-technical-design.md
+  // ── Automations (pages-finish step 4): main/automations/start-automations.ts ──
+  const automationsService = startAutomations({
+    createSession: (o) => nativeHost.createAutomationSession(o),
+    broadcast: (jobs) => {
+      webContents.getAllWebContents().forEach((wc) => wc.send(IPC.AUTOMATIONS_CHANGED, jobs));
+      remoteServer?.broadcast({ type: IPC.AUTOMATIONS_CHANGED, payload: jobs });
+    },
+  });
+
   const pagesService = initPagesService({
     personalRoot: () => getManagedRoots()?.personalRoot ?? null,
     listProjects: async () => (await listProjects(CLAUDE_DIR)).map((p) => ({ name: path.basename(p.path), path: p.path })),
@@ -2414,6 +2424,7 @@ export function registerIpcHandlers(
     deviceId: () => getMachineIdentity(app.getPath('userData'))?.id ?? null,
     localFallbackDir: () => app.getPath('userData'),
     noteOwnWrite,
+    automationsForDeletedPage: (pageId, del) => automationsService.pageDeleted(pageId, del),
     // Phase 2: approvals and key POINTERS beside the model-provider keys in userData, never a sync space (a key is machine-bound ciphertext).
     // officeListed (WHY): the built-in Office page is listed, and pinnable, only where the add-on is installed (pages-store.ts).
     // A page's files (pages-finish step 2): this computer's Open / Save / Choose folder windows and its bin.

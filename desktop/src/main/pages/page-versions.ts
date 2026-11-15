@@ -58,6 +58,11 @@ export class PageVersions {
     return path.join(this.deps.root(), 'page-versions', crypto.createHash('sha1').update(pageId).digest('hex').slice(0, 20));
   }
 
+  /** A page was deleted: its saved versions go with it. Queued behind any save still being written. */
+  forget(pageId: string): Promise<void> {
+    return this.serial(pageId, () => fs.rm(this.dirFor(pageId), { recursive: true, force: true }));
+  }
+
   private serial<T>(pageId: string, work: () => Promise<T>): Promise<T> {
     const prev = this.chains.get(pageId) ?? Promise.resolve();
     const next = prev.catch(() => {}).then(work);

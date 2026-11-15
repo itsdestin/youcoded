@@ -46,7 +46,7 @@ async function realLocation(p: string): Promise<string> {
 }
 
 /** Turn one step into a plain fact, or null when the tool is none of the kinds a permission can cover. */
-export async function jobCallFor(tool: string, subject: string | undefined, cwd: string): Promise<JobCall | 'free' | null> {
+async function jobCallFor(tool: string, subject: string | undefined, cwd: string): Promise<JobCall | 'free' | null> {
   if (FREE_TOOLS.has(tool)) return 'free';
   const page = pageTool(tool);
   if (page) return subject ? { kind: 'page', pageId: subject, change: page === 'change' } : null;

@@ -6,6 +6,8 @@
 // `AutomationsBridge` (shared/automation-types.ts), where every change returns the whole list, so a
 // window never shows a half-updated one.
 import path from 'node:path';
+import { promises as fs } from 'node:fs';
+import { atomicWrite } from '../atomic-write';
 import type { AutomationRun, AutomationSummary } from '../../shared/automation-types';
 import { AutomationStore, type StoredAutomation } from './automation-store';
 import { AutomationRunner, type RunEngine, type StartResult } from './automation-runner';
@@ -157,7 +159,11 @@ export class AutomationsService {
         await this.runner.start(id, 'missed');
       }
     } finally { this.ticking = false; }
+    // Remembered on disk so the next time the app opens it knows which times it slept through.
+    await fs.mkdir(this.deps.dir(), { recursive: true }).then(() => atomicWrite(this.checkedFile(), JSON.stringify({ checkedAt: this.lastChecked }))).catch(() => { /* the next check writes it again */ });
   }
+
+  private checkedFile(): string { return path.join(this.deps.dir(), 'checked.json'); }
 
   /** Missed runs waiting for their "run at another time" moment. Kept in memory: closing the app again
    *  before that time simply makes it a missed run once more at the next open. */
@@ -174,21 +180,25 @@ export class AutomationsService {
 
   /** Begin checking the schedule. `since` = when the app last checked before it was closed, so times that
    *  came due while it was closed count as missed. */
-  startSchedule(since?: number): void {
+  async startSchedule(since?: number): Promise<void> {
     if (this.timer) return;
-    if (since !== undefined && since < this.lastChecked) this.lastChecked = since;
+    let from = since;
+    if (from === undefined) {
+      try { from = Number((JSON.parse(await fs.readFile(this.checkedFile(), 'utf8')) as { checkedAt?: unknown }).checkedAt); } catch { /* first launch: nothing was missed */ }
+    }
+    if (this.timer) return;
+    if (from !== undefined && Number.isFinite(from) && from < this.lastChecked) this.lastChecked = from;
+    await fs.mkdir(this.deps.dir(), { recursive: true }).catch(() => {});
     this.timer = setInterval(() => { void this.tick(); }, TICK_MS);
     // WHY unref: the schedule check must never keep the app from quitting.
     (this.timer as { unref?: () => void }).unref?.();
-    void this.tick();
+    await this.tick();
   }
 
   stop(): void {
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
   }
 
-  /** When the schedule was last checked, saved at quit so the next open knows what it missed. */
-  get checkedAt(): number { return this.lastChecked; }
 }
 
 let service: AutomationsService | null = null;

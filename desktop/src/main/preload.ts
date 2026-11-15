@@ -393,6 +393,15 @@ const IPC = {
   PAGES_VIDEO_START: 'pages:video-start',
   PAGES_VIDEO_STOP: 'pages:video-stop',
   PAGES_VIDEO_PING: 'pages:video-ping',
+  PAGES_DELETE: 'pages:delete',
+  AUTOMATIONS_LIST: 'automations:list',
+  AUTOMATIONS_RUNS: 'automations:runs',
+  AUTOMATIONS_SAVE: 'automations:save',
+  AUTOMATIONS_SET_ENABLED: 'automations:set-enabled',
+  AUTOMATIONS_RUN_NOW: 'automations:run-now',
+  AUTOMATIONS_ANSWER: 'automations:answer',
+  AUTOMATIONS_REMOVE: 'automations:remove',
+  AUTOMATIONS_CHANGED: 'automations:changed',
   FS_READ_HEAD: 'fs:read-head',
   FILE_UPLOAD: 'file:upload',
   PERMISSIONS_LIST: 'permissions:list',
@@ -2504,6 +2513,22 @@ contextBridge.exposeInMainWorld('claude', {
       return () => ipcRenderer.removeListener('artifacts:changed', handler);
     },
   },
+  // Automations (pages-finish step 4). Shape: shared/automation-types.ts AutomationsBridge. Every change
+  // answers with the fresh list, and `onChanged` carries it to every window when a run starts, waits or ends.
+  automations: {
+    list: () => ipcRenderer.invoke(IPC.AUTOMATIONS_LIST),
+    runs: (id: string) => ipcRenderer.invoke(IPC.AUTOMATIONS_RUNS, { id }),
+    save: (job: unknown) => ipcRenderer.invoke(IPC.AUTOMATIONS_SAVE, { job }),
+    setEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke(IPC.AUTOMATIONS_SET_ENABLED, { id, enabled }),
+    runNow: (id: string) => ipcRenderer.invoke(IPC.AUTOMATIONS_RUN_NOW, { id }),
+    answer: (id: string, allow: boolean, note?: string, fromNowOn?: boolean) => ipcRenderer.invoke(IPC.AUTOMATIONS_ANSWER, { id, allow, note, fromNowOn }),
+    remove: (id: string) => ipcRenderer.invoke(IPC.AUTOMATIONS_REMOVE, { id }),
+    onChanged: (cb: (jobs: any[]) => void) => {
+      const handler = (_e: any, jobs: any[]) => cb(jobs);
+      ipcRenderer.on(IPC.AUTOMATIONS_CHANGED, handler);
+      return () => ipcRenderer.removeListener(IPC.AUTOMATIONS_CHANGED, handler);
+    },
+  },
   // YouCoded Pages: library, pins, document + data, change push. Shape: shared/pages-types.ts PagesBridge.
   pages: {
     list: () => ipcRenderer.invoke(IPC.PAGES_LIST),
@@ -2533,6 +2558,8 @@ contextBridge.exposeInMainWorld('claude', {
     listFolder: (id: string, ask: string, folder: string) => ipcRenderer.invoke(IPC.PAGES_LIST_FOLDER, { id, ask, folder }),
     refresh: (id: string) => ipcRenderer.invoke(IPC.PAGES_REFRESH, { id }),
     savedKeys: () => ipcRenderer.invoke(IPC.PAGES_SAVED_KEYS),
+    // Delete a page; `deleteAutomations` names the linked automations to delete with it (the rest are kept, unlinked).
+    deletePage: (id: string, deleteAutomations: string[]) => ipcRenderer.invoke(IPC.PAGES_DELETE, { id, deleteAutomations }),
     // Both parts: a key is identified by service AND address.
     deleteSavedKey: (service: string, address: string) => ipcRenderer.invoke(IPC.PAGES_DELETE_SAVED_KEY, { service, address }),
     fetch: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_FETCH, { id, request: req }), plaid: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_PLAID, { id, request: req }),
