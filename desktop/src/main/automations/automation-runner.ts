@@ -159,6 +159,12 @@ export class AutomationRunner {
     this.opts.onChanged();
   }
 
+  /** A scheduled time that passed while the app was closed, on an automation that skips late runs. */
+  async noteMissed(jobId: string, dueAt: number): Promise<void> {
+    await this.opts.store.updateRun(jobId, { id: this.newId(), startedAt: dueAt, endedAt: dueAt, outcome: 'missed', summary: 'Skipped: the computer was off or YouCoded was closed, and this automation skips late runs.', tokens: 0 });
+    this.opts.onChanged();
+  }
+
   // ---- asking ------------------------------------------------------------------------------------------------
 
   private ask(run: LiveRun, q: { action: string; detail?: string; toolId?: string }): Promise<{ allow: boolean; note: string }> {

@@ -29,7 +29,7 @@ import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
 import type { ModelAttachment } from './busy-message-boundary';
 import { SessionStore, validatedDeltaReferences, type NativeSessionListEntry } from './session-store';
-import { PermissionBroker } from './permission-broker';
+import { PermissionBroker, type AskDecision, type AskRequest } from './permission-broker';
 import { AdminPasswordService, type AdminPasswordServiceLike } from './admin-password-service';
 import { RunningCalls } from './askpass/running-calls';
 import type { AskpassServer } from './askpass/askpass-server';
@@ -38,7 +38,7 @@ import { decidePermission, decideChainParts } from './permission-engine';
 import { splitChain, plainCdTarget } from '../../shared/bash-chain';
 import { readOnlyChecksFor } from './tools/readonly-guard';
 import { getShell } from './tools/bash';
-import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
+import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionDecision, type PermissionRule } from '../../shared/permission-types';
 import { assembleSystemPrompt, assembleSystemPromptParts, gitSnapshotAsync } from './prompt-assembly';
 import { prepareProjectInstructions, type ProjectInstructionFile } from './injection/project-instructions';
 import { resolveProfile, effectiveContextForModel, IMAGE_LIMITS_DEFAULT, type CapabilityProfile, type ProfileProviderType, type ImageLimits } from './capability-profile';
@@ -3665,6 +3665,73 @@ export class NativeSessionHost extends EventEmitter {
     if (start.value.hasOutcome) await start.value.pending;
     this.assertStartup(start);
     if (slotsUnknown) this.live.get(opts.sessionId)!.refreshSlotsAfterTurn = true;
+  }
+
+  /** A session for one automation run (pages-finish step 4; main/automations/native-engine.ts).
+   *
+   *  The same assistant loop as a chat, but deliberately NOT a chat: it is never put in `live`, never
+   *  wire()'d and never written to the session store, so it emits no session-created event and reaches
+   *  none of the things a chat reaches (the strip, the phone list, restore, welcome-back, the namer,
+   *  search, sync). The caller keeps its conversation in its own file.
+   *
+   *  Everything a person set for the automation arrives as arguments: `decide` is that automation's own
+   *  permission list (no chat mode, no saved "Always allow", no deny-list config — the Bash floors and
+   *  the credential-path refusals inside HarnessSession still run beneath it), `askUser` goes to the
+   *  automation runner, `toolNames` is what it may ever use. No skills, no MCP servers, no helpers. */
+  async createAutomationSession(opts: {
+    runId: string; workDir: string; binding: ModelBinding; systemPrompt: string; toolNames: string[];
+    decide: (tool: string, subject: string | undefined) => Promise<PermissionDecision>;
+    askUser: (req: AskRequest) => Promise<AskDecision>;
+    onStepUsage: (u: { tokens: number; costUsd: number | null }) => Promise<void>;
+  }): Promise<{ session: HarnessSession; dispose: () => Promise<void> }> {
+    const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(opts.binding);
+    const preset = resolvePreset(undefined);
+    const allowed = new Set(opts.toolNames);
+    const gitSnapshot = await gitSnapshotAsync(opts.workDir);
+    const session = new HarnessSession(
+      {
+        sessionId: opts.runId, cwd: opts.workDir, binding: opts.binding, contextLength, profile, pricing, free,
+        harness: preset.manifest,
+        tools: CORE_TOOLS.filter((t) => allowed.has(t.name)),
+        shells: this.shellsFor(opts.runId),
+        runningCalls: this.runningCalls,
+        // The automation's brief stands where a chat's preset would; the <env> block describes its work folder.
+        systemPrompt: assembleSystemPrompt({
+          presetBody: opts.systemPrompt, cwd: opts.workDir, appVersion: this.appVersion, gitSnapshot, projectInstructionFiles: [],
+          promptVariant: profile.promptVariant, hasTools: profile.supportsTools,
+          instructionBudgetTokens: profile.injectionBudgetTokens,
+          supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'parent',
+        }),
+        // An explicit EMPTY skill list: leaving it out would hand the run every installed skill.
+        skillCatalog: { list: () => [], load: (id: string) => { throw new SkillNotFound(id, []); } },
+        decide: opts.decide,
+        decideJudgesOutsidePaths: true,
+        askUser: opts.askUser,
+        onStepUsage: opts.onStepUsage,
+        ...(this.toolServices ? { toolServices: this.toolServices } : {}),
+        // Borrowed for two effects a run needs: it can never start helpers of its own, and it never
+        // "parks" on a slow model (a parked run would wait forever with nobody watching).
+        isSpecialistChild: true,
+      },
+      this.modelFactory,
+    );
+    this.retainModel(opts.runId, opts.binding.modelId);
+    return {
+      session,
+      dispose: async () => {
+        session.destroy();
+        this.releaseModel(opts.runId, opts.binding.modelId);
+        const reg = this.shellRegistries.get(opts.runId);
+        if (reg) {
+          this.shellRegistries.delete(opts.runId);
+          this.drainingShellRegistries.add(reg);
+          // The run is over: any command it left going is stopped, as when a chat is closed.
+          await reg.killAll('conversation-closed')
+            .catch((err) => log('WARN', 'NativeSessionHost', 'killAll after an automation run failed', { runId: opts.runId, error: String(err) }))
+            .finally(() => { this.drainingShellRegistries.delete(reg); });
+        }
+      },
+    };
   }
 
   /** Mint a SPECIALIST CHILD of a live session (plan 1a, spec §1/§5).
