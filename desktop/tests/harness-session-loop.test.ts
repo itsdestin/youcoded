@@ -1204,6 +1204,22 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect((write as any).calls).toHaveLength(1);        // ask allowed → executed
   });
 
+  it("an automation's run lets its own decide judge a file outside the work folder instead of forcing a question", async () => {
+    const write = fakeTool('Write', { permissionSubject: (a: any) => a.file_path });
+    const decide = vi.fn(async () => ALLOW);
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Write', { file_path: 'C:/other/report.md' }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'ok'), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(makeOpts({ tools: [write], decide, askUser, decideJudgesOutsidePaths: true }), async () => model as any);
+    collect(session);
+    await session.send('go');
+    expect(decide).toHaveBeenCalledWith('Write', 'C:/other/report.md', expect.anything());
+    expect(askUser).not.toHaveBeenCalled();
+    expect((write as any).calls).toHaveLength(1);
+  });
+
   // 2026-08-16 stuck-session investigation. A local model Globbed "ROADMAP.md"
   // (Glob returns workspace-RELATIVE paths) and then invented an absolute path
   // from the project's name — "/youcoded-dev/ROADMAP.md" — which is outside the

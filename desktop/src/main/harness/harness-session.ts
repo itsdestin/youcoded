@@ -259,6 +259,11 @@ export interface HarnessSessionOpts {
   /** Pure permission decision for (tool, subject) — the configured layers
    *  (preset/mode/deny-list/remembered). Absent → every gated tool asks. */
   decide?: (tool: string, subject: string | undefined, where?: { shellCwd?: string; envChanged?: boolean }) => Promise<PermissionDecision>;
+  /** Set ONLY for an automation's run (main/automations): its `decide` compares every file's real location
+   *  against the folders that automation was given, so a change outside the work folder is NOT turned
+   *  into a forced question first. Credential and secret paths are still refused above that point, and
+   *  the Bash floors still run. Absent for every chat and helper: their behaviour is unchanged. */
+  decideJudgesOutsidePaths?: boolean;
   /** Raise an interactive permission ask (broker.ask bound to this session).
    *  Also the surface for the max_steps / doom_loop budget asks. */
   askUser?: (req: AskRequest) => Promise<AskDecision>;
@@ -4125,7 +4130,9 @@ export class HarnessSession extends EventEmitter {
         // below, so an explicit deny/ask rule the user set for Read still wins,
         // and — because the ask is no longer synthetic — an "Always allow" on
         // one of those rule-driven asks is now a promise the engine can keep.
-        if (!READ_ONLY_PATH_TOOLS.has(call.toolName)) {
+        // An automation's run names its own folders (job-decide.ts), which are outside its work folder
+        // by design: decide() below judges the real location, so no outside-the-folder card is forced.
+        if (!READ_ONLY_PATH_TOOLS.has(call.toolName) && !this.opts.decideJudgesOutsidePaths) {
           // WHY: this grant removes only the outside-folder toll. The normal
           // permission decision still runs, and credential denies ran above.
           externalAsk = !(this.externalEditsAllowed && !this.opts.isSpecialistChild
