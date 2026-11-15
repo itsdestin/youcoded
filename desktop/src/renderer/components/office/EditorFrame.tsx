@@ -63,6 +63,10 @@ const CLOSE_SAVE_WAIT_MS = 5_000;
  *  anything this late means the editor gave up without telling the host (a failed
  *  get_current_path, an exception in its save path), and "Saving…" must not stay up forever. */
 const REQUESTED_SAVE_LIMIT_MS = 60_000;
+/** A failed save tries again by itself after these pauses, the last repeating (Destin, 2026-11-14:
+ *  the error "should mostly resolve and disappear on its own when possible"). WHY growing pauses,
+ *  not every 3 s: a read-only file or a full disk fails every time, and each try is a whole save. */
+export const SAVE_RETRY_DELAYS_MS = [10_000, 30_000, 60_000, 120_000];
 /** How long a closing window waits for a save it just started to reach main (see journal). Below
  *  main's 1.5 s journal cap (office-journal-sync.ts), so the answer still counts. */
 const JOURNAL_SAVE_HANDOFF_MS = 1_400;
@@ -216,7 +220,32 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     // How long the editor took, last time, from being asked to save to handing its bytes over
     // (its freeze); askedAt is when the outstanding ask was posted (0: none). See autosaveDelay.
     askedAt: 0, handOverMs: 0,
+    // An automatic retry of a failed save is under way: the strip keeps the failure showing
+    // (no "Saving…" flicker every try) until a save lands, which clears it.
+    quiet: false,
   });
+  // The automatic retries of a failed save (SAVE_RETRY_DELAYS_MS): the pending timer and how many
+  // tries so far. A save that lands, by any route, starts the count over.
+  const retry = useRef({ timer: 0 as ReturnType<typeof setTimeout> | 0, n: 0 });
+  const scheduleRetry = () => {
+    const r = retry.current;
+    if (r.timer || keptRef.current || !mountedRef.current) return;
+    const delay = SAVE_RETRY_DELAYS_MS[Math.min(r.n, SAVE_RETRY_DELAYS_MS.length - 1)];
+    r.timer = setTimeout(() => {
+      r.timer = 0;
+      r.n += 1;
+      const s = save.current;
+      if (!mountedRef.current || keptRef.current || !s.failed || s.saving || s.requested) return;
+      s.quiet = true;
+      requestSave();
+    }, delay);
+  };
+  const retrySucceeded = () => {
+    const r = retry.current;
+    if (r.timer) { clearTimeout(r.timer); r.timer = 0; }
+    r.n = 0;
+    save.current.quiet = false;
+  };
   // A save that failed without save_file failing (fix round 2): the editor's write_editor_bin
   // was refused, the editor's save path gave up, or no save_file ever came. Same outcome as a
   // failed save_file — the strip shows the reason with the save-failed actions.
@@ -229,7 +258,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     s.dirty = true;
     s.failed = true;
     s.failMessage = message;
+    s.quiet = false;
     markFailed(file.path, message);
+    scheduleRetry();
     wake();
   };
   const requestSave = () => {
@@ -420,6 +451,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       const s = save.current;
       if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
       if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
+      if (retry.current.timer) { clearTimeout(retry.current.timer); retry.current.timer = 0; }
       if (token) void b.close(token).catch(() => {});
     };
   }, [file.path, attempt]);
@@ -733,7 +765,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         s.askedAt = 0; // a later Save As's bytes are no measure of an autosave's freeze
         if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
         if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
-        markSaving(file.path);
+        // An automatic retry stays quiet: the failure keeps showing until a save lands.
+        if (!s.quiet) markSaving(file.path);
       }
       b.invoke(opened.token, m.cmd, m.args ?? {}).then((result) => {
         // WHY not main's answer for save_file_as: it names the copy's folder for the note below,
@@ -775,6 +808,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
           save.current.failed = false;
           // A change during the save keeps the strip at "Saving…" for the follow-up save.
           if (save.current.dirty) markChanged(file.path); else markSaved(file.path);
+          retrySucceeded();
           saveSettled();
         }
       }, (e: unknown) => {
@@ -807,12 +841,16 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         if (saving) {
           // Main's message is already written for a person (office-commands.ts), so the strip
           // shows it as is, with Retry (docs/error-message-standards.md: specific + Retry).
-          // WHY no automatic retry: a read-only file or a full disk would fail every 3 s and
-          // flicker the strip; the changes stay unsaved (a closing tab still tries once more).
+          // Not retried every 3 s (a read-only file or a full disk would flicker the strip): the
+          // retries below wait longer each time and stay quiet until one lands.
           markFailed(file.path, message);
           save.current.dirty = true;
           save.current.failed = true;
           save.current.failMessage = message;
+          save.current.quiet = false;
+          // Tried again by itself, later (SAVE_RETRY_DELAYS_MS): a temporary cause — a busy file,
+          // a drive that came back — then clears without anyone pressing anything.
+          scheduleRetry();
           saveSettled();
         }
       });

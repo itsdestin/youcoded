@@ -5,7 +5,7 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
-import { EditorFrame, autosaveDelay } from '../../src/renderer/components/office/EditorFrame';
+import { EditorFrame, SAVE_RETRY_DELAYS_MS, autosaveDelay } from '../../src/renderer/components/office/EditorFrame';
 import { closeDoc, officeTabsNow, openDoc, resetOfficeStoreForTests, saveStateFor, useOfficeAlerts, useSaveState } from '../../src/renderer/components/office/office-store';
 import type { OfficeBridge, OfficeFile } from '../../src/shared/office-types';
 
@@ -479,6 +479,35 @@ describe('EditorFrame autosave', () => {
     expect(saveStateFor(FILE.path).phase).not.toBe('failed');
     await act(async () => { vi.advanceTimersByTime(1); });
     expect(saveStateFor(FILE.path)).toMatchObject({ phase: 'failed', message: "Office didn't finish saving this file." });
+  });
+
+  it('a failed save tries again by itself, quietly, and the failure clears once one lands', async () => {
+    let refuse = true;
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file' && refuse) throw new Error('This file is busy.'); return 'ok'; }) as never });
+    const { fromEditor, saves } = await mountFrame();
+    vi.useFakeTimers();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    await act(async () => { vi.advanceTimersByTime(3_000); });
+    expect(saves()).toBe(1);
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    expect(saveStateFor(FILE.path)).toMatchObject({ phase: 'failed', message: 'This file is busy.' });
+    // The first retry, 10 s on: it fails too, and the strip never flickers to "Saving…".
+    await act(async () => { vi.advanceTimersByTime(SAVE_RETRY_DELAYS_MS[0]); });
+    expect(saves()).toBe(2);
+    expect(saveStateFor(FILE.path).phase).toBe('failed');
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'save_file', args: { data: '' } });
+    expect(saveStateFor(FILE.path).phase).toBe('failed');
+    await settle();
+    // The cause went away; the next retry (a longer pause) lands and the failure is gone.
+    refuse = false;
+    await act(async () => { vi.advanceTimersByTime(SAVE_RETRY_DELAYS_MS[1] - 1); });
+    expect(saves()).toBe(2);
+    await act(async () => { vi.advanceTimersByTime(1); });
+    expect(saves()).toBe(3);
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    expect(saveStateFor(FILE.path).phase).toBe('saved');
   });
 
   it('a closed tab whose editor never starts the save keeps the tab and says so after 5 s', async () => {
