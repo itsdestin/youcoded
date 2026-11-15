@@ -92,9 +92,9 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-home#thermo-auto-climate', 'view'), params: { pagesHome: 'thermo-79-climate-auto' } },
   { ...pg('pages/page/page-home#problems', 'view', 'error-state'), params: { pagesHome: 'view-problems' } },
   { ...pg('pages/page/page-home#settings', 'view'), params: { pagesHome: 'settings' } },
-  { ...pg('pages/page/page-home#chips-pills', 'view'), params: { pagesHome: 'chips-pills' } },
-  { ...pg('pages/page/page-home#chips-sentence', 'view'), params: { pagesHome: 'chips-sentence' } },
-  { ...pg('pages/page/page-home#chips-tiles', 'view'), params: { pagesHome: 'chips-tiles' } },
+  { ...pg('pages/page/page-home#chips-pills', 'view'), params: { pagesHome: 'chips-pills' }, frameReady: '.pills' },
+  { ...pg('pages/page/page-home#chips-sentence', 'view'), params: { pagesHome: 'chips-sentence' }, frameReady: '.glance' },
+  { ...pg('pages/page/page-home#chips-tiles', 'view'), params: { pagesHome: 'chips-tiles' }, frameReady: '.tiles2' },
   // Redesign options, one screen each (fixtures/home-variants/), listed from the registry so
   // a helper adding an option never edits this file.
   ...homeVariantEntries().map(([k, v]) => ({ ...pg(`pages/page/page-home#v-${k}`, 'view', 'redesign'), params: { pagesHome: `v-${k}` }, ...(v.sameAs ? { sameAs: v.sameAs } : {}) })),
