@@ -204,7 +204,11 @@ export function workbenchNetworkOffline(): boolean {
  *  narrow (<640px) layout, and anything unrecognised — or any document that is
  *  not the workbench — is `today`, so the app itself never changes.
  *
- *  DECIDED (rounds 2-4, answers in that folder; status in its README.md):
+ *  DECIDED (rounds 2-9, answers in that folder; the README.md there is the
+ *  current summary — rounds 5-9 changed the `lights` bar: no + New session,
+ *  Projects in ☰ and the name left-aligned in a window with its own window
+ *  buttons, model alone in rows, 24px pills and chips). WHY this note: the
+ *  line below once said "rounds 2-4" and read as the whole decision.
  *  narrowTop=`lights`, narrowList=`dropdown`, narrowPills=`compact`. NOT YET
  *  BUILT: the build makes those the real narrow layout and deletes these
  *  switches and every other value (name, drawer, pair, plain, hub, sheet,
