@@ -198,6 +198,26 @@ describe('EditorFrame hosting the editor', () => {
   });
 });
 
+describe('EditorFrame and the Save button', () => {
+  it('Save pressed with nothing waiting says all changes are saved, and saves nothing', async () => {
+    fakeBridge();
+    const { fromEditor, saves } = await mountFrame();
+    fromEditor({ type: 'yc:office-save-pressed' });
+    expect(saveStateFor(FILE.path).note).toBe('All changes saved.');
+    expect(saves()).toBe(0);
+  });
+
+  it('Save pressed while this side still holds unsaved changes saves them now, not 3 s later', async () => {
+    fakeBridge();
+    const { fromEditor, saves } = await mountFrame();
+    vi.useFakeTimers();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    fromEditor({ type: 'yc:office-save-pressed' });
+    expect(saves()).toBe(1);
+    expect(saveStateFor(FILE.path).note).toBeUndefined();
+  });
+});
+
 describe('EditorFrame autosave', () => {
   it('marks the file unsaved on a change and asks the editor to save 3 s after it', async () => {
     fakeBridge();

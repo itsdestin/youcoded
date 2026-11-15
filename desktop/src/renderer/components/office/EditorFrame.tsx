@@ -7,7 +7,7 @@
 // own origin (design §3a, §5; review 3 R3-1):
 //   editor → host  {yc:'ready'}                 the editor listens for "open-file" now
 //                  {yc:'rpc', id, cmd, args}    one request for main (the add-on's __TAURI__ relay)
-//                  {type:'yc:office-loaded' | 'yc:office-state' | 'yc:office-esc'}
+//                  {type:'yc:office-loaded' | 'yc:office-state' | 'yc:office-esc' | 'yc:office-save-pressed'}
 //                  {type:'yc:office-comments-result', id, result}, {type:'yc:office-comments-changed'}
 //   host → editor  {yc:'rpc-result', id, result | error}, {yc:'event', name, payload}
 //                  {type:'yc:office-theme' | 'yc:office-mode' | 'yc:office-cmd' | 'yc:office-save'}
@@ -842,6 +842,17 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       }
       if (d?.type === 'yc:office-state' && d.state) stateCb.current?.(d.state);
       if (d?.type === 'yc:office-esc') dismissRef.current();
+      // Save / Ctrl+S pressed while the editor had nothing waiting (add-on v0.1.42 keeps Save
+      // pressable — Destin, 2026-11-14: "how would i just save a doc?"). Anything this side still
+      // holds is saved now (a failed save, or edits a Save As hid from the editor's own flag);
+      // otherwise the strip says so, so the press is never met with silence. A save already under
+      // way shows "Saving…" by itself. Kept after a restore: nothing is written to the file.
+      if (d?.type === 'yc:office-save-pressed' && !keptRef.current) {
+        const s = save.current;
+        if (s.saving || s.requested) { /* under way */ }
+        else if (s.dirty || s.failed || s.saveAsDirty) requestSave();
+        else markNote(file.path, 'All changes saved.');
+      }
       if (d?.type === 'yc:office-journaled') journalWaiters.current.slice().forEach((w) => w());
       // The editor's answer to main's comment request, and its news that a comment changed (by
       // anyone) — so the reading views of this file refresh (finish plan Task 6).
