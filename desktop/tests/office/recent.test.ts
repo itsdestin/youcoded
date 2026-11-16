@@ -150,3 +150,24 @@ describe('Recent (files opened in Office)', () => {
     expect((await recent.list(userData)).map((f) => f.name)).toEqual(['a.docx']);
   });
 });
+
+describe('Recent: forget and rename in place', () => {
+  it('forget drops only the matching entry (by any of the given paths)', async () => {
+    const a = await aFile('a.docx'); const b = await aFile('b.docx');
+    await recent.add(userData, a); await recent.add(userData, b);
+    await recent.forget(userData, ['/not/stored.docx', a.path]);
+    expect((await recent.list(userData)).map((f) => f.name)).toEqual(['b.docx']);
+  });
+  it('replaceEntry keeps the position and opened-time, and does not add a file that was not listed', async () => {
+    const a = await aFile('a.docx', '2026-09-01T00:00:00.000Z'); const b = await aFile('b.docx');
+    await recent.add(userData, a); await recent.add(userData, b);
+    const renamed = { ...a, path: path.join(dir, 'z.docx'), name: 'z.docx' };
+    await writeFile(renamed.path, 'x');
+    await recent.replaceEntry(userData, [a.path], renamed);
+    const list = await recent.list(userData);
+    expect(list.map((f) => f.name)).toEqual(['b.docx', 'z.docx']);
+    expect(list[1].at).toBe('2026-09-01T00:00:00.000Z');
+    await recent.replaceEntry(userData, ['/nowhere.docx'], { ...a, path: path.join(dir, 'q.docx'), name: 'q.docx' });
+    expect((await recent.list(userData)).map((f) => f.name)).toEqual(['b.docx', 'z.docx']);
+  });
+});

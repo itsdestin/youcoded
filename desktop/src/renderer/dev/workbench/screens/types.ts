@@ -19,6 +19,11 @@ export type ScreenEntry = {
    *  CHANGES on its own (a notice that used to clear itself after 6s). Keep it rare: it is
    *  slow by design. */
   waitMs?: number;
+  /** A CSS selector that must exist INSIDE the screen's Page iframe before the picture. WHY: the
+   *  screen's mark is on the app's side of the frame, so it can show while the Page inside is
+   *  still drawing — under load a Home chip-style screen was photographed before its style was
+   *  drawn and came out identical to its sibling (LOOK-ALIKE). */
+  frameReady?: string;
   /** "Open this first": steps `shoot` replays once the screen shows, before its picture — a
    *  button label to click (`'Your status: Online'`), or a journey step (`{ do: 'key', key:
    *  'ArrowDown' }`). WHY (games-social friction, proposal 9): an opened menu or folded card

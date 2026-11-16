@@ -5,8 +5,8 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
-import { EditorFrame, autosaveDelay } from '../../src/renderer/components/office/EditorFrame';
-import { closeDoc, openDoc, resetOfficeStoreForTests, saveStateFor, useOfficeAlerts, useSaveState } from '../../src/renderer/components/office/office-store';
+import { EditorFrame, SAVE_RETRY_DELAYS_MS, autosaveDelay } from '../../src/renderer/components/office/EditorFrame';
+import { closeDoc, officeDocFor, officeTabsNow, openDoc, resetOfficeStoreForTests, saveStateFor, useOfficeAlerts, useSaveState } from '../../src/renderer/components/office/office-store';
 import type { OfficeBridge, OfficeFile } from '../../src/shared/office-types';
 
 const FILE: OfficeFile = { path: '/home/you/plan.docx', name: 'plan.docx', kind: 'document', folder: 'you', at: '2026-09-28T00:00:00Z' };
@@ -195,6 +195,26 @@ describe('EditorFrame hosting the editor', () => {
     const { unmount } = await mountFrame();
     unmount();
     await waitFor(() => expect(bridge.close).toHaveBeenCalledWith('t1'));
+  });
+});
+
+describe('EditorFrame and the Save button', () => {
+  it('Save pressed with nothing waiting says all changes are saved, and saves nothing', async () => {
+    fakeBridge();
+    const { fromEditor, saves } = await mountFrame();
+    fromEditor({ type: 'yc:office-save-pressed' });
+    expect(saveStateFor(FILE.path).note).toBe('All changes saved.');
+    expect(saves()).toBe(0);
+  });
+
+  it('Save pressed while this side still holds unsaved changes saves them now, not 3 s later', async () => {
+    fakeBridge();
+    const { fromEditor, saves } = await mountFrame();
+    vi.useFakeTimers();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    fromEditor({ type: 'yc:office-save-pressed' });
+    expect(saves()).toBe(1);
+    expect(saveStateFor(FILE.path).note).toBeUndefined();
   });
 });
 
@@ -461,6 +481,35 @@ describe('EditorFrame autosave', () => {
     expect(saveStateFor(FILE.path)).toMatchObject({ phase: 'failed', message: "Office didn't finish saving this file." });
   });
 
+  it('a failed save tries again by itself, quietly, and the failure clears once one lands', async () => {
+    let refuse = true;
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file' && refuse) throw new Error('This file is busy.'); return 'ok'; }) as never });
+    const { fromEditor, saves } = await mountFrame();
+    vi.useFakeTimers();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    await act(async () => { vi.advanceTimersByTime(3_000); });
+    expect(saves()).toBe(1);
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    expect(saveStateFor(FILE.path)).toMatchObject({ phase: 'failed', message: 'This file is busy.' });
+    // The first retry, 10 s on: it fails too, and the strip never flickers to "Saving…".
+    await act(async () => { vi.advanceTimersByTime(SAVE_RETRY_DELAYS_MS[0]); });
+    expect(saves()).toBe(2);
+    expect(saveStateFor(FILE.path).phase).toBe('failed');
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'save_file', args: { data: '' } });
+    expect(saveStateFor(FILE.path).phase).toBe('failed');
+    await settle();
+    // The cause went away; the next retry (a longer pause) lands and the failure is gone.
+    refuse = false;
+    await act(async () => { vi.advanceTimersByTime(SAVE_RETRY_DELAYS_MS[1] - 1); });
+    expect(saves()).toBe(2);
+    await act(async () => { vi.advanceTimersByTime(1); });
+    expect(saves()).toBe(3);
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    expect(saveStateFor(FILE.path).phase).toBe('saved');
+  });
+
   it('a closed tab whose editor never starts the save keeps the tab and says so after 5 s', async () => {
     fakeBridge();
     const onClosed = vi.fn();
@@ -611,6 +660,21 @@ describe('EditorFrame and Save As', () => {
     expect(saveStateFor(FILE.path).note).toBe('Saved a copy as Report.pdf in out.');
     // The document itself was not saved by it: its own save state is untouched.
     expect(saveStateFor(FILE.path).phase).toBe('saved');
+  });
+
+  it('opens a copy Office can edit in a new tab right after the original, in front', async () => {
+    const OTHER: OfficeFile = { ...FILE, path: '/home/you/notes.docx', name: 'notes.docx' };
+    const COPY: OfficeFile = { ...FILE, path: '/home/you/plan v2.docx', name: 'plan v2.docx' };
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => (cmd === 'save_file_as' ? { name: COPY.name, folder: 'you', file: COPY } : 'ok')) as never });
+    const { fromEditor, posted } = await mountFrame();
+    act(() => { openDoc(FILE); openDoc(OTHER); });
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'save_file_as', args: { path: 'yc-save/abc/plan v2.docx' } });
+    await settle();
+    // The editor still learns nothing but "ok" — never the copy's folder.
+    expect(posted).toHaveBeenCalledWith({ yc: 'rpc-result', id: 4, result: 'ok' }, ORIGIN);
+    const tabs = officeTabsNow();
+    expect(tabs.docs.map((d) => d.file.name)).toEqual(['plan.docx', 'plan v2.docx', 'notes.docx']);
+    expect(tabs.active).toBe(COPY.path);
   });
 
   it("says main's reason on the strip when the copy or its dialog is refused", async () => {
@@ -782,5 +846,22 @@ describe('EditorFrame relaying comment requests', () => {
     const { fromEditor } = await mountFrame();
     fromEditor({ type: 'yc:office-comments-changed' });
     expect(c.commentsChanged).toHaveBeenCalledWith('t1');
+  });
+});
+
+describe('one tab per real file', () => {
+  it('gives way to the tab already showing the same file under another spelling', async () => {
+    // Main answers both spellings (a link and its target) with the one session's token.
+    const b = fakeBridge();
+    const LINK: OfficeFile = { ...FILE, path: '/home/you/link/plan.docx' };
+    openDoc(FILE);
+    openDoc(LINK);
+    const first = render(<EditorFrame file={FILE} />);
+    await waitFor(() => expect(first.container.querySelector('iframe')).not.toBeNull());
+    // (The page unmounts the dropped tab's frame; rendered alone here, only the tab list is checked.)
+    render(<EditorFrame file={LINK} />);
+    await waitFor(() => expect(b.close).toHaveBeenCalledWith('t1'));
+    expect(officeDocFor(LINK.path)).toBeNull();
+    expect(officeDocFor(FILE.path)).not.toBeNull();
   });
 });
