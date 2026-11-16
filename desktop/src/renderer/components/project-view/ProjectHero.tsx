@@ -27,13 +27,20 @@ interface HeroStats {
   // True when discovery hit a cap — render "N+" so a truncated sample never
   // poses as an exact total.
   filesTruncated?: boolean;
-  conversations: number;
-  contextFiles: number;
+  // null = the read FAILED (card #134, error inventory Projects row 8): shown as "—", never as a
+  // "0" that says the project has none.
+  conversations: number | null;
+  contextFiles: number | null;
   activeLabel: string;
 }
 
 // "N", "N+" (truncated), or "—" (gated — no scan ran). Shared by the hero
 // stat line and ProjectView's segment badges so the two can't disagree.
+/** "N", or "—" when that count could not be read. */
+export function formatCount(n: number | null): string {
+  return n === null ? '—' : String(n);
+}
+
 export function formatFileCount(files: number | null, truncated?: boolean): string {
   if (files === null) return '—';
   return truncated ? `${files.toLocaleString()}+` : String(files);
@@ -484,8 +491,8 @@ export function ProjectHero({
         {/* Stat row — dot-separated. */}
         <div className="flex flex-wrap gap-4 mt-3 text-xs text-fg-muted">
           <span><b className="text-fg-2 font-semibold">{formatFileCount(stats.files, stats.filesTruncated)}</b> files</span>
-          <span><b className="text-fg-2 font-semibold">{stats.conversations}</b> conversations</span>
-          <span><b className="text-fg-2 font-semibold">{stats.contextFiles}</b> context files</span>
+          <span><b className="text-fg-2 font-semibold">{formatCount(stats.conversations)}</b> conversations</span>
+          <span><b className="text-fg-2 font-semibold">{formatCount(stats.contextFiles)}</b> context files</span>
           <span>active <b className="text-fg-2 font-semibold">{stats.activeLabel}</b></span>
         </div>
 

@@ -42,7 +42,9 @@ export const APP: readonly ScreenEntry[] = [
   // The same screen with nothing shown: what the app looked like before the notice existed (the deck's Before picture).
   { name: 'dev/toast#none', tags: ['dev'], session: 'wb-1', params: { toast: 'none' }, newIn: 'after' as const, sameAs: { name: 'chat#queue-idle-after', why: 'The same chat with no notice raised (the Before picture for the signed-out notice).' } },
   { name: 'dev/toast#signed-out', tags: ['dev'], session: 'wb-1', params: { toast: 'signed-out' }, newIn: 'after' as const },
-  // Card #11 a: the one-time "damaged Claude Code settings file replaced" heads-up with its "Show old copy" button (the Before is dev/toast#none).
+  // Card #11 a: the one-time "damaged Claude Code settings file replaced" heads-up with its "Show file" button (the Before is dev/toast#none).
   { name: 'dev/toast#settings-repaired', tags: ['dev'], session: 'wb-1', params: { toast: 'settings-repaired' }, newIn: 'after' as const },
+  // Review 2026-11-13: the same notice over the terminal view, whose message bar is inert and zero-size (the notice must not move off screen).
+  { name: 'dev/toast#settings-repaired-terminal', tags: ['dev'], session: 'wb-1', params: { toast: 'settings-repaired' }, open: ['Terminal'], newIn: 'after' as const },
   { name: 'dev/toast#turned-off-phone', tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, session: 'wb-1', params: { toast: 'turned-off' }, newIn: 'after' as const },
 ];

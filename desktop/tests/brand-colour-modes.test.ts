@@ -107,7 +107,10 @@ describe('provider brand colours', () => {
 // Neither was in scope here. Tracked in ROADMAP.md.
 const themesRoot = resolve(__dirname, '..', '..', '..', 'wecoded-themes', 'themes');
 
-/** Brand/theme combinations still under 4.5:1 — BY NAME, not a count. The residue
+/** NOTE (2026-11-13, card #135 / C-8): this measures the FIXED sets. The gap below is closed at runtime
+ *  — theme-engine's computeBrandTokens darkens each colour per theme (tests/brand-colour-adjust.test.ts
+ *  proves every published theme clears 4.5:1 after that). The list stays so the fixed sets cannot regress.
+ *  Brand/theme combinations still under 4.5:1 — BY NAME, not a count. The residue
  *  may shrink, never grow unnoticed. WHY a list (2026-09-24): this was a ceiling of
  *  25, and Morning Rounds (published 2026-09-22) added two combinations the day it
  *  landed; a count cannot say whether a new theme brought them or an old combination

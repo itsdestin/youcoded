@@ -1,6 +1,7 @@
 {
  "_note": "Every channel a PHONE may call, as of one-core R6-3 (2026-10-01). Any change to this list is a decision for Destin: edit it only with his approval. tests/phone-open-set.test.ts compares the live channel table to it.",
  "_added_continue_turn": "2026-10-21: native:continue-turn (the chat error card's Try again and the step limit's Keep going) — Destin signed off this widening on 2026-10-21 (\"yes should work on phone\").",
+ "_added_settings_repair_notice": "2026-11-13: settings:repair-notice (the damaged-settings notice reaches phones and the Android app) — Destin, overnight deck C-1: yes.",
  "_added_browser_answer": "2026-10-26: browser:answer (answer the assistant Browser's card from a phone) — Destin, notify-user questions Q-1: \"can we just build in remote browser approvals like every other approval card?\" (card #205). Rebuilt on current code 2026-11-12.",
  "total": 282,
  "open": [
@@ -204,6 +205,7 @@
   "session:switch",
   "session:unwatch",
   "settings:get",
+  "settings:repair-notice",
   "settings:set",
   "skills:apply-output-style",
   "skills:create-prompt",

@@ -369,3 +369,18 @@ describe('guardedFetch', () => {
     expect(truncated).toBe(true);
   });
 });
+
+// Review 2026-11-13: ranges that are never a public website.
+describe('isPrivateIp: multicast, benchmark and reserved ranges', () => {
+  it.each(['224.0.0.1', '239.255.255.250', '240.0.0.1', '255.255.255.255', '198.18.0.1', '198.19.255.254', 'ff02::1', 'ff00::', '::ffff:224.0.0.1'])('%s is refused', (ip) => {
+    expect(isPrivateIp(ip)).toBe(true);
+  });
+  it.each(['8.8.8.8', '198.17.255.255', '198.20.0.0', '223.255.255.255', '93.184.216.34', '2606:4700:4700::1111'])('%s is still public', (ip) => {
+    expect(isPrivateIp(ip)).toBe(false);
+  });
+  it('a literal in those ranges and a name that resolves to one are both refused by the URL check', async () => {
+    await expect(assertPublicHttpUrl('http://224.0.0.1/a')).rejects.toBeInstanceOf(NetGuardError);
+    await expect(assertPublicHttpUrl('http://[ff02::1]/a')).rejects.toBeInstanceOf(NetGuardError);
+    await expect(assertPublicHttpUrl('http://bench.example/a', async () => [{ address: '198.18.0.9' }] as any)).rejects.toBeInstanceOf(NetGuardError);
+  });
+});

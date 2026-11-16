@@ -53,12 +53,16 @@ export function settingsPath(): string {
 // notice nobody was around to see at launch is still shown to the first window that opens, and a relaunch
 // (when the file is already healthy) never repeats it.
 let pendingRepairNotice: { backupPath: string } | null = null;
+// WHY one claim per KIND of screen (security/regression review 2026-11-13): with a single claim, a phone connecting during start-up
+// could take the notice before the computer's own window asked, and the window would never show it. The computer's windows are one
+// kind (a second window must not repeat it) and phones/Android are the other (one phone, once); neither can use up the other's.
+const repairNoticeTaken = { window: false, remote: false };
 
-/** The one-time "your settings file was replaced" fact, handed out once; null when nothing was repaired or it was already taken. */
-export function takeSettingsRepairNotice(): { backupPath: string } | null {
-  const n = pendingRepairNotice;
-  pendingRepairNotice = null;
-  return n;
+/** The one-time "your settings file was replaced" fact, handed out once per kind of screen; null when nothing was repaired or that kind already took it. */
+export function takeSettingsRepairNotice(kind: 'window' | 'remote' = 'window'): { backupPath: string } | null {
+  if (!pendingRepairNotice || repairNoticeTaken[kind]) return null;
+  repairNoticeTaken[kind] = true;
+  return pendingRepairNotice;
 }
 
 let memo: { path: string; mtimeMs: number; size: number; parsed: Settings } | null = null;
@@ -165,7 +169,8 @@ export async function mutateSettings(mutate: (settings: Settings) => void,
   }
   if (written) memo = null;
   if (repaired) {
-    pendingRepairNotice = pendingRepairNotice ?? { backupPath: repaired.backupPath };
+    // A repair after both kinds of screen were already told is a new fact; one still waiting for anyone keeps the first.
+    if (!pendingRepairNotice || (repairNoticeTaken.window && repairNoticeTaken.remote)) { pendingRepairNotice = { backupPath: repaired.backupPath }; repairNoticeTaken.window = false; repairNoticeTaken.remote = false; }
     log('WARN', 'ClaudeSettings', 'settings.json did not parse — backed it up and wrote a fresh file', { path: p, backupPath: repaired.backupPath });
     return { written, repaired };
   }

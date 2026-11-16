@@ -453,7 +453,10 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           if (onDiskRead) onDiskRead(res);
           else if (disk !== content) onContentChange(disk);
         }
-      });
+      // WHY silent: a background refresh after another program changed the file. The text on screen is still what was last
+      // read, and the next change event or a Save (which re-checks the file on disk) catches up, so a failed refresh needs no
+      // notice; without this catch it would only become an unhandled rejection.
+      }).catch(() => {});
     });
     return typeof unsubFn === 'function' ? unsubFn : undefined;
   }, [artifact.id, projectRoot, artifact.path, onDiskRead]);

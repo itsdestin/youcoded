@@ -173,3 +173,31 @@ describe('offline, incognito and an unreachable server are three different state
     expect(screen.getByText('No internet connection').closest('button')!).toBeDisabled();
   });
 });
+
+// Card #134 (error inventory Marketplace row 21): a signed-in player whose online read failed
+// must be told so, not shown "Play a round…" or "Sign in…".
+describe('a failed online read is said out loud', () => {
+  it('replaces the empty-board copy with a Try again notice, keeping the saved-here best', () => {
+    const retry = vi.fn();
+    render(<Leaderboard game={FLAPPY} rows={[]} unpublishedBest="31 pipes" loadError={{ detail: 'HTTP 500', onRetry: retry }} />);
+    expect(screen.getByText("Couldn't load your online best and the friends board.")).toBeInTheDocument();
+    expect(screen.queryByText(/Play a round/)).toBeNull();
+    expect(screen.queryByText(/Sign in to rank it/)).toBeNull();
+    expect(screen.getByText('31 pipes')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(retry).toHaveBeenCalled();
+  });
+
+  it('never shows an em dash as if the best were known to be none', () => {
+    render(<Leaderboard game={FLAPPY} rows={[]} unpublishedBest={null} loadError={{ detail: 'x', onRetry: vi.fn() }} />);
+    expect(screen.getByText('Not loaded')).toBeInTheDocument();
+  });
+
+  it('counts only a real failure: signed out (401) and success are not failures', async () => {
+    const { readFailure } = await import('../src/renderer/components/game/arcade-api');
+    expect(readFailure({ ok: true })).toBeNull();
+    expect(readFailure({ ok: false, status: 401, message: 'signed out' })).toBeNull();
+    expect(readFailure({ ok: false, status: 503, message: 'down' })).toBe('down');
+    expect(readFailure({ ok: false, status: 0, message: '' })).toMatch(/did not answer/);
+  });
+});

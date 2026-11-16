@@ -46,3 +46,31 @@ export async function readText(): Promise<string | null> {
   }
   return null;
 }
+
+// Card #143 a: copy a picture from the page itself — for a phone or remote browser, whose clipboard is its own (the
+// computer's windows ask the computer instead, shell.pictureAction). A website picture from another origin cannot be read
+// here (no CORS), so this can fail; the caller says so rather than guessing why. Browsers only accept PNG on the clipboard,
+// so another format is redrawn as PNG first.
+export function canCopyImageHere(): boolean {
+  return typeof ClipboardItem !== 'undefined' && typeof navigator !== 'undefined' && !!navigator.clipboard?.write;
+}
+
+export async function copyImageFromPage(src: string): Promise<boolean> {
+  try {
+    if (!canCopyImageHere()) return false;
+    const res = await fetch(src);
+    if (!res.ok) return false;
+    let blob = await res.blob();
+    if (blob.type !== 'image/png') {
+      const bmp = await createImageBitmap(blob);
+      const canvas = document.createElement('canvas');
+      canvas.width = bmp.width; canvas.height = bmp.height;
+      canvas.getContext('2d')?.drawImage(bmp, 0, 0);
+      blob = await new Promise<Blob>((ok, no) => canvas.toBlob((b) => (b ? ok(b) : no(new Error('no png'))), 'image/png'));
+    }
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    return true;
+  } catch {
+    return false;
+  }
+}

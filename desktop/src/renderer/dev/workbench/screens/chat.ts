@@ -23,6 +23,8 @@ export const CHAT: readonly ScreenEntry[] = [
   // before master the same state reads the old words and has no button.
   { ...chat('chat#phone-reconnecting', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', platform: 'android', conversation: 'reconnecting' } },
   { ...chat('chat#phone-slow', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', slow: '1' }, newIn: 'after' as const },
+  // Card #182 (deck C-6): the same phone after about 20 s of silence — says the computer may be asleep or off.
+  { ...chat('chat#phone-unreachable', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', slow: '1' }, waitMs: 16_000, newIn: 'after' as const },
   // The other connection bands (connection notices above the message box, 2026-10-22), and one on a computer-width browser.
   { ...chat('chat#phone-catching-up', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'restoring' } },
   { ...chat('chat#phone-out-of-date', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'incomplete' } },
@@ -65,6 +67,8 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/model-picker/fast-mode', 'dialog'),
   chat('chat/model-picker/switch-model', 'dialog'),
   chat('chat/preferences', 'dialog'),
+  // Destin N1: the write of a setting fails, so the notice shows beside it and the switch goes back.
+  { ...chat('chat/preferences#save-failed', 'dialog', 'error-state'), params: { fail: 'settings.set' }, open: [{ do: 'scroll', dir: 'down', times: 2 }, { do: 'click', target: { role: 'switch', label: 'Show turn duration' } }] },
   chat('chat/resume', 'dialog'),
   { ...chat('chat/resume#stress', 'dialog'), scenario: 'stress' },
   chat('chat/open-tasks', 'dialog'),
@@ -138,6 +142,10 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/menu/composer', 'menu'),
   chat('chat/menu/code', 'menu'),
   chat('chat/menu/file', 'menu'),
+  // Card #143 c: the real strip that asks Replace / Add to end when a quick chip is tapped over typed words.
+  chat('chat/chip-choice', 'view'),
+  // Card #143 a: right-click on a picture in a chat.
+  { ...chat('chat/menu/image', 'menu'), session: 'wb-2', params: { seed: 'bubbles-picture' } },
   chat('chat/voice/vocabulary', 'dialog'),
   { ...chat('chat/voice/vocabulary#empty', 'dialog'), params: { vocabulary: 'empty' } },
   { ...chat('chat/voice/vocabulary#stress', 'dialog', 'stress'), scenario: 'stress', params: { vocabulary: 'stress' } },
@@ -229,6 +237,9 @@ export const CHAT: readonly ScreenEntry[] = [
   // autoplay; autoplay=0 keeps them in the lobby, where the head-to-head record shows.
   { ...chat('chat/games/flappy', 'pane', 'games'), params: { signedIn: '1' } },
   { ...chat('chat/games/flappy#alone', 'pane', 'games'), params: { signedIn: '1', arcade: 'alone' } },
+  // Card #134: the online scores read fails for a signed-in player (the picker and the board each say so).
+  { ...chat('chat/games#scores-failed', 'pane', 'games', 'error-state'), params: { signedIn: '1', fail: 'arcade.status,arcade.leaderboard' } },
+  { ...chat('chat/games/flappy#scores-failed', 'pane', 'games', 'error-state'), params: { signedIn: '1', fail: 'arcade.status,arcade.leaderboard' } },
   { ...chat('chat/games/flappy/play', 'pane', 'games'), params: { signedIn: '1' } },
   { ...chat('chat/games/2048', 'pane', 'games'), params: { signedIn: '1' } },
   { ...chat('chat/games/chess', 'pane', 'games'), params: { signedIn: '1' } },

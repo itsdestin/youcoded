@@ -129,6 +129,10 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#phone-additional-open', 'dialog', 'narrow'), viewport: { width: 390, height: 844 }, open: ['Additional backups…'], newIn: 'after' as const },
   { ...settings('settings/sync#log-open', 'dialog', 'fold'), params: { sync: 'ok' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Sync log', { do: 'scroll', dir: 'down', times: 8 }] },
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
+  // Card #134: "Back up all now" fails (sync.force rejects), so the action says so with Try again.
+  // Destin N2: the same failure while the dialog is scrolled to the bottom - the notice is scrolled into view.
+  { ...settings('settings/sync#back-up-failed-scrolled', 'dialog', 'error-state'), params: { sync: 'ok', fail: 'sync.force' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Back up all now'] },
+  { ...settings('settings/sync#back-up-failed', 'dialog', 'error-state'), params: { sync: 'ok', fail: 'sync.force' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Back up all now', { do: 'scroll', dir: 'up', times: 8 }] },
   { ...settings('settings/sync#auth-error', 'dialog', 'error-state'), params: { sync: 'auth-error' } },
   { ...settings('settings/sync#oversize', 'dialog', 'error-state'), params: { sync: 'oversize' } },
   // A GitHub backup set up before computers stopped supporting it: shown honestly (small-fixes-2).

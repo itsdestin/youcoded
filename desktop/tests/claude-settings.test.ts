@@ -96,7 +96,7 @@ describe('mutateSettings', () => {
 
   // Card #11 a: the repair is told to the person once. The module keeps the backup path until a window takes it.
   it('remembers a repair for the one-time notice, hands it out once, and says nothing for a healthy file', async () => {
-    mod.takeSettingsRepairNotice(); // clear anything an earlier case left
+    mod.takeSettingsRepairNotice(); mod.takeSettingsRepairNotice('remote'); // clear anything an earlier case left
     write('{"ok":true}');
     await mutateSettings((s) => { s.a = 1; });
     expect(mod.takeSettingsRepairNotice()).toBeNull();
@@ -104,6 +104,17 @@ describe('mutateSettings', () => {
     const r = await mutateSettings(() => {});
     expect(mod.takeSettingsRepairNotice()).toEqual({ backupPath: r.repaired!.backupPath });
     expect(mod.takeSettingsRepairNotice()).toBeNull();
+  });
+
+  // Review 2026-11-13: a phone asking first must not use up the computer's own window's notice (and the reverse).
+  it('hands the notice out once to the computer\'s windows and once to phones, whichever asks first', async () => {
+    mod.takeSettingsRepairNotice('window'); mod.takeSettingsRepairNotice('remote'); // clear anything an earlier case left
+    write('{ broken');
+    const r = await mutateSettings(() => {});
+    expect(mod.takeSettingsRepairNotice('remote')).toEqual({ backupPath: r.repaired!.backupPath });
+    expect(mod.takeSettingsRepairNotice('remote')).toBeNull();
+    expect(mod.takeSettingsRepairNotice('window')).toEqual({ backupPath: r.repaired!.backupPath });
+    expect(mod.takeSettingsRepairNotice('window')).toBeNull();
   });
 
   it('a repaired file is written even when the mutator changes nothing, and is not backed up twice', async () => {

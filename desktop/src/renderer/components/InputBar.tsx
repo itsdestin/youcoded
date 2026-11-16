@@ -2,6 +2,8 @@ import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useIm
 import { NARROW_VIEWPORT_QUERY } from '../hooks/use-narrow-viewport';
 import { useChatDispatch } from '../state/chat-context';
 import QuickChips, { QuickChip } from './QuickChips';
+import { useToastClearance } from '../hooks/useToastClearance';
+import { useChipChoice } from './ChipChoiceStrip';
 import { createQueueDraft } from '../state/queue-draft';
 import { readQueueTransferDraft, saveQueueTransferDraft, updateQueueTransferDraft } from '../state/queue-transfer-storage';
 import { pendingQueueSend } from '../state/pending-queue-send';
@@ -294,6 +296,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // textarea's scrollTop (overflow:hidden + transform is more reliable across
   // browsers than setting scrollTop on a hidden-overflow element).
   const mirrorContentRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  useToastClearance(barRef, !compact); // notices sit above the chips and the box, not over them
   const dispatch = useChatDispatch();
   // WHY: a primitive cached selector keeps streaming tokens from redrawing the
   // controlled textarea. An in-flight turn keeps Stop reachable even when stalled.
@@ -1017,19 +1021,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     }
   };
 
-  const handleChip = useCallback(
-    (chip: QuickChip) => {
-      // All chips fill the input bar for the user to review/edit/send — never auto-send.
-      setText(chip.prompt);
-      requestAnimationFrame(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          inputRef.current.setSelectionRange(chip.prompt.length, chip.prompt.length);
-        }
-      });
-    },
-    [],
-  );
+  const chipChoice = useChipChoice(textRef, setText, inputRef, sessionId, text);
 
   const handleAttachClick = useCallback(async () => {
     try {
@@ -1098,6 +1090,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // 2026-09-10). The textarea itself stays selectable: globals.css
       // re-enables text fields.
       // `relative` holds the file-drag highlight below (nothing else positions against it).
+      ref={barRef}
       className="input-bar-container relative shrink-0 select-none"
       onDrop={handleDrop}
       onDragOver={handleDragOver}
@@ -1113,7 +1106,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           the same slot QuickChips occupies in chat view, so both modes share
           the same "pill row above input bar" visual inside one container. */}
       {minimal && <TerminalToolbar sessionId={sessionId} />}
-      {!minimal && !compact && <QuickChips onChipTap={handleChip} />}
+      {chipChoice.strip}
+      {!minimal && !compact && <QuickChips onChipTap={chipChoice.onChip} />}
 
       {attachments.length > 0 && (
         <div className="scroll-mask-x flex gap-2 px-3 py-2 overflow-x-auto">

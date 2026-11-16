@@ -360,3 +360,19 @@ describe.each([
     expect((window as any).claude.shell.openExternal).toHaveBeenCalledWith('https://github.com/a/b');
   });
 });
+
+// Card #134 (error inventory Projects row 8): a failed read is "—", never "0 conversations" beside the notice.
+describe('ProjectHero counts that could not be read', () => {
+  beforeEach(() => { cleanup(); setViewport(false); });
+  it('shows a dash, not a zero, for conversations and context files when their read failed', () => {
+    renderHero({ stats: { ...baseStats, conversations: null, contextFiles: null, activeLabel: '—' } });
+    const line = screen.getByText('conversations');
+    expect(line.textContent).toBe('— conversations');
+    expect(screen.getByText('context files').textContent).toBe('— context files');
+    expect(screen.queryByText('0')).toBeNull();
+  });
+  it('still shows real zeros when a read succeeded and found nothing', () => {
+    renderHero({ stats: { ...baseStats, conversations: 0, contextFiles: 0 } });
+    expect(screen.getByText('conversations').textContent).toBe('0 conversations');
+  });
+});

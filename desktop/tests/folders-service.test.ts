@@ -23,7 +23,7 @@ beforeEach(() => {
   h.managed = null;
   h.removed = new Set();
 });
-afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { vi.useRealTimers(); fs.rmSync(dir, { recursive: true, force: true }); });
 
 describe('listPickerFolders — what the new-session picker shows, on every transport', () => {
   it('seeds Home on first use', () => {
@@ -186,4 +186,135 @@ describe('folder paths that differ only by letter case', () => {
       if (!sameFolder) expect(saved().find((f) => f.path === upper)!.nickname).toBe('saved');
     });
   }
+});
+
+// Card #143 b (deck C-3): the one list is ordered by last use.
+describe('folder order by last use', () => {
+  it('a folder a session just started in moves to the top; unused ones keep their old order', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const a = path.join(dir, 'a'); const b = path.join(dir, 'b'); const c = path.join(dir, 'c');
+    fs.writeFileSync(file, JSON.stringify([{ path: a, nickname: 'a', addedAt: 3 }, { path: b, nickname: 'b', addedAt: 2 }, { path: c, nickname: 'c', addedAt: 1 }]));
+    const { noteFolderUsed } = await import('../src/main/folders-service');
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['a', 'b', 'c']);
+    noteFolderUsed(c, file);
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['c', 'a', 'b']);
+    vi.setSystemTime(Date.now() + 10); // the clock moves on by itself, so a later use always stamps later (no real waiting)
+    noteFolderUsed(b, file);
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['b', 'c', 'a']);
+  });
+  it('a folder that is not saved is not added by being used', async () => {
+    fs.writeFileSync(file, JSON.stringify([{ path: path.join(dir, 'a'), nickname: 'a', addedAt: 1 }]));
+    const { noteFolderUsed } = await import('../src/main/folders-service');
+    noteFolderUsed(path.join(dir, 'elsewhere'), file);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toHaveLength(1);
+  });
+});
+
+// Destin, Q-8 ("if its synced, then shouldnt it be in the list?"): a synced project he uses rises to the top like any folder, without
+// ever becoming a saved folder.
+describe('folder order: synced projects', () => {
+  // A fresh module copy per test (the stamps live in memory per process); both modules come from the SAME copy.
+  beforeEach(() => { vi.resetModules(); });
+  const load = async () => ({ ...(await import('../src/main/folders-service')), ...(await import('../src/main/folder-usage')) });
+  const setup = () => {
+    const projectsRoot = path.join(dir, 'Projects');
+    const a = path.join(projectsRoot, 'alpha'); const b = path.join(projectsRoot, 'beta');
+    const saved = path.join(dir, 'saved');
+    fs.mkdirSync(a, { recursive: true }); fs.mkdirSync(b, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify([{ path: saved, nickname: 'saved', addedAt: 5 }]));
+    h.managed = { projectsRoot, listProjects: () => [{ path: a, name: 'alpha' }, { path: b, name: 'beta' }] };
+    return { a, b, saved };
+  };
+  it('a synced project used most recently sorts first, and the saved-folders file is untouched by using it', async () => {
+    const { b } = setup();
+    const before = fs.readFileSync(file, 'utf8');
+    const { noteFolderUsed, listPickerFolders, loadFolderUsage, flushFolderUsage } = await load();
+    await loadFolderUsage(file);
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['saved', 'alpha', 'beta']);
+    noteFolderUsed(b, file);
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['beta', 'saved', 'alpha']);
+    expect(fs.readFileSync(file, 'utf8')).toBe(before); // never became a saved folder
+  });
+  it('a saved folder used later than a project goes above it, and the project keeps its row as a synced one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { a, saved } = setup();
+    const { noteFolderUsed, listPickerFolders, loadFolderUsage, flushFolderUsage } = await load();
+    await loadFolderUsage(file);
+    noteFolderUsed(a, file);
+    vi.setSystemTime(Date.now() + 10); // the clock moves on by itself, so a later use always stamps later (no real waiting)
+    noteFolderUsed(saved, file);
+    const list = listPickerFolders(file);
+    expect(list.map((f) => f.nickname)).toEqual(['saved', 'alpha', 'beta']);
+    expect(list.find((f) => f.nickname === 'alpha')!.managed).toBe(true);
+  });
+  it('a one-off folder that is neither saved nor a project is not added and leaves no stamp', async () => {
+    setup();
+    const { noteFolderUsed, listPickerFolders, loadFolderUsage, flushFolderUsage } = await load();
+    const before = fs.readFileSync(file, 'utf8');
+    noteFolderUsed(path.join(dir, 'elsewhere'), file);
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    await flushFolderUsage(file);
+    expect(fs.existsSync(path.join(dir, 'youcoded-folder-usage.json'))).toBe(false);
+  });
+  it('a removed project leaves no row, is not stamped, and its old stamp is dropped on the next write', async () => {
+    const { a, b } = setup();
+    const { noteFolderUsed, listPickerFolders, loadFolderUsage, flushFolderUsage } = await load();
+    await loadFolderUsage(file);
+    noteFolderUsed(a, file);
+    noteFolderUsed(b, file);
+    h.removed = new Set(['alpha']);
+    expect(listPickerFolders(file).map((f) => f.nickname)).not.toContain('alpha');
+    noteFolderUsed(a, file); // removed: no stamp
+    h.managed = { ...h.managed!, listProjects: () => [{ path: b, name: 'beta' }] }; // alpha is gone entirely
+    noteFolderUsed(b, file);
+    await flushFolderUsage(file);
+    const stamps = JSON.parse(fs.readFileSync(path.join(dir, 'youcoded-folder-usage.json'), 'utf8'));
+    expect(Object.keys(stamps)).toHaveLength(1);
+  });
+
+  it('a stamped project that later becomes a saved folder keeps its recency, read-only', async () => {
+    const { a, b, saved } = setup();
+    const { noteFolderUsed, listPickerFolders, loadFolderUsage } = await load();
+    await loadFolderUsage(file);
+    noteFolderUsed(b, file); // used while it was only a synced project
+    // Later the person adds it as a folder: the saved entry has no lastUsedAt of its own.
+    fs.writeFileSync(file, JSON.stringify([{ path: saved, nickname: 'saved', addedAt: 5 }, { path: b, nickname: 'beta', addedAt: 9 }]));
+    const before = fs.readFileSync(file, 'utf8');
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['beta', 'saved', 'alpha']);
+    expect(fs.readFileSync(file, 'utf8')).toBe(before); // merged on read only
+    void a;
+  });
+  it('stamps survive a restart: the file written by one run is loaded by the next', async () => {
+    const { b } = setup();
+    const { noteFolderUsed, listPickerFolders, loadFolderUsage, flushFolderUsage } = await load();
+    await loadFolderUsage(file);
+    noteFolderUsed(b, file);
+    await flushFolderUsage(file);
+    // A fresh process has an empty memory: reset the module and load from the file.
+    vi.resetModules();
+    const { listPickerFolders: list, loadFolderUsage: loadAgain } = await load();
+    await loadAgain(file);
+    expect(list(file).map((f) => f.nickname)).toEqual(['beta', 'saved', 'alpha']);
+  });
+  it('a failing or slow write never throws or blocks noteFolderUsed, and the in-memory order is still right', async () => {
+    const { b } = setup();
+    const { noteFolderUsed, listPickerFolders, loadFolderUsage, flushFolderUsage } = await load();
+    await loadFolderUsage(file);
+    // The write never finishes (a very slow disk): noteFolderUsed must still return at once.
+    const slow = vi.spyOn(fs.promises, 'writeFile').mockImplementation(() => new Promise(() => {})); // never finishes
+    const started = Date.now();
+    expect(() => noteFolderUsed(b, file)).not.toThrow();
+    expect(Date.now() - started).toBeLessThan(200); // returned at once
+    expect(listPickerFolders(file).map((f) => f.nickname)[0]).toBe('beta'); // memory is already current
+    slow.mockRestore();
+  });
+  it('a write that fails is swallowed', async () => {
+    const { b } = setup();
+    const { noteFolderUsed, listPickerFolders, loadFolderUsage, flushFolderUsage } = await load();
+    await loadFolderUsage(file);
+    const fail = vi.spyOn(fs.promises, 'rename').mockRejectedValue(new Error('disk full'));
+    expect(() => noteFolderUsed(b, file)).not.toThrow();
+    await expect(flushFolderUsage(file)).resolves.toBeUndefined();
+    fail.mockRestore();
+  });
 });

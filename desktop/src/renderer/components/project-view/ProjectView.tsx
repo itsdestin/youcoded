@@ -39,7 +39,7 @@ import { ConversationsTab } from './tabs/ConversationsTab';
 import { ContextTab } from './tabs/ContextTab';
 import { ConversationPreview } from './ConversationPreview';
 import type { ResumeHandler } from '../ResumeOptions';
-import { ProjectHero, formatFileCount } from './ProjectHero';
+import { ProjectHero, formatFileCount, formatCount } from './ProjectHero';
 import { ProjectsEmptyCard } from './ProjectsEmptyCard';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { RemoveProjectDialog } from './RemoveProjectDialog';
@@ -64,8 +64,8 @@ interface HeroStats {
   files: number | null;
   // Discovery hit a cap — render "N+" so a sample never poses as exact.
   filesTruncated?: boolean;
-  conversations: number;
-  contextFiles: number;
+  conversations: number | null;
+  contextFiles: number | null;
   activeLabel: string;
 }
 interface HeroRepo { webUrl?: string; owner?: string; name?: string }
@@ -502,6 +502,9 @@ export function ProjectView(props: ProjectViewProps) {
     // Cache-or-fetch helpers — the cache makes re-selecting a project / toggling
     // tabs instant; the bounded head-read in listProjectConversations keeps the
     // first fetch cheap (no full-transcript parse per session).
+    // Whether THIS pass's read failed — the hero must say "—", not "0 conversations", beside the notice.
+    let convFailed = false;
+    let ctxFailed = false;
     const getConversations = async (): Promise<ConversationSummary[]> => {
       const cached = convCache.current.get(id);
       if (cached) return cached;
@@ -514,6 +517,7 @@ export function ProjectView(props: ProjectViewProps) {
         return list;
       } catch (e) {
         // Not cached: a failure must not stand for the whole open, so Try again really re-reads.
+        convFailed = true;
         if (!cancelled) setConvError(plainMessage(e, 'the list did not come back'));
         return [];
       }
@@ -529,6 +533,7 @@ export function ProjectView(props: ProjectViewProps) {
         if (!cancelled) setCtxError(null);
         return groups;
       } catch (e) {
+        ctxFailed = true;
         if (!cancelled) setCtxError(plainMessage(e, 'the list did not come back'));
         return [];
       }
@@ -552,8 +557,8 @@ export function ProjectView(props: ProjectViewProps) {
         if (res?.gated) return { count: null, truncated: false };
         return res?.ok && Array.isArray(res.files)
           ? { count: res.files.length, truncated: !!res.truncated }
-          : { count: 0, truncated: false };
-      } catch { return { count: 0, truncated: false }; }
+          : { count: null, truncated: false };
+      } catch { return { count: null, truncated: false }; }
     };
 
     (async () => {
@@ -570,10 +575,11 @@ export function ProjectView(props: ProjectViewProps) {
       setContext(ctxGroups);
 
       // Hero counts (live — NOT the stale stored stats.artifactCount).
-      const conversationCount = convs.length;
+      const conversationCount = convFailed ? null : convs.length;
       const newest = convs[0]?.lastModified; // listPastSessions is newest-first
-      const activeLabel = typeof newest === 'number' ? formatRelativeTime(newest) : 'never';
-      const contextFiles = ctxGroups.reduce((acc, g) => acc + (g.files?.length ?? 0), 0);
+      // "never" would also be false when the read failed: say "—" (card #134).
+      const activeLabel = convFailed ? '—' : typeof newest === 'number' ? formatRelativeTime(newest) : 'never';
+      const contextFiles = ctxFailed ? null : ctxGroups.reduce((acc, g) => acc + (g.files?.length ?? 0), 0);
       const repo: HeroRepo | null = repoRes?.hasRepo && repoRes.webUrl
         ? { webUrl: repoRes.webUrl, owner: repoRes.owner, name: repoRes.name }
         : null;
@@ -822,12 +828,12 @@ export function ProjectView(props: ProjectViewProps) {
   // merge; see the file-merge spec).
   const SEGMENTS: { id: TabId; label: string; icon: React.ReactNode; count: string }[] = [
     { id: 'files', label: 'Files', icon: <FolderIcon />, count: formatFileCount(heroStats.files, heroStats.filesTruncated) },
-    { id: 'conversations', label: 'Conversations', icon: <ChatIcon />, count: String(heroStats.conversations) },
+    { id: 'conversations', label: 'Conversations', icon: <ChatIcon />, count: formatCount(heroStats.conversations) },
     // WHY "Instructions & memories" (not "Context", which it was built as): the
     // tab surfaces the files that tell the assistant HOW to behave — instructions
     // (CLAUDE.md/AGENTS.md/rules) and memories — and "instructions" is the term
     // the product uses everywhere else a non-technical user meets this concept.
-    { id: 'context', label: 'Instructions & memories', icon: <DocIcon />, count: String(heroStats.contextFiles) },
+    { id: 'context', label: 'Instructions & memories', icon: <DocIcon />, count: formatCount(heroStats.contextFiles) },
   ];
 
   // Per-active-project sync props for the hero. `dot` is null when syncStatus is
