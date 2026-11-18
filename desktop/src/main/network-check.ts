@@ -16,7 +16,7 @@ import dns from 'dns';
 
 /** How long one lookup may take. WHY 5s: the value the sync probe already used. Past it the host
  *  is treated as unreachable (a hung resolver is as good as no network for this question). */
-export const NETWORK_PROBE_TIMEOUT_MS = 5000;
+const NETWORK_PROBE_TIMEOUT_MS = 5000;
 
 /** The two hosts asked. github.com is the sync service's old probe; cloudflare.com is an
  *  unrelated provider so one company's outage cannot look like "no internet". */

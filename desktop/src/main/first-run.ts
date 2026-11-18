@@ -33,7 +33,7 @@ import { noteMilestone } from './analytics-service';
 import { checkInternet } from './network-check';
 
 /** The line under the sign-in buttons when the app's own check says there is no connection (card #236). */
-export const OFFLINE_SIGN_IN_MESSAGE = 'No internet connection. Connect, then try again.';
+const OFFLINE_SIGN_IN_MESSAGE = 'No internet connection. Connect, then try again.';
 
 // WHY (2026-09-30 one-core R3-3): NativeKeyService moved to shared/first-run-types.ts (the
 // first-run:submit-api-key channel row names it); re-exported so existing imports keep working.

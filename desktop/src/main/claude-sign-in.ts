@@ -14,7 +14,7 @@ import type { ClaudeAccount } from './providers/claude-account';
 
 /** How long the login process is kept waiting for the person. WHY 10 min: the cap the Settings
  *  card's own poll gives every provider (provider-sign-in-store.ts). */
-export const CLAUDE_SIGN_IN_TIMEOUT_MS = 10 * 60_000;
+const CLAUDE_SIGN_IN_TIMEOUT_MS = 10 * 60_000;
 const POLL_MS = 2000;
 /** How long to wait for the login link to appear. Same 1.5 s first-run waits. */
 const URL_WAIT_MS = 1500;
