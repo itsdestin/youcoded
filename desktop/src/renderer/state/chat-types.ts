@@ -48,7 +48,9 @@ export type AssistantTurnSegment =
       // Native runtime streams text as per-token deltas merged by partId
       // (same semantics as reasoning). CC's transcript path sends whole
       // blocks with no partId — those keep appending as separate segments.
-      partId?: string; sourceUuid?: string; sourceTimestamp?: number; lastSourceUuid?: string; lastSourceTimestamp?: number }
+      partId?: string; sourceUuid?: string; sourceTimestamp?: number; lastSourceUuid?: string; lastSourceTimestamp?: number;
+      /** Claude Code's error label when CC wrote this text itself (card #236). */
+      apiError?: string }
   // Reasoning / extended-thinking content with a text payload. The native
   // harness (Phase 2) streams these for thinking models; CC's transcript
   // path may also carry thinking text in future. Rendered as a collapsible
@@ -954,6 +956,8 @@ export type ChatAction =
       // Native runtime: per-token delta id. Same partId → merge into the last
       // text segment (mirrors reasoning). CC omits it → whole-block append.
       partId?: string;
+      /** Claude Code's error label on a reply CC wrote itself (card #236). */
+      apiError?: string;
       parentAgentToolUseId?: string;
       agentId?: string;
     }

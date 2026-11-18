@@ -1199,6 +1199,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               // timeline instead, which threw away readable history to express a
               // context reset (Destin, 2026-07-28).
               const { index: lastArchiveIdx, kind: archiveKind } = archiveBoundary;
+              // Card #236: only the LATEST reply's sign-in card is live (an older one was fixed long ago).
+              let lastAssistantIdx = -1;
+              for (let i = presentation.timeline.length - 1; i >= 0; i--) {
+                if (presentation.timeline[i].kind === 'assistant-turn') { lastAssistantIdx = i; break; }
+              }
               return presentation.timeline.map((entry, idx) => {
                 // Only the key and the "render nothing" gates live here; the
                 // row itself is ChatTimelineRow, memoised so a streamed word
@@ -1239,6 +1244,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     // "the model is writing this turn now". Lets a long open code fence be drawn in
                     // chunks only while that is true (MarkdownContent `live`).
                     streaming={isAssistant && !!turn && streamingTurnId === turn.id}
+                    latest={isAssistant && idx === lastAssistantIdx}
                     archived={lastArchiveIdx >= 0 && idx < lastArchiveIdx}
                     archiveKind={archiveKind}
                     foldHeight={foldHeight}

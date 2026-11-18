@@ -1,0 +1,5 @@
+{"type":"user_message","text":"Can you summarize the meeting notes in three bullets?"}
+{"type":"assistant_text","text":"- The launch moves to March 3.\n- Priya owns the pricing page.\n- Next check-in is Friday."}
+{"type":"turn_complete"}
+{"type":"user_message","text":"Now draft the follow-up email to the team."}
+{"type":"transcript_event","event":{"type":"session-error","data":{"text":"Couldn't reach OpenRouter.","errorCode":"no-internet","errorKind":"temporary"}}}

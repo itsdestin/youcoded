@@ -7,6 +7,8 @@ import { useSecondsTick } from '../hooks/useSecondsTick';
 import { FoldRow } from './ui/FoldRow';
 import { errorCardCopy, billingUrl, type ErrorCardAction } from './error-card-copy';
 import { BugReportPopup } from './development/BugReportPopup';
+import { ChatNoticeBubble } from './ChatNoticeBubble';
+import { NoInternetNotice, ProviderSignInCard } from './SignInNotices';
 
 // Banner shown in place of ThinkingIndicator when the classifier (or a
 // process-exit event) concludes chat view is out of sync with what the user
@@ -131,6 +133,20 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
   // of failure this was, one plain sentence, the provider's words under Details,
   // and that kind's buttons. Cards that already had their own (OpenRouter key and
   // credit, ChatGPT sign-in and plan limits) return null here and render below as before.
+  // Card #236 (round 2 Q-chat-button "match Claude"): a ChatGPT sign-in that ran out or a
+  // key OpenRouter refused gets the fix itself on the card — Sign in again / Reconnect — and,
+  // once back in, Continue (the same continue-the-turn as Try again). Replaces "Open settings".
+  if (state === 'error' && (errorCode === 'chatgpt-signin-expired' || errorCode === 'chatgpt-signin-required')) {
+    return <ProviderSignInCard provider="chatgpt" onContinue={onRetry} />;
+  }
+  if (state === 'error' && (errorCode === 'openrouter-key-rejected' || errorCode === 'openrouter-key-expired')) {
+    // Older connections never recorded how they were made, so both ways back are offered
+    // (round 2 Q-openrouter-how). Paste a new key opens the existing key window via Settings.
+    return <ProviderSignInCard provider="openrouter" onContinue={onRetry} onPasteKey={onOpenProviderSettings} />;
+  }
+  // The app's own connection check failed twice (main sets this code; round 2 S-offline-chat).
+  if (state === 'error' && errorCode === 'no-internet') return <NoInternetNotice onRetry={onRetry} />;
+
   const sorted = state === 'error' ? errorCardCopy(errorKind, errorCode, errorMessage ?? '', providerType) : null;
   if (sorted) return <SortedErrorCard copy={sorted} providerType={providerType ?? null} anthropicRequestId={anthropicRequestId}
     rawError={errorMessage ?? ''} handlers={{ onRetry, onOpenProviderSettings, onSwitchProviders, onSummarise }} />;
@@ -301,37 +317,22 @@ function SortedErrorCard({ copy, providerType, anthropicRequestId, rawError, han
   };
   // An action whose handler this screen lacks (a phone without the picker, say) is left out, never a dead button.
   const actions = copy.actions.filter((a) => press[a]);
-  const buttons = actions.length > 0 && (
-    <div className="ml-auto flex items-center justify-end gap-2 shrink-0">
+  const buttons = actions.length > 0 ? (
+    <>
       {actions.map((a, i) => (
         <Button key={a} size="sm" variant={i === actions.length - 1 ? 'primary' : 'secondary'} onClick={press[a]}>
           {ACTION_LABEL[a]}
         </Button>
       ))}
-    </div>
-  );
+    </>
+  ) : undefined;
+  // WHY ChatNoticeBubble (card #236): the same shell now draws the expired-sign-in and
+  // no-internet cards, so the three can never drift apart. Markup moved there unchanged.
   return (
-    <div className="flex flex-col items-start gap-1 px-4 py-1.5 in-view">
-      <div className="flex flex-col gap-2 bg-inset rounded-2xl rounded-bl-sm px-4 py-2.5 ring-1 ring-[var(--destructive)] max-w-full">
-        {/* Guide (Status and notices, gt-r1#E-2/#E-3): the box reads top to bottom —
-            what happened, the provider's own words if you want them, then what you can
-            do. So with a Details fold the buttons sit BELOW it, at the right; without
-            one they sit beside the sentence. */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm text-fg-2 min-w-0">{copy.line}</span>
-          {!copy.details && buttons}
-        </div>
-        {copy.details && (
-          <FoldRow title="Details" flush>
-            <p className="text-2xs text-fg-2 font-mono break-all select-text">{copy.details}</p>
-          </FoldRow>
-        )}
-        {copy.details && buttons}
-      </div>
-      {anthropicRequestId && (
-        <div className="text-3xs text-fg-muted font-mono mt-1 select-text">Request ID: {anthropicRequestId}</div>
-      )}
+    <>
+      <ChatNoticeBubble tone="danger" line={copy.line} details={copy.details} buttons={buttons}
+        footer={anthropicRequestId ? <div className="text-3xs text-fg-muted font-mono mt-1 select-text">Request ID: {anthropicRequestId}</div> : undefined} />
       <BugReportPopup open={reporting} onClose={() => setReporting(false)} context={{ surface: 'Chat', error: rawError }} />
-    </div>
+    </>
   );
 }

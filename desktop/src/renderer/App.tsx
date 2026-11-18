@@ -94,6 +94,7 @@ import { WelcomeAppIcon, ThemeMascot } from './components/Icons';
 import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
 import { InitializingCover } from './components/InitializingCover';
+import { useExpiredSignIns } from './hooks/useExpiredSignIns';
 import { promptShowMeansStarted, composerDisabled, usePendingPromptActive, startedIds, announcedAsStarted, startedFromSummaries } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import { readBuddyStyle } from './components/BuddyStyleRow';
@@ -2213,9 +2214,10 @@ function AppInner() {
 
   // Red dot on the gear icon so the user can't miss a sync failure — from
   // either sync system.
+  const signInExpired = useExpiredSignIns(); // card #236: an expired sign-in lights it too (round 2 Q-dot)
   const settingsDangerBadge = useMemo(
-    () => spacesFailing || (statusData.syncWarnings ?? []).some(isSyncAlarm), // never-set-up is grey, no dot
-    [spacesFailing, statusData.syncWarnings],
+    () => spacesFailing || signInExpired || (statusData.syncWarnings ?? []).some(isSyncAlarm), // never-set-up is grey, no dot
+    [spacesFailing, signInExpired, statusData.syncWarnings],
   );
 
   const handleOpenDrawer = useCallback((searchMode: boolean) => {

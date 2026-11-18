@@ -4,7 +4,7 @@ import type { CatalogModel } from '../../shared/provider-types';
 import BrailleSpinner from './BrailleSpinner';
 import { describeStep, isStopped, stoppedSentence } from './first-run/describe-step';
 import { persistLastBinding, persistRuntimeDefault } from './RuntimeBinding';
-import { Button, CARD_LEVEL_1, ErrorState, FieldError, FoldRow } from './ui';
+import { Button, Callout, CARD_LEVEL_1, ErrorState, FieldError, FoldRow } from './ui';
 import { BrandWordmark } from './brand/BrandLockup';
 import { SignInChoices, type WayIn } from './first-run/SignInChoices';
 import { StatusStrip } from './ui/StatusStrip';
@@ -388,7 +388,12 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
               busy={busy}
               onRetry={handleRetry}
             />}
-            {state?.lastError && !stopped && (
+            {/* Card #236 (Q-offline-signin "stop and say so"): offline, the browser stays closed and
+                this amber line says why, under the buttons you press to try again. */}
+            {state?.lastError && !stopped && state.lastErrorOffline && (
+              <Callout tone="warning" compact className="max-w-md">{state.lastError}</Callout>
+            )}
+            {state?.lastError && !stopped && !state.lastErrorOffline && (
               <FieldError as="p" size="2xs" className="text-center max-w-md">
                 {state.lastError}
               </FieldError>

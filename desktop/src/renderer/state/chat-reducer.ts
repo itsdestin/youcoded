@@ -1730,7 +1730,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
           lastSourceUuid: action.uuid, lastSourceTimestamp: action.timestamp }];
       } else {
         segments = [...segments, { type: 'text', content: action.text, messageId: nextMessageId(), partId: action.partId,
-          sourceUuid: action.uuid, sourceTimestamp: action.timestamp, lastSourceUuid: action.uuid, lastSourceTimestamp: action.timestamp }];
+          sourceUuid: action.uuid, sourceTimestamp: action.timestamp, lastSourceUuid: action.uuid, lastSourceTimestamp: action.timestamp,
+          ...(action.apiError ? { apiError: action.apiError } : {}) }];
       }
       // Task 2.4: Capture model on first text of the turn so the model pill is
       // visible while the turn is in-flight. `?? turn.model` preserves the
