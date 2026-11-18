@@ -528,6 +528,10 @@ describe('EditorFrame autosave', () => {
     }
     expect(saves()).toBe(1 + SAVE_RETRY_DELAYS_MS.length);
     expect(saveStateFor(FILE.path)).toMatchObject({ phase: 'failed', message: savedGiveUpMessage('This file is busy.') });
+    // WHY (Destin's W-2 wording): the real reason, then one "try again" ask — never two.
+    expect(savedGiveUpMessage('This file is busy.')).toBe('Not yet saved: This file is busy. Please try again in a moment.');
+    expect(savedGiveUpMessage("If it's open in another program, close it there and try again."))
+      .toBe("Not yet saved: If it's open in another program, close it there and try again.");
     // Nothing more happens by itself, however long it waits.
     await act(async () => { vi.advanceTimersByTime(60 * 60_000); });
     expect(saves()).toBe(1 + SAVE_RETRY_DELAYS_MS.length);

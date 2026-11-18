@@ -70,9 +70,16 @@ const REQUESTED_SAVE_LIMIT_MS = 60_000;
  *  failed three times in a row will not fix itself, and a quiet loop meant the person never learned
  *  their work was unsaved. After the last try the strip says so and Try again restarts the cycle. */
 export const SAVE_RETRY_DELAYS_MS = [10_000, 30_000, 60_000];
-/** What the strip says once the automatic tries are used up; `reason` is the real failure text. */
-export const savedGiveUpMessage = (reason: string) =>
-  `Not saved after ${SAVE_RETRY_DELAYS_MS.length} more tries. ${reason} Your changes are still open here.`;
+/** What the strip says once the automatic tries are used up; `reason` is the real failure text.
+ *  WHY this wording (Destin, 2026-11-18, release wording deck W-2: "Not yet saved: … Please try
+ *  again in a moment."): his example cause ("the file may be open elsewhere") is only one of the
+ *  real causes, so the real reason sits in its place (never an invented cause). The closing ask is
+ *  dropped when the reason already says to try again, so it never reads twice. */
+export const savedGiveUpMessage = (reason: string) => {
+  const why = reason.trim();
+  const ask = /try again/i.test(why) ? '' : ' Please try again in a moment.';
+  return `Not yet saved: ${why}${ask}`;
+};
 /** How long a closing window waits for a save it just started to reach main (see journal). Below
  *  main's 1.5 s journal cap (office-journal-sync.ts), so the answer still counts. */
 const JOURNAL_SAVE_HANDOFF_MS = 1_400;

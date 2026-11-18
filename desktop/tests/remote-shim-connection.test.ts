@@ -1284,3 +1284,36 @@ describe('remote-shim — overlapping connections', () => {
     });
   });
 });
+
+// Destin, 2026-11-18 (release wording deck W-1): the phone app says "update your computer" only when the
+// computer answers a plain web request, and "unable to reach" otherwise.
+describe('remote-shim — telling an out-of-date computer from an unreachable one', () => {
+  isolateGlobals();
+  const g = globalThis as any;
+  let savedFetch: unknown;
+  beforeEach(() => { savedFetch = g.fetch; vi.resetModules(); g.location = { protocol: 'http:', host: 'desk:9900', search: '' }; });
+  afterEach(() => { g.fetch = savedFetch; });
+
+  it('asks the computer\'s web address (not the socket path) and reports that it answered', async () => {
+    const seen: string[] = [];
+    g.fetch = vi.fn(async (u: string) => { seen.push(u); return {}; });
+    const { computerAnswers } = await import('../src/renderer/computer-answers');
+    expect(await computerAnswers('ws://desk.tail1234.ts.net:9900/ws?x=1')).toBe(true);
+    expect(seen).toEqual(['http://desk.tail1234.ts.net:9900/']);
+  });
+
+  it('reports no answer when the request fails or the address is not one', async () => {
+    g.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
+    const { computerAnswers } = await import('../src/renderer/computer-answers');
+    expect(await computerAnswers('ws://100.64.0.5:9900/ws')).toBe(false);
+    expect(await computerAnswers('not a url')).toBe(false);
+  });
+
+  it('gives up after its time limit when nothing answers', async () => {
+    g.fetch = vi.fn((_u: string, init: { signal?: AbortSignal }) => new Promise((_r, rej) => {
+      init.signal?.addEventListener('abort', () => rej(new Error('aborted')));
+    }));
+    const { computerAnswers } = await import('../src/renderer/computer-answers');
+    expect(await computerAnswers('ws://100.64.0.5:9900/ws', 20)).toBe(false);
+  });
+});
