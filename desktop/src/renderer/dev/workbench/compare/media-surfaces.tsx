@@ -723,6 +723,123 @@ function VideoSide({ done }: { done: boolean }) {
 }
 const Cap = ({ children }: { children: React.ReactNode }) => <p className="px-4 pt-3 text-2xs text-fg-muted">{children}</p>;
 
+
+// ═════════════════════════════════════════════════════════════════════════════════════
+// ROUND 3 (Destin's picks: approval b-header, picture row, limit ask-slim; no orange; the same two icon actions on every box)
+// ═════════════════════════════════════════════════════════════════════════════════════
+/** Approval, b-header, in its final states. No orange: the generic ask's own pills (see ToolCard's money branch). */
+function Approval3({ state }: { state: 'normal' | 'edit' | 'chatgpt-only' | 'no-provider' }) {
+  const { id, setId, maker } = useMaker();
+  const tool = React.useMemo<ToolCallState>(() => ({
+    toolUseId: 'media-ask-3', toolName: 'MediaAsk', input: {}, status: 'awaiting-approval', requestId: 'native-media-3', permissionMode: 'ask',
+  }), []);
+  const ask = React.useMemo(() => {
+    if (state === 'chatgpt-only' || state === 'no-provider') return {
+      label: 'Making a picture',
+      question: state === 'chatgpt-only'
+        ? 'Your ChatGPT plan only includes image generation on chatgpt.com. To generate images here, please connect a paid image provider.'
+        : 'Making images here needs a paid image provider. Connect one to continue.',
+      money: state === 'chatgpt-only'
+        ? { approve: 'Connect a provider', approveVariant: 'primary' as const, decline: 'Open chatgpt.com' }
+        : { approve: 'Connect a provider', approveVariant: 'primary' as const, decline: 'Not now' },
+      answer: async () => true,
+    };
+    const edit = state === 'edit';
+    return {
+      label: edit ? 'Changing a picture' : 'Making a picture',
+      detail: <span className="flex items-center gap-1.5"><span>·</span><Select size="sm" options={MAKER_OPTIONS} value={id} onChange={setId} className="w-80" aria-label="Who makes it" /></span>,
+      question: `“${edit ? EDIT_PROMPT : PROMPT}”`,
+      body: edit ? <img src={attachedData} alt="The picture to change" className="h-14 w-auto self-start rounded-md border border-edge-dim" /> : undefined,
+      note: `It costs ${maker.price}, charged to your ${maker.provider} account. “Allow for this chat” covers more pictures up to this chat’s $5.00 limit.`,
+      money: { approve: 'Approve', decline: 'Decline', chat: 'Allow for this chat' },
+      answer: async () => true,
+    };
+  }, [id, maker, state, setId]);
+  return <PendingAskBubble><div className="w-[580px] max-w-full"><ToolCard tool={tool} sessionId="workbench" ask={ask} /></div></PendingAskBubble>;
+}
+
+function Limit3() {
+  const [to, setTo] = React.useState('$10');
+  const tool = React.useMemo<ToolCallState>(() => ({
+    toolUseId: 'media-limit-3', toolName: 'MediaLimit', input: {}, status: 'awaiting-approval', requestId: 'native-limit-3', permissionMode: 'ask',
+  }), []);
+  const ask = React.useMemo(() => ({
+    label: 'Spending limit reached',
+    question: 'This chat has reached its $5 spending limit for image, video and audio generation.',
+    money: { approve: 'Continue', decline: 'Stop', lead: <Select size="sm" options={LIMIT_OPTIONS2} value={to} onChange={setTo} className="w-36 py-1" aria-label="New limit" /> },
+    answer: async () => true,
+  }), [to]);
+  return <PendingAskBubble><div className="w-[580px] max-w-full"><ToolCard tool={tool} sessionId="workbench" ask={ask} /></div></PendingAskBubble>;
+}
+
+// One action set for every made-thing box: Open and View in folder, icon buttons, at the right of the top / info line.
+const Actions = () => <><OpenBtn /><FolderBtn /></>;
+
+/** Sound (a): one box, info line on top (icon | name · maker · cost, actions), a tight player line under it. */
+function SoundA({ playing, progress }: { playing: boolean; progress: number }) {
+  return (
+    <NativeBox>
+      <NativeHeader icon={<SoundGlyph />} label="Rain on a tin roof" detail="Lyria 3 · $0.04" right={<Actions />} />
+      <div className="flex items-center gap-2 px-3 pb-1.5">
+        <Play playing={playing} />
+        <Waveform progress={progress} height={18} />
+        <Time now={playing ? '0:12' : '0:00'} total="0:31" />
+      </div>
+    </NativeBox>
+  );
+}
+/** Sound (b): one line; the middle column is the name over a thin wave. */
+function SoundB({ playing, progress }: { playing: boolean; progress: number }) {
+  return (
+    <NativeBox>
+      <div className="flex items-center gap-2 px-3 py-1.5">
+        <Play playing={playing} />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium text-fg-2 truncate">Rain on a tin roof</p>
+          <Waveform progress={progress} height={10} />
+        </div>
+        <Time now={playing ? '0:12' : '0:00'} total="0:31" />
+        <Actions />
+      </div>
+    </NativeBox>
+  );
+}
+/** Sound (c): one line like round 2's one-line; name · maker · cost as small text under the wave. */
+function SoundC({ playing, progress }: { playing: boolean; progress: number }) {
+  return (
+    <NativeBox>
+      <div className="flex items-center gap-2 px-3 py-1.5">
+        <Play playing={playing} />
+        <div className="min-w-0 flex-1">
+          <Waveform progress={progress} height={18} />
+          <p className="mt-0.5 text-2xs text-fg-muted truncate">Rain on a tin roof · Lyria 3 · $0.04</p>
+        </div>
+        <Time now={playing ? '0:12' : '0:00'} total="0:31" />
+        <Actions />
+      </div>
+    </NativeBox>
+  );
+}
+
+/** Video: making = header + bar (round 2 stacked); finished = frame beside the facts (round 2 side), actions at the top right of the info line. */
+function VideoMaking3() {
+  return (
+    <NativeBox>
+      <NativeHeader icon={<VideoGlyph />} label="Making your video" detail="About 2 minutes left. You can keep chatting." right={<StopButton />} />
+      <div className="px-3 pb-2.5"><ProgressBar percent={45} aria-label="Video progress" /></div>
+    </NativeBox>
+  );
+}
+function VideoDone3() {
+  // Info line on top (icon | name · length · maker · cost, icon actions right), the first frame full width under it, one box.
+  return (
+    <NativeBox>
+      <NativeHeader icon={<VideoGlyph />} label="ocean-loop.mp4" detail="0:08 · Veo 4 · $0.80" right={<Actions />} />
+      <img src={frameData} alt="First frame of the video" className="block w-full border-t border-edge" />
+    </NativeBox>
+  );
+}
+
 // ═════════════════════════════════════════════════════════════════════════════════════
 export const MEDIA_SURFACES: CompareSurface[] = [
   {
@@ -743,6 +860,12 @@ export const MEDIA_SURFACES: CompareSurface[] = [
         { id: 'a-body-edit', label: 'Changing a picture', note: 'Candidate a with the attached picture shown.', render: () => <MoneyAsk where="body" edit /> },
         { id: 'a-body-chatgpt-only', label: 'ChatGPT plan only', note: 'No paid provider: the same frame carries Destin\'s sentence; Open chatgpt.com outlined, Connect a provider filled.', render: () => <MoneyAsk chatgptOnly /> },
       ] },
+      { n: 3, basis: "Round 2 b-header (picked). No orange: the generic ask's own button pills. New states: no image provider connected, ChatGPT plan only.", candidates: [
+        { id: 'b-header', label: 'Maker in the header', note: 'Round 2 b-header with the normal approval-card button pills.', render: () => <Approval3 state="normal" /> },
+        { id: 'b-header-edit', label: 'Changing a picture', note: 'The attached picture shown under the question.', render: () => <Approval3 state="edit" /> },
+        { id: 'b-header-chatgpt-only', label: 'ChatGPT plan only', note: 'His sentence; Open chatgpt.com outlined, Connect a provider filled.', render: () => <Approval3 state="chatgpt-only" /> },
+        { id: 'b-header-no-provider', label: 'No image provider connected', note: 'For a chat with no image service (Claude has none): one sentence and Connect a provider.', render: () => <Approval3 state="no-provider" /> },
+      ] },
     ],
   },
   {
@@ -759,6 +882,9 @@ export const MEDIA_SURFACES: CompareSurface[] = [
         { id: 'row', label: 'Container row under the picture', note: 'Image icon | file name · maker · cost, with Open and View in folder icon buttons at the right.', render: () => <PictureRow /> },
         { id: 'header-menu', label: 'Caption folded into a header', note: 'The same header with a chevron; opened, it holds the two actions as outlined buttons.', render: () => <PictureFold open /> },
         { id: 'menu', label: 'Right-click menu', note: 'The real picture menu for a made picture: Copy image, Save image as…, Open file, View in folder, Ask about this.', render: () => <PictureMenu /> },
+      ] },
+      { n: 3, basis: 'Round 2 row (picked). The same two icon actions now sit on every made-thing box.', candidates: [
+        { id: 'row', label: 'Box row under the picture', note: 'Round 2 row, unchanged: Open and View in folder icon buttons at the right.', render: () => <PictureRow /> },
       ] },
     ],
   },
@@ -782,6 +908,17 @@ export const MEDIA_SURFACES: CompareSurface[] = [
           <div><Cap>Paused</Cap><Reply text="Here’s your sound."><SoundHeader playing={false} progress={0} /></Reply>
           <Cap>Playing</Cap><Reply text="Here’s your sound."><SoundHeader playing progress={0.4} /></Reply></div>) },
       ] },
+      { n: 3, basis: 'Round 2 one-line and with-header: three halfway options, all with Open and View in folder at the right.', candidates: [
+        { id: 'a-two-lines', label: 'Info line, then a tight player', note: 'Sound icon | name · maker · cost and actions on top; play, wave and time under it, tighter than with-header.', render: () => (
+          <div><Cap>Paused</Cap><Reply text="Here’s your sound."><SoundA playing={false} progress={0} /></Reply>
+          <Cap>Playing</Cap><Reply text="Here’s your sound."><SoundA playing progress={0.4} /></Reply></div>) },
+        { id: 'b-name-over-wave', label: 'One line, name over a thin wave', note: 'Play, then the name over a thin wave, then time and actions.', render: () => (
+          <div><Cap>Paused</Cap><Reply text="Here’s your sound."><SoundB playing={false} progress={0} /></Reply>
+          <Cap>Playing</Cap><Reply text="Here’s your sound."><SoundB playing progress={0.4} /></Reply></div>) },
+        { id: 'c-details-under', label: 'One line, details under the wave', note: 'Play, the wave with name · maker · cost in small text under it, then time and actions.', render: () => (
+          <div><Cap>Paused</Cap><Reply text="Here’s your sound."><SoundC playing={false} progress={0} /></Reply>
+          <Cap>Playing</Cap><Reply text="Here’s your sound."><SoundC playing progress={0.4} /></Reply></div>) },
+      ] },
     ],
   },
   {
@@ -804,6 +941,11 @@ export const MEDIA_SURFACES: CompareSurface[] = [
           <div><Cap>Making it</Cap><Reply text="Making your video now."><VideoSide done={false} /></Reply>
           <Cap>Finished</Cap><Reply text="Your video is ready."><VideoSide done /></Reply></div>) },
       ] },
+      { n: 3, basis: 'Round 2: making = stacked, finished = side; Open is now the shared icon button.', candidates: [
+        { id: 'making-then-done', label: 'Making, then finished', note: 'Making: header, Stop and a bar. Finished: info line with Open and View in folder icon buttons, the first frame full width under it.', render: () => (
+          <div><Cap>Making it</Cap><Reply text="Making your video now."><VideoMaking3 /></Reply>
+          <Cap>Finished</Cap><Reply text="Your video is ready."><VideoDone3 /></Reply></div>) },
+      ] },
     ],
   },
   {
@@ -818,6 +960,9 @@ export const MEDIA_SURFACES: CompareSurface[] = [
       { n: 2, basis: 'Round 1 candidate a (Destin: best, but too busy and oddly aligned), simplified: one sentence, one aligned line of controls.', candidates: [
         { id: 'ask', label: 'Ask frame, with the amount', note: 'Header shows $5.00 of $5.00; one sentence; the raise-to list, Stop and orange Continue on one line.', render: () => <LimitAsk2 rich /> },
         { id: 'ask-slim', label: 'Ask frame, slimmest', note: 'No amount in the header and no note: just the sentence and the one line of controls.', render: () => <LimitAsk2 rich={false} /> },
+      ] },
+      { n: 3, basis: 'Round 2 ask-slim (picked), with his sentence and the normal button pills.', candidates: [
+        { id: 'ask-slim', label: 'Ask frame, slimmest', note: 'His sentence; the raise-to list, Stop and Continue on one line at the right.', render: () => <Limit3 /> },
       ] },
     ],
   },

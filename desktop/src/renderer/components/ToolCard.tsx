@@ -577,7 +577,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   requestId: string;
   /** A non-tool ask (the browser's) that must look and behave exactly like a tool ask (Destin, 2026-11-02): same
    *  colours, keys and click-only rule, with its own question, note and place to send the answer. */
-  custom?: { question: string; note?: React.ReactNode; body?: React.ReactNode; money?: { approve: string; decline: string; chat?: string; approveVariant?: 'charge' | 'primary'; lead?: React.ReactNode }; answer: (decision: object) => Promise<unknown> };
+  custom?: { question: string; note?: React.ReactNode; body?: React.ReactNode; money?: { approve: string; decline: string; chat?: string; approveVariant?: 'primary'; lead?: React.ReactNode }; answer: (decision: object) => Promise<unknown> };
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
    *  buttons on the same line as the request. Confirm and safety-stop paths
@@ -950,7 +950,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   }
 
   // Card #267: an ask that spends money. Same frame, question and note as the generic ask below; only the buttons differ
-  // (guide "Buttons": outlined Decline and chat-wide choice, one filled orange `charge` button, all flush right).
+  // (flush right; the generic ask's own button pills).
   // Absent `custom.money`, nothing here runs and every other ask is unchanged.
   if (custom?.money) {
     const m = custom.money;
@@ -959,11 +959,27 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
         <p className="text-xs font-medium text-fg-2 break-words">{custom.question}</p>
         {custom.body}
         {custom.note && <p className="text-3xs text-fg-muted leading-relaxed">{custom.note}</p>}
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        {/* Same row, order and left edge as the generic ask (Yes first, then the chat-wide choice, then No). */}
+        <div className="flex flex-wrap items-center gap-2">
+          {m.approveVariant === 'primary' ? (
+            // A step that is not an approval (Connect a provider): the guide's one filled button first, then the outlined one.
+            <>
+              <Button variant="primary" size="sm" disabled={responding} onClick={() => handleRespond({ decision: { behavior: 'allow' } })}>{m.approve}</Button>
+              <Button variant="secondary" size="sm" disabled={responding} onClick={() => handleRespond({ decision: { behavior: 'deny' } })}>{m.decline}</Button>
+            </>
+          ) : (
+            // Destin (2026-11-18): "just use normal approval card styling" - the very pills the generic ask uses
+            // (green yes, blue chat-wide choice, red no), in its order, with this ask's words.
+            <>
+              <button disabled={responding} onClick={() => handleRespond({ decision: { behavior: 'allow' } })}
+                className={`px-3 ${pad} text-xs font-medium rounded-lg bg-green-400/60 hover:bg-green-400/80 text-green-100 transition-colors disabled:opacity-50`}>{m.approve}</button>
+              {m.chat && <button disabled={responding} onClick={() => handleRespond({ decision: { behavior: 'allow' }, allowForChat: true })}
+                className={`px-3 ${pad} text-xs font-medium rounded-lg whitespace-nowrap ${BROAD_ALLOW_COLORS} transition-colors disabled:opacity-50`}>{m.chat}</button>}
+              <button disabled={responding} onClick={() => handleRespond({ decision: { behavior: 'deny' } })}
+                className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-red-100 transition-colors disabled:opacity-50`}>{m.decline}</button>
+            </>
+          )}
           {m.lead}
-          <Button variant="secondary" size="sm" disabled={responding} onClick={() => handleRespond({ decision: { behavior: 'deny' } })}>{m.decline}</Button>
-          {m.chat && <Button variant="secondary" size="sm" disabled={responding} onClick={() => handleRespond({ decision: { behavior: 'allow' }, allowForChat: true })}>{m.chat}</Button>}
-          <Button variant={m.approveVariant ?? 'charge'} size="sm" disabled={responding} onClick={() => handleRespond({ decision: { behavior: 'allow' } })}>{m.approve}</Button>
         </div>
         {unconfirmedNote}
       </div>
