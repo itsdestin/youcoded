@@ -18,6 +18,7 @@ import { appendAbovePending, hasMarker, markerAnchor, appendSystemMarker, matchi
 import { reconcilePageSources } from './page-source-anchors';
 import { localUserMessage } from './local-user-message';
 import { reconcileQueueBubbles, boundPendingIndex, recordedUserMessage } from './queue-bubbles';
+import { reduceSendsStale } from './stale-sends';
 import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, applyTaskStop, ccBackgroundOnLaunch, commandWithKnownEnd, markHelperReopened, reopenResumedHelper, stopRunningBackground, stopRunningCommands } from './cc-background';
@@ -1081,6 +1082,11 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // A definitely unreceived message starts no turn; unknown remains pending without PTY retries.
       next.set(action.sessionId, { ...session, timeline, ...(action.type === 'SEND_NOTE' && action.note === 'not-sent' ? spinnerWithNoTurn(session) : {}) });
       return next;
+    }
+
+    case 'SENDS_STALE': { // a sent bubble is never pinned at the bottom forever (stale-sends.ts, Destin 2026-11-18)
+      const session = next.get(action.sessionId), updated = session && reduceSendsStale(session, action.messageIds, Date.now(), spinnerWithNoTurn);
+      return updated ? (next.set(action.sessionId, updated), next) : state;
     }
 
     case 'SEND_DISCARD': {

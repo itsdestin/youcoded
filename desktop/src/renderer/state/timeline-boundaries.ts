@@ -6,7 +6,9 @@ export function appendAbovePending(timeline: TimelineEntry[], entry: TimelineEnt
   let at = timeline.length;
   while (at > 0) {
     const prev = timeline[at - 1];
-    if (prev.kind !== 'user' || prev.pending !== true) break;
+    // WHY a stale bubble ends the tail (2026-11-18): one the screen gave up waiting for (stale-sends.ts) is no longer held
+    // at the bottom — otherwise a lost or unmatched send sat under every later reply forever.
+    if (prev.kind !== 'user' || prev.pending !== true || prev.sendStale) break;
     at--;
   }
   return [...timeline.slice(0, at), entry, ...timeline.slice(at)];
