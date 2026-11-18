@@ -485,12 +485,8 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
     }
     let res: any;
     try { res = await (window.claude as any).artifacts.rename(projectRoot, active.id, next); }
-    catch (e) {
-      // WHY (round-4 final review): over remote/phone, renaming is refused as "not available here", which the shim already
-      // says itself. That is not a failed rename, so close the field quietly instead of showing a red error.
-      if (isUnsupportedHere(e)) { setRenaming(false); setRenameError(null); return; }
-      res = { ok: false, rejected: e }; // a rejected call is a failed rename too (card #134): same notice, field stays open
-    }
+    catch (e) { // WHY: "not available here" (phone/remote; the shim says so itself) is not a failed rename: close quietly. Any other rejection is (card #134).
+      if (isUnsupportedHere(e)) { setRenaming(false); setRenameError(null); return; } res = { ok: false, rejected: e }; }
     if (res?.ok) {
       setRenaming(false);
       setRenameError(null);

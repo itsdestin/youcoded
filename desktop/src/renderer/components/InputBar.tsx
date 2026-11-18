@@ -639,9 +639,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // component keeps ownership of both clipboard serialization and attachments.
       void window.claude.dialog.saveClipboardImage().then((saved) => {
         if (saved) addFiles([saved]);
-        // WHY silent on null/undefined (round-4 final review): the menu fires this whenever the clipboard has no words,
-        // without knowing a picture is there, so null usually means "nothing to paste", which is fine, not a failure.
-        // undefined = a phone over remote cannot paste an image. Only a call that actually breaks is announced.
+        // WHY silent on null/undefined: the menu fires this whenever the clipboard has no words, not knowing a picture is there,
+        // so null is usually "nothing to paste"; undefined = a phone cannot paste a picture. Only a call that breaks is announced.
       }, (err) => announceFailed('attach the pasted image', err));
     };
     window.addEventListener('youcoded:composer-paste-image', listener);
