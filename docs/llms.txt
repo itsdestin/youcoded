@@ -2,6 +2,10 @@
 
 > YouCoded is a fully customizable AI assistant and open-source "everything app" for Windows, macOS, Linux and Android, plus any web browser through remote access. You ask it, in plain words, for what you want: help with your files, research and writing, a new feature, a page for something in your life, a game, or a whole new look. It builds those inside the app, on whichever AI model you choose. It is free, MIT-licensed, and was built entirely through conversation with AI by someone who has never written code.
 
+## Why it exists
+
+YouCoded is a bet that AI can end the "own nothing, subscribe to everything" era of software. When anyone can describe what they want and have it built, a community of ordinary people can make what used to take a large company. The premise is that everyone who installs YouCoded can change it, by asking for a page, a theme, a skill or a fix, and share what they made with everyone else: an app owned by nobody and improved by everybody. The long-term aim (much of it not built yet) is an everything app, the home base for a person's whole digital life: their devices working together, their data on hardware they own, and no subscription required, down to running fully offline on a local model.
+
 ## What makes it different
 
 - **It becomes what you ask for.** YouCoded Pages are small apps that live inside YouCoded and follow its theme, made by asking in the chat. Two examples on the website are pages one person asked for and uses every day: a smart-home control panel for their lights, thermostat, speakers and TVs, and a single page tracking every bank account, bill and loan. Neither shipped with the app; other ideas people start from include a paint program or a trip planner showing each day's forecast next to what's booked.
