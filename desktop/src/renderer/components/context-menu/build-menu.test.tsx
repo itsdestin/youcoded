@@ -142,6 +142,68 @@ describe('context-menu image paste', () => {
   );
 });
 
+describe('right-click on any plain typing box in the app window', () => {
+  // The computer's own window says nativeWindows; a remote browser or phone does not.
+  const asDesktopWindow = (on: boolean) => {
+    (window as any).claude = on ? { capabilities: { nativeWindows: true } } : undefined;
+  };
+  afterEach(() => { delete (window as any).claude; });
+
+  const field = (attrs: Record<string, string> = {}, tag: 'input' | 'textarea' = 'input') => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    document.body.appendChild(el);
+    return el;
+  };
+  const ids = (el: HTMLElement) => buildContextMenu(el)?.filter((e) => e.type === 'item').map((e: any) => e.id) ?? null;
+
+  it('an API key box offers Paste and Select all, never Cut or Copy of the hidden key', () => {
+    asDesktopWindow(true);
+    expect(ids(field({ type: 'password', placeholder: 'Paste your API key' }))).toEqual(['paste', 'select-all']);
+  });
+
+  it('pastes clipboard text into an empty API key box', async () => {
+    asDesktopWindow(true);
+    const readText = vi.fn().mockResolvedValue('sk-test-123');
+    Object.defineProperty(navigator, 'clipboard', { value: { readText }, configurable: true });
+    const box = field({ type: 'password' }) as HTMLInputElement;
+    const execCommand = vi.fn((_c: string, _ui: boolean, text: string) => { box.value += text; });
+    Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true });
+    const paste = buildContextMenu(box)?.find((e) => e.type === 'item' && e.id === 'paste');
+    await (paste as any)?.run();
+    expect(execCommand).toHaveBeenCalledWith('insertText', false, 'sk-test-123');
+    expect(box.value).toBe('sk-test-123');
+  });
+
+  it('a search or name box with text gets the full Cut/Copy/Paste/Select all menu', () => {
+    asDesktopWindow(true);
+    const box = field({ type: 'text' }) as HTMLInputElement;
+    box.value = 'hello';
+    box.setSelectionRange(0, 5);
+    expect(ids(box)).toEqual(['cut', 'copy', 'paste', 'select-all']);
+    expect(ids(field({}, 'textarea'))).toEqual(['cut', 'copy', 'paste', 'select-all']);
+  });
+
+  it('leaves a remote browser or phone to its own native menu', () => {
+    asDesktopWindow(false);
+    expect(buildContextMenu(field({ type: 'password' }))).toBeNull();
+  });
+
+  it('skips boxes that cannot take typing, non-text inputs and the terminal', () => {
+    asDesktopWindow(true);
+    expect(buildContextMenu(field({ type: 'text', readonly: '' }))).toBeNull();
+    expect(buildContextMenu(field({ type: 'text', disabled: '' }))).toBeNull();
+    expect(buildContextMenu(field({ type: 'checkbox' }))).toBeNull();
+    expect(buildContextMenu(field({ type: 'number' }))).toBeNull();
+    const term = document.createElement('div');
+    term.className = 'xterm';
+    const helper = document.createElement('textarea');
+    term.appendChild(helper);
+    document.body.appendChild(term);
+    expect(buildContextMenu(helper)).toBeNull();
+  });
+});
+
 describe('artifact viewer context menu', () => {
   it('cites a single source line for a one-line selection', () => {
     const { container, pre } = mountViewer({ path: 'docs/notes.txt', source: 'raw', body: FILE });
