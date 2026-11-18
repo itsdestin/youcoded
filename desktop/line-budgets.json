@@ -51,7 +51,7 @@
     "main/preload.ts": 2680,
     "renderer/components/StatusBar.tsx": 1812,
     "renderer/components/ToolCard.tsx": 1784,
-    "main/doc-comments/docx-comments.ts": 2113,
+    "main/doc-comments/docx-comments.ts": 2121,
     "main/doc-comments/xlsx-comments.ts": 2317,
     "renderer/components/InputBar.tsx": 1493,
     "main/engine/engine-supervisor.ts": 1616,

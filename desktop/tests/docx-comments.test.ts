@@ -870,6 +870,28 @@ describe('docx-comments write — M-4a: deleting a thread also removes Word-made
   });
 });
 
+describe('docx-comments write — deleting ONE Word-made reply removes its own document anchors', () => {
+  it('leaves no marks for the reply id in document.xml, keeps the root\'s marks and the text', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ycd-docx-onereplyanchor-'));
+    try {
+      const target = join(dir, 'reply-anchor.docx');
+      await writeFile(target, await buildWordReplyAnchorDocx());
+      const before = await readDocxComments(await readFile(target), 'reply-anchor.docx');
+      const replyId = before.ok ? before.comments.find((c) => c.id === 'w-0')?.replies[0]?.id : undefined;
+      expect(replyId).toBeDefined();
+      const result = await deleteDocxReply({ absolutePath: target, path: 'reply-anchor.docx', id: 'w-0', replyId: replyId! });
+      expect(result).toEqual({ ok: true });
+      const documentXml = await (await JSZip.loadAsync(await readFile(target))).file('word/document.xml')!.async('string');
+      expect(documentXml).not.toMatch(/w:id="1"/); // the reply's start/end/reference are gone
+      expect(documentXml).toMatch(/commentRangeStart w:id="0"/); // the root's anchor survives
+      expect(documentXml).toMatch(/commentReference w:id="0"/);
+      expect(documentXml).toContain('Anchored text.');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // Review M-4b: the write path must use the same real-bytes decompression guard
 // as the read path. A part whose declared size is a lie (tiny) but which
 // inflates past the ceiling must be refused, and the file left untouched.

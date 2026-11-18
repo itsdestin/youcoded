@@ -1692,6 +1692,14 @@ async function mutateDeleteReply(
   if (!target) return { ok: false, error: 'comment-not-found' };
   const p = elementsByTag(target as unknown as Document, 'w:p')[0];
   const paraId = p ? p.getAttribute('w14:paraId') : null;
+  // WHY (review, same bug as M-4a): a reply written by real Word has its OWN
+  // commentRangeStart/End/Reference in document.xml. Removing only the body
+  // left those marks pointing at nothing (Word's "unreadable content" repair
+  // prompt). Tolerant: an app-made reply has no anchor, so nothing is removed.
+  const replyRawId = target.getAttribute('w:id');
+  if (replyRawId !== null && removeCommentRangeAndReference(archive.documentDoc, replyRawId, true)) {
+    archive.documentChanged = true;
+  }
   removeElement(target);
   archive.commentsChanged = true;
   if (paraId) {
