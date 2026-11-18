@@ -34,7 +34,8 @@ afterEach(() => { t.off(); cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(
 const bar = () => render(<ChatProvider><SkillProvider><InputBar sessionId="s" provider="native" /></SkillProvider></ChatProvider>);
 const pasteImage = () => {
   const box = screen.getByPlaceholderText('Message your assistant...');
-  fireEvent.paste(box, { clipboardData: { items: [{ type: 'image/png' }] } });
+  // getData: the picture-only check (composer-clipboard.ts) also reads the clipboard's words; a screenshot carries none.
+  fireEvent.paste(box, { clipboardData: { items: [{ type: 'image/png' }], getData: () => '' } });
 };
 
 describe('pasting an image into the composer', () => {
