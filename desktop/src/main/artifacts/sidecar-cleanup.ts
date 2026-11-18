@@ -23,6 +23,7 @@ import { enqueueMaintenance, isAppendQueueIdle, readSidecarShared, writeSidecar 
 import { mutateFileUnderLock } from './cas-write';
 import { isAbsoluteRecorded } from './write-authorization';
 import { mapLimit } from '../map-limit';
+import { makeVolumeChecker, type Verdict } from './volume-safety';
 import { log } from '../logger';
 
 const gzip = promisify(zlib.gzip);
@@ -231,9 +232,18 @@ async function readArchivedRecords(root: string): Promise<ArtifactRecord[]> {
 // ---------------------------------------------------------------------------
 // Run
 // ---------------------------------------------------------------------------
+/** WHY (owner decision 2026-11-17: "The cleanup never touches projects on drives that are missing or removable"):
+ *  a file on an unplugged USB drive, an offline network share or an unsynced cloud folder looks exactly like a
+ *  deleted one. A fresh checker per pass, so a drive plugged back in is looked at again. Tests swap it. */
+type VolumeCheck = (target: string) => Promise<Verdict>;
+let volumeCheckerFactory: () => VolumeCheck = () => makeVolumeChecker();
+export function _setVolumeCheckerForTests(f: (() => VolumeCheck) | null): void {
+  volumeCheckerFactory = f ?? (() => makeVolumeChecker());
+}
+
 type CleanupStatus =
   | 'archived' | 'skipped-recent' | 'skipped-busy' | 'no-sidecar' | 'root-unhealthy'
-  | 'outage-suspected' | 'below-floor' | 'nothing-changed' | 'conflict' | 'aborted';
+  | 'outage-suspected' | 'volume-not-fixed' | 'below-floor' | 'nothing-changed' | 'conflict' | 'aborted';
 
 export interface CleanupResult {
   status: CleanupStatus;
@@ -270,9 +280,25 @@ export async function runCleanup(root: string, opts: CleanupOptions = {}): Promi
     if (entries.filter((n) => n !== '.youcoded').length === 0) return { status: 'root-unhealthy' };
   } catch { return { status: 'root-unhealthy' }; }
 
+  // Volume safeguard, project level: a project that is not on a fixed local disk is skipped entirely, and the
+  // ledger is left alone (no strike, no run date) so nothing about it ages while the drive is away.
+  const volumeOk = volumeCheckerFactory();
+  const rootVerdict = await volumeOk(path.join(root, '.youcoded'));
+  if (!rootVerdict.safe) {
+    log('INFO', 'ArtifactCleanup', 'skipped: project is not on a fixed local disk', { root, reason: rootVerdict.reason });
+    return { status: 'volume-not-fixed' };
+  }
+
   const records = sidecar.artifacts;
   const probes = await surveyProject(root, records, opts.signal);
   if (opts.signal?.aborted) return { status: 'aborted' };
+  // Record level: a file that lives (or lived) on another drive than the project (an external record, or a symlink)
+  // is judged the same way. Missing there counts as "unknown", never as a strike.
+  await mapLimit([...probes.entries()], SURVEY_CONCURRENCY, async ([id, pr]) => {
+    if (pr.exists || !pr.target) return;
+    const v = await volumeOk(pr.target);
+    if (!v.safe) probes.set(id, { target: pr.target, exists: true });
+  });
 
   const pinned = new Set([...(sidecar.manualIncludes ?? []).map((m) => m.path), ...(sidecar.manualExcludes ?? [])].map((p) => canonicalize(p, null)));
   const sel = selectArchivable(records, probes, ledgerData.strikes, nowMs, {
@@ -292,7 +318,7 @@ export async function runCleanup(root: string, opts: CleanupOptions = {}): Promi
   const chosen = new Set(sel.ids.filter((id) => !(fresh.keepUntil?.[id] && Date.parse(fresh.keepUntil[id]) > nowMs)));
   const surveyed = new Map(records.filter((r) => chosen.has(r.id)).map((r) => [r.id, { n: r.versions.length, lm: r.lastModified }]));
   await opts.hooks?.beforeCommit?.();
-  const result = await enqueueMaintenance(root, () => commit(root, surveyed, nowMs, opts.hooks));
+  const result = await enqueueMaintenance(root, () => commit(root, surveyed, nowMs, opts.hooks, volumeOk));
   if (result.status === 'archived' && result.archivedIds) {
     // Only now, with the sidecar write committed, do the archived records leave the strike ledger.
     const done = new Set(result.archivedIds);
@@ -303,6 +329,7 @@ export async function runCleanup(root: string, opts: CleanupOptions = {}): Promi
 
 async function commit(
   root: string, surveyed: Map<string, { n: number; lm: string }>, nowMs: number, hooks?: CleanupHooks,
+  volumeOk: VolumeCheck = async () => ({ safe: true }),
 ): Promise<CleanupResult> {
   const current = await readSidecarShared(root);
   if (!current || 'corrupted' in current) return { status: 'no-sidecar' };
@@ -315,6 +342,7 @@ async function commit(
   const stillGone = await mapLimit(doomed, SURVEY_CONCURRENCY, async (r) => {
     const target = targetOf(root, r);
     if (!target) return false;
+    if (!(await volumeOk(target)).safe) return false;   // the drive may have changed since the survey
     try { await fs.promises.stat(target); return false; }
     catch (e) { const c = errCode(e); return c === 'ENOENT' || c === 'ENOTDIR'; }
   });
