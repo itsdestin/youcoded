@@ -21,6 +21,7 @@
 // previous round has a recorded pick. Don't delete old rounds — the breadcrumb
 // IS the record of how a design got where it did.
 import React from 'react';
+import { MEDIA_SURFACES } from './media-surfaces';
 import {
   Button,
   Callout,
@@ -4563,6 +4564,8 @@ function PresentRefTable() {
 }
 
 const ALL_SURFACES: CompareSurface[] = [
+  // Card #267 (media creation) round 1 — drawn in media-surfaces.tsx.
+  ...MEDIA_SURFACES,
   {
     id: 'resume-shell',
     label: 'Resume Session — popup header and list edge',
