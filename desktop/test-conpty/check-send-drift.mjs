@@ -150,7 +150,11 @@ async function runCase(c, cli) {
     const prepared = await bridge.prepare(SID);
     const env = { ...isolatedEnv({ home, configDir }), ANTHROPIC_BASE_URL: api.url, ANTHROPIC_AUTH_TOKEN: 'local-stand-in', DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     worker = fork(path.join(desktop, 'src', 'main', 'pty-worker.js'), [], { cwd: project, env, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
-    worker.on('message', (m) => { if (m.type === 'data') { screens.noteOutput(SID, m.data); mirror.write(m.data); worker.send({ type: 'ack', n: m.data.length }); } });
+    // WHY the connected check and the error listener (PR #770 run 44420491517): output still arriving as the
+    // worker exits made this ack write to a closed channel; the unhandled EPIPE crashed the whole check instead of
+    // letting the `exit` path below report what happened.
+    worker.on('message', (m) => { if (m.type === 'data') { screens.noteOutput(SID, m.data); mirror.write(m.data); if (worker.connected) worker.send({ type: 'ack', n: m.data.length }); } });
+    worker.on('error', () => { /* a write after exit; the exit handler below records the outcome */ });
     worker.on('exit', (code, signal) => { exit = { code, signal }; });
     worker.stderr.on('data', () => {});
     worker.send({ type: 'spawn', sessionId: 'send-drift', command: cli, args: ['--model', 'haiku', '--permission-mode', 'default', '--setting-sources', 'user', ...prepared.args], controlEnv: prepared.env, cwd: project, cols: c.cols, rows: c.rows });
