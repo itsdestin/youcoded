@@ -12,7 +12,7 @@ import { FilepathToken } from './FilepathToken';
 import { splitComposeRefs, jumpToRef, type ComposeRef } from './context-menu/compose-ref';
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
 import { TokenPill } from './comments/TokenPill';
-import { Button, Callout } from './ui';
+import { Button } from './ui';
 
 interface Props {
   message: ChatMessage;
@@ -102,8 +102,29 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
     else body.push(...renderProseSegment(seg.value, `s${i}-`));
   }
 
+  // The wording says what is KNOWN and how (error-message-standards.md): "not-sent" is the computer's record showing it never arrived; "unsure" is
+  // the record unable to tell (it restarted, the question could not be asked, or no echo came back in time), so it claims nothing about a cause.
+  // WHY a strip INSIDE the bubble (Destin, pinned-bubbles-review-2#N-1/#N-2, 2026-11-18: "put it inside the chat message/bubble at the bottom,
+  // full width of the bubble. dark send again on the right side with light dismiss on left. no x"): the note belongs to this message, so it is
+  // the bubble's own foot — tinted with the status colour (amber = a doubt, red = known not received; the hue in the tint, never the words), its
+  // buttons at the right with the light one first and the dark Send again last.
+  const notSent = sendNote === 'not-sent';
+  const note = sendNote && (
+    <div role="status" data-send-note={sendNote}
+      className={`-mx-5 -mb-3 mt-3 px-5 py-2.5 border-t whitespace-normal select-text ${notSent ? 'bg-destructive/35 border-destructive/60' : 'bg-amber-500/35 border-amber-500/60'}`}>
+      <div className="text-xs">{notSent ? "This didn't send — your computer never received it." : 'Not sure this was sent.'}</div>
+      {(onDiscard || onDismiss || onSendAgain) && (
+        <div data-parts-agree="send note buttons" className="mt-2 flex flex-wrap items-center justify-end gap-2">
+          {onDiscard && <Button variant="on-accent-outline" size="sm" className="whitespace-nowrap" onClick={onDiscard} aria-label="Discard unsent message">Discard</Button>}
+          {onDismiss && <Button variant="on-accent-outline" size="sm" className="whitespace-nowrap" onClick={onDismiss}>Dismiss</Button>}
+          {onSendAgain && <Button variant="on-accent-solid" size="sm" className="whitespace-nowrap" onClick={onSendAgain}>Send again</Button>}
+        </div>
+      )}
+    </div>
+  );
+
   const bubble = (
-    <div className="user-bubble max-w-[80%] break-words rounded-2xl rounded-br-sm bg-accent px-5 py-3 text-sm text-on-accent whitespace-pre-wrap">
+    <div className={`user-bubble max-w-[80%] break-words rounded-2xl rounded-br-sm bg-accent px-5 py-3 text-sm text-on-accent whitespace-pre-wrap${note ? ' overflow-hidden' : ''}`}>
       {/* WHY: Find indexes authored text, not the optional timestamp beside it. */}
       <span data-message-find-body="0" data-message-find-plain>{body}</span>
       {showTimestamps && (
@@ -111,31 +132,8 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
           {formatBubbleTime(message.timestamp)}
         </div>
       )}
+      {note}
     </div>
   );
-  if (!sendNote) return <div className="flex justify-end px-4 py-2">{bubble}</div>;
-
-  // The wording says what is KNOWN and how (error-message-standards.md): "not-sent" is the computer's record showing it never arrived; "unsure" is
-  // the record unable to tell (it restarted, the question could not be asked, or no echo came back in time), so it claims nothing about a cause.
-  // WHY the app's notice box (Destin, pinned-bubbles-review#G-1, 2026-11-18: "better reflect standard youcoded error/button styling"): the note
-  // was grey words with flat buttons, unlike every other warning or error. Now it is the design guide's one tinted box (Callout, slim) with its
-  // buttons inside at the right: red for "didn't send" (known), amber for "not sure" (a doubt, not a failure). Dismiss is the box's own ✕, as on
-  // the chat's other dismissible notices. Send again is the filled main button only when the message provably never arrived; on a doubt it is
-  // outlined, because pressing it for a message that did arrive sends it twice.
-  const notSent = sendNote === 'not-sent';
-  const noteText = notSent ? "This didn't send — your computer never received it." : 'Not sure this was sent.';
-  return (
-    <div className="px-4 py-2">
-      <div className="flex justify-end">{bubble}</div>
-      <div className="mt-1.5 flex justify-end select-text" data-send-note={sendNote}>
-        <Callout tone={notSent ? 'danger' : 'warning'} compact role="status" className="w-fit max-w-full" onDismiss={onDismiss}
-          actions={(onDiscard || onSendAgain) && <>
-            {onDiscard && <Button variant="secondary" size="sm" className="whitespace-nowrap" onClick={onDiscard} aria-label="Discard unsent message">Discard</Button>}
-            {onSendAgain && <Button variant={notSent ? 'primary' : 'secondary'} size="sm" className="whitespace-nowrap" onClick={onSendAgain}>Send again</Button>}
-          </>}>
-          {noteText}
-        </Callout>
-      </div>
-    </div>
-  );
+  return <div className="flex justify-end px-4 py-2">{bubble}</div>;
 });
