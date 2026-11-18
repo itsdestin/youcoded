@@ -125,6 +125,22 @@ describe('FirstRunManager — sign-in with no internet', () => {
     }
   });
 
+  it('shows the waiting screen while the check runs, and a Cancel pressed meanwhile wins over the slow answer', async () => {
+    const m = managerAtAuth();
+    let answer: (online: boolean) => void = () => {};
+    let during: FirstRunState | null = null;
+    m.checkInternet = () => new Promise<boolean>((r) => { during = JSON.parse(JSON.stringify(m.getState())); answer = r; });
+    const auth = fakeAuth('signed-in');
+    const run = m.handleChatGptLogin(auth);
+    await vi.waitFor(() => expect(during).not.toBeNull());
+    expect(during!.authMode).toBe('chatgpt'); // not a blank screen
+    await m.cancelAuth();
+    answer(false); // the slow check finally says offline
+    await run;
+    expect(m.getState()).toMatchObject({ authMode: 'none', lastError: undefined }); // the buttons Cancel put back, no amber line
+    expect(auth.signIn).not.toHaveBeenCalled();
+  });
+
   it('the amber flag goes away as soon as anything else sets or clears the error', async () => {
     const m = managerAtAuth();
     m.checkInternet = async () => false;
