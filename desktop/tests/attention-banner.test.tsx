@@ -203,11 +203,11 @@ describe('AttentionBanner — errorCode picks the action', () => {
   beforeEach(() => { (window as any).claude = { ...(window as any).claude, capabilities: { openExternal: true } }; });
   afterEach(() => { if ((window as any).claude) delete (window as any).claude.capabilities; });
   it.each(['chatgpt-signin-expired', 'chatgpt-signin-required'])(
-    '%s offers Sign in again, not Open settings', (code) => {
+    '%s offers Sign in, not Open settings', (code) => {
       const { container } = render(
         <AttentionBanner state="error" errorMessage="x" errorCode={code} onOpenProviderSettings={vi.fn()} />,
       );
-      expect(button(container, 'Sign in again')).not.toBeNull();
+      expect(button(container, 'Sign in')).not.toBeNull();
       expect(openSettingsButton(container)).toBeNull();
     });
 
