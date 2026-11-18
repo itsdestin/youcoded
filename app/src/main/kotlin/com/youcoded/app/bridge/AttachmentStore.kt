@@ -17,6 +17,50 @@ object AttachmentStore {
     // WHY seven days, not one (Destin, 2026-11-10): coming back to a chat two days later, "the file I sent" was gone.
     const val MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
 
+    /** Longest file name kept, in UTF-8 bytes (filesystems limit bytes, not letters; 255 is the usual ceiling). */
+    const val MAX_NAME_BYTES = 200
+
+    /**
+     * Make a picked file's display name safe to use as a file name, keeping letters of every script.
+     * WHY (Destin, 2026-11-17: "keep accented letters in file names"): the old rule replaced everything outside
+     * A-Z/0-9 with "_", so "résumé.pdf" became "r_sum_.pdf" and Chinese or Russian names became all underscores.
+     * Only what is genuinely unsafe is replaced: folder separators, control and invisible direction-switching
+     * characters, and characters Windows/FAT/exFAT refuse (\ / : * ? " < > |) because the file may be copied to
+     * such a drive. Downstream is fine with Unicode: the desktop backend hands the path to Claude Code as a
+     * JSON-quoted string (claude-queue-wire.ts), which carries any Unicode and escapes quotes.
+     */
+    fun safeName(raw: String?): String {
+        val fallback = "attachment"
+        var name = java.text.Normalizer.normalize(raw ?: "", java.text.Normalizer.Form.NFC)
+        name = name.substringAfterLast('/').substringAfterLast('\\') // no folders
+        val sb = StringBuilder()
+        var i = 0
+        while (i < name.length) {
+            val cp = name.codePointAt(i); i += Character.charCount(cp)
+            val type = Character.getType(cp)
+            val bad = cp < 0x20 || cp == 0x7F || "\\/:*?\"<>|".indexOf(cp.toChar()) >= 0 && cp < 0x80 ||
+                type == Character.CONTROL.toInt() || type == Character.FORMAT.toInt() || type == Character.SURROGATE.toInt() ||
+                type == Character.UNASSIGNED.toInt() || type == Character.LINE_SEPARATOR.toInt() || type == Character.PARAGRAPH_SEPARATOR.toInt()
+            sb.appendCodePoint(if (bad) '_'.code else cp)
+        }
+        // A leading dot would make a hidden file or ".." traversal; trailing dots/spaces are refused by Windows/FAT.
+        name = sb.toString().trimStart('.', ' ').trimEnd('.', ' ')
+        if (name.isEmpty() || name.all { it == '_' }) return fallback
+        // Cap by bytes, shortening the part before the extension so ".pdf" survives.
+        if (name.toByteArray(Charsets.UTF_8).size > MAX_NAME_BYTES) {
+            val dot = name.lastIndexOf('.')
+            var ext = if (dot > 0 && name.length - dot <= 16) name.substring(dot) else ""
+            if (ext.toByteArray(Charsets.UTF_8).size > 40) ext = ""
+            var stem = name.substring(0, name.length - ext.length)
+            val budget = MAX_NAME_BYTES - ext.toByteArray(Charsets.UTF_8).size
+            while (stem.isNotEmpty() && stem.toByteArray(Charsets.UTF_8).size > budget) {
+                stem = stem.substring(0, stem.offsetByCodePoints(stem.length, -1)) // never split a letter in half
+            }
+            name = (stem.trimEnd('.', ' ') + ext).ifEmpty { fallback }
+        }
+        return name
+    }
+
     /** A picked file that was not attached, with the sentence to show. */
     class Refused(message: String) : Exception(message)
 
