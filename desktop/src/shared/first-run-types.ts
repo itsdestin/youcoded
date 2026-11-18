@@ -35,6 +35,9 @@ export interface FirstRunState {
   setupProvider?: string;
   /** Error from the most recent failed step */
   lastError?: string;
+  /** Card #236: `lastError` is the app's own "no internet" verdict (its connection check
+   *  failed twice before opening the browser), shown amber, not as a failure. */
+  lastErrorOffline?: boolean;
 }
 
 export const INITIAL_PREREQUISITES: PrerequisiteState[] = [

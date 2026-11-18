@@ -40,6 +40,8 @@ interface AuthStatusJson {
   apiProvider?: string;
   email?: string;
   subscriptionType?: string;
+  /** ISO time this login ends (card #236). Absent on API-key logins and older CLIs. */
+  loginExpiresAt?: string;
 }
 
 /** The one subprocess call, injectable so the tests never spawn anything. */
@@ -75,11 +77,16 @@ export function statusFromOutput(stdout: string): ClaudeAccountStatus {
   // vertex) or authMethod naming a key means there is no Claude plan behind
   // this login, so the card must not promise plan limits.
   const apiKey = parsed.authMethod !== 'claude.ai';
+  // WHY (card #236): the end time lets Settings say "ends on …" and flips to expired once it
+  // passes. Only a parseable time counts; an API-key login has no end.
+  const expiresAt = !apiKey && typeof parsed.loginExpiresAt === 'string' && Number.isFinite(Date.parse(parsed.loginExpiresAt))
+    ? parsed.loginExpiresAt : undefined;
   return {
     state: 'signed-in',
     email: parsed.email || undefined,
     plan: apiKey ? undefined : parsed.subscriptionType || undefined,
     apiKey,
+    ...(expiresAt ? { expiresAt } : {}),
   };
 }
 
@@ -90,9 +97,22 @@ function isMissingBinary(err: unknown): boolean {
   return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
+const PENDING = Symbol('failure noted before the login was read');
+
+/** Feed one transcript event; a live Claude Code `authentication_failed` reply marks the login
+ *  refused (card #236). Pure so the rule is testable: the label comes from CC's own error
+ *  stamp, never from its wording. Call for LIVE events only. */
+export function noteAuthFailureFromEvent(account: Pick<ClaudeAccount, 'noteAuthFailure'> | null | undefined, event: { type?: string; data?: any }): void {
+  if (event?.type === 'assistant-text' && event.data?.apiError === 'authentication_failed') account?.noteAuthFailure();
+}
+
 export class ClaudeAccount {
   private cached: { status: ClaudeAccountStatus; at: number } | null = null;
   private inFlight: Promise<ClaudeAccountStatus> | null = null;
+  /** The login that a reply said was refused (card #236): the `expiresAt` it had at that moment
+   *  (`''` when it has none, PENDING until the next read says). While the login is unchanged
+   *  the account reads `expired`; a different end time (a new sign-in) clears it. */
+  private failedLogin: string | typeof PENDING | null = null;
 
   constructor(
     private readonly run: AuthStatusRunner = defaultRunner,
@@ -108,8 +128,10 @@ export class ClaudeAccount {
    */
   async status(): Promise<ClaudeAccountStatus> {
     const fresh = this.cached && this.now() - this.cached.at < CLAUDE_STATUS_CACHE_MS;
-    if (fresh) return this.cached!.status;
-    if (this.inFlight) return this.inFlight;
+    // WHY decorate on every read, not once at probe time: the answer is reused for 60 s, and the
+    // end time can pass (or a reply can fail) inside that window.
+    if (fresh) return this.withExpiry(this.cached!.status);
+    if (this.inFlight) return this.inFlight.then((s) => this.withExpiry(s));
 
     this.inFlight = this.probe()
       .then((status) => {
@@ -117,7 +139,7 @@ export class ClaudeAccount {
         // failure should be retried on the next ask rather than pinned for a
         // minute. A definite yes/no is cached.
         if (status.state !== 'unknown') this.cached = { status, at: this.now() };
-        return status;
+        return this.withExpiry(status);
       })
       .finally(() => { this.inFlight = null; });
     return this.inFlight;
@@ -126,7 +148,34 @@ export class ClaudeAccount {
   /** The last answer without asking again — for a synchronous render that must
    *  not block. Null when nothing has been read yet. */
   peek(): ClaudeAccountStatus | null {
-    return this.cached?.status ?? null;
+    return this.cached ? this.withExpiry(this.cached.status) : null;
+  }
+
+  /** A reply came back "sign-in failed" (card #236): from now on this login reads `expired`
+   *  until it changes. The models stay switched on regardless (claude-account-types.ts). */
+  noteAuthFailure(): void {
+    const s = this.cached?.status;
+    this.failedLogin = s?.state === 'signed-in' ? (s.expiresAt ?? '') : PENDING;
+    this.invalidate();
+  }
+
+  /** The sign-in finished: forget any remembered failure. */
+  clearAuthFailure(): void {
+    this.failedLogin = null;
+  }
+
+  /** Adds `expired` to a signed-in answer: its end time has passed, or a reply failed on THIS
+   *  login. Never for an API key (no end, and a key failure is not a sign-in). */
+  private withExpiry(status: ClaudeAccountStatus): ClaudeAccountStatus {
+    if (status.state !== 'signed-in' || status.apiKey) return status;
+    const stamp = status.expiresAt ?? '';
+    // A failure noted before any read adopts the first login seen afterwards.
+    if (this.failedLogin === PENDING) this.failedLogin = stamp;
+    // A different login than the one that failed: the person signed in again.
+    if (this.failedLogin !== null && this.failedLogin !== stamp) this.failedLogin = null;
+    const passed = !!status.expiresAt && Date.parse(status.expiresAt) <= this.now();
+    const refused = this.failedLogin !== null;
+    return passed || refused ? { ...status, expired: true } : status;
   }
 
   /** Drop the cache so the next `status()` re-probes. Called by anything that
@@ -142,6 +191,15 @@ export class ClaudeAccount {
       return statusFromOutput(stdout);
     } catch (err) {
       if (isMissingBinary(err)) return { state: 'not-installed' };
+      // WHY (found 2026-11-18 in a signed-out test copy, CLI 2.1.327): `claude auth status`
+      // now EXITS 1 when logged out, still printing its JSON. execFile rejects on that exit,
+      // so the answer arrived only on the error — and the card said "Signed-in state couldn't
+      // be read" with no way to sign in. A rejection that carries the CLI's JSON is an answer.
+      const out = (err as { stdout?: unknown } | null)?.stdout;
+      if (typeof out === 'string' && out.trim().startsWith('{')) {
+        const answered = statusFromOutput(out);
+        if (answered.state !== 'unknown') return answered;
+      }
       // Timed out, killed, permission denied — we do not know, and saying
       // "signed out" here is precisely the bug this module was written to fix.
       log('WARN', 'claude-account', 'auth status probe failed', { error: String(err) });

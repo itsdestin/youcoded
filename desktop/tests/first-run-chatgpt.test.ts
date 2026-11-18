@@ -47,6 +47,8 @@ vi.mock('os', async (importOriginal) => {
   return { ...real, default: { ...real, homedir: () => home }, homedir: () => home };
 });
 vi.mock('../src/main/logger', () => ({ log: vi.fn() }));
+// Card #236: every sign-in asks the app's own online check first; these files test what happens AFTER it says yes.
+vi.mock('../src/main/network-check', () => ({ checkInternet: vi.fn(async () => true) }));
 // prerequisite-installer imports 'electron'; nothing in it is exercised here.
 vi.mock('../src/main/prerequisite-installer', () => ({
   detectNode: vi.fn(), detectGit: vi.fn(), detectClaude: vi.fn(), detectAuth: vi.fn(),
@@ -100,6 +102,55 @@ function authPrereq(m: FirstRunManager) {
 
 beforeEach(() => { rmSync(SCRATCH_HOME, { recursive: true, force: true }); });
 afterEach(() => { rmSync(SCRATCH_HOME, { recursive: true, force: true }); });
+
+describe('FirstRunManager — sign-in with no internet', () => {
+  const OFFLINE = 'No internet connection. Connect, then try again.';
+
+  it('all three sign-ins stop before opening anything and put the buttons back with the amber no-internet line', async () => {
+    for (const run of [
+      (m: FirstRunManager, auth: ReturnType<typeof fakeAuth>) => m.handleChatGptLogin(auth),
+      (m: FirstRunManager, auth: ReturnType<typeof fakeAuth>) => m.handleOpenRouterLogin(auth as any),
+      (m: FirstRunManager) => m.handleOAuthLogin(),
+    ]) {
+      const m = managerAtAuth();
+      m.checkInternet = async () => false;
+      const auth = fakeAuth('signed-in');
+      await run(m, auth);
+      const s = m.getState();
+      expect(s.lastError).toBe(OFFLINE);
+      expect(s.lastErrorOffline).toBe(true);
+      expect(s.authMode).toBe('none');
+      expect(authPrereq(m).status).toBe('waiting');
+      expect(auth.signIn).not.toHaveBeenCalled(); // no browser, no port
+    }
+  });
+
+  it('shows the waiting screen while the check runs, and a Cancel pressed meanwhile wins over the slow answer', async () => {
+    const m = managerAtAuth();
+    let answer: (online: boolean) => void = () => {};
+    let during: FirstRunState | null = null;
+    m.checkInternet = () => new Promise<boolean>((r) => { during = JSON.parse(JSON.stringify(m.getState())); answer = r; });
+    const auth = fakeAuth('signed-in');
+    const run = m.handleChatGptLogin(auth);
+    await vi.waitFor(() => expect(during).not.toBeNull());
+    expect(during!.authMode).toBe('chatgpt'); // not a blank screen
+    await m.cancelAuth();
+    answer(false); // the slow check finally says offline
+    await run;
+    expect(m.getState()).toMatchObject({ authMode: 'none', lastError: undefined }); // the buttons Cancel put back, no amber line
+    expect(auth.signIn).not.toHaveBeenCalled();
+  });
+
+  it('the amber flag goes away as soon as anything else sets or clears the error', async () => {
+    const m = managerAtAuth();
+    m.checkInternet = async () => false;
+    await m.handleChatGptLogin(fakeAuth('signed-in'));
+    expect(m.getState().lastErrorOffline).toBe(true);
+    m.checkInternet = async () => true;
+    await m.handleChatGptLogin(fakeAuth('timed-out')); // a different failure replaces the line
+    expect(m.getState()).toMatchObject({ lastError: 'Sign-in timed out. Try again?', lastErrorOffline: undefined });
+  });
+});
 
 describe('FirstRunManager.handleChatGptLogin', () => {
   it('shows the waiting line and marks auth in progress before the browser opens, with the 5-minute window', async () => {

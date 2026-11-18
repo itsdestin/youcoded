@@ -3515,6 +3515,15 @@ export function installShim(): void {
       // for a phone too. A failure or refusal answers {ok:false}, which REJECT_ON_NOT_OK turns
       // into an error the Settings card shows.
       install: () => invoke('claude-code:install'),
+      // Card #236: refused over remote access (a visiting phone answers false; the card tells
+      // people to sign in from the host computer). Invokes exist for parity.
+      signIn: () => invoke('claude-code:sign-in'),
+      cancelSignIn: () => invoke('claude-code:cancel-sign-in'),
+    },
+    // Card #236: the computer's own connection check. Refused to a visiting phone (main/ipc/network.ts
+    // says why); the Android app's own screen, the backend's owner, gets the real answer.
+    network: {
+      check: () => invoke('network:check'),
     },
     // WebSearch providers (Phase 2 Plan B) — WS transport. Object payloads match
     // remote-server's WS case reads (payload.backend / payload.key).
