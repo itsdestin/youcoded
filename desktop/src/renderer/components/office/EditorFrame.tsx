@@ -63,10 +63,16 @@ const CLOSE_SAVE_WAIT_MS = 5_000;
  *  anything this late means the editor gave up without telling the host (a failed
  *  get_current_path, an exception in its save path), and "Saving…" must not stay up forever. */
 const REQUESTED_SAVE_LIMIT_MS = 60_000;
-/** A failed save tries again by itself after these pauses, the last repeating (Destin, 2026-11-14:
- *  the error "should mostly resolve and disappear on its own when possible"). WHY growing pauses,
- *  not every 3 s: a read-only file or a full disk fails every time, and each try is a whole save. */
-export const SAVE_RETRY_DELAYS_MS = [10_000, 30_000, 60_000, 120_000];
+/** A failed save tries again by itself after these pauses, then STOPS (Destin, 2026-11-14: the
+ *  error "should mostly resolve and disappear on its own when possible"; 2026-11-17: "Stop after 3
+ *  and tell"). WHY growing pauses, not every 3 s: a read-only file or a full disk fails every time,
+ *  and each try is a whole save. WHY a stop, not a forever loop (was every 120 s): a save that
+ *  failed three times in a row will not fix itself, and a quiet loop meant the person never learned
+ *  their work was unsaved. After the last try the strip says so and Try again restarts the cycle. */
+export const SAVE_RETRY_DELAYS_MS = [10_000, 30_000, 60_000];
+/** What the strip says once the automatic tries are used up; `reason` is the real failure text. */
+export const savedGiveUpMessage = (reason: string) =>
+  `Not saved after ${SAVE_RETRY_DELAYS_MS.length} more tries. ${reason} Your changes are still open here.`;
 /** How long a closing window waits for a save it just started to reach main (see journal). Below
  *  main's 1.5 s journal cap (office-journal-sync.ts), so the answer still counts. */
 const JOURNAL_SAVE_HANDOFF_MS = 1_400;
@@ -230,7 +236,15 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   const scheduleRetry = () => {
     const r = retry.current;
     if (r.timer || keptRef.current || !mountedRef.current) return;
-    const delay = SAVE_RETRY_DELAYS_MS[Math.min(r.n, SAVE_RETRY_DELAYS_MS.length - 1)];
+    if (r.n >= SAVE_RETRY_DELAYS_MS.length) {
+      // WHY here: every failure path calls scheduleRetry right after markFailed, so this
+      // replaces the plain reason with the "not saved" one. Only the strip's text changes —
+      // failMessage stays the real reason (Save a copy / close paths read it), and the edits
+      // stay in the editor and the recovery journal.
+      markFailed(file.path, savedGiveUpMessage(save.current.failMessage));
+      return;
+    }
+    const delay = SAVE_RETRY_DELAYS_MS[r.n];
     r.timer = setTimeout(() => {
       r.timer = 0;
       r.n += 1;
@@ -268,6 +282,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
     s.dirty = false;
     s.failed = false;
+    // WHY: any save that is not one of the quiet automatic retries (Try again, a close, a Save)
+    // starts a fresh cycle of tries.
+    if (!s.quiet) retry.current.n = 0;
     s.requested = true;
     s.requestSeq += 1;
     s.askedAt = Date.now();

@@ -5,7 +5,7 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
-import { EditorFrame, SAVE_RETRY_DELAYS_MS, autosaveDelay } from '../../src/renderer/components/office/EditorFrame';
+import { EditorFrame, SAVE_RETRY_DELAYS_MS, autosaveDelay, savedGiveUpMessage } from '../../src/renderer/components/office/EditorFrame';
 import { closeDoc, officeDocFor, officeTabsNow, openDoc, resetOfficeStoreForTests, saveStateFor, useOfficeAlerts, useSaveState } from '../../src/renderer/components/office/office-store';
 import type { OfficeBridge, OfficeFile } from '../../src/shared/office-types';
 
@@ -507,6 +507,37 @@ describe('EditorFrame autosave', () => {
     expect(saves()).toBe(3);
     fromEditor({ yc: 'rpc', id: 4, cmd: 'save_file', args: { data: '' } });
     await settle();
+    expect(saveStateFor(FILE.path).phase).toBe('saved');
+  });
+
+  it('stops retrying after 3 automatic tries, says "not saved", and Try again starts over', async () => {
+    let refuse = true;
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file' && refuse) throw new Error('This file is busy.'); return 'ok'; }) as never });
+    const { fromEditor, saves, handle } = await mountWithHandle();
+    vi.useFakeTimers();
+    let id = 1;
+    fromEditor({ yc: 'rpc', id: id++, cmd: 'set_document_modified', args: { modified: true } });
+    await act(async () => { vi.advanceTimersByTime(3_000); });
+    fromEditor({ yc: 'rpc', id: id++, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    // Three automatic retries, each failing.
+    for (let i = 0; i < SAVE_RETRY_DELAYS_MS.length; i++) {
+      await act(async () => { vi.advanceTimersByTime(SAVE_RETRY_DELAYS_MS[i]); });
+      fromEditor({ yc: 'rpc', id: id++, cmd: 'save_file', args: { data: '' } });
+      await settle();
+    }
+    expect(saves()).toBe(1 + SAVE_RETRY_DELAYS_MS.length);
+    expect(saveStateFor(FILE.path)).toMatchObject({ phase: 'failed', message: savedGiveUpMessage('This file is busy.') });
+    // Nothing more happens by itself, however long it waits.
+    await act(async () => { vi.advanceTimersByTime(60 * 60_000); });
+    expect(saves()).toBe(1 + SAVE_RETRY_DELAYS_MS.length);
+    expect(saveStateFor(FILE.path).phase).toBe('failed');
+    // Try again asks for a save at once, and (cause gone) it lands.
+    refuse = false;
+    act(() => handle.current!.save());
+    fromEditor({ yc: 'rpc', id: id++, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    expect(saves()).toBe(2 + SAVE_RETRY_DELAYS_MS.length);
     expect(saveStateFor(FILE.path).phase).toBe('saved');
   });
 
