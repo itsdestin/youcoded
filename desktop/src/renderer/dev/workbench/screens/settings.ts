@@ -203,7 +203,7 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // install; ChatGPT's expired state; a sign-in pressed with no internet.
   { ...settings('settings/assistant/cloud#claude-expired', 'dialog', 'sign-in'), params: { claudeCode: 'expired' } },
   { ...settings('settings/assistant/cloud#claude-signed-out', 'dialog', 'sign-in'), params: { claudeCode: 'signed-out' } },
-  { ...settings('settings/assistant/cloud#claude-offline', 'dialog', 'sign-in'), params: { claudeCode: 'expired', online: '0' }, open: ['Sign in again'], newIn: 'after' as const },
+  { ...settings('settings/assistant/cloud#claude-offline', 'dialog', 'sign-in'), params: { claudeCode: 'expired', online: '0' }, open: ['Sign in'], newIn: 'after' as const },
   { ...settings('settings/assistant/cloud#chatgpt-expired', 'dialog', 'sign-in'), params: { chatgpt: 'expired' } },
   { ...settings('settings/assistant/cloud#remote-chatgpt-account', 'dialog'), params: { connection: 'remote', chatgpt: 'signed-in', planUsage: '1' } },
   // Sign-in and key states of the cloud providers (mock-shim switches); each picture

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import BrailleSpinner from './BrailleSpinner';
 import { Button } from './ui';
 import { ChatNoticeBubble } from './ChatNoticeBubble';
 import { useClaudeStatus } from './model/availability';
@@ -10,50 +11,39 @@ import { recheckExpiredSignIns } from '../hooks/useExpiredSignIns';
 // Decisions: claude-sign-in-expiry-questions (round 1) and -questions-2 (round 2),
 // on top of offline-and-sign-in-questions (2026-09-14).
 
-const NAME: Record<SignInProvider, string> = { claude: 'Claude', chatgpt: 'ChatGPT', openrouter: 'OpenRouter' };
-
 /** The words and buttons for one provider's sign-in flow — shared by Claude's card
  *  and the ChatGPT/OpenRouter error card, so all three read the same way
  *  (round 2 Q-chat-button: "match Claude"). */
 function useSignInCard(provider: SignInProvider, opts: {
   /** The sentence while nothing has been pressed. */
   expiredLine: string;
-  /** Already signed in again (this run, or found on reopening) and not yet continued. */
+  /** Already signed in again (this run, or found on reopening). */
   alreadyBack: boolean;
-  onContinue?: () => void;
   /** OpenRouter only: the paste-a-key way back (round 2 Q-openrouter-how). */
   onPasteKey?: () => void;
   /** Main label of the sign-in button. */
   signInLabel?: string;
 }) {
   const state = useSignInPhase(provider);
-  const [continued, setContinued] = useState(false);
   const signIn = () => { void startSignIn(provider); };
   const back = state.phase === 'signed-in' || (state.phase === 'idle' && opts.alreadyBack);
 
-  if (continued) return { tone: 'quiet' as const, line: `Signed in to ${NAME[provider]} again.` };
-  if (back) {
-    return {
-      tone: 'quiet' as const,
-      line: "You're signed in again.",
-      // WHY Continue, not a resend (round 2 Q-continue): the message that failed is
-      // still in the conversation and the assistant reads it once signed in, so the
-      // one press carries on from there — nothing is sent twice.
-      buttons: opts.onContinue
-        ? <Button size="sm" onClick={() => { setContinued(true); opts.onContinue!(); }}>Continue</Button>
-        : undefined,
-    };
-  }
+  // WHY no Continue button (Destin, review deck R-3: "just show a sign in successful card
+  // and let the user continue by sending a follow up"): the message that failed is still in
+  // the conversation, so the next thing the person sends carries on from there.
+  if (back) return { tone: 'success' as const, line: 'Sign in successful.' };
   switch (state.phase) {
     case 'checking':
     case 'waiting':
-      // While it runs, its Stop is the main action — filled (guide, Buttons). No status ring:
-      // nothing has gone wrong, the person is just busy in the browser.
-      return { tone: 'quiet' as const, line: 'Your browser opened. Finish signing in there.',
+      // Same red-ringed card as the step before it (review R-2: the style must not jump
+      // between the two), with the app's thinking spinner until the sign-in completes. While
+      // it runs, its Stop is the main action — filled (guide, Buttons).
+      return { tone: 'danger' as const,
+        line: <span className="inline-flex items-center gap-2"><BrailleSpinner size="base" />Browser opened, please continue to sign in.</span>,
         buttons: <Button size="sm" onClick={() => cancelSignIn(provider)}>Cancel</Button> };
     case 'offline':
-      // "No internet" only when the app's own check said so — amber (guide, Status and notices).
-      return { tone: 'warning' as const, line: 'No internet connection. Connect, then try again.',
+      // Red like the other sign-in cards (review R-4/R-9), and only after the app's own check said so.
+      return { tone: 'danger' as const, line: 'No internet connection. Connect, then try again.',
         buttons: <Button size="sm" onClick={signIn}>Try again</Button> };
     case 'failed':
       return { tone: 'danger' as const, line: "Signing in didn't finish.", details: state.message,
@@ -65,7 +55,8 @@ function useSignInCard(provider: SignInProvider, opts: {
         buttons: (
           <>
             {opts.onPasteKey && <Button size="sm" variant="secondary" onClick={opts.onPasteKey}>Paste a new key</Button>}
-            <Button size="sm" onClick={signIn}>{opts.signInLabel ?? 'Sign in again'}</Button>
+            {/* "Sign in", not "Sign in again", on every device (review R-6). */}
+            <Button size="sm" onClick={signIn}>{opts.signInLabel ?? 'Sign in'}</Button>
           </>
         ),
       };
@@ -78,39 +69,40 @@ function useSignInCard(provider: SignInProvider, opts: {
  * Only the conversation's LATEST reply is live: an expiry further up the history
  * was fixed long ago, so it shows one quiet line and no buttons.
  */
-export function ClaudeSignInNotice({ sessionId, latest }: { sessionId: string; latest: boolean }) {
+export function ClaudeSignInNotice({ latest }: { latest: boolean }) {
   if (!latest) return <ChatNoticeBubble tone="quiet" line="Your Claude sign-in expired here." />;
   // A phone or browser connected to the computer cannot sign Claude Code in: the
   // sign-in has to finish on the computer (round 1 Q-remote, "say where", no button).
   if (!getCapabilities().openExternal) {
-    return <ChatNoticeBubble tone="danger" line="Your Claude sign-in has expired. Sign in again on your computer." />;
+    return <ChatNoticeBubble tone="danger" line={`Your Claude sign-in has expired. ${HOST_LINE}`} />;
   }
-  return <LiveClaudeSignInNotice sessionId={sessionId} />;
+  return <LiveClaudeSignInNotice />;
 }
 
-function LiveClaudeSignInNotice({ sessionId }: { sessionId: string }) {
+function LiveClaudeSignInNotice() {
   const { status, refresh } = useClaudeStatus();
   const phase = useSignInPhase('claude').phase;
   // A reply just came back "sign-in failed": the gear's dot looks again (Q-check-when: "when a message fails").
   useEffect(() => { recheckExpiredSignIns(); }, []);
   // A sign-in finished here re-reads the live status, so Settings and the model menu agree.
   useEffect(() => { if (phase === 'signed-in') refresh(); }, [phase, refresh]);
-  // Signed in again since (in a terminal, or before a restart): the card offers Continue straight away.
+  // Signed in again since (in a terminal, or before a restart): the card says so straight away.
   const alreadyBack = status?.state === 'signed-in' && status.expired !== true;
   const card = useSignInCard('claude', {
     expiredLine: 'Your Claude sign-in has expired.',
     alreadyBack,
-    onContinue: () => { void (window as any).claude?.claudeCode?.continueQuietly?.(sessionId); },
   });
   return <ChatNoticeBubble tone={card.tone} line={card.line} buttons={card.buttons} details={card.details} />;
 }
 
+/** A phone or browser connected to the computer: the sign-in must finish on the computer (review R-5, Destin's words). */
+const HOST_LINE = 'Sign in again from your host computer.';
+
 /** The ChatGPT / OpenRouter red card when the sign-in or key was refused. */
-export function ProviderSignInCard({ provider, keyExpired, onContinue, onPasteKey }: {
+export function ProviderSignInCard({ provider, keyExpired, onPasteKey }: {
   provider: 'chatgpt' | 'openrouter';
   /** OpenRouter: the key passed its own end date (rather than being refused). */
   keyExpired?: boolean;
-  onContinue?: () => void;
   /** OpenRouter connections made before the app recorded how: offer both ways back. */
   onPasteKey?: () => void;
 }) {
@@ -118,12 +110,11 @@ export function ProviderSignInCard({ provider, keyExpired, onContinue, onPasteKe
     expiredLine: provider === 'chatgpt' ? 'Your ChatGPT sign-in has expired.'
       : keyExpired ? 'Your OpenRouter key has expired.' : "OpenRouter didn't accept your key.",
     alreadyBack: false,
-    onContinue,
     onPasteKey,
     signInLabel: provider === 'openrouter' ? 'Sign in with OpenRouter' : undefined,
   });
   if (!getCapabilities().openExternal) {
-    return <ChatNoticeBubble tone="danger" line={`${card.line} Sign in again on your computer.`} />;
+    return <ChatNoticeBubble tone="danger" line={`${card.line} ${HOST_LINE}`} />;
   }
   return <ChatNoticeBubble tone={card.tone} line={card.line} buttons={card.buttons} details={card.details} />;
 }
@@ -131,7 +122,7 @@ export function ProviderSignInCard({ provider, keyExpired, onContinue, onPasteKe
 /** No internet, confirmed by the app's own check (round 2 S-offline-chat). */
 export function NoInternetNotice({ onRetry }: { onRetry?: () => void }) {
   return (
-    <ChatNoticeBubble tone="warning" line="No internet connection."
+    <ChatNoticeBubble tone="danger" line="No internet connection."
       buttons={onRetry ? <Button size="sm" onClick={onRetry}>Try again</Button> : undefined} />
   );
 }
@@ -142,8 +133,9 @@ export function NoInternetNotice({ onRetry }: { onRetry?: () => void }) {
  * No internet card. Otherwise it stays Claude Code's own words (`fallback`), so a
  * problem on Anthropic's side is never blamed on the user's connection.
  */
-export function ClaudeConnectionNotice({ sessionId, fallback }: { sessionId: string; fallback: React.ReactNode }) {
+export function ClaudeConnectionNotice({ fallback }: { fallback: React.ReactNode }) {
   const [offline, setOffline] = useState(false);
+  const [backOnline, setBackOnline] = useState(false);
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
     let alive = true;
@@ -152,14 +144,15 @@ export function ClaudeConnectionNotice({ sessionId, fallback }: { sessionId: str
       .catch(() => { /* a failed check proves nothing: keep Claude Code's own words */ });
     return () => { alive = false; };
   }, [nonce]);
+  // Back online after Try again: say so, and let the person carry on with their next message
+  // (the same rule as a fixed sign-in — review R-3: nothing is sent for them).
+  if (backOnline) return <ChatNoticeBubble tone="success" line="You're back online." />;
   if (!offline) return <>{fallback}</>;
   return (
     <NoInternetNotice onRetry={() => {
-      // Try again: check again first; still offline keeps the card, back online carries on.
       void Promise.resolve((window as any).claude?.network?.check?.()).then((r: { online?: boolean } | undefined) => {
         if (r?.online === false) { setNonce((n) => n + 1); return; }
-        setOffline(false);
-        void (window as any).claude?.claudeCode?.continueQuietly?.(sessionId);
+        setBackOnline(true);
       });
     }} />
   );

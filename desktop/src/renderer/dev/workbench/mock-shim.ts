@@ -1428,8 +1428,6 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return true;
     },
     cancelSignIn: async () => { if (claudeSignInTimer) clearTimeout(claudeSignInTimer); claudeSignInTimer = null; return true; },
-    // Card #236 (MOCK_ONLY): "continue", sent through the control bridge and hidden from the chat.
-    continueQuietly: async (_sessionId: string) => true,
     // First-run local models (F-5): a short wait, then installed but signed out —
     // what a real install leaves behind before the Claude sign-in.
     install: async () => {

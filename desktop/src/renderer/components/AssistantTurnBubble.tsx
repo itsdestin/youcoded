@@ -546,7 +546,7 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
         // ("Login expired · Please run /login") becomes the sign-in card, chosen by
         // CC's own label, never by its words.
         if (bubble.text?.apiError === 'authentication_failed' && bubble.toolGroupIds.length === 0) {
-          return <ClaudeSignInNotice key={bubble.key} sessionId={sessionId} latest={!!latest} />;
+          return <ClaudeSignInNotice key={bubble.key} latest={!!latest} />;
         }
         const hasTools = bubble.toolGroupIds.length > 0;
         // A sent-files card counts as content: a bubble holding only that card
@@ -648,7 +648,7 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
         // No internet card. Online, or an older reply, keeps today's bubble — never a guess.
         const connectionError = bubble.text?.apiError === 'server_error' || bubble.text?.apiError === 'unknown';
         return connectionError && latest
-          ? <ClaudeConnectionNotice key={bubble.key} sessionId={sessionId} fallback={normal} />
+          ? <ClaudeConnectionNotice key={bubble.key} fallback={normal} />
           : normal;
       })}
     </>

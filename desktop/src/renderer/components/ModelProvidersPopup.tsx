@@ -153,12 +153,14 @@ function signInNotice(provider: SignInProvider, phase: ReturnType<typeof useSign
   // Cancel takes the top-right button — the same as the ChatGPT card always did. Not a notice:
   // nothing has gone wrong.
   if (phase === 'checking' || phase === 'waiting') return null;
-  if (phase === 'offline') return { tone: 'warning', text: 'No internet connection. Connect, then try again.', actions: <Button size="sm" onClick={again}>Try again</Button> };
+  // Red like the other sign-in notices (review R-4/R-9).
+  if (phase === 'offline') return { tone: 'danger', text: 'No internet connection. Connect, then try again.', actions: <Button size="sm" onClick={again}>Try again</Button> };
   if (phase === 'failed') return { tone: 'danger', text: "Signing in didn't finish.", actions: <Button size="sm" onClick={again}>Try again</Button> };
   if (!expired || phase === 'signed-in') return null;
   // A phone or browser connected to the computer cannot start the sign-in (round 1 Q-remote).
-  if (!canSignIn) return { tone: 'danger', text: `${expiredText} Sign in again on your computer.` };
-  return { tone: 'danger', text: expiredText, actions: <Button size="sm" onClick={again}>Sign in again</Button> };
+  if (!canSignIn) return { tone: 'danger', text: `${expiredText} Sign in again from your host computer.` };
+  // "Sign in", not "Sign in again" (review R-6).
+  return { tone: 'danger', text: expiredText, actions: <Button size="sm" onClick={again}>Sign in</Button> };
 }
 
 type ProviderNotice = { tone: 'warning' | 'danger'; text: React.ReactNode; actions?: React.ReactNode } | null;
@@ -226,7 +228,7 @@ export function ClaudeCodeBlock({
     const ends = !expired && status.expiresAt ? endsLabel(status.expiresAt) : null;
     detail = status.apiKey ? { text: 'Billed per token — no plan limits.' }
       : expired ? null
-      : { text: ends ? `${claudePlanLabel(status.plan)}. Sign-in ends ${ends}.` : claudePlanLabel(status.plan) };
+      : { text: ends ? `${claudePlanLabel(status.plan)}. Sign-in expires ${ends}.` : claudePlanLabel(status.plan) };
   } else if (status?.state === 'signed-out') {
     line = 'Not signed in';
     detail = { text: "Your Claude plan's models, in YouCoded's assistant." };
@@ -795,7 +797,7 @@ export function OpenRouterBlock() {
           // WHY one notice with its fix inside (ui-status-pills#PL-1/PL-2): a broken
           // key is the danger box holding the way back in; an unchecked key the
           // warning box holding Replace key and Try again (the filled one).
-          notice={offline && !waiting ? { tone: 'warning', text: 'No internet connection. Connect, then try again.',
+          notice={offline && !waiting ? { tone: 'danger', text: 'No internet connection. Connect, then try again.',
               actions: <Button size="sm" onClick={() => void startSignIn()}>Try again</Button> }
             : waiting || !connected || !(words.broken || words.unchecked) || !words.detail ? null : {
             tone: words.broken ? 'danger' : 'warning',

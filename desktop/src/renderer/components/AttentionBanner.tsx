@@ -135,14 +135,14 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
   // credit, ChatGPT sign-in and plan limits) return null here and render below as before.
   // Card #236 (round 2 Q-chat-button "match Claude"): a ChatGPT sign-in that ran out or a
   // key OpenRouter refused gets the fix itself on the card — Sign in again / Reconnect — and,
-  // once back in, Continue (the same continue-the-turn as Try again). Replaces "Open settings".
+  // once back in, "Sign in successful" (review R-3: the person carries on with their next message). Replaces "Open settings".
   if (state === 'error' && (errorCode === 'chatgpt-signin-expired' || errorCode === 'chatgpt-signin-required')) {
-    return <ProviderSignInCard provider="chatgpt" onContinue={onRetry} />;
+    return <ProviderSignInCard provider="chatgpt" />;
   }
   if (state === 'error' && (errorCode === 'openrouter-key-rejected' || errorCode === 'openrouter-key-expired')) {
     // Older connections never recorded how they were made, so both ways back are offered
     // (round 2 Q-openrouter-how). Paste a new key opens the existing key window via Settings.
-    return <ProviderSignInCard provider="openrouter" keyExpired={errorCode === 'openrouter-key-expired'} onContinue={onRetry} onPasteKey={onOpenProviderSettings} />;
+    return <ProviderSignInCard provider="openrouter" keyExpired={errorCode === 'openrouter-key-expired'} onPasteKey={onOpenProviderSettings} />;
   }
   // The app's own connection check failed twice (main sets this code; round 2 S-offline-chat).
   if (state === 'error' && errorCode === 'no-internet') return <NoInternetNotice onRetry={onRetry} />;

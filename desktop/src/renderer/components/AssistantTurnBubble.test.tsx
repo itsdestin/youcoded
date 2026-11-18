@@ -515,11 +515,11 @@ describe('AssistantTurnBubble — a reply Claude Code wrote because its sign-in 
     </ChatProvider>,
   );
 
-  it('the latest one offers Sign in again instead of the raw words', () => {
+  it('the latest one offers Sign in instead of the raw words', () => {
     const { container, getByRole } = renderExpired('authentication_failed', true);
     expect(container.textContent).toContain('Your Claude sign-in has expired.');
     expect(container.textContent).not.toContain('Please run /login');
-    expect(getByRole('button', { name: 'Sign in again' })).toBeInTheDocument();
+    expect(getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
   });
 
   it('an older one is one quiet line with no buttons', () => {
