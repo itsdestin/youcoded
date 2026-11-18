@@ -887,7 +887,10 @@ export class FirstRunManager extends EventEmitter {
     try {
       const raw = fs.readFileSync(STATE_FILE, 'utf8');
       return JSON.parse(raw) as FirstRunState;
-    } catch {
+    } catch (err) {
+      // Card #134 round 4: a missing file is the normal fresh start; a file that exists but cannot be read or parsed restarts setup
+      // from the top, and used to leave no trace of why.
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') log('WARN', 'first-run', 'Setup state file unreadable, starting setup fresh', { error: String(err) });
       return this.defaultState();
     }
   }

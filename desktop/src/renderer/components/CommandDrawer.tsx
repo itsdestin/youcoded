@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { announceFailed } from '../utils/announce';
 import { memoWhileClosed } from './memo-while-closed';
 import type { SkillEntry, CommandEntry } from '../../shared/types';
 import SkillCard from './SkillCard';
@@ -200,7 +201,7 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
         key={skill.id}
         skill={skill}
         onClick={onSelect}
-        favorite={{ filled: isFav, onToggle: () => setFavorite(favId, !isFav) }}
+        favorite={{ filled: isFav, onToggle: () => { void setFavorite(favId, !isFav).catch((e) => announceFailed('change your favorites', e)); } }}
         pluginBadge={pluginBadge}
       />
     );

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, useContext } from 'react';
+import { announceFailed } from '../utils/announce';
 import { NARROW_VIEWPORT_QUERY } from '../hooks/use-narrow-viewport';
 import { useChatDispatch } from '../state/chat-context';
 import QuickChips, { QuickChip } from './QuickChips';
@@ -638,7 +639,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // component keeps ownership of both clipboard serialization and attachments.
       void window.claude.dialog.saveClipboardImage().then((saved) => {
         if (saved) addFiles([saved]);
-      });
+        // WHY silent on null/undefined: the menu fires this whenever the clipboard has no words, not knowing a picture is there,
+        // so null is usually "nothing to paste"; undefined = a phone cannot paste a picture. Only a call that breaks is announced.
+      }, (err) => announceFailed('attach the pasted image', err));
     };
     window.addEventListener('youcoded:composer-paste-image', listener);
     return () => window.removeEventListener('youcoded:composer-paste-image', listener);
@@ -1031,15 +1034,21 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         addFiles(paths);
       }
     } catch (err) {
-      console.error('Failed to open file dialog:', err);
+      // Card #134 round 4: the console line was the only trace; the person pressed Attach and nothing opened.
+      announceFailed('open the file picker', err);
     }
   }, [addFiles]);
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
     if (!e.clipboardData || !isImageOnlyClipboard(e.clipboardData)) return;
     e.preventDefault();
-    const saved = await window.claude.dialog.saveClipboardImage();
-    if (saved) addFiles([saved]);
+    // Card #134 round 4: the clipboard said it held an image, so "nothing came back" or a rejection is a real failure to
+    // attach it (it used to vanish with no word). A successful save attaches it exactly as before.
+    try {
+      const saved = await window.claude.dialog.saveClipboardImage();
+      if (saved) addFiles([saved]); else if (saved !== undefined) announceFailed('attach the pasted image');
+      // undefined = a phone over remote cannot paste an image: silent for now (the shim says nothing either), pending the owner's decision.
+    } catch (err) { announceFailed('attach the pasted image', err); }
   }, [addFiles]);
 
   // WHY (decisions "Applied from earlier rules"): a file dragged in gets the session-tab drop

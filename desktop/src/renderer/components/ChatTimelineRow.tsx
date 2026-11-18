@@ -18,6 +18,8 @@
 // through `actionsRef` (latest-handlers ref), and nothing here receives a fresh
 // object from ChatView's render. The markup is exactly what ChatView rendered
 // inline before, so the DOM is unchanged.
+import { announceFailed } from '../utils/announce';
+import { copyText } from './context-menu/clipboard';
 import React from 'react';
 import type { AssistantTurn, TimelineEntry } from '../state/chat-types';
 import type { ChatAction } from '../state/chat-types';
@@ -164,9 +166,9 @@ function renderContent(p: Props): React.ReactNode {
           id={pickerId}
           options={entry.options}
           onCopy={(text, label) => {
-            navigator.clipboard.writeText(text).catch(() => {});
+            // The picker closes either way; a failed copy is said in the toast (announce needs no prop path).
+            void copyText(text).then((ok) => { if (!ok) announceFailed('copy'); });
             dismiss();
-            // onToast would be nicer but ChatView doesn't have it — minimal UX for now
             void label;
           }}
           onDismiss={dismiss}

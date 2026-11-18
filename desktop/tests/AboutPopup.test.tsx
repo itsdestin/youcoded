@@ -62,3 +62,34 @@ it('after two quick clicks that both fail, the switch shows the saved value, not
   expect(await screen.findByText("Couldn't save the usage stats setting")).toBeInTheDocument();
   expect(screen.getByRole('switch', { name })).toHaveAttribute('aria-checked', 'true');
 });
+
+// Card #134 round 4: a failed READ of the setting used to leave the row missing with no word.
+it('says so with Try again when the usage stats setting cannot be read, and the switch appears once it can', async () => {
+  const getOptIn = vi.fn().mockRejectedValueOnce(new Error('no answer')).mockResolvedValue(true);
+  (window as any).claude = { analytics: { getOptIn, setOptIn: vi.fn() } };
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  render(<AboutPopup open onClose={() => {}} platform="desktop" version="1.3.1" />);
+  expect(await screen.findByText("Couldn't load the usage stats setting.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  expect(await screen.findByRole('switch', { name: 'Share anonymous usage stats' })).toHaveAttribute('aria-checked', 'true');
+  expect(screen.queryByText(/Couldn't load/)).toBeNull();
+});
+it('shows no read notice when the setting reads fine', async () => {
+  (window as any).claude = { analytics: { getOptIn: vi.fn().mockResolvedValue(false) } };
+  render(<AboutPopup open onClose={() => {}} platform="desktop" version="1.3.1" />);
+  await screen.findByRole('switch', { name: 'Share anonymous usage stats' });
+  expect(screen.queryByText(/Couldn't/)).toBeNull();
+});
+
+// Card #134 round 4: over remote, analytics:get-opt-in is not allowed — the row stays hidden, as before, with no failure box.
+it('shows no failure box when the setting read is "unsupported here" (remote), and the row stays hidden', async () => {
+  const unsupported = Object.assign(new Error('remote-unsupported: analytics:get-opt-in'), { code: 'REMOTE_UNSUPPORTED' });
+  const getOptIn = vi.fn().mockRejectedValue(unsupported);
+  (window as any).claude = { analytics: { getOptIn } };
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  render(<AboutPopup open onClose={() => {}} platform="desktop" version="1.3.1" />);
+  await waitFor(() => expect(getOptIn).toHaveBeenCalled());
+  await Promise.resolve(); await Promise.resolve();
+  expect(screen.queryByText(/Couldn't load/)).toBeNull();
+  expect(screen.queryByRole('switch', { name: 'Share anonymous usage stats' })).toBeNull();
+});

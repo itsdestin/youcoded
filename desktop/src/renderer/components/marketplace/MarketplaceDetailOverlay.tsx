@@ -8,6 +8,7 @@
 // the top card and the labelled sections come from DetailPage.tsx; its header
 // comment says which guide rule each piece follows.
 
+import { announceFailed } from '../../utils/announce';
 import React, { useEffect, useState } from "react";
 import { useMarketplace, installTrackingKey } from "../../state/marketplace-context";
 import { useMarketplaceStats } from "../../state/marketplace-stats-context";
@@ -107,7 +108,7 @@ export default function MarketplaceDetailOverlay({
         member={member}
         onInstall={() => mp.installSkill(entry.id).catch(() => undefined)}
         onUninstall={() => mp.uninstallSkill(entry.id).catch(() => undefined)}
-        onToggleFavorite={() => mp.setFavorite(entry.id, !favorited).catch(() => undefined)}
+        onToggleFavorite={() => mp.setFavorite(entry.id, !favorited).catch((e) => announceFailed('change your favorites', e))}
         onShare={onOpenShareSheet ? () => onOpenShareSheet(entry.id) : undefined}
       />
     );
@@ -131,7 +132,7 @@ export default function MarketplaceDetailOverlay({
       onInstall={() => mp.installTheme(entry.slug).catch(() => undefined)}
       onUninstall={() => mp.uninstallTheme(entry.slug).catch(() => undefined)}
       onApply={() => setTheme(entry.slug)}
-      onToggleFavorite={() => mp.favoriteTheme(entry.slug, !favorited).catch(() => undefined)}
+      onToggleFavorite={() => mp.favoriteTheme(entry.slug, !favorited).catch((e) => announceFailed('change your favorites', e))}
       onShare={onOpenThemeShare ? () => onOpenThemeShare(entry.slug) : undefined}
     />
   );
