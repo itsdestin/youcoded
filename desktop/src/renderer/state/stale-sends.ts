@@ -20,8 +20,6 @@ export const SETTLE_BOUND_MS = 10_000;
 export const GIVE_UP_MS = 60_000;
 /** How far from the end to look. Pending bubbles live at (or, once stale, near) the end; this keeps the periodic check cheap on long chats. */
 const SCAN_TAIL = 60;
-/** Clock slack when placing a settled bubble against reply times (a phone's clock can differ from the computer's). */
-const CLOCK_SLACK_MS = 2_000;
 
 type UserEntry = Extract<TimelineEntry, { kind: 'user' }>;
 
@@ -69,13 +67,15 @@ function applyStaleSends(session: SessionChatState, messageIds: readonly string[
       if (rest.some(e => e.kind === 'user' && e.uuid === uuid)) { timeline = rest; changed = true; continue; }
       session.seenUuids.add(uuid); // a late echo of the same line must not draw a second copy
       const settled: TimelineEntry = { kind: 'user', message: entry.message, pending: false, uuid };
-      timeline = insertSettled(rest, idx, settled, session, entry.message.timestamp);
+      timeline = insertSettled(rest, idx, settled, entry.sentAfterTurn);
       changed = true; settledAny = true;
       continue;
     }
     if (entry.sendStale || age < GIVE_UP_MS) continue;
-    // A refused draft already says it did not send; a dismissed doubt is not raised again; a bubble with no sendId has no buttons to offer.
-    const note = entry.sendNote || entry.sendRefused || entry.sendNoteDismissed || !entry.sendId ? {} : { sendNote: 'unsure' as const };
+    // A refused draft already says it did not send; a dismissed doubt is not raised again; a bubble with no sendId has no buttons to offer;
+    // a slash command often gets no echo at all by design, and "Send again" would run it twice (code review, 2026-11-18).
+    const quiet = entry.sendNote || entry.sendRefused || entry.sendNoteDismissed || !entry.sendId || entry.message.content.trimStart().startsWith('/');
+    const note = quiet ? {} : { sendNote: 'unsure' as const };
     const updated: UserEntry = { ...entry, ...note, sendStale: true };
     timeline = timeline.slice(); timeline[idx] = updated;
     changed = true;
@@ -84,18 +84,18 @@ function applyStaleSends(session: SessionChatState, messageIds: readonly string[
 }
 
 /**
- * Where a settled bubble goes: above the replies that came AFTER it was sent, within the run of non-message rows directly above where it sat.
- * The search stops at the first message row, so a wrong clock can at worst place it at the top of that run — never past an earlier message.
+ * Where a settled bubble goes: straight after the reply it was drawn after (`sentAfterTurn`), so everything that arrived while it sat
+ * pinned — its own answer, later messages — reads below it, in the order it happened. By identity, never by clock. No record (a bubble
+ * from before this field existed, or its reply scrolled out of a page) leaves it where it is.
  */
-function insertSettled(timeline: TimelineEntry[], at: number, entry: TimelineEntry, session: SessionChatState, sentAt: number): TimelineEntry[] {
+function insertSettled(timeline: TimelineEntry[], at: number, entry: TimelineEntry, after: string | undefined): TimelineEntry[] {
   let place = at;
-  for (let i = at - 1; i >= 0; i--) {
-    const e = timeline[i];
-    if (e.kind === 'user') break;
-    if (e.kind !== 'assistant-turn') continue;
-    const t = session.assistantTurns.get(e.turnId)?.timestamp;
-    if (t === undefined || t < sentAt - CLOCK_SLACK_MS) break;
-    place = i;
+  if (after === '') {
+    const first = timeline.findIndex(e => e.kind === 'assistant-turn');
+    if (first >= 0 && first < at) place = first;
+  } else if (after !== undefined) {
+    const anchor = timeline.findIndex(e => e.kind === 'assistant-turn' && e.turnId === after);
+    if (anchor >= 0 && anchor < at) place = anchor + 1;
   }
   return [...timeline.slice(0, place), entry, ...timeline.slice(place)];
 }

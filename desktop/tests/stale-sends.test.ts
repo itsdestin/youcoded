@@ -4,7 +4,7 @@
 // Reproduced in a dev copy the same day: a picture attached with no words reached Claude Code as only its `Attached: "…"` line and was
 // answered, but the chat's bubble stayed pending under the reply. The watcher reads that line back as text '' plus attachedFiles, and
 // eventToAction dropped every user message with no text. These tests pin the fix and the general safety net (state/stale-sends.ts).
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import { dueStaleSends, SETTLE_BOUND_MS, GIVE_UP_MS } from '../src/renderer/state/stale-sends';
@@ -28,10 +28,8 @@ const done = (uuid: string, t: number) => ({ type: 'TRANSCRIPT_TURN_COMPLETE', s
 const bound = (sendId: string, uuid: string): ChatAction => ({ type: 'QUEUE_SYNCED', sessionId: SID, queue: [], bound: [{ sendId, uuid }] });
 const stale = (s: ChatState, now: number): ChatAction[] => {
   const ids = dueStaleSends(s.get(SID)!.timeline, now);
-  return ids.length ? [{ type: 'SENDS_STALE', sessionId: SID, messageIds: ids }] : [];
+  return ids.length ? [{ type: 'SENDS_STALE', sessionId: SID, messageIds: ids, now }] : [];
 };
-
-afterEach(() => { vi.useRealTimers(); });
 
 describe('a picture sent with no words', () => {
   // What the transcript watcher emits for Claude Code's line `Attached: "<path>"` (shared/claude-queue-wire.ts parseQueueWire).
@@ -70,7 +68,6 @@ describe('a bubble the echo never confirms is not pinned at the bottom forever',
   });
 
   it('settles a bubble the computer says Claude Code recorded: an ordinary message, back above the reply that answered it, no note', () => {
-    vi.useFakeTimers(); vi.setSystemTime(100_000);
     // An older exchange, then the stuck send: recorded (bound) but its echo was never matched; the reply arrived above it.
     let s = run([sendWords('earlier', 1_000), { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SID, uuid: 'u0', text: 'earlier', timestamp: 1_000 },
       reply('Earlier answer.', 'a0', 2_000), done('t0', 2_100),
@@ -87,7 +84,6 @@ describe('a bubble the echo never confirms is not pinned at the bottom forever',
   });
 
   it('gives up on a bubble with no sign of arrival: a doubt note, and later messages go below it', () => {
-    vi.useFakeTimers(); vi.setSystemTime(200_000);
     let s = run([sendWords('lost', 100_000, 'send-1')]);
     expect(s.get(SID)!.isThinking).toBe(true);
     s = run(stale(s, 200_000), s);
@@ -103,7 +99,6 @@ describe('a bubble the echo never confirms is not pinned at the bottom forever',
   });
 
   it('a late echo still confirms a given-up bubble, and the note goes', () => {
-    vi.useFakeTimers(); vi.setSystemTime(200_000);
     let s = run([sendWords('slow', 100_000, 'send-1')]);
     s = run(stale(s, 200_000), s);
     s = run([{ type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SID, uuid: 'u1', text: 'slow', timestamp: 200_500 }], s);
@@ -113,8 +108,34 @@ describe('a bubble the echo never confirms is not pinned at the bottom forever',
     expect(tl(s)[0].sendStale).toBeUndefined();
   });
 
+  it('a message sent the moment a reply ended settles after that reply, not above it', () => {
+    // Reply A's last event lands half a second before B is sent; B is recorded but its echo is missed, and B's answer arrives above it.
+    let s = run([sendWords('a', 1_000), { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SID, uuid: 'ua', text: 'a', timestamp: 1_000 },
+      reply('Answer A.', 'ra', 49_500), done('ta', 49_500),
+      sendWords('b', 50_000, 'send-b'), bound('send-b', 'ub'), reply('Answer B.', 'rb', 51_000), done('tb', 51_100)]);
+    s = run(stale(s, 70_000), s);
+    expect(order(s)).toEqual(['user:a', 'assistant-turn', 'user:b', 'assistant-turn']);
+    const turns = tl(s).filter(e => e.kind === 'assistant-turn').map(e => s.get(SID)!.assistantTurns.get(e.turnId)!.segments.map((g: any) => g.text ?? g.content).join(''));
+    expect(turns[0]).toContain('Answer A.');
+  });
+
+  it('retyping the words of a given-up message confirms the new bubble, not the old one', () => {
+    let s = run([sendWords('yes', 100_000, 'send-1')]);
+    s = run(stale(s, 200_000), s);
+    s = run([sendWords('yes', 200_100, 'send-2'), { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SID, uuid: 'u2', text: 'yes', timestamp: 200_200 }], s);
+    const users = tl(s).filter(e => e.kind === 'user');
+    expect(users.find(e => e.sendId === 'send-1')).toMatchObject({ pending: true, sendStale: true, sendNote: 'unsure' });
+    expect(users.find(e => e.uuid === 'u2')).toMatchObject({ pending: false });
+  });
+
+  it('gives up on a slash command quietly: no note, since many get no echo and Send again would run it twice', () => {
+    let s = run([sendWords('/compact', 100_000, 'send-1')]);
+    s = run(stale(s, 200_000), s);
+    expect(tl(s)[0]).toMatchObject({ pending: true, sendStale: true });
+    expect(tl(s)[0].sendNote).toBeUndefined();
+  });
+
   it('adds no note where one would be wrong or useless, but still releases the bubble', () => {
-    vi.useFakeTimers(); vi.setSystemTime(200_000);
     let s = run([sendWords('no id', 100_000), // a bubble with no send id has no Send again / Dismiss to offer
       // Dismiss is only offered once a doubt note is showing (a phone's reconnect check put one there).
       sendWords('dismissed', 100_000, 'send-d'), { type: 'SEND_NOTE', sessionId: SID, sendId: 'send-d', note: 'unsure' },

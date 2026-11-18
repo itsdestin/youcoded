@@ -268,8 +268,9 @@ export type TimelineEntry =
   // `sendTransport: 'queue'` = a Claude Code send handed to the host queue (never given the terminal's retry Enter); `boundUuid` = the transcript line the
   // host says it became, so the bubble is confirmed by identity even when Claude Code recorded different words.
   // `sendStale` (2026-11-18): the screen gave up waiting for this bubble's echo (stale-sends.ts). It stays pending, so a late echo still
-  // confirms it, but it is no longer held at the bottom under every later reply (appendAbovePending).
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty' | 'queue'; boundUuid?: string; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean; sendRefused?: true; sendStale?: true }
+  // confirms it, but it is no longer held at the bottom under every later reply (appendAbovePending). `sentAfterTurn`: the reply it was
+  // drawn after ('' = none), where a settled bubble goes back to (local-user-message.ts).
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty' | 'queue'; boundUuid?: string; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean; sendRefused?: true; sendStale?: true; sentAfterTurn?: string }
   | { kind: 'assistant-turn'; turnId: string; afterMarkerId?: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -608,6 +609,8 @@ export type ChatAction =
       sessionId: string;
       /** `message.id` of each stale bubble (not every bubble has a sendId). */
       messageIds: string[];
+      /** The clock the hook judged ages by, so the reducer stays pure. */
+      now: number;
     }
   | {
       // "Send again": the unconfirmed bubble goes, and the same words go out as a new send with its own bubble (one-core R5-4b).

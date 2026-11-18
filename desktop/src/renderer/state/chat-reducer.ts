@@ -1085,7 +1085,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'SENDS_STALE': { // a sent bubble is never pinned at the bottom forever (stale-sends.ts, Destin 2026-11-18)
-      const session = next.get(action.sessionId), updated = session && reduceSendsStale(session, action.messageIds, Date.now(), spinnerWithNoTurn);
+      const session = next.get(action.sessionId), updated = session && reduceSendsStale(session, action.messageIds, action.now, spinnerWithNoTurn);
       return updated ? (next.set(action.sessionId, updated), next) : state;
     }
 
@@ -1518,11 +1518,12 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // A queue send's bubble is confirmed by identity first (queue-bubbles.ts): Claude Code records the queue's wording.
       confirmedIdx = boundPendingIndex(session.timeline, action.uuid);
       if (confirmedIdx >= 0) confirmedEntry = session.timeline[confirmedIdx] as Extract<TimelineEntry, { kind: 'user' }>;
-      for (let i = 0; confirmedIdx < 0 && i < session.timeline.length; i++) {
-        const entry = session.timeline[i];
+      // Two passes: bubbles still waiting first, given-up ones (stale-sends.ts) only after — else a retyped "yes" confirmed the lost one.
+      for (let k = 0, n = session.timeline.length; confirmedIdx < 0 && k < 2 * n; k++) {
+        const i = k % n, entry = session.timeline[i];
         if (
           entry.kind === 'user' &&
-          entry.pending === true &&
+          entry.pending === true && (k < n) !== !!entry.sendStale &&
           // WHY: a directly refused native draft was never accepted; older identical history cannot confirm it.
           // Ordinary send-outcome notes may still be corrected by a later real echo (especially Claude Code).
           !entry.sendRefused &&
