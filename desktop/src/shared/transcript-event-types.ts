@@ -185,6 +185,12 @@ interface AssistantTextData extends SubagentStamp, StreamPart {
   text: string;
   /** Model ID that wrote it (CC and Kotlin; the native runtime puts it on turn-complete). */
   model?: string;
+  /** Claude Code only: the error label CC stamps on a reply it wrote ITSELF instead of a
+   *  model (`isApiErrorMessage` lines) — 'authentication_failed', 'rate_limit',
+   *  'server_error', … Every "Please run /login" reply carries 'authentication_failed'
+   *  whatever its wording, so the chat draws a sign-in card from this, never from the
+   *  text (card #236; 13 of 13 local samples, 2026-11-17). */
+  apiError?: string;
 }
 
 interface ToolUseData extends SubagentStamp {

@@ -53,6 +53,17 @@ describe('ProviderRegistry', () => {
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
+  it('OpenRouter remembers how it was connected, shows it on the list, and keeps it across a row edit', async () => {
+    const via = async () => (await reg.list()).find((p) => p.id === 'openrouter')?.connectedVia;
+    expect(await via()).toBeUndefined(); // older connections: unknown
+    await reg.setKey('openrouter', 'sk-or-typed');
+    expect(await via()).toBe('key'); // the key window
+    await reg.setKey('openrouter', 'sk-or-browser', 'browser');
+    expect(await via()).toBe('browser'); // Sign in with OpenRouter
+    await reg.upsert({ id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true });
+    expect(await via()).toBe('browser'); // an edit must not forget it
+  });
+
   it('endpointKey answers the saved key, and undefined for a provider without one or an unknown id', async () => {
     const id = await reg.upsert({ type: 'openai-compatible', label: 'Mine', baseUrl: 'https://x.example.com/v1', enabled: true });
     expect(await reg.endpointKey(id)).toBeUndefined();

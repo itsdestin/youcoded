@@ -13,6 +13,8 @@ import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
 import { getCapabilities } from '../platform';
+import { startSignIn, cancelSignIn, resetSignIn, useSignInPhase, type SignInProvider } from '../state/provider-sign-in-store';
+import { recheckExpiredSignIns } from '../hooks/useExpiredSignIns';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 // The provider blocks of Settings → Assistant settings (2026-09-05). This file
@@ -133,6 +135,37 @@ function useClaudePlanUsage(): PlanUsage | null {
   return usage;
 }
 
+// ── Sign-in notices (card #236) ──────────────────────────────────────────────
+
+/** "Nov 23" — the day a sign-in ends, in the user's own locale. */
+function endsLabel(iso: string): string | null {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/**
+ * The notice across a provider card's foot for a sign-in that ran out or is under
+ * way — the same words and buttons as the chat's card (SignInNotices.tsx), so
+ * Settings and the chat always agree. Null when there is nothing to say.
+ */
+function signInNotice(provider: SignInProvider, phase: ReturnType<typeof useSignInPhase>['phase'], expired: boolean, canSignIn: boolean, expiredText: string): ProviderNotice {
+  const again = () => void startSignIn(provider);
+  // While the browser is open the card's own status line says so (Waiting for the browser…) and
+  // Cancel takes the top-right button — the same as the ChatGPT card always did. Not a notice:
+  // nothing has gone wrong.
+  if (phase === 'checking' || phase === 'waiting') return null;
+  // Red like the other sign-in notices (review R-4/R-9).
+  if (phase === 'offline') return { tone: 'danger', text: 'No internet connection. Connect, then try again.', actions: <Button size="sm" onClick={again}>Try again</Button> };
+  if (phase === 'failed') return { tone: 'danger', text: "Signing in didn't finish.", actions: <Button size="sm" onClick={again}>Try again</Button> };
+  if (!expired || phase === 'signed-in') return null;
+  // A phone or browser connected to the computer cannot start the sign-in (round 1 Q-remote).
+  if (!canSignIn) return { tone: 'danger', text: `${expiredText} Sign in again from your host computer.` };
+  // "Sign in", not "Sign in again" (review R-6).
+  return { tone: 'danger', text: expiredText, actions: <Button size="sm" onClick={again}>Sign in</Button> };
+}
+
+type ProviderNotice = { tone: 'warning' | 'danger'; text: React.ReactNode; actions?: React.ReactNode } | null;
+
 // ── 1. Claude Code ───────────────────────────────────────────────────────────
 
 export function ClaudeCodeBlock({
@@ -151,8 +184,15 @@ export function ClaudeCodeBlock({
   // opening Settings always re-asks rather than trusting main's 60s cache.
   const { status, refresh } = useClaudeStatus();
   useEffect(() => { refresh(); }, [refresh]);
+  // Opening the card forgets an earlier finished outcome so a NEW expiry shows its notice (review F1).
+  useEffect(() => { resetSignIn('claude'); }, []);
+  // Card #236: the shared sign-in flow, so pressing Sign in here and on the chat's card is one flow.
+  const signInPhase = useSignInPhase('claude').phase;
+  useEffect(() => { if (signInPhase === 'signed-in') refresh(); }, [signInPhase, refresh]);
+  const canSignIn = getCapabilities().openExternal;
 
   const signedIn = status?.state === 'signed-in';
+  const expired = status?.state === 'signed-in' && status.expired === true;
   // First-run local models (F-5): Claude Code now installs only when someone
   // chooses Claude, so a missing install is fixed here, in place.
   const [installing, setInstalling] = useState(false);
@@ -183,8 +223,15 @@ export function ClaudeCodeBlock({
     // limits that do not exist.
     line = status.apiKey
       ? 'Connected with an Anthropic API key'
+      // Card #236: an expired sign-in no longer claims "Signed in as …" (the ChatGPT card's words).
+      : expired ? 'Sign-in expired'
       : status.email ? `Signed in as ${status.email}` : 'Signed in with your Claude account';
-    detail = status.apiKey ? { text: 'Billed per token — no plan limits.' } : { text: claudePlanLabel(status.plan) };
+    // Card #236 (round 1 Q-warn-ahead, "a line in Settings"): when the sign-in ends, read
+    // from Claude Code itself. Quiet: no dot, no pop-up, until it actually runs out.
+    const ends = !expired && status.expiresAt ? endsLabel(status.expiresAt) : null;
+    detail = status.apiKey ? { text: 'Billed per token — no plan limits.' }
+      : expired ? null
+      : { text: ends ? `${claudePlanLabel(status.plan)}. Sign-in expires ${ends}.` : claudePlanLabel(status.plan) };
   } else if (status?.state === 'signed-out') {
     line = 'Not signed in';
     detail = { text: "Your Claude plan's models, in YouCoded's assistant." };
@@ -205,6 +252,11 @@ export function ClaudeCodeBlock({
     // and everything keeps working, because "unknown" never blocks a model.
     line = "Signed-in state couldn't be read";
     detail = { text: 'Your models still work; this line will catch up.' };
+  }
+  // Card #236: a sign-in under way (from here or the chat's card) says so on the status line.
+  if (signInPhase === 'checking' || signInPhase === 'waiting') {
+    line = <span className="inline-flex items-center gap-1.5"><BrailleSpinner size="sm" />Waiting for the browser…</span>;
+    detail = null;
   }
   const claudeUsage = useClaudePlanUsage();
   const [signOutOpen, setSignOutOpen] = useState(false);
@@ -236,9 +288,15 @@ export function ClaudeCodeBlock({
         }}
         status={line}
         detail={detail}
+        // Card #236: an expired sign-in, or a sign-in under way, is one notice across the card's foot with its fix inside.
+        notice={signInNotice('claude', signInPhase, expired, canSignIn, 'Your Claude sign-in has expired.')}
         account={signedIn ? 'https://claude.ai/settings/usage' : undefined}
         action={
           <>
+            {(signInPhase === 'checking' || signInPhase === 'waiting') && (
+              <Button variant="secondary" size="sm" onClick={() => cancelSignIn('claude')}>Cancel</Button>
+            )}
+
             {onOpenClaudePreferences && (
               <Button variant="secondary" size="sm" onClick={() => { onCloseParent(); onOpenClaudePreferences(); }}>
                 Preferences
@@ -248,6 +306,10 @@ export function ClaudeCodeBlock({
               <Button variant="secondary" size="sm" onClick={() => setSignOutOpen(true)}>
                 Sign out
               </Button>
+            )}
+            {/* Card #236 (last, so the filled button sits at the right): until now the app could not sign Claude Code in after first launch at all. */}
+            {status?.state === 'signed-out' && canSignIn && signInPhase === 'idle' && (
+              <Button size="sm" onClick={() => void startSignIn('claude')}>Sign in</Button>
             )}
             {status?.state === 'not-installed' && (
               <Button variant="secondary" size="sm" onClick={installClaudeCode} disabled={installing}>
@@ -318,6 +380,8 @@ export function ChatGptBlock() {
   // WHY: the account is visible remotely too, but OAuth must open a browser on
   // the backend's own device. Android local has this ability; visiting clients do not.
   const canSignIn = getCapabilities().openExternal;
+  const signInPhase = useSignInPhase('chatgpt').phase;
+  useEffect(() => { resetSignIn('chatgpt'); }, []); // review F1: a new expiry must not hide behind an old outcome
   const [status, setStatus] = useState<ChatGptAccountStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -326,6 +390,8 @@ export function ChatGptBlock() {
     try { setStatus(await chatGptApi().status()); }
     catch (e) { setNote(e instanceof Error ? e.message : 'Could not read the ChatGPT sign-in state.'); }
   }, []);
+  // A sign-in finished through the shared flow (here or on the chat's card) re-reads the account.
+  useEffect(() => { if (signInPhase === 'signed-in') void refresh(); }, [signInPhase, refresh]);
   // Gated: a build with ChatGPT switched off must not call its IPC at all —
   // the card is gone, not merely blank (guarded by plan-windows-other.test).
   useEffect(() => { if (!supported) return; void refresh(); }, [refresh, supported]);
@@ -426,6 +492,9 @@ export function ChatGptBlock() {
     // OpenAI's own words, verbatim — never a guessed cause.
     line = `Signed in as ${status.email}`;
     detail = { text: status.reason, tone: 'bad' };
+  } else if (status?.state === 'signed-out' && status.expired) {
+    // Card #236: OpenAI refused to renew it — say so, rather than "Not signed in" as if it never was.
+    line = 'Sign-in expired';
   } else if (status?.state === 'signed-out' && status.reauth) {
     // Questions deck Q-2: a sign-in made the old way is asked for once more,
     // in plain words, rather than failing every message.
@@ -448,9 +517,9 @@ export function ChatGptBlock() {
       onClick={() => void run(() => chatGptApi().signOut(), 'Could not sign out.')}>
       Sign out
     </Button>
-  ) : canSignIn ? (
-    <Button size="sm" disabled={busy || !status}
-      onClick={() => void run(() => chatGptApi().signIn(), 'Could not open the sign-in page.')}>
+  ) : canSignIn && !(status?.state === 'signed-out' && status.expired) && signInPhase === 'idle' ? (
+    // Card #236: through the shared flow, which checks the connection before opening the browser.
+    <Button size="sm" disabled={busy || !status} onClick={() => void startSignIn('chatgpt')}>
       Sign in with ChatGPT
     </Button>
   ) : null;
@@ -504,7 +573,8 @@ export function ChatGptBlock() {
         // (provider-notices#PN-4: "much taller than it needs to be") — it stays
         // with the card's other buttons at the top.
         notice={status?.state === 'blocked' && !note ? { tone: 'danger', text: status.reason }
-          : status?.state === 'signed-out' && !canSignIn ? { tone: 'warning', text: 'To connect ChatGPT, sign in on the host device.' } : null}
+          : signInNotice('chatgpt', signInPhase, status?.state === 'signed-out' && status.expired === true, canSignIn, 'Your ChatGPT sign-in has expired.')
+            ?? (status?.state === 'signed-out' && !canSignIn ? { tone: 'warning', text: 'To connect ChatGPT, sign in on the host device.' } : null)}
         // Review R-1 (Destin, 2026-10-06): the official card keeps My Account
         // like today; Manage usage lives only on the limit message.
         account={status?.state === 'signed-in' || status?.state === 'blocked' ? 'https://chatgpt.com/#settings/Account' : undefined}
@@ -649,10 +719,19 @@ export function OpenRouterBlock() {
       wasWaiting.current = false;
       void refresh();
       invalidateProviderTypeCache();
+      recheckExpiredSignIns(); // review F5: the gear's dot looks again once this sign-in ends
     }
   }, [signIn.state, readSignIn, refresh]);
 
+  // Card #236 (Q-offline-signin "stop and say so"): offline, the browser stays closed and the
+  // card says why, instead of a tab that never loads and a timeout minutes later.
+  const [offline, setOffline] = useState(false);
   const startSignIn = async () => {
+    try {
+      const net = await (window as any).claude?.network?.check?.();
+      if (net?.online === false) { setOffline(true); return; }
+    } catch { /* a failed check proves nothing — go on */ }
+    setOffline(false);
     try {
       await openRouterSignInApi()!.signIn();
     } catch (e) {
@@ -723,14 +802,23 @@ export function OpenRouterBlock() {
           // WHY one notice with its fix inside (ui-status-pills#PL-1/PL-2): a broken
           // key is the danger box holding the way back in; an unchecked key the
           // warning box holding Replace key and Try again (the filled one).
-          notice={waiting || !connected || !(words.broken || words.unchecked) || !words.detail ? null : {
+          notice={offline && !waiting ? { tone: 'danger', text: 'No internet connection. Connect, then try again.',
+              actions: <Button size="sm" onClick={() => void startSignIn()}>Try again</Button> }
+            : waiting || !connected || !(words.broken || words.unchecked) || !words.detail ? null : {
             tone: words.broken ? 'danger' : 'warning',
             text: words.detail.text,
             actions: words.broken ? (signInSupported ? (
+              // Card #236: when the app recorded how it was connected, only that way back is offered.
+              openrouter?.connectedVia === 'key' ? (
+                <Button size="sm" onClick={() => setConnectOpen(true)}>API Key</Button>
+              ) : openrouter?.connectedVia === 'browser' ? (
+                <Button size="sm" onClick={() => void startSignIn()}>Sign in with OpenRouter</Button>
+              ) : (
               <>
                 <Button variant="secondary" size="sm" onClick={() => setConnectOpen(true)}>API Key</Button>
                 <Button size="sm" onClick={() => void startSignIn()}>Sign in with OpenRouter</Button>
               </>
+              )
             ) : (
               <Button size="sm" onClick={() => setConnectOpen(true)}>Replace key</Button>
             )) : (
@@ -748,6 +836,12 @@ export function OpenRouterBlock() {
             // Two separate ways in, side by side (review SI-1/SI-5): API Key
             // opens the paste window, Sign in goes straight to the browser.
             // A refused key gets the same pair — it is "not connected" again.
+            // Card #236: a refused key whose way of connecting was recorded offers only that way back.
+            connected && words.broken && openrouter?.connectedVia === 'key' ? (
+              <Button size="sm" onClick={() => setConnectOpen(true)}>API Key</Button>
+            ) : connected && words.broken && openrouter?.connectedVia === 'browser' ? (
+              <Button size="sm" onClick={() => void startSignIn()}>Sign in with OpenRouter</Button>
+            ) : (
             <>
               <Button variant="secondary" size="sm" onClick={() => setConnectOpen(true)}>
                 API Key
@@ -756,6 +850,7 @@ export function OpenRouterBlock() {
                 Sign in with OpenRouter
               </Button>
             </>
+            )
           ) : connected ? (
             // A refused key makes Replace key the one thing to do, so it takes
             // the primary style; on a working key it stays an outline peer.
@@ -820,6 +915,7 @@ function ConnectOpenRouterModal({
       }
       await window.claude.providers.setKey(providerId, value);
       await onSaved();
+      recheckExpiredSignIns(); // review F5: a new key can clear the gear's red dot
       if (res?.ok) {
         setNote({ tone: 'ok', text: res?.message ?? 'Connected.' });
         setKeyDraft('');

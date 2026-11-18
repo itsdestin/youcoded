@@ -246,6 +246,20 @@ describe('restoreArchive — the undo path', () => {
     expect(onDisk().artifacts.filter((a) => a.id.startsWith('D'))).toHaveLength(dead.length);
   });
 
+  it('restores an outside file even when a different outside file with the same name is present', async () => {
+    seed();
+    const ext = (id: string, abs: string): ArtifactRecord => ({ ...record(id, 'REPORT.md', 1), kind: 'external', absolutePath: abs });
+    const sc = onDisk();
+    sc.artifacts.push(ext('E-live', '/tmp/a/REPORT.md'));
+    fs.writeFileSync(sidecarFile(root), JSON.stringify(sc));
+    _resetSidecarCacheForTests();
+    fs.mkdirSync(archiveDir(root), { recursive: true });
+    fs.writeFileSync(path.join(archiveDir(root), '0001-manual.jsonl.gz'),
+      zlib.gzipSync(JSON.stringify(ext('E-archived', '/docs/b/REPORT.md')) + '\n'));
+    expect((await restoreArchive(root, { ids: ['E-archived'] })).restored).toBe(1);
+    expect(onDisk().artifacts.filter((a) => a.path === 'REPORT.md').map((a) => a.id).sort()).toEqual(['E-archived', 'E-live']);
+  });
+
   it('with no archive it restores nothing and says so', async () => {
     seed();
     expect(await restoreArchive(root)).toMatchObject({ status: 'restored', restored: 0 });

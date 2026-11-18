@@ -7,6 +7,7 @@
 // computer (a question for Destin in the R3-6 report). Android's own app refuses it; that is not this door.
 import { IPC } from '../../shared/backend-contract';
 import { installClaude, nodeRefusal } from '../prerequisite-installer';
+import { claudeSignIn } from '../claude-sign-in';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
 export const claudeCodeChannels: MainChannelDef[] = [
@@ -30,5 +31,20 @@ export const claudeCodeChannels: MainChannelDef[] = [
       ctx.runtime?.claudeAccount?.invalidate();
       return result;
     },
+  }),
+  // Sign in again (card #236). Reuses first launch's `claude auth login` (claude-sign-in.ts). `desktopOnly`: a VISITING
+  // phone is refused and told false (its card says "Sign in again from your host computer"); the Android app's own page
+  // is the backend's owner and is let through, as for first-run sign-in. A thrown sentence reaches the card as-is.
+  defineChannel({
+    name: IPC.CLAUDE_CODE_SIGN_IN, kind: 'handle', desktopOnly: true, refusal: { kind: 'reply', payload: false },
+    handler: async (_p, ctx) => {
+      const account = ctx.runtime?.claudeAccount;
+      if (!account) return false;
+      return claudeSignIn.signIn(account);
+    },
+  }),
+  defineChannel({
+    name: IPC.CLAUDE_CODE_CANCEL_SIGN_IN, kind: 'handle', desktopOnly: true, refusal: { kind: 'reply', payload: false },
+    handler: () => claudeSignIn.cancel(),
   }),
 ];
