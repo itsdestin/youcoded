@@ -109,6 +109,23 @@ function networkCodeOf(e: any): string | undefined {
   return undefined;
 }
 
+/** True when the failed request went to THIS machine or the local network (the local engine, Ollama,
+ *  LM Studio, a LAN server). WHY (card #236 review F3): such a failure is the local server being down, not the
+ *  internet — blaming the connection there would invent a cause, and local models are meant to work offline.
+ *  Reads the request address the AI SDK puts on its error (`url`), never the message. */
+export function failedAgainstLocalServer(error: unknown, providerType?: string): boolean {
+  if (providerType === 'local-engine') return true;
+  const e: any = (error as any)?.lastError ?? error;
+  let host = '';
+  try { host = new URL(String(e?.url ?? '')).hostname.replace(/^\[|\]$/g, ''); } catch { return false; }
+  if (!host) return false;
+  if (host === 'localhost' || host === '::1' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  const m = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (!m) return false;
+  const a = Number(m[1]); const b = Number(m[2]);
+  return a === 127 || a === 10 || a === 0 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254);
+}
+
 /** A network failure the app's own connection check confirmed (card #236): the computer is offline.
  *  Thrown by the harness's retry layer so the turn ends at once instead of waiting out the ladder. */
 export class NoInternetError extends Error {

@@ -17,7 +17,7 @@ import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow, ContextCannotFitError } from '../providers/context-overflow';
 import { capResultAndSave } from './tool-result-room';
 import { imageTooLarge, manyImageEdgeLimit } from '../providers/image-too-large';
-import { classifyFailure, abortableDelay, retryWaitMs, logTurnFailure, NoInternetError, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
+import { classifyFailure, abortableDelay, retryWaitMs, logTurnFailure, NoInternetError, failedAgainstLocalServer, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
 import { checkInternet as realCheckInternet } from '../network-check';
 import { truncationRecovery, CONTINUE_TURN_TEXT } from './truncation-recovery';
 import { cacheTokensForStep } from './cache-usage';
@@ -4494,7 +4494,8 @@ export class HarnessSession extends EventEmitter {
         // own check BEFORE the retry ladder (about a minute of waiting): offline ends the turn at once with
         // the red "No internet" card, whose Try again is the existing continue-turn. Online (or a check
         // that cannot say) keeps today's behaviour exactly. Only on the first failure of a step.
-        if (attempt === 0 && classifyFailure(err).code === 'network'
+        // (Not for a server on this machine or the local network: that failure is the server, not the internet.)
+        if (attempt === 0 && classifyFailure(err).code === 'network' && !failedAgainstLocalServer(err, this.profile.providerType)
           && !(await (this.opts.checkInternet ?? realCheckInternet)().catch(() => true))) {
           throw new NoInternetError(err);
         }
