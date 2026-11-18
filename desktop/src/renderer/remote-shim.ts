@@ -3520,7 +3520,8 @@ export function installShim(): void {
       signIn: () => invoke('claude-code:sign-in'),
       cancelSignIn: () => invoke('claude-code:cancel-sign-in'),
     },
-    // Card #236: the host's own connection check (it reports the HOST's network).
+    // Card #236: the computer's own connection check. Refused to a visiting phone (main/ipc/network.ts
+    // says why); the Android app's own screen, the backend's owner, gets the real answer.
     network: {
       check: () => invoke('network:check'),
     },
