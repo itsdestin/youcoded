@@ -108,6 +108,13 @@ describe('Backup & sync on a phone running its own backend', () => {
     expect(screen.queryByText('Backed up')).toBeNull();
   });
 
+  it('has no "Back up all now" when every saved backup is one that cannot run here', async () => {
+    asPhone(); stub([DRIVE, GITHUB]);
+    render(<SyncSection autoOpen />);
+    await screen.findByText('Not available on this phone');
+    expect(screen.queryByRole('button', { name: /Back up all now/ })).toBeNull();
+  });
+
   it('offers no way to add a backup (no Add a backup button, no inline Drive / iCloud picker)', async () => {
     asPhone(); stub([GITHUB]);
     render(<SyncSection autoOpen />);

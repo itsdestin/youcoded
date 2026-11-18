@@ -1510,7 +1510,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               const list = status?.backends ?? [];
               const masterOn = list.some(b => b.syncEnabled) || additionalIntent;
               const pausedCount = list.filter(b => !b.syncEnabled).length;
-              const anyActive = list.some(b => b.syncEnabled);
+              // On a phone an entry that cannot copy anything does not count: "Back up all now" would do nothing.
+              const anyActive = list.some(b => b.syncEnabled && !(onOwnPhone() && backupEntryNotice(b.type)));
               const isOffline = (status?.warnings ?? []).some(w => w.code === 'OFFLINE');
               // WHY (backup fixes 2026-11-18): on a phone running its own backend no kind of second copy can be
               // started, so with nothing already saved this card would be a switch that leads nowhere.
