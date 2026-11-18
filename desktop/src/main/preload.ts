@@ -2238,9 +2238,8 @@ contextBridge.exposeInMainWorld('claude', {
     cancelSignIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.OPENROUTER_CANCEL_SIGN_IN)),
   },
   // Claude Code's own sign-in, read live from `claude auth status` (2026-09-09).
-  // No sign-out verb on purpose: Claude Code owns its login and the app cannot clear it
-  // (the card points at /logout in a terminal). Sign-in DOES exist since card #236
-  // (2026-11-18): signIn/cancelSignIn run the first-launch `claude auth login` again.
+  // No sign-out verb on purpose: Claude Code owns its login and the app cannot clear it. Sign-in
+  // exists since card #236: signIn/cancelSignIn rerun the first-launch `claude auth login`.
   // `refresh: true` drops main's 60s cache first; the Cloud providers page
   // passes it so opening Settings always shows today's answer.
   claudeCode: {
