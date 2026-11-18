@@ -396,7 +396,8 @@ const BASE = [
   { name: 'slash-theme', description: '/theme (menu with a diff preview inside)', steps: slash('theme', 'Choose the text style') },
   { name: 'slash-login', description: '/login (menu)', steps: slash('login', 'Select login method') },
   { name: 'slash-help', description: '/help (tabs, shortcut table)', steps: slash('help', 'for shell mode') },
-  { name: 'slash-usage', description: '/usage (information panel)', steps: slash('usage', 'Total cost') },
+  // 2.1.326 renamed the panel's "Total cost" row to "Estimated cost" (drift run 2026-11-17).
+  { name: 'slash-usage', description: '/usage (information panel)', steps: slash('usage', '(Total|Estimated) cost') },
   { name: 'slash-effort', description: '/effort (slider)', steps: slash('effort', 'Faster') },
   { name: 'slash-memory', description: '/memory (menu)', steps: slash('memory', 'Auto-memory') },
   {
