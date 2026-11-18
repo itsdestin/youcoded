@@ -217,6 +217,34 @@ function textBasics(bubble: Element | null): MenuEntry[] {
   ];
 }
 
+// Input types whose text can be selected and pasted into through the selection
+// API (setSelectionRange throws on email/number, so those stay native-only).
+const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'url', 'tel', 'password']);
+
+// Any other typing box in the app's own window: API key fields, search boxes,
+// rename fields, settings. WHY (issue #728, "Can not paste api keys"): Electron
+// shows no right-click menu of its own, and this menu used to cover only the
+// composer, the file editor and comment boxes — right-clicking an API key box
+// did nothing, so mouse users could not paste a key at all.
+// Gated on the computer's own window (nativeWindows): a remote browser and the
+// Android WebView already draw their own cut/copy/paste menu or long-press bar
+// for these boxes, and their clipboard read is often unavailable (plain-http
+// remote access), so taking over there would REPLACE a working native Paste
+// with one that can silently do nothing.
+// The terminal is excluded: xterm moves its hidden helper textarea under the
+// pointer on right-click, and its right-click belongs to the terminal.
+function plainTextField(target: HTMLElement): HTMLInputElement | HTMLTextAreaElement | null {
+  if (!getCapabilities().nativeWindows) return null;
+  if (target.closest('.xterm')) return null;
+  const el = target.closest('input, textarea');
+  if (el instanceof HTMLTextAreaElement) return el.readOnly || el.disabled ? null : el;
+  if (el instanceof HTMLInputElement) {
+    if (el.readOnly || el.disabled) return null;
+    return TEXT_INPUT_TYPES.has(el.getAttribute('type')?.toLowerCase() ?? '') ? el : null;
+  }
+  return null;
+}
+
 function editableMenu(el: HTMLTextAreaElement | HTMLInputElement, canAttachClipboardImage = false): MenuEntry[] {
   // Capture the selection NOW (at right-click), because auto-focusing the menu
   // blurs the textarea; we restore this range before each op so cut/copy/paste
@@ -229,11 +257,18 @@ function editableMenu(el: HTMLTextAreaElement | HTMLInputElement, canAttachClipb
     el.focus();
     el.setSelectionRange(selStart, selEnd);
   };
+  // WHY no Cut/Copy on a hidden-text box (an API key, a password): the box
+  // shows dots, so copying would put a secret on the clipboard the user never
+  // saw. Chromium's own menu greys them out there for the same reason.
+  const secret = el instanceof HTMLInputElement && el.type === 'password';
+  const clipboardOut: MenuEntry[] = secret ? [] : [
+    { type: 'item', id: 'cut', label: 'Cut', icon: 'cut', kbd: mod('X'), disabled: !hasSelection, run: () => { restore(); document.execCommand('cut'); } },
+    { type: 'item', id: 'copy', label: 'Copy', icon: 'copy', kbd: mod('C'), disabled: !hasSelection, run: () => { restore(); document.execCommand('copy'); } },
+  ];
   return [
     // execCommand cut/paste fire the native 'input' event, so React's controlled
     // onChange stays in sync — a manual value set would not.
-    { type: 'item', id: 'cut', label: 'Cut', icon: 'cut', kbd: mod('X'), disabled: !hasSelection, run: () => { restore(); document.execCommand('cut'); } },
-    { type: 'item', id: 'copy', label: 'Copy', icon: 'copy', kbd: mod('C'), disabled: !hasSelection, run: () => { restore(); document.execCommand('copy'); } },
+    ...clipboardOut,
     { type: 'item', id: 'paste', label: 'Paste', icon: 'paste', kbd: mod('V'), run: async () => {
       restore();
       const t = await readText();
@@ -606,6 +641,10 @@ export function buildContextMenu(target: HTMLElement): MenuEntry[] | null {
   if (cmEditable instanceof HTMLElement) {
     return finalize(cmEditableMenu(cmEditable));
   }
+  // Every other plain typing box (see plainTextField). After the named
+  // surfaces above, so the composer keeps its image-paste behaviour.
+  const field = plainTextField(target);
+  if (field) return finalize(editableMenu(field));
 
   // Artifact viewer (SessionDrawer / ProjectView file tab) lives outside
   // .chat-scroll, so it's checked before that gate.
