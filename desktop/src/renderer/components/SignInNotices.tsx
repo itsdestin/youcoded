@@ -31,7 +31,8 @@ function useSignInCard(provider: SignInProvider, opts: {
   // WHY no Continue button (Destin, review deck R-3: "just show a sign in successful card
   // and let the user continue by sending a follow up"): the message that failed is still in
   // the conversation, so the next thing the person sends carries on from there.
-  if (back) return { tone: 'success' as const, line: 'Sign in successful.' };
+  // Destin's words (review round 2, R2-3); the card leaves once that next message is sent.
+  if (back) return { tone: 'success' as const, line: 'Sign in successful. Send another message to continue.' };
   switch (state.phase) {
     case 'checking':
     case 'waiting':
@@ -70,7 +71,9 @@ function useSignInCard(provider: SignInProvider, opts: {
  * was fixed long ago, so it shows one quiet line and no buttons.
  */
 export function ClaudeSignInNotice({ latest }: { latest: boolean }) {
-  if (!latest) return <ChatNoticeBubble tone="quiet" line="Your Claude sign-in expired here." />;
+  // WHY nothing (review round 2, R2-3: "the card should disappear on the next send"): once a
+  // message follows it, the expiry was dealt with and the card has no job left.
+  if (!latest) return null;
   // A phone or browser connected to the computer cannot sign Claude Code in: the
   // sign-in has to finish on the computer (round 1 Q-remote, "say where", no button).
   if (!getCapabilities().openExternal) {

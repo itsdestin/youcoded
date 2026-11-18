@@ -522,10 +522,9 @@ describe('AssistantTurnBubble — a reply Claude Code wrote because its sign-in 
     expect(getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
   });
 
-  it('an older one is one quiet line with no buttons', () => {
+  it('is gone once another message follows it', () => {
     const { container } = renderExpired('authentication_failed', false);
-    expect(container.textContent).toContain('Your Claude sign-in expired here.');
-    expect(container.querySelector('button')).toBeNull();
+    expect(container.textContent).toBe('');
   });
 
   it('any other error label keeps Claude Code\'s own words', () => {
