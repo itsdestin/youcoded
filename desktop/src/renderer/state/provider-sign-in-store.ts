@@ -50,6 +50,15 @@ export function useSignInPhase(provider: SignInProvider): SignInPhase {
   return useSyncExternalStore(subscribe, () => phases.get(provider) ?? IDLE, () => IDLE);
 }
 
+/** Forget a finished outcome (signed-in / failed / offline) so a NEW expiry draws the red card again.
+ *  WHY (card #236 review F1): the phase lives for the whole app run, so after one successful sign-in every
+ *  later expiry card would have drawn the green "Sign in successful" with no button. An open sign-in
+ *  (checking / waiting) is never reset. Called when a card for a fresh expiry appears. */
+export function resetSignIn(provider: SignInProvider): void {
+  const p = phases.get(provider)?.phase;
+  if (p === 'signed-in' || p === 'failed' || p === 'offline') set(provider, IDLE);
+}
+
 /** Start the browser sign-in the first-launch screen uses. Resolves when it ends. */
 export async function startSignIn(provider: SignInProvider): Promise<void> {
   const current = phases.get(provider)?.phase;
@@ -93,7 +102,9 @@ export async function startSignIn(provider: SignInProvider): Promise<void> {
 /** Has the open sign-in finished? 'done', a failure sentence, or null (still going). */
 async function readOutcome(provider: SignInProvider, api: any): Promise<'done' | { failed: string } | null> {
   if (provider === 'claude') {
-    const s = await api.claudeCode.status({ refresh: true });
+    // WHY no `refresh` (review F6): main's own sign-in loop already re-reads every 2 s; asking for a fresh
+    // read here too ran a second `claude auth status` process loop for the whole wait.
+    const s = await api.claudeCode.status();
     return s?.state === 'signed-in' && s.expired !== true ? 'done' : null;
   }
   if (provider === 'chatgpt') {

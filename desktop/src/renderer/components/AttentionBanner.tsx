@@ -137,7 +137,8 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
   // key OpenRouter refused gets the fix itself on the card — Sign in again / Reconnect — and,
   // once back in, "Sign in successful" (review R-3: the person carries on with their next message). Replaces "Open settings".
   if (state === 'error' && (errorCode === 'chatgpt-signin-expired' || errorCode === 'chatgpt-signin-required')) {
-    return <ProviderSignInCard provider="chatgpt" />;
+    // Review F4: a person who never connected ChatGPT is not told a sign-in "expired".
+    return <ProviderSignInCard provider="chatgpt" neverSignedIn={errorCode === 'chatgpt-signin-required'} />;
   }
   if (state === 'error' && (errorCode === 'openrouter-key-rejected' || errorCode === 'openrouter-key-expired')) {
     // Older connections never recorded how they were made, so both ways back are offered

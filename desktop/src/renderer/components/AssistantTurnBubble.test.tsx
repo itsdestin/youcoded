@@ -527,6 +527,19 @@ describe('AssistantTurnBubble — a reply Claude Code wrote because its sign-in 
     expect(container.textContent).toBe('');
   });
 
+  it('the card leaves the old reply when another message follows it (same rendered tree)', () => {
+    const turn = expiredTurn('authentication_failed');
+    const tree = (latest: boolean) => (
+      <ChatProvider>
+        <AssistantTurnBubble turn={turn} toolGroups={new Map()} toolCalls={new Map()} sessionId="s" showTimestamps={false} latest={latest} />
+      </ChatProvider>
+    );
+    const { container, rerender } = render(tree(true));
+    expect(container.textContent).toContain('Your Claude sign-in has expired.');
+    rerender(tree(false));
+    expect(container.textContent).toBe('');
+  });
+
   it('any other error label keeps Claude Code\'s own words', () => {
     const { container } = renderExpired('rate_limit', true);
     expect(container.textContent).toContain('Please run /login');

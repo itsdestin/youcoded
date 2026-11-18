@@ -13,7 +13,8 @@ import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
 import { getCapabilities } from '../platform';
-import { startSignIn, cancelSignIn, useSignInPhase, type SignInProvider } from '../state/provider-sign-in-store';
+import { startSignIn, cancelSignIn, resetSignIn, useSignInPhase, type SignInProvider } from '../state/provider-sign-in-store';
+import { recheckExpiredSignIns } from '../hooks/useExpiredSignIns';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 // The provider blocks of Settings → Assistant settings (2026-09-05). This file
@@ -183,6 +184,8 @@ export function ClaudeCodeBlock({
   // opening Settings always re-asks rather than trusting main's 60s cache.
   const { status, refresh } = useClaudeStatus();
   useEffect(() => { refresh(); }, [refresh]);
+  // Opening the card forgets an earlier finished outcome so a NEW expiry shows its notice (review F1).
+  useEffect(() => { resetSignIn('claude'); }, []);
   // Card #236: the shared sign-in flow, so pressing Sign in here and on the chat's card is one flow.
   const signInPhase = useSignInPhase('claude').phase;
   useEffect(() => { if (signInPhase === 'signed-in') refresh(); }, [signInPhase, refresh]);
@@ -378,6 +381,7 @@ export function ChatGptBlock() {
   // the backend's own device. Android local has this ability; visiting clients do not.
   const canSignIn = getCapabilities().openExternal;
   const signInPhase = useSignInPhase('chatgpt').phase;
+  useEffect(() => { resetSignIn('chatgpt'); }, []); // review F1: a new expiry must not hide behind an old outcome
   const [status, setStatus] = useState<ChatGptAccountStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -715,6 +719,7 @@ export function OpenRouterBlock() {
       wasWaiting.current = false;
       void refresh();
       invalidateProviderTypeCache();
+      recheckExpiredSignIns(); // review F5: the gear's dot looks again once this sign-in ends
     }
   }, [signIn.state, readSignIn, refresh]);
 
@@ -910,6 +915,7 @@ function ConnectOpenRouterModal({
       }
       await window.claude.providers.setKey(providerId, value);
       await onSaved();
+      recheckExpiredSignIns(); // review F5: a new key can clear the gear's red dot
       if (res?.ok) {
         setNote({ tone: 'ok', text: res?.message ?? 'Connected.' });
         setKeyDraft('');

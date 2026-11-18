@@ -10,18 +10,16 @@ import { FoldRow } from './ui/FoldRow';
 // shell instead of copying its classes (design guide "New UI reuses what exists").
 // The markup is the SortedErrorCard's, moved here unchanged.
 
-export type ChatNoticeTone = 'danger' | 'warning' | 'success' | 'quiet';
+// Only the two tones any card uses (review F10 removed the unused `warning` and `quiet`).
+export type ChatNoticeTone = 'danger' | 'success';
 
 // Status hues stay fixed across themes and live only in the ring (guide: "Status
-// colours … only in a tint", never in the words). `quiet` is a resolved notice — a
-// sign-in that has since been fixed — so it carries no status colour at all.
+// colours … only in a tint", never in the words).
 const RING: Record<ChatNoticeTone, string> = {
   danger: 'ring-1 ring-[var(--destructive)]',
-  warning: 'ring-1 ring-amber-500',
   // A fixed problem (signed in again, back online): the same card, green, so it reads as the
   // previous step resolved rather than a different kind of message (review R-2: no style jumps).
   success: 'ring-1 ring-green-500',
-  quiet: '',
 };
 
 export function ChatNoticeBubble({ tone, line, buttons, details, footer }: {

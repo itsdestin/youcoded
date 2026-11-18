@@ -222,6 +222,12 @@ describe('AttentionBanner — errorCode picks the action', () => {
       expect(onOpen).toHaveBeenCalledOnce();
     });
 
+  it('a ChatGPT that was never connected says to sign in, not that a sign-in expired', () => {
+    const { container } = render(<AttentionBanner state="error" errorMessage="x" errorCode="chatgpt-signin-required" onOpenProviderSettings={vi.fn()} />);
+    expect(container.textContent).toContain('Sign in to ChatGPT to use this model.');
+    expect(button(container, 'Sign in')).not.toBeNull();
+  });
+
   it.each([['key', 'Paste a new key', 'Sign in with OpenRouter'], ['browser', 'Sign in with OpenRouter', 'Paste a new key']])(
     'an OpenRouter connection made by %s offers only that way back', async (via, shown, hidden) => {
       (window as any).claude.providers = { list: async () => [{ id: 'openrouter', type: 'openrouter', connectedVia: via }] };

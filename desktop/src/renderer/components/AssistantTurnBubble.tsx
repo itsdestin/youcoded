@@ -451,6 +451,9 @@ function assistantTurnPropsAreEqual(prev: Props, next: Props): boolean {
   if (prev.showTimestamps !== next.showTimestamps) return false;
   // The turn ending flips this with no change to the turn object; the text must redraw once as one piece.
   if (prev.streaming !== next.streaming) return false;
+  // WHY (card #236 review F2): `latest` flips true to false on the OLD reply when the person sends another
+  // message, with no change to the turn object. Without this the sign-in card stayed on screen instead of leaving.
+  if (prev.latest !== next.latest) return false;
 
   // Same turn object (checked above) ⇒ same segments ⇒ same group IDs. We only
   // need to walk one side's IDs.

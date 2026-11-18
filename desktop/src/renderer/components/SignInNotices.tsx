@@ -4,7 +4,7 @@ import { Button } from './ui';
 import { ChatNoticeBubble } from './ChatNoticeBubble';
 import { useClaudeStatus } from './model/availability';
 import { getCapabilities } from '../platform';
-import { cancelSignIn, startSignIn, useSignInPhase, type SignInProvider } from '../state/provider-sign-in-store';
+import { cancelSignIn, resetSignIn, startSignIn, useSignInPhase, type SignInProvider } from '../state/provider-sign-in-store';
 import { recheckExpiredSignIns } from '../hooks/useExpiredSignIns';
 
 // The chat's cards for a sign-in that ran out, and for no internet (card #236).
@@ -92,7 +92,16 @@ function LiveClaudeSignInNotice() {
   const { status, refresh } = useClaudeStatus();
   const phase = useSignInPhase('claude').phase;
   // A reply just came back "sign-in failed": the gear's dot looks again (Q-check-when: "when a message fails").
-  useEffect(() => { recheckExpiredSignIns(); }, []);
+  // And a fresh expiry forgets an earlier "signed in" outcome from this app run (review F1): only when the
+  // live status still reads expired, so a card that merely remounts after a successful sign-in keeps saying so.
+  useEffect(() => {
+    recheckExpiredSignIns();
+    let alive = true;
+    Promise.resolve((window as any).claude?.claudeCode?.status?.({ refresh: true }))
+      .then((s: any) => { if (alive && s?.state === 'signed-in' && s.expired === true) resetSignIn('claude'); })
+      .catch(() => { /* unknown: leave the card as it is */ });
+    return () => { alive = false; };
+  }, []);
   // A sign-in finished here re-reads the live status, so Settings and the model menu agree.
   useEffect(() => { if (phase === 'signed-in') refresh(); }, [phase, refresh]);
   // Signed in again since (in a terminal, or before a restart): the card says so straight away.
@@ -125,17 +134,34 @@ function useOpenRouterConnectedVia(enabled: boolean): 'key' | 'browser' | undefi
 }
 
 /** The ChatGPT / OpenRouter red card when the sign-in or key was refused. */
-export function ProviderSignInCard({ provider, keyExpired, onPasteKey }: {
+export function ProviderSignInCard({ provider, keyExpired, neverSignedIn, onPasteKey }: {
   provider: 'chatgpt' | 'openrouter';
+  /** ChatGPT: there never was a sign-in (rather than one that ran out). */
+  neverSignedIn?: boolean;
   /** OpenRouter: the key passed its own end date (rather than being refused). */
   keyExpired?: boolean;
   /** OpenRouter connections made before the app recorded how: offer both ways back. */
   onPasteKey?: () => void;
 }) {
   const connectedVia = useOpenRouterConnectedVia(provider === 'openrouter');
+  // A failed reply is a reason for the gear's dot to look again (review F5), and a fresh failure forgets an
+  // earlier "signed in" outcome from this app run (review F1) — but only while the provider still reads broken.
+  useEffect(() => {
+    recheckExpiredSignIns();
+    let alive = true;
+    const api = (window as any).claude;
+    const stillBroken = provider === 'chatgpt'
+      ? Promise.resolve(api?.chatgpt?.status?.()).then((s: any) => s?.state === 'signed-out')
+      : Promise.resolve(api?.providers?.list?.()).then((rows: any[]) => {
+        const row = Array.isArray(rows) ? rows.find((p) => p?.id === 'openrouter' || p?.type === 'openrouter') : null;
+        return !!row && row.health?.verdict !== 'verified';
+      });
+    stillBroken.then((broken: boolean) => { if (alive && broken) resetSignIn(provider); }).catch(() => { /* leave it */ });
+    return () => { alive = false; };
+  }, [provider]);
   const card = useSignInCard(provider, {
     connectedVia,
-    expiredLine: provider === 'chatgpt' ? 'Your ChatGPT sign-in has expired.'
+    expiredLine: provider === 'chatgpt' ? (neverSignedIn ? 'Sign in to ChatGPT to use this model.' : 'Your ChatGPT sign-in has expired.')
       : keyExpired ? 'Your OpenRouter key has expired.' : "OpenRouter didn't accept your key.",
     alreadyBack: false,
     onPasteKey,
