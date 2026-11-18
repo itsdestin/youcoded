@@ -155,22 +155,6 @@ describe('InputBar — context-menu image paste', () => {
     expect(await screen.findByRole('button', { name: 'Remove chrome-copy.png' })).toBeInTheDocument();
   });
 
-  it('Ctrl+V of a picture whose only text is its own address still attaches the picture', async () => {
-    saveClipboardImage.mockResolvedValue('/tmp/with-url.png');
-    const box = renderComposer();
-    const src = 'https://example.com/cat.png';
-    fireEvent.paste(box, { clipboardData: clipboard(['text/plain', 'text/html', 'image/png'], { 'text/plain': src, 'text/html': `<img src="${src}">` }) });
-    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledTimes(1));
-  });
-
-  it('Ctrl+V of copied words that came with a picture (a page or spreadsheet copy) pastes the words', async () => {
-    const box = renderComposer();
-    fireEvent.paste(box, { clipboardData: clipboard(['text/plain', 'text/html', 'image/png'], { 'text/plain': 'Q3 total 42', 'text/html': '<table><tr><td>Q3 total</td><td>42</td></tr></table>' }) });
-    // settle: the image bridge is async, so give a wrongly-taken image path its chance to run.
-    await act(async () => { await Promise.resolve(); });
-    expect(saveClipboardImage).not.toHaveBeenCalled();
-  });
-
   it('keeps text precedence through the real composer menu and never invokes the image bridge', async () => {
     const readText = vi.fn().mockResolvedValue('pasted words');
     Object.defineProperty(navigator, 'clipboard', { value: { readText }, configurable: true });

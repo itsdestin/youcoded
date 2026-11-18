@@ -49,6 +49,7 @@ import type { ClaudeAlias } from '../../shared/model-ids';
 import { takeCaretAtStart } from './pages/page-prompt-caret';
 import { useStreamingGate, useTurnIsWorking } from '../hooks/useStreamingGate';
 import { isAndroid } from '../platform';
+import { isImageOnlyClipboard } from './composer-clipboard';
 
 // WHY: the composer auto-focus listener must leave controls and composite widgets
 // with their own keyboard behavior focused so they can handle Enter and arrows.
@@ -141,30 +142,6 @@ function isImagePath(p: string): boolean {
 
 function fileNameFromPath(p: string): string {
   return p.replace(/\\/g, '/').split('/').pop() || p;
-}
-
-// Is this clipboard a picture, rather than words that happen to come with one?
-// WHY (Destin, 2026-11-18: Ctrl+V of a Chrome "Copy image" did nothing, while
-// right-click → Paste worked): Chrome's Copy image puts the picture AND a small
-// HTML snippet (`<img src="…">`) on the clipboard. The old rule — "any text/*
-// item means it's a text paste" — saw that snippet as text and stepped aside,
-// and a textarea cannot paste HTML, so nothing happened. A screenshot tool puts
-// only the picture there, which is why it worked "sometimes".
-// Words still win whenever real words were copied: a page selection, or a
-// spreadsheet range (Excel and LibreOffice add a picture of the cells too).
-function isImageOnlyClipboard(data: DataTransfer): boolean {
-  if (!Array.from(data.items ?? []).some((item) => item.type.startsWith('image/'))) return false;
-  const html = data.getData('text/html');
-  let imageSources: string[] = [];
-  if (html) {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    // Real words in the HTML → the person copied text; let the normal paste run.
-    if ((doc.body.textContent ?? '').trim()) return false;
-    imageSources = Array.from(doc.images, (img) => img.getAttribute('src') ?? '');
-  }
-  const plain = data.getData('text/plain').trim();
-  // No plain text, or the plain text is only the picture's own address.
-  return !plain || imageSources.includes(plain);
 }
 
 const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, extraTool, disabled, sendBlocked: externalSendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider, connection }, ref) {
