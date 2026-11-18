@@ -48,6 +48,10 @@ export interface ProviderConfig {
   baseUrl?: string;       // openai-compatible + overrides
   secretRef?: string;     // pointer into the userData secrets store; never the key itself
   enabled: boolean;
+  /** How the key got here (card #236): 'key' = pasted in the key window, 'browser' = "Sign in with
+   *  OpenRouter". Lets the sign-in card offer only the way the person used. Absent on connections
+   *  made before the app recorded it (both ways are then offered). */
+  connectedVia?: 'key' | 'browser';
 }
 
 /** True when a custom endpoint's address points at this computer — Ollama,

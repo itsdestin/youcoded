@@ -580,6 +580,13 @@ export const IPC = {
   // Install Claude Code on demand (first-run local models, F-5): setup no longer
   // installs it for everyone, so Settings offers it. Desktop and remote desktop only.
   CLAUDE_CODE_INSTALL: 'claude-code:install',
+  // Sign in to Claude Code again (card #236): opens the browser through `claude auth login`
+  // and answers true once it is open (a THROWN sentence when no link appeared); cancel stops it.
+  // The end of the sign-in is read from CLAUDE_CODE_STATUS, like the other providers.
+  CLAUDE_CODE_SIGN_IN: 'claude-code:sign-in',
+  CLAUDE_CODE_CANCEL_SIGN_IN: 'claude-code:cancel-sign-in',
+  // The app's own "is this computer online?" check (card #236) -> { online }.
+  NETWORK_CHECK: 'network:check',
   // ---- WebSearch providers (Phase 2 Plan B): keyed Tavily/Exa upgrades ----
   // list = the fixed upgradeable-backend rows (hasKey flags); set/remove-key
   // manage the encrypted key; test = never-throws connectivity check.

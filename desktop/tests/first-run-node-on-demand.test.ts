@@ -21,6 +21,8 @@ vi.mock('os', async (importOriginal) => {
   return { ...real, default: { ...real, homedir: () => home }, homedir: () => home };
 });
 vi.mock('../src/main/logger', () => ({ log: vi.fn() }));
+// Card #236: every sign-in asks the app's own online check first; these files test what happens AFTER it says yes.
+vi.mock('../src/main/network-check', () => ({ checkInternet: vi.fn(async () => true) }));
 vi.mock('../src/main/prerequisite-installer', () => ({
   detectNode: vi.fn(), detectGit: vi.fn(), detectClaude: vi.fn(), detectAuth: vi.fn(),
   installNode: vi.fn(), installGit: vi.fn(), installClaude: vi.fn(), ensureNode: vi.fn(),

@@ -356,6 +356,9 @@ const IPC = {
   OPENROUTER_CANCEL_SIGN_IN: 'openrouter:cancel-sign-in',
   CLAUDE_CODE_STATUS: 'claude-code:status',
   CLAUDE_CODE_INSTALL: 'claude-code:install',
+  CLAUDE_CODE_SIGN_IN: 'claude-code:sign-in',
+  CLAUDE_CODE_CANCEL_SIGN_IN: 'claude-code:cancel-sign-in',
+  NETWORK_CHECK: 'network:check',
   SEARCH_LIST: 'search:list',
   SEARCH_SET_KEY: 'search:set-key',
   SEARCH_REMOVE_KEY: 'search:remove-key',
@@ -2244,6 +2247,14 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.CLAUDE_CODE_STATUS, opts),
     // First-run local models (F-5): the Settings card's Install Claude Code.
     install: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke(IPC.CLAUDE_CODE_INSTALL),
+    // Card #236: sign in again. signIn() can THROW a sentence written for the screen, so it
+    // goes through unwrapInvokeError like the other providers' sign-ins.
+    signIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CLAUDE_CODE_SIGN_IN)),
+    cancelSignIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CLAUDE_CODE_CANCEL_SIGN_IN)),
+  },
+  // Card #236: the app's own connection check (never rejects; offline = both probes failed).
+  network: {
+    check: (): Promise<{ online: boolean }> => ipcRenderer.invoke(IPC.NETWORK_CHECK),
   },
   // WebSearch providers (Phase 2 Plan B): keyed Tavily/Exa upgrades. list = the
   // fixed backend rows (hasKey flags); set/remove-key manage the encrypted key;

@@ -217,7 +217,7 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
     onBrowserDone: returnToApp,
     acceptKey: async (key) => {
       const check = await providerRegistry.testConnection('openrouter', key);
-      if (check.verdict !== 'rejected') await providerRegistry.setKey('openrouter', key);
+      if (check.verdict !== 'rejected') await providerRegistry.setKey('openrouter', key, 'browser');
       return check;
     },
   });

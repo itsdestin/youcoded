@@ -214,6 +214,8 @@ export class ProviderRegistry {
         baseUrl: nextBaseUrl,
         secretRef: nextSecretRef,
         enabled: input.enabled ?? existing?.enabled ?? true,
+        // A row edit must not forget how it was connected (unless its key was just dropped).
+        ...(existing?.connectedVia && nextSecretRef ? { connectedVia: existing.connectedVia } : {}),
       };
       if (existing) {
         file.providers = file.providers.map((p) => (p.id === id ? next : p));
@@ -256,7 +258,7 @@ export class ProviderRegistry {
 
   /** Save (or rotate) a provider's API key. Rotation reuses the existing
    *  secretRef so the providers.json pointer never needs rewriting. */
-  async setKey(id: string, plaintext: string): Promise<void> {
+  async setKey(id: string, plaintext: string, via: 'key' | 'browser' = 'key'): Promise<void> {
     if (VIRTUAL_IDS.has(id)) throw new Error(CHATGPT_NOT_A_KEY_MESSAGE);
     const entry = this.readAll().find((p) => p.id === id);
     if (!entry) {
@@ -277,6 +279,9 @@ export class ProviderRegistry {
       const live = file.providers.find((p) => p.id === id);
       if (live) {
         live.secretRef = ref;
+        // WHY (card #236): remember HOW it was connected so the sign-in card offers only that way back.
+        // Only OpenRouter has two ways in; other key rows are always pasted.
+        if (live.type === 'openrouter') live.connectedVia = via;
         found = true;
       }
       return file;
