@@ -36,7 +36,7 @@
     "main/remote-server.ts": 1482,
     "main/harness/harness-session.ts": 4545,
     "renderer/components/SettingsPanel.tsx": 3238,
-    "renderer/remote-shim.ts": 3648,
+    "renderer/remote-shim.ts": 3690,
     "renderer/state/chat-reducer.ts": 3516,
     "renderer/styles/globals.css": 3122,
     "renderer/components/SessionStrip.tsx": 2893,
@@ -51,7 +51,8 @@
     "renderer/components/ToolCard.tsx": 1784,
     "main/doc-comments/docx-comments.ts": 2031,
     "main/doc-comments/xlsx-comments.ts": 2317,
-    "renderer/components/InputBar.tsx": 1493,
+    "renderer/components/InputBar.tsx": 1496,
+    "renderer/components/InputBar.test.tsx": 1524,
     "main/engine/engine-supervisor.ts": 1616
   }
 }
