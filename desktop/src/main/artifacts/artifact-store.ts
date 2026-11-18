@@ -276,6 +276,24 @@ export async function writeSidecar(
 
 const MAX_RETRIES = 5;
 
+/**
+ * Which record in the sidecar does this (kind, path, absolutePath) name?
+ *
+ * WHY (2026-11-18, a REPORT.md chip that never opened): an EXTERNAL record's
+ * `path` is only its file name (resolveTrackedPath / buildArtifactifyArgs
+ * store the basename for display), so keying on kind+path made every outside
+ * file with the same name the SAME record. Clicking ~/Documents/x/REPORT.md
+ * added a version to an older /tmp/y/REPORT.md record and never recorded the
+ * clicked file, so the pill's lookup found nothing and failed. An external
+ * file is identified by WHERE it is: its canonical absolute path. Internal
+ * records keep kind+path (their path IS the full relative location).
+ * An external with no absolutePath (not produced today) falls back to its name.
+ */
+export function recordIdentityKey(rec: { kind: string; path: string; absolutePath?: string | null }): string {
+  if (rec.kind === 'external' && rec.absolutePath) return `external\0${canonicalize(rec.absolutePath, null)}`;
+  return `${rec.kind}\0${rec.path}`;
+}
+
 export interface AppendVersionInput {
   path: string;            // canonical
   kind: 'internal' | 'external';
@@ -458,10 +476,11 @@ export async function appendVersionsDirect(
       expectedUpdatedAt = sidecar.updatedAt;
     }
 
-    // Path+kind -> position, built once per cycle (the old per-input `find` scanned ~24k records each
-    // time). The FIRST match wins, exactly as `find` did.
+    // Identity -> position, built once per cycle (the old per-input `find` scanned ~24k records each
+    // time). The FIRST match wins, exactly as `find` did. Identity = recordIdentityKey (externals by
+    // their full location, not their file name — see its WHY).
     const slotOf = new Map<string, number>();
-    sidecar.artifacts.forEach((a, i) => { const k = `${a.kind}\0${a.path}`; if (!slotOf.has(k)) slotOf.set(k, i); });
+    sidecar.artifacts.forEach((a, i) => { const k = recordIdentityKey(a); if (!slotOf.has(k)) slotOf.set(k, i); });
     // Records this cycle has already copied; only those may be edited in place.
     const owned = new Set<ArtifactRecord>();
     const own = (rec: ArtifactRecord, slot: number): ArtifactRecord => {
@@ -475,7 +494,7 @@ export async function appendVersionsDirect(
     const results: AppendVersionResult[] = [];
     let changed = false;
     for (const input of inputs) {
-      const key = `${input.kind}\0${input.path}`;
+      const key = recordIdentityKey(input);
       const slot = slotOf.get(key);
       let existing = slot === undefined ? undefined : sidecar.artifacts[slot];
       // Replay dedupe: the same tool call recorded once already ⇒ nothing to

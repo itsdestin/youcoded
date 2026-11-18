@@ -19,7 +19,7 @@ import { canonicalize } from '../../shared/artifacts/canonicalize';
 import {
   selectArchivable, type AncestorInfo, type Ledger, type Probe, type SelectOptions,
 } from '../../shared/artifacts/dead-records';
-import { enqueueMaintenance, isAppendQueueIdle, readSidecarShared, writeSidecar } from './artifact-store';
+import { enqueueMaintenance, isAppendQueueIdle, readSidecarShared, recordIdentityKey, writeSidecar } from './artifact-store';
 import { mutateFileUnderLock } from './cas-write';
 import { isAbsoluteRecorded } from './write-authorization';
 import { mapLimit } from '../map-limit';
@@ -390,8 +390,10 @@ export async function restoreArchive(root: string, filter: RestoreFilter = {}, h
     const current = await readSidecarShared(root);
     if (!current || 'corrupted' in current) return { status: 'no-sidecar', restored: 0, skipped: wanted.length };
     const haveId = new Set(current.artifacts.map((r) => r.id));
-    const havePath = new Set(current.artifacts.map((r) => `${r.kind}\0${r.path}`));
-    const add = wanted.filter((r) => !haveId.has(r.id) && !havePath.has(`${r.kind}\0${r.path}`));
+    // Same identity appendVersion uses (recordIdentityKey): two outside files that merely share a
+    // file name are different records, so restoring one must not be skipped because of the other.
+    const havePath = new Set(current.artifacts.map((r) => recordIdentityKey(r)));
+    const add = wanted.filter((r) => !haveId.has(r.id) && !havePath.has(recordIdentityKey(r)));
     if (add.length === 0) return { status: 'restored', restored: 0, skipped: wanted.length };
     const next: ProjectSidecar = { ...current, artifacts: [...current.artifacts, ...add] };
     const w = await (hooks?.writeSidecar ?? writeSidecar)(root, current.updatedAt, next);
