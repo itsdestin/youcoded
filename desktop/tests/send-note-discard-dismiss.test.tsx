@@ -18,11 +18,11 @@ describe('the buttons on the note', () => {
     render(<UserMessage message={msg} sessionId={S} showTimestamps={false} sendNote="not-sent" onSendAgain={() => {}} onDiscard={() => {}} />);
     expect(screen.getByRole('button', { name: 'Send again' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Discard unsent message' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Dismiss this note' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
   });
   it('"not sure" offers Send again and Dismiss, and no Discard', () => {
     render(<UserMessage message={msg} sessionId={S} showTimestamps={false} sendNote="unsure" onSendAgain={() => {}} onDismiss={() => {}} />);
-    expect(screen.getByRole('button', { name: 'Dismiss this note' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Discard unsent message' })).toBeNull();
   });
   it('each button runs only its own callback, and Send again is not among them', () => {
@@ -30,12 +30,12 @@ describe('the buttons on the note', () => {
     render(<UserMessage message={msg} sessionId={S} showTimestamps={false} sendNote="not-sent" onSendAgain={again} onDiscard={discard} onDismiss={dismiss} />);
     fireEvent.click(screen.getByRole('button', { name: 'Discard unsent message' }));
     expect([again.mock.calls.length, discard.mock.calls.length, dismiss.mock.calls.length]).toEqual([0, 1, 0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss this note' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect([again.mock.calls.length, discard.mock.calls.length, dismiss.mock.calls.length]).toEqual([0, 1, 1]);
   });
-  it('the buttons are real buttons in reading order: Send again first, then the secondary one', () => {
+  it('the buttons sit in the notice box the guide way: the outlined one first, the filled main action last', () => {
     render(<UserMessage message={msg} sessionId={S} showTimestamps={false} sendNote="not-sent" onSendAgain={() => {}} onDiscard={() => {}} />);
-    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Send again', 'Discard']);
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Discard', 'Send again']);
   });
 });
 

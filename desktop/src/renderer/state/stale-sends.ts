@@ -12,12 +12,13 @@
 //     note clears, as notes always have (chat-reducer TRANSCRIPT_USER_MESSAGE).
 //
 // Why these times: an idle conversation records a message within a second or two (measured in the dev copy 2026-11-18), and a busy one moves the
-// message into the queue strip instead of keeping a bubble (queue-bubbles.ts). A minute without an echo is far past any delivery seen; the note is
+// message into the queue strip instead of keeping a bubble (queue-bubbles.ts). Half a minute without an echo is far past any delivery seen; the note is
 // worded as doubt, never as failure, because a slow delivery is still possible. The bound case can be quick: the record already exists.
 import type { SessionChatState, TimelineEntry } from './chat-types';
 
 export const SETTLE_BOUND_MS = 10_000;
-export const GIVE_UP_MS = 60_000;
+// 30 s: Destin's pick (pinned-bubbles-review#Q-1, 2026-11-18) over the proposed 60 s.
+export const GIVE_UP_MS = 30_000;
 /** How far from the end to look. Pending bubbles live at (or, once stale, near) the end; this keeps the periodic check cheap on long chats. */
 const SCAN_TAIL = 60;
 

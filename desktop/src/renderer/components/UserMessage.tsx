@@ -12,7 +12,7 @@ import { FilepathToken } from './FilepathToken';
 import { splitComposeRefs, jumpToRef, type ComposeRef } from './context-menu/compose-ref';
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
 import { TokenPill } from './comments/TokenPill';
-import { Button } from './ui';
+import { Button, Callout } from './ui';
 
 interface Props {
   message: ChatMessage;
@@ -116,20 +116,25 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
   if (!sendNote) return <div className="flex justify-end px-4 py-2">{bubble}</div>;
 
   // The wording says what is KNOWN and how (error-message-standards.md): "not-sent" is the computer's record showing it never arrived; "unsure" is
-  // the record unable to tell (it restarted, or the question could not be asked), so it claims nothing about a cause.
-  // WHY flex-wrap + nowrap buttons: with a second button the row no longer fits a phone, and the buttons were splitting ("Send / again") and running off the
-  // screen edge; now the sentence takes its own line and the buttons sit together under it.
-  const noteText = sendNote === 'not-sent' ? "This didn't send — your computer never received it." : 'Not sure this was sent.';
+  // the record unable to tell (it restarted, the question could not be asked, or no echo came back in time), so it claims nothing about a cause.
+  // WHY the app's notice box (Destin, pinned-bubbles-review#G-1, 2026-11-18: "better reflect standard youcoded error/button styling"): the note
+  // was grey words with flat buttons, unlike every other warning or error. Now it is the design guide's one tinted box (Callout, slim) with its
+  // buttons inside at the right: red for "didn't send" (known), amber for "not sure" (a doubt, not a failure). Dismiss is the box's own ✕, as on
+  // the chat's other dismissible notices. Send again is the filled main button only when the message provably never arrived; on a doubt it is
+  // outlined, because pressing it for a message that did arrive sends it twice.
+  const notSent = sendNote === 'not-sent';
+  const noteText = notSent ? "This didn't send — your computer never received it." : 'Not sure this was sent.';
   return (
     <div className="px-4 py-2">
       <div className="flex justify-end">{bubble}</div>
-      <div className="mt-1 flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs text-fg-dim select-text" role="status" data-send-note={sendNote}>
-        <span className="min-w-0 max-w-full">{noteText}</span>
-        {onSendAgain && <Button variant="ghost" size="sm" className="whitespace-nowrap" onClick={onSendAgain}>Send again</Button>}
-        {/* WHY: before this, a message that did not send could only be sent again. Same ghost style as Send again (Button's sm size already gets the 44px
-            touch area on phones); the label says what happens to the bubble, which is the whole difference between the two. */}
-        {onDiscard && <Button variant="ghost" size="sm" className="whitespace-nowrap" onClick={onDiscard} aria-label="Discard unsent message">Discard</Button>}
-        {onDismiss && <Button variant="ghost" size="sm" className="whitespace-nowrap" onClick={onDismiss} aria-label="Dismiss this note">Dismiss</Button>}
+      <div className="mt-1.5 flex justify-end select-text" data-send-note={sendNote}>
+        <Callout tone={notSent ? 'danger' : 'warning'} compact role="status" className="w-fit max-w-full" onDismiss={onDismiss}
+          actions={(onDiscard || onSendAgain) && <>
+            {onDiscard && <Button variant="secondary" size="sm" className="whitespace-nowrap" onClick={onDiscard} aria-label="Discard unsent message">Discard</Button>}
+            {onSendAgain && <Button variant={notSent ? 'primary' : 'secondary'} size="sm" className="whitespace-nowrap" onClick={onSendAgain}>Send again</Button>}
+          </>}>
+          {noteText}
+        </Callout>
       </div>
     </div>
   );
