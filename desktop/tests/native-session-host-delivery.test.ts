@@ -413,8 +413,12 @@ describe('native host delivery boundaries (offline investigation)', () => {
     undefined, undefined, undefined, undefined, undefined, undefined, b.home);
     host.on('transcript-event', e => { if (e.type === 'user-message' && e.data.injected === 'specialist-report') injected.push(e); });
     expect(await host.resume('parent', root)).toBe(true);
+    // Reopen alone never wakes the model; the report rides in with the user's next message.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(injected).toHaveLength(0); expect(prompts).toHaveLength(0);
+    host.send('parent', 'next'); await vi.waitFor(() => expect(prompts).toHaveLength(1));
     await (host as any).live.get('parent').running;
-    expect(injected).toHaveLength(1); expect(prompts).toHaveLength(1);
+    expect(injected).toHaveLength(1);
     expect(JSON.stringify(prompts[0])).toContain('SYNTHETIC-REPORT-TOKEN');
     expect((host as any).ledger.listFor(root, 'parent').find((r: any) => r.childId === child).delivered).toBe(true);
   });
@@ -447,9 +451,13 @@ describe('native host delivery boundaries (offline investigation)', () => {
       async () => ({ contextLength: null, totalSlots: null }), async () => null, async () => null,
       undefined, undefined, undefined, undefined, undefined, undefined, b.home);
     host.on('transcript-event', e => { if (e.type === 'user-message' && e.data.injected === 'specialist-report') injected++; });
-    await host.resume('parent', root); await (host as any).live.get('parent').running;
+    await host.resume('parent', root);
+    // Reopen never starts a turn by itself; a user message then carries any report that was never shown.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(requests).toBe(0);
+    host.send('parent', 'next'); await vi.waitFor(() => expect(requests).toBe(1));
+    await (host as any).live.get('parent').running;
     expect(injected).toBe(injectedBeforeRestart ? 0 : 1);
-    expect(requests).toBe(injectedBeforeRestart ? 0 : 1);
     expect((host as any).ledger.listFor(root, 'parent').find((r: any) => r.childId === child).delivered).toBe(true);
   });
 

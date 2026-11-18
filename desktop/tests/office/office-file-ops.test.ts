@@ -62,13 +62,22 @@ describe('renameNoClobber races and case', () => {
     expect(await readdir(dir)).toEqual(['b.docx']);
   });
   it('allows a case-only rename: the "taken" name is the very same file', async () => {
-    // WHY a hard link stands in: this disk tells names apart by case, a Windows/Mac disk does not;
-    // either way the target is the same file (same device and inode), which is what is checked.
+    // WHY two branches: a hard link a.docx -> A.docx only works on a disk that tells names apart by
+    // case; on Windows/macOS (case-insensitive) link() throws EEXIST before the code under test even
+    // runs. So probe the temp dir, then exercise the real thing on each kind of disk.
     await writeFile(path.join(dir, 'a.docx'), 'A');
-    await link(path.join(dir, 'a.docx'), path.join(dir, 'A.docx'));
-    await expect(renameNoClobber(path.join(dir, 'a.docx'), path.join(dir, 'A.docx'))).resolves.toBeUndefined();
-    // rename(2) between two names of one file does nothing, so the old name must be removed too.
+    const caseInsensitive = await stat(path.join(dir, 'A.DOCX')).then(() => true, () => false);
+    if (caseInsensitive) {
+      // Real case-insensitive disk: "A.docx" already resolves to the same file.
+      await expect(renameNoClobber(path.join(dir, 'a.docx'), path.join(dir, 'A.docx'))).resolves.toBeUndefined();
+    } else {
+      // Case-sensitive disk: simulate with a second hard link to one inode.
+      await link(path.join(dir, 'a.docx'), path.join(dir, 'A.docx'));
+      await expect(renameNoClobber(path.join(dir, 'a.docx'), path.join(dir, 'A.docx'))).resolves.toBeUndefined();
+    }
+    // Either way: one entry, the new spelling, content intact (never deleted by the cleanup unlink).
     expect(await readdir(dir)).toEqual(['A.docx']);
+    expect(await readFile(path.join(dir, 'A.docx'), 'utf8')).toBe('A');
   });
   it('says "taken" (not a crash) when the name is a dangling symlink', async () => {
     await writeFile(path.join(dir, 'a.docx'), 'A');

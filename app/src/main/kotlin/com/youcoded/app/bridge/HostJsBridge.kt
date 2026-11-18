@@ -193,11 +193,12 @@ class HostJsBridge(
      */
     private fun copyForBackend(uri: android.net.Uri): String {
         val resolver = context.contentResolver
-        var name = resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+        val displayName = resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
             if (it.moveToFirst()) it.getString(0) else null
         } ?: uri.lastPathSegment ?: "attachment"
-        // Keep the name readable but safe: no folders, no odd characters.
-        name = name.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._ -]"), "_").take(100).ifBlank { "attachment" }
+        // Keep the name readable but safe: no folders or unsafe characters, but accented and non-Latin letters stay
+        // (Destin, 2026-11-17). Rules and tests live in AttachmentStore.safeName.
+        val name = AttachmentStore.safeName(displayName)
         val root = java.io.File(context.filesDir, "tmp/attachments")
         val input = runCatching { resolver.openInputStream(uri) }.getOrNull()
             ?: throw AttachmentStore.Refused("The phone could not open $name, so it was not attached.")

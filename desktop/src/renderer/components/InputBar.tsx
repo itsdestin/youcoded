@@ -49,6 +49,7 @@ import type { ClaudeAlias } from '../../shared/model-ids';
 import { takeCaretAtStart } from './pages/page-prompt-caret';
 import { useStreamingGate, useTurnIsWorking } from '../hooks/useStreamingGate';
 import { isAndroid } from '../platform';
+import { isImageOnlyClipboard } from './composer-clipboard';
 
 // WHY: the composer auto-focus listener must leave controls and composite widgets
 // with their own keyboard behavior focused so they can handle Enter and arrows.
@@ -1035,21 +1036,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   }, [addFiles]);
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-    // Only treat as image paste if there's no text content — copying from
-    // web pages often includes both text/plain and image/png items, and
-    // we don't want to block the text paste in that case.
-    const hasText = Array.from(items).some((item) => item.type.startsWith('text/'));
-    if (hasText) return;
-    for (const item of Array.from(items)) {
-      if (item.type.startsWith('image/')) {
-        e.preventDefault();
-        const saved = await window.claude.dialog.saveClipboardImage();
-        if (saved) addFiles([saved]);
-        return;
-      }
-    }
+    if (!e.clipboardData || !isImageOnlyClipboard(e.clipboardData)) return;
+    e.preventDefault();
+    const saved = await window.claude.dialog.saveClipboardImage();
+    if (saved) addFiles([saved]);
   }, [addFiles]);
 
   // WHY (decisions "Applied from earlier rules"): a file dragged in gets the session-tab drop
