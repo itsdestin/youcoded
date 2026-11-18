@@ -15,7 +15,7 @@
 // tabs are filled by later tasks. The project-deletion modal + project list stay
 // here (project-scoped). The "+ Add external file" affordance moved into
 // FilesTab (artifact-scoped) since it operates on the active project's artifacts.
-import { plainMessage } from '../../utils/ipc-error';
+import { plainMessage, isUnsupportedHere } from '../../utils/ipc-error';
 import { announceFailed } from '../../utils/announce';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
@@ -442,7 +442,8 @@ export function ProjectView(props: ProjectViewProps) {
       }).catch(() => { /* the fast list above already shows; reopening or a reconnect asks again */ });
     }).catch((e: unknown) => {
       // Reopening, Try again, or a remote reconnect (below) asks again.
-      if (!cancelled) { console.warn('[project-view] project list failed:', e); setIndexFailed(true); }
+      // WHY (round-4 final review): an older computer that lacks this list answers "not available here"; that is not a failure.
+      if (!cancelled) { console.warn('[project-view] project list failed:', e); if (!isUnsupportedHere(e)) setIndexFailed(true); }
     });
     return () => { cancelled = true; };
   }, [projectViewOpen, indexTry]);

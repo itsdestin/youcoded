@@ -56,15 +56,16 @@ describe('pasting an image into the composer', () => {
     expect(await screen.findByText('paste.png')).toBeInTheDocument();
     expect(t.got).toEqual([]);
   });
-  it('the composer-menu paste behaves the same way', async () => {
-    const save = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(undefined);
+  it('the composer-menu paste is silent when the clipboard had nothing to paste, and speaks only when the call breaks', async () => {
+    // The menu sends this whenever the clipboard holds no words, without knowing a picture is there: null is "nothing", not a failure.
+    const save = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('clipboard busy'));
     api(save); bar();
     act(() => { window.dispatchEvent(new Event('youcoded:composer-paste-image')); });
-    await waitFor(() => expect(t.got).toEqual(["Couldn't attach the pasted image."]));
-    t.got.length = 0;
     act(() => { window.dispatchEvent(new Event('youcoded:composer-paste-image')); });
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     expect(t.got).toEqual([]);
+    act(() => { window.dispatchEvent(new Event('youcoded:composer-paste-image')); });
+    await waitFor(() => expect(t.got).toEqual(["Couldn't attach the pasted image."]));
   });
 });
 

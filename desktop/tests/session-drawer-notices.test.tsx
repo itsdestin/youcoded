@@ -170,6 +170,11 @@ describe('rename', () => {
     expect(input).toBeInTheDocument();
     expect(input.value).toBe('renamed');
   });
+  it('a rename refused as "not available here" (phone or remote) closes the field quietly with no error', async () => {
+    await rename(vi.fn().mockRejectedValue(unsupported));
+    await vi.waitFor(() => expect(document.querySelector('input.bg-canvas')).toBeNull());
+    expect(screen.queryByText("Couldn't rename this file.")).toBeNull();
+  });
   it('a host refusal with a reason shows that reason, not the generic line', async () => {
     await rename(vi.fn().mockResolvedValue({ ok: false, error: 'name-taken' }));
     await vi.waitFor(() => expect(document.querySelector('.text-destructive, [role="alert"]')).not.toBeNull());

@@ -638,9 +638,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // WHY: the context menu identifies a composer-only image paste, while this
       // component keeps ownership of both clipboard serialization and attachments.
       void window.claude.dialog.saveClipboardImage().then((saved) => {
-        if (saved) addFiles([saved]); else if (saved !== undefined) announceFailed('attach the pasted image');
-        // undefined = a phone over remote cannot paste an image. Nothing is said: the shim does NOT tell the user, this is silent
-        // pending the owner's decision on what a phone should say.
+        if (saved) addFiles([saved]);
+        // WHY silent on null/undefined (round-4 final review): the menu fires this whenever the clipboard has no words,
+        // without knowing a picture is there, so null usually means "nothing to paste", which is fine, not a failure.
+        // undefined = a phone over remote cannot paste an image. Only a call that actually breaks is announced.
       }, (err) => announceFailed('attach the pasted image', err));
     };
     window.addEventListener('youcoded:composer-paste-image', listener);
