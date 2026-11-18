@@ -43,6 +43,16 @@ vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 // parseTranscriptLine
 // ---------------------------------------------------------------------------
 describe('parseTranscriptLine', () => {
+  it('passes Claude Code\'s own error label through on a reply it wrote itself (the sign-in card reads it)', () => {
+    const line = (extra: object) => JSON.stringify({ type: 'assistant', uuid: 'e1', timestamp: '2026-08-23T18:34:28.811Z',
+      message: { model: '<synthetic>', role: 'assistant', stop_reason: 'stop_sequence', content: [{ type: 'text', text: 'Login expired · Please run /login' }] }, ...extra });
+    const flagged = parseTranscriptLine(line({ error: 'authentication_failed', isApiErrorMessage: true }), sessionId);
+    expect(flagged.find((e) => e.type === 'assistant-text')?.data).toMatchObject({ apiError: 'authentication_failed' });
+    // Without CC's own marker the field is absent, whatever the words say.
+    const plain = parseTranscriptLine(line({}), sessionId);
+    expect((plain.find((e) => e.type === 'assistant-text')?.data as any).apiError).toBeUndefined();
+  });
+
   const sessionId = 'desktop-session-1';
 
   it('recognizes an app mod command envelope even without promptId', () => {

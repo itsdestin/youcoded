@@ -30,6 +30,10 @@ import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { CuratedModel, DownloadProgress } from '../shared/model-manager-types';
 import { writeSetupDownload } from './first-run-local';
 import { noteMilestone } from './analytics-service';
+import { checkInternet } from './network-check';
+
+/** The line under the sign-in buttons when the app's own check says there is no connection (card #236). */
+const OFFLINE_SIGN_IN_MESSAGE = 'No internet connection. Connect, then try again.';
 
 // WHY (2026-09-30 one-core R3-3): NativeKeyService moved to shared/first-run-types.ts (the
 // first-run:submit-api-key channel row names it); re-exported so existing imports keep working.
@@ -169,6 +173,26 @@ export class FirstRunManager extends EventEmitter {
   private authRound = 0;
   private activeSignIn: { cancelSignIn(): Promise<boolean> } | null = null;
   private stopOAuth: (() => void) | null = null;
+  /** Test hook (card #236): the app's own online check. */
+  checkInternet: () => Promise<boolean> = checkInternet;
+
+  /** WHY (card #236): before a sign-in opens a browser or spawns anything, ask whether this computer is
+   *  online. Offline puts the buttons back with the amber "No internet" line (`lastErrorOffline`) instead of a
+   *  spinner that can only time out. Returns true when it stopped the sign-in. A check that cannot say
+   *  counts as online (never invent a problem). */
+  private async stoppedForNoInternet(round: number): Promise<boolean> {
+    // WHY the caller has already put the waiting screen up (review F7): a slow-failing network took up
+    // to 5 s with nothing on screen. And after the wait, a Cancel pressed meanwhile (authRound moved
+    // on) must win: the screen is already back on the buttons, so we neither write offline state nor
+    // let the caller carry on to open the browser.
+    const online = await this.checkInternet().catch(() => true);
+    if (round !== this.authRound) return true;
+    if (online) return false;
+    this.updatePrereq('auth', { status: 'waiting' });
+    this.updateState({ authMode: 'none', lastError: OFFLINE_SIGN_IN_MESSAGE, lastErrorOffline: true });
+    log('INFO', 'first-run', 'Sign-in not started: no internet connection');
+    return true;
+  }
 
   /**
    * Returns true if this is the first run (setup not yet completed).
@@ -246,6 +270,7 @@ export class FirstRunManager extends EventEmitter {
       if (step === 'AUTHENTICATE' || (step as string) === 'ENABLE_DEVELOPER_MODE') {
         this.state.authMode = 'none';
         this.state.lastError = undefined;
+        this.state.lastErrorOffline = undefined; // card #236: goes with lastError
         await this.detectAll();
       } else {
         await this.runStep(step);
@@ -439,6 +464,7 @@ export class FirstRunManager extends EventEmitter {
     const round = ++this.authRound;
     this.updateState({ authMode: 'oauth', statusMessage: 'Waiting for you to log in...', lastError: undefined });
     this.updatePrereq('auth', { status: 'installing' });
+    if (await this.stoppedForNoInternet(round)) return { url: null };
 
     // Node first (2026-10-02): Claude Code sessions run through it, and this
     // click is the moment a person has chosen Claude Code. The card's
@@ -679,6 +705,7 @@ export class FirstRunManager extends EventEmitter {
     const round = ++this.authRound;
     this.updateState({ authMode: 'chatgpt', statusMessage: 'Waiting for you to sign in…' });
     this.updatePrereq('auth', { status: 'installing' });
+    if (await this.stoppedForNoInternet(round)) return;
 
     // signIn() THROWS for two verified causes — the keychain is unavailable, or
     // another program holds port 1455. Both first-run IPC handlers in main.ts
@@ -741,6 +768,7 @@ export class FirstRunManager extends EventEmitter {
   async handleOpenRouterLogin(auth: OpenRouterSignInAuth): Promise<void> {
     const round = ++this.authRound;
     this.updateState({ authMode: 'openrouter', statusMessage: 'Waiting for you to sign in…', lastError: undefined });
+    if (await this.stoppedForNoInternet(round)) return;
     try {
       await auth.signIn({ timeoutMs: CHATGPT_FIRST_RUN_TIMEOUT_MS });
     } catch (err) {
@@ -845,6 +873,10 @@ export class FirstRunManager extends EventEmitter {
   }
 
   private updateState(updates: Partial<FirstRunState>): void {
+    // WHY (card #236): `lastErrorOffline` describes the CURRENT lastError only. Any other write to
+    // lastError (a new message, or clearing it) retires the amber "no internet" look unless the same
+    // call sets it again.
+    if ('lastError' in updates && !('lastErrorOffline' in updates)) updates = { ...updates, lastErrorOffline: undefined };
     Object.assign(this.state, updates);
     this.saveState();
     this.emitState();

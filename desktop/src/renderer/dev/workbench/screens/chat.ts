@@ -44,6 +44,18 @@ export const CHAT: readonly ScreenEntry[] = [
   ...(['cc', 'native'] as const).flatMap(rt => (['before-', ''] as const).map(when => ({
     ...chat(`chat#model-switch-${when}${rt}`, 'view'), session: rt === 'cc' ? 'wb-1' : 'wb-2', params: { seed: `bubbles-model-switch-${when}${rt}` },
   }))),
+  // Card #236 (sign-in expiry + no internet, 2026-11-18): Claude Code's "Login expired" reply, the sign-in from the card, and the
+  // ChatGPT / OpenRouter / no-internet cards. The "before" of each is the same conversation on master.
+  { ...chat('chat#signin-expired-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired' } },
+  { ...chat('chat#signin-waiting-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired', signIn: 'waiting' }, open: ['Sign in'], newIn: 'after' as const },
+  { ...chat('chat#signin-back-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired' }, open: ['Sign in'], waitMs: 5_000, newIn: 'after' as const },
+  { ...chat('chat#signin-offline-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired', online: '0' }, open: ['Sign in'], newIn: 'after' as const },
+  { ...chat('chat#signin-expired-cc-phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { seed: 'bubbles-expired-cc', claudeCode: 'expired', platform: 'android' } },
+  { ...chat('chat#signin-remote-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired', connection: 'remote' } },
+  { ...chat('chat#signin-expired-chatgpt', 'view'), session: 'wb-2', params: { seed: 'bubbles-chatgpt-expired' } },
+  { ...chat('chat#signin-expired-openrouter', 'view'), session: 'wb-2', params: { seed: 'bubbles-openrouter-rejected' } },
+  { ...chat('chat#offline-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-offline-cc', online: '0' } },
+  { ...chat('chat#offline-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-offline', online: '0' } },
   chat('chat/sessions', 'menu'),
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
@@ -221,6 +233,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { name: 'first-run#installing', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
   { name: 'first-run#install-failed', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'failed' } },
   { name: 'first-run#authenticate-chatgpt', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', authMode: 'chatgpt' } },
+  // Card #236: a sign-in button pressed with no internet — the browser stays closed and the screen says why.
+  { name: 'first-run#authenticate-offline', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', signInPick: 'plan', online: '0' }, newIn: 'after' as const },
   // A new user's checklist: Git installing, then Git done at sign-in (?prereqs, mock-shim).
   { name: 'first-run#setup-installing', tags: ['first-run', 'view'], viewport: { width: 800, height: 440 }, params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
   { name: 'first-run#setup-done', tags: ['first-run', 'view'], viewport: { width: 800, height: 680 }, params: { firstRun: 'AUTHENTICATE', prereqs: 'done' } },

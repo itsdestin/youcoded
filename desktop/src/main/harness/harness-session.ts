@@ -17,7 +17,8 @@ import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow, ContextCannotFitError } from '../providers/context-overflow';
 import { capResultAndSave } from './tool-result-room';
 import { imageTooLarge, manyImageEdgeLimit } from '../providers/image-too-large';
-import { classifyFailure, abortableDelay, retryWaitMs, logTurnFailure, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
+import { classifyFailure, abortableDelay, retryWaitMs, logTurnFailure, NoInternetError, failedAgainstLocalServer, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
+import { checkInternet as realCheckInternet } from '../network-check';
 import { truncationRecovery, CONTINUE_TURN_TEXT } from './truncation-recovery';
 import { cacheTokensForStep } from './cache-usage';
 import { EventEmitter } from 'events';
@@ -278,6 +279,9 @@ export interface HarnessSessionOpts {
   toolServices?: ToolServices;
   /** Test hook: step-level retry backoff (ms). Defaults to [1000, 2000, 4000]. */
   retryDelays?: number[];
+  /** Test hook (card #236): the app's own "is this computer online?" check, asked when a step fails
+   *  with a network error. Defaults to the real one (network-check.ts). */
+  checkInternet?: () => Promise<boolean>;
   /** Test hook: streaming inactivity watchdog timings (ms). Silence past
    *  `stallWarningMs` warns the user; a further `stallCountdownMs` of silence
    *  triggers the auto-retry / session-error. Default 60_000 / 15_000. */
@@ -4486,6 +4490,15 @@ export class HarnessSession extends EventEmitter {
       } catch (err: any) {
         const waitMs = this.abort?.signal.aborted ? null : retryWaitMs(err, attempt, this.retryDelays);
         if (waitMs === null) throw err;
+        // WHY (card #236): a network failure is either a blip or the computer being offline. Ask the app's
+        // own check BEFORE the retry ladder (about a minute of waiting): offline ends the turn at once with
+        // the red "No internet" card, whose Try again is the existing continue-turn. Online (or a check
+        // that cannot say) keeps today's behaviour exactly. Only on the first failure of a step.
+        // (Not for a server on this machine or the local network: that failure is the server, not the internet.)
+        if (attempt === 0 && classifyFailure(err).code === 'network' && !failedAgainstLocalServer(err, this.profile.providerType)
+          && !(await (this.opts.checkInternet ?? realCheckInternet)().catch(() => true))) {
+          throw new NoInternetError(err);
+        }
         // WHY: retrying the whole step must first erase ONLY its failed attempt;
         // previously a late provider error left streamed text on disk and screen.
         retractAttempt?.();
