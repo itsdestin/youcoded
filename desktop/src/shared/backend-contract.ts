@@ -1190,7 +1190,7 @@ interface ClaudeApi {
     openFolder: () => Promise<string | null>;
     openSound: () => Promise<string | null>;
     readTranscriptMeta: (path: string) => Promise<{ model: string; contextPercent: number } | null>;
-    saveClipboardImage: () => Promise<string | null | undefined>;   // path | null = tried, got nothing (reported) | undefined = phone can't paste (SILENT, owner to decide)
+    saveClipboardImage: (pasted?: File) => Promise<string | null | undefined>;   // path | null = tried, got nothing (reported) | undefined = nothing to attach (SILENT). `pasted` = the picture from the paste event: only remote/phone uses it (desktop reads its own clipboard)
   };
   shell: {
     openChangelog: () => Promise<void>;
