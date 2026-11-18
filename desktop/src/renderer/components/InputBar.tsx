@@ -1072,7 +1072,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     e.preventDefault();
     fileDragDepth.current = 0;
     setFileDragOver(false);
-    const paths = Array.from(e.dataTransfer.files).map((f) => (f as any).path as string).filter(Boolean);
+    // WHY: Electron removed File.path, so on desktop a dropped file's path comes from the preload's
+    // webUtils bridge (dialog.pathForFile). Remote/Android have no such bridge and fall back to the
+    // old File.path read, which behaves exactly as before there.
+    const pathForFile = window.claude?.dialog?.pathForFile;
+    const paths = Array.from(e.dataTransfer.files)
+      .map((f) => (pathForFile ? pathForFile(f) : (f as any).path) as string)
+      .filter(Boolean);
     if (paths.length > 0) addFiles(paths);
   }, [addFiles]);
 

@@ -1187,6 +1187,8 @@ interface ClaudeApi {
   on: BridgeListeners;
   dialog: {
     openFile: () => Promise<string[]>;
+    /** Desktop only: a dropped file's on-disk path (Electron removed File.path). Absent on remote/Android. */
+    pathForFile?: (file: File) => string;
     openFolder: () => Promise<string | null>;
     openSound: () => Promise<string | null>;
     readTranscriptMeta: (path: string) => Promise<{ model: string; contextPercent: number } | null>;

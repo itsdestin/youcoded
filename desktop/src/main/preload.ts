@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, IpcRendererEvent, webFrame } from 'electron';
+import { contextBridge, ipcRenderer, IpcRendererEvent, webFrame, webUtils } from 'electron';
 import type { AuthStartResponse, AuthPollResponse, PostRatingInput } from '../renderer/state/marketplace-api-client';
 import type { MarketplaceUser } from './marketplace-auth-store';
 import type { ApiResult } from './marketplace-api-handlers';
@@ -1504,6 +1504,11 @@ contextBridge.exposeInMainWorld('claude', {
   dialog: {
     openFile: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FILE),
+    // WHY: Electron removed File.path (v32), so a dropped file's real location can only be read
+    // here, in the preload, via webUtils. Synchronous, no IPC. Returns '' if the file has no path.
+    pathForFile: (file: File): string => {
+      try { return webUtils.getPathForFile(file) || ''; } catch { return ''; }
+    },
     openFolder: (): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_FOLDER),
     openSound: (): Promise<string | null> =>

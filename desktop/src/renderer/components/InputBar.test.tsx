@@ -85,6 +85,27 @@ describe('InputBar — context-menu image paste', () => {
     expect(container.querySelector('[data-file-drop-highlight]')).toBeNull();
   });
 
+  // WHY: Electron removed File.path, so a drop must resolve paths through dialog.pathForFile
+  // (webUtils in the preload). Without it every dropped file was silently ignored on desktop.
+  it('attaches a dropped file using the preload path bridge', async () => {
+    const pathForFile = vi.fn(() => '/home/me/report.pdf');
+    (window as any).claude.dialog.pathForFile = pathForFile;
+    const box = renderComposer();
+    const container = box.closest('.input-bar-container') as HTMLElement;
+    const file = new File(['x'], 'report.pdf');   // no .path, like modern Electron
+    fireEvent.drop(container, { dataTransfer: { types: ['Files'], files: [file] } });
+    expect(pathForFile).toHaveBeenCalledWith(file);
+    expect(await screen.findByRole('button', { name: 'Remove report.pdf' })).toBeInTheDocument();
+  });
+
+  it('still reads File.path when there is no preload bridge (remote/Android)', async () => {
+    const box = renderComposer();
+    const container = box.closest('.input-bar-container') as HTMLElement;
+    const file = Object.assign(new File(['x'], 'old.txt'), { path: '/tmp/old.txt' });
+    fireEvent.drop(container, { dataTransfer: { types: ['Files'], files: [file] } });
+    expect(await screen.findByRole('button', { name: 'Remove old.txt' })).toBeInTheDocument();
+  });
+
   it('atomically fills exact queued text and attachment chips once before React paints and refuses a newer draft/session', () => {
     const ref=React.createRef<InputBarHandle>();
     const composer=(id:string)=><ChatProvider><SkillProvider><InputBar ref={ref} sessionId={id} provider="claude" /></SkillProvider></ChatProvider>;
