@@ -98,8 +98,8 @@ fun QrScannerOverlay(
         if (hasCameraPermission) {
             var scanned by remember { mutableStateOf(false) }
 
-            // WHY: created once per open and closed in onDispose below, instead of a new thread
-            // and ML Kit client on every recomposition-visible bind that was never cleaned up.
+            // WHY: created once per open and closed in onDispose below. Before, every open made a
+            // new analysis thread and ML Kit client that were never cleaned up.
             val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
             val barcodeScanner = remember { BarcodeScanning.getClient() }
             var boundProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
@@ -140,7 +140,11 @@ fun QrScannerOverlay(
                             .also { imageAnalysis ->
                                 imageAnalysis.setAnalyzer(analysisExecutor) { imageProxy ->
                                     val mediaImage = imageProxy.image
-                                    if (mediaImage != null && !scanned) {
+                                    // WHY: a frame already in flight when the overlay closes must not
+                                    // reach the closed barcode reader; drop it and free the frame.
+                                    if (session.released) {
+                                        imageProxy.close()
+                                    } else if (mediaImage != null && !scanned) {
                                         val image = InputImage.fromMediaImage(
                                             mediaImage, imageProxy.imageInfo.rotationDegrees
                                         )
