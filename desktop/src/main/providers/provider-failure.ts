@@ -58,7 +58,8 @@ export const MAX_RETRY_AFTER_MS = 60_000;
  *  retry-after up to MAX_RETRY_AFTER_MS. */
 export function retryWaitMs(error: unknown, attempt: number, delays: readonly number[]): number | null {
   const failure = classifyFailure(error);
-  if (failure.kind !== 'temporary' || attempt >= delays.length) return null;
+  // A confirmed-offline failure is never retried by the ladder (card #236): the person presses Try again.
+  if (failure.kind !== 'temporary' || failure.code === 'no-internet' || attempt >= delays.length) return null;
   return failure.retryAfterSec !== undefined ? Math.min(failure.retryAfterSec * 1000, MAX_RETRY_AFTER_MS) : delays[attempt];
 }
 
@@ -108,9 +109,18 @@ function networkCodeOf(e: any): string | undefined {
   return undefined;
 }
 
+/** A network failure the app's own connection check confirmed (card #236): the computer is offline.
+ *  Thrown by the harness's retry layer so the turn ends at once instead of waiting out the ladder. */
+export class NoInternetError extends Error {
+  readonly noInternet = true;
+  constructor(readonly cause: unknown) { super('No internet connection.'); this.name = 'NoInternetError'; }
+}
+
 export function classifyFailure(error: unknown): ProviderFailure {
   const e: any = (error as any)?.lastError ?? error;
   if (!e || typeof e !== 'object') return { kind: 'unknown', code: 'unknown' };
+  // Still a TEMPORARY failure (Try again is right) but with its own code, which the chat draws as the red No internet card.
+  if (e.noInternet === true) return { kind: 'temporary', code: 'no-internet' };
   // Codes an earlier layer already decided (OpenRouter's ProviderAccountError,
   // ChatGPT sign-in) — those layers read the provider's real answer.
   // The harness's own pre-send "cannot fit" refusal (context-overflow.ts) is the same kind and code as the

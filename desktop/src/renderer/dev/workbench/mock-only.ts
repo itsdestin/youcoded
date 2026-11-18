@@ -108,10 +108,10 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
-  // Card #236 (sign-in expiry + no internet, 2026-11-18): designed in the workbench first.
-  { channel: 'claudeCode.signIn', feature: 'Sign in to Claude again from the chat and Settings (card #236)' },
-  { channel: 'claudeCode.cancelSignIn', feature: 'Sign in to Claude again from the chat and Settings (card #236)' },
-  { channel: 'network.check', feature: "The app's own connection check before sign-in and on a failed message (card #236)" },
+  // Card #236 (sign-in expiry + no internet): its three rows (`claudeCode.signIn`, `claudeCode.cancelSignIn`,
+  // `network.check`) are GONE (2026-11-18) — main + preload + remote-shim carry the real channels
+  // (main/claude-sign-in.ts, main/network-check.ts); the fakes in mock-shim.ts stay so the workbench can
+  // still show the waiting, back-in and offline cards without a browser or a network.
   // Office Home's row actions (card #143): office.rename / duplicate / forgetRecent rows are GONE —
   // main + preload + remote-shim carry the real channels; the fakes in mock-shim.ts stay.
   // Automatic updates (#183): its last row (update.restartToUpdate) is GONE (T3): main + preload +

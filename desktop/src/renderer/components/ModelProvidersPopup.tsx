@@ -803,10 +803,17 @@ export function OpenRouterBlock() {
             tone: words.broken ? 'danger' : 'warning',
             text: words.detail.text,
             actions: words.broken ? (signInSupported ? (
+              // Card #236: when the app recorded how it was connected, only that way back is offered.
+              openrouter?.connectedVia === 'key' ? (
+                <Button size="sm" onClick={() => setConnectOpen(true)}>API Key</Button>
+              ) : openrouter?.connectedVia === 'browser' ? (
+                <Button size="sm" onClick={() => void startSignIn()}>Sign in with OpenRouter</Button>
+              ) : (
               <>
                 <Button variant="secondary" size="sm" onClick={() => setConnectOpen(true)}>API Key</Button>
                 <Button size="sm" onClick={() => void startSignIn()}>Sign in with OpenRouter</Button>
               </>
+              )
             ) : (
               <Button size="sm" onClick={() => setConnectOpen(true)}>Replace key</Button>
             )) : (
@@ -824,6 +831,12 @@ export function OpenRouterBlock() {
             // Two separate ways in, side by side (review SI-1/SI-5): API Key
             // opens the paste window, Sign in goes straight to the browser.
             // A refused key gets the same pair — it is "not connected" again.
+            // Card #236: a refused key whose way of connecting was recorded offers only that way back.
+            connected && words.broken && openrouter?.connectedVia === 'key' ? (
+              <Button size="sm" onClick={() => setConnectOpen(true)}>API Key</Button>
+            ) : connected && words.broken && openrouter?.connectedVia === 'browser' ? (
+              <Button size="sm" onClick={() => void startSignIn()}>Sign in with OpenRouter</Button>
+            ) : (
             <>
               <Button variant="secondary" size="sm" onClick={() => setConnectOpen(true)}>
                 API Key
@@ -832,6 +845,7 @@ export function OpenRouterBlock() {
                 Sign in with OpenRouter
               </Button>
             </>
+            )
           ) : connected ? (
             // A refused key makes Replace key the one thing to do, so it takes
             // the primary style; on a working key it stays an outline peer.

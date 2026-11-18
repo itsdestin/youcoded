@@ -44,6 +44,10 @@ export interface ModelsChannelTypes {
   'openrouter:cancel-sign-in': { request: void; response: boolean };
   'claude-code:status': { request: { refresh?: boolean } | undefined; response: ClaudeAccountStatus };
   'claude-code:install': { request: void; response: { success: boolean; error?: string } };
+  'claude-code:sign-in': { request: void; response: boolean };
+  'claude-code:cancel-sign-in': { request: void; response: boolean };
+  // Card #236: the app's own connection check. Never throws; offline means both probes failed.
+  'network:check': { request: void; response: { online: boolean } };
   // WebSearch keys. A key goes IN (set-key, test) and is never in an answer: list says only whether one exists.
   'search:list': { request: void; response: Answer<'searchKeyStore', 'list'> };
   'search:set-key': { request: { backend: 'tavily' | 'exa'; key: string }; response: true };

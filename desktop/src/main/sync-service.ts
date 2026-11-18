@@ -41,6 +41,7 @@ import { classifyPushError, extractStderr, truncateStderr } from './sync-error-c
 // spaces daily-backup (single source of truth) plus the pure tiered-retention core.
 import { datedFolderName, isBackupDue } from './sync-spaces/daily-backup';
 import { snapshotsToDelete, shouldStampDailyMarker } from './snapshot-retention';
+import { checkInternet } from './network-check';
 
 const execFileAsync = promisify(execFile);
 
@@ -1153,19 +1154,9 @@ export class SyncService extends EventEmitter {
    * awkward to control from a suite.
    */
   private async probeInternet(): Promise<boolean> {
-    try {
-      const dns = await import('dns');
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('timeout')), 5000);
-        dns.lookup('github.com', (err) => {
-          clearTimeout(timer);
-          if (err) reject(err); else resolve();
-        });
-      });
-      return true;
-    } catch {
-      return false;
-    }
+    // WHY delegated (card #236): the check now lives in network-check.ts so the sign-in
+    // screens and a failed chat message share this exact definition of "online".
+    return checkInternet();
   }
 
   /**

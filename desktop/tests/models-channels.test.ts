@@ -22,16 +22,17 @@ describe('what is in the table and who may call it', () => {
   it('every request name in the contract for these families has an entry; the pushes have none', () => {
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const names = Object.values(IPC).filter((v) => FAMILY.test(v) && !PUSHES.has(v) && v !== IPC.ENGINE_MODELS_CHANGED);
-    // 13 models + 9 engine + 8 provider + 4 search + 4 chatgpt + 3 openrouter + 2 claude-code + endpoints:detect;
+    // 13 models + 9 engine + 8 provider + 4 search + 4 chatgpt + 3 openrouter + 4 claude-code + endpoints:detect;
     // a new one must be decided here.
-    expect(names.length).toBe(44);
+    expect(names.length).toBe(46);
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
     for (const p of PUSHES) expect(findChannel(p)).toBeUndefined();
   });
 
-  it('a phone may use exactly what it could before: only the two sign-in starts are refused, and they answer false', async () => {
+  it('a phone may use exactly what it could before: only the sign-in starts (and Claude\'s cancel) are refused, and they answer false', async () => {
     const refused = CHANNEL_TABLE.filter((d) => FAMILY.test(d.name) && (d.desktopOnly || d.remoteAllowed === false)).map((d) => d.name).sort();
-    expect(refused).toEqual(['chatgpt:sign-in', 'openrouter:sign-in']);
+    // Card #236: Claude Code's sign-in again (and its cancel) join them — the card tells a phone to sign in from the host.
+    expect(refused).toEqual(['chatgpt:sign-in', 'claude-code:cancel-sign-in', 'claude-code:sign-in', 'openrouter:sign-in']);
     const signIn = vi.fn(async () => true);
     const rt: any = { chatgptAuth: { signIn }, openRouterSignIn: { signIn } };
     for (const name of refused) expect(await serve(name, undefined, phoneCtx(rt))).toEqual({ reply: true, payload: false });
@@ -39,6 +40,15 @@ describe('what is in the table and who may call it', () => {
     // The computer's own window runs them.
     expect(await call('chatgpt:sign-in', undefined, desktopCtx(rt))).toBe(true);
     expect(await call('openrouter:sign-in', undefined, desktopCtx(rt))).toBe(true);
+  });
+});
+
+describe('the online check', () => {
+  it('network:check is open to a phone (it reports the host computer\'s network) and Claude\'s sign-in is not', () => {
+    const net = findChannel('network:check')!;
+    expect(net.desktopOnly).toBeFalsy();
+    expect(net.remoteAllowed).not.toBe(false);
+    expect(findChannel('claude-code:sign-in')!.desktopOnly).toBe(true);
   });
 });
 

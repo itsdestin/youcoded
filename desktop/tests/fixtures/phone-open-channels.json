@@ -136,6 +136,7 @@
   "native:startup-action",
   "native:submit-admin-password",
   "native:switch-model",
+  "network:check",
   "openrouter:cancel-sign-in",
   "openrouter:sign-in-status",
   "pages:approve",
@@ -292,5 +293,6 @@
   "zoom:out",
   "zoom:reset"
  ],
+ "_added_network_check": "2026-11-18: network:check (the app's own online check; a phone's sign-in card asks the HOST computer) — card #236 plan, approved with the card's UI (review rounds 1-2).",
  "_added_ha_pages": "2026-10-05, branch session/ha-pages-connection merged into one-core: the 7 pages:socket-* / pages:video-* channels were already open to a phone on that branch (a phone's Home page holds a live connection and camera through the computer, each owned by that phone alone). Destin signed off this widening on 2026-10-05 (\"yes\", asked whether a phone may use the Home page's live updates and camera video)."
 }

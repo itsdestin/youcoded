@@ -222,6 +222,17 @@ describe('AttentionBanner — errorCode picks the action', () => {
       expect(onOpen).toHaveBeenCalledOnce();
     });
 
+  it.each([['key', 'Paste a new key', 'Sign in with OpenRouter'], ['browser', 'Sign in with OpenRouter', 'Paste a new key']])(
+    'an OpenRouter connection made by %s offers only that way back', async (via, shown, hidden) => {
+      (window as any).claude.providers = { list: async () => [{ id: 'openrouter', type: 'openrouter', connectedVia: via }] };
+      const { container } = render(
+        <AttentionBanner state="error" errorMessage="x" errorCode="openrouter-key-rejected" onOpenProviderSettings={vi.fn()} />,
+      );
+      await vi.waitFor(() => expect(button(container, hidden)).toBeNull());
+      expect(button(container, shown)).not.toBeNull();
+      delete (window as any).claude.providers;
+    });
+
   it('not enough credit offers Add credit, and not Settings', () => {
     const onAddCredit = vi.fn();
     const { container } = render(

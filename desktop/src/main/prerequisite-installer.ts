@@ -1284,7 +1284,7 @@ export async function installClaude(): Promise<{ success: boolean; error?: strin
 // WHY `isPackaged` is a parameter (2026-09-29 one-core R1): this module is imported by the native
 // runtime (ClaudeAccount uses resolveCommand), and the runtime must load without Electron. The
 // one caller, first-run.ts, already runs inside Electron and passes `app.isPackaged`.
-export function startOAuthLogin(isPackaged = false): { url: string | null; kill: () => void } {
+export function startOAuthLogin(isPackaged = false): { url: string | null; kill: () => void; onExit: (cb: (code: number | null) => void) => void } {
   const claudePath = resolveClaudeCommand();
 
   // Locate pty-worker.js the same way SessionManager does — in packaged builds
@@ -1303,6 +1303,9 @@ export function startOAuthLogin(isPackaged = false): { url: string | null; kill:
   });
 
   let authUrl: string | null = null;
+  // WHY (card #236): the sign-in-again flow needs to know the login finished cleanly, because an
+  // expired login still reads "signed in" to `claude auth status`.
+  const exitListeners: Array<(code: number | null) => void> = [];
   let buffer = '';                 // accumulated stdout (ANSI-stripped) for regex matches across chunks
   const DIAG_MAX = 2000;           // cap diagnostic log volume
   let diagBuf = '';
@@ -1332,6 +1335,7 @@ export function startOAuthLogin(isPackaged = false): { url: string | null; kill:
         }
       }
     } else if (msg.type === 'exit') {
+      for (const cb of exitListeners) { try { cb(typeof msg.exitCode === 'number' ? msg.exitCode : null); } catch { /* a listener must not break the worker */ } }
       log('WARN', 'prereq', 'OAuth CLI exited', {
         exitCode: msg.exitCode,
         authUrlCaptured: Boolean(authUrl),
@@ -1359,6 +1363,7 @@ export function startOAuthLogin(isPackaged = false): { url: string | null; kill:
 
   return {
     get url() { return authUrl; },
+    onExit: (cb: (code: number | null) => void) => { exitListeners.push(cb); },
     kill: () => {
       try { worker.send({ type: 'kill' }); } catch {}
       try { worker.kill(); } catch {}

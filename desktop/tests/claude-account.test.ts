@@ -2,6 +2,7 @@ import { describe, test, expect, vi } from 'vitest';
 import {
   ClaudeAccount,
   statusFromOutput,
+  noteAuthFailureFromEvent,
   CLAUDE_STATUS_CACHE_MS,
 } from '../src/main/providers/claude-account';
 import {
@@ -167,5 +168,61 @@ describe('what the renderer shows', () => {
     // A plan Anthropic renames still reads as a name.
     expect(claudePlanLabel('team_premium')).toBe('Team_premium plan');
     expect(claudePlanLabel(undefined)).toBe('Claude plan');
+  });
+});
+
+// Card #236: a login that ran out still reads "signed in" to the CLI, so the account adds its own word.
+describe('ClaudeAccount — sign-in expiry', () => {
+  const withEnd = (iso: string) => JSON.stringify({ ...JSON.parse(SIGNED_IN_MAX), loginExpiresAt: iso });
+  const FUTURE = '2026-12-17T08:29:49.037Z';
+  const PAST = '2026-11-16T08:29:49.037Z';
+  const NOW = Date.parse('2026-11-18T00:00:00Z');
+
+  test('the end time is reported, and a past one reads expired while models stay available', async () => {
+    const live = await new ClaudeAccount(vi.fn().mockResolvedValue({ stdout: withEnd(FUTURE) }), () => NOW).status();
+    expect(live).toMatchObject({ state: 'signed-in', expiresAt: FUTURE });
+    expect((live as any).expired).toBeUndefined();
+
+    const past = await new ClaudeAccount(vi.fn().mockResolvedValue({ stdout: withEnd(PAST) }), () => NOW).status();
+    expect(past).toMatchObject({ state: 'signed-in', expiresAt: PAST, expired: true });
+    expect(claudeCanRun(past)).toBe(true); // the 2026-09-09 decision: expired never switches a model off
+  });
+
+  test('an API-key login has no end time and is never expired', async () => {
+    const out = JSON.stringify({ loggedIn: true, authMethod: 'apiKey', loginExpiresAt: PAST });
+    const s = await new ClaudeAccount(vi.fn().mockResolvedValue({ stdout: out }), () => NOW).status();
+    expect(s).toMatchObject({ state: 'signed-in', apiKey: true });
+    expect((s as any).expiresAt).toBeUndefined();
+    expect((s as any).expired).toBeUndefined();
+  });
+
+  test('a refused reply marks THIS login expired until a different login is read', async () => {
+    const run = vi.fn().mockResolvedValue({ stdout: withEnd(FUTURE) });
+    const acct = new ClaudeAccount(run, () => NOW);
+    await acct.status();
+    acct.noteAuthFailure();
+    expect(await acct.status()).toMatchObject({ expired: true }); // re-probed, same login
+    run.mockResolvedValue({ stdout: withEnd('2027-01-01T00:00:00.000Z') }); // signed in again elsewhere
+    acct.invalidate();
+    expect((await acct.status() as any).expired).toBeUndefined();
+  });
+
+  test('finishing a sign-in clears a remembered refusal even when the end time is unchanged', async () => {
+    const acct = new ClaudeAccount(vi.fn().mockResolvedValue({ stdout: SIGNED_IN_MAX }), () => NOW);
+    await acct.status();
+    acct.noteAuthFailure();
+    expect(await acct.status()).toMatchObject({ expired: true });
+    acct.clearAuthFailure();
+    expect((await acct.status() as any).expired).toBeUndefined();
+  });
+
+  test('only a live authentication_failed reply notes a failure', () => {
+    const acct = { noteAuthFailure: vi.fn() };
+    noteAuthFailureFromEvent(acct, { type: 'assistant-text', data: { text: 'x', apiError: 'rate_limit' } });
+    noteAuthFailureFromEvent(acct, { type: 'assistant-text', data: { text: 'x' } });
+    noteAuthFailureFromEvent(acct, { type: 'user-message', data: { apiError: 'authentication_failed' } });
+    expect(acct.noteAuthFailure).not.toHaveBeenCalled();
+    noteAuthFailureFromEvent(acct, { type: 'assistant-text', data: { text: 'Please run /login', apiError: 'authentication_failed' } });
+    expect(acct.noteAuthFailure).toHaveBeenCalledTimes(1);
   });
 });

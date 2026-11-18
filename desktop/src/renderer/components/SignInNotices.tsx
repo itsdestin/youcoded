@@ -23,6 +23,9 @@ function useSignInCard(provider: SignInProvider, opts: {
   onPasteKey?: () => void;
   /** Main label of the sign-in button. */
   signInLabel?: string;
+  /** OpenRouter only: how the person connected, when the app recorded it. Offers only that way
+   *  back; unknown (older connections) offers both, as built (card #236 backend, task 5). */
+  connectedVia?: 'key' | 'browser';
 }) {
   const state = useSignInPhase(provider);
   const signIn = () => { void startSignIn(provider); };
@@ -53,9 +56,12 @@ function useSignInCard(provider: SignInProvider, opts: {
       return {
         tone: 'danger' as const,
         line: opts.expiredLine,
-        buttons: (
+        buttons: opts.connectedVia === 'key' && opts.onPasteKey ? (
+          // Connected with a pasted key: that is the only way back (no browser button).
+          <Button size="sm" onClick={opts.onPasteKey}>Paste a new key</Button>
+        ) : (
           <>
-            {opts.onPasteKey && <Button size="sm" variant="secondary" onClick={opts.onPasteKey}>Paste a new key</Button>}
+            {opts.connectedVia !== 'browser' && opts.onPasteKey && <Button size="sm" variant="secondary" onClick={opts.onPasteKey}>Paste a new key</Button>}
             {/* "Sign in", not "Sign in again", on every device (review R-6). */}
             <Button size="sm" onClick={signIn}>{opts.signInLabel ?? 'Sign in'}</Button>
           </>
@@ -101,6 +107,23 @@ function LiveClaudeSignInNotice() {
 /** A phone or browser connected to the computer: the sign-in must finish on the computer (review R-5, Destin's words). */
 const HOST_LINE = 'Sign in again from your host computer.';
 
+/** How OpenRouter was connected ('key' | 'browser'), or undefined until read / when never recorded. */
+function useOpenRouterConnectedVia(enabled: boolean): 'key' | 'browser' | undefined {
+  const [via, setVia] = useState<'key' | 'browser' | undefined>(undefined);
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    Promise.resolve((window as any).claude?.providers?.list?.())
+      .then((rows: Array<{ id?: string; type?: string; connectedVia?: 'key' | 'browser' }> | undefined) => {
+        const row = rows?.find((p) => p.id === 'openrouter' || p.type === 'openrouter');
+        if (alive) setVia(row?.connectedVia);
+      })
+      .catch(() => { /* unknown: both ways are offered */ });
+    return () => { alive = false; };
+  }, [enabled]);
+  return via;
+}
+
 /** The ChatGPT / OpenRouter red card when the sign-in or key was refused. */
 export function ProviderSignInCard({ provider, keyExpired, onPasteKey }: {
   provider: 'chatgpt' | 'openrouter';
@@ -109,7 +132,9 @@ export function ProviderSignInCard({ provider, keyExpired, onPasteKey }: {
   /** OpenRouter connections made before the app recorded how: offer both ways back. */
   onPasteKey?: () => void;
 }) {
+  const connectedVia = useOpenRouterConnectedVia(provider === 'openrouter');
   const card = useSignInCard(provider, {
+    connectedVia,
     expiredLine: provider === 'chatgpt' ? 'Your ChatGPT sign-in has expired.'
       : keyExpired ? 'Your OpenRouter key has expired.' : "OpenRouter didn't accept your key.",
     alreadyBack: false,

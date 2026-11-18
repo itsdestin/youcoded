@@ -30,6 +30,10 @@ import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { CuratedModel, DownloadProgress } from '../shared/model-manager-types';
 import { writeSetupDownload } from './first-run-local';
 import { noteMilestone } from './analytics-service';
+import { checkInternet } from './network-check';
+
+/** The line under the sign-in buttons when the app's own check says there is no connection (card #236). */
+export const OFFLINE_SIGN_IN_MESSAGE = 'No internet connection. Connect, then try again.';
 
 // WHY (2026-09-30 one-core R3-3): NativeKeyService moved to shared/first-run-types.ts (the
 // first-run:submit-api-key channel row names it); re-exported so existing imports keep working.
@@ -169,6 +173,20 @@ export class FirstRunManager extends EventEmitter {
   private authRound = 0;
   private activeSignIn: { cancelSignIn(): Promise<boolean> } | null = null;
   private stopOAuth: (() => void) | null = null;
+  /** Test hook (card #236): the app's own online check. */
+  checkInternet: () => Promise<boolean> = checkInternet;
+
+  /** WHY (card #236): before a sign-in opens a browser or spawns anything, ask whether this computer is
+   *  online. Offline puts the buttons back with the amber "No internet" line (`lastErrorOffline`) instead of a
+   *  spinner that can only time out. Returns true when it stopped the sign-in. A check that cannot say
+   *  counts as online (never invent a problem). */
+  private async stoppedForNoInternet(): Promise<boolean> {
+    if (await this.checkInternet().catch(() => true)) return false;
+    this.updatePrereq('auth', { status: 'waiting' });
+    this.updateState({ authMode: 'none', lastError: OFFLINE_SIGN_IN_MESSAGE, lastErrorOffline: true });
+    log('INFO', 'first-run', 'Sign-in not started: no internet connection');
+    return true;
+  }
 
   /**
    * Returns true if this is the first run (setup not yet completed).
@@ -246,6 +264,7 @@ export class FirstRunManager extends EventEmitter {
       if (step === 'AUTHENTICATE' || (step as string) === 'ENABLE_DEVELOPER_MODE') {
         this.state.authMode = 'none';
         this.state.lastError = undefined;
+        this.state.lastErrorOffline = undefined; // card #236: goes with lastError
         await this.detectAll();
       } else {
         await this.runStep(step);
@@ -437,6 +456,7 @@ export class FirstRunManager extends EventEmitter {
   /** Called from IPC when the user chooses OAuth login. */
   async handleOAuthLogin(): Promise<{ url: string | null }> {
     const round = ++this.authRound;
+    if (await this.stoppedForNoInternet()) return { url: null };
     this.updateState({ authMode: 'oauth', statusMessage: 'Waiting for you to log in...', lastError: undefined });
     this.updatePrereq('auth', { status: 'installing' });
 
@@ -677,6 +697,7 @@ export class FirstRunManager extends EventEmitter {
    *  this only learns the outcome word. */
   async handleChatGptLogin(auth: ChatGptSignInAuth): Promise<void> {
     const round = ++this.authRound;
+    if (await this.stoppedForNoInternet()) return;
     this.updateState({ authMode: 'chatgpt', statusMessage: 'Waiting for you to sign in…' });
     this.updatePrereq('auth', { status: 'installing' });
 
@@ -740,6 +761,7 @@ export class FirstRunManager extends EventEmitter {
    *  the key. Replaced the "coming in a later update" line (2026-09-18). */
   async handleOpenRouterLogin(auth: OpenRouterSignInAuth): Promise<void> {
     const round = ++this.authRound;
+    if (await this.stoppedForNoInternet()) return;
     this.updateState({ authMode: 'openrouter', statusMessage: 'Waiting for you to sign in…', lastError: undefined });
     try {
       await auth.signIn({ timeoutMs: CHATGPT_FIRST_RUN_TIMEOUT_MS });
@@ -845,6 +867,10 @@ export class FirstRunManager extends EventEmitter {
   }
 
   private updateState(updates: Partial<FirstRunState>): void {
+    // WHY (card #236): `lastErrorOffline` describes the CURRENT lastError only. Any other write to
+    // lastError (a new message, or clearing it) retires the amber "no internet" look unless the same
+    // call sets it again.
+    if ('lastError' in updates && !('lastErrorOffline' in updates)) updates = { ...updates, lastErrorOffline: undefined };
     Object.assign(this.state, updates);
     this.saveState();
     this.emitState();
