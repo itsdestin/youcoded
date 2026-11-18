@@ -141,6 +141,36 @@ describe('InputBar — context-menu image paste', () => {
     expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
   });
 
+  // A clipboard as the browser hands it to a paste event: the listed items plus getData by type.
+  const clipboard = (types: string[], data: Record<string, string> = {}) => ({
+    items: types.map((type) => ({ type, kind: type.startsWith('image/') ? 'file' : 'string' })),
+    getData: (type: string) => data[type] ?? '',
+  });
+
+  it('Ctrl+V of a browser "Copy image" (picture plus an <img> snippet) attaches the picture', async () => {
+    saveClipboardImage.mockResolvedValue('/tmp/chrome-copy.png');
+    const box = renderComposer();
+    fireEvent.paste(box, { clipboardData: clipboard(['text/html', 'image/png'], { 'text/html': '<meta charset="utf-8"><img src="https://example.com/cat.png" alt="cat">' }) });
+    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'Remove chrome-copy.png' })).toBeInTheDocument();
+  });
+
+  it('Ctrl+V of a picture whose only text is its own address still attaches the picture', async () => {
+    saveClipboardImage.mockResolvedValue('/tmp/with-url.png');
+    const box = renderComposer();
+    const src = 'https://example.com/cat.png';
+    fireEvent.paste(box, { clipboardData: clipboard(['text/plain', 'text/html', 'image/png'], { 'text/plain': src, 'text/html': `<img src="${src}">` }) });
+    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledTimes(1));
+  });
+
+  it('Ctrl+V of copied words that came with a picture (a page or spreadsheet copy) pastes the words', async () => {
+    const box = renderComposer();
+    fireEvent.paste(box, { clipboardData: clipboard(['text/plain', 'text/html', 'image/png'], { 'text/plain': 'Q3 total 42', 'text/html': '<table><tr><td>Q3 total</td><td>42</td></tr></table>' }) });
+    // settle: the image bridge is async, so give a wrongly-taken image path its chance to run.
+    await act(async () => { await Promise.resolve(); });
+    expect(saveClipboardImage).not.toHaveBeenCalled();
+  });
+
   it('keeps text precedence through the real composer menu and never invokes the image bridge', async () => {
     const readText = vi.fn().mockResolvedValue('pasted words');
     Object.defineProperty(navigator, 'clipboard', { value: { readText }, configurable: true });
