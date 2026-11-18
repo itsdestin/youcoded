@@ -697,7 +697,7 @@ export async function detectAuth(): Promise<DetectionResult> {
   try {
     const claudePath = resolveClaudeCommand();
     const { stdout } = await runCommand(claudePath, ['auth', 'status']);
-    // claude auth status exits 0 even when not logged in — parse the JSON
+    // claude auth status prints JSON either way (older CLIs exit 0 when logged out, newer exit 1 — see the catch)
     const parsed = JSON.parse(stdout.trim());
     if (parsed.loggedIn === true) {
       log('INFO', 'prereq', 'Auth status: authenticated', { email: parsed.email });
@@ -705,6 +705,12 @@ export async function detectAuth(): Promise<DetectionResult> {
     }
     return { installed: false, error: 'Not logged in' };
   } catch (err) {
+    // WHY: newer CLIs (2.1.327) exit 1 when logged out, so the JSON rides on the error.
+    // Same answer as above, not a raw "Command failed" string.
+    const out = (err as { stdout?: unknown } | null)?.stdout;
+    if (typeof out === 'string') {
+      try { if (JSON.parse(out.trim()).loggedIn === false) return { installed: false, error: 'Not logged in' }; } catch { /* not JSON: fall through */ }
+    }
     return { installed: false, error: String(err) };
   }
 }

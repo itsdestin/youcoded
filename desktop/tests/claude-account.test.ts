@@ -78,6 +78,13 @@ describe('ClaudeAccount — probing and caching', () => {
     await expect(new ClaudeAccount(run).status()).resolves.toEqual({ state: 'not-installed' });
   });
 
+  test('a logged-out CLI that exits 1 with its JSON reads signed-out, not unknown', async () => {
+    // CLI 2.1.327: `claude auth status` exits 1 when logged out; execFile rejects with the JSON on .stdout.
+    const err = Object.assign(new Error('Command failed: claude auth status'), { code: 1, stdout: '{"loggedIn": false, "authMethod": "none"}' });
+    const run = vi.fn().mockRejectedValue(err);
+    await expect(new ClaudeAccount(run).status()).resolves.toEqual({ state: 'signed-out' });
+  });
+
   test('a timeout is unknown, so nothing gets greyed out', async () => {
     const run = vi.fn().mockRejectedValue(Object.assign(new Error('killed'), { killed: true }));
     const status = await new ClaudeAccount(run).status();

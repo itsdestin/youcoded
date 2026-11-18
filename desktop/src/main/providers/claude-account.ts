@@ -191,6 +191,15 @@ export class ClaudeAccount {
       return statusFromOutput(stdout);
     } catch (err) {
       if (isMissingBinary(err)) return { state: 'not-installed' };
+      // WHY (found 2026-11-18 in a signed-out test copy, CLI 2.1.327): `claude auth status`
+      // now EXITS 1 when logged out, still printing its JSON. execFile rejects on that exit,
+      // so the answer arrived only on the error — and the card said "Signed-in state couldn't
+      // be read" with no way to sign in. A rejection that carries the CLI's JSON is an answer.
+      const out = (err as { stdout?: unknown } | null)?.stdout;
+      if (typeof out === 'string' && out.trim().startsWith('{')) {
+        const answered = statusFromOutput(out);
+        if (answered.state !== 'unknown') return answered;
+      }
       // Timed out, killed, permission denied — we do not know, and saying
       // "signed out" here is precisely the bug this module was written to fix.
       log('WARN', 'claude-account', 'auth status probe failed', { error: String(err) });
