@@ -44,10 +44,8 @@ describe('what is in the table and who may call it', () => {
 });
 
 describe('the online check', () => {
-  it('network:check is open to a phone (it reports the host computer\'s network) and Claude\'s sign-in is not', () => {
-    const net = findChannel('network:check')!;
-    expect(net.desktopOnly).toBeFalsy();
-    expect(net.remoteAllowed).not.toBe(false);
+  it('network:check is refused to a visiting phone (reaching the computer already proves it is online) and Claude\'s sign-in is desktop-only', () => {
+    expect(findChannel('network:check')!.remoteAllowed).toBe(false);
     expect(findChannel('claude-code:sign-in')!.desktopOnly).toBe(true);
   });
 });
