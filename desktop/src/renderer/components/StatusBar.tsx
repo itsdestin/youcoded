@@ -448,6 +448,9 @@ interface Props {
   // chip. Clicking either (or the model chip directly) opens the ModelPickerPopup.
   fast?: boolean;
   effort?: string;
+  /** True until the saved Effort/Fast values have really been read: the effort label and Fast chip are hidden
+   *  rather than showing "auto"/off as if chosen (card #134 round 4, Q-1). Absent = values are known. */
+  modesUnread?: boolean;
   onOpenModelPicker?: () => void;
   // Context popup: session and a dispatcher wrapper threaded from App.tsx.
   sessionId?: string | null;
@@ -883,7 +886,7 @@ const INPUT_NOTE = 'Input is counted per request — a long turn re-sends its hi
 
 export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App hands this bar a memoised projection + stable handlers (hooks/useStatusBarProps.ts), so unrelated shell state no longer re-renders it
   statusData, onRunSync, onOpenSync, model, modelProviderType, provider, usagePlan,
-  permissionMode, onCyclePermission, permissionPending, fast, effort, onOpenModelPicker,
+  permissionMode, onCyclePermission, permissionPending, fast, effort, modesUnread, onOpenModelPicker,
   sessionId, sessionName, onDispatch,
   openTasksCounts, onOpenOpenTasks,
   nativeUsage, nativeContextLength, nativeContextOverride, turnsWithUsage, nativeTotals,
@@ -1051,7 +1054,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
             >
               {display.icon && <ProviderIcon icon={display.icon} className="flex-shrink-0" />}
               <span>{display.label}</span>
-              {model.kind !== 'unknown' && (
+              {model.kind !== 'unknown' && !modesUnread && (
                 <>
                   <span className="opacity-40">|</span>
                   {/* No CSS `capitalize` (2026-09-29): it title-cases every word; capitalize only the first letter in JS. */}<span>{(effort || 'auto').replace(/^./, (c) => c.toUpperCase())} effort</span>
@@ -1067,7 +1070,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           file — nothing in a native session honours it, so rendering it there
           is a control that lies (spec §1). Not a registry widget, so it takes
           the runtime gate directly rather than going through show(). */}
-      {fast && runtime === 'claude' && (
+      {fast && !modesUnread && runtime === 'claude' && (
         <Tooltip text="Fast mode on — click to configure">
         <button
           onClick={onOpenModelPicker} data-model-chip=""
