@@ -22,6 +22,13 @@ import { DeliverablesCard } from '../../../components/DeliverablesCard';
 import { ContextMenu } from '../../../components/context-menu/ContextMenu';
 import type { MenuEntry } from '../../../components/context-menu/build-menu';
 import type { ToolCallState } from '../../../../shared/types';
+import { ChatImage } from '../../../components/MarkdownContent';
+import { buildContextMenu } from '../../../components/context-menu/build-menu';
+import { PanelIcon, PanelIconButton } from '../../../components/panel-icon-button';
+import { PlayIcon } from '../../../components/project-view/detail-tool-icons';
+import pictureData from '../fixtures/media/picture-landscape.png?inline';
+import attachedData from '../fixtures/media/attached-photo.png?inline';
+import frameData from '../fixtures/media/video-frame.png?inline';
 import pictureUrl from '../fixtures/media/picture-landscape.png';
 import attachedUrl from '../fixtures/media/attached-photo.png';
 import videoFrameUrl from '../fixtures/media/video-frame.png';
@@ -478,12 +485,250 @@ function LimitNotice() {
   );
 }
 
+
+// ═════════════════════════════════════════════════════════════════════════════════════
+// ROUND 2 (Destin, 2026-11-18: "doesn't feel native to youcoded")
+// Everything below is the app's own in-chat container: ToolCard's frame for asks (the real component, extended with
+// optional `body` / `money` fields), and DeliverablesCard's frame (rounded-lg border border-edge bg-well; icon | divider |
+// label | detail; actions at the right) for results. Pictures go through the real ChatImage and the real picture menu.
+// ═════════════════════════════════════════════════════════════════════════════════════
+const G = ({ children, size = 14 }: { children: React.ReactNode; size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>{children}</svg>
+);
+// Drawn in the app's own icon style (24px box, 2px round stroke, currentColor) because Icons.tsx has no picture / sound / video mark.
+const ImageGlyph = () => <G><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" /></G>;
+const SoundGlyph = () => <G><path d="M11 5 6 9H2v6h4l5 4V5Z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14" /></G>;
+const VideoGlyph = () => <G><rect x="2" y="5" width="14" height="14" rx="2" /><path d="m22 8-6 4 6 4V8Z" /></G>;
+const PauseGlyph = () => <G><path d="M8 5v14M16 5v14" /></G>;
+const BoxIcon = ({ children }: { children: React.ReactNode }) => <span className="shrink-0 inline-flex text-fg-dim">{children}</span>;
+
+/** The in-bubble container (DeliverablesCard's frame). */
+function NativeBox({ children }: { children: React.ReactNode }) {
+  return <div className="mt-2 rounded-lg border border-edge bg-well overflow-hidden">{children}</div>;
+}
+/** Its header line: icon | divider | label | detail ... right-hand actions (ToolCard / DeliverablesCard header classes). */
+function NativeHeader({ icon, label, detail, right }: { icon: React.ReactNode; label: string; detail?: React.ReactNode; right?: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 select-none">
+      <BoxIcon>{icon}</BoxIcon>
+      <span aria-hidden className="w-px h-3.5 bg-edge shrink-0" />
+      <span className="text-xs font-medium text-fg-2 shrink-0">{label}</span>
+      {detail && <span className="text-xs text-fg-muted truncate flex-1 min-w-0">· {detail}</span>}
+      {!detail && <span className="flex-1" />}
+      {right && <span className="flex items-center gap-1 shrink-0">{right}</span>}
+    </div>
+  );
+}
+/** A reply bubble with a line of text above, at chat width. */
+function Reply({ text, children, width = 'w-[88%]' }: { text: string; children: React.ReactNode; width?: string }) {
+  return (
+    <div className="in-view flex justify-start px-4 py-0.5">
+      <div className={`assistant-bubble ${width} break-words rounded-2xl rounded-bl-sm bg-inset text-sm text-fg px-5 py-3`}>
+        <p>{text}</p>
+        {children}
+      </div>
+    </div>
+  );
+}
+const OpenBtn = () => <PanelIconButton name="external" title="Open" onClick={() => {}} />;
+const FolderBtn = () => <PanelIconButton name="folder" title="View in folder" onClick={() => {}} />;
+
+const PICTURE_NAME = 'valley-sunset.png';
+const MadePicture = () => <ChatImage src={pictureData} alt="A mountain valley at sunset" data-file-path={`/home/you/Generated Content/${PICTURE_NAME}`} />;
+
+// ── approval: ToolCard's own ask frame ─────────────────────────────────────────────
+function MoneyAsk({ where = 'body', edit = false, chatgptOnly = false }: { where?: 'body' | 'header'; edit?: boolean; chatgptOnly?: boolean }) {
+  const { id, setId, maker } = useMaker();
+  const tool = React.useMemo<ToolCallState>(() => ({
+    toolUseId: 'media-ask-2', toolName: 'MediaAsk', input: {}, status: 'awaiting-approval', requestId: 'native-media-2', permissionMode: 'ask',
+  }), []);
+  const picker = (cls: string) => <Select size="sm" options={MAKER_OPTIONS} value={id} onChange={setId} className={cls} aria-label="Who makes it" />;
+  const ask = React.useMemo(() => {
+    if (chatgptOnly) return {
+      label: 'Making a picture',
+      question: 'Your ChatGPT plan only includes image generation on chatgpt.com. To generate images here, please connect a paid image provider.',
+      money: { approve: 'Connect a provider', approveVariant: 'primary' as const, decline: 'Open chatgpt.com' },
+      answer: async () => true,
+    };
+    return {
+      label: edit ? 'Changing a picture' : 'Making a picture',
+      detail: where === 'header' ? <span className="flex items-center gap-1.5"><span>·</span>{picker('w-80')}</span> : `· ${maker.name} · ${maker.price}`,
+      question: `“${edit ? EDIT_PROMPT : PROMPT}”`,
+      body: (where === 'body' || edit) ? (
+        <div className="flex flex-col gap-2">
+          {edit && <img src={attachedData} alt="The picture to change" className="h-14 w-auto self-start rounded-md border border-edge-dim" />}
+          {where === 'body' && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-fg-muted shrink-0">Made by</span>
+              {picker('flex-1')}
+            </div>
+          )}
+        </div>
+      ) : undefined,
+      note: `It costs ${maker.price}, charged to your ${maker.provider} account. “Allow for this chat” covers more pictures up to this chat’s $5.00 limit.`,
+      money: { approve: 'Approve', decline: 'Decline', chat: 'Allow for this chat' },
+      answer: async () => true,
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, maker, where, edit, chatgptOnly]);
+  return <PendingAskBubble><div className="w-[580px] max-w-full"><ToolCard tool={tool} sessionId="workbench" ask={ask} /></div></PendingAskBubble>;
+}
+
+// ── limit: the same frame ──────────────────────────────────────────────────────────
+const LIMIT_OPTIONS2 = ['$10', '$15', '$20', '$25', '$30'].map((v) => ({ value: v, label: `Raise to ${v}` }));
+function LimitAsk2({ rich }: { rich: boolean }) {
+  const [to, setTo] = React.useState('$10');
+  const tool = React.useMemo<ToolCallState>(() => ({
+    toolUseId: 'media-limit-2', toolName: 'MediaLimit', input: {}, status: 'awaiting-approval', requestId: 'native-limit-2', permissionMode: 'ask',
+  }), []);
+  const ask = React.useMemo(() => ({
+    label: 'Spending limit reached',
+    detail: rich ? '· $5.00 of $5.00' : undefined,
+    question: 'This chat has spent its $5.00 limit.',
+    note: rich ? 'The limit covers pictures, sound and video.' : undefined,
+    money: {
+      approve: 'Continue', decline: 'Stop',
+      lead: <Select size="sm" options={LIMIT_OPTIONS2} value={to} onChange={setTo} className="w-36 py-1" aria-label="New limit" />,
+    },
+    answer: async () => true,
+  }), [to, rich]);
+  return <PendingAskBubble><div className="w-[580px] max-w-full"><ToolCard tool={tool} sessionId="workbench" ask={ask} /></div></PendingAskBubble>;
+}
+
+// ── picture: ChatImage + container ─────────────────────────────────────────────────
+const META = 'Nano Banana 2.1 · $0.03';
+function PictureRow() {
+  return (
+    <Reply text="Here’s your picture.">
+      <MadePicture />
+      <NativeBox>
+        <NativeHeader icon={<ImageGlyph />} label={PICTURE_NAME} detail={META} right={<><OpenBtn /><FolderBtn /></>} />
+      </NativeBox>
+    </Reply>
+  );
+}
+function PictureFold({ open }: { open: boolean }) {
+  return (
+    <Reply text="Here’s your picture.">
+      <MadePicture />
+      <NativeBox>
+        <NativeHeader icon={<ImageGlyph />} label={PICTURE_NAME} detail={META} right={<ChevronOpen open={open} />} />
+        {open && (
+          <div className="flex justify-end gap-2 px-3 pb-2">
+            <Button variant="secondary" size="sm"><PanelIcon name="folder" size={12} /> View in folder</Button>
+            <Button variant="secondary" size="sm"><PanelIcon name="external" size={12} /> Open</Button>
+          </div>
+        )}
+      </NativeBox>
+    </Reply>
+  );
+}
+function ChevronOpen({ open }: { open: boolean }) {
+  return <span className="inline-flex text-fg-muted"><G size={14}><path d={open ? 'm18 15-6-6-6 6' : 'm6 9 6 6 6-6'} /></G></span>;
+}
+
+/** The REAL menu build-menu draws for a picture the assistant made (built from the live element, not hand-listed). */
+function PictureMenu() {
+  const wrap = React.useRef<HTMLDivElement>(null);
+  const [state, setState] = React.useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  React.useEffect(() => {
+    // The workbench has no computer behind it: give the menu the two calls it asks about, so it offers what the desktop would.
+    const w = window as any;
+    w.claude = w.claude ?? {};
+    w.claude.shell = { ...(w.claude.shell ?? {}), pictureAction: w.claude.shell?.pictureAction ?? (async () => ({ ok: true })) };
+    const img = wrap.current?.querySelector('img');
+    const place = () => {
+      if (!img) return;
+      const r = img.getBoundingClientRect();
+      if (r.width === 0) return;
+      const entries = buildContextMenu(img as HTMLElement);
+      if (entries) setState({ x: r.left + r.width * 0.4, y: r.top + r.height * 0.25, entries });
+    };
+    place();
+    img?.addEventListener('load', place);
+    return () => img?.removeEventListener('load', place);
+  }, []);
+  return (
+    <div ref={wrap} className="chat-scroll">
+      <Reply text="Here’s your picture."><MadePicture /></Reply>
+      {state && <ContextMenu x={state.x} y={state.y} entries={state.entries} onClose={() => setState(null)} />}
+    </div>
+  );
+}
+
+// ── sound / video: container in the bubble ─────────────────────────────────────────
+const Play = ({ playing }: { playing: boolean }) => <PanelIconButton title={playing ? 'Pause' : 'Play'} onClick={() => {}} glyph={playing ? <PauseGlyph /> : <PlayIcon size={14} />} />;
+function SoundOneLine({ playing, progress }: { playing: boolean; progress: number }) {
+  return (
+    <NativeBox>
+      <div className="flex items-center gap-2 px-3 py-1.5">
+        <Play playing={playing} />
+        <Waveform progress={progress} height={20} count={48} />
+        <Time now={playing ? '0:12' : '0:00'} total="0:31" />
+        <FolderBtn />
+      </div>
+    </NativeBox>
+  );
+}
+function SoundHeader({ playing, progress }: { playing: boolean; progress: number }) {
+  return (
+    <NativeBox>
+      <NativeHeader icon={<SoundGlyph />} label="Sound" detail="Rain on a tin roof · Lyria 3 · $0.04" right={<FolderBtn />} />
+      <div className="flex items-center gap-2 px-3 pb-2">
+        <Play playing={playing} />
+        <Waveform progress={progress} height={28} />
+        <Time now={playing ? '0:12' : '0:00'} total="0:31" />
+      </div>
+    </NativeBox>
+  );
+}
+const OpenButton = () => <Button variant="secondary" size="sm" className="shrink-0"><PanelIcon name="external" size={12} /> Open</Button>;
+const StopButton = () => <Button variant="secondary" size="sm" className="shrink-0">Stop</Button>;
+/** A: header line + full-width first frame. */
+function VideoStacked({ done }: { done: boolean }) {
+  return done ? (
+    <NativeBox>
+      <NativeHeader icon={<VideoGlyph />} label="ocean-loop.mp4" detail="0:08 · Veo 4 · $0.80" right={<><OpenBtn /><FolderBtn /></>} />
+      <img src={frameData} alt="First frame of the video" className="block w-full border-t border-edge" />
+    </NativeBox>
+  ) : (
+    <NativeBox>
+      <NativeHeader icon={<VideoGlyph />} label="Making your video" detail="About 2 minutes left. You can keep chatting." right={<StopButton />} />
+      <div className="px-3 pb-2.5"><ProgressBar percent={45} aria-label="Video progress" /></div>
+    </NativeBox>
+  );
+}
+/** B: first frame at the left, facts in the middle, one button flush right; all one height. */
+function VideoSide({ done }: { done: boolean }) {
+  return (
+    <NativeBox>
+      <div className="flex items-center gap-3 p-2">
+        {done
+          ? <img src={frameData} alt="First frame of the video" className="h-16 w-28 shrink-0 rounded-md object-cover" />
+          : <div className="h-16 w-28 shrink-0 rounded-md bg-inset border border-edge-dim flex items-center justify-center text-fg-dim"><VideoGlyph /></div>}
+        <div className="min-w-0 flex-1">
+          {done ? (<>
+            <p className="text-xs font-medium text-fg-2 truncate">ocean-loop.mp4</p>
+            <p className="text-xs text-fg-muted truncate">0:08 · Veo 4 · $0.80</p>
+          </>) : (<>
+            <p className="text-xs font-medium text-fg-2">Making your video</p>
+            <ProgressBar className="my-1.5" percent={45} aria-label="Video progress" />
+            <p className="text-xs text-fg-muted truncate">About 2 minutes left. You can keep chatting.</p>
+          </>)}
+        </div>
+        {done ? <OpenButton /> : <StopButton />}
+      </div>
+    </NativeBox>
+  );
+}
+const Cap = ({ children }: { children: React.ReactNode }) => <p className="px-4 pt-3 text-2xs text-fg-muted">{children}</p>;
+
 // ═════════════════════════════════════════════════════════════════════════════════════
 export const MEDIA_SURFACES: CompareSurface[] = [
   {
     id: 'media-approval', label: 'Making a picture: the approval card',
     question: 'How should the chat ask before it spends money on a picture?',
-    frame: 'canvas', paneWidth: 620,
+    frame: 'canvas', paneWidth: 760,
     rounds: [{ n: 1, candidates: [
       { id: 'a-ask', label: 'Through the permission card', note: 'The browser\'s own ask card (Yes / No); maker picker and price in its note area.', render: () => <ApprovalAsk /> },
       { id: 'b-card', label: 'Its own card', note: 'Prompt, "Made by" picker row, price beside Decline and an orange Approve.', render: () => <ApprovalCard /> },
@@ -491,23 +736,36 @@ export const MEDIA_SURFACES: CompareSurface[] = [
       { id: 'b-chatgpt-only', label: 'Its own card, ChatGPT plan only', note: 'No paid service: the card becomes a notice pointing to chatgpt.com.', render: () => <ApprovalChatGptOnly /> },
       { id: 'c-compact', label: 'One line', note: 'A maker button, the price, Decline and Approve on one line.', render: () => <ApprovalCompact /> },
       { id: 'c-compact-open', label: 'One line, list open', note: 'The maker list: name, provider, price and a strength line.', render: () => <ApprovalCompact startOpen /> },
-    ] }],
+    ] },
+      { n: 2, basis: "Round 1, redrawn as ToolCard's own ask frame (header line, question, buttons flush right). ToolCardAsk gained optional body and money fields.", candidates: [
+        { id: 'a-body', label: 'Picker in the card', note: 'Header: maker and price. Body: question, then a "Made by" picker on its own aligned line. Decline, Allow for this chat, orange Approve at the right.', render: () => <MoneyAsk where="body" /> },
+        { id: 'b-header', label: 'Picker in the header', note: 'The maker picker sits in the header line, in place of the detail text; the body is just the question.', render: () => <MoneyAsk where="header" /> },
+        { id: 'a-body-edit', label: 'Changing a picture', note: 'Candidate a with the attached picture shown.', render: () => <MoneyAsk where="body" edit /> },
+        { id: 'a-body-chatgpt-only', label: 'ChatGPT plan only', note: 'No paid provider: the same frame carries Destin\'s sentence; Open chatgpt.com outlined, Connect a provider filled.', render: () => <MoneyAsk chatgptOnly /> },
+      ] },
+    ],
   },
   {
     id: 'media-picture-result', label: 'A finished picture in the reply',
     question: 'How does a made picture arrive in the chat?',
-    frame: 'canvas', paneWidth: 620,
+    frame: 'canvas', paneWidth: 760,
     rounds: [{ n: 1, candidates: [
       { id: 'bare', label: 'Picture and a caption', note: 'Full width, one small caption line under it.', render: () => <ResultBare /> },
       { id: 'footer', label: 'Picture with a footer', note: 'Caption on the left; Show in folder and Open on the right.', render: () => <ResultFooter /> },
       { id: 'deliverables', label: 'Picture plus the Deliverables card', note: 'The real Deliverables card under the picture.', render: () => <ResultDeliverables /> },
       { id: 'menu', label: 'Right-click menu', note: 'Copy, Save as…, Open, Show in folder in the app\'s own picture menu.', render: () => <ResultMenu /> },
-    ] }],
+    ] },
+      { n: 2, basis: "Round 1, redrawn: the picture is the app's ChatImage; actions live in the in-bubble container; the menu is the real one build-menu makes.", candidates: [
+        { id: 'row', label: 'Container row under the picture', note: 'Image icon | file name · maker · cost, with Open and View in folder icon buttons at the right.', render: () => <PictureRow /> },
+        { id: 'header-menu', label: 'Caption folded into a header', note: 'The same header with a chevron; opened, it holds the two actions as outlined buttons.', render: () => <PictureFold open /> },
+        { id: 'menu', label: 'Right-click menu', note: 'The real picture menu for a made picture: Copy image, Save image as…, Open file, View in folder, Ask about this.', render: () => <PictureMenu /> },
+      ] },
+    ],
   },
   {
     id: 'media-sound-card', label: 'A sound in the chat',
     question: 'What does a sound look like in the chat?',
-    frame: 'canvas', paneWidth: 620,
+    frame: 'canvas', paneWidth: 760,
     rounds: [{ n: 1, candidates: [
       { id: 'pill', label: 'Compact row', note: 'Play, a small waveform and the time on one line.', render: () => (
         <Stacked><Label>Paused</Label><SoundPill playing={false} progress={0} /><Label>Playing</Label><SoundPill playing progress={0.4} /></Stacked>) },
@@ -515,12 +773,21 @@ export const MEDIA_SURFACES: CompareSurface[] = [
         <Stacked><Label>Paused</Label><SoundCard playing={false} progress={0} /><Label>Playing</Label><SoundCard playing progress={0.4} /></Stacked>) },
       { id: 'sent', label: 'In your own bubble', note: 'A recording you sent, in the right-hand bubble.', render: () => (
         <Stacked><Label>Paused</Label><SoundSent playing={false} progress={0} /><Label>Playing</Label><SoundSent playing progress={0.4} /></Stacked>) },
-    ] }],
+    ] },
+      { n: 2, basis: "Round 1, redrawn inside the in-bubble container (DeliverablesCard's frame) with the app's panel icon buttons.", candidates: [
+        { id: 'one-line', label: 'One-line container', note: 'Play, waveform, time and View in folder on one line.', render: () => (
+          <div><Cap>Paused</Cap><Reply text="Here’s your sound."><SoundOneLine playing={false} progress={0} /></Reply>
+          <Cap>Playing</Cap><Reply text="Here’s your sound."><SoundOneLine playing progress={0.4} /></Reply></div>) },
+        { id: 'with-header', label: 'Header, then the player', note: 'Header line: sound icon | Sound · name · maker · cost, with View in folder; the player under it.', render: () => (
+          <div><Cap>Paused</Cap><Reply text="Here’s your sound."><SoundHeader playing={false} progress={0} /></Reply>
+          <Cap>Playing</Cap><Reply text="Here’s your sound."><SoundHeader playing progress={0.4} /></Reply></div>) },
+      ] },
+    ],
   },
   {
     id: 'media-video-card', label: 'A video in the chat',
     question: 'How does a made video show up, while it is made and when it is done?',
-    frame: 'canvas', paneWidth: 620,
+    frame: 'canvas', paneWidth: 760,
     rounds: [{ n: 1, candidates: [
       { id: 'card', label: 'Side-by-side card', note: 'First frame left; length, maker and Open right.', render: () => (
         <Stacked><Label>Making it</Label><VideoMaking layout="card" /><Label>Finished</Label><VideoDone layout="card" /></Stacked>) },
@@ -528,16 +795,30 @@ export const MEDIA_SURFACES: CompareSurface[] = [
         <Stacked><Label>Making it</Label><VideoMaking layout="row" /><Label>Finished</Label><VideoDone layout="row" /></Stacked>) },
       { id: 'poster', label: 'Big first frame', note: 'The first frame full width with its length; Open under it.', render: () => (
         <Stacked><Label>Finished</Label><VideoDone layout="poster" /></Stacked>) },
-    ] }],
+    ] },
+      { n: 2, basis: 'Round 1, redrawn inside the in-bubble container; every control flush right.', candidates: [
+        { id: 'stacked', label: 'Header, then the first frame', note: 'Making: header with Stop and a bar. Finished: header with Open and View in folder, the first frame full width.', render: () => (
+          <div><Cap>Making it</Cap><Reply text="Making your video now."><VideoStacked done={false} /></Reply>
+          <Cap>Finished</Cap><Reply text="Your video is ready."><VideoStacked done /></Reply></div>) },
+        { id: 'side', label: 'Frame beside the facts', note: 'First frame at the left, facts in the middle, Open (or Stop) flush right on the same height.', render: () => (
+          <div><Cap>Making it</Cap><Reply text="Making your video now."><VideoSide done={false} /></Reply>
+          <Cap>Finished</Cap><Reply text="Your video is ready."><VideoSide done /></Reply></div>) },
+      ] },
+    ],
   },
   {
     id: 'media-limit-card', label: 'The chat\'s spending limit',
     question: 'What does the chat say when it has used its $5?',
-    frame: 'canvas', paneWidth: 620,
+    frame: 'canvas', paneWidth: 760,
     rounds: [{ n: 1, candidates: [
       { id: 'ask', label: 'Through the permission card', note: 'Beside approval (a): the same ask card; the dropdown in its note area.', render: () => <LimitAsk /> },
       { id: 'card', label: 'Its own card', note: 'Beside approval (b): amount spent, a full bar, the dropdown, Stop and an orange Continue.', render: () => <LimitCard /> },
       { id: 'notice', label: 'One warning box', note: 'The app\'s warning notice with the dropdown and both buttons inside it.', render: () => <LimitNotice /> },
-    ] }],
+    ] },
+      { n: 2, basis: 'Round 1 candidate a (Destin: best, but too busy and oddly aligned), simplified: one sentence, one aligned line of controls.', candidates: [
+        { id: 'ask', label: 'Ask frame, with the amount', note: 'Header shows $5.00 of $5.00; one sentence; the raise-to list, Stop and orange Continue on one line.', render: () => <LimitAsk2 rich /> },
+        { id: 'ask-slim', label: 'Ask frame, slimmest', note: 'No amount in the header and no note: just the sentence and the one line of controls.', render: () => <LimitAsk2 rich={false} /> },
+      ] },
+    ],
   },
 ];

@@ -7,7 +7,7 @@ export interface ToolCardAsk {
   /** Header label ("Sending a form"). */
   label: string;
   /** Header detail (the site). */
-  detail?: string;
+  detail?: ReactNode;
   question: string;
   note?: ReactNode;
   /** Receives the standard decision object; resolves when the answer was delivered. */
@@ -16,4 +16,12 @@ export interface ToolCardAsk {
   noAlways?: boolean;
   /** Click-only: no Enter / arrow keys (a step that buys or sends must never be a stray key). */
   noKeyboard?: boolean;
+  /** A block of its own between the question and the buttons (card #267: the maker picker). Absent = nothing drawn. */
+  body?: ReactNode;
+  /** An ask that SPENDS money (card #267, picture / sound / video). WHY it is a field of the shared ask and not a
+   *  second card: Destin (2026-11-18) rejected a look-alike; the money ask must be the same frame, header and note
+   *  as every other ask. Its buttons follow the design guide instead of the green / red pills: outlined Decline,
+   *  optional outlined chat-wide choice, and ONE filled orange `charge` button, all at the right. Click-only (never a stray Enter).
+   *  The chat-wide choice answers with `{ decision: { behavior: 'allow' }, allowForChat: true }`. */
+  money?: { approve: string; decline: string; chat?: string; approveVariant?: 'charge' | 'primary'; lead?: ReactNode };
 }

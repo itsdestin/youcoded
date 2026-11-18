@@ -363,6 +363,22 @@ function imageMenu(img: HTMLImageElement, target: HTMLElement): MenuEntry[] {
   };
   // WHY only a website address gets Copy and Save: the computer refuses every other kind (picture-actions.ts), so offering them
   // would be a button that always fails.
+  // Card #267: a picture the assistant MADE sits on the computer (its message box marks it with data-file-path). It gets the same
+  // Copy and Save as a website picture, plus the file chip's Open and View in folder (same words as filePillMenu). WHY a marker and not
+  // the address: the computer refuses to copy/save any non-website address (picture-actions.ts), so the made-picture path needs its
+  // own backend step later; this only draws the menu the design review asked for. Absent marker = nothing below changes.
+  const madePath = img.getAttribute('data-file-path') || '';
+  const made = !!madePath;
+  if (made && (desktop || canCopyImageHere())) {
+    entries.push({ type: 'item', id: 'copy-image', label: 'Copy image', icon: 'copy', disabled: !src, run: () => attempt('copy') });
+  }
+  if (made && desktop) entries.push({ type: 'item', id: 'save-image', label: 'Save image as\u2026', icon: 'save', disabled: !src, run: () => attempt('save') });
+  if (made && getCapabilities().openInOs) {
+    entries.push(
+      { type: 'item', id: 'open-file', label: 'Open file', icon: 'open', run: () => shell()?.openPath(madePath) },
+      { type: 'item', id: 'reveal', label: 'View in folder', icon: 'folder', run: () => shell()?.showItemInFolder(madePath) },
+    );
+  }
   if (onWeb && (desktop || canCopyImageHere())) {
     entries.push({ type: 'item', id: 'copy-image', label: 'Copy image', icon: 'copy', disabled: !src, run: () => attempt('copy') });
   }

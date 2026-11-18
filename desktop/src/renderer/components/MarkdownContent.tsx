@@ -304,7 +304,8 @@ function isNetworkImageSrc(src: string): boolean {
   }
 }
 
-function ChatImage({ src, alt, ...props }: any) {
+// Exported for card #267: a picture the assistant made is drawn by this same component (with data-file-path for its menu).
+export function ChatImage({ src, alt, ...props }: any) {
   const [shown, setShown] = useState(false);
   const source = typeof src === 'string' ? src : '';
   if (!source || !isNetworkImageSrc(source)) {

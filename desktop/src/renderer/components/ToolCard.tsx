@@ -577,7 +577,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   requestId: string;
   /** A non-tool ask (the browser's) that must look and behave exactly like a tool ask (Destin, 2026-11-02): same
    *  colours, keys and click-only rule, with its own question, note and place to send the answer. */
-  custom?: { question: string; note?: React.ReactNode; answer: (decision: object) => Promise<unknown> };
+  custom?: { question: string; note?: React.ReactNode; body?: React.ReactNode; money?: { approve: string; decline: string; chat?: string; approveVariant?: 'charge' | 'primary'; lead?: React.ReactNode }; answer: (decision: object) => Promise<unknown> };
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
    *  buttons on the same line as the request. Confirm and safety-stop paths
@@ -943,6 +943,27 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
           >
             Always allow
           </button>
+        </div>
+        {unconfirmedNote}
+      </div>
+    );
+  }
+
+  // Card #267: an ask that spends money. Same frame, question and note as the generic ask below; only the buttons differ
+  // (guide "Buttons": outlined Decline and chat-wide choice, one filled orange `charge` button, all flush right).
+  // Absent `custom.money`, nothing here runs and every other ask is unchanged.
+  if (custom?.money) {
+    const m = custom.money;
+    return (
+      <div className={bare ? 'space-y-2' : 'px-3 py-2 border-t border-edge bg-inset/30 space-y-2'}>
+        <p className="text-xs font-medium text-fg-2 break-words">{custom.question}</p>
+        {custom.body}
+        {custom.note && <p className="text-3xs text-fg-muted leading-relaxed">{custom.note}</p>}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {m.lead}
+          <Button variant="secondary" size="sm" disabled={responding} onClick={() => handleRespond({ decision: { behavior: 'deny' } })}>{m.decline}</Button>
+          {m.chat && <Button variant="secondary" size="sm" disabled={responding} onClick={() => handleRespond({ decision: { behavior: 'allow' }, allowForChat: true })}>{m.chat}</Button>}
+          <Button variant={m.approveVariant ?? 'charge'} size="sm" disabled={responding} onClick={() => handleRespond({ decision: { behavior: 'allow' } })}>{m.approve}</Button>
         </div>
         {unconfirmedNote}
       </div>
@@ -1448,7 +1469,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false, 
   // the helper or command it acts on — look up that one name (a narrow selector; every
   // other card has no target and subscribes to nothing).
   const targetLabel = useBackgroundTarget(sessionId, managementTargetId(tool.toolName, tool.input));
-  const display = ask ? { label: ask.label, detail: ask.detail ?? '' } : friendlyToolDisplay(tool, {
+  const display: { label: string; detail: React.ReactNode } = ask ? { label: ask.label, detail: ask.detail ?? '' } : friendlyToolDisplay(tool, {
     taskTargetTitle: taskTarget?.title,
     taskTargetRunning: taskTarget ? taskTarget.status === 'running' : undefined,
     targetLabel,
@@ -1666,9 +1687,9 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false, 
         ) : (
           <PermissionButtons
             requestId={tool.requestId}
-            custom={ask && { question: ask.question, note: ask.note, answer: ask.answer }}
+            custom={ask && { question: ask.question, note: ask.note, body: ask.body, money: ask.money, answer: ask.answer }}
             // A helper's request is click-only — see PermissionButtons.noKeyboard.
-            noKeyboard={!!tool.specialist || !!ask?.noKeyboard}
+            noKeyboard={!!tool.specialist || !!ask?.noKeyboard || !!ask?.money}
             suggestions={tool.permissionSuggestions}
             denyListed={tool.denyListed}
             toolName={tool.toolName}
