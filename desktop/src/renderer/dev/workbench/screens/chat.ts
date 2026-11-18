@@ -47,6 +47,7 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#signin-waiting-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired', signIn: 'waiting' }, open: ['Sign in again'], newIn: 'after' as const },
   { ...chat('chat#signin-back-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired' }, open: ['Sign in again'], waitMs: 5_000, newIn: 'after' as const },
   { ...chat('chat#signin-offline-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired', online: '0' }, open: ['Sign in again'], newIn: 'after' as const },
+  { ...chat('chat#signin-expired-cc-phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { seed: 'bubbles-expired-cc', claudeCode: 'expired', platform: 'android' } },
   { ...chat('chat#signin-remote-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-expired-cc', claudeCode: 'expired', connection: 'remote' } },
   { ...chat('chat#signin-expired-chatgpt', 'view'), session: 'wb-2', params: { seed: 'bubbles-chatgpt-expired' } },
   { ...chat('chat#signin-expired-openrouter', 'view'), session: 'wb-2', params: { seed: 'bubbles-openrouter-rejected' } },
