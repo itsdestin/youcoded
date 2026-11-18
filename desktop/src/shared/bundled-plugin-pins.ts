@@ -18,6 +18,6 @@ export interface BundledPluginPin {
 export const BUNDLED_PLUGIN_PINS: Record<string, BundledPluginPin> = {
   'wecoded-marketplace-publisher': { commit: '28f59b32656ccbd91acaea510be9bcb514acc257', sourceRef: 'wecoded-marketplace-publisher', version: '0.1.1' },
   'wecoded-pages-plugin': { commit: '2218b216c60980a4c2f43e774dd683cb5c09cd66', sourceRef: 'wecoded-pages-plugin', version: '0.3.0' },
-  'wecoded-themes-plugin': { commit: '28f59b32656ccbd91acaea510be9bcb514acc257', sourceRef: 'wecoded-themes-plugin', version: '1.0.3' },
+  'wecoded-themes-plugin': { commit: 'c935c146bdb110b4c3f225d1a93def9df3c923ce', sourceRef: 'wecoded-themes-plugin', version: '1.0.4' },
   'youcoded-chatsearch': { commit: '314617f81874fb43275eb19a792f3809d01f4866', sourceRef: 'youcoded-chatsearch', version: '0.2.0' },
 };

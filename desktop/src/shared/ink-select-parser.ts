@@ -614,7 +614,14 @@ function parseUnnumbered(lines: string[], selectorIdx: number): ParsedMenu | nul
     const text = isCursor ? m[4].trim() : raw.trim();
     const prev = rows[rows.length - 1];
     if (prev && !isCursor) {
-      const wrap = wrapsInto(prev.lastRow, raw, width);
+      let wrap = wrapsInto(prev.lastRow, raw, width);
+      // WHY (Claude Code 2.1.325 MCP dialog at 40 columns, 2026-11-17): the dialog's real right edge sits 1-2
+      // columns inside its rule, so "Use this and all future MCP" + "servers" (39 of 40) is a wrap the width
+      // maths alone cannot call, and refusing it left phones with no card for "New MCP Server Found". Inside
+      // that band only, a row that starts in lower case under a row that does not end a sentence is the rest
+      // of the same label: Claude Code's options all start with a capital. An upper-case row in the band is
+      // still refused, and a wrongly joined label can never be typed (the driver checks labels before Enter).
+      if (wrap === 'ambiguous' && /^[a-z]/.test(raw.trim()) && !/[.!?:)]$/.test(prev.lastRow.trim())) wrap = 'yes';
       if (wrap === 'ambiguous') return null;
       if (wrap === 'yes') { prev.text += ' ' + text; prev.lastRow = raw; last = i; continue; }
     }
