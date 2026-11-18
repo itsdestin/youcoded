@@ -19,7 +19,8 @@ import { deriveSettingsRowState, isSyncAlarm, type SyncDisplayState } from '../s
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { BackupLogo } from './BackupLogo';
-import SyncSetupWizard, { githubBackupWorks, WizardHeaderContext, type FirstBackup, type WizardHeaderInfo } from './SyncSetupWizard';
+import SyncSetupWizard, { WizardHeaderContext, type FirstBackup, type WizardHeaderInfo } from './SyncSetupWizard';
+import { backupTypeOffered, backupEntryNotice, onOwnPhone } from './backup-availability';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
@@ -717,6 +718,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   // we stash the backend id+type here so SyncSetupWizard jumps straight to the right flow.
   const [wizardPreselect, setWizardPreselect] = useState<{ id: string; type: 'drive' | 'github' | 'icloud' } | undefined>();
 
+  // The backup a warning's "Sign in again" is repairing, while the wizard is open for it.
+  const reconnectBackend = wizardPreselect ? status?.backends.find(b => b.id === wizardPreselect.id) : undefined;
+
   const handleFixAction = useCallback(async (w: SyncWarning) => {
     const action = w.fixAction;
     if (!action) return;
@@ -1112,6 +1116,21 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
             onClose={closeWizard}
             preselectedBackendId={wizardPreselect?.id}
             preselectedBackendType={wizardPreselect?.type}
+            reconnectRemote={reconnectBackend?.type === 'drive' ? (reconnectBackend.config?.rcloneRemote || 'gdrive') : undefined}
+            onReconnect={reconnectBackend?.type === 'drive' ? async (remoteName) => {
+              // WHY (backup fixes 2026-11-18, item 4): repair the EXISTING entry — never add one. Only if sign-in
+              // answered with a different connection name does the entry need pointing at it. The id is checked
+              // against the live list first, so a backup removed meanwhile is never recreated.
+              const id = reconnectBackend.id;
+              const live = (await claude.sync.getStatus())?.backends?.some((b: { id: string }) => b.id === id);
+              if (!live) throw new Error('That backup was removed, so there is nothing to sign in again.');
+              if (remoteName !== (reconnectBackend.config?.rcloneRemote || 'gdrive')) {
+                await claude.sync.updateBackend(id, { config: { rcloneRemote: remoteName } });
+              }
+              // Prove it works: a good upload clears the failure. The row shows "Uploading…" and any failure
+              // lands in its usual error box, so the wizard does not sit open for a long first upload.
+              void refreshStatus().then(() => handlePushBackend(id));
+            } : undefined}
           />
           </WizardHeaderContext.Provider>
         ) : view === 'edit' && editingId ? (
@@ -1500,6 +1519,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               const pausedCount = list.filter(b => !b.syncEnabled).length;
               const anyActive = list.some(b => b.syncEnabled);
               const isOffline = (status?.warnings ?? []).some(w => w.code === 'OFFLINE');
+              // WHY (backup fixes 2026-11-18): on a phone running its own backend no kind of second copy can be
+              // started, so with nothing already saved this card would be a switch that leads nowhere.
+              if (onOwnPhone() && list.length === 0) return null;
 
               const sub =
                 masterOn && list.length === 0 ? 'Pick where the second copy goes' :
@@ -1553,10 +1575,12 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           : (b.syncEnabled && b.connected) ? 'bg-green-400 ring-2 ring-green-400/25'
                           : 'bg-fg-muted/40';
                         const failure = uploadFailure[b.id];
-                        // A GitHub backup set up before it was removed on computers (small-fixes-2):
-                        // kept and shown honestly — its settings and the files on GitHub are never
-                        // touched — with Remove inside a notice ("Problem on a list item").
-                        const unsupported = b.type === 'github' && !githubBackupWorks();
+                        // A GitHub backup set up before it was removed (small-fixes-2), or a Google Drive
+                        // backup on a phone (backup fixes 2026-11-18 — a phone has no tool to run it):
+                        // kept and shown honestly — its settings and what is already on GitHub / Drive are
+                        // never touched — with Remove inside a notice ("Problem on a list item").
+                        const notice = backupEntryNotice(b.type);
+                        const unsupported = notice !== null;
                         return (
                           <React.Fragment key={b.id}>
                           {/* WHY always the plain nested box (nothing-bare-3#N3-2, Destin: "styled more
@@ -1574,7 +1598,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                             <div className="flex-1 min-w-0">
                               <div className="text-xs text-fg font-medium truncate">{b.label}</div>
                               <div className="text-3xs text-fg-muted truncate">
-                                {unsupported ? 'No longer supported' :
+                                {notice === 'drive-phone' ? 'Not available on this phone' :
+                                 unsupported ? 'No longer supported' :
                                  b.lastError ? b.lastError :
                                  b.lastPushEpoch ? `Backed up ${timeAgo(b.lastPushEpoch)}` :
                                  !b.syncEnabled ? 'Auto-backup paused' :
@@ -1631,7 +1656,12 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                               <Callout tone="warning" compact actions={
                                 <Button size="sm" variant="secondary" onClick={() => setConfirmRemoveId(b.id)}>Remove</Button>
                               }>
-                                GitHub backups are no longer supported on computers, so nothing is copied here. What's already on GitHub stays there.
+                                {/* Said as before on a computer; a phone is not "a computer" (nothing here changes for computers). */}
+                                {notice === 'drive-phone'
+                                  ? "Google Drive backup needs a computer. Nothing is copied from this phone. What's already on Google Drive stays there."
+                                  : onOwnPhone()
+                                    ? "GitHub backups are no longer supported, so nothing is copied here. What's already on GitHub stays there."
+                                    : "GitHub backups are no longer supported on computers, so nothing is copied here. What's already on GitHub stays there."}
                               </Callout>
                             </div>
                           )}
@@ -1654,24 +1684,31 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
 
                   {/* Inline picker — master on but nothing connected yet (initialType
                       skips the type picker). Real Button now (card-levels trial). */}
-                  {masterOn && list.length === 0 && (
+                  {/* WHY each button asks backupTypeOffered (backup fixes 2026-11-18): this picker had no check at
+                      all — it offered Google Drive on a phone (no tool to run it) and iCloud on a phone and on
+                      Linux (no iCloud there). With nothing offered, no picker is drawn. */}
+                  {masterOn && list.length === 0 && (backupTypeOffered('drive') || backupTypeOffered('icloud')) && (
                     <div className="flex gap-2">
-                      <Button
-                        variant="secondary"
-                        onClick={() => { setAddType('drive'); setView('add-config'); }}
-                        className="flex-1"
-                      >
-                        <BackupLogo type="drive" size={14} />
-                        Google Drive
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        onClick={() => { setAddType('icloud'); setView('add-config'); }}
-                        className="flex-1"
-                      >
-                        <BackupLogo type="icloud" size={14} />
-                        iCloud
-                      </Button>
+                      {backupTypeOffered('drive') && (
+                        <Button
+                          variant="secondary"
+                          onClick={() => { setAddType('drive'); setView('add-config'); }}
+                          className="flex-1"
+                        >
+                          <BackupLogo type="drive" size={14} />
+                          Google Drive
+                        </Button>
+                      )}
+                      {backupTypeOffered('icloud') && (
+                        <Button
+                          variant="secondary"
+                          onClick={() => { setAddType('icloud'); setView('add-config'); }}
+                          className="flex-1"
+                        >
+                          <BackupLogo type="icloud" size={14} />
+                          iCloud
+                        </Button>
+                      )}
                     </div>
                   )}
 
@@ -1684,7 +1721,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           dashed 'add' boxes — use a normal outlined full-width
                           button." Was a `border-dashed` override on `secondary`
                           (spec decision 64) — that exception is retired. */}
-                      <Button
+                      {(backupTypeOffered('drive') || backupTypeOffered('icloud')) && <Button
                         variant="secondary"
                         onClick={() => setView('add-type')}
                         // w-full only (fix batch 2): the same height as "Back up all
@@ -1692,7 +1729,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         className="w-full"
                       >
                         ＋ Add a backup
-                      </Button>
+                      </Button>}
                       {/* WHY a full-width outlined Button (fix batch 2 — decisions.md
                           "Follow-up actions", settings-pieces#P-3; Destin named "back up
                           all now button" in B1-6): never underlined text. */}

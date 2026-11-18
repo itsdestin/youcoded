@@ -11,30 +11,13 @@
 
 import { createContext, useContext, useRef, useState, useEffect, useCallback } from 'react';
 import { Button, CARD_LEVEL_1, CARD_LEVEL_2, CloseButton, ErrorState, FieldError, FieldRow, LoadingState, Pill, SectionLabel, SettingRow, TextInput, Toggle, Radio, RadioGroup, Callout } from './ui';
-import { isAndroid as checkIsAndroid, isRemoteMode } from '../platform';
+import { isAndroid as checkIsAndroid } from '../platform';
+import { backupTypeOffered, detectDesktopOS, type DesktopOS } from './backup-availability';
 
-/** Whether a GitHub backup copies anything on the backend this screen talks to. Only the phone
- *  app's own backup service still pushes one; a computer's (or a phone paired to a computer)
- *  removed it. Shared with Backup & sync's rows. */
-export function githubBackupWorks(): boolean {
-  return checkIsAndroid() && !isRemoteMode();
-}
 import { useEscClose } from '../hooks/use-esc-close';
 import { BackupLogo } from './BackupLogo';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { plainMessage } from '../utils/ipc-error';
-
-// Detect desktop OS so prereq warnings can show install steps specific to the
-// user's machine (iCloud setup on Windows differs from macOS, gh install varies, etc.)
-type DesktopOS = 'mac' | 'windows' | 'linux' | 'other';
-function detectDesktopOS(): DesktopOS {
-  const ua = (navigator.userAgent || '').toLowerCase();
-  const platform = (navigator.platform || '').toLowerCase();
-  if (platform.includes('mac') || ua.includes('mac os')) return 'mac';
-  if (platform.includes('win') || ua.includes('windows')) return 'windows';
-  if (platform.includes('linux') || ua.includes('linux')) return 'linux';
-  return 'other';
-}
 
 // --- Types ---
 
@@ -149,6 +132,12 @@ interface SyncSetupWizardProps {
   preselectedBackendId?: string;
   /** Must be set when preselectedBackendId is set; determines which auth flow to jump to. */
   preselectedBackendType?: 'drive' | 'github' | 'icloud';
+  /** Reconnect mode, Google Drive: the connection the broken backup already uses (its saved name). Signing in again
+   *  repairs THIS one in place instead of making a second connection and a second backup entry. */
+  reconnectRemote?: string;
+  /** Reconnect mode, Google Drive: called once sign-in succeeds, with the connection's name. The caller repairs the
+   *  EXISTING backup entry (never adds one); REJECT to show the reason on the sign-in page. */
+  onReconnect?: (remoteName: string) => Promise<void>;
 }
 
 // Normalize a GitHub repo URL for duplicate comparison (strip trailing slash and .git)
@@ -156,7 +145,7 @@ function normalizeRepoUrl(url: string): string {
   return url.trim().replace(/\.git$/, '').replace(/\/+$/, '').toLowerCase();
 }
 
-export default function SyncSetupWizard({ initialType, existingBackends, onComplete, onClose, preselectedBackendId, preselectedBackendType }: SyncSetupWizardProps) {
+export default function SyncSetupWizard({ initialType, existingBackends, onComplete, onClose, preselectedBackendId, preselectedBackendType, reconnectRemote, onReconnect }: SyncSetupWizardProps) {
   // Always mounted when open (parent conditionally renders this component) — so open=true is correct here.
   useEscClose(true, onClose);
   // The GitHub repo this wizard has already created, so Try again reuses it (see handleStartBackup).
@@ -212,19 +201,14 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
   // --- Step: Type Picker ---
   if (step === 'type') {
     const types: { type: BackendType; desc: string }[] = [
-      { type: 'drive', desc: 'Stores your data in a Google Drive folder. Works on any device.' },
-      // GitHub only where it still backs anything up: the phone app's own backup service
-      // (SyncService.kt pushGithub). WHY (small-fixes-2, Destin "yes, proceed"): on a computer the
-      // GitHub backup was removed (sync-service.ts, sync-legacy-demolition), so the option made a
-      // backup that copied nothing. A computer's GitHub copy is cross-device sync, above.
-      ...(githubBackupWorks()
-        ? [{ type: 'github' as BackendType, desc: 'Stores your data in a private GitHub repository. Includes full version history.' }]
+      // WHY each kind asks backupTypeOffered (backup fixes 2026-11-18): Google Drive needs a tool a phone running
+      // its own backend does not have; GitHub is gone everywhere (a computer's GitHub copy is cross-device sync,
+      // above, and a phone's backup copied nothing); iCloud needs an iCloud Drive client (a Mac or Windows
+      // computer — Linux and Android have none, and offering it there gave a dead option).
+      ...(backupTypeOffered('drive')
+        ? [{ type: 'drive' as BackendType, desc: 'Stores your data in a Google Drive folder. Works on any device.' }]
         : []),
-      // iCloud only where an iCloud Drive client exists: macOS, and
-      // iCloud-for-Windows on Windows. Linux has no iCloud client at all and
-      // Android has no iCloud Drive support — offering it there gave users a
-      // dead option that silently failed prereq detection.
-      ...(!checkIsAndroid() && detectDesktopOS() !== 'linux'
+      ...(backupTypeOffered('icloud')
         ? [{ type: 'icloud' as BackendType, desc: 'Stores your data in iCloud Drive. Best for Mac and iPhone users.' }]
         : []),
     ];
@@ -330,7 +314,17 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
         backendType={backendType}
         isAdditionalDrive={isAdditionalDrive}
         isReconnect={isReconnect}
-        onSuccess={(authResult) => {
+        existingRemote={isReconnect && backendType === 'drive' && onReconnect ? (reconnectRemote || 'gdrive') : undefined}
+        onSuccess={async (authResult) => {
+          // WHY (backup fixes 2026-11-18, item 4): a reconnect used to carry on to the settings page and save a NEW
+          // backup entry (and the sign-in itself made a second connection, "gdrive2"), while the broken one kept
+          // failing. Now the sign-in repairs the existing connection, the caller repairs the existing entry, and
+          // there is nothing more to fill in: close back onto Backup & sync.
+          if (isReconnect && backendType === 'drive' && onReconnect) {
+            await onReconnect(authResult.remoteName || reconnectRemote || 'gdrive');
+            onClose();
+            return;
+          }
           if (backendType === 'drive') {
             setRemoteName(authResult.remoteName || 'gdrive');
           }
@@ -929,6 +923,7 @@ function AuthStep({
   backendType,
   isAdditionalDrive = false,
   isReconnect = false,
+  existingRemote,
   onSuccess,
   onBack,
   onClose,
@@ -940,7 +935,9 @@ function AuthStep({
   // before (we don't yet store the email — that's a follow-up) rather than
   // seeing the "connect another account" copy intended for a second Drive.
   isReconnect?: boolean;
-  onSuccess: (result: { remoteName?: string; username?: string }) => void;
+  // Reconnect mode, Drive: the saved connection to sign in again (see SyncSetupWizardProps.reconnectRemote).
+  existingRemote?: string;
+  onSuccess: (result: { remoteName?: string; username?: string }) => void | Promise<void>;
   onBack: () => void;
   onClose: () => void;
 }) {
@@ -954,9 +951,9 @@ function AuthStep({
 
     try {
       if (backendType === 'drive') {
-        const result = await claude.sync.setup.authGdrive();
+        const result = await claude.sync.setup.authGdrive(existingRemote);
         if (result.success) {
-          onSuccess({ remoteName: result.remoteName });
+          await onSuccess({ remoteName: result.remoteName });
         } else {
           setError(result.error || SIGN_IN_NO_REASON);
         }
