@@ -37,6 +37,32 @@ import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
 
 /**
+ * Everything the scanner holds open, released together when the overlay leaves the screen.
+ *
+ * WHY: the camera is bound to the ACTIVITY's lifecycle, not the overlay's, so removing the
+ * overlay from the screen did not stop it. The camera (green dot, battery), the analysis
+ * thread and the ML Kit client all kept running until the app was backgrounded (review
+ * 2026-11-18 B-5). Kept as a plain class so a unit test can pin the behaviour without a device.
+ * Each step is isolated so one failing release cannot skip the others.
+ */
+internal class QrScannerSession(
+    private val unbindCamera: () -> Unit,
+    private val closeScanner: () -> Unit,
+    private val shutdownExecutor: () -> Unit,
+) {
+    @Volatile var released = false
+        private set
+
+    fun release() {
+        if (released) return
+        released = true
+        runCatching(unbindCamera)
+        runCatching(closeScanner)
+        runCatching(shutdownExecutor)
+    }
+}
+
+/**
  * Full-screen QR scanner overlay using CameraX + ML Kit.
  * Returns scanned URL via [onScanned] or null via [onDismiss].
  */
@@ -72,6 +98,24 @@ fun QrScannerOverlay(
         if (hasCameraPermission) {
             var scanned by remember { mutableStateOf(false) }
 
+            // WHY: created once per open and closed in onDispose below, instead of a new thread
+            // and ML Kit client on every recomposition-visible bind that was never cleaned up.
+            val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+            val barcodeScanner = remember { BarcodeScanning.getClient() }
+            var boundProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+            val session = remember {
+                QrScannerSession(
+                    unbindCamera = { boundProvider?.unbindAll() },
+                    closeScanner = { barcodeScanner.close() },
+                    shutdownExecutor = { analysisExecutor.shutdown() },
+                )
+            }
+            // WHY: runs when the overlay leaves the screen (scan done, Close, or permission lost)
+            // so the camera stops with it rather than with the activity.
+            DisposableEffect(Unit) {
+                onDispose { session.release() }
+            }
+
             AndroidView(
                 factory = { ctx ->
                     val previewView = PreviewView(ctx).apply {
@@ -83,17 +127,18 @@ fun QrScannerOverlay(
 
                     val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
                     cameraProviderFuture.addListener({
-                        val cameraProvider = cameraProviderFuture.get()
+                        // WHY: the overlay may already be gone by the time the camera service
+                        // answers; binding then would start a camera nobody can see or stop.
+                        if (session.released) return@addListener
                         val preview = Preview.Builder().build().also {
                             it.surfaceProvider = previewView.surfaceProvider
                         }
 
-                        val barcodeScanner = BarcodeScanning.getClient()
                         val analysis = ImageAnalysis.Builder()
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                             .build()
                             .also { imageAnalysis ->
-                                imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
+                                imageAnalysis.setAnalyzer(analysisExecutor) { imageProxy ->
                                     val mediaImage = imageProxy.image
                                     if (mediaImage != null && !scanned) {
                                         val image = InputImage.fromMediaImage(
@@ -119,6 +164,10 @@ fun QrScannerOverlay(
                             }
 
                         try {
+                            // WHY: .get() moved inside the try so a camera-service failure is logged
+                            // instead of crashing the app (same review finding).
+                            val cameraProvider = cameraProviderFuture.get()
+                            boundProvider = cameraProvider
                             cameraProvider.unbindAll()
                             cameraProvider.bindToLifecycle(
                                 lifecycleOwner,
