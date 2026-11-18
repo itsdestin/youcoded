@@ -53,12 +53,19 @@ export function ContextMenu({
     setPos({ left, top });
   }, [x, y, entries]);
 
-  // Focus the menu CONTAINER (not the first item) so keydown reaches us for
-  // arrow-key nav, but nothing looks pre-selected on open — the first item only
-  // highlights once the user hovers or arrows onto it.
+  // A menu over a text box leaves the box focused. WHY: several boxes treat
+  // losing focus as "done editing" — the project and file rename boxes close,
+  // note and settings boxes save — so a menu that took focus closed the box
+  // before its Paste could run (review of #728). The cost: arrow keys move the
+  // caret instead of the highlight here; mouse and Escape work as before.
+  const fieldOwnsFocus = anchor instanceof Element && !!anchor.closest('input, textarea, [contenteditable="true"]');
+
+  // Elsewhere, focus the menu CONTAINER (not the first item) so keydown reaches
+  // us for arrow-key nav, but nothing looks pre-selected on open — the first
+  // item only highlights once the user hovers or arrows onto it.
   useEffect(() => {
-    menuElRef.current?.focus();
-  }, []);
+    if (!fieldOwnsFocus) menuElRef.current?.focus();
+  }, [fieldOwnsFocus]);
 
   useEscClose(true, onClose);
 
@@ -139,7 +146,9 @@ export function ContextMenu({
       {/* Keyboard handling lives on this inner div — OverlayPanel's typed props
           don't include onKeyDown, and the menu shouldn't scroll (no overflow on
           the surface). */}
-      <div ref={menuElRef} role="menu" tabIndex={-1} className="p-1 outline-none" onKeyDown={onKeyDown}>
+      {/* onMouseDown preventDefault (text-box menus only): pressing an item would otherwise move focus to the
+          button and blur the box before the click runs — the same early "done editing" as above. */}
+      <div ref={menuElRef} role="menu" tabIndex={-1} className="p-1 outline-none" onKeyDown={onKeyDown} onMouseDown={fieldOwnsFocus ? (e) => e.preventDefault() : undefined}>
       {entries.map((entry, i) => {
         if (entry.type === 'sep') {
           return <div key={`sep-${i}`} className="h-px my-1 mx-1.5" style={{ background: 'var(--edge-dim)' }} role="separator" />;
