@@ -230,7 +230,7 @@ async function main() {
   const verdict = failed.length ? `${failed.length} of ${results.length} messages did NOT send on Claude Code ${version}` : `All ${results.length} messages sent on Claude Code ${version}`;
   console.log(`\n${verdict}`);
   if (process.env.GITHUB_STEP_SUMMARY) {
-    const cell = (s) => String(s).replace(/\|/g, '\\|');
+    const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|'); // backslashes first, then the column separator
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Message sending — Claude Code ${version}\n\n${verdict}\n\n| Case | Result |\n|---|---|\n${results.sort((a, b) => a.name.localeCompare(b.name)).map((r) => `| ${r.name} | ${r.ok ? 'sent' : `**did not send** — ${cell(r.error)}`} |`).join('\n')}\n`);
   }
   // WHY exit explicitly: a leaked child or IPC handle must not hold the CI step open until its time limit.
