@@ -142,7 +142,7 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
   if (state === 'error' && (errorCode === 'openrouter-key-rejected' || errorCode === 'openrouter-key-expired')) {
     // Older connections never recorded how they were made, so both ways back are offered
     // (round 2 Q-openrouter-how). Paste a new key opens the existing key window via Settings.
-    return <ProviderSignInCard provider="openrouter" onContinue={onRetry} onPasteKey={onOpenProviderSettings} />;
+    return <ProviderSignInCard provider="openrouter" keyExpired={errorCode === 'openrouter-key-expired'} onContinue={onRetry} onPasteKey={onOpenProviderSettings} />;
   }
   // The app's own connection check failed twice (main sets this code; round 2 S-offline-chat).
   if (state === 'error' && errorCode === 'no-internet') return <NoInternetNotice onRetry={onRetry} />;

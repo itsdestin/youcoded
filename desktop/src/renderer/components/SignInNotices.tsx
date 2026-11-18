@@ -106,14 +106,17 @@ function LiveClaudeSignInNotice({ sessionId }: { sessionId: string }) {
 }
 
 /** The ChatGPT / OpenRouter red card when the sign-in or key was refused. */
-export function ProviderSignInCard({ provider, onContinue, onPasteKey }: {
+export function ProviderSignInCard({ provider, keyExpired, onContinue, onPasteKey }: {
   provider: 'chatgpt' | 'openrouter';
+  /** OpenRouter: the key passed its own end date (rather than being refused). */
+  keyExpired?: boolean;
   onContinue?: () => void;
   /** OpenRouter connections made before the app recorded how: offer both ways back. */
   onPasteKey?: () => void;
 }) {
   const card = useSignInCard(provider, {
-    expiredLine: provider === 'chatgpt' ? 'Your ChatGPT sign-in has expired.' : "OpenRouter didn't accept your key.",
+    expiredLine: provider === 'chatgpt' ? 'Your ChatGPT sign-in has expired.'
+      : keyExpired ? 'Your OpenRouter key has expired.' : "OpenRouter didn't accept your key.",
     alreadyBack: false,
     onContinue,
     onPasteKey,

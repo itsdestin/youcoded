@@ -112,6 +112,3 @@ export function cancelSignIn(provider: SignInProvider): void {
   void Promise.resolve(cancel?.()).catch(() => {});
   set(provider, IDLE);
 }
-
-/** Test-only: forget every phase. */
-export function __resetSignInStore(): void { phases.clear(); for (const l of listeners) l(); }

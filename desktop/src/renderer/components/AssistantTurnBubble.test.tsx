@@ -497,3 +497,39 @@ describe('AssistantTurnBubble — stop reason footer', () => {
     expect(container.textContent).toBe('');
   });
 });
+
+// Claude Code's own "Login expired · Please run /login" reply: chosen by CC's error label,
+// drawn as the sign-in card, and live only on the conversation's latest reply.
+describe('AssistantTurnBubble — a reply Claude Code wrote because its sign-in ran out', () => {
+  beforeEach(() => { (window as any).claude = { capabilities: { openExternal: true } }; });
+
+  function expiredTurn(apiError: string): AssistantTurn {
+    return {
+      id: 'expired', timestamp: 0, stopReason: null, model: '<synthetic>', usage: null, anthropicRequestId: null,
+      segments: [{ type: 'text', content: 'Login expired · Please run /login', messageId: 'm1', apiError } as AssistantTurnSegment],
+    };
+  }
+  const renderExpired = (apiError: string, latest: boolean) => render(
+    <ChatProvider>
+      <AssistantTurnBubble turn={expiredTurn(apiError)} toolGroups={new Map()} toolCalls={new Map()} sessionId="s" showTimestamps={false} latest={latest} />
+    </ChatProvider>,
+  );
+
+  it('the latest one offers Sign in again instead of the raw words', () => {
+    const { container, getByRole } = renderExpired('authentication_failed', true);
+    expect(container.textContent).toContain('Your Claude sign-in has expired.');
+    expect(container.textContent).not.toContain('Please run /login');
+    expect(getByRole('button', { name: 'Sign in again' })).toBeInTheDocument();
+  });
+
+  it('an older one is one quiet line with no buttons', () => {
+    const { container } = renderExpired('authentication_failed', false);
+    expect(container.textContent).toContain('Your Claude sign-in expired here.');
+    expect(container.querySelector('button')).toBeNull();
+  });
+
+  it('any other error label keeps Claude Code\'s own words', () => {
+    const { container } = renderExpired('rate_limit', true);
+    expect(container.textContent).toContain('Please run /login');
+  });
+});
