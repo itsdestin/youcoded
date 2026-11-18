@@ -20,7 +20,8 @@ import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { BackupLogo } from './BackupLogo';
 import SyncSetupWizard, { WizardHeaderContext, type FirstBackup, type WizardHeaderInfo } from './SyncSetupWizard';
-import { backupTypeOffered, backupEntryNotice, onOwnPhone } from './backup-availability';
+import { backupTypeOffered, backupEntryNotice, backupEntryText, onOwnPhone, reconnectDriveBackend } from './backup-availability';
+import { BackupTypePicker } from './BackupTypePicker';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
@@ -1118,18 +1119,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
             preselectedBackendType={wizardPreselect?.type}
             reconnectRemote={reconnectBackend?.type === 'drive' ? (reconnectBackend.config?.rcloneRemote || 'gdrive') : undefined}
             onReconnect={reconnectBackend?.type === 'drive' ? async (remoteName) => {
-              // WHY (backup fixes 2026-11-18, item 4): repair the EXISTING entry — never add one. Only if sign-in
-              // answered with a different connection name does the entry need pointing at it. The id is checked
-              // against the live list first, so a backup removed meanwhile is never recreated.
-              const id = reconnectBackend.id;
-              const live = (await claude.sync.getStatus())?.backends?.some((b: { id: string }) => b.id === id);
-              if (!live) throw new Error('That backup was removed, so there is nothing to sign in again.');
-              if (remoteName !== (reconnectBackend.config?.rcloneRemote || 'gdrive')) {
-                await claude.sync.updateBackend(id, { config: { rcloneRemote: remoteName } });
-              }
-              // Prove it works: a good upload clears the failure. The row shows "Uploading…" and any failure
+              await reconnectDriveBackend(claude, reconnectBackend, remoteName);
+              // A good upload proves it works and clears the failure; the row shows "Uploading…" and any failure
               // lands in its usual error box, so the wizard does not sit open for a long first upload.
-              void refreshStatus().then(() => handlePushBackend(id));
+              void refreshStatus().then(() => handlePushBackend(reconnectBackend.id));
             } : undefined}
           />
           </WizardHeaderContext.Provider>
@@ -1581,6 +1574,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         // never touched — with Remove inside a notice ("Problem on a list item").
                         const notice = backupEntryNotice(b.type);
                         const unsupported = notice !== null;
+                        const noticeText = notice ? backupEntryText(notice) : null;
                         return (
                           <React.Fragment key={b.id}>
                           {/* WHY always the plain nested box (nothing-bare-3#N3-2, Destin: "styled more
@@ -1598,8 +1592,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                             <div className="flex-1 min-w-0">
                               <div className="text-xs text-fg font-medium truncate">{b.label}</div>
                               <div className="text-3xs text-fg-muted truncate">
-                                {notice === 'drive-phone' ? 'Not available on this phone' :
-                                 unsupported ? 'No longer supported' :
+                                {noticeText ? noticeText.status :
                                  b.lastError ? b.lastError :
                                  b.lastPushEpoch ? `Backed up ${timeAgo(b.lastPushEpoch)}` :
                                  !b.syncEnabled ? 'Auto-backup paused' :
@@ -1656,12 +1649,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                               <Callout tone="warning" compact actions={
                                 <Button size="sm" variant="secondary" onClick={() => setConfirmRemoveId(b.id)}>Remove</Button>
                               }>
-                                {/* Said as before on a computer; a phone is not "a computer" (nothing here changes for computers). */}
-                                {notice === 'drive-phone'
-                                  ? "Google Drive backup needs a computer. Nothing is copied from this phone. What's already on Google Drive stays there."
-                                  : onOwnPhone()
-                                    ? "GitHub backups are no longer supported, so nothing is copied here. What's already on GitHub stays there."
-                                    : "GitHub backups are no longer supported on computers, so nothing is copied here. What's already on GitHub stays there."}
+                                {noticeText?.body}
                               </Callout>
                             </div>
                           )}
@@ -1684,33 +1672,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
 
                   {/* Inline picker — master on but nothing connected yet (initialType
                       skips the type picker). Real Button now (card-levels trial). */}
-                  {/* WHY each button asks backupTypeOffered (backup fixes 2026-11-18): this picker had no check at
-                      all — it offered Google Drive on a phone (no tool to run it) and iCloud on a phone and on
-                      Linux (no iCloud there). With nothing offered, no picker is drawn. */}
-                  {masterOn && list.length === 0 && (backupTypeOffered('drive') || backupTypeOffered('icloud')) && (
-                    <div className="flex gap-2">
-                      {backupTypeOffered('drive') && (
-                        <Button
-                          variant="secondary"
-                          onClick={() => { setAddType('drive'); setView('add-config'); }}
-                          className="flex-1"
-                        >
-                          <BackupLogo type="drive" size={14} />
-                          Google Drive
-                        </Button>
-                      )}
-                      {backupTypeOffered('icloud') && (
-                        <Button
-                          variant="secondary"
-                          onClick={() => { setAddType('icloud'); setView('add-config'); }}
-                          className="flex-1"
-                        >
-                          <BackupLogo type="icloud" size={14} />
-                          iCloud
-                        </Button>
-                      )}
-                    </div>
-                  )}
+                  {masterOn && list.length === 0 && <BackupTypePicker onPick={(t) => { setAddType(t); setView('add-config'); }} />}
 
                   {/* Add-a-backup + compact "Back up all now" (replaces the standalone Back
                       up now row; keeps handleForceSync's syncing state + label behavior). */}

@@ -2767,9 +2767,7 @@ export function installShim(): void {
       addBackend: (instance: any) => invoke('sync:add-backend', instance),
       removeBackend: (id: string) => invoke('sync:remove-backend', { id }),
       updateBackend: (id: string, updates: any) => invoke('sync:update-backend', { id, updates }),
-      // WHY the same 10 minutes as force (backup fixes 2026-11-18): "Upload now" now copies conversations and project
-      // files too, which takes minutes; the 30-second default reported a false failure while it was still running.
-      pushBackend: (id: string) => invoke('sync:push-backend', { id }, { timeoutMs: 10 * 60_000 }),
+      pushBackend: (id: string) => invoke('sync:push-backend', { id }, { timeoutMs: 10 * 60_000 }), // WHY 10 min like force (backup fixes 2026-11-18): "Upload now" now copies conversations and project files too; the 30 s default reported a false failure mid-copy
       openFolder: (id: string) => invoke('sync:open-folder', { id }),
       // Guided setup wizard
       setup: {

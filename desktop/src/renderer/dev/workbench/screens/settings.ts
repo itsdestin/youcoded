@@ -137,6 +137,10 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#oversize', 'dialog', 'error-state'), params: { sync: 'oversize' } },
   // A GitHub backup set up before computers stopped supporting it: shown honestly (small-fixes-2).
   { ...settings('settings/sync#github-unsupported', 'dialog'), params: { syncWarn: 'github' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
+  // Backup fixes 2026-11-18: on a phone running its own backend, a Google Drive or GitHub backup cannot copy anything, so
+  // each is shown honestly with Remove. (Before: the Drive row said "Backed up" and offered Upload now.)
+  { ...settings('settings/sync#phone-drive-unsupported', 'dialog'), params: { platform: 'android' }, open: [{ do: 'scroll', dir: 'down', times: 8 }], newIn: 'after' as const },
+  { ...settings('settings/sync#phone-github-unsupported', 'dialog'), params: { platform: 'android', syncWarn: 'github' }, open: [{ do: 'scroll', dir: 'down', times: 8 }], newIn: 'after' as const },
   // The wizard's sign-in step when the sign-in fails: its own reason and Try again (small-fixes-2).
   { ...settings('settings/sync#add-auth-failed', 'dialog', 'error-state'), params: { syncSetup: 'auth-failed' }, escapeStepsBack: WIZARD_ESCAPE,
     open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…', 'Connect to Google'] },
