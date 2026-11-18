@@ -288,11 +288,27 @@ const MAX_RETRIES = 5;
  * file is identified by WHERE it is: its canonical absolute path. Internal
  * records keep kind+path (their path IS the full relative location).
  * An external with no absolutePath (not produced today) falls back to its name.
+ *
+ * A RELATIVE absolutePath ("../x/play.html", what the native harness records
+ * for a write through `..`) is resolved against `projectRoot` first. WHY:
+ * repairRelativeExternals later rewrites that record to its full location, and
+ * a replayed relative input must still land on the repaired record — otherwise
+ * every relaunch + reopen added one more copy of the file (review of this fix).
+ * On Windows and macOS the key is lowercased because their file systems treat
+ * C:\Users\x and C:\users\x as one file (filepath-match compares the same way).
  */
-export function recordIdentityKey(rec: { kind: string; path: string; absolutePath?: string | null }): string {
-  if (rec.kind === 'external' && rec.absolutePath) return `external\0${canonicalize(rec.absolutePath, null)}`;
+export function recordIdentityKey(
+  rec: { kind: string; path: string; absolutePath?: string | null },
+  projectRoot: string,
+): string {
+  if (rec.kind === 'external' && rec.absolutePath) {
+    const abs = isAbsoluteRecorded(rec.absolutePath) ? rec.absolutePath : join(projectRoot, rec.absolutePath);
+    const canon = canonicalize(abs, null);
+    return `external\0${CASE_INSENSITIVE_FS ? canon.toLowerCase() : canon}`;
+  }
   return `${rec.kind}\0${rec.path}`;
 }
+const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin';
 
 export interface AppendVersionInput {
   path: string;            // canonical
@@ -480,7 +496,7 @@ export async function appendVersionsDirect(
     // time). The FIRST match wins, exactly as `find` did. Identity = recordIdentityKey (externals by
     // their full location, not their file name — see its WHY).
     const slotOf = new Map<string, number>();
-    sidecar.artifacts.forEach((a, i) => { const k = recordIdentityKey(a); if (!slotOf.has(k)) slotOf.set(k, i); });
+    sidecar.artifacts.forEach((a, i) => { const k = recordIdentityKey(a, projectRoot); if (!slotOf.has(k)) slotOf.set(k, i); });
     // Records this cycle has already copied; only those may be edited in place.
     const owned = new Set<ArtifactRecord>();
     const own = (rec: ArtifactRecord, slot: number): ArtifactRecord => {
@@ -494,7 +510,7 @@ export async function appendVersionsDirect(
     const results: AppendVersionResult[] = [];
     let changed = false;
     for (const input of inputs) {
-      const key = recordIdentityKey(input);
+      const key = recordIdentityKey(input, projectRoot);
       const slot = slotOf.get(key);
       let existing = slot === undefined ? undefined : sidecar.artifacts[slot];
       // Replay dedupe: the same tool call recorded once already ⇒ nothing to

@@ -433,6 +433,22 @@ describe('appendVersion — read semantics + artifact id', () => {
     expect(after.artifacts.find((a) => a.id === old.artifactId)?.versions).toHaveLength(2);
   });
 
+  it('a replayed ../ write lands on the record already repaired to its full location', async () => {
+    // repairRelativeExternals rewrites "../x/play.html" to its absolute form on launch; a reopened
+    // conversation then replays the relative path, which must not make a second copy of the file.
+    const full = join(projectRoot, '..', 'x', 'play.html');
+    const repaired = await appendVersion(projectRoot, 'p1', 'proj', {
+      path: 'play.html', kind: 'external', absolutePath: full,
+      sessionId: 's', type: 'create', author: 'agent', toolUseId: 'toolu_1',
+    });
+    const replay = await appendVersion(projectRoot, 'p1', 'proj', {
+      path: 'play.html', kind: 'external', absolutePath: '../x/play.html',
+      sessionId: 's', type: 'create', author: 'agent', toolUseId: 'toolu_1',
+    });
+    expect(replay).toMatchObject({ artifactId: repaired.artifactId, deduped: true });
+    expect(((await readSidecar(projectRoot)) as ProjectSidecar).artifacts).toHaveLength(1);
+  });
+
   it('an internal file and an outside file with the same name stay separate', async () => {
     const inside = await appendVersion(projectRoot, 'p1', 'proj', {
       path: 'REPORT.md', kind: 'internal', absolutePath: null,

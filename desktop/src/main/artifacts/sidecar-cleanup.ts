@@ -392,8 +392,8 @@ export async function restoreArchive(root: string, filter: RestoreFilter = {}, h
     const haveId = new Set(current.artifacts.map((r) => r.id));
     // Same identity appendVersion uses (recordIdentityKey): two outside files that merely share a
     // file name are different records, so restoring one must not be skipped because of the other.
-    const havePath = new Set(current.artifacts.map((r) => recordIdentityKey(r)));
-    const add = wanted.filter((r) => !haveId.has(r.id) && !havePath.has(recordIdentityKey(r)));
+    const havePath = new Set(current.artifacts.map((r) => recordIdentityKey(r, root)));
+    const add = wanted.filter((r) => !haveId.has(r.id) && !havePath.has(recordIdentityKey(r, root)));
     if (add.length === 0) return { status: 'restored', restored: 0, skipped: wanted.length };
     const next: ProjectSidecar = { ...current, artifacts: [...current.artifacts, ...add] };
     const w = await (hooks?.writeSidecar ?? writeSidecar)(root, current.updatedAt, next);
