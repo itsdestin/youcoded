@@ -32,6 +32,11 @@ import { getLastSyncByDevice, getSelfLastSyncEpochMs, isSyncSpacesSyncing } from
 // sync-spaces-vs-legacy-marker precedence rule.
 import { deriveSelfLastSyncEpochSec } from './sync-spaces/self-sync-status';
 import { atomicWrite } from './atomic-write';
+import { syncSpacesBackupNow } from './sync-spaces/service';
+import { targetForBackend } from './sync-spaces/backup-targets';
+import type { BackupTarget } from './sync-spaces/daily-backup';
+import { classifyPushError } from './sync-error-classifier';
+import { isRunningOnPhone } from './backup-platform';
 
 // --- SyncService delegation ---
 // When the SyncService is running, forceSync() delegates to it instead
@@ -211,6 +216,37 @@ async function readJson(filePath: string): Promise<any> {
   }
 }
 
+/**
+ * Read config.json for a read-modify-WRITE.
+ *
+ * WHY (backup fixes 2026-11-18, D-5): readJson answers null for a missing file AND for one that cannot be read or
+ * parsed, and every writer below did `(await readJson(...)) || {}` — so a damaged file was treated as "no config",
+ * and the next add/update/remove/save wrote a brand-new file over it, silently deleting every saved backup
+ * destination. Only a missing (or empty) file is "empty" now; anything else is `ok:false` and callers must not write.
+ */
+async function readConfigStrict(): Promise<{ ok: true; config: any } | { ok: false }> {
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(configPath, 'utf8');
+  } catch (e: any) {
+    return e?.code === 'ENOENT' ? { ok: true, config: {} } : { ok: false };
+  }
+  if (!raw.trim()) return { ok: true, config: {} };
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? { ok: true, config: parsed } : { ok: false };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** The config for a write, or an error that says nothing was changed (shown to the person as the reason). */
+async function configForWrite(): Promise<any> {
+  const r = await readConfigStrict();
+  if (!r.ok) throw new Error("The saved backup settings couldn't be read, so nothing was changed.");
+  return r.config;
+}
+
 async function dirExists(dirPath: string): Promise<boolean> {
   try {
     const stat = await fs.promises.stat(dirPath);
@@ -339,7 +375,9 @@ export function syncLegacyKeys(config: any): void {
  * This is the single source of truth for what backends exist.
  */
 async function readBackendInstances(): Promise<BackendInstance[]> {
-  const config = (await readJson(configPath)) || {};
+  const strict = await readConfigStrict();
+  if (!strict.ok) return []; // damaged: report no backups, write nothing (see readConfigStrict)
+  const config = strict.config;
 
   if (config.storage_backends && Array.isArray(config.storage_backends)) {
     return config.storage_backends;
@@ -525,7 +563,7 @@ export async function getSyncConfig(): Promise<SyncConfig> {
 export async function setSyncConfig(
   updates: Partial<SyncConfig>
 ): Promise<SyncConfig> {
-  const existing = (await readJson(configPath)) || {};
+  const existing = await configForWrite();
 
   if (updates.backends) {
     // New model: replace the backends array and regenerate legacy keys
@@ -567,7 +605,7 @@ export async function setSyncConfig(
 export async function addBackend(
   instance: Omit<BackendInstance, 'id'>
 ): Promise<BackendInstance> {
-  const config = (await readJson(configPath)) || {};
+  const config = await configForWrite();
   const backends: BackendInstance[] = config.storage_backends || migrateConfigToV2(config);
 
   const id = generateBackendId(instance.type, instance.label);
@@ -594,7 +632,7 @@ export async function addBackend(
  * Remove a backend instance by id. Cleans up per-backend state files.
  */
 export async function removeBackend(id: string): Promise<void> {
-  const config = (await readJson(configPath)) || {};
+  const config = await configForWrite();
   const backends: BackendInstance[] = config.storage_backends || [];
 
   config.storage_backends = backends.filter(b => b.id !== id);
@@ -619,7 +657,7 @@ export async function updateBackend(
   id: string,
   updates: Partial<Omit<BackendInstance, 'id' | 'type'>>
 ): Promise<BackendInstance | null> {
-  const config = (await readJson(configPath)) || {};
+  const config = await configForWrite();
   const backends: BackendInstance[] = config.storage_backends || [];
 
   const index = backends.findIndex(b => b.id === id);
@@ -641,8 +679,32 @@ export async function updateBackend(
 // --- Force Sync & Per-Backend Sync ---
 
 /**
+ * The conversations-and-project-files half of a backup, run for the given destinations, with its failures
+ * turned into the same red warnings the settings-and-skills half writes.
+ *
+ * WHY (backup fixes 2026-11-18, item 3): "Back up now" used to run only the settings-and-skills half
+ * (SyncService.push); conversations and project files waited for the daily timer, whose failures only went to
+ * the log. A failure here is now a warning on the destination's row (non-dismissible, like every push failure),
+ * so a "finished" can never hide it. Returns true when every destination received everything.
+ */
+async function copySpacesTo(pairs: Array<{ backend: BackendInstance; target: BackupTarget }>): Promise<boolean> {
+  if (pairs.length === 0) return true;
+  const res = await syncSpacesBackupNow(pairs.map((p) => p.target));
+  for (const f of res.failures) {
+    const hit = pairs.find((p) => p.target.type === f.target.type && p.target.base === f.target.base);
+    if (hit) await addOrReplaceWarning(classifyPushError(f.message, hit.backend.type, hit.backend));
+  }
+  return res.ok;
+}
+
+function pairFor(backend: BackendInstance): { backend: BackendInstance; target: BackupTarget } | null {
+  const target = targetForBackend(backend);
+  return target ? { backend, target } : null;
+}
+
+/**
  * Trigger a force sync of all sync-enabled backends.
- * Delegates to the native SyncService.
+ * Delegates to the native SyncService, then copies conversations and project files to the same destinations.
  */
 export async function forceSync(): Promise<{
   success: boolean;
@@ -655,11 +717,14 @@ export async function forceSync(): Promise<{
 
   try {
     const result = await syncServiceInstance.push({ force: true });
+    const backends = await readBackendInstances();
+    const pairs = backends.filter((b) => b.syncEnabled).map(pairFor).filter((p): p is NonNullable<typeof p> => p !== null);
+    const spacesOk = await copySpacesTo(pairs);
     return {
-      success: result.success,
+      success: result.success && spacesOk,
       output: result.backends.join(', ') || 'No backends configured',
       // Shown to the user as the reason (Backup & Sync row, setup wizard) — plain words, no ids.
-      error: result.errors > 0 ? "Some backups didn't finish." : '',
+      error: result.errors > 0 || !spacesOk ? "Some backups didn't finish." : '',
     };
   } catch (e: any) {
     return { success: false, output: '', error: e.message || 'SyncService push failed' };
@@ -668,6 +733,10 @@ export async function forceSync(): Promise<{
 
 /**
  * Push to a single specific backend (manual upsync).
+ *
+ * WHY the early answers (backup fixes 2026-11-18, item 1): SyncService.push answers {success:true, backends:[]}
+ * for a backup it skips (GitHub copies nothing; Drive cannot run on a phone), and this used to turn that into
+ * "finished". A skipped backup is now a failure that says why. (The pinned answer of push() itself is unchanged.)
  */
 export async function pushBackend(id: string): Promise<{
   success: boolean;
@@ -678,11 +747,20 @@ export async function pushBackend(id: string): Promise<{
   }
 
   try {
+    const backend = (await readBackendInstances()).find((b) => b.id === id);
+    if (!backend) return { success: false, error: 'That backup was not found.' };
+    if (backend.type === 'github') return { success: false, error: 'GitHub backups are no longer supported, so nothing was copied.' };
+    if (backend.type === 'drive' && isRunningOnPhone()) return { success: false, error: "Google Drive backup isn't available on this phone, so nothing was copied." };
     const result = await syncServiceInstance.push({ force: true, backendId: id });
+    // A paused destination is included: this is the person asking for it by name.
+    const pair = pairFor(backend);
+    const spacesOk = await copySpacesTo(pair ? [pair] : []);
+    // Skipped for any reason other than "another backup is running" (which answers success:false itself).
+    if (result.success && !result.backends.includes(id)) return { success: false, error: 'Nothing was copied.' };
     return {
-      success: result.success,
+      success: result.success && spacesOk,
       // Shown to the user as the reason (Backup & Sync row, setup wizard) — plain words, no ids.
-      error: result.errors > 0 ? "Some files didn't upload." : '',
+      error: result.errors > 0 || !spacesOk ? "Some files didn't upload." : '',
     };
   } catch (e: any) {
     return { success: false, error: e.message || `Push to ${id} failed` };

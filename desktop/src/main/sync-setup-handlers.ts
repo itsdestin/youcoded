@@ -16,6 +16,7 @@ import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { isRunningOnPhone } from './backup-platform';
 
 const execFileAsync = promisify(execFile);
 
@@ -154,6 +155,9 @@ export async function checkSyncPrereqs(backend: 'drive' | 'github' | 'icloud'): 
  * Desktop only — on Android, rclone is bundled in Bootstrap.
  */
 export async function installRclone(): Promise<{ success: boolean; error?: string }> {
+  // WHY (backup fixes 2026-11-18, item 2): the phone fell into the Linux branch below and ran `curl | sudo bash`,
+  // which cannot work there. Google Drive backup is not available on a phone at all, so refuse before anything runs.
+  if (isRunningOnPhone()) return { success: false, error: "Google Drive backup isn't available on this phone." };
   let cmd: string;
   let args: string[];
 
@@ -222,16 +226,40 @@ export async function checkGdriveRemote(): Promise<{
  * rclone starts a temporary localhost server to capture the OAuth token.
  * The promise resolves when the user completes sign-in (or times out).
  */
-export async function authGdrive(): Promise<{
+export async function authGdrive(existingRemote?: string): Promise<{
   success: boolean;
   remoteName: string;
   error?: string;
 }> {
+  // The name becomes a command argument: only a plain connection name is accepted.
+  if (existingRemote !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(existingRemote)) {
+    return { success: false, remoteName: existingRemote, error: 'Google sign-in failed' };
+  }
   // Pick a remote name that doesn't conflict with existing ones
   const listResult = await safeExec('rclone', ['listremotes']);
   const existingRemotes = listResult.code === 0
     ? listResult.stdout.split('\n').map(r => r.trim().replace(/:$/, '')).filter(Boolean)
     : [];
+
+  // WHY (backup fixes 2026-11-18, item 4): "Sign in again" on an expired Drive backup used to take the "add another
+  // account" path below — `gdrive` already exists, so it made `gdrive2`, a second backup entry, while the broken
+  // entry kept pointing at `gdrive` and kept failing. When the wizard says which connection it is repairing, that
+  // one connection is signed in again in place: same name, same entry, nothing new.
+  // `rclone config update <name>` (no settings given) re-runs the browser sign-in for that connection and swaps in
+  // the new token only when it finishes — checked against a throwaway rclone configuration: the name, the other
+  // settings and the old token are untouched while it waits, so a cancelled sign-in leaves the connection as it was.
+  // (`config reconnect` was tried and is not used: with rclone 1.75 it stops at a yes/no question when no terminal is attached.)
+  if (existingRemote !== undefined) {
+    const exists = existingRemotes.includes(existingRemote);
+    const args = exists ? ['config', 'update', existingRemote] : ['config', 'create', existingRemote, 'drive'];
+    const result = await safeExec('rclone', args, { timeout: AUTH_TIMEOUT });
+    if (result.code !== 0) {
+      // A connection made fresh just now and never signed in is useless — put things back as they were.
+      if (!exists) await safeExec('rclone', ['config', 'delete', existingRemote]);
+      return { success: false, remoteName: existingRemote, error: result.stderr || 'Google sign-in failed or timed out' };
+    }
+    return { success: true, remoteName: existingRemote };
+  }
 
   let remoteName = 'gdrive';
   let counter = 2;

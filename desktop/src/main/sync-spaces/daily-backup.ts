@@ -8,6 +8,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { DEFAULT_IGNORES, isIgnoredPath } from './guards';
 import type { SyncSpace } from './types';
+import { extractStderr } from '../sync-error-classifier';
 
 const execFileAsync = promisify(execFile);
 const RCLONE_TIMEOUT = 10 * 60 * 1000;
@@ -27,11 +28,23 @@ export function foldersToPrune(names: string[], now: Date, keepDays: number): st
   return dated.filter(n => n !== newest && new Date(`${n}T00:00:00Z`).getTime() < cutoff);
 }
 
+async function rootExists(root: string): Promise<boolean> {
+  try { return (await fs.promises.stat(root)).isDirectory(); } catch { return false; }
+}
+
 // ---- job ----
 export interface BackupTarget {
   type: 'drive' | 'icloud';
   /** drive: rclone remote+root e.g. "gdrive:Claude"; icloud: absolute folder path */
   base: string;
+}
+
+/** What a run did, for a caller that must report it honestly ("Back up now"). */
+export interface BackupRunResult {
+  /** True when every destination received every space (a skipped, missing folder is not a failure). */
+  ok: boolean;
+  /** One entry per space copy that failed, with the tool's own words (classified by the caller). */
+  failures: { target: BackupTarget; message: string }[];
 }
 
 export class DailyBackup {
@@ -42,38 +55,69 @@ export class DailyBackup {
   // closes the day, and only once every copy landed.
   private done = new Set<string>();
   private doneDate = '';
+  // WHY one "active run" (backup fixes 2026-11-18, D-11): the hourly timer had no re-entry guard, so a first
+  // big upload (over an hour) was started a second time on top of itself, and "Back up now" would have been a
+  // third. Every run — timer or manual — is chained here: the timer skips its tick while anything is running;
+  // a manual run waits its turn and then runs, so two copies of the same spaces never overlap.
+  private active: Promise<void> | null = null;
+  // Manual runs waiting or running, by destination set: a second tap on the same button joins the first.
+  private manualRuns = new Map<string, Promise<BackupRunResult>>();
 
   constructor(opts?: { markerPath?: string }) {
     this.markerPath = opts?.markerPath ?? path.join(os.homedir(), '.claude', '.spaces-backup-marker');
   }
 
+  private track<T>(p: Promise<T>): Promise<T> {
+    // The clean-up rides the SAME promise the caller awaits, so by the time a caller resumes, the run is
+    // already off the books (a follow-up call is never refused for a run that has just ended).
+    let tail: Promise<void>;
+    const guarded = p.finally(() => { if (this.active === tail) this.active = null; });
+    tail = guarded.then(() => {}, () => {});
+    this.active = tail;
+    return guarded;
+  }
+
   /** Call from an hourly timer; no-ops until a new UTC day. Never throws. */
   async runIfDue(spaces: SyncSpace[], targets: BackupTarget[], log: (msg: string) => void): Promise<void> {
+    if (this.active) { log('spaces-backup: a backup is already running; this check is skipped'); return; }
+    await this.track(this.runIfDueInner(spaces, targets, log));
+  }
+
+  /**
+   * Copy every space to the given destinations NOW, whatever today's marker says ("Back up now" /
+   * "Upload now"). WHY (backup fixes 2026-11-18): the button only ran the settings-and-skills half, so
+   * conversations and project files were left for the next day's timer while the screen said "finished".
+   *
+   * It never writes the day's marker: the caller may have named only one destination, and a one-destination
+   * run must not close the day for the others. What it copies is remembered, so the next hourly check only
+   * finishes the rest and writes the marker. Destinations are used as given — a paused one the person asked
+   * for by name is included (the timer's own list leaves paused ones out).
+   */
+  runNow(spaces: SyncSpace[], targets: BackupTarget[], log: (msg: string) => void): Promise<BackupRunResult> {
+    const key = targets.map((t) => `${t.type}|${t.base}`).join(';');
+    const joined = this.manualRuns.get(key);
+    if (joined) return joined;
+    const before = this.active;
+    const run = (async (): Promise<BackupRunResult> => {
+      try {
+        if (before) await before;
+        return await this.copyAll(spaces, targets, log, true);
+      }
+      catch (e: any) { return { ok: false, failures: targets.map((t) => ({ target: t, message: String(e?.message ?? e) })) }; }
+      finally { this.manualRuns.delete(key); }
+    })();
+    this.manualRuns.set(key, run);
+    return this.track(run);
+  }
+
+  private async runIfDueInner(spaces: SyncSpace[], targets: BackupTarget[], log: (msg: string) => void): Promise<void> {
     let marker: string | null = null;
     try { marker = (await fs.promises.readFile(this.markerPath, 'utf8')).trim(); } catch { /* first run */ }
     const now = new Date();
     if (!isBackupDue(marker, now) || targets.length === 0) return;
     const dated = datedFolderName(now);
-    if (this.doneDate !== dated) { this.done.clear(); this.doneDate = dated; }
-    let complete = true;
-    for (const target of targets) {
-      const where = `${target.type}|${target.base}`;
-      let landed = true;
-      for (const space of spaces) {
-        const key = `copy|${where}|${space.id}`;
-        if (this.done.has(key)) continue;
-        try { await this.copySpace(space, target, dated); this.done.add(key); }
-        catch (e: any) { landed = false; log(`spaces-backup failed for ${space.id} → ${target.type}: ${String(e?.message ?? e)}`); }
-      }
-      if (!landed) { complete = false; continue; }
-      // WHY: pruning used to run after FAILED copies too — a month of failures
-      // (an expired Drive sign-in) would delete every snapshot and add none.
-      // Prune a destination only once today's snapshot fully landed there.
-      if (!this.done.has(`prune|${where}`)) {
-        try { await this.prune(target, now, log); this.done.add(`prune|${where}`); } catch { /* best-effort; retried next run */ }
-      }
-    }
-    if (!complete) {
+    const { ok } = await this.copyAll(spaces, targets, log, false);
+    if (!ok) {
       log(`spaces-backup incomplete for ${dated}; failed copies retry next hour`);
       return;
     }
@@ -82,6 +126,40 @@ export class DailyBackup {
     try { await fs.promises.writeFile(this.markerPath, dated); }
     catch (e: any) { log(`spaces-backup: could not write marker: ${String(e?.message ?? e)}`); }
     log(`spaces-backup completed for ${dated} (${spaces.length} spaces, ${targets.length} targets)`);
+  }
+
+  /** The copy-and-prune pass shared by the timer and "Back up now". `force` re-copies what today already did. */
+  private async copyAll(spaces: SyncSpace[], targets: BackupTarget[], log: (msg: string) => void, force: boolean): Promise<BackupRunResult> {
+    const now = new Date();
+    const dated = datedFolderName(now);
+    if (this.doneDate !== dated) { this.done.clear(); this.doneDate = dated; }
+    const failures: BackupRunResult['failures'] = [];
+    for (const target of targets) {
+      const where = `${target.type}|${target.base}`;
+      let landed = true;
+      for (const space of spaces) {
+        const key = `copy|${where}|${space.id}`;
+        if (!force && this.done.has(key)) continue;
+        // WHY (backup fixes 2026-11-18, D-7): one space whose folder is gone (a project deleted on this
+        // device) failed the copy every hour, so the destination never pruned and the day never closed.
+        // A folder that is not there has nothing to back up: say so in the log and carry on.
+        if (!(await rootExists(space.root))) { log(`spaces-backup: skipping ${space.id} — its folder is missing (${space.root})`); continue; }
+        try { await this.copySpace(space, target, dated); this.done.add(key); }
+        catch (e: any) {
+          landed = false;
+          failures.push({ target, message: extractStderr(e, RCLONE_TIMEOUT) || String(e) });
+          log(`spaces-backup failed for ${space.id} → ${target.type}: ${String(e?.message ?? e)}`);
+        }
+      }
+      if (!landed) continue;
+      // WHY: pruning used to run after FAILED copies too — a month of failures
+      // (an expired Drive sign-in) would delete every snapshot and add none.
+      // Prune a destination only once today's snapshot fully landed there.
+      if (force || !this.done.has(`prune|${where}`)) {
+        try { await this.prune(target, now, log); this.done.add(`prune|${where}`); } catch { /* best-effort; retried next run */ }
+      }
+    }
+    return { ok: failures.length === 0, failures };
   }
 
   private async copySpace(space: SyncSpace, target: BackupTarget, dated: string): Promise<void> {

@@ -514,3 +514,175 @@ describe('SyncService push with only GitHub backups', () => {
     expect(fs.existsSync(path.join(tmpHome, '.claude', 'backup-meta.json'))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Backup fixes 2026-11-18 — the backup lock (D-18 / B-3), phone handling (item 2), and the
+// saved-settings file never being wiped by a failed read (D-5).
+// ---------------------------------------------------------------------------
+import { spawnSync } from 'child_process';
+import { setRunningOnPhone } from '../src/main/backup-platform';
+import { LOCK_STALE_MS } from '../src/main/sync-service';
+
+/** A process id that belonged to a process that has ended — certain to be dead. */
+function deadPid(): number {
+  const r = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+  return parseInt(r.stdout, 10);
+}
+
+describe('SyncService backup lock', () => {
+  const tmpHome = path.join(os.tmpdir(), `sync-service-lock-${process.pid}-${Date.now()}`);
+  const lockDir = path.join(tmpHome, '.claude', 'toolkit-state', '.sync-lock');
+  const lockStart = () => path.join(lockDir, 'started');
+  beforeEach(() => {
+    fs.mkdirSync(path.join(tmpHome, '.claude', 'toolkit-state'), { recursive: true });
+    setClaudeDirForTests(tmpHome);
+  });
+  afterEach(() => { vi.restoreAllMocks(); try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {} });
+
+  const leave = (pid: number | null, startedMsAgo: number | null) => {
+    fs.mkdirSync(lockDir, { recursive: true });
+    if (pid !== null) fs.writeFileSync(path.join(lockDir, 'pid'), String(pid));
+    if (startedMsAgo !== null) fs.writeFileSync(lockStart(), String(Date.now() - startedMsAgo));
+  };
+  const acquire = (svc: SyncService) => (svc as any).acquireLock() as Promise<boolean>;
+
+  it('reclaims a lock left by a process that no longer exists', async () => {
+    leave(deadPid(), 60_000);
+    expect(await acquire(new SyncService(tmpHome))).toBe(true);
+  });
+
+  it('reclaims a lock that carries this very process id but is not held by this service (a recycled id after a restart)', async () => {
+    leave(process.pid, 60_000);
+    expect(await acquire(new SyncService(tmpHome))).toBe(true);
+  });
+
+  it('respects a recent lock held by another live process', async () => {
+    leave(process.ppid, 60_000); // the test runner's parent: alive, and not us
+    expect(await acquire(new SyncService(tmpHome))).toBe(false);
+    expect(fs.existsSync(lockDir)).toBe(true);
+  });
+
+  it('reclaims a lock older than the stale limit even if its process id now belongs to something else alive', async () => {
+    leave(process.ppid, LOCK_STALE_MS + 60_000);
+    expect(await acquire(new SyncService(tmpHome))).toBe(true);
+  });
+
+  it('keeps the stale limit longer than any real backup run', () => {
+    // WHY 24 h: the lock covers one personal push — at most a few dozen copy commands, each cut off after 10 minutes
+    // (conversations and project files are copied outside it). Even a first-ever upload of a huge history on a slow
+    // line finishes in hours; a limit that short would take a lock from a push still running and let two run at once.
+    // Longer than a day only delays recovery from a recycled process id by a day.
+    expect(LOCK_STALE_MS).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000);
+  });
+
+  it('reclaims a lock with no readable owner once the folder itself is old, never while it is fresh', async () => {
+    leave(null, null);
+    expect(await acquire(new SyncService(tmpHome))).toBe(false); // just made: its owner may be about to write its id
+    const old = new Date(Date.now() - LOCK_STALE_MS - 60_000);
+    fs.utimesSync(lockDir, old, old);
+    expect(await acquire(new SyncService(tmpHome))).toBe(true);
+  });
+
+  it('release removes only a lock this service took', async () => {
+    const svc = new SyncService(tmpHome);
+    expect(await acquire(svc)).toBe(true);
+    // Another process reclaimed the lock after ours was judged stale and now holds its own.
+    fs.writeFileSync(path.join(lockDir, 'owner'), 'someone-else');
+    await (svc as any).releaseLock();
+    expect(fs.existsSync(lockDir)).toBe(true);
+  });
+
+  it('release removes the lock it took, and stop() never removes one it does not hold', async () => {
+    const svc = new SyncService(tmpHome);
+    expect(await acquire(svc)).toBe(true);
+    await (svc as any).releaseLock();
+    expect(fs.existsSync(lockDir)).toBe(false);
+
+    leave(process.ppid, 1000); // someone else's lock
+    svc.stop();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fs.existsSync(lockDir)).toBe(true);
+  });
+
+  it('knows a live process from a dead one on Windows without the language-dependent tasklist', () => {
+    const svc = new SyncService(tmpHome) as any;
+    const real = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      expect(svc.isPidAlive(process.pid)).toBe(true);
+      expect(svc.isPidAlive(deadPid())).toBe(false);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: real });
+    }
+  });
+});
+
+describe('SyncService on a phone', () => {
+  const tmpHome = path.join(os.tmpdir(), `sync-service-phone-${process.pid}-${Date.now()}`);
+  const drive = { id: 'drive-1', type: 'drive', syncEnabled: true, label: 'My Drive', config: { rcloneRemote: 'gdrive' } };
+  beforeEach(() => {
+    fs.mkdirSync(path.join(tmpHome, '.claude', 'toolkit-state'), { recursive: true });
+    setClaudeDirForTests(tmpHome);
+  });
+  afterEach(async () => {
+    setRunningOnPhone(false);
+    vi.restoreAllMocks();
+    await writeWarnings([]);
+    try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+  });
+
+  it('never runs rclone for a Drive backup, writes no "rclone isn\'t installed" warning, and clears an old one', async () => {
+    setRunningOnPhone(true);
+    const svc = new SyncService(tmpHome);
+    vi.spyOn(svc as any, 'getBackendInstances').mockReturnValue([drive]);
+    const rclone = vi.spyOn(svc as any, 'rclone');
+    await writeWarnings([{ code: 'RCLONE_MISSING', level: 'danger', backendId: 'drive-1', title: "rclone isn't installed", body: '', dismissible: false, createdEpoch: 1 }]);
+    const res = await svc.push({ force: true });
+    expect(res).toEqual({ success: true, errors: 0, backends: [] });
+    expect(rclone).not.toHaveBeenCalled();
+    expect(await readWarnings()).toEqual([]);
+    expect(fs.existsSync(path.join(tmpHome, '.claude', 'backup-meta.json'))).toBe(false);
+  });
+
+  it('a service built the way the computer builds it (no phone flag) still pushes Drive', async () => {
+    const svc = new SyncService(tmpHome);
+    vi.spyOn(svc as any, 'getBackendInstances').mockReturnValue([drive]);
+    const pushDrive = vi.spyOn(svc as any, 'pushDrive').mockResolvedValue(0);
+    const res = await svc.push({ force: true });
+    expect(pushDrive).toHaveBeenCalledTimes(1);
+    expect(res.backends).toEqual(['drive-1']);
+  });
+});
+
+describe('SyncService never wipes the saved backups after a failed read', () => {
+  const tmpHome = path.join(os.tmpdir(), `sync-service-cfg-${process.pid}-${Date.now()}`);
+  const cfg = () => path.join(tmpHome, '.claude', 'toolkit-state', 'config.json');
+  beforeEach(() => {
+    fs.mkdirSync(path.join(tmpHome, '.claude', 'toolkit-state'), { recursive: true });
+    setClaudeDirForTests(tmpHome);
+  });
+  afterEach(() => { vi.restoreAllMocks(); try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {} });
+
+  it('a damaged settings file is left exactly as it is by the backup-list read', () => {
+    const damaged = '{"storage_backends":[{"id":"drive-1","ty';
+    fs.writeFileSync(cfg(), damaged);
+    const svc = new SyncService(tmpHome) as any;
+    expect(svc.getBackendInstances()).toEqual([]);
+    expect(fs.readFileSync(cfg(), 'utf8')).toBe(damaged);
+  });
+
+  it('a damaged settings file is left alone by the health check\'s auto-detect write', async () => {
+    const damaged = '{"storage_backends":[{"id":"drive-1","ty';
+    fs.writeFileSync(cfg(), damaged);
+    const svc = new SyncService(tmpHome);
+    vi.spyOn(svc as any, 'probeInternet').mockResolvedValue(true);
+    vi.spyOn(svc as any, 'autoDetectBackend').mockResolvedValue('drive');
+    await svc.runHealthCheck();
+    expect(fs.readFileSync(cfg(), 'utf8')).toBe(damaged);
+  });
+
+  it('a missing settings file is still the normal "no backups yet" and is created', () => {
+    const svc = new SyncService(tmpHome) as any;
+    expect(svc.getBackendInstances()).toEqual([]);
+  });
+});

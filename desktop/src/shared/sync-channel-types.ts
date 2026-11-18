@@ -37,7 +37,7 @@ export interface SyncChannelTypes {
   'sync:setup:check-prereqs': { request: { backend: Parameters<typeof SyncSetup.checkSyncPrereqs>[0] }; response: Res<typeof SyncSetup.checkSyncPrereqs> };
   'sync:setup:install-rclone': { request: void; response: Res<typeof SyncSetup.installRclone> };
   'sync:setup:check-gdrive': { request: void; response: Res<typeof SyncSetup.checkGdriveRemote> };
-  'sync:setup:auth-gdrive': { request: void; response: Res<typeof SyncSetup.authGdrive> };
+  'sync:setup:auth-gdrive': { request: { existingRemote?: string } | undefined; response: Res<typeof SyncSetup.authGdrive> };
   'sync:setup:auth-github': { request: void; response: Res<typeof SyncSetup.authGithub> };
   'sync:setup:create-repo': { request: { repoName: string }; response: Res<typeof SyncSetup.createGithubRepo> };
 

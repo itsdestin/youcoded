@@ -129,11 +129,11 @@ export const firstRunChannels: MainChannelDef[] = [
   }),
   defineChannel({
     name: IPC.FIRST_RUN_SKIP, kind: 'handle', desktopOnly: true,
-    handler: () => {
+    handler: async () => {
       // One writer for the setup-completed flag (first-run.ts): it is the only place that knows WHERE
       // the wizard's files live, so a dev instance pointed at a scratch folder cannot write the
       // installed app's config. Then move the state machine so the renderer's onStateChanged fires.
-      markSetupCompleted();
+      await markSetupCompleted();
       manager()?.skip();
     },
   }),

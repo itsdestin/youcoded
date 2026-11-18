@@ -36,6 +36,7 @@ import { SyncService } from '../sync-service';
 import { setSyncService, getSyncConfig } from '../sync-state';
 import { startSyncSpaces, setSyncSpacesRemoteBroadcaster, setSyncSpacesWindowBroadcaster, setSyncSpacesAuthStore, hubLeaseRequest, setSyncSpacesLeaseEventListener, getManagedRoots, syncSpacesSyncNowAwaited } from '../sync-spaces/service';
 import { loadSpaceBackupTargets } from '../sync-spaces/backup-targets';
+import { setRunningOnPhone } from '../backup-platform';
 import { createGithubClient, setGithubClient } from '../github-client';
 import { getDeviceIdentity, getMachineIdentity } from '../device-identity';
 import { createLeaseClient, sweepExpiredLeases, sweepLegacyLeaseDir } from '../conversations/lease-client';
@@ -252,7 +253,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
         try {
           const { detectAuth } = require('../prerequisite-installer');
           if (await setupIsUsable({ isSignedIn: () => chatgptAuth.isSignedIn(), hasUsableProvider: ipcWiring.hasUsableProvider, detectAuth })) return { currentStep: 'COMPLETE' };
-          markSetupCompleted();
+          await markSetupCompleted();
           late = new FirstRunManager();
           late.forceStep('AUTHENTICATE');
           late.on('state-changed', (state) => remoteServer.broadcast({ type: IPC.FIRST_RUN_STATE, payload: state }));
@@ -290,6 +291,10 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   });
 
   // --- main.ts's post-window services ---
+  // WHY (backup fixes 2026-11-18): this backend only ever runs on a phone, which has no rclone (Google Drive backup)
+  // and no gh (GitHub backup). The backup code cannot tell from process.platform ("linux" here), so it is told once,
+  // here — and only here, never from the environment — before the backup service is built.
+  setRunningOnPhone(true);
   const syncService = new SyncService();
   setSyncService(syncService);
   syncService.start().catch((e) => log('ERROR', 'Headless', 'SyncService start failed', { error: String(e) }));

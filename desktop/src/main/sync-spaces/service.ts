@@ -9,7 +9,7 @@ import { ManagedRoots } from './managed-roots';
 import { SpaceManager, repoNameForSpace } from './space-manager';
 import { GitTransport } from './git-transport';
 import { SpaceSyncEngine } from './engine';
-import { DailyBackup, BackupTarget } from './daily-backup';
+import { DailyBackup, BackupTarget, BackupRunResult } from './daily-backup';
 import { importProjectFolder } from './import-project';
 import { MAX_SYNC_FILE_BYTES, validateSyncName } from './guards';
 import { createSyncHubSocket } from '../sync-hub-socket';
@@ -274,6 +274,19 @@ export async function startSyncSpaces(getBackupTargets: () => Promise<BackupTarg
   backupTimer = setInterval(() => { void runBackup(); }, 60 * 60 * 1000);
   (backupTimer as any).unref?.();
   void runBackup();
+}
+
+/**
+ * "Back up now" for conversations and project files: copy every space to the given destinations right now.
+ *
+ * WHY here (backup fixes 2026-11-18): the button used to run only the settings-and-skills half of a backup
+ * (sync-service.ts); this service owns the spaces, the destinations' copy job and its once-at-a-time guard.
+ * Never throws: a backup that cannot start answers ok:false so the caller reports it instead of "finished".
+ */
+export async function syncSpacesBackupNow(targets: BackupTarget[]): Promise<BackupRunResult> {
+  if (!backup) return { ok: false, failures: targets.map((target) => ({ target, message: 'The backup service is still starting up.' })) };
+  try { return await backup.runNow(await activeSpaces(), targets, logFn); }
+  catch (e: any) { return { ok: false, failures: targets.map((target) => ({ target, message: String(e?.message ?? e) })) }; }
 }
 
 // The spaces the engine should actually run — spaces() minus stopped projects

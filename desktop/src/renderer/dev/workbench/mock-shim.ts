@@ -2541,9 +2541,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         ? { success: false, error: 'The download of the helper tool stopped part way (workbench practice failure).' }
         : { success: true }),
       // `?syncSetup=auth-failed`: the sign-in answers with a reason of its own.
-      authGdrive: async () => (syncSetupMode === 'auth-failed'
+      authGdrive: async (existingRemote?: string) => (syncSetupMode === 'auth-failed'
         ? { success: false, error: 'Google sign-in was closed before it finished (workbench practice failure).' }
-        : { success: true, remoteName: 'gdrive2' }),
+        : { success: true, remoteName: existingRemote ?? 'gdrive2' }),
       createRepo: async (name: string) => (syncSetupMode === 'save-failed'
         ? { success: false, error: `GitHub refused to make the repository ${name}: name already exists on this account (workbench practice failure).` }
         : { success: true, repoUrl: `https://github.com/you/${name}` }),

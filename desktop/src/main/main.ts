@@ -1130,7 +1130,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
             // brand-new machine — re-running the Node/Git/Claude installers and,
             // with the Skip link gone, stranding them on a "Try again" screen.
             // With the flag set, the next launch comes back through THIS check.
-            markSetupCompleted();
+            await markSetupCompleted();
             lateFirstRunManager = new FirstRunManager();
             lateFirstRunManager.forceStep('AUTHENTICATE');
             wireSetupDownloadHandoff(() => lateFirstRunManager, ipcWiring.firstRunDeps);

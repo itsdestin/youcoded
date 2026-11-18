@@ -23,7 +23,7 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { execFile, execFileSync } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import {
   type BackendInstance,
@@ -37,6 +37,7 @@ import {
   writeWarnings,
 } from './sync-state';
 import { classifyPushError, extractStderr, truncateStderr } from './sync-error-classifier';
+import { isRunningOnPhone } from './backup-platform';
 // Why: dated daily snapshots reuse the SAME once-per-UTC-day gate helpers as the
 // spaces daily-backup (single source of truth) plus the pure tiered-retention core.
 import { datedFolderName, isBackupDue } from './sync-spaces/daily-backup';
@@ -108,6 +109,14 @@ const SNAPSHOT_POLL_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 // second strike lands within about a minute; a good probe returns to 5 min.
 const HEALTH_POLL_INTERVAL_MS = 5 * 60 * 1000;
 const HEALTH_RETRY_INTERVAL_MS = 60 * 1000;
+
+// How old a backup lock may be before it is taken over even though its owner looks alive (backup fixes 2026-11-18, D-18).
+// WHY 24 hours: the lock covers ONE personal push — at most a few dozen copy commands, each cut off after 10 minutes
+// (conversations and project files are copied outside the lock, by the spaces backup). Even a first-ever upload of a huge
+// history on a slow line finishes in hours; a shorter limit would take the lock from a push still running and let two run
+// at once. Longer only delays recovery from a recycled process id (a lock left by a crash whose id something else now
+// uses) by a day. A dead owner is reclaimed at once, whatever the age; this limit only covers an owner we cannot disprove.
+export const LOCK_STALE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Do two warning lists say the same thing? Used to skip the write when a
@@ -305,8 +314,8 @@ export class SyncService extends EventEmitter {
       this.healthTimer = null;
     }
 
-    // Release lock if held
-    this.releaseLock();
+    // Release the lock only if this service holds it (see releaseLock)
+    void this.releaseLock();
 
     // Remove .app-sync-active marker so hooks resume normal operation
     try { fs.unlinkSync(this.appSyncMarkerPath); } catch {}
@@ -337,7 +346,12 @@ export class SyncService extends EventEmitter {
    * on first read if storage_backends array is missing.
    */
   private getBackendInstances(): BackendInstance[] {
-    const config = this.readJson(this.configPath) || {};
+    const strict = this.readConfigStrict();
+    // WHY (backup fixes 2026-11-18, D-5): a file that could not be read or parsed used to count as "no config yet",
+    // and the "migration" below then wrote an EMPTY backup list over it — silently turning every backup off. A damaged
+    // file is left exactly as it is (so it can still be recovered) and reads as "no backups" until it is repaired.
+    if (!strict.ok) return [];
+    const config = strict.config;
     if (config.storage_backends && Array.isArray(config.storage_backends)) {
       return config.storage_backends;
     }
@@ -347,6 +361,29 @@ export class SyncService extends EventEmitter {
     syncLegacyKeys(config);
     this.atomicWrite(this.configPath, JSON.stringify(config, null, 2));
     return migrated;
+  }
+
+  private warnedUnreadableConfig = false;
+
+  /** Read the settings file for a read-modify-WRITE. Only a missing file is "empty"; a file that exists but cannot be
+   *  read or parsed is `ok:false` and must never be written back (see getBackendInstances). */
+  private readConfigStrict(): { ok: boolean; config: any } {
+    try {
+      const parsed = this.readJson(this.configPath, true);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return { ok: true, config: parsed };
+      return this.unreadableConfig(new Error('not an object'));
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return { ok: true, config: {} };
+      return this.unreadableConfig(e);
+    }
+  }
+
+  private unreadableConfig(e: unknown): { ok: false; config: null } {
+    if (!this.warnedUnreadableConfig) {
+      this.warnedUnreadableConfig = true; // once, not on every 5-minute check
+      this.logBackup('WARN', `Settings file unreadable — left untouched: ${String(e)}`, 'sync.config');
+    }
+    return { ok: false, config: null };
   }
 
   /** Get only backends with syncEnabled=true (for the automatic push loop). */
@@ -455,58 +492,79 @@ export class SyncService extends EventEmitter {
   // Mutex (mkdir-based, portable)
   // =========================================================================
 
+  // WHY the lock is async and owner-checked (backup fixes 2026-11-18, D-18 / B-3): it used to trust any live process
+  // with the recorded id (no age limit, so a lock left by a crash whose id something else reused blocked every backup
+  // forever, silently), judged "alive" on Windows by parsing English tasklist text (never reclaimed on a translated
+  // Windows), and was released by whoever called — even by a service that did not take it, so quitting or toggling
+  // could pull the lock out from under a push still running. Now: a lock records who took it, when, and a private token;
+  // it is reclaimed when its owner is gone, when it carries this very process's id without this service holding it, or
+  // when it is older than LOCK_STALE_MS; and release removes only the lock this service took.
+  private lockToken: string | null = null;
+
+  /** Is the existing lock leftover (safe to take over)? */
+  private async lockIsStale(): Promise<boolean> {
+    const read = async (name: string) => { try { return (await fs.promises.readFile(path.join(this.lockDir, name), 'utf8')).trim(); } catch { return ''; } };
+    const pid = parseInt(await read('pid'), 10);
+    let startedAt = parseInt(await read('started'), 10);
+    if (!(startedAt > 0)) {
+      try { startedAt = (await fs.promises.stat(this.lockDir)).mtimeMs; } catch { return false; } // vanished: the next try finds it free
+    }
+    const tooOld = Date.now() - startedAt > LOCK_STALE_MS;
+    if (!(pid > 0)) return tooOld; // no readable owner: a fresh folder may be a push that is about to write its id
+    if (pid === process.pid) {
+      // Ours only if THIS service took it; otherwise this id was recycled after a restart.
+      return !(this.lockToken && (await read('owner')) === this.lockToken);
+    }
+    if (!this.isPidAlive(pid)) return true;
+    return tooOld;
+  }
+
   /** Acquire sync lock. Returns true if acquired, false if another sync is running. */
-  private acquireLock(): boolean {
+  private async acquireLock(): Promise<boolean> {
     try {
-      fs.mkdirSync(this.lockDir, { recursive: false });
+      await fs.promises.mkdir(this.lockDir, { recursive: false });
     } catch (e: any) {
       if (e.code !== 'EEXIST') return false;
-
-      // Lock exists — check if holder PID is alive
-      const pidFile = path.join(this.lockDir, 'pid');
-      let pid = 0;
-      try { pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10); } catch {}
-
-      if (pid > 0 && this.isPidAlive(pid)) {
-        return false; // Another sync is genuinely running
-      }
-
-      // Stale lock — clean up and retry
-      try {
-        fs.rmSync(this.lockDir, { recursive: true, force: true });
-        fs.mkdirSync(this.lockDir, { recursive: false });
-      } catch {
-        return false;
-      }
+      if (!(await this.lockIsStale())) return false; // Another sync is genuinely running
+      // Stale lock. Move it aside in one step (only one process can win that), then remove it and retry.
+      const aside = `${this.lockDir}.stale.${process.pid}.${Date.now()}`;
+      try { await fs.promises.rename(this.lockDir, aside); } catch { return false; }
+      await fs.promises.rm(aside, { recursive: true, force: true }).catch(() => {});
+      try { await fs.promises.mkdir(this.lockDir, { recursive: false }); } catch { return false; }
+      this.logBackup('INFO', 'Took over a leftover backup lock', 'sync.lock');
     }
 
-    // Write our PID
+    const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     try {
-      fs.writeFileSync(path.join(this.lockDir, 'pid'), String(process.pid));
+      await fs.promises.writeFile(path.join(this.lockDir, 'pid'), String(process.pid));
+      await fs.promises.writeFile(path.join(this.lockDir, 'started'), String(Date.now()));
+      await fs.promises.writeFile(path.join(this.lockDir, 'owner'), token);
     } catch {}
+    this.lockToken = token;
     return true;
   }
 
-  /** Release sync lock. */
-  private releaseLock(): void {
+  /** Release sync lock — only the one this service took. */
+  private async releaseLock(): Promise<void> {
+    const token = this.lockToken;
+    if (!token) return;
+    this.lockToken = null;
     try {
-      fs.rmSync(this.lockDir, { recursive: true, force: true });
-    } catch {}
+      const owner = (await fs.promises.readFile(path.join(this.lockDir, 'owner'), 'utf8')).trim();
+      if (owner !== token) return; // someone else holds it now (ours was judged stale and taken over)
+    } catch { /* no owner file (write failed): the folder is ours by creation */ }
+    await fs.promises.rm(this.lockDir, { recursive: true, force: true }).catch(() => {});
   }
 
   /** Check if a PID is alive (cross-platform). */
   private isPidAlive(pid: number): boolean {
+    // WHY process.kill(pid, 0) on Windows too (D-18): Node supports it there, and it does not depend on the language of
+    // tasklist's "No tasks are running" message. EPERM means the process exists but belongs to someone else: alive.
     try {
-      if (process.platform === 'win32') {
-        // tasklist with PID filter — output contains process info if alive
-        const result = execFileSync('tasklist', ['/FI', `PID eq ${pid}`], { encoding: 'utf8', timeout: 5000 });
-        return !result.includes('No tasks');
-      } else {
-        process.kill(pid, 0); // Signal 0 = test if process exists
-        return true;
-      }
-    } catch {
-      return false;
+      process.kill(pid, 0);
+      return true;
+    } catch (e: any) {
+      return e?.code === 'EPERM';
     }
   }
 
@@ -595,10 +653,12 @@ export class SyncService extends EventEmitter {
   // File Helpers
   // =========================================================================
 
-  private readJson(filePath: string): any {
+  // `throwOnError`: callers that will WRITE the file back must tell "missing" (ENOENT) from "unreadable" — see readConfigStrict.
+  private readJson(filePath: string, throwOnError = false): any {
     try {
       return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    } catch {
+    } catch (e) {
+      if (throwOnError) throw e;
       return null;
     }
   }
@@ -1011,6 +1071,14 @@ export class SyncService extends EventEmitter {
     this.pushing = true;
 
     try {
+      // WHY (backup fixes 2026-11-18, item 2): Google Drive backup cannot run on a phone (no rclone there), and its
+      // entry is shown as "not supported" with Remove. An entry migrated from the old app used to fail on every
+      // hourly push and leave a red "rclone isn't installed" warning; push skips it below and any such warning
+      // left from before is cleared here.
+      if (isRunningOnPhone()) {
+        for (const b of this.getBackendInstances()) if (b.type === 'drive') await this.clearBackendFailures(b.id);
+      }
+
       // Plan 2c: the legacy conversation-index is FROZEN — no longer maintained
       // on push. The Conversation Store (~/YouCoded/Personal/Conversations/) is
       // authoritative for titles + flags now; the index file stays readable for
@@ -1019,7 +1087,7 @@ export class SyncService extends EventEmitter {
       // deferred to a future task. (was: this.updateConversationIndex())
 
       // Acquire lock
-      if (!this.acquireLock()) {
+      if (!(await this.acquireLock())) {
         this.logBackup('INFO', 'Push skipped — another sync is running', 'sync.push');
         return { success: false, errors: 0, backends: [] };
       }
@@ -1040,7 +1108,7 @@ export class SyncService extends EventEmitter {
         // the cycle ends exactly as one with no backups at all: nothing is stamped.
         const instances = (opts?.backendId
           ? [this.getBackendById(opts.backendId)].filter(Boolean) as BackendInstance[]
-          : this.getSyncEnabledBackends()).filter((i) => i.type !== 'github');
+          : this.getSyncEnabledBackends()).filter((i) => i.type !== 'github' && !(i.type === 'drive' && isRunningOnPhone()));
 
         if (instances.length === 0) return { success: true, errors: 0, backends: [] };
 
@@ -1128,7 +1196,7 @@ export class SyncService extends EventEmitter {
         this.emit('push-complete', { errors: totalErrors });
         return { success: totalErrors === 0, errors: totalErrors, backends: pushedIds };
       } finally {
-        this.releaseLock();
+        await this.releaseLock();
       }
     } finally {
       this.pushing = false;
@@ -1228,10 +1296,14 @@ export class SyncService extends EventEmitter {
       const detected = probeBackends ? await this.autoDetectBackend() : null;
       if (detected) {
         try {
-          const config = this.readJson(this.configPath) || {};
-          config.PERSONAL_SYNC_BACKEND = detected;
-          this.atomicWrite(this.configPath, JSON.stringify(config, null, 2));
-          this.logBackup('INFO', `Auto-detected sync backend: ${detected}`, 'sync.health');
+          // WHY strict (D-5): `|| {}` here wrote a settings file holding only this key over a file it could not read.
+          const strict = this.readConfigStrict();
+          if (strict.ok) {
+            const config = strict.config;
+            config.PERSONAL_SYNC_BACKEND = detected;
+            this.atomicWrite(this.configPath, JSON.stringify(config, null, 2));
+            this.logBackup('INFO', `Auto-detected sync backend: ${detected}`, 'sync.health');
+          }
         } catch {}
       } else if (!primarySyncOn) {
         warnings.push({
@@ -1313,9 +1385,12 @@ export class SyncService extends EventEmitter {
   /** Try to auto-detect a sync backend (Drive via rclone, iCloud via folder). */
   private async autoDetectBackend(): Promise<string | null> {
     // Check Google Drive (rclone + gdrive remote)
-    const driveRoot = this.configGet('DRIVE_ROOT', 'Claude');
-    const rcloneResult = await this.rclone(['lsd', `gdrive:${driveRoot}/Backup/`]);
-    if (rcloneResult.code === 0) return 'drive';
+    // A phone has no rclone (backup fixes 2026-11-18): looking would only spawn a command that cannot exist.
+    if (!isRunningOnPhone()) {
+      const driveRoot = this.configGet('DRIVE_ROOT', 'Claude');
+      const rcloneResult = await this.rclone(['lsd', `gdrive:${driveRoot}/Backup/`]);
+      if (rcloneResult.code === 0) return 'drive';
+    }
 
     // Check iCloud Drive (macOS/Windows folder exists with Claude backup)
     const icloudCandidates = [

@@ -2767,7 +2767,9 @@ export function installShim(): void {
       addBackend: (instance: any) => invoke('sync:add-backend', instance),
       removeBackend: (id: string) => invoke('sync:remove-backend', { id }),
       updateBackend: (id: string, updates: any) => invoke('sync:update-backend', { id, updates }),
-      pushBackend: (id: string) => invoke('sync:push-backend', { id }),
+      // WHY the same 10 minutes as force (backup fixes 2026-11-18): "Upload now" now copies conversations and project
+      // files too, which takes minutes; the 30-second default reported a false failure while it was still running.
+      pushBackend: (id: string) => invoke('sync:push-backend', { id }, { timeoutMs: 10 * 60_000 }),
       openFolder: (id: string) => invoke('sync:open-folder', { id }),
       // Guided setup wizard
       setup: {
@@ -2777,7 +2779,7 @@ export function installShim(): void {
         // OAuth waits on the user completing sign-in in a browser tab; Android
         // side has a 180s rclone wait, gh device flow can poll longer — give a
         // 4 min ceiling so the shim doesn't cut the kotlin timeout short.
-        authGdrive: () => invoke('sync:setup:auth-gdrive', undefined, { timeoutMs: 4 * 60_000 }),
+        authGdrive: (existingRemote?: string) => invoke('sync:setup:auth-gdrive', existingRemote ? { existingRemote } : undefined, { timeoutMs: 4 * 60_000 }),
         authGithub: () => invoke('sync:setup:auth-github', undefined, { timeoutMs: 4 * 60_000 }),
         createRepo: (repoName: string) => invoke('sync:setup:create-repo', { repoName }),
       },

@@ -1690,7 +1690,7 @@ contextBridge.exposeInMainWorld('claude', {
       checkPrereqs: (backend: string) => ipcRenderer.invoke('sync:setup:check-prereqs', { backend }),
       installRclone: () => ipcRenderer.invoke('sync:setup:install-rclone'),
       checkGdrive: () => ipcRenderer.invoke('sync:setup:check-gdrive'),
-      authGdrive: () => ipcRenderer.invoke('sync:setup:auth-gdrive'),
+      authGdrive: (existingRemote?: string) => ipcRenderer.invoke('sync:setup:auth-gdrive', existingRemote ? { existingRemote } : undefined),
       authGithub: () => ipcRenderer.invoke('sync:setup:auth-github'),
       createRepo: (repoName: string) => ipcRenderer.invoke('sync:setup:create-repo', { repoName }),
     },

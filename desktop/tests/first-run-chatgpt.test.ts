@@ -58,7 +58,7 @@ vi.mock('../src/main/prerequisite-installer', () => ({
 }));
 
 import {
-  FirstRunManager, CHATGPT_FIRST_RUN_TIMEOUT_MS, markSetupCompleted, setupIsUsable,
+  FirstRunManager, CHATGPT_FIRST_RUN_TIMEOUT_MS, markSetupCompleted, setupIsUsable, flushFirstRunWrites,
 } from '../src/main/first-run';
 import type { ChatGptSignInAuth } from '../src/main/first-run';
 import FirstRunView from '../src/renderer/components/FirstRunView';
@@ -170,6 +170,7 @@ describe('FirstRunManager.handleChatGptLogin', () => {
     expect(auth.signIn).toHaveBeenCalledWith({ timeoutMs: 300_000 });
     expect(CHATGPT_FIRST_RUN_TIMEOUT_MS).toBe(300_000);
     // The scratch home really is where state went — not Destin's ~/.claude.
+    await flushFirstRunWrites();
     expect(existsSync(join(SCRATCH_HOME, '.claude', 'toolkit-state', 'first-run-state.json'))).toBe(true);
   });
 
@@ -389,30 +390,34 @@ describe('setupIsUsable', () => {
 // ---------------------------------------------------------------------------
 
 describe('markSetupCompleted and isFirstRun', () => {
-  it('forceStep alone demotes a finished install back to first-run on the next launch', () => {
+  // WHY changed (backup fixes 2026-11-18): reaching COMPLETE now records setup_completed itself, so the
+  // launch-time "sign in again" nudge can no longer demote a finished install back into the wizard
+  // (this used to rely on one caller remembering to call markSetupCompleted first).
+  it('reaching COMPLETE keeps the next launch out of the wizard even after forceStep', async () => {
     const m = new FirstRunManager();
     m.skip(); // reaches COMPLETE, which is what a finished setup looks like
+    await flushFirstRunWrites();
     expect(FirstRunManager.isFirstRun()).toBe(false);
 
     m.forceStep('AUTHENTICATE'); // the launch-time "sign in again" nudge
-    // This is the bug the flag exists to stop: the wizard would re-run the
-    // Node/Git/Claude installers against a working install.
-    expect(FirstRunManager.isFirstRun()).toBe(true);
-  });
-
-  it('marking setup completed first keeps the next launch out of the wizard', () => {
-    const m = new FirstRunManager();
-    m.skip();
-    markSetupCompleted();
-    m.forceStep('AUTHENTICATE');
+    await flushFirstRunWrites();
     expect(FirstRunManager.isFirstRun()).toBe(false);
   });
 
-  it('merges into an existing config rather than replacing it', () => {
+  it('marking setup completed first keeps the next launch out of the wizard', async () => {
+    const m = new FirstRunManager();
+    m.skip();
+    await markSetupCompleted();
+    m.forceStep('AUTHENTICATE');
+    await flushFirstRunWrites();
+    expect(FirstRunManager.isFirstRun()).toBe(false);
+  });
+
+  it('merges into an existing config rather than replacing it', async () => {
     const configPath = join(SCRATCH_HOME, '.claude', 'toolkit-state', 'config.json');
     mkdirSync(join(SCRATCH_HOME, '.claude', 'toolkit-state'), { recursive: true });
     writeFileSync(configPath, JSON.stringify({ something_else: 'kept' }));
-    markSetupCompleted();
+    await markSetupCompleted();
     expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({
       something_else: 'kept', setup_completed: true,
     });
@@ -440,7 +445,8 @@ describe('YOUCODED_TOOLKIT_STATE_DIR', () => {
     const mod = await import('../src/main/first-run');
     const m = new mod.FirstRunManager();
     m.forceStep('AUTHENTICATE');
-    mod.markSetupCompleted();
+    await mod.markSetupCompleted();
+    await mod.flushFirstRunWrites();
 
     expect(existsSync(join(ENV_DIR, 'first-run-state.json'))).toBe(true);
     expect(existsSync(join(ENV_DIR, 'config.json'))).toBe(true);
@@ -453,6 +459,7 @@ describe('YOUCODED_TOOLKIT_STATE_DIR', () => {
     const mod = await import('../src/main/first-run');
     const m = new mod.FirstRunManager();
     m.forceStep('AUTHENTICATE');
+    await mod.flushFirstRunWrites();
 
     expect(existsSync(join(SCRATCH_HOME, '.claude', 'toolkit-state', 'first-run-state.json'))).toBe(true);
     expect(existsSync(join(ENV_DIR, 'first-run-state.json'))).toBe(false);

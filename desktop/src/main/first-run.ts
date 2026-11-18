@@ -31,6 +31,7 @@ import type { CuratedModel, DownloadProgress } from '../shared/model-manager-typ
 import { writeSetupDownload } from './first-run-local';
 import { noteMilestone } from './analytics-service';
 import { checkInternet } from './network-check';
+import { atomicWrite } from './atomic-write';
 
 /** The line under the sign-in buttons when the app's own check says there is no connection (card #236). */
 const OFFLINE_SIGN_IN_MESSAGE = 'No internet connection. Connect, then try again.';
@@ -99,6 +100,21 @@ const STATE_DIR = process.env.YOUCODED_TOOLKIT_STATE_DIR
 const STATE_FILE = path.join(STATE_DIR, 'first-run-state.json');
 const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
 
+// WHY one queue for both files (backup fixes 2026-11-18): the setup state and the settings file are written
+// from many places, several in a row. Each write goes through a temp file and a rename (a crash can no longer
+// leave a cut-off file that restarts setup on a working install), and this chain keeps them in the order they
+// were asked, so a slow older write can never land on top of a newer one.
+let firstRunWriteChain: Promise<void> = Promise.resolve();
+function queueFirstRunWrite(job: () => Promise<void>): Promise<void> {
+  const next = firstRunWriteChain.then(job, job);
+  firstRunWriteChain = next.catch(() => {});
+  return next;
+}
+/** Resolves once every write asked so far has finished (tests, and a clean quit). */
+export function flushFirstRunWrites(): Promise<void> {
+  return firstRunWriteChain;
+}
+
 /** The wizard's state folder — also where first-run-local keeps the record of
  *  the download setup finished on, so it follows the same dev-instance redirect. */
 export function firstRunStateDir(): string {
@@ -116,16 +132,40 @@ export function firstRunStateDir(): string {
  * must set this flag first, or the NEXT launch treats a months-old install as
  * a brand-new machine and re-runs the Node/Git/Claude installers.
  */
-export function markSetupCompleted(): void {
-  try {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    let config: Record<string, unknown> = {};
-    try { config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch { /* no config yet */ }
-    config.setup_completed = true;
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
-  } catch (err) {
-    log('WARN', 'first-run', 'Failed to mark setup completed', { error: String(err) });
-  }
+export function markSetupCompleted(): Promise<void> {
+  // WHY queued + atomic (backup fixes 2026-11-18): this file also holds the saved backup destinations
+  // (storage_backends). It was written with a plain writeFileSync, so a crash mid-write left a cut-off file,
+  // and a file that could not be PARSED was treated as "no config yet" and replaced by {setup_completed:true}
+  // — silently wiping every backup destination. Now: only a MISSING file means "empty"; any other read or
+  // parse failure leaves the file exactly as it is; the write goes through a temp file and a rename.
+  return queueFirstRunWrite(async () => {
+    try {
+      let config: Record<string, unknown> = {};
+      let raw: string | null = null;
+      try {
+        raw = await fs.promises.readFile(CONFIG_FILE, 'utf8');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+          log('WARN', 'first-run', 'Settings file unreadable — left untouched, setup_completed not written', { error: String(err) });
+          return;
+        }
+      }
+      if (raw !== null) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+          config = parsed;
+        } catch (err) {
+          log('WARN', 'first-run', 'Settings file damaged — left untouched, setup_completed not written', { error: String(err) });
+          return;
+        }
+      }
+      config.setup_completed = true;
+      await atomicWrite(CONFIG_FILE, JSON.stringify(config, null, 2));
+    } catch (err) {
+      log('WARN', 'first-run', 'Failed to mark setup completed', { error: String(err) });
+    }
+  });
 }
 
 /**
@@ -867,7 +907,12 @@ export class FirstRunManager extends EventEmitter {
   private advanceTo(step: FirstRunStep): void {
     this.state.currentStep = step;
     // Setup staircase (analytics deck U-2): sent once per fresh install, ever.
-    if (step === 'COMPLETE') noteMilestone('setup_done');
+    if (step === 'COMPLETE') {
+      noteMilestone('setup_done');
+      // WHY (backup fixes 2026-11-18): setup_completed was only ever written on one rare path, so a normal
+      // install relied on the state file alone; one damaged state file then re-ran setup on a working install.
+      void markSetupCompleted();
+    }
     this.saveState();
     this.emitState();
   }
@@ -928,14 +973,12 @@ export class FirstRunManager extends EventEmitter {
   }
 
   private saveState(): void {
-    try {
-      fs.mkdirSync(STATE_DIR, { recursive: true });
-      fs.writeFileSync(STATE_FILE, JSON.stringify(this.state, null, 2));
-    } catch (err) {
-      log('WARN', 'first-run', 'Failed to save state', {
-        error: String(err),
-      });
-    }
+    // The text is taken NOW (the state keeps changing); the write is queued so writes land in order.
+    const body = JSON.stringify(this.state, null, 2);
+    void queueFirstRunWrite(async () => {
+      try { await atomicWrite(STATE_FILE, body); }
+      catch (err) { log('WARN', 'first-run', 'Failed to save state', { error: String(err) }); }
+    });
   }
 
   private defaultState(): FirstRunState {

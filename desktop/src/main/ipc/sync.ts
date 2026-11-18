@@ -93,7 +93,7 @@ export const syncChannels: MainChannelDef[] = [
   defineChannel({ name: IPC.SYNC_SETUP_CHECK_PREREQS, kind: 'handle', handler: (p) => checkSyncPrereqs(p.backend) }),
   defineChannel({ name: IPC.SYNC_SETUP_INSTALL_RCLONE, kind: 'handle', handler: () => installRclone() }),
   defineChannel({ name: IPC.SYNC_SETUP_CHECK_GDRIVE, kind: 'handle', handler: () => checkGdriveRemote() }),
-  defineChannel({ name: IPC.SYNC_SETUP_AUTH_GDRIVE, kind: 'handle', handler: () => authGdrive() }),
+  defineChannel({ name: IPC.SYNC_SETUP_AUTH_GDRIVE, kind: 'handle', handler: (p) => authGdrive(p?.existingRemote) }),
   defineChannel({ name: IPC.SYNC_SETUP_AUTH_GITHUB, kind: 'handle', handler: () => authGithub() }),
   defineChannel({ name: IPC.SYNC_SETUP_CREATE_REPO, kind: 'handle', handler: (p) => createGithubRepo(p.repoName) }),
 ];

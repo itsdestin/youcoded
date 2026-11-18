@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -51,6 +51,32 @@ describe('automatic spaces backup targets', () => {
       { type: 'drive', base: 'gdrive:Claude' }, { type: 'drive', base: ':Claude' },
       { type: 'drive', base: 'gdrive:' }, { type: 'drive', base: ':' },
     ]);
+  });
+});
+
+// Backup fixes 2026-11-18 (item 2): a phone has no rclone, so its Drive entries must never be a target.
+describe('backup targets on a phone', () => {
+  afterEach(async () => { (await import('../src/main/backup-platform')).setRunningOnPhone(false); });
+  const mixed = [
+    backend('drive-a', 'drive', true, { rcloneRemote: 'personal', DRIVE_ROOT: 'My Files' }),
+    backend('icloud-a', 'icloud', true, { ICLOUD_PATH: '/fixtures/cloud-a' }),
+  ];
+
+  it('leaves Drive out on the phone\'s own backend and keeps it everywhere else', async () => {
+    const platform = await import('../src/main/backup-platform');
+    expect(await targets(mixed)).toHaveLength(2); // a computer (the default): both
+    platform.setRunningOnPhone(true);
+    expect(await targets(mixed)).toEqual([{ type: 'icloud', base: '/fixtures/cloud-a' }]);
+  });
+
+  it('targetForBackend builds one destination, including a paused one (a manual "Upload now")', async () => {
+    const { targetForBackend } = await import('../src/main/sync-spaces/backup-targets');
+    expect(targetForBackend(backend('d', 'drive', false, { rcloneRemote: 'w', DRIVE_ROOT: 'X' }))).toEqual({ type: 'drive', base: 'w:X' });
+    expect(targetForBackend(backend('i', 'icloud', false, { ICLOUD_PATH: '/p' }))).toEqual({ type: 'icloud', base: '/p' });
+    expect(targetForBackend(backend('g', 'github'))).toBeNull();
+    expect(targetForBackend(backend('i2', 'icloud', true, { ICLOUD_PATH: '' }))).toBeNull();
+    (await import('../src/main/backup-platform')).setRunningOnPhone(true);
+    expect(targetForBackend(backend('d', 'drive', true))).toBeNull();
   });
 });
 
@@ -129,9 +155,17 @@ describe('DailyBackup.runIfDue failure handling', () => {
     const old = path.join(base, 'Backup', 'spaces', '2020-01-01', 'project-a');
     fs.mkdirSync(old, { recursive: true });
     const good = mkSpace('good');
-    const bad: SyncSpace = { id: 'project:bad', kind: 'project', root: path.join(tmp, 'not-yet') };
+    const bad = mkSpace('bad');
     const markerPath = path.join(tmp, 'marker');
     const job = new DailyBackup({ markerPath });
+    // WHY an injected failure (backup fixes 2026-11-18, D-7): this used to make `bad` fail by pointing it
+    // at a folder that does not exist — but a missing folder is now skipped, not failed (see below).
+    const realCopy = (job as any).copySpace.bind(job);
+    let badFails = true;
+    vi.spyOn(job as any, 'copySpace').mockImplementation((async (sp: SyncSpace, ...rest: any[]) => {
+      if (sp.id === 'project:bad' && badFails) throw new Error('disk said no');
+      return realCopy(sp, ...rest);
+    }) as any);
     const logs: string[] = [];
     await job.runIfDue([good, bad], [{ type: 'icloud', base }], m => logs.push(m));
     // WHY: with no fresh snapshot, pruning would only shrink the recovery set.
@@ -139,7 +173,7 @@ describe('DailyBackup.runIfDue failure handling', () => {
     expect(fs.existsSync(markerPath)).toBe(false);
     expect(logs.some(m => m.includes('spaces-backup completed'))).toBe(false);
 
-    fs.mkdirSync(bad.root);
+    badFails = false;
     fs.writeFileSync(path.join(bad.root, 'notes.md'), 'bad');
     fs.writeFileSync(path.join(good.root, 'later.md'), 'x');
     await job.runIfDue([good, bad], [{ type: 'icloud', base }], m => logs.push(m));
@@ -148,6 +182,23 @@ describe('DailyBackup.runIfDue failure handling', () => {
     expect(fs.existsSync(path.join(day, 'project-good', 'later.md'))).toBe(false); // not redone
     expect(fs.readFileSync(markerPath, 'utf8')).toBe(today());
     expect(fs.existsSync(old)).toBe(false); // pruned once today's snapshot landed
+  });
+
+  // D-7: one space whose folder is gone used to block pruning and the day's marker for the whole destination.
+  it('a space whose folder is missing is skipped — the others still land, old snapshots prune, the day closes', async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'spaces-backup-'));
+    const base = path.join(tmp, 'icloud');
+    const old = path.join(base, 'Backup', 'spaces', '2020-01-01', 'project-a');
+    fs.mkdirSync(old, { recursive: true });
+    const good = mkSpace('good');
+    const gone: SyncSpace = { id: 'project:gone', kind: 'project', root: path.join(tmp, 'deleted-project') };
+    const markerPath = path.join(tmp, 'marker');
+    const logs: string[] = [];
+    await new DailyBackup({ markerPath }).runIfDue([good, gone], [{ type: 'icloud', base }], m => logs.push(m));
+    expect(fs.readFileSync(path.join(base, 'Backup', 'spaces', today(), 'project-good', 'notes.md'), 'utf8')).toBe('good');
+    expect(fs.readFileSync(markerPath, 'utf8')).toBe(today());
+    expect(fs.existsSync(old)).toBe(false);
+    expect(logs.some(m => m.includes('project:gone') && m.includes('missing'))).toBe(true);
   });
 
   it("one destination's success does not end another destination's retries", async () => {
@@ -185,5 +236,116 @@ describe('DailyBackup.runIfDue failure handling', () => {
 describe('foldersToPrune keeps the newest snapshot', () => {
   it('never returns the newest dated folder, however old', () => {
     expect(foldersToPrune(['2020-01-01', '2020-02-01'], new Date('2026-07-03T00:00:00Z'), 30)).toEqual(['2020-01-01']);
+  });
+});
+
+// "Back up now" must copy conversations and project files too (backup fixes 2026-11-18, item 3).
+describe('DailyBackup.runNow', () => {
+  let tmp: string;
+  afterEach(() => { vi.restoreAllMocks(); if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const today = () => datedFolderName(new Date());
+  const setup = () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'spaces-backup-now-'));
+    const root = path.join(tmp, 'space');
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'notes.md'), 'v1');
+    const space: SyncSpace = { id: 'project:demo', kind: 'project', root };
+    return { space, root, base: path.join(tmp, 'icloud'), markerPath: path.join(tmp, 'marker') };
+  };
+
+  it('copies even though today\'s marker says the day is done, and leaves the marker alone', async () => {
+    const { space, root, base, markerPath } = setup();
+    fs.writeFileSync(markerPath, today()); // the daily timer already finished today
+    const job = new DailyBackup({ markerPath });
+    await job.runIfDue([space], [{ type: 'icloud', base }], () => {});
+    expect(fs.existsSync(path.join(base, 'Backup'))).toBe(false); // the timer correctly did nothing
+    const res = await job.runNow([space], [{ type: 'icloud', base }], () => {});
+    expect(res).toEqual({ ok: true, failures: [] });
+    expect(fs.readFileSync(path.join(base, 'Backup', 'spaces', today(), 'project-demo', 'notes.md'), 'utf8')).toBe('v1');
+    expect(fs.readFileSync(markerPath, 'utf8')).toBe(today()); // unchanged value, not rewritten by runNow
+  });
+
+  it('picks up changes made since an earlier run the same day', async () => {
+    const { space, root, base, markerPath } = setup();
+    const job = new DailyBackup({ markerPath });
+    await job.runNow([space], [{ type: 'icloud', base }], () => {});
+    await new Promise(r => setTimeout(r, 20)); // a later mtime than the first copy
+    fs.writeFileSync(path.join(root, 'notes.md'), 'v2');
+    fs.writeFileSync(path.join(root, 'added.md'), 'new');
+    await job.runNow([space], [{ type: 'icloud', base }], () => {});
+    const dest = path.join(base, 'Backup', 'spaces', today(), 'project-demo');
+    expect(fs.readFileSync(path.join(dest, 'added.md'), 'utf8')).toBe('new');
+  });
+
+  it('does NOT close the day: with no marker before, there is still none after (one destination must not close it for the rest)', async () => {
+    const { space, base, markerPath } = setup();
+    const job = new DailyBackup({ markerPath });
+    await job.runNow([space], [{ type: 'icloud', base }], () => {});
+    expect(fs.existsSync(markerPath)).toBe(false);
+    // ...and the next hourly check only has to finish the day (nothing is copied again).
+    const copy = vi.spyOn(job as any, 'copySpace');
+    await job.runIfDue([space], [{ type: 'icloud', base }], () => {});
+    expect(copy).not.toHaveBeenCalled();
+    expect(fs.readFileSync(markerPath, 'utf8')).toBe(today());
+  });
+
+  it('uses the destinations it is given, so a paused one the person asked for by name is included', async () => {
+    const { space, base, markerPath } = setup();
+    // The timer's own list (loadSpaceBackupTargets) leaves paused destinations out; runNow takes what it is handed.
+    await new DailyBackup({ markerPath }).runNow([space], [{ type: 'icloud', base }], () => {});
+    expect(fs.existsSync(path.join(base, 'Backup', 'spaces', today(), 'project-demo', 'notes.md'))).toBe(true);
+  });
+
+  it('reports a failed copy with the tool\'s own words, and does not prune on it', async () => {
+    const { space, base, markerPath } = setup();
+    const old = path.join(base, 'Backup', 'spaces', '2020-01-01', 'project-a');
+    fs.mkdirSync(old, { recursive: true });
+    const job = new DailyBackup({ markerPath });
+    vi.spyOn(job as any, 'copySpace').mockRejectedValue(Object.assign(new Error('x'), { stderr: 'token expired' }));
+    const res = await job.runNow([space], [{ type: 'icloud', base }], () => {});
+    expect(res.ok).toBe(false);
+    expect(res.failures).toEqual([{ target: { type: 'icloud', base }, message: 'token expired' }]);
+    expect(fs.existsSync(old)).toBe(true);
+  });
+
+  it('never overlaps itself or the hourly timer: a second run waits, a duplicate tap joins, the timer skips', async () => {
+    const { space, base, markerPath } = setup();
+    const job = new DailyBackup({ markerPath });
+    let inFlight = 0; let maxInFlight = 0; let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    vi.spyOn(job as any, 'copySpace').mockImplementation(async () => {
+      calls++; inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      await gate; inFlight--;
+    });
+    const target = { type: 'icloud' as const, base };
+    const first = job.runNow([space], [target], () => {});
+    const duplicate = job.runNow([space], [target], () => {});          // same button tapped again
+    const other = job.runNow([space], [{ type: 'icloud', base: base + '2' }], () => {}); // a different destination
+    const logs: string[] = [];
+    await job.runIfDue([space], [target], m => logs.push(m));            // the hourly timer fires meanwhile
+    expect(logs.some(m => m.includes('already running'))).toBe(true);
+    release();
+    await Promise.all([first, duplicate, other]);
+    expect(maxInFlight).toBe(1);
+    expect(calls).toBe(2); // the duplicate joined the first run instead of copying again
+  });
+
+  it('the hourly timer cannot start a second copy on top of itself either', async () => {
+    const { space, base, markerPath } = setup();
+    const job = new DailyBackup({ markerPath });
+    let inFlight = 0; let maxInFlight = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    vi.spyOn(job as any, 'copySpace').mockImplementation(async () => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight); await gate; inFlight--;
+    });
+    const t = [{ type: 'icloud' as const, base }];
+    const a = job.runIfDue([space], t, () => {});
+    const b = job.runIfDue([space], t, () => {});
+    await new Promise(r => setTimeout(r, 10));
+    release();
+    await Promise.all([a, b]);
+    expect(maxInFlight).toBe(1);
   });
 });
