@@ -58,13 +58,24 @@ function ipcAliases(sf: ts.SourceFile): { names: Set<string>; props: Set<string>
   return { names, props };
 }
 
+// WHY one parse per file: both scanners below read every file of desktop/src/main, and parsing is nearly all of the scan's cost.
+// Parsing each file twice made the beforeAll scan time out (over 90 s) once with the machine at load ~80 (2026-11-15); the
+// last parse is reused when the same file and text come straight back.
+let lastParse: { file: string; text: string; sf: ts.SourceFile } | null = null;
+function parse(file: string, text: string): ts.SourceFile {
+  if (lastParse && lastParse.file === file && lastParse.text === text) return lastParse.sf;
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  lastParse = { file, text, sf };
+  return sf;
+}
+
 const REGISTERING = new Set(['handle', 'handleOnce', 'on', 'once', 'addListener', 'prependListener', 'prependOnceListener']);
 
 /** Every way of registering an Electron IPC listener, as `channel expression`: the five direct methods on ipcMain or any alias of it,
  *  `ipcMain['handle'](...)`, a registering method pulled off by destructuring or assignment (`const { handle } = ipcMain`, `const h = ipcMain.handle`). */
 export function scanIpcRegistrations(file: string, text: string): string[] {
   if (!/ipc|IpcMain/i.test(text)) return [];
-  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const sf = parse(file, text);
   const aliases = ipcAliases(sf);
   const isIpc = (e: ts.Expression): boolean => (ts.isIdentifier(e) && aliases.names.has(e.text))
     || (ts.isPropertyAccessExpression(e) && (e.name.text === 'ipcMain' || aliases.props.has(e.name.text)))
@@ -115,7 +126,7 @@ function channelShapedLabel(e: ts.Expression, ctx: { strings: Map<string, string
  *  or `case CH:` there cannot hide a channel behind a constant. */
 export function scanChannelCases(file: string, text: string, strict = false): string[] {
   if (!/\bcase\b/.test(text)) return [];
-  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const sf = parse(file, text);
   const ctx = { strings: new Map<string, string>(), imported: new Set<string>() };
   const collect = (n: ts.Node) => {
     if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && ts.isStringLiteralLike(n.initializer)) ctx.strings.set(n.name.text, n.initializer.text);

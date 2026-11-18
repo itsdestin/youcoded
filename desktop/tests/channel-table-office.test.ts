@@ -8,10 +8,10 @@ const office = CHANNEL_TABLE.filter((d) => d.name.startsWith('office:'));
 const ctx = (extra: any = {}): any => ({ door: 'desktop', runtime: null, broadcast: vi.fn(), sender: { id: 7 }, ...extra });
 
 describe('the office:* channels', () => {
-  it('are the fifteen Office channels, all computer-only; a phone is refused before any handler runs', async () => {
+  it('are the eighteen Office channels, all computer-only; a phone is refused before any handler runs', async () => {
     expect(office.map((d) => d.name).sort()).toEqual([
-      'office:close', 'office:comments-answer', 'office:comments-changed', 'office:create', 'office:dismiss', 'office:invoke',
-      'office:journal-done', 'office:open', 'office:other-unsaved', 'office:pick', 'office:proceed', 'office:restore',
+      'office:close', 'office:comments-answer', 'office:comments-changed', 'office:create', 'office:dismiss', 'office:duplicate', 'office:forget-recent', 'office:invoke',
+      'office:journal-done', 'office:open', 'office:other-unsaved', 'office:pick', 'office:proceed', 'office:rename', 'office:restore',
       'office:save-copy', 'office:status', 'office:versions',
     ]);
     expect(office.every((d) => d.desktopOnly)).toBe(true);
@@ -27,7 +27,9 @@ describe('the office:* channels', () => {
     expect(await findChannel('office:restore')!.handler({ path: '/a.docx', versionId: 'v1' }, ctx())).toEqual({ ok: true });
     officeIpc.removeHandler('office:save-copy'); officeIpc.handle('office:save-copy', (e, ...args) => { seen.push([e.sender.id, ...args]); return { ok: true, possible: true }; });
     await findChannel('office:save-copy')!.handler({ token: 't', mode: 'check', data: undefined }, ctx());
-    expect(seen).toEqual([[7, '/a.docx', 'v1'], [7, 't', 'check', undefined]]);
+    officeIpc.removeHandler('office:rename'); officeIpc.handle('office:rename', (e, ...args) => { seen.push([e.sender.id, ...args]); return { ok: true }; });
+    await findChannel('office:rename')!.handler({ path: '/a.docx', newName: 'b.docx' }, ctx());
+    expect(seen).toEqual([[7, '/a.docx', 'v1'], [7, 't', 'check', undefined], [7, '/a.docx', 'b.docx']]);
   });
 
   it('a request before Office registered answers with an error, as an unregistered ipcMain.handle did', async () => {

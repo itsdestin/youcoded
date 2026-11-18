@@ -141,6 +141,20 @@ describe('InputBar — context-menu image paste', () => {
     expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
   });
 
+  // A clipboard as the browser hands it to a paste event: the listed items plus getData by type.
+  const clipboard = (types: string[], data: Record<string, string> = {}) => ({
+    items: types.map((type) => ({ type, kind: type.startsWith('image/') ? 'file' : 'string' })),
+    getData: (type: string) => data[type] ?? '',
+  });
+
+  it('Ctrl+V of a browser "Copy image" (picture plus an <img> snippet) attaches the picture', async () => {
+    saveClipboardImage.mockResolvedValue('/tmp/chrome-copy.png');
+    const box = renderComposer();
+    fireEvent.paste(box, { clipboardData: clipboard(['text/html', 'image/png'], { 'text/html': '<meta charset="utf-8"><img src="https://example.com/cat.png" alt="cat">' }) });
+    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'Remove chrome-copy.png' })).toBeInTheDocument();
+  });
+
   it('keeps text precedence through the real composer menu and never invokes the image bridge', async () => {
     const readText = vi.fn().mockResolvedValue('pasted words');
     Object.defineProperty(navigator, 'clipboard', { value: { readText }, configurable: true });

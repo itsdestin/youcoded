@@ -185,6 +185,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // Office (built in): home beside the panel; documents as a pinned button opens them.
   useScreenOpen('office/home', () => dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID }));
   useScreenOpen('office/first-run', () => dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID }));
+  // Home with its first file's Rename popup open (the URL's officeHome=rename does the opening).
+  useScreenOpen('office/rename', () => dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID }));
   useScreenOpen('office/document', () => { void previewOfficeTabs(0); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   useScreenOpen('office/spreadsheet', () => { void previewOfficeTabs(1); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   // WHY: the third editor (slides) needs its own picture too — the look is per editor.

@@ -1185,6 +1185,7 @@ describe('office:* channel parity', () => {
   const channels = [
     'office:status', 'office:create', 'office:pick', 'office:open',
     'office:invoke', 'office:close', 'office:versions', 'office:restore', 'office:save-copy',
+    'office:rename', 'office:duplicate', 'office:forget-recent',
     // main → renderer push after a restore (desktop sends it; the other hosts never do).
     'office:changed',
   ];

@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, renderHook, waitFor } from '@testing-l
 import { OfficeView } from '../../src/renderer/components/office/OfficeView';
 import { officeHeaderAction, useOfficeHeaderAction } from '../../src/renderer/components/office/use-office-edit-screen';
 import { resetOfficeAvailabilityForTests, useOfficeAvailable } from '../../src/renderer/components/office/office-availability';
-import { markFailed, openDoc, resetOfficeStoreForTests } from '../../src/renderer/components/office/office-store';
+import { HOME_TAB, markFailed, openDoc, resetOfficeStoreForTests, selectTab } from '../../src/renderer/components/office/office-store';
 import { usePages } from '../../src/renderer/components/pages/use-pages';
 import { ActiveArtifactView, type ActiveArtifactHandle } from '../../src/renderer/components/artifact-views/ActiveArtifactView';
 import { OFFICE_PAGE_SUMMARY } from '../../src/shared/pages-types';
@@ -66,6 +66,25 @@ describe('the Office page', () => {
     expect(status).toHaveBeenCalledTimes(2);
   });
 
+  it('asks for Recent again when the Home tab comes back from a document tab', async () => {
+    const status = vi.fn(async () => READY);
+    withOffice({
+      status,
+      open: async () => ({ ok: true as const, token: 't1', origin: 'office://t1' }),
+      invoke: async () => null,
+      close: async () => {},
+    });
+    const { findByText } = render(<OfficeView visible />);
+    await findByText('Files you open in Office will show up here.');
+    expect(status).toHaveBeenCalledTimes(1);
+    // The page never hides here — only its tab changes — so `visible` alone would miss this.
+    act(() => openDoc(FILE));
+    status.mockResolvedValueOnce({ ...READY, recent: [FILE] });
+    act(() => selectTab(HOME_TAB));
+    expect(await findByText('plan')).toBeTruthy();
+    expect(status).toHaveBeenCalledTimes(2);
+  });
+
   it('shows New and Open at once, and Recent without waiting for a slow project list', async () => {
     let answerRecent!: (s: OfficeStatus) => void;
     let answerProject!: (s: OfficeStatus) => void;
@@ -75,7 +94,7 @@ describe('the Office page', () => {
     const { findByText, getByText, queryByText } = render(<OfficeView projectRoot="/home/you/Projects/garden" />);
     // Nothing has answered yet: New and Open are already there.
     expect(getByText('Document')).toBeTruthy();
-    expect(getByText('Open a file…')).toBeTruthy();
+    expect(getByText('Browse files')).toBeTruthy();
     act(() => answerRecent({ ...READY, recent: [FILE] }));
     expect(await findByText('plan.docx')).toBeTruthy();
     expect(queryByText('In garden')).toBeNull();
@@ -140,7 +159,7 @@ describe('the Office page', () => {
     withOffice({ status: async () => READY, pick: async () => { throw new Error('no window'); } });
     const { findByText, getByText, getByRole } = render(<OfficeView />);
     await findByText('Files you open in Office will show up here.');
-    fireEvent.click(getByText('Open a file…'));
+    fireEvent.click(getByText('Browse files'));
     expect(await findByText("Office couldn't open the file picker.")).toBeTruthy();
     expect(getByRole('button', { name: /try again/i })).toBeTruthy();
     quiet.mockRestore();

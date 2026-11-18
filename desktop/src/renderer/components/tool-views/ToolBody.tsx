@@ -36,6 +36,7 @@ import { SpecialistActions } from '../specialists/SpecialistActions';
 import { RunStatusLine } from '../specialists/RunStatusLine';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../../shared/send-user-link';
 import { shellEndKind, shellFacts, specialistFacts } from '../../state/native-run-facts';
+import { whenEditsSaved } from '../artifact-views/dirty-editor-guard';
 
 // Parsed views for expanded tool cards. One dispatcher + inline view functions;
 // splitting per-file only becomes worthwhile if a single view grows past ~80
@@ -177,7 +178,8 @@ function ToolFilePreview({ fp, sessionId, chips }: { fp: string; sessionId?: str
   const open = () => {
     if (!sessionId) return; // per-session drawer needs a session to scope to
     artifactDispatch?.({ type: 'DRAWER_OPENED', sessionId });
-    artifactDispatch?.({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: artifact.id });
+    // An Office edit open in the panel saves first, so switching never drops its newest typing.
+    whenEditsSaved(() => artifactDispatch?.({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: artifact.id }));
   };
 
   return (

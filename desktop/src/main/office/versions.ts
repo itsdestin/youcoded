@@ -23,7 +23,7 @@ import { CAS_REPLACE_ANY, casWrite, renameReplacing, type CasExpectation } from 
 import { noteOwnWrite } from '../artifacts/project-watcher';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
-import { finishCopy, SAVE_DIR_MARK, sweepStaleSaveDirsSoon } from './office-commands';
+import { finishCopy, saveDirPrefix, sweepStaleSaveDirsSoon } from './office-commands';
 
 // ── The owner's pruning rules, "tiered-30" (R11) ──
 const KEEP_ALL_MS = 24 * 60 * 60 * 1000;
@@ -328,7 +328,7 @@ async function writeBack(target: string, bytes: Buffer): Promise<void> {
   // such leftover over an hour old beside this file now. Started, never awaited, errors swallowed
   // (office-commands.ts sweepStaleSaveDirsSoon), so it can neither slow nor fail the restore.
   sweepStaleSaveDirsSoon(path.dirname(target), base);
-  const priv = await fsp.mkdtemp(path.join(path.dirname(target), `.${base}${SAVE_DIR_MARK}`));
+  const priv = await fsp.mkdtemp(path.join(path.dirname(target), saveDirPrefix(base)));
   try {
     const tmp = path.join(priv, base);
     await fsp.writeFile(tmp, bytes);
@@ -352,7 +352,8 @@ export async function pruneAll(userData: string, now: Date = new Date(), maxTota
   const names = await fsp.readdir(base).catch(() => [] as string[]);
   const perDir: { dir: string; filePath: string; versions: Entry[] }[] = [];
   for (const name of names) {
-    if (!/^[0-9a-f]{40}$/.test(name)) continue;
+    // WHY `.stale-` too: histories set aside by a rename (moveVersions) are tidied and finally removed like any other.
+    if (!/^[0-9a-f]{40}(\.stale-\d+)?$/.test(name)) continue;
     const dir = path.join(base, name);
     try {
       const kept = await locked(dir, async () => {
@@ -423,5 +424,44 @@ async function sweepStrays(dir: string): Promise<void> {
     const full = path.join(dir, name);
     const st = await fsp.stat(full).catch(() => null);
     if (st && now - st.mtimeMs > STRAY_AGE_MS) await fsp.rm(full, { force: true }).catch(() => {});
+  }
+}
+
+/**
+ * A file was renamed in the app: its kept versions follow it. The folder is keyed on the path, so
+ * it is moved to the new path's key and the index's recorded path is updated.
+ * WHY best-effort and never an error: the rename has already happened and must not be reported as
+ * failed because history could not follow. If the new key already has a folder (the new name had
+ * history of its own) nothing is merged and the old history stays where it is, unreachable but safe.
+ * Returns true when the history moved.
+ */
+export async function moveVersions(userData: string, oldPath: string, newPath: string): Promise<boolean> {
+  const from = versionsDir(userData, oldPath);
+  const to = versionsDir(userData, newPath);
+  if (from === to) return false;
+  try {
+    return await locked(from, () => locked(to, async () => {
+      if (!(await fsp.stat(from).then(() => true, () => false))) return false;
+      // WHY set aside, not skipped and not merged: a folder already at the new key is the history of
+      // some OTHER file that once had this name (deleted since). Handing its stale versions to the
+      // renamed file would be wrong, and leaving the renamed file's own history stranded under the
+      // old key would lose it. The stale folder is only renamed (never deleted here); pruneAll
+      // recognises `.stale-` folders and ages them out by the normal rules.
+      const aside = `${to}.stale-${Date.now()}`;
+      const hadTarget = await fsp.stat(to).then(() => true, () => false);
+      if (hadTarget) await fsp.rename(to, aside);
+      try {
+        await fsp.rename(from, to);
+      } catch (e) {
+        if (hadTarget) await fsp.rename(aside, to).catch(() => {});
+        throw e;
+      }
+      // The index's `path` is for a person looking at the folder; keep it truthful.
+      await updateIndex(to, newPath, (list) => list);
+      return true;
+    }));
+  } catch (e) {
+    log('WARN', 'Office', 'kept versions could not follow a rename', { error: String((e as Error)?.name), code: (e as NodeJS.ErrnoException)?.code ?? null });
+    return false;
   }
 }

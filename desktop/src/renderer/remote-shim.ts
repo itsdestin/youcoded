@@ -32,6 +32,7 @@ import { rememberLastComputer, forgetLastComputer } from './last-computer';
 import type { FirstRunState } from '../shared/first-run-types';
 import { createRemotePagesBridge } from './remote-pages-bridge';
 import { withStartSize } from './components/terminal-hidden-size';
+import { computerAnswers, PHONE_COMPUTER_TOO_OLD, PHONE_COMPUTER_UNREACHABLE } from './computer-answers';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
 interface MarketplaceUser {
@@ -1617,14 +1618,13 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         // completed the TCP/HTTP-upgrade handshake — on Android that's usually
         // the cleartext-traffic policy or a wrong host/port/firewall.
         let message: string;
+        if (!didOpen && isAndroidAppPage() && !localBridge) {
+          // WHY a check first (Destin, 2026-11-18, wording deck W-1): an out-of-date computer refuses the phone app's
+          // page and looks unreachable to the socket; one that answers a web request is there, just too old.
+          void computerAnswers(url).then((a) => reject(signInError(a ? PHONE_COMPUTER_TOO_OLD : PHONE_COMPUTER_UNREACHABLE, { kind: 'unreachable' }))); return;
+        }
         if (!didOpen) {
-          // WHY two wordings (Destin, 2026-11-10, his Flip against a computer on 1.3.3): the phone app got a technical address
-          // and "host, port, network (VPN/firewall)" when the real cause was an out-of-date computer app, which refuses the
-          // phone app's page address — and the phone cannot tell that from "unreachable". So the phone app names every cause
-          // it cannot rule out, in plain words, the update first; the address is on the saved computer's row just below.
-          message = isAndroidAppPage() && !localBridge
-            ? 'Couldn’t connect to your computer. Make sure YouCoded on it is up to date and open, and that Tailscale is on for both devices.'
-            : `Cannot reach host at ${url}. Check the host, port, and network (VPN/firewall).`;
+          message = `Cannot reach host at ${url}. Check the host, port, and network (VPN/firewall).`;
         } else if (code === 4029) {
           message = 'Too many failed attempts. Wait a minute and try again.';
         } else if (code === 4000) {
@@ -3017,6 +3017,10 @@ export function installShim(): void {
       restore: (filePath: string, versionId: string) => invoke('office:restore', { path: filePath, versionId }),
       onChanged: (cb: (p: { path: string; token: string }) => void) => { const h: Callback = (p: any) => cb(p); addListener('office:changed', h); return () => removeListener('office:changed', h); },
       saveCopy: (token: string, mode: string, data?: string) => invoke('office:save-copy', { token, mode, data }),
+      // Office Home's row actions (card #143): refused like the rest.
+      rename: (filePath: string, newName: string) => invoke('office:rename', { path: filePath, newName }),
+      duplicate: (filePath: string) => invoke('office:duplicate', { path: filePath }),
+      forgetRecent: (filePath: string) => invoke('office:forget-recent', { path: filePath }),
     },
     // Project View IPC — sibling to artifacts. Object-payload invoke style
     // mirrors the artifacts namespace above; the literal 'project:*' channel

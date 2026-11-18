@@ -39,6 +39,12 @@ const ANSI = /\x1b\[[0-9;?]*[a-zA-Z]/g;
  *  code blocks and pop-up bodies are indented, so they never match. */
 // 10, not more: a phone-width terminal draws a short box (review F11).
 const EDGE = /^[─━]{10,}\s*$/;
+/** The same box edge when the draft is too tall for the box: Claude Code writes how many lines are scrolled away into
+ *  it, `─── ↑ 5 more ───…`, `─── ↓ 2 more ───…` or both joined by ` · ` (cc-dependencies.md, "the message-box shape").
+ *  WHY (2026-11-17, a long first message stuck "Paused"): a new chat's hidden terminal is 80×24, where ~230+ characters
+ *  overflow the box; the labelled edges failed EDGE, so the live box read as a pop-up and the queue never pressed Enter. */
+const MORE_EDGE = /^[─━]+ [↑↓] \d+ more(?: · ↓ \d+ more)? [─━]{10,}\s*$/;
+const isEdge = (row: string) => EDGE.test(row) || MORE_EDGE.test(row);
 
 /** The first row inside the message box: Unicode/ASCII prompt, or bash mode's "!".
  * WHY: a Windows desktop launch without a Unicode-terminal environment draws
@@ -69,11 +75,12 @@ function rowsOf(screen: string): string[] {
  */
 function boxAt(rows: string[]): number {
   let last = -1;
-  for (let i = rows.length - 1; i >= 0; i--) if (EDGE.test(rows[i])) { last = i; break; }
+  for (let i = rows.length - 1; i >= 0; i--) if (isEdge(rows[i])) { last = i; break; }
   if (last < 0) return -1;
   // A tall multi-line draft sits between the rules — look well up (F11).
   for (let i = last - 1; i >= Math.max(0, last - 200); i--) {
-    if (EDGE.test(rows[i])) return i + 1 < last && INPUT_ROW.test(rows[i + 1]) ? last : -1;
+    // An "↑ N more" top edge has scrolled the input row away; it is still the box (MORE_EDGE — why).
+    if (isEdge(rows[i])) return i + 1 < last && (INPUT_ROW.test(rows[i + 1]) || rows[i].includes('↑')) ? last : -1;
   }
   return -1;
 }

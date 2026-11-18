@@ -19,13 +19,14 @@ import { log } from '../logger';
 import { saveEditorSettings } from './editor-settings';
 import { createOfficeCommands, OFFICE_COMMANDS } from './office-commands';
 import { grantPicked } from './office-pictures';
-import { discardRecoveryFor, keepRecoveryIn, offerRecovery, pruneRecovery } from './office-recovery';
+import { discardRecoveryFor, keepRecoveryIn, moveRecovery, offerRecovery, pruneRecovery } from './office-recovery';
 import type { createSessions, OfficeSession } from './office-sessions';
 import type { PrintOutcome } from './office-print';
 import { formatFor } from './x2t';
 import * as versions from './versions';
 import { createPruneScheduler, type PruneScheduler } from './prune-schedule';
 import * as recent from './recent';
+import { copyBeside, nameProblem, NameTaken, renameNoClobber } from './office-file-ops';
 import { answerBy, blankName, createBlank, describeFile, isOfficeKind, kindFor, startWalk, type ProjectWalk, type WalkOptions } from './office-home';
 
 type Sessions = ReturnType<typeof createSessions>;
@@ -42,6 +43,9 @@ const CHANNELS = [
   'office:versions',
   'office:restore',
   'office:save-copy',
+  'office:rename',
+  'office:duplicate',
+  'office:forget-recent',
 ] as const;
 
 // WHY a local literal, not imported: office-protocol.ts keeps its scheme constant private on
@@ -71,6 +75,18 @@ const MSG = {
   folderGone: "This file's folder no longer exists.",
   stillSaving: 'This file is still being saved. Try again in a moment.',
   couldNotRestore: "Office couldn't restore this version.",
+  // Office Home's row actions (card #143). Specific causes only where the cause is certain.
+  renameOpen: 'Close this file in Office first, then rename it.',
+  nameTaken: 'A file with that name is already in this folder.',
+  cantFind: "Office can't find this file.",
+  renamePermission: "Office doesn't have permission to rename this file.",
+  renameReadOnly: "This file is on a read-only disk, so Office couldn't rename it.",
+  couldNotRename: "Office couldn't rename this file.",
+  copyPermission: "Office doesn't have permission to make a copy of this file.",
+  copyReadOnly: "This file is on a read-only disk, so Office couldn't make a copy of it.",
+  copyDiskFull: "The disk is full, so Office couldn't make a copy of this file.",
+  couldNotCopyFile: "Office couldn't make a copy of this file.",
+  tooManyCopies: 'This file already has a lot of copies in this folder. Rename or remove some first.',
   // Print (finish plan Task 3).
   printing: 'Office is already printing a document. Finish or cancel that first.',
   noPrinter: "Office couldn't find a printer on this computer.",
@@ -439,7 +455,7 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
 
   // The answer's second half: write the copy where the dialog said. Answers the chosen file's
   // name and its folder's name for YouCoded's own note (EditorFrame keeps them from the frame).
-  async function saveFileAs(reg: Sessions, s: OfficeSession, a: Record<string, unknown>): Promise<{ name: string; folder: string }> {
+  async function saveFileAs(reg: Sessions, s: OfficeSession, a: Record<string, unknown>): Promise<{ name: string; folder: string; file?: OfficeFile }> {
     const handle = a.path;
     const target = typeof handle === 'string' && SAVE_HANDLE.test(handle) ? saveTargets.get(s)?.get(handle) : undefined;
     if (!target) throw new Error(MSG.refused);
@@ -447,7 +463,13 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
     saveTargets.get(s)?.delete(handle as string);
     // The editor's export choices go along; main checks them before x2t sees any (exportParams).
     await commandsFor(reg).saveAs(s.token, target, { text: a.text, json: a.json });
-    return { name: path.basename(target), folder: path.basename(path.dirname(target)) };
+    // WHY `file` (Destin, 2026-11-14: Save As "leaving me on the old version with no indication
+    // is super broken"; chose the Google Docs way): a copy Office can edit (.docx/.xlsx/.pptx)
+    // opens in a new tab beside the original, so the renderer needs the file to open. A PDF or
+    // other export has no `file` and stays a note. The renderer never forwards it to the frame.
+    const kind = kindFor(target);
+    const file = kind ? describeFile(target, kind, new Date()) : undefined;
+    return { name: path.basename(target), folder: path.basename(path.dirname(target)), ...(file ? { file } : {}) };
   }
 
   // ── Print (finish plan Task 3) ──
@@ -630,6 +652,161 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
     }
     return r;
   }
+
+
+  // ── Office Home's row actions: Rename, Make a copy, Remove from Recent (card #143) ──
+
+  /** A refusal carrying the sentence to show (thrown inside the copy so it unwinds cleanly). */
+  class Refused extends Error {}
+
+  /** The real path of `p` and whether Office may change it (same boundary as open/restore). */
+  async function authorizeChange(p: string): Promise<{ ok: true; realPath: string } | { ok: false; message: string; missing?: boolean }> {
+    const auth = await authorizeArtifactWrite({ projectRoot: path.dirname(p), fullPath: p, mustStayInRoot: false });
+    if (auth.ok) return { ok: true, realPath: auth.realPath };
+    if (auth.error === 'protected-path') return { ok: false, message: MSG.changeProtected };
+    if (auth.error === 'needs-confirm') return { ok: false, message: MSG.changeNeedsConfirm };
+    return { ok: false, message: MSG.folderGone, missing: true };
+  }
+
+  /** Plain sentence for an fs failure. WHY the cause is only named when certain: the rest is
+   *  logged (kind and code, never the path) and the person gets the general sentence. */
+  function fsSentence(e: unknown, what: 'rename' | 'copy'): string {
+    if (e instanceof Refused) return e.message;
+    const code = (e as NodeJS.ErrnoException)?.code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return MSG.cantFind;
+    if (code === 'EACCES' || code === 'EPERM') return what === 'rename' ? MSG.renamePermission : MSG.copyPermission;
+    if (code === 'EROFS') return what === 'rename' ? MSG.renameReadOnly : MSG.copyReadOnly;
+    if (code === 'ENOSPC' && what === 'copy') return MSG.copyDiskFull;
+    log('ERROR', 'Office', `office:${what === 'rename' ? 'rename' : 'duplicate'} failed`, errorKind(e));
+    return what === 'rename' ? MSG.couldNotRename : MSG.couldNotCopyFile;
+  }
+
+  /** The file as Home lists it, dated by when it last changed. */
+  async function describeNow(real: string): Promise<OfficeFile> {
+    const info = await fsp.stat(real);
+    return describeFile(real, kindFor(real) ?? 'document', info.mtime);
+  }
+
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  /** The path Home's row means: the file itself, or — when the row is a symbolic link — the link,
+   *  with its folder resolved (so it compares with real paths). WHY (the owner's decision: the
+   *  person renames what they see): a link `~/Docs/report.docx` to `~/Dropbox/q3.docx` is renamed
+   *  or copied as `report.docx`; the Dropbox file keeps its name and the link keeps working. */
+  async function rowPath(given: string, realTarget: string): Promise<{ at: string; isLink: boolean }> {
+    const isLink = await fsp.lstat(given).then((i) => i.isSymbolicLink(), () => false);
+    if (!isLink) return { at: realTarget, isLink };
+    return { at: path.join(await fsp.realpath(path.dirname(given)), path.basename(given)), isLink };
+  }
+
+  async function renameFile(filePath: unknown, newName: unknown): Promise<{ ok: true; file: OfficeFile } | { ok: false; message: string }> {
+    const reg = await isReady();
+    if (!reg) return { ok: false, message: MSG.unavailable };
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return { ok: false, message: MSG.couldNotRename };
+    try {
+      const old = await authorizeChange(filePath);
+      if (!old.ok) return { ok: false, message: old.missing ? MSG.cantFind : old.message };
+      const realOld = old.realPath;
+      // WHY the kind is checked: Home only lists Office files, but the channel is callable with any
+      // path, and Rename must not become a way to rename arbitrary files. Same refusal as a copy.
+      if (!(await fsp.stat(realOld)).isFile() || kindFor(realOld) === null) return { ok: false, message: MSG.cantFind };
+      // `shown` is what the row is called: the link's own path for a symbolic link, else the file's.
+      const { at: shown, isLink } = await rowPath(filePath, realOld);
+      if (kindFor(shown) === null) return { ok: false, message: MSG.cantFind };
+      const problem = nameProblem(newName, path.basename(shown));
+      if (problem) return { ok: false, message: problem };
+      const name = newName as string;
+      // The same name: nothing to do, and not an error.
+      if (name === path.basename(shown)) return { ok: true, file: await describeNow(shown) };
+      const realNew = path.join(path.dirname(shown), name);
+      // WHY the new path is authorized too: a protected folder must not receive a file by rename
+      // either (the folder is the same, but the NAME can match a protected pattern, e.g. ".env").
+      const dest = await authorizeChange(realNew);
+      if (!dest.ok) return { ok: false, message: dest.missing ? MSG.cantFind : dest.message };
+      // WHY refuse at once when it is open, but wait when it is only closing: an editor that is
+      // open would keep saving to the old name and quietly recreate the file. A tab the person
+      // just closed is still draining its last save for a moment (inUse stays true), and the
+      // window closes the tab right before asking, so that short wait is expected.
+      if (reg.byPath(realOld)) return { ok: false, message: MSG.renameOpen };
+      const giveUpAt = Date.now() + 5000;
+      while (reg.inUse(realOld) && Date.now() < giveUpAt) await sleep(100);
+      if (reg.inUse(realOld)) return { ok: false, message: MSG.renameOpen };
+      // WHY held: an open of the old name starting now waits for the rename, so no editor
+      // loads a file that is just being moved. (inUse above and this hold are one synchronous
+      // step.) The history moves inside the hold so it is in place before anything reads it.
+      const done = await reg.holdWhile(realOld, async () => {
+        try {
+          await renameNoClobber(shown, realNew);
+        } catch (e) {
+          if (e instanceof NameTaken) return { ok: false as const, message: MSG.nameTaken };
+          return { ok: false as const, message: fsSentence(e, 'rename') };
+        }
+        // WHY nothing else moves for a link: Recent, kept versions and recovery are keyed by the
+        // REAL file, which a renamed link does not change. Recent therefore keeps listing the
+        // target under its own name, history stays with the target, and opening the renamed link
+        // (it resolves to the same target) reaches both.
+        if (isLink) return { ok: true as const };
+        // The file's history follows it. Best effort: the rename has happened and must not be
+        // reported as failed because a kept copy could not move (each logs its own problem).
+        if (await versions.moveVersions(deps.userData, realOld, realNew)) pruner?.request();
+        await moveRecovery(realOld, realNew);
+        return { ok: true as const };
+      });
+      if (!done.ok) return done;
+      const file = await describeNow(realNew);
+      // Same place in Recent, new name. Matches the real path and the path as given. (A renamed
+      // link changed no real path, so there is nothing to replace.)
+      if (!isLink) {
+        await recent.replaceEntry(deps.userData, [...new Set([realOld, filePath])], file)
+          .catch((e) => log('WARN', 'Office', 'Recent could not follow a rename', errorKind(e)));
+      }
+      folderChanged(path.dirname(filePath), path.dirname(shown));
+      return { ok: true, file };
+    } catch (e) {
+      return { ok: false, message: fsSentence(e, 'rename') };
+    }
+  }
+
+  async function duplicateFile(filePath: unknown): Promise<{ ok: true; file: OfficeFile } | { ok: false; message: string }> {
+    const reg = await isReady();
+    if (!reg) return { ok: false, message: MSG.unavailable };
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return { ok: false, message: MSG.couldNotCopyFile };
+    try {
+      const old = await authorizeChange(filePath);
+      if (!old.ok) return { ok: false, message: old.missing ? MSG.cantFind : old.message };
+      const realOld = old.realPath;
+      if (!(await fsp.stat(realOld)).isFile() || kindFor(realOld) === null) return { ok: false, message: MSG.cantFind };
+      // WHY the copy is of what is on disk: a file open in Office may hold edits not yet saved;
+      // those are not in the copy (autosave keeps the disk file close behind).
+      // WHY named after the link when the row is one: the copy is a new regular file holding the
+      // target's bytes, beside the link and named after it (what the person sees in the row).
+      const { at: shown } = await rowPath(filePath, realOld);
+      if (kindFor(shown) === null) return { ok: false, message: MSG.cantFind };
+      const target = await copyBeside(shown, async (candidate) => {
+        const a = await authorizeChange(candidate);
+        if (!a.ok) throw new Refused(a.missing ? MSG.cantFind : a.message);
+        return candidate;
+      });
+      folderChanged(path.dirname(filePath), path.dirname(shown));
+      return { ok: true, file: await describeNow(target) };
+    } catch (e) {
+      if (e instanceof NameTaken) return { ok: false, message: MSG.tooManyCopies };
+      return { ok: false, message: fsSentence(e, 'copy') };
+    }
+  }
+
+  // Remove from Recent: only the list entry; the file is never touched.
+  async function forgetRecent(filePath: unknown): Promise<void> {
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return;
+    // WHY both spellings: Recent stores real paths, but a file that is gone cannot be resolved,
+    // and the stored path is then all there is to match.
+    const real = await fsp.realpath(filePath).catch(() => filePath);
+    await recent.forget(deps.userData, [...new Set([filePath, real])]);
+  }
+
+  ipc.handle('office:rename', (_e, filePath, newName) => renameFile(filePath, newName));
+  ipc.handle('office:duplicate', (_e, filePath) => duplicateFile(filePath));
+  ipc.handle('office:forget-recent', (_e, filePath) => forgetRecent(filePath));
 
   ipc.handle('office:open', (e, filePath) => open(e.sender, filePath));
   ipc.handle('office:versions', (_e, filePath) => listVersions(filePath));

@@ -60,3 +60,43 @@ class AttachmentStoreTest {
         AttachmentStore.sweep(File(root(), "never-made"))
     }
 }
+
+/** Pins which characters a picked file's name keeps (Destin, 2026-11-17: keep accented letters). */
+class SafeNameTest {
+    private fun bytes(s: String) = s.toByteArray(Charsets.UTF_8).size
+
+    @Test fun `accented letters are kept`() = assertEquals("résumé.pdf", AttachmentStore.safeName("résumé.pdf"))
+    @Test fun `decomposed accents are normalized to one form`() = assertEquals("résumé.pdf", AttachmentStore.safeName("re\u0301sume\u0301.pdf"))
+    @Test fun `CJK and Cyrillic are kept`() {
+        assertEquals("报告 最终.docx", AttachmentStore.safeName("报告 最终.docx"))
+        assertEquals("Отчёт.txt", AttachmentStore.safeName("Отчёт.txt"))
+    }
+    @Test fun `folders are dropped`() {
+        assertEquals("passwd", AttachmentStore.safeName("../../etc/passwd"))
+        assertEquals("a.txt", AttachmentStore.safeName("C:\\Users\\me\\a.txt"))
+    }
+    @Test fun `leading dots and dot-dot cannot escape`() {
+        assertEquals("attachment", AttachmentStore.safeName(".."))
+        assertEquals("bashrc", AttachmentStore.safeName("...bashrc"))
+    }
+    @Test fun `reserved and control characters are replaced`() {
+        assertEquals("a_b_c_d_e_f_g_h_i.txt", AttachmentStore.safeName("a:b*c?d\"e<f>g|h\u0000i.txt"))
+        assertEquals("a_b.txt", AttachmentStore.safeName("a\nb.txt"))
+        assertEquals("a_b.txt", AttachmentStore.safeName("a\u202Eb.txt")) // right-to-left override
+    }
+    @Test fun `trailing dots and spaces are removed`() = assertEquals("notes", AttachmentStore.safeName("notes. . "))
+    @Test fun `long names are cut by bytes and keep the extension`() {
+        val n = AttachmentStore.safeName("é".repeat(300) + ".pdf")
+        assertTrue(bytes(n) <= AttachmentStore.MAX_NAME_BYTES)
+        assertTrue(n.endsWith(".pdf"))
+        val cjk = AttachmentStore.safeName("文".repeat(300) + ".txt")
+        assertTrue(bytes(cjk) <= AttachmentStore.MAX_NAME_BYTES)
+        assertTrue(cjk.endsWith("文.txt"))
+        assertFalse(cjk.contains('\uFFFD'))
+    }
+    @Test fun `empty or all-unsafe names fall back`() {
+        assertEquals("attachment", AttachmentStore.safeName(""))
+        assertEquals("attachment", AttachmentStore.safeName(null))
+        assertEquals("attachment", AttachmentStore.safeName("***"))
+    }
+}
