@@ -158,7 +158,7 @@ describe('row 2 — no helper needed, but one is still installed', () => {
     fakeClaude(LEFTOVER_HELPER);
     await openPopup();
 
-    expect(removeButton()).toBeInTheDocument();
+    await waitFor(() => expect(removeButton()).toBeInTheDocument()); // the helper's state arrives asynchronously
     // ...and nothing else: no consent card, no unsupported row, and the switch
     // is the ordinary one, because the buddy works fine here without a helper.
     expect(screen.queryByText(CONSENT_CARD)).not.toBeInTheDocument();
@@ -171,6 +171,9 @@ describe('row 2 — no helper needed, but one is still installed', () => {
     localStorage.setItem('youcoded-buddy-enabled', '1');
     await openPopup();
 
+    // WHY waited for (found by verify.sh under load, 2026-11-18): the helper's state arrives from an async
+    // check after the popup opens; on a busy machine the button was not drawn yet when this clicked it.
+    await waitFor(() => expect(removeButton()).toBeInTheDocument());
     fireEvent.click(removeButton()!);
 
     await waitFor(() => expect(removeButton()).not.toBeInTheDocument());
