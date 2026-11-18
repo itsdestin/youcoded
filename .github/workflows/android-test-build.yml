@@ -5,9 +5,9 @@ on:
     inputs:
       base:
         description: >-
-          Next-feature-release beta prefix. Blank selects it automatically, with beta
-          numbers restarting at 1 after each feature release. The test build adds -dev,
-          e.g. 1.4.0-beta.1-dev after release 1.3.1.
+          Next beta prefix (the next small release). Blank selects it automatically, with beta
+          numbers restarting at 1 after every official release. The test build adds -dev,
+          e.g. 1.3.4-beta.1-dev after release 1.3.3.
         required: false
         default: ''
 
