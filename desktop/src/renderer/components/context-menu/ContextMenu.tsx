@@ -84,17 +84,23 @@ export function ContextMenu({
     const onScroll = (e: Event) => {
       if (!anchor || !(e.target instanceof Node) || e.target.contains(anchor)) onClose();
     };
+    // Over a text box the box keeps the keyboard, so typing (or Enter sending
+    // the message) means the person moved on: close rather than leave a menu
+    // whose Paste would act on a stale selection or a box that has since closed.
+    const onKey = () => { if (fieldOwnsFocus) onClose(); };
     window.addEventListener('mousedown', onDown, true);
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', onClose);
     window.addEventListener('blur', onClose);
+    window.addEventListener('keydown', onKey);
     return () => {
+      window.removeEventListener('keydown', onKey);
       window.removeEventListener('mousedown', onDown, true);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onClose);
       window.removeEventListener('blur', onClose);
     };
-  }, [onClose, anchor]);
+  }, [onClose, anchor, fieldOwnsFocus]);
 
   const run = (entry: MenuEntry) => {
     if (entry.type !== 'item' || entry.disabled) return;

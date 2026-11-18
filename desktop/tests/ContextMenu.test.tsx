@@ -67,3 +67,19 @@ it('a menu over chat text takes focus itself, for arrow-key navigation', () => {
   const { getByRole } = render(<ContextMenu x={10} y={10} entries={entries as any} anchor={cell} onClose={() => {}} />);
   expect(document.activeElement).toBe(getByRole('menu'));
 });
+
+it('typing in the text box closes its menu; keys elsewhere leave a chat-text menu alone', () => {
+  const box = document.createElement('input');
+  document.body.appendChild(box);
+  box.focus();
+  const onClose = vi.fn();
+  render(<ContextMenu x={10} y={10} entries={entries as any} anchor={box} onClose={onClose} />);
+  box.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+  expect(onClose).toHaveBeenCalled();
+  cleanup();
+  const { cell } = layout();
+  const onChatClose = vi.fn();
+  render(<ContextMenu x={10} y={10} entries={entries as any} anchor={cell} onClose={onChatClose} />);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+  expect(onChatClose).not.toHaveBeenCalled();
+});
