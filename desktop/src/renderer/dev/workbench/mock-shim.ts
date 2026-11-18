@@ -4170,6 +4170,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         return { ok: true as const, value: { id: v.id, hidden: v.hidden } };
       },
     },
+    // WHY only behind ?pastedPicture=1 (card #134): the phone-paste review screen needs a picture to land in the message box,
+    // and the workbench has no clipboard or file picker. Both routes answer with the same practice picture path.
+    ...(typeof location !== 'undefined' && new URLSearchParams(location.search).get('pastedPicture') === '1' ? { dialog: {
+      openFile: async () => ['/home/you/uploads/pasted-image.png'],
+      openFolder: async () => null, openSound: async () => null, readTranscriptMeta: async () => null,
+      saveClipboardImage: async () => '/home/you/uploads/pasted-image.png',
+    } } : {}),
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
     // WHY only on the buddy chat view (buddy rebuild, 2026-10-25): the buddy draws every dot from main's merged summary, and its

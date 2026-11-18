@@ -155,6 +155,30 @@ describe('InputBar — context-menu image paste', () => {
     expect(await screen.findByRole('button', { name: 'Remove chrome-copy.png' })).toBeInTheDocument();
   });
 
+  it('Ctrl+V of a picture hands the pasted file itself to the bridge (the phone route)', async () => {
+    saveClipboardImage.mockResolvedValue('/tmp/uploads/phone.png');
+    const box = renderComposer();
+    const file = new File([new Uint8Array([1])], 'image.png', { type: 'image/png' });
+    fireEvent.paste(box, { clipboardData: { items: [{ type: 'image/png', kind: 'file', getAsFile: () => file }], getData: () => '' } });
+    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledWith(file));
+    expect(await screen.findByRole('button', { name: 'Remove phone.png' })).toBeInTheDocument();
+  });
+
+  it('a picture paste that the bridge answers with undefined shows no failure notice', async () => {
+    saveClipboardImage.mockResolvedValue(undefined as any);
+    const box = renderComposer();
+    fireEvent.paste(box, { clipboardData: clipboard(['image/png']) });
+    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
+    expect(screen.queryByText(/couldn.t attach/i)).not.toBeInTheDocument();
+  });
+
+  it('a text paste never calls the picture bridge', () => {
+    const box = renderComposer();
+    fireEvent.paste(box, { clipboardData: clipboard(['text/plain'], { 'text/plain': 'hello' }) });
+    expect(saveClipboardImage).not.toHaveBeenCalled();
+  });
+
   it('keeps text precedence through the real composer menu and never invokes the image bridge', async () => {
     const readText = vi.fn().mockResolvedValue('pasted words');
     Object.defineProperty(navigator, 'clipboard', { value: { readText }, configurable: true });

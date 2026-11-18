@@ -35,6 +35,9 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { platform: 'android' } },
   // The Browser's approval card on a phone (card #205): the card the computer publishes, drawn like every other approval card.
   ...['site', 'final', 'handoff'].map((b) => ({ ...chat(`chat#phone-browser-${b}`, 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', platform: 'android', phoneBrowser: b }, newIn: 'after' as const })),
+  // Card #134: a picture pasted on a phone attaches to the message box. The practice picture arrives through the Attach button's route,
+  // which draws the same chip a pasted one does (the paste itself uploads through that same route).
+  { ...chat('chat#phone-pasted-picture', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', pastedPicture: '1' }, open: ['Attach file'], newIn: 'after' as const },
   { ...chat('chat#permission-phone', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { seed: 'bubbles-approval-cc', platform: 'android' } },
   // Model switch in the chat (2026-10-22 review): the same conversation as each runtime drew a switch before (a "/model …" bubble on
   // Claude Code, nothing on native) and after (the "Model switched to …" divider). Both sides come from this checkout's fixtures.
