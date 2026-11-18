@@ -1,0 +1,5 @@
+{"type":"assistant_text","text":"A little studio, with big brushes for small hands.","delay":400}
+{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"pages/paint/index.html"},"delay":500}
+{"type":"tool_result","tool_use_id":"t1","content":"Wrote index.html","delay":800}
+{"type":"assistant_text","text":"Your Paint studio is ready.","delay":300}
+{"type":"turn_complete","delay":200}

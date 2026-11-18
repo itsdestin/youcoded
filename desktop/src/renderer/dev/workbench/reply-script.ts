@@ -58,7 +58,12 @@ export function resolvePermission(requestId: string): boolean {
 
 let counter = 0;
 const uid = () => `wb-ev-${++counter}`;
-const stamp = () => FIXTURE_BASE + counter * 1000;
+// WHY `?replyClock=now` (campaign films, 2026-11-18): a reply is stamped 07:40 + a counter, but the bubble the
+// person TYPES is stamped with the page clock (08:00 at load), so a film showed the answer dated BEFORE the question.
+// With the switch on, replies take the page clock too (always later than the typed message). Off by default, so
+// every existing screenshot, test and landing loop stays byte-identical.
+const replyOnPageClock = typeof location !== 'undefined' && new URLSearchParams(location.search).get('replyClock') === 'now';
+const stamp = () => (replyOnPageClock ? Date.now() : FIXTURE_BASE + counter * 1000);
 
 /** One scripted event, typed: `type` and `data` must belong together, exactly as
  *  the real producers' emitEvent<T> demands (M5). The cast is the one place a

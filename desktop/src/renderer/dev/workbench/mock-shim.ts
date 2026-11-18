@@ -541,6 +541,7 @@ import { createNamingPreview } from './naming-preview';
 import { createBrowserMock } from './browser-mock';
 import { seedPages } from './fixtures/pages';
 import { seedSitePages, siteHomeAnswer, siteHomeValue } from './fixtures/site-pages';
+import { adPages } from './fixtures/ad-pages';
 import { kitPiecesPage } from './fixtures/kit-pieces-page';
 import { fakeCameraDeps, fakeCameraRefuse, fakeCameraRefusal, FAKE_RATE_LIMIT_WHY } from './fixtures/fake-camera';
 import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantCameraEvents, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSet, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
@@ -4374,7 +4375,10 @@ function createPagesMock(scenario: string): PagesBridge {
   // Unpinned, as a new install has it: pinning it filled the header's fourth slot,
   // and the resume journey's All Sessions click then raced the session strip
   // re-packing under verify.sh's load (failed 2 of 4 runs, 2026-09-28).
-  let pages: PageDocument[] = [OFFICE_PAGE, ...(empty ? [] : site ? seedSitePages() : seedPages())];
+  // WHY `?adPages=paint,trip` (campaign films, 2026-11-18): with the site scenario it REPLACES Home/Finance by
+  // the named practice pages (fixtures/ad-pages.ts), so a take shows only the pinned buttons it needs.
+  const adPagesParam = site && typeof location !== 'undefined' ? new URLSearchParams(location.search).get('adPages') : null;
+  let pages: PageDocument[] = [OFFICE_PAGE, ...(empty ? [] : adPagesParam ? adPages(adPagesParam.split(',')) : site ? seedSitePages() : seedPages())];
   // `?pagesKit=1`: the Pages kit's showcase page is listed too (fixtures/kit-pieces-page.ts), so every
   // kit piece can be photographed; any other value opens that section first at phone width
   // (`?pagesKit=controls`). WHY only on request: the Pages list on every other screen keeps its cards.

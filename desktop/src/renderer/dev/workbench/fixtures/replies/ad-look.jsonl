@@ -1,0 +1,6 @@
+{"type":"assistant_text","text":"Warm and glowing, like the last hour of sun. Building it.","delay":400}
+{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"themes/golden-hour/manifest.json"},"delay":500}
+{"type":"tool_result","tool_use_id":"t1","content":"Wrote manifest.json","delay":700}
+{"type":"tool_use","id":"t2","name":"Write","input":{"file_path":"themes/golden-hour/assets/wallpaper.jpg"},"delay":200}
+{"type":"tool_result","tool_use_id":"t2","content":"Golden hour installed","delay":600}
+{"type":"turn_complete","delay":200}

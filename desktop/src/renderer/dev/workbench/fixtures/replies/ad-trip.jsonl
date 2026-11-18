@@ -1,0 +1,5 @@
+{"type":"assistant_text","text":"Seven days in Lisbon, flights and the apartment included.","delay":400}
+{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"pages/lisbon/index.html"},"delay":500}
+{"type":"tool_result","tool_use_id":"t1","content":"Wrote index.html","delay":800}
+{"type":"assistant_text","text":"Your Lisbon page is ready.","delay":300}
+{"type":"turn_complete","delay":200}
